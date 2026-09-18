@@ -11,7 +11,7 @@
 *.crt
 
 # Go build and test artifacts
-prometheus-universal-exporter
+/prometheus-universal-exporter
 bin/
 dist/
 *.test

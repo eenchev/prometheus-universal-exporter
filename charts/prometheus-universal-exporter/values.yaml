@@ -1,0 +1,130 @@
+replicaCount: 1
+namespaceOverride: ""
+nameOverride: ""
+fullnameOverride: ""
+image:
+  repository: ghcr.io/evgenienchev/prometheus-universal-exporter
+  tag: "latest"
+  pullPolicy: IfNotPresent
+imagePullSecrets: []
+serviceAccount:
+  create: true
+  automount: false
+  annotations: {}
+  name: ""
+service:
+  type: ClusterIP
+  port: 8080
+  annotations: {}
+neg:
+  enabled: false
+  annotations: {}
+ingress:
+  enabled: false
+  className: ""
+  annotations: {}
+  hosts:
+    - host: exporter.example.com
+      paths:
+        - path: /
+          pathType: Prefix
+  tls: []
+config:
+  enabled: true
+  data:
+    config.yaml: |
+      collectors:
+        - name: example
+          request:
+            path: /status
+          response:
+            format: text
+          transform:
+            type: regex
+            rules:
+              - name: example_status
+                type: gauge
+                regex: 'status:\s+(\d+(?:\.\d+)?)'
+monitor:
+  # Optional single-monitor selector. The podMonitor.enabled and
+  # serviceMonitor.enabled flags remain available for explicit control.
+  enabled: false
+  type: pod # pod or service
+serviceMonitor:
+  enabled: false
+  interval: 30s
+  scrapeTimeout: 10s
+  labels: {}
+  annotations: {}
+  targetSelector: {}
+  collector: example
+  # Non-secret headers are sent as header_<name> probe parameters. The
+  # collector must explicitly allow them with request.forward_headers.
+  headers: {}
+  auth:
+    enabled: false
+    type: bearer # bearer or basic
+    secretName: ""
+    secretKey: token
+    usernameKey: username
+    passwordKey: password
+    optional: false
+podMonitor:
+  enabled: false
+  interval: 30s
+  scrapeTimeout: 10s
+  labels: {}
+  annotations: {}
+  targetSelector: {}
+  collector: example
+  # Non-secret headers are sent as header_<name> probe parameters. The
+  # collector must explicitly allow them with request.forward_headers.
+  headers: {}
+  auth:
+    enabled: false
+    type: bearer # bearer or basic
+    secretName: ""
+    secretKey: token
+    usernameKey: username
+    passwordKey: password
+    optional: false
+selfMetrics:
+  path: /self-metrics
+  enabled: true
+  interval: 30s
+  scrapeTimeout: 10s
+  labels: {}
+  annotations: {}
+resources:
+  requests:
+    cpu: 100m
+    memory: 128Mi
+  limits:
+    cpu: 500m
+    memory: 512Mi
+strategy:
+  type: RollingUpdate
+  rollingUpdate:
+    maxUnavailable: 25%
+    maxSurge: 25%
+podSecurityContext:
+  runAsNonRoot: true
+  seccompProfile: {type: RuntimeDefault}
+securityContext:
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: true
+  capabilities: {drop: [ALL]}
+nodeSelector: {}
+tolerations: []
+affinity: {}
+networkPolicy:
+  enabled: false
+  ingress: []
+  egress: []
+targetAuth:
+  # Mount a Kubernetes Secret so collectors can use request.bearer_token_file.
+  enabled: false
+  secretName: ""
+  secretKey: token
+  fileName: token
+  mountPath: /var/run/prometheus-universal-exporter/target-auth

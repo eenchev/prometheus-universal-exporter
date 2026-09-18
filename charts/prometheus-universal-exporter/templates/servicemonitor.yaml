@@ -1,0 +1,77 @@
+{{- if or .Values.serviceMonitor.enabled (and .Values.monitor.enabled (eq .Values.monitor.type "service")) }}
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: {{ include "prometheus-universal-exporter.fullname" . }}
+  {{ with .Values.namespaceOverride }}namespace: {{ . }}{{ end }}
+  labels:
+    {{- include "prometheus-universal-exporter.labels" . | nindent 4 }}
+    {{- with .Values.serviceMonitor.labels }}{{ toYaml . | nindent 4 }}{{ end }}
+  {{- with .Values.serviceMonitor.annotations }}
+  annotations: {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  selector:
+    {{- if .Values.serviceMonitor.targetSelector }}{{ toYaml .Values.serviceMonitor.targetSelector | nindent 4 }}{{ else }}matchLabels:
+      app.kubernetes.io/name: target
+    {{- end }}
+  endpoints:
+    - port: http
+      path: /probe
+      interval: {{ .Values.serviceMonitor.interval }}
+      scrapeTimeout: {{ .Values.serviceMonitor.scrapeTimeout }}
+      params:
+        collector: [{{ .Values.serviceMonitor.collector | quote }}]
+        {{ range $name, $value := .Values.serviceMonitor.headers }}
+        header_{{ $name }}: [{{ $value | quote }}]
+        {{ end }}
+      {{ if and .Values.serviceMonitor.auth.enabled (eq .Values.serviceMonitor.auth.type "bearer") }}
+      authorization:
+        type: Bearer
+        credentials:
+          name: {{ .Values.serviceMonitor.auth.secretName | quote }}
+          key: {{ .Values.serviceMonitor.auth.secretKey | quote }}
+          optional: {{ .Values.serviceMonitor.auth.optional }}
+      {{ else if and .Values.serviceMonitor.auth.enabled (eq .Values.serviceMonitor.auth.type "basic") }}
+      basicAuth:
+        username:
+          name: {{ .Values.serviceMonitor.auth.secretName | quote }}
+          key: {{ .Values.serviceMonitor.auth.usernameKey | quote }}
+          optional: {{ .Values.serviceMonitor.auth.optional }}
+        password:
+          name: {{ .Values.serviceMonitor.auth.secretName | quote }}
+          key: {{ .Values.serviceMonitor.auth.passwordKey | quote }}
+          optional: {{ .Values.serviceMonitor.auth.optional }}
+      {{ end }}
+      relabelings:
+        - sourceLabels: [__address__]
+          targetLabel: __param_target
+        - sourceLabels: [__param_target]
+          targetLabel: instance
+        - targetLabel: __address__
+          replacement: {{ include "prometheus-universal-exporter.fullname" . }}:{{ .Values.service.port }}
+{{- end }}
+{{- if and (or .Values.serviceMonitor.enabled (and .Values.monitor.enabled (eq .Values.monitor.type "service"))) .Values.selfMetrics.enabled }}
+---
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: {{ include "prometheus-universal-exporter.fullname" . }}-self
+  {{ with .Values.namespaceOverride }}namespace: {{ . }}{{ end }}
+  labels:
+    {{- include "prometheus-universal-exporter.labels" . | nindent 4 }}
+    {{- with .Values.selfMetrics.labels }}{{ toYaml . | nindent 4 }}{{ end }}
+  {{- with .Values.selfMetrics.annotations }}
+  annotations: {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: {{ include "prometheus-universal-exporter.name" . }}
+      app.kubernetes.io/instance: {{ .Release.Name }}
+  endpoints:
+    - port: http
+      path: {{ .Values.selfMetrics.path | quote }}
+      interval: {{ .Values.selfMetrics.interval }}
+      scrapeTimeout: {{ .Values.selfMetrics.scrapeTimeout }}
+{{- end }}

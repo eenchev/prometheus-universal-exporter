@@ -1,0 +1,77 @@
+{{- if or .Values.podMonitor.enabled (and .Values.monitor.enabled (eq .Values.monitor.type "pod")) }}
+apiVersion: monitoring.coreos.com/v1
+kind: PodMonitor
+metadata:
+  name: {{ include "prometheus-universal-exporter.fullname" . }}
+  {{ with .Values.namespaceOverride }}namespace: {{ . }}{{ end }}
+  labels:
+    {{- include "prometheus-universal-exporter.labels" . | nindent 4 }}
+    {{- with .Values.podMonitor.labels }}{{ toYaml . | nindent 4 }}{{ end }}
+  {{- with .Values.podMonitor.annotations }}
+  annotations: {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  selector:
+    {{- if .Values.podMonitor.targetSelector }}{{ toYaml .Values.podMonitor.targetSelector | nindent 4 }}{{ else }}matchLabels:
+      app.kubernetes.io/name: target
+    {{- end }}
+  podMetricsEndpoints:
+    - port: http
+      path: /probe
+      interval: {{ .Values.podMonitor.interval }}
+      scrapeTimeout: {{ .Values.podMonitor.scrapeTimeout }}
+      params:
+        collector: [{{ .Values.podMonitor.collector | quote }}]
+        {{ range $name, $value := .Values.podMonitor.headers }}
+        header_{{ $name }}: [{{ $value | quote }}]
+        {{ end }}
+      {{ if and .Values.podMonitor.auth.enabled (eq .Values.podMonitor.auth.type "bearer") }}
+      authorization:
+        type: Bearer
+        credentials:
+          name: {{ .Values.podMonitor.auth.secretName | quote }}
+          key: {{ .Values.podMonitor.auth.secretKey | quote }}
+          optional: {{ .Values.podMonitor.auth.optional }}
+      {{ else if and .Values.podMonitor.auth.enabled (eq .Values.podMonitor.auth.type "basic") }}
+      basicAuth:
+        username:
+          name: {{ .Values.podMonitor.auth.secretName | quote }}
+          key: {{ .Values.podMonitor.auth.usernameKey | quote }}
+          optional: {{ .Values.podMonitor.auth.optional }}
+        password:
+          name: {{ .Values.podMonitor.auth.secretName | quote }}
+          key: {{ .Values.podMonitor.auth.passwordKey | quote }}
+          optional: {{ .Values.podMonitor.auth.optional }}
+      {{ end }}
+      relabelings:
+        - sourceLabels: [__address__]
+          targetLabel: __param_target
+        - sourceLabels: [__param_target]
+          targetLabel: instance
+        - targetLabel: __address__
+          replacement: {{ include "prometheus-universal-exporter.fullname" . }}:{{ .Values.service.port }}
+{{- end }}
+{{- if and (or .Values.podMonitor.enabled (and .Values.monitor.enabled (eq .Values.monitor.type "pod"))) .Values.selfMetrics.enabled }}
+---
+apiVersion: monitoring.coreos.com/v1
+kind: PodMonitor
+metadata:
+  name: {{ include "prometheus-universal-exporter.fullname" . }}-self
+  {{ with .Values.namespaceOverride }}namespace: {{ . }}{{ end }}
+  labels:
+    {{- include "prometheus-universal-exporter.labels" . | nindent 4 }}
+    {{- with .Values.selfMetrics.labels }}{{ toYaml . | nindent 4 }}{{ end }}
+  {{- with .Values.selfMetrics.annotations }}
+  annotations: {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: {{ include "prometheus-universal-exporter.name" . }}
+      app.kubernetes.io/instance: {{ .Release.Name }}
+  podMetricsEndpoints:
+    - port: http
+      path: {{ .Values.selfMetrics.path | quote }}
+      interval: {{ .Values.selfMetrics.interval }}
+      scrapeTimeout: {{ .Values.selfMetrics.scrapeTimeout }}
+{{- end }}

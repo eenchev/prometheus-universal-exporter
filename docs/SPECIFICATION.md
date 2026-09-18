@@ -2761,3 +2761,36 @@ Authentication.
 Tests MUST cover bearer-token-file loading, whitespace trimming, missing and
 empty files, independent exporter Basic Auth, and the fact that the exporter
 Basic Auth credential is not forwarded to the target.
+
+## 42.7 Helm monitor selection and opt-in monitor authentication
+
+The Helm chart MUST expose an explicit monitor selector:
+
+```yaml
+monitor:
+  enabled: true
+  type: pod # pod or service
+```
+
+When `monitor.enabled` is true, `monitor.type` MUST accept `pod` and
+`service`, and the chart MUST render the corresponding PodMonitor or
+ServiceMonitor, respectively. The chart MUST retain `podMonitor.enabled` and
+`serviceMonitor.enabled` as compatibility controls for users that need direct
+per-resource configuration. Documentation MUST warn that enabling both the
+selector and conflicting compatibility flags can create duplicate monitor
+resources.
+
+Monitor authentication MUST be explicitly opt-in and disabled by default for
+both monitor values:
+
+```yaml
+auth:
+  enabled: false
+  type: bearer # bearer or basic
+```
+
+When `auth.enabled` is false, the chart MUST NOT render `authorization` or
+`basicAuth`, regardless of the configured `auth.type`. When enabled, `auth.type`
+MUST select bearer or basic authentication and the chart MUST render the
+corresponding SecretKeySelectors. Tests MUST cover the disabled default, both
+monitor selector types, and enabled bearer/basic authentication rendering.

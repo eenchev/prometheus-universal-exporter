@@ -14,7 +14,7 @@ go run . --config.file=config.example.yaml
 
 The full implementation specification is [docs/SPECIFICATION.md](docs/SPECIFICATION.md).
 
-Exporter self-health metrics are available at `/self-metrics` by default (and `/metrics` remains a compatibility alias). Change the dedicated path with `--web.self-metrics-path=/exporter/metrics`. The Helm chart's optional self-metrics ServiceMonitor/PodMonitor scrapes the exporter pods/services separately from the target-probing monitor.
+Exporter self-health metrics are available at `/self-metrics` by default (and `/metrics` remains a compatibility alias). Change the dedicated path with `--web.self-metrics-path=/exporter/metrics`. The Helm chart's optional self-metrics ServiceMonitor/PodMonitor scrapes the exporter pods/services separately from the target-probing monitor. Use `monitor.enabled: true` with `monitor.type: pod` or `monitor.type: service` to select one monitor kind; the legacy `podMonitor.enabled` and `serviceMonitor.enabled` flags remain available for explicit compatibility control.
 
 Optional OTLP/HTTP JSON export is configured at the top level. Probe metric sets and self-health metric sets are forwarded when enabled:
 
@@ -115,12 +115,13 @@ podMonitor:
   headers:
     X-Tenant: team-a
   auth:
+    enabled: true
     type: bearer
     secretName: target-api-token
     secretKey: token
 ```
 
-Header values in monitor parameters are not suitable for secrets. Use monitor `auth` with a Kubernetes Secret for bearer/basic authentication, and explicitly opt in per collector before forwarding the incoming Authorization header.
+Header values in monitor parameters are not suitable for secrets. Monitor authentication is disabled by default; set `auth.enabled: true` and use monitor `auth` with a Kubernetes Secret for bearer/basic authentication. Explicitly opt in per collector before forwarding the incoming Authorization header.
 
 The exporter endpoints can also be protected with exporter-side Basic Auth:
 

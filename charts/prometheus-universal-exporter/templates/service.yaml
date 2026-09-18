@@ -1,0 +1,23 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "prometheus-universal-exporter.fullname" . }}
+  {{ with .Values.namespaceOverride }}namespace: {{ . }}{{ end }}
+  labels:
+    {{- include "prometheus-universal-exporter.labels" . | nindent 4 }}
+  annotations:
+    {{- with .Values.service.annotations }}{{ toYaml . | nindent 4 }}{{ end }}
+    {{- if .Values.neg.enabled }}
+    cloud.google.com/neg: '{"ingress": true}'
+    {{- with .Values.neg.annotations }}{{ toYaml . | nindent 4 }}{{ end }}
+    {{- end }}
+spec:
+  type: {{ .Values.service.type }}
+  selector:
+    app.kubernetes.io/name: {{ include "prometheus-universal-exporter.name" . }}
+    app.kubernetes.io/instance: {{ .Release.Name }}
+  ports:
+    - name: http
+      port: {{ .Values.service.port }}
+      targetPort: http
+      protocol: TCP

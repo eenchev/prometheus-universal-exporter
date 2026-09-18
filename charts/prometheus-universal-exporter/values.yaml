@@ -40,14 +40,13 @@ config:
         - name: example
           request:
             path: /status
-          response:
-            format: text
           transform:
             type: regex
           metrics:
             - name: example_status
               description: Example status value
               type: gauge
+              error_mode: log
               labels: []
               expression: 'status:\s+(\d+(?:\.\d+)?)'
 monitors: []

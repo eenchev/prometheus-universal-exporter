@@ -131,6 +131,7 @@ type MetricRule struct {
 	Type        MetricType  `yaml:"type"`
 	Labels      []LabelRule `yaml:"labels"`
 	Expression  string      `yaml:"expression"`
+	ErrorMode   string      `yaml:"error_mode"`
 	Required    *bool       `yaml:"required"`
 }
 type LabelRule struct {
@@ -222,6 +223,18 @@ func (c *Config) Validate() error {
 		if x.Decoder.Type == "" {
 			x.Decoder.Type = "auto"
 		}
+		if x.Response.Format == "auto" && x.Decoder.Type == "auto" {
+			switch strings.ToLower(x.Transform.Type) {
+			case "regex":
+				x.Decoder.Type = "text"
+			case "csv":
+				x.Decoder.Type = "csv"
+			case "css":
+				x.Decoder.Type = "html"
+			case "prometheus":
+				x.Decoder.Type = "prometheus"
+			}
+		}
 		x.Decoder.Type = strings.ToLower(x.Decoder.Type)
 		if !map[string]bool{"json": true, "yaml": true, "xml": true, "csv": true, "html": true, "prometheus": true, "text": true, "auto": true}[x.Decoder.Type] {
 			return fmt.Errorf("collector %q has unknown decoder %q", x.Name, x.Decoder.Type)
@@ -256,6 +269,12 @@ func (c *Config) Validate() error {
 		}
 		for i := range x.Metrics {
 			r := &x.Metrics[i]
+			if r.ErrorMode == "" {
+				r.ErrorMode = "log"
+			}
+			if r.ErrorMode != "log" && r.ErrorMode != "ignore" {
+				return fmt.Errorf("collector %q metric %q has invalid error_mode %q; want log or ignore", x.Name, r.Name, r.ErrorMode)
+			}
 			if r.Type == "" {
 				r.Type = GaugeMetricType
 			}

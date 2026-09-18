@@ -174,6 +174,45 @@ func TestPythonIsConfiguredAsTransform(t *testing.T) {
 	}
 }
 
+func TestTransformInfersResponseFormatAndMetricErrorMode(t *testing.T) {
+	cfg := &Config{Collectors: []Collector{{Name: "text", Transform: TransformConfig{Type: "regex"}, Metrics: []MetricRule{{Name: "value", Type: GaugeMetricType, ErrorMode: "ignore", Expression: `missing=(\d+)`}}}}}
+	if err := cfg.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	c := &cfg.Collectors[0]
+	if c.Decoder.Type != "text" {
+		t.Fatalf("inferred decoder=%q", c.Decoder.Type)
+	}
+	r := &HTTPResponse{Body: []byte("value=42\n"), Headers: make(http.Header)}
+	d, err := decode(r, c)
+	if err != nil {
+		t.Fatal(err)
+	}
+	m, err := transform(context.Background(), d, r, c, "python3")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(m.Metrics) != 0 {
+		t.Fatalf("expected ignored metric, got %#v", m.Metrics)
+	}
+}
+
+func TestTransformRejectsIncompatibleResponseFormat(t *testing.T) {
+	cfg := &Config{Collectors: []Collector{{Name: "invalid", Response: ResponseConfig{Format: "json"}, Transform: TransformConfig{Type: "regex"}, Metrics: []MetricRule{{Name: "value", Type: GaugeMetricType, Expression: `value=(\d+)`}}}}}
+	if err := cfg.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	c := &cfg.Collectors[0]
+	r := &HTTPResponse{Body: []byte(`{"value":42}`), Headers: make(http.Header)}
+	d, err := decode(r, c)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := transform(context.Background(), d, r, c, "python3"); err == nil || !strings.Contains(err.Error(), "requires a text response") {
+		t.Fatalf("expected incompatible response error, got %v", err)
+	}
+}
+
 func boolPtr(value bool) *bool { return &value }
 
 func TestForwardedHeadersAreExplicitAndAllowlisted(t *testing.T) {

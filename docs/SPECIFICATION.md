@@ -257,6 +257,15 @@ auto
 Python is a transform, not a decoder. Supported transform types MUST include
 `jq`, `yq`, `xpath`, `css`, `csv`, `regex`, `prometheus`, and `python`.
 
+`response.format` is optional and defaults to `auto`. When it is omitted, the
+implementation MUST infer a deterministic response decoder from the transform
+where possible: `regex` to text, `csv` to CSV, `css` to HTML, and `prometheus`
+to Prometheus exposition. jq/yq, XPath, and Python MAY use content detection
+because they can operate on more than one response representation. If the
+decoded response cannot be mapped to the selected transform, the exporter MUST
+return a clear transform error. An explicit response format remains available
+for ambiguous or incorrectly labeled endpoints.
+
 ### 6.1 Auto detection
 
 When `format: auto` is used, determine format using, in order:
@@ -385,6 +394,7 @@ Example:
     - name: application_requests_total
       description: Total application requests
       type: counter
+      error_mode: log
       expression: '.requests'
       labels:
         - name: environment
@@ -416,6 +426,7 @@ Example:
     - name: application_requests_total
       description: Total application requests
       type: counter
+      error_mode: log
       labels: []
       expression: '.status.requests'
 ```
@@ -444,6 +455,7 @@ Example:
     - name: application_requests_total
       description: Total application requests
       type: counter
+      error_mode: log
       labels: []
       expression: '/status/requests'
 ```
@@ -485,6 +497,7 @@ Example conceptual configuration:
     - name: application_server_cpu
       description: Server CPU utilization
       type: gauge
+      error_mode: log
       expression: '#servers tr'
       labels:
         - name: server
@@ -581,6 +594,7 @@ Example:
     - name: application_requests_total
       description: Vendor HTTP requests
       type: counter
+      error_mode: log
       labels: []
       expression: '^vendor_requests_total$'
 ```
@@ -614,6 +628,7 @@ Example:
     - name: application_connections
       description: Current application connections
       type: gauge
+      error_mode: log
       labels: []
       expression: 'Connections:\\s+(\\d+)'
 ```
@@ -806,6 +821,7 @@ metrics:
   - name: application_requests_total
     description: Total application requests
     type: counter
+    error_mode: log
     expression: '.requests'
 ```
 
@@ -821,6 +837,7 @@ metrics:
   - name: application_requests_total
     description: Total application requests
     type: counter
+    error_mode: log
     labels: []
     expression: '.status.requests'
 ```
@@ -882,6 +899,7 @@ metrics:
   - name: application_requests_total
     description: Total application requests
     type: counter
+    error_mode: log
     labels:
       - name: environment
         type: expression
@@ -889,12 +907,17 @@ metrics:
     expression: .requests
 ```
 
-`name`, `description`, `type`, `labels`, and `expression` are the standard
-shape. `description` becomes the Prometheus HELP text. `type` MUST be one of
+`name`, `description`, `type`, `labels`, `expression`, and `error_mode` are the
+standard shape. `description` becomes the Prometheus HELP text. `type` MUST be one of
 `gauge`, `counter`, `histogram`, `summary`, or `untyped`; omitted types default
 to `gauge`. Metric declarations MUST be placed on the collector, alongside
 `transform`, rather than using transform-specific arrays such as `rules` or
 `expressions`.
+
+`error_mode` MUST be `log` or `ignore` and defaults to `log`. When an
+individual metric cannot be extracted, `log` MUST record the metric-specific
+error and skip that metric; `ignore` MUST skip it without logging. A
+metric-level error MUST NOT fail unrelated metrics in the same collector.
 
 Each label entry MUST have `name` and `type`. `type` MUST be either `string` or
 `expression`. A `string` label MUST use `value` as its literal value. An
@@ -1205,6 +1228,7 @@ collectors:
       - name: application_requests_total
         description: Total application requests
         type: counter
+        error_mode: log
         labels: []
         expression: .requests
 ```
@@ -1226,6 +1250,7 @@ collectors:
       - name: application_requests_total
         description: Total application requests
         type: counter
+        error_mode: log
         labels: []
         expression: '.status.requests'
 ```
@@ -1247,6 +1272,7 @@ collectors:
       - name: application_requests_total
         description: Total application requests
         type: counter
+        error_mode: log
         labels: []
         expression: '/status/requests'
 ```
@@ -1271,6 +1297,7 @@ collectors:
       - name: server_cpu
         description: Server CPU utilization
         type: gauge
+        error_mode: log
         expression: cpu
         labels:
           - name: server
@@ -1295,6 +1322,7 @@ collectors:
       - name: server_cpu
         description: Server CPU utilization
         type: gauge
+        error_mode: log
         expression: '#servers tr'
         labels:
           - name: server
@@ -1322,6 +1350,7 @@ collectors:
       - name: vendor_requests_total
         description: Vendor HTTP requests
         type: counter
+        error_mode: log
         labels: []
         expression: '^vendor_requests_total$'
 ```
@@ -1343,6 +1372,7 @@ collectors:
       - name: application_connections
         description: Current application connections
         type: gauge
+        error_mode: log
         labels: []
         expression: 'Connections:\\s+(\\d+)'
 ```
@@ -1863,6 +1893,10 @@ Test:
 - Invalid regex.
 - Invalid Python source.
 - Invalid CSV configuration.
+- Invalid metric `error_mode`.
+- Missing `error_mode` defaults to `log`.
+- Transform-specific response format incompatibility.
+- Response format inference when `response.format` is omitted.
 - Invalid error policy values.
 - Missing required configuration fields.
 - Unknown configuration fields according to the chosen strictness policy.
@@ -2091,6 +2125,10 @@ consistently.
 Test that a transform `pre_script` runs once before extraction, can mutate or
 replace `data`, is subject to timeout/output restrictions, and is reparsed for
 HTML/XML output.
+
+Test that metric-level `error_mode: log` records an extraction error and skips
+only that metric, while `error_mode: ignore` skips it silently without failing
+the collector or unrelated metrics.
 
 Test subsequent transformations such as:
 
@@ -2811,6 +2849,7 @@ metrics:
   - name: server_cpu
     description: Server CPU utilization
     type: gauge
+    error_mode: log
     expression: cpu
     labels:
       - name: server

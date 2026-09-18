@@ -72,6 +72,13 @@ interval even when no Prometheus self-metrics scrape is running.
 
 Collectors contain request, response, decoder, transformation, error-policy, and limit settings. Target URLs are deliberately not stored in configuration.
 
+`response.format` is optional and defaults to `auto`. When omitted, the
+transform selects a deterministic decoder where possible: `regex` uses text,
+`csv` uses CSV, `css` uses HTML, and `prometheus` uses Prometheus exposition.
+JSON/YAML transforms use content detection. If the decoded response cannot be
+used by the selected transform, the probe fails with a clear mapping error.
+An explicit format remains useful for ambiguous or mislabeled endpoints.
+
 Supported response formats are `json`, `yaml`, `xml`, `csv`, `html`,
 `prometheus`, `text`, and `auto`. Supported transforms include jq/yq, XPath,
 CSS, CSV, regex, Prometheus filtering, and Python. JSON and YAML expressions
@@ -89,8 +96,6 @@ entry has `name`, `description`, `type`, `labels`, and a transform-specific
 ```yaml
 collectors:
   - name: app_json
-    response:
-      format: json
     transform:
       type: jq
       pre_script: |
@@ -99,6 +104,7 @@ collectors:
       - name: application_requests_total
         description: Total application requests
         type: counter
+        error_mode: log
         expression: .requests
         labels:
           - name: environment
@@ -137,12 +143,15 @@ Label expressions use the same transform-specific language as the metric
 expression. For CSV, each row produces a metric and `expression: server`
 selects that row's `server` column.
 
+Each metric may set `error_mode: log` or `error_mode: ignore`. `log` records a
+metric-specific extraction error and skips that metric; `ignore` skips it
+silently. The default is `log`.
+
 Every transform may define `transform.pre_script`. It runs once per scrape
 after decoding and before metric extraction. The script receives the decoded
 value as `data` and may mutate it or replace it by assigning to `data`.
 HTML/XML pre-scripts receive raw document text, which is parsed again after the
-script. Python transforms and decoders continue to emit metrics with the
-`metric(...)` API.
+script. Python transforms emit metrics with the `metric(...)` API.
 
 Errors are classified as HTTP, decode, transform, missing data, validation, or resource-limit failures. `error_handling` accepts `fail`, `warn`, and `ignore`; `allow_missing_keys` controls required extraction results. Limits default to conservative values and are enforced immediately before exposition.
 
@@ -150,11 +159,13 @@ CSV responses can use a native CSV transform without CSS or Python:
 
 ```yaml
 response:
-  format: csv
+  csv:
+    header: true
 metrics:
   - name: server_cpu
     description: Server CPU utilization
     type: gauge
+    error_mode: log
     expression: cpu
     labels:
       - name: server

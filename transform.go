@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"log/slog"
 	"regexp"
 	"strconv"
 	"strings"
@@ -28,6 +29,9 @@ func transform(ctx context.Context, d *Decoded, r *HTTPResponse, c *Collector, p
 			return nil, fmt.Errorf("Python transform requires a script")
 		}
 		return executePython(ctx, pythonPath, c.Transform.Script, d, r, c)
+	}
+	if err := validateTransformInput(d, c.Transform.Type); err != nil {
+		return nil, err
 	}
 	if ms, ok := d.Data.(MetricSet); ok {
 		if c.Transform.Type == "" || c.Transform.Type == "prometheus" {
@@ -66,6 +70,61 @@ func transform(ctx context.Context, d *Decoded, r *HTTPResponse, c *Collector, p
 	}
 }
 
+func validateTransformInput(d *Decoded, transformType string) error {
+	switch transformType {
+	case "":
+		if d.Kind == "prometheus" {
+			return nil
+		}
+		if d.Kind == "text" || d.Kind == "html" || d.Kind == "xml" || d.Kind == "csv" {
+			return fmt.Errorf("transform %q cannot map response format %q; configure a compatible transform", transformType, d.Kind)
+		}
+	case "none":
+		if d.Kind == "prometheus" {
+			return nil
+		}
+		if d.Kind == "text" || d.Kind == "html" || d.Kind == "xml" || d.Kind == "csv" || d.Kind == "prometheus" {
+			return fmt.Errorf("transform %q cannot map response format %q; use a structured JSON/YAML response or a compatible transform", transformType, d.Kind)
+		}
+	case "jq", "yq":
+		if d.Kind == "text" || d.Kind == "html" || d.Kind == "xml" || d.Kind == "csv" || d.Kind == "prometheus" {
+			return fmt.Errorf("transform %q cannot map response format %q; use a structured JSON/YAML response or a compatible transform", transformType, d.Kind)
+		}
+	case "regex":
+		if d.Kind != "text" {
+			return fmt.Errorf("regex transform requires a text response, got %q", d.Kind)
+		}
+	case "csv":
+		if d.Kind != "csv" {
+			return fmt.Errorf("csv transform requires a CSV response, got %q", d.Kind)
+		}
+	case "css":
+		if d.Kind != "html" {
+			return fmt.Errorf("css transform requires an HTML response, got %q", d.Kind)
+		}
+	case "xpath":
+		if d.Kind != "xml" && d.Kind != "html" {
+			return fmt.Errorf("xpath transform requires an XML or HTML response, got %q", d.Kind)
+		}
+	case "prometheus":
+		if d.Kind != "prometheus" {
+			return fmt.Errorf("prometheus transform requires a Prometheus response, got %q", d.Kind)
+		}
+	}
+	return nil
+}
+
+func handleMetricError(rule MetricRule, err error) bool {
+	if rule.ErrorMode == "ignore" {
+		return true
+	}
+	if rule.ErrorMode == "log" {
+		slog.Default().Error("metric extraction failed", "metric", rule.Name, "error", err)
+		return true
+	}
+	return false
+}
+
 func applyPreScript(ctx context.Context, d *Decoded, r *HTTPResponse, c *Collector, pythonPath string) (*Decoded, error) {
 	data, err := executePythonPreScript(ctx, pythonPath, c.Transform.PreScript, d, r, c)
 	if err != nil {
@@ -95,13 +154,22 @@ func transformJQ(ctx context.Context, data any, rules []MetricRule, c *Collector
 	for _, rule := range rules {
 		values, err := evaluateJQ(ctx, data, rule.Expression)
 		if err != nil {
+			if handleMetricError(rule, err) {
+				continue
+			}
 			return nil, fmt.Errorf("metric %q expression: %w", rule.Name, err)
 		}
 		labels, err := evaluateLabels(ctx, data, rule.Labels)
 		if err != nil {
+			if handleMetricError(rule, err) {
+				continue
+			}
 			return nil, fmt.Errorf("metric %q labels: %w", rule.Name, err)
 		}
 		if len(values) == 0 && requiredRule(rule, c) {
+			if handleMetricError(rule, fmt.Errorf("metric %q value is missing", rule.Name)) {
+				continue
+			}
 			return nil, fmt.Errorf("metric %q value is missing", rule.Name)
 		}
 		for _, value := range values {
@@ -110,6 +178,9 @@ func transformJQ(ctx context.Context, data any, rules []MetricRule, c *Collector
 			}
 			n, err := number(value)
 			if err != nil {
+				if handleMetricError(rule, err) {
+					continue
+				}
 				return nil, fmt.Errorf("metric %q: %w", rule.Name, err)
 			}
 			out.Metrics = append(out.Metrics, Metric{Name: rule.Name, Help: rule.Description, Type: rule.Type, Value: n, Labels: cloneLabels(labels)})
@@ -174,11 +245,17 @@ func transformRegex(text string, rules []MetricRule, c *Collector) (*MetricSet, 
 	for _, rule := range rules {
 		re, err := regexp.Compile(rule.Expression)
 		if err != nil {
+			if handleMetricError(rule, err) {
+				continue
+			}
 			return nil, fmt.Errorf("metric %q regex: %w", rule.Name, err)
 		}
 		matches := re.FindAllStringSubmatchIndex(text, -1)
 		if len(matches) == 0 {
 			if requiredRule(rule, c) {
+				if handleMetricError(rule, fmt.Errorf("regex for metric %q matched no text", rule.Name)) {
+					continue
+				}
 				return nil, fmt.Errorf("regex for metric %q matched no text", rule.Name)
 			}
 			continue
@@ -190,10 +267,16 @@ func transformRegex(text string, rules []MetricRule, c *Collector) (*MetricSet, 
 				capture = 0
 			}
 			if 2*capture+1 >= len(match) {
+				if handleMetricError(rule, fmt.Errorf("metric %q regex has no capture group", rule.Name)) {
+					break
+				}
 				return nil, fmt.Errorf("metric %q regex has no capture group", rule.Name)
 			}
 			n, err := strconv.ParseFloat(text[match[2*capture]:match[2*capture+1]], 64)
 			if err != nil {
+				if handleMetricError(rule, err) {
+					continue
+				}
 				return nil, fmt.Errorf("metric %q: %w", rule.Name, err)
 			}
 			labels := map[string]string{}
@@ -233,17 +316,26 @@ func transformXPath(root *xmlquery.Node, rules []MetricRule, c *Collector, names
 		if len(namespaces) > 0 {
 			expression, compileErr := xpath.CompileWithNS(rule.Expression, namespaces)
 			if compileErr != nil {
+				if handleMetricError(rule, compileErr) {
+					continue
+				}
 				return nil, fmt.Errorf("XPath %q: %w", rule.Expression, compileErr)
 			}
 			nodes = xmlquery.QuerySelectorAll(root, expression)
 		} else {
 			nodes, err = xmlquery.QueryAll(root, rule.Expression)
 			if err != nil {
+				if handleMetricError(rule, err) {
+					continue
+				}
 				return nil, fmt.Errorf("XPath %q: %w", rule.Expression, err)
 			}
 		}
 		if len(nodes) == 0 {
 			if requiredRule(rule, c) {
+				if handleMetricError(rule, fmt.Errorf("XPath %q matched no nodes", rule.Expression)) {
+					continue
+				}
 				return nil, fmt.Errorf("XPath %q matched no nodes", rule.Expression)
 			}
 			continue
@@ -261,6 +353,9 @@ func transformXPath(root *xmlquery.Node, rules []MetricRule, c *Collector, names
 			}
 			value, err := textValue(node.InnerText())
 			if err != nil {
+				if handleMetricError(rule, err) {
+					continue
+				}
 				return nil, fmt.Errorf("metric %q: %w", rule.Name, err)
 			}
 			out.Metrics = append(out.Metrics, Metric{Name: rule.Name, Help: rule.Description, Type: rule.Type, Value: value, Labels: labels})
@@ -278,10 +373,16 @@ func transformHTMLXPath(raw []byte, rules []MetricRule, c *Collector) (*MetricSe
 	for _, rule := range rules {
 		nodes, err := htmlquery.QueryAll(root, rule.Expression)
 		if err != nil {
+			if handleMetricError(rule, err) {
+				continue
+			}
 			return nil, fmt.Errorf("HTML XPath %q: %w", rule.Expression, err)
 		}
 		if len(nodes) == 0 {
 			if requiredRule(rule, c) {
+				if handleMetricError(rule, fmt.Errorf("HTML XPath %q matched no nodes", rule.Expression)) {
+					continue
+				}
 				return nil, fmt.Errorf("HTML XPath %q matched no nodes", rule.Expression)
 			}
 			continue
@@ -299,6 +400,9 @@ func transformHTMLXPath(raw []byte, rules []MetricRule, c *Collector) (*MetricSe
 			}
 			value, err := textValue(htmlquery.InnerText(node))
 			if err != nil {
+				if handleMetricError(rule, err) {
+					continue
+				}
 				return nil, fmt.Errorf("metric %q: %w", rule.Name, err)
 			}
 			out.Metrics = append(out.Metrics, Metric{Name: rule.Name, Help: rule.Description, Type: rule.Type, Value: value, Labels: labels})
@@ -313,6 +417,9 @@ func transformCSS(doc *goquery.Document, rules []MetricRule, c *Collector) (*Met
 		selection := doc.Find(rule.Expression)
 		if selection.Length() == 0 {
 			if requiredRule(rule, c) {
+				if handleMetricError(rule, fmt.Errorf("CSS selector %q matched no nodes", rule.Expression)) {
+					continue
+				}
 				return nil, fmt.Errorf("CSS selector %q matched no nodes", rule.Expression)
 			}
 			continue
@@ -338,6 +445,9 @@ func transformCSS(doc *goquery.Document, rules []MetricRule, c *Collector) (*Met
 			out.Metrics = append(out.Metrics, Metric{Name: rule.Name, Help: rule.Description, Type: rule.Type, Value: value, Labels: labels})
 		})
 		if transformErr != nil {
+			if handleMetricError(rule, transformErr) {
+				continue
+			}
 			return nil, transformErr
 		}
 	}
@@ -359,12 +469,18 @@ func transformCSV(data any, rules []MetricRule, c *Collector) (*MetricSet, error
 			value, exists := row[rule.Expression]
 			if !exists || strings.TrimSpace(fmt.Sprint(value)) == "" {
 				if requiredRule(rule, c) {
+					if handleMetricError(rule, fmt.Errorf("CSV column %q is missing", rule.Expression)) {
+						continue
+					}
 					return nil, fmt.Errorf("CSV column %q is missing", rule.Expression)
 				}
 				continue
 			}
 			n, err := number(value)
 			if err != nil {
+				if handleMetricError(rule, err) {
+					continue
+				}
 				return nil, fmt.Errorf("metric %q: %w", rule.Name, err)
 			}
 			labels := map[string]string{}
@@ -392,6 +508,9 @@ func applyPrometheusTransform(in MetricSet, t TransformConfig, rules []MetricRul
 				}
 				matched, err := regexp.MatchString(pattern, source.Name)
 				if err != nil {
+					if handleMetricError(rule, err) {
+						continue
+					}
 					return nil, fmt.Errorf("metric %q expression: %w", rule.Name, err)
 				}
 				if !matched {

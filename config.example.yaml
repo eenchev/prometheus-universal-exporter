@@ -33,8 +33,6 @@ collectors:
       #   raw request body for POST or PUT requests
       headers:
         Accept: application/json
-    response:
-      format: json
     transform:
       type: jq
       # Optional: runs once after decoding and before all metric expressions.
@@ -45,6 +43,7 @@ collectors:
       - name: application_requests_total
         description: Total application requests
         type: counter
+        error_mode: log
         expression: .requests
         labels:
           - name: environment
@@ -64,14 +63,13 @@ collectors:
       # Monitor credentials and selected headers can be propagated explicitly.
       # forward_authorization: true
       # forward_headers: [X-Tenant]
-    response:
-      format: text
     transform:
       type: regex
     metrics:
       - name: application_connections
         description: Current application connections
         type: gauge
+        error_mode: log
         labels: []
         expression: 'Connections:\s+(\d+)'
 
@@ -79,7 +77,6 @@ collectors:
     request:
       path: /status.csv
     response:
-      format: csv
       csv:
         header: true
     transform:
@@ -88,6 +85,7 @@ collectors:
       - name: server_cpu
         description: Server CPU utilization
         type: gauge
+        error_mode: log
         expression: cpu
         labels:
           - name: server
@@ -97,22 +95,19 @@ collectors:
   - name: vendor_prometheus
     request:
       path: /metrics
-    response:
-      format: prometheus
     transform:
       type: prometheus
     metrics:
       - name: vendor_requests_total
         description: Vendor HTTP requests
         type: counter
+        error_mode: log
         labels: []
         expression: '^vendor_requests_total$'
 
   - name: custom_python
     request:
       path: /status
-    response:
-      format: text
     transform:
       type: python
       script: |

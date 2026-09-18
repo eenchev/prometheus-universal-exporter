@@ -48,6 +48,7 @@ config:
             - name: example_status
               description: Example status value
               type: gauge
+              labels: {}
               expression: 'status:\s+(\d+(?:\.\d+)?)'
 monitors: []
 # Example:

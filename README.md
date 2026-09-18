@@ -266,4 +266,8 @@ make build
 make helm-test
 ```
 
+GitHub Actions uses changed-path detection: Go tests/build/vet/race checks run
+for Go source or module changes, while Helm lint/template checks run for
+changes under `charts/`. Documentation-only changes do not run either suite.
+
 The test suite is intentionally local-only; no third-party endpoint is required. The exporter exposes `/health`, `/ready`, `/metrics`, and `/probe`.

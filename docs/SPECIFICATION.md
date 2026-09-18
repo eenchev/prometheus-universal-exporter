@@ -402,6 +402,7 @@ Example:
     - name: application_requests_total
       description: Total application requests
       type: counter
+      labels: {}
       expression: '.status.requests'
 ```
 
@@ -429,6 +430,7 @@ Example:
     - name: application_requests_total
       description: Total application requests
       type: counter
+      labels: {}
       expression: '/status/requests'
 ```
 
@@ -563,6 +565,7 @@ Example:
     - name: application_requests_total
       description: Vendor HTTP requests
       type: counter
+      labels: {}
       expression: '^vendor_requests_total$'
 ```
 
@@ -595,6 +598,7 @@ Example:
     - name: application_connections
       description: Current application connections
       type: gauge
+      labels: {}
       expression: 'Connections:\\s+(\\d+)'
 ```
 
@@ -799,6 +803,7 @@ metrics:
   - name: application_requests_total
     description: Total application requests
     type: counter
+    labels: {}
     expression: '.status.requests'
 ```
 
@@ -1165,6 +1170,7 @@ collectors:
       - name: application_requests_total
         description: Total application requests
         type: counter
+        labels: {}
         expression: .requests
 ```
 
@@ -1185,6 +1191,7 @@ collectors:
       - name: application_requests_total
         description: Total application requests
         type: counter
+        labels: {}
         expression: '.status.requests'
 ```
 
@@ -1205,6 +1212,7 @@ collectors:
       - name: application_requests_total
         description: Total application requests
         type: counter
+        labels: {}
         expression: '/status/requests'
 ```
 
@@ -1275,6 +1283,7 @@ collectors:
       - name: vendor_requests_total
         description: Vendor HTTP requests
         type: counter
+        labels: {}
         expression: '^vendor_requests_total$'
 ```
 
@@ -1295,6 +1304,7 @@ collectors:
       - name: application_connections
         description: Current application connections
         type: gauge
+        labels: {}
         expression: 'Connections:\\s+(\\d+)'
 ```
 
@@ -2447,6 +2457,17 @@ helm lint
 helm template for required scenarios
 manifest schema validation where configured
 ```
+
+CI SHOULD use changed-path detection to avoid running unrelated suites:
+
+- Go tests, race tests, vet, formatting, and build run when Go source or Go
+  module files change (`**/*.go`, `go.mod`, or `go.sum`).
+- Helm lint and template scenarios run when chart files change (`charts/**`).
+- A documentation-only or unrelated change MAY complete without running either
+  suite.
+
+The path filter MUST evaluate the correct comparison base for both push and
+pull-request workflows.
 
 CI SHOULD additionally run fuzz smoke tests, image tests, and Kubernetes integration tests in a dedicated pipeline stage when infrastructure is available.
 

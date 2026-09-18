@@ -70,6 +70,7 @@ collectors:
       - name: application_connections
         description: Current application connections
         type: gauge
+        labels: {}
         expression: 'Connections:\s+(\d+)'
 
   - name: app_csv
@@ -100,6 +101,7 @@ collectors:
       - name: vendor_requests_total
         description: Vendor HTTP requests
         type: counter
+        labels: {}
         expression: '^vendor_requests_total$'
 
   - name: custom_python

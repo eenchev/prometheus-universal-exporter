@@ -7,17 +7,39 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - uses: dorny/paths-filter@v3
+        id: changes
+        with:
+          filters: |
+            go:
+              - '**/*.go'
+              - 'go.mod'
+              - 'go.sum'
+            chart:
+              - 'charts/**'
       - uses: actions/setup-go@v5
+        if: steps.changes.outputs.go == 'true'
         with:
           go-version: '1.23.x'
       - uses: azure/setup-helm@v4
+        if: steps.changes.outputs.chart == 'true'
       - run: go mod download
+        if: steps.changes.outputs.go == 'true'
       - run: gofmt -w *.go
+        if: steps.changes.outputs.go == 'true'
       - run: go test ./...
+        if: steps.changes.outputs.go == 'true'
       - run: go test -race ./...
+        if: steps.changes.outputs.go == 'true'
       - run: go vet ./...
+        if: steps.changes.outputs.go == 'true'
       - run: go build ./...
+        if: steps.changes.outputs.go == 'true'
       - run: helm lint charts/prometheus-universal-exporter
+        if: steps.changes.outputs.chart == 'true'
       - run: helm template test charts/prometheus-universal-exporter
+        if: steps.changes.outputs.chart == 'true'
       - run: helm template test charts/prometheus-universal-exporter --set-json 'monitors=[{"name":"service-targets","enabled":true,"type":"service","collector":"example","interval":"30s","scrapeTimeout":"10s"}]'
+        if: steps.changes.outputs.chart == 'true'
       - run: helm template test charts/prometheus-universal-exporter --set-json 'monitors=[{"name":"pod-targets","enabled":true,"type":"pod","collector":"example","interval":"30s","scrapeTimeout":"10s"}]'
+        if: steps.changes.outputs.chart == 'true'

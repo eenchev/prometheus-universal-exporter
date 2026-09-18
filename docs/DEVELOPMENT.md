@@ -9,7 +9,36 @@ make vet
 make build
 make helm-test  # helm lint and the template scenarios CI renders
 make ci         # everything above, in CI order
+
+make test-external  # opt-in; probes real third-party endpoints
 ```
+
+## Tests that reach the internet
+
+`make ci` never touches the network. The demo configurations under `testdata/`
+describe real services, though, and a stub replaying a captured response cannot
+tell you when one of those services renames a field or a column: the local
+tests go on passing while the shipped configuration quietly stops working.
+
+`external_e2e_test.go` closes that gap by probing the real endpoints, and it is
+off unless asked for:
+
+```sh
+EXTERNAL_E2E=1 go test -run TestExternal -v ./...
+# or
+make test-external
+```
+
+Without `EXTERNAL_E2E` the tests skip with a message saying how to run them, so
+`go test ./...` stays offline and deterministic. They are deliberately not in
+CI: a red build caused by somebody else's afternoon outage teaches everyone to
+ignore red builds. Run them when changing a demo configuration, and every so
+often to catch a source that has moved on.
+
+A failure here usually means the service changed or is unreachable rather than
+that this code broke, and the assertions say so — they check that the probe
+returned 200, that each metric the configuration declares is present, and that
+the per-row or per-entry labels survived.
 
 Static analysis is configured in `.golangci.yml`, so a local `make lint` and the
 CI run check exactly the same rules. Install the pinned version with `make

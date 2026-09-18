@@ -1,0 +1,93 @@
+# Demo collector for the USGS earthquake feed, a public CSV endpoint that needs
+# no authentication and no API key.
+#
+#   go run . --config.file=testdata/config.usgs.csv-test.yaml
+#   curl 'http://localhost:8080/probe?collector=earthquakes&target=https://earthquake.usgs.gov'
+#
+# The response is a header row followed by one row per earthquake recorded in
+# the last hour:
+#
+#   time,latitude,longitude,depth,mag,magType,nst,gap,dmin,rms,net,id,updated,place,type,...
+#   2026-09-18T19:14:55.400Z,17.936,-66.960,7.56,2.09,md,7,224,0.06074,0.05,pr,pr71532588,...
+#
+# Two things about this feed are worth knowing before copying the shape of this
+# collector into production.
+#
+# It is event data rather than a gauge: `id` is different for every earthquake,
+# so the series set churns completely as quakes age out of the window. That is
+# exactly the unbounded label value section 22 of the specification warns
+# against. It is fine here — the point is to exercise the CSV path against a
+# real response — but a real deployment would aggregate (a count of quakes, or
+# the maximum magnitude) rather than carry the id.
+#
+# Several columns are empty on some rows: `nst`, `gap`, `dmin` and `magError`
+# are often blank, and `mag` occasionally is. The metrics below read columns
+# that are almost always populated and use `error_mode: log`, so one incomplete
+# row is reported and skipped instead of failing the whole scrape.
+web:
+  self_metrics:
+    # Adds a series per collector, request URL and method with the last
+    # scrape's status, timestamp and duration. A request URL is an unbounded
+    # label value, so tracking is capped at 1000 combinations and
+    # http_exporter_request_series_capped reports when the cap is reached.
+    # The url label carries scheme, host and path only; credentials and the
+    # query string are never put in a label.
+    verbose: true
+
+collectors:
+  - name: earthquakes
+    # The feed is rebuilt about once a minute, so a repeated scrape inside that
+    # minute is answered from memory instead of hitting the public API again.
+    cache: 60s
+    request:
+      method: GET
+      path: /earthquakes/feed/v1.0/summary/all_hour.csv
+      headers:
+        Accept: text/csv
+    # The decoder would infer CSV from the feed's text/csv content type; naming
+    # it makes the collector independent of that.
+    decoder:
+      type: csv
+    response:
+      csv:
+        # A header row, comma separated. Both are the defaults, and the feed
+        # pads some numeric fields with spaces.
+        header: true
+        delimiter: ","
+        trim_space: true
+    transform:
+      type: csv
+    metrics:
+      - name: earthquake_magnitude
+        description: Magnitude of each earthquake reported in the last hour
+        type: gauge
+        error_mode: log
+        # One series per row of the CSV. The value is read from the `mag`
+        # column and the labels from columns of the same row.
+        expression: mag
+        labels:
+          - name: id
+            type: expression
+            expression: id
+          - name: network
+            type: expression
+            expression: net
+          - name: magnitude_type
+            type: expression
+            expression: magType
+          - name: review_status
+            type: expression
+            expression: status
+
+      - name: earthquake_depth_kilometers
+        description: Depth below the surface of each earthquake reported in the last hour
+        type: gauge
+        error_mode: log
+        expression: depth
+        labels:
+          - name: id
+            type: expression
+            expression: id
+          - name: network
+            type: expression
+            expression: net

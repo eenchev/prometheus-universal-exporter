@@ -2987,6 +2987,26 @@ The repository MUST include at least one complete end-to-end scenario for every 
 
 Each scenario SHOULD include at least one failure case and one optional/missing-field case.
 
+## 34.31a External endpoint tests
+
+The repository ships demo configurations that describe real third-party
+services. A stub replaying a captured response cannot detect that one of those
+services has renamed a field or a column, so the configuration keeps passing
+every local test while no longer working.
+
+The repository MUST therefore include tests that probe those endpoints for real,
+and they MUST be opt-in and skipped by default: the rest of the suite is
+local-only and deterministic, and a suite that fails when someone else's service
+is down teaches maintainers to ignore failures. The opt-in MUST be explicit, and
+the skip message MUST say how to run them. They MUST NOT run in CI for the same
+reason.
+
+Each case MUST assert that the probe succeeded, that every metric the
+configuration declares is present, and that the per-row or per-entry labels
+survived, so a source that changes shape is reported rather than silently
+producing an empty scrape. One case MUST cover the response cache against a real
+response.
+
 ## 34.32 Regression tests
 
 Every bug fixed in the project MUST add a regression test reproducing the bug before or alongside the fix.

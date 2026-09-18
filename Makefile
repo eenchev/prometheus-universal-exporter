@@ -5,13 +5,18 @@ APP := prometheus-universal-exporter
 # .github/workflows/ci.yml by a test.
 GOLANGCI_LINT_VERSION := v2.13.2
 
-.PHONY: build test vet fmt fmt-check lint lint-install helm-test
+.PHONY: build test test-external vet fmt fmt-check lint lint-install helm-test
 build:
 	go build ./...
 
 test:
 	go test ./...
 	go test -race ./...
+
+# Opt-in: probes real third-party endpoints, so it is deliberately not part of
+# `make ci`. See docs/DEVELOPMENT.md.
+test-external:
+	EXTERNAL_E2E=1 go test -run TestExternal -v ./...
 
 vet:
 	go vet ./...

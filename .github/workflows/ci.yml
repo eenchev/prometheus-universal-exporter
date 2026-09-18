@@ -6,8 +6,8 @@ jobs:
   test:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: dorny/paths-filter@v3
+      - uses: actions/checkout@v7
+      - uses: dorny/paths-filter@v4
         id: changes
         with:
           filters: |
@@ -20,11 +20,11 @@ jobs:
               - '.github/workflows/**'
             chart:
               - 'charts/**'
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@v7
         if: steps.changes.outputs.go == 'true'
         with:
           go-version: '1.23.x'
-      - uses: azure/setup-helm@v4
+      - uses: azure/setup-helm@v5
         if: steps.changes.outputs.chart == 'true'
       - run: go mod download
         if: steps.changes.outputs.go == 'true'
@@ -37,7 +37,7 @@ jobs:
             exit 1
           fi
         if: steps.changes.outputs.go == 'true'
-      - uses: golangci/golangci-lint-action@v8
+      - uses: golangci/golangci-lint-action@v9
         with:
           version: v2.5.0
         if: steps.changes.outputs.go == 'true'

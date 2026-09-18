@@ -30,9 +30,9 @@ jobs:
             exit 1
           fi
 
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: azure/setup-helm@v4
+      - uses: azure/setup-helm@v5
 
       # Chart.yaml is the source of truth for the chart version. Releasing a tag
       # that disagrees with it would publish an artifact whose committed

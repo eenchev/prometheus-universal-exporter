@@ -151,15 +151,19 @@ func evaluateJQ(ctx context.Context, data any, expression string) ([]any, error)
 	return values, nil
 }
 
-func evaluateLabels(ctx context.Context, data any, expressions map[string]string) (map[string]string, error) {
+func evaluateLabels(ctx context.Context, data any, expressions []LabelRule) (map[string]string, error) {
 	labels := map[string]string{}
-	for name, expression := range expressions {
-		values, err := evaluateJQ(ctx, data, expression)
+	for _, label := range expressions {
+		if label.Type == "string" {
+			labels[label.Name] = label.Value
+			continue
+		}
+		values, err := evaluateJQ(ctx, data, label.Expression)
 		if err != nil {
-			return nil, fmt.Errorf("label %q: %w", name, err)
+			return nil, fmt.Errorf("label %q: %w", label.Name, err)
 		}
 		if len(values) > 0 && values[0] != nil {
-			labels[name] = fmt.Sprint(values[0])
+			labels[label.Name] = fmt.Sprint(values[0])
 		}
 	}
 	return labels, nil
@@ -197,10 +201,14 @@ func transformRegex(text string, rules []MetricRule, c *Collector) (*MetricSet, 
 				return nil, fmt.Errorf("metric %q: %w", rule.Name, err)
 			}
 			labels := map[string]string{}
-			for label, group := range rule.Labels {
-				index := captureIndex(group, names)
+			for _, label := range rule.Labels {
+				if label.Type == "string" {
+					labels[label.Name] = label.Value
+					continue
+				}
+				index := captureIndex(label.Expression, names)
 				if index >= 0 && 2*index+1 < len(match) && match[2*index] >= 0 {
-					labels[label] = text[match[2*index]:match[2*index+1]]
+					labels[label.Name] = text[match[2*index]:match[2*index+1]]
 				}
 			}
 			out.Metrics = append(out.Metrics, Metric{Name: rule.Name, Help: rule.Description, Type: rule.Type, Value: n, Labels: labels})
@@ -246,11 +254,13 @@ func transformXPath(root *xmlquery.Node, rules []MetricRule, c *Collector, names
 		}
 		for _, node := range nodes {
 			labels := map[string]string{}
-			for label, expression := range rule.Labels {
-				if strings.HasPrefix(expression, "@") {
-					labels[label] = node.SelectAttr(strings.TrimPrefix(expression, "@"))
-				} else if value := xmlquery.FindOne(node, expression); value != nil {
-					labels[label] = value.InnerText()
+			for _, label := range rule.Labels {
+				if label.Type == "string" {
+					labels[label.Name] = label.Value
+				} else if strings.HasPrefix(label.Expression, "@") {
+					labels[label.Name] = node.SelectAttr(strings.TrimPrefix(label.Expression, "@"))
+				} else if value := xmlquery.FindOne(node, label.Expression); value != nil {
+					labels[label.Name] = value.InnerText()
 				}
 			}
 			value, err := textValue(node.InnerText())
@@ -282,11 +292,13 @@ func transformHTMLXPath(raw []byte, rules []MetricRule, c *Collector) (*MetricSe
 		}
 		for _, node := range nodes {
 			labels := map[string]string{}
-			for label, expression := range rule.Labels {
-				if strings.HasPrefix(expression, "@") {
-					labels[label] = htmlquery.SelectAttr(node, strings.TrimPrefix(expression, "@"))
-				} else if value := htmlquery.FindOne(node, expression); value != nil {
-					labels[label] = htmlquery.InnerText(value)
+			for _, label := range rule.Labels {
+				if label.Type == "string" {
+					labels[label.Name] = label.Value
+				} else if strings.HasPrefix(label.Expression, "@") {
+					labels[label.Name] = htmlquery.SelectAttr(node, strings.TrimPrefix(label.Expression, "@"))
+				} else if value := htmlquery.FindOne(node, label.Expression); value != nil {
+					labels[label.Name] = htmlquery.InnerText(value)
 				}
 			}
 			value, err := textValue(htmlquery.InnerText(node))
@@ -320,8 +332,12 @@ func transformCSS(doc *goquery.Document, rules []MetricRule, c *Collector) (*Met
 				return
 			}
 			labels := map[string]string{}
-			for label, selector := range rule.Labels {
-				labels[label] = strings.TrimSpace(node.Find(selector).First().Text())
+			for _, label := range rule.Labels {
+				if label.Type == "string" {
+					labels[label.Name] = label.Value
+				} else {
+					labels[label.Name] = strings.TrimSpace(node.Find(label.Expression).First().Text())
+				}
 			}
 			out.Metrics = append(out.Metrics, Metric{Name: rule.Name, Help: rule.Description, Type: rule.Type, Value: value, Labels: labels})
 		})
@@ -356,9 +372,11 @@ func transformCSV(data any, rules []MetricRule, c *Collector) (*MetricSet, error
 				return nil, fmt.Errorf("metric %q: %w", rule.Name, err)
 			}
 			labels := map[string]string{}
-			for label, column := range rule.Labels {
-				if labelValue, exists := row[column]; exists {
-					labels[label] = fmt.Sprint(labelValue)
+			for _, label := range rule.Labels {
+				if label.Type == "string" {
+					labels[label.Name] = label.Value
+				} else if labelValue, exists := row[label.Expression]; exists {
+					labels[label.Name] = fmt.Sprint(labelValue)
 				}
 			}
 			out.Metrics = append(out.Metrics, Metric{Name: rule.Name, Help: rule.Description, Type: rule.Type, Value: n, Labels: labels})
@@ -396,9 +414,11 @@ func applyPrometheusTransform(in MetricSet, t TransformConfig, rules []MetricRul
 				if metric.Labels == nil {
 					metric.Labels = map[string]string{}
 				}
-				for destination, sourceLabel := range rule.Labels {
-					if value, ok := metric.Labels[sourceLabel]; ok {
-						metric.Labels[destination] = value
+				for _, label := range rule.Labels {
+					if label.Type == "string" {
+						metric.Labels[label.Name] = label.Value
+					} else if value, ok := metric.Labels[label.Expression]; ok {
+						metric.Labels[label.Name] = value
 					}
 				}
 				out.Metrics = append(out.Metrics, metric)

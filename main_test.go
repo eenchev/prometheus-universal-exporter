@@ -118,7 +118,7 @@ func TestMissingOptionalJSONValue(t *testing.T) {
 }
 
 func TestStandardJSONMetricAndPreScript(t *testing.T) {
-	c := Collector{Name: "json", Response: ResponseConfig{Format: "json"}, Transform: TransformConfig{Type: "jq", PreScript: `data["requests"] = 42`}, Metrics: []MetricRule{{Name: "application_requests_total", Description: "Total application requests", Type: CounterMetricType, Expression: ".requests", Labels: map[string]string{"environment": ".environment"}}}, Limits: Limits{MaxMetrics: 10}}
+	c := Collector{Name: "json", Response: ResponseConfig{Format: "json"}, Transform: TransformConfig{Type: "jq", PreScript: `data["requests"] = 42`}, Metrics: []MetricRule{{Name: "application_requests_total", Description: "Total application requests", Type: CounterMetricType, Expression: ".requests", Labels: []LabelRule{{Name: "environment", Type: "expression", Expression: ".environment"}}}}, Limits: Limits{MaxMetrics: 10}}
 	r := &HTTPResponse{Body: []byte(`{"environment":"test"}`), Headers: make(http.Header)}
 	if err := (&Config{Collectors: []Collector{c}}).Validate(); err != nil {
 		t.Fatal(err)
@@ -135,6 +135,27 @@ func TestStandardJSONMetricAndPreScript(t *testing.T) {
 		t.Fatalf("unexpected metrics: %#v", m.Metrics)
 	}
 }
+
+func TestStandardCSVMetricLabelsUseRowExpressions(t *testing.T) {
+	c := Collector{Name: "csv", Response: ResponseConfig{Format: "csv", CSV: CSVConfig{Header: boolPtr(true)}}, Transform: TransformConfig{Type: "csv"}, Metrics: []MetricRule{{Name: "server_cpu", Description: "Server CPU utilization", Type: GaugeMetricType, Expression: "cpu", Labels: []LabelRule{{Name: "server", Type: "expression", Expression: "server"}, {Name: "environment", Type: "string", Value: "production"}}}}, Limits: Limits{MaxMetrics: 10}}
+	if err := (&Config{Collectors: []Collector{c}}).Validate(); err != nil {
+		t.Fatal(err)
+	}
+	r := &HTTPResponse{Body: []byte("server,cpu\nweb01,72\nweb02,31\n"), Headers: http.Header{"Content-Type": []string{"text/csv"}}}
+	d, err := decode(r, &c)
+	if err != nil {
+		t.Fatal(err)
+	}
+	m, err := transform(context.Background(), d, r, &c, "python3")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(m.Metrics) != 2 || m.Metrics[0].Labels["server"] != "web01" || m.Metrics[1].Labels["server"] != "web02" || m.Metrics[0].Labels["environment"] != "production" {
+		t.Fatalf("unexpected CSV metrics: %#v", m.Metrics)
+	}
+}
+
+func boolPtr(value bool) *bool { return &value }
 
 func TestForwardedHeadersAreExplicitAndAllowlisted(t *testing.T) {
 	r := httptest.NewRequest(http.MethodGet, "/probe?header_X-Tenant=team-a&header_X-Unsafe=secret", nil)

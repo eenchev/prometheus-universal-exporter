@@ -129,12 +129,18 @@ type Limits struct {
 	MaxOutputBytes      int      `yaml:"max_output_bytes"`
 }
 type MetricRule struct {
-	Name        string            `yaml:"name"`
-	Description string            `yaml:"description"`
-	Type        MetricType        `yaml:"type"`
-	Labels      map[string]string `yaml:"labels"`
-	Expression  string            `yaml:"expression"`
-	Required    *bool             `yaml:"required"`
+	Name        string      `yaml:"name"`
+	Description string      `yaml:"description"`
+	Type        MetricType  `yaml:"type"`
+	Labels      []LabelRule `yaml:"labels"`
+	Expression  string      `yaml:"expression"`
+	Required    *bool       `yaml:"required"`
+}
+type LabelRule struct {
+	Name       string `yaml:"name"`
+	Type       string `yaml:"type"`
+	Value      string `yaml:"value"`
+	Expression string `yaml:"expression"`
 }
 type TransformConfig struct {
 	Type         string            `yaml:"type"`
@@ -226,7 +232,7 @@ func (c *Config) Validate() error {
 		}
 		if x.Transform.Type != "" {
 			x.Transform.Type = strings.ToLower(x.Transform.Type)
-			if !map[string]bool{"jq": true, "yq": true, "xpath": true, "css": true, "csv": true, "regex": true, "python": true, "prometheus": true}[x.Transform.Type] {
+			if !map[string]bool{"none": true, "jq": true, "yq": true, "xpath": true, "css": true, "csv": true, "regex": true, "python": true, "prometheus": true}[x.Transform.Type] {
 				return fmt.Errorf("collector %q has unknown transform %q", x.Name, x.Transform.Type)
 			}
 		}
@@ -268,13 +274,38 @@ func (c *Config) Validate() error {
 			if strings.TrimSpace(r.Expression) == "" && x.Transform.Type != "python" && x.Transform.Type != "prometheus" {
 				return fmt.Errorf("collector %q metric %q has no expression", x.Name, r.Name)
 			}
-			if x.Transform.Type == "jq" || x.Transform.Type == "yq" {
+			for _, label := range r.Labels {
+				if strings.TrimSpace(label.Name) == "" {
+					return fmt.Errorf("collector %q metric %q has a label without a name", x.Name, r.Name)
+				}
+				if !regexp.MustCompile(`^[a-zA-Z_][a-zA-Z0-9_]*$`).MatchString(label.Name) {
+					return fmt.Errorf("collector %q metric %q has invalid label name %q", x.Name, r.Name, label.Name)
+				}
+				switch label.Type {
+				case "string":
+					if label.Expression != "" {
+						return fmt.Errorf("collector %q metric %q label %q of type string cannot set expression", x.Name, r.Name, label.Name)
+					}
+				case "expression":
+					if strings.TrimSpace(label.Expression) == "" {
+						return fmt.Errorf("collector %q metric %q label %q of type expression requires expression", x.Name, r.Name, label.Name)
+					}
+					if label.Value != "" {
+						return fmt.Errorf("collector %q metric %q label %q of type expression cannot set value", x.Name, r.Name, label.Name)
+					}
+				default:
+					return fmt.Errorf("collector %q metric %q label %q has invalid type %q; want string or expression", x.Name, r.Name, label.Name, label.Type)
+				}
+			}
+			if x.Transform.Type == "" || x.Transform.Type == "none" || x.Transform.Type == "jq" || x.Transform.Type == "yq" {
 				if _, err := gojq.Parse(r.Expression); err != nil {
 					return fmt.Errorf("collector %q metric %q expression: %w", x.Name, r.Name, err)
 				}
-				for label, expr := range r.Labels {
-					if _, err := gojq.Parse(expr); err != nil {
-						return fmt.Errorf("collector %q metric %q label %q expression: %w", x.Name, r.Name, label, err)
+				for _, label := range r.Labels {
+					if label.Type == "expression" {
+						if _, err := gojq.Parse(label.Expression); err != nil {
+							return fmt.Errorf("collector %q metric %q label %q expression: %w", x.Name, r.Name, label.Name, err)
+						}
 					}
 				}
 			}

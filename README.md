@@ -94,7 +94,9 @@ collectors:
         type: counter
         expression: .requests
         labels:
-          environment: .environment
+          - name: environment
+            type: expression
+            expression: .environment
 ```
 
 The expression and label values are interpreted by the selected transform:
@@ -110,6 +112,23 @@ The expression and label values are interpreted by the selected transform:
   are relative XPath expressions or `@attribute` selectors.
 - `prometheus`: the expression matches source metric names; it can remap the
   name, description, type, and selected labels.
+
+Metric labels are explicit typed entries. Use `type: expression` when the
+value comes from the response, or `type: string` with `value` for a literal:
+
+```yaml
+labels:
+  - name: server
+    type: expression
+    expression: server       # CSV column for the current row
+  - name: environment
+    type: string
+    value: production
+```
+
+Label expressions use the same transform-specific language as the metric
+expression. For CSV, each row produces a metric and `expression: server`
+selects that row's `server` column.
 
 Every transform may define `transform.pre_script`. It runs once per scrape
 after decoding and before metric extraction. The script receives the decoded
@@ -131,7 +150,9 @@ metrics:
     type: gauge
     expression: cpu
     labels:
-      server: server
+      - name: server
+        type: expression
+        expression: server
 transform:
   type: csv
 ```

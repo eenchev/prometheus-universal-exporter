@@ -47,7 +47,9 @@ collectors:
         type: counter
         expression: .requests
         labels:
-          environment: .environment
+          - name: environment
+            type: expression
+            expression: .environment
 
   # Set targetAuth.enabled=true in the Helm chart and store the token in the
   # configured Secret key when using this file-based target credential.
@@ -70,7 +72,7 @@ collectors:
       - name: application_connections
         description: Current application connections
         type: gauge
-        labels: {}
+        labels: []
         expression: 'Connections:\s+(\d+)'
 
   - name: app_csv
@@ -88,7 +90,9 @@ collectors:
         type: gauge
         expression: cpu
         labels:
-          server: server
+          - name: server
+            type: expression
+            expression: server
 
   - name: vendor_prometheus
     request:
@@ -101,7 +105,7 @@ collectors:
       - name: vendor_requests_total
         description: Vendor HTTP requests
         type: counter
-        labels: {}
+        labels: []
         expression: '^vendor_requests_total$'
 
   - name: custom_python

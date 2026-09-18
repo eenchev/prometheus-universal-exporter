@@ -375,7 +375,9 @@ Example:
       type: counter
       expression: '.requests'
       labels:
-        environment: '.environment'
+        - name: environment
+          type: expression
+          expression: '.environment'
 ```
 
 ---
@@ -402,7 +404,7 @@ Example:
     - name: application_requests_total
       description: Total application requests
       type: counter
-      labels: {}
+      labels: []
       expression: '.status.requests'
 ```
 
@@ -430,7 +432,7 @@ Example:
     - name: application_requests_total
       description: Total application requests
       type: counter
-      labels: {}
+      labels: []
       expression: '/status/requests'
 ```
 
@@ -473,7 +475,9 @@ Example conceptual configuration:
       type: gauge
       expression: '#servers tr'
       labels:
-        server: 'td:nth-child(1)'
+        - name: server
+          type: expression
+          expression: 'td:nth-child(1)'
 ```
 
 XPath equivalent SHOULD be supported.
@@ -565,7 +569,7 @@ Example:
     - name: application_requests_total
       description: Vendor HTTP requests
       type: counter
-      labels: {}
+      labels: []
       expression: '^vendor_requests_total$'
 ```
 
@@ -598,7 +602,7 @@ Example:
     - name: application_connections
       description: Current application connections
       type: gauge
-      labels: {}
+      labels: []
       expression: 'Connections:\\s+(\\d+)'
 ```
 
@@ -803,7 +807,7 @@ metrics:
   - name: application_requests_total
     description: Total application requests
     type: counter
-    labels: {}
+    labels: []
     expression: '.status.requests'
 ```
 
@@ -865,7 +869,9 @@ metrics:
     description: Total application requests
     type: counter
     labels:
-      environment: .environment
+      - name: environment
+        type: expression
+        expression: .environment
     expression: .requests
 ```
 
@@ -876,8 +882,10 @@ to `gauge`. Metric declarations MUST be placed on the collector, alongside
 `transform`, rather than using transform-specific arrays such as `rules` or
 `expressions`.
 
-The meaning of `expression` and the values in `labels` depends only on the
-selected transform:
+Each label entry MUST have `name` and `type`. `type` MUST be either `string` or
+`expression`. A `string` label MUST use `value` as its literal value. An
+`expression` label MUST provide `expression`, interpreted by the same transform
+as the metric expression:
 
 | Transform | `expression` | `labels` |
 | --- | --- | --- |
@@ -887,6 +895,19 @@ selected transform:
 | `css` | CSS selector for numeric text | selectors relative to the selected element |
 | `xpath` | XPath selecting numeric text | relative XPath or `@attribute` |
 | `prometheus` | regular expression matching source metric names | destination label name to source label name |
+
+For example, these labels distinguish a response-derived value from a
+constant:
+
+```yaml
+labels:
+  - name: server
+    type: expression
+    expression: server       # current CSV row's server column
+  - name: environment
+    type: string
+    value: production
+```
 
 Python transforms are the exception: their script emits the common metric
 objects through `metric(...)`, so a `metrics` array is optional for them.
@@ -1170,7 +1191,7 @@ collectors:
       - name: application_requests_total
         description: Total application requests
         type: counter
-        labels: {}
+        labels: []
         expression: .requests
 ```
 
@@ -1191,7 +1212,7 @@ collectors:
       - name: application_requests_total
         description: Total application requests
         type: counter
-        labels: {}
+        labels: []
         expression: '.status.requests'
 ```
 
@@ -1212,7 +1233,7 @@ collectors:
       - name: application_requests_total
         description: Total application requests
         type: counter
-        labels: {}
+        labels: []
         expression: '/status/requests'
 ```
 
@@ -1238,7 +1259,9 @@ collectors:
         type: gauge
         expression: cpu
         labels:
-          server: server
+          - name: server
+            type: expression
+            expression: server
 ```
 
 ## 28.5 HTML + CSS selector
@@ -1260,7 +1283,9 @@ collectors:
         type: gauge
         expression: '#servers tr'
         labels:
-          server: 'td:nth-child(1)'
+          - name: server
+            type: expression
+            expression: 'td:nth-child(1)'
 ```
 
 A simple tag extraction is also valid by setting `expression: h1` in a metric
@@ -1283,7 +1308,7 @@ collectors:
       - name: vendor_requests_total
         description: Vendor HTTP requests
         type: counter
-        labels: {}
+        labels: []
         expression: '^vendor_requests_total$'
 ```
 
@@ -1304,7 +1329,7 @@ collectors:
       - name: application_connections
         description: Current application connections
         type: gauge
-        labels: {}
+        labels: []
         expression: 'Connections:\\s+(\\d+)'
 ```
 
@@ -2773,7 +2798,9 @@ metrics:
     type: gauge
     expression: cpu
     labels:
-      server: server
+      - name: server
+        type: expression
+        expression: server
 transform:
   type: csv
 ```

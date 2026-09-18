@@ -72,6 +72,27 @@ var externalCases = []externalCase{
 		wantMetrics: []string{"earthquake_magnitude", "earthquake_depth_kilometers"},
 		wantLabel:   `network=`,
 	},
+	{
+		name:      "k8s-guestbook/yaml",
+		config:    "testdata/config.k8sguestbook.yaml-test.yaml",
+		collector: "kubernetes_guestbook_deployment",
+		target:    "https://raw.githubusercontent.com",
+		wantMetrics: []string{
+			"kubernetes_deployment_replicas",
+			"kubernetes_deployment_containers",
+			"kubernetes_deployment_container_port",
+			"kubernetes_deployment_info",
+		},
+		wantLabel: `container="php-redis"`,
+	},
+	{
+		name:        "scrapethissite/html",
+		config:      "testdata/config.scrapethissite.html-test.yaml",
+		collector:   "countries_html",
+		target:      "https://www.scrapethissite.com",
+		wantMetrics: []string{"country_population", "country_area"},
+		wantLabel:   `country="Andorra"`,
+	},
 }
 
 func TestExternalDemoConfigurationsStillMatchTheirSources(t *testing.T) {

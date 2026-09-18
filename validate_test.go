@@ -255,13 +255,16 @@ func TestConfigReloadRejectsAPreScriptThatDoesNotProduceData(t *testing.T) {
 
 // The configurations the repository ships must satisfy the contract they
 // demonstrate — the examples an operator copies from, and the fixture the
-// Frankfurter demo runs against, which is the only one of them carrying a
+// different file format demos runs against, which is the only one of them carrying a
 // pre-script.
 func TestShippedExampleScriptsSatisfyTheContract(t *testing.T) {
 	for _, path := range []string{
 		"config.example.yaml",
 		"config.otlp.example.yaml",
 		"testdata/config.frankfurter.json-test.yaml",
+		"testdata/config.usgs.csv-test.yaml",
+		"testdata/config.k8sguestbook.yaml-test.yaml",
+		"testdata/config.scrapethissite.html-test.yaml",
 	} {
 		t.Run(path, func(t *testing.T) {
 			cfg, err := LoadConfig(path)

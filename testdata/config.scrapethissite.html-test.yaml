@@ -1,0 +1,40 @@
+web:
+  self_metrics:
+    verbose: true
+
+collectors:
+  - name: countries_html
+    cache: 60s
+
+    request:
+      method: GET
+      path: /pages/simple/
+      headers:
+        Accept: text/html
+
+    decoder:
+      type: html
+
+    transform:
+      type: xpath
+
+    metrics:
+      - name: country_population
+        description: Population of the first country on the page
+        type: gauge
+        error_mode: log
+        expression: "(//span[contains(@class, 'country-population')])[1]"
+        labels:
+          - name: country
+            type: string
+            value: Andorra
+
+      - name: country_area
+        description: Area in square kilometres of the first country on the page
+        type: gauge
+        error_mode: log
+        expression: "(//span[contains(@class, 'country-area')])[1]"
+        labels:
+          - name: country
+            type: string
+            value: Andorra

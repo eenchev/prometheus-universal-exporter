@@ -1,0 +1,54 @@
+web:
+  self_metrics:
+    verbose: true
+
+collectors:
+  - name: kubernetes_guestbook_deployment
+    request:
+      method: GET
+      follow_redirects: true
+      path: /kubernetes/website/master/content/en/examples/application/guestbook/frontend-deployment.yaml
+      headers:
+        Accept: application/yaml
+
+    decoder:
+      type: yaml
+
+    transform:
+      type: yq
+
+    metrics:
+      - name: kubernetes_deployment_replicas
+        description: Desired number of replicas configured for the deployment
+        type: gauge
+        error_mode: log
+        expression: '.spec.replicas'
+
+      - name: kubernetes_deployment_containers
+        description: Number of containers configured in the deployment
+        type: gauge
+        error_mode: log
+        expression: '.spec.template.spec.containers | length'
+
+      - name: kubernetes_deployment_container_port
+        description: Container port configured for the deployment
+        type: gauge
+        error_mode: log
+        expression: '.spec.template.spec.containers[0].ports[0].containerPort'
+        labels:
+          - name: container
+            type: expression
+            expression: '.spec.template.spec.containers[0].name'
+
+      - name: kubernetes_deployment_info
+        description: Kubernetes deployment information
+        type: gauge
+        error_mode: log
+        expression: '1'
+        labels:
+          - name: name
+            type: expression
+            expression: '.metadata.name'
+          - name: namespace
+            type: expression
+            expression: '.metadata.namespace'

@@ -5,11 +5,10 @@ metadata:
   name: {{ include "prometheus-universal-exporter.fullname" . }}
   {{ with .Values.namespaceOverride }}namespace: {{ . }}{{ end }}
   labels:
-    {{- include "prometheus-universal-exporter.labels" . | nindent 4 }}
-  {{- with .Values.ingress.annotations }}
+    {{- include "prometheus-universal-exporter.metadataLabels" (list .) | nindent 4 }}
   annotations:
-    {{- toYaml . | nindent 4 }}
-  {{- end }}
+    {{- $annotations := .Values.ingress.annotations | default dict -}}
+    {{- include "prometheus-universal-exporter.metadataAnnotations" (list . $annotations) | nindent 4 }}
 spec:
   {{- with .Values.ingress.className }}
   ingressClassName: {{ . }}

@@ -2,6 +2,8 @@ replicaCount: 1
 namespaceOverride: ""
 nameOverride: ""
 fullnameOverride: ""
+defaultLabels: {}
+defaultAnnotations: {}
 image:
   repository: ghcr.io/evgenienchev/prometheus-universal-exporter
   tag: "latest"
@@ -60,6 +62,12 @@ monitors: []
 #     relabelings: []
 #     metricRelabelings: []
 #     headers: {}
+#     # Optional /probe request parameter overrides. Values must be lists.
+#     params:
+#       method: [POST]
+#       path: [/api/status]
+#       timeout: [5s]
+#       body: [raw request body]
 #     auth:
 #       enabled: false
 #       type: bearer # bearer or basic

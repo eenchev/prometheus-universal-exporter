@@ -4,13 +4,14 @@ metadata:
   name: {{ include "prometheus-universal-exporter.fullname" . }}
   {{ with .Values.namespaceOverride }}namespace: {{ . }}{{ end }}
   labels:
-    {{- include "prometheus-universal-exporter.labels" . | nindent 4 }}
+    {{- include "prometheus-universal-exporter.metadataLabels" (list .) | nindent 4 }}
   annotations:
-    {{- with .Values.service.annotations }}{{ toYaml . | nindent 4 }}{{ end }}
+    {{- $annotations := .Values.service.annotations | default dict -}}
     {{- if .Values.neg.enabled }}
-    cloud.google.com/neg: '{"ingress": true}'
-    {{- with .Values.neg.annotations }}{{ toYaml . | nindent 4 }}{{ end }}
+    {{- $_ := set $annotations "cloud.google.com/neg" "{\"ingress\": true}" -}}
+    {{- range $key, $value := .Values.neg.annotations }}{{- $_ := set $annotations $key $value -}}{{- end }}
     {{- end }}
+    {{- include "prometheus-universal-exporter.metadataAnnotations" (list . $annotations) | nindent 4 }}
 spec:
   type: {{ .Values.service.type }}
   selector:

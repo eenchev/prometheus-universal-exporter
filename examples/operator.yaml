@@ -20,8 +20,15 @@ spec:
   endpoints:
     - port: http
       path: /probe
+      interval: 30s
+      scrapeTimeout: 10s
       params:
         collector: [legacy_text]
+        # Optional per-scrape overrides of the selected collector request:
+        # method: [POST]
+        # path: [/api/status]
+        # timeout: [5s]
+        # body: [raw request body]
         # Non-secret monitor parameters become target headers only when the
         # selected collector allowlists X-Tenant in request.forward_headers.
         header_X-Tenant: [team-a]
@@ -43,6 +50,8 @@ spec:
   podMetricsEndpoints:
     - port: http
       path: /probe
+      interval: 30s
+      scrapeTimeout: 10s
       params:
         collector: [legacy_text]
         header_X-Tenant: [team-a]

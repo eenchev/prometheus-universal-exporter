@@ -29,7 +29,8 @@ collectors:
     request:
       method: GET
       path: /api/status
-      timeout: 5s
+      # body: |
+      #   raw request body for POST or PUT requests
       headers:
         Accept: application/json
     response:

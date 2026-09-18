@@ -14,7 +14,15 @@ go run . --config.file=config.example.yaml
 
 The full implementation specification is [docs/SPECIFICATION.md](docs/SPECIFICATION.md).
 
+The Helm chart supports `defaultLabels` and `defaultAnnotations` for metadata
+that should be applied to every chart-created Kubernetes object. Object-specific
+metadata overrides a same-named default.
+
 Exporter self-health metrics are available at `/self-metrics` by default (and `/metrics` remains a compatibility alias). Change the dedicated path with `--web.self-metrics-path=/exporter/metrics`. The Helm chart's optional self-metrics ServiceMonitor/PodMonitor scrapes the exporter pods/services separately from target-probing monitors. Configure one or more entries in `monitors`, each with a unique `name` and `type: pod` or `type: service`; each entry supports Prometheus Operator `relabelings` and `metricRelabelings`.
+
+The Dockerfile exposes `GO_VERSION`, `PYTHON_VERSION`, `BEAUTIFULSOUP4_VERSION`,
+`LXML_VERSION`, `PYYAML_VERSION`, and `PYTHON_DATEUTIL_VERSION` build arguments,
+all with pinned defaults. Override them with `docker build --build-arg NAME=value`.
 
 Optional OTLP/HTTP JSON export is configured at the top level. Probe metric sets and self-health metric sets are forwarded when enabled:
 
@@ -46,7 +54,7 @@ interval even when no Prometheus self-metrics scrape is running.
 
 Collectors contain request, response, decoder, transformation, error-policy, and limit settings. Target URLs are deliberately not stored in configuration.
 
-Supported formats are `json`, `yaml`, `xml`, `csv`, `html`, `prometheus`, `text`, `python`, and `auto`. JSON and YAML expressions use the embedded jq-compatible engine (the expression language is also used for yq-compatible transformations). XML supports XPath, HTML supports CSS selectors, text supports regular expressions, and Prometheus input is parsed before filtering/renaming.
+Supported formats are `json`, `yaml`, `xml`, `csv`, `html`, `prometheus`, `text`, `python`, and `auto`. JSON and YAML expressions use the embedded jq-compatible engine (the expression language is also used for yq-compatible transformations). XML supports XPath, HTML supports CSS selectors and XPath (including bare element selectors such as `h1`), text supports regular expressions, and Prometheus input is parsed before filtering/renaming.
 
 A simple extraction rule is useful when the desired metric name is known:
 
@@ -107,6 +115,25 @@ relabelings:
 ```
 
 One ServiceMonitor endpoint selects one collector. Use multiple endpoints or monitor resources for multiple collector configurations. The same pattern works for PodMonitor.
+
+Each Helm `monitors` entry can set `interval` and `scrapeTimeout` for the Prometheus scrape. Its `params` map can override the selected collector's request method, path, timeout, or raw body for that scrape:
+
+```yaml
+monitors:
+  - name: write-status
+    enabled: true
+    type: service
+    collector: legacy_text
+    interval: 30s
+    scrapeTimeout: 10s
+    params:
+      method: [POST]
+      path: [/api/status]
+      timeout: [5s]
+      body: [raw request body]
+```
+
+The body is opaque text and does not need to be JSON. Without a `timeout` parameter, the exporter uses the incoming Prometheus scrape context as the target request timeout.
 
 Monitor authentication is applied by Prometheus when it scrapes the exporter. To pass that credential to the discovered target, set `request.forward_authorization: true` on the selected collector. Each `monitors` entry supports Secret-backed `auth.type: bearer` and `auth.type: basic` settings. The exporter never forwards arbitrary incoming headers.
 

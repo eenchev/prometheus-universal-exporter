@@ -4,7 +4,9 @@ metadata:
   name: {{ include "prometheus-universal-exporter.fullname" . }}
   {{ with .Values.namespaceOverride }}namespace: {{ . }}{{ end }}
   labels:
-    {{- include "prometheus-universal-exporter.labels" . | nindent 4 }}
+    {{- include "prometheus-universal-exporter.metadataLabels" (list .) | nindent 4 }}
+  annotations:
+    {{- include "prometheus-universal-exporter.metadataAnnotations" (list .) | nindent 4 }}
 spec:
   replicas: {{ .Values.replicaCount }}
   strategy: {{- toYaml .Values.strategy | nindent 4 }}
@@ -15,10 +17,10 @@ spec:
   template:
     metadata:
       labels:
-        app.kubernetes.io/name: {{ include "prometheus-universal-exporter.name" . }}
-        app.kubernetes.io/instance: {{ .Release.Name }}
+        {{- include "prometheus-universal-exporter.metadataLabels" (list .) | nindent 8 }}
       annotations:
-        checksum/config: {{ include (print $.Template.BasePath "/configmap.yaml") . | sha256sum }}
+        {{- $podAnnotations := dict "checksum/config" (include (print $.Template.BasePath "/configmap.yaml") . | sha256sum) -}}
+        {{- include "prometheus-universal-exporter.metadataAnnotations" (list . $podAnnotations) | nindent 8 }}
     spec:
       serviceAccountName: {{ include "prometheus-universal-exporter.serviceAccountName" . }}
       securityContext: {{- toYaml .Values.podSecurityContext | nindent 8 }}

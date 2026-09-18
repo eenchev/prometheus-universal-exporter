@@ -4,6 +4,15 @@ Install with `helm install exporter ./charts/prometheus-universal-exporter`. Rep
 
 The chart creates a Deployment, Service, ServiceAccount, and ConfigMap. A ConfigMap checksum annotation triggers a rollout when collector configuration changes. The exporter also checks the file periodically and keeps the last valid configuration when a reload is invalid. `namespaceOverride`, `strategy`, `resources`, `tolerations`, and `affinity` are available directly in values.
 
+`defaultLabels` and `defaultAnnotations` are applied to every chart-created Kubernetes object, including Pod template metadata and optional monitor, ingress, and NetworkPolicy resources. Resource-specific `labels` and `annotations` are applied afterward and override a same-named default; generated chart labels and required annotations remain authoritative where necessary.
+
+```yaml
+defaultLabels:
+  app.kubernetes.io/part-of: observability
+defaultAnnotations:
+  owner.example.com/team: platform
+```
+
 The default `RollingUpdate` strategy also works with `replicaCount: 1`: `maxUnavailable: 25%` becomes zero unavailable replicas and `maxSurge: 25%` permits one extra Pod, so the old ready Pod remains until the replacement is ready. This can temporarily run two Pods. Use `strategy.type: Recreate` if overlap is undesirable.
 
 The optional Prometheus Operator monitors are configured as an array because the chart can create multiple target monitors. The Prometheus Operator CRDs are external dependencies, so the array is empty by default:
@@ -18,6 +27,18 @@ monitors:
 
 Each array item creates one named ServiceMonitor or PodMonitor. All scrape settings, selectors, headers, authentication, relabelings, and metric relabelings live under that item. Each target endpoint selects one collector. The chart adds the target-routing relabelings that pass the discovered address as `target`, preserve it as `instance`, and route the scrape to the exporter Service. Values in an item's `relabelings` are appended to those built-ins. When enabled, `selfMetrics.enabled` creates one self-health monitor for each monitor type used by the array.
 
+Each entry's `interval` and `scrapeTimeout` configure the Prometheus scrape. The optional `params` map is rendered as `/probe` query parameters and can override collector request settings for that scrape:
+
+```yaml
+params:
+  method: [POST]
+  path: [/api/status]
+  timeout: [5s]
+  body: [raw request body]
+```
+
+The `body` value is an opaque string and is not required to be JSON. Values in `params` must be lists because that is the Prometheus Operator format. When no `timeout` parameter is supplied, the exporter uses the incoming scrape request context and does not apply a separate collector timeout.
+
 `relabelings` and `metricRelabelings` accept the native Prometheus Operator structures. `relabelings` run during target relabeling; `metricRelabelings` run on scraped samples. Self-health monitor relabelings can be set separately with `selfMetrics.relabelings` and `selfMetrics.metricRelabelings`.
 
 Monitor authentication is disabled by default; set an item's `auth.enabled: true` and choose `auth.type: bearer` or `auth.type: basic` to render the Prometheus Operator `authorization` or `basicAuth` configuration. Header entries are rendered as `header_<name>` endpoint parameters and are forwarded to the target only when the collector lists the canonical name in `request.forward_headers`. To pass the monitor's Authorization header through to the target, the collector must also set `request.forward_authorization: true`. Do not place secrets in `headers`; use a Kubernetes Secret through `auth`.
@@ -31,12 +52,12 @@ monitors:
     type: service
     collector: example
     relabelings:
-    - sourceLabels: [__meta_kubernetes_service_label_team]
-      targetLabel: team
-  metricRelabelings:
-    - sourceLabels: [__name__]
-      regex: exporter_debug_.+
-      action: drop
+      - sourceLabels: [__meta_kubernetes_service_label_team]
+        targetLabel: team
+    metricRelabelings:
+      - sourceLabels: [__name__]
+        regex: exporter_debug_.+
+        action: drop
 ```
 
 Exporter endpoint protection is configured in the mounted exporter configuration, not in the monitor values:

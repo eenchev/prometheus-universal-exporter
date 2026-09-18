@@ -101,8 +101,19 @@ Parameters:
 
 - `target`: required target address/URL supplied by Prometheus relabeling.
 - `collector`: required collector name.
+- `method`: optional request method override (`GET`, `POST`, `PUT`, `PATCH`,
+  `DELETE`, or `HEAD`).
+- `path`: optional request path override.
+- `timeout`: optional positive Go duration controlling the underlying target
+  request for this scrape.
+- `body`: optional opaque request body override. It MUST be treated as raw
+  text and MUST NOT require JSON encoding.
 
 The exporter MUST reject missing or unknown collector names with a useful error.
+
+Invalid request overrides MUST return a client error. When `timeout` is absent,
+the exporter MUST use the incoming scrape request context as the target request
+deadline rather than a collector-configured timeout.
 
 The exporter MUST validate and normalize the target according to collector request configuration.
 
@@ -160,7 +171,7 @@ Support:
 - Bearer token authentication
 - TLS CA configuration
 - Optional client certificates if practical
-- Configurable timeout
+- Per-scrape timeout override through the probe request parameter
 - Configurable maximum response size
 - Redirect policy
 - HTTP status handling
@@ -175,7 +186,8 @@ request:
     detail: full
   headers:
     Accept: application/json
-  timeout: 5s
+  body: |
+    raw request body for a POST or PUT
 ```
 
 Target URL and collector request path MUST be combined safely.
@@ -437,6 +449,12 @@ Support:
 
 - XPath
 - CSS selectors
+- Bare element selectors such as `h1`, `title`, and `meta`.
+
+HTML extraction MUST operate on the parsed document tree, not only on class or
+ID selectors. For example, `selector: h1` MUST select an `h1` element and use
+its text as the metric value. XPath MUST remain available for HTML structures
+that are better expressed with XPath predicates or attributes.
 
 Recommended implementation libraries:
 
@@ -1188,6 +1206,13 @@ collectors:
             server: 'td:nth-child(1)'
 ```
 
+A simple tag extraction is also valid:
+
+```yaml
+        - name: application_status
+          selector: h1
+```
+
 ## 28.6 Prometheus input
 
 ```yaml
@@ -1477,6 +1502,7 @@ monitors:
     annotations: {}
     targetSelector: {}
     collector: example
+    params: {}
     relabelings: []
     metricRelabelings: []
 ```
@@ -1675,7 +1701,8 @@ Test at minimum:
 - Bearer authentication.
 - TLS with a test CA/certificate.
 - TLS verification failure.
-- Configured timeout.
+- Per-scrape request timeout override.
+- Incoming scrape deadline propagation when no timeout override is supplied.
 - HTTP redirects according to policy.
 - HTTP 2xx handling.
 - HTTP 3xx handling according to policy.
@@ -1683,6 +1710,7 @@ Test at minimum:
 - HTTP 5xx handling.
 - Invalid target URLs.
 - Unsupported HTTP methods.
+- Invalid method, path, body, and timeout overrides.
 - Empty response bodies.
 - Response body exactly at the maximum allowed size.
 - Response body exceeding the configured maximum size.
@@ -1914,6 +1942,7 @@ Test:
 - Nested elements.
 - CSS selectors.
 - XPath selectors.
+- Bare element selectors such as `h1`.
 - Attributes.
 - Text extraction.
 - HTML entities.
@@ -2317,7 +2346,7 @@ Test the built container image for:
 - Expected filesystem permissions are respected.
 - The image runs as the configured non-root user when non-root mode is enabled.
 
-The image build MUST be reproducible and MUST pin dependency versions sufficiently for production use.
+The image build MUST be reproducible and MUST pin dependency versions sufficiently for production use. The Dockerfile MUST expose the Go base version, Python base version, and each bundled Python dependency version as `ARG` variables with documented defaults, so builds can override them without editing the Dockerfile.
 
 ## 34.31 End-to-end scenario matrix
 
@@ -2484,7 +2513,8 @@ The implementation is considered complete when all of the following are true:
 - A Prometheus Operator `ServiceMonitor` can discover targets and invoke `/probe` with a configured collector.
 - A `PodMonitor` can do the same.
 - No target URLs need to be hardcoded into the collector configuration.
-- A collector can select its HTTP method, path, headers, authentication, TLS, timeout, and other request properties.
+- A collector can select its HTTP method, path, headers, authentication, TLS, request body, and other request properties.
+- A probe request can override a collector's method, path, body, or target-request timeout for one scrape.
 - JSON responses can be transformed using jq.
 - YAML responses can be transformed using yq.
 - XML responses can be transformed using XPath.
@@ -2870,3 +2900,46 @@ MUST configure an optional client certificate for mutual TLS. Setting
 when explicitly requested. The exporter MUST retain TLS 1.2 or newer and MUST
 not log certificate contents or credentials. The OTLP HTTP client MUST use the
 same configured timeout and best-effort failure behavior as other OTLP exports.
+
+## 42.10 Per-scrape request overrides
+
+The collector configuration MUST support a raw `request.body` value for
+requests whose method accepts a body. The value MUST be sent as provided and
+MUST NOT be restricted to JSON. The collector configuration MUST NOT contain a
+`request.timeout` field.
+
+The `/probe` endpoint MUST accept these optional query parameters for a
+single scrape:
+
+```text
+method=<GET|POST|PUT|PATCH|DELETE|HEAD>
+path=<request path>
+timeout=<positive Go duration>
+body=<raw request body>
+```
+
+When supplied, these parameters MUST override the selected collector's
+`request.method`, `request.path`, and `request.body`. The `timeout` parameter
+MUST bound the target request with a child context of the incoming scrape
+context. When it is absent, the target request MUST use the incoming scrape
+context directly, so the Prometheus scrape timeout is the effective request
+deadline. Invalid methods or timeout values MUST return HTTP 400 before the
+target is contacted.
+
+The Helm chart MUST expose these parameters as list-valued `params` entries on
+each `monitors` item, and MUST expose `interval` and `scrapeTimeout` on each
+item as the Prometheus Operator scrape settings. The monitor scrape timeout
+and the exporter target-request timeout override are distinct: the former is
+set on the generated ServiceMonitor or PodMonitor, while the latter is passed
+to `/probe` as `params.timeout`.
+
+## 42.11 Helm-wide default metadata
+
+The Helm chart MUST expose `defaultLabels` and `defaultAnnotations` maps. The
+chart MUST apply them to the metadata of every Kubernetes object it creates,
+including the Deployment Pod template and conditionally rendered ConfigMap,
+ServiceAccount, Service, Ingress, NetworkPolicy, ServiceMonitor, and
+PodMonitor resources. Resource-specific metadata maps MUST be applied after
+the defaults and therefore MUST override a same-named default. The chart's
+generated identity labels and required operational annotations MUST remain
+valid and authoritative where they conflict with user defaults.

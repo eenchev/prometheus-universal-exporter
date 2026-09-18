@@ -1,16 +1,27 @@
-FROM golang:1.23-alpine AS build
+ARG GO_VERSION=1.23
+ARG PYTHON_VERSION=3.12
+ARG BEAUTIFULSOUP4_VERSION=4.12.3
+ARG LXML_VERSION=5.3.0
+ARG PYYAML_VERSION=6.0.2
+ARG PYTHON_DATEUTIL_VERSION=2.9.0.post0
+
+FROM golang:${GO_VERSION}-alpine AS build
 WORKDIR /src
 COPY go.mod ./
 RUN go mod download
 COPY . .
 RUN CGO_ENABLED=0 go build -trimpath -ldflags='-s -w' -o /out/prometheus-universal-exporter .
 
-FROM python:3.12-slim
+FROM python:${PYTHON_VERSION}-slim
+ARG BEAUTIFULSOUP4_VERSION
+ARG LXML_VERSION
+ARG PYYAML_VERSION
+ARG PYTHON_DATEUTIL_VERSION
 RUN pip install --no-cache-dir \
-    beautifulsoup4==4.12.3 \
-    lxml==5.3.0 \
-    PyYAML==6.0.2 \
-    python-dateutil==2.9.0.post0 \
+    beautifulsoup4==${BEAUTIFULSOUP4_VERSION} \
+    lxml==${LXML_VERSION} \
+    PyYAML==${PYYAML_VERSION} \
+    python-dateutil==${PYTHON_DATEUTIL_VERSION} \
  && groupadd --system exporter \
  && useradd --system --gid exporter exporter \
  && rm -rf /var/lib/apt/lists/*

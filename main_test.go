@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"io"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -11,11 +12,38 @@ import (
 	"time"
 )
 
-func testCollector(name, format string) Collector {return Collector{Name:name,Request:RequestConfig{Method:"GET",Timeout:Duration(2e9)},Response:ResponseConfig{Format:format},Transform:TransformConfig{Type:"regex",Rules:[]RegexRule{{Name:"demo_value",Type:GaugeMetricType,Regex:`value=(\d+)`}}},ErrorHandling:ErrorHandling{OnHTTPError:"fail",OnDecodeError:"fail",OnTransformError:"fail"},Limits:Limits{MaxResponseBytes:1024}}}
+func testCollector(name, format string) Collector {return Collector{Name:name,Request:RequestConfig{Method:"GET"},Response:ResponseConfig{Format:format},Transform:TransformConfig{Type:"regex",Rules:[]RegexRule{{Name:"demo_value",Type:GaugeMetricType,Regex:`value=(\d+)`}}},ErrorHandling:ErrorHandling{OnHTTPError:"fail",OnDecodeError:"fail",OnTransformError:"fail"},Limits:Limits{MaxResponseBytes:1024}}}
 
 func TestMetricValidationAndExpositionEscaping(t *testing.T){m:=MetricSet{Metrics:[]Metric{{Name:"demo",Type:GaugeMetricType,Value:2,Labels:map[string]string{"text":"a\n\\b\"c"}}}};if err:=m.Validate(Limits{MaxMetrics:3,MaxLabelsPerMetric:3,MaxLabelValueLength:20,MaxMetricNameLength:20});err!=nil{t.Fatal(err)};w:=httptest.NewRecorder();writeMetricSet(w,&m);if !strings.Contains(w.Body.String(),`text="a\n\\b\"c"`){t.Fatalf("unexpected exposition: %s",w.Body.String())}}
 
 func TestProbeTextCollector(t *testing.T){target:=httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter,r *http.Request){if got:=r.Header.Get("Authorization");got!="Bearer monitor-token"{t.Errorf("authorization=%q",got)};if got:=r.Header.Get("X-Tenant");got!="team-a"{t.Errorf("X-Tenant=%q",got)};w.Header().Set("Content-Type","text/plain");w.WriteHeader(http.StatusOK);_,_=w.Write([]byte("value=42\n"))}));defer target.Close();c:=testCollector("text","text");c.Request.ForwardAuthorization=true;c.Request.ForwardHeaders=[]string{"X-Tenant"};cfg:=&Config{Collectors:[]Collector{c}};if err:=cfg.Validate();err!=nil{t.Fatal(err)};m:=NewConfigManager(cfg,"",slog.Default());s:=NewServer(m,"python3",slog.Default());rr:=httptest.NewRecorder();req:=httptest.NewRequest(http.MethodGet,"/probe?target="+target.URL+"&collector=text&header_X-Tenant=team-a",nil);req.Header.Set("Authorization","Bearer monitor-token");s.Handler().ServeHTTP(rr,req);if rr.Code!=200{t.Fatalf("status=%d body=%s",rr.Code,rr.Body.String())};if !strings.Contains(rr.Body.String(),"demo_value 42"){t.Fatalf("body=%s",rr.Body.String())}}
+
+func TestProbeRequestOverrides(t *testing.T) {
+	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		if r.Method != http.MethodPost || r.URL.Path != "/api/status" || string(body) != "raw payload" { t.Errorf("request=%s %s %q", r.Method, r.URL.Path, string(body)) }
+		w.Header().Set("Content-Type", "text/plain")
+		_, _ = w.Write([]byte("value=42\n"))
+	}))
+	defer target.Close()
+	cfg := &Config{Collectors: []Collector{testCollector("override", "text")}}
+	if err := cfg.Validate(); err != nil { t.Fatal(err) }
+	server := NewServer(NewConfigManager(cfg, "", slog.Default()), "python3", slog.Default())
+	request := httptest.NewRequest(http.MethodGet, "/probe?target="+target.URL+"&collector=override&method=POST&path=%2Fapi%2Fstatus&timeout=2s&body=raw+payload", nil)
+	response := httptest.NewRecorder()
+	server.Handler().ServeHTTP(response, request)
+	if response.Code != http.StatusOK { t.Fatalf("status=%d body=%s", response.Code, response.Body.String()) }
+}
+
+func TestHTMLBareTagSelector(t *testing.T) {
+	c := Collector{Name: "html", Response: ResponseConfig{Format: "html"}, Transform: TransformConfig{Type: "css", Expressions: []Extraction{{Name: "application_status", Type: GaugeMetricType, Selector: "h1"}}}, ErrorHandling: ErrorHandling{AllowMissingKeys: false}, Limits: Limits{MaxMetrics: 10}}
+	r := &HTTPResponse{Body: []byte("<html><body><h1>42</h1></body></html>"), Headers: http.Header{"Content-Type": []string{"text/html"}}}
+	d, err := decode(r, &c)
+	if err != nil { t.Fatal(err) }
+	m, err := transform(context.Background(), d, r, &c, "python3")
+	if err != nil { t.Fatal(err) }
+	if len(m.Metrics) != 1 || m.Metrics[0].Value != 42 { t.Fatalf("unexpected metrics: %#v", m.Metrics) }
+}
 
 func TestMissingOptionalJSONValue(t *testing.T){c:=Collector{Name:"json",Response:ResponseConfig{Format:"json"},Transform:TransformConfig{Type:"jq",Expression:".missing",Metric:&MetricRule{Name:"optional_value",Type:GaugeMetricType}},ErrorHandling:ErrorHandling{AllowMissingKeys:true},Limits:Limits{MaxMetrics:10}};r:=&HTTPResponse{Body:[]byte(`{"present":1}`),Headers:make(http.Header)};d,err:=decode(r,&c);if err!=nil{t.Fatal(err)};m,err:=transform(context.Background(),d,r,&c,"python3");if err!=nil{t.Fatal(err)};if len(m.Metrics)!=0{t.Fatalf("expected omitted metric, got %#v",m.Metrics)}}
 

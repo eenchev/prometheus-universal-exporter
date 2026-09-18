@@ -128,7 +128,7 @@ otlpTargets:
           service_name: legacy-app
 ```
 
-Scheduled targets require OTLP export. When the chart manages the configuration, enabling them without `otlp.enabled: true` in `config.data.config.yaml` fails `helm template` with an explicit message rather than producing a Deployment that crash-loops. With an external ConfigMap (`config.enabled: false`) the chart cannot check, and the exporter reports the same requirement at startup. See the main README for the target document format.
+Scheduled targets require OTLP export. When the chart manages the configuration, enabling them without `otlp.enabled: true` in `config.data.config.yaml` fails `helm template` with an explicit message rather than producing a Deployment that crash-loops. With an external ConfigMap (`config.enabled: false`) the chart cannot check, and the exporter reports the same requirement at startup. See [docs/OTLP.md](../../docs/OTLP.md) for the target document format.
 
 `server.watchConfig` passes `--config.watch` so the exporter re-reads its configuration in place when the mounted files change, with `server.watchConfigInterval` (default `60s`, validated at render time) controlling how often it checks. It is off by default because the chart's ConfigMap checksum annotation already rolls the Deployment whenever chart-managed configuration changes — the pod restarts with the new configuration and an in-place reload would never be reached. Turn it on when `config.enabled` is `false` and an external ConfigMap is updated without triggering a rollout.
 

@@ -1,0 +1,95 @@
+# OTLP export
+
+Optional OTLP/HTTP JSON export is configured at the top level. Probe metric sets and self-health metric sets are forwarded when enabled:
+
+```yaml
+otlp:
+  enabled: true
+  endpoint: http://otel-collector:4318/v1/metrics
+  service_name: prometheus-universal-exporter
+  timeout: 5s
+  interval: 30s
+  # headers:
+  #   X-OTLP-Tenant: production
+  # tls:
+  #   ca_file: /etc/prometheus/tls/ca.crt
+  #   cert_file: /etc/prometheus/tls/client.crt
+  #   key_file: /etc/prometheus/tls/client.key
+  #   insecure_skip_verify: false
+  # resource_attributes:
+  #   deployment.environment: production
+```
+
+OTLP export is best-effort and does not make a Prometheus probe fail. Metric
+values are buffered as latest values and exported every `otlp.interval`;
+the default is 30 seconds. Each export request is bounded by `otlp.timeout`,
+which defaults to 5 seconds. Self-health metrics are included in every export
+interval even when no Prometheus self-metrics scrape is running.
+
+## Scheduled targets
+
+The exporter can also scrape a fixed list of targets itself and deliver only
+those metrics over OTLP, with no Prometheus involved. Pass the list with
+`--otlp.targets-file`; `targets.example.yaml` is a complete example, and
+`config.otlp.example.yaml` is the matching exporter configuration with OTLP
+export enabled:
+
+```yaml
+targets:
+  - name: legacy_eu
+    collector: legacy_text
+    target: http://legacy.eu.example:8080
+    request:
+      path: /status
+      timeout: 5s
+      retry:
+        attempts: 2
+        backoff: 2s
+      headers:
+        X-Tenant: team-a
+      bearer_token_file: /var/run/prometheus-universal-exporter/target-auth/token
+    labels:
+      region: eu
+    otlp:
+      service_name: legacy-app
+      resource_attributes:
+        deployment.environment: production
+```
+
+Each target names a collector from the exporter configuration and takes every
+per-scrape parameter `/probe` accepts — `method`, `path`, `body`, `timeout`,
+`insecure_skip_verify`, `follow_redirects`, `enable_http2` and the `retry`
+settings — overriding the collector's own request for that target only. It also takes static `headers` and its own target
+credentials, inline or file-backed, as basic authentication or a bearer token.
+Because the file is operator configuration rather than caller input, these
+headers are applied directly and are not filtered through the collector's
+`request.forward_headers` allowlist.
+
+`labels` are added to every metric the target produces, without overwriting a
+label the collector already extracted. `otlp.service_name` and
+`otlp.resource_attributes` set the OTLP resource the target's metrics arrive
+under; both fall back to the exporter-wide `otlp` settings, and per-target
+attributes are merged over the exporter-wide ones. Targets with different
+identities are exported as separate `resourceMetrics` entries rather than
+being conflated.
+
+Targets are scraped once per `otlp.interval`, through the same fetch, decode and
+transform path as `/probe`, so collector limits, error handling and the response
+cache all apply — a scheduled scrape and an identical `/probe` request share
+cache entries. Scheduled targets are never exposed on `/metrics` and are not
+reachable through `/probe`.
+
+Every scheduled scrape also exports `http_exporter_target_up` and
+`http_exporter_target_scrape_duration_seconds` under that target's resource and
+labels, so a failing target is visible in the OTLP backend instead of simply
+being absent. Their scrapes are counted in the existing per-collector
+self-metrics rather than per-target series, and `http_exporter_scheduled_targets`
+reports how many targets loaded.
+
+The file is only accepted when OTLP export is enabled. Starting the exporter
+with a targets file while `otlp.enabled` is `false`, or without an
+`otlp.endpoint`, logs `invalid scheduled target configuration; exiting` and
+terminates with a non-zero exit code. The file is reloaded on the same terms as
+the exporter configuration: an invalid document, or a configuration change that
+would disable OTLP while targets are loaded, is rejected and the last valid pair
+stays active.

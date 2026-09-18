@@ -51,7 +51,7 @@ web:
 
 This protects `/probe`, `/metrics`, and `selfMetrics.path`; `/health` and `/ready` remain open for Kubernetes probes. It cannot be enabled with any collector using `request.forward_authorization`.
 
-`targetAuth` is `null` by default, so no target credential Secret is mounted. To mount basic authentication from a Kubernetes Secret:
+`targetAuth.enabled` is `false` by default, so no target credential Secret is mounted. To mount basic authentication from a Kubernetes Secret:
 
 ```yaml
 targetAuth:

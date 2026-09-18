@@ -2920,7 +2920,11 @@ with at least these values combinations:
 8. Custom securityContext.
 9. Custom exporter arguments/configuration, including a custom
    `server.listenAddress` and `server.pythonPath`, and an invalid
-   `server.listenAddress` that MUST fail rendering.
+   `server.listenAddress` that MUST fail rendering. The chart MUST require
+   `host:port`: a value carrying no port, such as a bare port number or a bare
+   host, renders as valid YAML and then makes the container exit immediately
+   with "missing port in address", so it MUST be rejected while rendering rather
+   than at run time. A port outside 1-65535 MUST be rejected too.
 9a. Scheduled targets enabled, which MUST add the `--otlp.targets-file`
    argument and render the target document into the exporter ConfigMap. When
    the chart manages the configuration, enabling scheduled targets without

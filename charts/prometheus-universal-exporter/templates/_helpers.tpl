@@ -27,15 +27,24 @@ app.kubernetes.io/managed-by: {{ .Release.Service }}
 {{- toYaml $annotations -}}
 {{- end }}
 {{- define "prometheus-universal-exporter.listenAddress" -}}
-{{- default ":8080" .Values.server.listenAddress -}}
-{{- end }}
-{{- define "prometheus-universal-exporter.containerPort" -}}
-{{- $address := include "prometheus-universal-exporter.listenAddress" . -}}
+{{- $address := default ":8080" .Values.server.listenAddress -}}
+{{- /* Go's net.Listen wants host:port. A bare port such as "9115" renders
+       perfectly well here and then makes the container exit at once with
+       "listen tcp: address 9115: missing port in address", so it is rejected
+       while the chart is still being rendered. The host may be empty, a name or
+       IPv4 address, or a bracketed IPv6 address. */ -}}
+{{- if not (regexMatch "^([^:]*|\\[[0-9A-Fa-f:.]+\\]):[0-9]+$" $address) -}}
+{{- fail (printf "server.listenAddress %q must be host:port with the port after a colon, for example \":8080\", \"0.0.0.0:8080\" or \"[::1]:8080\"" $address) -}}
+{{- end -}}
 {{- $port := $address | splitList ":" | last | int -}}
 {{- if or (lt $port 1) (gt $port 65535) -}}
-{{- fail (printf "server.listenAddress %q must end in a valid TCP port, for example \":8080\"" $address) -}}
+{{- fail (printf "server.listenAddress %q must end in a TCP port between 1 and 65535" $address) -}}
 {{- end -}}
-{{- $port -}}
+{{- $address -}}
+{{- end }}
+{{- define "prometheus-universal-exporter.containerPort" -}}
+{{- /* listenAddress has already validated the shape and the range. */ -}}
+{{- include "prometheus-universal-exporter.listenAddress" . | splitList ":" | last | int -}}
 {{- end }}
 {{- define "prometheus-universal-exporter.watchConfigInterval" -}}
 {{- $interval := default "60s" .Values.server.watchConfigInterval -}}

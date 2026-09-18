@@ -1,0 +1,114 @@
+# Demo collector for the Frankfurter foreign-exchange API, a public endpoint
+# that needs no authentication and no API key.
+#
+#   go run . --config.file=config.frankfurter.yaml
+#   curl 'http://localhost:8080/probe?collector=exchange_rates&target=https://api.frankfurter.dev'
+#
+# Note the target host: api.frankfurter.app answers with a 302 to
+# api.frankfurter.dev, so the collector points at .dev directly.
+#
+# The response looks like:
+#   {"amount":1.0,"base":"EUR","date":"2026-09-18",
+#    "rates":{"CHF":0.9462,"GBP":0.8588,"USD":1.146}}
+#
+# It also demonstrates a pre-script: Python reshapes the response first, and the
+# metrics are still declared in jq. See the pre-script's own comments for why
+# this response is a reasonable thing to reshape.
+web:
+  self_metrics:
+    # Adds a series per collector, request URL and method with the last
+    # scrape's status, timestamp and duration. A request URL is an unbounded
+    # label value, so tracking is capped at 1000 combinations and
+    # http_exporter_request_series_capped reports when the cap is reached.
+    # The url label carries scheme, host and path only; credentials and the
+    # query string are never put in a label.
+    verbose: true
+
+
+collectors:
+  - name: exchange_rates
+    # The rates change at most once a day, so a repeated scrape within the
+    # minute is answered from memory instead of hitting the public API again.
+    cache: 60s
+    limits:
+      # A pre-script starts a Python interpreter, which takes far longer than
+      # the 100ms a collector allows its scripts by default.
+      script_timeout: 5s
+    request:
+      method: GET
+      path: /v1/latest
+      query:
+        base: EUR
+        symbols: CHF,GBP,USD
+      headers:
+        Accept: application/json
+    transform:
+      type: jq
+      # A pre-script receives the decoded response as `data` (plus `response`,
+      # `target` and `collector`) and must leave its result in `data` again —
+      # the exporter refuses to start if a pre-script never assigns it.
+      #
+      # Two things are easier here than in jq: turning the rates object into a
+      # list, so each metric is a plain `.rates[]` walk rather than a
+      # `to_entries` dance, and parsing the date, which jq can only do through
+      # strptime/mktime. Everything below stays declarative as a result.
+      pre_script: |
+        from datetime import datetime, timezone
+
+        published = datetime.strptime(data["date"], "%Y-%m-%d").replace(tzinfo=timezone.utc)
+
+        data = {
+            "base": data["base"],
+            "observed_at": published.timestamp(),
+            # Sorted, so the value and its label are paired in a stable order
+            # every scrape.
+            "rates": [
+                {
+                    "currency": currency,
+                    "rate": rate,
+                    # Units of the base per one unit of the quoted currency.
+                    "inverse": round(1 / rate, 6),
+                }
+                for currency, rate in sorted(data["rates"].items())
+            ],
+        }
+    metrics:
+      - name: exchange_rate
+        description: Units of the quoted currency per one unit of the base currency
+        type: gauge
+        error_mode: log
+        # One series per entry of the reshaped list. The value and the currency
+        # label are paired positionally; base yields a single value, so it is
+        # applied to every series.
+        expression: .rates[] | .rate
+        labels:
+          - name: currency
+            type: expression
+            expression: .rates[] | .currency
+          - name: base
+            type: expression
+            expression: .base
+
+      - name: exchange_rate_inverse
+        description: Units of the base currency per one unit of the quoted currency
+        type: gauge
+        error_mode: log
+        expression: .rates[] | .inverse
+        labels:
+          - name: currency
+            type: expression
+            expression: .rates[] | .currency
+          - name: base
+            type: expression
+            expression: .base
+
+      - name: exchange_rate_observation_timestamp_seconds
+        description: Unix timestamp of the day the published rates refer to
+        type: gauge
+        error_mode: log
+        # Parsed by the pre-script, so this is a plain field read.
+        expression: .observed_at
+        labels:
+          - name: base
+            type: expression
+            expression: .base

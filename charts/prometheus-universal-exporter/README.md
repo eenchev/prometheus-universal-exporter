@@ -106,7 +106,7 @@ server:
   pythonPath: /usr/local/bin/python3
 ```
 
-`server.listenAddress` becomes `--web.listen-address` and also sets the container port, so an override such as `0.0.0.0:9115` moves the listener and the port together. The port keeps the name `http`, which is what the Service, Ingress, ServiceMonitor, and PodMonitor reference, so nothing else needs changing; `service.port` stays independent. A value without a valid TCP port fails `helm template` with an explicit message.
+`server.listenAddress` becomes `--web.listen-address` and also sets the container port, so an override such as `0.0.0.0:9115` moves the listener and the port together. The port keeps the name `http`, which is what the Service, Ingress, ServiceMonitor, and PodMonitor reference, so nothing else needs changing; `service.port` stays independent. The value must be `host:port`: an empty host, a name, an IPv4 address, or a bracketed IPv6 address, then a colon and a port. A bare port such as `9115` fails `helm template` with an explicit message, because Go accepts the flag and then cannot listen — the container would exit with `missing port in address`. A port outside 1-65535 is rejected the same way.
 
 `server.pythonPath` becomes `--python.path`, the interpreter used by the `python` transform. The default matches the exporter image, which is based on `python:3.12-slim` and installs Python at `/usr/local/bin/python3`. Override it when you run a custom image with the interpreter somewhere else.
 

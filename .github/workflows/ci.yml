@@ -85,8 +85,12 @@ jobs:
         if: steps.changes.outputs.chart == 'true'
       - name: Reject an invalid server.listenAddress
         run: |
-          if helm template test charts/prometheus-universal-exporter --set server.listenAddress=:http >/dev/null 2>&1; then
-            echo "helm template accepted an invalid server.listenAddress" >&2
-            exit 1
-          fi
+          # A bare port renders as valid YAML and then makes the container exit
+          # with "missing port in address", so the chart has to reject it here.
+          for address in ':http' '9115' '0.0.0.0' ':0'; do
+            if helm template test charts/prometheus-universal-exporter --set "server.listenAddress=$address" >/dev/null 2>&1; then
+              echo "helm template accepted the invalid server.listenAddress '$address'" >&2
+              exit 1
+            fi
+          done
         if: steps.changes.outputs.chart == 'true'

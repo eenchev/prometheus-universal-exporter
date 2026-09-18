@@ -42,5 +42,16 @@ helm-test:
 	helm template test charts/prometheus-universal-exporter --set server.listenAddress=0.0.0.0:9115 --set server.pythonPath=/usr/bin/python3.11
 	helm template test charts/prometheus-universal-exporter --set otlpTargets.enabled=true --set-file otlpTargets.data=targets.example.yaml --set-file 'config.data.config\.yaml=config.otlp.example.yaml'
 	helm template test charts/prometheus-universal-exporter --set-json 'monitors=[{"name":"a","enabled":true,"type":"service","collector":"example","interval":"30s","scrapeTimeout":"10s"},{"name":"b","enabled":true,"type":"pod","collector":"example","interval":"30s","scrapeTimeout":"10s"}]' | python3 tools/check-manifests.py
+	@# The same rejections CI checks, so a local run means a CI run.
+	@for address in ':http' '9115' '0.0.0.0' ':0'; do \
+		if helm template test charts/prometheus-universal-exporter --set "server.listenAddress=$$address" >/dev/null 2>&1; then \
+			echo "helm template accepted the invalid server.listenAddress '$$address'" >&2; \
+			exit 1; \
+		fi; \
+	done
+	@if helm template test charts/prometheus-universal-exporter --set otlpTargets.enabled=true --set-file otlpTargets.data=targets.example.yaml --set-file 'config.data.config\.yaml=config.example.yaml' >/dev/null 2>&1; then \
+		echo "helm template accepted scheduled targets while OTLP export is disabled" >&2; \
+		exit 1; \
+	fi
 
 ci: fmt-check lint test vet build helm-test

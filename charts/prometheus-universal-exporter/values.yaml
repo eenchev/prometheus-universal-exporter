@@ -36,7 +36,10 @@ ingress:
 server:
   # Address the exporter listens on. The container port follows the port in
   # this value; Service, Ingress, and monitor references use the named port, so
-  # they follow automatically. Must end in a valid TCP port.
+  # they follow automatically. Must be host:port — an empty host, a name, an
+  # IPv4 address, or a bracketed IPv6 address, then a colon and a TCP port.
+  # A bare port such as "9115" is rejected while rendering, because Go would
+  # otherwise accept the flag and fail to listen with "missing port in address".
   listenAddress: ":8080"
   # Python interpreter used by the `python` transform. The default is the
   # interpreter path in the exporter image, which is based on python:3.X-slim.

@@ -1,3 +1,5 @@
+<img src="docs/logo.svg" alt="prometheus-universal-exporter" width="104">
+
 # prometheus-universal-exporter
 
 [![CI](https://img.shields.io/github/actions/workflow/status/eenchev/prometheus-universal-exporter/ci.yml?branch=main&label=CI&logo=github)](https://github.com/eenchev/prometheus-universal-exporter/actions/workflows/ci.yml)

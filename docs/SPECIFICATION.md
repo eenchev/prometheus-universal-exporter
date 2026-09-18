@@ -277,6 +277,14 @@ decoded response cannot be mapped to the selected transform, the exporter MUST
 return a clear transform error. An explicit response format remains available
 for ambiguous or incorrectly labeled endpoints.
 
+The entire `response` block is optional. CSV decoding MUST use a header row by
+default when `response.csv.header` is omitted. The `response.csv` block is only
+needed for non-default CSV options such as a custom delimiter, trimming, or a
+headerless response. Omitting response configuration MUST NOT weaken validation:
+decode failures and transform/input incompatibilities remain collector-level
+errors controlled by `error_handling`; `metric.error_mode` applies after a
+response has been decoded and an individual metric is being extracted.
+
 ### 6.1 Auto detection
 
 When `format: auto` is used, determine format using, in order:
@@ -607,9 +615,6 @@ Example:
 
 ```yaml
 - name: vendor_prometheus
-  response:
-    format: prometheus
-
   transform:
     type: prometheus
   metrics:
@@ -641,9 +646,6 @@ Example:
 
 ```yaml
 - name: legacy_text
-  response:
-    format: text
-
   transform:
     type: regex
   metrics:
@@ -1307,12 +1309,6 @@ collectors:
     request:
       path: /status.csv
 
-    response:
-      format: csv
-      csv:
-        header: true
-        delimiter: ','
-
     transform:
       type: csv
     metrics:
@@ -1363,9 +1359,6 @@ collectors:
     request:
       path: /metrics
 
-    response:
-      format: prometheus
-
     transform:
       type: prometheus
     metrics:
@@ -1384,9 +1377,6 @@ collectors:
   - name: legacy_text
     request:
       path: /status
-
-    response:
-      format: text
 
     transform:
       type: regex
@@ -2867,8 +2857,6 @@ MUST normalize header-based records, and a first-class `csv` transformation
 MAY map a numeric column to a metric and named columns to labels:
 
 ```yaml
-response:
-  format: csv
 metrics:
   - name: server_cpu
     description: Server CPU utilization

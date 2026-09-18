@@ -83,9 +83,6 @@ collectors:
   - name: app_csv
     request:
       path: /status.csv
-    response:
-      csv:
-        header: true
     transform:
       type: csv
     metrics:

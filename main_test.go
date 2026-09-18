@@ -297,6 +297,38 @@ func TestCSVFormatIsInferredAndMissingRowsRespectMetricErrorMode(t *testing.T) {
 	}
 }
 
+func TestCSVTransformDefaultsWithoutResponseConfiguration(t *testing.T) {
+	cfg := &Config{Collectors: []Collector{{
+		Name:      "csv_defaults",
+		Transform: TransformConfig{Type: "csv"},
+		Metrics: []MetricRule{{
+			Name:       "server_cpu",
+			Type:       GaugeMetricType,
+			Expression: "cpu",
+			Labels:     []LabelRule{{Name: "server", Type: "expression", Expression: "server"}},
+		}},
+	}}}
+	if err := cfg.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	c := &cfg.Collectors[0]
+	if c.Response.Format != "auto" || c.Decoder.Type != "csv" || c.Response.CSV.Header != nil {
+		t.Fatalf("unexpected CSV defaults: format=%q decoder=%q header=%v", c.Response.Format, c.Decoder.Type, c.Response.CSV.Header)
+	}
+	r := &HTTPResponse{Body: []byte("server,cpu\nweb01,72\nweb02,31\n"), Headers: make(http.Header)}
+	d, err := decode(r, c)
+	if err != nil {
+		t.Fatal(err)
+	}
+	m, err := transform(context.Background(), d, r, c, "python3")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(m.Metrics) != 2 || m.Metrics[0].Labels["server"] != "web01" || m.Metrics[1].Labels["server"] != "web02" {
+		t.Fatalf("unexpected metrics with omitted response config: %#v", m.Metrics)
+	}
+}
+
 func TestHTMLCSSTableValues(t *testing.T) {
 	body, err := os.ReadFile("testdata/html/status.html")
 	if err != nil {

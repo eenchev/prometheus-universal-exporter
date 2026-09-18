@@ -158,9 +158,6 @@ Errors are classified as HTTP, decode, transform, missing data, validation, or r
 CSV responses can use a native CSV transform without CSS or Python:
 
 ```yaml
-response:
-  csv:
-    header: true
 metrics:
   - name: server_cpu
     description: Server CPU utilization
@@ -174,6 +171,17 @@ metrics:
 transform:
   type: csv
 ```
+
+The entire `response` block may be omitted. The exporter infers CSV for the
+`csv` transform, and header-based CSV parsing is enabled by default. Use
+`response.csv` only when changing CSV behavior, such as selecting a custom
+delimiter or disabling the header row. Likewise, `response.format: text` is
+unnecessary for a regex or Python transform unless an explicit decoder is
+needed for an ambiguous endpoint.
+
+`error_mode` applies after decoding, when an individual metric is extracted.
+Decode failures and response/transform incompatibilities are collector-level
+errors controlled by `error_handling`.
 
 CSS remains available specifically for HTML tables and HTML status pages; it is not used for CSV.
 
@@ -189,8 +197,6 @@ first parses the response when applicable, then the Python script receives
 For example:
 
 ```yaml
-response:
-  format: text
 transform:
   type: python
   script: |

@@ -15,6 +15,7 @@ serviceAccount:
   annotations: {}
   name: ""
 service:
+  enabled: true
   type: ClusterIP
   port: 8080
   annotations: {}
@@ -95,8 +96,8 @@ resources:
 strategy:
   type: RollingUpdate
   rollingUpdate:
-    maxUnavailable: 25%
-    maxSurge: 25%
+    maxUnavailable: 0
+    maxSurge: 1
 podSecurityContext:
   runAsNonRoot: true
   seccompProfile: {type: RuntimeDefault}

@@ -1,4 +1,8 @@
+{{- if .Values.service.enabled }}
 Exporter is available at:
   http://{{ include "prometheus-universal-exporter.fullname" . }}:{{ .Values.service.port }}
+{{- else }}
+The exporter Service was disabled with service.enabled=false.
+{{- end }}
 
 The chart does not install Prometheus Operator CRDs. Enable entries in monitors only when the selected ServiceMonitor or PodMonitor CRD is installed.

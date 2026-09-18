@@ -1429,6 +1429,7 @@ resources:
   limits: {}
 
 service:
+  enabled: true
   type: ClusterIP
   port: 8080
 
@@ -1480,9 +1481,13 @@ The implementation MUST document which behavior is used.
 
 ### 33.4 Service
 
-The chart MUST create a Kubernetes `Service` exposing the exporter HTTP port.
+The chart MUST expose a `service.enabled` value that defaults to `true`. When
+enabled, the chart MUST create a Kubernetes `Service` exposing the exporter
+HTTP port. When disabled, the Service resource MUST NOT be rendered.
 
-The Service MUST be usable as the target of Prometheus Operator `ServiceMonitor` resources.
+The Service MUST be usable as the target of Prometheus Operator
+`ServiceMonitor` resources. The documentation MUST warn that the chart's
+generated ServiceMonitor and PodMonitor routing requires this Service.
 
 ### 33.5 ServiceMonitor support
 
@@ -2870,13 +2875,12 @@ These lists MUST support the standard fields, including `sourceLabels`,
 The self-health monitor MUST independently support
 `selfMetrics.relabelings` and `selfMetrics.metricRelabelings`.
 
-The default Deployment strategy MUST work with `replicaCount: 1`. With
-`RollingUpdate`, `maxUnavailable: 25%` rounds down to zero unavailable
-replicas and `maxSurge: 25%` rounds up to one extra replica. Therefore a
-single-replica rollout keeps the old ready Pod until the replacement is ready,
-temporarily allowing two Pods and avoiding intentional downtime. The chart
-MUST document that this relies on the readiness probe becoming ready; users
-that require no overlap MAY choose `strategy.type: Recreate`.
+The default Deployment strategy MUST work with `replicaCount: 1`. The default
+`RollingUpdate` settings MUST use explicit `maxUnavailable: 0` and
+`maxSurge: 1`, keeping the old ready Pod until the replacement is ready and
+temporarily allowing two Pods. The chart MAY accept percentage values as
+supported by Kubernetes, but MUST document their rounding behavior. Users that
+require no overlap MAY choose `strategy.type: Recreate`.
 
 ## 42.9 OTLP TLS configuration
 

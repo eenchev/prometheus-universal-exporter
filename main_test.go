@@ -551,3 +551,256 @@ func TestBasicAuthFileIsUsedForTarget(t *testing.T) {
 		t.Fatalf("target basic auth=%q/%q", receivedUser, receivedPassword)
 	}
 }
+
+func TestConfigValidationAppliesDefaults(t *testing.T) {
+	cfg := &Config{Collectors: []Collector{{
+		Name:      "defaults",
+		Transform: TransformConfig{Type: "regex"},
+		Metrics:   []MetricRule{{Name: "value", Expression: `value=(\d+)`}},
+	}}}
+	if err := cfg.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	c := cfg.Collectors[0]
+	if c.Request.Method != http.MethodGet || c.Response.Format != "auto" || c.Decoder.Type != "text" {
+		t.Fatalf("unexpected inferred defaults: method=%q format=%q decoder=%q", c.Request.Method, c.Response.Format, c.Decoder.Type)
+	}
+	if c.ErrorHandling.OnHTTPError != "fail" || c.ErrorHandling.OnDecodeError != "fail" || c.ErrorHandling.OnTransformError != "fail" {
+		t.Fatalf("unexpected error policy defaults: %#v", c.ErrorHandling)
+	}
+	if c.Metrics[0].Type != GaugeMetricType || c.Metrics[0].ErrorMode != "log" {
+		t.Fatalf("unexpected metric defaults: %#v", c.Metrics[0])
+	}
+	if c.Limits.MaxResponseBytes <= 0 || c.Limits.MaxMetrics <= 0 || c.Limits.ScriptTimeout <= 0 {
+		t.Fatalf("limits were not defaulted: %#v", c.Limits)
+	}
+}
+
+func TestConfigValidationRejectsInvalidSettings(t *testing.T) {
+	tests := []struct {
+		name string
+		cfg  *Config
+		want string
+	}{
+		{
+			name: "empty collectors",
+			cfg:  &Config{},
+			want: "collectors must not be empty",
+		},
+		{
+			name: "invalid collector name",
+			cfg:  &Config{Collectors: []Collector{{Name: "bad-name"}}},
+			want: "invalid name",
+		},
+		{
+			name: "unsupported method",
+			cfg:  &Config{Collectors: []Collector{{Name: "invalid_method", Request: RequestConfig{Method: "TRACE"}}}},
+			want: "unsupported method",
+		},
+		{
+			name: "unknown transform",
+			cfg:  &Config{Collectors: []Collector{{Name: "invalid_transform", Transform: TransformConfig{Type: "lua"}}}},
+			want: "unknown transform",
+		},
+		{
+			name: "invalid metric type",
+			cfg:  &Config{Collectors: []Collector{{Name: "invalid_metric_type", Metrics: []MetricRule{{Name: "value", Type: "rate", Expression: ".value"}}}}},
+			want: "invalid type",
+		},
+		{
+			name: "invalid metric error mode",
+			cfg:  &Config{Collectors: []Collector{{Name: "invalid_error_mode", Metrics: []MetricRule{{Name: "value", ErrorMode: "fail", Expression: ".value"}}}}},
+			want: "invalid error_mode",
+		},
+		{
+			name: "invalid label type",
+			cfg:  &Config{Collectors: []Collector{{Name: "invalid_label", Transform: TransformConfig{Type: "jq"}, Metrics: []MetricRule{{Name: "value", Expression: ".value", Labels: []LabelRule{{Name: "source", Type: "xpath", Expression: ".source"}}}}}}},
+			want: "invalid type",
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			err := test.cfg.Validate()
+			if err == nil || !strings.Contains(err.Error(), test.want) {
+				t.Fatalf("Validate() error=%v, want substring %q", err, test.want)
+			}
+		})
+	}
+}
+
+func TestLoadConfigRejectsUnknownFields(t *testing.T) {
+	path := t.TempDir() + "/config.yaml"
+	if err := os.WriteFile(path, []byte("collectors:\n  - name: app\n    unknown: true\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := LoadConfig(path); err == nil || !strings.Contains(err.Error(), "unknown") {
+		t.Fatalf("LoadConfig() error=%v, want unknown-field error", err)
+	}
+}
+
+func TestDecodeJSONAutoDetectionAndMalformedInput(t *testing.T) {
+	c := Collector{}
+	r := &HTTPResponse{Body: []byte(`[{"value":7}]`), Headers: make(http.Header)}
+	d, err := decode(r, &c)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if d.Kind != "json" {
+		t.Fatalf("detected kind=%q, want json", d.Kind)
+	}
+	values, ok := d.Data.([]any)
+	if !ok || len(values) != 1 {
+		t.Fatalf("decoded JSON array=%#v", d.Data)
+	}
+	row, ok := values[0].(map[string]any)
+	if !ok || row["value"] != float64(7) {
+		t.Fatalf("decoded JSON row=%#v", values[0])
+	}
+
+	c.Response.Format = "json"
+	r.Body = []byte(`{"value":`)
+	if _, err := decode(r, &c); err == nil || !strings.Contains(err.Error(), "JSON decode") {
+		t.Fatalf("malformed JSON error=%v", err)
+	}
+}
+
+func TestDecodeCSVQuotedFieldsAndRowsWithoutHeader(t *testing.T) {
+	c := Collector{Response: ResponseConfig{Format: "csv", CSV: CSVConfig{Header: boolPtr(true), Delimiter: ";", TrimSpace: true}}}
+	r := &HTTPResponse{Body: []byte("server;note;cpu\n\"web;01\";\"up;ok\"; 72 \n"), Headers: make(http.Header)}
+	d, err := decode(r, &c)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rows := d.Data.([]any)
+	row := rows[0].(map[string]any)
+	if row["server"] != "web;01" || row["note"] != "up;ok" || row["cpu"] != "72" {
+		t.Fatalf("decoded CSV row=%#v", row)
+	}
+
+	c.Response.CSV.Header = boolPtr(false)
+	r.Body = []byte("web01;72\nweb02;31\n")
+	d, err = decode(r, &c)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rows = d.Data.([]any)
+	first := rows[0].([]any)
+	if len(rows) != 2 || first[0] != "web01" || first[1] != "72" {
+		t.Fatalf("decoded headerless CSV rows=%#v", rows)
+	}
+}
+
+func TestDecodePrometheusPreservesTimestamp(t *testing.T) {
+	c := Collector{Response: ResponseConfig{Format: "prometheus"}}
+	r := &HTTPResponse{Body: []byte("# TYPE vendor_value gauge\nvendor_value 42 1700000000000\n"), Headers: make(http.Header)}
+	d, err := decode(r, &c)
+	if err != nil {
+		t.Fatal(err)
+	}
+	set := d.Data.(MetricSet)
+	if len(set.Metrics) != 1 || set.Metrics[0].Timestamp == nil || *set.Metrics[0].Timestamp != 1700000000000 {
+		t.Fatalf("decoded Prometheus timestamp=%#v", set.Metrics)
+	}
+}
+
+func TestFetchBuildsConfiguredRequestAndBearerAuth(t *testing.T) {
+	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		if r.Method != http.MethodPost || r.URL.Path != "/base/status" || r.URL.Query().Get("region") != "eu" || string(body) != "raw body" {
+			t.Errorf("request=%s %s?%s body=%q", r.Method, r.URL.Path, r.URL.RawQuery, string(body))
+		}
+		if r.Header.Get("X-Request") != "one" || r.Header.Get("Authorization") != "Bearer target-token" {
+			t.Errorf("headers=%v", r.Header)
+		}
+		_, _ = w.Write([]byte("value=42\n"))
+	}))
+	defer target.Close()
+	c := Collector{Name: "configured", Request: RequestConfig{Method: http.MethodPost, Path: "/status", Query: map[string]string{"region": "eu"}, Headers: map[string]string{"X-Request": "one"}, Body: "raw body", BearerToken: "target-token", AllowedSchemes: []string{"http"}}, Limits: Limits{MaxResponseBytes: 1024}}
+	response, err := fetch(context.Background(), target.URL+"/base?existing=true", &c, RequestOverrides{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if response.StatusCode != http.StatusOK || string(response.Body) != "value=42\n" {
+		t.Fatalf("response=%#v", response)
+	}
+}
+
+func TestFetchRejectsDisallowedSchemeAndOversizedResponse(t *testing.T) {
+	c := Collector{Name: "scheme", Request: RequestConfig{AllowedSchemes: []string{"https"}}}
+	if _, err := fetch(context.Background(), "http://example.com", &c, RequestOverrides{}); err == nil || !strings.Contains(err.Error(), "not allowed") {
+		t.Fatalf("scheme error=%v", err)
+	}
+	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write([]byte("123456789")) }))
+	defer target.Close()
+	c.Request.AllowedSchemes = []string{"http"}
+	c.Limits.MaxResponseBytes = 4
+	if _, err := fetch(context.Background(), target.URL, &c, RequestOverrides{}); err == nil || !strings.Contains(err.Error(), "exceeds limit") {
+		t.Fatalf("response-size error=%v", err)
+	}
+}
+
+func TestServerHealthAndCustomSelfMetricsEndpoint(t *testing.T) {
+	cfg := &Config{Collectors: []Collector{testCollector("health", "text")}}
+	if err := cfg.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	server := NewServer(NewConfigManager(cfg, "", slog.Default()), "python3", slog.Default())
+	server.SetSelfMetricsPath("/probe")
+	handler := server.Handler()
+	for _, test := range []struct {
+		path   string
+		status int
+		body   string
+	}{
+		{path: "/health", status: http.StatusOK, body: "ok\n"},
+		{path: "/ready", status: http.StatusOK, body: "ready\n"},
+		{path: "/self-metrics", status: http.StatusOK, body: "http_exporter_collector_config_valid"},
+		{path: "/metrics", status: http.StatusOK, body: "http_exporter_collector_config_valid"},
+	} {
+		t.Run(test.path, func(t *testing.T) {
+			rr := httptest.NewRecorder()
+			handler.ServeHTTP(rr, httptest.NewRequest(http.MethodGet, test.path, nil))
+			if rr.Code != test.status || !strings.Contains(rr.Body.String(), test.body) {
+				t.Fatalf("status=%d body=%q", rr.Code, rr.Body.String())
+			}
+		})
+	}
+}
+
+func TestSafeTargetRedactsCredentials(t *testing.T) {
+	if got := safeTarget("https://user:password@example.com/status"); strings.Contains(got, "password") || !strings.Contains(got, "redacted") {
+		t.Fatalf("safe target=%q", got)
+	}
+}
+
+func TestMetricSetValidationRejectsDuplicateAndInconsistentSeries(t *testing.T) {
+	tests := []struct {
+		name string
+		set  MetricSet
+		want string
+	}{
+		{
+			name: "duplicate series",
+			set:  MetricSet{Metrics: []Metric{{Name: "value", Type: GaugeMetricType, Value: 1}, {Name: "value", Type: GaugeMetricType, Value: 2}}},
+			want: "duplicate metric series",
+		},
+		{
+			name: "inconsistent types",
+			set:  MetricSet{Metrics: []Metric{{Name: "value", Type: GaugeMetricType, Value: 1}, {Name: "value", Type: CounterMetricType, Value: 2, Labels: map[string]string{"source": "api"}}}},
+			want: "inconsistent types",
+		},
+		{
+			name: "label limit",
+			set:  MetricSet{Metrics: []Metric{{Name: "value", Type: GaugeMetricType, Value: 1, Labels: map[string]string{"one": "1", "two": "2"}}}},
+			want: "too many labels",
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			err := test.set.Validate(Limits{MaxLabelsPerMetric: 1})
+			if err == nil || !strings.Contains(err.Error(), test.want) {
+				t.Fatalf("Validate() error=%v, want substring %q", err, test.want)
+			}
+		})
+	}
+}

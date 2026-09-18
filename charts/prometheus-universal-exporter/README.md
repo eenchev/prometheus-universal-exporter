@@ -96,6 +96,8 @@ request:
 
 For bearer authentication, set `type: bearer`, `secretKey: token`, and `fileName: token`, then reference `request.bearer_token_file`. The exporter then uses its own configured Basic Auth for incoming scrapes and the mounted Kubernetes Secret for the target request. These credentials are independent.
 
+Each `monitors` entry's `params` map becomes `/probe` query parameters, so per-scrape request overrides need no chart changes. Alongside `method`, `path`, `timeout`, `body`, `insecure_skip_verify` and the retry settings, `follow_redirects: ["true"]` and `enable_http2: ["true"]` override the collector's redirect and HTTP/2 behaviour for that monitor. Both default to false on the collector; values must be lists, and each must be exactly `"true"` or `"false"` or the exporter answers 400.
+
 The exporter's process settings are values, not hardcoded arguments:
 
 ```yaml

@@ -32,6 +32,32 @@ type RequestOverrides struct {
 	InsecureSkipVerify *bool
 	RetryAttempts      *int
 	RetryBackoff       *time.Duration
+	FollowRedirects    *bool
+	EnableHTTP2        *bool
+}
+
+// parseBoolOverride reads an optional boolean probe parameter. An absent
+// parameter leaves the collector setting in force; a present one must be
+// exactly true or false so a typo cannot quietly select a default.
+func parseBoolOverride(values url.Values, name string) (*bool, error) {
+	value, ok := values[name]
+	if !ok {
+		return nil, nil
+	}
+	raw := ""
+	if len(value) > 0 {
+		raw = strings.TrimSpace(value[0])
+	}
+	var parsed bool
+	switch strings.ToLower(raw) {
+	case "true":
+		parsed = true
+	case "false":
+		parsed = false
+	default:
+		return nil, fmt.Errorf("invalid %s override %q; want true or false", name, raw)
+	}
+	return &parsed, nil
 }
 
 func parseRequestOverrides(values url.Values) (RequestOverrides, error) {
@@ -64,22 +90,21 @@ func parseRequestOverrides(values url.Values) (RequestOverrides, error) {
 		}
 		overrides.Body = &value
 	}
-	if value, ok := values["insecure_skip_verify"]; ok {
-		raw := ""
-		if len(value) > 0 {
-			raw = strings.TrimSpace(value[0])
-		}
-		var parsed bool
-		switch strings.ToLower(raw) {
-		case "true":
-			parsed = true
-		case "false":
-			parsed = false
-		default:
-			return overrides, fmt.Errorf("invalid insecure_skip_verify override %q; want true or false", raw)
-		}
-		overrides.InsecureSkipVerify = &parsed
+	insecure, err := parseBoolOverride(values, "insecure_skip_verify")
+	if err != nil {
+		return overrides, err
 	}
+	overrides.InsecureSkipVerify = insecure
+	followRedirects, err := parseBoolOverride(values, "follow_redirects")
+	if err != nil {
+		return overrides, err
+	}
+	overrides.FollowRedirects = followRedirects
+	enableHTTP2, err := parseBoolOverride(values, "enable_http2")
+	if err != nil {
+		return overrides, err
+	}
+	overrides.EnableHTTP2 = enableHTTP2
 	if value, ok := values["retry_attempts"]; ok {
 		raw := ""
 		if len(value) > 0 {
@@ -157,9 +182,21 @@ func fetch(ctx context.Context, target string, c *Collector, overrides RequestOv
 	if err != nil {
 		return nil, err
 	}
-	policy := c.Request.RedirectPolicy
-	client := &http.Client{Transport: &http.Transport{TLSClientConfig: tlsCfg}}
-	if strings.EqualFold(policy, "none") || strings.EqualFold(policy, "reject") {
+	followRedirects := c.Request.FollowRedirects
+	if overrides.FollowRedirects != nil {
+		followRedirects = *overrides.FollowRedirects
+	}
+	// Go only negotiates HTTP/2 on a custom transport when it is asked to, so
+	// this defaults to the protocol the exporter has always used. It applies to
+	// HTTPS targets: cleartext HTTP/2 is not negotiated.
+	enableHTTP2 := c.Request.EnableHTTP2
+	if overrides.EnableHTTP2 != nil {
+		enableHTTP2 = *overrides.EnableHTTP2
+	}
+	client := &http.Client{Transport: &http.Transport{TLSClientConfig: tlsCfg, ForceAttemptHTTP2: enableHTTP2}}
+	if !followRedirects {
+		// The response of the redirect itself is returned, so a collector sees
+		// the 3xx status rather than silently following it to another host.
 		client.CheckRedirect = func(_ *http.Request, _ []*http.Request) error { return http.ErrUseLastResponse }
 	}
 	requestContext := ctx

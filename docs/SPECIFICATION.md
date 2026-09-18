@@ -115,6 +115,10 @@ Parameters:
   number of retries after the initial target request.
 - `retry_backoff`: optional non-negative Go duration overriding the fixed delay
   between retry attempts.
+- `follow_redirects`: optional boolean overriding whether the target request
+  follows HTTP redirect statuses.
+- `enable_http2`: optional boolean overriding whether the target request may
+  negotiate HTTP/2.
 
 When the selected collector enables caching, the exporter MUST serve a stored
 result instead of contacting the target while a cached entry for the identical
@@ -208,7 +212,8 @@ Support:
 - Fixed-delay retries for transient target request failures
 - Per-scrape timeout override through the probe request parameter
 - Configurable maximum response size
-- Redirect policy
+- Configurable redirect following, disabled by default
+- Configurable HTTP/2 negotiation, disabled by default
 - HTTP status handling
 
 Example:
@@ -3334,6 +3339,8 @@ path=<request path>
 timeout=<positive Go duration>
 body=<raw request body>
 insecure_skip_verify=<true|false>
+follow_redirects=<true|false>
+enable_http2=<true|false>
 retry_attempts=<non-negative integer>
 retry_backoff=<non-negative Go duration>
 ```
@@ -3599,3 +3606,46 @@ rather than in per-target series, so exporter self-metric cardinality does not
 grow with the number of targets. The exporter MUST expose
 `http_exporter_scheduled_targets` so an operator can confirm the document
 loaded.
+
+## 42.15 Redirect following and HTTP/2 negotiation
+
+Collector target requests MUST support two transport settings:
+
+```yaml
+request:
+  follow_redirects: false
+  enable_http2: false
+```
+
+`follow_redirects` controls whether the exporter follows HTTP redirect
+statuses on the target request. It MUST default to `false`. When it is false the
+exporter MUST return the redirect response itself, so the collector observes the
+3xx status rather than being sent to another host silently; a collector whose
+`error_handling.on_http_error` is `fail` therefore fails the probe, which is the
+intended signal that the target moved. When it is true the exporter MUST follow
+redirects using the HTTP client's normal limit.
+
+`enable_http2` controls whether the target request may negotiate HTTP/2. It MUST
+default to `false`, which is the protocol behaviour the exporter has always had,
+because HTTP/2 is negotiated through ALPN over TLS and is therefore relevant to
+HTTPS targets only. Cleartext HTTP/2 MUST NOT be attempted.
+
+Both settings MUST be overridable per scrape through the `/probe` parameters
+`follow_redirects` and `enable_http2`. Both MUST accept exactly `true` or
+`false`; any other value MUST return HTTP 400 before the target is contacted, so
+a typo cannot silently select a default. An absent parameter MUST leave the
+collector's own setting in force, and the presence or absence of either
+parameter MUST be part of the response cache key, so a scrape that requested
+different transport behaviour never reads another scrape's cached result.
+
+Scheduled targets MUST accept both settings in their `request` block with the
+same semantics.
+
+The Helm chart MUST expose both as list-valued `params` entries on each
+`monitors` item.
+
+These settings replace the earlier `request.redirect_policy` string, which MUST
+NOT be accepted any more. Because the configuration decoder rejects unknown
+fields, a configuration still carrying it fails to load rather than silently
+changing how a collector follows redirects.
+

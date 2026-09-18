@@ -72,7 +72,8 @@ type RequestConfig struct {
 	TLS                  TLSConfig         `yaml:"tls"`
 	Retry                RetryConfig       `yaml:"retry"`
 	MaxResponseBytes     int64             `yaml:"max_response_bytes"`
-	RedirectPolicy       string            `yaml:"redirect_policy"`
+	FollowRedirects      bool              `yaml:"follow_redirects"`
+	EnableHTTP2          bool              `yaml:"enable_http2"`
 	AllowedSchemes       []string          `yaml:"allowed_schemes"`
 }
 type RetryConfig struct {

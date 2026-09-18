@@ -107,6 +107,8 @@ monitors: []
 #       path: [/api/status]
 #       timeout: [5s]
 #       body: [raw request body]
+#       follow_redirects: ["true"]
+#       enable_http2: ["true"]
 #     auth:
 #       enabled: false
 #       type: bearer # bearer or basic

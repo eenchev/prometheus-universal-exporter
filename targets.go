@@ -46,6 +46,8 @@ type TargetRequestConfig struct {
 	BodySet            bool              `yaml:"-"`
 	Timeout            Duration          `yaml:"timeout"`
 	InsecureSkipVerify *bool             `yaml:"insecure_skip_verify"`
+	FollowRedirects    *bool             `yaml:"follow_redirects"`
+	EnableHTTP2        *bool             `yaml:"enable_http2"`
 	Retry              *RetryConfig      `yaml:"retry"`
 	Headers            map[string]string `yaml:"headers"`
 	BasicAuth          *BasicAuth        `yaml:"basic_auth"`
@@ -206,6 +208,14 @@ func (t *ScheduledTarget) overrides() RequestOverrides {
 		value := *t.Request.InsecureSkipVerify
 		out.InsecureSkipVerify = &value
 	}
+	if t.Request.FollowRedirects != nil {
+		value := *t.Request.FollowRedirects
+		out.FollowRedirects = &value
+	}
+	if t.Request.EnableHTTP2 != nil {
+		value := *t.Request.EnableHTTP2
+		out.EnableHTTP2 = &value
+	}
 	if t.Request.Retry != nil {
 		attempts := t.Request.Retry.Attempts
 		backoff := time.Duration(t.Request.Retry.Backoff)
@@ -285,6 +295,12 @@ func (t *ScheduledTarget) cacheQuery() url.Values {
 	}
 	if t.Request.InsecureSkipVerify != nil {
 		values.Set("insecure_skip_verify", strconv.FormatBool(*t.Request.InsecureSkipVerify))
+	}
+	if t.Request.FollowRedirects != nil {
+		values.Set("follow_redirects", strconv.FormatBool(*t.Request.FollowRedirects))
+	}
+	if t.Request.EnableHTTP2 != nil {
+		values.Set("enable_http2", strconv.FormatBool(*t.Request.EnableHTTP2))
 	}
 	if t.Request.Retry != nil {
 		values.Set("retry_attempts", strconv.Itoa(t.Request.Retry.Attempts))

@@ -133,8 +133,8 @@ targets:
 
 Each target names a collector from the exporter configuration and takes every
 per-scrape parameter `/probe` accepts — `method`, `path`, `body`, `timeout`,
-`insecure_skip_verify` and the `retry` settings — overriding the collector's own
-request for that target only. It also takes static `headers` and its own target
+`insecure_skip_verify`, `follow_redirects`, `enable_http2` and the `retry`
+settings — overriding the collector's own request for that target only. It also takes static `headers` and its own target
 credentials, inline or file-backed, as basic authentication or a bearer token.
 Because the file is operator configuration rather than caller input, these
 headers are applied directly and are not filtered through the collector's
@@ -346,9 +346,9 @@ disk, replicas do not share entries, and a restart empties it.
 A stored result is only ever returned to an identical request. The cache key
 covers the collector name and its full effective configuration, the `target`,
 every `/probe` query parameter (`method`, `path`, `timeout`, `body`,
-`insecure_skip_verify`, `retry_attempts`, `retry_backoff`, and any
-`header_<name>` entry), and every header forwarded to the target, including a
-forwarded `Authorization` value. Presence and absence differ: a probe that sends
+`insecure_skip_verify`, `follow_redirects`, `enable_http2`, `retry_attempts`,
+`retry_backoff`, and any `header_<name>` entry), and every header forwarded to
+the target, including a forwarded `Authorization` value. Presence and absence differ: a probe that sends
 no credential, no forwarded header, or no TLS override cannot read an entry
 stored by a probe that sent one, and two probes with different credentials never
 share an entry. Because the collector definition is part of the key, a
@@ -477,6 +477,47 @@ verification and should not be used as a general workaround.
 params:
   insecure_skip_verify: ["true"]
 ```
+
+### Redirects and HTTP/2
+
+Two transport settings live on the collector request, both off by default:
+
+```yaml
+request:
+  follow_redirects: false
+  enable_http2: false
+```
+
+`follow_redirects` decides whether a redirect status on the target request is
+followed. Left at `false`, the exporter returns the redirect response itself, so
+the collector sees the 3xx status and — with the default `on_http_error: fail` —
+the probe fails. That is deliberate: a target that has moved is worth noticing
+rather than quietly scraping somewhere else. Set it to `true` for endpoints that
+legitimately redirect, such as an API whose documented host forwards to another.
+
+`enable_http2` decides whether the target request may negotiate HTTP/2. HTTP/2
+is negotiated through ALPN over TLS, so this only affects HTTPS targets;
+cleartext HTTP/2 is never attempted. The default of `false` is the protocol the
+exporter has always used.
+
+Both are overridable per scrape:
+
+```yaml
+params:
+  follow_redirects: ["true"]
+  enable_http2: ["true"]
+```
+
+Each accepts exactly `true` or `false`; anything else returns HTTP 400 before
+the target is contacted, so a typo cannot quietly fall back to a default. An
+absent parameter leaves the collector's setting in force, and both parameters
+are part of the response cache key, so a scrape asking for different transport
+behaviour never reads another scrape's cached result. Scheduled targets accept
+both in their own `request` block.
+
+These replace the earlier undocumented `request.redirect_policy`. A
+configuration still setting it now fails to load with an unknown-field error
+rather than silently changing behaviour.
 
 Monitor authentication is applied by Prometheus when it scrapes the exporter. To pass that credential to the discovered target, set `request.forward_authorization: true` on the selected collector. Each `monitors` entry supports Secret-backed `auth.type: bearer` and `auth.type: basic` settings. The exporter never forwards arbitrary incoming headers.
 

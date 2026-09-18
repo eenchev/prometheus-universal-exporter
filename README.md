@@ -72,7 +72,14 @@ interval even when no Prometheus self-metrics scrape is running.
 
 Collectors contain request, response, decoder, transformation, error-policy, and limit settings. Target URLs are deliberately not stored in configuration.
 
-Supported formats are `json`, `yaml`, `xml`, `csv`, `html`, `prometheus`, `text`, `python`, and `auto`. JSON and YAML expressions use the embedded jq-compatible engine (the expression language is also used for yq-compatible transformations). XML supports XPath, HTML supports CSS selectors and XPath (including bare element selectors such as `h1`), text supports regular expressions, and Prometheus input is parsed before filtering/renaming.
+Supported response formats are `json`, `yaml`, `xml`, `csv`, `html`,
+`prometheus`, `text`, and `auto`. Supported transforms include jq/yq, XPath,
+CSS, CSV, regex, Prometheus filtering, and Python. JSON and YAML expressions
+use the embedded jq-compatible engine (the expression language is also used
+for yq-compatible transformations). XML supports XPath, HTML supports CSS
+selectors and XPath (including bare element selectors such as `h1`), text
+supports regular expressions, and Prometheus input is parsed before
+filtering/renaming.
 
 All non-Python transforms use the same collector-level metric declaration. Each
 entry has `name`, `description`, `type`, `labels`, and a transform-specific
@@ -161,7 +168,33 @@ CSS remains available specifically for HTML tables and HTML status pages; it is 
 
 ## Python
 
-Python is a peer decoder, not a fallback. The Go process performs the HTTP request and passes `response.status_code`, `response.headers`, `response.body`, `response.text`, `target`, `collector`, and decoded `data` to the script. Scripts emit metrics with `metric(...)` and may call `fail(...)`.
+Python is a transform, not a decoder. Configure it under the same
+`transform` block as every other collector; the selected response decoder
+first parses the response when applicable, then the Python script receives
+`response.status_code`, `response.headers`, `response.body`, `response.text`,
+`target`, `collector`, and decoded `data`. Scripts emit metrics with
+`metric(...)` and may call `fail(...)`.
+
+For example:
+
+```yaml
+response:
+  format: text
+transform:
+  type: python
+  script: |
+    import re
+    for line in response.text.splitlines():
+        match = re.match(r"Worker (\S+) CPU: (\d+)%", line)
+        if match:
+            metric(name="vendor_worker_cpu", type="gauge",
+                   value=float(match.group(2)),
+                   labels={"worker": match.group(1)})
+metrics: []
+```
+
+`metrics: []` is explicit for Python because the script creates the metric
+definitions dynamically through `metric(...)`.
 
 The launcher blocks `socket`, `subprocess`, `ctypes`, `multiprocessing`, `threading`, shell execution, and package installation. Python has no supported network API; `requests` and `httpx` are unnecessary. `script_timeout` and metric/output limits apply. Declared `libraries` are validated against the supported names (`beautifulsoup4`, `lxml`, `PyYAML`, and `python-dateutil`); they are never installed during a scrape.
 

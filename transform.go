@@ -23,15 +23,11 @@ func transform(ctx context.Context, d *Decoded, r *HTTPResponse, c *Collector, p
 		}
 		d = processed
 	}
-	if c.Decoder.Type == "python" || c.Transform.Type == "python" {
-		script := c.Decoder.Script
-		if c.Transform.Type == "python" {
-			script = c.Transform.Script
-		}
-		if script == "" {
+	if c.Transform.Type == "python" {
+		if c.Transform.Script == "" {
 			return nil, fmt.Errorf("Python transform requires a script")
 		}
-		return executePython(ctx, pythonPath, script, d, r, c)
+		return executePython(ctx, pythonPath, c.Transform.Script, d, r, c)
 	}
 	if ms, ok := d.Data.(MetricSet); ok {
 		if c.Transform.Type == "" || c.Transform.Type == "prometheus" {

@@ -155,6 +155,25 @@ func TestStandardCSVMetricLabelsUseRowExpressions(t *testing.T) {
 	}
 }
 
+func TestPythonIsConfiguredAsTransform(t *testing.T) {
+	c := Collector{Name: "python", Response: ResponseConfig{Format: "text"}, Transform: TransformConfig{Type: "python", Script: `metric(name="python_value", type="gauge", value=7)`, Libraries: []string{"beautifulsoup4"}}, Metrics: []MetricRule{}, Limits: Limits{MaxMetrics: 10}}
+	if err := (&Config{Collectors: []Collector{c}}).Validate(); err != nil {
+		t.Fatal(err)
+	}
+	r := &HTTPResponse{Body: []byte("ignored\n"), Headers: make(http.Header)}
+	d, err := decode(r, &c)
+	if err != nil {
+		t.Fatal(err)
+	}
+	m, err := transform(context.Background(), d, r, &c, "python3")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(m.Metrics) != 1 || m.Metrics[0].Name != "python_value" || m.Metrics[0].Value != 7 {
+		t.Fatalf("unexpected Python metrics: %#v", m.Metrics)
+	}
+}
+
 func boolPtr(value bool) *bool { return &value }
 
 func TestForwardedHeadersAreExplicitAndAllowlisted(t *testing.T) {

@@ -96,10 +96,7 @@ type CSVConfig struct {
 	TrimSpace bool   `yaml:"trim_space"`
 }
 type DecoderConfig struct {
-	Type         string   `yaml:"type"`
-	Libraries    []string `yaml:"libraries"`
-	RequiredLibs []string `yaml:"required_libs"`
-	Script       string   `yaml:"script"`
+	Type string `yaml:"type"`
 }
 type ErrorHandling struct {
 	OnHTTPError      string `yaml:"on_http_error"`
@@ -146,6 +143,8 @@ type TransformConfig struct {
 	Type         string            `yaml:"type"`
 	PreScript    string            `yaml:"pre_script"`
 	Script       string            `yaml:"script"`
+	Libraries    []string          `yaml:"libraries"`
+	RequiredLibs []string          `yaml:"required_libs"`
 	Include      []string          `yaml:"include"`
 	Exclude      []string          `yaml:"exclude"`
 	Rename       map[string]string `yaml:"rename"`
@@ -224,11 +223,8 @@ func (c *Config) Validate() error {
 			x.Decoder.Type = "auto"
 		}
 		x.Decoder.Type = strings.ToLower(x.Decoder.Type)
-		if !map[string]bool{"json": true, "yaml": true, "xml": true, "csv": true, "html": true, "prometheus": true, "text": true, "python": true, "auto": true}[x.Decoder.Type] {
+		if !map[string]bool{"json": true, "yaml": true, "xml": true, "csv": true, "html": true, "prometheus": true, "text": true, "auto": true}[x.Decoder.Type] {
 			return fmt.Errorf("collector %q has unknown decoder %q", x.Name, x.Decoder.Type)
-		}
-		if x.Decoder.Type == "python" && strings.TrimSpace(x.Decoder.Script) == "" {
-			return fmt.Errorf("collector %q Python decoder requires decoder.script", x.Name)
 		}
 		if x.Transform.Type != "" {
 			x.Transform.Type = strings.ToLower(x.Transform.Type)
@@ -253,7 +249,7 @@ func (c *Config) Validate() error {
 				return fmt.Errorf("collector %q has invalid error policy %q", x.Name, p)
 			}
 		}
-		for _, lib := range append(x.Decoder.Libraries, x.Decoder.RequiredLibs...) {
+		for _, lib := range append(x.Transform.Libraries, x.Transform.RequiredLibs...) {
 			if !map[string]bool{"beautifulsoup4": true, "bs4": true, "lxml": true, "PyYAML": true, "yaml": true, "python-dateutil": true, "dateutil": true}[lib] {
 				return fmt.Errorf("collector %q declares unsupported Python library %q", x.Name, lib)
 			}

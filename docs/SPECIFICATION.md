@@ -67,7 +67,7 @@ Prometheus Operator
 Important:
 
 - A decoder is a first-class component.
-- Python is a first-class decoder, not a fallback.
+- Python is a first-class transform, not a decoder or fallback.
 - Prometheus is a first-class decoder capable of converting an existing Prometheus endpoint into the internal metric model and then applying optional filtering/renaming/label transformations.
 - No decoder should emit Prometheus text directly. All decoders MUST produce a common internal representation.
 
@@ -209,6 +209,9 @@ collectors:
       ...
     decoder:
       ...
+    transform:
+      ...
+    metrics: []
     error_handling:
       ...
     limits:
@@ -216,6 +219,13 @@ collectors:
 ```
 
 A collector MUST have a unique name.
+
+Every collector uses the same `transform` and `metrics` structure. The decoder
+only selects how the response is parsed; it does not contain executable
+collector logic. Python is a transform (`transform.type: python`) and its
+script and optional library declarations live under `transform`, just like
+`pre_script`. A Python transform may use `metrics: []` because it emits its
+metric definitions dynamically through `metric(...)`.
 
 Collector names SHOULD use Prometheus-label-safe/simple names such as:
 
@@ -239,11 +249,13 @@ csv
 html
 prometheus
 text
-python
 auto
 ```
 
 `auto` is optional but strongly recommended.
+
+Python is a transform, not a decoder. Supported transform types MUST include
+`jq`, `yq`, `xpath`, `css`, `csv`, `regex`, `prometheus`, and `python`.
 
 ### 6.1 Auto detection
 
@@ -606,17 +618,19 @@ Example:
       expression: 'Connections:\\s+(\\d+)'
 ```
 
-Complex parsing can use the Python decoder.
+Complex parsing can use the Python transform.
 
 ---
 
-# 16. Python decoder
+# 16. Python transform
 
-Python MUST be a first-class decoder type.
+Python MUST be a first-class transform type.
 
-It is not a fallback and should be documented alongside JSON/YAML/XML/etc.
+It is not a fallback or a separate decoder. It MUST be documented alongside
+the jq/yq, XPath, CSS, CSV, regex, and Prometheus transforms.
 
-Python scripts MUST operate only on data already fetched by the Go exporter.
+The configured response decoder runs before the Python transform. Python
+scripts MUST operate only on data already fetched by the Go exporter.
 
 Python MUST NOT need `requests`, `httpx`, `urllib3`, `socket`, or equivalent networking libraries.
 
@@ -717,7 +731,7 @@ The collector configuration MUST allow Python scripts to declare third-party dep
 Preferred syntax:
 
 ```yaml
-decoder:
+transform:
   type: python
   libraries:
     - beautifulsoup4
@@ -1333,7 +1347,7 @@ collectors:
         expression: 'Connections:\\s+(\\d+)'
 ```
 
-## 28.8 Python decoder
+## 28.8 Python transform
 
 ```yaml
 collectors:
@@ -1344,7 +1358,7 @@ collectors:
     response:
       format: auto
 
-    decoder:
+    transform:
       type: python
       libraries:
         - beautifulsoup4
@@ -1365,6 +1379,7 @@ collectors:
                     value=float(match.group(2)),
                     labels={"worker": match.group(1)},
                 )
+    metrics: []
 ```
 
 ---
@@ -2108,9 +2123,9 @@ Test:
 
 Verify that a valid response with no matching rules is distinguishable from a decoder failure.
 
-## 34.15 Python decoder tests
+## 34.15 Python transform tests
 
-Python is a first-class decoder and requires a dedicated test suite.
+Python is a first-class transform and requires a dedicated test suite.
 
 Test:
 
@@ -2274,7 +2289,7 @@ A limit violation MUST be reported through the appropriate self-metrics and MUST
 
 ## 34.22 Metric exposition tests
 
-Every supported decoder MUST have end-to-end tests that verify the final `/probe` response is valid Prometheus exposition.
+Every supported decoder/transform combination MUST have end-to-end tests that verify the final `/probe` response is valid Prometheus exposition.
 
 Test:
 
@@ -2330,7 +2345,7 @@ Test:
 - Many simultaneous probes to many targets.
 - Simultaneous probes while configuration reload occurs.
 - Simultaneous probes for different collectors.
-- Python decoder execution concurrently.
+- Python transform execution concurrently.
 - jq/yq execution concurrently.
 
 CI MUST run:
@@ -2437,7 +2452,7 @@ Test the built container image for:
 - `/metrics` exposes exporter metrics.
 - `/probe` is reachable.
 - Default configuration loads.
-- Python decoder is available.
+- Python transform execution is available.
 - Every documented bundled Python library imports successfully.
 - No runtime package installation is required.
 - Expected filesystem permissions are respected.
@@ -2447,7 +2462,7 @@ The image build MUST be reproducible and MUST pin dependency versions sufficient
 
 ## 34.31 End-to-end scenario matrix
 
-The repository MUST include at least one complete end-to-end scenario for every supported decoder:
+The repository MUST include at least one complete end-to-end scenario for every supported response decoder and transform:
 
 | Scenario | Input | Decoder | Transformation | Expected result |
 |---|---|---|---|---|
@@ -2458,7 +2473,7 @@ The repository MUST include at least one complete end-to-end scenario for every 
 | HTML status page | HTML | html | CSS/XPath | valid Prometheus metrics |
 | Existing metrics | Prometheus | prometheus | filter/rename | valid Prometheus metrics |
 | Legacy endpoint | Plain text | text | regex | valid Prometheus metrics |
-| Custom parser | arbitrary response | python | Python | valid Prometheus metrics |
+| Scripted endpoint | Plain text/decoded data | text/json/etc. | Python transform | valid Prometheus metrics |
 
 Each scenario SHOULD include at least one failure case and one optional/missing-field case.
 
@@ -2526,13 +2541,13 @@ The repository MUST include documentation covering:
 2. Installation
 3. Configuration
 4. Collector authoring
-5. Every supported decoder
+5. Every supported response decoder and transform
 6. jq examples
 7. yq examples
 8. XPath examples
 9. CSS selector examples
 10. Regex examples
-11. Python decoder API
+11. Python transform API
 12. Supported Python standard library
 13. Supported bundled third-party Python libraries and exact versions
 14. Unsupported Python libraries/capabilities
@@ -2637,10 +2652,10 @@ The implementation is considered complete when all of the following are true:
 - Parse and transformation errors have configurable behavior.
 - Resource/cardinality limits are enforced.
 - Self-metrics clearly identify scrape/decode/transform failures.
-- Metrics emitted by every decoder have consistent Prometheus behavior.
+- Metrics emitted by every decoder/transform combination have consistent Prometheus behavior.
 - The complete project builds reproducibly and includes tests, documentation, and a working Helm chart.
-- Every supported decoder has automated unit and end-to-end coverage, including representative success and failure cases.
-- Python decoder execution, bundled library availability, sandbox restrictions, and execution limits are covered by automated tests.
+- Every supported response decoder and transform has automated unit and end-to-end coverage, including representative success and failure cases.
+- Python transform execution, bundled library availability, sandbox restrictions, and execution limits are covered by automated tests.
 - Missing-key and configurable error-policy semantics are covered by automated tests.
 - Concurrency is covered by tests and the race detector passes.
 - Parser/configuration fuzz tests exist for applicable components and do not expose panics in the maintained corpus.

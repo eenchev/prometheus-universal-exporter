@@ -113,7 +113,7 @@ collectors:
       path: /status
     response:
       format: text
-    decoder:
+    transform:
       type: python
       script: |
         import re
@@ -123,3 +123,4 @@ collectors:
                 metric(name="vendor_worker_cpu", type="gauge",
                        value=float(match.group(2)),
                        labels={"worker": match.group(1)})
+    metrics: []

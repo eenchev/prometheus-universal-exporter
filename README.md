@@ -74,22 +74,49 @@ Collectors contain request, response, decoder, transformation, error-policy, and
 
 Supported formats are `json`, `yaml`, `xml`, `csv`, `html`, `prometheus`, `text`, `python`, and `auto`. JSON and YAML expressions use the embedded jq-compatible engine (the expression language is also used for yq-compatible transformations). XML supports XPath, HTML supports CSS selectors and XPath (including bare element selectors such as `h1`), text supports regular expressions, and Prometheus input is parsed before filtering/renaming.
 
-A simple extraction rule is useful when the desired metric name is known:
+All non-Python transforms use the same collector-level metric declaration. Each
+entry has `name`, `description`, `type`, `labels`, and a transform-specific
+`expression`. The only allowed metric types are `gauge`, `counter`,
+`histogram`, `summary`, and `untyped`:
 
 ```yaml
-metrics:
-  - name: application_requests_total
-    type: counter
-    jq: .requests
+collectors:
+  - name: app_json
+    response:
+      format: json
+    transform:
+      type: jq
+      pre_script: |
+        data["requests"] = data.get("requests", 0)
+    metrics:
+      - name: application_requests_total
+        description: Total application requests
+        type: counter
+        expression: .requests
+        labels:
+          environment: .environment
 ```
 
-Expression transformations can return metric objects:
+The expression and label values are interpreted by the selected transform:
 
-```yaml
-transform:
-  type: jq
-  expression: '[{name: "application_requests_total", type: "counter", value: .requests}]'
-```
+- `jq`/`yq`: jq expressions evaluated against decoded data.
+- `regex`: a RE2 expression; the first capture group is the numeric value and
+  labels map to capture-group numbers or names.
+- `csv`: the expression is the numeric column name and labels map to column
+  names.
+- `css`: the expression selects HTML nodes whose text is numeric; labels are
+  selectors relative to each selected node.
+- `xpath`: the expression selects XML/HTML nodes whose text is numeric; labels
+  are relative XPath expressions or `@attribute` selectors.
+- `prometheus`: the expression matches source metric names; it can remap the
+  name, description, type, and selected labels.
+
+Every transform may define `transform.pre_script`. It runs once per scrape
+after decoding and before metric extraction. The script receives the decoded
+value as `data` and may mutate it or replace it by assigning to `data`.
+HTML/XML pre-scripts receive raw document text, which is parsed again after the
+script. Python transforms and decoders continue to emit metrics with the
+`metric(...)` API.
 
 Errors are classified as HTTP, decode, transform, missing data, validation, or resource-limit failures. `error_handling` accepts `fail`, `warn`, and `ignore`; `allow_missing_keys` controls required extraction results. Limits default to conservative values and are enforced immediately before exposition.
 
@@ -98,14 +125,15 @@ CSV responses can use a native CSV transform without CSS or Python:
 ```yaml
 response:
   format: csv
+metrics:
+  - name: server_cpu
+    description: Server CPU utilization
+    type: gauge
+    expression: cpu
+    labels:
+      server: server
 transform:
   type: csv
-  expressions:
-    - name: server_cpu
-      type: gauge
-      value: cpu
-      labels:
-        server: server
 ```
 
 CSS remains available specifically for HTML tables and HTML status pages; it is not used for CSV.

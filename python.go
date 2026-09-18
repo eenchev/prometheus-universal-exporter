@@ -9,8 +9,20 @@ import (
 	"time"
 )
 
-type pythonInput struct { Script string `json:"script"`; Data any `json:"data"`; Response pythonResponse `json:"response"`; Target string `json:"target"`; Collector string `json:"collector"` }
-type pythonResponse struct { StatusCode int `json:"status_code"`; Headers map[string][]string `json:"headers"`; Body string `json:"body"`; Text string `json:"text"` }
+type pythonInput struct {
+	Mode      string         `json:"mode"`
+	Script    string         `json:"script"`
+	Data      any            `json:"data"`
+	Response  pythonResponse `json:"response"`
+	Target    string         `json:"target"`
+	Collector string         `json:"collector"`
+}
+type pythonResponse struct {
+	StatusCode int                 `json:"status_code"`
+	Headers    map[string][]string `json:"headers"`
+	Body       string              `json:"body"`
+	Text       string              `json:"text"`
+}
 
 // The launcher deliberately receives the script as data. It blocks imports and
 // process/network primitives before executing collector code, while keeping the
@@ -44,9 +56,94 @@ response=Response(p['response']); target=p['target']; collector=p['collector']; 
 sink=io.StringIO()
 with contextlib.redirect_stdout(sink), contextlib.redirect_stderr(sink):
     exec(compile(p['script'],'<collector-python>','exec'),globals(),globals())
-print(json.dumps({'metrics':metrics,'log':sink.getvalue()}))`
+if p.get('mode') == 'data':
+    print(json.dumps({'data':data,'log':sink.getvalue()}))
+else:
+    print(json.dumps({'metrics':metrics,'log':sink.getvalue()}))`
 
-func executePython(ctx context.Context,pythonPath,script string,d *Decoded,r *HTTPResponse,c *Collector)(*MetricSet,error){
-	if pythonPath==""{pythonPath="python3"};timeout:=time.Duration(c.Limits.ScriptTimeout);if timeout<=0{timeout=100*time.Millisecond};pctx,cancel:=context.WithTimeout(ctx,timeout);defer cancel()
-	input:=pythonInput{Script:script,Data:d.Data,Target:r.Target,Collector:c.Name,Response:pythonResponse{StatusCode:r.StatusCode,Headers:r.Headers,Body:string(r.Body),Text:string(r.Body)}};b,err:=json.Marshal(input);if err!=nil{return nil,err};cmd:=exec.CommandContext(pctx,pythonPath,"-I","-c",pythonLauncher);cmd.Stdin=bytes.NewReader(b);var stdout,stderr bytes.Buffer;cmd.Stdout=&stdout;cmd.Stderr=&stderr;err=cmd.Run();if pctx.Err()!=nil{return nil,fmt.Errorf("Python execution timeout: %w",pctx.Err())};if err!=nil{return nil,fmt.Errorf("Python execution failed: %w: %s",err,stderr.String())};if c.Limits.MaxOutputBytes>0&&stdout.Len()>c.Limits.MaxOutputBytes{return nil,fmt.Errorf("Python output exceeds limit")};var result struct{Metrics []Metric `json:"metrics"`};if err=json.Unmarshal(stdout.Bytes(),&result);err!=nil{return nil,fmt.Errorf("Python output: %w",err)};return &MetricSet{Metrics:result.Metrics},nil
+func executePython(ctx context.Context, pythonPath, script string, d *Decoded, r *HTTPResponse, c *Collector) (*MetricSet, error) {
+	if pythonPath == "" {
+		pythonPath = "python3"
+	}
+	timeout := time.Duration(c.Limits.ScriptTimeout)
+	if timeout <= 0 {
+		timeout = 100 * time.Millisecond
+	}
+	pctx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+	input := pythonInput{Mode: "metrics", Script: script, Data: pythonScriptData(d), Target: r.Target, Collector: c.Name, Response: pythonResponse{StatusCode: r.StatusCode, Headers: r.Headers, Body: string(r.Body), Text: string(r.Body)}}
+	b, err := json.Marshal(input)
+	if err != nil {
+		return nil, err
+	}
+	cmd := exec.CommandContext(pctx, pythonPath, "-I", "-c", pythonLauncher)
+	cmd.Stdin = bytes.NewReader(b)
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+	err = cmd.Run()
+	if pctx.Err() != nil {
+		return nil, fmt.Errorf("Python execution timeout: %w", pctx.Err())
+	}
+	if err != nil {
+		return nil, fmt.Errorf("Python execution failed: %w: %s", err, stderr.String())
+	}
+	if c.Limits.MaxOutputBytes > 0 && stdout.Len() > c.Limits.MaxOutputBytes {
+		return nil, fmt.Errorf("Python output exceeds limit")
+	}
+	var result struct {
+		Metrics []Metric `json:"metrics"`
+	}
+	if err = json.Unmarshal(stdout.Bytes(), &result); err != nil {
+		return nil, fmt.Errorf("Python output: %w", err)
+	}
+	return &MetricSet{Metrics: result.Metrics}, nil
+}
+
+func executePythonPreScript(ctx context.Context, pythonPath, script string, d *Decoded, r *HTTPResponse, c *Collector) (any, error) {
+	if pythonPath == "" {
+		pythonPath = "python3"
+	}
+	timeout := time.Duration(c.Limits.ScriptTimeout)
+	if timeout <= 0 {
+		timeout = 100 * time.Millisecond
+	}
+	pctx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+	input := pythonInput{Mode: "data", Script: script, Data: pythonScriptData(d), Target: r.Target, Collector: c.Name, Response: pythonResponse{StatusCode: r.StatusCode, Headers: r.Headers, Body: string(r.Body), Text: string(r.Body)}}
+	b, err := json.Marshal(input)
+	if err != nil {
+		return nil, err
+	}
+	cmd := exec.CommandContext(pctx, pythonPath, "-I", "-c", pythonLauncher)
+	cmd.Stdin = bytes.NewReader(b)
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+	if err := cmd.Run(); err != nil {
+		if pctx.Err() != nil {
+			return nil, fmt.Errorf("Python pre-script timeout: %w", pctx.Err())
+		}
+		return nil, fmt.Errorf("Python pre-script failed: %w: %s", err, stderr.String())
+	}
+	if pctx.Err() != nil {
+		return nil, fmt.Errorf("Python pre-script timeout: %w", pctx.Err())
+	}
+	if c.Limits.MaxOutputBytes > 0 && stdout.Len() > c.Limits.MaxOutputBytes {
+		return nil, fmt.Errorf("Python pre-script output exceeds limit")
+	}
+	var result struct {
+		Data any `json:"data"`
+	}
+	if err := json.Unmarshal(stdout.Bytes(), &result); err != nil {
+		return nil, fmt.Errorf("Python pre-script output: %w", err)
+	}
+	return normalize(result.Data), nil
+}
+
+func pythonScriptData(d *Decoded) any {
+	if d.Kind == "html" || d.Kind == "xml" {
+		return string(d.Raw)
+	}
+	return d.Data
 }

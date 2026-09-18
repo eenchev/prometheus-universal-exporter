@@ -44,10 +44,11 @@ config:
             format: text
           transform:
             type: regex
-            rules:
-              - name: example_status
-                type: gauge
-                regex: 'status:\s+(\d+(?:\.\d+)?)'
+          metrics:
+            - name: example_status
+              description: Example status value
+              type: gauge
+              expression: 'status:\s+(\d+(?:\.\d+)?)'
 monitors: []
 # Example:
 # monitors:

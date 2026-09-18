@@ -369,24 +369,14 @@ Example:
 
   transform:
     type: jq
-    expression: |
-      .servers[] |
-      {
-        name: .name,
-        cpu: .cpu
-      }
+  metrics:
+    - name: application_requests_total
+      description: Total application requests
+      type: counter
+      expression: '.requests'
+      labels:
+        environment: '.environment'
 ```
-
-A simpler metric-oriented configuration MAY be supported:
-
-```yaml
-metrics:
-  - name: application_requests_total
-    type: counter
-    jq: '.requests'
-```
-
-The implementation MUST clearly document the supported configuration form.
 
 ---
 
@@ -408,7 +398,11 @@ Example:
 
   transform:
     type: yq
-    expression: '.status.requests'
+  metrics:
+    - name: application_requests_total
+      description: Total application requests
+      type: counter
+      expression: '.status.requests'
 ```
 
 ---
@@ -431,10 +425,11 @@ Example:
 
   transform:
     type: xpath
-    expressions:
-      - name: application_requests_total
-        type: counter
-        expression: '/status/requests'
+  metrics:
+    - name: application_requests_total
+      description: Total application requests
+      type: counter
+      expression: '/status/requests'
 ```
 
 The implementation MUST document XPath behavior and namespaces.
@@ -470,12 +465,13 @@ Example conceptual configuration:
 
   transform:
     type: css
-    expressions:
-      - name: application_server_cpu
-        selector: '#servers tr'
-        value: 'td:nth-child(2)'
-        labels:
-          server: 'td:nth-child(1)'
+  metrics:
+    - name: application_server_cpu
+      description: Server CPU utilization
+      type: gauge
+      expression: '#servers tr'
+      labels:
+        server: 'td:nth-child(1)'
 ```
 
 XPath equivalent SHOULD be supported.
@@ -563,12 +559,11 @@ Example:
 
   transform:
     type: prometheus
-    include:
-      - vendor_.*
-    rename:
-      vendor_requests_total: application_requests_total
-    labels:
-      source: vendor
+  metrics:
+    - name: application_requests_total
+      description: Vendor HTTP requests
+      type: counter
+      expression: '^vendor_requests_total$'
 ```
 
 The implementation MUST avoid double-encoding Prometheus text. It must parse it into the common representation first.
@@ -596,10 +591,11 @@ Example:
 
   transform:
     type: regex
-    rules:
-      - name: application_connections
-        type: gauge
-        regex: 'Connections:\\s+(\\d+)'
+  metrics:
+    - name: application_connections
+      description: Current application connections
+      type: gauge
+      expression: 'Connections:\\s+(\\d+)'
 ```
 
 Complex parsing can use the Python decoder.
@@ -784,7 +780,11 @@ decoder:
 
 transform:
   type: jq
-  expression: '.requests'
+metrics:
+  - name: application_requests_total
+    description: Total application requests
+    type: counter
+    expression: '.requests'
 ```
 
 and:
@@ -795,7 +795,11 @@ decoder:
 
 transform:
   type: yq
-  expression: '.status.requests'
+metrics:
+  - name: application_requests_total
+    description: Total application requests
+    type: counter
+    expression: '.status.requests'
 ```
 
 Execution MUST be bounded and failures MUST be reported as transform errors.
@@ -844,6 +848,52 @@ Prometheus + Python
 Python does not need to be the only way to handle difficult cases.
 
 ---
+
+## 18.1 Canonical metric declarations
+
+All non-Python transformations MUST use one common collector-level `metrics`
+array. A metric declaration MUST support these fields:
+
+```yaml
+metrics:
+  - name: application_requests_total
+    description: Total application requests
+    type: counter
+    labels:
+      environment: .environment
+    expression: .requests
+```
+
+`name`, `description`, `type`, `labels`, and `expression` are the standard
+shape. `description` becomes the Prometheus HELP text. `type` MUST be one of
+`gauge`, `counter`, `histogram`, `summary`, or `untyped`; omitted types default
+to `gauge`. Metric declarations MUST be placed on the collector, alongside
+`transform`, rather than using transform-specific arrays such as `rules` or
+`expressions`.
+
+The meaning of `expression` and the values in `labels` depends only on the
+selected transform:
+
+| Transform | `expression` | `labels` |
+| --- | --- | --- |
+| `jq`, `yq` | jq-compatible expression evaluated against decoded data | jq-compatible expressions evaluated against the same data |
+| `regex` | RE2 expression; capture group 1 is the numeric value | capture-group number or named capture group |
+| `csv` | numeric column name | column names |
+| `css` | CSS selector for numeric text | selectors relative to the selected element |
+| `xpath` | XPath selecting numeric text | relative XPath or `@attribute` |
+| `prometheus` | regular expression matching source metric names | destination label name to source label name |
+
+Python transforms are the exception: their script emits the common metric
+objects through `metric(...)`, so a `metrics` array is optional for them.
+
+Every transform MAY define one `transform.pre_script`. The exporter MUST run
+it exactly once per scrape, after decoding and before evaluating the metric
+array. The script receives `data`, `response`, `target`, and `collector`; it
+MAY mutate `data` or replace it by assigning a new value to `data`. JSON/YAML,
+CSV, and text receive decoded values; HTML/XML receive raw document text and
+the exporter MUST parse the returned text again before CSS/XPath extraction.
+The pre-script uses the same timeout, output limit, and Python restrictions as
+Python metric scripts. A pre-script failure is a transform error.
 
 # 19. Missing keys and error handling
 
@@ -1111,14 +1161,11 @@ collectors:
 
     transform:
       type: jq
-      expression: |
-        [
-          {
-            name: "application_requests_total",
-            type: "counter",
-            value: .requests
-          }
-        ]
+    metrics:
+      - name: application_requests_total
+        description: Total application requests
+        type: counter
+        expression: .requests
 ```
 
 ## 28.2 YAML + yq
@@ -1134,7 +1181,11 @@ collectors:
 
     transform:
       type: yq
-      expression: '.status.requests'
+    metrics:
+      - name: application_requests_total
+        description: Total application requests
+        type: counter
+        expression: '.status.requests'
 ```
 
 ## 28.3 XML + XPath
@@ -1150,10 +1201,11 @@ collectors:
 
     transform:
       type: xpath
-      expressions:
-        - name: application_requests_total
-          type: counter
-          expression: '/status/requests'
+    metrics:
+      - name: application_requests_total
+        description: Total application requests
+        type: counter
+        expression: '/status/requests'
 ```
 
 ## 28.4 CSV
@@ -1171,18 +1223,14 @@ collectors:
         delimiter: ','
 
     transform:
-      type: python
-      libraries: []
-      script: |
-        import csv
-
-        for row in data:
-            metric(
-                name="server_cpu",
-                type="gauge",
-                value=float(row["cpu"]),
-                labels={"server": row["server"]}
-            )
+      type: csv
+    metrics:
+      - name: server_cpu
+        description: Server CPU utilization
+        type: gauge
+        expression: cpu
+        labels:
+          server: server
 ```
 
 ## 28.5 HTML + CSS selector
@@ -1198,20 +1246,17 @@ collectors:
 
     transform:
       type: css
-      expressions:
-        - name: server_cpu
-          selector: '#servers tr'
-          value: 'td:nth-child(2)'
-          labels:
-            server: 'td:nth-child(1)'
+    metrics:
+      - name: server_cpu
+        description: Server CPU utilization
+        type: gauge
+        expression: '#servers tr'
+        labels:
+          server: 'td:nth-child(1)'
 ```
 
-A simple tag extraction is also valid:
-
-```yaml
-        - name: application_status
-          selector: h1
-```
+A simple tag extraction is also valid by setting `expression: h1` in a metric
+declaration.
 
 ## 28.6 Prometheus input
 
@@ -1226,10 +1271,11 @@ collectors:
 
     transform:
       type: prometheus
-      include:
-        - 'vendor_.*'
-      labels:
-        source: vendor
+    metrics:
+      - name: vendor_requests_total
+        description: Vendor HTTP requests
+        type: counter
+        expression: '^vendor_requests_total$'
 ```
 
 ## 28.7 Plain text + regex
@@ -1245,10 +1291,11 @@ collectors:
 
     transform:
       type: regex
-      rules:
-        - name: application_connections
-          type: gauge
-          regex: 'Connections:\\s+(\\d+)'
+    metrics:
+      - name: application_connections
+        description: Current application connections
+        type: gauge
+        expression: 'Connections:\\s+(\\d+)'
 ```
 
 ## 28.8 Python decoder
@@ -1985,6 +2032,16 @@ The Prometheus decoder MUST be tested against representative Prometheus expositi
 
 Test that the decoder converts the exposition into the common internal metric model rather than simply copying raw text.
 
+Test the canonical metric declaration shape with `name`, `description`,
+`type`, `labels`, and `expression` for every non-Python transform. Verify that
+only the five allowed Prometheus metric types are accepted, that descriptions
+become HELP text, and that transform-specific expression semantics are applied
+consistently.
+
+Test that a transform `pre_script` runs once before extraction, can mutate or
+replace `data`, is subject to timeout/output restrictions, and is reparsed for
+HTML/XML output.
+
 Test subsequent transformations such as:
 
 - Include/filter by metric name.
@@ -2689,14 +2746,15 @@ MAY map a numeric column to a metric and named columns to labels:
 ```yaml
 response:
   format: csv
+metrics:
+  - name: server_cpu
+    description: Server CPU utilization
+    type: gauge
+    expression: cpu
+    labels:
+      server: server
 transform:
   type: csv
-  expressions:
-    - name: server_cpu
-      type: gauge
-      value: cpu
-      labels:
-        server: server
 ```
 
 CSS remains a first-class transformation for HTML responses. It MUST NOT be

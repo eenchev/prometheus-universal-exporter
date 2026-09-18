@@ -37,8 +37,17 @@ collectors:
       format: json
     transform:
       type: jq
-      expression: |
-        [{name: "application_requests_total", type: "counter", value: .requests}]
+      # Optional: runs once after decoding and before all metric expressions.
+      # The script can mutate or replace the decoded `data` value.
+      pre_script: |
+        data["requests"] = data.get("requests", 0)
+    metrics:
+      - name: application_requests_total
+        description: Total application requests
+        type: counter
+        expression: .requests
+        labels:
+          environment: .environment
 
   # Set targetAuth.enabled=true in the Helm chart and store the token in the
   # configured Secret key when using this file-based target credential.
@@ -57,10 +66,11 @@ collectors:
       format: text
     transform:
       type: regex
-      rules:
-        - name: application_connections
-          type: gauge
-          regex: 'Connections:\s+(\d+)'
+    metrics:
+      - name: application_connections
+        description: Current application connections
+        type: gauge
+        expression: 'Connections:\s+(\d+)'
 
   - name: app_csv
     request:
@@ -71,12 +81,13 @@ collectors:
         header: true
     transform:
       type: csv
-      expressions:
-        - name: server_cpu
-          type: gauge
-          value: cpu
-          labels:
-            server: server
+    metrics:
+      - name: server_cpu
+        description: Server CPU utilization
+        type: gauge
+        expression: cpu
+        labels:
+          server: server
 
   - name: vendor_prometheus
     request:
@@ -85,9 +96,11 @@ collectors:
       format: prometheus
     transform:
       type: prometheus
-      include: ['vendor_.*']
-      labels:
-        source: vendor
+    metrics:
+      - name: vendor_requests_total
+        description: Vendor HTTP requests
+        type: counter
+        expression: '^vendor_requests_total$'
 
   - name: custom_python
     request:

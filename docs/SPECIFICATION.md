@@ -381,6 +381,12 @@ The JSON decoder MUST:
 - Support jq transformations.
 - Support simple metric extraction without jq if practical.
 
+When a jq metric expression emits multiple values, each value becomes one
+metric sample. An expression label that emits the same number of values is
+paired with those samples by array index. A scalar expression label is reused
+for every sample. Missing or null metric values are handled according to the
+metric's `error_mode` and the collector's missing-key policy.
+
 Example:
 
 ```yaml
@@ -498,12 +504,17 @@ Example conceptual configuration:
       description: Server CPU utilization
       type: gauge
       error_mode: log
-      expression: '#servers tr'
+      expression: '#servers td:nth-child(2)'
       labels:
-        - name: server
-          type: expression
-          expression: 'td:nth-child(1)'
+        - name: environment
+          type: string
+          value: production
 ```
+
+For CSS transforms, the metric expression selects the element whose text is
+converted to a number. Expression labels are evaluated against that selected
+element; use XPath when labels need to be read from a sibling or ancestor
+element.
 
 XPath equivalent SHOULD be supported.
 

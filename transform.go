@@ -159,7 +159,7 @@ func transformJQ(ctx context.Context, data any, rules []MetricRule, c *Collector
 			}
 			return nil, fmt.Errorf("metric %q expression: %w", rule.Name, err)
 		}
-		labels, err := evaluateLabels(ctx, data, rule.Labels)
+		labels, err := evaluateLabels(ctx, data, rule.Labels, len(values))
 		if err != nil {
 			if handleMetricError(rule, err) {
 				continue
@@ -172,8 +172,14 @@ func transformJQ(ctx context.Context, data any, rules []MetricRule, c *Collector
 			}
 			return nil, fmt.Errorf("metric %q value is missing", rule.Name)
 		}
-		for _, value := range values {
+		for index, value := range values {
 			if value == nil {
+				if requiredRule(rule, c) {
+					if handleMetricError(rule, fmt.Errorf("metric %q value is missing", rule.Name)) {
+						continue
+					}
+					return nil, fmt.Errorf("metric %q value is missing", rule.Name)
+				}
 				continue
 			}
 			n, err := number(value)
@@ -183,7 +189,7 @@ func transformJQ(ctx context.Context, data any, rules []MetricRule, c *Collector
 				}
 				return nil, fmt.Errorf("metric %q: %w", rule.Name, err)
 			}
-			out.Metrics = append(out.Metrics, Metric{Name: rule.Name, Help: rule.Description, Type: rule.Type, Value: n, Labels: cloneLabels(labels)})
+			out.Metrics = append(out.Metrics, Metric{Name: rule.Name, Help: rule.Description, Type: rule.Type, Value: n, Labels: cloneLabels(labels[index])})
 		}
 	}
 	return out, nil
@@ -218,19 +224,34 @@ func evaluateJQ(ctx context.Context, data any, expression string) ([]any, error)
 	return values, nil
 }
 
-func evaluateLabels(ctx context.Context, data any, expressions []LabelRule) (map[string]string, error) {
-	labels := map[string]string{}
+func evaluateLabels(ctx context.Context, data any, expressions []LabelRule, metricCount int) ([]map[string]string, error) {
+	labels := make([]map[string]string, metricCount)
+	for index := range labels {
+		labels[index] = map[string]string{}
+	}
 	for _, label := range expressions {
 		if label.Type == "string" {
-			labels[label.Name] = label.Value
+			for index := range labels {
+				labels[index][label.Name] = label.Value
+			}
 			continue
 		}
 		values, err := evaluateJQ(ctx, data, label.Expression)
 		if err != nil {
 			return nil, fmt.Errorf("label %q: %w", label.Name, err)
 		}
-		if len(values) > 0 && values[0] != nil {
-			labels[label.Name] = fmt.Sprint(values[0])
+		if len(values) == 1 {
+			if values[0] != nil {
+				for index := range labels {
+					labels[index][label.Name] = fmt.Sprint(values[0])
+				}
+			}
+			continue
+		}
+		for index := 0; index < len(labels) && index < len(values); index++ {
+			if values[index] != nil {
+				labels[index][label.Name] = fmt.Sprint(values[index])
+			}
 		}
 	}
 	return labels, nil

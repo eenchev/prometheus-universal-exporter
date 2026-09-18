@@ -136,6 +136,79 @@ func TestStandardJSONMetricAndPreScript(t *testing.T) {
 	}
 }
 
+func TestJSONArrayMetricsPairLabelsByIndex(t *testing.T) {
+	c := Collector{
+		Name:      "json_array",
+		Response:  ResponseConfig{Format: "json"},
+		Transform: TransformConfig{Type: "jq"},
+		Metrics: []MetricRule{{
+			Name:        "server_cpu",
+			Description: "Server CPU utilization",
+			Type:        GaugeMetricType,
+			Expression:  ".servers[] | .cpu",
+			Labels: []LabelRule{{
+				Name:       "server",
+				Type:       "expression",
+				Expression: ".servers[] | .name",
+			}},
+		}},
+		Limits: Limits{MaxMetrics: 10},
+	}
+	if err := (&Config{Collectors: []Collector{c}}).Validate(); err != nil {
+		t.Fatal(err)
+	}
+	r := &HTTPResponse{Body: []byte(`{"servers":[{"name":"web01","cpu":72},{"name":"web02","cpu":31}]}`), Headers: make(http.Header)}
+	d, err := decode(r, &c)
+	if err != nil {
+		t.Fatal(err)
+	}
+	m, err := transform(context.Background(), d, r, &c, "python3")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(m.Metrics) != 2 {
+		t.Fatalf("expected two array metrics, got %#v", m.Metrics)
+	}
+	if m.Metrics[0].Value != 72 || m.Metrics[0].Labels["server"] != "web01" || m.Metrics[1].Value != 31 || m.Metrics[1].Labels["server"] != "web02" {
+		t.Fatalf("array metric labels were not paired by index: %#v", m.Metrics)
+	}
+}
+
+func TestJSONArrayMissingValuesRespectMetricErrorMode(t *testing.T) {
+	for _, errorMode := range []string{"ignore", "log"} {
+		t.Run(errorMode, func(t *testing.T) {
+			c := Collector{
+				Name:      "json_array_missing",
+				Response:  ResponseConfig{Format: "json"},
+				Transform: TransformConfig{Type: "jq"},
+				Metrics: []MetricRule{{
+					Name:       "server_cpu",
+					Type:       GaugeMetricType,
+					ErrorMode:  errorMode,
+					Expression: ".servers[] | .cpu",
+					Labels:     []LabelRule{{Name: "server", Type: "expression", Expression: ".servers[] | .name"}},
+				}},
+				Limits: Limits{MaxMetrics: 10},
+			}
+			if err := (&Config{Collectors: []Collector{c}}).Validate(); err != nil {
+				t.Fatal(err)
+			}
+			r := &HTTPResponse{Body: []byte(`{"servers":[{"name":"web01","cpu":72},{"name":"web02"},{"name":"web03","cpu":31}]}`), Headers: make(http.Header)}
+			d, err := decode(r, &c)
+			if err != nil {
+				t.Fatal(err)
+			}
+			m, err := transform(context.Background(), d, r, &c, "python3")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(m.Metrics) != 2 || m.Metrics[0].Labels["server"] != "web01" || m.Metrics[1].Labels["server"] != "web03" {
+				t.Fatalf("unexpected metrics after missing array value: %#v", m.Metrics)
+			}
+		})
+	}
+}
+
 func TestStandardCSVMetricLabelsUseRowExpressions(t *testing.T) {
 	c := Collector{Name: "csv", Response: ResponseConfig{Format: "csv", CSV: CSVConfig{Header: boolPtr(true)}}, Transform: TransformConfig{Type: "csv"}, Metrics: []MetricRule{{Name: "server_cpu", Description: "Server CPU utilization", Type: GaugeMetricType, Expression: "cpu", Labels: []LabelRule{{Name: "server", Type: "expression", Expression: "server"}, {Name: "environment", Type: "string", Value: "production"}}}}, Limits: Limits{MaxMetrics: 10}}
 	if err := (&Config{Collectors: []Collector{c}}).Validate(); err != nil {
@@ -152,6 +225,129 @@ func TestStandardCSVMetricLabelsUseRowExpressions(t *testing.T) {
 	}
 	if len(m.Metrics) != 2 || m.Metrics[0].Labels["server"] != "web01" || m.Metrics[1].Labels["server"] != "web02" || m.Metrics[0].Labels["environment"] != "production" {
 		t.Fatalf("unexpected CSV metrics: %#v", m.Metrics)
+	}
+}
+
+func TestCSVFormatIsInferredAndMissingRowsRespectMetricErrorMode(t *testing.T) {
+	for _, errorMode := range []string{"ignore", "log"} {
+		t.Run(errorMode, func(t *testing.T) {
+			c := Collector{
+				Name:      "csv_missing",
+				Response:  ResponseConfig{CSV: CSVConfig{Header: boolPtr(true)}},
+				Transform: TransformConfig{Type: "csv"},
+				Metrics:   []MetricRule{{Name: "server_cpu", Type: GaugeMetricType, ErrorMode: errorMode, Expression: "cpu", Labels: []LabelRule{{Name: "server", Type: "expression", Expression: "server"}}}},
+				Limits:    Limits{MaxMetrics: 10},
+			}
+			cfg := &Config{Collectors: []Collector{c}}
+			if err := cfg.Validate(); err != nil {
+				t.Fatal(err)
+			}
+			c = cfg.Collectors[0]
+			if c.Decoder.Type != "csv" {
+				t.Fatalf("decoder was not inferred as CSV: %q", c.Decoder.Type)
+			}
+			r := &HTTPResponse{Body: []byte("server,cpu\nweb01,72\nweb02,\nweb03,31\n"), Headers: make(http.Header)}
+			d, err := decode(r, &c)
+			if err != nil {
+				t.Fatal(err)
+			}
+			m, err := transform(context.Background(), d, r, &c, "python3")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(m.Metrics) != 2 || m.Metrics[0].Labels["server"] != "web01" || m.Metrics[1].Labels["server"] != "web03" {
+				t.Fatalf("unexpected metrics after missing CSV field: %#v", m.Metrics)
+			}
+		})
+	}
+}
+
+func TestHTMLCSSTableValues(t *testing.T) {
+	body, err := os.ReadFile("testdata/html/status.html")
+	if err != nil {
+		t.Fatal(err)
+	}
+	c := Collector{
+		Name:      "html_css",
+		Response:  ResponseConfig{Format: "html"},
+		Transform: TransformConfig{Type: "css"},
+		Metrics:   []MetricRule{{Name: "server_cpu", Type: GaugeMetricType, Expression: "#servers td:nth-child(2)", Labels: []LabelRule{{Name: "environment", Type: "string", Value: "production"}}}},
+		Limits:    Limits{MaxMetrics: 10},
+	}
+	r := &HTTPResponse{Body: body, Headers: http.Header{"Content-Type": []string{"text/html"}}}
+	d, err := decode(r, &c)
+	if err != nil {
+		t.Fatal(err)
+	}
+	m, err := transform(context.Background(), d, r, &c, "python3")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(m.Metrics) != 2 || m.Metrics[0].Value != 72 || m.Metrics[1].Value != 31 || m.Metrics[0].Labels["environment"] != "production" {
+		t.Fatalf("unexpected HTML CSS metrics: %#v", m.Metrics)
+	}
+}
+
+func TestHTMLXPathTableValuesAndLabels(t *testing.T) {
+	body, err := os.ReadFile("testdata/html/status.html")
+	if err != nil {
+		t.Fatal(err)
+	}
+	c := Collector{
+		Name:      "html_xpath",
+		Response:  ResponseConfig{Format: "html"},
+		Transform: TransformConfig{Type: "xpath"},
+		Metrics: []MetricRule{{
+			Name:       "server_cpu",
+			Type:       GaugeMetricType,
+			Expression: `//table[@id='servers']//tr/td[2]`,
+			Labels:     []LabelRule{{Name: "server", Type: "expression", Expression: "preceding-sibling::td[1]"}},
+		}},
+		Limits: Limits{MaxMetrics: 10},
+	}
+	r := &HTTPResponse{Body: body, Headers: http.Header{"Content-Type": []string{"text/html"}}}
+	d, err := decode(r, &c)
+	if err != nil {
+		t.Fatal(err)
+	}
+	m, err := transform(context.Background(), d, r, &c, "python3")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(m.Metrics) != 2 || m.Metrics[0].Labels["server"] != "web01" || m.Metrics[1].Labels["server"] != "web02" {
+		t.Fatalf("unexpected HTML XPath metrics: %#v", m.Metrics)
+	}
+}
+
+func TestPrometheusInputFilteringAndRelabeling(t *testing.T) {
+	body, err := os.ReadFile("testdata/prometheus/status.prom")
+	if err != nil {
+		t.Fatal(err)
+	}
+	c := Collector{
+		Name:      "prometheus",
+		Response:  ResponseConfig{Format: "prometheus"},
+		Transform: TransformConfig{Type: "prometheus"},
+		Metrics: []MetricRule{{
+			Name:        "application_requests_total",
+			Description: "Application requests",
+			Type:        CounterMetricType,
+			Expression:  `^vendor_requests_total$`,
+			Labels:      []LabelRule{{Name: "component", Type: "expression", Expression: "service"}},
+		}},
+		Limits: Limits{MaxMetrics: 10},
+	}
+	r := &HTTPResponse{Body: body, Headers: http.Header{"Content-Type": []string{"text/plain; version=0.0.4"}}}
+	d, err := decode(r, &c)
+	if err != nil {
+		t.Fatal(err)
+	}
+	m, err := transform(context.Background(), d, r, &c, "python3")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(m.Metrics) != 1 || m.Metrics[0].Name != "application_requests_total" || m.Metrics[0].Type != CounterMetricType || m.Metrics[0].Value != 42 || m.Metrics[0].Labels["component"] != "api" {
+		t.Fatalf("unexpected Prometheus metrics: %#v", m.Metrics)
 	}
 }
 

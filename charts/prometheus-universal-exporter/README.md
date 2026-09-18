@@ -1,5 +1,7 @@
 # Prometheus Universal Exporter chart
 
+The chart is versioned and released independently of the exporter: `version` in `Chart.yaml` is the chart's own version and is the source of truth for a release, while `appVersion` records the exporter release the chart was validated against. Chart releases are tagged `chart/prometheus-universal-exporter-<version>`, separate from the exporter's own `exporter/prometheus-universal-exporter-v<version>` tags; the release workflow refuses a tag that does not match `Chart.yaml`. Released charts are published to `oci://ghcr.io/eenchev/charts/prometheus-universal-exporter`.
+
 Install with `helm install exporter ./charts/prometheus-universal-exporter`. Replace the default ConfigMap with `--set-file 'config.data.config\.yaml=config.yaml'` or values supplied by your deployment system. Quote the argument and escape the dot: Helm splits `--set` keys on unescaped dots, so the unquoted form sets a nested `config.data.config.yaml` path instead of the single `config.yaml` key the exporter reads.
 
 The chart creates a Deployment, Service (enabled by default), ServiceAccount, and ConfigMap. Set `service.enabled: false` to omit the Service. A ConfigMap checksum annotation triggers a rollout when collector configuration changes. The exporter also checks the file periodically and keeps the last valid configuration when a reload is invalid. `namespaceOverride`, `strategy`, `resources`, `tolerations`, and `affinity` are available directly in values.

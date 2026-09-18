@@ -3374,19 +3374,57 @@ valid and authoritative where they conflict with user defaults.
 ## 42.12 CI, container, and chart releases
 
 CI MUST materialize Go module checksums before running tests and MUST run the
-test, race, vet, build, and Helm validation checks. The repository MUST provide
-a tag-triggered release workflow for tags matching `vMAJOR.MINOR.PATCH`. The
-workflow MUST:
+test, race, vet, build, and Helm validation checks.
 
+The exporter and the Helm chart MUST be released on independent cycles, from
+separate tags and separate workflows. Releasing one MUST NOT publish the other,
+so a chart fix does not require an exporter release and an exporter release does
+not republish an unchanged chart.
+
+Release tags MUST be namespaced by what they release: `exporter/<name>-vX.Y.Z`
+for the exporter and `chart/<chart-name>-X.Y.Z` for the chart.
+
+Each release workflow MUST be triggered by every tag under its namespace, not
+only by well-formed ones, and MUST fail when the tag does not match the required
+format. A workflow triggered only by the strict pattern would leave a malformed
+release tag matching no workflow at all, which is indistinguishable from a
+successful release that produced no artifacts. Because a tag filter's `*` does
+not match `/`, covering a namespace requires both the `<prefix>/**` and
+`<prefix>*` patterns. The format check MUST run before any other step, so an
+invalid tag costs nothing.
+
+The exporter release workflow MUST be triggered by tags under `exporter` and
+MUST:
+
+- resolve the release version from the tag, which carries a prefix and
+  therefore cannot be parsed as a bare semantic version, and fail when the tag
+  does not end in `MAJOR.MINOR.PATCH`;
 - publish versioned and `latest` container tags to GHCR;
-- package and publish the Helm chart as an OCI artifact with the tag version;
 - build release binaries for the documented target platforms; and
-- create a GitHub Release containing the software archives and Helm chart
-  archive.
+- create a GitHub Release containing the software archives.
 
-The release workflow MUST use `GITHUB_TOKEN` with `contents: write` and
-`packages: write` permissions and MUST run the same Go dependency and build
-checks before publishing artifacts.
+The chart release workflow MUST be triggered by tags under `chart` and MUST:
+
+- verify that the version implied by the tag matches the `version` field in
+  `Chart.yaml`, failing the release when they disagree;
+- re-run the chart lint and template scenarios;
+- package the chart without overriding `version` or `appVersion`, so the
+  published artifact carries exactly what the committed `Chart.yaml` declares;
+- publish the chart as an OCI artifact; and
+- create a GitHub Release containing the chart archive.
+
+`Chart.yaml` MUST be the source of truth for the chart version. `appVersion`
+records the exporter release a chart version was validated against and MUST be
+maintained by hand rather than derived from a release tag.
+
+Both release workflows MUST use `GITHUB_TOKEN` with `contents: write` and
+`packages: write` permissions and MUST run their respective validation checks
+before publishing artifacts.
+
+The repository's tests MUST cover the release tag contract: that each release
+workflow triggers on its whole namespace, that the format it enforces accepts
+well-formed tags and rejects malformed ones, and that the version committed in
+`Chart.yaml` would produce a tag the chart release accepts.
 
 ## 42.13 Collector response caching
 

@@ -3,6 +3,8 @@ package main
 import (
 	"os"
 	"path/filepath"
+	"regexp"
+	"slices"
 	"sort"
 	"testing"
 
@@ -112,5 +114,169 @@ func TestWorkflowStepsAreWellFormed(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// The release workflows are triggered on every tag under their namespace, not
+// only well-formed ones, so that a malformed release tag fails loudly instead
+// of matching no workflow and looking like it released. Narrowing either
+// trigger back to the strict pattern would silently restore that hole, so the
+// breadth is pinned here alongside the format each workflow accepts.
+
+type releaseTagCase struct {
+	workflow string
+	prefix   string
+	valid    []string
+	invalid  []string
+}
+
+var releaseTagCases = []releaseTagCase{
+	{
+		workflow: ".github/workflows/release.yml",
+		prefix:   "exporter",
+		valid: []string{
+			"exporter/prometheus-universal-exporter-v1.0.0",
+			"exporter/prometheus-universal-exporter-v0.0.1",
+			"exporter/prometheus-universal-exporter-v12.34.56",
+		},
+		invalid: []string{
+			"exporter/prometheus-universal-exporter-1.0.0",      // missing the v
+			"exporter/prometheus-universal-exporter-v1.0",       // not MAJOR.MINOR.PATCH
+			"exporter/prometheus-universal-exporter-v1.0.0-rc1", // pre-release suffix
+			"exporter/prometheus-universal-exporter-vX.Y.Z",
+			"exporter/something-else-v1.0.0",
+			"exporter",
+			"exporterv1.0.0",
+			"chart/prometheus-universal-exporter-1.0.0",
+		},
+	},
+	{
+		workflow: ".github/workflows/release-chart.yml",
+		prefix:   "chart",
+		valid: []string{
+			"chart/prometheus-universal-exporter-0.2.0",
+			"chart/prometheus-universal-exporter-1.2.3",
+			"chart/prometheus-universal-exporter-10.0.0",
+		},
+		invalid: []string{
+			"chart/prometheus-universal-exporter-v0.2.0", // the chart version carries no v
+			"chart/prometheus-universal-exporter-0.2",
+			"chart/prometheus-universal-exporter-0.2.0-rc1",
+			"chart/something-else-1.2.3",
+			"chart",
+			"chart0.2.0",
+			"exporter/prometheus-universal-exporter-v1.0.0",
+		},
+	},
+}
+
+func workflowDocument(t *testing.T, path string) map[string]any {
+	t.Helper()
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var document map[string]any
+	if err := yaml.Unmarshal(raw, &document); err != nil {
+		t.Fatal(err)
+	}
+	return document
+}
+
+// tagPatterns returns the push tag filters of a workflow.
+func tagPatterns(t *testing.T, document map[string]any) []string {
+	t.Helper()
+	triggers, ok := document["on"].(map[string]any)
+	if !ok {
+		t.Fatalf("workflow trigger is %T, want a mapping", document["on"])
+	}
+	push, ok := triggers["push"].(map[string]any)
+	if !ok {
+		t.Fatalf("workflow has no push trigger: %v", triggers)
+	}
+	raw, ok := push["tags"].([]any)
+	if !ok {
+		t.Fatalf("push trigger has no tag filters: %v", push)
+	}
+	patterns := make([]string, 0, len(raw))
+	for _, value := range raw {
+		patterns = append(patterns, value.(string))
+	}
+	return patterns
+}
+
+func TestReleaseWorkflowsTriggerOnEveryNamespacedTag(t *testing.T) {
+	for _, test := range releaseTagCases {
+		t.Run(test.prefix, func(t *testing.T) {
+			patterns := tagPatterns(t, workflowDocument(t, test.workflow))
+			// "prefix/**" catches namespaced tags and "prefix*" catches the
+			// unnamespaced ones, because a filter's * never matches a slash.
+			for _, want := range []string{test.prefix + "/**", test.prefix + "*"} {
+				if !slices.Contains(patterns, want) {
+					t.Fatalf("%s must trigger on %q so a malformed tag still fails; patterns=%v", test.workflow, want, patterns)
+				}
+			}
+		})
+	}
+}
+
+// validationPattern extracts the expression the workflow validates its tag
+// with, so the test checks the shipped rule rather than a copy of it.
+func validationPattern(t *testing.T, path string) *regexp.Regexp {
+	t.Helper()
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	matches := regexp.MustCompile(`grep -Eq '([^']+)'`).FindSubmatch(raw)
+	if matches == nil {
+		t.Fatalf("%s has no tag validation expression", path)
+	}
+	return regexp.MustCompile(string(matches[1]))
+}
+
+func TestReleaseWorkflowsRejectMalformedNamespacedTags(t *testing.T) {
+	for _, test := range releaseTagCases {
+		t.Run(test.prefix, func(t *testing.T) {
+			pattern := validationPattern(t, test.workflow)
+			for _, tag := range test.valid {
+				if !pattern.MatchString(tag) {
+					t.Errorf("%s rejects valid tag %q", test.workflow, tag)
+				}
+			}
+			for _, tag := range test.invalid {
+				if pattern.MatchString(tag) {
+					t.Errorf("%s accepts malformed tag %q", test.workflow, tag)
+				}
+			}
+		})
+	}
+}
+
+// The chart release refuses a tag that disagrees with Chart.yaml, so the
+// committed version has to be releasable in the first place.
+func TestChartVersionIsReleasable(t *testing.T) {
+	raw, err := os.ReadFile("charts/prometheus-universal-exporter/Chart.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var chart struct {
+		Name       string `yaml:"name"`
+		Version    string `yaml:"version"`
+		AppVersion string `yaml:"appVersion"`
+	}
+	if err := yaml.Unmarshal(raw, &chart); err != nil {
+		t.Fatal(err)
+	}
+	semver := regexp.MustCompile(`^[0-9]+\.[0-9]+\.[0-9]+$`)
+	if !semver.MatchString(chart.Version) {
+		t.Errorf("Chart.yaml version %q is not MAJOR.MINOR.PATCH", chart.Version)
+	}
+	if !semver.MatchString(chart.AppVersion) {
+		t.Errorf("Chart.yaml appVersion %q is not MAJOR.MINOR.PATCH", chart.AppVersion)
+	}
+	tag := "chart/" + chart.Name + "-" + chart.Version
+	if pattern := validationPattern(t, ".github/workflows/release-chart.yml"); !pattern.MatchString(tag) {
+		t.Errorf("the tag %q implied by Chart.yaml would be rejected by the chart release workflow", tag)
 	}
 }

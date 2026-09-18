@@ -1,9 +1,16 @@
+# Releases the exporter itself: container image, binaries, and a GitHub
+# Release. The Helm chart has its own cycle in release-chart.yml and is not
+# published here.
 name: release
 
+# Triggered on every tag under the exporter/ namespace, not only well-formed
+# ones: a malformed release tag must fail loudly rather than silently match no
+# workflow and appear to have been released.
 on:
   push:
     tags:
-      - 'v*.*.*'
+      - 'exporter/**'
+      - 'exporter*'
 
 permissions:
   contents: write
@@ -16,17 +23,39 @@ jobs:
   release:
     runs-on: ubuntu-latest
     steps:
+      - name: Validate the release tag
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -eu
+          if ! printf '%s' "$TAG" | grep -Eq '^exporter/prometheus-universal-exporter-v[0-9]+\.[0-9]+\.[0-9]+$'; then
+            echo "tag $TAG is not a valid exporter release tag" >&2
+            echo "expected exporter/prometheus-universal-exporter-vMAJOR.MINOR.PATCH, for example exporter/prometheus-universal-exporter-v1.0.0" >&2
+            exit 1
+          fi
+
       - uses: actions/checkout@v4
 
       - uses: actions/setup-go@v5
         with:
           go-version: '1.23.x'
 
-      - uses: azure/setup-helm@v4
-
       - run: go mod download
       - run: go test ./...
       - run: go build ./...
+
+      # The tag carries a prefix, so the version is resolved here rather than
+      # parsed out of the ref by the metadata action. The format was already
+      # validated above.
+      - name: Resolve version
+        id: version
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -eu
+          version="${TAG#exporter/prometheus-universal-exporter-v}"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "major_minor=${version%.*}" >> "$GITHUB_OUTPUT"
 
       - name: Log in to GHCR
         uses: docker/login-action@v3
@@ -41,8 +70,8 @@ jobs:
         with:
           images: ${{ env.IMAGE_NAME }}
           tags: |
-            type=semver,pattern={{version}}
-            type=semver,pattern={{major}}.{{minor}}
+            type=raw,value=${{ steps.version.outputs.version }}
+            type=raw,value=${{ steps.version.outputs.major_minor }}
             type=raw,value=latest
 
       - uses: docker/setup-buildx-action@v3
@@ -57,33 +86,22 @@ jobs:
 
       - name: Build release binaries
         env:
-          VERSION: ${{ github.ref_name }}
+          VERSION: ${{ steps.version.outputs.version }}
         run: |
           set -eu
-          version="${VERSION#v}"
           mkdir -p dist
           for target in linux/amd64 linux/arm64 darwin/amd64 darwin/arm64; do
             os="${target%/*}"
             arch="${target#*/}"
-            output="prometheus-universal-exporter-${version}-${os}-${arch}"
+            output="prometheus-universal-exporter-${VERSION}-${os}-${arch}"
             CGO_ENABLED=0 GOOS="$os" GOARCH="$arch" go build -trimpath -ldflags='-s -w' -o "dist/$output/prometheus-universal-exporter" .
             cp config.example.yaml "dist/$output/"
             tar -czf "dist/$output.tar.gz" -C "dist/$output" .
             rm -rf "dist/$output"
           done
 
-      - name: Package and publish Helm chart
-        env:
-          VERSION: ${{ github.ref_name }}
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          set -eu
-          version="${VERSION#v}"
-          helm package charts/prometheus-universal-exporter --version "$version" --app-version "$version" --destination dist
-          echo "$GH_TOKEN" | helm registry login ghcr.io -u "${GITHUB_ACTOR}" --password-stdin
-          helm push "dist/prometheus-universal-exporter-${version}.tgz" "oci://ghcr.io/${GITHUB_REPOSITORY_OWNER}/charts"
-
       - name: Create GitHub Release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: gh release create "${GITHUB_REF_NAME}" dist/*.tar.gz dist/*.tgz --generate-notes --title "${GITHUB_REF_NAME}"
+          VERSION: ${{ steps.version.outputs.version }}
+        run: gh release create "${GITHUB_REF_NAME}" dist/*.tar.gz --generate-notes --title "Exporter v${VERSION}"

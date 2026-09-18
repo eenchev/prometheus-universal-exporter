@@ -18,6 +18,24 @@ The Helm chart supports `defaultLabels` and `defaultAnnotations` for metadata
 that should be applied to every chart-created Kubernetes object. Object-specific
 metadata overrides a same-named default.
 
+## Releases
+
+Pushing a semantic version tag such as `v1.0.0` runs the release workflow. It
+publishes the container image to GHCR, publishes the Helm chart as an OCI
+artifact, and creates a GitHub Release containing the chart archive and
+cross-platform software archives:
+
+```sh
+git tag -a v1.0.0 -m "Release v1.0.0"
+git push origin v1.0.0
+```
+
+The resulting artifacts are available as
+`ghcr.io/eenchev/prometheus-universal-exporter:1.0.0` and
+`oci://ghcr.io/eenchev/charts/prometheus-universal-exporter`, respectively.
+The GHCR packages may need to be made public once in the repository's package
+settings.
+
 Exporter self-health metrics are available at `/self-metrics` by default (and `/metrics` remains a compatibility alias). Change the dedicated path with `--web.self-metrics-path=/exporter/metrics`. The Helm chart's optional self-metrics ServiceMonitor/PodMonitor scrapes the exporter pods/services separately from target-probing monitors. Configure one or more entries in `monitors`, each with a unique `name` and `type: pod` or `type: service`; each entry supports Prometheus Operator `relabelings` and `metricRelabelings`.
 
 The Dockerfile exposes `GO_VERSION`, `PYTHON_VERSION`, `BEAUTIFULSOUP4_VERSION`,

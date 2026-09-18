@@ -2947,3 +2947,20 @@ PodMonitor resources. Resource-specific metadata maps MUST be applied after
 the defaults and therefore MUST override a same-named default. The chart's
 generated identity labels and required operational annotations MUST remain
 valid and authoritative where they conflict with user defaults.
+
+## 42.12 CI, container, and chart releases
+
+CI MUST materialize Go module checksums before running tests and MUST run the
+test, race, vet, build, and Helm validation checks. The repository MUST provide
+a tag-triggered release workflow for tags matching `vMAJOR.MINOR.PATCH`. The
+workflow MUST:
+
+- publish versioned and `latest` container tags to GHCR;
+- package and publish the Helm chart as an OCI artifact with the tag version;
+- build release binaries for the documented target platforms; and
+- create a GitHub Release containing the software archives and Helm chart
+  archive.
+
+The release workflow MUST use `GITHUB_TOKEN` with `contents: write` and
+`packages: write` permissions and MUST run the same Go dependency and build
+checks before publishing artifacts.

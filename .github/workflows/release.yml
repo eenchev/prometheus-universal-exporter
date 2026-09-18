@@ -1,0 +1,89 @@
+name: release
+
+on:
+  push:
+    tags:
+      - 'v*.*.*'
+
+permissions:
+  contents: write
+  packages: write
+
+env:
+  IMAGE_NAME: ghcr.io/${{ github.repository }}
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.23.x'
+
+      - uses: azure/setup-helm@v4
+
+      - run: go mod download
+      - run: go test ./...
+      - run: go build ./...
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract Docker metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.IMAGE_NAME }}
+          tags: |
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=raw,value=latest
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Build and push container image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+
+      - name: Build release binaries
+        env:
+          VERSION: ${{ github.ref_name }}
+        run: |
+          set -eu
+          version="${VERSION#v}"
+          mkdir -p dist
+          for target in linux/amd64 linux/arm64 darwin/amd64 darwin/arm64; do
+            os="${target%/*}"
+            arch="${target#*/}"
+            output="prometheus-universal-exporter-${version}-${os}-${arch}"
+            CGO_ENABLED=0 GOOS="$os" GOARCH="$arch" go build -trimpath -ldflags='-s -w' -o "dist/$output/prometheus-universal-exporter" .
+            cp config.example.yaml "dist/$output/"
+            tar -C "dist/$output" -czf "dist/$output.tar.gz" .
+            rm -rf "dist/$output"
+          done
+
+      - name: Package and publish Helm chart
+        env:
+          VERSION: ${{ github.ref_name }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -eu
+          version="${VERSION#v}"
+          helm package charts/prometheus-universal-exporter --version "$version" --app-version "$version" --destination dist
+          echo "$GH_TOKEN" | helm registry login ghcr.io -u "${GITHUB_ACTOR}" --password-stdin
+          helm push "dist/prometheus-universal-exporter-${version}.tgz" "oci://ghcr.io/${GITHUB_REPOSITORY_OWNER}/charts"
+
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh release create "${GITHUB_REF_NAME}" dist/*.tar.gz dist/*.tgz --generate-notes --title "${GITHUB_REF_NAME}"

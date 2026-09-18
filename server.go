@@ -15,13 +15,82 @@ import (
 	"time"
 )
 
-type serverStats struct {
-	mu                                                                                                                           sync.Mutex
+// statsValues are the exporter's own counters for one collector, or for one
+// request when verbose self-metrics are configured. They are separated from the
+// mutex so a consistent copy can be taken under the lock and rendered outside
+// it.
+type statsValues struct {
 	probes, success, decodeOK, parseErrors, transformErrors, missing, scriptErrors, limitErrors, emitted, cacheHits, cacheMisses uint64
 	lastStatus                                                                                                                   int
 	lastBytes                                                                                                                    int64
 	lastDuration                                                                                                                 float64
+	// lastScrape is only kept per request; the per-collector series has no
+	// timestamp of its own.
+	lastScrape time.Time
 }
+
+type serverStats struct {
+	mu sync.Mutex
+	statsValues
+}
+
+func (s *serverStats) snapshot() statsValues {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.statsValues
+}
+
+// selfMetricNames are the exporter's own metric families, in the order they are
+// exposed.
+var selfMetricNames = []string{
+	"http_exporter_scrapes_total",
+	"http_exporter_scrape_success",
+	"http_exporter_scrape_duration_seconds",
+	"http_exporter_scrape_http_status_code",
+	"http_exporter_scrape_response_bytes",
+	"http_exporter_decode_success",
+	"http_exporter_parse_errors_total",
+	"http_exporter_transform_errors_total",
+	"http_exporter_missing_keys_total",
+	"http_exporter_script_errors_total",
+	"http_exporter_script_duration_seconds",
+	"http_exporter_metrics_emitted",
+	"http_exporter_series_limit_exceeded",
+	"http_exporter_cache_hits_total",
+	"http_exporter_cache_misses_total",
+	"http_exporter_cache_entries",
+}
+
+type selfSeries struct {
+	Name  string
+	Type  MetricType
+	Value float64
+}
+
+// statsSeries turns one set of counters into the exporter's own series, in the
+// order of selfMetricNames. http_exporter_cache_entries is not here: it counts
+// what a collector's cache holds, which belongs to the collector rather than to
+// any one request, so the per-collector rendering appends it itself.
+func statsSeries(v statsValues) []selfSeries {
+	return []selfSeries{
+		{"http_exporter_scrapes_total", CounterMetricType, float64(v.probes)},
+		{"http_exporter_scrape_success", GaugeMetricType, float64(v.success)},
+		{"http_exporter_scrape_duration_seconds", GaugeMetricType, v.lastDuration},
+		{"http_exporter_scrape_http_status_code", GaugeMetricType, float64(v.lastStatus)},
+		{"http_exporter_scrape_response_bytes", GaugeMetricType, float64(v.lastBytes)},
+		{"http_exporter_decode_success", GaugeMetricType, float64(v.decodeOK)},
+		{"http_exporter_parse_errors_total", CounterMetricType, float64(v.parseErrors)},
+		{"http_exporter_transform_errors_total", CounterMetricType, float64(v.transformErrors)},
+		{"http_exporter_missing_keys_total", CounterMetricType, float64(v.missing)},
+		{"http_exporter_script_errors_total", CounterMetricType, float64(v.scriptErrors)},
+		{"http_exporter_script_duration_seconds", GaugeMetricType, 0},
+		{"http_exporter_metrics_emitted", GaugeMetricType, float64(v.emitted)},
+		{"http_exporter_series_limit_exceeded", CounterMetricType, float64(v.limitErrors)},
+		{"http_exporter_cache_hits_total", CounterMetricType, float64(v.cacheHits)},
+		{"http_exporter_cache_misses_total", CounterMetricType, float64(v.cacheMisses)},
+	}
+}
+
 type Server struct {
 	manager         *ConfigManager
 	pythonPath      string
@@ -253,32 +322,38 @@ func (s *Server) probeHandler(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, fmt.Sprintf("unknown collector %q", name), http.StatusBadRequest)
 		return
 	}
-	st := s.statsFor(name)
-	st.mu.Lock()
-	st.probes++
-	st.mu.Unlock()
 	logTarget := safeTarget(target)
-	// Filled in once the request parameters are known, so the verbose
-	// per-request self-metric describes the request that was actually made.
-	var requestURL, method string
-	var statusCode int
+	// The request parameters are resolved before anything is counted, so every
+	// counter this probe raises lands on the individual request as well as on
+	// the collector rather than only on the collector.
+	overrides, err := parseRequestOverrides(r.URL.Query())
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	var requestURL string
+	method := requestMethod(c, overrides)
+	if resolved, resolveErr := resolveRequestURL(target, c, overrides); resolveErr == nil {
+		requestURL = requestLabelURL(resolved)
+	}
+	st := s.statsFor(name)
+	rec := s.recorderFor(st, name, requestURL, method)
+	rec.update(func(x *serverStats) { x.probes++ })
 	// scraped stays false until the exporter has actually gone to the target,
 	// so a response served from the collector cache leaves the last-scrape
-	// status, timestamp and duration describing the scrape that filled it.
+	// timestamp describing the scrape that filled it.
 	scraped := false
 	finish := func(ok bool) {
 		duration := time.Since(start)
-		st.mu.Lock()
-		if ok {
-			st.success++
-		}
-		st.lastDuration = duration.Seconds()
-		st.mu.Unlock()
+		rec.update(func(x *serverStats) {
+			if ok {
+				x.success++
+			}
+			x.lastDuration = duration.Seconds()
+		})
 		if scraped {
-			s.recordRequest(name, requestURL, method, statusCode, duration)
-			return
+			rec.scraped(time.Now())
 		}
-		s.registerRequest(name, requestURL, method)
 	}
 	failStage := func(stage string, err error, policy string) bool {
 		if policy == "warn" || policy == "ignore" {
@@ -290,42 +365,29 @@ func (s *Server) probeHandler(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, fmt.Sprintf("collector %s %s failed: %v", name, stage, err), http.StatusBadGateway)
 		return false
 	}
-	overrides, err := parseRequestOverrides(r.URL.Query())
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
-		return
-	}
 	ctx := r.Context()
-	method = requestMethod(c, overrides)
-	if resolved, resolveErr := resolveRequestURL(target, c, overrides); resolveErr == nil {
-		requestURL = requestLabelURL(resolved)
-	}
 	forwarded := forwardedHeaders(r, c.Request)
 	cacheTTL := time.Duration(c.Cache)
 	var cacheKey string
 	if cacheTTL > 0 {
 		cacheKey = probeCacheKey(c, target, r.URL.Query(), forwarded)
 		if cached, ok := s.cache.Get(cacheKey, time.Now()); ok {
-			st.mu.Lock()
-			st.cacheHits++
-			st.emitted += uint64(len(cached.Metrics))
-			st.mu.Unlock()
+			rec.update(func(x *serverStats) {
+				x.cacheHits++
+				x.emitted += uint64(len(cached.Metrics))
+			})
 			finish(true)
 			writeMetricSet(w, &cached)
 			s.queueOTLP(cached)
 			return
 		}
-		st.mu.Lock()
-		st.cacheMisses++
-		st.mu.Unlock()
+		rec.update(func(x *serverStats) { x.cacheMisses++ })
 	}
 	resp, err := fetch(ctx, target, c, overrides, forwarded)
 	scraped = true
 	if err != nil {
 		if strings.Contains(strings.ToLower(err.Error()), "response size") {
-			st.mu.Lock()
-			st.limitErrors++
-			st.mu.Unlock()
+			rec.update(func(x *serverStats) { x.limitErrors++ })
 		}
 		if !failStage("http", err, c.ErrorHandling.OnHTTPError) {
 			return
@@ -333,11 +395,10 @@ func (s *Server) probeHandler(w http.ResponseWriter, r *http.Request) {
 		finish(true)
 		return
 	}
-	statusCode = resp.StatusCode
-	st.mu.Lock()
-	st.lastStatus = resp.StatusCode
-	st.lastBytes = int64(len(resp.Body))
-	st.mu.Unlock()
+	rec.update(func(x *serverStats) {
+		x.lastStatus = resp.StatusCode
+		x.lastBytes = int64(len(resp.Body))
+	})
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		if !failStage("http_status", fmt.Errorf("received HTTP status %d", resp.StatusCode), c.ErrorHandling.OnHTTPError) {
 			return
@@ -347,33 +408,25 @@ func (s *Server) probeHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	d, err := decode(resp, c)
 	if err != nil {
-		st.mu.Lock()
-		st.parseErrors++
-		st.mu.Unlock()
+		rec.update(func(x *serverStats) { x.parseErrors++ })
 		if !failStage("decode", err, c.ErrorHandling.OnDecodeError) {
 			return
 		}
 		finish(true)
 		return
 	}
-	st.mu.Lock()
-	st.decodeOK++
-	st.mu.Unlock()
+	rec.update(func(x *serverStats) { x.decodeOK++ })
 	ms, err := transform(ctx, d, resp, c, s.pythonPath)
 	if err != nil {
-		if strings.Contains(strings.ToLower(err.Error()), "missing") {
-			st.mu.Lock()
-			st.missing++
-			st.mu.Unlock()
-		}
-		if strings.Contains(strings.ToLower(err.Error()), "python") {
-			st.mu.Lock()
-			st.scriptErrors++
-			st.mu.Unlock()
-		}
-		st.mu.Lock()
-		st.transformErrors++
-		st.mu.Unlock()
+		rec.update(func(x *serverStats) {
+			if strings.Contains(strings.ToLower(err.Error()), "missing") {
+				x.missing++
+			}
+			if strings.Contains(strings.ToLower(err.Error()), "python") {
+				x.scriptErrors++
+			}
+			x.transformErrors++
+		})
 		if !failStage("transform", err, c.ErrorHandling.OnTransformError) {
 			return
 		}
@@ -381,17 +434,13 @@ func (s *Server) probeHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err = ms.Validate(c.Limits); err != nil {
-		st.mu.Lock()
-		st.limitErrors++
-		st.mu.Unlock()
+		rec.update(func(x *serverStats) { x.limitErrors++ })
 		if !failStage("validation", err, "fail") {
 			return
 		}
 		return
 	}
-	st.mu.Lock()
-	st.emitted += uint64(len(ms.Metrics))
-	st.mu.Unlock()
+	rec.update(func(x *serverStats) { x.emitted += uint64(len(ms.Metrics)) })
 	finish(true)
 	s.cache.Put(cacheKey, c.Name, *ms, cacheTTL, c.Limits.MaxCacheEntries, time.Now())
 	writeMetricSet(w, ms)
@@ -482,9 +531,10 @@ func (s *Server) metricsHandler(w http.ResponseWriter, _ *http.Request) {
 	s.statsMu.Unlock()
 	cacheEntries := s.cache.Stats(time.Now())
 	var b strings.Builder
-	selfNames := []string{"http_exporter_scrapes_total", "http_exporter_scrape_success", "http_exporter_scrape_duration_seconds", "http_exporter_scrape_http_status_code", "http_exporter_scrape_response_bytes", "http_exporter_decode_success", "http_exporter_parse_errors_total", "http_exporter_transform_errors_total", "http_exporter_missing_keys_total", "http_exporter_script_errors_total", "http_exporter_script_duration_seconds", "http_exporter_metrics_emitted", "http_exporter_series_limit_exceeded", "http_exporter_cache_hits_total", "http_exporter_cache_misses_total", "http_exporter_cache_entries"}
-	for _, n := range selfNames {
+	declared := map[string]bool{}
+	for _, n := range selfMetricNames {
 		fmt.Fprintf(&b, "# HELP %s Exporter self metric.\n# TYPE %s gauge\n", n, n)
+		declared[n] = true
 	}
 	b.WriteString("# HELP http_exporter_collector_config_valid Whether the collector configuration is valid.\n# TYPE http_exporter_collector_config_valid gauge\n")
 	for _, x := range names {
@@ -499,9 +549,7 @@ func (s *Server) metricsHandler(w http.ResponseWriter, _ *http.Request) {
 		fmt.Fprintf(&b, "http_exporter_scrapes_total%s %d\nhttp_exporter_scrape_success%s %d\nhttp_exporter_scrape_duration_seconds%s %s\nhttp_exporter_scrape_http_status_code%s %d\nhttp_exporter_scrape_response_bytes%s %d\nhttp_exporter_decode_success%s %d\nhttp_exporter_parse_errors_total%s %d\nhttp_exporter_transform_errors_total%s %d\nhttp_exporter_missing_keys_total%s %d\nhttp_exporter_script_errors_total%s %d\nhttp_exporter_script_duration_seconds%s 0\nhttp_exporter_metrics_emitted%s %d\nhttp_exporter_series_limit_exceeded%s %d\n", label, p, label, ok, label, strconv.FormatFloat(dur, 'f', -1, 64), label, status, label, bytes, label, d, label, pe, label, te, label, m, label, se, label, label, em, label, le)
 		fmt.Fprintf(&b, "http_exporter_cache_hits_total%s %d\nhttp_exporter_cache_misses_total%s %d\nhttp_exporter_cache_entries%s %d\n", label, hits, label, misses, label, cacheEntries[x.name])
 	}
-	if verbose := s.verboseRequestMetrics(); len(verbose) > 0 {
-		renderMetricSet(&b, &MetricSet{Metrics: verbose})
-	}
+	s.renderVerboseRequestMetrics(&b, declared)
 	w.Header().Set("Content-Type", "text/plain; version=0.0.4")
 	_, _ = w.Write([]byte(b.String()))
 }

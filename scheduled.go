@@ -52,10 +52,6 @@ func (s *Server) scrapeScheduledTargets(ctx context.Context, budget time.Duratio
 // the result under the target's own OTLP resource.
 func (s *Server) scrapeScheduledTarget(ctx context.Context, target ScheduledTarget, c *Collector, cfg OTLPConfig) {
 	start := time.Now()
-	stats := s.statsFor(c.Name)
-	stats.mu.Lock()
-	stats.probes++
-	stats.mu.Unlock()
 	identity := target.resource(cfg)
 	address := safeTarget(target.Target)
 	overrides := target.overrides()
@@ -64,32 +60,27 @@ func (s *Server) scrapeScheduledTarget(ctx context.Context, target ScheduledTarg
 	if resolved, err := resolveRequestURL(target.Target, c, overrides); err == nil {
 		requestURL = requestLabelURL(resolved)
 	}
-	statusCode := 0
+	// The request is identified before anything is counted, so every counter
+	// this collection raises lands on the target's own series as well as on the
+	// collector's.
+	rec := s.recorderFor(s.statsFor(c.Name), c.Name, requestURL, method)
+	count := rec.update
+	count(func(st *serverStats) { st.probes++ })
 	// Set once the exporter has actually gone to the target, so a collection
-	// answered from the cache does not overwrite the last-scrape series with a
-	// status of zero.
+	// answered from the cache does not move the last-scrape timestamp.
 	scraped := false
 
 	finish := func(up float64) {
 		elapsed := time.Since(start)
-		stats.mu.Lock()
-		stats.lastDuration = elapsed.Seconds()
-		stats.mu.Unlock()
+		count(func(st *serverStats) { st.lastDuration = elapsed.Seconds() })
 		if scraped {
-			s.recordRequest(c.Name, requestURL, method, statusCode, elapsed)
-		} else {
-			s.registerRequest(c.Name, requestURL, method)
+			rec.scraped(time.Now())
 		}
 		s.queueOTLPResource(scheduledHealthMetrics(target, c.Name, up, elapsed.Seconds()), identity)
 	}
 	fail := func(stage string, err error) {
 		s.logger.Error("scheduled target scrape failed", "target", target.Name, "collector", c.Name, "address", address, "stage", stage, "error", err)
 		finish(0)
-	}
-	count := func(apply func(*serverStats)) {
-		stats.mu.Lock()
-		apply(stats)
-		stats.mu.Unlock()
 	}
 
 	headers, err := target.headers()
@@ -123,7 +114,6 @@ func (s *Server) scrapeScheduledTarget(ctx context.Context, target ScheduledTarg
 		fail("http", err)
 		return
 	}
-	statusCode = response.StatusCode
 	count(func(st *serverStats) {
 		st.lastStatus = response.StatusCode
 		st.lastBytes = int64(len(response.Body))

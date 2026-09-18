@@ -27,7 +27,11 @@ var (
 	pypiBase       = "https://pypi.org"
 )
 
-func getJSON(ctx context.Context, endpoint string, header http.Header, out any) (*http.Response, error) {
+// getJSON decodes a JSON response and returns the response headers, which the
+// tag listing needs for its Link header. It deliberately does not return the
+// response itself: the body is consumed and closed here, so no caller can leak
+// it.
+func getJSON(ctx context.Context, endpoint string, header http.Header, out any) (http.Header, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
 	if err != nil {
 		return nil, err
@@ -43,12 +47,12 @@ func getJSON(ctx context.Context, endpoint string, header http.Header, out any) 
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		return resp, fmt.Errorf("GET %s: %s", endpoint, resp.Status)
+		return resp.Header, fmt.Errorf("GET %s: %s", endpoint, resp.Status)
 	}
 	if err := json.NewDecoder(resp.Body).Decode(out); err != nil {
-		return resp, fmt.Errorf("GET %s: %w", endpoint, err)
+		return resp.Header, fmt.Errorf("GET %s: %w", endpoint, err)
 	}
-	return resp, nil
+	return resp.Header, nil
 }
 
 // dockerToken fetches the anonymous pull token the Docker registry requires
@@ -84,13 +88,13 @@ func dockerTags(ctx context.Context, repo string) ([]string, error) {
 		var body struct {
 			Tags []string `json:"tags"`
 		}
-		resp, err := getJSON(ctx, endpoint, header, &body)
+		responseHeader, err := getJSON(ctx, endpoint, header, &body)
 		if err != nil {
 			return nil, err
 		}
 		tags = append(tags, body.Tags...)
 		endpoint = ""
-		if match := nextLink.FindStringSubmatch(resp.Header.Get("Link")); match != nil {
+		if match := nextLink.FindStringSubmatch(responseHeader.Get("Link")); match != nil {
 			base, err := url.Parse(registryBase)
 			if err != nil {
 				return nil, fmt.Errorf("unusable registry address %q: %w", registryBase, err)

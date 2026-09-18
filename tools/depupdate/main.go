@@ -52,6 +52,11 @@ func run() int {
 	timeout := flag.Duration("timeout", 5*time.Minute, "overall time budget for resolving versions")
 	flag.Parse()
 
+	info, err := os.Stat(*dockerfilePath)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "depupdate: %v\n", err)
+		return 1
+	}
 	raw, err := os.ReadFile(*dockerfilePath)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "depupdate: %v\n", err)
@@ -76,7 +81,7 @@ func run() int {
 	}
 
 	if *summaryPath != "" {
-		if err := os.WriteFile(*summaryPath, []byte(summaryMarkdown(updates)), 0o644); err != nil {
+		if err := os.WriteFile(*summaryPath, []byte(summaryMarkdown(updates)), 0o600); err != nil {
 			fmt.Fprintf(os.Stderr, "depupdate: %v\n", err)
 			return 1
 		}
@@ -94,7 +99,9 @@ func run() int {
 		fmt.Fprintf(os.Stderr, "depupdate: %v\n", err)
 		return 1
 	}
-	if err := os.WriteFile(*dockerfilePath, []byte(rewritten), 0o644); err != nil {
+	// The Dockerfile keeps the mode it had; this rewrites a tracked file in a
+	// working tree rather than creating one.
+	if err := os.WriteFile(*dockerfilePath, []byte(rewritten), info.Mode().Perm()); err != nil {
 		fmt.Fprintf(os.Stderr, "depupdate: %v\n", err)
 		return 1
 	}

@@ -120,6 +120,26 @@ func TestParseInsecureSkipVerifyOverride(t *testing.T) {
 	}
 }
 
+func TestParseRetryOverrides(t *testing.T) {
+	request := httptest.NewRequest(http.MethodGet, "/probe?retry_attempts=2&retry_backoff=3s", nil)
+	overrides, err := parseRequestOverrides(request.URL.Query())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if overrides.RetryAttempts == nil || *overrides.RetryAttempts != 2 || overrides.RetryBackoff == nil || *overrides.RetryBackoff != 3*time.Second {
+		t.Fatalf("retry overrides=%v/%v", overrides.RetryAttempts, overrides.RetryBackoff)
+	}
+
+	for _, query := range []string{"retry_attempts=-1", "retry_attempts=bad", "retry_backoff=-1s", "retry_backoff=bad"} {
+		t.Run(query, func(t *testing.T) {
+			request := httptest.NewRequest(http.MethodGet, "/probe?"+query, nil)
+			if _, err := parseRequestOverrides(request.URL.Query()); err == nil || !strings.Contains(err.Error(), "retry_") {
+				t.Fatalf("invalid retry override error=%v", err)
+			}
+		})
+	}
+}
+
 func TestHTMLBareTagSelector(t *testing.T) {
 	c := Collector{Name: "html", Response: ResponseConfig{Format: "html"}, Transform: TransformConfig{Type: "css"}, Metrics: []MetricRule{{Name: "application_status", Type: GaugeMetricType, Expression: "h1"}}, ErrorHandling: ErrorHandling{AllowMissingKeys: false}, Limits: Limits{MaxMetrics: 10}}
 	r := &HTTPResponse{Body: []byte("<html><body><h1>42</h1></body></html>"), Headers: http.Header{"Content-Type": []string{"text/html"}}}
@@ -665,6 +685,16 @@ func TestConfigValidationRejectsInvalidSettings(t *testing.T) {
 			want: "unsupported method",
 		},
 		{
+			name: "negative retry attempts",
+			cfg:  &Config{Collectors: []Collector{{Name: "invalid_retries", Request: RequestConfig{Retry: RetryConfig{Attempts: -1}}}}},
+			want: "retry.attempts",
+		},
+		{
+			name: "negative retry backoff",
+			cfg:  &Config{Collectors: []Collector{{Name: "invalid_backoff", Request: RequestConfig{Retry: RetryConfig{Backoff: Duration(-time.Second)}}}}},
+			want: "retry.backoff",
+		},
+		{
 			name: "unknown transform",
 			cfg:  &Config{Collectors: []Collector{{Name: "invalid_transform", Transform: TransformConfig{Type: "lua"}}}},
 			want: "unknown transform",
@@ -803,6 +833,54 @@ func TestFetchRejectsDisallowedSchemeAndOversizedResponse(t *testing.T) {
 	c.Limits.MaxResponseBytes = 4
 	if _, err := fetch(context.Background(), target.URL, &c, RequestOverrides{}); err == nil || !strings.Contains(err.Error(), "exceeds limit") {
 		t.Fatalf("response-size error=%v", err)
+	}
+}
+
+func TestFetchRetriesTransientResponsesAndQueryOverrides(t *testing.T) {
+	var requests int
+	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		requests++
+		if requests == 1 {
+			w.WriteHeader(http.StatusBadGateway)
+			return
+		}
+		_, _ = w.Write([]byte("recovered"))
+	}))
+	defer target.Close()
+	c := Collector{Name: "retry", Request: RequestConfig{AllowedSchemes: []string{"http"}, Retry: RetryConfig{Attempts: 1, Backoff: Duration(10 * time.Millisecond)}}, Limits: Limits{MaxResponseBytes: 1024}}
+	started := time.Now()
+	response, err := fetch(context.Background(), target.URL, &c, RequestOverrides{})
+	if err != nil || response.StatusCode != http.StatusOK || string(response.Body) != "recovered" {
+		t.Fatalf("configured retry response=%#v error=%v", response, err)
+	}
+	if requests != 2 || time.Since(started) < 10*time.Millisecond {
+		t.Fatalf("configured retry requests=%d elapsed=%s", requests, time.Since(started))
+	}
+
+	requests = 0
+	c.Request.Retry.Attempts = 0
+	overrideRequest := httptest.NewRequest(http.MethodGet, "/probe?retry_attempts=1&retry_backoff=0s", nil)
+	overrides, err := parseRequestOverrides(overrideRequest.URL.Query())
+	if err != nil {
+		t.Fatal(err)
+	}
+	response, err = fetch(context.Background(), target.URL, &c, overrides)
+	if err != nil || response.StatusCode != http.StatusOK || requests != 2 {
+		t.Fatalf("query retry response=%#v error=%v requests=%d", response, err, requests)
+	}
+}
+
+func TestFetchDoesNotRetryNonTransientHTTPStatus(t *testing.T) {
+	requests := 0
+	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		requests++
+		w.WriteHeader(http.StatusBadRequest)
+	}))
+	defer target.Close()
+	c := Collector{Name: "no_retry", Request: RequestConfig{AllowedSchemes: []string{"http"}, Retry: RetryConfig{Attempts: 3}}, Limits: Limits{MaxResponseBytes: 1024}}
+	response, err := fetch(context.Background(), target.URL, &c, RequestOverrides{})
+	if err != nil || response.StatusCode != http.StatusBadRequest || requests != 1 {
+		t.Fatalf("non-transient response=%#v error=%v requests=%d", response, err, requests)
 	}
 }
 

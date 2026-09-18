@@ -8,6 +8,7 @@ import (
 	"net/url"
 	"os"
 	"path"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -28,6 +29,8 @@ type RequestOverrides struct {
 	Timeout            time.Duration
 	Body               *string
 	InsecureSkipVerify *bool
+	RetryAttempts      *int
+	RetryBackoff       *time.Duration
 }
 
 func parseRequestOverrides(values url.Values) (RequestOverrides, error) {
@@ -75,6 +78,28 @@ func parseRequestOverrides(values url.Values) (RequestOverrides, error) {
 			return overrides, fmt.Errorf("invalid insecure_skip_verify override %q; want true or false", raw)
 		}
 		overrides.InsecureSkipVerify = &parsed
+	}
+	if value, ok := values["retry_attempts"]; ok {
+		raw := ""
+		if len(value) > 0 {
+			raw = strings.TrimSpace(value[0])
+		}
+		parsed, err := strconv.Atoi(raw)
+		if err != nil || parsed < 0 {
+			return overrides, fmt.Errorf("invalid retry_attempts override %q; want a non-negative integer", raw)
+		}
+		overrides.RetryAttempts = &parsed
+	}
+	if value, ok := values["retry_backoff"]; ok {
+		raw := ""
+		if len(value) > 0 {
+			raw = strings.TrimSpace(value[0])
+		}
+		parsed, err := time.ParseDuration(raw)
+		if err != nil || parsed < 0 {
+			return overrides, fmt.Errorf("invalid retry_backoff override %q; want a non-negative Go duration", raw)
+		}
+		overrides.RetryBackoff = &parsed
 	}
 	return overrides, nil
 }
@@ -150,19 +175,25 @@ func fetch(ctx context.Context, target string, c *Collector, overrides RequestOv
 	if overrides.Body != nil {
 		requestBody = *overrides.Body
 	}
-	reqBody := io.Reader(nil)
-	if requestBody != "" {
-		reqBody = strings.NewReader(requestBody)
+	retryAttempts := c.Request.Retry.Attempts
+	retryBackoff := time.Duration(c.Request.Retry.Backoff)
+	if overrides.RetryAttempts != nil {
+		retryAttempts = *overrides.RetryAttempts
 	}
-	req, err := http.NewRequestWithContext(requestContext, method, u.String(), reqBody)
-	if err != nil {
-		return nil, err
+	if overrides.RetryBackoff != nil {
+		retryBackoff = *overrides.RetryBackoff
 	}
-	for k, v := range c.Request.Headers {
-		req.Header.Set(k, v)
+	if retryAttempts < 0 {
+		retryAttempts = 0
 	}
+	if retryBackoff < 0 {
+		retryBackoff = 0
+	}
+
+	var basicUsername, basicPassword string
 	if c.Request.BasicAuth != nil {
-		req.SetBasicAuth(c.Request.BasicAuth.Username, c.Request.BasicAuth.Password)
+		basicUsername = c.Request.BasicAuth.Username
+		basicPassword = c.Request.BasicAuth.Password
 	}
 	if c.Request.BasicAuthFile != nil {
 		username, readErr := readCredentialFile(c.Request.BasicAuthFile.Username)
@@ -176,7 +207,8 @@ func fetch(ctx context.Context, target string, c *Collector, overrides RequestOv
 		if username == "" || password == "" {
 			return nil, fmt.Errorf("basic auth credential files must not be empty")
 		}
-		req.SetBasicAuth(username, password)
+		basicUsername = username
+		basicPassword = password
 	}
 	bearerToken := c.Request.BearerToken
 	if c.Request.BearerTokenFile != "" {
@@ -189,20 +221,7 @@ func fetch(ctx context.Context, target string, c *Collector, overrides RequestOv
 			return nil, fmt.Errorf("bearer token file %s is empty", c.Request.BearerTokenFile)
 		}
 	}
-	if bearerToken != "" {
-		req.Header.Set("Authorization", "Bearer "+bearerToken)
-	}
-	if len(forwarded) > 0 {
-		for k, v := range forwarded[0] {
-			req.Header[k] = append([]string(nil), v...)
-		}
-	}
 	start := time.Now()
-	resp, err := client.Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("HTTP request failed: %w", err)
-	}
-	defer resp.Body.Close()
 	limit := c.Limits.MaxResponseBytes
 	if limit <= 0 || c.Request.MaxResponseBytes > 0 && c.Request.MaxResponseBytes < limit {
 		limit = c.Request.MaxResponseBytes
@@ -210,14 +229,83 @@ func fetch(ctx context.Context, target string, c *Collector, overrides RequestOv
 	if limit <= 0 {
 		limit = 10 << 20
 	}
-	body, err := io.ReadAll(io.LimitReader(resp.Body, limit+1))
-	if err != nil {
-		return nil, fmt.Errorf("reading response: %w", err)
+	for attempt := 0; attempt <= retryAttempts; attempt++ {
+		var reqBody io.Reader
+		if requestBody != "" {
+			reqBody = strings.NewReader(requestBody)
+		}
+		req, err := http.NewRequestWithContext(requestContext, method, u.String(), reqBody)
+		if err != nil {
+			return nil, err
+		}
+		for k, v := range c.Request.Headers {
+			req.Header.Set(k, v)
+		}
+		if basicUsername != "" || basicPassword != "" {
+			req.SetBasicAuth(basicUsername, basicPassword)
+		}
+		if bearerToken != "" {
+			req.Header.Set("Authorization", "Bearer "+bearerToken)
+		}
+		if len(forwarded) > 0 {
+			for k, v := range forwarded[0] {
+				req.Header[k] = append([]string(nil), v...)
+			}
+		}
+
+		resp, err := client.Do(req)
+		if err != nil {
+			if attempt < retryAttempts && requestContext.Err() == nil {
+				if waitErr := waitRetry(requestContext, retryBackoff); waitErr != nil {
+					return nil, fmt.Errorf("HTTP request failed: %w", err)
+				}
+				continue
+			}
+			return nil, fmt.Errorf("HTTP request failed: %w", err)
+		}
+		body, readErr := io.ReadAll(io.LimitReader(resp.Body, limit+1))
+		closeErr := resp.Body.Close()
+		if readErr != nil {
+			return nil, fmt.Errorf("reading response: %w", readErr)
+		}
+		if closeErr != nil {
+			return nil, fmt.Errorf("closing response: %w", closeErr)
+		}
+		if int64(len(body)) > limit {
+			return nil, fmt.Errorf("response size %d exceeds limit %d", len(body), limit)
+		}
+		if retryableStatus(resp.StatusCode) && attempt < retryAttempts {
+			if waitErr := waitRetry(requestContext, retryBackoff); waitErr != nil {
+				return nil, waitErr
+			}
+			continue
+		}
+		return &HTTPResponse{StatusCode: resp.StatusCode, Headers: resp.Header.Clone(), Body: body, Target: target, Collector: c.Name, Duration: time.Since(start)}, nil
 	}
-	if int64(len(body)) > limit {
-		return nil, fmt.Errorf("response size %d exceeds limit %d", len(body), limit)
+	return nil, fmt.Errorf("HTTP request failed after %d attempts", retryAttempts+1)
+}
+
+func retryableStatus(status int) bool {
+	return status == http.StatusRequestTimeout || status == http.StatusTooEarly || status == http.StatusTooManyRequests || status >= 500 && status <= 599
+}
+
+func waitRetry(ctx context.Context, backoff time.Duration) error {
+	if backoff <= 0 {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		default:
+			return nil
+		}
 	}
-	return &HTTPResponse{StatusCode: resp.StatusCode, Headers: resp.Header.Clone(), Body: body, Target: target, Collector: c.Name, Duration: time.Since(start)}, nil
+	timer := time.NewTimer(backoff)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return nil
+	}
 }
 
 func readCredentialFile(path string) (string, error) {

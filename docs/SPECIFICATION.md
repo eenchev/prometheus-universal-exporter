@@ -111,6 +111,10 @@ Parameters:
 - `insecure_skip_verify`: optional boolean override for the collector's target
   TLS setting. When `true`, the target request MUST disable server certificate
   verification for this scrape only.
+- `retry_attempts`: optional non-negative integer overriding the configured
+  number of retries after the initial target request.
+- `retry_backoff`: optional non-negative Go duration overriding the fixed delay
+  between retry attempts.
 
 The exporter MUST reject missing or unknown collector names with a useful error.
 
@@ -123,6 +127,21 @@ The `insecure_skip_verify` override MUST take precedence over
 values MUST return HTTP 400 before the target is contacted. Disabling
 certificate verification is an explicit security trade-off and MUST be
 documented as unsafe for general use.
+
+The collector MAY configure fixed-delay retries as follows:
+
+```yaml
+request:
+  retry:
+    attempts: 2
+    backoff: 2s
+```
+
+`attempts` counts retries after the initial request and defaults to zero.
+`backoff` defaults to zero and MUST NOT be exponential. The exporter SHOULD
+retry transport failures and transient HTTP statuses `408`, `425`, `429`, and
+`500` through `599`. Other HTTP statuses MUST be returned without retrying.
+The retry loop MUST share the incoming scrape or explicit target timeout.
 
 The exporter MUST validate and normalize the target according to collector request configuration.
 
@@ -182,6 +201,7 @@ Support:
 - Configurable target certificate verification, including an explicit
   `insecure_skip_verify` opt-out
 - Optional client certificates if practical
+- Fixed-delay retries for transient target request failures
 - Per-scrape timeout override through the probe request parameter
 - Configurable maximum response size
 - Redirect policy
@@ -1847,6 +1867,7 @@ Test at minimum:
 - TLS verification failure.
 - Target TLS verification can be disabled in collector configuration and
   overridden per scrape with `insecure_skip_verify=true|false`.
+- Configured and per-scrape fixed-delay retries for transient failures.
 - Per-scrape request timeout override.
 - Incoming scrape deadline propagation when no timeout override is supplied.
 - HTTP redirects according to policy.
@@ -1857,6 +1878,7 @@ Test at minimum:
 - Invalid target URLs.
 - Unsupported HTTP methods.
 - Invalid method, path, body, and timeout overrides.
+- Invalid retry count and retry backoff overrides.
 - Empty response bodies.
 - Response body exactly at the maximum allowed size.
 - Response body exceeding the configured maximum size.
@@ -2689,7 +2711,7 @@ The implementation is considered complete when all of the following are true:
 - A `PodMonitor` can do the same.
 - No target URLs need to be hardcoded into the collector configuration.
 - A collector can select its HTTP method, path, headers, authentication, TLS, request body, and other request properties.
-- A probe request can override a collector's method, path, body, target-request timeout, or target TLS certificate verification for one scrape.
+- A probe request can override a collector's method, path, body, target-request timeout, target TLS certificate verification, retry count, or retry backoff for one scrape.
 - JSON responses can be transformed using jq.
 - YAML responses can be transformed using yq.
 - XML responses can be transformed using XPath.
@@ -3110,6 +3132,8 @@ path=<request path>
 timeout=<positive Go duration>
 body=<raw request body>
 insecure_skip_verify=<true|false>
+retry_attempts=<non-negative integer>
+retry_backoff=<non-negative Go duration>
 ```
 
 When supplied, these parameters MUST override the selected collector's
@@ -3130,7 +3154,9 @@ and the exporter target-request timeout override are distinct: the former is
 set on the generated ServiceMonitor or PodMonitor, while the latter is passed
 to `/probe` as `params.timeout`. The TLS override is passed as
 `params.insecure_skip_verify`; when absent, the collector's TLS setting MUST be
-preserved.
+preserved. `params.retry_attempts` and `params.retry_backoff` override the
+collector's retry settings for that scrape; when absent, the collector values
+MUST be preserved.
 
 ## 42.11 Helm-wide default metadata
 

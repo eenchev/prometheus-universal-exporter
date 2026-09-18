@@ -40,6 +40,10 @@ collectors:
       #   cert_file: /etc/prometheus/tls/client.crt
       #   key_file: /etc/prometheus/tls/client.key
       #   insecure_skip_verify: false
+      # Optional fixed-delay retries for transient target failures.
+      # retry:
+      #   attempts: 2
+      #   backoff: 2s
     transform:
       type: jq
       # Optional: runs once after decoding and before all metric expressions.

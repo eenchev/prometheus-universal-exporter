@@ -67,9 +67,14 @@ type RequestConfig struct {
 	ForwardAuthorization bool              `yaml:"forward_authorization"`
 	ForwardHeaders       []string          `yaml:"forward_headers"`
 	TLS                  TLSConfig         `yaml:"tls"`
+	Retry                RetryConfig       `yaml:"retry"`
 	MaxResponseBytes     int64             `yaml:"max_response_bytes"`
 	RedirectPolicy       string            `yaml:"redirect_policy"`
 	AllowedSchemes       []string          `yaml:"allowed_schemes"`
+}
+type RetryConfig struct {
+	Attempts int      `yaml:"attempts"`
+	Backoff  Duration `yaml:"backoff"`
 }
 type BasicAuth struct {
 	Username string `yaml:"username"`
@@ -176,6 +181,12 @@ func (c *Config) Validate() error {
 		}
 		if x.Request.BasicAuthFile != nil && (strings.TrimSpace(x.Request.BasicAuthFile.Username) == "" || strings.TrimSpace(x.Request.BasicAuthFile.Password) == "") {
 			return fmt.Errorf("collector %q basic_auth_file requires username and password paths", x.Name)
+		}
+		if x.Request.Retry.Attempts < 0 {
+			return fmt.Errorf("collector %q request.retry.attempts must not be negative", x.Name)
+		}
+		if x.Request.Retry.Backoff < 0 {
+			return fmt.Errorf("collector %q request.retry.backoff must not be negative", x.Name)
 		}
 		if (x.Request.BasicAuth != nil || x.Request.BasicAuthFile != nil) && (x.Request.BearerToken != "" || x.Request.BearerTokenFile != "") {
 			return fmt.Errorf("collector %q cannot configure basic and bearer authentication together", x.Name)

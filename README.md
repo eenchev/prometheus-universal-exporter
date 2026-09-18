@@ -248,9 +248,27 @@ monitors:
       path: [/api/status]
       timeout: [5s]
       body: [raw request body]
+      retry_attempts: ["2"]
+      retry_backoff: ["2s"]
 ```
 
 The body is opaque text and does not need to be JSON. Without a `timeout` parameter, the exporter uses the incoming Prometheus scrape context as the target request timeout.
+
+Target retries can be configured in the collector and overridden for one
+scrape:
+
+```yaml
+request:
+  retry:
+    attempts: 2   # retries after the initial request
+    backoff: 2s   # fixed delay between attempts
+```
+
+The exporter retries transport failures and transient HTTP responses (`408`,
+`425`, `429`, and `5xx`). Other HTTP statuses are returned immediately. The
+retry count and fixed delay can be overridden with the `retry_attempts` and
+`retry_backoff` probe parameters shown above. Retries share the scrape/target
+timeout, so the retry loop cannot extend the configured deadline indefinitely.
 
 The collector can configure target TLS verification and trust material:
 

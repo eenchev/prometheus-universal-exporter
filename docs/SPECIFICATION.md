@@ -1024,6 +1024,30 @@ the exporter MUST parse the returned text again before CSS/XPath extraction.
 The pre-script uses the same timeout, output limit, and Python restrictions as
 Python metric scripts. A pre-script failure is a transform error.
 
+A pre-script MUST produce its result in the variable `data`. The exporter
+reads `data` back after the script runs, so a script that computes a value and
+leaves it in another name discards its work silently: the transform then runs
+against the untouched decoded response and the collector appears to be
+mis-extracting rather than misconfigured. Replacing `data`, mutating it by key
+or attribute, augmenting it, binding it as a loop or `with` target, and calling
+a method on it all satisfy this.
+
+This MUST be enforced as a configuration error rather than a scrape error. The
+exporter MUST refuse to start when a configured pre-script never produces
+`data`, MUST reject such a configuration on reload with the last valid
+configuration left active, and MUST report the offending collector by name. It
+MUST report every faulty script in one message rather than only the first.
+
+The same check MUST reject a Python syntax error in any configured script,
+including a `python` transform script, so a script that cannot compile is caught
+before the exporter serves traffic. A `python` transform emits through
+`metric(...)` rather than `data` and MUST NOT be required to produce it.
+
+Enforcing this requires parsing the script, so a configuration that contains any
+Python MUST be checked with the configured interpreter and MUST fail to start
+when that interpreter is unusable. A configuration containing no Python MUST NOT
+invoke an interpreter at all, so a deployment that uses none is unaffected.
+
 A pre-script that returns a mapping or a sequence produces structured data. When
 the collector's transform reads structured data — `jq`, `yq`, `none`, or an
 unset transform — the exporter MUST treat that result as the decoded response
@@ -1202,6 +1226,51 @@ Avoid unbounded label values on exporter self-metrics.
 
 `/metrics` MUST NOT require a target query parameter.
 
+### 22.1 Verbose per-request self-metrics
+
+The exporter MUST support an opt-in verbose mode that reports the outcome of the
+last scrape of every collector, request URL and method combination:
+
+```text
+http_exporter_request_last_status_code
+http_exporter_request_last_scrape_timestamp_seconds
+http_exporter_request_last_duration_seconds
+```
+
+All three MUST carry `collector`, `url` and `method` labels.
+`http_exporter_request_last_status_code` MUST report the HTTP status the target
+returned, and zero when the request failed before a response arrived, so a
+transport failure is distinguishable from an HTTP error.
+
+Verbose mode MUST be configured in the exporter configuration under
+`web.self_metrics.verbose` and MUST default to false. Because it is
+configuration rather than a process flag, a reload MUST be able to turn it on
+and off; turning it off MUST drop the per-request series rather than leaving
+stale ones exposed. None of these metrics, including the indicator below, may
+appear while verbose mode is off.
+
+The `url` label MUST carry only the scheme, host and path of the resolved
+request. Userinfo credentials and the entire query string MUST be removed: a
+collector's `request.query` or a probe parameter may carry a token or a tenant
+identifier, and a metric label is persisted by Prometheus and passed to anything
+federating from it. The label MUST be derived from the same resolution the real
+request uses, so a label can never describe a URL that was not the one fetched.
+
+A request URL is an unbounded label value, which section 22 warns against, so
+the number of tracked combinations MUST be capped. The limit MUST be 1000
+combinations. A request already tracked MUST keep updating after the limit is
+reached; only new combinations are refused. Reaching the limit MUST NOT be
+silent: the exporter MUST expose
+
+```text
+http_exporter_request_series_capped
+```
+
+which reads 1 once the limit has been reached and 0 otherwise, so an operator
+can alert on truncation without having to test for an absent series.
+
+Scheduled targets MUST be recorded the same way as probe requests.
+
 ---
 
 # 23. Health endpoints
@@ -1232,13 +1301,43 @@ Support startup validation.
 
 Strongly recommended:
 
-- Config syntax validation before activation.
+- Config syntax validation before activation, including the collector Python
+  scripts, whose contract section 18 defines.
 - Atomic config reload.
 - Collector-level validation.
 - No partially loaded collector state.
 - Optional SIGHUP/config-file reload and/or HTTP reload endpoint.
 
 If a new configuration is invalid, the exporter should retain the last known valid configuration where practical and expose an explicit configuration error metric/log.
+
+### 24.1 Configuration watch
+
+Watching the configuration files for changes MUST be opt-in through a CLI flag
+and MUST be disabled by default, so an exporter started without it reads its
+configuration once and picks up changes on restart. The flag MUST cover every
+configuration file the exporter was given, including the scheduled target
+document, so a deployment does not have to reason about which files are watched.
+
+The watch interval MUST be configurable and MUST have a documented default of
+60 seconds, which keeps an idle exporter from stating its configuration files
+continuously while still picking a change up promptly enough for a reload. A
+non-positive interval MUST be rejected at startup rather than silently disabling
+the watch that was explicitly requested. The exporter SHOULD report whether the
+watch is active in its startup log.
+
+Changes MUST be detected by file modification time rather than by filesystem
+event notification. Kubernetes republishes a mounted ConfigMap by atomically
+swapping a `..data` symlink, which replaces the inode a file-level event watch
+is attached to; such a watch stops firing after the first change unless it
+watches the directory and re-arms. Polling is unaffected by this.
+
+Enabling the watch MUST NOT weaken any reload rule: an invalid configuration, a
+configuration that would disable OTLP while scheduled targets are loaded, and a
+pre-script that stops producing `data` MUST all still be rejected with the last
+valid configuration left active.
+
+When a disabled watch is configured, the exporter MUST NOT run a polling loop at
+all.
 
 ---
 
@@ -1582,6 +1681,8 @@ Provide clear CLI flags, for example:
 --web.self-metrics-path=/self-metrics
 --python.path=/usr/local/bin/python3
 --otlp.targets-file=/etc/exporter/targets.yaml
+--config.watch
+--config.watch-interval=60s
 ```
 
 `--otlp.targets-file` is optional and selects the scheduled target document
@@ -2272,6 +2373,55 @@ consistently.
 Test that a transform `pre_script` runs once before extraction, can mutate or
 replace `data`, is subject to timeout/output restrictions, and is reparsed for
 HTML/XML output.
+
+Test verbose per-request self-metrics:
+
+- None of the per-request metrics, including the capped indicator, appear while
+  verbose mode is off, and the ordinary per-collector self-metrics are
+  unaffected.
+- With verbose mode on, the status code, a timestamp around now, and a plausible
+  duration are reported for a scraped request.
+- The `url` label drops userinfo credentials and the query string, for a query
+  in the target, a query from `request.query`, and a scheme-less target.
+- Distinct URLs and methods produce distinct series, and repeating a request
+  updates its series rather than adding one.
+- A failing scrape records its HTTP status code.
+- Scheduled target scrapes are recorded.
+- The series set stops growing at 1000 combinations, an already-tracked request
+  keeps updating past the limit, and the capped indicator reads 1.
+- A configuration reload turns verbose mode on and off, and turning it off drops
+  the series.
+
+Test the configuration watch:
+
+- The watch is off by default, and the reload loop returns immediately rather
+  than idling, so a configuration change is not picked up.
+- An enabled watch reloads a changed configuration file and a changed scheduled
+  target file.
+- The watch stops when its context is cancelled and reloads nothing afterwards.
+- An enabled watch still rejects an invalid configuration and leaves the
+  previous one active, and a later valid configuration still loads.
+- A non-positive watch interval leaves the watch disabled at the manager level
+  and is rejected at startup when the watch was explicitly requested.
+
+Test the pre-script `data` contract:
+
+- A pre-script that produces `data` is accepted for every shape that does so:
+  replacing it, mutating it by key, nested key or attribute, augmenting it,
+  annotated and tuple and starred assignment, a method call on it, and binding
+  it as a loop or `with` target.
+- A pre-script that assigns another name, computes and discards, only reads
+  `data`, or mutates a different object is rejected, naming the collector.
+- A Python syntax error in a pre-script or a `python` transform script is
+  rejected at startup.
+- A `python` transform script that never mentions `data` is accepted.
+- Every faulty script is reported, not only the first, and valid collectors are
+  not named.
+- A configuration with no Python scripts needs no interpreter; one with scripts
+  fails clearly when the interpreter is unusable.
+- A reload whose pre-script stops producing `data` is rejected and the previous
+  configuration stays active.
+- The shipped example configurations satisfy the contract.
 
 Test structured pre-script results:
 

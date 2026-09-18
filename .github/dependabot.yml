@@ -1,0 +1,59 @@
+# Dependency updates that GitHub can handle natively. The Dockerfile is not
+# covered here: it pins every version through an ARG and interpolates them into
+# the FROM lines, which the Docker ecosystem updater cannot resolve. Those are
+# updated by .github/workflows/update-docker-deps.yml instead.
+#
+# Schedules use Europe/Sofia, so a run lands mid-morning on a working day all
+# year round rather than drifting an hour when daylight saving changes.
+version: 2
+updates:
+  # A Go major version lives at a different import path, so `go get -u` and
+  # Dependabot both stay within the current major by construction: these updates
+  # cannot introduce a breaking major bump.
+  - package-ecosystem: gomod
+    directory: /
+    schedule:
+      interval: weekly
+      day: tuesday
+      time: "10:00"
+      timezone: Europe/Sofia
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: deps
+    labels:
+      - dependencies
+      - go
+    groups:
+      # One PR for the whole set: these move together and reviewing a single
+      # green build beats triaging eight PRs.
+      go-modules:
+        patterns:
+          - "*"
+        update-types:
+          - minor
+          - patch
+    ignore:
+      # A major bump changes the import path and needs code changes, so it is a
+      # deliberate piece of work rather than an automated PR.
+      - dependency-name: "*"
+        update-types:
+          - version-update:semver-major
+
+  # Keeps the actions used by CI and the release workflows current.
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+      day: tuesday
+      time: "10:00"
+      timezone: Europe/Sofia
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: deps
+    labels:
+      - dependencies
+      - github-actions
+    groups:
+      github-actions:
+        patterns:
+          - "*"

@@ -23,6 +23,14 @@ otlp:
 #     enabled: true
 #     username: exporter
 #     password: change-me
+#   self_metrics:
+#     # Adds a series per collector, request URL and method with the last
+#     # scrape's status, timestamp and duration. A request URL is an unbounded
+#     # label value, so tracking is capped at 1000 combinations and
+#     # http_exporter_request_series_capped reports when the cap is reached.
+#     # The url label carries scheme, host and path only; credentials and the
+#     # query string are never put in a label.
+#     verbose: false
 
 collectors:
   - name: app_json
@@ -63,7 +71,9 @@ collectors:
     transform:
       type: jq
       # Optional: runs once after decoding and before all metric expressions.
-      # The script can mutate or replace the decoded `data` value.
+      # It must leave its result in `data`, which is the variable the exporter
+      # reads back; a script that produces nothing in `data` is rejected at
+      # startup. Mutating it in place counts, as here.
       pre_script: |
         data["requests"] = data.get("requests", 0)
     metrics:

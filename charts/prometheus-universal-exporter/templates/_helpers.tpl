@@ -37,6 +37,13 @@ app.kubernetes.io/managed-by: {{ .Release.Service }}
 {{- end -}}
 {{- $port -}}
 {{- end }}
+{{- define "prometheus-universal-exporter.watchConfigInterval" -}}
+{{- $interval := default "60s" .Values.server.watchConfigInterval -}}
+{{- if not (regexMatch "^[0-9]+(\\.[0-9]+)?(ns|us|ms|s|m|h)$" $interval) -}}
+{{- fail (printf "server.watchConfigInterval %q must be a positive Go duration, for example \"60s\"" $interval) -}}
+{{- end -}}
+{{- $interval -}}
+{{- end }}
 {{- define "prometheus-universal-exporter.pythonPath" -}}
 {{- default "/usr/local/bin/python3" .Values.server.pythonPath -}}
 {{- end }}

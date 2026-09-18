@@ -32,11 +32,12 @@ type Server struct {
 	otlpMu          sync.Mutex
 	otlpPending     map[string]*otlpBatch
 	cache           *responseCache
+	requests        *requestTracker
 	ready           atomic.Bool
 }
 
 func NewServer(m *ConfigManager, p string, l *slog.Logger) *Server {
-	s := &Server{manager: m, pythonPath: p, logger: l, stats: map[string]*serverStats{}, otlpPending: map[string]*otlpBatch{}, cache: newResponseCache()}
+	s := &Server{manager: m, pythonPath: p, logger: l, stats: map[string]*serverStats{}, otlpPending: map[string]*otlpBatch{}, cache: newResponseCache(), requests: newRequestTracker()}
 	s.ready.Store(true)
 	return s
 }
@@ -257,13 +258,19 @@ func (s *Server) probeHandler(w http.ResponseWriter, r *http.Request) {
 	st.probes++
 	st.mu.Unlock()
 	logTarget := safeTarget(target)
+	// Filled in once the request parameters are known, so the verbose
+	// per-request self-metric describes the request that was actually made.
+	var requestURL, method string
+	var statusCode int
 	finish := func(ok bool) {
+		duration := time.Since(start)
 		st.mu.Lock()
 		if ok {
 			st.success++
 		}
-		st.lastDuration = time.Since(start).Seconds()
+		st.lastDuration = duration.Seconds()
 		st.mu.Unlock()
+		s.recordRequest(name, requestURL, method, statusCode, duration)
 	}
 	failStage := func(stage string, err error, policy string) bool {
 		if policy == "warn" || policy == "ignore" {
@@ -281,6 +288,10 @@ func (s *Server) probeHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	ctx := r.Context()
+	method = requestMethod(c, overrides)
+	if resolved, resolveErr := resolveRequestURL(target, c, overrides); resolveErr == nil {
+		requestURL = requestLabelURL(resolved)
+	}
 	forwarded := forwardedHeaders(r, c.Request)
 	cacheTTL := time.Duration(c.Cache)
 	var cacheKey string
@@ -313,6 +324,7 @@ func (s *Server) probeHandler(w http.ResponseWriter, r *http.Request) {
 		finish(true)
 		return
 	}
+	statusCode = resp.StatusCode
 	st.mu.Lock()
 	st.lastStatus = resp.StatusCode
 	st.lastBytes = int64(len(resp.Body))
@@ -478,6 +490,9 @@ func (s *Server) metricsHandler(w http.ResponseWriter, _ *http.Request) {
 		fmt.Fprintf(&b, "http_exporter_scrapes_total%s %d\nhttp_exporter_scrape_success%s %d\nhttp_exporter_scrape_duration_seconds%s %s\nhttp_exporter_scrape_http_status_code%s %d\nhttp_exporter_scrape_response_bytes%s %d\nhttp_exporter_decode_success%s %d\nhttp_exporter_parse_errors_total%s %d\nhttp_exporter_transform_errors_total%s %d\nhttp_exporter_missing_keys_total%s %d\nhttp_exporter_script_errors_total%s %d\nhttp_exporter_script_duration_seconds%s 0\nhttp_exporter_metrics_emitted%s %d\nhttp_exporter_series_limit_exceeded%s %d\n", label, p, label, ok, label, strconv.FormatFloat(dur, 'f', -1, 64), label, status, label, bytes, label, d, label, pe, label, te, label, m, label, se, label, label, em, label, le)
 		fmt.Fprintf(&b, "http_exporter_cache_hits_total%s %d\nhttp_exporter_cache_misses_total%s %d\nhttp_exporter_cache_entries%s %d\n", label, hits, label, misses, label, cacheEntries[x.name])
 	}
+	if verbose := s.verboseRequestMetrics(); len(verbose) > 0 {
+		renderMetricSet(&b, &MetricSet{Metrics: verbose})
+	}
 	w.Header().Set("Content-Type", "text/plain; version=0.0.4")
 	_, _ = w.Write([]byte(b.String()))
 }
@@ -530,36 +545,43 @@ func (s *Server) selfMetricSet() MetricSet {
 		out.Metrics = append(out.Metrics, Metric{Name: "http_exporter_collector_config_valid", Type: GaugeMetricType, Value: 1, Labels: map[string]string{"collector": c.Name}})
 	}
 	out.Metrics = append(out.Metrics, Metric{Name: "http_exporter_scheduled_targets", Help: "Scheduled targets configured for OTLP delivery.", Type: GaugeMetricType, Value: float64(len(s.manager.Targets()))})
+	out.Metrics = append(out.Metrics, s.verboseRequestMetrics()...)
 	return out
 }
 
 func writeMetricSet(w http.ResponseWriter, s *MetricSet) {
 	w.Header().Set("Content-Type", "text/plain; version=0.0.4")
 	var b strings.Builder
+	renderMetricSet(&b, s)
+	_, _ = w.Write([]byte(b.String()))
+}
+
+// renderMetricSet writes the exposition text for a metric set, so the verbose
+// self-metrics are rendered by exactly the same code as collector output.
+func renderMetricSet(b *strings.Builder, s *MetricSet) {
 	help := map[string]bool{}
 	for _, m := range s.Metrics {
 		if !help[m.Name] {
 			if m.Help != "" {
-				fmt.Fprintf(&b, "# HELP %s %s\n", m.Name, strings.ReplaceAll(strings.ReplaceAll(m.Help, "\\", "\\\\"), "\n", "\\n"))
+				fmt.Fprintf(b, "# HELP %s %s\n", m.Name, strings.ReplaceAll(strings.ReplaceAll(m.Help, "\\", "\\\\"), "\n", "\\n"))
 			}
-			fmt.Fprintf(&b, "# TYPE %s %s\n", m.Name, m.Type)
+			fmt.Fprintf(b, "# TYPE %s %s\n", m.Name, m.Type)
 			help[m.Name] = true
 		}
 		if m.Histogram != nil {
-			writeHistogram(&b, m)
+			writeHistogram(b, m)
 			continue
 		}
 		if m.Summary != nil {
-			writeSummary(&b, m)
+			writeSummary(b, m)
 			continue
 		}
-		fmt.Fprintf(&b, "%s%s %s", m.Name, formatLabels(m.Labels), strconv.FormatFloat(m.Value, 'g', -1, 64))
+		fmt.Fprintf(b, "%s%s %s", m.Name, formatLabels(m.Labels), strconv.FormatFloat(m.Value, 'g', -1, 64))
 		if m.Timestamp != nil {
-			fmt.Fprintf(&b, " %d", *m.Timestamp)
+			fmt.Fprintf(b, " %d", *m.Timestamp)
 		}
 		b.WriteByte('\n')
 	}
-	_, _ = w.Write([]byte(b.String()))
 }
 func formatLabels(ls map[string]string) string {
 	if len(ls) == 0 {

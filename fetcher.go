@@ -130,7 +130,10 @@ func parseRequestOverrides(values url.Values) (RequestOverrides, error) {
 	return overrides, nil
 }
 
-func fetch(ctx context.Context, target string, c *Collector, overrides RequestOverrides, forwarded ...http.Header) (*HTTPResponse, error) {
+// resolveRequestURL builds the URL a scrape actually requests. Both fetch and
+// the verbose self-metric label go through it, so a label can never describe a
+// different URL than the one that was fetched.
+func resolveRequestURL(target string, c *Collector, overrides RequestOverrides) (*url.URL, error) {
 	u, err := url.Parse(target)
 	if err != nil {
 		return nil, fmt.Errorf("invalid target: %w", err)
@@ -174,6 +177,36 @@ func fetch(ctx context.Context, target string, c *Collector, overrides RequestOv
 		q.Set(k, v)
 	}
 	u.RawQuery = q.Encode()
+	return u, nil
+}
+
+// requestLabelURL renders a resolved URL for a metric label. Credentials in the
+// userinfo and the whole query string are dropped: a collector's request.query
+// or a probe parameter can carry a token or a tenant identifier, and a metric
+// label is persisted by Prometheus and passed on to anything federating from it.
+func requestLabelURL(u *url.URL) string {
+	labelled := *u
+	labelled.User = nil
+	labelled.RawQuery = ""
+	labelled.ForceQuery = false
+	labelled.Fragment = ""
+	labelled.RawFragment = ""
+	return labelled.String()
+}
+
+// requestMethod reports the method a scrape will use.
+func requestMethod(c *Collector, overrides RequestOverrides) string {
+	if overrides.Method != "" {
+		return overrides.Method
+	}
+	return c.Request.Method
+}
+
+func fetch(ctx context.Context, target string, c *Collector, overrides RequestOverrides, forwarded ...http.Header) (*HTTPResponse, error) {
+	u, err := resolveRequestURL(target, c, overrides)
+	if err != nil {
+		return nil, err
+	}
 	tlsSettings := c.Request.TLS
 	if overrides.InsecureSkipVerify != nil {
 		tlsSettings.InsecureSkipVerify = *overrides.InsecureSkipVerify

@@ -1,0 +1,201 @@
+package main
+
+import (
+	"log/slog"
+	"os"
+	"strings"
+	"testing"
+	"time"
+)
+
+func preScriptCollector(name, script string) Collector {
+	c := testCollector(name, "text")
+	c.Transform = TransformConfig{Type: "jq", PreScript: script}
+	c.Metrics = []MetricRule{{Name: "demo_value", Type: GaugeMetricType, ErrorMode: "log", Expression: ".value"}}
+	c.Limits = Limits{ScriptTimeout: Duration(5 * time.Second)}
+	return c
+}
+
+func validatedConfig(t *testing.T, collectors ...Collector) *Config {
+	t.Helper()
+	cfg := &Config{Collectors: collectors}
+	if err := cfg.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	return cfg
+}
+
+// A pre-script hands its result back through `data`, so every shape that
+// produces one must be accepted: replacing it, mutating it by key or attribute,
+// augmenting it, binding it in a loop or a with-statement, or calling a method
+// on it.
+func TestPreScriptProducingDataIsAccepted(t *testing.T) {
+	scripts := map[string]string{
+		"replaces data":            `data = {"value": 1}`,
+		"replaces from response":   "import json\ndata = json.loads(response.text)",
+		"mutates by key":           `data["value"] = 1`,
+		"mutates nested key":       `data["a"]["b"] = 1`,
+		"mutates by attribute":     "class X: pass\ndata = X()\ndata.value = 1",
+		"augments":                 `data += [1]`,
+		"annotated assignment":     "data: dict = {}",
+		"tuple assignment":         `data, extra = {"value": 1}, 2`,
+		"starred assignment":       `first, *data = [1, 2, 3]`,
+		"method call mutation":     `data.update({"value": 1})`,
+		"append mutation":          `data.append(1)`,
+		"loop target":              "for data in [{'value': 1}]:\n    pass",
+		"with statement":           "import contextlib\nwith contextlib.suppress(Exception) as data:\n    pass",
+		"conditional reassignment": "if response.status_code == 200:\n    data = {'value': 1}\nelse:\n    data = {}",
+	}
+	for name, script := range scripts {
+		t.Run(name, func(t *testing.T) {
+			cfg := validatedConfig(t, preScriptCollector("accepted", script))
+			if err := ValidatePythonScripts("python3", cfg); err != nil {
+				t.Fatalf("a pre-script that produces data was rejected: %v", err)
+			}
+		})
+	}
+}
+
+func TestPreScriptWithoutDataIsRejected(t *testing.T) {
+	scripts := map[string]string{
+		"assigns another name":   `result = {"value": 1}`,
+		"computes and discards":  "import json\njson.loads(response.text)",
+		"only reads data":        `print(len(data))`,
+		"mutates another object": "other = {}\nother[\"value\"] = 1",
+	}
+	for name, script := range scripts {
+		t.Run(name, func(t *testing.T) {
+			cfg := validatedConfig(t, preScriptCollector("rejected", script))
+			err := ValidatePythonScripts("python3", cfg)
+			if err == nil {
+				t.Fatal("a pre-script that never produces data was accepted")
+			}
+			for _, want := range []string{"rejected", "pre_script", "'data'"} {
+				if !strings.Contains(err.Error(), want) {
+					t.Fatalf("error %q should mention %q", err, want)
+				}
+			}
+		})
+	}
+}
+
+func TestPreScriptSyntaxErrorIsRejected(t *testing.T) {
+	cfg := validatedConfig(t, preScriptCollector("broken", "data = {'value': 1"))
+	err := ValidatePythonScripts("python3", cfg)
+	if err == nil || !strings.Contains(err.Error(), "syntax error") {
+		t.Fatalf("error=%v, want a syntax error for the pre-script", err)
+	}
+	if !strings.Contains(err.Error(), "broken") {
+		t.Fatalf("error %q should name the collector", err)
+	}
+}
+
+// A Python transform emits through metric(...) rather than data, so it is held
+// to syntax only.
+func TestPythonTransformScriptIsCheckedForSyntaxOnly(t *testing.T) {
+	valid := testCollector("emitting", "text")
+	valid.Transform = TransformConfig{Type: "python", Script: `metric(name="demo_value", value=1)`}
+	valid.Metrics = nil
+	if err := ValidatePythonScripts("python3", validatedConfig(t, valid)); err != nil {
+		t.Fatalf("a transform script without data was rejected: %v", err)
+	}
+
+	broken := testCollector("emitting", "text")
+	broken.Transform = TransformConfig{Type: "python", Script: `metric(name="demo_value", value=`}
+	broken.Metrics = nil
+	err := ValidatePythonScripts("python3", validatedConfig(t, broken))
+	if err == nil || !strings.Contains(err.Error(), "syntax error") {
+		t.Fatalf("error=%v, want a syntax error for the transform script", err)
+	}
+}
+
+func TestEveryFaultyScriptIsReported(t *testing.T) {
+	cfg := validatedConfig(t,
+		preScriptCollector("first", `result = 1`),
+		preScriptCollector("second", `data = {`),
+		preScriptCollector("third", `data = {"value": 1}`),
+	)
+	err := ValidatePythonScripts("python3", cfg)
+	if err == nil {
+		t.Fatal("expected the faulty scripts to be rejected")
+	}
+	for _, want := range []string{"first", "second"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("error %q should report collector %q", err, want)
+		}
+	}
+	if strings.Contains(err.Error(), "third") {
+		t.Fatalf("the valid collector should not be reported: %q", err)
+	}
+}
+
+// A configuration with no Python at all must not need an interpreter, so a
+// deployment that uses none is unaffected by this check.
+func TestConfigurationWithoutPythonNeedsNoInterpreter(t *testing.T) {
+	cfg := validatedConfig(t, testCollector("plain", "text"))
+	if err := ValidatePythonScripts("/nonexistent/python", cfg); err != nil {
+		t.Fatalf("a configuration without Python scripts must not run an interpreter: %v", err)
+	}
+}
+
+func TestMissingInterpreterIsReportedWhenScriptsExist(t *testing.T) {
+	cfg := validatedConfig(t, preScriptCollector("scripted", `data = {"value": 1}`))
+	err := ValidatePythonScripts("/nonexistent/python", cfg)
+	if err == nil || !strings.Contains(err.Error(), "working interpreter") {
+		t.Fatalf("error=%v, want a clear interpreter error", err)
+	}
+}
+
+func TestConfigReloadRejectsAPreScriptThatDoesNotProduceData(t *testing.T) {
+	dir := t.TempDir()
+	path := dir + "/config.yaml"
+	valid := "collectors:\n  - name: reloaded\n    transform:\n      type: jq\n      pre_script: |\n" +
+		"        data = {\"value\": 1}\n    metrics:\n      - name: demo_value\n        expression: .value\n"
+	if err := os.WriteFile(path, []byte(valid), 0600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := LoadConfig(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := ValidatePythonScripts("python3", cfg); err != nil {
+		t.Fatal(err)
+	}
+	manager := NewConfigManager(cfg, path, slog.Default())
+	manager.SetPythonPath("python3")
+
+	broken := strings.Replace(valid, "        data = {\"value\": 1}\n", "        result = {\"value\": 1}\n", 1)
+	if err := os.WriteFile(path, []byte(broken), 0600); err != nil {
+		t.Fatal(err)
+	}
+	manager.lastMod = time.Time{}
+	manager.reloadConfig()
+	if got := manager.Get().Collectors[0].Transform.PreScript; !strings.Contains(got, "data =") {
+		t.Fatalf("a reload whose pre-script stops producing data must be rejected; active script is %q", got)
+	}
+
+	fixed := strings.Replace(valid, "        data = {\"value\": 1}\n", "        data = {\"value\": 2}\n", 1)
+	if err := os.WriteFile(path, []byte(fixed), 0600); err != nil {
+		t.Fatal(err)
+	}
+	manager.lastMod = time.Time{}
+	manager.reloadConfig()
+	if got := manager.Get().Collectors[0].Transform.PreScript; !strings.Contains(got, `"value": 2`) {
+		t.Fatalf("a valid reload should take effect, got %q", got)
+	}
+}
+
+// The shipped examples must satisfy the contract they demonstrate.
+func TestShippedExampleScriptsSatisfyTheContract(t *testing.T) {
+	for _, path := range []string{"config.example.yaml", "config.otlp.example.yaml"} {
+		t.Run(path, func(t *testing.T) {
+			cfg, err := LoadConfig(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := ValidatePythonScripts("python3", cfg); err != nil {
+				t.Fatalf("%s: %v", path, err)
+			}
+		})
+	}
+}

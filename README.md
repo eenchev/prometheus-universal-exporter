@@ -69,6 +69,49 @@ matching no workflow and looking like it released.
 The GHCR packages may need to be made public once in the repository's package
 settings.
 
+### Verbose per-request self-metrics
+
+By default the self-metrics are per collector. Setting `web.self_metrics.verbose`
+adds one series per collector, request URL and method, reporting the outcome of
+the last scrape of each:
+
+```yaml
+web:
+  self_metrics:
+    verbose: true
+```
+
+```text
+http_exporter_request_last_status_code{collector="app_json",method="GET",url="http://api.example:8080/api/status"} 200
+http_exporter_request_last_scrape_timestamp_seconds{collector="app_json",method="GET",url="http://api.example:8080/api/status"} 1.7896896e+09
+http_exporter_request_last_duration_seconds{collector="app_json",method="GET",url="http://api.example:8080/api/status"} 0.0142
+```
+
+The status code is what the target returned, or `0` when the request failed
+before a response arrived, so a transport failure is distinguishable from an
+HTTP error. Scheduled targets are recorded the same way.
+
+The `url` label carries only the scheme, host and path. Userinfo credentials and
+the whole query string are dropped, because `request.query` or a probe parameter
+can carry a token or tenant identifier and a metric label is persisted by
+Prometheus and handed to anything federating from it. The label is built from
+the same resolution the real request uses, so it can never describe a different
+URL than the one fetched.
+
+A request URL is an unbounded label value, so tracking is capped at 1000
+collector/URL/method combinations. Requests already tracked keep updating past
+the limit; only new combinations are refused. The truncation is visible rather
+than silent:
+
+```text
+http_exporter_request_series_capped 1
+```
+
+It reads `0` normally, so you can alert on `== 1` without testing for an absent
+series. Because verbosity is configuration rather than a flag, a reload turns it
+on and off; turning it off drops the per-request series instead of leaving stale
+ones exposed.
+
 Exporter self-health metrics are available at `/self-metrics` by default (and `/metrics` remains a compatibility alias). Change the dedicated path with `--web.self-metrics-path=/exporter/metrics`. The Helm chart's optional self-metrics ServiceMonitor/PodMonitor scrapes the exporter pods/services separately from target-probing monitors. Configure one or more entries in `monitors`, each with a unique `name` and `type: pod` or `type: service`; each entry supports Prometheus Operator `relabelings` and `metricRelabelings`.
 
 The Dockerfile exposes `GO_VERSION`, `PYTHON_VERSION`, `BEAUTIFULSOUP4_VERSION`,
@@ -253,6 +296,35 @@ after decoding and before metric extraction. The script receives the decoded
 value as `data` and may mutate it or replace it by assigning to `data`.
 HTML/XML pre-scripts receive raw document text, which is parsed again after the
 script. Python transforms emit metrics with the `metric(...)` API.
+
+A pre-script **must** leave its result in `data` — that is the variable the
+exporter reads back. A script that computes a value under another name throws it
+away: the transform then runs against the untouched response, so the collector
+looks like it is extracting badly rather than configured wrongly. The exporter
+therefore refuses to start when a pre-script never produces `data`, naming the
+collector, and rejects such a configuration on reload with the previous one left
+active. Replacing `data`, mutating it by key or attribute, augmenting it,
+binding it as a loop or `with` target, and calling a method on it all count.
+
+```yaml
+transform:
+  pre_script: |
+    import json
+    data = json.loads(response.text)["payload"]   # produces data
+
+    # result = json.loads(...)  would be rejected at startup: nothing reaches
+    # the transform, because the exporter only reads back `data`.
+```
+
+The same startup check compiles every configured script, so a Python syntax
+error in a pre-script or a `python` transform script is reported before the
+exporter serves traffic rather than at the first scrape. All faults are listed
+in one message. A `python` transform emits through `metric(...)` and is not
+required to produce `data`.
+
+The check needs the interpreter from `--python.path`, so a configuration that
+contains any Python fails to start if that interpreter is unusable. A
+configuration with no Python scripts never invokes one.
 
 ### Reshaping a response instead of writing a Python transform
 
@@ -563,6 +635,34 @@ web:
 When enabled, Basic Auth is required for `/probe`, `/metrics`, and the configured self-metrics endpoint. `/health` and `/ready` remain unauthenticated for Kubernetes probes. Exporter-side Basic Auth is mutually exclusive with `request.forward_authorization`; enable one model or the other so the incoming Authorization header cannot be confused with the exporter credential.
 
 This conflict is rejected during startup: the exporter logs `invalid startup configuration; exiting` and terminates with a non-zero exit code. Invalid configurations detected during file reload are rejected while the last valid configuration remains active.
+
+### Watching the configuration
+
+The exporter reads its configuration once at startup. Pass `--config.watch` to
+have it re-read the configuration file and, when one is configured, the
+scheduled target file whenever either changes on disk:
+
+```sh
+prometheus-universal-exporter \
+  --config.file=config.yaml \
+  --config.watch \
+  --config.watch-interval=60s
+```
+
+`--config.watch-interval` defaults to 60s and must be positive; passing zero or a
+negative duration alongside `--config.watch` is a startup error rather than a
+silently disabled watch. Without `--config.watch` no polling loop runs at all,
+and configuration changes take effect on restart.
+
+Changes are detected by modification time rather than filesystem events. That is
+deliberate: Kubernetes republishes a mounted ConfigMap by atomically swapping
+the `..data` symlink, which replaces the inode a file-level event watch is
+attached to, so such a watch would stop firing after the first change.
+
+The watch does not relax any reload rule. An invalid configuration, one that
+would disable OTLP while scheduled targets are loaded, and a pre-script that
+stops producing `data` are all still rejected, with the last valid configuration
+left active and the reason logged.
 
 To use exporter Basic Auth and a Kubernetes Secret for target credentials at the same time, disable the bridge and configure a mounted credential file. `targetAuth.enabled` is `false` by default; for basic auth:
 

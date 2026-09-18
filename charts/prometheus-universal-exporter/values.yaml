@@ -42,6 +42,15 @@ server:
   # interpreter path in the exporter image, which is based on python:3.X-slim.
   # Override this when running a custom image with Python installed elsewhere.
   pythonPath: /usr/local/bin/python3
+  # Re-read the configuration when it changes on disk, without restarting.
+  # Off by default: with a chart-managed ConfigMap the checksum annotation
+  # already rolls the Deployment on every change, so the pod restarts with the
+  # new configuration and an in-place reload never gets a chance. Turn this on
+  # when config.enabled is false and an external ConfigMap is updated without a
+  # rollout.
+  watchConfig: false
+  # How often to re-check the files when watchConfig is true. Must be positive.
+  watchConfigInterval: 60s
 
 # Scheduled targets scraped by the exporter itself and delivered over OTLP.
 # The exporter refuses to start with these while OTLP export is disabled, so

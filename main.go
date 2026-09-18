@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"flag"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"os"
@@ -23,6 +24,8 @@ func run() int {
 	selfMetricsPath := flag.String("web.self-metrics-path", "/self-metrics", "Dedicated endpoint for exporter self-health metrics")
 	pythonPath := flag.String("python.path", "python3", "Python interpreter used by the python transform")
 	targetFile := flag.String("otlp.targets-file", "", "Optional file of scheduled targets scraped by the exporter and delivered over OTLP")
+	watchConfig := flag.Bool("config.watch", false, "Reload the configuration and scheduled target files when they change on disk")
+	watchInterval := flag.Duration("config.watch-interval", DefaultWatchInterval, "How often to check the configuration files for changes when config.watch is set")
 	logLevel := flag.String("log.level", "info", "Log level: debug, info, warn, or error")
 	flag.Parse()
 
@@ -33,7 +36,21 @@ func run() int {
 		return 1
 	}
 
+	if err := ValidatePythonScripts(*pythonPath, config); err != nil {
+		logger.Error("invalid startup configuration; exiting", "error", err)
+		return 1
+	}
+
+	if *watchConfig && *watchInterval <= 0 {
+		logger.Error("invalid startup configuration; exiting", "error", fmt.Sprintf("config.watch-interval must be positive, got %s", *watchInterval))
+		return 1
+	}
+
 	manager := NewConfigManager(config, *configFile, logger)
+	manager.SetPythonPath(*pythonPath)
+	if *watchConfig {
+		manager.SetWatchInterval(*watchInterval)
+	}
 	if *targetFile != "" {
 		targets, err := LoadTargetFile(*targetFile)
 		if err == nil {
@@ -57,7 +74,8 @@ func run() int {
 	go manager.ReloadLoop(ctx)
 	go server.OTLPExportLoop(ctx)
 
-	logger.Info("starting exporter", "address", *listenAddress, "collectors", len(config.Collectors), "scheduled_targets", len(manager.Targets()))
+	logger.Info("starting exporter", "address", *listenAddress, "collectors", len(config.Collectors),
+		"scheduled_targets", len(manager.Targets()), "config_watch", manager.WatchEnabled())
 	// ReadHeaderTimeout bounds how long a client may take to send its request
 	// headers, so a stalled connection cannot hold a handler open indefinitely.
 	httpServer := &http.Server{Addr: *listenAddress, Handler: server.Handler(), ReadHeaderTimeout: 10 * time.Second}

@@ -58,13 +58,21 @@ func (s *Server) scrapeScheduledTarget(ctx context.Context, target ScheduledTarg
 	stats.mu.Unlock()
 	identity := target.resource(cfg)
 	address := safeTarget(target.Target)
+	overrides := target.overrides()
+	method := requestMethod(c, overrides)
+	requestURL := ""
+	if resolved, err := resolveRequestURL(target.Target, c, overrides); err == nil {
+		requestURL = requestLabelURL(resolved)
+	}
+	statusCode := 0
 
 	finish := func(up float64) {
-		duration := time.Since(start).Seconds()
+		elapsed := time.Since(start)
 		stats.mu.Lock()
-		stats.lastDuration = duration
+		stats.lastDuration = elapsed.Seconds()
 		stats.mu.Unlock()
-		s.queueOTLPResource(scheduledHealthMetrics(target, c.Name, up, duration), identity)
+		s.recordRequest(c.Name, requestURL, method, statusCode, elapsed)
+		s.queueOTLPResource(scheduledHealthMetrics(target, c.Name, up, elapsed.Seconds()), identity)
 	}
 	fail := func(stage string, err error) {
 		s.logger.Error("scheduled target scrape failed", "target", target.Name, "collector", c.Name, "address", address, "stage", stage, "error", err)
@@ -98,7 +106,7 @@ func (s *Server) scrapeScheduledTarget(ctx context.Context, target ScheduledTarg
 		count(func(st *serverStats) { st.cacheMisses++ })
 	}
 
-	response, err := fetch(ctx, target.Target, c, target.overrides(), headers)
+	response, err := fetch(ctx, target.Target, c, overrides, headers)
 	if err != nil {
 		if strings.Contains(strings.ToLower(err.Error()), "response size") {
 			count(func(st *serverStats) { st.limitErrors++ })
@@ -106,6 +114,7 @@ func (s *Server) scrapeScheduledTarget(ctx context.Context, target ScheduledTarg
 		fail("http", err)
 		return
 	}
+	statusCode = response.StatusCode
 	count(func(st *serverStats) {
 		st.lastStatus = response.StatusCode
 		st.lastBytes = int64(len(response.Body))

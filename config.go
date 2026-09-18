@@ -39,7 +39,16 @@ type Config struct {
 	Web        WebConfig   `yaml:"web"`
 }
 type WebConfig struct {
-	BasicAuth *ExporterBasicAuth `yaml:"basic_auth"`
+	BasicAuth   *ExporterBasicAuth `yaml:"basic_auth"`
+	SelfMetrics SelfMetricsConfig  `yaml:"self_metrics"`
+}
+
+// SelfMetricsConfig controls how much the exporter reports about itself.
+type SelfMetricsConfig struct {
+	// Verbose adds a series per collector, request URL and method. Section 22
+	// warns against unbounded self-metric labels, so it is opt-in and the
+	// number of tracked requests is capped.
+	Verbose bool `yaml:"verbose"`
 }
 type ExporterBasicAuth struct {
 	Enabled  bool   `yaml:"enabled"`
@@ -409,7 +418,16 @@ type ConfigManager struct {
 	targetPath     string
 	targetFile     atomic.Pointer[TargetFile]
 	targetsLastMod time.Time
+	pythonPath     string
+	watchInterval  time.Duration
 }
+
+// DefaultWatchInterval is how often an enabled watch re-stats the configuration
+// files. Changes are detected by modification time rather than by filesystem
+// events, because Kubernetes republishes a mounted ConfigMap by swapping the
+// `..data` symlink atomically: that replaces the inode a file-level event watch
+// is attached to, so such a watch stops firing after the first change.
+const DefaultWatchInterval = 60 * time.Second
 
 func NewConfigManager(c *Config, path string, l *slog.Logger) *ConfigManager {
 	m := &ConfigManager{path: path, logger: l}
@@ -417,6 +435,20 @@ func NewConfigManager(c *Config, path string, l *slog.Logger) *ConfigManager {
 	return m
 }
 func (m *ConfigManager) Get() *Config { return m.current.Load().(*Config) }
+
+// SetWatchInterval enables the configuration watch and sets how often the
+// files are re-stated. A non-positive interval leaves the watch disabled, which
+// is the default: configuration is then read once at startup and changes take
+// effect on restart.
+func (m *ConfigManager) SetWatchInterval(interval time.Duration) { m.watchInterval = interval }
+
+// WatchEnabled reports whether ReloadLoop will do anything.
+func (m *ConfigManager) WatchEnabled() bool { return m.watchInterval > 0 }
+
+// SetPythonPath records the interpreter used to check collector Python
+// scripts, so a reloaded configuration is held to the same contract as the one
+// the exporter started with.
+func (m *ConfigManager) SetPythonPath(path string) { m.pythonPath = path }
 
 // SetTargets installs the scheduled target document and the file it was read
 // from. An empty path leaves the feature disabled.
@@ -441,8 +473,13 @@ func (m *ConfigManager) Targets() []ScheduledTarget {
 	return f.Targets
 }
 
+// ReloadLoop watches the configuration files when the watch is enabled and
+// returns immediately when it is not, so the opt-in costs nothing.
 func (m *ConfigManager) ReloadLoop(ctx context.Context) {
-	ticker := time.NewTicker(2 * time.Second)
+	if !m.WatchEnabled() {
+		return
+	}
+	ticker := time.NewTicker(m.watchInterval)
 	defer ticker.Stop()
 	for {
 		select {
@@ -463,6 +500,10 @@ func (m *ConfigManager) reloadConfig() {
 	m.lastMod = st.ModTime()
 	c, err := LoadConfig(m.path)
 	if err != nil {
+		m.logger.Error("configuration reload rejected", "error", err)
+		return
+	}
+	if err := ValidatePythonScripts(m.pythonPath, c); err != nil {
 		m.logger.Error("configuration reload rejected", "error", err)
 		return
 	}

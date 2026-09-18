@@ -54,6 +54,25 @@ func (t *requestTracker) Record(key requestKey, outcome requestOutcome) {
 	t.outcomes[key] = outcome
 }
 
+// Register makes a request visible before anything is known about it, so a
+// configured target has its series from the first scrape of /self-metrics
+// rather than only after it has been collected once. An already tracked
+// request keeps the outcome it has, because registering is not a scrape: a
+// response served from the collector cache, for instance, must not overwrite
+// the status and timestamp of the scrape that filled it.
+func (t *requestTracker) Register(key requestKey) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if _, exists := t.outcomes[key]; exists {
+		return
+	}
+	if len(t.outcomes) >= VerboseRequestSeriesLimit {
+		t.capReached = true
+		return
+	}
+	t.outcomes[key] = requestOutcome{}
+}
+
 // Snapshot returns the tracked outcomes in a stable order, and whether the
 // limit has been reached.
 func (t *requestTracker) Snapshot() ([]requestSample, bool) {
@@ -97,7 +116,10 @@ func (s *Server) verboseSelfMetrics() bool {
 
 // recordRequest stores one scrape outcome when verbose self-metrics are on. The
 // status is the HTTP status code the target returned, or zero when the request
-// failed before a response arrived.
+// failed before a response arrived. It is called only when the exporter
+// actually went to the target: a response served from the collector cache
+// registers the request instead, so the reported status and timestamp keep
+// describing a real scrape.
 func (s *Server) recordRequest(collector, labelURL, method string, statusCode int, duration time.Duration) {
 	if labelURL == "" || !s.verboseSelfMetrics() {
 		return
@@ -108,6 +130,35 @@ func (s *Server) recordRequest(collector, labelURL, method string, statusCode in
 	)
 }
 
+// registerRequest makes a request's series exist without claiming a scrape.
+func (s *Server) registerRequest(collector, labelURL, method string) {
+	if labelURL == "" || !s.verboseSelfMetrics() {
+		return
+	}
+	s.requests.Register(requestKey{Collector: collector, URL: labelURL, Method: method})
+}
+
+// seedScheduledRequests registers every scheduled target, so the targets the
+// configuration names are visible before their first collection and remain
+// visible across a reload that adds one. A request driven by /probe cannot be
+// seeded this way: its URL comes from the probe's own target parameter, so it
+// appears the first time it is asked for.
+func (s *Server) seedScheduledRequests() {
+	cfg := s.manager.Get()
+	for _, target := range s.manager.Targets() {
+		c := collectorByName(cfg, target.Collector)
+		if c == nil {
+			continue
+		}
+		overrides := target.overrides()
+		resolved, err := resolveRequestURL(target.Target, c, overrides)
+		if err != nil {
+			continue
+		}
+		s.registerRequest(c.Name, requestLabelURL(resolved), requestMethod(c, overrides))
+	}
+}
+
 // verboseRequestMetrics renders the per-request series. It returns nothing when
 // verbose self-metrics are off, and clears anything tracked earlier so a
 // reload that turns verbose off does not leave stale series behind.
@@ -116,18 +167,30 @@ func (s *Server) verboseRequestMetrics() []Metric {
 		s.requests.Reset()
 		return nil
 	}
+	s.seedScheduledRequests()
 	samples, capped := s.requests.Snapshot()
-	out := make([]Metric, 0, len(samples)*3+1)
+	out := make([]Metric, 0, len(samples)*3+2)
 	cappedValue := 0.0
 	if capped {
 		cappedValue = 1
 	}
-	out = append(out, Metric{
-		Name:  "http_exporter_request_series_capped",
-		Help:  "Whether verbose per-request self-metrics have reached their series limit.",
-		Type:  GaugeMetricType,
-		Value: cappedValue,
-	})
+	out = append(out,
+		Metric{
+			Name:  "http_exporter_request_series_capped",
+			Help:  "Whether verbose per-request self-metrics have reached their series limit.",
+			Type:  GaugeMetricType,
+			Value: cappedValue,
+		},
+		// Without this, a verbose exporter that has not been asked for a probe
+		// yet reports only the cap gauge, which reads as though the feature is
+		// doing nothing rather than as an empty set.
+		Metric{
+			Name:  "http_exporter_request_series_tracked",
+			Help:  "Number of collector, URL and method combinations the verbose self-metrics track.",
+			Type:  GaugeMetricType,
+			Value: float64(len(samples)),
+		},
+	)
 	for _, sample := range samples {
 		labels := map[string]string{
 			"collector": sample.Key.Collector,
@@ -144,9 +207,9 @@ func (s *Server) verboseRequestMetrics() []Metric {
 			},
 			Metric{
 				Name:   "http_exporter_request_last_scrape_timestamp_seconds",
-				Help:   "Unix timestamp of the last scrape of this request.",
+				Help:   "Unix timestamp of the last scrape of this request, or 0 when it has not been scraped yet.",
 				Type:   GaugeMetricType,
-				Value:  float64(sample.Outcome.Scraped.UnixNano()) / float64(time.Second),
+				Value:  scrapeTimestamp(sample.Outcome.Scraped),
 				Labels: cloneLabels(labels),
 			},
 			Metric{
@@ -159,4 +222,14 @@ func (s *Server) verboseRequestMetrics() []Metric {
 		)
 	}
 	return out
+}
+
+// scrapeTimestamp reports a registered but never scraped request as 0 rather
+// than as the zero instant, which would otherwise appear as a timestamp far in
+// the past and read as a very stale scrape.
+func scrapeTimestamp(at time.Time) float64 {
+	if at.IsZero() {
+		return 0
+	}
+	return float64(at.UnixNano()) / float64(time.Second)
 }

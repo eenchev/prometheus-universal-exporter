@@ -65,13 +65,21 @@ func (s *Server) scrapeScheduledTarget(ctx context.Context, target ScheduledTarg
 		requestURL = requestLabelURL(resolved)
 	}
 	statusCode := 0
+	// Set once the exporter has actually gone to the target, so a collection
+	// answered from the cache does not overwrite the last-scrape series with a
+	// status of zero.
+	scraped := false
 
 	finish := func(up float64) {
 		elapsed := time.Since(start)
 		stats.mu.Lock()
 		stats.lastDuration = elapsed.Seconds()
 		stats.mu.Unlock()
-		s.recordRequest(c.Name, requestURL, method, statusCode, elapsed)
+		if scraped {
+			s.recordRequest(c.Name, requestURL, method, statusCode, elapsed)
+		} else {
+			s.registerRequest(c.Name, requestURL, method)
+		}
 		s.queueOTLPResource(scheduledHealthMetrics(target, c.Name, up, elapsed.Seconds()), identity)
 	}
 	fail := func(stage string, err error) {
@@ -107,6 +115,7 @@ func (s *Server) scrapeScheduledTarget(ctx context.Context, target ScheduledTarg
 	}
 
 	response, err := fetch(ctx, target.Target, c, overrides, headers)
+	scraped = true
 	if err != nil {
 		if strings.Contains(strings.ToLower(err.Error()), "response size") {
 			count(func(st *serverStats) { st.limitErrors++ })

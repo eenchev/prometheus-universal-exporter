@@ -262,6 +262,10 @@ func (s *Server) probeHandler(w http.ResponseWriter, r *http.Request) {
 	// per-request self-metric describes the request that was actually made.
 	var requestURL, method string
 	var statusCode int
+	// scraped stays false until the exporter has actually gone to the target,
+	// so a response served from the collector cache leaves the last-scrape
+	// status, timestamp and duration describing the scrape that filled it.
+	scraped := false
 	finish := func(ok bool) {
 		duration := time.Since(start)
 		st.mu.Lock()
@@ -270,7 +274,11 @@ func (s *Server) probeHandler(w http.ResponseWriter, r *http.Request) {
 		}
 		st.lastDuration = duration.Seconds()
 		st.mu.Unlock()
-		s.recordRequest(name, requestURL, method, statusCode, duration)
+		if scraped {
+			s.recordRequest(name, requestURL, method, statusCode, duration)
+			return
+		}
+		s.registerRequest(name, requestURL, method)
 	}
 	failStage := func(stage string, err error, policy string) bool {
 		if policy == "warn" || policy == "ignore" {
@@ -312,6 +320,7 @@ func (s *Server) probeHandler(w http.ResponseWriter, r *http.Request) {
 		st.mu.Unlock()
 	}
 	resp, err := fetch(ctx, target, c, overrides, forwarded)
+	scraped = true
 	if err != nil {
 		if strings.Contains(strings.ToLower(err.Error()), "response size") {
 			st.mu.Lock()

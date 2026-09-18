@@ -1228,26 +1228,42 @@ Avoid unbounded label values on exporter self-metrics.
 
 ### 22.1 Verbose per-request self-metrics
 
-The exporter MUST support an opt-in verbose mode that reports the outcome of the
-last scrape of every collector, request URL and method combination:
+The exporter MUST support an opt-in verbose mode that republishes its own
+metrics broken down by the individual request that produced them. Verbose mode
+MUST NOT remove or alter the per-collector series: the labelled series are
+published in addition to them, so a dashboard built on the per-collector view
+keeps working when verbose mode is switched on.
+
+Every self-metric family of section 22 MUST be republished with the labels
+`collector`, `http_method` and `url`, with the single exception of
+`http_exporter_cache_entries`, which counts what a collector's response cache
+holds and belongs to no individual request.
+
+In addition, verbose mode MUST expose
 
 ```text
-http_exporter_request_last_status_code
 http_exporter_request_last_scrape_timestamp_seconds
-http_exporter_request_last_duration_seconds
 ```
 
-All three MUST carry `collector`, `url` and `method` labels.
-`http_exporter_request_last_status_code` MUST report the HTTP status the target
-returned, and zero when the request failed before a response arrived, so a
-transport failure is distinguishable from an HTTP error.
+carrying the same three labels: the moment the request was last collected, which
+has no per-collector equivalent.
+
+Because both shapes of a family are exposed at once, a query that selects a
+family without constraining the labels matches the collector total and its
+requests together. The documentation MUST state that `http_method=""` selects
+the per-collector series and `http_method!=""` the per-request ones.
+
+A counter MUST be raised on the collector and on the request through the same
+path, so the two views cannot drift: the collector's total MUST equal the sum of
+its requests' values for every counter, and the repository's tests MUST check
+this.
 
 Verbose mode MUST be configured in the exporter configuration under
 `web.self_metrics.verbose` and MUST default to false. Because it is
 configuration rather than a process flag, a reload MUST be able to turn it on
 and off; turning it off MUST drop the per-request series rather than leaving
-stale ones exposed. None of these metrics, including the indicator below, may
-appear while verbose mode is off.
+stale ones exposed. No labelled series, and none of the three indicators above
+or below, may appear while verbose mode is off.
 
 The `url` label MUST carry only the scheme, host and path of the resolved
 request. Userinfo credentials and the entire query string MUST be removed: a
@@ -1255,23 +1271,57 @@ collector's `request.query` or a probe parameter may carry a token or a tenant
 identifier, and a metric label is persisted by Prometheus and passed to anything
 federating from it. The label MUST be derived from the same resolution the real
 request uses, so a label can never describe a URL that was not the one fetched.
+The request parameters MUST therefore be resolved before any counter is raised,
+so a probe cannot be counted against the collector alone.
 
-A request URL is an unbounded label value, which section 22 warns against, so
-the number of tracked combinations MUST be capped. The limit MUST be 1000
-combinations. A request already tracked MUST keep updating after the limit is
-reached; only new combinations are refused. Reaching the limit MUST NOT be
-silent: the exporter MUST expose
+A request URL is an unbounded label value, which section 22 warns against, and
+each combination now carries a whole metric family, so the number of tracked
+combinations MUST be capped. The limit MUST be 1000 combinations. A request
+already tracked MUST keep updating after the limit is reached; only new
+combinations are refused. Reaching the limit MUST NOT be silent: the exporter
+MUST expose
 
 ```text
 http_exporter_request_series_capped
 ```
 
 which reads 1 once the limit has been reached and 0 otherwise, so an operator
-can alert on truncation without having to test for an absent series.
+can alert on truncation without having to test for an absent series. Alongside
+it the exporter MUST expose
 
-Scheduled targets MUST be recorded the same way as probe requests.
+```text
+http_exporter_request_series_tracked
+```
+
+the number of combinations currently tracked, so a verbose exporter that has not
+been asked for anything yet reports an empty set rather than leaving the cap
+indicator alone with nothing to explain it.
+
+A metric family may be described only once in an exposition. The labelled series
+MUST therefore join the family the per-collector block has already declared,
+without a second `HELP` or `TYPE` line; only the families verbose mode
+introduces may declare their own.
+
+Scheduled targets MUST be recorded the same way as probe requests. A scheduled
+target's request is fully described by the configuration, so its series MUST
+exist from the first scrape of the self-metrics endpoint rather than only after
+the target has been collected once, and MUST survive a reload that adds or keeps
+the target. A request driven by `/probe` cannot be published in advance, because
+its URL comes from the probe's own `target` parameter; it MUST appear the first
+time that probe is served.
+
+A request that is known but has not been scraped MUST report zero counters and a
+timestamp of zero rather than the zero instant, which would otherwise read as a
+scrape in 1970.
+
+A response served from the collector response cache MUST NOT move the request's
+last-scrape timestamp. No HTTP request is made, so the status, duration and
+timestamp MUST keep describing the scrape that filled the cache; the cache hit
+itself MUST still be counted, on the collector and on the request alike. This
+applies to both `/probe` and scheduled targets.
 
 ---
+
 
 # 23. Health endpoints
 
@@ -1979,6 +2029,8 @@ The repository MUST include automated Helm validation covering at least:
 - `helm template` with one enabled `monitors` entry of `type: pod`;
 - `helm template` with multiple enabled `monitors` entries;
 - `helm template` with `monitors: []`.
+- every rendered manifest starting its own YAML document, with monitors enabled
+  and the self-metrics monitor rendering alongside them
 - ConfigMap generation
 - Deployment generation
 - Service generation
@@ -2376,21 +2428,34 @@ HTML/XML output.
 
 Test verbose per-request self-metrics:
 
-- None of the per-request metrics, including the capped indicator, appear while
-  verbose mode is off, and the ordinary per-collector self-metrics are
-  unaffected.
-- With verbose mode on, the status code, a timestamp around now, and a plausible
-  duration are reported for a scraped request.
+- No labelled series and none of the verbose-only indicators appear while
+  verbose mode is off, and the per-collector self-metrics are unaffected.
+- With verbose mode on, every self-metric family except
+  `http_exporter_cache_entries` is published per request, alongside the
+  unchanged per-collector series.
+- Each metric family is declared exactly once in the exposition: publishing both
+  shapes must not repeat a `HELP` or `TYPE` line.
+- The collector's totals equal the sum of its requests' values, across
+  successful and failing probes alike.
 - The `url` label drops userinfo credentials and the query string, for a query
   in the target, a query from `request.query`, and a scheme-less target.
 - Distinct URLs and methods produce distinct series, and repeating a request
   updates its series rather than adding one.
-- A failing scrape records its HTTP status code.
-- Scheduled target scrapes are recorded.
+- A failing scrape records its HTTP status code on its own series.
+- Scheduled target scrapes are recorded per request.
 - The series set stops growing at 1000 combinations, an already-tracked request
   keeps updating past the limit, and the capped indicator reads 1.
-- A configuration reload turns verbose mode on and off, and turning it off drops
-  the series.
+- A response served from the collector cache leaves the last-scrape timestamp
+  and status of the scrape that filled it untouched, and the cache hit is
+  counted on the request's own series.
+- A scheduled target is listed with zero counters and a zero timestamp before
+  its first collection, and `http_exporter_request_series_tracked` counts it.
+- `http_exporter_request_series_tracked` counts distinct combinations, so
+  scraping the same request twice does not increase it.
+- Registering a request never invents a scrape and never overwrites one that
+  has already been recorded.
+- A configuration reload turns verbose mode on and off, turning it off drops the
+  labelled series, and the per-collector series are unaffected by either switch.
 
 Test the configuration watch:
 
@@ -2794,6 +2859,21 @@ with at least these values combinations:
 10. Multiple collectors in ConfigMap content.
 11. Existing Secret references for credentials where supported.
 
+Every manifest a template renders MUST begin its own YAML document. A template
+that renders more than one manifest, whether because it declares several or
+because it wraps one in a range, MUST emit a `---` before each. `helm template`
+and `helm lint` do not detect a missing separator — helm prints whatever the
+template produced — so two manifests silently merge into a single document and
+the chart only fails when it is applied.
+
+Two checks MUST cover this, because neither alone is enough. A test in the Go
+suite MUST verify statically that every manifest a template renders is preceded
+by a separator, and the CI path filters MUST run that suite for changes under
+`charts/`, since a chart-only change is exactly the change that would break it.
+A CI step MUST additionally render the chart with monitors enabled and fail when
+the number of manifests rendered exceeds the number of YAML documents the output
+parses into.
+
 Rendered manifests SHOULD be validated with `kubeconform`, `kubeval`, or equivalent.
 
 Helm tests MUST verify that invalid combinations either fail rendering clearly or are rejected by chart validation.
@@ -2963,6 +3043,28 @@ Required:
 - Cache hit, miss, and entry self-metrics are exposed per collector.
 - Configuration parsing accepts durations such as `90s` and rejects a negative
   `cache` value.
+
+## 34.37 Dependency update tests
+
+Required:
+
+- A version selection never crosses a major, for every pin in the table.
+- A selection keeps the pin's granularity: a two-component pin is never
+  replaced by a three-component version, and the reverse.
+- Pre-release, release-candidate and development versions are never selected;
+  PEP 440 post-releases are ordered correctly.
+- Image candidates are restricted to the exact tag form the build pulls, so a
+  version published only under a different variant is not proposed.
+- PyPI releases whose files have all been yanked, and releases with no files,
+  are not proposed.
+- Rewriting a build argument leaves the interpolations and the stage-local
+  declarations untouched, and fails rather than doing nothing when the argument
+  is absent or declared more than once.
+- Every version the Dockerfile pins is covered by the resolver's table, and the
+  table names no argument the Dockerfile has stopped declaring.
+- A source that cannot be reached is reported as an error rather than as
+  "nothing to update".
+- Tag listings are followed across pages.
 
 # 35. Documentation requirements
 
@@ -3799,3 +3901,56 @@ NOT be accepted any more. Because the configuration decoder rejects unknown
 fields, a configuration still carrying it fails to load rather than silently
 changing how a collector follows redirects.
 
+
+## 42.16 Automated dependency updates
+
+Dependency updates MUST be proposed automatically and MUST never be applied
+automatically: every update arrives as a pull request a maintainer merges.
+
+The Go modules and the GitHub Actions used by the workflows MUST be updated by
+Dependabot, configured in `.github/dependabot.yml`. Each ecosystem MUST be
+grouped into a single pull request, because these move together and reviewing
+one green build is better than triaging one pull request per module. Major
+version updates MUST be excluded: a Go major version lives at a different import
+path and needs code changes, so it is deliberate work rather than an automated
+proposal.
+
+The versions pinned in the Dockerfile MUST be updated by a scheduled workflow
+rather than by Dependabot. They are declared as build arguments and interpolated
+into the `FROM` lines and the `pip install`, which the Docker ecosystem updater
+cannot resolve; a configuration that appears to cover them would silently
+propose nothing.
+
+The resolver MUST live in the repository as ordinary Go code under `tools/`, so
+its rules are covered by the same test suite as the exporter, and MUST:
+
+- never cross a major version, for any pin;
+- keep each pin's granularity, so a two-component pin such as `1.23` is only
+  ever replaced by another two-component version. A two-component image tag is a
+  floating tag that already picks up patch rebuilds, so rewriting it to
+  `1.23.4` would freeze it and make the pin worse rather than better;
+- reject pre-release, release-candidate and development versions, and accept
+  PEP 440 post-releases, which one of the pinned Python packages uses;
+- draw image candidates from the exact tag form the build pulls, so a proposed
+  version is known to exist as `golang:<version>-alpine` rather than merely to
+  have been released upstream;
+- ignore PyPI releases whose files have all been yanked, which pip will not
+  install; and
+- fail rather than silently propose nothing when a source cannot be reached, or
+  when the build argument it is asked to rewrite is missing or declared more
+  than once.
+
+The pin table and the Dockerfile MUST be kept in agreement by a test, so a
+renamed or removed build argument cannot leave a dependency unwatched.
+
+The scheduled workflow MUST run the resolver, and when anything moved MUST run
+the full quality suite and build the container image against the new versions
+before opening a pull request. A proposed version that does not build or breaks
+a test MUST fail the workflow rather than arrive as a pull request that looks
+ready to merge.
+
+Both schedules MUST land during Bulgarian working hours on a working day.
+Dependabot MUST use an explicit `Europe/Sofia` timezone so the run does not
+drift when daylight saving changes. The workflow's cron is evaluated in UTC,
+which has no daylight saving, so its hour MUST be chosen to fall mid-morning in
+Sofia in both halves of the year.

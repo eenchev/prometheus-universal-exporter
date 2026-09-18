@@ -1,8 +1,7 @@
 {{- $root := . }}
 {{- range $index, $monitor := .Values.monitors }}
 {{- if and $monitor.enabled (eq $monitor.type "pod") }}
-{{ if gt $index 0 }}---
-{{ end }}
+---
 apiVersion: monitoring.coreos.com/v1
 kind: PodMonitor
 metadata:
@@ -67,6 +66,7 @@ spec:
 {{- $hasPodMonitor := false }}
 {{- range .Values.monitors }}{{- if and .enabled (eq .type "pod") }}{{- $hasPodMonitor = true }}{{- end }}{{- end }}
 {{- if and .Values.selfMetrics.enabled $hasPodMonitor }}
+---
 apiVersion: monitoring.coreos.com/v1
 kind: PodMonitor
 metadata:

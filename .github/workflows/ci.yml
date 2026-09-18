@@ -18,6 +18,9 @@ jobs:
               # Workflow validity is checked by a Go test, so a change to these
               # files must still run the Go suite.
               - '.github/workflows/**'
+              # So is chart manifest separation, and that guard is worth least
+              # on exactly the changes that would break it.
+              - 'charts/**'
             chart:
               - 'charts/**'
       - uses: actions/setup-go@v5
@@ -30,7 +33,7 @@ jobs:
         if: steps.changes.outputs.go == 'true'
       - name: Check formatting
         run: |
-          unformatted=$(gofmt -l *.go)
+          unformatted=$(gofmt -l .)
           if [ -n "$unformatted" ]; then
             echo "These files need gofmt:" >&2
             echo "$unformatted" >&2
@@ -60,6 +63,12 @@ jobs:
       - run: helm template test charts/prometheus-universal-exporter --set server.listenAddress=0.0.0.0:9115 --set server.pythonPath=/usr/bin/python3.11
         if: steps.changes.outputs.chart == 'true'
       - run: helm template test charts/prometheus-universal-exporter --set otlpTargets.enabled=true --set-file otlpTargets.data=targets.example.yaml --set-file 'config.data.config\.yaml=config.otlp.example.yaml'
+        if: steps.changes.outputs.chart == 'true'
+      - name: Check that every rendered manifest is its own document
+        run: |
+          helm template test charts/prometheus-universal-exporter \
+            --set-json 'monitors=[{"name":"a","enabled":true,"type":"service","collector":"example","interval":"30s","scrapeTimeout":"10s"},{"name":"b","enabled":true,"type":"pod","collector":"example","interval":"30s","scrapeTimeout":"10s"}]' \
+            | python3 tools/check-manifests.py
         if: steps.changes.outputs.chart == 'true'
       - name: Reject scheduled targets without OTLP export
         run: |

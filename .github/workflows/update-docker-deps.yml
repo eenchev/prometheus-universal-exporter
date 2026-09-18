@@ -1,0 +1,58 @@
+# Updates the versions the Dockerfile pins, which Dependabot cannot read: they
+# are held in build arguments and interpolated into the FROM lines and the pip
+# install. tools/depupdate resolves them, and the whole suite runs against the
+# new versions before a pull request is opened, so an update that breaks the
+# build never arrives as one that looks ready to merge.
+#
+# The schedule is in UTC, which has no daylight saving: 08:00 UTC is 10:00 in
+# Sofia in winter and 11:00 in summer, so the run always lands mid-morning on a
+# Tuesday rather than in the middle of the night.
+name: update-docker-deps
+on:
+  schedule:
+    - cron: '0 8 * * 2'
+  workflow_dispatch:
+permissions:
+  contents: write
+  pull-requests: write
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.23.x'
+      - uses: azure/setup-helm@v4
+      - name: Resolve newer pinned versions
+        run: go run ./tools/depupdate --dockerfile Dockerfile --summary "$RUNNER_TEMP/depupdate.md"
+      - name: Record whether anything moved
+        id: changes
+        run: |
+          if git diff --quiet -- Dockerfile; then
+            echo "updated=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "updated=true" >> "$GITHUB_OUTPUT"
+            git --no-pager diff -- Dockerfile
+          fi
+      - name: Install the linter
+        run: make lint-install
+        if: steps.changes.outputs.updated == 'true'
+      - name: Run the full suite against the new versions
+        run: make ci
+        if: steps.changes.outputs.updated == 'true'
+      - name: Build the image with the new versions
+        run: docker build --tag prometheus-universal-exporter:depupdate .
+        if: steps.changes.outputs.updated == 'true'
+      - uses: peter-evans/create-pull-request@v7
+        if: steps.changes.outputs.updated == 'true'
+        with:
+          branch: deps/dockerfile
+          base: main
+          title: 'deps: update the versions pinned in the Dockerfile'
+          body-path: ${{ runner.temp }}/depupdate.md
+          commit-message: 'deps: update the versions pinned in the Dockerfile'
+          labels: |
+            dependencies
+            docker
+          delete-branch: true

@@ -1,8 +1,7 @@
 {{- $root := . }}
 {{- range $index, $monitor := .Values.monitors }}
 {{- if and $monitor.enabled (eq $monitor.type "service") }}
-{{ if gt $index 0 }}---
-{{ end }}
+---
 apiVersion: monitoring.coreos.com/v1
 kind: ServiceMonitor
 metadata:
@@ -67,6 +66,7 @@ spec:
 {{- $hasServiceMonitor := false }}
 {{- range .Values.monitors }}{{- if and .enabled (eq .type "service") }}{{- $hasServiceMonitor = true }}{{- end }}{{- end }}
 {{- if and .Values.selfMetrics.enabled $hasServiceMonitor }}
+---
 apiVersion: monitoring.coreos.com/v1
 kind: ServiceMonitor
 metadata:

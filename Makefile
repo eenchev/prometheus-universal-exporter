@@ -8,15 +8,18 @@ build:
 
 test:
 	go test ./...
+	go test -race ./...
 
 vet:
 	go vet ./...
 
+# The whole tree, not just the root package: tools/ holds the dependency
+# resolver and is covered by the same gates.
 fmt:
-	gofmt -w *.go
+	gofmt -w .
 
 fmt-check:
-	@unformatted=$$(gofmt -l *.go); \
+	@unformatted=$$(gofmt -l .); \
 	if [ -n "$$unformatted" ]; then \
 		echo "gofmt needed for:"; echo "$$unformatted"; echo "run: make fmt"; \
 		exit 1; \
@@ -31,9 +34,10 @@ lint-install:
 helm-test:
 	helm lint charts/prometheus-universal-exporter
 	helm template test charts/prometheus-universal-exporter
-	helm template test charts/prometheus-universal-exporter --set serviceMonitor.enabled=true
-	helm template test charts/prometheus-universal-exporter --set podMonitor.enabled=true
+	helm template test charts/prometheus-universal-exporter --set-json 'monitors=[{"name":"service-targets","enabled":true,"type":"service","collector":"example","interval":"30s","scrapeTimeout":"10s"}]'
+	helm template test charts/prometheus-universal-exporter --set-json 'monitors=[{"name":"pod-targets","enabled":true,"type":"pod","collector":"example","interval":"30s","scrapeTimeout":"10s"}]'
 	helm template test charts/prometheus-universal-exporter --set server.listenAddress=0.0.0.0:9115 --set server.pythonPath=/usr/bin/python3.11
 	helm template test charts/prometheus-universal-exporter --set otlpTargets.enabled=true --set-file otlpTargets.data=targets.example.yaml --set-file 'config.data.config\.yaml=config.otlp.example.yaml'
+	helm template test charts/prometheus-universal-exporter --set-json 'monitors=[{"name":"a","enabled":true,"type":"service","collector":"example","interval":"30s","scrapeTimeout":"10s"},{"name":"b","enabled":true,"type":"pod","collector":"example","interval":"30s","scrapeTimeout":"10s"}]' | python3 tools/check-manifests.py
 
 ci: fmt-check lint test vet build helm-test

@@ -71,9 +71,9 @@ settings.
 
 ### Verbose per-request self-metrics
 
-By default the self-metrics are per collector. Setting `web.self_metrics.verbose`
-adds one series per collector, request URL and method, reporting the outcome of
-the last scrape of each:
+By default the exporter's own metrics are per collector. Setting
+`web.self_metrics.verbose` republishes every one of them broken down by the
+request that produced it, labelled with `collector`, `http_method` and `url`:
 
 ```yaml
 web:
@@ -82,14 +82,48 @@ web:
 ```
 
 ```text
-http_exporter_request_last_status_code{collector="app_json",method="GET",url="http://api.example:8080/api/status"} 200
-http_exporter_request_last_scrape_timestamp_seconds{collector="app_json",method="GET",url="http://api.example:8080/api/status"} 1.7896896e+09
-http_exporter_request_last_duration_seconds{collector="app_json",method="GET",url="http://api.example:8080/api/status"} 0.0142
+http_exporter_scrapes_total{collector="app_json"} 2
+http_exporter_scrapes_total{collector="app_json",http_method="GET",url="http://api.example:8080/api/status"} 1
+http_exporter_scrape_http_status_code{collector="app_json",http_method="GET",url="http://api.example:8080/api/status"} 200
+http_exporter_scrape_duration_seconds{collector="app_json",http_method="GET",url="http://api.example:8080/api/status"} 0.0142
+http_exporter_request_last_scrape_timestamp_seconds{collector="app_json",http_method="GET",url="http://api.example:8080/api/status"} 1.7896896e+09
 ```
 
-The status code is what the target returned, or `0` when the request failed
-before a response arrived, so a transport failure is distinguishable from an
-HTTP error. Scheduled targets are recorded the same way.
+The per-collector series stay exactly as they were, so dashboards built on them
+keep working; the labelled series are published alongside. Both shapes share a
+metric name, so constrain the label when you query one of them:
+
+```promql
+http_exporter_scrapes_total{http_method=""}   # per collector
+http_exporter_scrapes_total{http_method!=""}  # per request
+```
+
+Everything in the self-metric set is republished except
+`http_exporter_cache_entries`, which counts what a collector's response cache
+holds and belongs to no single request. `http_exporter_request_last_scrape_timestamp_seconds`
+is the one series that exists only in verbose mode: the per-collector view has
+no timestamp of its own. Status codes carry `0` when the request failed before a
+response arrived, so a transport failure is distinguishable from an HTTP error.
+
+The two views are raised through the same path, so a collector's total is always
+the sum of its requests'; a test checks that.
+
+Scheduled targets are recorded the same way, and because their requests are
+fully described by the target file they are listed from startup with zero
+counters and a zero timestamp, before their first collection. A `/probe` request
+cannot be listed in advance — its URL comes from the probe's own `target`
+parameter — so it appears the first time that probe is served. Until then the
+exporter reports an empty set rather than nothing at all:
+
+```text
+http_exporter_request_series_tracked 0
+http_exporter_request_series_capped 0
+```
+
+A response served from the collector response cache is not a scrape: no request
+reaches the target, so the last-scrape timestamp and status keep describing the
+scrape that filled the cache. The cache hit itself is counted, on the collector
+and on the request alike.
 
 The `url` label carries only the scheme, host and path. Userinfo credentials and
 the whole query string are dropped, because `request.query` or a probe parameter
@@ -98,19 +132,20 @@ Prometheus and handed to anything federating from it. The label is built from
 the same resolution the real request uses, so it can never describe a different
 URL than the one fetched.
 
-A request URL is an unbounded label value, so tracking is capped at 1000
-collector/URL/method combinations. Requests already tracked keep updating past
-the limit; only new combinations are refused. The truncation is visible rather
-than silent:
+A request URL is an unbounded label value and each combination now carries a
+whole metric family, so tracking is capped at 1000 collector/URL/method
+combinations. Requests already tracked keep updating past the limit; only new
+combinations are refused. The truncation is visible rather than silent:
 
 ```text
 http_exporter_request_series_capped 1
 ```
 
 It reads `0` normally, so you can alert on `== 1` without testing for an absent
-series. Because verbosity is configuration rather than a flag, a reload turns it
-on and off; turning it off drops the per-request series instead of leaving stale
-ones exposed.
+series, and `http_exporter_request_series_tracked` reports how many combinations
+are in use against that limit. Because verbosity is configuration rather than a
+flag, a reload turns it on and off; turning it off drops the labelled series
+instead of leaving stale ones exposed.
 
 Exporter self-health metrics are available at `/self-metrics` by default (and `/metrics` remains a compatibility alias). Change the dedicated path with `--web.self-metrics-path=/exporter/metrics`. The Helm chart's optional self-metrics ServiceMonitor/PodMonitor scrapes the exporter pods/services separately from target-probing monitors. Configure one or more entries in `monitors`, each with a unique `name` and `type: pod` or `type: service`; each entry supports Prometheus Operator `relabelings` and `metricRelabelings`.
 
@@ -710,13 +745,13 @@ The ConfigMap is mounted at `/etc/prometheus-universal-exporter/config.yaml`; it
 ## Development
 
 ```sh
-make fmt        # rewrite sources with gofmt
+make fmt        # rewrite the whole tree with gofmt, tools/ included
 make fmt-check  # fail if any source needs gofmt
 make lint       # golangci-lint, same configuration as CI
-make test
+make test       # go test ./... followed by go test -race ./...
 make vet
 make build
-make helm-test
+make helm-test  # helm lint and the template scenarios CI renders
 make ci         # everything above, in CI order
 ```
 
@@ -736,13 +771,60 @@ mistake in the commit that introduces it — the checker would be in the file
 GitHub is refusing to read. Running the tests before pushing is what protects
 you.
 
+It validates the chart templates the same way. `charts_test.go` checks that
+every manifest a template renders begins its own YAML document. A template that
+renders more than one manifest — several declared, or one wrapped in a range —
+needs a `---` before each, and neither `helm lint` nor `helm template` notices a
+missing one: helm prints whatever the template produced, so two manifests merge
+into a single document and the chart only fails when someone applies it.
+`helm-test` and CI render the chart with monitors enabled and additionally fail
+when the number of manifests exceeds the number of documents the output parses
+into.
+
 A few `gosec` findings are deliberate and are suppressed narrowly, with the
 reason stated at the suppression: `request.tls.insecure_skip_verify` is a
 documented opt-in, and the exporter necessarily reads the configuration, target
 document and credential files whose paths the operator supplies.
 
 GitHub Actions uses changed-path detection: Go tests/build/vet/race checks run
-for Go source or module changes, while Helm lint/template checks run for
-changes under `charts/`. Documentation-only changes do not run either suite.
+for Go source or module changes, while Helm lint/template checks run for changes
+under `charts/`. A change under `charts/` runs the Go suite too, because the
+template guard above lives there and is worth least on exactly the changes that
+would break it. Documentation-only changes do not run either suite.
+
+### Dependency updates
+
+Updates are proposed, never applied: each one arrives as a pull request.
+
+Dependabot handles the Go modules and the GitHub Actions, configured in
+`.github/dependabot.yml`. Each ecosystem is grouped into one pull request, and
+major bumps are excluded — a Go major version lives at a different import path
+and needs real work.
+
+The Dockerfile is updated by `.github/workflows/update-docker-deps.yml` instead.
+Dependabot cannot read it: `GO_VERSION`, `PYTHON_VERSION` and the pip pins are
+build arguments interpolated into the `FROM` lines and the `pip install`, which
+the Docker ecosystem updater does not resolve. The resolver lives in
+`tools/depupdate`, so its rules are covered by `go test ./...` like everything
+else. It never crosses a major version, keeps each pin's granularity (`1.23`
+stays two-component, because a two-component image tag already picks up patch
+rebuilds and pinning it to `1.23.4` would freeze it), skips pre-releases and
+yanked PyPI files, and draws image candidates from the exact tag the build
+pulls, so a proposed version is known to exist as `golang:<version>-alpine`
+rather than merely to have been released. A test keeps the resolver's pin table
+and the Dockerfile in agreement, so a renamed build argument cannot leave a
+dependency unwatched.
+
+When anything moves, the workflow runs the whole suite and builds the image
+against the new versions, and opens the pull request only if that passes. Run it
+by hand with the workflow dispatch button, or locally:
+
+```sh
+go run ./tools/depupdate --dry-run
+```
+
+Both schedules land mid-morning on a Tuesday in Sofia. Dependabot uses an
+explicit `Europe/Sofia` timezone; the workflow's cron is UTC, which has no
+daylight saving, so `0 8 * * 2` is 10:00 in winter and 11:00 in summer.
 
 The test suite is intentionally local-only; no third-party endpoint is required. The exporter exposes `/health`, `/ready`, `/metrics`, and `/probe`.

@@ -1,0 +1,134 @@
+package main
+
+import (
+	"os"
+	"path/filepath"
+	"regexp"
+	"sort"
+	"strings"
+	"testing"
+)
+
+// A Helm template file may render more than one Kubernetes manifest: either
+// because it declares several, or because it wraps one in a range over a list
+// of values. Every manifest after the first needs its own `---`, and a template
+// that omits it emits two manifests concatenated into a single YAML document.
+// Nothing in `helm template` or `helm lint` notices — helm prints whatever the
+// template produced — so the breakage only appears when someone applies the
+// chart and Kubernetes rejects a document with two apiVersion keys. This test
+// is the guard, because the chart's own CI steps cannot be.
+//
+// The rule checked here is deliberately narrow: a template that renders exactly
+// one manifest, outside any range, needs no separator of its own, because helm
+// already separates the files it renders.
+
+// templateAction matches the block-forming actions of a Go template, in the
+// order they appear, so the test can tell whether a line sits inside a range.
+var templateAction = regexp.MustCompile(`\{\{-?\s*(if|range|with|define|block|end)\b`)
+
+func chartTemplatePaths(t *testing.T) []string {
+	t.Helper()
+	paths, err := filepath.Glob("charts/*/templates/*.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	sort.Strings(paths)
+	if len(paths) == 0 {
+		t.Fatal("no chart templates found; this test must not silently pass if they move")
+	}
+	return paths
+}
+
+// manifestStarts reports, for each line that begins a manifest, whether it sits
+// inside a range and whether a document separator immediately precedes it.
+type manifestStart struct {
+	line      int
+	inRange   bool
+	separated bool
+}
+
+func manifestStarts(document string) []manifestStart {
+	var stack []string
+	var previous string
+	var starts []manifestStart
+	for index, line := range strings.Split(document, "\n") {
+		if strings.HasPrefix(line, "apiVersion:") {
+			inRange := false
+			for _, open := range stack {
+				if open == "range" {
+					inRange = true
+					break
+				}
+			}
+			starts = append(starts, manifestStart{line: index + 1, inRange: inRange, separated: previous == "---"})
+		}
+		for _, action := range templateAction.FindAllStringSubmatch(line, -1) {
+			if action[1] == "end" {
+				if len(stack) > 0 {
+					stack = stack[:len(stack)-1]
+				}
+				continue
+			}
+			stack = append(stack, action[1])
+		}
+		if strings.TrimSpace(line) != "" {
+			previous = strings.TrimSpace(line)
+		}
+	}
+	return starts
+}
+
+func TestChartTemplatesSeparateEveryManifest(t *testing.T) {
+	for _, path := range chartTemplatePaths(t) {
+		t.Run(filepath.Base(path), func(t *testing.T) {
+			raw, err := os.ReadFile(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			starts := manifestStarts(string(raw))
+			if len(starts) == 0 {
+				t.Fatalf("%s renders no manifest; it should not be a .yaml template", path)
+			}
+			for _, start := range starts {
+				// One manifest, not repeated, is the whole file: helm puts the
+				// separator between files itself.
+				if len(starts) == 1 && !start.inRange {
+					continue
+				}
+				if !start.separated {
+					t.Errorf("%s:%d: this manifest is not preceded by a `---`, so it merges into the one before it",
+						path, start.line)
+				}
+			}
+		})
+	}
+}
+
+// The self-metrics monitor is appended after the loop over `monitors`, and it
+// only renders when a monitor of the same kind was already rendered — so
+// without a separator of its own it always collided with one. Pinning it here
+// keeps the fix from being undone by an edit to the surrounding block.
+func TestSelfMetricsMonitorStartsItsOwnDocument(t *testing.T) {
+	for _, name := range []string{"servicemonitor.yaml", "podmonitor.yaml"} {
+		t.Run(name, func(t *testing.T) {
+			raw, err := os.ReadFile("charts/prometheus-universal-exporter/templates/" + name)
+			if err != nil {
+				t.Fatal(err)
+			}
+			document := string(raw)
+			guard := "{{- if and .Values.selfMetrics.enabled $has"
+			index := strings.Index(document, guard)
+			if index < 0 {
+				t.Fatalf("%s no longer guards the self-metrics monitor as expected", name)
+			}
+			rest := document[index:]
+			end := strings.Index(rest, "apiVersion:")
+			if end < 0 {
+				t.Fatalf("%s: the self-metrics guard is not followed by a manifest", name)
+			}
+			if !strings.Contains(rest[:end], "\n---\n") {
+				t.Errorf("%s: the self-metrics monitor must open its own document, or it merges into the last monitor", name)
+			}
+		})
+	}
+}

@@ -797,7 +797,17 @@ make ci         # everything above, in CI order
 
 Static analysis is configured in `.golangci.yml`, so a local `make lint` and the
 CI run check exactly the same rules. Install the pinned version with `make
-lint-install`. Beyond the standard linters it enables `bodyclose`, `errorlint`,
+lint-install`; the Makefile and the CI workflow pin the same version, and a test
+keeps them in step.
+
+That pin is coupled to the Go toolchain in a way worth knowing about.
+golangci-lint ships as a binary built with a particular Go release, and its type
+checker cannot read standard-library sources from a newer one — run an older
+build against a newer toolchain and it does not report a lint failure, it panics
+with `file requires newer Go version go1.27 (application built with go1.25)`.
+Since the build uses the current stable Go, the pinned linter has to be a
+release built with at least that. When Go ships a new minor, golangci-lint needs
+bumping with it. Beyond the standard linters it enables `bodyclose`, `errorlint`,
 `gocritic`, `gosec`, `misspell`, `nilerr`, `noctx`, `perfsprint`, `revive`,
 `unconvert` and `usestdlibvars`. The repository is gofmt-clean and CI fails on
 unformatted sources rather than rewriting them.
@@ -824,7 +834,16 @@ into.
 A few `gosec` findings are deliberate and are suppressed narrowly, with the
 reason stated at the suppression: `request.tls.insecure_skip_verify` is a
 documented opt-in, and the exporter necessarily reads the configuration, target
-document and credential files whose paths the operator supplies.
+document and credential files whose paths the operator supplies (G304).
+
+Two more are scoped to the single file each applies to rather than excluded
+globally. G704 reports the outbound request as server-side request forgery,
+which is an accurate description of what this program is — an exporter whose job
+is to fetch a URL an operator supplied — so it is excluded on `fetcher.go` only,
+with the exposure bounded by the scheme allowlist, the response size limit and
+the operator's own target allowlist. G703 reports the Dockerfile path that
+`tools/depupdate` takes on the command line as attacker-controlled; that is a
+developer tool with no untrusted caller, so it is excluded under `tools/`.
 
 ### The Go toolchain
 

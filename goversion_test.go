@@ -170,3 +170,32 @@ func TestDockerfileGoVersionSatisfiesTheModule(t *testing.T) {
 		t.Fatalf("the image builds with Go %s but go.mod requires go %s", match[1], declared)
 	}
 }
+
+// The linter version is pinned twice: in the Makefile for `make lint` and in
+// the CI workflow for the action. They have to agree, or a clean local run
+// stops meaning a clean CI run — which is the whole promise `make lint` makes.
+func TestTheLinterVersionIsPinnedConsistently(t *testing.T) {
+	makefile, err := os.ReadFile("Makefile")
+	if err != nil {
+		t.Fatal(err)
+	}
+	match := regexp.MustCompile(`(?m)^GOLANGCI_LINT_VERSION[ \t]*:?=[ \t]*(\S+)`).FindSubmatch(makefile)
+	if match == nil {
+		t.Fatal("the Makefile no longer pins GOLANGCI_LINT_VERSION")
+	}
+	pinned := string(match[1])
+
+	workflow, err := os.ReadFile(".github/workflows/ci.yml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The version input of the golangci-lint action, whose step is the only
+	// place CI names a linter version.
+	action := regexp.MustCompile(`golangci/golangci-lint-action@[^\s]+\s+with:\s+version:[ \t]*(\S+)`).FindSubmatch(workflow)
+	if action == nil {
+		t.Fatal("ci.yml no longer pins a golangci-lint version")
+	}
+	if got := string(action[1]); got != pinned {
+		t.Fatalf("ci.yml lints with %s but the Makefile installs %s; a clean `make lint` would not mean a clean CI run", got, pinned)
+	}
+}

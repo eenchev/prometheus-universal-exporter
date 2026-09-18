@@ -3138,6 +3138,8 @@ Required:
 - Every Go version the workflows request satisfies the go directive in
   `go.mod`, as does the version the Dockerfile pins, and the comparison itself
   is covered for versions of differing granularity.
+- The golangci-lint version pinned in the Makefile and the one pinned in CI are
+  the same.
 
 # 35. Documentation requirements
 
@@ -4018,7 +4020,12 @@ renamed or removed build argument cannot leave a dependency unwatched.
 
 The CI and release workflows MUST build with the current stable Go release
 rather than a pinned version, so the build follows Go's releases without anyone
-editing a workflow. The `go` directive in `go.mod` MUST remain the minimum the
+editing a workflow. The pinned golangci-lint version MUST be a release built
+with at least that Go: golangci-lint ships as a binary carrying its own type
+checker, which cannot read standard-library sources from a newer toolchain and
+panics rather than reporting a lint failure. The linter version MUST be pinned
+identically in the Makefile and in CI, and a test MUST keep the two in step, so
+that a clean local `make lint` continues to mean a clean CI run. The `go` directive in `go.mod` MUST remain the minimum the
 module requires — it is raised by dependency updates, not by the toolchain the
 build happens to use — and the Dockerfile MUST pin a Go version that satisfies
 it.

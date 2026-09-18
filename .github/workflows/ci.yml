@@ -40,9 +40,15 @@ jobs:
             exit 1
           fi
         if: steps.changes.outputs.go == 'true'
+      # golangci-lint ships as a binary built with a particular Go release, and
+      # its type checker cannot read standard-library sources from a newer one:
+      # against a newer toolchain it panics with "file requires newer Go version".
+      # So this version has to be one built with at least the Go the build uses,
+      # which is the current stable release. The Makefile pins the same version
+      # and a test keeps the two in step.
       - uses: golangci/golangci-lint-action@v9
         with:
-          version: v2.5.0
+          version: v2.13.2
         if: steps.changes.outputs.go == 'true'
       - run: go test ./...
         if: steps.changes.outputs.go == 'true'

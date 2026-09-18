@@ -1,6 +1,9 @@
 APP := prometheus-universal-exporter
 
-GOLANGCI_LINT_VERSION := v2.5.0
+# Must be a release built with at least the Go the build uses; an older one
+# panics on standard-library sources from a newer toolchain. Kept in step with
+# .github/workflows/ci.yml by a test.
+GOLANGCI_LINT_VERSION := v2.13.2
 
 .PHONY: build test vet fmt fmt-check lint lint-install helm-test
 build:

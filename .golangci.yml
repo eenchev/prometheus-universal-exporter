@@ -62,6 +62,26 @@ linters:
           - errcheck
           - gosec
           - noctx
+      # G704 reports the outbound request as server-side request forgery, which
+      # is an accurate description of what this program is: an exporter whose
+      # entire job is to fetch a URL an operator supplied and turn the response
+      # into metrics. It cannot be resolved by changing this code. The exposure
+      # is bounded where it can be — section 26 of the specification: the scheme
+      # allowlist, the response size limit, and the operator's own target
+      # allowlist — so the finding is excluded here, and only on the file that
+      # makes the request.
+      - path: fetcher\.go
+        text: G704
+        linters:
+          - gosec
+      # G703 reports the path the maintainer passes on the command line as
+      # attacker-controlled. This is a developer tool run from the repository
+      # and from one scheduled workflow; there is no untrusted caller to guard
+      # against.
+      - path: tools/depupdate/
+        text: G703
+        linters:
+          - gosec
 
 issues:
   # Report every finding rather than the first few per linter, so a CI failure

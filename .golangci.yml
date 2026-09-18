@@ -1,0 +1,74 @@
+version: "2"
+
+# Run with `make lint`. CI runs the same configuration, so a clean local run
+# means a clean CI run.
+run:
+  timeout: 5m
+
+linters:
+  # The standard set is errcheck, govet, ineffassign, staticcheck and unused.
+  default: standard
+  enable:
+    - bodyclose # HTTP response bodies must be closed
+    - copyloopvar
+    - errorlint # wrapped errors compared with == instead of errors.Is
+    - gocritic
+    - gosec
+    - misspell
+    - nilerr
+    - noctx # outbound requests must carry a context
+    - perfsprint
+    - revive
+    - unconvert
+    - usestdlibvars # http.MethodGet over "GET", and friends
+
+  settings:
+    revive:
+      rules:
+        - name: empty-block
+        - name: error-strings
+        - name: errorf
+        - name: increment-decrement
+        - name: indent-error-flow
+        - name: redefines-builtin-id
+        - name: superfluous-else
+        - name: unreachable-code
+        - name: var-declaration
+    gocritic:
+      disabled-checks:
+        # The exposition and OTLP writers build strings from small fixed parts;
+        # switching them to a different construct would not make them clearer.
+        - appendAssign
+    gosec:
+      excludes:
+        # G304 is reported for every file the operator names in configuration:
+        # the exporter configuration, the scheduled target document, and the
+        # credential files those documents point at. Reading them is the whole
+        # point, and the paths come from configuration rather than from a
+        # request, so the finding cannot be acted on.
+        - G304
+
+  exclusions:
+    generated: lax
+    presets:
+      - comments
+      - std-error-handling
+    rules:
+      # Tests exercise failure paths deliberately and do not need the same
+      # hardening as the exporter itself.
+      - path: _test\.go
+        linters:
+          - bodyclose
+          - errcheck
+          - gosec
+          - noctx
+
+issues:
+  # Report every finding rather than the first few per linter, so a CI failure
+  # lists the whole job of work.
+  max-issues-per-linter: 0
+  max-same-issues: 0
+
+formatters:
+  enable:
+    - gofmt

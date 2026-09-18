@@ -2689,15 +2689,29 @@ Regression fixtures SHOULD be named with a descriptive issue/reference identifie
 CI MUST enforce at minimum:
 
 ```text
+gofmt check
+golangci-lint run
 go test ./...
 go test -race ./...
 go vet ./...
-static analysis/lint
 build
 helm lint
 helm template for required scenarios
 manifest schema validation where configured
 ```
+
+Static analysis MUST be configured in the repository rather than left to each
+developer, so a local run and a CI run agree. The configuration MUST pin the
+linter version used by CI. Formatting MUST be checked rather than silently
+rewritten: a CI step that reformats files without failing never reports a
+violation, so the check MUST fail on unformatted sources and the repository MUST
+stay gofmt-clean.
+
+Findings that cannot be acted on MUST be suppressed narrowly and with a stated
+reason — a per-line annotation or a specific rule exclusion — rather than by
+disabling a linter wholesale. Security findings for settings the exporter
+deliberately exposes, such as the documented `insecure_skip_verify` opt-out and
+reads of operator-supplied file paths, fall in this category.
 
 CI SHOULD use changed-path detection to avoid running unrelated suites:
 

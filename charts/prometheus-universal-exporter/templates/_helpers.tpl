@@ -49,7 +49,11 @@ app.kubernetes.io/managed-by: {{ .Release.Service }}
 {{- if not (trim (.Values.otlpTargets.data | default "")) -}}
 {{- fail "otlpTargets.enabled requires otlpTargets.data to hold the scheduled target document" -}}
 {{- end -}}
-{{- $config := fromYaml (index .Values.config.data "config.yaml" | default "") -}}
+{{- $raw := index .Values.config.data "config.yaml" | default "" -}}
+{{- if not (trim $raw) -}}
+{{- fail "config.data must contain a config.yaml entry, which is the file the exporter reads. When supplying it with --set-file, quote the whole argument so the escaped dot reaches helm instead of being consumed by the shell." -}}
+{{- end -}}
+{{- $config := fromYaml $raw -}}
 {{- if not (dig "otlp" "enabled" false $config) -}}
 {{- fail "otlpTargets.enabled requires otlp.enabled: true in config.data.config.yaml; the exporter refuses to start with scheduled targets while OTLP export is disabled" -}}
 {{- end -}}

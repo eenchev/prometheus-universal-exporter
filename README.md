@@ -516,7 +516,7 @@ Prometheus Operator CRDs are not installed by this chart.
 
 ```sh
 helm install exporter charts/prometheus-universal-exporter \
-  --set-file config.data.config.yaml=config.example.yaml
+  --set-file 'config.data.config\.yaml=config.example.yaml'
 ```
 
 The exporter's own flags are chart values. `server.listenAddress` sets
@@ -536,11 +536,27 @@ The ConfigMap is mounted at `/etc/prometheus-universal-exporter/config.yaml`; it
 ## Development
 
 ```sh
+make fmt        # rewrite sources with gofmt
+make fmt-check  # fail if any source needs gofmt
+make lint       # golangci-lint, same configuration as CI
 make test
 make vet
 make build
 make helm-test
+make ci         # everything above, in CI order
 ```
+
+Static analysis is configured in `.golangci.yml`, so a local `make lint` and the
+CI run check exactly the same rules. Install the pinned version with `make
+lint-install`. Beyond the standard linters it enables `bodyclose`, `errorlint`,
+`gocritic`, `gosec`, `misspell`, `nilerr`, `noctx`, `perfsprint`, `revive`,
+`unconvert` and `usestdlibvars`. The repository is gofmt-clean and CI fails on
+unformatted sources rather than rewriting them.
+
+A few `gosec` findings are deliberate and are suppressed narrowly, with the
+reason stated at the suppression: `request.tls.insecure_skip_verify` is a
+documented opt-in, and the exporter necessarily reads the configuration, target
+document and credential files whose paths the operator supplies.
 
 GitHub Actions uses changed-path detection: Go tests/build/vet/race checks run
 for Go source or module changes, while Helm lint/template checks run for

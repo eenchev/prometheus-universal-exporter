@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"encoding/csv"
+	"errors"
 	"fmt"
 	"strconv"
 	"strings"
@@ -111,7 +112,7 @@ func decodeCSV(r *HTTPResponse, c *Collector) (*Decoded, error) {
 	if cfg.Delimiter != "" {
 		rr := []rune(cfg.Delimiter)
 		if len(rr) != 1 {
-			return nil, fmt.Errorf("CSV delimiter must be one character")
+			return nil, errors.New("CSV delimiter must be one character")
 		}
 		delim = rr[0]
 	}
@@ -169,7 +170,7 @@ func decodePrometheus(r *HTTPResponse) (*Decoded, error) {
 	parser := expfmt.NewTextParser(model.UTF8Validation)
 	families, err := parser.TextToMetricFamilies(bytes.NewReader(r.Body))
 	if err != nil {
-		return nil, fmt.Errorf("Prometheus decode: %w", err)
+		return nil, fmt.Errorf("decoding Prometheus exposition: %w", err)
 	}
 	set := MetricSet{}
 	for name, mf := range families {

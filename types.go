@@ -3,7 +3,6 @@ package main
 import (
 	"encoding/json"
 	"fmt"
-	"math"
 	"regexp"
 	"sort"
 	"strconv"
@@ -87,8 +86,7 @@ func (s *MetricSet) Validate(l Limits) error {
 		default:
 			return fmt.Errorf("metric %q has invalid type %q", m.Name, m.Type)
 		}
-		if math.IsInf(m.Value, 0) || math.IsNaN(m.Value) { /* Prometheus accepts these values. */
-		}
+		// Prometheus accepts infinities and NaN, so no value check applies here.
 		if len(m.Labels) > l.MaxLabelsPerMetric && l.MaxLabelsPerMetric > 0 {
 			return fmt.Errorf("metric %q has too many labels", m.Name)
 		}
@@ -113,47 +111,6 @@ func (s *MetricSet) Validate(l Limits) error {
 		seen[m.seriesKey()] = struct{}{}
 	}
 	return nil
-}
-
-func metricFromValue(v any, fallback *MetricRule) (Metric, error) {
-	obj, ok := v.(map[string]any)
-	if !ok {
-		return Metric{}, fmt.Errorf("metric result must be an object, got %T", v)
-	}
-	m := Metric{Type: GaugeMetricType, Labels: map[string]string{}}
-	if fallback != nil {
-		m.Name, m.Type, m.Help = fallback.Name, fallback.Type, fallback.Description
-	}
-	if x, ok := obj["name"].(string); ok {
-		m.Name = x
-	}
-	if x, ok := obj["type"].(string); ok {
-		m.Type = MetricType(x)
-	}
-	if x, ok := obj["help"].(string); ok {
-		m.Help = x
-	}
-	if x, ok := obj["labels"].(map[string]any); ok {
-		for k, v := range x {
-			m.Labels[k] = fmt.Sprint(v)
-		}
-	}
-	if x, ok := obj["labels"].(map[string]string); ok {
-		m.Labels = x
-	}
-	if x, ok := obj["value"]; ok {
-		n, err := number(x)
-		if err != nil {
-			return m, err
-		}
-		m.Value = n
-	} else {
-		return m, fmt.Errorf("metric %q has no numeric value", m.Name)
-	}
-	if m.Name == "" {
-		return m, fmt.Errorf("metric result has no name")
-	}
-	return m, nil
 }
 
 func number(v any) (float64, error) {

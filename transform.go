@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"regexp"
@@ -26,7 +27,7 @@ func transform(ctx context.Context, d *Decoded, r *HTTPResponse, c *Collector, p
 	}
 	if c.Transform.Type == "python" {
 		if c.Transform.Script == "" {
-			return nil, fmt.Errorf("Python transform requires a script")
+			return nil, errors.New("python transform requires a script")
 		}
 		return executePython(ctx, pythonPath, c.Transform.Script, d, r, c)
 	}
@@ -45,13 +46,13 @@ func transform(ctx context.Context, d *Decoded, r *HTTPResponse, c *Collector, p
 	case "regex":
 		text, ok := d.Data.(string)
 		if !ok {
-			return nil, fmt.Errorf("regex transformation requires text data")
+			return nil, errors.New("regex transformation requires text data")
 		}
 		return transformRegex(text, c.Metrics, c)
 	case "css":
 		h, ok := d.Data.(*HTMLDecoded)
 		if !ok {
-			return nil, fmt.Errorf("CSS transformation requires HTML data")
+			return nil, errors.New("CSS transformation requires HTML data")
 		}
 		return transformCSS(h.Document, c.Metrics, c)
 	case "csv":
@@ -62,7 +63,7 @@ func transform(ctx context.Context, d *Decoded, r *HTTPResponse, c *Collector, p
 		}
 		n, ok := d.Data.(*xmlquery.Node)
 		if !ok {
-			return nil, fmt.Errorf("XPath transformation requires XML or HTML data")
+			return nil, errors.New("XPath transformation requires XML or HTML data")
 		}
 		return transformXPath(n, c.Metrics, c, c.Response.Namespaces)
 	default:
@@ -134,7 +135,7 @@ func applyPreScript(ctx context.Context, d *Decoded, r *HTTPResponse, c *Collect
 		return &Decoded{Kind: "json", Data: data, Raw: d.Raw}, nil
 	}
 	if d.Kind == "html" {
-		raw := []byte(fmt.Sprint(data))
+		raw := fmt.Append(nil, data)
 		doc, parseErr := goquery.NewDocumentFromReader(bytes.NewReader(raw))
 		if parseErr != nil {
 			return nil, fmt.Errorf("HTML pre-script output: %w", parseErr)
@@ -142,7 +143,7 @@ func applyPreScript(ctx context.Context, d *Decoded, r *HTTPResponse, c *Collect
 		return &Decoded{Kind: "html", Data: &HTMLDecoded{Document: doc, Raw: raw}, Raw: raw}, nil
 	}
 	if d.Kind == "xml" {
-		raw := []byte(fmt.Sprint(data))
+		raw := fmt.Append(nil, data)
 		node, parseErr := xmlquery.Parse(bytes.NewReader(raw))
 		if parseErr != nil {
 			return nil, fmt.Errorf("XML pre-script output: %w", parseErr)
@@ -503,7 +504,7 @@ func transformCSS(doc *goquery.Document, rules []MetricRule, c *Collector) (*Met
 func transformCSV(data any, rules []MetricRule, c *Collector) (*MetricSet, error) {
 	rows, ok := data.([]any)
 	if !ok {
-		return nil, fmt.Errorf("CSV transform requires a header-based CSV response")
+		return nil, errors.New("CSV transform requires a header-based CSV response")
 	}
 	out := &MetricSet{}
 	for _, raw := range rows {

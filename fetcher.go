@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -38,7 +39,7 @@ func parseRequestOverrides(values url.Values) (RequestOverrides, error) {
 	if method := strings.TrimSpace(values.Get("method")); method != "" {
 		overrides.Method = strings.ToUpper(method)
 		switch overrides.Method {
-		case "GET", "POST", "PUT", "PATCH", "DELETE", "HEAD":
+		case http.MethodGet, http.MethodPost, http.MethodPut, http.MethodPatch, http.MethodDelete, http.MethodHead:
 		default:
 			return overrides, fmt.Errorf("unsupported request method override %q", method)
 		}
@@ -129,7 +130,7 @@ func fetch(ctx context.Context, target string, c *Collector, overrides RequestOv
 		return nil, fmt.Errorf("target scheme %q is not allowed", u.Scheme)
 	}
 	if u.Host == "" {
-		return nil, fmt.Errorf("target has no host")
+		return nil, errors.New("target has no host")
 	}
 	requestPath := c.Request.Path
 	if overrides.PathSet {
@@ -205,7 +206,7 @@ func fetch(ctx context.Context, target string, c *Collector, overrides RequestOv
 			return nil, fmt.Errorf("reading basic auth password file: %w", readErr)
 		}
 		if username == "" || password == "" {
-			return nil, fmt.Errorf("basic auth credential files must not be empty")
+			return nil, errors.New("basic auth credential files must not be empty")
 		}
 		basicUsername = username
 		basicPassword = password
@@ -310,7 +311,7 @@ func waitRetry(ctx context.Context, backoff time.Duration) error {
 
 func readCredentialFile(path string) (string, error) {
 	if strings.TrimSpace(path) == "" {
-		return "", fmt.Errorf("path is empty")
+		return "", errors.New("path is empty")
 	}
 	b, err := os.ReadFile(path)
 	if err != nil {

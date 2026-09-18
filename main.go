@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"log/slog"
 	"net/http"
@@ -11,7 +12,12 @@ import (
 	"time"
 )
 
-func main() {
+func main() { os.Exit(run()) }
+
+// run owns the exporter lifecycle and returns the process exit status. Keeping
+// it separate from main means every deferred cleanup still executes on the
+// paths that terminate early.
+func run() int {
 	configFile := flag.String("config.file", "/etc/prometheus-universal-exporter/config.yaml", "Path to the exporter configuration")
 	listenAddress := flag.String("web.listen-address", ":8080", "Address on which to expose HTTP endpoints")
 	selfMetricsPath := flag.String("web.self-metrics-path", "/self-metrics", "Dedicated endpoint for exporter self-health metrics")
@@ -24,7 +30,7 @@ func main() {
 	config, err := LoadConfig(*configFile)
 	if err != nil {
 		logger.Error("invalid startup configuration; exiting", "error", err)
-		os.Exit(1)
+		return 1
 	}
 
 	manager := NewConfigManager(config, *configFile, logger)
@@ -38,7 +44,7 @@ func main() {
 		}
 		if err != nil {
 			logger.Error("invalid scheduled target configuration; exiting", "file", *targetFile, "error", err)
-			os.Exit(1)
+			return 1
 		}
 		manager.SetTargets(*targetFile, targets)
 		logger.Info("scheduled targets loaded", "file", *targetFile, "targets", len(targets.Targets))
@@ -52,14 +58,16 @@ func main() {
 	go server.OTLPExportLoop(ctx)
 
 	logger.Info("starting exporter", "address", *listenAddress, "collectors", len(config.Collectors), "scheduled_targets", len(manager.Targets()))
-	httpServer := &http.Server{Addr: *listenAddress, Handler: server.Handler()}
+	// ReadHeaderTimeout bounds how long a client may take to send its request
+	// headers, so a stalled connection cannot hold a handler open indefinitely.
+	httpServer := &http.Server{Addr: *listenAddress, Handler: server.Handler(), ReadHeaderTimeout: 10 * time.Second}
 	serverErr := make(chan error, 1)
 	go func() { serverErr <- httpServer.ListenAndServe() }()
 	select {
 	case err := <-serverErr:
-		if err != nil && err != http.ErrServerClosed {
+		if err != nil && !errors.Is(err, http.ErrServerClosed) {
 			logger.Error("HTTP server stopped", "error", err)
-			os.Exit(1)
+			return 1
 		}
 	case <-ctx.Done():
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -68,6 +76,7 @@ func main() {
 			logger.Error("HTTP server shutdown failed", "error", err)
 		}
 	}
+	return 0
 }
 
 func newLogger(level string) *slog.Logger {

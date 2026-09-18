@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"net/http"
 	"net/url"
@@ -98,7 +99,7 @@ func LoadTargetFile(path string) (*TargetFile, error) {
 // that need the exporter configuration.
 func (f *TargetFile) Validate() error {
 	if len(f.Targets) == 0 {
-		return fmt.Errorf("targets must not be empty")
+		return errors.New("targets must not be empty")
 	}
 	seen := map[string]bool{}
 	for i := range f.Targets {
@@ -125,7 +126,7 @@ func (f *TargetFile) Validate() error {
 		if t.Request.Method != "" {
 			t.Request.Method = strings.ToUpper(t.Request.Method)
 			switch t.Request.Method {
-			case "GET", "POST", "PUT", "PATCH", "DELETE", "HEAD":
+			case http.MethodGet, http.MethodPost, http.MethodPut, http.MethodPatch, http.MethodDelete, http.MethodHead:
 			default:
 				return fmt.Errorf("target %q has unsupported method %q", t.Name, t.Request.Method)
 			}
@@ -172,10 +173,10 @@ func (f *TargetFile) Validate() error {
 // must name a configured collector.
 func (f *TargetFile) ValidateAgainst(c *Config) error {
 	if !c.OTLP.Enabled {
-		return fmt.Errorf("scheduled targets require OTLP export; set otlp.enabled: true or remove the target file")
+		return errors.New("scheduled targets require OTLP export; set otlp.enabled: true or remove the target file")
 	}
 	if strings.TrimSpace(c.OTLP.Endpoint) == "" {
-		return fmt.Errorf("scheduled targets require otlp.endpoint")
+		return errors.New("scheduled targets require otlp.endpoint")
 	}
 	known := map[string]bool{}
 	for i := range c.Collectors {
@@ -240,7 +241,7 @@ func (t *ScheduledTarget) headers() (http.Header, error) {
 		}
 		password = value
 		if username == "" || password == "" {
-			return nil, fmt.Errorf("basic auth credential files must not be empty")
+			return nil, errors.New("basic auth credential files must not be empty")
 		}
 	}
 	if username != "" || password != "" {

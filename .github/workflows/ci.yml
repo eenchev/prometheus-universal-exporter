@@ -25,7 +25,19 @@ jobs:
         if: steps.changes.outputs.chart == 'true'
       - run: go mod download
         if: steps.changes.outputs.go == 'true'
-      - run: gofmt -w *.go
+      - name: Check formatting
+        run: |
+          unformatted=$(gofmt -l *.go)
+          if [ -n "$unformatted" ]; then
+            echo "These files need gofmt:" >&2
+            echo "$unformatted" >&2
+            exit 1
+          fi
+        if: steps.changes.outputs.go == 'true'
+      - uses: golangci/golangci-lint-action@v8
+        with:
+          version: v2.5.0
+        if: steps.changes.outputs.go == 'true'
         if: steps.changes.outputs.go == 'true'
       - run: go test ./...
         if: steps.changes.outputs.go == 'true'
@@ -45,11 +57,11 @@ jobs:
         if: steps.changes.outputs.chart == 'true'
       - run: helm template test charts/prometheus-universal-exporter --set server.listenAddress=0.0.0.0:9115 --set server.pythonPath=/usr/bin/python3.11
         if: steps.changes.outputs.chart == 'true'
-      - run: helm template test charts/prometheus-universal-exporter --set otlpTargets.enabled=true --set-file otlpTargets.data=targets.example.yaml --set-file config.data.config\.yaml=config.otlp.example.yaml
+      - run: helm template test charts/prometheus-universal-exporter --set otlpTargets.enabled=true --set-file otlpTargets.data=targets.example.yaml --set-file 'config.data.config\.yaml=config.otlp.example.yaml'
         if: steps.changes.outputs.chart == 'true'
       - name: Reject scheduled targets without OTLP export
         run: |
-          if helm template test charts/prometheus-universal-exporter --set otlpTargets.enabled=true --set-file otlpTargets.data=targets.example.yaml --set-file config.data.config\.yaml=config.example.yaml >/dev/null 2>&1; then
+          if helm template test charts/prometheus-universal-exporter --set otlpTargets.enabled=true --set-file otlpTargets.data=targets.example.yaml --set-file 'config.data.config\.yaml=config.example.yaml' >/dev/null 2>&1; then
             echo "helm template accepted scheduled targets while OTLP export is disabled" >&2
             exit 1
           fi

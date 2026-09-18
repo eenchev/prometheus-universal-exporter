@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os/exec"
 	"time"
@@ -83,19 +84,19 @@ func executePython(ctx context.Context, pythonPath, script string, d *Decoded, r
 	cmd.Stderr = &stderr
 	err = cmd.Run()
 	if pctx.Err() != nil {
-		return nil, fmt.Errorf("Python execution timeout: %w", pctx.Err())
+		return nil, fmt.Errorf("python transform timed out: %w", pctx.Err())
 	}
 	if err != nil {
-		return nil, fmt.Errorf("Python execution failed: %w: %s", err, stderr.String())
+		return nil, fmt.Errorf("python transform failed: %w: %s", err, stderr.String())
 	}
 	if c.Limits.MaxOutputBytes > 0 && stdout.Len() > c.Limits.MaxOutputBytes {
-		return nil, fmt.Errorf("Python output exceeds limit")
+		return nil, errors.New("python transform output exceeds limit")
 	}
 	var result struct {
 		Metrics []Metric `json:"metrics"`
 	}
 	if err = json.Unmarshal(stdout.Bytes(), &result); err != nil {
-		return nil, fmt.Errorf("Python output: %w", err)
+		return nil, fmt.Errorf("python transform output: %w", err)
 	}
 	return &MetricSet{Metrics: result.Metrics}, nil
 }
@@ -122,21 +123,21 @@ func executePythonPreScript(ctx context.Context, pythonPath, script string, d *D
 	cmd.Stderr = &stderr
 	if err := cmd.Run(); err != nil {
 		if pctx.Err() != nil {
-			return nil, fmt.Errorf("Python pre-script timeout: %w", pctx.Err())
+			return nil, fmt.Errorf("python pre-script timed out: %w", pctx.Err())
 		}
-		return nil, fmt.Errorf("Python pre-script failed: %w: %s", err, stderr.String())
+		return nil, fmt.Errorf("python pre-script failed: %w: %s", err, stderr.String())
 	}
 	if pctx.Err() != nil {
-		return nil, fmt.Errorf("Python pre-script timeout: %w", pctx.Err())
+		return nil, fmt.Errorf("python pre-script timed out: %w", pctx.Err())
 	}
 	if c.Limits.MaxOutputBytes > 0 && stdout.Len() > c.Limits.MaxOutputBytes {
-		return nil, fmt.Errorf("Python pre-script output exceeds limit")
+		return nil, errors.New("python pre-script output exceeds limit")
 	}
 	var result struct {
 		Data any `json:"data"`
 	}
 	if err := json.Unmarshal(stdout.Bytes(), &result); err != nil {
-		return nil, fmt.Errorf("Python pre-script output: %w", err)
+		return nil, fmt.Errorf("python pre-script output: %w", err)
 	}
 	return normalize(result.Data), nil
 }

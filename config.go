@@ -4,8 +4,10 @@ import (
 	"context"
 	"crypto/tls"
 	"crypto/x509"
+	"errors"
 	"fmt"
 	"log/slog"
+	"net/http"
 	"net/url"
 	"os"
 	"regexp"
@@ -21,7 +23,7 @@ type Duration time.Duration
 
 func (d *Duration) UnmarshalYAML(n *yaml.Node) error {
 	if n.Kind != yaml.ScalarNode {
-		return fmt.Errorf("duration must be a scalar")
+		return errors.New("duration must be a scalar")
 	}
 	v, err := time.ParseDuration(n.Value)
 	if err != nil {
@@ -163,7 +165,7 @@ type TransformConfig struct {
 
 func (c *Config) Validate() error {
 	if len(c.Collectors) == 0 {
-		return fmt.Errorf("collectors must not be empty")
+		return errors.New("collectors must not be empty")
 	}
 	seen := map[string]bool{}
 	for i := range c.Collectors {
@@ -198,7 +200,7 @@ func (c *Config) Validate() error {
 		}
 		x.Request.Method = strings.ToUpper(x.Request.Method)
 		switch x.Request.Method {
-		case "GET", "POST", "PUT", "PATCH", "DELETE", "HEAD":
+		case http.MethodGet, http.MethodPost, http.MethodPut, http.MethodPatch, http.MethodDelete, http.MethodHead:
 		default:
 			return fmt.Errorf("collector %q has unsupported method %q", x.Name, x.Request.Method)
 		}
@@ -352,7 +354,7 @@ func (c *Config) Validate() error {
 	}
 	if c.Web.BasicAuth != nil && c.Web.BasicAuth.Enabled {
 		if strings.TrimSpace(c.Web.BasicAuth.Username) == "" || c.Web.BasicAuth.Password == "" {
-			return fmt.Errorf("web.basic_auth requires a username and password when enabled")
+			return errors.New("web.basic_auth requires a username and password when enabled")
 		}
 		for _, collector := range c.Collectors {
 			if collector.Request.ForwardAuthorization {
@@ -362,11 +364,11 @@ func (c *Config) Validate() error {
 	}
 	if c.OTLP.Enabled {
 		if strings.TrimSpace(c.OTLP.Endpoint) == "" {
-			return fmt.Errorf("otlp.endpoint is required when OTLP is enabled")
+			return errors.New("otlp.endpoint is required when OTLP is enabled")
 		}
 		u, err := url.Parse(c.OTLP.Endpoint)
 		if err != nil || u.Scheme != "http" && u.Scheme != "https" || u.Host == "" {
-			return fmt.Errorf("otlp.endpoint must be an http or https URL")
+			return errors.New("otlp.endpoint must be an http or https URL")
 		}
 		if c.OTLP.Timeout <= 0 {
 			c.OTLP.Timeout = Duration(5 * time.Second)
@@ -501,7 +503,11 @@ func (m *ConfigManager) reloadTargets() {
 }
 
 func tlsConfig(t TLSConfig) (*tls.Config, error) {
-	cfg := &tls.Config{InsecureSkipVerify: t.InsecureSkipVerify, MinVersion: tls.VersionTLS12}
+	// The exporter deliberately exposes request.tls.insecure_skip_verify and the
+	// matching per-scrape override as a documented, opt-in setting for targets
+	// whose certificate cannot be validated. TLS stays enabled and the minimum
+	// version is pinned.
+	cfg := &tls.Config{InsecureSkipVerify: t.InsecureSkipVerify, MinVersion: tls.VersionTLS12} //nolint:gosec // G402: documented opt-in, defaults to false
 	if t.CAFile != "" {
 		b, err := os.ReadFile(t.CAFile)
 		if err != nil {
@@ -518,7 +524,7 @@ func tlsConfig(t TLSConfig) (*tls.Config, error) {
 	}
 	if t.CertFile != "" || t.KeyFile != "" {
 		if t.CertFile == "" || t.KeyFile == "" {
-			return nil, fmt.Errorf("both tls cert_file and key_file are required")
+			return nil, errors.New("both tls cert_file and key_file are required")
 		}
 		cert, err := tls.LoadX509KeyPair(t.CertFile, t.KeyFile)
 		if err != nil {

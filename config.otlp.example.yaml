@@ -1,6 +1,8 @@
+# Companion to config.example.yaml with OTLP export enabled. Scheduled targets
+# (targets.example.yaml, passed with --otlp.targets-file) require this.
 otlp:
-  enabled: false
-  # endpoint: http://otel-collector:4318/v1/metrics
+  enabled: true
+  endpoint: http://otel-collector:4318/v1/metrics
   timeout: 5s
   # Metrics are batched and exported at this interval.
   interval: 30s

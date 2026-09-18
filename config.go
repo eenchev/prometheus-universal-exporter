@@ -399,10 +399,13 @@ func LoadConfig(path string) (*Config, error) {
 }
 
 type ConfigManager struct {
-	current atomic.Value
-	path    string
-	logger  *slog.Logger
-	lastMod time.Time
+	current        atomic.Value
+	path           string
+	logger         *slog.Logger
+	lastMod        time.Time
+	targetPath     string
+	targetFile     atomic.Pointer[TargetFile]
+	targetsLastMod time.Time
 }
 
 func NewConfigManager(c *Config, path string, l *slog.Logger) *ConfigManager {
@@ -411,6 +414,30 @@ func NewConfigManager(c *Config, path string, l *slog.Logger) *ConfigManager {
 	return m
 }
 func (m *ConfigManager) Get() *Config { return m.current.Load().(*Config) }
+
+// SetTargets installs the scheduled target document and the file it was read
+// from. An empty path leaves the feature disabled.
+func (m *ConfigManager) SetTargets(path string, f *TargetFile) {
+	m.targetPath = path
+	if f != nil {
+		m.targetFile.Store(f)
+	}
+	if path != "" {
+		if st, err := os.Stat(path); err == nil {
+			m.targetsLastMod = st.ModTime()
+		}
+	}
+}
+
+// Targets returns the scheduled targets currently in force.
+func (m *ConfigManager) Targets() []ScheduledTarget {
+	f := m.targetFile.Load()
+	if f == nil {
+		return nil
+	}
+	return f.Targets
+}
+
 func (m *ConfigManager) ReloadLoop(ctx context.Context) {
 	ticker := time.NewTicker(2 * time.Second)
 	defer ticker.Stop()
@@ -419,22 +446,58 @@ func (m *ConfigManager) ReloadLoop(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			st, err := os.Stat(m.path)
-			if err != nil {
-				continue
-			}
-			if st.ModTime().After(m.lastMod) {
-				m.lastMod = st.ModTime()
-				c, err := LoadConfig(m.path)
-				if err != nil {
-					m.logger.Error("configuration reload rejected", "error", err)
-					continue
-				}
-				m.current.Store(c)
-				m.logger.Info("configuration reloaded", "collectors", len(c.Collectors))
-			}
+			m.reloadConfig()
+			m.reloadTargets()
 		}
 	}
+}
+
+func (m *ConfigManager) reloadConfig() {
+	st, err := os.Stat(m.path)
+	if err != nil || !st.ModTime().After(m.lastMod) {
+		return
+	}
+	m.lastMod = st.ModTime()
+	c, err := LoadConfig(m.path)
+	if err != nil {
+		m.logger.Error("configuration reload rejected", "error", err)
+		return
+	}
+	// Scheduled targets exist only to feed OTLP, so a configuration that would
+	// disable OTLP while they are loaded is rejected exactly as it is at
+	// startup, and the last valid configuration stays active.
+	if f := m.targetFile.Load(); f != nil {
+		if err := f.ValidateAgainst(c); err != nil {
+			m.logger.Error("configuration reload rejected", "error", err)
+			return
+		}
+	}
+	m.current.Store(c)
+	m.logger.Info("configuration reloaded", "collectors", len(c.Collectors))
+}
+
+func (m *ConfigManager) reloadTargets() {
+	if m.targetPath == "" {
+		return
+	}
+	st, err := os.Stat(m.targetPath)
+	if err != nil || !st.ModTime().After(m.targetsLastMod) {
+		return
+	}
+	m.targetsLastMod = st.ModTime()
+	f, err := LoadTargetFile(m.targetPath)
+	if err == nil {
+		err = f.Validate()
+	}
+	if err == nil {
+		err = f.ValidateAgainst(m.Get())
+	}
+	if err != nil {
+		m.logger.Error("scheduled target reload rejected", "error", err)
+		return
+	}
+	m.targetFile.Store(f)
+	m.logger.Info("scheduled targets reloaded", "targets", len(f.Targets))
 }
 
 func tlsConfig(t TLSConfig) (*tls.Config, error) {

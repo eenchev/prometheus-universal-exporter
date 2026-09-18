@@ -40,6 +40,22 @@ app.kubernetes.io/managed-by: {{ .Release.Service }}
 {{- define "prometheus-universal-exporter.pythonPath" -}}
 {{- default "/usr/local/bin/python3" .Values.server.pythonPath -}}
 {{- end }}
+{{- define "prometheus-universal-exporter.targetsFile" -}}
+{{- default "targets.yaml" .Values.otlpTargets.fileName -}}
+{{- end }}
+{{- define "prometheus-universal-exporter.validateTargets" -}}
+{{- if .Values.otlpTargets.enabled -}}
+{{- if .Values.config.enabled -}}
+{{- if not (trim (.Values.otlpTargets.data | default "")) -}}
+{{- fail "otlpTargets.enabled requires otlpTargets.data to hold the scheduled target document" -}}
+{{- end -}}
+{{- $config := fromYaml (index .Values.config.data "config.yaml" | default "") -}}
+{{- if not (dig "otlp" "enabled" false $config) -}}
+{{- fail "otlpTargets.enabled requires otlp.enabled: true in config.data.config.yaml; the exporter refuses to start with scheduled targets while OTLP export is disabled" -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
+{{- end }}
 {{- define "prometheus-universal-exporter.serviceAccountName" -}}
 {{- if .Values.serviceAccount.create }}{{ default (include "prometheus-universal-exporter.fullname" .) .Values.serviceAccount.name }}{{ else }}{{ default "default" .Values.serviceAccount.name }}{{ end }}
 {{- end }}

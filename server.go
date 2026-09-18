@@ -16,24 +16,84 @@ import (
 )
 
 type serverStats struct { mu sync.Mutex; probes,success,decodeOK,parseErrors,transformErrors,missing,scriptErrors,limitErrors,emitted,cacheHits,cacheMisses uint64; lastStatus int; lastBytes int64; lastDuration float64 }
-type Server struct { manager *ConfigManager; pythonPath string; logger *slog.Logger; selfMetricsPath string; statsMu sync.Mutex; stats map[string]*serverStats; otlpMu sync.Mutex; otlpPending map[string]Metric; cache *responseCache; ready atomic.Bool }
-func NewServer(m *ConfigManager,p string,l *slog.Logger)*Server{s:=&Server{manager:m,pythonPath:p,logger:l,stats:map[string]*serverStats{},otlpPending:map[string]Metric{},cache:newResponseCache()};s.ready.Store(true);return s}
+type Server struct { manager *ConfigManager; pythonPath string; logger *slog.Logger; selfMetricsPath string; statsMu sync.Mutex; stats map[string]*serverStats; otlpMu sync.Mutex; otlpPending map[string]*otlpBatch; cache *responseCache; ready atomic.Bool }
+func NewServer(m *ConfigManager,p string,l *slog.Logger)*Server{s:=&Server{manager:m,pythonPath:p,logger:l,stats:map[string]*serverStats{},otlpPending:map[string]*otlpBatch{},cache:newResponseCache()};s.ready.Store(true);return s}
 
-func (s *Server) queueOTLP(set MetricSet) {
-	cfg := s.manager.Get().OTLP
-	if !cfg.Enabled || cfg.Endpoint == "" || len(set.Metrics) == 0 { return }
-	s.otlpMu.Lock()
-	defer s.otlpMu.Unlock()
-	for _, metric := range set.Metrics { s.otlpPending[otlpMetricKey(metric)] = metric }
+// otlpBatch holds the metrics pending export for one OTLP resource.
+type otlpBatch struct {
+	identity otlpResourceIdentity
+	metrics  map[string]Metric
 }
 
-func (s *Server) drainOTLP() MetricSet {
+// queueOTLP stages metrics under the exporter-wide OTLP resource.
+func (s *Server) queueOTLP(set MetricSet) {
+	s.queueOTLPResource(set, defaultResourceIdentity(s.manager.Get().OTLP))
+}
+
+// queueOTLPResource stages metrics under a specific resource, so a scheduled
+// target's own service name and resource attributes survive to the exporter.
+func (s *Server) queueOTLPResource(set MetricSet, identity otlpResourceIdentity) {
+	cfg := s.manager.Get().OTLP
+	if !cfg.Enabled || cfg.Endpoint == "" || len(set.Metrics) == 0 {
+		return
+	}
 	s.otlpMu.Lock()
 	defer s.otlpMu.Unlock()
-	set := MetricSet{Metrics: make([]Metric, 0, len(s.otlpPending))}
-	for _, metric := range s.otlpPending { set.Metrics = append(set.Metrics, metric) }
-	s.otlpPending = make(map[string]Metric)
-	return set
+	key := identity.key()
+	batch := s.otlpPending[key]
+	if batch == nil {
+		batch = &otlpBatch{identity: identity, metrics: map[string]Metric{}}
+		s.otlpPending[key] = batch
+	}
+	for _, metric := range set.Metrics {
+		batch.metrics[otlpMetricKey(metric)] = cloneMetric(metric)
+	}
+}
+
+func (s *Server) drainOTLP() []otlpResourceSet {
+	s.otlpMu.Lock()
+	defer s.otlpMu.Unlock()
+	keys := make([]string, 0, len(s.otlpPending))
+	for key := range s.otlpPending {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	out := make([]otlpResourceSet, 0, len(keys))
+	for _, key := range keys {
+		batch := s.otlpPending[key]
+		set := MetricSet{Metrics: make([]Metric, 0, len(batch.metrics))}
+		for _, metricKey := range sortedMetricKeys(batch.metrics) {
+			set.Metrics = append(set.Metrics, batch.metrics[metricKey])
+		}
+		out = append(out, otlpResourceSet{Identity: batch.identity, Set: set})
+	}
+	s.otlpPending = make(map[string]*otlpBatch)
+	return out
+}
+
+func sortedMetricKeys(in map[string]Metric) []string {
+	out := make([]string, 0, len(in))
+	for key := range in {
+		out = append(out, key)
+	}
+	sort.Strings(out)
+	return out
+}
+
+// appendToResource adds metrics to the matching resource in resources, creating
+// the entry when the identity is not present yet.
+func appendToResource(resources []otlpResourceSet, identity otlpResourceIdentity, set MetricSet) []otlpResourceSet {
+	if len(set.Metrics) == 0 {
+		return resources
+	}
+	key := identity.key()
+	for i := range resources {
+		if resources[i].Identity.key() == key {
+			resources[i].Set.Metrics = append(resources[i].Set.Metrics, set.Metrics...)
+			return resources
+		}
+	}
+	return append(resources, otlpResourceSet{Identity: identity, Set: set})
 }
 
 func (s *Server) OTLPExportLoop(ctx context.Context) {
@@ -49,9 +109,9 @@ func (s *Server) OTLPExportLoop(ctx context.Context) {
 		}
 		cfg := s.manager.Get().OTLP
 		if !cfg.Enabled || cfg.Endpoint == "" { _ = s.drainOTLP(); continue }
-		set := s.drainOTLP()
-		set.Metrics = append(set.Metrics, s.selfMetricSet().Metrics...)
-		if len(set.Metrics) > 0 { s.pushOTLP(set) }
+		s.scrapeScheduledTargets(ctx, interval)
+		resources := appendToResource(s.drainOTLP(), defaultResourceIdentity(cfg), s.selfMetricSet())
+		if len(resources) > 0 { s.pushOTLP(resources) }
 	}
 }
 
@@ -152,11 +212,11 @@ func forwardedHeaders(r *http.Request, request RequestConfig) http.Header {
 }
 
 func (s *Server)metricsHandler(w http.ResponseWriter,_ *http.Request){s.statsMu.Lock();for _,c:=range s.manager.Get().Collectors{if s.stats[c.Name]==nil{s.stats[c.Name]=&serverStats{}}};names:=make([]string,0,len(s.stats));for n:=range s.stats{names=append(names,n)};sort.Strings(names);ss:=make([]struct{name string;v *serverStats},0,len(names));for _,n:=range names{ss=append(ss,struct{name string;v *serverStats}{n,s.stats[n]})};s.statsMu.Unlock();cacheEntries:=s.cache.Stats(time.Now());var b strings.Builder
-	selfNames:=[]string{"http_exporter_scrapes_total","http_exporter_scrape_success","http_exporter_scrape_duration_seconds","http_exporter_scrape_http_status_code","http_exporter_scrape_response_bytes","http_exporter_decode_success","http_exporter_parse_errors_total","http_exporter_transform_errors_total","http_exporter_missing_keys_total","http_exporter_script_errors_total","http_exporter_script_duration_seconds","http_exporter_metrics_emitted","http_exporter_series_limit_exceeded","http_exporter_cache_hits_total","http_exporter_cache_misses_total","http_exporter_cache_entries"};for _,n:=range selfNames{fmt.Fprintf(&b,"# HELP %s Exporter self metric.\n# TYPE %s gauge\n",n,n)};b.WriteString("# HELP http_exporter_collector_config_valid Whether the collector configuration is valid.\n# TYPE http_exporter_collector_config_valid gauge\n");for _,x:=range names{fmt.Fprintf(&b,"http_exporter_collector_config_valid{collector=%q} 1\n",x)}
+	selfNames:=[]string{"http_exporter_scrapes_total","http_exporter_scrape_success","http_exporter_scrape_duration_seconds","http_exporter_scrape_http_status_code","http_exporter_scrape_response_bytes","http_exporter_decode_success","http_exporter_parse_errors_total","http_exporter_transform_errors_total","http_exporter_missing_keys_total","http_exporter_script_errors_total","http_exporter_script_duration_seconds","http_exporter_metrics_emitted","http_exporter_series_limit_exceeded","http_exporter_cache_hits_total","http_exporter_cache_misses_total","http_exporter_cache_entries"};for _,n:=range selfNames{fmt.Fprintf(&b,"# HELP %s Exporter self metric.\n# TYPE %s gauge\n",n,n)};b.WriteString("# HELP http_exporter_collector_config_valid Whether the collector configuration is valid.\n# TYPE http_exporter_collector_config_valid gauge\n");for _,x:=range names{fmt.Fprintf(&b,"http_exporter_collector_config_valid{collector=%q} 1\n",x)};fmt.Fprintf(&b,"# HELP http_exporter_scheduled_targets Scheduled targets configured for OTLP delivery.\n# TYPE http_exporter_scheduled_targets gauge\nhttp_exporter_scheduled_targets %d\n",len(s.manager.Targets()))
 	for _,x:=range ss{x.v.mu.Lock();p,ok,d,pe,te,m,se,le,em,status,bytes,dur,hits,misses:=x.v.probes,x.v.success,x.v.decodeOK,x.v.parseErrors,x.v.transformErrors,x.v.missing,x.v.scriptErrors,x.v.limitErrors,x.v.emitted,x.v.lastStatus,x.v.lastBytes,x.v.lastDuration,x.v.cacheHits,x.v.cacheMisses;x.v.mu.Unlock();label:=fmt.Sprintf("{collector=%q}",x.name);fmt.Fprintf(&b,"http_exporter_scrapes_total%s %d\nhttp_exporter_scrape_success%s %d\nhttp_exporter_scrape_duration_seconds%s %s\nhttp_exporter_scrape_http_status_code%s %d\nhttp_exporter_scrape_response_bytes%s %d\nhttp_exporter_decode_success%s %d\nhttp_exporter_parse_errors_total%s %d\nhttp_exporter_transform_errors_total%s %d\nhttp_exporter_missing_keys_total%s %d\nhttp_exporter_script_errors_total%s %d\nhttp_exporter_script_duration_seconds%s 0\nhttp_exporter_metrics_emitted%s %d\nhttp_exporter_series_limit_exceeded%s %d\n",label,p,label,ok,label,strconv.FormatFloat(dur,'f',-1,64),label,status,label,bytes,label,d,label,pe,label,te,label,m,label,se,label,label,em,label,le);fmt.Fprintf(&b,"http_exporter_cache_hits_total%s %d\nhttp_exporter_cache_misses_total%s %d\nhttp_exporter_cache_entries%s %d\n",label,hits,label,misses,label,cacheEntries[x.name])}
 	w.Header().Set("Content-Type","text/plain; version=0.0.4");_,_=w.Write([]byte(b.String()))}
 
-func(s *Server)selfMetricSet() MetricSet {cacheEntries:=s.cache.Stats(time.Now());s.statsMu.Lock();for _,c:=range s.manager.Get().Collectors{if s.stats[c.Name]==nil{s.stats[c.Name]=&serverStats{}}};ss:=make([]struct{name string;v *serverStats},0,len(s.stats));for name,st:=range s.stats{ss=append(ss,struct{name string;v *serverStats}{name,st})};s.statsMu.Unlock();out:=MetricSet{};for _,x:=range ss{x.v.mu.Lock();labels:=map[string]string{"collector":x.name};add:=func(name string,typ MetricType,value float64){out.Metrics=append(out.Metrics,Metric{Name:name,Type:typ,Value:value,Labels:cloneLabels(labels)})};add("http_exporter_scrapes_total",CounterMetricType,float64(x.v.probes));add("http_exporter_scrape_success",GaugeMetricType,float64(x.v.success));add("http_exporter_scrape_duration_seconds",GaugeMetricType,x.v.lastDuration);add("http_exporter_scrape_http_status_code",GaugeMetricType,float64(x.v.lastStatus));add("http_exporter_scrape_response_bytes",GaugeMetricType,float64(x.v.lastBytes));add("http_exporter_decode_success",GaugeMetricType,float64(x.v.decodeOK));add("http_exporter_parse_errors_total",CounterMetricType,float64(x.v.parseErrors));add("http_exporter_transform_errors_total",CounterMetricType,float64(x.v.transformErrors));add("http_exporter_missing_keys_total",CounterMetricType,float64(x.v.missing));add("http_exporter_script_errors_total",CounterMetricType,float64(x.v.scriptErrors));add("http_exporter_script_duration_seconds",GaugeMetricType,0);add("http_exporter_metrics_emitted",GaugeMetricType,float64(x.v.emitted));add("http_exporter_series_limit_exceeded",CounterMetricType,float64(x.v.limitErrors));add("http_exporter_cache_hits_total",CounterMetricType,float64(x.v.cacheHits));add("http_exporter_cache_misses_total",CounterMetricType,float64(x.v.cacheMisses));add("http_exporter_cache_entries",GaugeMetricType,float64(cacheEntries[x.name]));x.v.mu.Unlock()};for _,c:=range s.manager.Get().Collectors{out.Metrics=append(out.Metrics,Metric{Name:"http_exporter_collector_config_valid",Type:GaugeMetricType,Value:1,Labels:map[string]string{"collector":c.Name}})};return out}
+func(s *Server)selfMetricSet() MetricSet {cacheEntries:=s.cache.Stats(time.Now());s.statsMu.Lock();for _,c:=range s.manager.Get().Collectors{if s.stats[c.Name]==nil{s.stats[c.Name]=&serverStats{}}};ss:=make([]struct{name string;v *serverStats},0,len(s.stats));for name,st:=range s.stats{ss=append(ss,struct{name string;v *serverStats}{name,st})};s.statsMu.Unlock();out:=MetricSet{};for _,x:=range ss{x.v.mu.Lock();labels:=map[string]string{"collector":x.name};add:=func(name string,typ MetricType,value float64){out.Metrics=append(out.Metrics,Metric{Name:name,Type:typ,Value:value,Labels:cloneLabels(labels)})};add("http_exporter_scrapes_total",CounterMetricType,float64(x.v.probes));add("http_exporter_scrape_success",GaugeMetricType,float64(x.v.success));add("http_exporter_scrape_duration_seconds",GaugeMetricType,x.v.lastDuration);add("http_exporter_scrape_http_status_code",GaugeMetricType,float64(x.v.lastStatus));add("http_exporter_scrape_response_bytes",GaugeMetricType,float64(x.v.lastBytes));add("http_exporter_decode_success",GaugeMetricType,float64(x.v.decodeOK));add("http_exporter_parse_errors_total",CounterMetricType,float64(x.v.parseErrors));add("http_exporter_transform_errors_total",CounterMetricType,float64(x.v.transformErrors));add("http_exporter_missing_keys_total",CounterMetricType,float64(x.v.missing));add("http_exporter_script_errors_total",CounterMetricType,float64(x.v.scriptErrors));add("http_exporter_script_duration_seconds",GaugeMetricType,0);add("http_exporter_metrics_emitted",GaugeMetricType,float64(x.v.emitted));add("http_exporter_series_limit_exceeded",CounterMetricType,float64(x.v.limitErrors));add("http_exporter_cache_hits_total",CounterMetricType,float64(x.v.cacheHits));add("http_exporter_cache_misses_total",CounterMetricType,float64(x.v.cacheMisses));add("http_exporter_cache_entries",GaugeMetricType,float64(cacheEntries[x.name]));x.v.mu.Unlock()};for _,c:=range s.manager.Get().Collectors{out.Metrics=append(out.Metrics,Metric{Name:"http_exporter_collector_config_valid",Type:GaugeMetricType,Value:1,Labels:map[string]string{"collector":c.Name}})};out.Metrics=append(out.Metrics,Metric{Name:"http_exporter_scheduled_targets",Help:"Scheduled targets configured for OTLP delivery.",Type:GaugeMetricType,Value:float64(len(s.manager.Targets()))});return out}
 
 func writeMetricSet(w http.ResponseWriter,s *MetricSet){w.Header().Set("Content-Type","text/plain; version=0.0.4");var b strings.Builder;help:=map[string]bool{};for _,m:=range s.Metrics{if !help[m.Name]{if m.Help!=""{fmt.Fprintf(&b,"# HELP %s %s\n",m.Name,strings.ReplaceAll(strings.ReplaceAll(m.Help,"\\","\\\\"),"\n","\\n"))};fmt.Fprintf(&b,"# TYPE %s %s\n",m.Name,m.Type);help[m.Name]=true};if m.Histogram!=nil{writeHistogram(&b,m);continue};if m.Summary!=nil{writeSummary(&b,m);continue};fmt.Fprintf(&b,"%s%s %s",m.Name,formatLabels(m.Labels),strconv.FormatFloat(m.Value,'g',-1,64));if m.Timestamp!=nil{fmt.Fprintf(&b," %d",*m.Timestamp)};b.WriteByte('\n')};_,_=w.Write([]byte(b.String()))}
 func formatLabels(ls map[string]string)string{if len(ls)==0{return ""};keys:=make([]string,0,len(ls));for k:=range ls{keys=append(keys,k)};sort.Strings(keys);var b strings.Builder;b.WriteByte('{');for i,k:=range keys{if i>0{b.WriteByte(',')};fmt.Fprintf(&b,"%s=\"%s\"",k,promQuote(ls[k]))};b.WriteByte('}');return b.String()}

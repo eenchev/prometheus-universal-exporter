@@ -6,7 +6,7 @@
 /probe?target=http%3A%2F%2Flegacy.example%3A8080&collector=legacy_text
 ```
 
-The repository includes a self-contained Go service, a Helm chart, Operator examples, and a configuration example. Start locally with:
+The repository includes a self-contained Go service, a Helm chart, a configuration example, and a scheduled-target example. Start locally with:
 
 ```sh
 go run . --config.file=config.example.yaml
@@ -67,6 +67,74 @@ values are buffered as latest values and exported every `otlp.interval`;
 the default is 30 seconds. Each export request is bounded by `otlp.timeout`,
 which defaults to 5 seconds. Self-health metrics are included in every export
 interval even when no Prometheus self-metrics scrape is running.
+
+### Scheduled targets
+
+The exporter can also scrape a fixed list of targets itself and deliver only
+those metrics over OTLP, with no Prometheus involved. Pass the list with
+`--otlp.targets-file`; `targets.example.yaml` is a complete example, and
+`config.otlp.example.yaml` is the matching exporter configuration with OTLP
+export enabled:
+
+```yaml
+targets:
+  - name: legacy_eu
+    collector: legacy_text
+    target: http://legacy.eu.example:8080
+    request:
+      path: /status
+      timeout: 5s
+      retry:
+        attempts: 2
+        backoff: 2s
+      headers:
+        X-Tenant: team-a
+      bearer_token_file: /var/run/prometheus-universal-exporter/target-auth/token
+    labels:
+      region: eu
+    otlp:
+      service_name: legacy-app
+      resource_attributes:
+        deployment.environment: production
+```
+
+Each target names a collector from the exporter configuration and takes every
+per-scrape parameter `/probe` accepts — `method`, `path`, `body`, `timeout`,
+`insecure_skip_verify` and the `retry` settings — overriding the collector's own
+request for that target only. It also takes static `headers` and its own target
+credentials, inline or file-backed, as basic authentication or a bearer token.
+Because the file is operator configuration rather than caller input, these
+headers are applied directly and are not filtered through the collector's
+`request.forward_headers` allowlist.
+
+`labels` are added to every metric the target produces, without overwriting a
+label the collector already extracted. `otlp.service_name` and
+`otlp.resource_attributes` set the OTLP resource the target's metrics arrive
+under; both fall back to the exporter-wide `otlp` settings, and per-target
+attributes are merged over the exporter-wide ones. Targets with different
+identities are exported as separate `resourceMetrics` entries rather than
+being conflated.
+
+Targets are scraped once per `otlp.interval`, through the same fetch, decode and
+transform path as `/probe`, so collector limits, error handling and the response
+cache all apply — a scheduled scrape and an identical `/probe` request share
+cache entries. Scheduled targets are never exposed on `/metrics` and are not
+reachable through `/probe`.
+
+Every scheduled scrape also exports `http_exporter_target_up` and
+`http_exporter_target_scrape_duration_seconds` under that target's resource and
+labels, so a failing target is visible in the OTLP backend instead of simply
+being absent. Their scrapes are counted in the existing per-collector
+self-metrics rather than per-target series, and `http_exporter_scheduled_targets`
+reports how many targets loaded.
+
+The file is only accepted when OTLP export is enabled. Starting the exporter
+with a targets file while `otlp.enabled` is `false`, or without an
+`otlp.endpoint`, logs `invalid scheduled target configuration; exiting` and
+terminates with a non-zero exit code. The file is reloaded on the same terms as
+the exporter configuration: an invalid document, or a configuration change that
+would disable OTLP while targets are loaded, is rejected and the last valid pair
+stays active.
 
 ## Configuration
 
@@ -152,6 +220,45 @@ after decoding and before metric extraction. The script receives the decoded
 value as `data` and may mutate it or replace it by assigning to `data`.
 HTML/XML pre-scripts receive raw document text, which is parsed again after the
 script. Python transforms emit metrics with the `metric(...)` API.
+
+### Reshaping a response instead of writing a Python transform
+
+When a response only needs parsing, prefer a pre-script that returns a mapping
+or a sequence over `transform.type: python`. A structured pre-script result
+becomes the decoded response for the `jq`, `yq`, and `none` transforms whatever
+the endpoint actually returned, so the metrics are declared exactly like any
+other collector's:
+
+```yaml
+transform:
+  type: jq
+  pre_script: |
+    import re
+    data = {"workers": [{"name": m.group(1), "cpu": int(m.group(2))}
+                        for m in re.finditer(r"Worker (\S+) CPU: (\d+)%", response.text)]}
+metrics:
+  - name: vendor_worker_cpu
+    description: Worker CPU utilization
+    type: gauge
+    error_mode: log
+    expression: .workers[].cpu
+    labels:
+      - name: worker
+        type: expression
+        expression: .workers[].name
+```
+
+Python parses, the metric declaration stays uniform, and `error_mode`,
+`required`, `description`, and `type` behave as they do everywhere else — none
+of which apply to metrics emitted from a `python` transform. Reserve
+`transform.type: python` for collectors whose metric *names* are not known until
+the response is read; those still emit through `metric(...)` and may omit the
+`metrics` array entirely.
+
+The promotion is deliberately limited to the transforms that read structured
+data. `csv`, `regex`, `css`, `xpath`, and `prometheus` keep receiving their own
+decoded format, and a pre-script that returns a string still leaves the format
+alone, so HTML and XML output is reparsed as before.
 
 Errors are classified as HTTP, decode, transform, missing data, validation, or resource-limit failures. `error_handling` accepts `fail`, `warn`, and `ignore`; `allow_missing_keys` controls required extraction results. Limits default to conservative values and are enforced immediately before exposition.
 
@@ -264,7 +371,7 @@ The launcher blocks `socket`, `subprocess`, `ctypes`, `multiprocessing`, `thread
 
 ## Prometheus Operator
 
-The chart and `examples/operator.yaml` show the required relabeling:
+The chart's generated ServiceMonitor and PodMonitor show the required relabeling:
 
 ```yaml
 params:

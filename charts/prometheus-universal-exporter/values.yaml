@@ -43,6 +43,32 @@ server:
   # Override this when running a custom image with Python installed elsewhere.
   pythonPath: /usr/local/bin/python3
 
+# Scheduled targets scraped by the exporter itself and delivered over OTLP.
+# The exporter refuses to start with these while OTLP export is disabled, so
+# when the chart manages the configuration `helm template` fails early instead.
+otlpTargets:
+  enabled: false
+  # File name inside the mounted configuration directory.
+  fileName: targets.yaml
+  # The scheduled target document. Rendered into the exporter ConfigMap, so a
+  # change to it rolls the Deployment through the existing checksum annotation.
+  data: ""
+  # Example:
+  # data: |
+  #   targets:
+  #     - name: legacy_eu
+  #       collector: legacy_text
+  #       target: http://legacy.eu.example:8080
+  #       request:
+  #         path: /status
+  #         timeout: 5s
+  #       labels:
+  #         region: eu
+  #       otlp:
+  #         service_name: legacy-app
+  #         resource_attributes:
+  #           deployment.environment: production
+
 config:
   enabled: true
   data:

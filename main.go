@@ -16,6 +16,7 @@ func main() {
 	listenAddress := flag.String("web.listen-address", ":8080", "Address on which to expose HTTP endpoints")
 	selfMetricsPath := flag.String("web.self-metrics-path", "/self-metrics", "Dedicated endpoint for exporter self-health metrics")
 	pythonPath := flag.String("python.path", "python3", "Python interpreter used by the python transform")
+	targetFile := flag.String("otlp.targets-file", "", "Optional file of scheduled targets scraped by the exporter and delivered over OTLP")
 	logLevel := flag.String("log.level", "info", "Log level: debug, info, warn, or error")
 	flag.Parse()
 
@@ -27,6 +28,21 @@ func main() {
 	}
 
 	manager := NewConfigManager(config, *configFile, logger)
+	if *targetFile != "" {
+		targets, err := LoadTargetFile(*targetFile)
+		if err == nil {
+			err = targets.Validate()
+		}
+		if err == nil {
+			err = targets.ValidateAgainst(config)
+		}
+		if err != nil {
+			logger.Error("invalid scheduled target configuration; exiting", "file", *targetFile, "error", err)
+			os.Exit(1)
+		}
+		manager.SetTargets(*targetFile, targets)
+		logger.Info("scheduled targets loaded", "file", *targetFile, "targets", len(targets.Targets))
+	}
 	server := NewServer(manager, *pythonPath, logger)
 	server.SetSelfMetricsPath(*selfMetricsPath)
 
@@ -35,7 +51,7 @@ func main() {
 	go manager.ReloadLoop(ctx)
 	go server.OTLPExportLoop(ctx)
 
-	logger.Info("starting exporter", "address", *listenAddress, "collectors", len(config.Collectors))
+	logger.Info("starting exporter", "address", *listenAddress, "collectors", len(config.Collectors), "scheduled_targets", len(manager.Targets()))
 	httpServer := &http.Server{Addr: *listenAddress, Handler: server.Handler()}
 	serverErr := make(chan error, 1)
 	go func() { serverErr <- httpServer.ListenAndServe() }()

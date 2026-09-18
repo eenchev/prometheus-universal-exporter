@@ -1,3 +1,4 @@
+{{- include "prometheus-universal-exporter.validateTargets" . }}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -46,6 +47,9 @@ spec:
             - {{ printf "--web.listen-address=%s" (include "prometheus-universal-exporter.listenAddress" .) | quote }}
             - {{ printf "--web.self-metrics-path=%s" .Values.selfMetrics.path | quote }}
             - {{ printf "--python.path=%s" (include "prometheus-universal-exporter.pythonPath" .) | quote }}
+            {{- if .Values.otlpTargets.enabled }}
+            - {{ printf "--otlp.targets-file=/etc/prometheus-universal-exporter/%s" (include "prometheus-universal-exporter.targetsFile" .) | quote }}
+            {{- end }}
           ports:
             - name: http
               containerPort: {{ include "prometheus-universal-exporter.containerPort" . }}

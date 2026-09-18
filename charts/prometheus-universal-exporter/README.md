@@ -106,6 +106,26 @@ server:
 
 `server.pythonPath` becomes `--python.path`, the interpreter used by the `python` transform. The default matches the exporter image, which is based on `python:3.12-slim` and installs Python at `/usr/local/bin/python3`. Override it when you run a custom image with the interpreter somewhere else.
 
+Set `otlpTargets.enabled` to have the exporter scrape a fixed list of targets itself and deliver only those metrics over OTLP, with no Prometheus involved. `otlpTargets.data` holds the scheduled target document; it is rendered into the same ConfigMap as the exporter configuration, so changing it rolls the Deployment through the existing checksum annotation, and the chart passes `--otlp.targets-file` automatically.
+
+```yaml
+otlpTargets:
+  enabled: true
+  data: |
+    targets:
+      - name: legacy_eu
+        collector: legacy_text
+        target: http://legacy.eu.example:8080
+        request:
+          path: /status
+        labels:
+          region: eu
+        otlp:
+          service_name: legacy-app
+```
+
+Scheduled targets require OTLP export. When the chart manages the configuration, enabling them without `otlp.enabled: true` in `config.data.config.yaml` fails `helm template` with an explicit message rather than producing a Deployment that crash-loops. With an external ConfigMap (`config.enabled: false`) the chart cannot check, and the exporter reports the same requirement at startup. See the main README for the target document format.
+
 Collector caching is configured in the exporter configuration, not in chart values. Add `cache: 60s` to a collector in `config.data.config.yaml` to answer repeated identical probes from memory. The cache is per-process and in-memory, so each replica keeps its own entries and a rollout empties them; with several replicas, expect up to one target request per replica per interval.
 
 The chart defaults to a non-root, read-only-root-filesystem container, drops Linux capabilities, and does not install Kubernetes API permissions. `ingress.enabled` creates an Ingress, while `neg.enabled` adds the GKE NEG service annotation. Configure `networkPolicy` in an environment-specific values file if target access must be restricted.

@@ -130,6 +130,9 @@ func applyPreScript(ctx context.Context, d *Decoded, r *HTTPResponse, c *Collect
 	if err != nil {
 		return nil, err
 	}
+	if structuredTransform(c.Transform.Type) && structuredValue(data) {
+		return &Decoded{Kind: "json", Data: data, Raw: d.Raw}, nil
+	}
 	if d.Kind == "html" {
 		raw := []byte(fmt.Sprint(data))
 		doc, parseErr := goquery.NewDocumentFromReader(bytes.NewReader(raw))
@@ -147,6 +150,28 @@ func applyPreScript(ctx context.Context, d *Decoded, r *HTTPResponse, c *Collect
 		return &Decoded{Kind: "xml", Data: node, Raw: raw}, nil
 	}
 	return &Decoded{Kind: d.Kind, Data: data, Raw: d.Raw}, nil
+}
+
+// structuredTransform reports whether a transform reads decoded structured
+// data rather than the original response format. Only these transforms accept
+// a pre-script result in place of the decoded response.
+func structuredTransform(transformType string) bool {
+	switch transformType {
+	case "", "none", "jq", "yq":
+		return true
+	}
+	return false
+}
+
+// structuredValue reports whether a pre-script returned an object or an array.
+// Scalars leave the decoded format alone, so a pre-script that rewrites text,
+// HTML, or XML keeps its existing behavior.
+func structuredValue(value any) bool {
+	switch value.(type) {
+	case map[string]any, []any:
+		return true
+	}
+	return false
 }
 
 func transformJQ(ctx context.Context, data any, rules []MetricRule, c *Collector) (*MetricSet, error) {

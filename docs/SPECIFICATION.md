@@ -266,8 +266,11 @@ Every collector uses the same `transform` and `metrics` structure. The decoder
 only selects how the response is parsed; it does not contain executable
 collector logic. Python is a transform (`transform.type: python`) and its
 script and optional library declarations live under `transform`, just like
-`pre_script`. A Python transform may use `metrics: []` because it emits its
-metric definitions dynamically through `metric(...)`.
+`pre_script`. A Python transform emits its metric definitions dynamically
+through `metric(...)`, so it MAY omit the `metrics` array entirely; an empty
+`metrics: []` MUST NOT be required. A collector that needs Python only to parse
+its response SHOULD instead reshape the response in `transform.pre_script` and
+declare its metrics in the ordinary `metrics` array, as section 18 defines.
 
 Collector names SHOULD use Prometheus-label-safe/simple names such as:
 
@@ -685,10 +688,13 @@ Example:
       type: gauge
       error_mode: log
       labels: []
-      expression: 'Connections:\\s+(\\d+)'
+      expression: 'Connections:\s+(\d+)'
 ```
 
-Complex parsing can use the Python transform.
+Complex parsing can use Python. Prefer a `transform.pre_script` that reshapes
+the response into structured data, so the metric declaration stays identical to
+every other transform; use the Python transform when metric names are not known
+until the response is read.
 
 ---
 
@@ -1013,6 +1019,23 @@ the exporter MUST parse the returned text again before CSS/XPath extraction.
 The pre-script uses the same timeout, output limit, and Python restrictions as
 Python metric scripts. A pre-script failure is a transform error.
 
+A pre-script that returns a mapping or a sequence produces structured data. When
+the collector's transform reads structured data — `jq`, `yq`, `none`, or an
+unset transform — the exporter MUST treat that result as the decoded response
+and MUST NOT reject the collector because of the response's original format. The
+decoded format becomes JSON for the rest of the scrape, whatever the response
+originally was. This lets an unstructured response be reshaped once in Python
+and then declared with the ordinary `metrics` array, so a collector that needs
+Python only to parse its response keeps the same configuration shape as every
+other collector.
+
+The promotion MUST NOT apply when the transform consumes the original response
+format. `csv`, `regex`, `css`, `xpath`, `prometheus`, and `python` MUST continue
+to receive the decoded format they already require, and a pre-script returning a
+scalar MUST leave the decoded format unchanged for every transform. A structured
+transform whose pre-script returns a scalar MUST still be rejected with the
+existing response-format error.
+
 # 19. Missing keys and error handling
 
 Error behavior MUST be explicit and configurable.
@@ -1165,6 +1188,7 @@ http_exporter_cache_misses_total
 http_exporter_cache_entries
 
 http_exporter_collector_config_valid
+http_exporter_scheduled_targets
 ```
 
 Labels should include `collector` and, where appropriate, `target`.
@@ -1428,14 +1452,54 @@ collectors:
         type: gauge
         error_mode: log
         labels: []
-        expression: 'Connections:\\s+(\\d+)'
+        expression: 'Connections:\s+(\d+)'
 ```
 
-## 28.8 Python transform
+## 28.8 Python pre-script with declared metrics
+
+The preferred shape when Python is only needed to parse the response. The
+pre-script returns structured data and the metrics are declared exactly as they
+are for every other transform:
 
 ```yaml
 collectors:
   - name: weird_vendor
+    request:
+      path: /status
+
+    transform:
+      type: jq
+      libraries:
+        - beautifulsoup4
+        - lxml
+        - python-dateutil
+
+      pre_script: |
+        import re
+
+        data = {"workers": [{"name": m.group(1), "cpu": int(m.group(2))}
+                            for m in re.finditer(r"Worker (\S+) CPU: (\d+)%",
+                                                 response.text)]}
+    metrics:
+      - name: vendor_worker_cpu
+        description: Worker CPU utilization
+        type: gauge
+        error_mode: log
+        expression: .workers[].cpu
+        labels:
+          - name: worker
+            type: expression
+            expression: .workers[].name
+```
+
+## 28.9 Python transform
+
+For collectors whose metric names are not known until the response is read. The
+script emits through `metric(...)` and the `metrics` array is omitted:
+
+```yaml
+collectors:
+  - name: dynamic_vendor
     request:
       path: /status
 
@@ -1451,19 +1515,15 @@ collectors:
 
       script: |
         import re
-        from bs4 import BeautifulSoup
-        from dateutil import parser
 
         for line in response.text.splitlines():
-            match = re.match(r"Worker (\\S+) CPU: (\\d+)%", line)
+            match = re.match(r"(\w+)\s*=\s*(\d+)", line)
             if match:
                 metric(
-                    name="vendor_worker_cpu",
+                    name="vendor_" + match.group(1).lower(),
                     type="gauge",
                     value=float(match.group(2)),
-                    labels={"worker": match.group(1)},
                 )
-    metrics: []
 ```
 
 ---
@@ -1516,7 +1576,11 @@ Provide clear CLI flags, for example:
 --web.listen-address=:8080
 --web.self-metrics-path=/self-metrics
 --python.path=/usr/local/bin/python3
+--otlp.targets-file=/etc/exporter/targets.yaml
 ```
+
+`--otlp.targets-file` is optional and selects the scheduled target document
+defined in section 42.14.
 
 `--python.path` selects the interpreter used by the `python` transform. It MUST
 default to an interpreter resolvable through `PATH` and MUST accept an absolute
@@ -1592,7 +1656,6 @@ charts/prometheus-universal-exporter/
 │   ├── servicemonitor.yaml
 │   ├── podmonitor.yaml
 │   └── NOTES.txt
-└── examples/
 ```
 
 Not every listed template must be rendered by default, but the chart structure MUST cleanly support the corresponding features.
@@ -1787,6 +1850,7 @@ resources: {}
 server: {}
 service: {}
 config: {}
+otlpTargets: {}
 serviceAccount: {}
 securityContext: {}
 podSecurityContext: {}
@@ -2204,6 +2268,20 @@ Test that a transform `pre_script` runs once before extraction, can mutate or
 replace `data`, is subject to timeout/output restrictions, and is reparsed for
 HTML/XML output.
 
+Test structured pre-script results:
+
+- A text response reshaped into a mapping is extracted by ordinary `jq` metric
+  rules, including label expressions, and produces the declared name, help, and
+  type.
+- Promotion applies to `jq`, `yq`, `none`, and an unset transform, for any
+  original response format, and to both mapping and sequence results.
+- Promotion does not apply to `csv`, `regex`, `css`, `xpath`, or `python`, which
+  keep receiving their decoded format.
+- A scalar pre-script result leaves the decoded format unchanged, so HTML output
+  is still reparsed and regex input is still text.
+- A structured transform whose pre-script returns a scalar still fails with the
+  response-format error.
+
 Test that metric-level `error_mode: log` records an extraction error and skips
 only that metric, while `error_mode: ignore` skips it silently without failing
 the collector or unrelated metrics.
@@ -2553,6 +2631,11 @@ with at least these values combinations:
 9. Custom exporter arguments/configuration, including a custom
    `server.listenAddress` and `server.pythonPath`, and an invalid
    `server.listenAddress` that MUST fail rendering.
+9a. Scheduled targets enabled, which MUST add the `--otlp.targets-file`
+   argument and render the target document into the exporter ConfigMap. When
+   the chart manages the configuration, enabling scheduled targets without
+   `otlp.enabled: true`, or with an empty document, MUST fail rendering with an
+   explicit message rather than producing a Deployment that cannot start.
 10. Multiple collectors in ConfigMap content.
 11. Existing Secret references for credentials where supported.
 
@@ -2651,7 +2734,34 @@ The project MUST document how to run the complete suite locally without external
 
 The test suite SHOULD avoid time-dependent assertions and random network behavior. Where time is required, use injectable clocks or bounded assertions.
 
-## 34.35 Collector cache tests
+## 34.35 Scheduled target tests
+
+Required:
+
+- A target document is rejected unless OTLP export is enabled and an endpoint is
+  configured, and the exporter exits non-zero with that error at startup.
+- A target naming an unconfigured collector is rejected.
+- Document validation rejects a missing collector or target, a relative target
+  URL, an invalid or duplicate target name, an unsupported method, a negative
+  timeout or retry setting, conflicting credential sources, and an invalid
+  label name; unknown fields are rejected.
+- Every request parameter round-trips from the document into the per-scrape
+  overrides, the request headers, and the cache key.
+- Target credentials and headers reach the target request.
+- Metrics are grouped by the target's OTLP resource, per-target resource
+  attributes merge over the exporter-wide ones, and an absent per-target service
+  name falls back to the exporter default.
+- Target labels are applied to exported metrics without overwriting labels the
+  collector extracted, and without mutating the cached metric set.
+- A scheduled scrape reuses the collector cache, and the reused scrape is
+  counted in the existing per-collector self-metrics.
+- A failed scrape exports a zero health metric and no collector metrics.
+- The delivered OTLP payload contains one `resourceMetrics` entry per distinct
+  resource.
+- A configuration reload that would disable OTLP while targets are loaded is
+  rejected, and an invalid target reload keeps the previous document.
+
+## 34.36 Collector cache tests
 
 Required:
 
@@ -3329,3 +3439,103 @@ for OTLP export. Target-request self-metrics such as
 `http_exporter_scrape_http_status_code` and
 `http_exporter_scrape_response_bytes` describe the last real target request and
 MUST NOT be altered by a cache hit.
+
+## 42.14 Scheduled targets exported over OTLP
+
+The exporter MAY be started with an optional scheduled target document:
+
+```text
+--otlp.targets-file=/etc/prometheus-universal-exporter/targets.yaml
+```
+
+The document lists fully specified requests that the exporter scrapes itself:
+
+```yaml
+targets:
+  - name: legacy_eu
+    collector: legacy_text
+    target: http://legacy.eu.example:8080
+    request:
+      method: GET
+      path: /status
+      body: ""
+      timeout: 5s
+      insecure_skip_verify: false
+      retry:
+        attempts: 2
+        backoff: 2s
+      headers:
+        X-Tenant: team-a
+      bearer_token_file: /var/run/prometheus-universal-exporter/target-auth/token
+    labels:
+      region: eu
+    otlp:
+      service_name: legacy-app
+      resource_attributes:
+        deployment.environment: production
+```
+
+The feature exists only to deliver metrics over OTLP. The exporter MUST refuse
+to start when a target document is supplied while `otlp.enabled` is false or no
+`otlp.endpoint` is configured, and MUST report that requirement explicitly
+before exiting with a non-zero status. A configuration reload that would put the
+exporter into that state while targets are loaded MUST be rejected, and the last
+valid configuration MUST remain active. Every target MUST name a configured
+collector; an unknown collector MUST be rejected at startup and at reload.
+
+The target document MUST be reloadable on the same terms as the exporter
+configuration: an invalid document MUST be rejected with the previous document
+left in force.
+
+Each target MUST accept every per-scrape parameter the `/probe` endpoint
+accepts — `method`, `path`, `body`, `timeout`, `insecure_skip_verify`,
+`retry.attempts`, and `retry.backoff` — with the same semantics, overriding the
+collector's own request settings for that target only. Each target MUST also
+accept static request `headers` and its own target credentials, as inline or
+file-backed basic authentication or a bearer token. Because the document is
+operator configuration rather than caller input, these headers are applied
+directly and MUST NOT be filtered through the collector's
+`request.forward_headers` allowlist.
+
+Each target MAY declare `labels`, which the exporter MUST add to every metric
+that target produces. A label the collector already extracted MUST NOT be
+overwritten.
+
+Each target MAY declare `otlp.service_name` and `otlp.resource_attributes`.
+These form the OTLP resource the target's metrics are exported under. Both MUST
+default to the exporter-wide `otlp.service_name` and `otlp.resource_attributes`,
+and per-target attributes MUST be merged over the exporter-wide ones rather than
+replacing them. The exporter MUST emit one `resourceMetrics` entry per distinct
+resource in an export, so metrics from targets with different identities are not
+conflated.
+
+The scrape period MUST be the OTLP export interval, so every export carries a
+freshly collected set. The exporter MUST bound one scrape pass by that interval
+and SHOULD limit how many targets it scrapes concurrently. Scheduled scrapes MUST
+run through the same fetch, decode, and transform path as `/probe`, including the
+collector's cache, limits, and validation. A scheduled scrape and a `/probe`
+request that would produce a byte-for-byte identical request MUST share cache
+entries, which requires the cache key to be derived from the same request
+fingerprint.
+
+Scheduled targets MUST NOT be exposed on `/metrics` or reachable through
+`/probe`; their metrics are delivered only over OTLP.
+
+Each scheduled scrape MUST export a health result under that target's resource
+and labels:
+
+```text
+http_exporter_target_up
+http_exporter_target_scrape_duration_seconds
+```
+
+Without them a failing target is absent from the OTLP stream and cannot be
+distinguished from a target that was never configured. A failed scrape MUST
+export the health result with `http_exporter_target_up` set to zero and MUST NOT
+export collector metrics for that target.
+
+Scheduled scrapes MUST be counted in the existing per-collector self-metrics
+rather than in per-target series, so exporter self-metric cardinality does not
+grow with the number of targets. The exporter MUST expose
+`http_exporter_scheduled_targets` so an operator can confirm the document
+loaded.

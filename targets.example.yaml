@@ -1,0 +1,65 @@
+# Scheduled targets scraped by the exporter itself and delivered over OTLP.
+#
+# Pass this file with --otlp.targets-file. It is only accepted when OTLP export
+# is enabled in the exporter configuration; starting with targets while
+# otlp.enabled is false is a startup error. Targets are scraped once per OTLP
+# interval (otlp.interval) and are never exposed on /metrics or /probe. The
+# selected collector's cache, limits, and error handling all still apply.
+targets:
+  - name: legacy_eu
+    # Any collector defined in the exporter configuration.
+    collector: legacy_text
+    target: http://legacy.eu.example:8080
+
+    # Every per-scrape parameter the /probe endpoint accepts is available here
+    # and overrides the collector's own request settings for this target.
+    request:
+      method: GET
+      path: /status
+      # body: |
+      #   raw request body for POST or PUT requests
+      timeout: 5s
+      # Disabling certificate verification is an explicit security trade-off.
+      # insecure_skip_verify: false
+      retry:
+        attempts: 2
+        backoff: 2s
+      headers:
+        X-Tenant: team-a
+      # Target credentials. Prefer the file-backed forms so secrets stay in a
+      # mounted Secret rather than in this document.
+      # bearer_token: monitor-token
+      # bearer_token_file: /var/run/prometheus-universal-exporter/target-auth/token
+      # basic_auth:
+      #   username: exporter
+      #   password: change-me
+      # basic_auth_file:
+      #   username: /var/run/prometheus-universal-exporter/target-auth/username
+      #   password: /var/run/prometheus-universal-exporter/target-auth/password
+
+    # Added to every metric this target produces. A label the collector already
+    # extracted is never overwritten.
+    labels:
+      region: eu
+      environment: production
+
+    # OTLP resource identity for this target. Both fall back to the exporter's
+    # otlp.service_name and otlp.resource_attributes; resource_attributes set
+    # here are merged over the exporter-wide ones.
+    otlp:
+      service_name: legacy-app
+      resource_attributes:
+        deployment.environment: production
+        team: platform
+
+  - name: legacy_us
+    collector: legacy_text
+    target: http://legacy.us.example:8080
+    request:
+      path: /status
+    labels:
+      region: us
+    otlp:
+      service_name: legacy-app
+      resource_attributes:
+        deployment.environment: production

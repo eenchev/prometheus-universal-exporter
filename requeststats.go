@@ -188,8 +188,9 @@ func (s *Server) seedScheduledRequests() {
 // http_exporter_cache_entries, which counts the entries a collector's cache
 // holds and belongs to no single request.
 func verboseRequestSeriesNames() []string {
-	names := make([]string, 0, len(selfMetricNames))
-	for _, name := range selfMetricNames {
+	all := selfMetricNames()
+	names := make([]string, 0, len(all))
+	for _, name := range all {
 		if name == "http_exporter_cache_entries" {
 			continue
 		}

@@ -339,7 +339,15 @@ looks like it is extracting badly rather than configured wrongly. The exporter
 therefore refuses to start when a pre-script never produces `data`, naming the
 collector, and rejects such a configuration on reload with the previous one left
 active. Replacing `data`, mutating it by key or attribute, augmenting it,
-binding it as a loop or `with` target, and calling a method on it all count.
+binding it as a loop or `with` target, and calling a method that mutates it all
+count.
+
+Reading `data` does not count, however much of it the script does. A method call
+only counts when the method mutates: `data.update(...)` and
+`data["rates"].append(...)` produce `data`, while `data.items()`, `data.get(...)`
+and `data.copy()` are reads. This matters because the mistake usually looks
+busy — a script that walks `data` thoroughly and assigns the result to a
+neighbouring name:
 
 ```yaml
 transform:
@@ -349,6 +357,12 @@ transform:
 
     # result = json.loads(...)  would be rejected at startup: nothing reaches
     # the transform, because the exporter only reads back `data`.
+
+    # So would this, despite reading data three times — it never produces it:
+    #   reshaped = {
+    #       "base": data["base"],
+    #       "rates": [r for r in sorted(data["rates"].items())],
+    #   }
 ```
 
 The same startup check compiles every configured script, so a Python syntax
@@ -671,6 +685,32 @@ When enabled, Basic Auth is required for `/probe`, `/metrics`, and the configure
 
 This conflict is rejected during startup: the exporter logs `invalid startup configuration; exiting` and terminates with a non-zero exit code. Invalid configurations detected during file reload are rejected while the last valid configuration remains active.
 
+### Logging
+
+Every line the exporter writes is a JSON object, at the level set by
+`--log.level` (`debug`, `info`, `warn` or `error`):
+
+```json
+{"time":"2026-09-18T21:49:52+03:00","level":"INFO","msg":"starting exporter","address":":8080","collectors":1,"scheduled_targets":0,"config_watch":true,"config_watch_interval":"1m30s"}
+{"time":"2026-09-18T21:49:54+03:00","level":"ERROR","msg":"metric extraction failed","collector":"exchange_rates","metric":"exchange_rate_observation_timestamp_seconds","error":"metric \"exchange_rate_observation_timestamp_seconds\" value is missing"}
+```
+
+There is no second format. That is worth stating because it is easy to lose: a
+metric rule failing under `error_mode: log` reports from inside a transform,
+several calls below anything holding a logger, so it goes through Go's default
+logger rather than the exporter's. The exporter installs its JSON logger as the
+process default at startup so those lines are JSON too, instead of arriving as
+`2026/09/18 21:43:35 ERROR metric extraction failed metric=...` in the middle of
+a stream your collector is parsing.
+
+A failing rule is reported with its collector as well as its name, because the
+same metric name is often declared by several collectors and the rule name alone
+would not say which one to go and look at.
+
+`config_watch_interval` appears only when `--config.watch` is on, since that is
+what bounds how stale a running configuration can be; with the watch off there
+is no interval to report.
+
 ### Watching the configuration
 
 The exporter reads its configuration once at startup. Pass `--config.watch` to
@@ -786,6 +826,23 @@ reason stated at the suppression: `request.tls.insecure_skip_verify` is a
 documented opt-in, and the exporter necessarily reads the configuration, target
 document and credential files whose paths the operator supplies.
 
+### The Go toolchain
+
+CI and the release workflows ask setup-go for `stable`, so the build always uses
+the current stable Go release and no workflow needs editing when Go ships a new
+one. The `go` directive in `go.mod` is something different: it is the *minimum*
+the module requires, raised by dependency updates rather than by whichever
+toolchain builds it, so it stays where the dependencies put it. The Dockerfile
+pins `GO_VERSION` to a released minor, which `tools/depupdate` keeps moving
+within the major.
+
+The two can drift apart in a way that is hard to read: a dependency bump raises
+the go directive in a pull request that touches no workflow, and from then on
+every build fails with `go.mod requires go >= X` with nothing nearby to explain
+it. `goversion_test.go` ties them together — it checks that every Go version the
+workflows request, and the one the Dockerfile pins, satisfies the go directive —
+so `go test ./...` catches the mismatch instead of the next red build.
+
 GitHub Actions uses changed-path detection: Go tests/build/vet/race checks run
 for Go source or module changes, while Helm lint/template checks run for changes
 under `charts/`. A change under `charts/` runs the Go suite too, because the
@@ -806,9 +863,9 @@ Dependabot cannot read it: `GO_VERSION`, `PYTHON_VERSION` and the pip pins are
 build arguments interpolated into the `FROM` lines and the `pip install`, which
 the Docker ecosystem updater does not resolve. The resolver lives in
 `tools/depupdate`, so its rules are covered by `go test ./...` like everything
-else. It never crosses a major version, keeps each pin's granularity (`1.23`
+else. It never crosses a major version, keeps each pin's granularity (`1.27`
 stays two-component, because a two-component image tag already picks up patch
-rebuilds and pinning it to `1.23.4` would freeze it), skips pre-releases and
+rebuilds and pinning it to `1.27.4` would freeze it), skips pre-releases and
 yanked PyPI files, and draws image candidates from the exact tag the build
 pulls, so a proposed version is known to exist as `golang:<version>-alpine`
 rather than merely to have been released. A test keeps the resolver's pin table

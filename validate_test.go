@@ -28,7 +28,7 @@ func validatedConfig(t *testing.T, collectors ...Collector) *Config {
 // A pre-script hands its result back through `data`, so every shape that
 // produces one must be accepted: replacing it, mutating it by key or attribute,
 // augmenting it, binding it in a loop or a with-statement, or calling a method
-// on it.
+// that mutates it.
 func TestPreScriptProducingDataIsAccepted(t *testing.T) {
 	scripts := map[string]string{
 		"replaces data":            `data = {"value": 1}`,
@@ -74,6 +74,72 @@ func TestPreScriptWithoutDataIsRejected(t *testing.T) {
 				if !strings.Contains(err.Error(), want) {
 					t.Fatalf("error %q should mention %q", err, want)
 				}
+			}
+		})
+	}
+}
+
+// The shape that slipped through once: a script that reads `data` thoroughly
+// and assigns its result to some other name. Reading is not producing, however
+// much of it there is, and a method call is only a mutation when the method
+// mutates — `data["rates"].items()` is a read. Accepting it let the exporter
+// start and then extract from the untouched response, which surfaces as
+// mis-extraction errors on every scrape rather than as the configuration
+// mistake it is.
+func TestPreScriptThatOnlyReadsDataIsRejected(t *testing.T) {
+	misnamed := "from datetime import datetime, timezone\n" +
+		"published = datetime.strptime(data[\"date\"], \"%Y-%m-%d\").replace(tzinfo=timezone.utc)\n" +
+		"mata = {\n" +
+		"    \"base\": data[\"base\"],\n" +
+		"    \"observed_at\": published.timestamp(),\n" +
+		"    \"rates\": [\n" +
+		"        {\"currency\": currency, \"rate\": rate}\n" +
+		"        for currency, rate in sorted(data[\"rates\"].items())\n" +
+		"    ],\n" +
+		"}\n"
+	cfg := validatedConfig(t, preScriptCollector("misnamed", misnamed))
+	err := ValidatePythonScripts("python3", cfg)
+	if err == nil {
+		t.Fatal("a pre-script that assigns its result to another name was accepted")
+	}
+	if !strings.Contains(err.Error(), "'data'") || !strings.Contains(err.Error(), "misnamed") {
+		t.Fatalf("error %q should name the collector and the variable", err)
+	}
+}
+
+// Reading methods must never be mistaken for mutations, and mutating ones must
+// still be recognised, including on a nested part of data.
+func TestOnlyMutatingMethodsCountAsProducingData(t *testing.T) {
+	reads := map[string]string{
+		"items":      `for k, v in data.items(): pass`,
+		"keys":       `names = list(data.keys())`,
+		"values":     `total = sum(data.values())`,
+		"get":        `base = data.get("base")`,
+		"copy":       `other = data.copy()`,
+		"nested get": `rates = data["rates"].get("USD")`,
+		"index":      `first = data["rates"].index(1)`,
+	}
+	for name, script := range reads {
+		t.Run("reads/"+name, func(t *testing.T) {
+			cfg := validatedConfig(t, preScriptCollector("reader", script))
+			if err := ValidatePythonScripts("python3", cfg); err == nil {
+				t.Fatalf("%q only reads data and must be rejected", script)
+			}
+		})
+	}
+	mutations := map[string]string{
+		"update":        `data.update({"value": 1})`,
+		"append":        `data.append(1)`,
+		"nested append": `data["rates"].append(1)`,
+		"setdefault":    `data.setdefault("value", 1)`,
+		"clear":         `data.clear()`,
+		"sort":          `data["rates"].sort()`,
+	}
+	for name, script := range mutations {
+		t.Run("mutates/"+name, func(t *testing.T) {
+			cfg := validatedConfig(t, preScriptCollector("mutator", script))
+			if err := ValidatePythonScripts("python3", cfg); err != nil {
+				t.Fatalf("%q mutates data in place and must be accepted: %v", script, err)
 			}
 		})
 	}
@@ -164,7 +230,9 @@ func TestConfigReloadRejectsAPreScriptThatDoesNotProduceData(t *testing.T) {
 	manager := NewConfigManager(cfg, path, slog.Default())
 	manager.SetPythonPath("python3")
 
-	broken := strings.Replace(valid, "        data = {\"value\": 1}\n", "        result = {\"value\": 1}\n", 1)
+	// Reads data, produces nothing: the shape a reload must refuse just as
+	// startup does.
+	broken := strings.Replace(valid, "        data = {\"value\": 1}\n", "        mata = {\"value\": data[\"value\"]}\n", 1)
 	if err := os.WriteFile(path, []byte(broken), 0600); err != nil {
 		t.Fatal(err)
 	}

@@ -40,25 +40,54 @@ func (s *serverStats) snapshot() statsValues {
 	return s.statsValues
 }
 
-// selfMetricNames are the exporter's own metric families, in the order they are
-// exposed.
-var selfMetricNames = []string{
-	"http_exporter_scrapes_total",
-	"http_exporter_scrape_success",
-	"http_exporter_scrape_duration_seconds",
-	"http_exporter_scrape_http_status_code",
-	"http_exporter_scrape_response_bytes",
-	"http_exporter_decode_success",
-	"http_exporter_parse_errors_total",
-	"http_exporter_transform_errors_total",
-	"http_exporter_missing_keys_total",
-	"http_exporter_script_errors_total",
-	"http_exporter_script_duration_seconds",
-	"http_exporter_metrics_emitted",
-	"http_exporter_series_limit_exceeded",
-	"http_exporter_cache_hits_total",
-	"http_exporter_cache_misses_total",
-	"http_exporter_cache_entries",
+// selfMetricDescriptors are the exporter's own metric families, in the order
+// they are exposed, each with the help text it is published with. A shared
+// placeholder would make the endpoint self-documenting in name only: HELP is
+// what a reader sees in Grafana's metric browser or `curl`, and sixteen
+// identical lines tell them nothing about which counter to reach for.
+var selfMetricDescriptors = []selfMetricDescriptor{
+	{"http_exporter_scrapes_total", "Probes served for this collector, including those answered from the response cache."},
+	{"http_exporter_scrape_success", "Probes for this collector that completed without a fatal error."},
+	{"http_exporter_scrape_duration_seconds", "Duration of the most recent probe of this collector, in seconds."},
+	{"http_exporter_scrape_http_status_code", "HTTP status the target returned on the most recent scrape, or 0 when the request failed before a response arrived."},
+	{"http_exporter_scrape_response_bytes", "Size of the most recent response body for this collector, in bytes."},
+	{"http_exporter_decode_success", "Responses this collector decoded into its configured format."},
+	{"http_exporter_parse_errors_total", "Responses this collector's decoder could not parse."},
+	{"http_exporter_transform_errors_total", "Transforms that failed for this collector."},
+	{"http_exporter_missing_keys_total", "Transform failures caused by a key or field the response did not contain."},
+	{"http_exporter_script_errors_total", "Python script failures during this collector's transform."},
+	{"http_exporter_script_duration_seconds", "Duration of the most recent Python script run for this collector, in seconds."},
+	{"http_exporter_metrics_emitted", "Metrics this collector has produced across its scrapes."},
+	{"http_exporter_series_limit_exceeded", "Scrapes rejected for exceeding this collector's response size or series limits."},
+	{"http_exporter_cache_hits_total", "Probes answered from this collector's response cache."},
+	{"http_exporter_cache_misses_total", "Probes that found no usable cache entry and went to the target."},
+	{"http_exporter_cache_entries", "Entries currently held in this collector's response cache."},
+}
+
+// selfMetricDescriptor names one of the exporter's own metric families and the
+// help text it is published with.
+type selfMetricDescriptor struct {
+	Name string
+	Help string
+}
+
+// selfMetricHelp indexes the descriptors, so the self-metrics served as a
+// MetricSet carry the same help as the ones rendered as text.
+var selfMetricHelp = func() map[string]string {
+	out := make(map[string]string, len(selfMetricDescriptors))
+	for _, d := range selfMetricDescriptors {
+		out[d.Name] = d.Help
+	}
+	return out
+}()
+
+// selfMetricNames lists the families in exposition order.
+func selfMetricNames() []string {
+	names := make([]string, 0, len(selfMetricDescriptors))
+	for _, d := range selfMetricDescriptors {
+		names = append(names, d.Name)
+	}
+	return names
 }
 
 type selfSeries struct {
@@ -532,9 +561,9 @@ func (s *Server) metricsHandler(w http.ResponseWriter, _ *http.Request) {
 	cacheEntries := s.cache.Stats(time.Now())
 	var b strings.Builder
 	declared := map[string]bool{}
-	for _, n := range selfMetricNames {
-		fmt.Fprintf(&b, "# HELP %s Exporter self metric.\n# TYPE %s gauge\n", n, n)
-		declared[n] = true
+	for _, d := range selfMetricDescriptors {
+		fmt.Fprintf(&b, "# HELP %s %s\n# TYPE %s gauge\n", d.Name, d.Help, d.Name)
+		declared[d.Name] = true
 	}
 	b.WriteString("# HELP http_exporter_collector_config_valid Whether the collector configuration is valid.\n# TYPE http_exporter_collector_config_valid gauge\n")
 	for _, x := range names {
@@ -578,7 +607,7 @@ func (s *Server) selfMetricSet() MetricSet {
 		x.v.mu.Lock()
 		labels := map[string]string{"collector": x.name}
 		add := func(name string, typ MetricType, value float64) {
-			out.Metrics = append(out.Metrics, Metric{Name: name, Type: typ, Value: value, Labels: cloneLabels(labels)})
+			out.Metrics = append(out.Metrics, Metric{Name: name, Help: selfMetricHelp[name], Type: typ, Value: value, Labels: cloneLabels(labels)})
 		}
 		add("http_exporter_scrapes_total", CounterMetricType, float64(x.v.probes))
 		add("http_exporter_scrape_success", GaugeMetricType, float64(x.v.success))

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"log/slog"
 	"net/http"
 	"os"
@@ -29,7 +30,7 @@ func run() int {
 	logLevel := flag.String("log.level", "info", "Log level: debug, info, warn, or error")
 	flag.Parse()
 
-	logger := newLogger(*logLevel)
+	logger := newLogger(*logLevel, os.Stderr)
 	config, err := LoadConfig(*configFile)
 	if err != nil {
 		logger.Error("invalid startup configuration; exiting", "error", err)
@@ -74,8 +75,15 @@ func run() int {
 	go manager.ReloadLoop(ctx)
 	go server.OTLPExportLoop(ctx)
 
-	logger.Info("starting exporter", "address", *listenAddress, "collectors", len(config.Collectors),
-		"scheduled_targets", len(manager.Targets()), "config_watch", manager.WatchEnabled())
+	startup := []any{"address", *listenAddress, "collectors", len(config.Collectors),
+		"scheduled_targets", len(manager.Targets()), "config_watch", manager.WatchEnabled()}
+	// The interval is only meaningful when the watch is on, and its absence
+	// would otherwise leave the operator guessing how stale a running
+	// configuration can be.
+	if manager.WatchEnabled() {
+		startup = append(startup, "config_watch_interval", manager.WatchInterval().String())
+	}
+	logger.Info("starting exporter", startup...)
 	// ReadHeaderTimeout bounds how long a client may take to send its request
 	// headers, so a stalled connection cannot hold a handler open indefinitely.
 	httpServer := &http.Server{Addr: *listenAddress, Handler: server.Handler(), ReadHeaderTimeout: 10 * time.Second}
@@ -97,7 +105,14 @@ func run() int {
 	return 0
 }
 
-func newLogger(level string) *slog.Logger {
+// newLogger builds the exporter's logger and installs it as the default. Every
+// line the exporter writes has to be JSON, and not all of them come from a
+// logger passed down through the call chain: metric extraction reports a failed
+// rule from deep inside a transform, where threading a logger through seven
+// signatures would buy nothing. Those lines go through slog's default logger,
+// which without this would be the text handler and would emit a differently
+// shaped line into the middle of an otherwise machine-readable stream.
+func newLogger(level string, out io.Writer) *slog.Logger {
 	var l slog.Level
 	switch level {
 	case "debug":
@@ -109,5 +124,7 @@ func newLogger(level string) *slog.Logger {
 	default:
 		l = slog.LevelInfo
 	}
-	return slog.New(slog.NewJSONHandler(os.Stderr, &slog.HandlerOptions{Level: l}))
+	logger := slog.New(slog.NewJSONHandler(out, &slog.HandlerOptions{Level: l}))
+	slog.SetDefault(logger)
+	return logger
 }

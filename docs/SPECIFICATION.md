@@ -1030,7 +1030,15 @@ leaves it in another name discards its work silently: the transform then runs
 against the untouched decoded response and the collector appears to be
 mis-extracting rather than misconfigured. Replacing `data`, mutating it by key
 or attribute, augmenting it, binding it as a loop or `with` target, and calling
-a method on it all satisfy this.
+a method that mutates it all satisfy this.
+
+Reading `data` MUST NOT satisfy it, however thoroughly the script reads. A
+method call counts only when the method mutates its receiver: `data.update(...)`
+and `data["rates"].append(...)` produce `data`, while `data.items()`,
+`data.get(...)` and `data.copy()` are reads. A script that reads `data` at
+length and assigns its result to another name is the mistake this rule exists to
+catch, and treating any method call on `data` as a mutation would let exactly
+that script start.
 
 This MUST be enforced as a configuration error rather than a scrape error. The
 exporter MUST refuse to start when a configured pre-script never produces
@@ -1224,6 +1232,15 @@ Labels should include `collector` and, where appropriate, `target`.
 
 Avoid unbounded label values on exporter self-metrics.
 
+Each family MUST be published with its own `HELP` text describing what that
+family counts or measures. A shared placeholder such as "Exporter self metric"
+MUST NOT be used: `HELP` is what a reader sees in a metric browser or in the raw
+exposition, and repeating one line across every family documents nothing while
+appearing to. The descriptions MUST come from a single source, so the text
+exposition and the self-metrics delivered over OTLP carry the same text, and a
+family exposed without a description MUST fail the repository's tests rather
+than reach an operator undocumented.
+
 `/metrics` MUST NOT require a target query parameter.
 
 ### 22.1 Verbose per-request self-metrics
@@ -1393,7 +1410,38 @@ all.
 
 # 25. Logging
 
-Use structured logging.
+Every line the exporter writes to its log MUST be a JSON object, with no
+exceptions and no second format. Logs are read by machines, so a line in another
+shape is not a cosmetic inconsistency: it is a line the collector drops or
+chokes on, in the middle of a stream it otherwise parses.
+
+This MUST hold for lines the exporter does not write through a logger it passed
+down the call chain. Metric extraction reports a failing rule from inside a
+transform, several calls below anything holding a logger, and reaches Go's
+default logger instead. The exporter MUST therefore install its own JSON logger
+as the process default at startup, rather than relying on every call site to
+have been given one — a rule enforced only by convention is one a later change
+breaks silently, and the resulting line looks like
+
+```text
+2026/09/18 21:43:35 ERROR metric extraction failed metric=demo_value error="..."
+```
+
+which is the text handler's default format, not the exporter's.
+
+The configured log level MUST apply to those lines too.
+
+A logged metric extraction failure MUST name the collector as well as the rule.
+A metric name is not unique across collectors — the same rule is often copied
+between them — so the rule name alone does not say which collector to go and
+look at. A logging path MUST NOT be what fails a scrape, so an absent collector
+MUST degrade to an empty name rather than panicking.
+
+The startup line MUST report the listen address, the number of collectors, the
+number of scheduled targets, and whether the configuration watch is enabled.
+When the watch is enabled it MUST also report the interval, because that is what
+bounds how stale a running configuration can be; when it is disabled the
+interval MUST be omitted rather than reported as a value that has no effect.
 
 Every probe failure should include enough context to identify:
 
@@ -2473,10 +2521,16 @@ Test the pre-script `data` contract:
 
 - A pre-script that produces `data` is accepted for every shape that does so:
   replacing it, mutating it by key, nested key or attribute, augmenting it,
-  annotated and tuple and starred assignment, a method call on it, and binding
-  it as a loop or `with` target.
+  annotated and tuple and starred assignment, a mutating method call on it or on
+  a nested part of it, and binding it as a loop or `with` target.
 - A pre-script that assigns another name, computes and discards, only reads
   `data`, or mutates a different object is rejected, naming the collector.
+- A pre-script that reads `data` extensively — including through a method call
+  such as `data["rates"].items()` — and assigns its result to another name is
+  rejected. Reading is not producing, and each non-mutating method is covered
+  individually so none of them can be mistaken for a mutation.
+- A reload is held to the same rule, so a script that only reads `data` is not
+  activated by one either.
 - A Python syntax error in a pre-script or a `python` transform script is
   rejected at startup.
 - A `python` transform script that never mentions `data` is accepted.
@@ -2736,6 +2790,12 @@ Verify exporter self-metrics for:
 - Series/limit violations.
 - Collector configuration validity.
 
+Verify that every self-metric family is published with a description of its own:
+none is empty, none repeats another, none is the old shared placeholder, the
+descriptor list and what the endpoint actually exposes do not drift apart in
+either direction, and the self-metrics delivered over OTLP carry the same text
+as the exposition.
+
 Verify labels such as `collector` and `target` are present only where appropriate and do not create uncontrolled cardinality.
 
 ## 34.24 Logging tests
@@ -2747,7 +2807,17 @@ Test that logs:
 - Distinguish HTTP, decode, transformation, and validation errors.
 - Never expose authentication secrets.
 - Do not dump entire potentially sensitive response bodies by default.
-- Respect configured log level.
+- Respect configured log level, including for lines written through the default
+  logger.
+- Are JSON on every line: a metric rule failing under `error_mode: log` — which
+  reports from inside a transform rather than through a passed-down logger —
+  produces a JSON object carrying the time, level, message, the failing rule's
+  name and its collector.
+- Name the collector even when two collectors declare the same metric name, and
+  degrade to an empty name rather than panicking when no collector is available.
+- Are silent for the other error modes, so `ignore` really does stop the noise.
+- Report the watch interval in the startup line when the watch is enabled, and
+  omit it when it is not.
 
 ## 34.25 Concurrency and race tests
 
@@ -3065,6 +3135,9 @@ Required:
 - A source that cannot be reached is reported as an error rather than as
   "nothing to update".
 - Tag listings are followed across pages.
+- Every Go version the workflows request satisfies the go directive in
+  `go.mod`, as does the version the Dockerfile pins, and the comparison itself
+  is covered for versions of differing granularity.
 
 # 35. Documentation requirements
 
@@ -3925,10 +3998,10 @@ The resolver MUST live in the repository as ordinary Go code under `tools/`, so
 its rules are covered by the same test suite as the exporter, and MUST:
 
 - never cross a major version, for any pin;
-- keep each pin's granularity, so a two-component pin such as `1.23` is only
+- keep each pin's granularity, so a two-component pin such as `1.27` is only
   ever replaced by another two-component version. A two-component image tag is a
   floating tag that already picks up patch rebuilds, so rewriting it to
-  `1.23.4` would freeze it and make the pin worse rather than better;
+  `1.27.4` would freeze it and make the pin worse rather than better;
 - reject pre-release, release-candidate and development versions, and accept
   PEP 440 post-releases, which one of the pinned Python packages uses;
 - draw image candidates from the exact tag form the build pulls, so a proposed
@@ -3942,6 +4015,20 @@ its rules are covered by the same test suite as the exporter, and MUST:
 
 The pin table and the Dockerfile MUST be kept in agreement by a test, so a
 renamed or removed build argument cannot leave a dependency unwatched.
+
+The CI and release workflows MUST build with the current stable Go release
+rather than a pinned version, so the build follows Go's releases without anyone
+editing a workflow. The `go` directive in `go.mod` MUST remain the minimum the
+module requires — it is raised by dependency updates, not by the toolchain the
+build happens to use — and the Dockerfile MUST pin a Go version that satisfies
+it.
+
+A dependency update can raise the go directive in a pull request that touches no
+workflow, which leaves every later build failing with `go.mod requires go >= X`
+and nothing nearby to explain it. A test MUST therefore verify that every Go
+version a workflow requests, and the version the Dockerfile pins, satisfies the
+go directive; a workflow requesting the current stable release satisfies it by
+definition.
 
 The scheduled workflow MUST run the resolver, and when anything moved MUST run
 the full quality suite and build the container image against the new versions

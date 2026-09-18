@@ -445,6 +445,10 @@ func (m *ConfigManager) SetWatchInterval(interval time.Duration) { m.watchInterv
 // WatchEnabled reports whether ReloadLoop will do anything.
 func (m *ConfigManager) WatchEnabled() bool { return m.watchInterval > 0 }
 
+// WatchInterval is how often an enabled watch re-stats the files, which is what
+// bounds how stale a running configuration can be.
+func (m *ConfigManager) WatchInterval() time.Duration { return m.watchInterval }
+
 // SetPythonPath records the interpreter used to check collector Python
 // scripts, so a reloaded configuration is held to the same contract as the one
 // the exporter started with.

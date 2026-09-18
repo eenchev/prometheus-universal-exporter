@@ -26,7 +26,7 @@ jobs:
       - uses: actions/setup-go@v7
         if: steps.changes.outputs.go == 'true'
         with:
-          go-version: '1.23.x'
+          go-version: 'stable'
       - uses: azure/setup-helm@v5
         if: steps.changes.outputs.chart == 'true'
       - run: go mod download

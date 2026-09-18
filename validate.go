@@ -21,6 +21,14 @@ import (
 
 const pythonScriptValidator = `import sys,json,ast
 
+# Only these methods change their receiver. Accepting any method call on data
+# would accept a script that merely reads it: data["rates"].items() is a read,
+# and treating it as a mutation lets a script that never produces data start,
+# which is exactly the mistake this check exists to catch.
+MUTATORS={'append','extend','insert','remove','pop','popitem','clear','sort','reverse',
+ 'add','discard','update','setdefault',
+ 'difference_update','intersection_update','symmetric_difference_update'}
+
 def roots(node):
     out=[]
     stack=[node]
@@ -39,8 +47,9 @@ def produces_data(tree):
         elif isinstance(node,ast.withitem):
             if node.optional_vars is not None: targets=[node.optional_vars]
         elif isinstance(node,ast.Call) and isinstance(node.func,ast.Attribute):
-            # data.update(...), data.append(...) and friends mutate in place.
-            if 'data' in roots(node.func.value): return True
+            # data.update(...), data["rates"].append(...) and friends mutate in
+            # place; data.items() and data.get(...) only read.
+            if node.func.attr in MUTATORS and 'data' in roots(node.func.value): return True
             continue
         for t in targets:
             if 'data' in roots(t): return True
@@ -56,7 +65,7 @@ for item in payload['scripts']:
         problems.append("%s has a Python syntax error on line %s: %s" % (label, e.lineno, e.msg))
         continue
     if item['requires_data'] and not produces_data(tree):
-        problems.append("%s must produce its result in a variable named 'data'; assign to data or mutate it in place" % label)
+        problems.append("%s must produce its result in a variable named 'data'; assign to data or mutate it in place. Reading it, such as data['x'] or data.items(), does not count: the transform would run against the untouched response" % label)
 print(json.dumps({'problems':problems}))`
 
 type pythonScript struct {

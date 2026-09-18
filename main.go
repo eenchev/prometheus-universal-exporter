@@ -33,6 +33,7 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGTERM, syscall.SIGINT)
 	defer stop()
 	go manager.ReloadLoop(ctx)
+	go server.OTLPExportLoop(ctx)
 
 	logger.Info("starting exporter", "address", *listenAddress, "collectors", len(config.Collectors))
 	httpServer := &http.Server{Addr: *listenAddress, Handler: server.Handler()}

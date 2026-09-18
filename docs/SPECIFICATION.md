@@ -156,6 +156,7 @@ Support:
 - Custom headers
 - Authentication
 - HTTP basic authentication
+- Optional file-backed basic authentication credentials
 - Bearer token authentication
 - TLS CA configuration
 - Optional client certificates if practical
@@ -1460,23 +1461,24 @@ The Service MUST be usable as the target of Prometheus Operator `ServiceMonitor`
 
 ### 33.5 ServiceMonitor support
 
-The chart MUST provide an optional `ServiceMonitor` resource, selected through
-the shared `monitor` values block.
+The chart MUST provide optional `ServiceMonitor` resources, selected through
+entries in the shared `monitors` values array.
 
 Example values:
 
 ```yaml
-monitor:
-  enabled: false
-  type: service
-  interval: 30s
-  scrapeTimeout: 10s
-  labels: {}
-  annotations: {}
-  targetSelector: {}
-  collector: example
-  relabelings: []
-  metricRelabelings: []
+monitors:
+  - name: application-services
+    enabled: true
+    type: service
+    interval: 30s
+    scrapeTimeout: 10s
+    labels: {}
+    annotations: {}
+    targetSelector: {}
+    collector: example
+    relabelings: []
+    metricRelabelings: []
 ```
 
 The chart MUST allow configuring `params.collector`, user-provided
@@ -1503,12 +1505,14 @@ relabelings:
     replacement: <exporter-service>:<port>
 ```
 
-The implementation MUST document that a single ServiceMonitor endpoint selects one collector, and that multiple endpoints or multiple ServiceMonitors can be used when different collectors are required.
+Each monitor entry MUST have a unique name and select one collector. Multiple
+entries MUST be supported for different target selectors, collectors, or
+scrape settings.
 
 ### 33.6 PodMonitor support
 
-When `monitor.type` is `pod`, the chart MUST provide the equivalent optional
-`PodMonitor` resource using the same shared `monitor` values block.
+When a `monitors` entry has `type: pod`, the chart MUST provide the equivalent
+optional `PodMonitor` resource using that entry's settings.
 
 It MUST implement the equivalent target relabeling and collector parameter behavior described for `ServiceMonitor`.
 
@@ -1557,7 +1561,7 @@ podSecurityContext: {}
 nodeSelector: {}
 tolerations: []
 affinity: {}
-monitor: {}
+monitors: []
 networkPolicy: {}
 ```
 
@@ -1569,9 +1573,10 @@ The repository MUST include automated Helm validation covering at least:
 
 - `helm lint`
 - `helm template` with default values
-- `helm template` with `monitor.type=service` and `monitor.enabled=true`;
-- `helm template` with `monitor.type=pod` and `monitor.enabled=true`;
-- `helm template` with `monitor.enabled=false`.
+- `helm template` with one enabled `monitors` entry of `type: service`;
+- `helm template` with one enabled `monitors` entry of `type: pod`;
+- `helm template` with multiple enabled `monitors` entries;
+- `helm template` with `monitors: []`.
 - ConfigMap generation
 - Deployment generation
 - Service generation
@@ -2617,7 +2622,14 @@ The Helm chart MUST support:
 
 The exporter SHOULD support optional OTLP/HTTP metrics export. When enabled,
 configuration MUST include an OTLP endpoint and SHOULD support headers,
-timeout, TLS verification settings, service name, and resource attributes.
+timeout, interval, TLS verification settings, service name, and resource
+attributes.
+
+`otlp.interval` MUST control the export cadence and SHOULD default to 30
+seconds. The exporter MUST buffer the latest general metric value for each
+metric/label set between exports and include an exporter self-health snapshot
+in each interval export. `otlp.timeout` MUST bound each export request and
+SHOULD default to 5 seconds.
 
 Both metric classes MUST be exportable through the same OTLP exporter:
 
@@ -2735,7 +2747,7 @@ endpoints, the `WWW-Authenticate` challenge, unauthenticated health/readiness
 access, and rejection of the Basic Authentication/Authorization-bridge
 combination.
 
-## 42.6 Independent exporter authentication and target bearer token
+## 42.6 Independent exporter authentication and target credentials
 
 The exporter MUST support a configuration-only non-bridge mode in which:
 
@@ -2743,7 +2755,8 @@ The exporter MUST support a configuration-only non-bridge mode in which:
    self-health scrapes;
 2. `request.forward_authorization` is disabled; and
 3. the exporter supplies the target's bearer token from
-   `request.bearer_token_file`.
+   `request.bearer_token_file` or basic credentials from
+   `request.basic_auth_file`.
 
 The bearer token file MAY be populated by a projected or mounted Kubernetes
 Secret. The exporter MUST trim surrounding whitespace, reject an unreadable
@@ -2753,40 +2766,54 @@ or empty token file, and send the resulting value only as:
 Authorization: Bearer <token>
 ```
 
-The Helm chart SHOULD provide an optional Secret volume controlled by
-`targetAuth.enabled`, `targetAuth.secretName`, `targetAuth.secretKey`,
-`targetAuth.mountPath`, and `targetAuth.fileName`, so the file path can be
-declared in exporter configuration without placing the token in a ConfigMap.
+The Helm chart MUST default `targetAuth.enabled` to false and mount no target
+credential Secret by default. It SHOULD provide an optional Secret volume
+controlled by `targetAuth.enabled`, `targetAuth.type`, `targetAuth.secretName`,
+and the corresponding bearer or basic-auth key/file settings, so the file path
+can be declared in exporter configuration without placing credentials in a
+ConfigMap. For basic authentication, the exporter MUST support:
+
+```yaml
+request:
+  basic_auth_file:
+    username: /var/run/prometheus-universal-exporter/target-auth/username
+    password: /var/run/prometheus-universal-exporter/target-auth/password
+```
+
+The exporter MUST trim the mounted username and password files and reject
+missing or empty credentials.
 
 Exporter credentials and target credentials MUST remain independent. The
 incoming monitor's Basic Auth may authenticate the exporter, while the
-exporter's configured bearer token authenticates the underlying target. The
+exporter's configured bearer or basic credentials authenticate the underlying target. The
 Authorization bridge MUST remain disabled in this mode, and configuration
 validation MUST reject a collector that enables it alongside exporter Basic
 Authentication.
 
-Tests MUST cover bearer-token-file loading, whitespace trimming, missing and
-empty files, independent exporter Basic Auth, and the fact that the exporter
-Basic Auth credential is not forwarded to the target.
+Tests MUST cover bearer-token-file loading, basic-auth-file loading, whitespace
+trimming, missing and empty files, independent exporter Basic Auth, and the
+fact that the exporter Basic Auth credential is not forwarded to the target.
 
-## 42.7 Helm monitor selection and opt-in monitor authentication
+## 42.7 Helm monitor arrays and opt-in monitor authentication
 
-The Helm chart MUST expose an explicit monitor selector:
+The Helm chart MUST expose a `monitors` array. Each entry MUST contain a
+unique optional resource name, an `enabled` flag, and a `type` of `pod` or
+`service`:
 
 ```yaml
-monitor:
-  enabled: true
-  type: pod # pod or service
+monitors:
+  - name: application-services
+    enabled: true
+    type: service # service or pod
 ```
 
-When `monitor.enabled` is true, `monitor.type` MUST accept `pod` and
-`service`, and the chart MUST render exactly one corresponding PodMonitor or
-ServiceMonitor, respectively. All target monitor settings MUST live under the
-single `monitor` block; separate `podMonitor` and `serviceMonitor` values MUST
-NOT be required.
+Each enabled entry MUST render exactly one corresponding PodMonitor or
+ServiceMonitor. The chart MUST support multiple enabled entries and produce
+unique resource names. A self-health monitor MUST be rendered once per
+monitor type used by the array when self-health monitoring is enabled.
 
 Monitor authentication MUST be explicitly opt-in and disabled by default for
-the shared monitor value:
+each array entry:
 
 ```yaml
 auth:
@@ -2802,11 +2829,11 @@ monitor selector types, and enabled bearer/basic authentication rendering.
 
 ## 42.8 Monitor relabeling and Deployment rollout behavior
 
-The shared Helm `monitor` block MUST expose native Prometheus Operator
+Each Helm `monitors` entry MUST expose native Prometheus Operator
 `relabelings` and `metricRelabelings` lists. The chart MUST preserve its
-mandatory target-routing relabelings and append user-provided
-`monitor.relabelings` after them. `monitor.metricRelabelings` MUST be rendered
-on the selected ServiceMonitor endpoint or PodMonitor pod metrics endpoint.
+mandatory target-routing relabelings and append user-provided entry
+`relabelings` after them. Entry `metricRelabelings` MUST be rendered on the
+selected ServiceMonitor endpoint or PodMonitor pod metrics endpoint.
 These lists MUST support the standard fields, including `sourceLabels`,
 `targetLabel`, `regex`, `replacement`, `action`, and `modulus`, as applicable.
 
@@ -2820,3 +2847,26 @@ single-replica rollout keeps the old ready Pod until the replacement is ready,
 temporarily allowing two Pods and avoiding intentional downtime. The chart
 MUST document that this relies on the readiness probe becoming ready; users
 that require no overlap MAY choose `strategy.type: Recreate`.
+
+## 42.9 OTLP TLS configuration
+
+The OTLP configuration MUST support HTTPS endpoints with optional custom
+trust and client credentials:
+
+```yaml
+otlp:
+  enabled: true
+  endpoint: https://otel-collector.example/v1/metrics
+  tls:
+    ca_file: /etc/prometheus/tls/ca.crt
+    cert_file: /etc/prometheus/tls/client.crt
+    key_file: /etc/prometheus/tls/client.key
+    insecure_skip_verify: false
+```
+
+`ca_file` MUST extend the system trust roots, while `cert_file` and `key_file`
+MUST configure an optional client certificate for mutual TLS. Setting
+`insecure_skip_verify: true` MUST disable server certificate verification only
+when explicitly requested. The exporter MUST retain TLS 1.2 or newer and MUST
+not log certificate contents or credentials. The OTLP HTTP client MUST use the
+same configured timeout and best-effort failure behavior as other OTLP exports.

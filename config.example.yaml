@@ -2,6 +2,18 @@ otlp:
   enabled: false
   # endpoint: http://otel-collector:4318/v1/metrics
   timeout: 5s
+  # Metrics are batched and exported at this interval.
+  interval: 30s
+  # headers:
+  #   X-OTLP-Tenant: production
+  # service_name: prometheus-universal-exporter
+  # tls:
+  #   ca_file: /etc/prometheus/tls/ca.crt
+  #   cert_file: /etc/prometheus/tls/client.crt
+  #   key_file: /etc/prometheus/tls/client.key
+  #   insecure_skip_verify: false
+  # resource_attributes:
+  #   deployment.environment: production
 
 # Optional exporter endpoint protection. Do not enable this together with a
 # collector using request.forward_authorization; both use the incoming

@@ -6,27 +6,31 @@ The chart creates a Deployment, Service, ServiceAccount, and ConfigMap. A Config
 
 The default `RollingUpdate` strategy also works with `replicaCount: 1`: `maxUnavailable: 25%` becomes zero unavailable replicas and `maxSurge: 25%` permits one extra Pod, so the old ready Pod remains until the replacement is ready. This can temporarily run two Pods. Use `strategy.type: Recreate` if overlap is undesirable.
 
-The optional Prometheus Operator monitor is controlled by one `monitor` block because the chart creates exactly one target monitor. The Prometheus Operator CRDs are external dependencies, so it is opt-in:
+The optional Prometheus Operator monitors are configured as an array because the chart can create multiple target monitors. The Prometheus Operator CRDs are external dependencies, so the array is empty by default:
 
 ```yaml
-monitor:
-  enabled: true
-  type: service # pod or service
+monitors:
+  - name: application-services
+    enabled: true
+    type: service # pod or service
+    collector: example
 ```
 
-`monitor.type` selects the generated resource; all scrape settings, selectors, headers, authentication, relabelings, and metric relabelings live under this block. Each target endpoint selects one collector; use additional monitor resources outside this chart when different collector configurations are required. The chart adds the target-routing relabelings that pass the discovered address as `target`, preserve it as `instance`, and route the scrape to the exporter Service. Values in `monitor.relabelings` are appended to those built-ins. When enabled, `selfMetrics.enabled` creates a second monitor resource selecting the exporter itself and scraping `selfMetrics.path`.
+Each array item creates one named ServiceMonitor or PodMonitor. All scrape settings, selectors, headers, authentication, relabelings, and metric relabelings live under that item. Each target endpoint selects one collector. The chart adds the target-routing relabelings that pass the discovered address as `target`, preserve it as `instance`, and route the scrape to the exporter Service. Values in an item's `relabelings` are appended to those built-ins. When enabled, `selfMetrics.enabled` creates one self-health monitor for each monitor type used by the array.
 
-Both `monitor.relabelings` and `monitor.metricRelabelings` accept the native Prometheus Operator relabeling structures. `relabelings` run during target relabeling; `metricRelabelings` run on scraped samples. Self-health monitor relabelings can be set separately with `selfMetrics.relabelings` and `selfMetrics.metricRelabelings`.
+`relabelings` and `metricRelabelings` accept the native Prometheus Operator structures. `relabelings` run during target relabeling; `metricRelabelings` run on scraped samples. Self-health monitor relabelings can be set separately with `selfMetrics.relabelings` and `selfMetrics.metricRelabelings`.
 
-The monitor supports `headers` and Secret-backed `auth`. Monitor authentication is disabled by default; set `monitor.auth.enabled: true` and choose `monitor.auth.type: bearer` or `monitor.auth.type: basic` to render the Prometheus Operator `authorization` or `basicAuth` configuration. Header entries are rendered as `header_<name>` endpoint parameters and are forwarded to the target only when the collector lists the canonical name in `request.forward_headers`. To pass the monitor's Authorization header through to the target, the collector must also set `request.forward_authorization: true`. Do not place secrets in `headers`; use a Kubernetes Secret through `auth`.
+Monitor authentication is disabled by default; set an item's `auth.enabled: true` and choose `auth.type: bearer` or `auth.type: basic` to render the Prometheus Operator `authorization` or `basicAuth` configuration. Header entries are rendered as `header_<name>` endpoint parameters and are forwarded to the target only when the collector lists the canonical name in `request.forward_headers`. To pass the monitor's Authorization header through to the target, the collector must also set `request.forward_authorization: true`. Do not place secrets in `headers`; use a Kubernetes Secret through `auth`.
 
 For example:
 
 ```yaml
-monitor:
-  enabled: true
-  type: service
-  relabelings:
+monitors:
+  - name: application-services
+    enabled: true
+    type: service
+    collector: example
+    relabelings:
     - sourceLabels: [__meta_kubernetes_service_label_team]
       targetLabel: team
   metricRelabelings:
@@ -47,19 +51,26 @@ web:
 
 This protects `/probe`, `/metrics`, and `selfMetrics.path`; `/health` and `/ready` remain open for Kubernetes probes. It cannot be enabled with any collector using `request.forward_authorization`.
 
-For the non-bridge model, enable `targetAuth` and reference the mounted token in the collector:
+`targetAuth` is `null` by default, so no target credential Secret is mounted. To mount basic authentication from a Kubernetes Secret:
 
 ```yaml
 targetAuth:
   enabled: true
-  secretName: target-api-token
-  secretKey: token
+  type: basic
+  secretName: target-basic-auth
+  usernameKey: username
+  passwordKey: password
+  mountPath: /var/run/prometheus-universal-exporter/target-auth
+  usernameFileName: username
+  passwordFileName: password
 
 # In config.data.config.yaml:
 request:
-  bearer_token_file: /var/run/prometheus-universal-exporter/target-auth/token
+  basic_auth_file:
+    username: /var/run/prometheus-universal-exporter/target-auth/username
+    password: /var/run/prometheus-universal-exporter/target-auth/password
 ```
 
-The exporter then uses its own configured Basic Auth for incoming scrapes and the Kubernetes Secret token for the target request. These credentials are independent.
+For bearer authentication, set `type: bearer`, `secretKey: token`, and `fileName: token`, then reference `request.bearer_token_file`. The exporter then uses its own configured Basic Auth for incoming scrapes and the mounted Kubernetes Secret for the target request. These credentials are independent.
 
 The chart defaults to a non-root, read-only-root-filesystem container, drops Linux capabilities, and does not install Kubernetes API permissions. `ingress.enabled` creates an Ingress, while `neg.enabled` adds the GKE NEG service annotation. Configure `networkPolicy` in an environment-specific values file if target access must be restricted.

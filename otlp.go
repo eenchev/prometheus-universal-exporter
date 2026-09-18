@@ -3,7 +3,6 @@ package main
 import (
 	"bytes"
 	"context"
-	"crypto/tls"
 	"encoding/json"
 	"net/http"
 	"strconv"
@@ -31,7 +30,7 @@ func (s *Server) pushOTLP(set MetricSet) {
 	timeout:=time.Duration(cfg.Timeout);if timeout<=0{timeout=5*time.Second};ctx,cancel:=context.WithTimeout(context.Background(),timeout);defer cancel()
 	now:=strconv.FormatInt(time.Now().UnixNano(),10);payload:=otlpPayload{ResourceMetrics:[]otlpResourceMetrics{{Resource:otlpResource{Attributes:otlpAttributes(cfg)},ScopeMetrics:[]otlpScopeMetrics{{Scope:otlpScope{Name:"prometheus-universal-exporter"},Metrics:otlpMetrics(set,now)}}}}}
 	body,err:=json.Marshal(payload);if err!=nil{s.logger.Warn("OTLP encoding failed","error",err);return}
-	tlsConfig:=&tls.Config{MinVersion:tls.VersionTLS12,InsecureSkipVerify:cfg.InsecureSkipVerify};client:=&http.Client{Timeout:timeout,Transport:&http.Transport{TLSClientConfig:tlsConfig}};req,err:=http.NewRequestWithContext(ctx,http.MethodPost,cfg.Endpoint,bytes.NewReader(body));if err!=nil{s.logger.Warn("OTLP request creation failed","error",err);return};req.Header.Set("Content-Type","application/json");for k,v:=range cfg.Headers{req.Header.Set(k,v)};resp,err:=client.Do(req);if err!=nil{s.logger.Warn("OTLP export failed","error",err);return};defer resp.Body.Close();if resp.StatusCode<200||resp.StatusCode>=300{s.logger.Warn("OTLP endpoint returned an error","status",resp.StatusCode)}
+	tlsSettings:=cfg.TLS;if cfg.InsecureSkipVerify{tlsSettings.InsecureSkipVerify=true};tlsCfg,err:=tlsConfig(tlsSettings);if err!=nil{s.logger.Warn("OTLP TLS configuration failed","error",err);return};client:=&http.Client{Timeout:timeout,Transport:&http.Transport{TLSClientConfig:tlsCfg}};req,err:=http.NewRequestWithContext(ctx,http.MethodPost,cfg.Endpoint,bytes.NewReader(body));if err!=nil{s.logger.Warn("OTLP request creation failed","error",err);return};req.Header.Set("Content-Type","application/json");for k,v:=range cfg.Headers{req.Header.Set(k,v)};resp,err:=client.Do(req);if err!=nil{s.logger.Warn("OTLP export failed","error",err);return};defer resp.Body.Close();if resp.StatusCode<200||resp.StatusCode>=300{s.logger.Warn("OTLP endpoint returned an error","status",resp.StatusCode)}
 }
 
 func otlpAttributes(cfg OTLPConfig)[]otlpAttribute{attrs:=[]otlpAttribute{{Key:"service.name",Value:otlpValue{StringValue:cfg.ServiceName}}};for k,v:=range cfg.ResourceAttributes{attrs=append(attrs,otlpAttribute{Key:k,Value:otlpValue{StringValue:v}})};return attrs}

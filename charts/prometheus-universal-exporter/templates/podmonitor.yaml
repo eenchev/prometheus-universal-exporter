@@ -1,47 +1,51 @@
-{{- if and .Values.monitor.enabled (eq .Values.monitor.type "pod") }}
+{{- $root := . }}
+{{- range $index, $monitor := .Values.monitors }}
+{{- if and $monitor.enabled (eq $monitor.type "pod") }}
+{{ if gt $index 0 }}---
+{{ end }}
 apiVersion: monitoring.coreos.com/v1
 kind: PodMonitor
 metadata:
-  name: {{ include "prometheus-universal-exporter.fullname" . }}
-  {{ with .Values.namespaceOverride }}namespace: {{ . }}{{ end }}
+  name: {{ if $monitor.name }}{{ include "prometheus-universal-exporter.fullname" $root }}-{{ $monitor.name }}{{ else }}{{ include "prometheus-universal-exporter.fullname" $root }}-monitor-{{ $index }}{{ end }}
+  {{ with $root.Values.namespaceOverride }}namespace: {{ . }}{{ end }}
   labels:
-    {{- include "prometheus-universal-exporter.labels" . | nindent 4 }}
-    {{- with .Values.monitor.labels }}{{ toYaml . | nindent 4 }}{{ end }}
-  {{- with .Values.monitor.annotations }}
+    {{- include "prometheus-universal-exporter.labels" $root | nindent 4 }}
+    {{- with $monitor.labels }}{{ toYaml . | nindent 4 }}{{ end }}
+  {{- with $monitor.annotations }}
   annotations: {{- toYaml . | nindent 4 }}
   {{- end }}
 spec:
   selector:
-    {{- if .Values.monitor.targetSelector }}{{ toYaml .Values.monitor.targetSelector | nindent 4 }}{{ else }}matchLabels:
+    {{- if $monitor.targetSelector }}{{ toYaml $monitor.targetSelector | nindent 4 }}{{ else }}matchLabels:
       app.kubernetes.io/name: target
     {{- end }}
   podMetricsEndpoints:
     - port: http
       path: /probe
-      interval: {{ .Values.monitor.interval }}
-      scrapeTimeout: {{ .Values.monitor.scrapeTimeout }}
+      interval: {{ $monitor.interval }}
+      scrapeTimeout: {{ $monitor.scrapeTimeout }}
       params:
-        collector: [{{ .Values.monitor.collector | quote }}]
-        {{ range $name, $value := .Values.monitor.headers }}
+        collector: [{{ $monitor.collector | quote }}]
+        {{ range $name, $value := $monitor.headers }}
         header_{{ $name }}: [{{ $value | quote }}]
         {{ end }}
-      {{ if and .Values.monitor.auth.enabled (eq .Values.monitor.auth.type "bearer") }}
+      {{ if and $monitor.auth $monitor.auth.enabled (eq $monitor.auth.type "bearer") }}
       authorization:
         type: Bearer
         credentials:
-          name: {{ .Values.monitor.auth.secretName | quote }}
-          key: {{ .Values.monitor.auth.secretKey | quote }}
-          optional: {{ .Values.monitor.auth.optional }}
-      {{ else if and .Values.monitor.auth.enabled (eq .Values.monitor.auth.type "basic") }}
+          name: {{ $monitor.auth.secretName | quote }}
+          key: {{ $monitor.auth.secretKey | quote }}
+          optional: {{ $monitor.auth.optional }}
+      {{ else if and $monitor.auth $monitor.auth.enabled (eq $monitor.auth.type "basic") }}
       basicAuth:
         username:
-          name: {{ .Values.monitor.auth.secretName | quote }}
-          key: {{ .Values.monitor.auth.usernameKey | quote }}
-          optional: {{ .Values.monitor.auth.optional }}
+          name: {{ $monitor.auth.secretName | quote }}
+          key: {{ $monitor.auth.usernameKey | quote }}
+          optional: {{ $monitor.auth.optional }}
         password:
-          name: {{ .Values.monitor.auth.secretName | quote }}
-          key: {{ .Values.monitor.auth.passwordKey | quote }}
-          optional: {{ .Values.monitor.auth.optional }}
+          name: {{ $monitor.auth.secretName | quote }}
+          key: {{ $monitor.auth.passwordKey | quote }}
+          optional: {{ $monitor.auth.optional }}
       {{ end }}
       relabelings:
         - sourceLabels: [__address__]
@@ -49,17 +53,19 @@ spec:
         - sourceLabels: [__param_target]
           targetLabel: instance
         - targetLabel: __address__
-          replacement: {{ include "prometheus-universal-exporter.fullname" . }}:{{ .Values.service.port }}
-      {{- with .Values.monitor.relabelings }}
+          replacement: {{ include "prometheus-universal-exporter.fullname" $root }}:{{ $root.Values.service.port }}
+      {{- with $monitor.relabelings }}
       {{ toYaml . | nindent 8 }}
       {{- end }}
-      {{- with .Values.monitor.metricRelabelings }}
+      {{- with $monitor.metricRelabelings }}
       metricRelabelings:
         {{ toYaml . | nindent 8 }}
       {{- end }}
 {{- end }}
-{{- if and .Values.monitor.enabled (eq .Values.monitor.type "pod") .Values.selfMetrics.enabled }}
----
+{{- end }}
+{{- $hasPodMonitor := false }}
+{{- range .Values.monitors }}{{- if and .enabled (eq .type "pod") }}{{- $hasPodMonitor = true }}{{- end }}{{- end }}
+{{- if and .Values.selfMetrics.enabled $hasPodMonitor }}
 apiVersion: monitoring.coreos.com/v1
 kind: PodMonitor
 metadata:

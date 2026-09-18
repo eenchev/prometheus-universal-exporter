@@ -14,7 +14,7 @@ go run . --config.file=config.example.yaml
 
 The full implementation specification is [docs/SPECIFICATION.md](docs/SPECIFICATION.md).
 
-Exporter self-health metrics are available at `/self-metrics` by default (and `/metrics` remains a compatibility alias). Change the dedicated path with `--web.self-metrics-path=/exporter/metrics`. The Helm chart's optional self-metrics ServiceMonitor/PodMonitor scrapes the exporter pods/services separately from the target-probing monitor. Use one `monitor` block with `monitor.enabled: true` and `monitor.type: pod` or `monitor.type: service` to select the monitor kind. The same block supports Prometheus Operator `relabelings` and `metricRelabelings`.
+Exporter self-health metrics are available at `/self-metrics` by default (and `/metrics` remains a compatibility alias). Change the dedicated path with `--web.self-metrics-path=/exporter/metrics`. The Helm chart's optional self-metrics ServiceMonitor/PodMonitor scrapes the exporter pods/services separately from target-probing monitors. Configure one or more entries in `monitors`, each with a unique `name` and `type: pod` or `type: service`; each entry supports Prometheus Operator `relabelings` and `metricRelabelings`.
 
 Optional OTLP/HTTP JSON export is configured at the top level. Probe metric sets and self-health metric sets are forwarded when enabled:
 
@@ -24,9 +24,23 @@ otlp:
   endpoint: http://otel-collector:4318/v1/metrics
   service_name: prometheus-universal-exporter
   timeout: 5s
+  interval: 30s
+  # headers:
+  #   X-OTLP-Tenant: production
+  # tls:
+  #   ca_file: /etc/prometheus/tls/ca.crt
+  #   cert_file: /etc/prometheus/tls/client.crt
+  #   key_file: /etc/prometheus/tls/client.key
+  #   insecure_skip_verify: false
+  # resource_attributes:
+  #   deployment.environment: production
 ```
 
-OTLP export is best-effort and does not make a Prometheus probe fail.
+OTLP export is best-effort and does not make a Prometheus probe fail. Metric
+values are buffered as latest values and exported every `otlp.interval`;
+the default is 30 seconds. Each export request is bounded by `otlp.timeout`,
+which defaults to 5 seconds. Self-health metrics are included in every export
+interval even when no Prometheus self-metrics scrape is running.
 
 ## Configuration
 
@@ -94,7 +108,7 @@ relabelings:
 
 One ServiceMonitor endpoint selects one collector. Use multiple endpoints or monitor resources for multiple collector configurations. The same pattern works for PodMonitor.
 
-Monitor authentication is applied by Prometheus when it scrapes the exporter. To pass that credential to the discovered target, set `request.forward_authorization: true` on the selected collector. The chart supports Secret-backed `monitor.auth.type: bearer` and `monitor.auth.type: basic` settings for either selected monitor type. The exporter never forwards arbitrary incoming headers.
+Monitor authentication is applied by Prometheus when it scrapes the exporter. To pass that credential to the discovered target, set `request.forward_authorization: true` on the selected collector. Each `monitors` entry supports Secret-backed `auth.type: bearer` and `auth.type: basic` settings. The exporter never forwards arbitrary incoming headers.
 
 For non-secret target headers, configure an allowlist in the collector and use the chart's monitor `headers` map. The chart encodes these as `header_<Header-Name>` probe parameters, which the exporter forwards only when the header is listed in `request.forward_headers`:
 
@@ -110,19 +124,20 @@ collectors:
 
 ```yaml
 # Helm values
-monitor:
-  enabled: true
-  type: pod
-  headers:
-    X-Tenant: team-a
-  auth:
+monitors:
+  - name: application-services
     enabled: true
-    type: bearer
-    secretName: target-api-token
-    secretKey: token
+    type: pod
+    headers:
+      X-Tenant: team-a
+    auth:
+      enabled: true
+      type: bearer
+      secretName: target-api-token
+      secretKey: token
 ```
 
-Header values in monitor parameters are not suitable for secrets. Monitor authentication is disabled by default; set `monitor.auth.enabled: true` and use monitor `auth` with a Kubernetes Secret for bearer/basic authentication. Explicitly opt in per collector before forwarding the incoming Authorization header.
+Header values in monitor parameters are not suitable for secrets. Monitor authentication is disabled by default; set an entry's `auth.enabled: true` and use its `auth` block with a Kubernetes Secret for bearer/basic authentication. Explicitly opt in per collector before forwarding the incoming Authorization header.
 
 The exporter endpoints can also be protected with exporter-side Basic Auth:
 
@@ -138,7 +153,7 @@ When enabled, Basic Auth is required for `/probe`, `/metrics`, and the configure
 
 This conflict is rejected during startup: the exporter logs `invalid startup configuration; exiting` and terminates with a non-zero exit code. Invalid configurations detected during file reload are rejected while the last valid configuration remains active.
 
-To use exporter Basic Auth and a Kubernetes Secret for the target token at the same time, disable the bridge and configure a mounted token file:
+To use exporter Basic Auth and a Kubernetes Secret for target credentials at the same time, disable the bridge and configure a mounted credential file. `targetAuth.enabled` is `false` by default; for basic auth:
 
 ```yaml
 web:
@@ -151,10 +166,12 @@ collectors:
   - name: protected_status
     request:
       path: /status
-      bearer_token_file: /var/run/prometheus-universal-exporter/target-auth/token
+      basic_auth_file:
+        username: /var/run/prometheus-universal-exporter/target-auth/username
+        password: /var/run/prometheus-universal-exporter/target-auth/password
 ```
 
-For the Helm chart, set `targetAuth.enabled: true`, `targetAuth.secretName`, and optionally `targetAuth.secretKey`. The mounted Secret is read by the exporter and sent as `Authorization: Bearer ...` to the underlying endpoint. The selected monitor can independently use `monitor.auth.type: basic` to authenticate its scrape of the exporter; `request.forward_authorization` must remain `false`.
+For the Helm chart, set `targetAuth.enabled: true`, `targetAuth.type: basic`, `targetAuth.secretName`, `usernameKey`, and `passwordKey`. The mounted Secret is read by the exporter and sent as HTTP Basic Auth to the underlying endpoint. For bearer auth, use `type: bearer`, `secretKey`, `fileName`, and `request.bearer_token_file`. The selected monitor can independently use its `auth.type: basic` to authenticate its scrape of the exporter; `request.forward_authorization` must remain `false`.
 
 ## Helm
 

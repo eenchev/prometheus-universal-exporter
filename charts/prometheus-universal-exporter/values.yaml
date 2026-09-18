@@ -45,29 +45,29 @@ config:
               - name: example_status
                 type: gauge
                 regex: 'status:\s+(\d+(?:\.\d+)?)'
-monitor:
-  enabled: false
-  type: pod # pod or service
-  interval: 30s
-  scrapeTimeout: 10s
-  labels: {}
-  annotations: {}
-  targetSelector: {}
-  collector: example
-  # Appended after the chart's target-routing relabelings.
-  relabelings: []
-  metricRelabelings: []
-  # Non-secret headers are sent as header_<name> probe parameters. The
-  # collector must explicitly allow them with request.forward_headers.
-  headers: {}
-  auth:
-    enabled: false
-    type: bearer # bearer or basic
-    secretName: ""
-    secretKey: token
-    usernameKey: username
-    passwordKey: password
-    optional: false
+monitors: []
+# Example:
+# monitors:
+#   - name: application-services
+#     enabled: true
+#     type: service # service or pod
+#     interval: 30s
+#     scrapeTimeout: 10s
+#     labels: {}
+#     annotations: {}
+#     targetSelector: {}
+#     collector: example
+#     relabelings: []
+#     metricRelabelings: []
+#     headers: {}
+#     auth:
+#       enabled: false
+#       type: bearer # bearer or basic
+#       secretName: ""
+#       secretKey: token
+#       usernameKey: username
+#       passwordKey: password
+#       optional: false
 selfMetrics:
   path: /self-metrics
   enabled: true
@@ -104,9 +104,19 @@ networkPolicy:
   ingress: []
   egress: []
 targetAuth:
-  # Mount a Kubernetes Secret so collectors can use request.bearer_token_file.
   enabled: false
+  type: bearer # bearer or basic
   secretName: ""
   secretKey: token
   fileName: token
+  usernameKey: username
+  passwordKey: password
   mountPath: /var/run/prometheus-universal-exporter/target-auth
+  usernameFileName: username
+  passwordFileName: password
+# For basic auth from a Secret, set enabled: true and type: basic, then
+# reference the mounted files from a collector:
+# request:
+#   basic_auth_file:
+#     username: /var/run/prometheus-universal-exporter/target-auth/username
+#     password: /var/run/prometheus-universal-exporter/target-auth/password

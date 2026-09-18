@@ -8,6 +8,7 @@ import (
 	"os"
 	"strings"
 	"testing"
+	"time"
 )
 
 func testCollector(name, format string) Collector {return Collector{Name:name,Request:RequestConfig{Method:"GET",Timeout:Duration(2e9)},Response:ResponseConfig{Format:format},Transform:TransformConfig{Type:"regex",Rules:[]RegexRule{{Name:"demo_value",Type:GaugeMetricType,Regex:`value=(\d+)`}}},ErrorHandling:ErrorHandling{OnHTTPError:"fail",OnDecodeError:"fail",OnTransformError:"fail"},Limits:Limits{MaxResponseBytes:1024}}}
@@ -76,6 +77,15 @@ func TestExporterBasicAuthRejectsAuthorizationBridge(t *testing.T) {
 	}
 }
 
+func TestOTLPIntervalDefaultsAndCanBeConfigured(t *testing.T) {
+	cfg := &Config{Collectors: []Collector{testCollector("text", "text")}, OTLP: OTLPConfig{Enabled: true, Endpoint: "http://otel-collector:4318/v1/metrics"}}
+	if err := cfg.Validate(); err != nil { t.Fatal(err) }
+	if got := time.Duration(cfg.OTLP.Interval); got != 30*time.Second { t.Fatalf("default OTLP interval=%s", got) }
+	cfg.OTLP.Interval = Duration(2 * time.Minute)
+	if err := cfg.Validate(); err != nil { t.Fatal(err) }
+	if got := time.Duration(cfg.OTLP.Interval); got != 2*time.Minute { t.Fatalf("configured OTLP interval=%s", got) }
+}
+
 func TestBearerTokenFileIsUsedIndependentlyOfExporterAuth(t *testing.T) {
 	tokenFile := t.TempDir() + "/token"
 	if err := os.WriteFile(tokenFile, []byte(" target-token \n"), 0600); err != nil {
@@ -105,4 +115,29 @@ func TestBearerTokenFileIsUsedIndependentlyOfExporterAuth(t *testing.T) {
 	if received != "Bearer target-token" {
 		t.Fatalf("target authorization=%q", received)
 	}
+}
+
+func TestBasicAuthFileIsUsedForTarget(t *testing.T) {
+	dir := t.TempDir()
+	usernameFile := dir + "/username"
+	passwordFile := dir + "/password"
+	if err := os.WriteFile(usernameFile, []byte(" target-user \n"), 0600); err != nil { t.Fatal(err) }
+	if err := os.WriteFile(passwordFile, []byte(" target-password \n"), 0600); err != nil { t.Fatal(err) }
+	var receivedUser, receivedPassword string
+	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		receivedUser, receivedPassword, _ = r.BasicAuth()
+		w.Header().Set("Content-Type", "text/plain")
+		_, _ = w.Write([]byte("value=42\n"))
+	}))
+	defer target.Close()
+	c := testCollector("file_basic", "text")
+	c.Request.BasicAuthFile = &BasicAuthFile{Username: usernameFile, Password: passwordFile}
+	cfg := &Config{Collectors: []Collector{c}}
+	if err := cfg.Validate(); err != nil { t.Fatal(err) }
+	server := NewServer(NewConfigManager(cfg, "", slog.Default()), "python3", slog.Default())
+	request := httptest.NewRequest(http.MethodGet, "/probe?target="+target.URL+"&collector=file_basic", nil)
+	response := httptest.NewRecorder()
+	server.Handler().ServeHTTP(response, request)
+	if response.Code != http.StatusOK { t.Fatalf("status=%d body=%s", response.Code, response.Body.String()) }
+	if receivedUser != "target-user" || receivedPassword != "target-password" { t.Fatalf("target basic auth=%q/%q", receivedUser, receivedPassword) }
 }

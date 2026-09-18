@@ -1,4 +1,4 @@
 Exporter is available at:
   http://{{ include "prometheus-universal-exporter.fullname" . }}:{{ .Values.service.port }}
 
-The chart does not install Prometheus Operator CRDs. Enable monitor only when the selected ServiceMonitor or PodMonitor CRD is installed.
+The chart does not install Prometheus Operator CRDs. Enable entries in monitors only when the selected ServiceMonitor or PodMonitor CRD is installed.

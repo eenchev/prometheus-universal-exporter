@@ -56,7 +56,7 @@ spec:
             - name: config
               mountPath: /etc/prometheus-universal-exporter
               readOnly: true
-            {{- if .Values.targetAuth.enabled }}
+            {{- if and .Values.targetAuth .Values.targetAuth.enabled }}
             - name: target-auth
               mountPath: {{ .Values.targetAuth.mountPath | quote }}
               readOnly: true
@@ -65,11 +65,18 @@ spec:
         - name: config
           configMap:
             name: {{ include "prometheus-universal-exporter.fullname" . }}
-        {{- if .Values.targetAuth.enabled }}
+        {{- if and .Values.targetAuth .Values.targetAuth.enabled }}
         - name: target-auth
           secret:
             secretName: {{ required "targetAuth.secretName is required when targetAuth.enabled is true" .Values.targetAuth.secretName | quote }}
             items:
+              {{- if eq .Values.targetAuth.type "basic" }}
+              - key: {{ .Values.targetAuth.usernameKey | quote }}
+                path: {{ .Values.targetAuth.usernameFileName | quote }}
+              - key: {{ .Values.targetAuth.passwordKey | quote }}
+                path: {{ .Values.targetAuth.passwordFileName | quote }}
+              {{- else }}
               - key: {{ .Values.targetAuth.secretKey | quote }}
                 path: {{ .Values.targetAuth.fileName | quote }}
+              {{- end }}
         {{- end }}

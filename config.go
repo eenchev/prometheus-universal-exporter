@@ -35,15 +35,16 @@ type Collector struct {
 }
 type RequestConfig struct {
 	Method string `yaml:"method"`; Path string `yaml:"path"`; Query map[string]string `yaml:"query"`; Headers map[string]string `yaml:"headers"`; Body string `yaml:"body"`
-	BasicAuth *BasicAuth `yaml:"basic_auth"`; BearerToken string `yaml:"bearer_token"`; BearerTokenFile string `yaml:"bearer_token_file"`; ForwardAuthorization bool `yaml:"forward_authorization"`; ForwardHeaders []string `yaml:"forward_headers"`; TLS TLSConfig `yaml:"tls"`; Timeout Duration `yaml:"timeout"`; MaxResponseBytes int64 `yaml:"max_response_bytes"`; RedirectPolicy string `yaml:"redirect_policy"`; AllowedSchemes []string `yaml:"allowed_schemes"`
+	BasicAuth *BasicAuth `yaml:"basic_auth"`; BasicAuthFile *BasicAuthFile `yaml:"basic_auth_file"`; BearerToken string `yaml:"bearer_token"`; BearerTokenFile string `yaml:"bearer_token_file"`; ForwardAuthorization bool `yaml:"forward_authorization"`; ForwardHeaders []string `yaml:"forward_headers"`; TLS TLSConfig `yaml:"tls"`; Timeout Duration `yaml:"timeout"`; MaxResponseBytes int64 `yaml:"max_response_bytes"`; RedirectPolicy string `yaml:"redirect_policy"`; AllowedSchemes []string `yaml:"allowed_schemes"`
 }
 type BasicAuth struct { Username string `yaml:"username"`; Password string `yaml:"password"` }
+type BasicAuthFile struct { Username string `yaml:"username"`; Password string `yaml:"password"` }
 type TLSConfig struct { CAFile string `yaml:"ca_file"`; CertFile string `yaml:"cert_file"`; KeyFile string `yaml:"key_file"`; InsecureSkipVerify bool `yaml:"insecure_skip_verify"` }
 type ResponseConfig struct { Format string `yaml:"format"`; CSV CSVConfig `yaml:"csv"`; Namespaces map[string]string `yaml:"namespaces"` }
 type CSVConfig struct { Header *bool `yaml:"header"`; Delimiter string `yaml:"delimiter"`; TrimSpace bool `yaml:"trim_space"` }
 type DecoderConfig struct { Type string `yaml:"type"`; Libraries []string `yaml:"libraries"`; RequiredLibs []string `yaml:"required_libs"`; Script string `yaml:"script"` }
 type ErrorHandling struct { OnHTTPError string `yaml:"on_http_error"`; OnDecodeError string `yaml:"on_decode_error"`; OnTransformError string `yaml:"on_transform_error"`; AllowMissingKeys bool `yaml:"allow_missing_keys"` }
-type OTLPConfig struct { Enabled bool `yaml:"enabled"`; Endpoint string `yaml:"endpoint"`; Headers map[string]string `yaml:"headers"`; Timeout Duration `yaml:"timeout"`; InsecureSkipVerify bool `yaml:"insecure_skip_verify"`; ServiceName string `yaml:"service_name"`; ResourceAttributes map[string]string `yaml:"resource_attributes"` }
+type OTLPConfig struct { Enabled bool `yaml:"enabled"`; Endpoint string `yaml:"endpoint"`; Headers map[string]string `yaml:"headers"`; Timeout Duration `yaml:"timeout"`; Interval Duration `yaml:"interval"`; TLS TLSConfig `yaml:"tls"`; InsecureSkipVerify bool `yaml:"insecure_skip_verify"`; ServiceName string `yaml:"service_name"`; ResourceAttributes map[string]string `yaml:"resource_attributes"` }
 type Limits struct { MaxResponseBytes int64 `yaml:"max_response_bytes"`; MaxMetrics int `yaml:"max_metrics"`; MaxLabelsPerMetric int `yaml:"max_labels_per_metric"`; MaxLabelValueLength int `yaml:"max_label_value_length"`; MaxMetricNameLength int `yaml:"max_metric_name_length"`; MaxHelpLength int `yaml:"max_help_length"`; ScriptTimeout Duration `yaml:"script_timeout"`; MaxOutputBytes int `yaml:"max_output_bytes"` }
 type MetricRule struct { Name string `yaml:"name"`; Type MetricType `yaml:"type"`; Help string `yaml:"help"`; JQ string `yaml:"jq"`; YQ string `yaml:"yq"`; Required *bool `yaml:"required"` }
 type TransformConfig struct { Type string `yaml:"type"`; Expression string `yaml:"expression"`; Script string `yaml:"script"`; Expressions []Extraction `yaml:"expressions"`; Rules []RegexRule `yaml:"rules"`; Metric *MetricRule `yaml:"metric"`; Include []string `yaml:"include"`; Exclude []string `yaml:"exclude"`; Rename map[string]string `yaml:"rename"`; Labels map[string]string `yaml:"labels"`; RemoveLabels []string `yaml:"remove_labels"`; RenameLabels map[string]string `yaml:"rename_labels"` }
@@ -54,6 +55,9 @@ func (c *Config) Validate() error {
 	if len(c.Collectors)==0{return fmt.Errorf("collectors must not be empty")}; seen:=map[string]bool{}
 	for i:=range c.Collectors { x:=&c.Collectors[i]; if !regexp.MustCompile(`^[a-zA-Z_][a-zA-Z0-9_]*$`).MatchString(x.Name){return fmt.Errorf("collector %q has invalid name",x.Name)};if seen[x.Name]{return fmt.Errorf("duplicate collector %q",x.Name)};seen[x.Name]=true
 		if x.Request.BearerToken != "" && x.Request.BearerTokenFile != "" { return fmt.Errorf("collector %q cannot set both request.bearer_token and request.bearer_token_file", x.Name) }
+		if x.Request.BasicAuth != nil && x.Request.BasicAuthFile != nil { return fmt.Errorf("collector %q cannot set both request.basic_auth and request.basic_auth_file", x.Name) }
+		if x.Request.BasicAuthFile != nil && (strings.TrimSpace(x.Request.BasicAuthFile.Username) == "" || strings.TrimSpace(x.Request.BasicAuthFile.Password) == "") { return fmt.Errorf("collector %q basic_auth_file requires username and password paths", x.Name) }
+		if (x.Request.BasicAuth != nil || x.Request.BasicAuthFile != nil) && (x.Request.BearerToken != "" || x.Request.BearerTokenFile != "") { return fmt.Errorf("collector %q cannot configure basic and bearer authentication together", x.Name) }
 		if x.Request.Method==""{x.Request.Method="GET"}; x.Request.Method=strings.ToUpper(x.Request.Method); switch x.Request.Method{case "GET","POST","PUT","PATCH","DELETE","HEAD":default:return fmt.Errorf("collector %q has unsupported method %q",x.Name,x.Request.Method)}
 		if x.Request.Timeout<=0{x.Request.Timeout=Duration(10*time.Second)};if x.Limits.MaxResponseBytes<=0{x.Limits.MaxResponseBytes=10<<20};if x.Limits.MaxMetrics<=0{x.Limits.MaxMetrics=10000};if x.Limits.MaxLabelsPerMetric<=0{x.Limits.MaxLabelsPerMetric=20};if x.Limits.MaxLabelValueLength<=0{x.Limits.MaxLabelValueLength=500};if x.Limits.MaxMetricNameLength<=0{x.Limits.MaxMetricNameLength=200};if x.Limits.MaxHelpLength<=0{x.Limits.MaxHelpLength=2000};if x.Limits.ScriptTimeout<=0{x.Limits.ScriptTimeout=Duration(100*time.Millisecond)};if x.Limits.MaxOutputBytes<=0{x.Limits.MaxOutputBytes=1<<20}
 		if x.Response.Format==""{x.Response.Format="auto"}; x.Response.Format=strings.ToLower(x.Response.Format);if x.Decoder.Type==""{x.Decoder.Type=x.Response.Format}; if x.Decoder.Type==""{x.Decoder.Type="auto"}; x.Decoder.Type=strings.ToLower(x.Decoder.Type)
@@ -77,7 +81,7 @@ func (c *Config) Validate() error {
 			}
 		}
 	}
-	if c.OTLP.Enabled {if strings.TrimSpace(c.OTLP.Endpoint)==""{return fmt.Errorf("otlp.endpoint is required when OTLP is enabled")};u,err:=url.Parse(c.OTLP.Endpoint);if err!=nil||u.Scheme!="http"&&u.Scheme!="https"||u.Host==""{return fmt.Errorf("otlp.endpoint must be an http or https URL")};if c.OTLP.Timeout<=0{c.OTLP.Timeout=Duration(5*time.Second)};if c.OTLP.ServiceName==""{c.OTLP.ServiceName="prometheus-universal-exporter"}}
+	if c.OTLP.Enabled {if strings.TrimSpace(c.OTLP.Endpoint)==""{return fmt.Errorf("otlp.endpoint is required when OTLP is enabled")};u,err:=url.Parse(c.OTLP.Endpoint);if err!=nil||u.Scheme!="http"&&u.Scheme!="https"||u.Host==""{return fmt.Errorf("otlp.endpoint must be an http or https URL")};if c.OTLP.Timeout<=0{c.OTLP.Timeout=Duration(5*time.Second)};if c.OTLP.Interval<=0{c.OTLP.Interval=Duration(30*time.Second)};if c.OTLP.ServiceName==""{c.OTLP.ServiceName="prometheus-universal-exporter"}}
 	return nil
 }
 

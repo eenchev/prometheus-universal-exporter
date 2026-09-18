@@ -4,7 +4,9 @@ Install with `helm install exporter ./charts/prometheus-universal-exporter`. Rep
 
 The chart creates a Deployment, Service, ServiceAccount, and ConfigMap. A ConfigMap checksum annotation triggers a rollout when collector configuration changes. The exporter also checks the file periodically and keeps the last valid configuration when a reload is invalid. `namespaceOverride`, `strategy`, `resources`, `tolerations`, and `affinity` are available directly in values.
 
-`serviceMonitor.enabled` and `podMonitor.enabled` are opt-in because the Prometheus Operator CRDs are external dependencies. For a single monitor choice, use the explicit selector:
+The default `RollingUpdate` strategy also works with `replicaCount: 1`: `maxUnavailable: 25%` becomes zero unavailable replicas and `maxSurge: 25%` permits one extra Pod, so the old ready Pod remains until the replacement is ready. This can temporarily run two Pods. Use `strategy.type: Recreate` if overlap is undesirable.
+
+The optional Prometheus Operator monitor is controlled by one `monitor` block because the chart creates exactly one target monitor. The Prometheus Operator CRDs are external dependencies, so it is opt-in:
 
 ```yaml
 monitor:
@@ -12,9 +14,26 @@ monitor:
   type: service # pod or service
 ```
 
-This renders either a ServiceMonitor or a PodMonitor. The existing `serviceMonitor.enabled` and `podMonitor.enabled` flags remain available for compatibility and explicit per-resource control; do not enable both mechanisms for both monitor kinds at the same time, or duplicate monitor resources may be created. Set `serviceMonitor.collector` or `podMonitor.collector` to select one server-side collector. Each target endpoint selects one collector; use additional monitor resources/endpoints for others. Relabeling passes the discovered address as `target`, preserves it as `instance`, and routes the scrape to the exporter Service. When enabled, `selfMetrics.enabled` creates a second monitor resource selecting the exporter itself and scraping `selfMetrics.path`.
+`monitor.type` selects the generated resource; all scrape settings, selectors, headers, authentication, relabelings, and metric relabelings live under this block. Each target endpoint selects one collector; use additional monitor resources outside this chart when different collector configurations are required. The chart adds the target-routing relabelings that pass the discovered address as `target`, preserve it as `instance`, and route the scrape to the exporter Service. Values in `monitor.relabelings` are appended to those built-ins. When enabled, `selfMetrics.enabled` creates a second monitor resource selecting the exporter itself and scraping `selfMetrics.path`.
 
-Both monitor values support `headers` and Secret-backed `auth`. Monitor authentication is disabled by default; set the selected monitor's `auth.enabled: true` and choose `auth.type: bearer` or `auth.type: basic` to render the Prometheus Operator `authorization` or `basicAuth` configuration. Header entries are rendered as `header_<name>` endpoint parameters and are forwarded to the target only when the collector lists the canonical name in `request.forward_headers`. To pass the monitor's Authorization header through to the target, the collector must also set `request.forward_authorization: true`. Do not place secrets in `headers`; use a Kubernetes Secret through `auth`.
+Both `monitor.relabelings` and `monitor.metricRelabelings` accept the native Prometheus Operator relabeling structures. `relabelings` run during target relabeling; `metricRelabelings` run on scraped samples. Self-health monitor relabelings can be set separately with `selfMetrics.relabelings` and `selfMetrics.metricRelabelings`.
+
+The monitor supports `headers` and Secret-backed `auth`. Monitor authentication is disabled by default; set `monitor.auth.enabled: true` and choose `monitor.auth.type: bearer` or `monitor.auth.type: basic` to render the Prometheus Operator `authorization` or `basicAuth` configuration. Header entries are rendered as `header_<name>` endpoint parameters and are forwarded to the target only when the collector lists the canonical name in `request.forward_headers`. To pass the monitor's Authorization header through to the target, the collector must also set `request.forward_authorization: true`. Do not place secrets in `headers`; use a Kubernetes Secret through `auth`.
+
+For example:
+
+```yaml
+monitor:
+  enabled: true
+  type: service
+  relabelings:
+    - sourceLabels: [__meta_kubernetes_service_label_team]
+      targetLabel: team
+  metricRelabelings:
+    - sourceLabels: [__name__]
+      regex: exporter_debug_.+
+      action: drop
+```
 
 Exporter endpoint protection is configured in the mounted exporter configuration, not in the monitor values:
 

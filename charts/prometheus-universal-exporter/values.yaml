@@ -46,37 +46,17 @@ config:
                 type: gauge
                 regex: 'status:\s+(\d+(?:\.\d+)?)'
 monitor:
-  # Optional single-monitor selector. The podMonitor.enabled and
-  # serviceMonitor.enabled flags remain available for explicit control.
   enabled: false
   type: pod # pod or service
-serviceMonitor:
-  enabled: false
   interval: 30s
   scrapeTimeout: 10s
   labels: {}
   annotations: {}
   targetSelector: {}
   collector: example
-  # Non-secret headers are sent as header_<name> probe parameters. The
-  # collector must explicitly allow them with request.forward_headers.
-  headers: {}
-  auth:
-    enabled: false
-    type: bearer # bearer or basic
-    secretName: ""
-    secretKey: token
-    usernameKey: username
-    passwordKey: password
-    optional: false
-podMonitor:
-  enabled: false
-  interval: 30s
-  scrapeTimeout: 10s
-  labels: {}
-  annotations: {}
-  targetSelector: {}
-  collector: example
+  # Appended after the chart's target-routing relabelings.
+  relabelings: []
+  metricRelabelings: []
   # Non-secret headers are sent as header_<name> probe parameters. The
   # collector must explicitly allow them with request.forward_headers.
   headers: {}
@@ -95,6 +75,8 @@ selfMetrics:
   scrapeTimeout: 10s
   labels: {}
   annotations: {}
+  relabelings: []
+  metricRelabelings: []
 resources:
   requests:
     cpu: 100m

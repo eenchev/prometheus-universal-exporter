@@ -1460,21 +1460,28 @@ The Service MUST be usable as the target of Prometheus Operator `ServiceMonitor`
 
 ### 33.5 ServiceMonitor support
 
-The chart MUST provide an optional `ServiceMonitor` resource, controlled through Helm values.
+The chart MUST provide an optional `ServiceMonitor` resource, selected through
+the shared `monitor` values block.
 
 Example values:
 
 ```yaml
-serviceMonitor:
+monitor:
   enabled: false
+  type: service
   interval: 30s
   scrapeTimeout: 10s
   labels: {}
   annotations: {}
-  additionalLabels: {}
+  targetSelector: {}
+  collector: example
+  relabelings: []
+  metricRelabelings: []
 ```
 
-The chart MUST allow configuring `params.collector` and the required relabeling to route discovered targets through `/probe`.
+The chart MUST allow configuring `params.collector`, user-provided
+`relabelings`, and `metricRelabelings` to route discovered targets through
+`/probe` and filter or rewrite scraped samples.
 
 Because collector selection is target-specific, the chart MUST support a documented configuration pattern where a ServiceMonitor endpoint passes:
 
@@ -1500,7 +1507,8 @@ The implementation MUST document that a single ServiceMonitor endpoint selects o
 
 ### 33.6 PodMonitor support
 
-The chart MUST provide an optional `PodMonitor` resource, controlled through Helm values.
+When `monitor.type` is `pod`, the chart MUST provide the equivalent optional
+`PodMonitor` resource using the same shared `monitor` values block.
 
 It MUST implement the equivalent target relabeling and collector parameter behavior described for `ServiceMonitor`.
 
@@ -1549,8 +1557,7 @@ podSecurityContext: {}
 nodeSelector: {}
 tolerations: []
 affinity: {}
-serviceMonitor: {}
-podMonitor: {}
+monitor: {}
 networkPolicy: {}
 ```
 
@@ -1562,8 +1569,9 @@ The repository MUST include automated Helm validation covering at least:
 
 - `helm lint`
 - `helm template` with default values
-- `helm template` with ServiceMonitor enabled
-- `helm template` with PodMonitor enabled
+- `helm template` with `monitor.type=service` and `monitor.enabled=true`;
+- `helm template` with `monitor.type=pod` and `monitor.enabled=true`;
+- `helm template` with `monitor.enabled=false`.
 - ConfigMap generation
 - Deployment generation
 - Service generation
@@ -2273,17 +2281,16 @@ helm template
 with at least these values combinations:
 
 1. Default configuration.
-2. ServiceMonitor disabled.
-3. ServiceMonitor enabled.
-4. PodMonitor disabled.
-5. PodMonitor enabled.
-6. Both monitor resources configured where the chart permits this.
-7. Custom image/repository/tag.
-8. Custom resources.
-9. Custom securityContext.
-10. Custom exporter arguments/configuration.
-11. Multiple collectors in ConfigMap content.
-12. Existing Secret references for credentials where supported.
+2. Monitor disabled.
+3. Monitor enabled with `type: service`.
+4. Monitor enabled with `type: pod`.
+5. Custom target and metric relabelings.
+6. Custom image/repository/tag.
+7. Custom resources.
+8. Custom securityContext.
+9. Custom exporter arguments/configuration.
+10. Multiple collectors in ConfigMap content.
+11. Existing Secret references for credentials where supported.
 
 Rendered manifests SHOULD be validated with `kubeconform`, `kubeval`, or equivalent.
 
@@ -2773,15 +2780,13 @@ monitor:
 ```
 
 When `monitor.enabled` is true, `monitor.type` MUST accept `pod` and
-`service`, and the chart MUST render the corresponding PodMonitor or
-ServiceMonitor, respectively. The chart MUST retain `podMonitor.enabled` and
-`serviceMonitor.enabled` as compatibility controls for users that need direct
-per-resource configuration. Documentation MUST warn that enabling both the
-selector and conflicting compatibility flags can create duplicate monitor
-resources.
+`service`, and the chart MUST render exactly one corresponding PodMonitor or
+ServiceMonitor, respectively. All target monitor settings MUST live under the
+single `monitor` block; separate `podMonitor` and `serviceMonitor` values MUST
+NOT be required.
 
 Monitor authentication MUST be explicitly opt-in and disabled by default for
-both monitor values:
+the shared monitor value:
 
 ```yaml
 auth:
@@ -2794,3 +2799,24 @@ When `auth.enabled` is false, the chart MUST NOT render `authorization` or
 MUST select bearer or basic authentication and the chart MUST render the
 corresponding SecretKeySelectors. Tests MUST cover the disabled default, both
 monitor selector types, and enabled bearer/basic authentication rendering.
+
+## 42.8 Monitor relabeling and Deployment rollout behavior
+
+The shared Helm `monitor` block MUST expose native Prometheus Operator
+`relabelings` and `metricRelabelings` lists. The chart MUST preserve its
+mandatory target-routing relabelings and append user-provided
+`monitor.relabelings` after them. `monitor.metricRelabelings` MUST be rendered
+on the selected ServiceMonitor endpoint or PodMonitor pod metrics endpoint.
+These lists MUST support the standard fields, including `sourceLabels`,
+`targetLabel`, `regex`, `replacement`, `action`, and `modulus`, as applicable.
+
+The self-health monitor MUST independently support
+`selfMetrics.relabelings` and `selfMetrics.metricRelabelings`.
+
+The default Deployment strategy MUST work with `replicaCount: 1`. With
+`RollingUpdate`, `maxUnavailable: 25%` rounds down to zero unavailable
+replicas and `maxSurge: 25%` rounds up to one extra replica. Therefore a
+single-replica rollout keeps the old ready Pod until the replacement is ready,
+temporarily allowing two Pods and avoiding intentional downtime. The chart
+MUST document that this relies on the readiness probe becoming ready; users
+that require no overlap MAY choose `strategy.type: Recreate`.

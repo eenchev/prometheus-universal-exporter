@@ -1,4 +1,4 @@
-{{- if or .Values.serviceMonitor.enabled (and .Values.monitor.enabled (eq .Values.monitor.type "service")) }}
+{{- if and .Values.monitor.enabled (eq .Values.monitor.type "service") }}
 apiVersion: monitoring.coreos.com/v1
 kind: ServiceMonitor
 metadata:
@@ -6,42 +6,42 @@ metadata:
   {{ with .Values.namespaceOverride }}namespace: {{ . }}{{ end }}
   labels:
     {{- include "prometheus-universal-exporter.labels" . | nindent 4 }}
-    {{- with .Values.serviceMonitor.labels }}{{ toYaml . | nindent 4 }}{{ end }}
-  {{- with .Values.serviceMonitor.annotations }}
+    {{- with .Values.monitor.labels }}{{ toYaml . | nindent 4 }}{{ end }}
+  {{- with .Values.monitor.annotations }}
   annotations: {{- toYaml . | nindent 4 }}
   {{- end }}
 spec:
   selector:
-    {{- if .Values.serviceMonitor.targetSelector }}{{ toYaml .Values.serviceMonitor.targetSelector | nindent 4 }}{{ else }}matchLabels:
+    {{- if .Values.monitor.targetSelector }}{{ toYaml .Values.monitor.targetSelector | nindent 4 }}{{ else }}matchLabels:
       app.kubernetes.io/name: target
     {{- end }}
   endpoints:
     - port: http
       path: /probe
-      interval: {{ .Values.serviceMonitor.interval }}
-      scrapeTimeout: {{ .Values.serviceMonitor.scrapeTimeout }}
+      interval: {{ .Values.monitor.interval }}
+      scrapeTimeout: {{ .Values.monitor.scrapeTimeout }}
       params:
-        collector: [{{ .Values.serviceMonitor.collector | quote }}]
-        {{ range $name, $value := .Values.serviceMonitor.headers }}
+        collector: [{{ .Values.monitor.collector | quote }}]
+        {{ range $name, $value := .Values.monitor.headers }}
         header_{{ $name }}: [{{ $value | quote }}]
         {{ end }}
-      {{ if and .Values.serviceMonitor.auth.enabled (eq .Values.serviceMonitor.auth.type "bearer") }}
+      {{ if and .Values.monitor.auth.enabled (eq .Values.monitor.auth.type "bearer") }}
       authorization:
         type: Bearer
         credentials:
-          name: {{ .Values.serviceMonitor.auth.secretName | quote }}
-          key: {{ .Values.serviceMonitor.auth.secretKey | quote }}
-          optional: {{ .Values.serviceMonitor.auth.optional }}
-      {{ else if and .Values.serviceMonitor.auth.enabled (eq .Values.serviceMonitor.auth.type "basic") }}
+          name: {{ .Values.monitor.auth.secretName | quote }}
+          key: {{ .Values.monitor.auth.secretKey | quote }}
+          optional: {{ .Values.monitor.auth.optional }}
+      {{ else if and .Values.monitor.auth.enabled (eq .Values.monitor.auth.type "basic") }}
       basicAuth:
         username:
-          name: {{ .Values.serviceMonitor.auth.secretName | quote }}
-          key: {{ .Values.serviceMonitor.auth.usernameKey | quote }}
-          optional: {{ .Values.serviceMonitor.auth.optional }}
+          name: {{ .Values.monitor.auth.secretName | quote }}
+          key: {{ .Values.monitor.auth.usernameKey | quote }}
+          optional: {{ .Values.monitor.auth.optional }}
         password:
-          name: {{ .Values.serviceMonitor.auth.secretName | quote }}
-          key: {{ .Values.serviceMonitor.auth.passwordKey | quote }}
-          optional: {{ .Values.serviceMonitor.auth.optional }}
+          name: {{ .Values.monitor.auth.secretName | quote }}
+          key: {{ .Values.monitor.auth.passwordKey | quote }}
+          optional: {{ .Values.monitor.auth.optional }}
       {{ end }}
       relabelings:
         - sourceLabels: [__address__]
@@ -50,8 +50,15 @@ spec:
           targetLabel: instance
         - targetLabel: __address__
           replacement: {{ include "prometheus-universal-exporter.fullname" . }}:{{ .Values.service.port }}
+      {{- with .Values.monitor.relabelings }}
+      {{ toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.monitor.metricRelabelings }}
+      metricRelabelings:
+        {{ toYaml . | nindent 8 }}
+      {{- end }}
 {{- end }}
-{{- if and (or .Values.serviceMonitor.enabled (and .Values.monitor.enabled (eq .Values.monitor.type "service"))) .Values.selfMetrics.enabled }}
+{{- if and .Values.monitor.enabled (eq .Values.monitor.type "service") .Values.selfMetrics.enabled }}
 ---
 apiVersion: monitoring.coreos.com/v1
 kind: ServiceMonitor
@@ -74,4 +81,12 @@ spec:
       path: {{ .Values.selfMetrics.path | quote }}
       interval: {{ .Values.selfMetrics.interval }}
       scrapeTimeout: {{ .Values.selfMetrics.scrapeTimeout }}
+      {{- with .Values.selfMetrics.relabelings }}
+      relabelings:
+        {{ toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.selfMetrics.metricRelabelings }}
+      metricRelabelings:
+        {{ toYaml . | nindent 8 }}
+      {{- end }}
 {{- end }}

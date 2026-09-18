@@ -1,4 +1,4 @@
-{{- if or .Values.podMonitor.enabled (and .Values.monitor.enabled (eq .Values.monitor.type "pod")) }}
+{{- if and .Values.monitor.enabled (eq .Values.monitor.type "pod") }}
 apiVersion: monitoring.coreos.com/v1
 kind: PodMonitor
 metadata:
@@ -6,42 +6,42 @@ metadata:
   {{ with .Values.namespaceOverride }}namespace: {{ . }}{{ end }}
   labels:
     {{- include "prometheus-universal-exporter.labels" . | nindent 4 }}
-    {{- with .Values.podMonitor.labels }}{{ toYaml . | nindent 4 }}{{ end }}
-  {{- with .Values.podMonitor.annotations }}
+    {{- with .Values.monitor.labels }}{{ toYaml . | nindent 4 }}{{ end }}
+  {{- with .Values.monitor.annotations }}
   annotations: {{- toYaml . | nindent 4 }}
   {{- end }}
 spec:
   selector:
-    {{- if .Values.podMonitor.targetSelector }}{{ toYaml .Values.podMonitor.targetSelector | nindent 4 }}{{ else }}matchLabels:
+    {{- if .Values.monitor.targetSelector }}{{ toYaml .Values.monitor.targetSelector | nindent 4 }}{{ else }}matchLabels:
       app.kubernetes.io/name: target
     {{- end }}
   podMetricsEndpoints:
     - port: http
       path: /probe
-      interval: {{ .Values.podMonitor.interval }}
-      scrapeTimeout: {{ .Values.podMonitor.scrapeTimeout }}
+      interval: {{ .Values.monitor.interval }}
+      scrapeTimeout: {{ .Values.monitor.scrapeTimeout }}
       params:
-        collector: [{{ .Values.podMonitor.collector | quote }}]
-        {{ range $name, $value := .Values.podMonitor.headers }}
+        collector: [{{ .Values.monitor.collector | quote }}]
+        {{ range $name, $value := .Values.monitor.headers }}
         header_{{ $name }}: [{{ $value | quote }}]
         {{ end }}
-      {{ if and .Values.podMonitor.auth.enabled (eq .Values.podMonitor.auth.type "bearer") }}
+      {{ if and .Values.monitor.auth.enabled (eq .Values.monitor.auth.type "bearer") }}
       authorization:
         type: Bearer
         credentials:
-          name: {{ .Values.podMonitor.auth.secretName | quote }}
-          key: {{ .Values.podMonitor.auth.secretKey | quote }}
-          optional: {{ .Values.podMonitor.auth.optional }}
-      {{ else if and .Values.podMonitor.auth.enabled (eq .Values.podMonitor.auth.type "basic") }}
+          name: {{ .Values.monitor.auth.secretName | quote }}
+          key: {{ .Values.monitor.auth.secretKey | quote }}
+          optional: {{ .Values.monitor.auth.optional }}
+      {{ else if and .Values.monitor.auth.enabled (eq .Values.monitor.auth.type "basic") }}
       basicAuth:
         username:
-          name: {{ .Values.podMonitor.auth.secretName | quote }}
-          key: {{ .Values.podMonitor.auth.usernameKey | quote }}
-          optional: {{ .Values.podMonitor.auth.optional }}
+          name: {{ .Values.monitor.auth.secretName | quote }}
+          key: {{ .Values.monitor.auth.usernameKey | quote }}
+          optional: {{ .Values.monitor.auth.optional }}
         password:
-          name: {{ .Values.podMonitor.auth.secretName | quote }}
-          key: {{ .Values.podMonitor.auth.passwordKey | quote }}
-          optional: {{ .Values.podMonitor.auth.optional }}
+          name: {{ .Values.monitor.auth.secretName | quote }}
+          key: {{ .Values.monitor.auth.passwordKey | quote }}
+          optional: {{ .Values.monitor.auth.optional }}
       {{ end }}
       relabelings:
         - sourceLabels: [__address__]
@@ -50,8 +50,15 @@ spec:
           targetLabel: instance
         - targetLabel: __address__
           replacement: {{ include "prometheus-universal-exporter.fullname" . }}:{{ .Values.service.port }}
+      {{- with .Values.monitor.relabelings }}
+      {{ toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.monitor.metricRelabelings }}
+      metricRelabelings:
+        {{ toYaml . | nindent 8 }}
+      {{- end }}
 {{- end }}
-{{- if and (or .Values.podMonitor.enabled (and .Values.monitor.enabled (eq .Values.monitor.type "pod"))) .Values.selfMetrics.enabled }}
+{{- if and .Values.monitor.enabled (eq .Values.monitor.type "pod") .Values.selfMetrics.enabled }}
 ---
 apiVersion: monitoring.coreos.com/v1
 kind: PodMonitor
@@ -74,4 +81,12 @@ spec:
       path: {{ .Values.selfMetrics.path | quote }}
       interval: {{ .Values.selfMetrics.interval }}
       scrapeTimeout: {{ .Values.selfMetrics.scrapeTimeout }}
+      {{- with .Values.selfMetrics.relabelings }}
+      relabelings:
+        {{ toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.selfMetrics.metricRelabelings }}
+      metricRelabelings:
+        {{ toYaml . | nindent 8 }}
+      {{- end }}
 {{- end }}

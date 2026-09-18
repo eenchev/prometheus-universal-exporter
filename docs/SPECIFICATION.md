@@ -108,12 +108,21 @@ Parameters:
   request for this scrape.
 - `body`: optional opaque request body override. It MUST be treated as raw
   text and MUST NOT require JSON encoding.
+- `insecure_skip_verify`: optional boolean override for the collector's target
+  TLS setting. When `true`, the target request MUST disable server certificate
+  verification for this scrape only.
 
 The exporter MUST reject missing or unknown collector names with a useful error.
 
 Invalid request overrides MUST return a client error. When `timeout` is absent,
 the exporter MUST use the incoming scrape request context as the target request
 deadline rather than a collector-configured timeout.
+
+The `insecure_skip_verify` override MUST take precedence over
+`request.tls.insecure_skip_verify` for the individual scrape. Invalid boolean
+values MUST return HTTP 400 before the target is contacted. Disabling
+certificate verification is an explicit security trade-off and MUST be
+documented as unsafe for general use.
 
 The exporter MUST validate and normalize the target according to collector request configuration.
 
@@ -170,6 +179,8 @@ Support:
 - Optional file-backed basic authentication credentials
 - Bearer token authentication
 - TLS CA configuration
+- Configurable target certificate verification, including an explicit
+  `insecure_skip_verify` opt-out
 - Optional client certificates if practical
 - Per-scrape timeout override through the probe request parameter
 - Configurable maximum response size
@@ -1844,6 +1855,8 @@ Test at minimum:
 - Bearer authentication.
 - TLS with a test CA/certificate.
 - TLS verification failure.
+- Target TLS verification can be disabled in collector configuration and
+  overridden per scrape with `insecure_skip_verify=true|false`.
 - Per-scrape request timeout override.
 - Incoming scrape deadline propagation when no timeout override is supplied.
 - HTTP redirects according to policy.
@@ -2686,7 +2699,7 @@ The implementation is considered complete when all of the following are true:
 - A `PodMonitor` can do the same.
 - No target URLs need to be hardcoded into the collector configuration.
 - A collector can select its HTTP method, path, headers, authentication, TLS, request body, and other request properties.
-- A probe request can override a collector's method, path, body, or target-request timeout for one scrape.
+- A probe request can override a collector's method, path, body, target-request timeout, or target TLS certificate verification for one scrape.
 - JSON responses can be transformed using jq.
 - YAML responses can be transformed using yq.
 - XML responses can be transformed using XPath.
@@ -3078,6 +3091,23 @@ same configured timeout and best-effort failure behavior as other OTLP exports.
 
 ## 42.10 Per-scrape request overrides
 
+Collector target requests MAY configure TLS verification and trust material:
+
+```yaml
+request:
+  tls:
+    ca_file: /etc/prometheus/tls/ca.crt
+    cert_file: /etc/prometheus/tls/client.crt
+    key_file: /etc/prometheus/tls/client.key
+    insecure_skip_verify: false
+```
+
+`request.tls.insecure_skip_verify` MUST default to `false`. When set to
+`true`, only server certificate verification is disabled; TLS remains enabled
+and the exporter MUST retain TLS 1.2 or newer. This setting SHOULD be avoided
+unless the target's certificate cannot be validated through configured or
+system trust roots.
+
 The collector configuration MUST support a raw `request.body` value for
 requests whose method accepts a body. The value MUST be sent as provided and
 MUST NOT be restricted to JSON. The collector configuration MUST NOT contain a
@@ -3091,6 +3121,7 @@ method=<GET|POST|PUT|PATCH|DELETE|HEAD>
 path=<request path>
 timeout=<positive Go duration>
 body=<raw request body>
+insecure_skip_verify=<true|false>
 ```
 
 When supplied, these parameters MUST override the selected collector's
@@ -3098,15 +3129,20 @@ When supplied, these parameters MUST override the selected collector's
 MUST bound the target request with a child context of the incoming scrape
 context. When it is absent, the target request MUST use the incoming scrape
 context directly, so the Prometheus scrape timeout is the effective request
-deadline. Invalid methods or timeout values MUST return HTTP 400 before the
-target is contacted.
+deadline. The `insecure_skip_verify` parameter MUST override
+`request.tls.insecure_skip_verify` only for the current target request. Invalid
+methods, timeout values, or boolean values MUST return HTTP 400 before the
+target is contacted. Disabling certificate verification is an explicit
+security trade-off and MUST be documented as unsafe for general use.
 
 The Helm chart MUST expose these parameters as list-valued `params` entries on
 each `monitors` item, and MUST expose `interval` and `scrapeTimeout` on each
 item as the Prometheus Operator scrape settings. The monitor scrape timeout
 and the exporter target-request timeout override are distinct: the former is
 set on the generated ServiceMonitor or PodMonitor, while the latter is passed
-to `/probe` as `params.timeout`.
+to `/probe` as `params.timeout`. The TLS override is passed as
+`params.insecure_skip_verify`; when absent, the collector's TLS setting MUST be
+preserved.
 
 ## 42.11 Helm-wide default metadata
 

@@ -246,6 +246,27 @@ monitors:
 
 The body is opaque text and does not need to be JSON. Without a `timeout` parameter, the exporter uses the incoming Prometheus scrape context as the target request timeout.
 
+The collector can configure target TLS verification and trust material:
+
+```yaml
+request:
+  tls:
+    ca_file: /etc/prometheus/tls/ca.crt
+    cert_file: /etc/prometheus/tls/client.crt
+    key_file: /etc/prometheus/tls/client.key
+    insecure_skip_verify: false
+```
+
+For a one-off scrape, the `insecure_skip_verify` probe parameter overrides the
+collector setting. Set it to `true` only for endpoints where certificate
+verification is intentionally unavailable; it disables server certificate
+verification and should not be used as a general workaround.
+
+```yaml
+params:
+  insecure_skip_verify: ["true"]
+```
+
 Monitor authentication is applied by Prometheus when it scrapes the exporter. To pass that credential to the discovered target, set `request.forward_authorization: true` on the selected collector. Each `monitors` entry supports Secret-backed `auth.type: bearer` and `auth.type: basic` settings. The exporter never forwards arbitrary incoming headers.
 
 For non-secret target headers, configure an allowlist in the collector and use the chart's monitor `headers` map. The chart encodes these as `header_<Header-Name>` probe parameters, which the exporter forwards only when the header is listed in `request.forward_headers`:

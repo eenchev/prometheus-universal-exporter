@@ -85,6 +85,41 @@ func TestProbeRequestOverrides(t *testing.T) {
 	}
 }
 
+func TestParseInsecureSkipVerifyOverride(t *testing.T) {
+	withoutOverride := httptest.NewRequest(http.MethodGet, "/probe", nil).URL.Query()
+	overrides, err := parseRequestOverrides(withoutOverride)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if overrides.InsecureSkipVerify != nil {
+		t.Fatal("unexpected TLS verification override when parameter is absent")
+	}
+
+	for _, test := range []struct {
+		value string
+		want  bool
+	}{
+		{value: "true", want: true},
+		{value: "false", want: false},
+	} {
+		t.Run(test.value, func(t *testing.T) {
+			request := httptest.NewRequest(http.MethodGet, "/probe?insecure_skip_verify="+test.value, nil)
+			overrides, err := parseRequestOverrides(request.URL.Query())
+			if err != nil {
+				t.Fatal(err)
+			}
+			if overrides.InsecureSkipVerify == nil || *overrides.InsecureSkipVerify != test.want {
+				t.Fatalf("override=%v, want %t", overrides.InsecureSkipVerify, test.want)
+			}
+		})
+	}
+
+	request := httptest.NewRequest(http.MethodGet, "/probe?insecure_skip_verify=1", nil)
+	if _, err := parseRequestOverrides(request.URL.Query()); err == nil || !strings.Contains(err.Error(), "insecure_skip_verify") {
+		t.Fatalf("invalid override error=%v", err)
+	}
+}
+
 func TestHTMLBareTagSelector(t *testing.T) {
 	c := Collector{Name: "html", Response: ResponseConfig{Format: "html"}, Transform: TransformConfig{Type: "css"}, Metrics: []MetricRule{{Name: "application_status", Type: GaugeMetricType, Expression: "h1"}}, ErrorHandling: ErrorHandling{AllowMissingKeys: false}, Limits: Limits{MaxMetrics: 10}}
 	r := &HTTPResponse{Body: []byte("<html><body><h1>42</h1></body></html>"), Headers: http.Header{"Content-Type": []string{"text/html"}}}
@@ -736,6 +771,34 @@ func TestFetchRejectsDisallowedSchemeAndOversizedResponse(t *testing.T) {
 	c.Limits.MaxResponseBytes = 4
 	if _, err := fetch(context.Background(), target.URL, &c, RequestOverrides{}); err == nil || !strings.Contains(err.Error(), "exceeds limit") {
 		t.Fatalf("response-size error=%v", err)
+	}
+}
+
+func TestFetchTLSVerificationCanBeConfiguredAndOverridden(t *testing.T) {
+	target := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte("secure response"))
+	}))
+	defer target.Close()
+	c := Collector{Name: "tls", Request: RequestConfig{AllowedSchemes: []string{"https"}}, Limits: Limits{MaxResponseBytes: 1024}}
+
+	if _, err := fetch(context.Background(), target.URL, &c, RequestOverrides{}); err == nil {
+		t.Fatal("expected certificate verification to fail by default")
+	}
+	c.Request.TLS.InsecureSkipVerify = true
+	response, err := fetch(context.Background(), target.URL, &c, RequestOverrides{})
+	if err != nil || string(response.Body) != "secure response" {
+		t.Fatalf("configured insecure request failed: response=%#v error=%v", response, err)
+	}
+
+	verified := false
+	if _, err := fetch(context.Background(), target.URL, &c, RequestOverrides{InsecureSkipVerify: &verified}); err == nil {
+		t.Fatal("expected query override false to restore certificate verification")
+	}
+	unsafe := true
+	c.Request.TLS.InsecureSkipVerify = false
+	response, err = fetch(context.Background(), target.URL, &c, RequestOverrides{InsecureSkipVerify: &unsafe})
+	if err != nil || string(response.Body) != "secure response" {
+		t.Fatalf("query override true failed: response=%#v error=%v", response, err)
 	}
 }
 

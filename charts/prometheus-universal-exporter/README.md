@@ -94,4 +94,18 @@ request:
 
 For bearer authentication, set `type: bearer`, `secretKey: token`, and `fileName: token`, then reference `request.bearer_token_file`. The exporter then uses its own configured Basic Auth for incoming scrapes and the mounted Kubernetes Secret for the target request. These credentials are independent.
 
+The exporter's process settings are values, not hardcoded arguments:
+
+```yaml
+server:
+  listenAddress: ":8080"
+  pythonPath: /usr/local/bin/python3
+```
+
+`server.listenAddress` becomes `--web.listen-address` and also sets the container port, so an override such as `0.0.0.0:9115` moves the listener and the port together. The port keeps the name `http`, which is what the Service, Ingress, ServiceMonitor, and PodMonitor reference, so nothing else needs changing; `service.port` stays independent. A value without a valid TCP port fails `helm template` with an explicit message.
+
+`server.pythonPath` becomes `--python.path`, the interpreter used by the `python` transform. The default matches the exporter image, which is based on `python:3.12-slim` and installs Python at `/usr/local/bin/python3`. Override it when you run a custom image with the interpreter somewhere else.
+
+Collector caching is configured in the exporter configuration, not in chart values. Add `cache: 60s` to a collector in `config.data.config.yaml` to answer repeated identical probes from memory. The cache is per-process and in-memory, so each replica keeps its own entries and a rollout empties them; with several replicas, expect up to one target request per replica per interval.
+
 The chart defaults to a non-root, read-only-root-filesystem container, drops Linux capabilities, and does not install Kubernetes API permissions. `ingress.enabled` creates an Ingress, while `neg.enabled` adds the GKE NEG service annotation. Configure `networkPolicy` in an environment-specific values file if target access must be restricted.

@@ -116,6 +116,10 @@ Parameters:
 - `retry_backoff`: optional non-negative Go duration overriding the fixed delay
   between retry attempts.
 
+When the selected collector enables caching, the exporter MUST serve a stored
+result instead of contacting the target while a cached entry for the identical
+request is still valid. Section 42.13 defines caching.
+
 The exporter MUST reject missing or unknown collector names with a useful error.
 
 Invalid request overrides MUST return a client error. When `timeout` is absent,
@@ -247,9 +251,16 @@ collectors:
       ...
     limits:
       ...
+    cache: 60s
 ```
 
 A collector MUST have a unique name.
+
+A collector MAY set `cache` to a Go duration such as `60s`, `1m`, or `3h`. The
+value is the time to live of a cached collector result. Omitting `cache`, or
+setting it to `0s`, MUST disable caching for that collector. A negative value
+MUST be rejected during configuration validation. Section 42.13 defines the
+caching contract.
 
 Every collector uses the same `transform` and `metrics` structure. The decoder
 only selects how the response is parsed; it does not contain executable
@@ -1087,7 +1098,12 @@ limits:
   max_label_value_length: 500
   max_metric_name_length: 200
   script_timeout: 100ms
+  max_cache_entries: 1000
 ```
+
+`max_cache_entries` bounds the number of live cache entries a single collector
+may hold. It MUST default to a finite value and MUST be enforced by evicting
+expired entries first and then the entries closest to expiry.
 
 Implementation may also add:
 
@@ -1143,6 +1159,10 @@ http_exporter_script_duration_seconds
 
 http_exporter_metrics_emitted
 http_exporter_series_limit_exceeded
+
+http_exporter_cache_hits_total
+http_exporter_cache_misses_total
+http_exporter_cache_entries
 
 http_exporter_collector_config_valid
 ```
@@ -1249,6 +1269,8 @@ Requirements:
 - Concurrent probes to different targets are allowed.
 - Respect configured global and per-collector concurrency limits if implemented.
 - Avoid race conditions during configuration reload.
+- Serve the collector response cache safely under concurrent probes, and never
+  hand a caller a metric set that another caller can mutate.
 
 ---
 
@@ -1492,7 +1514,13 @@ Provide clear CLI flags, for example:
 ```text
 --config.file=/etc/exporter/config.yaml
 --web.listen-address=:8080
+--web.self-metrics-path=/self-metrics
+--python.path=/usr/local/bin/python3
 ```
+
+`--python.path` selects the interpreter used by the `python` transform. It MUST
+default to an interpreter resolvable through `PATH` and MUST accept an absolute
+path so a deployment can point at a specific interpreter.
 
 Optional:
 
@@ -1572,6 +1600,19 @@ Not every listed template must be rendered by default, but the chart structure M
 ### 33.1 Deployment
 
 The chart MUST deploy the exporter as a Kubernetes `Deployment`.
+
+The chart MUST expose the exporter's process settings as values rather than
+hardcoding them in the Pod template. At minimum `server.listenAddress` MUST set
+`--web.listen-address` and `server.pythonPath` MUST set `--python.path`. The
+container port MUST be derived from the port in `server.listenAddress`, and a
+value without a valid TCP port MUST fail rendering with a clear message. The
+container port MUST keep the name `http` so Service, Ingress, ServiceMonitor,
+and PodMonitor references remain valid when the port changes.
+`server.pythonPath` MUST default to the interpreter path in the published
+container image.
+
+Arguments rendered into the Pod template MUST be quoted so the argument value
+reaches the process exactly as configured, without literal quote characters.
 
 Configurable values SHOULD include at least:
 
@@ -1743,6 +1784,7 @@ replicaCount: 1
 nameOverride: ""
 fullnameOverride: ""
 resources: {}
+server: {}
 service: {}
 config: {}
 serviceAccount: {}
@@ -2508,7 +2550,9 @@ with at least these values combinations:
 6. Custom image/repository/tag.
 7. Custom resources.
 8. Custom securityContext.
-9. Custom exporter arguments/configuration.
+9. Custom exporter arguments/configuration, including a custom
+   `server.listenAddress` and `server.pythonPath`, and an invalid
+   `server.listenAddress` that MUST fail rendering.
 10. Multiple collectors in ConfigMap content.
 11. Existing Secret references for credentials where supported.
 
@@ -2606,6 +2650,32 @@ testdata/
 The project MUST document how to run the complete suite locally without external services.
 
 The test suite SHOULD avoid time-dependent assertions and random network behavior. Where time is required, use injectable clocks or bounded assertions.
+
+## 34.35 Collector cache tests
+
+Required:
+
+- A repeated identical probe is served from the cache and the target receives
+  exactly one request.
+- A collector without `cache` configured never caches; every probe reaches the
+  target.
+- An expired entry is not served and the next probe refetches.
+- The cache key changes when the target, the collector definition, any probe
+  parameter, any forwarded header, or the forwarded credential changes, and
+  when any of those is removed. Absence and presence MUST produce different
+  keys.
+- A probe carrying no credential never reads an entry stored by a probe that
+  carried one, and probes carrying different credentials never share an entry.
+- A configuration reload retires entries cached under the previous collector
+  definition.
+- Failed probes are not cached.
+- Entries beyond `limits.max_cache_entries` are evicted, expired entries first.
+- A cached metric set is copied on store and on read, so neither the producer
+  nor a reader can mutate the stored entry.
+- Concurrent probes of a cached collector are race-free under `go test -race`.
+- Cache hit, miss, and entry self-metrics are exposed per collector.
+- Configuration parsing accepts durations such as `90s` and rejects a negative
+  `cache` value.
 
 # 35. Documentation requirements
 
@@ -3185,3 +3255,77 @@ workflow MUST:
 The release workflow MUST use `GITHUB_TOKEN` with `contents: write` and
 `packages: write` permissions and MUST run the same Go dependency and build
 checks before publishing artifacts.
+
+## 42.13 Collector response caching
+
+Each collector MUST support a `cache` parameter holding a Go duration, for
+example `60s`, `1m`, or `3h`:
+
+```yaml
+collectors:
+  - name: expensive_api
+    cache: 60s
+    limits:
+      max_cache_entries: 1000
+```
+
+When `cache` is greater than zero and a probe repeats a request the exporter
+has already served within that interval, the exporter MUST return the stored
+result and MUST NOT contact the target again. Omitting `cache` or setting it to
+`0s` MUST disable caching for that collector, which is the default. A negative
+value MUST be rejected during configuration validation.
+
+The cache MUST be in-memory and process-local. It MUST NOT be written to disk
+and MUST NOT be shared between exporter replicas. Cached entries are lost on
+restart, which is expected and MUST NOT be treated as an error.
+
+An entry MUST be served only for a request that matches the stored request
+exactly. The cache key MUST be a fingerprint covering at least:
+
+- the collector name and the full effective collector definition;
+- the `target` value;
+- every query parameter of the `/probe` request, including `method`, `path`,
+  `timeout`, `body`, `insecure_skip_verify`, `retry_attempts`,
+  `retry_backoff`, and any `header_<name>` parameter, with all values; and
+- every header forwarded to the target, including a forwarded `Authorization`
+  value.
+
+The presence and the absence of a parameter, a header, or a credential MUST
+produce different keys. A probe that supplies no credential, no forwarded
+header, or no TLS override therefore MUST NOT be able to read an entry stored
+by a probe that supplied one, and two probes presenting different credentials
+MUST NOT share an entry. This is a confidentiality requirement: a cached result
+may only ever be returned to a byte-for-byte identical request.
+
+Because the collector definition is part of the key, a configuration reload
+MUST retire every entry cached under the previous definition. Credentials read
+from files at request time are covered only through their configured paths, so
+a rotated credential file takes effect for a cached request once the entry
+expires; deployments that rotate credentials faster than the cache interval
+SHOULD shorten `cache` accordingly.
+
+Only a fully successful probe MAY be cached. Requests that fail at the HTTP,
+decode, transform, or validation stage MUST NOT be stored.
+
+Stored metric sets MUST be copied when written and when read, so a cached entry
+can never be mutated by the probe that produced it or by a later reader, and
+concurrent probes MUST be safe.
+
+The cache MUST be bounded per collector by `limits.max_cache_entries`. When the
+limit is exceeded, the exporter MUST drop expired entries first and then the
+entries closest to expiry.
+
+The exporter MUST expose per-collector cache self-metrics:
+
+```text
+http_exporter_cache_hits_total
+http_exporter_cache_misses_total
+http_exporter_cache_entries
+```
+
+A cache hit MUST count as a successful scrape in `http_exporter_scrapes_total`
+and `http_exporter_scrape_success`, and the cached metrics MUST still be queued
+for OTLP export. Target-request self-metrics such as
+`http_exporter_scrape_http_status_code` and
+`http_exporter_scrape_response_bytes` describe the last real target request and
+MUST NOT be altered by a cache hit.

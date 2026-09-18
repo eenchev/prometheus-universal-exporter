@@ -26,6 +26,20 @@ app.kubernetes.io/managed-by: {{ .Release.Service }}
 {{- if gt (len .) 1 }}{{- range $key, $value := index . 1 }}{{- $_ := set $annotations $key $value -}}{{- end -}}{{- end -}}
 {{- toYaml $annotations -}}
 {{- end }}
+{{- define "prometheus-universal-exporter.listenAddress" -}}
+{{- default ":8080" .Values.server.listenAddress -}}
+{{- end }}
+{{- define "prometheus-universal-exporter.containerPort" -}}
+{{- $address := include "prometheus-universal-exporter.listenAddress" . -}}
+{{- $port := $address | splitList ":" | last | int -}}
+{{- if or (lt $port 1) (gt $port 65535) -}}
+{{- fail (printf "server.listenAddress %q must end in a valid TCP port, for example \":8080\"" $address) -}}
+{{- end -}}
+{{- $port -}}
+{{- end }}
+{{- define "prometheus-universal-exporter.pythonPath" -}}
+{{- default "/usr/local/bin/python3" .Values.server.pythonPath -}}
+{{- end }}
 {{- define "prometheus-universal-exporter.serviceAccountName" -}}
 {{- if .Values.serviceAccount.create }}{{ default (include "prometheus-universal-exporter.fullname" .) .Values.serviceAccount.name }}{{ else }}{{ default "default" .Values.serviceAccount.name }}{{ end }}
 {{- end }}

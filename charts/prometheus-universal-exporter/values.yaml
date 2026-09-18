@@ -32,6 +32,17 @@ ingress:
         - path: /
           pathType: Prefix
   tls: []
+# Exporter process settings. These become command-line flags on the container.
+server:
+  # Address the exporter listens on. The container port follows the port in
+  # this value; Service, Ingress, and monitor references use the named port, so
+  # they follow automatically. Must end in a valid TCP port.
+  listenAddress: ":8080"
+  # Python interpreter used by the `python` transform. The default is the
+  # interpreter path in the exporter image, which is based on python:3.X-slim.
+  # Override this when running a custom image with Python installed elsewhere.
+  pythonPath: /usr/local/bin/python3
+
 config:
   enabled: true
   data:

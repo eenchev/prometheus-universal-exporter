@@ -18,5 +18,6 @@ helm-test:
 	helm template test charts/prometheus-universal-exporter
 	helm template test charts/prometheus-universal-exporter --set serviceMonitor.enabled=true
 	helm template test charts/prometheus-universal-exporter --set podMonitor.enabled=true
+	helm template test charts/prometheus-universal-exporter --set server.listenAddress=0.0.0.0:9115 --set server.pythonPath=/usr/bin/python3.11
 
 ci: fmt test vet build helm-test

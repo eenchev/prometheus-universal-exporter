@@ -43,3 +43,12 @@ jobs:
         if: steps.changes.outputs.chart == 'true'
       - run: helm template test charts/prometheus-universal-exporter --set-json 'monitors=[{"name":"pod-targets","enabled":true,"type":"pod","collector":"example","interval":"30s","scrapeTimeout":"10s"}]'
         if: steps.changes.outputs.chart == 'true'
+      - run: helm template test charts/prometheus-universal-exporter --set server.listenAddress=0.0.0.0:9115 --set server.pythonPath=/usr/bin/python3.11
+        if: steps.changes.outputs.chart == 'true'
+      - name: Reject an invalid server.listenAddress
+        run: |
+          if helm template test charts/prometheus-universal-exporter --set server.listenAddress=:http >/dev/null 2>&1; then
+            echo "helm template accepted an invalid server.listenAddress" >&2
+            exit 1
+          fi
+        if: steps.changes.outputs.chart == 'true'

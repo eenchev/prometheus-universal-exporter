@@ -43,11 +43,12 @@ spec:
           securityContext: {{- toYaml .Values.securityContext | nindent 12 }}
           args:
             - --config.file=/etc/prometheus-universal-exporter/config.yaml
-            - --web.listen-address=:8080
-            - --web.self-metrics-path={{ .Values.selfMetrics.path | quote }}
+            - {{ printf "--web.listen-address=%s" (include "prometheus-universal-exporter.listenAddress" .) | quote }}
+            - {{ printf "--web.self-metrics-path=%s" .Values.selfMetrics.path | quote }}
+            - {{ printf "--python.path=%s" (include "prometheus-universal-exporter.pythonPath" .) | quote }}
           ports:
             - name: http
-              containerPort: 8080
+              containerPort: {{ include "prometheus-universal-exporter.containerPort" . }}
               protocol: TCP
           livenessProbe:
             httpGet: {path: /health, port: http}

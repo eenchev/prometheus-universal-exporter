@@ -26,6 +26,12 @@ otlp:
 
 collectors:
   - name: app_json
+    # Optional in-memory response cache. A repeat of the same probe within this
+    # interval is answered from memory instead of contacting the target. The
+    # cached entry is keyed on the whole request, so a probe with different (or
+    # missing) parameters, headers, or credentials never reads it. Omit or set
+    # 0s to disable caching, which is the default.
+    cache: 60s
     request:
       method: GET
       path: /api/status
@@ -44,6 +50,9 @@ collectors:
       # retry:
       #   attempts: 2
       #   backoff: 2s
+    # limits:
+    #   # Maximum live cache entries for this collector. Defaults to 1000.
+    #   max_cache_entries: 1000
     transform:
       type: jq
       # Optional: runs once after decoding and before all metric expressions.

@@ -53,6 +53,7 @@ type Collector struct {
 	Metrics       []MetricRule    `yaml:"metrics"`
 	ErrorHandling ErrorHandling   `yaml:"error_handling"`
 	Limits        Limits          `yaml:"limits"`
+	Cache         Duration        `yaml:"cache"`
 }
 type RequestConfig struct {
 	Method               string            `yaml:"method"`
@@ -129,6 +130,7 @@ type Limits struct {
 	MaxHelpLength       int      `yaml:"max_help_length"`
 	ScriptTimeout       Duration `yaml:"script_timeout"`
 	MaxOutputBytes      int      `yaml:"max_output_bytes"`
+	MaxCacheEntries     int      `yaml:"max_cache_entries"`
 }
 type MetricRule struct {
 	Name        string      `yaml:"name"`
@@ -223,6 +225,12 @@ func (c *Config) Validate() error {
 		}
 		if x.Limits.MaxOutputBytes <= 0 {
 			x.Limits.MaxOutputBytes = 1 << 20
+		}
+		if x.Limits.MaxCacheEntries <= 0 {
+			x.Limits.MaxCacheEntries = 1000
+		}
+		if x.Cache < 0 {
+			return fmt.Errorf("collector %q cache must not be negative", x.Name)
 		}
 		if x.Response.Format == "" {
 			x.Response.Format = "auto"

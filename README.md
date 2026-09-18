@@ -183,6 +183,53 @@ needed for an ambiguous endpoint.
 Decode failures and response/transform incompatibilities are collector-level
 errors controlled by `error_handling`.
 
+### Caching
+
+A collector may set `cache` to a Go duration such as `60s`, `1m`, or `3h`:
+
+```yaml
+collectors:
+  - name: expensive_api
+    cache: 60s
+    limits:
+      max_cache_entries: 1000
+```
+
+While a cached result is younger than that interval, a repeat of the same probe
+is answered from memory and the target is not contacted again. Caching is off by
+default; omitting `cache` or setting `0s` disables it, and a negative value is
+rejected at startup.
+
+The cache is in-memory and local to the exporter process. Nothing is written to
+disk, replicas do not share entries, and a restart empties it.
+
+A stored result is only ever returned to an identical request. The cache key
+covers the collector name and its full effective configuration, the `target`,
+every `/probe` query parameter (`method`, `path`, `timeout`, `body`,
+`insecure_skip_verify`, `retry_attempts`, `retry_backoff`, and any
+`header_<name>` entry), and every header forwarded to the target, including a
+forwarded `Authorization` value. Presence and absence differ: a probe that sends
+no credential, no forwarded header, or no TLS override cannot read an entry
+stored by a probe that sent one, and two probes with different credentials never
+share an entry. Because the collector definition is part of the key, a
+configuration reload retires the entries cached under the previous definition.
+Credentials loaded from files are covered through their configured paths, so a
+rotated credential file applies to a cached request once the entry expires; keep
+`cache` shorter than the rotation interval where that matters.
+
+Only fully successful probes are cached; HTTP, decode, transform, and validation
+failures are not. `limits.max_cache_entries` bounds each collector's live
+entries and defaults to 1000, dropping expired entries first and then the ones
+closest to expiry.
+
+Cache activity is visible per collector in the self-metrics as
+`http_exporter_cache_hits_total`, `http_exporter_cache_misses_total`, and
+`http_exporter_cache_entries`. A cache hit counts as a successful scrape and
+cached metrics are still queued for OTLP export, while
+`http_exporter_scrape_http_status_code` and
+`http_exporter_scrape_response_bytes` continue to describe the last real target
+request.
+
 CSS remains available specifically for HTML tables and HTML status pages; it is not used for CSV.
 
 ## Python
@@ -363,6 +410,18 @@ Prometheus Operator CRDs are not installed by this chart.
 ```sh
 helm install exporter charts/prometheus-universal-exporter \
   --set-file config.data.config.yaml=config.example.yaml
+```
+
+The exporter's own flags are chart values. `server.listenAddress` sets
+`--web.listen-address` and the container port together, and `server.pythonPath`
+sets `--python.path`, the interpreter used by the `python` transform. Its
+default, `/usr/local/bin/python3`, is where the exporter image's `python:3.12-slim`
+base installs Python; override it for a custom image.
+
+```sh
+helm install exporter charts/prometheus-universal-exporter \
+  --set server.listenAddress=0.0.0.0:9115 \
+  --set server.pythonPath=/usr/bin/python3.11
 ```
 
 The ConfigMap is mounted at `/etc/prometheus-universal-exporter/config.yaml`; its checksum is part of the Deployment pod template, so configuration changes roll the Deployment. See the chart README for ServiceMonitor, PodMonitor, security, and network-policy values.

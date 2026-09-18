@@ -1,0 +1,28 @@
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# Environment and local secrets
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.crt
+
+# Go build and test artifacts
+prometheus-universal-exporter
+bin/
+dist/
+*.test
+coverage.out
+coverage.html
+*.out
+*.prof
+*.log
+
+# Local configuration and editor files
+config.local.yaml
+config.*.local.yaml
+.idea/
+.vscode/

@@ -1,0 +1,108 @@
+package main
+
+import (
+	"context"
+	"log/slog"
+	"net/http"
+	"net/http/httptest"
+	"os"
+	"strings"
+	"testing"
+)
+
+func testCollector(name, format string) Collector {return Collector{Name:name,Request:RequestConfig{Method:"GET",Timeout:Duration(2e9)},Response:ResponseConfig{Format:format},Transform:TransformConfig{Type:"regex",Rules:[]RegexRule{{Name:"demo_value",Type:GaugeMetricType,Regex:`value=(\d+)`}}},ErrorHandling:ErrorHandling{OnHTTPError:"fail",OnDecodeError:"fail",OnTransformError:"fail"},Limits:Limits{MaxResponseBytes:1024}}}
+
+func TestMetricValidationAndExpositionEscaping(t *testing.T){m:=MetricSet{Metrics:[]Metric{{Name:"demo",Type:GaugeMetricType,Value:2,Labels:map[string]string{"text":"a\n\\b\"c"}}}};if err:=m.Validate(Limits{MaxMetrics:3,MaxLabelsPerMetric:3,MaxLabelValueLength:20,MaxMetricNameLength:20});err!=nil{t.Fatal(err)};w:=httptest.NewRecorder();writeMetricSet(w,&m);if !strings.Contains(w.Body.String(),`text="a\n\\b\"c"`){t.Fatalf("unexpected exposition: %s",w.Body.String())}}
+
+func TestProbeTextCollector(t *testing.T){target:=httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter,r *http.Request){if got:=r.Header.Get("Authorization");got!="Bearer monitor-token"{t.Errorf("authorization=%q",got)};if got:=r.Header.Get("X-Tenant");got!="team-a"{t.Errorf("X-Tenant=%q",got)};w.Header().Set("Content-Type","text/plain");w.WriteHeader(http.StatusOK);_,_=w.Write([]byte("value=42\n"))}));defer target.Close();c:=testCollector("text","text");c.Request.ForwardAuthorization=true;c.Request.ForwardHeaders=[]string{"X-Tenant"};cfg:=&Config{Collectors:[]Collector{c}};if err:=cfg.Validate();err!=nil{t.Fatal(err)};m:=NewConfigManager(cfg,"",slog.Default());s:=NewServer(m,"python3",slog.Default());rr:=httptest.NewRecorder();req:=httptest.NewRequest(http.MethodGet,"/probe?target="+target.URL+"&collector=text&header_X-Tenant=team-a",nil);req.Header.Set("Authorization","Bearer monitor-token");s.Handler().ServeHTTP(rr,req);if rr.Code!=200{t.Fatalf("status=%d body=%s",rr.Code,rr.Body.String())};if !strings.Contains(rr.Body.String(),"demo_value 42"){t.Fatalf("body=%s",rr.Body.String())}}
+
+func TestMissingOptionalJSONValue(t *testing.T){c:=Collector{Name:"json",Response:ResponseConfig{Format:"json"},Transform:TransformConfig{Type:"jq",Expression:".missing",Metric:&MetricRule{Name:"optional_value",Type:GaugeMetricType}},ErrorHandling:ErrorHandling{AllowMissingKeys:true},Limits:Limits{MaxMetrics:10}};r:=&HTTPResponse{Body:[]byte(`{"present":1}`),Headers:make(http.Header)};d,err:=decode(r,&c);if err!=nil{t.Fatal(err)};m,err:=transform(context.Background(),d,r,&c,"python3");if err!=nil{t.Fatal(err)};if len(m.Metrics)!=0{t.Fatalf("expected omitted metric, got %#v",m.Metrics)}}
+
+func TestForwardedHeadersAreExplicitAndAllowlisted(t *testing.T) {
+	r := httptest.NewRequest(http.MethodGet, "/probe?header_X-Tenant=team-a&header_X-Unsafe=secret", nil)
+	r.Header.Set("Authorization", "Bearer monitor-token")
+	forwarded := forwardedHeaders(r, RequestConfig{ForwardAuthorization: true, ForwardHeaders: []string{"x-tenant"}})
+	if got := forwarded.Get("Authorization"); got != "Bearer monitor-token" {
+		t.Fatalf("authorization was not forwarded: %q", got)
+	}
+	if got := forwarded.Get("X-Tenant"); got != "team-a" {
+		t.Fatalf("allowlisted header was not forwarded: %q", got)
+	}
+	if got := forwarded.Get("X-Unsafe"); got != "" {
+		t.Fatalf("unallowlisted header was forwarded: %q", got)
+	}
+	if got := forwarded.Get("Host"); got != "" {
+		t.Fatalf("hop-by-hop/transport header was forwarded: %q", got)
+	}
+}
+
+func TestExporterBasicAuthProtection(t *testing.T) {
+	cfg := &Config{
+		Collectors: []Collector{testCollector("text", "text")},
+		Web: WebConfig{BasicAuth: &ExporterBasicAuth{Enabled: true, Username: "exporter", Password: "secret"}},
+	}
+	if err := cfg.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	server := NewServer(NewConfigManager(cfg, "", slog.Default()), "python3", slog.Default())
+	unauthorized := httptest.NewRecorder()
+	server.Handler().ServeHTTP(unauthorized, httptest.NewRequest(http.MethodGet, "/metrics", nil))
+	if unauthorized.Code != http.StatusUnauthorized {
+		t.Fatalf("status=%d body=%s", unauthorized.Code, unauthorized.Body.String())
+	}
+	if got := unauthorized.Header().Get("WWW-Authenticate"); got == "" {
+		t.Fatal("missing WWW-Authenticate challenge")
+	}
+	authorized := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodGet, "/metrics", nil)
+	request.SetBasicAuth("exporter", "secret")
+	server.Handler().ServeHTTP(authorized, request)
+	if authorized.Code != http.StatusOK {
+		t.Fatalf("authorized status=%d body=%s", authorized.Code, authorized.Body.String())
+	}
+	health := httptest.NewRecorder()
+	server.Handler().ServeHTTP(health, httptest.NewRequest(http.MethodGet, "/health", nil))
+	if health.Code != http.StatusOK {
+		t.Fatalf("health status=%d", health.Code)
+	}
+}
+
+func TestExporterBasicAuthRejectsAuthorizationBridge(t *testing.T) {
+	c := testCollector("text", "text")
+	c.Request.ForwardAuthorization = true
+	cfg := &Config{Collectors: []Collector{c}, Web: WebConfig{BasicAuth: &ExporterBasicAuth{Enabled: true, Username: "exporter", Password: "secret"}}}
+	if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "forward_authorization") {
+		t.Fatalf("expected auth bridge conflict, got %v", err)
+	}
+}
+
+func TestBearerTokenFileIsUsedIndependentlyOfExporterAuth(t *testing.T) {
+	tokenFile := t.TempDir() + "/token"
+	if err := os.WriteFile(tokenFile, []byte(" target-token \n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	var received string
+	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		received = r.Header.Get("Authorization")
+		w.Header().Set("Content-Type", "text/plain")
+		_, _ = w.Write([]byte("value=42\n"))
+	}))
+	defer target.Close()
+	c := testCollector("file_token", "text")
+	c.Request.BearerTokenFile = tokenFile
+	cfg := &Config{Collectors: []Collector{c}, Web: WebConfig{BasicAuth: &ExporterBasicAuth{Enabled: true, Username: "exporter", Password: "secret"}}}
+	if err := cfg.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	server := NewServer(NewConfigManager(cfg, "", slog.Default()), "python3", slog.Default())
+	request := httptest.NewRequest(http.MethodGet, "/probe?target="+target.URL+"&collector=file_token", nil)
+	request.SetBasicAuth("exporter", "secret")
+	response := httptest.NewRecorder()
+	server.Handler().ServeHTTP(response, request)
+	if response.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
+	}
+	if received != "Bearer target-token" {
+		t.Fatalf("target authorization=%q", received)
+	}
+}

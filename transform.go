@@ -1,0 +1,51 @@
+package main
+
+import (
+	"context"
+	"fmt"
+	"regexp"
+	"strconv"
+	"strings"
+
+	"github.com/antchfx/xmlquery"
+	"github.com/antchfx/htmlquery"
+	"github.com/antchfx/xpath"
+	"github.com/itchyny/gojq"
+	"github.com/PuerkitoBio/goquery"
+)
+
+func transform(ctx context.Context, d *Decoded, r *HTTPResponse, c *Collector, pythonPath string)(*MetricSet,error){
+	if c.Decoder.Type=="python"||c.Transform.Type=="python"{script:=c.Decoder.Script;if c.Transform.Type=="python"{script=c.Transform.Script;if script==""{script=c.Decoder.Script};if script==""{script=c.Transform.Expression}};if script==""{return nil,fmt.Errorf("python decoder requires a script")};return executePython(ctx,pythonPath,script,d,r,c)}
+	if ms,ok:=d.Data.(MetricSet);ok {if c.Transform.Type==""||c.Transform.Type=="prometheus"{return applyPrometheusTransform(ms,c.Transform)};return nil,fmt.Errorf("unsupported transformation %q for Prometheus",c.Transform.Type)}
+	switch c.Transform.Type{
+	case "", "none": return extractRules(ctx,d.Data,c.Metrics,c)
+	case "jq","yq": t:=c.Transform;if t.Metric==nil&&len(c.Metrics)==0{t.Metric=&MetricRule{Name:c.Name,Type:GaugeMetricType}};return transformJQ(ctx,d.Data,t,c.Metrics)
+	case "regex": return transformRegex(d.Data.(string),c.Transform,c)
+	case "css": return transformCSS(d.Data.(*HTMLDecoded).Document,c.Transform,c)
+	case "csv": return transformCSV(d.Data,c.Transform,c)
+	case "xpath": if h,ok:=d.Data.(*HTMLDecoded);ok{return transformHTMLXPath(h.Raw,c.Transform,c)};return transformXPath(d.Data.(*xmlquery.Node),c.Transform,c,c.Response.Namespaces)
+	default:return nil,fmt.Errorf("unsupported transformation %q",c.Transform.Type)
+	}
+}
+
+func transformJQ(ctx context.Context,data any,t TransformConfig,rules []MetricRule)(*MetricSet,error){expr:=t.Expression;if expr==""{return extractRules(ctx,data,rules,&Collector{Limits:Limits{MaxMetrics:10000}})};q,err:=gojq.Parse(expr);if err!=nil{return nil,fmt.Errorf("transform expression: %w",err)};code,err:=gojq.Compile(q);if err!=nil{return nil,fmt.Errorf("transform expression: %w",err)};iter:=code.Run(data);out:=&MetricSet{};for{select{case<-ctx.Done():return nil,ctx.Err();default:};v,ok:=iter.Next();if !ok{break};if e,ok:=v.(error);ok{return nil,fmt.Errorf("transform expression: %w",e)};if err:=addMetricValue(out,v,t.Metric);err!=nil{return nil,err}};return out,nil}
+
+func addMetricValue(out *MetricSet,v any,fallback *MetricRule)error{if v==nil{return nil};if arr,ok:=v.([]any);ok{for _,x:=range arr{if err:=addMetricValue(out,x,fallback);err!=nil{return err}};return nil};if fallback!=nil{m,err:=metricFromValue(v,fallback);if err!=nil{return err};out.Metrics=append(out.Metrics,m);return nil};if obj,ok:=v.(map[string]any);ok{if _,has:=obj["value"];has{m,err:=metricFromValue(v,nil);if err!=nil{return err};out.Metrics=append(out.Metrics,m);return nil};return fmt.Errorf("transform result object is not a metric")};return fmt.Errorf("transform result must be a metric object, got %T",v)}
+
+func extractRules(ctx context.Context,data any,rules []MetricRule,c *Collector)(*MetricSet,error){out:=&MetricSet{};for _,rule:=range rules{expr:=rule.JQ;if expr==""{expr=rule.YQ};if expr==""{return nil,fmt.Errorf("metric %q has no jq or yq expression",rule.Name)};q,err:=gojq.Parse(expr);if err!=nil{return nil,fmt.Errorf("metric %q expression: %w",rule.Name,err)};code,err:=gojq.Compile(q);if err!=nil{return nil,err};iter:=code.Run(data);found:=false;for{select{case<-ctx.Done():return nil,ctx.Err();default:};v,ok:=iter.Next();if !ok{break};if e,ok:=v.(error);ok{return nil,e};if v==nil{continue};found=true;m:=Metric{Name:rule.Name,Type:rule.Type,Help:rule.Help,Labels:map[string]string{}};n,err:=number(v);if err!=nil{return nil,fmt.Errorf("metric %q: %w",rule.Name,err)};m.Value=n;out.Metrics=append(out.Metrics,m)};required:=rule.Required==nil||*rule.Required;if !found&&required&&!c.ErrorHandling.AllowMissingKeys{return nil,fmt.Errorf("metric %q value is missing",rule.Name)}};return out,nil}
+
+func transformRegex(text string,t TransformConfig,c *Collector)(*MetricSet,error){out:=&MetricSet{};for _,r:=range t.Rules{re,err:=regexp.Compile(r.Regex);if err!=nil{return nil,err};matches:=re.FindAllStringSubmatchIndex(text,-1);if len(matches)==0{required:=r.Required==nil||*r.Required;if required&&!c.ErrorHandling.AllowMissingKeys{return nil,fmt.Errorf("regex for metric %q matched no text",r.Name)};continue};names:=re.SubexpNames();for _,mm:=range matches{m:=Metric{Name:r.Name,Type:r.Type,Help:r.Help,Labels:map[string]string{}};for label,group:=range r.Labels{idx:=captureIndex(group,names);if idx>=0&&2*idx+1<len(mm){m.Labels[label]=text[mm[2*idx]:mm[2*idx+1]]}};capture:=1;if len(mm)<4{capture=0};if capture==0{return nil,fmt.Errorf("regex for metric %q has no capture group",r.Name)};n,err:=strconv.ParseFloat(text[mm[2*capture]:mm[2*capture+1]],64);if err!=nil{return nil,fmt.Errorf("metric %q value: %w",r.Name,err)};m.Value=n;out.Metrics=append(out.Metrics,m)}};return out,nil}
+func captureIndex(s string,names []string)int{if n,err:=strconv.Atoi(s);err==nil{return n};for i,n:=range names{if n==s{return i}};return -1}
+
+func transformXPath(root *xmlquery.Node,t TransformConfig,c *Collector,namespaces map[string]string)(*MetricSet,error){out:=&MetricSet{};for _,x:=range t.Expressions{var nodes []*xmlquery.Node;var err error;if len(namespaces)>0{expr,e:=xpath.CompileWithNS(x.Expression,namespaces);if e!=nil{return nil,fmt.Errorf("XPath %q: %w",x.Expression,e)};nodes=xmlquery.QuerySelectorAll(root,expr)}else{nodes,err=xmlquery.QueryAll(root,x.Expression);if err!=nil{return nil,fmt.Errorf("XPath %q: %w",x.Expression,err)}};if len(nodes)==0{required:=x.Required==nil||*x.Required;if required&&!c.ErrorHandling.AllowMissingKeys{return nil,fmt.Errorf("XPath %q matched no nodes",x.Expression)};continue};for _,n:=range nodes{m:=Metric{Name:x.Name,Type:x.Type,Help:x.Help,Labels:map[string]string{}};for label,expr:=range x.Labels{if strings.HasPrefix(expr,"@"){m.Labels[label]=n.SelectAttr(strings.TrimPrefix(expr,"@"))}else{q:=xmlquery.FindOne(n,expr);if q!=nil{m.Labels[label]=q.InnerText()}}};v,err:=textValue(n.InnerText());if err!=nil{return nil,fmt.Errorf("XPath metric %q: %w",x.Name,err)};m.Value=v;out.Metrics=append(out.Metrics,m)}};return out,nil}
+
+func transformHTMLXPath(raw []byte,t TransformConfig,c *Collector)(*MetricSet,error){root,err:=htmlquery.Parse(strings.NewReader(string(raw)));if err!=nil{return nil,fmt.Errorf("HTML XPath parse: %w",err)};out:=&MetricSet{};for _,x:=range t.Expressions{nodes,err:=htmlquery.QueryAll(root,x.Expression);if err!=nil{return nil,fmt.Errorf("HTML XPath %q: %w",x.Expression,err)};if len(nodes)==0{required:=x.Required==nil||*x.Required;if required&&!c.ErrorHandling.AllowMissingKeys{return nil,fmt.Errorf("HTML XPath %q matched no nodes",x.Expression)};continue};for _,n:=range nodes{m:=Metric{Name:x.Name,Type:x.Type,Help:x.Help,Labels:map[string]string{}};for label,expr:=range x.Labels{if strings.HasPrefix(expr,"@"){m.Labels[label]=htmlquery.SelectAttr(n,strings.TrimPrefix(expr,"@"))}else{q:=htmlquery.FindOne(n,expr);if q!=nil{m.Labels[label]=htmlquery.InnerText(q)}}};v,err:=textValue(htmlquery.InnerText(n));if err!=nil{return nil,fmt.Errorf("HTML XPath metric %q: %w",x.Name,err)};m.Value=v;out.Metrics=append(out.Metrics,m)}};return out,nil}
+
+func transformCSS(doc *goquery.Document,t TransformConfig,c *Collector)(*MetricSet,error){out:=&MetricSet{};for _,x:=range t.Expressions{sel:=doc.Find(x.Selector);if sel.Length()==0{required:=x.Required==nil||*x.Required;if required&&!c.ErrorHandling.AllowMissingKeys{return nil,fmt.Errorf("CSS selector %q matched no nodes",x.Selector)};continue};sel.Each(func(_ int,s *goquery.Selection){m:=Metric{Name:x.Name,Type:x.Type,Help:x.Help,Labels:map[string]string{}};for label,selector:=range x.Labels{m.Labels[label]=strings.TrimSpace(s.Find(selector).First().Text())};value:=strings.TrimSpace(s.Find(x.Value).First().Text());if x.Value==""{value=strings.TrimSpace(s.Text())};v,err:=textValue(value);if err!=nil{return};m.Value=v;out.Metrics=append(out.Metrics,m)});};if len(out.Metrics)==0&&len(t.Expressions)>0&& !c.ErrorHandling.AllowMissingKeys{return nil,fmt.Errorf("CSS transformation produced no metrics")};return out,nil}
+
+// CSV is already normalized by the csv decoder. This transform turns named
+// columns into metrics without requiring Python: value is the numeric column,
+// and labels maps label names to column names.
+func transformCSV(data any,t TransformConfig,c *Collector)(*MetricSet,error){rows,ok:=data.([]any);if !ok{return nil,fmt.Errorf("CSV transform requires a header-based CSV response")};out:=&MetricSet{};for _,raw:=range rows{row,ok:=raw.(map[string]any);if !ok{continue};for _,x:=range t.Expressions{column:=x.Value;if column==""{column=x.Expression};value,exists:=row[column];if !exists||strings.TrimSpace(fmt.Sprint(value))==""{required:=x.Required==nil||*x.Required;if required&&!c.ErrorHandling.AllowMissingKeys{return nil,fmt.Errorf("CSV column %q is missing",column)};continue};n,err:=number(value);if err!=nil{return nil,fmt.Errorf("CSV metric %q: %w",x.Name,err)};m:=Metric{Name:x.Name,Type:x.Type,Help:x.Help,Value:n,Labels:map[string]string{}};for label,column:=range x.Labels{if value,exists:=row[column];exists{m.Labels[label]=fmt.Sprint(value)}};out.Metrics=append(out.Metrics,m)}};return out,nil}
+
+func applyPrometheusTransform(in MetricSet,t TransformConfig)(*MetricSet,error){out:=MetricSet{};includes:=make([]*regexp.Regexp,0,len(t.Include));for _,x:=range t.Include{r,e:=regexp.Compile(x);if e!=nil{return nil,e};includes=append(includes,r)};excludes:=make([]*regexp.Regexp,0,len(t.Exclude));for _,x:=range t.Exclude{r,e:=regexp.Compile(x);if e!=nil{return nil,e};excludes=append(excludes,r)};for _,m:=range in.Metrics{ok:=len(includes)==0;for _,r:=range includes{if r.MatchString(m.Name){ok=true}};for _,r:=range excludes{if r.MatchString(m.Name){ok=false}};if !ok{continue};if n,yes:=t.Rename[m.Name];yes{m.Name=n};if m.Labels==nil{m.Labels=map[string]string{}};for k,v:=range t.Labels{m.Labels[k]=v};for _,k:=range t.RemoveLabels{delete(m.Labels,k)};for old,n:=range t.RenameLabels{if v,yes:=m.Labels[old];yes{delete(m.Labels,old);m.Labels[n]=v}};out.Metrics=append(out.Metrics,m)};return &out,nil}

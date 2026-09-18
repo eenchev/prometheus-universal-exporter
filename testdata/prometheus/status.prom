@@ -1,0 +1,3 @@
+# HELP vendor_requests_total Requests handled by the vendor service
+# TYPE vendor_requests_total counter
+vendor_requests_total{service="api"} 42

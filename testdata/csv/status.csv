@@ -1,0 +1,3 @@
+server,cpu,memory,status
+web01,72,61,up
+web02,31,48,up

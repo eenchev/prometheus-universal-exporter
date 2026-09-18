@@ -1,0 +1,93 @@
+otlp:
+  enabled: false
+  # endpoint: http://otel-collector:4318/v1/metrics
+  timeout: 5s
+
+# Optional exporter endpoint protection. Do not enable this together with a
+# collector using request.forward_authorization; both use the incoming
+# Authorization header for different purposes.
+# web:
+#   basic_auth:
+#     enabled: true
+#     username: exporter
+#     password: change-me
+
+collectors:
+  - name: app_json
+    request:
+      method: GET
+      path: /api/status
+      timeout: 5s
+      headers:
+        Accept: application/json
+    response:
+      format: json
+    transform:
+      type: jq
+      expression: |
+        [{name: "application_requests_total", type: "counter", value: .requests}]
+
+  # Set targetAuth.enabled=true in the Helm chart and store the token in the
+  # configured Secret key when using this file-based target credential.
+  # - name: protected_status
+  #   request:
+  #     path: /status
+  #     bearer_token_file: /var/run/prometheus-universal-exporter/target-auth/token
+
+  - name: legacy_text
+    request:
+      path: /status
+      # Monitor credentials and selected headers can be propagated explicitly.
+      # forward_authorization: true
+      # forward_headers: [X-Tenant]
+    response:
+      format: text
+    transform:
+      type: regex
+      rules:
+        - name: application_connections
+          type: gauge
+          regex: 'Connections:\s+(\d+)'
+
+  - name: app_csv
+    request:
+      path: /status.csv
+    response:
+      format: csv
+      csv:
+        header: true
+    transform:
+      type: csv
+      expressions:
+        - name: server_cpu
+          type: gauge
+          value: cpu
+          labels:
+            server: server
+
+  - name: vendor_prometheus
+    request:
+      path: /metrics
+    response:
+      format: prometheus
+    transform:
+      type: prometheus
+      include: ['vendor_.*']
+      labels:
+        source: vendor
+
+  - name: custom_python
+    request:
+      path: /status
+    response:
+      format: text
+    decoder:
+      type: python
+      script: |
+        import re
+        for line in response.text.splitlines():
+            match = re.match(r"Worker (\S+) CPU: (\d+)%", line)
+            if match:
+                metric(name="vendor_worker_cpu", type="gauge",
+                       value=float(match.group(2)),
+                       labels={"worker": match.group(1)})

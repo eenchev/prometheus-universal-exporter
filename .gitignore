@@ -26,3 +26,6 @@ config.local.yaml
 config.*.local.yaml
 .idea/
 .vscode/
+
+# Files for local testing
+config.frankfurter.yaml

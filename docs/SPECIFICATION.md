@@ -2707,6 +2707,14 @@ rewritten: a CI step that reformats files without failing never reports a
 violation, so the check MUST fail on unformatted sources and the repository MUST
 stay gofmt-clean.
 
+The repository MUST validate its own CI workflow definitions in a check that
+runs locally, not only in CI. A workflow file that GitHub cannot parse produces
+no jobs, so a check defined inside that workflow cannot report the failure in
+the commit that causes it. The validation MUST reject duplicate mapping keys,
+which a permissive YAML parser accepts silently, and MUST verify that each step
+declares exactly one of `run` or `uses`. Changes under `.github/workflows` MUST
+be part of the changed-path filter that runs this validation.
+
 Findings that cannot be acted on MUST be suppressed narrowly and with a stated
 reason — a per-line annotation or a specific rule exclusion — rather than by
 disabling a linter wholesale. Security findings for settings the exporter

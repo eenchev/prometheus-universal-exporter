@@ -553,6 +553,15 @@ lint-install`. Beyond the standard linters it enables `bodyclose`, `errorlint`,
 `unconvert` and `usestdlibvars`. The repository is gofmt-clean and CI fails on
 unformatted sources rather than rewriting them.
 
+`make test` also validates the GitHub Actions workflows: `workflows_test.go`
+decodes every file under `.github/workflows` with a parser that rejects
+duplicate mapping keys, and checks that each step sets exactly one of `run` or
+`uses` and uses no unknown keys. GitHub refuses to create a run for a workflow
+it cannot parse, which produces no jobs at all, so a CI step cannot catch that
+mistake in the commit that introduces it — the checker would be in the file
+GitHub is refusing to read. Running the tests before pushing is what protects
+you.
+
 A few `gosec` findings are deliberate and are suppressed narrowly, with the
 reason stated at the suppression: `request.tls.insecure_skip_verify` is a
 documented opt-in, and the exporter necessarily reads the configuration, target

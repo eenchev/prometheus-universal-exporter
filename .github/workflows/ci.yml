@@ -15,6 +15,9 @@ jobs:
               - '**/*.go'
               - 'go.mod'
               - 'go.sum'
+              # Workflow validity is checked by a Go test, so a change to these
+              # files must still run the Go suite.
+              - '.github/workflows/**'
             chart:
               - 'charts/**'
       - uses: actions/setup-go@v5

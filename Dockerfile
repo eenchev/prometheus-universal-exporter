@@ -1,7 +1,3 @@
-LABEL org.opencontainers.image.source="https://github.com/eenchev/prometheus-universal-exporter"
-LABEL org.opencontainers.image.description="Prometheus Universal Exporter"
-LABEL org.opencontainers.image.licenses="Apache-2.0"
-
 ARG GO_VERSION=1.27
 ARG PYTHON_VERSION=3.12
 ARG BEAUTIFULSOUP4_VERSION=4.12.3
@@ -28,6 +24,10 @@ RUN CGO_ENABLED=0 \
     -o /out/prometheus-universal-exporter .
 
 FROM python:${PYTHON_VERSION}-slim
+
+LABEL org.opencontainers.image.source="https://github.com/eenchev/prometheus-universal-exporter"
+LABEL org.opencontainers.image.description="Prometheus Universal Exporter"
+LABEL org.opencontainers.image.licenses="Apache-2.0"
 
 ARG BEAUTIFULSOUP4_VERSION
 ARG LXML_VERSION

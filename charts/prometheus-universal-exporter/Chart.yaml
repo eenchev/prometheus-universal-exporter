@@ -41,6 +41,7 @@ annotations:
       image: ghcr.io/eenchev/prometheus-universal-exporter:latest
       platforms:
         - linux/amd64
+        - linux/arm64
   artifacthub.io/links: |
     - name: Chart documentation
       url: https://github.com/eenchev/prometheus-universal-exporter/blob/main/charts/prometheus-universal-exporter/README.md

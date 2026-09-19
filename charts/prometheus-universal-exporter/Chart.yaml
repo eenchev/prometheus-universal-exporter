@@ -5,7 +5,7 @@ type: application
 # The chart is versioned and released independently of the exporter. This is
 # the source of truth for the chart version: the release workflow refuses to
 # publish a tag that disagrees with it.
-version: 0.2.0
+version: 0.2.1
 # The exporter release this chart version was validated against. Note that
 # values.yaml leaves image.tag at "latest", so pin image.tag in production
 # values if you want deployments to track this instead.

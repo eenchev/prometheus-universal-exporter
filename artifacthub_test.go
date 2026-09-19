@@ -103,49 +103,49 @@ func TestChartKeywordsCoverTheAdvertisedCapabilities(t *testing.T) {
 // render error — Helm passes it through untouched and Artifact Hub is left to
 // fail on it, out of sight.
 func TestArtifactHubAnnotationsAreWellFormed(t *testing.T) {
-    annotations := readChartMetadata(t).Annotations
+	annotations := readChartMetadata(t).Annotations
 
-    if annotations["artifacthub.io/category"] == "" {
-        t.Error("artifacthub.io/category places the chart in Artifact Hub's navigation")
-    }
+	if annotations["artifacthub.io/category"] == "" {
+		t.Error("artifacthub.io/category places the chart in Artifact Hub's navigation")
+	}
 
-    if value, ok := annotations["artifacthub.io/images"]; ok {
-        var entries []struct {
-            Name      string   `yaml:"name"`
-            Image     string   `yaml:"image"`
-            Platforms []string `yaml:"platforms"`
-        }
+	if value, ok := annotations["artifacthub.io/images"]; ok {
+		var entries []struct {
+			Name      string   `yaml:"name"`
+			Image     string   `yaml:"image"`
+			Platforms []string `yaml:"platforms"`
+		}
 
-        if err := yaml.Unmarshal([]byte(value), &entries); err != nil {
-            t.Errorf("artifacthub.io/images does not parse as YAML: %v", err)
-        }
+		if err := yaml.Unmarshal([]byte(value), &entries); err != nil {
+			t.Errorf("artifacthub.io/images does not parse as YAML: %v", err)
+		}
 
-        for _, entry := range entries {
-            if entry.Name == "" {
-                t.Errorf("artifacthub.io/images has an entry with no name")
-            }
-            if entry.Image == "" {
-                t.Errorf("artifacthub.io/images entry %q has no image", entry.Name)
-            }
-        }
-    }
+		for _, entry := range entries {
+			if entry.Name == "" {
+				t.Errorf("artifacthub.io/images has an entry with no name")
+			}
+			if entry.Image == "" {
+				t.Errorf("artifacthub.io/images entry %q has no image", entry.Name)
+			}
+		}
+	}
 
-    if value, ok := annotations["artifacthub.io/links"]; ok {
-        var entries []struct {
-            Name string `yaml:"name"`
-            URL  string `yaml:"url"`
-        }
+	if value, ok := annotations["artifacthub.io/links"]; ok {
+		var entries []struct {
+			Name string `yaml:"name"`
+			URL  string `yaml:"url"`
+		}
 
-        if err := yaml.Unmarshal([]byte(value), &entries); err != nil {
-            t.Errorf("artifacthub.io/links does not parse as YAML: %v", err)
-        }
+		if err := yaml.Unmarshal([]byte(value), &entries); err != nil {
+			t.Errorf("artifacthub.io/links does not parse as YAML: %v", err)
+		}
 
-        for _, entry := range entries {
-            if entry.Name == "" {
-                t.Errorf("artifacthub.io/links has an entry with no name")
-            }
-        }
-    }
+		for _, entry := range entries {
+			if entry.Name == "" {
+				t.Errorf("artifacthub.io/links has an entry with no name")
+			}
+		}
+	}
 }
 
 // Artifact Hub verifies ownership through this file. It is allowed to carry the

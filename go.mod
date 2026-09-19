@@ -1,4 +1,4 @@
-module github.com/evgenienchev/prometheus-universal-exporter
+module github.com/eenchev/prometheus-universal-exporter
 
 go 1.25.0
 

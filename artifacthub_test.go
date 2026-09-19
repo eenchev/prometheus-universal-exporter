@@ -260,3 +260,36 @@ func TestDocumentedChartVersionMatchesTheChart(t *testing.T) {
 		}
 	}
 }
+
+// The module path is a URL: `go install` and pkg.go.dev both resolve it by
+// fetching it, so a module path naming a repository that does not exist breaks
+// both and nothing in a build notices — the path is never fetched by the build
+// itself. It went unnoticed here for exactly that reason, so it is pinned to the
+// repository the chart already points at.
+func TestModulePathMatchesTheRepository(t *testing.T) {
+	raw, err := os.ReadFile("go.mod")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var module string
+	for _, line := range strings.Split(string(raw), "\n") {
+		if after, ok := strings.CutPrefix(line, "module "); ok {
+			module = strings.TrimSpace(after)
+			break
+		}
+	}
+	if module == "" {
+		t.Fatal("go.mod declares no module path")
+	}
+
+	home := readChartMetadata(t).Home
+	repository, ok := strings.CutPrefix(home, "https://")
+	if !ok {
+		t.Fatalf("Chart.yaml home=%q is not an https URL", home)
+	}
+	repository = strings.TrimSuffix(strings.TrimSuffix(repository, "/"), ".git")
+	if module != repository {
+		t.Errorf("go.mod declares module %s, but the chart points at %s; `go install %s@latest` would fetch a repository that is not this one",
+			module, repository, module)
+	}
+}

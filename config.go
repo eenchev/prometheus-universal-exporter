@@ -49,6 +49,10 @@ type SelfMetricsConfig struct {
 	// warns against unbounded self-metric labels, so it is opt-in and the
 	// number of tracked requests is capped.
 	Verbose bool `yaml:"verbose"`
+	// ResourceMetrics adds the familiar go_ and process_ series describing the
+	// exporter's own CPU and memory. Opt-in because reading them is not free:
+	// runtime.ReadMemStats briefly stops the world on every scrape.
+	ResourceMetrics bool `yaml:"resource_metrics_enabled"`
 }
 type ExporterBasicAuth struct {
 	Enabled  bool   `yaml:"enabled"`
@@ -393,8 +397,34 @@ func (c *Config) Validate() error {
 	return nil
 }
 
-func LoadConfig(path string) (*Config, error) {
+// LoadOption adjusts how a configuration document is read. Options are
+// variadic so that reading a file without them — which is what every test and
+// every default path does — stays the plain call it was.
+type LoadOption func(*loadOptions)
+
+type loadOptions struct{ expandEnv bool }
+
+// WithEnvExpansion substitutes ${NAME} references from the process environment
+// before the document is parsed. It is what --config.export-env turns on.
+func WithEnvExpansion() LoadOption { return func(o *loadOptions) { o.expandEnv = true } }
+
+func readDocument(path string, opts []LoadOption) ([]byte, error) {
+	var options loadOptions
+	for _, apply := range opts {
+		apply(&options)
+	}
 	b, err := os.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+	if !options.expandEnv {
+		return b, nil
+	}
+	return expandEnvironment(path, b)
+}
+
+func LoadConfig(path string, opts ...LoadOption) (*Config, error) {
+	b, err := readDocument(path, opts)
 	if err != nil {
 		return nil, err
 	}
@@ -420,6 +450,7 @@ type ConfigManager struct {
 	targetsLastMod time.Time
 	pythonPath     string
 	watchInterval  time.Duration
+	expandEnv      bool
 }
 
 // DefaultWatchInterval is how often an enabled watch re-stats the configuration
@@ -448,6 +479,19 @@ func (m *ConfigManager) WatchEnabled() bool { return m.watchInterval > 0 }
 // WatchInterval is how often an enabled watch re-stats the files, which is what
 // bounds how stale a running configuration can be.
 func (m *ConfigManager) WatchInterval() time.Duration { return m.watchInterval }
+
+// SetEnvExpansion records that the documents were read with ${NAME} expansion,
+// so a reload reads them the same way. A reload that quietly stopped expanding
+// would replace a working configuration with one full of literal references.
+func (m *ConfigManager) SetEnvExpansion(expand bool) { m.expandEnv = expand }
+
+// loadOptions returns the options the documents were first read with.
+func (m *ConfigManager) loadOptions() []LoadOption {
+	if m.expandEnv {
+		return []LoadOption{WithEnvExpansion()}
+	}
+	return nil
+}
 
 // SetPythonPath records the interpreter used to check collector Python
 // scripts, so a reloaded configuration is held to the same contract as the one
@@ -502,7 +546,7 @@ func (m *ConfigManager) reloadConfig() {
 		return
 	}
 	m.lastMod = st.ModTime()
-	c, err := LoadConfig(m.path)
+	c, err := LoadConfig(m.path, m.loadOptions()...)
 	if err != nil {
 		m.logger.Error("configuration reload rejected", "error", err)
 		return
@@ -533,7 +577,7 @@ func (m *ConfigManager) reloadTargets() {
 		return
 	}
 	m.targetsLastMod = st.ModTime()
-	f, err := LoadTargetFile(m.targetPath)
+	f, err := LoadTargetFile(m.targetPath, m.loadOptions()...)
 	if err == nil {
 		err = f.Validate()
 	}

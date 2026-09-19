@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
-	"os"
 	"regexp"
 	"strconv"
 	"strings"
@@ -83,8 +82,12 @@ func (t *TargetRequestConfig) UnmarshalYAML(n *yaml.Node) error {
 	return nil
 }
 
-func LoadTargetFile(path string) (*TargetFile, error) {
-	b, err := os.ReadFile(path)
+// LoadTargetFile reads the scheduled target document. It takes the same
+// options as LoadConfig: a target file carries the addresses and credentials of
+// the things being scraped, which is exactly the material an operator wants to
+// keep out of a committed file, so --config.export-env applies to both.
+func LoadTargetFile(path string, opts ...LoadOption) (*TargetFile, error) {
+	b, err := readDocument(path, opts)
 	if err != nil {
 		return nil, err
 	}

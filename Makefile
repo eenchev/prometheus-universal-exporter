@@ -45,8 +45,10 @@ helm-test:
 	helm template test charts/prometheus-universal-exporter --set-json 'monitors=[{"name":"service-targets","enabled":true,"type":"service","collector":"example","interval":"30s","scrapeTimeout":"10s"}]'
 	helm template test charts/prometheus-universal-exporter --set-json 'monitors=[{"name":"pod-targets","enabled":true,"type":"pod","collector":"example","interval":"30s","scrapeTimeout":"10s"}]'
 	helm template test charts/prometheus-universal-exporter --set server.listenAddress=0.0.0.0:9115 --set server.pythonPath=/usr/bin/python3.11
+	helm template test charts/prometheus-universal-exporter --set server.expandEnv=true --set-json 'env=[{"name":"DEMO_TARGET","value":"http://api.internal:8080"}]' --set-json 'envFrom=[{"secretRef":{"name":"exporter-secrets"}}]'
 	helm template test charts/prometheus-universal-exporter --set otlpTargets.enabled=true --set-file otlpTargets.data=targets.example.yaml --set-file 'config.data.config\.yaml=config.otlp.example.yaml'
 	helm template test charts/prometheus-universal-exporter --set-json 'monitors=[{"name":"a","enabled":true,"type":"service","collector":"example","interval":"30s","scrapeTimeout":"10s"},{"name":"b","enabled":true,"type":"pod","collector":"example","interval":"30s","scrapeTimeout":"10s"}]' | python3 tools/check-manifests.py
+	helm template test charts/prometheus-universal-exporter --set-json 'extraArgs=["--log.level=debug"]' --set-json 'extraVolumes=[{"name":"extra-collectors","configMap":{"name":"my-collectors"}}]' --set-json 'extraVolumeMounts=[{"name":"extra-collectors","mountPath":"/etc/collectors","readOnly":true}]'
 	@# The same rejections CI checks, so a local run means a CI run.
 	@for address in ':http' '9115' '0.0.0.0' ':0'; do \
 		if helm template test charts/prometheus-universal-exporter --set "server.listenAddress=$$address" >/dev/null 2>&1; then \
@@ -56,6 +58,18 @@ helm-test:
 	done
 	@if helm template test charts/prometheus-universal-exporter --set otlpTargets.enabled=true --set-file otlpTargets.data=targets.example.yaml --set-file 'config.data.config\.yaml=config.example.yaml' >/dev/null 2>&1; then \
 		echo "helm template accepted scheduled targets while OTLP export is disabled" >&2; \
+		exit 1; \
+	fi
+	@if helm template test charts/prometheus-universal-exporter --set-json 'extraArgs=["--web.listen-address=:9999"]' >/dev/null 2>&1; then \
+		echo "helm template accepted an extraArgs entry overriding a chart-managed flag" >&2; \
+		exit 1; \
+	fi
+	@if helm template test charts/prometheus-universal-exporter --set-json 'extraArgs=["log.level=debug"]' >/dev/null 2>&1; then \
+		echo "helm template accepted an extraArgs entry that is not a flag" >&2; \
+		exit 1; \
+	fi
+	@if helm template test charts/prometheus-universal-exporter --set-json 'extraVolumes=[{"name":"shadow","configMap":{"name":"shadow"}}]' --set-json 'extraVolumeMounts=[{"name":"shadow","mountPath":"/etc/prometheus-universal-exporter"}]' >/dev/null 2>&1; then \
+		echo "helm template accepted an extraVolumeMounts entry hiding the configuration directory" >&2; \
 		exit 1; \
 	fi
 

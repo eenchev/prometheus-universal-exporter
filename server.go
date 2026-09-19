@@ -579,6 +579,9 @@ func (s *Server) metricsHandler(w http.ResponseWriter, _ *http.Request) {
 		fmt.Fprintf(&b, "http_exporter_cache_hits_total%s %d\nhttp_exporter_cache_misses_total%s %d\nhttp_exporter_cache_entries%s %d\n", label, hits, label, misses, label, cacheEntries[x.name])
 	}
 	s.renderVerboseRequestMetrics(&b, declared)
+	if runtime := s.runtimeMetrics(); len(runtime) > 0 {
+		renderMetricSet(&b, &MetricSet{Metrics: runtime})
+	}
 	w.Header().Set("Content-Type", "text/plain; version=0.0.4")
 	_, _ = w.Write([]byte(b.String()))
 }
@@ -632,6 +635,7 @@ func (s *Server) selfMetricSet() MetricSet {
 	}
 	out.Metrics = append(out.Metrics, Metric{Name: "http_exporter_scheduled_targets", Help: "Scheduled targets configured for OTLP delivery.", Type: GaugeMetricType, Value: float64(len(s.manager.Targets()))})
 	out.Metrics = append(out.Metrics, s.verboseRequestMetrics()...)
+	out.Metrics = append(out.Metrics, s.runtimeMetrics()...)
 	return out
 }
 

@@ -68,7 +68,11 @@ jobs:
         if: steps.changes.outputs.chart == 'true'
       - run: helm template test charts/prometheus-universal-exporter --set server.listenAddress=0.0.0.0:9115 --set server.pythonPath=/usr/bin/python3.11
         if: steps.changes.outputs.chart == 'true'
+      - run: helm template test charts/prometheus-universal-exporter --set server.expandEnv=true --set-json 'env=[{"name":"DEMO_TARGET","value":"http://api.internal:8080"}]' --set-json 'envFrom=[{"secretRef":{"name":"exporter-secrets"}}]'
+        if: steps.changes.outputs.chart == 'true'
       - run: helm template test charts/prometheus-universal-exporter --set otlpTargets.enabled=true --set-file otlpTargets.data=targets.example.yaml --set-file 'config.data.config\.yaml=config.otlp.example.yaml'
+        if: steps.changes.outputs.chart == 'true'
+      - run: helm template test charts/prometheus-universal-exporter --set-json 'extraArgs=["--log.level=debug"]' --set-json 'extraVolumes=[{"name":"extra-collectors","configMap":{"name":"my-collectors"}}]' --set-json 'extraVolumeMounts=[{"name":"extra-collectors","mountPath":"/etc/collectors","readOnly":true}]'
         if: steps.changes.outputs.chart == 'true'
       - name: Check that every rendered manifest is its own document
         run: |
@@ -80,6 +84,24 @@ jobs:
         run: |
           if helm template test charts/prometheus-universal-exporter --set otlpTargets.enabled=true --set-file otlpTargets.data=targets.example.yaml --set-file 'config.data.config\.yaml=config.example.yaml' >/dev/null 2>&1; then
             echo "helm template accepted scheduled targets while OTLP export is disabled" >&2
+            exit 1
+          fi
+        if: steps.changes.outputs.chart == 'true'
+      - name: Reject extraArgs and extraVolumeMounts that collide with the chart
+        run: |
+          # Go keeps the last occurrence of a repeated flag, and a mount over the
+          # configuration directory hides config.yaml. Both render happily and
+          # then fail at run time pointing somewhere other than the values file.
+          if helm template test charts/prometheus-universal-exporter --set-json 'extraArgs=["--web.listen-address=:9999"]' >/dev/null 2>&1; then
+            echo "helm template accepted an extraArgs entry overriding a chart-managed flag" >&2
+            exit 1
+          fi
+          if helm template test charts/prometheus-universal-exporter --set-json 'extraArgs=["log.level=debug"]' >/dev/null 2>&1; then
+            echo "helm template accepted an extraArgs entry that is not a flag" >&2
+            exit 1
+          fi
+          if helm template test charts/prometheus-universal-exporter --set-json 'extraVolumes=[{"name":"shadow","configMap":{"name":"shadow"}}]' --set-json 'extraVolumeMounts=[{"name":"shadow","mountPath":"/etc/prometheus-universal-exporter"}]' >/dev/null 2>&1; then
+            echo "helm template accepted an extraVolumeMounts entry hiding the configuration directory" >&2
             exit 1
           fi
         if: steps.changes.outputs.chart == 'true'

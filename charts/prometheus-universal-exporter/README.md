@@ -60,7 +60,7 @@ helm upgrade prometheus-universal-exporter \
 
 Configuration changes automatically roll the exporter Deployment.
 
-## 3. Configure Prometheus
+### 3. Configure Prometheus
 
 If Prometheus Operator is installed, enable a `ServiceMonitor` or `PodMonitor`:
 
@@ -180,6 +180,33 @@ The Kubernetes `/health` and `/ready` endpoints remain available for health chec
 
 ## Common configuration
 
+### Exporter flags
+
+The exporter's own flags are chart values rather than something to assemble by hand. `server.listenAddress` sets `--web.listen-address` and the container port together, so the listener and the probes cannot drift apart. `server.pythonPath` sets `--python.path`, the interpreter used by the `python` transform; its default, `/usr/local/bin/python3`, is where the exporter image's `python:3.12-slim` base installs Python, and it is worth overriding only for a custom image.
+
+```sh
+helm install exporter charts/prometheus-universal-exporter \
+  --set server.listenAddress=0.0.0.0:9115 \
+  --set server.pythonPath=/usr/bin/python3.11
+```
+
+Anything the chart does not render from a named value goes in `extraArgs`, described under [Extra volumes and arguments](#extra-volumes-and-arguments).
+
+### Configuration mount and rollout
+
+The ConfigMap is mounted at `/etc/prometheus-universal-exporter/config.yaml`, and its checksum is part of the Deployment pod template — so a configuration change rolls the Deployment rather than waiting for the kubelet to refresh a mounted file. Set `server.watchConfig` instead when the pods should reload in place.
+
+### Default labels and annotations
+
+`defaultLabels` and `defaultAnnotations` are applied to every object the chart creates. Metadata set on a particular object overrides a default of the same name.
+
+```yaml
+defaultLabels:
+  team: platform
+defaultAnnotations:
+  owner: observability@example.com
+```
+
 ### Resources
 
 ```yaml
@@ -257,6 +284,89 @@ server:
 
 This allows the exporter to reload the configuration when the mounted ConfigMap changes without requiring a Deployment rollout.
 
+### Environment variables in the configuration
+
+`server.expandEnv` adds `--config.export-env`, which substitutes `${NAME}` references in the configuration and in the scheduled target document from the container's environment before either is parsed. That lets a hostname, tenant or token come from a Secret rather than from the ConfigMap the chart renders:
+
+```yaml
+server:
+  expandEnv: true
+
+env:
+  - name: API_TOKEN
+    valueFrom:
+      secretKeyRef:
+        name: exporter-secrets
+        key: api-token
+
+envFrom:
+  - secretRef:
+      name: exporter-secrets
+
+config:
+  data:
+    config.yaml: |
+      collectors:
+        - name: example
+          request:
+            headers:
+              Authorization: Bearer ${API_TOKEN}
+```
+
+`env` and `envFrom` take the ordinary Kubernetes shapes and are useful on their own; `expandEnv` is inert without them. Expansion is off by default: only `${NAME}` is substituted and never `$NAME`, but a configuration carrying regexes, jq expressions or Python pre-scripts has dollar signs that are not references, so expanding should be a decision rather than a surprise. A reference whose variable is not set stops the exporter at startup with the variable named, rather than becoming an empty string — a missing Secret key is then a clear failure instead of a collector quietly scraping the wrong thing.
+
+### Exporter resource metrics
+
+Set `web.self_metrics.resource_metrics_enabled: true` inside `config.data.config.yaml` to publish the standard `go_` and `process_` series describing the exporter's own CPU and memory, under the names an existing Go dashboard already uses:
+
+```yaml
+config:
+  data:
+    config.yaml: |
+      web:
+        self_metrics:
+          resource_metrics_enabled: true
+      collectors:
+        - name: example
+          ...
+```
+
+They are scraped by the self-metrics monitor along with everything else on that endpoint. They carry no per-collector or per-target labels, so they add a fixed number of series rather than one per target. Off by default: reading them briefly stops the world on every scrape, which an exporter scraped frequently by several Prometheus servers should not pay for unless the numbers are wanted.
+
+## Extra volumes and arguments
+
+The chart mounts one ConfigMap — the one it renders — and passes the flags it derives from the values above. `extraVolumes`, `extraVolumeMounts` and `extraArgs` cover everything beyond that, in the ordinary Kubernetes and command-line shapes, so a ConfigMap or Secret the chart does not create can be mounted alongside the standard one:
+
+```yaml
+extraVolumes:
+  - name: extra-collectors
+    configMap:
+      name: my-collectors
+  - name: internal-ca
+    secret:
+      secretName: internal-ca
+
+extraVolumeMounts:
+  - name: extra-collectors
+    mountPath: /etc/collectors
+    readOnly: true
+  - name: internal-ca
+    mountPath: /etc/ssl/internal
+    readOnly: true
+
+extraArgs:
+  - --log.level=debug
+```
+
+`extraVolumes` and `extraVolumeMounts` are passed through untouched, so anything a pod can mount — a ConfigMap, a Secret, a projected volume, an emptyDir — works here, and the entries are appended after the ones the chart makes rather than replacing them. `extraArgs` entries are appended after the chart's own flags, each one a whole argument.
+
+Two collisions are rejected while rendering, because both fail in a way that points somewhere other than the values file:
+
+* An `extraArgs` entry that sets a flag the chart already renders — `--web.listen-address`, `--config.file`, `--python.path` and the rest. Go keeps the last occurrence of a repeated flag, so the entry would quietly win; for the listen address the container port and the probes would still follow `server.listenAddress`, leaving a pod that listens on one port while Kubernetes checks another. The error names the value to set instead.
+* An `extraVolumeMounts` entry whose `mountPath` is one the chart already mounts. Mounting over `/etc/prometheus-universal-exporter` replaces it, so the exporter starts with no `config.yaml` and crash-loops with an error about the file rather than about the mount that hid it. To add a file to that directory, mount it at its own path — `/etc/collectors`, say — and point the configuration at it.
+
+An entry that does not begin with `--` is rejected too, since `log.level=debug` as an argument is read as a positional value and ignored.
+
 ## Scheduled OTLP targets
 
 The exporter can optionally scrape targets itself and send the metrics directly over OTLP.
@@ -296,9 +406,15 @@ The chart also supports:
 * Custom exporter listen address
 * Custom Python interpreter
 * Verbose self-metrics
+* Resource metrics for the exporter's own CPU and memory
 * Collector caching
+* Extra volumes and volume mounts
+* Extra command-line flags
 
 See `values.yaml` for all available Helm options.
+
+The requirements this chart is built to are in
+[../../docs/SPECIFICATION-CHART.md](../../docs/SPECIFICATION-CHART.md).
 
 ## Security
 

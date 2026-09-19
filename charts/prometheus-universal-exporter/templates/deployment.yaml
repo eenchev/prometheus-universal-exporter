@@ -54,6 +54,19 @@ spec:
             {{- if .Values.otlpTargets.enabled }}
             - {{ printf "--otlp.targets-file=/etc/prometheus-universal-exporter/%s" (include "prometheus-universal-exporter.targetsFile" .) | quote }}
             {{- end }}
+            {{- if .Values.server.expandEnv }}
+            - --config.export-env
+            {{- end }}
+            {{- include "prometheus-universal-exporter.extraArgs" . }}
+            {{- range .Values.extraArgs }}
+            - {{ . | quote }}
+            {{- end }}
+          {{- with .Values.env }}
+          env: {{- toYaml . | nindent 12 }}
+          {{- end }}
+          {{- with .Values.envFrom }}
+          envFrom: {{- toYaml . | nindent 12 }}
+          {{- end }}
           ports:
             - name: http
               containerPort: {{ include "prometheus-universal-exporter.containerPort" . }}
@@ -71,6 +84,10 @@ spec:
             - name: target-auth
               mountPath: {{ .Values.targetAuth.mountPath | quote }}
               readOnly: true
+            {{- end }}
+            {{- include "prometheus-universal-exporter.validateExtraMounts" . }}
+            {{- with .Values.extraVolumeMounts }}
+            {{- toYaml . | nindent 12 }}
             {{- end }}
       volumes:
         - name: config
@@ -90,4 +107,7 @@ spec:
               - key: {{ .Values.targetAuth.secretKey | quote }}
                 path: {{ .Values.targetAuth.fileName | quote }}
               {{- end }}
+        {{- end }}
+        {{- with .Values.extraVolumes }}
+        {{- toYaml . | nindent 8 }}
         {{- end }}

@@ -2,6 +2,68 @@
 
 Exporter self-health metrics are available at `/self-metrics` by default (and `/metrics` remains a compatibility alias). Change the dedicated path with `--web.self-metrics-path=/exporter/metrics`. The Helm chart's optional self-metrics ServiceMonitor/PodMonitor scrapes the exporter pods/services separately from target-probing monitors. Configure one or more entries in `monitors`, each with a unique `name` and `type: pod` or `type: service`; each entry supports Prometheus Operator `relabelings` and `metricRelabelings`.
 
+## Resource metrics
+
+The exporter can publish the familiar `go_` and `process_` series describing its
+own CPU and memory, under the names every Go dashboard already uses:
+
+```yaml
+web:
+  self_metrics:
+    resource_metrics_enabled: true
+```
+
+```text
+go_goroutines 7
+go_threads 8
+go_info{version="go1.27.0"} 1
+go_memstats_heap_inuse_bytes 1.589248e+06
+go_memstats_alloc_bytes_total 767904
+go_gc_duration_seconds_count 3
+go_cpu_classes_user_cpu_seconds_total 0.27687507
+process_cpu_seconds_total 0.31
+process_resident_memory_bytes 1.3389824e+07
+process_open_fds 8
+```
+
+The names and meanings match what `prometheus/client_golang` publishes, so an
+existing dashboard or alert works unchanged — that is the entire point of the
+prefix. The numbers come from the standard library rather than from a client
+library: this exporter renders its own exposition and keeps no registry, so
+pulling one in to gather these would add a dependency and an adapter for
+nothing.
+
+It is off by default because reading them is not free. `runtime.ReadMemStats`
+briefly stops the world, and an exporter scraped every few seconds by several
+Prometheus servers should not pay that unless somebody wants the numbers.
+
+### What you get
+
+The `go_memstats_*`, `go_goroutines`, `go_threads`, `go_info`,
+`go_sched_gomaxprocs_threads` and `go_gc_duration_seconds_count` / `_sum` series
+come from the runtime and are published on every platform the exporter builds
+for.
+
+The `go_cpu_classes_*` counters come from `runtime/metrics`, asked for by name.
+A Go release that renames or drops one makes that series disappear rather than
+publish a zero, so what you see is what the runtime the binary was built with
+actually offers.
+
+The `process_*` series are the operating system's view, read from `/proc`. They
+appear on Linux — where the container runs — and are simply absent elsewhere.
+They are deliberately not synthesised from runtime numbers on other platforms:
+`process_cpu_seconds_total` is real CPU time the process consumed, while
+`go_cpu_classes_total_cpu_seconds_total` is GOMAXPROCS multiplied by wall time
+and includes idle. Publishing one under the other's name would be wrong in a way
+that only shows up when somebody trusts the graph.
+
+`go_gc_duration_seconds` is published as its `_count` and `_sum` only. The
+quantiles a summary would carry are not available from `runtime.MemStats`, and
+inventing them would be worse than leaving them out.
+
+Like verbosity, this is configuration rather than a flag, so a reload turns it
+on and off.
+
 ## Verbose per-request self-metrics
 
 By default the exporter's own metrics are per collector. Setting

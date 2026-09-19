@@ -1,4 +1,20 @@
-# Generic HTTP Prometheus Exporter — Implementation Specification
+# Generic HTTP Prometheus Exporter — Exporter Specification
+
+This is the specification for the exporter itself: its endpoints, configuration,
+decoders, transforms, limits, logging, CLI, container image and tests. The Helm
+chart that deploys it has its own specification in
+[SPECIFICATION-CHART.md](SPECIFICATION-CHART.md).
+
+Section numbers are the ones this specification has always used, and they did not
+change when it was split. Each document therefore keeps its own sections' numbers
+and skips the other's, so a reference to § 33.13 or § 42.8 still points at the
+same requirement it always did. A section that carried requirements for both is
+present in both documents under the same number, each holding only its own half
+and linking the other.
+
+Sections about the repository as a whole — purpose, implementation order,
+acceptance criteria, CI gates, documentation requirements — stay here, and name
+the chart document where a chart requirement belongs to it.
 
 ## 1. Purpose
 
@@ -1243,6 +1259,43 @@ than reach an operator undocumented.
 
 `/metrics` MUST NOT require a target query parameter.
 
+### 22.0a Resource metrics
+
+The exporter MUST support publishing the standard `go_` and `process_` series
+describing its own CPU and memory, configured under
+`web.self_metrics.resource_metrics_enabled` and defaulting to false.
+
+The names and semantics MUST match what `prometheus/client_golang` publishes, so
+an existing Go dashboard or alert works against this exporter unchanged. That is
+the only reason to use the prefix at all; a series named `go_goroutines` that
+means something else is worse than no series.
+
+They MUST default to off. Collecting them is not free — reading the memory
+statistics briefly stops the world — and an exporter scraped frequently by
+several Prometheus servers should not pay that cost unless it is asked for.
+
+The runtime series MUST be available on every platform the exporter builds for.
+The CPU class series MUST be requested from the runtime by name and omitted when
+the Go release in use does not provide them, so the exporter publishes what its
+runtime actually offers rather than a fixed list a toolchain upgrade could
+invalidate.
+
+The `process_` series MUST reflect the operating system's view of the process
+and MUST be omitted where that view is unavailable. They MUST NOT be synthesised
+from runtime accounting: `process_cpu_seconds_total` is CPU the process
+consumed, while the runtime's total CPU class is GOMAXPROCS multiplied by wall
+time and includes idle. Publishing one under the other's name is wrong in a way
+that only appears when somebody trusts the graph.
+
+Where a standard series cannot be produced faithfully it MUST be omitted rather
+than approximated. `go_gc_duration_seconds` MUST therefore be published as its
+count and sum only, because the quantiles are not available from the runtime
+statistics the exporter reads.
+
+Publishing these alongside the exporter's own self-metrics MUST NOT declare any
+metric family twice, and turning the setting off through a reload MUST drop the
+series rather than leave them exposed.
+
 ### 22.1 Verbose per-request self-metrics
 
 The exporter MUST support an opt-in verbose mode that republishes its own
@@ -1730,45 +1783,6 @@ collectors:
 
 ---
 
-# 29. Prometheus Operator manifests
-
-Provide complete examples for:
-
-- Service deployment
-- Exporter Service
-- ServiceMonitor
-- PodMonitor
-
-Example ServiceMonitor pattern:
-
-```yaml
-apiVersion: monitoring.coreos.com/v1
-kind: ServiceMonitor
-metadata:
-  name: generic-http-exporter-target
-spec:
-  selector:
-    matchLabels:
-      app: target
-  endpoints:
-    - port: http
-      path: /probe
-      params:
-        collector:
-          - legacy_text
-      relabelings:
-        - sourceLabels: [__address__]
-          targetLabel: __param_target
-        - sourceLabels: [__param_target]
-          targetLabel: instance
-        - targetLabel: __address__
-          replacement: generic-http-exporter:8080
-```
-
-The example must be tested against Prometheus Operator semantics.
-
----
-
 # 30. CLI
 
 Provide clear CLI flags, for example:
@@ -1829,289 +1843,6 @@ The supported Python dependencies should be bundled in the image and version-pin
 Document exact package versions in the project.
 
 A future optional extension may support externally supplied Python environments, but this is out of scope for the initial implementation.
-
----
-
-# 33. Helm chart
-
-The repository MUST include a production-ready Helm chart for deploying the exporter to Kubernetes.
-
-The Helm chart MUST be maintained in the same repository as the application source code and MUST be usable without manually creating Kubernetes manifests for the core deployment.
-
-Recommended repository location:
-
-```text
-charts/prometheus-universal-exporter/
-```
-
-The chart SHOULD follow Helm conventions and include at minimum:
-
-```text
-charts/prometheus-universal-exporter/
-├── Chart.yaml
-├── values.yaml
-├── README.md
-├── templates/
-│   ├── _helpers.tpl
-│   ├── deployment.yaml
-│   ├── service.yaml
-│   ├── configmap.yaml
-│   ├── serviceaccount.yaml
-│   ├── servicemonitor.yaml
-│   ├── podmonitor.yaml
-│   └── NOTES.txt
-```
-
-Not every listed template must be rendered by default, but the chart structure MUST cleanly support the corresponding features.
-
-### 33.1 Deployment
-
-The chart MUST deploy the exporter as a Kubernetes `Deployment`.
-
-The chart MUST expose the exporter's process settings as values rather than
-hardcoding them in the Pod template. At minimum `server.listenAddress` MUST set
-`--web.listen-address` and `server.pythonPath` MUST set `--python.path`. The
-container port MUST be derived from the port in `server.listenAddress`, and a
-value without a valid TCP port MUST fail rendering with a clear message. The
-container port MUST keep the name `http` so Service, Ingress, ServiceMonitor,
-and PodMonitor references remain valid when the port changes.
-`server.pythonPath` MUST default to the interpreter path in the published
-container image.
-
-Arguments rendered into the Pod template MUST be quoted so the argument value
-reaches the process exactly as configured, without literal quote characters.
-
-Configurable values SHOULD include at least:
-
-```yaml
-image:
-  repository: ...
-  tag: ...
-  pullPolicy: IfNotPresent
-
-replicaCount: 1
-
-resources:
-  requests: {}
-  limits: {}
-
-service:
-  enabled: true
-  type: ClusterIP
-  port: 8080
-
-podSecurityContext: {}
-securityContext: {}
-nodeSelector: {}
-tolerations: []
-affinity: {}
-```
-
-The deployment SHOULD run as a non-root user where practical.
-
-The chart MUST configure liveness/readiness probes using the exporter health endpoints.
-
-### 33.2 Exporter configuration
-
-Collector configuration MUST be supplied through a Helm-managed ConfigMap by default.
-
-Example:
-
-```yaml
-config:
-  enabled: true
-  data:
-    config.yaml: |
-      collectors:
-        - name: example
-          ...
-```
-
-The chart MUST mount the configuration into the exporter container using a stable path such as:
-
-```text
-/etc/prometheus-universal-exporter/config.yaml
-```
-
-The container arguments MUST reference that path.
-
-### 33.3 Configuration reload / rollout
-
-The chart MUST ensure that changes to the ConfigMap eventually cause the exporter to use the new configuration.
-
-Preferred behavior:
-
-- If the exporter supports live configuration reload, mount the ConfigMap and configure the exporter to reload it.
-- Otherwise, use a checksum annotation on the Deployment pod template so a ConfigMap change triggers a rollout.
-
-The implementation MUST document which behavior is used.
-
-### 33.4 Service
-
-The chart MUST expose a `service.enabled` value that defaults to `true`. When
-enabled, the chart MUST create a Kubernetes `Service` exposing the exporter
-HTTP port. When disabled, the Service resource MUST NOT be rendered.
-
-The Service MUST be usable as the target of Prometheus Operator
-`ServiceMonitor` resources. The documentation MUST warn that the chart's
-generated ServiceMonitor and PodMonitor routing requires this Service.
-
-### 33.5 ServiceMonitor support
-
-The chart MUST provide optional `ServiceMonitor` resources, selected through
-entries in the shared `monitors` values array.
-
-Example values:
-
-```yaml
-monitors:
-  - name: application-services
-    enabled: true
-    type: service
-    interval: 30s
-    scrapeTimeout: 10s
-    labels: {}
-    annotations: {}
-    targetSelector: {}
-    collector: example
-    params: {}
-    relabelings: []
-    metricRelabelings: []
-```
-
-The chart MUST allow configuring `params.collector`, user-provided
-`relabelings`, and `metricRelabelings` to route discovered targets through
-`/probe` and filter or rewrite scraped samples.
-
-Because collector selection is target-specific, the chart MUST support a documented configuration pattern where a ServiceMonitor endpoint passes:
-
-```yaml
-params:
-  collector:
-    - example
-```
-
-and rewrites the target using:
-
-```yaml
-relabelings:
-  - sourceLabels: [__address__]
-    targetLabel: __param_target
-  - sourceLabels: [__param_target]
-    targetLabel: instance
-  - targetLabel: __address__
-    replacement: <exporter-service>:<port>
-```
-
-Each monitor entry MUST have a unique name and select one collector. Multiple
-entries MUST be supported for different target selectors, collectors, or
-scrape settings.
-
-### 33.6 PodMonitor support
-
-When a `monitors` entry has `type: pod`, the chart MUST provide the equivalent
-optional `PodMonitor` resource using that entry's settings.
-
-It MUST implement the equivalent target relabeling and collector parameter behavior described for `ServiceMonitor`.
-
-### 33.7 CRD availability
-
-The exporter Helm chart MUST NOT install Prometheus Operator CRDs itself.
-
-If `ServiceMonitor` or `PodMonitor` is enabled and the required CRDs are absent, the chart SHOULD fail clearly or document the dependency on Prometheus Operator.
-
-### 33.8 RBAC
-
-The exporter does not inherently need Kubernetes API access for target discovery because target discovery is performed by Prometheus Operator.
-
-Therefore the chart SHOULD default to no additional Kubernetes API permissions.
-
-A dedicated ServiceAccount MAY be created for standard Kubernetes deployment conventions, but no broad `ClusterRole`/`ClusterRoleBinding` should be installed unless a future feature explicitly requires it.
-
-### 33.9 Network and security settings
-
-The chart SHOULD support:
-
-- Pod security context
-- Container security context
-- Read-only root filesystem where practical
-- Dropping Linux capabilities
-- `allowPrivilegeEscalation: false`
-- NetworkPolicy as an optional feature
-
-If a NetworkPolicy is provided, it MUST account for the exporter needing to reach configured target endpoints.
-
-### 33.10 Helm values
-
-`values.yaml` MUST document all user-configurable settings. At minimum:
-
-```yaml
-image: {}
-replicaCount: 1
-nameOverride: ""
-fullnameOverride: ""
-resources: {}
-server: {}
-service: {}
-config: {}
-otlpTargets: {}
-serviceAccount: {}
-securityContext: {}
-podSecurityContext: {}
-nodeSelector: {}
-tolerations: []
-affinity: {}
-monitors: []
-networkPolicy: {}
-```
-
-The chart MUST provide sane production defaults and avoid hardcoding environment-specific values.
-
-### 33.11 Helm validation
-
-The repository MUST include automated Helm validation covering at least:
-
-- `helm lint`
-- `helm template` with default values
-- `helm template` with one enabled `monitors` entry of `type: service`;
-- `helm template` with one enabled `monitors` entry of `type: pod`;
-- `helm template` with multiple enabled `monitors` entries;
-- `helm template` with `monitors: []`.
-- every rendered manifest starting its own YAML document, with monitors enabled
-  and the self-metrics monitor rendering alongside them
-- ConfigMap generation
-- Deployment generation
-- Service generation
-- Correct `/probe` path and collector parameter configuration
-
-If feasible, use a Kubernetes schema/testing tool such as `kubeconform` or an equivalent to validate rendered manifests.
-
-### 33.12 Helm examples
-
-The repository MUST include examples showing:
-
-1. Basic exporter installation.
-2. Exporter with a JSON collector.
-3. ServiceMonitor targeting a Service and selecting a collector.
-4. PodMonitor targeting Pods and selecting a collector.
-5. Configuration containing multiple collectors.
-
-Examples MUST not contain real credentials.
-
-### 33.13 Chart documentation
-
-The Helm chart README MUST document:
-
-- Installation
-- Upgrade
-- Uninstallation
-- Configuration values
-- How to supply collectors
-- ServiceMonitor usage
-- PodMonitor usage
-- Prometheus Operator prerequisite
-- Resource/security configuration
-- Configuration reload behavior
 
 ---
 
@@ -2473,6 +2204,20 @@ consistently.
 Test that a transform `pre_script` runs once before extraction, can mutate or
 replace `data`, is subject to timeout/output restrictions, and is reparsed for
 HTML/XML output.
+
+Test resource metrics:
+
+- None of the `go_` or `process_` series appear unless configured.
+- With the setting on, every runtime series is published, `go_info` carries this
+  binary's Go version, and the values are the live ones rather than zeros.
+- The CPU class series are requested from the runtime by name and are counters.
+- The `process_` series appear where the operating system's view is available
+  and are absent where it is not, rather than being synthesised.
+- The process statistics are parsed correctly when the executable name contains
+  spaces or parentheses, and a malformed line yields nothing.
+- Publishing them beside the verbose series declares no metric family twice.
+- A reload turns them on and off.
+- They reach the OTLP self-metric set on the same terms.
 
 Test verbose per-request self-metrics:
 
@@ -2878,80 +2623,6 @@ Test at minimum:
 
 Security tests MUST be runnable without internet access.
 
-## 34.28 ServiceMonitor and PodMonitor tests
-
-The repository MUST contain fixture manifests for:
-
-- ServiceMonitor with one collector.
-- ServiceMonitor with multiple collector configurations.
-- PodMonitor with one collector.
-- PodMonitor with multiple collector configurations.
-
-Rendered manifests MUST be tested for:
-
-- Correct scrape path `/probe`.
-- Correct `collector` parameter.
-- Correct `__param_target` relabeling.
-- Correct `instance` label relabeling.
-- Correct exporter `__address__` rewrite.
-- Correct port/service references.
-- Selector behavior.
-
-Where practical, run an integration test against a Kubernetes test cluster and Prometheus Operator CRDs.
-
-## 34.29 Helm tests
-
-The Helm chart MUST be tested using:
-
-```text
-helm lint
-helm template
-```
-
-with at least these values combinations:
-
-1. Default configuration.
-2. Monitor disabled.
-3. Monitor enabled with `type: service`.
-4. Monitor enabled with `type: pod`.
-5. Custom target and metric relabelings.
-6. Custom image/repository/tag.
-7. Custom resources.
-8. Custom securityContext.
-9. Custom exporter arguments/configuration, including a custom
-   `server.listenAddress` and `server.pythonPath`, and an invalid
-   `server.listenAddress` that MUST fail rendering. The chart MUST require
-   `host:port`: a value carrying no port, such as a bare port number or a bare
-   host, renders as valid YAML and then makes the container exit immediately
-   with "missing port in address", so it MUST be rejected while rendering rather
-   than at run time. A port outside 1-65535 MUST be rejected too.
-9a. Scheduled targets enabled, which MUST add the `--otlp.targets-file`
-   argument and render the target document into the exporter ConfigMap. When
-   the chart manages the configuration, enabling scheduled targets without
-   `otlp.enabled: true`, or with an empty document, MUST fail rendering with an
-   explicit message rather than producing a Deployment that cannot start.
-10. Multiple collectors in ConfigMap content.
-11. Existing Secret references for credentials where supported.
-
-Every manifest a template renders MUST begin its own YAML document. A template
-that renders more than one manifest, whether because it declares several or
-because it wraps one in a range, MUST emit a `---` before each. `helm template`
-and `helm lint` do not detect a missing separator — helm prints whatever the
-template produced — so two manifests silently merge into a single document and
-the chart only fails when it is applied.
-
-Two checks MUST cover this, because neither alone is enough. A test in the Go
-suite MUST verify statically that every manifest a template renders is preceded
-by a separator, and the CI path filters MUST run that suite for changes under
-`charts/`, since a chart-only change is exactly the change that would break it.
-A CI step MUST additionally render the chart with monitors enabled and fail when
-the number of manifests rendered exceeds the number of YAML documents the output
-parses into.
-
-Rendered manifests SHOULD be validated with `kubeconform`, `kubeval`, or equivalent.
-
-Helm tests MUST verify that invalid combinations either fail rendering clearly or are rejected by chart validation.
-
 ## 34.30 Container/image tests
 
 Test the built container image for:
@@ -3159,6 +2830,22 @@ Required:
 - A source that cannot be reached is reported as an error rather than as
   "nothing to update".
 - Tag listings are followed across pages.
+
+Test environment variable expansion:
+
+- References are literal without the flag and substituted with it, in both the
+  configuration and the scheduled target document.
+- Only `${NAME}` is a reference: `$NAME`, a trailing `$`, an unterminated `${`
+  and a name that does not match the spelling are all left alone, and `$$`
+  produces a literal dollar.
+- An unset variable is an error naming every missing variable and the document;
+  a variable set to an empty string substitutes normally.
+- A value containing a line break is refused.
+- A reload keeps expanding, a reload does not start expanding when startup did
+  not, and a reload with an unresolvable reference leaves the previous
+  configuration active.
+- Expansion precedes parsing, so a reference can supply a non-scalar part of the
+  document.
 - Every Go version the workflows request satisfies the go directive in
   `go.mod`, as does the version the Dockerfile pins, and the comparison itself
   is covered for versions of differing granularity.
@@ -3193,6 +2880,23 @@ The repository MUST include documentation covering:
 22. Example collectors for JSON/YAML/XML/CSV/HTML/Prometheus/text/Python
 
 The Python documentation MUST explicitly state that networking is owned by the exporter and that `requests`/`httpx` are unnecessary.
+
+The documentation MUST be split by audience rather than gathered in one file.
+The repository README is what someone reads before deciding to use the exporter
+and while starting it for the first time, so it MUST carry only what serves
+that: what the exporter is, how the probe pattern works, a minimal configuration
+and the commands to run it, the endpoints, the command-line flags, and an index
+of everything else. It MUST NOT carry reference material — decoder and transform
+detail, caching, transport settings, authentication models, operator manifests —
+because a README that answers every question stops answering the first one.
+
+Each subject above MUST live in a dedicated page under `docs/`, and the README's
+index MUST link every one of them. The Helm chart's own README remains the
+reference for chart values, per [SPECIFICATION-CHART.md](SPECIFICATION-CHART.md)
+§ 33.13, and the repository README MUST
+link to it rather than restate it. Documentation that moves MUST move whole: a
+subject MUST have exactly one home, so that a reader who follows a link is not
+sent back to a shorter version of what they just left.
 
 ---
 
@@ -3385,23 +3089,9 @@ The endpoint MUST NOT require `target` or `collector` query parameters and
 MUST expose configuration, scrape, decode, transform, Python, limit, status,
 duration, response-size, and emitted-series health metrics.
 
-The Helm chart MUST expose values for the self-health path and MUST provide an
-optional ServiceMonitor and PodMonitor that select the exporter Service/Pods
-and scrape the dedicated endpoint. The self-health monitor MUST be separate
-from the target-probing monitor: a monitor that selects discovered target Pods
-MUST NOT accidentally scrape the exporter health endpoint on those target
-Pods.
+The chart values and monitors that expose this endpoint are specified in
+[SPECIFICATION-CHART.md](SPECIFICATION-CHART.md) § 42.
 
-The Helm chart MUST support:
-
-- `namespaceOverride` for namespaced resources;
-- configurable Deployment strategy, including RollingUpdate settings;
-- CPU and memory requests and limits through `resources.requests` and
-  `resources.limits`;
-- `tolerations` and `affinity`;
-- an optional Ingress resource with class, host, path, TLS, and annotations;
-- optional NEG integration, implemented by a configurable Service annotation
-  such as the GKE `cloud.google.com/neg` annotation.
 
 ## 42.1 OTLP export
 
@@ -3457,11 +3147,10 @@ name.
 
 ## 42.3 Additional tests and documentation
 
-Tests MUST cover the configurable self-health path, separate Operator monitor
-resources, namespace override, Deployment strategy, resources, scheduling
-constraints, Ingress/NEG rendering, CSV transformation, OTLP payload shape,
-OTLP timeout/failure behavior, and the guarantee that OTLP failures do not
-fail Prometheus probes.
+Tests MUST cover CSV transformation, OTLP payload shape, OTLP timeout/failure
+behavior, and the guarantee that OTLP failures do not fail Prometheus probes.
+The chart rendering these tests are the counterpart to is covered in
+[SPECIFICATION-CHART.md](SPECIFICATION-CHART.md) § 42.3.
 
 ## 42.4 PodMonitor/ServiceMonitor header and authentication propagation
 
@@ -3475,10 +3164,10 @@ collector-scoped:
    Operator `authorization` or `basicAuth` fields.
 2. The exporter MUST NOT forward the incoming `Authorization` header unless
    the selected collector sets `request.forward_authorization: true`.
-3. The Helm chart MUST expose a monitor `headers` map for non-secret target
-   headers. Each entry MUST be encoded as a `header_<Header-Name>` endpoint
-   parameter. The exporter MUST forward those values only when the selected
-   collector lists the header in `request.forward_headers`.
+3. The exporter MUST forward a `header_<Header-Name>` endpoint parameter to the
+   target only when the selected collector lists that header in
+   `request.forward_headers`. The chart value that produces those parameters
+   is specified in [SPECIFICATION-CHART.md](SPECIFICATION-CHART.md) § 42.4.
 4. The exporter MUST reject or ignore forwarding of transport and hop-by-hop
    headers, including `Host`, `Connection`, `Content-Length`, `Proxy-*`,
    `Transfer-Encoding`, `Trailer`, `Upgrade`, and `TE`. `Authorization` MUST
@@ -3495,9 +3184,9 @@ HTTP request policy. The PodMonitor API does not provide an arbitrary header
 map equivalent to Prometheus `http_config.http_headers`, so the
 `header_<Header-Name>` parameter convention is the chart-compatible bridge.
 
-The test suite MUST verify bearer and basic monitor rendering, forwarding of
-an explicitly enabled Authorization header, forwarding of allowlisted
-`header_*` values, and non-forwarding of unallowlisted or transport headers.
+The test suite MUST verify forwarding of an explicitly enabled Authorization
+header, forwarding of allowlisted `header_*` values, and non-forwarding of
+unallowlisted or transport headers.
 
 ## 42.5 Exporter endpoint Basic Authentication
 
@@ -3553,12 +3242,7 @@ or empty token file, and send the resulting value only as:
 Authorization: Bearer <token>
 ```
 
-The Helm chart MUST default `targetAuth.enabled` to false and mount no target
-credential Secret by default. It SHOULD provide an optional Secret volume
-controlled by `targetAuth.enabled`, `targetAuth.type`, `targetAuth.secretName`,
-and the corresponding bearer or basic-auth key/file settings, so the file path
-can be declared in exporter configuration without placing credentials in a
-ConfigMap. For basic authentication, the exporter MUST support:
+For basic authentication, the exporter MUST support:
 
 ```yaml
 request:
@@ -3580,59 +3264,6 @@ Authentication.
 Tests MUST cover bearer-token-file loading, basic-auth-file loading, whitespace
 trimming, missing and empty files, independent exporter Basic Auth, and the
 fact that the exporter Basic Auth credential is not forwarded to the target.
-
-## 42.7 Helm monitor arrays and opt-in monitor authentication
-
-The Helm chart MUST expose a `monitors` array. Each entry MUST contain a
-unique optional resource name, an `enabled` flag, and a `type` of `pod` or
-`service`:
-
-```yaml
-monitors:
-  - name: application-services
-    enabled: true
-    type: service # service or pod
-```
-
-Each enabled entry MUST render exactly one corresponding PodMonitor or
-ServiceMonitor. The chart MUST support multiple enabled entries and produce
-unique resource names. A self-health monitor MUST be rendered once per
-monitor type used by the array when self-health monitoring is enabled.
-
-Monitor authentication MUST be explicitly opt-in and disabled by default for
-each array entry:
-
-```yaml
-auth:
-  enabled: false
-  type: bearer # bearer or basic
-```
-
-When `auth.enabled` is false, the chart MUST NOT render `authorization` or
-`basicAuth`, regardless of the configured `auth.type`. When enabled, `auth.type`
-MUST select bearer or basic authentication and the chart MUST render the
-corresponding SecretKeySelectors. Tests MUST cover the disabled default, both
-monitor selector types, and enabled bearer/basic authentication rendering.
-
-## 42.8 Monitor relabeling and Deployment rollout behavior
-
-Each Helm `monitors` entry MUST expose native Prometheus Operator
-`relabelings` and `metricRelabelings` lists. The chart MUST preserve its
-mandatory target-routing relabelings and append user-provided entry
-`relabelings` after them. Entry `metricRelabelings` MUST be rendered on the
-selected ServiceMonitor endpoint or PodMonitor pod metrics endpoint.
-These lists MUST support the standard fields, including `sourceLabels`,
-`targetLabel`, `regex`, `replacement`, `action`, and `modulus`, as applicable.
-
-The self-health monitor MUST independently support
-`selfMetrics.relabelings` and `selfMetrics.metricRelabelings`.
-
-The default Deployment strategy MUST work with `replicaCount: 1`. The default
-`RollingUpdate` settings MUST use explicit `maxUnavailable: 0` and
-`maxSurge: 1`, keeping the old ready Pod until the replacement is ready and
-temporarily allowing two Pods. The chart MAY accept percentage values as
-supported by Kubernetes, but MUST document their rounding behavior. Users that
-require no overlap MAY choose `strategy.type: Recreate`.
 
 ## 42.9 OTLP TLS configuration
 
@@ -3707,27 +3338,9 @@ methods, timeout values, or boolean values MUST return HTTP 400 before the
 target is contacted. Disabling certificate verification is an explicit
 security trade-off and MUST be documented as unsafe for general use.
 
-The Helm chart MUST expose these parameters as list-valued `params` entries on
-each `monitors` item, and MUST expose `interval` and `scrapeTimeout` on each
-item as the Prometheus Operator scrape settings. The monitor scrape timeout
-and the exporter target-request timeout override are distinct: the former is
-set on the generated ServiceMonitor or PodMonitor, while the latter is passed
-to `/probe` as `params.timeout`. The TLS override is passed as
-`params.insecure_skip_verify`; when absent, the collector's TLS setting MUST be
-preserved. `params.retry_attempts` and `params.retry_backoff` override the
-collector's retry settings for that scrape; when absent, the collector values
-MUST be preserved.
+The chart values that render these overrides onto a monitor are specified in
+[SPECIFICATION-CHART.md](SPECIFICATION-CHART.md) § 42.10.
 
-## 42.11 Helm-wide default metadata
-
-The Helm chart MUST expose `defaultLabels` and `defaultAnnotations` maps. The
-chart MUST apply them to the metadata of every Kubernetes object it creates,
-including the Deployment Pod template and conditionally rendered ConfigMap,
-ServiceAccount, Service, Ingress, NetworkPolicy, ServiceMonitor, and
-PodMonitor resources. Resource-specific metadata maps MUST be applied after
-the defaults and therefore MUST override a same-named default. The chart's
-generated identity labels and required operational annotations MUST remain
-valid and authoritative where they conflict with user defaults.
 
 ## 42.12 CI, container, and chart releases
 
@@ -3761,19 +3374,8 @@ MUST:
 - build release binaries for the documented target platforms; and
 - create a GitHub Release containing the software archives.
 
-The chart release workflow MUST be triggered by tags under `chart` and MUST:
-
-- verify that the version implied by the tag matches the `version` field in
-  `Chart.yaml`, failing the release when they disagree;
-- re-run the chart lint and template scenarios;
-- package the chart without overriding `version` or `appVersion`, so the
-  published artifact carries exactly what the committed `Chart.yaml` declares;
-- publish the chart as an OCI artifact; and
-- create a GitHub Release containing the chart archive.
-
-`Chart.yaml` MUST be the source of truth for the chart version. `appVersion`
-records the exporter release a chart version was validated against and MUST be
-maintained by hand rather than derived from a release tag.
+The chart release workflow is specified in
+[SPECIFICATION-CHART.md](SPECIFICATION-CHART.md) § 42.12.
 
 Both release workflows MUST use `GITHUB_TOKEN` with `contents: write` and
 `packages: write` permissions and MUST run their respective validation checks
@@ -3999,6 +3601,42 @@ These settings replace the earlier `request.redirect_policy` string, which MUST
 NOT be accepted any more. Because the configuration decoder rejects unknown
 fields, a configuration still carrying it fails to load rather than silently
 changing how a collector follows redirects.
+
+
+## 42.15a Environment variable expansion in configuration
+
+The exporter MUST support an optional `--config.export-env` flag that
+substitutes `${NAME}` references in the configuration document, and in the
+scheduled target document, from the process environment before either is parsed.
+
+It MUST default to off. A configuration legitimately contains dollar signs that
+are not references — a regex metric rule, a jq expression, a Python pre-script —
+and expanding by default would rewrite an operator's own text without being
+asked. With the flag off, a document MUST be used exactly as written.
+
+Only the braced form MUST be treated as a reference. `$NAME` MUST be left
+untouched even with the flag on, so regexes and shell-style text keep working.
+`$$` MUST produce a literal dollar, so `$${NAME}` survives as `${NAME}`. A name
+MUST match the usual environment variable spelling; anything else, including an
+unterminated `${`, MUST be left alone rather than reported as an error.
+
+A reference to a variable that is not set MUST be an error that stops startup,
+not an empty substitution. An empty substitution yields a document that parses
+and is wrong — a collector with no path, a credential that is silently blank —
+which the exporter would then serve. Every unset name MUST be reported in one
+message, and the message MUST name the document. A variable that is set to an
+empty string MUST substitute normally: that is a deliberate choice.
+
+Substitution is textual and precedes parsing, so a reference MAY supply any part
+of the document rather than only a scalar. For the same reason a value
+containing a line break MUST be refused: it would end the line and turn the
+remainder into YAML rather than setting a long value.
+
+A reload MUST read the documents the way startup did. A reload that stopped
+expanding would replace a working configuration with one full of literal
+references, and a reload that started expanding would rewrite a configuration
+the operator never asked to have expanded. A reload whose references cannot all
+be resolved MUST be rejected with the previous configuration left active.
 
 
 ## 42.16 Automated dependency updates

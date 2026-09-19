@@ -1,3 +1,46 @@
+{{- define "prometheus-universal-exporter.extraArgs" -}}
+{{- /* The chart already renders the flags below from named values. Go's flag
+       package keeps the last occurrence, so an extraArgs entry repeating one of
+       them would win silently — and for --web.listen-address the container port
+       and the probes would still follow server.listenAddress, leaving a pod
+       that listens on one port while Kubernetes checks another. Rejecting the
+       collision while rendering costs nothing; debugging it costs an
+       afternoon. */ -}}
+{{- $managed := dict
+  "--config.file" "the chart renders the configuration itself, so change it through config.data, or set config.enabled to false and supply the ConfigMap yourself"
+  "--web.listen-address" "set server.listenAddress instead"
+  "--web.self-metrics-path" "set selfMetrics.path instead"
+  "--python.path" "set server.pythonPath instead"
+  "--config.watch" "set server.watchConfig instead"
+  "--config.watch-interval" "set server.watchConfigInterval instead"
+  "--otlp.targets-file" "set otlpTargets.enabled instead"
+  "--config.export-env" "set server.expandEnv instead" -}}
+{{- range $arg := .Values.extraArgs -}}
+{{- $text := $arg | toString -}}
+{{- if not (hasPrefix "--" $text) -}}
+{{- fail (printf "extraArgs entry %q must start with `--`, for example \"--log.level=debug\"" $text) -}}
+{{- end -}}
+{{- $name := $text | splitList "=" | first -}}
+{{- if hasKey $managed $name -}}
+{{- fail (printf "extraArgs entry %q sets %s, which the chart already manages; %s" $text $name (get $managed $name)) -}}
+{{- end -}}
+{{- end -}}
+{{- end }}
+{{- define "prometheus-universal-exporter.validateExtraMounts" -}}
+{{- /* A mount at the configuration directory replaces it, so the exporter
+       starts with no config.yaml and crash-loops with an error that points at
+       the file rather than at the mount that hid it. */ -}}
+{{- $reserved := list "/etc/prometheus-universal-exporter" -}}
+{{- if and .Values.targetAuth .Values.targetAuth.enabled -}}
+{{- $reserved = append $reserved (.Values.targetAuth.mountPath | toString) -}}
+{{- end -}}
+{{- range $mount := .Values.extraVolumeMounts -}}
+{{- $path := $mount.mountPath | toString | trimSuffix "/" -}}
+{{- if has $path $reserved -}}
+{{- fail (printf "extraVolumeMounts uses mountPath %q, which the chart already mounts; choose another path" $mount.mountPath) -}}
+{{- end -}}
+{{- end -}}
+{{- end }}
 {{- define "prometheus-universal-exporter.name" -}}
 {{- default .Chart.Name .Values.nameOverride | trunc 63 | trimSuffix "-" }}
 {{- end }}

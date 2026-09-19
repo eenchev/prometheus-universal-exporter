@@ -28,10 +28,18 @@ func run() int {
 	watchConfig := flag.Bool("config.watch", false, "Reload the configuration and scheduled target files when they change on disk")
 	watchInterval := flag.Duration("config.watch-interval", DefaultWatchInterval, "How often to check the configuration files for changes when config.watch is set")
 	logLevel := flag.String("log.level", "info", "Log level: debug, info, warn, or error")
+	expandEnv := flag.Bool("config.export-env", false, "Expand ${NAME} environment variable references in the configuration and scheduled target files")
 	flag.Parse()
 
+	// Every document is read the same way, and the manager is told so its
+	// reloads keep expanding.
+	var loadOptions []LoadOption
+	if *expandEnv {
+		loadOptions = append(loadOptions, WithEnvExpansion())
+	}
+
 	logger := newLogger(*logLevel, os.Stderr)
-	config, err := LoadConfig(*configFile)
+	config, err := LoadConfig(*configFile, loadOptions...)
 	if err != nil {
 		logger.Error("invalid startup configuration; exiting", "error", err)
 		return 1
@@ -49,11 +57,12 @@ func run() int {
 
 	manager := NewConfigManager(config, *configFile, logger)
 	manager.SetPythonPath(*pythonPath)
+	manager.SetEnvExpansion(*expandEnv)
 	if *watchConfig {
 		manager.SetWatchInterval(*watchInterval)
 	}
 	if *targetFile != "" {
-		targets, err := LoadTargetFile(*targetFile)
+		targets, err := LoadTargetFile(*targetFile, loadOptions...)
 		if err == nil {
 			err = targets.Validate()
 		}
@@ -76,7 +85,8 @@ func run() int {
 	go server.OTLPExportLoop(ctx)
 
 	startup := []any{"address", *listenAddress, "collectors", len(config.Collectors),
-		"scheduled_targets", len(manager.Targets()), "config_watch", manager.WatchEnabled()}
+		"scheduled_targets", len(manager.Targets()), "config_watch", manager.WatchEnabled(),
+		"config_export_env", *expandEnv}
 	// The interval is only meaningful when the watch is on, and its absence
 	// would otherwise leave the operator guessing how stale a running
 	// configuration can be.

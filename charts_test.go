@@ -132,3 +132,99 @@ func TestSelfMetricsMonitorStartsItsOwnDocument(t *testing.T) {
 		})
 	}
 }
+
+// The chart renders some flags itself and rejects an extraArgs entry that
+// repeats one of them, because Go's flag package keeps the last occurrence: the
+// entry would win silently, and for --web.listen-address the container port and
+// the probes would still follow server.listenAddress, leaving a pod that
+// listens on one port while Kubernetes checks another. That guard is a list,
+// and a list is only as good as the thing keeping it in step with the template
+// beside it — so adding a flag to the Deployment without adding it to the guard
+// has to fail here rather than in somebody's cluster.
+func TestEveryRenderedFlagIsGuardedAgainstExtraArgs(t *testing.T) {
+	deployment := readChartFile(t, "templates/deployment.yaml")
+	helpers := readChartFile(t, "templates/_helpers.tpl")
+
+	guarded := map[string]bool{}
+	define := "{{- define \"prometheus-universal-exporter.extraArgs\" -}}"
+	start := strings.Index(helpers, define)
+	if start < 0 {
+		t.Fatal("the extraArgs guard is gone or renamed; nothing stops a values entry from overriding a chart flag")
+	}
+	block := helpers[start:]
+	if end := strings.Index(block, "{{- end }}\n{{- define"); end > 0 {
+		block = block[:end]
+	}
+	for _, match := range flagReference.FindAllString(block, -1) {
+		guarded[match] = true
+	}
+	if len(guarded) == 0 {
+		t.Fatal("the extraArgs guard lists no flags; it has been renamed or emptied")
+	}
+
+	rendered := map[string]bool{}
+	for _, line := range argLines(deployment) {
+		for _, match := range flagReference.FindAllString(line, -1) {
+			rendered[match] = true
+		}
+	}
+	if len(rendered) == 0 {
+		t.Fatal("the Deployment renders no flags; the args block has moved")
+	}
+	for flag := range rendered {
+		if !guarded[flag] {
+			t.Errorf("the Deployment renders %s but extraArgs does not reject it, so an entry repeating it would silently win", flag)
+		}
+	}
+}
+
+var flagReference = regexp.MustCompile(`--[a-z][a-z0-9.-]*`)
+
+// argLines returns the body of the container's args block: the lines indented
+// further than the key itself, up to whatever comes next.
+func argLines(template string) []string {
+	lines := strings.Split(template, "\n")
+	start := -1
+	indent := 0
+	for index, line := range lines {
+		if strings.TrimSpace(line) == "args:" {
+			start = index + 1
+			indent = len(line) - len(strings.TrimLeft(line, " "))
+			break
+		}
+	}
+	if start < 0 {
+		return nil
+	}
+	var body []string
+	for _, line := range lines[start:] {
+		if strings.TrimSpace(line) == "" {
+			continue
+		}
+		if len(line)-len(strings.TrimLeft(line, " ")) <= indent {
+			break
+		}
+		body = append(body, line)
+	}
+	return body
+}
+
+// The three values have to exist and to default to empty, so a chart nobody
+// asked for extras from renders exactly what it rendered before.
+func TestExtraValuesDefaultToEmpty(t *testing.T) {
+	values := readChartFile(t, "values.yaml")
+	for _, key := range []string{"extraArgs", "extraVolumes", "extraVolumeMounts"} {
+		if !strings.Contains(values, "\n"+key+": []\n") {
+			t.Errorf("values.yaml must declare %s defaulting to []", key)
+		}
+	}
+}
+
+func readChartFile(t *testing.T, name string) string {
+	t.Helper()
+	raw, err := os.ReadFile("charts/prometheus-universal-exporter/" + name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(raw)
+}

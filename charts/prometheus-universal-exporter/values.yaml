@@ -54,6 +54,70 @@ server:
   watchConfig: false
   # How often to re-check the files when watchConfig is true. Must be positive.
   watchConfigInterval: 60s
+  # Expand ${NAME} environment variable references in the configuration and in
+  # the scheduled target document, so a value can come from a Secret rather than
+  # from the committed file. Off by default, because a configuration is full of
+  # dollar signs that are not references — a regex, a jq expression, a Python
+  # pre-script — and only ${NAME} is substituted. A reference whose variable is
+  # not set stops the exporter at startup rather than becoming an empty string.
+  # Set the variables through `env` or `envFrom` below.
+  expandEnv: false
+
+# Environment variables for the exporter container, in the Kubernetes shapes.
+# These are what server.expandEnv substitutes from; they are also useful on
+# their own, for anything the image reads from the environment.
+#
+#   env:
+#     - name: DEMO_TARGET
+#       value: http://api.internal:8080
+#     - name: API_TOKEN
+#       valueFrom:
+#         secretKeyRef:
+#           name: exporter-secrets
+#           key: api-token
+env: []
+
+#   envFrom:
+#     - secretRef:
+#         name: exporter-secrets
+envFrom: []
+
+# Extra command-line flags for the exporter, on top of the ones the chart
+# renders from the values above. Each entry is a whole argument:
+#
+#   extraArgs:
+#     - --log.level=debug
+#
+# A flag the chart already manages is rejected while rendering rather than
+# silently overriding the value it came from — Go keeps the last occurrence of a
+# flag, so `--web.listen-address` here would move the listener while the
+# container port and the probes stayed on server.listenAddress.
+extraArgs: []
+
+# Extra volumes and mounts, in the ordinary Kubernetes shapes. This is how to
+# mount a ConfigMap or Secret the chart does not create — an extra collector
+# configuration, a CA bundle, a credential file:
+#
+#   extraVolumes:
+#     - name: extra-collectors
+#       configMap:
+#         name: my-collectors
+#     - name: internal-ca
+#       secret:
+#         secretName: internal-ca
+#
+#   extraVolumeMounts:
+#     - name: extra-collectors
+#       mountPath: /etc/collectors
+#       readOnly: true
+#     - name: internal-ca
+#       mountPath: /etc/ssl/internal
+#       readOnly: true
+#
+# A mount path the chart already uses is rejected while rendering: mounting over
+# the configuration directory would hide config.yaml and crash-loop the pod.
+extraVolumes: []
+extraVolumeMounts: []
 
 # Scheduled targets scraped by the exporter itself and delivered over OTLP.
 # The exporter refuses to start with these while OTLP export is disabled, so
@@ -129,6 +193,11 @@ monitors: []
 #       usernameKey: username
 #       passwordKey: password
 #       optional: false
+# The self-metrics ServiceMonitor/PodMonitor. What that endpoint publishes is
+# configured in the exporter configuration rather than here: set
+# web.self_metrics.verbose for the per-request series, and
+# web.self_metrics.resource_metrics_enabled for the go_ and process_ series
+# describing the exporter's own CPU and memory.
 selfMetrics:
   path: /self-metrics
   enabled: true

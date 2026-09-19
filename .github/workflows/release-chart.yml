@@ -14,6 +14,7 @@ on:
 permissions:
   contents: write
   packages: write
+  id-token: write
 
 jobs:
   release-chart:
@@ -91,6 +92,9 @@ jobs:
                     "(see docs/RELEASING.md)")
           PY
 
+      - name: Install Cosign
+        uses: sigstore/cosign-installer@v4
+
       # No --version or --app-version override: the packaged chart carries
       # exactly what Chart.yaml declares.
       - name: Package and publish the chart
@@ -104,6 +108,23 @@ jobs:
           echo "$GH_TOKEN" | helm registry login ghcr.io -u "${GITHUB_ACTOR}" --password-stdin
           helm push dist/prometheus-universal-exporter-*.tgz "oci://ghcr.io/${GITHUB_REPOSITORY_OWNER}/charts"
 
+      - name: Sign Helm chart
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          cosign sign --yes \
+            ghcr.io/${GITHUB_REPOSITORY_OWNER}/charts/prometheus-universal-exporter:${VERSION}
+ 
+      - name: Verify Helm chart signature
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          cosign verify \
+            ghcr.io/${GITHUB_REPOSITORY_OWNER}/charts/prometheus-universal-exporter:${VERSION} \
+            --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+            --certificate-identity-regexp \
+              "^https://github\.com/eenchev/prometheus-universal-exporter/\.github/workflows/release-chart\.yml@refs/tags/chart/prometheus-universal-exporter-[0-9]+\.[0-9]+\.[0-9]+$"            
+      
       - name: Create GitHub Release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

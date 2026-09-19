@@ -49,6 +49,14 @@ helm-test:
 	helm template test charts/prometheus-universal-exporter --set otlpTargets.enabled=true --set-file otlpTargets.data=targets.example.yaml --set-file 'config.data.config\.yaml=config.otlp.example.yaml'
 	helm template test charts/prometheus-universal-exporter --set-json 'monitors=[{"name":"a","enabled":true,"type":"service","collector":"example","interval":"30s","scrapeTimeout":"10s"},{"name":"b","enabled":true,"type":"pod","collector":"example","interval":"30s","scrapeTimeout":"10s"}]' | python3 tools/check-manifests.py
 	helm template test charts/prometheus-universal-exporter --set-json 'extraArgs=["--log.level=debug"]' --set-json 'extraVolumes=[{"name":"extra-collectors","configMap":{"name":"my-collectors"}}]' --set-json 'extraVolumeMounts=[{"name":"extra-collectors","mountPath":"/etc/collectors","readOnly":true}]'
+	@# Packaged into a temporary directory: a .tgz in the worktree is build
+	@# output, and the release workflow is what publishes one.
+	@set -e; dist=$$(mktemp -d); \
+	helm package charts/prometheus-universal-exporter --destination "$$dist" >/dev/null; \
+	package=$$(ls "$$dist"/prometheus-universal-exporter-*.tgz); \
+	helm template test "$$package" >/dev/null; \
+	helm install test "$$package" --dry-run=client >/dev/null; \
+	rm -rf "$$dist"
 	@# The same rejections CI checks, so a local run means a CI run.
 	@for address in ':http' '9115' '0.0.0.0' ':0'; do \
 		if helm template test charts/prometheus-universal-exporter --set "server.listenAddress=$$address" >/dev/null 2>&1; then \
@@ -60,6 +68,12 @@ helm-test:
 		echo "helm template accepted scheduled targets while OTLP export is disabled" >&2; \
 		exit 1; \
 	fi
+	@for bad in 'replicaCount=many' 'image.pullPolicy=always' 'replicaCounts=2'; do \
+		if helm template test charts/prometheus-universal-exporter --set "$$bad" >/dev/null 2>&1; then \
+			echo "helm template accepted '$$bad', which values.schema.json should reject" >&2; \
+			exit 1; \
+		fi; \
+	done
 	@if helm template test charts/prometheus-universal-exporter --set-json 'extraArgs=["--web.listen-address=:9999"]' >/dev/null 2>&1; then \
 		echo "helm template accepted an extraArgs entry overriding a chart-managed flag" >&2; \
 		exit 1; \

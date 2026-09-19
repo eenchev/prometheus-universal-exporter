@@ -5,7 +5,7 @@ fullnameOverride: ""
 defaultLabels: {}
 defaultAnnotations: {}
 image:
-  repository: ghcr.io/evgenienchev/prometheus-universal-exporter
+  repository: ghcr.io/eenchev/prometheus-universal-exporter
   tag: "latest"
   pullPolicy: IfNotPresent
 imagePullSecrets: []

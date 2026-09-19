@@ -2,7 +2,25 @@
 
 Helm chart for deploying the Prometheus Universal Exporter to Kubernetes.
 
+The exporter turns an HTTP endpoint that was never meant for Prometheus into a Prometheus target. Point it at a service that answers with JSON, YAML, XML, CSV, HTML, plain text or Prometheus exposition; a collector in the configuration says how to call it, how to read the response and which metrics to publish. Targets are never written into the configuration — Prometheus discovers the real service and passes it to the exporter's `/probe` endpoint, so one deployment serves many services and many response shapes.
+
 The chart creates the exporter Deployment, Service, ServiceAccount, and ConfigMap. By default, the exporter configuration is managed directly through Helm values.
+
+## Features
+
+* A Prometheus `/probe` endpoint that takes the discovered `target` and a named `collector`
+* Collectors that configure the target request: method, path, headers, request body, timeout, retries and TLS
+* Decoders for JSON, YAML, XML, CSV, HTML, plain text and Prometheus exposition, with auto-detection
+* Transforms with jq, yq, XPath, CSS selectors, regex, Prometheus filtering and Python
+* Python pre-scripts and full Python transforms, with a bundled third-party library set and no runtime installs
+* Declared metrics with types, descriptions, explicit labels and per-metric error policy
+* Per-scrape overrides through `/probe` parameters, which monitors render as `params`
+* `ServiceMonitor` and `PodMonitor` resources, including a separate monitor for the exporter's own metrics
+* Exporter Basic Auth, Secret-backed monitor authentication, and Secret-backed target credentials
+* Scheduled targets the exporter scrapes itself and delivers over OTLP
+* Response caching per collector
+* Configuration watching and in-place reload, and `${NAME}` expansion from the environment
+* Self-metrics, optionally including per-request series and the standard `go_` and `process_` series
 
 ## Prerequisites
 
@@ -41,6 +59,33 @@ See the exporter documentation for the full collector configuration format.
 
 ### 2. Install the exporter
 
+The chart is published to GitHub Container Registry as an OCI artifact:
+
+```bash
+helm install prometheus-universal-exporter \
+  oci://ghcr.io/eenchev/charts/prometheus-universal-exporter \
+  --version 0.1.0 \
+  --namespace monitoring \
+  --create-namespace \
+  -f values.yaml
+```
+
+Omitting `--version` installs the newest published chart:
+
+```bash
+helm install prometheus-universal-exporter \
+  oci://ghcr.io/eenchev/charts/prometheus-universal-exporter \
+  --namespace monitoring \
+  --create-namespace \
+  -f values.yaml
+```
+
+Pin the version in anything you deploy more than once. An unpinned install takes whatever is newest at the moment it runs, so the same command run twice can produce two different releases — which is the one thing you do not want to discover while rolling back.
+
+No registry login is needed: the package is public.
+
+To install from a checkout of this repository instead, point Helm at the chart directory:
+
 ```bash
 helm install prometheus-universal-exporter \
   ./charts/prometheus-universal-exporter \
@@ -49,18 +94,19 @@ helm install prometheus-universal-exporter \
   -f values.yaml
 ```
 
-To update the configuration later:
+### 3. Upgrade
 
 ```bash
 helm upgrade prometheus-universal-exporter \
-  ./charts/prometheus-universal-exporter \
+  oci://ghcr.io/eenchev/charts/prometheus-universal-exporter \
+  --version 0.1.0 \
   --namespace monitoring \
   -f values.yaml
 ```
 
 Configuration changes automatically roll the exporter Deployment.
 
-### 3. Configure Prometheus
+### 4. Configure Prometheus
 
 If Prometheus Operator is installed, enable a `ServiceMonitor` or `PodMonitor`:
 
@@ -390,6 +436,36 @@ otlpTargets:
 OTLP export must also be enabled in the exporter configuration.
 
 See `docs/OTLP.md` for the scheduled-target configuration format.
+
+## Values
+
+Every value has a default, and `values.yaml` documents each one in place. `values.schema.json` is checked by Helm on install, upgrade and `helm template`, so a misspelled key or a wrong type fails there rather than on a pod that starts and behaves unexpectedly.
+
+| Value | Type | Default | What it sets |
+| --- | --- | --- | --- |
+| `replicaCount` | integer | `1` | Deployment replicas. |
+| `image.repository` / `image.tag` / `image.pullPolicy` | string | GHCR, `latest`, `IfNotPresent` | The exporter image. Pin `tag` in production. |
+| `imagePullSecrets` | array | `[]` | Secrets for a private registry. |
+| `nameOverride` / `fullnameOverride` / `namespaceOverride` | string | `""` | Naming and namespace of the created objects. |
+| `defaultLabels` / `defaultAnnotations` | map | `{}` | Metadata applied to every object the chart creates. |
+| `serviceAccount` | object | created | `create`, `automount`, `name`, `annotations`. |
+| `service` | object | enabled, ClusterIP, 8080 | The exporter Service. |
+| `neg` | object | disabled | GKE Network Endpoint Group annotations on the Service. |
+| `ingress` | object | disabled | Class, hosts, paths, TLS and annotations. |
+| `server` | object | see below | Exporter flags: `listenAddress`, `pythonPath`, `watchConfig`, `watchConfigInterval`, `expandEnv`. |
+| `env` / `envFrom` | array | `[]` | Container environment, in the Kubernetes shapes. |
+| `extraArgs` | array | `[]` | Extra command-line flags. |
+| `extraVolumes` / `extraVolumeMounts` | array | `[]` | Volumes and mounts beyond the chart's own. |
+| `config` | object | enabled | `enabled`, and `data` holding `config.yaml`. |
+| `otlpTargets` | object | disabled | Scheduled targets rendered into the ConfigMap. |
+| `monitors` | array | `[]` | `ServiceMonitor` and `PodMonitor` resources. |
+| `selfMetrics` | object | enabled | The monitor for the exporter's own endpoint, and its path. |
+| `resources` | object | 100m/128Mi, 500m/512Mi | Requests and limits. |
+| `strategy` | object | RollingUpdate | Deployment strategy and its `rollingUpdate` settings. |
+| `podSecurityContext` / `securityContext` | object | hardened | Pod and container security context. |
+| `nodeSelector` / `tolerations` / `affinity` | map/array/object | empty | Scheduling. |
+| `networkPolicy` | object | disabled | `ingress` and `egress` rules. |
+| `targetAuth` | object | disabled | Secret-backed credentials mounted for the exporter to send to the target. |
 
 ## Other options
 

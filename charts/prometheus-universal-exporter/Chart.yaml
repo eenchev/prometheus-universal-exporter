@@ -1,6 +1,6 @@
 apiVersion: v2
 name: prometheus-universal-exporter
-description: Generic HTTP endpoint to Prometheus metrics exporter
+description: Turn HTTP endpoints that do not speak Prometheus into Prometheus metrics, with configurable collectors and transforms
 type: application
 # The chart is versioned and released independently of the exporter. This is
 # the source of truth for the chart version: the release workflow refuses to
@@ -10,3 +10,39 @@ version: 0.1.0
 # values.yaml leaves image.tag at "latest", so pin image.tag in production
 # values if you want deployments to track this instead.
 appVersion: "0.1.0"
+
+home: https://github.com/eenchev/prometheus-universal-exporter
+
+sources:
+  - https://github.com/eenchev/prometheus-universal-exporter
+
+maintainers:
+  - name: Evgeni Enchev
+    email: eenchev2@gmail.com
+
+# Artifact Hub searches these. Each one names something the exporter actually
+# does, so a search that matches brings up a chart that delivers it.
+keywords:
+  - prometheus
+  - exporter
+  - monitoring
+  - kubernetes
+  - metrics
+  - otlp
+  - python
+  - json
+  - yaml
+
+annotations:
+  artifacthub.io/category: monitoring-logging
+  artifacthub.io/license: Apache-2.0
+  artifacthub.io/images: |
+    - name: exporter
+      image: ghcr.io/eenchev/prometheus-universal-exporter:latest
+  artifacthub.io/links: |
+    - name: Chart documentation
+      url: https://github.com/eenchev/prometheus-universal-exporter/blob/main/charts/prometheus-universal-exporter/README.md
+    - name: Exporter documentation
+      url: https://github.com/eenchev/prometheus-universal-exporter/blob/main/docs/CONFIGURATION.md
+    - name: Chart specification
+      url: https://github.com/eenchev/prometheus-universal-exporter/blob/main/docs/SPECIFICATION-CHART.md

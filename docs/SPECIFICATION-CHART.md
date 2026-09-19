@@ -327,6 +327,39 @@ An `extraArgs` entry that does not begin with `--` MUST be rejected as well: a
 bare word is read as a positional argument and ignored, so it would fail by
 doing nothing.
 
+### 33.10b Values schema
+
+The chart MUST ship a `values.schema.json` describing every value in
+`values.yaml`. Helm validates values against it on `template`, `install` and
+`upgrade`, which is what turns a misspelled value into a failed render instead of
+a Deployment that starts and quietly ignores what the operator asked for.
+
+The schema MUST:
+
+- declare a property for every key `values.yaml` sets, and set none the chart
+  does not read, so the schema and the defaults describe the same chart;
+- require nothing at the top level. Every value has a default, so an install
+  passing no values MUST succeed;
+- set `additionalProperties: false` on the top level and on the objects the
+  chart defines itself, since an unknown key is a typo and rejecting it is the
+  point of having a schema at all;
+- constrain the values whose wrong value fails late rather than loudly: the
+  enumerations the templates compare against (`image.pullPolicy`,
+  `service.type`, `ingress` path types, `strategy.type`, a monitor's `type` and
+  `auth.type`, `targetAuth.type`), Go durations, TCP port ranges,
+  `server.listenAddress` in the same `host:port` shape the render-time check
+  enforces, and the `--` prefix on an `extraArgs` entry; and
+- stay open where the chart passes a raw Kubernetes shape straight through —
+  `resources`, `affinity`, the security contexts, `tolerations`, `env`,
+  `envFrom`, `extraVolumes`, relabelings, network policy rules — beyond the
+  fields Kubernetes itself requires. Constraining those would make the chart
+  reject a field Kubernetes gained, for no benefit the API server does not
+  already provide.
+
+A value the schema rejects MUST fail rendering with the schema's own message.
+The schema MUST NOT be used as a reason to change the values API: a value that
+is optional today stays optional.
+
 ### 33.11 Helm validation
 
 The repository MUST include automated Helm validation covering at least:
@@ -337,6 +370,12 @@ The repository MUST include automated Helm validation covering at least:
 - `helm template` with one enabled `monitors` entry of `type: pod`;
 - `helm template` with multiple enabled `monitors` entries;
 - `helm template` with `monitors: []`.
+- `helm package`, followed by rendering the packaged chart and a client-side
+  `helm install --dry-run` of it, so a chart that cannot be packaged or
+  installed fails before a release attempts it rather than during one.
+- `helm template` with a value the schema rejects — a wrong type, a value
+  outside an enumeration, and an unknown top-level key — each of which MUST
+  fail.
 - `helm template` with `extraArgs`, `extraVolumes` and `extraVolumeMounts` set,
   and one rendering each for an `extraArgs` entry naming a chart-managed flag,
   an `extraArgs` entry that is not a flag, and an `extraVolumeMounts` entry at a
@@ -378,6 +417,55 @@ The Helm chart README MUST document:
 - Configuration reload behavior
 - Extra volumes, volume mounts and command-line arguments, and which collisions
   the chart rejects
+- Installation and upgrade from the published OCI repository, including the
+  recommendation to pin a version
+- A reference listing every top-level value, its type and its default
+- The features the chart deploys, described only where the exporter
+  implements them
+
+---
+
+### 33.14 Publication and discoverability
+
+The chart MUST be published as an OCI artifact to the registry belonging to the
+repository that builds it, and MUST be installable without authenticating: a
+public chart behind a login is indistinguishable, to the person running
+`helm install`, from a chart that does not exist. Making the published package
+public is a one-time setting on the registry that no workflow token can change,
+so it MUST be documented as a manual step rather than assumed.
+
+A traditional `index.yaml` repository MUST NOT be maintained alongside it. Two
+distribution paths for one chart means two things to keep in step and one of
+them silently going stale.
+
+The chart MUST carry the metadata a package index displays and searches:
+
+- `home` and `sources` pointing at the project;
+- at least one maintainer, with a name and an email address;
+- keywords, each naming a capability the exporter actually implements. A keyword
+  for something it does not do is worse than a missing one, because it brings a
+  reader who then leaves; and
+- the Artifact Hub annotations that apply, including a category. Annotations
+  whose value is itself YAML MUST parse, since nothing in Helm validates them
+  and an index is left to fail on them out of sight. A security-update
+  annotation MUST NOT be set unless the release actually carries one.
+
+Ownership of the published repository is claimed through an
+`.artifacthub-repo.yml` at the repository root, naming the repository ID and the
+owners. The ID does not exist until the repository is registered, and a chart
+must be published before it can be registered, so the file MUST be allowed to
+carry a clearly marked placeholder: a release MUST NOT be blocked by it. The
+release workflow MUST nevertheless verify that the file parses and names its
+owners, and MUST warn when the placeholder is still in place, so a release does
+not quietly publish a chart that nothing will index. The registration steps and
+the replacement of the placeholder MUST be documented as manual work.
+
+The documentation MUST NOT state that the chart is available on a package index
+before it has actually been registered and indexed there.
+
+A packaged chart MUST NOT be committed. It is build output, and a committed
+`.tgz` is a second, stale definition of a released version sitting beside the
+source it was built from.
 
 ---
 
@@ -441,6 +529,22 @@ with at least these values combinations:
    explicit message rather than producing a Deployment that cannot start.
 10. Multiple collectors in ConfigMap content.
 11. Existing Secret references for credentials where supported.
+13. Packaging: `helm package` MUST succeed, the resulting archive MUST render
+   and MUST pass a client-side `helm install --dry-run`, and no packaged chart
+   MUST be present in the repository.
+14. The values schema: it MUST declare exactly the keys `values.yaml` sets,
+   require nothing, and reject an unknown top-level key. A wrong type and a
+   value outside an enumeration MUST each fail rendering.
+15. The index metadata: `Chart.yaml` MUST carry a SemVer `version` and
+   `appVersion`, a description, `home`, `sources`, a maintainer with a name and
+   an email address, and every advertised keyword; annotations carrying YAML
+   MUST parse. `.artifacthub-repo.yml` MUST parse and name owners, accepting
+   either the placeholder or a real repository ID, since it has to pass both
+   before and after registration.
+16. The documented install: a version pinned in a documented `helm install`
+   command MUST equal the version `Chart.yaml` declares, so a chart bump cannot
+   leave a reader with a command that installs something else.
+
 12. `extraArgs`, `extraVolumes` and `extraVolumeMounts` set together, which MUST
    append the argument, the volume and the mount to the ones the chart renders
    and leave those unchanged. Three further renderings MUST fail: an `extraArgs`

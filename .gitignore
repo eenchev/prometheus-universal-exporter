@@ -26,3 +26,7 @@ config.local.yaml
 config.*.local.yaml
 .idea/
 .vscode/
+
+# Packaged Helm charts are build output; the release workflow packages the
+# chart from source and pushes it to GHCR.
+*.tgz

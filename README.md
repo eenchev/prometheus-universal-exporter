@@ -70,14 +70,23 @@ docker run -p 8080:8080 \
 
 ## Install with Helm
 
-Prometheus Operator CRDs are not installed by this chart.
+The chart is published to GitHub Container Registry as an OCI artifact. It is public, so no registry login is needed. Prometheus Operator CRDs are not installed by this chart.
+
+```sh
+helm install exporter \
+  oci://ghcr.io/eenchev/charts/prometheus-universal-exporter \
+  --version 0.1.0 \
+  --set-file 'config.data.config\.yaml=config.example.yaml'
+```
+
+Omitting `--version` takes the newest published chart; pin it for anything you deploy more than once. To install from a checkout instead:
 
 ```sh
 helm install exporter charts/prometheus-universal-exporter \
   --set-file 'config.data.config\.yaml=config.example.yaml'
 ```
 
-The chart creates the Deployment, Service, ConfigMaps and, on request,
+The chart creates the Deployment, Service, ConfigMap and, on request,
 `ServiceMonitor` or `PodMonitor` resources with the relabeling the probe
 pattern needs. See the
 [chart README](charts/prometheus-universal-exporter/README.md) for its values.

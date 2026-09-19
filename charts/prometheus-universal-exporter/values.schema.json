@@ -1,0 +1,289 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "prometheus-universal-exporter values",
+  "description": "Values accepted by the prometheus-universal-exporter chart. Every value has a default, so nothing here is required; the schema exists to catch a typo or a wrong type while rendering rather than after the pod is scheduled. Values that pass a raw Kubernetes shape straight through stay open, so a field Kubernetes gains does not need a chart release.",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "replicaCount": {"type": "integer", "minimum": 0},
+    "namespaceOverride": {"type": "string"},
+    "nameOverride": {"type": "string"},
+    "fullnameOverride": {"type": "string"},
+    "defaultLabels": {"$ref": "#/$defs/stringMap"},
+    "defaultAnnotations": {"$ref": "#/$defs/stringMap"},
+
+    "image": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "repository": {"type": "string", "minLength": 1},
+        "tag": {"type": "string", "minLength": 1},
+        "pullPolicy": {"enum": ["Always", "IfNotPresent", "Never"]}
+      }
+    },
+    "imagePullSecrets": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {"name": {"type": "string"}},
+        "required": ["name"]
+      }
+    },
+
+    "serviceAccount": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "create": {"type": "boolean"},
+        "automount": {"type": "boolean"},
+        "annotations": {"$ref": "#/$defs/stringMap"},
+        "name": {"type": "string"}
+      }
+    },
+
+    "service": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {"type": "boolean"},
+        "type": {"enum": ["ClusterIP", "NodePort", "LoadBalancer", "ExternalName"]},
+        "port": {"$ref": "#/$defs/port"},
+        "annotations": {"$ref": "#/$defs/stringMap"}
+      }
+    },
+
+    "neg": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {"type": "boolean"},
+        "annotations": {"$ref": "#/$defs/stringMap"}
+      }
+    },
+
+    "ingress": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {"type": "boolean"},
+        "className": {"type": "string"},
+        "annotations": {"$ref": "#/$defs/stringMap"},
+        "hosts": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "host": {"type": "string", "minLength": 1},
+              "paths": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "properties": {
+                    "path": {"type": "string", "minLength": 1},
+                    "pathType": {"enum": ["Exact", "Prefix", "ImplementationSpecific"]}
+                  }
+                }
+              }
+            }
+          }
+        },
+        "tls": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "hosts": {"type": "array", "items": {"type": "string"}},
+              "secretName": {"type": "string"}
+            }
+          }
+        }
+      }
+    },
+
+    "server": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "listenAddress": {
+          "type": "string",
+          "description": "host:port. A bare port is rejected here and again while rendering, because Go accepts the flag and then fails to listen with \"missing port in address\".",
+          "pattern": "^([^:]*|\\[[0-9A-Fa-f:.]+\\]):[0-9]+$"
+        },
+        "pythonPath": {"type": "string", "minLength": 1},
+        "watchConfig": {"type": "boolean"},
+        "watchConfigInterval": {"$ref": "#/$defs/duration"},
+        "expandEnv": {"type": "boolean"}
+      }
+    },
+
+    "env": {"type": "array", "items": {"type": "object", "properties": {"name": {"type": "string"}}, "required": ["name"]}},
+    "envFrom": {"type": "array", "items": {"type": "object"}},
+
+    "extraArgs": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "description": "A whole command-line argument. A flag the chart already renders is rejected while rendering, because Go keeps the last occurrence and the entry would silently win.",
+        "pattern": "^--"
+      }
+    },
+    "extraVolumes": {
+      "type": "array",
+      "items": {"type": "object", "properties": {"name": {"type": "string"}}, "required": ["name"]}
+    },
+    "extraVolumeMounts": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {"name": {"type": "string"}, "mountPath": {"type": "string"}, "readOnly": {"type": "boolean"}, "subPath": {"type": "string"}},
+        "required": ["name", "mountPath"]
+      }
+    },
+
+    "otlpTargets": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {"type": "boolean"},
+        "fileName": {"type": "string", "minLength": 1},
+        "data": {"type": "string"}
+      }
+    },
+
+    "config": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {"type": "boolean"},
+        "data": {"type": "object", "additionalProperties": {"type": "string"}}
+      }
+    },
+
+    "monitors": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "name": {"type": "string", "minLength": 1},
+          "enabled": {"type": "boolean"},
+          "type": {"enum": ["service", "pod"]},
+          "interval": {"$ref": "#/$defs/duration"},
+          "scrapeTimeout": {"$ref": "#/$defs/duration"},
+          "labels": {"$ref": "#/$defs/stringMap"},
+          "annotations": {"$ref": "#/$defs/stringMap"},
+          "targetSelector": {"type": "object"},
+          "collector": {"type": "string", "minLength": 1},
+          "relabelings": {"type": "array", "items": {"type": "object"}},
+          "metricRelabelings": {"type": "array", "items": {"type": "object"}},
+          "headers": {"$ref": "#/$defs/stringMap"},
+          "params": {
+            "type": "object",
+            "description": "Probe parameter overrides. Prometheus Operator params are list-valued, so every entry is a list of strings.",
+            "additionalProperties": {"type": "array", "items": {"type": "string"}}
+          },
+          "auth": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "enabled": {"type": "boolean"},
+              "type": {"enum": ["bearer", "basic"]},
+              "secretName": {"type": "string"},
+              "secretKey": {"type": "string"},
+              "usernameKey": {"type": "string"},
+              "passwordKey": {"type": "string"},
+              "optional": {"type": "boolean"}
+            }
+          }
+        },
+        "required": ["name", "type"]
+      }
+    },
+
+    "selfMetrics": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "path": {"type": "string", "pattern": "^/"},
+        "enabled": {"type": "boolean"},
+        "interval": {"$ref": "#/$defs/duration"},
+        "scrapeTimeout": {"$ref": "#/$defs/duration"},
+        "labels": {"$ref": "#/$defs/stringMap"},
+        "annotations": {"$ref": "#/$defs/stringMap"},
+        "relabelings": {"type": "array", "items": {"type": "object"}},
+        "metricRelabelings": {"type": "array", "items": {"type": "object"}}
+      }
+    },
+
+    "resources": {
+      "type": "object",
+      "properties": {
+        "requests": {"$ref": "#/$defs/quantityMap"},
+        "limits": {"$ref": "#/$defs/quantityMap"}
+      }
+    },
+
+    "strategy": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "type": {"enum": ["RollingUpdate", "Recreate"]},
+        "rollingUpdate": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "maxUnavailable": {"$ref": "#/$defs/countOrPercent"},
+            "maxSurge": {"$ref": "#/$defs/countOrPercent"}
+          }
+        }
+      }
+    },
+
+    "podSecurityContext": {"type": "object"},
+    "securityContext": {"type": "object"},
+    "nodeSelector": {"$ref": "#/$defs/stringMap"},
+    "tolerations": {"type": "array", "items": {"type": "object"}},
+    "affinity": {"type": "object"},
+
+    "networkPolicy": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {"type": "boolean"},
+        "ingress": {"type": "array", "items": {"type": "object"}},
+        "egress": {"type": "array", "items": {"type": "object"}}
+      }
+    },
+
+    "targetAuth": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {"type": "boolean"},
+        "type": {"enum": ["bearer", "basic"]},
+        "secretName": {"type": "string"},
+        "secretKey": {"type": "string"},
+        "fileName": {"type": "string"},
+        "usernameKey": {"type": "string"},
+        "passwordKey": {"type": "string"},
+        "mountPath": {"type": "string", "pattern": "^/"},
+        "usernameFileName": {"type": "string"},
+        "passwordFileName": {"type": "string"}
+      }
+    }
+  },
+
+  "$defs": {
+    "stringMap": {"type": "object", "additionalProperties": {"type": "string"}},
+    "quantityMap": {"type": "object", "additionalProperties": {"type": ["string", "number"]}},
+    "port": {"type": "integer", "minimum": 1, "maximum": 65535},
+    "countOrPercent": {"type": ["integer", "string"], "pattern": "^[0-9]+%?$"},
+    "duration": {
+      "type": "string",
+      "description": "A Go duration such as 30s, 1m30s or 2h.",
+      "pattern": "^[0-9]+(\\.[0-9]+)?(ns|us|ms|s|m|h)([0-9]+(\\.[0-9]+)?(ns|us|ms|s|m|h))*$"
+    }
+  }
+}

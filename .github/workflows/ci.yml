@@ -105,6 +105,34 @@ jobs:
             exit 1
           fi
         if: steps.changes.outputs.chart == 'true'
+      - name: Reject values the schema does not allow
+        run: |
+          # values.schema.json is what turns a typo into a failed render instead
+          # of a pod that starts and quietly ignores the value.
+          if helm template test charts/prometheus-universal-exporter --set replicaCount=many >/dev/null 2>&1; then
+            echo "helm template accepted a non-integer replicaCount" >&2
+            exit 1
+          fi
+          if helm template test charts/prometheus-universal-exporter --set image.pullPolicy=always >/dev/null 2>&1; then
+            echo "helm template accepted an invalid image.pullPolicy" >&2
+            exit 1
+          fi
+          if helm template test charts/prometheus-universal-exporter --set replicaCounts=2 >/dev/null 2>&1; then
+            echo "helm template accepted an unknown top-level value" >&2
+            exit 1
+          fi
+        if: steps.changes.outputs.chart == 'true'
+      - name: Package the chart
+        run: |
+          # The same packaging the chart release performs, so a chart that
+          # cannot be packaged fails here rather than during a release. The
+          # package is rendered again and installed with a client-side dry run,
+          # which needs no cluster.
+          helm package charts/prometheus-universal-exporter --destination dist
+          package=$(ls dist/prometheus-universal-exporter-*.tgz)
+          helm template test "$package" >/dev/null
+          helm install test "$package" --dry-run=client >/dev/null
+        if: steps.changes.outputs.chart == 'true'
       - name: Reject an invalid server.listenAddress
         run: |
           # A bare port renders as valid YAML and then makes the container exit

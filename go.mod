@@ -4,6 +4,7 @@ go 1.25.0
 
 require (
 	github.com/PuerkitoBio/goquery v1.13.0
+	github.com/andybalholm/cascadia v1.3.4
 	github.com/antchfx/htmlquery v1.3.6
 	github.com/antchfx/xmlquery v1.5.1
 	github.com/antchfx/xpath v1.3.6
@@ -12,7 +13,6 @@ require (
 )
 
 require (
-	github.com/andybalholm/cascadia v1.3.4 // indirect
 	github.com/golang/groupcache v0.0.0-20210331224755-41bb18bfe9da // indirect
 	github.com/itchyny/timefmt-go v0.1.8 // indirect
 	golang.org/x/net v0.58.0 // indirect

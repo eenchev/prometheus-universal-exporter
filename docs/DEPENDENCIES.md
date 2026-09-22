@@ -41,6 +41,11 @@ The Dockerfile exposes `GO_VERSION`, `PYTHON_VERSION`, `LXML_VERSION`,
 `PYYAML_VERSION`, and `PYTHON_DATEUTIL_VERSION` build arguments, all with pinned
 defaults. Override them with `docker build --build-arg NAME=value`.
 
+`REQUEST_TYPES` is a build argument too, but not a pinned version: empty by
+default, which builds every request type, or a comma-separated list such as
+`http` to build only those. See
+[Choosing request types at build time](CONFIGURATION.md#choosing-request-types-at-build-time).
+
 ## What the image contains
 
 The runtime image is `python:<PYTHON_VERSION>-slim` with the exporter binary and

@@ -99,6 +99,205 @@ Label expressions use the same transform-specific language as the metric
 expression. For CSV, each row produces a metric and `expression: server`
 selects that row's `server` column.
 
+### Prefixing a collector's metrics
+
+`metrics_prefix` puts a namespace in front of everything a collector exports.
+The exporter joins it with `_`, so
+
+```yaml
+collectors:
+  - name: grafana_status
+    metrics_prefix: grafana
+    ...
+    metrics:
+      - name: statuspage_status
+```
+
+exports `grafana_statuspage_status`. It is optional; without it, names are
+exactly as declared.
+
+The prefix applies to every metric the collector produces, whatever the
+transform: declared metrics, the names a Python script passes to `metric(...)`,
+and the source names a `prometheus` transform passes through or renames. A
+histogram or summary keeps its family, so `_bucket`, `_sum` and `_count` follow
+the prefixed name. /probe, OTLP export and scheduled targets all see the same
+prefixed names, and the response cache is keyed by the collector's definition,
+so a changed prefix never serves metrics cached under the old names. The
+exporter's own `http_exporter_*` metrics, including a scheduled target's health
+metrics, describe the exporter rather than the target and are never prefixed.
+
+A prefix must match `^[a-zA-Z][a-zA-Z0-9]*(_[a-zA-Z0-9]+)*$`: a letter first,
+then letters and digits, in parts joined by single underscores.
+
+| Prefix | |
+| --- | --- |
+| `grafana`, `vendor_eu`, `acme2` | Valid |
+| `grafana_` | Invalid: the exporter adds the `_`, which would double it |
+| `_grafana`, `a__b` | Invalid: names starting with `__` are reserved by Prometheus, and a double underscore anywhere reads as one |
+| `grafana:cloud` | Invalid: `:` is reserved for recording rules |
+| `1grafana`, `graf-ana` | Invalid: not a metric name |
+
+An invalid prefix stops the exporter at startup, and `--dry-run` reports it,
+naming the collector. So does a declared metric whose prefixed name would be
+longer than `limits.max_metric_name_length` (200 by default); a name produced at
+scrape time, by a Python script or a `prometheus` transform, is checked against
+the same limit when the scrape happens.
+
+Log lines and probe errors name a metric rule as it is written in the
+configuration, without the prefix, so it can be found in the file. The prefix is
+added blindly: a rule already called `grafana_status` becomes
+`grafana_grafana_status`, so drop it from the rule names when adding it to the
+collector.
+
+### Metrics per item
+
+A jq or yq metric can set `items`, which selects the things the metric is about
+— servers, rows, components. The value and every label are then evaluated once
+per item, against that item as `.`, with the whole document available as
+`$root`:
+
+```yaml
+metrics:
+  - name: server_cpu
+    description: CPU utilization per server
+    type: gauge
+    items: .servers[]
+    expression: .cpu
+    labels:
+      - name: server
+        type: expression
+        expression: .name
+      - name: site
+        type: expression
+        expression: $root.site
+```
+
+Without `items`, the value expression and each label expression run over the
+whole document and are paired by position: the third value gets the third
+label value. That works while every expression yields exactly one value per
+element, and goes quietly wrong when one does not — a label that yields nothing
+for one server shifts every later label onto the wrong series, and a label that
+yields a single value is applied to all of them. With `items` there is nothing
+to pair: a label that yields nothing for an item is simply absent on that
+series.
+
+Per item, the value and each label must yield at most one value; two is an
+error, since there is no telling which belongs to the series. A value that is
+missing or null for one item is that item's missing metric, handled by
+`required` and `error_mode` like any other: `log` drops that one series and keeps
+the rest. `items` selecting nothing is a missing metric when the metric is
+required, and produces nothing when it is not. `$root` works without `items`
+too, where it is the same document as `.`.
+
+### Long label values
+
+Label values are capped by `limits.max_label_value_length`, 500 bytes by
+default, and a value over the cap fails the whole scrape rather than one series:
+a silently shortened value would be a surprise. A label that carries free text
+can ask to be cut instead:
+
+```yaml
+labels:
+  - name: message
+    type: expression
+    expression: .latest_update
+    truncate: true
+```
+
+A longer value is then cut to the cap, on a character boundary, and ends in
+`…`, which counts towards the cap. Truncation applies to declared metrics from
+every transform, before any `metrics_prefix` is added.
+
+### Turning a status into metrics
+
+A status such as `operational` or `major_outage` is text, and a metric value is
+a number. Put the text in a label and the value `1` on one series per thing that
+has a status:
+
+```yaml
+- name: statuspage_component_status
+  description: Status of a component, 1 with the current status as a label
+  type: gauge
+  items: .components[]
+  expression: 1
+  labels:
+    - name: component
+      type: expression
+      expression: .name
+    - name: status
+      type: expression
+      expression: .status
+```
+
+```promql
+statuspage_component_status{status="major_outage"}
+```
+
+Only the current status has a series. When it changes, the old series ends and
+a new one starts, which Prometheus marks stale on the next scrape. The
+alternative is one series per possible status, `1` for the current one and `0`
+for the rest, which keeps every series alive at the cost of one series per
+status per component; choose it when you want `== 0` comparisons or an unbroken
+history per status. Counts — incidents by impact, say — are different: a `0`
+there is a real value, not a status that does not apply, so keep it.
+
+Keep free text — an incident's latest update, say — off such a series. Its
+value changes whenever the text does, and every change starts a new series, so
+an alert on the status would reset each time the page posts an update. Put the
+text on a separate series that exists only while it matters, with
+`truncate: true`, and join on it when you want it:
+
+```promql
+statuspage_component_status{status!="operational"}
+  and on (component_id) statuspage_component_incident_info
+```
+
+[`testdata/config.grafanastatus.json-test.yaml`](../testdata/config.grafanastatus.json-test.yaml)
+is a complete collector for [status.grafana.com](https://status.grafana.com),
+and for any page hosted on Atlassian Statuspage, which all publish the same
+`/api/v2/summary.json`:
+
+```sh
+curl 'http://localhost:8080/probe?collector=statuspage&target=https://status.grafana.com'
+```
+
+It exposes the page's overall indicator, every component and component group,
+unresolved incidents by impact, scheduled maintenances by status, and the start
+of the next maintenance. Component names repeat on that page — the same region
+appears under most product groups, and occasionally twice in one group — so
+each component series also carries `component_id` and `group`, which keeps the
+series distinct. The group is found through `$root`:
+
+```yaml
+- name: group
+  type: expression
+  expression: '.group_id as $id | first($root.components[] | select(.id == $id)) | .name'
+```
+
+The component series also carry `cloud_provider` and `cloud_zone`, parsed from
+names such as `AWS Ireland - prod-eu-west-6: API` (`AWS`, `prod-eu-west-6`) with
+jq's `capture`:
+
+```yaml
+- name: cloud_zone
+  type: expression
+  expression: 'first(.name | capture("^(?<provider>AWS|Azure|GCP|GCS) (?<location>.+?)(?: - | )(?<zone>[a-z][a-z0-9-]*[0-9])(?::|$)")) | .zone'
+```
+
+A component whose name carries neither, such as `Support Tickets`, matches
+nothing, and so has neither label.
+
+For every component that is not operational it also exposes
+`statuspage_component_incident_info`, whose labels name the incident or
+maintenance in progress behind the status and carry that event's latest update
+as `message`, collapsed to one line and cut to 300 bytes by `truncate: true`.
+Maintenance that is only scheduled is not counted as the cause. A component
+marked down with no event behind it still gets the series, without those labels.
+
+No series carries the page's name: Prometheus labels every series with the
+target it probed (`instance`), which already tells two pages apart.
+`statuspage_info{page="Grafana Cloud"}` carries the name once, for dashboards.
+
 ### Request types
 
 Every collector's `request` block starts with `type`, which is required and
@@ -139,6 +338,31 @@ A key that belongs to a different type is an error rather than being ignored,
 and the same holds for `/probe` parameters: a parameter that only another type
 accepts gets a `400`. With `http` as the only type, every key and parameter on
 these pages applies.
+
+#### Choosing request types at build time
+
+Every build of the exporter carries every request type, and so does the
+published image. A build can instead carry only the types it needs, which keeps
+the other types' code, and the libraries only they use, out of the binary:
+
+```sh
+make build REQUEST_TYPES=http
+docker build --build-arg REQUEST_TYPES=http -t exporter:http .
+go build -tags "$(sh tools/request-type-tags.sh http)" .
+```
+
+`REQUEST_TYPES` is a comma-separated list of type names. Empty, the default,
+means every type. A name that is not a request type fails the build, and so does
+a selection that names none. The script turns the list into Go build tags —
+`select_request_types` plus `request_type_<name>` per type — which is all
+`go build -tags select_request_types,request_type_http` needs by hand.
+
+A collector whose type the build left out stops the exporter at startup, saying
+the type exists but this build does not include it, and which types it does. The
+startup log line and the [dry run](#dry-run) report list the types the binary
+carries, so a configuration can be checked against the build that will run it.
+With `http` as the only type today, an http-only build is the same as the
+default one; the selection matters once other types exist.
 
 ### When a metric cannot be extracted
 
@@ -193,6 +417,69 @@ back into a partial success.
 A metric that is optional — `required: false`, or a collector with
 `error_handling.allow_missing_keys: true` — is not failing when its value is
 absent, so no mode applies to it, `fail` included: it is simply left out.
+
+### When a stage of the probe fails
+
+`error_handling` covers the stages before any metric: reaching the target, its
+HTTP status, decoding the response, and the transform as a whole. It uses the
+same words as `error_mode`:
+
+```yaml
+error_handling:
+  on_http_error: fail        # the default for all three
+  on_decode_error: fail
+  on_transform_error: log
+```
+
+| Policy | The probe | Logged |
+| --- | --- | --- |
+| `fail` (default) | fails with `502 Bad Gateway` | yes, at error level |
+| `log` | carries on without that stage's output | yes, at warning level |
+| `ignore` | carries on without that stage's output | only at debug level |
+
+`warn` is the older spelling of `log` here. It still works, but each use is
+logged as deprecated at startup and on every reload, and listed by `--dry-run`;
+change it to `log`.
+
+### Checked when the configuration loads
+
+Everything about a metric that can be known before a scrape is checked at
+startup, on reload and by `--dry-run`, and an error names the collector, the
+metric and the label:
+
+- a metric name must be a valid Prometheus metric name, and not start with
+  `__`;
+- every expression must compile in its transform's language — jq and yq
+  (including `items`, and undefined functions and variables), regular
+  expressions, CSS selectors, XPath with the collector's namespaces, and a
+  `prometheus` transform's patterns, `include` and `exclude`;
+- a `regex` label must name a capture group the regex has;
+- a `prometheus` transform's `rename` targets must be metric names, and its
+  `labels` and `rename_labels` label names.
+
+A CSS selector that does not compile used to match nothing, on every scrape,
+without saying why; it is now refused when the configuration loads. The
+expressions are compiled once, then, and every scrape reuses them.
+
+### Editor support
+
+[`config.schema.json`](../config.schema.json) is a JSON Schema of this file.
+With the YAML extension for VS Code, or any editor that uses the YAML language
+server, start a configuration with
+
+```yaml
+# yaml-language-server: $schema=https://raw.githubusercontent.com/eenchev/prometheus-universal-exporter/main/config.schema.json
+```
+
+and the editor completes keys, shows what each one does, and flags unknown keys
+and values that are not allowed as you type. The example configurations start
+with it.
+
+`prometheus-universal-exporter --config.schema` prints the schema of the binary
+you are running; its `request.type` values are the request types that binary
+was built with. The schema describes the canonical spelling and is not the last
+word: startup validation also checks what a schema cannot, such as that an
+expression compiles.
 
 On a scheduled target there is no HTTP response to carry an error. `fail` there
 means the scrape exports nothing except `http_exporter_target_up` at 0, and
@@ -359,6 +646,40 @@ cached metrics are still queued for OTLP export, while
 `http_exporter_scrape_response_bytes` continue to describe the last real target
 request.
 
+## Identical probes share one request
+
+Several Prometheus replicas scraping the same targets on the same interval tend
+to probe at the same moment. When a probe arrives while an identical one is
+already waiting on the target, it does not send a request of its own: it waits
+for the one in flight and gets an exact copy of its answer — the metrics, or
+the same error. A slow endpoint is then asked once instead of once per replica,
+and a rate-limited one is not pushed over its limit.
+
+Identical means the same thing it does for the response cache: the same
+collector definition, target, probe parameters and forwarded headers,
+credentials included, so two probes that could get different answers never
+share one. It needs no cache: the cache helps the probes that come after one
+has finished, and this helps the ones that arrive while it is still running.
+With a cache, the probes that share a request fill the cache once.
+
+The shared request belongs to no single probe. If the probe that started it
+goes away — its Prometheus timed out, say — the others still get their answer;
+the request is cancelled only when every probe waiting on it has gone.
+
+The trip to the target is counted once in the self-metrics, whatever number of
+probes shared it: every probe still counts in `http_exporter_scrapes_total` and
+`http_exporter_scrape_success`, and each one that shared another's request also
+counts in `http_exporter_probes_coalesced_total`. A failure is logged once.
+
+It is on by default. A collector whose target must see every probe as its own
+request can turn it off:
+
+```yaml
+collectors:
+  - name: counts_every_call
+    coalesce: false
+```
+
 ## Watching the configuration
 
 The exporter reads its configuration once at startup. Pass `--config.watch` to
@@ -404,6 +725,11 @@ prometheus-universal-exporter --dry-run \
   --config.file=config.otlp.yaml --otlp.targets-file=targets.yaml
 ```
 
+It checks everything startup checks, including that every expression compiles
+(see [Checked when the configuration loads](#checked-when-the-configuration-loads)).
+A deprecated spelling does not fail the check; it is listed under
+`details.deprecations` of the `config` entry and logged.
+
 It takes the same flags a real start does, and they matter: `--config.file` and
 `--otlp.targets-file` choose what is checked, `--config.export-env` decides
 whether `${NAME}` references are expanded — so a check run where a referenced
@@ -417,6 +743,7 @@ The report lists one entry per startup step, in the order startup runs them:
 ```json
 {
   "status": "failed",
+  "request_types": ["http"],
   "checks": [
     {
       "check": "config",
@@ -453,7 +780,9 @@ Each entry's `status` is `ok`, `failed` with `errors`, or `skipped` with a
 from a configuration that did not load, and a target file that is valid on its
 own cannot be paired with it. A skipped check counts as not passing, and the
 report still shows it, so it is never shorter because something went wrong. The
-top-level `status` is `ok` only when every entry is.
+top-level `status` is `ok` only when every entry is. `request_types` lists the
+request types the binary was built with (see
+[Choosing request types at build time](#choosing-request-types-at-build-time)).
 
 stderr carries one JSON log line per check — `configuration check passed` at
 INFO, `skipped` at WARN, `failed` at ERROR with its errors — and a final

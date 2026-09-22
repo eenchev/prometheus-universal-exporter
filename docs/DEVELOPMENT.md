@@ -6,12 +6,24 @@ make fmt-check  # fail if any source needs gofmt
 make lint       # golangci-lint, same configuration as CI
 make test       # go test ./... followed by go test -race ./...
 make vet
-make build
+make build      # every request type; REQUEST_TYPES=http builds only those listed
 make helm-test  # helm lint and the template scenarios CI renders
 make ci         # everything above, in CI order
 
 make test-external  # opt-in; probes real third-party endpoints
 ```
+
+## The configuration schema
+
+`config.schema.json` is generated from the configuration structs. After adding
+or changing a configuration key, regenerate it, or the test suite fails:
+
+```sh
+go run . --config.schema > config.schema.json
+```
+
+Allowed values, patterns and descriptions that a struct cannot express are added
+by path in `configSchemaRules` in `configschema.go`.
 
 ## Tests that reach the internet
 
@@ -39,6 +51,15 @@ A failure here usually means the service changed or is unreachable rather than
 that this code broke, and the assertions say so — they check that the probe
 returned 200, that each metric the configuration declares is present, and that
 the per-row or per-entry labels survived.
+
+The suite also holds the status page demo's detailed tests,
+`grafanastatus_external_e2e_test.go`, which run its configuration against a
+captured copy of status.grafana.com's summary. They need no network but are
+opt-in like the rest.
+A test file joins the suite by being listed in `externalgate_test.go`; every test
+in it must be named `TestExternal*`, so `make test-external` picks it up, and
+start with `requireExternalE2E(t)`. `TestExternalSuiteTestsAreOptIn`, which
+does run by default, fails when either is missing.
 
 Static analysis is configured in `.golangci.yml`, so a local `make lint` and the
 CI run check exactly the same rules. Install the pinned version with `make

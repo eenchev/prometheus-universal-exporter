@@ -1,3 +1,4 @@
+# yaml-language-server: $schema=https://raw.githubusercontent.com/eenchev/prometheus-universal-exporter/main/config.schema.json
 otlp:
   enabled: false
   # endpoint: http://otel-collector:4318/v1/metrics
@@ -139,13 +140,18 @@ collectors:
             expression: server
 
   - name: vendor_prometheus
+    # Optional. Joined with "_" to the front of every metric this collector
+    # exports, so the rule below is exported as vendor_requests_total. It must
+    # start with a letter and use only letters, digits, and single underscores
+    # between them, without a trailing underscore.
+    metrics_prefix: vendor
     request:
       type: http
       path: /metrics
     transform:
       type: prometheus
     metrics:
-      - name: vendor_requests_total
+      - name: requests_total
         description: Vendor HTTP requests
         type: counter
         error_mode: log

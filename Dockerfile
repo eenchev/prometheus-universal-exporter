@@ -8,6 +8,9 @@ FROM --platform=$BUILDPLATFORM golang:${GO_VERSION}-alpine AS build
 
 ARG TARGETOS
 ARG TARGETARCH
+# REQUEST_TYPES selects the request types built in, as a comma-separated list
+# such as "http". Empty, the default, builds every type.
+ARG REQUEST_TYPES
 
 WORKDIR /src
 
@@ -16,10 +19,11 @@ RUN go mod download
 
 COPY . .
 
-RUN CGO_ENABLED=0 \
+RUN tags="$(sh tools/request-type-tags.sh "${REQUEST_TYPES}")" || exit 1; \
+    CGO_ENABLED=0 \
     GOOS=${TARGETOS} \
     GOARCH=${TARGETARCH} \
-    go build -trimpath -ldflags='-s -w' \
+    go build -trimpath -ldflags='-s -w' -tags "${tags}" \
     -o /out/prometheus-universal-exporter .
 
 FROM python:${PYTHON_VERSION}-slim

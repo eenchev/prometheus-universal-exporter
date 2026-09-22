@@ -58,6 +58,14 @@ jobs:
         if: steps.changes.outputs.go == 'true'
       - run: go build ./...
         if: steps.changes.outputs.go == 'true'
+      # A build can carry only some request types. Vet and build the smallest
+      # selection too, so code one type needs cannot quietly depend on another.
+      - name: Build with only the http request type
+        run: |
+          tags="$(sh tools/request-type-tags.sh http)"
+          go vet -tags "$tags" ./...
+          go build -tags "$tags" ./...
+        if: steps.changes.outputs.go == 'true'
       - run: helm lint charts/prometheus-universal-exporter
         if: steps.changes.outputs.chart == 'true'
       - run: helm template test charts/prometheus-universal-exporter

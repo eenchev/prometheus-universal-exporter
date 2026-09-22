@@ -14,7 +14,6 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/itchyny/gojq"
 	"gopkg.in/yaml.v3"
 )
 
@@ -36,6 +35,10 @@ type Config struct {
 	Collectors []Collector `yaml:"collectors"`
 	OTLP       OTLPConfig  `yaml:"otlp"`
 	Web        WebConfig   `yaml:"web"`
+	// Deprecations lists the deprecated spellings Validate accepted and
+	// normalised, one message each, for startup, reload and --dry-run to
+	// report. It is not read from the document.
+	Deprecations []string `yaml:"-"`
 }
 type WebConfig struct {
 	BasicAuth   *ExporterBasicAuth `yaml:"basic_auth"`
@@ -59,7 +62,10 @@ type ExporterBasicAuth struct {
 	Password string `yaml:"password"`
 }
 type Collector struct {
-	Name          string          `yaml:"name"`
+	Name string `yaml:"name"`
+	// MetricsPrefix, when set, is joined with "_" to the front of every metric
+	// the collector exports; see metricsprefix.go.
+	MetricsPrefix string          `yaml:"metrics_prefix"`
 	Request       RequestConfig   `yaml:"request"`
 	Response      ResponseConfig  `yaml:"response"`
 	Decoder       DecoderConfig   `yaml:"decoder"`
@@ -68,6 +74,9 @@ type Collector struct {
 	ErrorHandling ErrorHandling   `yaml:"error_handling"`
 	Limits        Limits          `yaml:"limits"`
 	Cache         Duration        `yaml:"cache"`
+	// Coalesce shares one upstream request among identical probes that arrive
+	// while it is in flight. Unset means true; see probeflight.go.
+	Coalesce *bool `yaml:"coalesce"`
 }
 type RequestConfig struct {
 	// Type selects how the collector reaches its data. It is required; see
@@ -151,7 +160,11 @@ type Limits struct {
 	MaxCacheEntries     int      `yaml:"max_cache_entries"`
 }
 type MetricRule struct {
-	Name        string      `yaml:"name"`
+	Name string `yaml:"name"`
+	// Items, for the jq and yq transforms, selects the things the metric is
+	// about; the expression and the labels are then evaluated once per item.
+	// See transformJQItems.
+	Items       string      `yaml:"items"`
 	Description string      `yaml:"description"`
 	Type        MetricType  `yaml:"type"`
 	Labels      []LabelRule `yaml:"labels"`
@@ -178,6 +191,9 @@ type LabelRule struct {
 	Type       string `yaml:"type"`
 	Value      string `yaml:"value"`
 	Expression string `yaml:"expression"`
+	// Truncate cuts a value longer than limits.max_label_value_length to fit,
+	// instead of failing the scrape. See truncateLabelValue.
+	Truncate bool `yaml:"truncate"`
 }
 type TransformConfig struct {
 	Type         string            `yaml:"type"`
@@ -284,10 +300,20 @@ func (c *Config) Validate() error {
 		if x.ErrorHandling.OnTransformError == "" {
 			x.ErrorHandling.OnTransformError = "fail"
 		}
-		for _, p := range []string{x.ErrorHandling.OnHTTPError, x.ErrorHandling.OnDecodeError, x.ErrorHandling.OnTransformError} {
-			if p != "fail" && p != "warn" && p != "ignore" {
-				return fmt.Errorf("collector %q has invalid error policy %q", x.Name, p)
+		for _, policy := range []struct {
+			key   string
+			value *string
+		}{
+			{"on_http_error", &x.ErrorHandling.OnHTTPError},
+			{"on_decode_error", &x.ErrorHandling.OnDecodeError},
+			{"on_transform_error", &x.ErrorHandling.OnTransformError},
+		} {
+			if err := c.normalizeErrorPolicy(x.Name, "error_handling."+policy.key, policy.value); err != nil {
+				return err
 			}
+		}
+		if err := validateMetricsPrefix(x); err != nil {
+			return err
 		}
 		for _, lib := range append(x.Transform.Libraries, x.Transform.RequiredLibs...) {
 			if err := checkPythonLibrary(x.Name, lib); err != nil {
@@ -299,10 +325,8 @@ func (c *Config) Validate() error {
 			if r.ErrorMode == "" {
 				r.ErrorMode = ErrorModeLog
 			}
-			switch r.ErrorMode {
-			case ErrorModeIgnore, ErrorModeLog, ErrorModeFail:
-			default:
-				return fmt.Errorf("collector %q metric %q has invalid error_mode %q; want ignore, log or fail", x.Name, r.Name, r.ErrorMode)
+			if err := c.normalizeErrorPolicy(x.Name, fmt.Sprintf("metric %q error_mode", r.Name), &r.ErrorMode); err != nil {
+				return err
 			}
 			if r.Type == "" {
 				r.Type = GaugeMetricType
@@ -341,23 +365,12 @@ func (c *Config) Validate() error {
 					return fmt.Errorf("collector %q metric %q label %q has invalid type %q; want string or expression", x.Name, r.Name, label.Name, label.Type)
 				}
 			}
-			if x.Transform.Type == "" || x.Transform.Type == "none" || x.Transform.Type == "jq" || x.Transform.Type == "yq" {
-				if _, err := gojq.Parse(r.Expression); err != nil {
-					return fmt.Errorf("collector %q metric %q expression: %w", x.Name, r.Name, err)
-				}
-				for _, label := range r.Labels {
-					if label.Type == "expression" {
-						if _, err := gojq.Parse(label.Expression); err != nil {
-							return fmt.Errorf("collector %q metric %q label %q expression: %w", x.Name, r.Name, label.Name, err)
-						}
-					}
-				}
+			if err := checkMetricRule(x, r); err != nil {
+				return err
 			}
-			if x.Transform.Type == "regex" {
-				if _, err := regexp.Compile(r.Expression); err != nil {
-					return fmt.Errorf("collector %q metric %q regex: %w", x.Name, r.Name, err)
-				}
-			}
+		}
+		if err := checkPrometheusTransform(x); err != nil {
+			return err
 		}
 	}
 	if c.Web.BasicAuth != nil && c.Web.BasicAuth.Enabled {
@@ -559,6 +572,7 @@ func (m *ConfigManager) reloadConfig() {
 		}
 	}
 	m.current.Store(c)
+	logDeprecations(m.logger, m.path, c)
 	m.logger.Info("configuration reloaded", "collectors", len(c.Collectors))
 }
 
@@ -634,4 +648,13 @@ func checkPythonLibrary(collector, lib string) error {
 		return fmt.Errorf("collector %q declares Python library %q, which the image no longer installs; parse HTML with lxml.html instead and declare lxml", collector, lib)
 	}
 	return fmt.Errorf("collector %q declares unsupported Python library %q; the supported libraries are lxml, PyYAML and python-dateutil", collector, lib)
+}
+
+// logDeprecations warns once per deprecated spelling a loaded configuration
+// used, so the operator hears about it on every start and reload until it is
+// changed.
+func logDeprecations(logger *slog.Logger, path string, c *Config) {
+	for _, message := range c.Deprecations {
+		logger.Warn("deprecated configuration", "file", path, "deprecation", message)
+	}
 }

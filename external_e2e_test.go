@@ -93,6 +93,22 @@ var externalCases = []externalCase{
 		wantMetrics: []string{"country_population", "country_area"},
 		wantLabel:   `country="Andorra"`,
 	},
+	{
+		name:      "grafana-status/json",
+		config:    "testdata/config.grafanastatus.json-test.yaml",
+		collector: "statuspage",
+		target:    "https://status.grafana.com",
+		wantMetrics: []string{
+			"statuspage_info",
+			"statuspage_status",
+			"statuspage_component_status",
+			"statuspage_component_group_status",
+			"statuspage_unresolved_incidents",
+			"statuspage_scheduled_maintenances",
+			"statuspage_updated_timestamp_seconds",
+		},
+		wantLabel: `component_id=`,
+	},
 }
 
 func TestExternalDemoConfigurationsStillMatchTheirSources(t *testing.T) {

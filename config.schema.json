@@ -1,0 +1,753 @@
+{
+  "$id": "https://raw.githubusercontent.com/eenchev/prometheus-universal-exporter/main/config.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "The exporter configuration. See docs/CONFIGURATION.md.",
+  "properties": {
+    "collectors": {
+      "description": "The collectors. A probe names one with its collector parameter.",
+      "items": {
+        "additionalProperties": false,
+        "description": "How to reach a kind of target and turn its response into metrics.",
+        "properties": {
+          "cache": {
+            "description": "Answer a repeat of the same probe from memory for this long. Omit or 0s to disable.",
+            "pattern": "^[-+]?(0|([0-9]*(\\.[0-9]*)?(ns|us|µs|μs|ms|s|m|h))+)$",
+            "type": "string"
+          },
+          "coalesce": {
+            "description": "Share one request to the target among identical probes that arrive while it is in flight. Defaults to true.",
+            "type": "boolean"
+          },
+          "decoder": {
+            "additionalProperties": false,
+            "properties": {
+              "type": {
+                "enum": [
+                  "auto",
+                  "json",
+                  "yaml",
+                  "xml",
+                  "csv",
+                  "html",
+                  "prometheus",
+                  "text"
+                ],
+                "type": "string"
+              }
+            },
+            "type": "object"
+          },
+          "error_handling": {
+            "additionalProperties": false,
+            "properties": {
+              "allow_missing_keys": {
+                "type": "boolean"
+              },
+              "on_decode_error": {
+                "description": "fail stops the probe, log carries on and logs why, ignore carries on quietly. Defaults to fail. warn is a deprecated spelling of log.",
+                "enum": [
+                  "fail",
+                  "log",
+                  "ignore",
+                  "warn"
+                ],
+                "type": "string"
+              },
+              "on_http_error": {
+                "description": "fail stops the probe, log carries on and logs why, ignore carries on quietly. Defaults to fail. warn is a deprecated spelling of log.",
+                "enum": [
+                  "fail",
+                  "log",
+                  "ignore",
+                  "warn"
+                ],
+                "type": "string"
+              },
+              "on_transform_error": {
+                "description": "fail stops the probe, log carries on and logs why, ignore carries on quietly. Defaults to fail. warn is a deprecated spelling of log.",
+                "enum": [
+                  "fail",
+                  "log",
+                  "ignore",
+                  "warn"
+                ],
+                "type": "string"
+              }
+            },
+            "type": "object"
+          },
+          "limits": {
+            "additionalProperties": false,
+            "properties": {
+              "max_cache_entries": {
+                "minimum": 0,
+                "type": "integer"
+              },
+              "max_help_length": {
+                "minimum": 0,
+                "type": "integer"
+              },
+              "max_label_value_length": {
+                "minimum": 0,
+                "type": "integer"
+              },
+              "max_labels_per_metric": {
+                "minimum": 0,
+                "type": "integer"
+              },
+              "max_metric_name_length": {
+                "minimum": 0,
+                "type": "integer"
+              },
+              "max_metrics": {
+                "minimum": 0,
+                "type": "integer"
+              },
+              "max_output_bytes": {
+                "minimum": 0,
+                "type": "integer"
+              },
+              "max_response_bytes": {
+                "minimum": 0,
+                "type": "integer"
+              },
+              "script_timeout": {
+                "description": "How long a Python script may run. Starting the interpreter is not counted. Defaults to 100ms.",
+                "pattern": "^[-+]?(0|([0-9]*(\\.[0-9]*)?(ns|us|µs|μs|ms|s|m|h))+)$",
+                "type": "string"
+              }
+            },
+            "type": "object"
+          },
+          "metrics": {
+            "items": {
+              "additionalProperties": false,
+              "properties": {
+                "description": {
+                  "type": [
+                    "string",
+                    "number",
+                    "boolean"
+                  ]
+                },
+                "error_mode": {
+                  "description": "What happens when this metric cannot be extracted. Defaults to log. warn is a deprecated spelling of log.",
+                  "enum": [
+                    "fail",
+                    "log",
+                    "ignore",
+                    "warn"
+                  ],
+                  "type": "string"
+                },
+                "expression": {
+                  "description": "Where the value comes from, in the transform's language: jq, a regex, a CSS selector, an XPath expression, a CSV column or a source metric pattern.",
+                  "type": [
+                    "string",
+                    "number",
+                    "boolean"
+                  ]
+                },
+                "items": {
+                  "description": "jq and yq only: selects the things the metric is about. The expression and labels are then evaluated once per item, with the item as . and the whole document as $root.",
+                  "type": [
+                    "string",
+                    "number",
+                    "boolean"
+                  ]
+                },
+                "labels": {
+                  "items": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "expression": {
+                        "type": [
+                          "string",
+                          "number",
+                          "boolean"
+                        ]
+                      },
+                      "name": {
+                        "pattern": "^[a-zA-Z_][a-zA-Z0-9_]*$",
+                        "type": "string"
+                      },
+                      "truncate": {
+                        "description": "Cut a value longer than limits.max_label_value_length to fit, ending in …, instead of failing the scrape.",
+                        "type": "boolean"
+                      },
+                      "type": {
+                        "description": "string for a literal value, expression for a value from the response.",
+                        "enum": [
+                          "string",
+                          "expression"
+                        ],
+                        "type": "string"
+                      },
+                      "value": {
+                        "type": [
+                          "string",
+                          "number",
+                          "boolean"
+                        ]
+                      }
+                    },
+                    "type": "object"
+                  },
+                  "type": "array"
+                },
+                "name": {
+                  "description": "The metric name, before metrics_prefix.",
+                  "pattern": "^[a-zA-Z_:][a-zA-Z0-9_:]*$",
+                  "type": "string"
+                },
+                "required": {
+                  "description": "When false, a missing value is skipped without an error. Defaults to true.",
+                  "type": "boolean"
+                },
+                "type": {
+                  "enum": [
+                    "gauge",
+                    "counter",
+                    "histogram",
+                    "summary",
+                    "untyped"
+                  ],
+                  "type": "string"
+                }
+              },
+              "type": "object"
+            },
+            "type": "array"
+          },
+          "metrics_prefix": {
+            "description": "Joined with _ to the front of every metric the collector exports, such as grafana for grafana_statuspage_status. Letters and digits, in parts joined by single underscores.",
+            "pattern": "^[a-zA-Z][a-zA-Z0-9]*(?:_[a-zA-Z0-9]+)*$",
+            "type": "string"
+          },
+          "name": {
+            "description": "Unique name, used as the collector parameter of /probe.",
+            "pattern": "^[a-zA-Z_][a-zA-Z0-9_]*$",
+            "type": "string"
+          },
+          "request": {
+            "additionalProperties": false,
+            "description": "How the collector reaches its data. See docs/REQUESTS.md.",
+            "properties": {
+              "allowed_schemes": {
+                "items": {
+                  "type": [
+                    "string",
+                    "number",
+                    "boolean"
+                  ]
+                },
+                "type": "array"
+              },
+              "basic_auth": {
+                "additionalProperties": false,
+                "properties": {
+                  "password": {
+                    "type": [
+                      "string",
+                      "number",
+                      "boolean"
+                    ]
+                  },
+                  "username": {
+                    "type": [
+                      "string",
+                      "number",
+                      "boolean"
+                    ]
+                  }
+                },
+                "type": "object"
+              },
+              "basic_auth_file": {
+                "additionalProperties": false,
+                "properties": {
+                  "password": {
+                    "type": [
+                      "string",
+                      "number",
+                      "boolean"
+                    ]
+                  },
+                  "username": {
+                    "type": [
+                      "string",
+                      "number",
+                      "boolean"
+                    ]
+                  }
+                },
+                "type": "object"
+              },
+              "bearer_token": {
+                "type": [
+                  "string",
+                  "number",
+                  "boolean"
+                ]
+              },
+              "bearer_token_file": {
+                "type": [
+                  "string",
+                  "number",
+                  "boolean"
+                ]
+              },
+              "body": {
+                "type": [
+                  "string",
+                  "number",
+                  "boolean"
+                ]
+              },
+              "enable_http2": {
+                "type": "boolean"
+              },
+              "follow_redirects": {
+                "type": "boolean"
+              },
+              "forward_authorization": {
+                "type": "boolean"
+              },
+              "forward_headers": {
+                "items": {
+                  "type": [
+                    "string",
+                    "number",
+                    "boolean"
+                  ]
+                },
+                "type": "array"
+              },
+              "headers": {
+                "additionalProperties": {
+                  "type": [
+                    "string",
+                    "number",
+                    "boolean"
+                  ]
+                },
+                "type": "object"
+              },
+              "max_response_bytes": {
+                "minimum": 0,
+                "type": "integer"
+              },
+              "method": {
+                "description": "HTTP method. Defaults to GET.",
+                "enum": [
+                  "GET",
+                  "POST",
+                  "PUT",
+                  "PATCH",
+                  "DELETE",
+                  "HEAD",
+                  "get",
+                  "post",
+                  "put",
+                  "patch",
+                  "delete",
+                  "head"
+                ],
+                "type": "string"
+              },
+              "path": {
+                "description": "Joined onto the target URL. May contain {{param_name}} or {{param_name:default}} path parameters, filled by param_\u003cname\u003e probe parameters.",
+                "type": [
+                  "string",
+                  "number",
+                  "boolean"
+                ]
+              },
+              "query": {
+                "additionalProperties": {
+                  "type": [
+                    "string",
+                    "number",
+                    "boolean"
+                  ]
+                },
+                "type": "object"
+              },
+              "retry": {
+                "additionalProperties": false,
+                "properties": {
+                  "attempts": {
+                    "minimum": 0,
+                    "type": "integer"
+                  },
+                  "backoff": {
+                    "description": "A duration such as 500ms, 30s or 5m.",
+                    "pattern": "^[-+]?(0|([0-9]*(\\.[0-9]*)?(ns|us|µs|μs|ms|s|m|h))+)$",
+                    "type": "string"
+                  }
+                },
+                "type": "object"
+              },
+              "tls": {
+                "additionalProperties": false,
+                "properties": {
+                  "ca_file": {
+                    "type": [
+                      "string",
+                      "number",
+                      "boolean"
+                    ]
+                  },
+                  "cert_file": {
+                    "type": [
+                      "string",
+                      "number",
+                      "boolean"
+                    ]
+                  },
+                  "insecure_skip_verify": {
+                    "type": "boolean"
+                  },
+                  "key_file": {
+                    "type": [
+                      "string",
+                      "number",
+                      "boolean"
+                    ]
+                  }
+                },
+                "type": "object"
+              },
+              "type": {
+                "description": "Required. How the collector reaches its data.",
+                "enum": [
+                  "http"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "type"
+            ],
+            "type": "object"
+          },
+          "response": {
+            "additionalProperties": false,
+            "properties": {
+              "csv": {
+                "additionalProperties": false,
+                "properties": {
+                  "delimiter": {
+                    "type": [
+                      "string",
+                      "number",
+                      "boolean"
+                    ]
+                  },
+                  "header": {
+                    "type": "boolean"
+                  },
+                  "trim_space": {
+                    "type": "boolean"
+                  }
+                },
+                "type": "object"
+              },
+              "format": {
+                "description": "How to decode the response. Defaults to auto, which the transform or the Content-Type decides.",
+                "enum": [
+                  "auto",
+                  "json",
+                  "yaml",
+                  "xml",
+                  "csv",
+                  "html",
+                  "prometheus",
+                  "text"
+                ],
+                "type": "string"
+              },
+              "namespaces": {
+                "additionalProperties": {
+                  "type": [
+                    "string",
+                    "number",
+                    "boolean"
+                  ]
+                },
+                "type": "object"
+              }
+            },
+            "type": "object"
+          },
+          "transform": {
+            "additionalProperties": false,
+            "properties": {
+              "exclude": {
+                "items": {
+                  "type": [
+                    "string",
+                    "number",
+                    "boolean"
+                  ]
+                },
+                "type": "array"
+              },
+              "include": {
+                "items": {
+                  "type": [
+                    "string",
+                    "number",
+                    "boolean"
+                  ]
+                },
+                "type": "array"
+              },
+              "labels": {
+                "additionalProperties": {
+                  "type": [
+                    "string",
+                    "number",
+                    "boolean"
+                  ]
+                },
+                "type": "object"
+              },
+              "libraries": {
+                "items": {
+                  "description": "A bundled Python library the script uses. Declared libraries are imported when the interpreter starts.",
+                  "enum": [
+                    "PyYAML",
+                    "dateutil",
+                    "lxml",
+                    "python-dateutil",
+                    "yaml"
+                  ],
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "pre_script": {
+                "description": "Python run before the transform. It receives data and must leave its result in data.",
+                "type": [
+                  "string",
+                  "number",
+                  "boolean"
+                ]
+              },
+              "remove_labels": {
+                "items": {
+                  "type": [
+                    "string",
+                    "number",
+                    "boolean"
+                  ]
+                },
+                "type": "array"
+              },
+              "rename": {
+                "additionalProperties": {
+                  "type": [
+                    "string",
+                    "number",
+                    "boolean"
+                  ]
+                },
+                "type": "object"
+              },
+              "rename_labels": {
+                "additionalProperties": {
+                  "type": [
+                    "string",
+                    "number",
+                    "boolean"
+                  ]
+                },
+                "type": "object"
+              },
+              "required_libs": {
+                "items": {
+                  "description": "A bundled Python library the script uses. Declared libraries are imported when the interpreter starts.",
+                  "enum": [
+                    "PyYAML",
+                    "dateutil",
+                    "lxml",
+                    "python-dateutil",
+                    "yaml"
+                  ],
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "script": {
+                "description": "Python for the python transform. It emits metrics with metric(...).",
+                "type": [
+                  "string",
+                  "number",
+                  "boolean"
+                ]
+              },
+              "type": {
+                "description": "How metrics are extracted from the decoded response.",
+                "enum": [
+                  "none",
+                  "jq",
+                  "yq",
+                  "xpath",
+                  "css",
+                  "csv",
+                  "regex",
+                  "python",
+                  "prometheus"
+                ],
+                "type": "string"
+              }
+            },
+            "type": "object"
+          }
+        },
+        "required": [
+          "name",
+          "request"
+        ],
+        "type": "object"
+      },
+      "minItems": 1,
+      "type": "array"
+    },
+    "otlp": {
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {
+          "type": "boolean"
+        },
+        "endpoint": {
+          "description": "OTLP/HTTP metrics endpoint, such as http://otel-collector:4318/v1/metrics.",
+          "type": [
+            "string",
+            "number",
+            "boolean"
+          ]
+        },
+        "headers": {
+          "additionalProperties": {
+            "type": [
+              "string",
+              "number",
+              "boolean"
+            ]
+          },
+          "type": "object"
+        },
+        "insecure_skip_verify": {
+          "type": "boolean"
+        },
+        "interval": {
+          "description": "A duration such as 500ms, 30s or 5m.",
+          "pattern": "^[-+]?(0|([0-9]*(\\.[0-9]*)?(ns|us|µs|μs|ms|s|m|h))+)$",
+          "type": "string"
+        },
+        "resource_attributes": {
+          "additionalProperties": {
+            "type": [
+              "string",
+              "number",
+              "boolean"
+            ]
+          },
+          "type": "object"
+        },
+        "service_name": {
+          "type": [
+            "string",
+            "number",
+            "boolean"
+          ]
+        },
+        "timeout": {
+          "description": "A duration such as 500ms, 30s or 5m.",
+          "pattern": "^[-+]?(0|([0-9]*(\\.[0-9]*)?(ns|us|µs|μs|ms|s|m|h))+)$",
+          "type": "string"
+        },
+        "tls": {
+          "additionalProperties": false,
+          "properties": {
+            "ca_file": {
+              "type": [
+                "string",
+                "number",
+                "boolean"
+              ]
+            },
+            "cert_file": {
+              "type": [
+                "string",
+                "number",
+                "boolean"
+              ]
+            },
+            "insecure_skip_verify": {
+              "type": "boolean"
+            },
+            "key_file": {
+              "type": [
+                "string",
+                "number",
+                "boolean"
+              ]
+            }
+          },
+          "type": "object"
+        }
+      },
+      "type": "object"
+    },
+    "web": {
+      "additionalProperties": false,
+      "properties": {
+        "basic_auth": {
+          "additionalProperties": false,
+          "properties": {
+            "enabled": {
+              "type": "boolean"
+            },
+            "password": {
+              "type": [
+                "string",
+                "number",
+                "boolean"
+              ]
+            },
+            "username": {
+              "type": [
+                "string",
+                "number",
+                "boolean"
+              ]
+            }
+          },
+          "type": "object"
+        },
+        "self_metrics": {
+          "additionalProperties": false,
+          "properties": {
+            "resource_metrics_enabled": {
+              "type": "boolean"
+            },
+            "verbose": {
+              "type": "boolean"
+            }
+          },
+          "type": "object"
+        }
+      },
+      "type": "object"
+    }
+  },
+  "required": [
+    "collectors"
+  ],
+  "title": "prometheus-universal-exporter configuration",
+  "type": "object"
+}

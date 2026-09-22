@@ -1,0 +1,80 @@
+//go:build !select_request_types || request_type_http
+
+package main
+
+import (
+	"context"
+	"fmt"
+	"net/http"
+	"strings"
+)
+
+// The http request type: a GET, or another method, against the target URL.
+// It is included in every default build; with -tags select_request_types it
+// is included only when request_type_http is among the tags.
+
+func init() {
+	registerRequestType(&requestType{
+		Name: RequestTypeHTTP,
+		Fields: []string{
+			"method", "path", "query", "headers", "body",
+			"basic_auth", "basic_auth_file", "bearer_token", "bearer_token_file",
+			"forward_authorization", "forward_headers",
+			"tls", "retry", "max_response_bytes",
+			"follow_redirects", "enable_http2", "allowed_schemes",
+		},
+		Overrides: []string{
+			"method", "path", "timeout", "body", "insecure_skip_verify",
+			"follow_redirects", "enable_http2", "retry_attempts", "retry_backoff",
+			"header_", pathParamPrefix,
+		},
+		TargetFields: []string{
+			"method", "path", "body", "timeout", "insecure_skip_verify",
+			"follow_redirects", "enable_http2", "retry", "headers",
+			"basic_auth", "basic_auth_file", "bearer_token", "bearer_token_file",
+		},
+		Validate: validateHTTPRequest,
+		Fetch: func(ctx context.Context, target string, c *Collector, overrides RequestOverrides, forwarded http.Header) (*HTTPResponse, error) {
+			return fetch(ctx, target, c, overrides, forwarded)
+		},
+	})
+}
+
+// validateHTTPRequest holds the http type's rules. Nothing but type is
+// required: path may be empty, since the target URL can carry the whole path,
+// and method defaults to GET.
+func validateHTTPRequest(x *Collector) error {
+	if x.Request.BearerToken != "" && x.Request.BearerTokenFile != "" {
+		return fmt.Errorf("collector %q cannot set both request.bearer_token and request.bearer_token_file", x.Name)
+	}
+	if x.Request.BasicAuth != nil && x.Request.BasicAuthFile != nil {
+		return fmt.Errorf("collector %q cannot set both request.basic_auth and request.basic_auth_file", x.Name)
+	}
+	if x.Request.BasicAuthFile != nil && (strings.TrimSpace(x.Request.BasicAuthFile.Username) == "" || strings.TrimSpace(x.Request.BasicAuthFile.Password) == "") {
+		return fmt.Errorf("collector %q basic_auth_file requires username and password paths", x.Name)
+	}
+	if x.Request.Retry.Attempts < 0 {
+		return fmt.Errorf("collector %q request.retry.attempts must not be negative", x.Name)
+	}
+	if x.Request.Retry.Backoff < 0 {
+		return fmt.Errorf("collector %q request.retry.backoff must not be negative", x.Name)
+	}
+	if (x.Request.BasicAuth != nil || x.Request.BasicAuthFile != nil) && (x.Request.BearerToken != "" || x.Request.BearerTokenFile != "") {
+		return fmt.Errorf("collector %q cannot configure basic and bearer authentication together", x.Name)
+	}
+	if hasPathParams(x.Request.Path) {
+		if _, err := parsePathParams(x.Request.Path); err != nil {
+			return fmt.Errorf("collector %q: %w", x.Name, err)
+		}
+	}
+	if x.Request.Method == "" {
+		x.Request.Method = http.MethodGet
+	}
+	x.Request.Method = strings.ToUpper(x.Request.Method)
+	switch x.Request.Method {
+	case http.MethodGet, http.MethodPost, http.MethodPut, http.MethodPatch, http.MethodDelete, http.MethodHead:
+	default:
+		return fmt.Errorf("collector %q has unsupported method %q", x.Name, x.Request.Method)
+	}
+	return nil
+}

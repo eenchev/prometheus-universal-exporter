@@ -13,11 +13,23 @@ import (
 	"github.com/PuerkitoBio/goquery"
 	"github.com/antchfx/htmlquery"
 	"github.com/antchfx/xmlquery"
-	"github.com/antchfx/xpath"
-	"github.com/itchyny/gojq"
 )
 
+// transform turns a decoded response into the collector's metrics, named as
+// they are exported: every transform's output passes through here, so the
+// collector's metrics_prefix is applied in exactly one place, before the limits
+// are checked, the set is cached, or it is written to /probe or OTLP.
 func transform(ctx context.Context, d *Decoded, r *HTTPResponse, c *Collector, pythonPath string) (*MetricSet, error) {
+	set, err := transformMetrics(ctx, d, r, c, pythonPath)
+	if err != nil || set == nil {
+		return set, err
+	}
+	truncateLabels(set, c)
+	applyMetricsPrefix(set, c.MetricsPrefix)
+	return set, nil
+}
+
+func transformMetrics(ctx context.Context, d *Decoded, r *HTTPResponse, c *Collector, pythonPath string) (*MetricSet, error) {
 	if strings.TrimSpace(c.Transform.PreScript) != "" {
 		processed, err := applyPreScript(ctx, d, r, c, pythonPath)
 		if err != nil {
@@ -227,7 +239,15 @@ func structuredValue(value any) bool {
 func transformJQ(ctx context.Context, data any, rules []MetricRule, c *Collector) (*MetricSet, error) {
 	out := &MetricSet{}
 	for _, rule := range rules {
-		values, err := evaluateJQ(ctx, data, rule.Expression)
+		if rule.Items != "" {
+			metrics, err := transformJQItems(ctx, data, rule, c)
+			if err != nil {
+				return nil, err
+			}
+			out.Metrics = append(out.Metrics, metrics...)
+			continue
+		}
+		values, err := evaluateJQ(ctx, data, data, rule.Expression)
 		if err != nil {
 			if handleMetricError(c, rule, err) {
 				continue
@@ -270,23 +290,94 @@ func transformJQ(ctx context.Context, data any, rules []MetricRule, c *Collector
 	return out, nil
 }
 
-func evaluateJQ(ctx context.Context, data any, expression string) ([]any, error) {
-	query, err := gojq.Parse(expression)
+// transformJQItems evaluates a rule item by item. items selects the things
+// the metric is about — components, rows, workers — and the value and every
+// label are evaluated against one item at a time, so they cannot drift apart
+// the way parallel streams can when one of them skips an element. Each
+// expression sees the item as its input and the whole document as $root.
+//
+// For one item, the value expression must produce at most one value and each
+// label expression at most one; more is an error, since there would be no
+// telling which belongs to the series. A missing or null value is a missing
+// metric for that item, handled by required and error_mode like any other; a
+// missing or null label leaves the label off.
+func transformJQItems(ctx context.Context, data any, rule MetricRule, c *Collector) ([]Metric, error) {
+	fail := func(err error) ([]Metric, bool, error) {
+		if handleMetricError(c, rule, err) {
+			return nil, true, nil
+		}
+		return nil, false, ruleFailure(c, rule, err)
+	}
+	items, err := evaluateJQ(ctx, data, data, rule.Items)
+	if err != nil {
+		metrics, _, failure := fail(fmt.Errorf("metric %q items: %w", rule.Name, err))
+		return metrics, failure
+	}
+	if len(items) == 0 && requiredRule(rule, c) {
+		metrics, _, failure := fail(fmt.Errorf("metric %q items selected nothing", rule.Name))
+		return metrics, failure
+	}
+	var out []Metric
+	for index, item := range items {
+		value, err := evaluateJQOne(ctx, item, data, rule.Expression)
+		if err != nil {
+			if _, carryOn, failure := fail(fmt.Errorf("metric %q item %d expression: %w", rule.Name, index, err)); !carryOn {
+				return nil, failure
+			}
+			continue
+		}
+		if value == nil {
+			if requiredRule(rule, c) {
+				if _, carryOn, failure := fail(fmt.Errorf("metric %q value is missing for item %d", rule.Name, index)); !carryOn {
+					return nil, failure
+				}
+			}
+			continue
+		}
+		n, err := number(value)
+		if err != nil {
+			if _, carryOn, failure := fail(fmt.Errorf("metric %q item %d: %w", rule.Name, index, err)); !carryOn {
+				return nil, failure
+			}
+			continue
+		}
+		labels := map[string]string{}
+		var labelErr error
+		for _, label := range rule.Labels {
+			if label.Type == "string" {
+				labels[label.Name] = label.Value
+				continue
+			}
+			labelValue, err := evaluateJQOne(ctx, item, data, label.Expression)
+			if err != nil {
+				labelErr = fmt.Errorf("metric %q item %d label %q: %w", rule.Name, index, label.Name, err)
+				break
+			}
+			if labelValue != nil {
+				labels[label.Name] = fmt.Sprint(labelValue)
+			}
+		}
+		if labelErr != nil {
+			if _, carryOn, failure := fail(labelErr); !carryOn {
+				return nil, failure
+			}
+			continue
+		}
+		out = append(out, Metric{Name: rule.Name, Help: rule.Description, Type: rule.Type, Value: n, Labels: labels})
+	}
+	return out, nil
+}
+
+// evaluateJQ runs a compiled program with input as its input and root bound
+// to $root, collecting every value it produces.
+func evaluateJQ(ctx context.Context, input, root any, expression string) ([]any, error) {
+	code, err := compileJQ(expression)
 	if err != nil {
 		return nil, err
 	}
-	code, err := gojq.Compile(query)
-	if err != nil {
-		return nil, err
-	}
-	iterator := code.Run(data)
+	iterator := code.RunWithContext(ctx, input, root)
 	values := []any{}
 	for {
-		select {
-		case <-ctx.Done():
-			return nil, ctx.Err()
-		default:
-		}
 		value, ok := iterator.Next()
 		if !ok {
 			break
@@ -297,6 +388,23 @@ func evaluateJQ(ctx context.Context, data any, expression string) ([]any, error)
 		values = append(values, value)
 	}
 	return values, nil
+}
+
+// evaluateJQOne runs a program that must produce at most one value; no value
+// is reported as nil.
+func evaluateJQOne(ctx context.Context, input, root any, expression string) (any, error) {
+	values, err := evaluateJQ(ctx, input, root, expression)
+	if err != nil {
+		return nil, err
+	}
+	switch len(values) {
+	case 0:
+		return nil, nil
+	case 1:
+		return values[0], nil
+	default:
+		return nil, fmt.Errorf("expression %q produced %d values for one item; it must produce at most one", expression, len(values))
+	}
 }
 
 func evaluateLabels(ctx context.Context, data any, expressions []LabelRule, metricCount int) ([]map[string]string, error) {
@@ -311,7 +419,7 @@ func evaluateLabels(ctx context.Context, data any, expressions []LabelRule, metr
 			}
 			continue
 		}
-		values, err := evaluateJQ(ctx, data, label.Expression)
+		values, err := evaluateJQ(ctx, data, data, label.Expression)
 		if err != nil {
 			return nil, fmt.Errorf("label %q: %w", label.Name, err)
 		}
@@ -339,7 +447,7 @@ func requiredRule(rule MetricRule, c *Collector) bool {
 func transformRegex(text string, rules []MetricRule, c *Collector) (*MetricSet, error) {
 	out := &MetricSet{}
 	for _, rule := range rules {
-		re, err := regexp.Compile(rule.Expression)
+		re, err := compileRegex(rule.Expression)
 		if err != nil {
 			if handleMetricError(c, rule, err) {
 				continue
@@ -407,26 +515,14 @@ func captureIndex(value string, names []string) int {
 func transformXPath(root *xmlquery.Node, rules []MetricRule, c *Collector, namespaces map[string]string) (*MetricSet, error) {
 	out := &MetricSet{}
 	for _, rule := range rules {
-		var nodes []*xmlquery.Node
-		var err error
-		if len(namespaces) > 0 {
-			expression, compileErr := xpath.CompileWithNS(rule.Expression, namespaces)
-			if compileErr != nil {
-				if handleMetricError(c, rule, compileErr) {
-					continue
-				}
-				return nil, ruleFailure(c, rule, fmt.Errorf("XPath %q: %w", rule.Expression, compileErr))
+		expression, compileErr := compileXPath(rule.Expression, namespaces)
+		if compileErr != nil {
+			if handleMetricError(c, rule, compileErr) {
+				continue
 			}
-			nodes = xmlquery.QuerySelectorAll(root, expression)
-		} else {
-			nodes, err = xmlquery.QueryAll(root, rule.Expression)
-			if err != nil {
-				if handleMetricError(c, rule, err) {
-					continue
-				}
-				return nil, ruleFailure(c, rule, fmt.Errorf("XPath %q: %w", rule.Expression, err))
-			}
+			return nil, ruleFailure(c, rule, fmt.Errorf("XPath %q: %w", rule.Expression, compileErr))
 		}
+		nodes := xmlquery.QuerySelectorAll(root, expression)
 		if len(nodes) == 0 {
 			if requiredRule(rule, c) {
 				if handleMetricError(c, rule, fmt.Errorf("XPath %q matched no nodes", rule.Expression)) {
@@ -443,8 +539,10 @@ func transformXPath(root *xmlquery.Node, rules []MetricRule, c *Collector, names
 					labels[label.Name] = label.Value
 				} else if strings.HasPrefix(label.Expression, "@") {
 					labels[label.Name] = node.SelectAttr(strings.TrimPrefix(label.Expression, "@"))
-				} else if value := xmlquery.FindOne(node, label.Expression); value != nil {
-					labels[label.Name] = value.InnerText()
+				} else if selector, err := compileXPath(label.Expression, namespaces); err == nil {
+					if value := xmlquery.QuerySelector(node, selector); value != nil {
+						labels[label.Name] = value.InnerText()
+					}
 				}
 			}
 			value, err := textValue(node.InnerText())
@@ -467,13 +565,14 @@ func transformHTMLXPath(raw []byte, rules []MetricRule, c *Collector) (*MetricSe
 	}
 	out := &MetricSet{}
 	for _, rule := range rules {
-		nodes, err := htmlquery.QueryAll(root, rule.Expression)
+		expression, err := compileXPath(rule.Expression, nil)
 		if err != nil {
 			if handleMetricError(c, rule, err) {
 				continue
 			}
 			return nil, ruleFailure(c, rule, fmt.Errorf("HTML XPath %q: %w", rule.Expression, err))
 		}
+		nodes := htmlquery.QuerySelectorAll(root, expression)
 		if len(nodes) == 0 {
 			if requiredRule(rule, c) {
 				if handleMetricError(c, rule, fmt.Errorf("HTML XPath %q matched no nodes", rule.Expression)) {
@@ -490,8 +589,10 @@ func transformHTMLXPath(raw []byte, rules []MetricRule, c *Collector) (*MetricSe
 					labels[label.Name] = label.Value
 				} else if strings.HasPrefix(label.Expression, "@") {
 					labels[label.Name] = htmlquery.SelectAttr(node, strings.TrimPrefix(label.Expression, "@"))
-				} else if value := htmlquery.FindOne(node, label.Expression); value != nil {
-					labels[label.Name] = htmlquery.InnerText(value)
+				} else if selector, err := compileXPath(label.Expression, nil); err == nil {
+					if value := htmlquery.QuerySelector(node, selector); value != nil {
+						labels[label.Name] = htmlquery.InnerText(value)
+					}
 				}
 			}
 			value, err := textValue(htmlquery.InnerText(node))
@@ -510,7 +611,14 @@ func transformHTMLXPath(raw []byte, rules []MetricRule, c *Collector) (*MetricSe
 func transformCSS(doc *goquery.Document, rules []MetricRule, c *Collector) (*MetricSet, error) {
 	out := &MetricSet{}
 	for _, rule := range rules {
-		selection := doc.Find(rule.Expression)
+		matcher, err := compileCSS(rule.Expression)
+		if err != nil {
+			if handleMetricError(c, rule, err) {
+				continue
+			}
+			return nil, ruleFailure(c, rule, fmt.Errorf("CSS selector %q: %w", rule.Expression, err))
+		}
+		selection := doc.FindMatcher(matcher)
 		if selection.Length() == 0 {
 			if requiredRule(rule, c) {
 				if handleMetricError(c, rule, fmt.Errorf("CSS selector %q matched no nodes", rule.Expression)) {
@@ -535,7 +643,9 @@ func transformCSS(doc *goquery.Document, rules []MetricRule, c *Collector) (*Met
 				if label.Type == "string" {
 					labels[label.Name] = label.Value
 				} else {
-					labels[label.Name] = strings.TrimSpace(node.Find(label.Expression).First().Text())
+					if selector, err := compileCSS(label.Expression); err == nil {
+						labels[label.Name] = strings.TrimSpace(node.FindMatcher(selector).First().Text())
+					}
 				}
 			}
 			out.Metrics = append(out.Metrics, Metric{Name: rule.Name, Help: rule.Description, Type: rule.Type, Value: value, Labels: labels})
@@ -602,14 +712,14 @@ func applyPrometheusTransform(in MetricSet, c *Collector, t TransformConfig, rul
 				if pattern == "" {
 					pattern = "^" + regexp.QuoteMeta(rule.Name) + "$"
 				}
-				matched, err := regexp.MatchString(pattern, source.Name)
+				re, err := compileRegex(pattern)
 				if err != nil {
 					if handleMetricError(c, rule, err) {
 						continue
 					}
 					return nil, ruleFailure(c, rule, fmt.Errorf("metric %q expression: %w", rule.Name, err))
 				}
-				if !matched {
+				if !re.MatchString(source.Name) {
 					continue
 				}
 				metric := source
@@ -640,7 +750,7 @@ func applyPrometheusTransform(in MetricSet, c *Collector, t TransformConfig, rul
 	out := MetricSet{}
 	includes := make([]*regexp.Regexp, 0, len(t.Include))
 	for _, expression := range t.Include {
-		re, err := regexp.Compile(expression)
+		re, err := compileRegex(expression)
 		if err != nil {
 			return nil, err
 		}
@@ -648,7 +758,7 @@ func applyPrometheusTransform(in MetricSet, c *Collector, t TransformConfig, rul
 	}
 	excludes := make([]*regexp.Regexp, 0, len(t.Exclude))
 	for _, expression := range t.Exclude {
-		re, err := regexp.Compile(expression)
+		re, err := compileRegex(expression)
 		if err != nil {
 			return nil, err
 		}

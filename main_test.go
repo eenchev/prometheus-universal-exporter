@@ -707,7 +707,7 @@ func TestConfigValidationRejectsInvalidSettings(t *testing.T) {
 		{
 			name: "invalid metric error mode",
 			cfg:  &Config{Collectors: []Collector{{Request: RequestConfig{Type: RequestTypeHTTP}, Name: "invalid_error_mode", Metrics: []MetricRule{{Name: "value", ErrorMode: "panic", Expression: ".value"}}}}},
-			want: "want ignore, log or fail",
+			want: "want fail, log or ignore",
 		},
 		{
 			name: "invalid label type",

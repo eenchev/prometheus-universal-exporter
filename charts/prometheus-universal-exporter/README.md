@@ -56,7 +56,15 @@ config:
 
 The chart automatically creates a ConfigMap containing this configuration and mounts it into the exporter.
 
-See the exporter documentation for the full collector configuration format.
+Every collector key works here as it does in a standalone configuration file.
+For example, `metrics_prefix: example` on the collector above would export
+`example_example_status`; a prefix is joined with `_` to every metric the
+collector exports, and is validated when the exporter starts, so a bad one fails
+the rollout instead of producing oddly named series.
+
+See the exporter documentation for the full collector configuration format, and
+[Prefixing a collector's metrics](https://github.com/eenchev/prometheus-universal-exporter/blob/main/docs/CONFIGURATION.md#prefixing-a-collectors-metrics)
+for the prefix rules.
 
 ### 2. Install the exporter
 

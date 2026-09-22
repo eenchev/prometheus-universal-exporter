@@ -38,6 +38,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 	watchInterval := flags.Duration("config.watch-interval", DefaultWatchInterval, "How often to check the configuration files for changes when config.watch is set")
 	logLevel := flags.String("log.level", "info", "Log level: debug, info, warn, or error")
 	expandEnv := flags.Bool("config.export-env", false, "Expand ${NAME} environment variable references in the configuration and scheduled target files")
+	printSchema := flags.Bool("config.schema", false, "Print the JSON Schema of the configuration file, for editors, and exit")
 	check := flags.Bool("dry-run", false, "Validate the configuration and scheduled target files as startup would, print a JSON report to stdout, and exit 0 if they are valid or 1 if not, without starting the exporter")
 	if err := flags.Parse(args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
@@ -49,6 +50,16 @@ func run(args []string, stdout, stderr io.Writer) int {
 		}
 		newLogger("info", stderr).Error("invalid command line; exiting", "error", err.Error())
 		return 2
+	}
+
+	if *printSchema {
+		schema, err := configSchemaJSON()
+		if err != nil {
+			newLogger("info", stderr).Error("rendering the configuration schema failed", "error", err)
+			return 1
+		}
+		_, _ = stdout.Write(schema)
+		return 0
 	}
 
 	// Every document is read the same way, and the manager is told so its
@@ -74,6 +85,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 		logger.Error("invalid startup configuration; exiting", "error", err)
 		return 1
 	}
+	logDeprecations(logger, *configFile, config)
 
 	if err := ValidatePythonScripts(*pythonPath, config); err != nil {
 		logger.Error("invalid startup configuration; exiting", "error", err)
@@ -116,7 +128,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 
 	startup := []any{"address", *listenAddress, "collectors", len(config.Collectors),
 		"scheduled_targets", len(manager.Targets()), "config_watch", manager.WatchEnabled(),
-		"config_export_env", *expandEnv}
+		"config_export_env", *expandEnv, "request_types", builtRequestTypes()}
 	// The interval is only meaningful when the watch is on, and its absence
 	// would otherwise leave the operator guessing how stale a running
 	// configuration can be.

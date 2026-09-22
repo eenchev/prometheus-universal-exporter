@@ -45,6 +45,9 @@ type checkInputs struct {
 type checkReport struct {
 	Status string        `json:"status"`
 	Checks []checkResult `json:"checks"`
+	// RequestTypes are the request types this binary was built with, so a
+	// configuration can be checked against the build that will run it.
+	RequestTypes []string `json:"request_types"`
 }
 
 // checkResult is one step of startup. Errors lists every fault the step found
@@ -69,6 +72,11 @@ func runCheck(in checkInputs, stdout io.Writer, logger *slog.Logger) int {
 		attrs := []any{"check", result.Check}
 		if result.File != "" {
 			attrs = append(attrs, "file", result.File)
+		}
+		if deprecations, ok := result.Details["deprecations"].([]string); ok {
+			for _, message := range deprecations {
+				logger.Warn("deprecated configuration", "file", result.File, "deprecation", message)
+			}
 		}
 		switch result.Status {
 		case checkOK:
@@ -113,11 +121,17 @@ func checkStartup(in checkInputs) checkReport {
 		for _, c := range config.Collectors {
 			names = append(names, c.Name)
 		}
-		results = append(results, checkResult{Check: "config", File: in.ConfigFile, Status: checkOK, Details: map[string]any{
+		details := map[string]any{
 			"collectors":        names,
 			"otlp_enabled":      config.OTLP.Enabled,
 			"config_export_env": in.ExpandEnv,
-		}})
+		}
+		// A deprecated spelling still passes, so the check stays ok; the
+		// report says what to change before the spelling is removed.
+		if len(config.Deprecations) > 0 {
+			details["deprecations"] = config.Deprecations
+		}
+		results = append(results, checkResult{Check: "config", File: in.ConfigFile, Status: checkOK, Details: details})
 	}
 
 	if config == nil {
@@ -159,7 +173,7 @@ func checkStartup(in checkInputs) checkReport {
 			status = checkFailed
 		}
 	}
-	return checkReport{Status: status, Checks: results}
+	return checkReport{Status: status, Checks: results, RequestTypes: builtRequestTypes()}
 }
 
 // checkTargets validates the scheduled target document on its own and then

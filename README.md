@@ -38,6 +38,7 @@ Describe a collector:
 ```yaml
 collectors:
   - name: app_json
+    metrics_prefix: myapp   # optional; exports myapp_application_requests_total
     request:
       type: http
       path: /status
@@ -49,6 +50,24 @@ collectors:
         type: counter
         expression: .requests
 ```
+
+`metrics_prefix` is optional: when set, it is joined with `_` to the front of
+every metric the collector exports. See
+[Prefixing a collector's metrics](docs/CONFIGURATION.md#prefixing-a-collectors-metrics).
+For a list of things — servers, rows, components — give a metric `items` and
+write its value and labels against one item at a time; see
+[Metrics per item](docs/CONFIGURATION.md#metrics-per-item).
+
+Your editor can check the file as you type: start it with
+
+```yaml
+# yaml-language-server: $schema=https://raw.githubusercontent.com/eenchev/prometheus-universal-exporter/main/config.schema.json
+```
+
+and the YAML language server completes keys and flags mistakes against
+[`config.schema.json`](config.schema.json). Every expression is also compiled
+when the exporter starts, so a typo stops it with a message naming the
+collector and metric, rather than failing each scrape.
 
 Run the exporter and probe a target through it:
 
@@ -115,6 +134,7 @@ pattern needs. See the
 | `--config.watch-interval` | `60s` | How often to check, with `--config.watch`. |
 | `--config.export-env` | off | Expand `${NAME}` references in the configuration. |
 | `--otlp.targets-file` | none | Scheduled targets the exporter scrapes itself. |
+| `--config.schema` | off | Print the JSON Schema of the configuration file, for editors, and exit. See [Editor support](docs/CONFIGURATION.md#editor-support). |
 | `--dry-run` | off | Validate the files and flags above, print a JSON report and exit `0` or `1`, without starting. See [Dry run](docs/CONFIGURATION.md#dry-run). |
 
 ## Documentation

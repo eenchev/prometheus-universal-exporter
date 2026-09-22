@@ -1,0 +1,281 @@
+# Demo collector for the Grafana Cloud status page, https://status.grafana.com.
+# It needs no authentication.
+#
+#   go run . --config.file=testdata/config.grafanastatus.json-test.yaml
+#   curl 'http://localhost:8080/probe?collector=statuspage&target=https://status.grafana.com'
+#
+# The page is hosted on Atlassian Statuspage, which publishes the whole page as
+# JSON at /api/v2/summary.json, so the collector reads that rather than the
+# HTML. The same collector works for any Statuspage-hosted page: change only
+# the target, for example target=https://www.githubstatus.com.
+#
+# The summary looks like this, trimmed (testdata/json/grafana-status-summary.json
+# is a trimmed capture of the real one):
+#
+#   {"page": {"name": "Grafana Cloud", "updated_at": "2026-09-22T18:00:07.561Z", ...},
+#    "status": {"indicator": "minor", "description": "Minor Service Outage"},
+#    "components": [
+#      {"id": "y8nfqvv7w562", "name": "Grafana", "group": true,
+#       "status": "under_maintenance", "components": ["wfc1hb7m917l", ...]},
+#      {"id": "wfc1hb7m917l", "name": "AWS Australia - prod-ap-southeast-2",
+#       "group": false, "group_id": "y8nfqvv7w562", "status": "operational"},
+#      ...],
+#    "incidents": [{"name": "...", "status": "monitoring", "impact": "major", ...}],
+#    "scheduled_maintenances": [{"status": "scheduled", "scheduled_for": "...", ...}]}
+#
+# Components come in two kinds. A group ("group": true), such as "Grafana" or
+# "Logs", rolls up the status of the components inside it; the components that
+# are not groups are regions or services, each either inside a group
+# (group_id) or standing alone. The names of the grouped ones repeat: "AWS
+# Sweden - prod-eu-north-0" appears under almost every group, and a few names
+# repeat even inside one group. So a component is identified by its id, and the
+# name and group are labels for reading.
+#
+# Most component names carry the cloud provider and zone they run in:
+#
+#   AWS Ireland - prod-eu-west-6
+#   AWS Ireland - prod-eu-west-6: API
+#   AWS East (VA) prod-us-east-1
+#   Azure US Central - us-central2
+#
+# The component metrics parse them into cloud_provider (AWS, Azure, GCP or GCS,
+# as the page writes it) and cloud_zone (the last token before any ": service"
+# suffix, which contains a digit). A name that does not start with a provider,
+# such as "Support Tickets" or "Federal Cloud - AWS US Gov West", has neither
+# label.
+#
+# A status is exposed as a single series whose status label is the current
+# status, with the value 1. A status that does not apply has no series at all,
+# so an alert matches on the label:
+#
+#   statuspage_component_status{status="major_outage"}
+#
+# When a component's status changes, its old series ends and a new one starts.
+# Grafana Cloud has around 500 components, so the component status metric is
+# around 500 series.
+#
+# No series carries the page's name. Prometheus already labels every series
+# with the target it probed (instance, once the usual /probe relabeling is in
+# place), which tells two pages apart; repeating "Grafana Cloud" on 2,600 series
+# would add nothing but bytes. statuspage_info carries the name once, for a
+# dashboard to join on when it wants it.
+#
+# statuspage_component_incident_info explains the components that are not
+# operational: the incident or maintenance behind the status, and its latest
+# update. It exists only while a component is not operational, so its text never
+# churns the status series.
+collectors:
+  - name: statuspage
+    # A status page changes rarely and a scrape reads a large document, so a
+    # repeated scrape within 30 seconds is answered from memory.
+    cache: 30s
+    request:
+      type: http
+      path: /api/v2/summary.json
+      headers:
+        Accept: application/json
+    transform:
+      type: jq
+    # Incident updates run to several hundred characters. The message label
+    # below sets truncate: true, so a longer one is cut to this many bytes,
+    # ending in "…", instead of failing the whole scrape.
+    limits:
+      max_label_value_length: 300
+    metrics:
+      - name: statuspage_info
+        description: The status page, 1 always, with its name and time zone as labels
+        type: gauge
+        error_mode: log
+        expression: 1
+        labels:
+          - name: page
+            type: expression
+            expression: .page.name
+          - name: time_zone
+            type: expression
+            expression: .page.time_zone
+
+      # The overall status of the page: none (all operational), minor, major or
+      # critical.
+      - name: statuspage_status
+        description: Overall status of the page, 1 with the current indicator as a label
+        type: gauge
+        error_mode: log
+        expression: 1
+        labels:
+          - name: indicator
+            type: expression
+            expression: .status.indicator
+
+      # Every component that is not a group, one series each. items selects the
+      # components, and the value and every label are evaluated against one
+      # component at a time, as ".", with the whole summary as $root.
+      - name: statuspage_component_status
+        description: Status of a component, 1 with the current status as a label
+        type: gauge
+        error_mode: log
+        items: '.components[] | select(.group | not)'
+        expression: 1
+        labels:
+          - name: component_id
+            type: expression
+            expression: .id
+          - name: component
+            type: expression
+            expression: .name
+          # The cloud provider and zone, parsed from names such as
+          # "AWS Ireland - prod-eu-west-6: API"; absent for a component whose
+          # name does not carry them, such as "Support Tickets".
+          - name: cloud_provider
+            type: expression
+            expression: 'first(.name | capture("^(?<provider>AWS|Azure|GCP|GCS) (?<location>.+?)(?: - | )(?<zone>[a-z][a-z0-9-]*[0-9])(?::|$)")) | .provider'
+          - name: cloud_zone
+            type: expression
+            expression: 'first(.name | capture("^(?<provider>AWS|Azure|GCP|GCS) (?<location>.+?)(?: - | )(?<zone>[a-z][a-z0-9-]*[0-9])(?::|$)")) | .zone'
+          # The name of the group the component is in; absent when it stands
+          # alone.
+          - name: group
+            type: expression
+            expression: '.group_id as $id | first($root.components[] | select(.id == $id)) | .name'
+          - name: status
+            type: expression
+            expression: .status
+
+      # One series per component that is not operational, naming what the page
+      # says is behind it: the most recently updated unresolved incident, or
+      # maintenance in progress, that lists the component, and that event's
+      # latest update. Maintenance that is only scheduled is not the cause of
+      # anything yet, so it is left out. A component the page marks down with no
+      # event behind it still gets a series, without the event labels.
+      #
+      # The message is collapsed to one line, and truncate: true cuts it to
+      # limits.max_label_value_length. It changes with every update the page
+      # posts, and each change starts a new series; that is why it lives here
+      # rather than on statuspage_component_status, whose series should change
+      # only when the status does, not with every update the page posts.
+      - name: statuspage_component_incident_info
+        description: The incident or maintenance behind a component that is not operational, with its latest update, 1 while the component is not operational
+        type: gauge
+        error_mode: log
+        # Absent while every component is operational.
+        required: false
+        items: '.components[] | select((.group | not) and .status != "operational")'
+        expression: 1
+        labels:
+          - name: component_id
+            type: expression
+            expression: .id
+          - name: component
+            type: expression
+            expression: .name
+          - name: cloud_provider
+            type: expression
+            expression: 'first(.name | capture("^(?<provider>AWS|Azure|GCP|GCS) (?<location>.+?)(?: - | )(?<zone>[a-z][a-z0-9-]*[0-9])(?::|$)")) | .provider'
+          - name: cloud_zone
+            type: expression
+            expression: 'first(.name | capture("^(?<provider>AWS|Azure|GCP|GCS) (?<location>.+?)(?: - | )(?<zone>[a-z][a-z0-9-]*[0-9])(?::|$)")) | .zone'
+          - name: group
+            type: expression
+            expression: '.group_id as $id | first($root.components[] | select(.id == $id)) | .name'
+          - name: status
+            type: expression
+            expression: .status
+          - name: incident
+            type: expression
+            expression: |
+              .id as $id
+              | [($root.incidents + [$root.scheduled_maintenances[] | select(.status == "in_progress" or .status == "verifying")])[]
+                 | select(any(.components[]?; .id == $id))]
+              | max_by(.updated_at)
+              | .name
+          - name: incident_status
+            type: expression
+            expression: |
+              .id as $id
+              | [($root.incidents + [$root.scheduled_maintenances[] | select(.status == "in_progress" or .status == "verifying")])[]
+                 | select(any(.components[]?; .id == $id))]
+              | max_by(.updated_at)
+              | .status
+          - name: impact
+            type: expression
+            expression: |
+              .id as $id
+              | [($root.incidents + [$root.scheduled_maintenances[] | select(.status == "in_progress" or .status == "verifying")])[]
+                 | select(any(.components[]?; .id == $id))]
+              | max_by(.updated_at)
+              | .impact
+          - name: message
+            type: expression
+            truncate: true
+            expression: |
+              .id as $id
+              | [($root.incidents + [$root.scheduled_maintenances[] | select(.status == "in_progress" or .status == "verifying")])[]
+                 | select(any(.components[]?; .id == $id))]
+              | max_by(.updated_at)
+              | (.incident_updates // []) | max_by(.display_at) | .body
+              | if . then gsub("\\s+"; " ") | ltrimstr(" ") | rtrimstr(" ") else empty end
+
+      # The groups, whose status Statuspage derives from their components.
+      - name: statuspage_component_group_status
+        description: Status of a component group, 1 with the current status as a label
+        type: gauge
+        error_mode: log
+        required: false
+        items: '.components[] | select(.group)'
+        expression: 1
+        labels:
+          - name: group
+            type: expression
+            expression: .name
+          - name: status
+            type: expression
+            expression: .status
+
+      # The summary lists only incidents that are not resolved yet. These are
+      # counts, not statuses, so an impact with no incidents is a real 0 and
+      # keeps its series.
+      - name: statuspage_unresolved_incidents
+        description: Number of unresolved incidents by impact
+        type: gauge
+        error_mode: log
+        expression: |
+          .incidents as $incidents
+          | ["none", "minor", "major", "critical"][] as $impact
+          | [$incidents[] | select(.impact == $impact)] | length
+        labels:
+          - name: impact
+            type: expression
+            expression: '["none", "minor", "major", "critical"][]'
+
+      # The summary lists maintenances that are upcoming or in progress.
+      - name: statuspage_scheduled_maintenances
+        description: Number of upcoming and active scheduled maintenances by status
+        type: gauge
+        error_mode: log
+        expression: |
+          .scheduled_maintenances as $maintenances
+          | ["scheduled", "in_progress", "verifying"][] as $status
+          | [$maintenances[] | select(.status == $status)] | length
+        labels:
+          - name: status
+            type: expression
+            expression: '["scheduled", "in_progress", "verifying"][]'
+
+      # Absent when nothing is scheduled, hence required: false. Statuspage
+      # timestamps carry milliseconds, which fromdateiso8601 does not accept,
+      # so they are dropped first.
+      - name: statuspage_next_maintenance_start_timestamp_seconds
+        description: Unix time at which the next scheduled maintenance starts
+        type: gauge
+        error_mode: log
+        required: false
+        expression: |
+          [.scheduled_maintenances[] | select(.status == "scheduled") | .scheduled_for]
+          | min
+          | if . then sub("\\.[0-9]+Z$"; "Z") | fromdateiso8601 else empty end
+
+      - name: statuspage_updated_timestamp_seconds
+        description: Unix time at which the status page was last updated
+        type: gauge
+        error_mode: log
+        expression: .page.updated_at | sub("\\.[0-9]+Z$"; "Z") | fromdateiso8601

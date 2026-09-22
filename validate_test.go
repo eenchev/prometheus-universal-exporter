@@ -265,6 +265,7 @@ func TestShippedExampleScriptsSatisfyTheContract(t *testing.T) {
 		"testdata/config.usgs.csv-test.yaml",
 		"testdata/config.k8sguestbook.yaml-test.yaml",
 		"testdata/config.scrapethissite.html-test.yaml",
+		"testdata/config.grafanastatus.json-test.yaml",
 	} {
 		t.Run(path, func(t *testing.T) {
 			cfg, err := LoadConfig(path)

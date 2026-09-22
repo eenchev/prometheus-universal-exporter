@@ -29,6 +29,12 @@ import (
 // RequestTypeHTTP is the only request type implemented so far.
 const RequestTypeHTTP = "http"
 
+// knownRequestTypes is every request type in the source tree, whether or not
+// this binary was built with it, so a configuration that names a type the
+// build left out is told that, rather than that the type does not exist. A
+// test keeps it in step with the requesttype_<name>.go files.
+var knownRequestTypes = []string{RequestTypeHTTP}
+
 type requestType struct {
 	Name         string
 	Fields       []string
@@ -38,43 +44,43 @@ type requestType struct {
 	Fetch        func(ctx context.Context, target string, c *Collector, overrides RequestOverrides, forwarded http.Header) (*HTTPResponse, error)
 }
 
-// requestTypes is the registry. It is a variable only so a test can register
-// a fixture type to exercise the per-type rules with more than one type.
-var requestTypes = map[string]*requestType{
-	RequestTypeHTTP: {
-		Name: RequestTypeHTTP,
-		Fields: []string{
-			"method", "path", "query", "headers", "body",
-			"basic_auth", "basic_auth_file", "bearer_token", "bearer_token_file",
-			"forward_authorization", "forward_headers",
-			"tls", "retry", "max_response_bytes",
-			"follow_redirects", "enable_http2", "allowed_schemes",
-		},
-		Overrides: []string{
-			"method", "path", "timeout", "body", "insecure_skip_verify",
-			"follow_redirects", "enable_http2", "retry_attempts", "retry_backoff",
-			"header_", pathParamPrefix,
-		},
-		TargetFields: []string{
-			"method", "path", "body", "timeout", "insecure_skip_verify",
-			"follow_redirects", "enable_http2", "retry", "headers",
-			"basic_auth", "basic_auth_file", "bearer_token", "bearer_token_file",
-		},
-		Validate: validateHTTPRequest,
-		Fetch: func(ctx context.Context, target string, c *Collector, overrides RequestOverrides, forwarded http.Header) (*HTTPResponse, error) {
-			return fetch(ctx, target, c, overrides, forwarded)
-		},
-	},
+// requestTypes is the registry of the types built into this binary. Each type
+// registers itself from its own requesttype_<name>.go file, whose build
+// constraint decides whether the type is included:
+//
+//	//go:build !select_request_types || request_type_<name>
+//
+// A default build carries every type. Building with -tags
+// select_request_types,request_type_http carries only the listed ones; the
+// others, and everything only they import, are left out of the binary.
+//
+// The map is a variable, rather than being built once, only so a test can
+// register a fixture type to exercise the per-type rules with more than one
+// type.
+var requestTypes = map[string]*requestType{}
+
+// registerRequestType adds a type to the registry. It is called from the
+// init function of the type's file, so a duplicate is a programming error.
+func registerRequestType(rt *requestType) {
+	if _, exists := requestTypes[rt.Name]; exists {
+		panic(fmt.Sprintf("request type %q registered twice", rt.Name))
+	}
+	requestTypes[rt.Name] = rt
 }
 
-// supportedRequestTypes lists the registered names for error messages.
-func supportedRequestTypes() string {
+// builtRequestTypes lists the types this binary was built with, sorted.
+func builtRequestTypes() []string {
 	names := make([]string, 0, len(requestTypes))
 	for name := range requestTypes {
 		names = append(names, name)
 	}
 	sort.Strings(names)
-	return strings.Join(names, ", ")
+	return names
+}
+
+// supportedRequestTypes lists the built types for error messages.
+func supportedRequestTypes() string {
+	return strings.Join(builtRequestTypes(), ", ")
 }
 
 // validateRequest checks a collector's request block: the type is present and
@@ -87,6 +93,9 @@ func validateRequest(c *Collector) error {
 		return fmt.Errorf("collector %q has no request.type; it is required, and the supported types are: %s (add `type: http` to its request block)", c.Name, supportedRequestTypes())
 	}
 	rt, ok := requestTypes[c.Request.Type]
+	if !ok && contains(knownRequestTypes, c.Request.Type) {
+		return fmt.Errorf("collector %q uses request.type %q, which this build of the exporter does not include; it was built with: %s. Use a build that includes it: the default build includes every type, and a build with -tags select_request_types needs request_type_%s in its tags too", c.Name, c.Request.Type, supportedRequestTypes(), c.Request.Type)
+	}
 	if !ok {
 		return fmt.Errorf("collector %q has unsupported request.type %q; the supported types are: %s", c.Name, c.Request.Type, supportedRequestTypes())
 	}
@@ -210,43 +219,4 @@ func contains(values []string, value string) bool {
 		}
 	}
 	return false
-}
-
-// validateHTTPRequest holds the http type's rules. Nothing but type is
-// required: path may be empty, since the target URL can carry the whole path,
-// and method defaults to GET.
-func validateHTTPRequest(x *Collector) error {
-	if x.Request.BearerToken != "" && x.Request.BearerTokenFile != "" {
-		return fmt.Errorf("collector %q cannot set both request.bearer_token and request.bearer_token_file", x.Name)
-	}
-	if x.Request.BasicAuth != nil && x.Request.BasicAuthFile != nil {
-		return fmt.Errorf("collector %q cannot set both request.basic_auth and request.basic_auth_file", x.Name)
-	}
-	if x.Request.BasicAuthFile != nil && (strings.TrimSpace(x.Request.BasicAuthFile.Username) == "" || strings.TrimSpace(x.Request.BasicAuthFile.Password) == "") {
-		return fmt.Errorf("collector %q basic_auth_file requires username and password paths", x.Name)
-	}
-	if x.Request.Retry.Attempts < 0 {
-		return fmt.Errorf("collector %q request.retry.attempts must not be negative", x.Name)
-	}
-	if x.Request.Retry.Backoff < 0 {
-		return fmt.Errorf("collector %q request.retry.backoff must not be negative", x.Name)
-	}
-	if (x.Request.BasicAuth != nil || x.Request.BasicAuthFile != nil) && (x.Request.BearerToken != "" || x.Request.BearerTokenFile != "") {
-		return fmt.Errorf("collector %q cannot configure basic and bearer authentication together", x.Name)
-	}
-	if hasPathParams(x.Request.Path) {
-		if _, err := parsePathParams(x.Request.Path); err != nil {
-			return fmt.Errorf("collector %q: %w", x.Name, err)
-		}
-	}
-	if x.Request.Method == "" {
-		x.Request.Method = http.MethodGet
-	}
-	x.Request.Method = strings.ToUpper(x.Request.Method)
-	switch x.Request.Method {
-	case http.MethodGet, http.MethodPost, http.MethodPut, http.MethodPatch, http.MethodDelete, http.MethodHead:
-	default:
-		return fmt.Errorf("collector %q has unsupported method %q", x.Name, x.Request.Method)
-	}
-	return nil
 }

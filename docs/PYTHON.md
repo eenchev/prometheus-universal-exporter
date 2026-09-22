@@ -28,6 +28,34 @@ definitions dynamically through `metric(...)`.
 
 The launcher blocks `socket`, `subprocess`, `ctypes`, `multiprocessing`, `threading`, shell execution, and package installation. Python has no supported network API; `requests` and `httpx` are unnecessary. `script_timeout` and metric/output limits apply. Declared `libraries` are validated against the supported names (`lxml`, `PyYAML`, and `python-dateutil`, or their import names `yaml` and `dateutil`); they are never installed during a scrape, and the image has no pip to install them with.
 
+## How scripts run
+
+Scripts run in long-lived Python workers, not in a new interpreter per scrape.
+Starting CPython and importing lxml or dateutil takes tens to hundreds of
+milliseconds; running a typical script takes well under one. A worker pays the
+start once and then serves scrape after scrape.
+
+- **One collector per worker.** A worker only runs one collector's scripts, so
+  nothing one collector's script does to a module can affect another's. Each run
+  gets fresh globals, so a variable from the last scrape is gone; module state,
+  such as an attribute set on an imported module, lasts for the worker's life.
+  A changed script, after a reload, gets new workers.
+- **Timeouts.** `limits.script_timeout` (100 ms by default) bounds running the
+  script, not starting the interpreter. A script that overruns fails the scrape
+  with a timeout error, and its worker is killed; the next scrape starts another.
+- **Declared libraries are preloaded.** The libraries in `libraries` are
+  imported when the worker starts, so their import time is not counted against
+  the script, and a library that itself needs a module the sandbox blocks, such
+  as `threading`, still loads.
+- **Errors.** A script that raises, calls `fail(...)` or `sys.exit()` fails that
+  scrape with the Python error; the worker carries on. A worker that crashes, or
+  answers with more than `limits.max_output_bytes`, is replaced.
+- **Output.** `print` inside a script is captured per run and never mixes with
+  the metrics.
+- **Lifetime.** A worker is reused up to 1,000 times, at most four stay idle per
+  collector after a burst of scrapes, and an idle one stops after five minutes.
+  Workers exit with the exporter.
+
 ## Parsing HTML with lxml
 
 The image bundles `lxml`, and `lxml.html` is the HTML parser for Python
@@ -97,7 +125,7 @@ data. `csv`, `regex`, `css`, `xpath`, and `prometheus` keep receiving their own
 decoded format, and a pre-script that returns a string still leaves the format
 alone, so HTML and XML output is reparsed as before.
 
-Errors are classified as HTTP, decode, transform, missing data, validation, or resource-limit failures. `error_handling` accepts `fail`, `warn`, and `ignore`; `allow_missing_keys` controls required extraction results. Limits default to conservative values and are enforced immediately before exposition.
+Errors are classified as HTTP, decode, transform, missing data, validation, or resource-limit failures. `error_handling` accepts `fail`, `log`, and `ignore` (`warn` is a deprecated spelling of `log`); `allow_missing_keys` controls required extraction results. Limits default to conservative values and are enforced immediately before exposition.
 
 CSV responses can use a native CSV transform without CSS or Python:
 

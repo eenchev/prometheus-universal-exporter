@@ -280,6 +280,7 @@ Recommended top-level structure:
 ```yaml
 collectors:
   - name: example
+    metrics_prefix: example   # optional
     request:
       type: http
       ...
@@ -295,9 +296,42 @@ collectors:
     limits:
       ...
     cache: 60s
+    coalesce: true   # optional; identical probes in flight share a request (§ 42.13a)
 ```
 
 A collector MUST have a unique name.
+
+### 5.0a Metrics prefix
+
+A collector MAY set `metrics_prefix`. When set, the exporter MUST join it with
+`_` to the front of every metric the collector exports: `metrics_prefix:
+grafana` and a metric `statuspage_status` export `grafana_statuspage_status`.
+Unset or empty, names MUST be exported exactly as declared.
+
+The prefix MUST match `^[a-zA-Z][a-zA-Z0-9]*(_[a-zA-Z0-9]+)*$`: a letter, then
+letters and digits in parts joined by single underscores. This rules out a
+leading underscore (names beginning `__` are reserved by Prometheus), a trailing
+one (the joining `_` would double it), `__` anywhere, `:` (reserved for
+recording rules), a leading digit, and anything outside ASCII letters, digits
+and `_`. The exporter adds the separator rather than expecting it in the
+prefix, so a prefix is a name fragment and cannot produce a malformed name.
+
+An invalid prefix MUST be rejected at startup, on reload and by `--dry-run`,
+with a message naming the collector, the rule, an example, and that the
+separator is added. A prefix that leaves no room for a name within
+`limits.max_metric_name_length`, and a declared metric whose prefixed name
+exceeds that limit, MUST be rejected the same way; a name only known at scrape
+time MUST be checked against the limit with every other exported name (§ 21).
+
+The prefix MUST be applied in one place, to the output of whichever transform
+ran — declared metrics, names emitted by a Python script, and names passed
+through or renamed by a `prometheus` transform alike — and before the limits
+are checked, the result is cached, or it is written to `/probe` or queued for
+OTLP, so every consumer sees the same names. A histogram or summary keeps its
+family under the prefixed name. The response cache MUST be keyed on the
+collector definition including the prefix. The exporter's own `http_exporter_*`
+metrics, including scheduled-target health metrics, MUST NOT be prefixed. Logs
+and probe errors MUST name a metric rule as configured, without the prefix.
 
 ### 5.1 Request types
 
@@ -334,6 +368,35 @@ Each type MUST own, and the implementation MUST keep in one registry:
 Every key of the request block, and of a scheduled target's request block, MUST
 be accepted by at least one type, and a test MUST enforce it, so a key cannot be
 added without deciding which types it belongs to.
+
+#### Selecting request types at build time
+
+Which request types a binary carries MUST be decided at build time, so a build
+can leave out types it does not need together with the code and libraries only
+they use. A default build — no tags, and the published image — MUST carry every
+type.
+
+- Each type MUST live in its own `requesttype_<name>.go`, which registers it
+  from `init` and carries exactly the constraint
+  `//go:build !select_request_types || request_type_<name>`. Code and imports
+  that only that type needs MUST live behind the same constraint.
+- A build with `-tags select_request_types` MUST carry only the types named by
+  `request_type_<name>` tags. One that names none MUST fail to compile, which
+  `requesttype_none.go` does with the constraint
+  `select_request_types && !request_type_<a> && !request_type_<b> ...`
+  listing every type.
+- The source MUST keep a list of every type in the tree, whether or not the
+  build carries it. A collector naming a type that exists but was left out of
+  the build MUST be rejected with a message saying so, listing the types the
+  build carries and naming the tag that would include it; a name that is no
+  type at all keeps the unknown-type message.
+- `tools/request-type-tags.sh` MUST turn a comma-separated `REQUEST_TYPES` list
+  into those tags, printing nothing for an empty list and failing on a name
+  that is not a type in the tree. The Dockerfile's `REQUEST_TYPES` build
+  argument and the Makefile's `REQUEST_TYPES` variable MUST both use it.
+- The types the binary carries MUST appear on the startup log line and in the
+  `--dry-run` report (§ 30.1).
+- CI MUST vet and build the smallest selection as well as the default build.
 
 #### `http`
 
@@ -983,7 +1046,7 @@ transform:
 
 The implementation may use `required_libs` instead, but the field must be clearly documented.
 
-These declarations are metadata/validation, not an instruction to perform `pip install` during a scrape.
+These declarations are metadata/validation, not an instruction to perform `pip install` during a scrape. The declared libraries are also imported when a worker starts (§ 16.7), so their import time is not counted against `script_timeout`.
 
 The exporter MUST validate that declared libraries are from the supported bundled set.
 
@@ -1021,6 +1084,40 @@ Support configurable/default:
 - Maximum output/metric count
 - Memory/resource limits where technically feasible
 - Error reporting with collector and script context
+
+### 16.7 Python workers
+
+Scripts MUST run in long-lived worker interpreters, not in a new process per
+scrape: starting CPython and importing a library costs far more than running a
+typical script.
+
+- A worker MUST only run the scripts of one collector. Workers MUST be pooled
+  per interpreter path, collector, declared libraries, output limit and script
+  text, so no collector can see or disturb another's module state, and a
+  reloaded script gets new workers.
+- Each run MUST get fresh globals holding the names scripts have always had
+  (`data`, `response`, `target`, `collector`, `metric`, `fail`, `Response`,
+  `metrics`, `json`, `sys`, `os`, `io`, `contextlib`, `builtins`).
+- Requests and answers MUST travel on dedicated descriptors (3 and 4), one JSON
+  document per line, never on stdin or stdout, so a script that prints or reads
+  stdin cannot corrupt the protocol. A script's stdout and stderr MUST be
+  captured per run.
+- The sandbox (§ 16.5) MUST be installed once per worker, after the declared
+  libraries (§ 16.4) are imported and before any script runs. Declared libraries
+  MUST be imported at start-up, so their import time is not the script's, and so
+  a library that itself imports a module the sandbox blocks still loads.
+- `limits.script_timeout` MUST bound the run of a script, not the start of the
+  interpreter, which has its own budget of 10 seconds. A script that overruns
+  MUST fail the run with a timeout error naming the limit, and its worker MUST be
+  killed.
+- A script error, including `SystemExit`, MUST fail that run with the Python
+  error and leave the worker in service. A worker that exits, crashes, or writes
+  an answer longer than `limits.max_output_bytes` MUST be discarded, and the next
+  scrape MUST start another.
+- A healthy worker MUST be reused at most 1000 times; at most four idle workers
+  MUST be kept per pool, and an idle worker MUST be stopped after five minutes.
+  A worker MUST exit when the exporter does, which closing its request pipe
+  achieves.
 
 ---
 
@@ -1066,6 +1163,16 @@ metrics:
 ```
 
 Execution MUST be bounded and failures MUST be reported as transform errors.
+
+Expressions MUST be compiled once and reused by every scrape, not parsed and
+compiled per evaluation: configuration validation compiles every jq, regular
+expression, CSS selector and XPath expression a configuration holds (§ 24.2),
+and scrapes run those programs. The compiled programs MUST be safe for
+concurrent use, cached by expression text (and namespace bindings for XPath),
+and bounded in number, so repeated reloads cannot grow the cache without limit.
+
+Every jq program MUST have `$root` bound to the whole decoded document, so an
+expression evaluated against one item (§ 18.2) can reach the rest of it.
 
 ---
 
@@ -1137,9 +1244,11 @@ to `gauge`. Metric declarations MUST be placed on the collector, alongside
 `transform`, rather than using transform-specific arrays such as `rules` or
 `expressions`.
 
-`error_mode` MUST be `ignore`, `log` or `fail` and defaults to `log`. Any other
-value MUST be rejected at startup and on reload, and the message MUST list the
-accepted values. It governs what happens when an individual metric cannot be
+`error_mode` MUST be `ignore`, `log` or `fail` and defaults to `log`; the same
+vocabulary as `error_handling` (§ 19). `warn`, the older spelling of `log` in
+`error_handling`, MUST be accepted as meaning `log` and reported as deprecated
+(§ 19). Any other value MUST be rejected at startup and on reload, and the
+message MUST list the accepted values. It governs what happens when an individual metric cannot be
 extracted — its expression or a label expression errors, its value is absent
 while the metric is required, or its value is not a number:
 
@@ -1215,8 +1324,49 @@ labels:
     value: production
 ```
 
+A label MAY set `truncate: true`. A value longer than
+`limits.max_label_value_length` then MUST be cut to that many bytes, on a
+character boundary, ending in `…`, the mark counted within the limit; without
+it, such a value MUST fail the scrape as before (§ 21), since a silently
+shortened value would surprise. Truncation MUST apply to the labels of declared
+metrics from every transform, and MUST happen before `metrics_prefix` (§ 5.0a)
+is added.
+
 Python transforms are the exception: their script emits the common metric
 objects through `metric(...)`, so a `metrics` array is optional for them.
+
+## 18.2 Metrics per item
+
+For the `jq` and `yq` transforms a metric MAY set `items`, a jq expression
+selecting the things the metric is about. The value expression and every label
+expression MUST then be evaluated once per item, with the item as `.` and the
+whole document as `$root`, instead of as parallel streams over the whole
+document paired by position. Parallel streams drift silently: a label
+expression that yields nothing for one element shifts every later value onto
+the wrong series, and one that yields a single value is applied to all.
+
+```yaml
+metrics:
+  - name: server_cpu
+    items: .servers[]
+    expression: .cpu
+    labels:
+      - name: server
+        type: expression
+        expression: .name
+      - name: site
+        type: expression
+        expression: $root.site
+```
+
+For one item, the value expression and each label expression MUST produce at
+most one value; more MUST be an error naming the expression. A missing or null
+value MUST be that item's missing metric, handled by `required` and `error_mode`
+as for any other metric, and the other items MUST be unaffected under `ignore`
+and `log`. A missing or null label MUST leave that label off the series. An
+`items` expression that selects nothing MUST be a missing metric when the metric
+is required and produce nothing otherwise. `items` on any other transform MUST
+be rejected at startup.
 
 Every transform MAY define one `transform.pre_script`. The exporter MUST run
 it exactly once per scrape, after decoding and before evaluating the metric
@@ -1290,13 +1440,21 @@ error_handling:
   allow_missing_keys: false
 ```
 
-Allowed policies SHOULD include:
+The policies MUST be:
 
 ```text
-fail
-warn
-ignore
+fail     fail the probe at that stage
+log      carry on and log the failure at warning level
+ignore   carry on, logging the failure only at debug level
 ```
+
+This is the vocabulary `error_mode` uses (§ 18.1). `warn`, this setting's
+original spelling of `log`, MUST still be accepted and treated as `log`, and each
+use MUST be reported as deprecated: logged at warning level on startup and on
+every reload, naming the collector, the key and the replacement, and listed
+under `deprecations` in the `config` check of `--dry-run` (§ 30.1), which still
+passes. The value MUST be matched case-insensitively; anything else MUST be
+rejected naming the collector, the key and the accepted values.
 
 ### 19.1 Distinguish failure types
 
@@ -1398,7 +1556,7 @@ Before exposition, validate:
 - Numeric values
 - Invalid NaN/Inf behavior according to Prometheus client conventions
 
-Metric names SHOULD be normalized only when explicitly configured; silent surprising renaming is undesirable.
+Metric names SHOULD be normalized only when explicitly configured; silent surprising renaming is undesirable. A collector's `metrics_prefix` (§ 5.0a) is such explicit configuration, and validation applies to the prefixed names.
 
 ---
 
@@ -1429,6 +1587,8 @@ http_exporter_series_limit_exceeded
 http_exporter_cache_hits_total
 http_exporter_cache_misses_total
 http_exporter_cache_entries
+
+http_exporter_probes_coalesced_total
 
 http_exporter_collector_config_valid
 http_exporter_scheduled_targets
@@ -1650,6 +1810,48 @@ valid configuration left active.
 
 When a disabled watch is configured, the exporter MUST NOT run a polling loop at
 all.
+
+### 24.2 Validation of metric rules
+
+Everything about a metric rule that can be known before a scrape MUST be
+checked when the configuration loads — at startup, on reload and by `--dry-run`
+— with a message naming the collector, the rule and, where it applies, the
+label:
+
+- A declared metric name MUST be a valid Prometheus metric name and MUST NOT
+  start with `__`.
+- Every expression MUST compile in its transform's language: jq and yq value,
+  `items` and label expressions (compiled, not only parsed, so an undefined
+  function or variable is caught); regular expressions; CSS selectors, which
+  goquery would otherwise silently treat as matching nothing; XPath expressions
+  and relative label expressions, with the collector's namespaces; and a
+  prometheus transform's patterns, `include` and `exclude`.
+- A regex label MUST name a capture group the regex has, by number or name.
+- A prometheus transform's `rename` targets MUST be valid metric names, and its
+  `labels` keys and `rename_labels` targets valid label names.
+
+### 24.3 Configuration schema
+
+The repository MUST publish a JSON Schema (draft 2020-12) of the configuration
+file, `config.schema.json`, so editors can complete keys, show descriptions and
+flag unknown keys and invalid values. It MUST be generated from the Go
+configuration structs, with the allowed values, patterns, required keys and
+descriptions the structs cannot express added by path, so a key added to the
+configuration cannot be missing from it. `--config.schema` MUST print the
+schema of the running binary — its `request.type` values are the request types
+that binary was built with (§ 5.1) — and exit 0.
+
+A test MUST fail when the committed file differs from what the code generates,
+when a key the configuration reads is missing from the schema or the schema has
+a key the configuration does not read, when any shipped configuration (the
+examples, the demo configurations and the chart's default configuration) does
+not validate against it, and when it accepts any of a set of invalid documents.
+The example configurations MUST begin with the `yaml-language-server` modeline
+pointing at the published schema.
+
+The schema describes the canonical spelling, and MUST allow an unquoted number
+or boolean where the exporter reads a string, since YAML reads `expression: 1`
+as a number. Startup validation remains the authority on what is valid.
 
 ---
 
@@ -1980,6 +2182,70 @@ collectors:
                 )
 ```
 
+## 28.10 Status page: a status as a label
+
+A status is text; it MUST be exposed as a single series per thing that has a
+status, with the value `1` and the current status as a label. A status that
+does not apply MUST NOT have a series — no `0` series for the other possible
+values — so an alert selects on the label alone. When a status changes, its old
+series ends and a new one starts. Counts, such as incidents by impact, are not
+statuses: a count of `0` is a real value and MUST still be exported. The
+per-component and per-group metrics MUST use `items` (§ 18.2), so each label is
+evaluated against its own component and `$root` reaches the rest of the page.
+
+`testdata/config.grafanastatus.json-test.yaml` is the reference: a collector
+for any Atlassian Statuspage page, demonstrated against
+<https://status.grafana.com>, reading `/api/v2/summary.json`. It MUST expose:
+
+| Metric | Labels | Value |
+| --- | --- | --- |
+| `statuspage_info` | `page`, `time_zone` | Always 1 |
+| `statuspage_status` | `indicator` (`none`, `minor`, `major`, `critical`) | 1, one series, labelled with the page's current indicator |
+| `statuspage_component_status` | `component_id`, `component`, `group`, `cloud_provider`, `cloud_zone`, `status` (`operational`, `degraded_performance`, `partial_outage`, `major_outage`, `under_maintenance`) | 1, one series per component, labelled with its current status; components that are groups are excluded; `group` is absent for a component in no group |
+| `statuspage_component_incident_info` | `component_id`, `component`, `group`, `cloud_provider`, `cloud_zone`, `status`, `incident`, `incident_status`, `impact`, `message` | 1, only for a component that is not operational |
+| `statuspage_component_group_status` | `group`, `status` | 1, one series per group, labelled with its current status |
+| `statuspage_unresolved_incidents` | `impact` | Unresolved incidents with that impact |
+| `statuspage_scheduled_maintenances` | `status` (`scheduled`, `in_progress`, `verifying`) | Maintenances in that status |
+| `statuspage_next_maintenance_start_timestamp_seconds` | none | Start of the earliest scheduled maintenance; absent when none is scheduled |
+| `statuspage_updated_timestamp_seconds` | none | When the page was last updated |
+
+`cloud_provider` and `cloud_zone` MUST be parsed from the component name, which
+on status.grafana.com takes the forms `AWS Ireland - prod-eu-west-6`,
+`AWS Ireland - prod-eu-west-6: API`, `AWS East (VA) prod-us-east-1` and
+`Azure US Central - us-central2`: the provider is the leading `AWS`, `Azure`,
+`GCP` or `GCS`, as written, and the zone is the lowercase token, containing a
+digit, that ends the name or precedes a `: service` suffix. A name that does not
+start with a provider MUST leave both off the series. A test MUST cover every form, and
+names that carry neither, including `Federal Cloud - AWS US Gov West`.
+
+The page's name MUST appear only on `statuspage_info`. Prometheus labels every
+probed series with its target (`instance`), which already distinguishes pages,
+so the name on every series would only add bytes.
+
+`statuspage_component_incident_info` MUST name, for a component that is not
+operational, the most recently updated unresolved incident or maintenance in
+progress or verifying that lists it, and carry that event's latest update (by
+`display_at`) as `message`, with whitespace collapsed to single spaces and
+`truncate: true` (§ 18.1) cutting it to `limits.max_label_value_length`, which
+the collector sets to 300. Maintenance that is only scheduled MUST NOT count. A
+component with no such event MUST still have the series, without the event
+labels. The message MUST NOT be a label on `statuspage_component_status`: it
+changes with every update, and each change would start a new status series and
+reset any alert on the status, though the status itself had not changed.
+
+Component names are not unique — status.grafana.com lists the same region under
+most product groups, and a few names repeat within one group — so
+`component_id` MUST be a label; without it the scrape fails on duplicate series.
+
+It MUST be covered, as part of the opt-in external suite (§ 34.31a), by tests
+against a trimmed capture of the real summary
+(`testdata/json/grafana-status-summary.json`) that keeps grouped and ungrouped
+components, repeated names within a group, a component in outage, an unresolved
+incident with several updates, and maintenances both scheduled and in progress;
+by a case with nothing scheduled; by a component down with only a scheduled
+maintenance or nothing behind it; by a long, multi-line, non-ASCII update; and
+by an opt-in external case (§ 34.31a).
+
 ---
 
 # 30. CLI
@@ -1994,7 +2260,11 @@ Provide clear CLI flags, for example:
 --otlp.targets-file=/etc/exporter/targets.yaml
 --config.watch
 --config.watch-interval=60s
+--config.schema
 ```
+
+`--config.schema` prints the configuration file's JSON Schema and exits
+(§ 24.3).
 
 `--otlp.targets-file` is optional and selects the scheduled target document
 defined in section 42.14.
@@ -2029,7 +2299,9 @@ check can report.
 
 The steps MUST be:
 
-- `config` — the configuration file loads and validates;
+- `config` — the configuration file loads and validates, including the rule
+  checks of § 24.2; deprecated spellings accepted during validation are listed
+  under `details.deprecations` and logged, and do not fail the check;
 - `python_scripts` — every Python script compiles and every pre-script produces
   `data` (§ 16), with each faulty script reported as its own error. A
   configuration without Python MUST pass without needing an interpreter;
@@ -2041,8 +2313,11 @@ The steps MUST be:
 The report MUST be a single JSON document on stdout:
 
 ```json
-{"status": "ok|failed", "checks": [{"check": "...", "file": "...", "status": "ok|failed|skipped", "errors": ["..."], "reason": "...", "details": {}}]}
+{"status": "ok|failed", "request_types": ["http"], "checks": [{"check": "...", "file": "...", "status": "ok|failed|skipped", "errors": ["..."], "reason": "...", "details": {}}]}
 ```
+
+`request_types` MUST list the request types the binary was built with (§ 5.1),
+so a configuration can be checked against the build that will run it.
 
 A step whose input failed to load MUST be reported as `skipped` with a `reason`
 rather than omitted, so a report never looks shorter because something went
@@ -2984,6 +3259,14 @@ survived, so a source that changes shape is reported rather than silently
 producing an empty scrape. One case MUST cover the response cache against a real
 response.
 
+A demo configuration's detailed tests against a captured response MAY belong to
+the same suite, as the status page's do (§ 28.10): they then follow the same
+rules even though they need no network. The suite's files MUST be listed in one
+place, every test in them MUST be named `TestExternal*` so that
+`make test-external` (`-run TestExternal`) selects it, and each MUST start by
+calling the opt-in check. A test in the default suite MUST enforce both, by
+reading the source of the listed files.
+
 ## 34.32 Regression tests
 
 Every bug fixed in the project MUST add a regression test reproducing the bug before or alongside the fix.
@@ -3238,6 +3521,17 @@ status captured:
   setting `method` for it is rejected and one setting `path` is not.
 - An `http` collector accepts every `http` probe parameter together.
 - The configuration the Helm chart ships by default is valid.
+- Build-time selection: every `requesttype_<name>.go` carries its selection
+  constraint and the list of known types matches the files; the guard's
+  constraint names every type; evaluated with the Go toolchain's constraint
+  rules, a default build compiles every type and not the guard,
+  `select_request_types,request_type_http` compiles http and not the guard, and
+  `select_request_types` alone compiles only the guard; a default build
+  registers every known type; a known type missing from the build is rejected
+  as left out of the build, naming the tag, while an unknown name is not;
+  registering a type twice panics; the `--dry-run` report lists the built
+  types; `tools/request-type-tags.sh` maps lists to tags, de-duplicates, and
+  refuses names that are not types; the Dockerfile builds with its tags.
 
 ## 34.41 Target scheme tests
 
@@ -3251,6 +3545,134 @@ status captured:
 - A collector allowing only `https` rejects a bare target.
 - A probe whose target is the bare `host:port` of a running server — what a
   chart-generated monitor sends — is served.
+
+## 34.42 Metrics prefix tests
+
+- Valid prefixes (`grafana`, `vendor_eu`, single letters, mixed case, digits
+  after the first character) are accepted; a leading or trailing underscore, a
+  double underscore, a leading digit, `-`, `:`, spaces, a newline, non-ASCII
+  letters and `_` alone are rejected with a message naming the collector, the
+  rule and the separator.
+- An unset or empty prefix leaves names unchanged; the key is read from a
+  configuration file, where unknown keys are rejected.
+- The jq, yq, regex, csv, css, xpath and prometheus transforms, a prometheus
+  rename, and a Python transform all export prefixed names.
+- On `/probe`, HELP and TYPE lines and a histogram's `_bucket`, `_sum` and
+  `_count` series carry the prefix; no unprefixed series leaks; a second
+  collector without a prefix is unaffected; the exporter's own metrics are not
+  prefixed.
+- OTLP export, from a probe and from a scheduled target, carries the prefixed
+  names, and the scheduled target's health metrics do not.
+- A declared name too long once prefixed, and a prefix leaving no room for a
+  name, are rejected at startup; a name exactly at the limit is accepted; a
+  prefixed name over the limit fails validation at scrape time.
+- `--dry-run` reports an invalid prefix as a failed `config` check.
+- Changing the prefix changes the cache key.
+- `config.example.yaml` demonstrates the key.
+
+## 34.43 Metric rule validation tests
+
+- Invalid metric names (a hyphen, a space, a leading digit, non-ASCII, a `__`
+  prefix) are rejected naming the collector and the rule; valid ones, including
+  colons and a leading underscore, pass.
+- A jq expression with a syntax error, an undefined function or an undefined
+  variable; a jq label or `items` expression; a regex; a regex label naming a
+  capture group the regex lacks, by name or by number; a CSS selector and a CSS
+  label selector; an XPath expression and an XPath label; a prometheus pattern;
+  and `items` on a non-jq transform are each rejected naming the collector, the
+  rule and the label. Named and numbered captures, `@attribute` labels,
+  namespaced XPath and `$root` pass.
+- A prometheus transform's invalid `include` and `exclude` patterns, `rename`
+  targets, `labels` keys and `rename_labels` targets are rejected.
+- `--dry-run` reports an expression that does not compile as a failed `config`
+  check.
+
+## 34.44 Error policy vocabulary tests
+
+- `warn` in `error_handling` and in `error_mode` is normalised to `log`, each
+  use is recorded as a deprecation naming the collector, the key and the
+  replacement, and values are matched case-insensitively.
+- Anything else is rejected naming the collector, the key and the accepted
+  values.
+- `--dry-run` passes with a deprecated spelling, lists it under
+  `details.deprecations`, and logs it.
+- A rule's `fail` still takes precedence over `on_transform_error` of `ignore`,
+  `log` and `warn`.
+
+## 34.45 Items tests
+
+- Per item, the value and each label are evaluated against that item; `$root`
+  reaches the rest of the document; a label that yields nothing for one item is
+  absent on that series only, where parallel streams would have shifted it.
+- The same works with `yq`.
+- A value missing or null for one item drops that series under `log`, fails the
+  scrape naming the item under `fail`, and is skipped silently when not required.
+- A value or label expression that yields two values for one item is an error.
+- `items` selecting nothing is a missing metric when required and nothing
+  otherwise.
+- Without `items`, `$root` is the whole document.
+
+## 34.46 Label truncation tests
+
+- Truncation cuts to the byte limit, counts the mark within it, never splits a
+  character, and drops the mark when the limit is smaller than the mark.
+- Only a label with `truncate: true` is cut; another label over the limit still
+  fails validation; short values are untouched.
+- Truncation works with `metrics_prefix` and with transforms other than jq.
+
+## 34.47 Python worker tests
+
+- Sequential runs of one collector reuse one interpreter.
+- A global from one run is not visible to the next, and module state one
+  collector leaves is not visible to another.
+- A script that overruns fails naming the timeout, promptly, and the next run
+  succeeds in a new worker.
+- A cold start with a 25 ms `script_timeout` succeeds, since start-up is not
+  counted.
+- Printing JSON to stdout, writing to stderr and reading stdin do not corrupt
+  the protocol.
+- `raise`, `fail(...)` and `sys.exit` fail the run with the Python error and
+  leave the worker in service.
+- A worker that exits is replaced on the next run.
+- An answer over `max_output_bytes` fails with the output limit error, and the
+  next run succeeds.
+- `socket`, `subprocess` and `threading` imports, `open`, `os.system`, and
+  reading or writing the protocol descriptors are refused on every run.
+- A declared library is preloaded, including one that imports a blocked module.
+- Expired idle workers are stopped; pools are keyed by script; a burst of
+  concurrent runs succeeds and leaves at most the idle limit.
+
+## 34.48 Expression cache tests
+
+- A program compiled at load is the one scrapes run.
+- The cache is bounded and does not keep failed compiles.
+- XPath keys include namespace bindings.
+- One program serves concurrent evaluations.
+
+## 34.49 Configuration schema tests
+
+See § 24.3. In addition, the README's command-line table lists exactly the flags
+the exporter has.
+
+## 34.50 Shared probe tests
+
+- Five concurrent identical probes make one request to the target and get
+  identical answers; the self-metrics show five scrapes, five successes, one
+  decode and four coalesced probes; nothing is left in flight.
+- Two probes that do not overlap make two requests.
+- Probes to a different target, with a different probe parameter, or with a
+  different forwarded `Authorization` header each make their own request.
+- A target failure reaches every waiting probe as the same `502`, is logged
+  once, and counts as a failure; a rule's `error_mode: fail` JSON body reaches
+  every waiting probe.
+- The first probe's client going away neither fails the others nor cancels the
+  request.
+- Every waiting probe going away cancels the request, and a later probe starts
+  afresh and succeeds.
+- `coalesce: false` makes one request per probe.
+- With a cache, concurrent probes make one request and fill the cache, and the
+  next probe is a cache hit.
+- A panic in the shared work answers with `500` and leaves nothing in flight.
 
 # 35. Documentation requirements
 
@@ -3931,6 +4353,40 @@ for OTLP export. Target-request self-metrics such as
 `http_exporter_scrape_http_status_code` and
 `http_exporter_scrape_response_bytes` describe the last real target request and
 MUST NOT be altered by a cache hit.
+
+## 42.13a Sharing identical probes in flight
+
+A probe that arrives while an identical probe is already in flight MUST NOT
+send its own request to the target. It MUST wait for the one in flight and
+answer with an exact copy of its result: status, headers and body, a failure
+included. Several Prometheus replicas probing the same target at the same
+moment would otherwise each reach it, multiplying the load on a slow or
+rate-limited endpoint.
+
+- Identical MUST mean the response cache key (§ 42.13): the collector
+  definition, the target, every probe parameter and every forwarded header,
+  credentials included. Probes that could get different answers MUST NOT share.
+- It MUST work with the response cache off. With it on, the cache is checked
+  first, and the shared request fills it once. The probe that starts a shared
+  request MUST check the cache again before going to the target, since one that
+  just finished may have filled it.
+- The shared request's own work MUST be counted and logged once: its HTTP
+  status, response bytes, decode, transform, validation and error counters, its
+  log lines, its cache entry and its OTLP export. Every probe MUST still count
+  in `http_exporter_scrapes_total` and, by the shared outcome,
+  `http_exporter_scrape_success`, with its own duration. Each probe answered by
+  another's request MUST increment `http_exporter_probes_coalesced_total` for
+  its collector.
+- The shared request MUST run detached from the probe that started it, so that
+  probe's client going away MUST NOT fail the others. It MUST be cancelled when
+  every probe waiting on it has gone, and a probe arriving after that MUST start
+  a new request rather than join the cancelled one.
+- A panic in the shared work MUST answer the waiting probes with `500` rather
+  than stop the exporter.
+- It MUST be on by default, and a collector MUST be able to turn it off with
+  `coalesce: false`, for a target that must see every probe as a request.
+- Scheduled targets (§ 42.14) are scraped once per interval by the exporter
+  itself and are not affected.
 
 ## 42.14 Scheduled targets exported over OTLP
 

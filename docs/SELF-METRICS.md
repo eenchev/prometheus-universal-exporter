@@ -2,6 +2,17 @@
 
 Exporter self-health metrics are available at `/self-metrics` by default (and `/metrics` remains a compatibility alias). Change the dedicated path with `--web.self-metrics-path=/exporter/metrics`. The Helm chart's optional self-metrics ServiceMonitor/PodMonitor scrapes the exporter pods/services separately from target-probing monitors. Configure one or more entries in `monitors`, each with a unique `name` and `type: pod` or `type: service`; each entry supports Prometheus Operator `relabelings` and `metricRelabelings`.
 
+## Shared probes
+
+`http_exporter_probes_coalesced_total{collector="..."}` counts the probes that
+were answered by sharing an identical probe already in flight, instead of going
+to the target themselves (see
+[Identical probes share one request](CONFIGURATION.md#identical-probes-share-one-request)).
+With several Prometheus replicas it is normal for it to be roughly
+`(replicas - 1) / replicas` of `http_exporter_scrapes_total`; the trip to the
+target itself — its status, bytes, decode and transform counters — is counted
+once.
+
 ## Resource metrics
 
 The exporter can publish the familiar `go_` and `process_` series describing its

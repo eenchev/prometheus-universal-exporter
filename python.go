@@ -1,12 +1,11 @@
 package main
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"os/exec"
+	"strings"
 	"time"
 )
 
@@ -25,83 +24,36 @@ type pythonResponse struct {
 	Text       string              `json:"text"`
 }
 
-// The launcher deliberately receives the script as data. It blocks imports and
-// process/network primitives before executing collector code, while keeping the
-// normal Python standard library available for parsing and arithmetic.
-const pythonLauncher = `import sys,json,builtins,contextlib,io,os
-p=json.load(sys.stdin)
-blocked={'socket','subprocess','ctypes','multiprocessing','threading','_ctypes','pathlib','shutil','tempfile'}
-real_import=builtins.__import__
-def guarded_import(name,*a,**kw):
-    if name.split('.')[0] in blocked or name in {'urllib.request','urllib.error','urllib.robotparser'}: raise ImportError('module disabled by exporter')
-    return real_import(name,*a,**kw)
-builtins.__import__=guarded_import
-def denied(*a,**kw): raise RuntimeError('operation disabled by exporter')
-os.system=denied; os.popen=denied; os.spawnl=denied; os.spawnlp=denied; os.spawnv=denied; os.spawnvp=denied; os.execv=denied; os.execve=denied; os.execvp=denied; os.fork=denied; os.open=denied; os.listdir=denied; os.scandir=denied; os.walk=denied; os.remove=denied; os.unlink=denied; os.rename=denied; os.replace=denied; os.mkdir=denied; os.makedirs=denied; os.rmdir=denied
-builtins.open=denied; io.open=denied
-metrics=[]
-def metric(name,type='gauge',value=0,labels=None,help=None,timestamp=None):
-    if not isinstance(name,str): raise ValueError('metric name must be a string')
-    if labels is None: labels={}
-    metrics.append({'name':name,'type':type,'value':value,'labels':labels,'help':help or '', 'timestamp':timestamp})
-def fail(message): raise RuntimeError(str(message))
-class Response:
-    def __init__(self,x): self.status_code=x['status_code']; self.headers=x['headers']; self.body=x['body']; self.text=x['text']
-    def json(self): return json.loads(self.text)
-    def yaml(self):
-        try:
-            import yaml
-        except ImportError: raise RuntimeError('yaml library is not available')
-        return yaml.safe_load(self.text)
-response=Response(p['response']); target=p['target']; collector=p['collector']; data=p['data']
-sink=io.StringIO()
-with contextlib.redirect_stdout(sink), contextlib.redirect_stderr(sink):
-    exec(compile(p['script'],'<collector-python>','exec'),globals(),globals())
-if p.get('mode') == 'data':
-    print(json.dumps({'data':data,'log':sink.getvalue()}))
-else:
-    print(json.dumps({'metrics':metrics,'log':sink.getvalue()}))`
-
-func executePython(ctx context.Context, pythonPath, script string, d *Decoded, r *HTTPResponse, c *Collector) (*MetricSet, error) {
-	if pythonPath == "" {
-		pythonPath = "python3"
-	}
-	timeout := time.Duration(c.Limits.ScriptTimeout)
-	if timeout <= 0 {
-		timeout = 100 * time.Millisecond
-	}
-	pctx, cancel := context.WithTimeout(ctx, timeout)
-	defer cancel()
-	input := pythonInput{Mode: "metrics", Script: script, Data: pythonScriptData(d), Target: r.Target, Collector: c.Name, Response: pythonResponse{StatusCode: r.StatusCode, Headers: r.Headers, Body: string(r.Body), Text: string(r.Body)}}
-	b, err := json.Marshal(input)
-	if err != nil {
-		return nil, err
-	}
-	cmd := exec.CommandContext(pctx, pythonPath, "-I", "-c", pythonLauncher)
-	cmd.Stdin = bytes.NewReader(b)
-	var stdout, stderr bytes.Buffer
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
-	err = cmd.Run()
-	if pctx.Err() != nil {
-		return nil, fmt.Errorf("python transform timed out: %w", pctx.Err())
-	}
-	if err != nil {
-		return nil, fmt.Errorf("python transform failed: %w: %s", err, stderr.String())
-	}
-	if c.Limits.MaxOutputBytes > 0 && stdout.Len() > c.Limits.MaxOutputBytes {
-		return nil, errors.New("python transform output exceeds limit")
-	}
-	var result struct {
-		Metrics []Metric `json:"metrics"`
-	}
-	if err = json.Unmarshal(stdout.Bytes(), &result); err != nil {
-		return nil, fmt.Errorf("python transform output: %w", err)
-	}
-	return &MetricSet{Metrics: result.Metrics}, nil
+// pythonOutput is one answer from a worker: the metrics a transform emitted or
+// the data a pre-script left, or the error the script raised.
+type pythonOutput struct {
+	OK      bool     `json:"ok"`
+	Error   string   `json:"error"`
+	Metrics []Metric `json:"metrics"`
+	Data    any      `json:"data"`
+	Log     string   `json:"log"`
 }
 
+// executePython runs a python transform in one of the collector's workers
+// (pythonworker.go) and returns the metrics it emitted.
+func executePython(ctx context.Context, pythonPath, script string, d *Decoded, r *HTTPResponse, c *Collector) (*MetricSet, error) {
+	out, err := runPython(ctx, pythonPath, "metrics", "transform", script, d, r, c)
+	if err != nil {
+		return nil, err
+	}
+	return &MetricSet{Metrics: out.Metrics}, nil
+}
+
+// executePythonPreScript runs a pre-script and returns the data it left.
 func executePythonPreScript(ctx context.Context, pythonPath, script string, d *Decoded, r *HTTPResponse, c *Collector) (any, error) {
+	out, err := runPython(ctx, pythonPath, "data", "pre-script", script, d, r, c)
+	if err != nil {
+		return nil, err
+	}
+	return normalize(out.Data), nil
+}
+
+func runPython(ctx context.Context, pythonPath, mode, what, script string, d *Decoded, r *HTTPResponse, c *Collector) (*pythonOutput, error) {
 	if pythonPath == "" {
 		pythonPath = "python3"
 	}
@@ -109,37 +61,28 @@ func executePythonPreScript(ctx context.Context, pythonPath, script string, d *D
 	if timeout <= 0 {
 		timeout = 100 * time.Millisecond
 	}
-	pctx, cancel := context.WithTimeout(ctx, timeout)
-	defer cancel()
-	input := pythonInput{Mode: "data", Script: script, Data: pythonScriptData(d), Target: r.Target, Collector: c.Name, Response: pythonResponse{StatusCode: r.StatusCode, Headers: r.Headers, Body: string(r.Body), Text: string(r.Body)}}
-	b, err := json.Marshal(input)
+	input := pythonInput{Mode: mode, Script: script, Data: pythonScriptData(d), Target: r.Target, Collector: c.Name, Response: pythonResponse{StatusCode: r.StatusCode, Headers: r.Headers, Body: string(r.Body), Text: string(r.Body)}}
+	payload, err := json.Marshal(input)
 	if err != nil {
 		return nil, err
 	}
-	cmd := exec.CommandContext(pctx, pythonPath, "-I", "-c", pythonLauncher)
-	cmd.Stdin = bytes.NewReader(b)
-	var stdout, stderr bytes.Buffer
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
-	if err := cmd.Run(); err != nil {
-		if pctx.Err() != nil {
-			return nil, fmt.Errorf("python pre-script timed out: %w", pctx.Err())
-		}
-		return nil, fmt.Errorf("python pre-script failed: %w: %s", err, stderr.String())
+	line, err := pythonWorkers.run(ctx, pythonWorkerSpec(pythonPath, c), payload, timeout)
+	switch {
+	case errors.Is(err, errPythonTimeout):
+		return nil, fmt.Errorf("python %s timed out after %s: %w", what, timeout, context.DeadlineExceeded)
+	case errors.Is(err, errPythonOutputTooLarge):
+		return nil, fmt.Errorf("python %s output exceeds limit", what)
+	case err != nil:
+		return nil, fmt.Errorf("python %s failed: %w", what, err)
 	}
-	if pctx.Err() != nil {
-		return nil, fmt.Errorf("python pre-script timed out: %w", pctx.Err())
+	var out pythonOutput
+	if err := json.Unmarshal(line, &out); err != nil {
+		return nil, fmt.Errorf("python %s output: %w", what, err)
 	}
-	if c.Limits.MaxOutputBytes > 0 && stdout.Len() > c.Limits.MaxOutputBytes {
-		return nil, errors.New("python pre-script output exceeds limit")
+	if !out.OK {
+		return nil, fmt.Errorf("python %s failed: %s", what, strings.TrimSpace(out.Error))
 	}
-	var result struct {
-		Data any `json:"data"`
-	}
-	if err := json.Unmarshal(stdout.Bytes(), &result); err != nil {
-		return nil, fmt.Errorf("python pre-script output: %w", err)
-	}
-	return normalize(result.Data), nil
+	return &out, nil
 }
 
 func pythonScriptData(d *Decoded) any {

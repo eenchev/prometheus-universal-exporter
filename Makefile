@@ -6,8 +6,13 @@ APP := prometheus-universal-exporter
 GOLANGCI_LINT_VERSION := v2.13.2
 
 .PHONY: build test test-external vet fmt fmt-check lint lint-install helm-test
+# REQUEST_TYPES builds only the listed request types, comma-separated, for
+# example `make build REQUEST_TYPES=http`. Empty, the default, builds every type.
+# See "Choosing request types at build time" in docs/CONFIGURATION.md.
+REQUEST_TYPES ?=
+
 build:
-	go build ./...
+	tags="$$(sh tools/request-type-tags.sh '$(REQUEST_TYPES)')" && go build -tags "$$tags" ./...
 
 test:
 	go test ./...

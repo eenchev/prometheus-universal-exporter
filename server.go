@@ -23,9 +23,11 @@ import (
 // it.
 type statsValues struct {
 	probes, success, decodeOK, parseErrors, transformErrors, missing, scriptErrors, limitErrors, emitted, cacheHits, cacheMisses uint64
-	lastStatus                                                                                                                   int
-	lastBytes                                                                                                                    int64
-	lastDuration                                                                                                                 float64
+	// coalesced counts probes answered by sharing another probe's request.
+	coalesced    uint64
+	lastStatus   int
+	lastBytes    int64
+	lastDuration float64
 	// lastScrape is only kept per request; the per-collector series has no
 	// timestamp of its own.
 	lastScrape time.Time
@@ -64,6 +66,7 @@ var selfMetricDescriptors = []selfMetricDescriptor{
 	{"http_exporter_cache_hits_total", "Probes answered from this collector's response cache."},
 	{"http_exporter_cache_misses_total", "Probes that found no usable cache entry and went to the target."},
 	{"http_exporter_cache_entries", "Entries currently held in this collector's response cache."},
+	{"http_exporter_probes_coalesced_total", "Probes answered by sharing an identical probe already in flight instead of going to the target."},
 }
 
 // selfMetricDescriptor names one of the exporter's own metric families and the
@@ -119,6 +122,7 @@ func statsSeries(v statsValues) []selfSeries {
 		{"http_exporter_series_limit_exceeded", CounterMetricType, float64(v.limitErrors)},
 		{"http_exporter_cache_hits_total", CounterMetricType, float64(v.cacheHits)},
 		{"http_exporter_cache_misses_total", CounterMetricType, float64(v.cacheMisses)},
+		{"http_exporter_probes_coalesced_total", CounterMetricType, float64(v.coalesced)},
 	}
 }
 
@@ -133,11 +137,12 @@ type Server struct {
 	otlpPending     map[string]*otlpBatch
 	cache           *responseCache
 	requests        *requestTracker
+	flights         *probeFlights
 	ready           atomic.Bool
 }
 
 func NewServer(m *ConfigManager, p string, l *slog.Logger) *Server {
-	s := &Server{manager: m, pythonPath: p, logger: l, stats: map[string]*serverStats{}, otlpPending: map[string]*otlpBatch{}, cache: newResponseCache(), requests: newRequestTracker()}
+	s := &Server{manager: m, pythonPath: p, logger: l, stats: map[string]*serverStats{}, otlpPending: map[string]*otlpBatch{}, cache: newResponseCache(), requests: newRequestTracker(), flights: newProbeFlights()}
 	s.ready.Store(true)
 	return s
 }
@@ -383,10 +388,6 @@ func (s *Server) probeHandler(w http.ResponseWriter, r *http.Request) {
 	st := s.statsFor(name)
 	rec := s.recorderFor(st, name, requestURL, method)
 	rec.update(func(x *serverStats) { x.probes++ })
-	// scraped stays false until the exporter has actually gone to the target,
-	// so a response served from the collector cache leaves the last-scrape
-	// timestamp describing the scrape that filled it.
-	scraped := false
 	finish := func(ok bool) {
 		duration := time.Since(start)
 		rec.update(func(x *serverStats) {
@@ -395,26 +396,13 @@ func (s *Server) probeHandler(w http.ResponseWriter, r *http.Request) {
 			}
 			x.lastDuration = duration.Seconds()
 		})
-		if scraped {
-			rec.scraped(time.Now())
-		}
 	}
-	failStage := func(stage string, err error, policy string) bool {
-		if policy == "warn" || policy == "ignore" {
-			s.logger.Warn("probe stage failed; continuing", "collector", name, "target", logTarget, "stage", stage, "error", err)
-			return true
-		}
-		s.logger.Error("probe failed", "collector", name, "target", logTarget, "stage", stage, "error", err)
-		finish(false)
-		http.Error(w, fmt.Sprintf("collector %s %s failed: %v", name, stage, err), http.StatusBadGateway)
-		return false
-	}
-	ctx := r.Context()
 	forwarded := forwardedHeaders(r, c.Request)
 	cacheTTL := time.Duration(c.Cache)
+	key := probeCacheKey(c, target, r.URL.Query(), forwarded)
 	var cacheKey string
 	if cacheTTL > 0 {
-		cacheKey = probeCacheKey(c, target, r.URL.Query(), forwarded)
+		cacheKey = key
 		if cached, ok := s.cache.Get(cacheKey, time.Now()); ok {
 			rec.update(func(x *serverStats) {
 				x.cacheHits++
@@ -427,37 +415,102 @@ func (s *Server) probeHandler(w http.ResponseWriter, r *http.Request) {
 		}
 		rec.update(func(x *serverStats) { x.cacheMisses++ })
 	}
-	resp, err := fetchCollector(ctx, target, c, overrides, forwarded)
+	upstream := func(ctx context.Context) *probeResult {
+		return s.probeUpstream(ctx, upstreamProbe{
+			collector: c, target: target, logTarget: logTarget, overrides: overrides,
+			forwarded: forwarded, rec: rec, cacheKey: cacheKey, cacheTTL: cacheTTL,
+		})
+	}
+	if !coalesceProbes(c) {
+		result := upstream(r.Context())
+		finish(result.ok)
+		result.writeTo(w)
+		return
+	}
+	result, shared, err := s.flights.do(r.Context(), key, upstream)
+	if err != nil {
+		// This caller went away while it waited; there is nobody to answer.
+		finish(false)
+		return
+	}
+	if shared {
+		rec.update(func(x *serverStats) { x.coalesced++ })
+		s.logger.Debug("probe shared an identical probe in flight", "collector", name, "target", logTarget)
+	}
+	finish(result.ok)
+	result.writeTo(w)
+}
+
+// upstreamProbe is what one trip to the target needs.
+type upstreamProbe struct {
+	collector *Collector
+	target    string
+	logTarget string
+	overrides RequestOverrides
+	forwarded http.Header
+	rec       statsRecorder
+	cacheKey  string
+	cacheTTL  time.Duration
+}
+
+// probeUpstream goes to the target, decodes, transforms and validates, and
+// records the answer instead of writing it, so identical probes waiting on it
+// can each be given a copy. Its self-metrics, logs, cache entry and OTLP
+// export happen once, however many probes share it.
+func (s *Server) probeUpstream(ctx context.Context, p upstreamProbe) *probeResult {
+	c, name, rec, logTarget := p.collector, p.collector.Name, p.rec, p.logTarget
+	out := newProbeRecorder()
+	// A probe that finished while this one was waiting to start may have just
+	// filled the cache.
+	if p.cacheKey != "" {
+		if cached, ok := s.cache.Get(p.cacheKey, time.Now()); ok {
+			rec.update(func(x *serverStats) { x.emitted += uint64(len(cached.Metrics)) })
+			writeMetricSet(out, &cached)
+			return out.result(true)
+		}
+	}
+	scraped := false
+	defer func() {
+		// The last-scrape timestamp describes a trip to the target, not a
+		// probe answered from the cache.
+		if scraped {
+			rec.scraped(time.Now())
+		}
+	}()
+	// failStage applies a stage's error policy. It reports whether the probe
+	// carries on; when it does not, the error response is already recorded.
+	failStage := func(stage string, err error, policy string) bool {
+		switch policy {
+		case ErrorPolicyLog, errorPolicyWarn:
+			s.logger.Warn("probe stage failed; continuing", "collector", name, "target", logTarget, "stage", stage, "error", err)
+			return true
+		case ErrorPolicyIgnore:
+			s.logger.Debug("probe stage failed; continuing", "collector", name, "target", logTarget, "stage", stage, "error", err)
+			return true
+		}
+		s.logger.Error("probe failed", "collector", name, "target", logTarget, "stage", stage, "error", err)
+		http.Error(out, fmt.Sprintf("collector %s %s failed: %v", name, stage, err), http.StatusBadGateway)
+		return false
+	}
+	resp, err := fetchCollector(ctx, p.target, c, p.overrides, p.forwarded)
 	scraped = true
 	if err != nil {
 		if strings.Contains(strings.ToLower(err.Error()), "response size") {
 			rec.update(func(x *serverStats) { x.limitErrors++ })
 		}
-		if !failStage("http", err, c.ErrorHandling.OnHTTPError) {
-			return
-		}
-		finish(true)
-		return
+		return out.result(failStage("http", err, c.ErrorHandling.OnHTTPError))
 	}
 	rec.update(func(x *serverStats) {
 		x.lastStatus = resp.StatusCode
 		x.lastBytes = int64(len(resp.Body))
 	})
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		if !failStage("http_status", fmt.Errorf("received HTTP status %d", resp.StatusCode), c.ErrorHandling.OnHTTPError) {
-			return
-		}
-		finish(true)
-		return
+		return out.result(failStage("http_status", fmt.Errorf("received HTTP status %d", resp.StatusCode), c.ErrorHandling.OnHTTPError))
 	}
 	d, err := decode(resp, c)
 	if err != nil {
 		rec.update(func(x *serverStats) { x.parseErrors++ })
-		if !failStage("decode", err, c.ErrorHandling.OnDecodeError) {
-			return
-		}
-		finish(true)
-		return
+		return out.result(failStage("decode", err, c.ErrorHandling.OnDecodeError))
 	}
 	rec.update(func(x *serverStats) { x.decodeOK++ })
 	ms, err := transform(ctx, d, resp, c, s.pythonPath)
@@ -478,34 +531,27 @@ func (s *Server) probeHandler(w http.ResponseWriter, r *http.Request) {
 		var failure *MetricFailure
 		if errors.As(err, &failure) {
 			s.logger.Error("probe failed", "collector", name, "target", logTarget, "stage", "metric", "metric", failure.Metric, "error", err)
-			finish(false)
-			writeProbeError(w, http.StatusBadGateway, probeError{
+			writeProbeError(out, http.StatusBadGateway, probeError{
 				Stage:     "metric",
 				Collector: name,
 				Metric:    failure.Metric,
 				Target:    logTarget,
 				Error:     err.Error(),
 			})
-			return
+			return out.result(false)
 		}
-		if !failStage("transform", err, c.ErrorHandling.OnTransformError) {
-			return
-		}
-		finish(true)
-		return
+		return out.result(failStage("transform", err, c.ErrorHandling.OnTransformError))
 	}
 	if err = ms.Validate(c.Limits); err != nil {
 		rec.update(func(x *serverStats) { x.limitErrors++ })
-		if !failStage("validation", err, "fail") {
-			return
-		}
-		return
+		failStage("validation", err, ErrorPolicyFail)
+		return out.result(false)
 	}
 	rec.update(func(x *serverStats) { x.emitted += uint64(len(ms.Metrics)) })
-	finish(true)
-	s.cache.Put(cacheKey, c.Name, *ms, cacheTTL, c.Limits.MaxCacheEntries, time.Now())
-	writeMetricSet(w, ms)
+	s.cache.Put(p.cacheKey, c.Name, *ms, p.cacheTTL, c.Limits.MaxCacheEntries, time.Now())
+	writeMetricSet(out, ms)
 	s.queueOTLP(*ms)
+	return out.result(true)
 }
 
 // safeTarget renders a target for logs and error bodies with any credentials
@@ -629,11 +675,11 @@ func (s *Server) metricsHandler(w http.ResponseWriter, _ *http.Request) {
 	fmt.Fprintf(&b, "# HELP http_exporter_scheduled_targets Scheduled targets configured for OTLP delivery.\n# TYPE http_exporter_scheduled_targets gauge\nhttp_exporter_scheduled_targets %d\n", len(s.manager.Targets()))
 	for _, x := range ss {
 		x.v.mu.Lock()
-		p, ok, d, pe, te, m, se, le, em, status, bytes, dur, hits, misses := x.v.probes, x.v.success, x.v.decodeOK, x.v.parseErrors, x.v.transformErrors, x.v.missing, x.v.scriptErrors, x.v.limitErrors, x.v.emitted, x.v.lastStatus, x.v.lastBytes, x.v.lastDuration, x.v.cacheHits, x.v.cacheMisses
+		p, ok, d, pe, te, m, se, le, em, status, bytes, dur, hits, misses, coalesced := x.v.probes, x.v.success, x.v.decodeOK, x.v.parseErrors, x.v.transformErrors, x.v.missing, x.v.scriptErrors, x.v.limitErrors, x.v.emitted, x.v.lastStatus, x.v.lastBytes, x.v.lastDuration, x.v.cacheHits, x.v.cacheMisses, x.v.coalesced
 		x.v.mu.Unlock()
 		label := fmt.Sprintf("{collector=%q}", x.name)
 		fmt.Fprintf(&b, "http_exporter_scrapes_total%s %d\nhttp_exporter_scrape_success%s %d\nhttp_exporter_scrape_duration_seconds%s %s\nhttp_exporter_scrape_http_status_code%s %d\nhttp_exporter_scrape_response_bytes%s %d\nhttp_exporter_decode_success%s %d\nhttp_exporter_parse_errors_total%s %d\nhttp_exporter_transform_errors_total%s %d\nhttp_exporter_missing_keys_total%s %d\nhttp_exporter_script_errors_total%s %d\nhttp_exporter_script_duration_seconds%s 0\nhttp_exporter_metrics_emitted%s %d\nhttp_exporter_series_limit_exceeded%s %d\n", label, p, label, ok, label, strconv.FormatFloat(dur, 'f', -1, 64), label, status, label, bytes, label, d, label, pe, label, te, label, m, label, se, label, label, em, label, le)
-		fmt.Fprintf(&b, "http_exporter_cache_hits_total%s %d\nhttp_exporter_cache_misses_total%s %d\nhttp_exporter_cache_entries%s %d\n", label, hits, label, misses, label, cacheEntries[x.name])
+		fmt.Fprintf(&b, "http_exporter_cache_hits_total%s %d\nhttp_exporter_cache_misses_total%s %d\nhttp_exporter_cache_entries%s %d\nhttp_exporter_probes_coalesced_total%s %d\n", label, hits, label, misses, label, cacheEntries[x.name], label, coalesced)
 	}
 	s.renderVerboseRequestMetrics(&b, declared)
 	if runtime := s.runtimeMetrics(); len(runtime) > 0 {
@@ -685,6 +731,7 @@ func (s *Server) selfMetricSet() MetricSet {
 		add("http_exporter_cache_hits_total", CounterMetricType, float64(x.v.cacheHits))
 		add("http_exporter_cache_misses_total", CounterMetricType, float64(x.v.cacheMisses))
 		add("http_exporter_cache_entries", GaugeMetricType, float64(cacheEntries[x.name]))
+		add("http_exporter_probes_coalesced_total", CounterMetricType, float64(x.v.coalesced))
 		x.v.mu.Unlock()
 	}
 	for _, c := range s.manager.Get().Collectors {

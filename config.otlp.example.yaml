@@ -1,3 +1,4 @@
+# yaml-language-server: $schema=https://raw.githubusercontent.com/eenchev/prometheus-universal-exporter/main/config.schema.json
 # Companion to config.example.yaml with OTLP export enabled. Scheduled targets
 # (targets.example.yaml, passed with --otlp.targets-file) require this.
 otlp:

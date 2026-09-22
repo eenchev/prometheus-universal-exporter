@@ -55,6 +55,10 @@ start once and then serves scrape after scrape.
 - **Lifetime.** A worker is reused up to 1,000 times, at most four stay idle per
   collector after a burst of scrapes, and an idle one stops after five minutes.
   Workers exit with the exporter.
+- **Metrics.** With `web.self_metrics.verbose`, the exporter publishes each
+  collector's workers by state (starting, idle, busy), how many started or
+  failed to, why they stopped, and how script runs ended. See
+  [Python workers](SELF-METRICS.md#python-workers).
 
 ## Parsing HTML with lxml
 

@@ -196,7 +196,8 @@ monitors: []
 #       optional: false
 # The self-metrics ServiceMonitor/PodMonitor. What that endpoint publishes is
 # configured in the exporter configuration rather than here: set
-# web.self_metrics.verbose for the per-request series, and
+# web.self_metrics.verbose for the per-request series, the per-collector
+# scrape-time histograms and the Python worker metrics, and
 # web.self_metrics.resource_metrics_enabled for the go_ and process_ series
 # describing the exporter's own CPU and memory.
 selfMetrics:

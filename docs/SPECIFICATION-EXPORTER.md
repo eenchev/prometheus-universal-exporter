@@ -1742,6 +1742,44 @@ timestamp MUST keep describing the scrape that filled the cache; the cache hit
 itself MUST still be counted, on the collector and on the request alike. This
 applies to both `/probe` and scheduled targets.
 
+### 22.1a Verbose collector metrics
+
+Verbose mode MUST additionally publish the following per-collector families.
+None of them may appear while verbose mode is off, and every label value MUST
+come from a fixed set, so the number of series is bounded by the number of
+configured collectors.
+
+```text
+http_exporter_target_scrape_duration_seconds          histogram {collector}
+http_exporter_python_workers                          gauge     {collector, state}
+http_exporter_python_worker_starts_total              counter   {collector}
+http_exporter_python_worker_start_failures_total      counter   {collector}
+http_exporter_python_worker_stops_total               counter   {collector, reason}
+http_exporter_python_runs_total                       counter   {collector, outcome}
+```
+
+`http_exporter_target_scrape_duration_seconds` MUST observe the duration of
+every trip to the target, from sending the request to having validated metrics,
+for `/probe` and scheduled targets alike. A probe answered from the response
+cache, or by sharing another probe's request (§ 42.13a), made no trip and MUST
+NOT be observed. The buckets MUST be fixed at 0.005, 0.01, 0.025, 0.05, 0.1,
+0.25, 0.5, 1, 2.5, 5, 10, 30 and 60 seconds, plus `+Inf`. Every configured
+collector MUST have a histogram, empty until its first trip. Durations MUST only
+be recorded while verbose mode is on, so turning it on does not publish a
+history nobody asked to be kept.
+
+The Python families MUST be published for every collector with a Python
+transform or pre-script, and for no other. `state` MUST be one of `starting`,
+`idle` and `busy`; `reason` one of `timeout`, `crash`, `output_limit`,
+`cancelled`, `retired`, `surplus` and `idle`; `outcome` one of `ok`,
+`script_error`, `timeout`, `output_limit` and `failed`. Every value of `reason`
+and `outcome` MUST be published, zero included, so a rate can be taken before
+the first event. The pool MUST keep these counts regardless of verbose mode,
+since it maintains them anyway; only their publication depends on it.
+
+Each family MUST declare `HELP` and `TYPE` once, before its series, and MUST be
+delivered over OTLP like the rest of the self-metrics.
+
 ---
 
 
@@ -3094,6 +3132,8 @@ Test:
 - HELP/TYPE output where required.
 - Multiple metrics.
 - Histograms and summaries where supported.
+- A histogram's `+Inf` bucket written once, including when the decoded histogram
+  already carries it.
 - No malformed exposition after transformation.
 
 The test suite SHOULD parse the generated exposition with a Prometheus parser rather than relying only on string comparisons.
@@ -3673,6 +3713,25 @@ the exporter has.
 - With a cache, concurrent probes make one request and fill the cache, and the
   next probe is a cache hit.
 - A panic in the shared work answers with `500` and leaves nothing in flight.
+
+## 34.51 Verbose collector metric tests
+
+See § 22.1a.
+
+- The histogram's buckets are the ones listed, cumulative, with `_sum` and
+  `_count`; it is published when verbose, over `/metrics` and over OTLP, and not
+  published or recorded when verbose is off.
+- A probe to the target is observed; a cache hit and a coalesced probe are not;
+  a scheduled scrape is.
+- A Python collector's runs are counted by outcome — `ok`, `script_error`,
+  `timeout` — and a timed-out or crashed worker is counted as a stop with that
+  reason; worker states read idle after the runs; starts are counted.
+- A worker that cannot start is counted as a start failure.
+- A collector without Python has no Python series.
+- Every family has one `HELP` and one `TYPE` line, and every family added here
+  is absent without verbose mode.
+- A histogram passed through from a Prometheus target is written with exactly
+  one `le="+Inf"` bucket.
 
 # 35. Documentation requirements
 

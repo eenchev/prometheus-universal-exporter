@@ -27,6 +27,12 @@ var verboseOnlyNames = []string{
 	"http_exporter_request_series_capped",
 	"http_exporter_request_series_tracked",
 	"http_exporter_request_last_scrape_timestamp_seconds",
+	"http_exporter_target_scrape_duration_seconds",
+	"http_exporter_python_workers",
+	"http_exporter_python_worker_starts_total",
+	"http_exporter_python_worker_start_failures_total",
+	"http_exporter_python_worker_stops_total",
+	"http_exporter_python_runs_total",
 }
 
 func TestVerboseRequestMetricsAreAbsentByDefault(t *testing.T) {

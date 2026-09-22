@@ -69,19 +69,25 @@ func runPython(ctx context.Context, pythonPath, mode, what, script string, d *De
 	line, err := pythonWorkers.run(ctx, pythonWorkerSpec(pythonPath, c), payload, timeout)
 	switch {
 	case errors.Is(err, errPythonTimeout):
+		pythonWorkers.recordRun(c.Name, pythonRunTimeout)
 		return nil, fmt.Errorf("python %s timed out after %s: %w", what, timeout, context.DeadlineExceeded)
 	case errors.Is(err, errPythonOutputTooLarge):
+		pythonWorkers.recordRun(c.Name, pythonRunOutputLimit)
 		return nil, fmt.Errorf("python %s output exceeds limit", what)
 	case err != nil:
+		pythonWorkers.recordRun(c.Name, pythonRunFailed)
 		return nil, fmt.Errorf("python %s failed: %w", what, err)
 	}
 	var out pythonOutput
 	if err := json.Unmarshal(line, &out); err != nil {
+		pythonWorkers.recordRun(c.Name, pythonRunFailed)
 		return nil, fmt.Errorf("python %s output: %w", what, err)
 	}
 	if !out.OK {
+		pythonWorkers.recordRun(c.Name, pythonRunScriptError)
 		return nil, fmt.Errorf("python %s failed: %s", what, strings.TrimSpace(out.Error))
 	}
+	pythonWorkers.recordRun(c.Name, pythonRunOK)
 	return &out, nil
 }
 

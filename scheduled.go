@@ -75,6 +75,7 @@ func (s *Server) scrapeScheduledTarget(ctx context.Context, target ScheduledTarg
 		count(func(st *serverStats) { st.lastDuration = elapsed.Seconds() })
 		if scraped {
 			rec.scraped(time.Now())
+			s.observeTargetScrape(c.Name, elapsed)
 		}
 		s.queueOTLPResource(scheduledHealthMetrics(target, c.Name, up, elapsed.Seconds()), identity)
 	}

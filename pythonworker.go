@@ -113,9 +113,65 @@ type pythonPool struct {
 	mu      sync.Mutex
 	idle    map[string][]*pythonWorker
 	started atomic.Int64
+	// stats are kept per collector, under mu. They cost a map lookup per
+	// run, and are published only with verbose self-metrics (pythonmetrics.go).
+	stats map[string]*pythonCollectorStats
 }
 
-var pythonWorkers = &pythonPool{idle: map[string][]*pythonWorker{}}
+// Why a worker stopped, and how a run ended: bounded sets, so they can be
+// label values.
+const (
+	pythonStopTimeout     = "timeout"
+	pythonStopCrash       = "crash"
+	pythonStopOutputLimit = "output_limit"
+	pythonStopCancelled   = "cancelled"
+	pythonStopRetired     = "retired"
+	pythonStopSurplus     = "surplus"
+	pythonStopIdle        = "idle"
+
+	pythonRunOK          = "ok"
+	pythonRunScriptError = "script_error"
+	pythonRunTimeout     = "timeout"
+	pythonRunOutputLimit = "output_limit"
+	pythonRunFailed      = "failed"
+)
+
+var (
+	pythonStopReasons = []string{pythonStopTimeout, pythonStopCrash, pythonStopOutputLimit, pythonStopCancelled, pythonStopRetired, pythonStopSurplus, pythonStopIdle}
+	pythonRunOutcomes = []string{pythonRunOK, pythonRunScriptError, pythonRunTimeout, pythonRunOutputLimit, pythonRunFailed}
+)
+
+type pythonCollectorStats struct {
+	starting, busy int
+	starts         uint64
+	startFailures  uint64
+	stops          map[string]uint64
+	runs           map[string]uint64
+}
+
+var pythonWorkers = &pythonPool{idle: map[string][]*pythonWorker{}, stats: map[string]*pythonCollectorStats{}}
+
+// statsLocked returns a collector's statistics, creating them; mu is held.
+func (p *pythonPool) statsLocked(collector string) *pythonCollectorStats {
+	st := p.stats[collector]
+	if st == nil {
+		st = &pythonCollectorStats{stops: map[string]uint64{}, runs: map[string]uint64{}}
+		p.stats[collector] = st
+	}
+	return st
+}
+
+func (p *pythonPool) count(collector string, update func(*pythonCollectorStats)) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	update(p.statsLocked(collector))
+}
+
+// recordRun counts how a run ended. The pool cannot tell a script's own error
+// from a successful answer, so the caller, which reads the answer, records it.
+func (p *pythonPool) recordRun(collector, outcome string) {
+	p.count(collector, func(st *pythonCollectorStats) { st.runs[outcome]++ })
+}
 
 // run sends one request to a worker for spec and returns its answer line.
 func (p *pythonPool) run(ctx context.Context, spec pythonSpec, payload []byte, timeout time.Duration) ([]byte, error) {
@@ -125,11 +181,32 @@ func (p *pythonPool) run(ctx context.Context, spec pythonSpec, payload []byte, t
 	}
 	line, err := worker.call(ctx, payload, timeout)
 	if err != nil {
-		worker.stop()
+		p.discard(worker, stopReason(err))
 		return nil, err
 	}
 	p.release(spec, worker)
 	return line, nil
+}
+
+func stopReason(err error) string {
+	switch {
+	case errors.Is(err, errPythonTimeout):
+		return pythonStopTimeout
+	case errors.Is(err, errPythonOutputTooLarge):
+		return pythonStopOutputLimit
+	case errors.Is(err, context.Canceled):
+		return pythonStopCancelled
+	}
+	return pythonStopCrash
+}
+
+// discard stops a busy worker and counts why.
+func (p *pythonPool) discard(worker *pythonWorker, reason string) {
+	worker.stop()
+	p.count(worker.collector, func(st *pythonCollectorStats) {
+		st.busy--
+		st.stops[reason]++
+	})
 }
 
 func (p *pythonPool) acquire(ctx context.Context, spec pythonSpec) (*pythonWorker, error) {
@@ -141,25 +218,43 @@ func (p *pythonPool) acquire(ctx context.Context, spec pythonSpec) (*pythonWorke
 		worker = idle[len(idle)-1]
 		p.idle[key] = idle[:len(idle)-1]
 	}
-	p.mu.Unlock()
+	st := p.statsLocked(spec.Collector)
 	if worker != nil {
+		st.busy++
+		p.mu.Unlock()
 		return worker, nil
 	}
+	st.starting++
+	p.mu.Unlock()
+
 	p.started.Add(1)
-	return startPythonWorker(ctx, spec)
+	worker, err := startPythonWorker(ctx, spec)
+	p.count(spec.Collector, func(st *pythonCollectorStats) {
+		st.starting--
+		if err != nil {
+			st.startFailures++
+			return
+		}
+		st.starts++
+		st.busy++
+	})
+	return worker, err
 }
 
 func (p *pythonPool) release(spec pythonSpec, worker *pythonWorker) {
 	worker.runs++
 	if worker.runs >= pythonWorkerMaxRuns {
-		worker.stop()
+		p.discard(worker, pythonStopRetired)
 		return
 	}
 	key := spec.key()
 	p.mu.Lock()
 	defer p.mu.Unlock()
+	st := p.statsLocked(spec.Collector)
+	st.busy--
 	if len(p.idle[key]) >= pythonWorkerMaxIdle {
 		worker.stop()
+		st.stops[pythonStopSurplus]++
 		return
 	}
 	worker.idleSince = time.Now()
@@ -174,6 +269,7 @@ func (p *pythonPool) reapLocked(now time.Time) {
 		for _, worker := range workers {
 			if now.Sub(worker.idleSince) > pythonWorkerIdleTimeout {
 				worker.stop()
+				p.statsLocked(worker.collector).stops[pythonStopIdle]++
 				continue
 			}
 			kept = append(kept, worker)
@@ -186,12 +282,42 @@ func (p *pythonPool) reapLocked(now time.Time) {
 	}
 }
 
+// pythonWorkerSnapshot is one collector's worker statistics at a moment.
+type pythonWorkerSnapshot struct {
+	starting, idle, busy  int
+	starts, startFailures uint64
+	stops, runs           map[string]uint64
+}
+
+// snapshot copies a collector's statistics and counts its idle workers.
+func (p *pythonPool) snapshot(collector string) pythonWorkerSnapshot {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	st := p.statsLocked(collector)
+	out := pythonWorkerSnapshot{starting: st.starting, busy: st.busy, starts: st.starts, startFailures: st.startFailures, stops: map[string]uint64{}, runs: map[string]uint64{}}
+	for reason, n := range st.stops {
+		out.stops[reason] = n
+	}
+	for outcome, n := range st.runs {
+		out.runs[outcome] = n
+	}
+	for _, workers := range p.idle {
+		for _, worker := range workers {
+			if worker.collector == collector {
+				out.idle++
+			}
+		}
+	}
+	return out
+}
+
 type pythonLine struct {
 	data []byte
 	err  error
 }
 
 type pythonWorker struct {
+	collector string
 	cmd       *exec.Cmd
 	requests  *os.File
 	lines     chan pythonLine
@@ -228,7 +354,7 @@ func startPythonWorker(ctx context.Context, spec pythonSpec) (*pythonWorker, err
 	// The child holds its own copies of these ends.
 	closeFiles(requestRead, answerWrite)
 
-	worker := &pythonWorker{cmd: cmd, requests: requestWrite, lines: make(chan pythonLine, 1), stderr: stderr}
+	worker := &pythonWorker{collector: spec.Collector, cmd: cmd, requests: requestWrite, lines: make(chan pythonLine, 1), stderr: stderr}
 	go worker.readAnswers(answerRead, spec.MaxOutput)
 	go func() { _ = cmd.Wait() }()
 

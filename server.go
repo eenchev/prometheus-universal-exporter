@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"math"
 	"net/http"
 	"net/url"
 	"sort"
@@ -138,11 +139,12 @@ type Server struct {
 	cache           *responseCache
 	requests        *requestTracker
 	flights         *probeFlights
+	durations       *scrapeDurations
 	ready           atomic.Bool
 }
 
 func NewServer(m *ConfigManager, p string, l *slog.Logger) *Server {
-	s := &Server{manager: m, pythonPath: p, logger: l, stats: map[string]*serverStats{}, otlpPending: map[string]*otlpBatch{}, cache: newResponseCache(), requests: newRequestTracker(), flights: newProbeFlights()}
+	s := &Server{manager: m, pythonPath: p, logger: l, stats: map[string]*serverStats{}, otlpPending: map[string]*otlpBatch{}, cache: newResponseCache(), requests: newRequestTracker(), flights: newProbeFlights(), durations: newScrapeDurations()}
 	s.ready.Store(true)
 	return s
 }
@@ -470,11 +472,13 @@ func (s *Server) probeUpstream(ctx context.Context, p upstreamProbe) *probeResul
 		}
 	}
 	scraped := false
+	tripStart := time.Now()
 	defer func() {
-		// The last-scrape timestamp describes a trip to the target, not a
-		// probe answered from the cache.
+		// The last-scrape timestamp and the duration histogram describe a trip
+		// to the target, not a probe answered from the cache.
 		if scraped {
 			rec.scraped(time.Now())
+			s.observeTargetScrape(name, time.Since(tripStart))
 		}
 	}()
 	// failStage applies a stage's error policy. It reports whether the probe
@@ -682,6 +686,9 @@ func (s *Server) metricsHandler(w http.ResponseWriter, _ *http.Request) {
 		fmt.Fprintf(&b, "http_exporter_cache_hits_total%s %d\nhttp_exporter_cache_misses_total%s %d\nhttp_exporter_cache_entries%s %d\nhttp_exporter_probes_coalesced_total%s %d\n", label, hits, label, misses, label, cacheEntries[x.name], label, coalesced)
 	}
 	s.renderVerboseRequestMetrics(&b, declared)
+	if verbose := s.verboseCollectorMetrics(); len(verbose) > 0 {
+		renderMetricSet(&b, &MetricSet{Metrics: verbose})
+	}
 	if runtime := s.runtimeMetrics(); len(runtime) > 0 {
 		renderMetricSet(&b, &MetricSet{Metrics: runtime})
 	}
@@ -739,6 +746,7 @@ func (s *Server) selfMetricSet() MetricSet {
 	}
 	out.Metrics = append(out.Metrics, Metric{Name: "http_exporter_scheduled_targets", Help: "Scheduled targets configured for OTLP delivery.", Type: GaugeMetricType, Value: float64(len(s.manager.Targets()))})
 	out.Metrics = append(out.Metrics, s.verboseRequestMetrics()...)
+	out.Metrics = append(out.Metrics, s.verboseCollectorMetrics()...)
 	out.Metrics = append(out.Metrics, s.runtimeMetrics()...)
 	return out
 }
@@ -826,6 +834,12 @@ func promQuote(s string) string {
 }
 func writeHistogram(b *strings.Builder, m Metric) {
 	for _, x := range m.Histogram.Buckets {
+		// The +Inf bucket is written below from the count. A histogram decoded
+		// from a Prometheus source carries its own +Inf bucket, which written
+		// here as well would be a duplicate series.
+		if math.IsInf(x.UpperBound, 1) {
+			continue
+		}
 		ls := cloneLabels(m.Labels)
 		ls["le"] = strconv.FormatFloat(x.UpperBound, 'g', -1, 64)
 		fmt.Fprintf(b, "%s_bucket%s %d\n", m.Name, formatLabels(ls), x.CumulativeCount)

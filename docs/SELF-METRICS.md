@@ -155,3 +155,71 @@ series, and `http_exporter_request_series_tracked` reports how many combinations
 are in use against that limit. Because verbosity is configuration rather than a
 flag, a reload turns it on and off; turning it off drops the labelled series
 instead of leaving stale ones exposed.
+
+### Scrape-time histograms
+
+Verbose mode also publishes, per collector, a histogram of how long each trip to
+the target took, from sending the request to having validated metrics:
+
+```text
+http_exporter_target_scrape_duration_seconds_bucket{collector="app_json",le="0.005"} 0
+http_exporter_target_scrape_duration_seconds_bucket{collector="app_json",le="0.01"} 3
+...
+http_exporter_target_scrape_duration_seconds_bucket{collector="app_json",le="+Inf"} 42
+http_exporter_target_scrape_duration_seconds_sum{collector="app_json"} 0.61
+http_exporter_target_scrape_duration_seconds_count{collector="app_json"} 42
+```
+
+`http_exporter_scrape_duration_seconds` only holds the last probe's duration, so
+a slow scrape between two Prometheus scrapes is lost. The histogram keeps all of
+them, which is what "this collector got slow" alerts need:
+
+```promql
+histogram_quantile(0.95,
+  sum by (collector, le) (rate(http_exporter_target_scrape_duration_seconds_bucket[5m])))
+  > 2
+```
+
+The buckets are fixed: 5 ms, 10 ms, 25 ms, 50 ms, 100 ms, 250 ms, 500 ms, 1 s,
+2.5 s, 5 s, 10 s, 30 s and 60 s. Only trips to the target are observed: a probe
+answered from the response cache, or by [sharing another probe's
+request](#shared-probes), made no trip and is not counted, so the histogram
+describes the target and the collector's processing, not how quickly the
+exporter could answer. Scheduled targets are observed like probes. Every
+configured collector has a histogram, empty until its first trip, and the
+durations are only recorded while verbose mode is on.
+
+### Python workers
+
+For every collector with a Python transform or pre-script, verbose mode publishes
+the state of its [Python workers](PYTHON.md#how-scripts-run):
+
+| Metric | Labels | Meaning |
+|---|---|---|
+| `http_exporter_python_workers` | `state`: `starting`, `idle`, `busy` | Workers of the collector now in each state. |
+| `http_exporter_python_worker_starts_total` | | Workers started. |
+| `http_exporter_python_worker_start_failures_total` | | Workers that failed to start: Python missing, a library that does not import. |
+| `http_exporter_python_worker_stops_total` | `reason` | Workers stopped, and why (below). |
+| `http_exporter_python_runs_total` | `outcome` | Script runs, and how they ended (below). |
+
+A worker stops because of a `timeout` (the script overran `limits.script_timeout`
+and the worker was killed), a `crash` (the interpreter died), an `output_limit`
+(it answered with more than `limits.max_output_bytes`), `cancelled` (the scrape
+was abandoned mid-run), `retired` (it reached 1,000 runs), `surplus` (more than
+four were idle after a burst) or `idle` (unused for five minutes). The last three
+are routine; the first four each cost the next scrape a fresh interpreter.
+
+A run ends `ok`, `script_error` (the script raised or called `fail(...)`; the
+worker carries on), `timeout`, `output_limit` or `failed` (the worker could not
+be reached or its answer was unreadable).
+
+```promql
+# a collector whose script keeps timing out
+increase(http_exporter_python_runs_total{outcome="timeout"}[15m]) > 0
+# workers that cannot start at all
+increase(http_exporter_python_worker_start_failures_total[5m]) > 0
+```
+
+Every label is from a fixed set, and a collector without Python has none of
+these series. The counters are kept whether or not verbose mode is on, so
+turning it on through a reload shows the counts since the exporter started.

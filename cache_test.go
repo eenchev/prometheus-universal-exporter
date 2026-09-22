@@ -417,6 +417,8 @@ func TestCacheConfigurationParsingAndValidation(t *testing.T) {
 	path := t.TempDir() + "/config.yaml"
 	document := "collectors:\n" +
 		"  - name: cached\n" +
+		"    request:\n" +
+		"      type: http\n" +
 		"    cache: 90s\n" +
 		"    transform:\n" +
 		"      type: regex\n" +

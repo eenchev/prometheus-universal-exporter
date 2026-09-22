@@ -215,7 +215,7 @@ func TestMissingInterpreterIsReportedWhenScriptsExist(t *testing.T) {
 func TestConfigReloadRejectsAPreScriptThatDoesNotProduceData(t *testing.T) {
 	dir := t.TempDir()
 	path := dir + "/config.yaml"
-	valid := "collectors:\n  - name: reloaded\n    transform:\n      type: jq\n      pre_script: |\n" +
+	valid := "collectors:\n  - name: reloaded\n    request:\n      type: http\n    transform:\n      type: jq\n      pre_script: |\n" +
 		"        data = {\"value\": 1}\n    metrics:\n      - name: demo_value\n        expression: .value\n"
 	if err := os.WriteFile(path, []byte(valid), 0600); err != nil {
 		t.Fatal(err)

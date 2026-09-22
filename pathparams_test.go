@@ -245,7 +245,7 @@ func TestAnEmptyDefaultBindsNothing(t *testing.T) {
 // compose, so a default can come from the environment.
 func TestEnvironmentReferencesAndPathParametersCompose(t *testing.T) {
 	t.Setenv("DEFAULT_TENANT", "fromenv")
-	body := "collectors:\n  - name: tenants\n    request:\n      path: /api/{{param_tenant:${DEFAULT_TENANT}}}/status\n" +
+	body := "collectors:\n  - name: tenants\n    request:\n      type: http\n      path: /api/{{param_tenant:${DEFAULT_TENANT}}}/status\n" +
 		"    transform:\n      type: regex\n    metrics:\n      - name: demo_value\n        expression: 'value=(\\d+)'\n"
 	path := t.TempDir() + "/config.yaml"
 	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {

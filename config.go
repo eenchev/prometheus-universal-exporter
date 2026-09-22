@@ -7,7 +7,6 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"net/http"
 	"net/url"
 	"os"
 	"regexp"
@@ -71,6 +70,9 @@ type Collector struct {
 	Cache         Duration        `yaml:"cache"`
 }
 type RequestConfig struct {
+	// Type selects how the collector reaches its data. It is required; see
+	// requesttype.go for the types and the keys each accepts.
+	Type                 string            `yaml:"type"`
 	Method               string            `yaml:"method"`
 	Path                 string            `yaml:"path"`
 	Query                map[string]string `yaml:"query"`
@@ -205,37 +207,8 @@ func (c *Config) Validate() error {
 			return fmt.Errorf("duplicate collector %q", x.Name)
 		}
 		seen[x.Name] = true
-		if x.Request.BearerToken != "" && x.Request.BearerTokenFile != "" {
-			return fmt.Errorf("collector %q cannot set both request.bearer_token and request.bearer_token_file", x.Name)
-		}
-		if x.Request.BasicAuth != nil && x.Request.BasicAuthFile != nil {
-			return fmt.Errorf("collector %q cannot set both request.basic_auth and request.basic_auth_file", x.Name)
-		}
-		if x.Request.BasicAuthFile != nil && (strings.TrimSpace(x.Request.BasicAuthFile.Username) == "" || strings.TrimSpace(x.Request.BasicAuthFile.Password) == "") {
-			return fmt.Errorf("collector %q basic_auth_file requires username and password paths", x.Name)
-		}
-		if x.Request.Retry.Attempts < 0 {
-			return fmt.Errorf("collector %q request.retry.attempts must not be negative", x.Name)
-		}
-		if x.Request.Retry.Backoff < 0 {
-			return fmt.Errorf("collector %q request.retry.backoff must not be negative", x.Name)
-		}
-		if (x.Request.BasicAuth != nil || x.Request.BasicAuthFile != nil) && (x.Request.BearerToken != "" || x.Request.BearerTokenFile != "") {
-			return fmt.Errorf("collector %q cannot configure basic and bearer authentication together", x.Name)
-		}
-		if hasPathParams(x.Request.Path) {
-			if _, err := parsePathParams(x.Request.Path); err != nil {
-				return fmt.Errorf("collector %q: %w", x.Name, err)
-			}
-		}
-		if x.Request.Method == "" {
-			x.Request.Method = "GET"
-		}
-		x.Request.Method = strings.ToUpper(x.Request.Method)
-		switch x.Request.Method {
-		case http.MethodGet, http.MethodPost, http.MethodPut, http.MethodPatch, http.MethodDelete, http.MethodHead:
-		default:
-			return fmt.Errorf("collector %q has unsupported method %q", x.Name, x.Request.Method)
+		if err := validateRequest(x); err != nil {
+			return err
 		}
 		if x.Limits.MaxResponseBytes <= 0 {
 			x.Limits.MaxResponseBytes = 10 << 20

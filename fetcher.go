@@ -150,15 +150,9 @@ func resolveRequestURL(target string, c *Collector, overrides RequestOverrides) 
 // placeholder rather than the value; everything else is identical, which keeps
 // the label describing the URL that was fetched.
 func buildRequestURL(target string, c *Collector, overrides RequestOverrides, bind bool) (*url.URL, error) {
-	u, err := url.Parse(target)
+	u, err := url.Parse(normalizeTarget(target))
 	if err != nil {
 		return nil, fmt.Errorf("invalid target: %w", err)
-	}
-	if u.Scheme == "" {
-		u, err = url.Parse("http://" + target)
-		if err != nil {
-			return nil, fmt.Errorf("invalid target: %w", err)
-		}
 	}
 	allowed := c.Request.AllowedSchemes
 	if len(allowed) == 0 {

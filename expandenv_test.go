@@ -17,7 +17,7 @@ func envConfig(t *testing.T, body string) string {
 	return path
 }
 
-const envCollector = "collectors:\n  - name: example\n    request:\n      path: %s\n" +
+const envCollector = "collectors:\n  - name: example\n    request:\n      type: http\n      path: %s\n" +
 	"    transform:\n      type: jq\n    metrics:\n      - name: demo_value\n        expression: .value\n"
 
 func collectorWithPath(path string) string {
@@ -250,7 +250,7 @@ func TestAReloadWithAMissingVariableIsRejected(t *testing.T) {
 func TestExpansionHappensBeforeParsing(t *testing.T) {
 	t.Setenv("DEMO_METHOD", "POST")
 	t.Setenv("DEMO_HEADER", "application/json")
-	body := "collectors:\n  - name: example\n    request:\n      method: ${DEMO_METHOD}\n" +
+	body := "collectors:\n  - name: example\n    request:\n      type: http\n      method: ${DEMO_METHOD}\n" +
 		"      headers:\n        Accept: ${DEMO_HEADER}\n" +
 		"    transform:\n      type: jq\n    metrics:\n      - name: demo_value\n        expression: .value\n"
 	cfg, err := LoadConfig(envConfig(t, body), WithEnvExpansion())

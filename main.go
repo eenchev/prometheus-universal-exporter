@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"flag"
-	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
@@ -14,22 +13,43 @@ import (
 	"time"
 )
 
-func main() { os.Exit(run()) }
+func main() { os.Exit(run(os.Args[1:], os.Stdout, os.Stderr)) }
 
 // run owns the exporter lifecycle and returns the process exit status. Keeping
 // it separate from main means every deferred cleanup still executes on the
-// paths that terminate early.
-func run() int {
-	configFile := flag.String("config.file", "/etc/prometheus-universal-exporter/config.yaml", "Path to the exporter configuration")
-	listenAddress := flag.String("web.listen-address", ":8080", "Address on which to expose HTTP endpoints")
-	selfMetricsPath := flag.String("web.self-metrics-path", "/self-metrics", "Dedicated endpoint for exporter self-health metrics")
-	pythonPath := flag.String("python.path", "python3", "Python interpreter used by the python transform")
-	targetFile := flag.String("otlp.targets-file", "", "Optional file of scheduled targets scraped by the exporter and delivered over OTLP")
-	watchConfig := flag.Bool("config.watch", false, "Reload the configuration and scheduled target files when they change on disk")
-	watchInterval := flag.Duration("config.watch-interval", DefaultWatchInterval, "How often to check the configuration files for changes when config.watch is set")
-	logLevel := flag.String("log.level", "info", "Log level: debug, info, warn, or error")
-	expandEnv := flag.Bool("config.export-env", false, "Expand ${NAME} environment variable references in the configuration and scheduled target files")
-	flag.Parse()
+// paths that terminate early, and taking the arguments and output streams as
+// parameters lets the command line be tested end to end.
+//
+// Exit statuses: 0 on a clean shutdown or a passing --dry-run, 1 when the
+// configuration is invalid, a --dry-run fails or the server stops with an error,
+// and 2 when the command line itself cannot be parsed.
+func run(args []string, stdout, stderr io.Writer) int {
+	flags := flag.NewFlagSet("prometheus-universal-exporter", flag.ContinueOnError)
+	// The flag package would print its own plain-text complaint to stderr;
+	// it is silenced so every line on stderr stays JSON, and the error is
+	// logged below instead.
+	flags.SetOutput(io.Discard)
+	configFile := flags.String("config.file", "/etc/prometheus-universal-exporter/config.yaml", "Path to the exporter configuration")
+	listenAddress := flags.String("web.listen-address", ":8080", "Address on which to expose HTTP endpoints")
+	selfMetricsPath := flags.String("web.self-metrics-path", "/self-metrics", "Dedicated endpoint for exporter self-health metrics")
+	pythonPath := flags.String("python.path", "python3", "Python interpreter used by the python transform")
+	targetFile := flags.String("otlp.targets-file", "", "Optional file of scheduled targets scraped by the exporter and delivered over OTLP")
+	watchConfig := flags.Bool("config.watch", false, "Reload the configuration and scheduled target files when they change on disk")
+	watchInterval := flags.Duration("config.watch-interval", DefaultWatchInterval, "How often to check the configuration files for changes when config.watch is set")
+	logLevel := flags.String("log.level", "info", "Log level: debug, info, warn, or error")
+	expandEnv := flags.Bool("config.export-env", false, "Expand ${NAME} environment variable references in the configuration and scheduled target files")
+	check := flags.Bool("dry-run", false, "Validate the configuration and scheduled target files as startup would, print a JSON report to stdout, and exit 0 if they are valid or 1 if not, without starting the exporter")
+	if err := flags.Parse(args); err != nil {
+		if errors.Is(err, flag.ErrHelp) {
+			// Asked for, so it goes to stdout, where help text belongs.
+			flags.SetOutput(stdout)
+			_, _ = io.WriteString(stdout, "Usage of prometheus-universal-exporter:\n")
+			flags.PrintDefaults()
+			return 0
+		}
+		newLogger("info", stderr).Error("invalid command line; exiting", "error", err.Error())
+		return 2
+	}
 
 	// Every document is read the same way, and the manager is told so its
 	// reloads keep expanding.
@@ -38,7 +58,17 @@ func run() int {
 		loadOptions = append(loadOptions, WithEnvExpansion())
 	}
 
-	logger := newLogger(*logLevel, os.Stderr)
+	logger := newLogger(*logLevel, stderr)
+	if *check {
+		return runCheck(checkInputs{
+			ConfigFile:    *configFile,
+			TargetFile:    *targetFile,
+			PythonPath:    *pythonPath,
+			ExpandEnv:     *expandEnv,
+			Watch:         *watchConfig,
+			WatchInterval: *watchInterval,
+		}, stdout, logger)
+	}
 	config, err := LoadConfig(*configFile, loadOptions...)
 	if err != nil {
 		logger.Error("invalid startup configuration; exiting", "error", err)
@@ -50,8 +80,8 @@ func run() int {
 		return 1
 	}
 
-	if *watchConfig && *watchInterval <= 0 {
-		logger.Error("invalid startup configuration; exiting", "error", fmt.Sprintf("config.watch-interval must be positive, got %s", *watchInterval))
+	if err := validateWatchInterval(*watchConfig, *watchInterval); err != nil {
+		logger.Error("invalid startup configuration; exiting", "error", err)
 		return 1
 	}
 

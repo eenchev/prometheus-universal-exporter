@@ -415,7 +415,7 @@ func TestConfigReloadRejectedWhenItWouldDisableOTLPWithTargets(t *testing.T) {
 	dir := t.TempDir()
 	configPath := dir + "/config.yaml"
 	enabled := "otlp:\n  enabled: true\n  endpoint: http://collector.invalid/v1/metrics\n" +
-		"collectors:\n  - name: text\n    transform:\n      type: regex\n    metrics:\n      - name: demo_value\n        expression: 'value=(\\d+)'\n"
+		"collectors:\n  - name: text\n    request:\n      type: http\n    transform:\n      type: regex\n    metrics:\n      - name: demo_value\n        expression: 'value=(\\d+)'\n"
 	if err := os.WriteFile(configPath, []byte(enabled), 0600); err != nil {
 		t.Fatal(err)
 	}

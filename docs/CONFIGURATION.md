@@ -37,6 +37,8 @@ entry has `name`, `description`, `type`, `labels`, and a transform-specific
 ```yaml
 collectors:
   - name: app_json
+    request:
+      type: http
     transform:
       type: jq
       pre_script: |
@@ -86,6 +88,47 @@ labels:
 Label expressions use the same transform-specific language as the metric
 expression. For CSV, each row produces a metric and `expression: server`
 selects that row's `server` column.
+
+### Request types
+
+Every collector's `request` block starts with `type`, which is required and
+says how the collector reaches its data:
+
+```yaml
+request:
+  type: http
+  path: /api/status
+```
+
+`http` is the only type today; others, such as gRPC or files, are planned. A
+collector without `type` stops the exporter at startup with a message saying
+what to add, and so does an unknown type.
+
+Each type accepts its own keys. For `http`, `type` is the only required one —
+`path` can be left out when the target URL already carries the whole path, and
+`method` defaults to `GET`:
+
+| Key | Default | Notes |
+| --- | --- | --- |
+| `type` | — | **Required.** `http`. |
+| `method` | `GET` | GET, POST, PUT, PATCH, DELETE or HEAD. |
+| `path` | — | Joined onto the target; may use [path parameters](REQUESTS.md#path-parameters). |
+| `query` | — | Query parameters added to the request. |
+| `headers` | — | Sent to the target. |
+| `body` | — | Raw request body. |
+| `basic_auth`, `basic_auth_file` | — | Use one; see [Authentication](AUTHENTICATION.md). |
+| `bearer_token`, `bearer_token_file` | — | Use one; not together with basic auth. |
+| `forward_authorization`, `forward_headers` | off | See [Authentication](AUTHENTICATION.md). |
+| `tls` | verify | See [Target requests](REQUESTS.md#tls). |
+| `retry` | none | See [Target requests](REQUESTS.md#retries). |
+| `max_response_bytes` | limit | Response size cap. |
+| `follow_redirects`, `enable_http2` | off | See [Target requests](REQUESTS.md#redirects-and-http2). |
+| `allowed_schemes` | `http`, `https` | Schemes a target may use. |
+
+A key that belongs to a different type is an error rather than being ignored,
+and the same holds for `/probe` parameters: a parameter that only another type
+accepts gets a `400`. With `http` as the only type, every key and parameter on
+these pages applies.
 
 ### When a metric cannot be extracted
 
@@ -205,6 +248,7 @@ own environment before parsing the document:
 collectors:
   - name: example
     request:
+      type: http
       path: ${API_PATH}
       headers:
         Authorization: Bearer ${API_TOKEN}
@@ -263,6 +307,8 @@ A collector may set `cache` to a Go duration such as `60s`, `1m`, or `3h`:
 ```yaml
 collectors:
   - name: expensive_api
+    request:
+      type: http
     cache: 60s
     limits:
       max_cache_entries: 1000
@@ -330,6 +376,97 @@ The watch does not relax any reload rule. An invalid configuration, one that
 would disable OTLP while scheduled targets are loaded, and a pre-script that
 stops producing `data` are all still rejected, with the last valid configuration
 left active and the reason logged.
+
+## Dry run
+
+`--dry-run` answers "would this start?" without starting anything. It runs the
+same validation startup runs, prints a JSON report on stdout, and exits:
+
+| Exit status | Meaning |
+| --- | --- |
+| `0` | Every check passed; the exporter would start with these files and flags. |
+| `1` | At least one check failed; the report says which, and why. |
+| `2` | The command line itself could not be parsed, so nothing was checked. |
+
+```sh
+prometheus-universal-exporter --dry-run --config.file=config.yaml
+prometheus-universal-exporter --dry-run \
+  --config.file=config.otlp.yaml --otlp.targets-file=targets.yaml
+```
+
+It takes the same flags a real start does, and they matter: `--config.file` and
+`--otlp.targets-file` choose what is checked, `--config.export-env` decides
+whether `${NAME}` references are expanded — so a check run where a referenced
+variable is not set fails, exactly as startup would — `--python.path` is the
+interpreter the Python scripts are compiled with, and `--config.watch` with
+`--config.watch-interval` are checked when the watch is on. It never binds a
+port, starts a watch or contacts a target.
+
+The report lists one entry per startup step, in the order startup runs them:
+
+```json
+{
+  "status": "failed",
+  "checks": [
+    {
+      "check": "config",
+      "file": "config.yaml",
+      "status": "ok",
+      "details": {"collectors": ["app_json", "legacy_text"], "otlp_enabled": false, "config_export_env": false}
+    },
+    {
+      "check": "python_scripts",
+      "file": "config.yaml",
+      "status": "failed",
+      "errors": ["collector app_json pre_script must produce its result in a variable named 'data'; assign to data or mutate it in place. ..."]
+    },
+    {
+      "check": "targets",
+      "file": "targets.yaml",
+      "status": "failed",
+      "errors": ["scheduled targets require OTLP export; set otlp.enabled: true or remove the target file"],
+      "details": {"targets": ["legacy_eu", "legacy_us"]}
+    }
+  ]
+}
+```
+
+| `check` | Present | What it validates |
+| --- | --- | --- |
+| `config` | always | The configuration file loads and is valid. |
+| `python_scripts` | always | Every pre-script and `python` transform compiles, and every pre-script produces `data`. Each faulty script is its own entry in `errors`. A configuration without Python needs no interpreter and passes with `"scripts": 0`. |
+| `config_watch` | with `--config.watch` | `--config.watch-interval` is positive. |
+| `targets` | with `--otlp.targets-file` | The target file is valid on its own, and against the configuration: every collector exists and OTLP export is enabled. |
+
+Each entry's `status` is `ok`, `failed` with `errors`, or `skipped` with a
+`reason` when it depends on a step that failed: the Python scripts cannot be read
+from a configuration that did not load, and a target file that is valid on its
+own cannot be paired with it. A skipped check counts as not passing, and the
+report still shows it, so it is never shorter because something went wrong. The
+top-level `status` is `ok` only when every entry is.
+
+stderr carries one JSON log line per check — `configuration check passed` at
+INFO, `skipped` at WARN, `failed` at ERROR with its errors — and a final
+`configuration check complete`, so a job's log reads like the exporter's own.
+`--log.level` quietens the log; it never changes the report. Pipe the report
+through `jq` in CI:
+
+```sh
+prometheus-universal-exporter --dry-run --config.file=config.yaml \
+  | jq -e '.status == "ok"'
+```
+
+The container image runs the same way, with the files mounted:
+
+```sh
+docker run --rm -v "$PWD:/config:ro" \
+  ghcr.io/eenchev/prometheus-universal-exporter:latest \
+  --dry-run --config.file=/config/config.yaml
+```
+
+In Kubernetes, run it as a Job or an init container rather than as the exporter
+itself: a pod started with `--dry-run` validates and exits instead of serving,
+which is why the Helm chart rejects it in `extraArgs`.
 
 ## Related pages
 

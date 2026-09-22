@@ -9,7 +9,7 @@ import (
 	"time"
 )
 
-const watchConfigTemplate = "collectors:\n  - name: watched\n    transform:\n      type: regex\n" +
+const watchConfigTemplate = "collectors:\n  - name: watched\n    request:\n      type: http\n    transform:\n      type: regex\n" +
 	"    metrics:\n      - name: %s\n        expression: 'value=(\\d+)'\n"
 
 func writeWatchedConfig(t *testing.T, path, metric string) {
@@ -140,7 +140,7 @@ func TestWatchReloadsTheScheduledTargetFile(t *testing.T) {
 	dir := t.TempDir()
 	configPath := dir + "/config.yaml"
 	document := "otlp:\n  enabled: true\n  endpoint: http://collector.invalid/v1/metrics\n" +
-		"collectors:\n  - name: watched\n    transform:\n      type: regex\n" +
+		"collectors:\n  - name: watched\n    request:\n      type: http\n    transform:\n      type: regex\n" +
 		"    metrics:\n      - name: demo_value\n        expression: 'value=(\\d+)'\n"
 	if err := os.WriteFile(configPath, []byte(document), 0600); err != nil {
 		t.Fatal(err)

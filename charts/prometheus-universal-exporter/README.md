@@ -41,6 +41,7 @@ config:
       collectors:
         - name: example
           request:
+            type: http
             path: /status
           transform:
             type: regex
@@ -127,6 +128,7 @@ config:
       collectors:
         - name: example
           request:
+            type: http
             path: /status
           transform:
             type: regex
@@ -362,6 +364,7 @@ config:
       collectors:
         - name: example
           request:
+            type: http
             headers:
               Authorization: Bearer ${API_TOKEN}
 ```
@@ -381,6 +384,8 @@ config:
           resource_metrics_enabled: true
       collectors:
         - name: example
+          request:
+            type: http
           ...
 ```
 
@@ -417,6 +422,8 @@ Two collisions are rejected while rendering, because both fail in a way that poi
 
 * An `extraArgs` entry that sets a flag the chart already renders — `--web.listen-address`, `--config.file`, `--python.path` and the rest. Go keeps the last occurrence of a repeated flag, so the entry would quietly win; for the listen address the container port and the probes would still follow `server.listenAddress`, leaving a pod that listens on one port while Kubernetes checks another. The error names the value to set instead.
 * An `extraVolumeMounts` entry whose `mountPath` is one the chart already mounts. Mounting over `/etc/prometheus-universal-exporter` replaces it, so the exporter starts with no `config.yaml` and crash-loops with an error about the file rather than about the mount that hid it. To add a file to that directory, mount it at its own path — `/etc/collectors`, say — and point the configuration at it.
+
+`--dry-run` is rejected as well: it validates the configuration and exits, so a pod started with it would never serve. Run it as a separate command, a Job or an init container instead — see [Dry run](../../docs/CONFIGURATION.md#dry-run).
 
 An entry that does not begin with `--` is rejected too, since `log.level=debug` as an argument is read as a positional value and ignored.
 

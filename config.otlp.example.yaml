@@ -43,6 +43,9 @@ collectors:
     # 0s to disable caching, which is the default.
     cache: 60s
     request:
+      # Required. How this collector reaches its data; http is the only type
+      # today, and each type accepts its own request keys and probe parameters.
+      type: http
       method: GET
       path: /api/status
       # body: |
@@ -101,6 +104,7 @@ collectors:
 
   - name: legacy_text
     request:
+      type: http
       path: /status
       # Monitor credentials and selected headers can be propagated explicitly.
       # forward_authorization: true
@@ -117,6 +121,7 @@ collectors:
 
   - name: app_csv
     request:
+      type: http
       path: /status.csv
     transform:
       type: csv
@@ -133,6 +138,7 @@ collectors:
 
   - name: vendor_prometheus
     request:
+      type: http
       path: /metrics
     transform:
       type: prometheus
@@ -150,6 +156,7 @@ collectors:
   # whatever the endpoint actually returned.
   - name: worker_cpu
     request:
+      type: http
       path: /status
     transform:
       type: jq
@@ -174,6 +181,7 @@ collectors:
   # metrics produced this way.
   - name: custom_python
     request:
+      type: http
       path: /status
     transform:
       type: python

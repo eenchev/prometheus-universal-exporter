@@ -16,6 +16,7 @@ For non-secret target headers, configure an allowlist in the collector and use t
 collectors:
   - name: tenant_status
     request:
+      type: http
       path: /status
       forward_authorization: true
       forward_headers: [X-Tenant]
@@ -66,6 +67,7 @@ web:
 collectors:
   - name: protected_status
     request:
+      type: http
       path: /status
       basic_auth_file:
         username: /var/run/prometheus-universal-exporter/target-auth/username

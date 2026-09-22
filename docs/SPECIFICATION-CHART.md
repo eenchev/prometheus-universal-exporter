@@ -146,6 +146,8 @@ config:
     config.yaml: |
       collectors:
         - name: example
+          request:
+            type: http
           ...
 ```
 
@@ -325,7 +327,8 @@ other than the values file:
 
 An `extraArgs` entry that does not begin with `--` MUST be rejected as well: a
 bare word is read as a positional argument and ignored, so it would fail by
-doing nothing.
+doing nothing. So MUST `--dry-run` (SPECIFICATION-EXPORTER.md § 30): it validates
+the configuration and exits, so a pod started with it would never serve.
 
 ### 33.10b Values schema
 
@@ -547,10 +550,10 @@ with at least these values combinations:
 
 12. `extraArgs`, `extraVolumes` and `extraVolumeMounts` set together, which MUST
    append the argument, the volume and the mount to the ones the chart renders
-   and leave those unchanged. Three further renderings MUST fail: an `extraArgs`
-   entry naming a flag the chart manages, an `extraArgs` entry that does not
-   begin with `--`, and an `extraVolumeMounts` entry whose `mountPath` is one
-   the chart already mounts. A rendering that succeeds for any of these is a
+   and leave those unchanged. Four further renderings MUST fail: an `extraArgs`
+   entry naming a flag the chart manages, an `extraArgs` entry of `--dry-run`, an
+   `extraArgs` entry that does not begin with `--`, and an `extraVolumeMounts`
+   entry whose `mountPath` is one the chart already mounts. A rendering that succeeds for any of these is a
    test failure, since each produces a pod that starts and then behaves as
    though the values file said something it did not.
 

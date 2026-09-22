@@ -57,7 +57,7 @@ func assertJSONLines(t *testing.T, out *bytes.Buffer, wantLines int) []map[strin
 // a transform, which reports through the default logger.
 func TestMetricExtractionErrorIsLoggedAsJSON(t *testing.T) {
 	out := captureLogs(t)
-	collector := &Collector{Name: "exchange_rates"}
+	collector := &Collector{Request: RequestConfig{Type: RequestTypeHTTP}, Name: "exchange_rates"}
 	rule := MetricRule{Name: "exchange_rate_observation_timestamp_seconds", ErrorMode: "log"}
 	if !handleMetricError(collector, rule, errors.New(`metric "exchange_rate_observation_timestamp_seconds" value is missing`)) {
 		t.Fatal("an error_mode of log should continue the scrape")
@@ -83,7 +83,7 @@ func TestMetricExtractionErrorIsLoggedAsJSON(t *testing.T) {
 // noise.
 func TestIgnoreErrorModeLogsNothing(t *testing.T) {
 	out := captureLogs(t)
-	collector := &Collector{Name: "quiet"}
+	collector := &Collector{Request: RequestConfig{Type: RequestTypeHTTP}, Name: "quiet"}
 	if !handleMetricError(collector, MetricRule{Name: "ignored", ErrorMode: ErrorModeIgnore}, errors.New("boom")) {
 		t.Fatal("ignore should continue the scrape")
 	}
@@ -96,7 +96,7 @@ func TestIgnoreErrorModeLogsNothing(t *testing.T) {
 // target, which has no HTTP response to put it in.
 func TestFailErrorModeLogsAndStops(t *testing.T) {
 	out := captureLogs(t)
-	collector := &Collector{Name: "strict"}
+	collector := &Collector{Request: RequestConfig{Type: RequestTypeHTTP}, Name: "strict"}
 	if handleMetricError(collector, MetricRule{Name: "failing", ErrorMode: ErrorModeFail}, errors.New("boom")) {
 		t.Fatal("fail should stop the scrape")
 	}

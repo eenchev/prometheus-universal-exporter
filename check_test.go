@@ -1,0 +1,350 @@
+package main
+
+import (
+	"bytes"
+	"encoding/json"
+	"log/slog"
+	"os"
+	"strings"
+	"testing"
+)
+
+// --dry-run answers "would this start?" without starting: it runs startup's
+// validation, prints one JSON report on stdout, logs JSON lines on stderr, and
+// exits 0 when everything would load and 1 when anything would not.
+
+type checkRun struct {
+	code   int
+	report checkReport
+	stdout string
+	stderr string
+	logs   []map[string]any
+}
+
+// runCLI drives the real command line, so these tests cover the flag, the
+// streams and the exit status exactly as a shell would see them.
+func runCLI(t *testing.T, args ...string) checkRun {
+	t.Helper()
+	previous := slog.Default()
+	t.Cleanup(func() { slog.SetDefault(previous) })
+	var stdout, stderr bytes.Buffer
+	code := run(args, &stdout, &stderr)
+	out := checkRun{code: code, stdout: stdout.String(), stderr: stderr.String()}
+	for _, line := range strings.Split(strings.TrimSpace(out.stderr), "\n") {
+		if strings.TrimSpace(line) == "" {
+			continue
+		}
+		var record map[string]any
+		if err := json.Unmarshal([]byte(line), &record); err != nil {
+			t.Fatalf("stderr line is not JSON: %q", line)
+		}
+		out.logs = append(out.logs, record)
+	}
+	return out
+}
+
+func runCheckCLI(t *testing.T, args ...string) checkRun {
+	t.Helper()
+	out := runCLI(t, append([]string{"--dry-run"}, args...)...)
+	// stdout carries the report and nothing else: one JSON document.
+	decoder := json.NewDecoder(strings.NewReader(out.stdout))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&out.report); err != nil {
+		t.Fatalf("stdout is not a check report: %v\n%s", err, out.stdout)
+	}
+	if decoder.More() {
+		t.Fatalf("stdout carries more than the report:\n%s", out.stdout)
+	}
+	return out
+}
+
+func (r checkRun) result(t *testing.T, check string) checkResult {
+	t.Helper()
+	for _, result := range r.report.Checks {
+		if result.Check == check {
+			return result
+		}
+	}
+	t.Fatalf("no %q check in the report:\n%s", check, r.stdout)
+	return checkResult{}
+}
+
+func (r checkRun) has(check string) bool {
+	for _, result := range r.report.Checks {
+		if result.Check == check {
+			return true
+		}
+	}
+	return false
+}
+
+func writeFile(t *testing.T, name, body string) string {
+	t.Helper()
+	path := t.TempDir() + "/" + name
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return path
+}
+
+const minimalConfig = `collectors:
+  - name: demo
+    request:
+      type: http
+      path: /status
+    transform:
+      type: regex
+    metrics:
+      - name: demo_value
+        expression: 'value=(\d+)'
+`
+
+func TestCheckPassesTheShippedExamples(t *testing.T) {
+	plain := runCheckCLI(t, "--config.file=config.example.yaml")
+	if plain.code != 0 || plain.report.Status != checkOK {
+		t.Fatalf("exit=%d status=%s\n%s", plain.code, plain.report.Status, plain.stdout)
+	}
+	if collectors, _ := plain.result(t, "config").Details["collectors"].([]any); len(collectors) == 0 {
+		t.Fatalf("a passing config check should list its collectors: %+v", plain.result(t, "config"))
+	}
+	if plain.result(t, "python_scripts").Status != checkOK {
+		t.Fatal("the example's Python scripts should pass")
+	}
+
+	withTargets := runCheckCLI(t, "--config.file=config.otlp.example.yaml", "--otlp.targets-file=targets.example.yaml")
+	if withTargets.code != 0 || withTargets.result(t, "targets").Status != checkOK {
+		t.Fatalf("exit=%d\n%s", withTargets.code, withTargets.stdout)
+	}
+	if targets, _ := withTargets.result(t, "targets").Details["targets"].([]any); len(targets) != 2 {
+		t.Fatalf("targets details=%v, want both example targets", withTargets.result(t, "targets").Details)
+	}
+}
+
+// Only the steps that apply are reported: no targets check without a targets
+// file, and no watch check without --config.watch.
+func TestCheckReportsOnlyTheStepsThatApply(t *testing.T) {
+	out := runCheckCLI(t, "--config.file="+writeFile(t, "config.yaml", minimalConfig))
+	if out.code != 0 {
+		t.Fatalf("exit=%d\n%s", out.code, out.stdout)
+	}
+	if out.has("targets") || out.has("config_watch") {
+		t.Fatalf("unexpected steps:\n%s", out.stdout)
+	}
+	if scripts := out.result(t, "python_scripts").Details["scripts"]; scripts != float64(0) {
+		t.Fatalf("scripts=%v, want 0 for a configuration without Python", scripts)
+	}
+}
+
+func TestCheckFailsAnInvalidConfiguration(t *testing.T) {
+	broken := strings.Replace(minimalConfig, "expression:", "error_mode: panic\n        expression:", 1)
+	out := runCheckCLI(t, "--config.file="+writeFile(t, "config.yaml", broken))
+	if out.code != 1 || out.report.Status != checkFailed {
+		t.Fatalf("exit=%d status=%s", out.code, out.report.Status)
+	}
+	config := out.result(t, "config")
+	if config.Status != checkFailed || len(config.Errors) != 1 || !strings.Contains(config.Errors[0], "error_mode") {
+		t.Fatalf("config=%+v", config)
+	}
+	// The scripts cannot be read from a configuration that did not load, and
+	// the report says so rather than leaving the step out.
+	if python := out.result(t, "python_scripts"); python.Status != checkSkipped || python.Reason == "" {
+		t.Fatalf("python_scripts=%+v, want skipped with a reason", python)
+	}
+}
+
+func TestCheckFailsAMissingConfigurationFile(t *testing.T) {
+	out := runCheckCLI(t, "--config.file="+t.TempDir()+"/absent.yaml")
+	if out.code != 1 || !strings.Contains(out.result(t, "config").Errors[0], "no such file") {
+		t.Fatalf("exit=%d\n%s", out.code, out.stdout)
+	}
+}
+
+// The Python check reports each faulty script on its own line, not one blob.
+func TestCheckListsEveryPythonFault(t *testing.T) {
+	config := minimalConfig + `  - name: first
+    request:
+      type: http
+    transform:
+      type: jq
+      pre_script: |
+        result = 1
+    metrics:
+      - name: first_value
+        expression: .value
+  - name: second
+    request:
+      type: http
+    transform:
+      type: jq
+      pre_script: |
+        result = 2
+    metrics:
+      - name: second_value
+        expression: .value
+`
+	out := runCheckCLI(t, "--config.file="+writeFile(t, "config.yaml", config))
+	python := out.result(t, "python_scripts")
+	if out.code != 1 || python.Status != checkFailed || len(python.Errors) != 2 {
+		t.Fatalf("exit=%d python=%+v", out.code, python)
+	}
+	for i, collector := range []string{"first", "second"} {
+		if !strings.Contains(python.Errors[i], collector) {
+			t.Errorf("error %d %q should name collector %q", i, python.Errors[i], collector)
+		}
+	}
+}
+
+// Without an interpreter the scripts cannot be checked, which is a failure —
+// the exporter would not start either — but a configuration with no scripts
+// never needs one.
+func TestCheckNeedsAnInterpreterOnlyForScripts(t *testing.T) {
+	missing := "--python.path=/nonexistent/python"
+	withScripts := runCheckCLI(t, "--config.file=config.example.yaml", missing)
+	if withScripts.code != 1 || !strings.Contains(withScripts.result(t, "python_scripts").Errors[0], "interpreter") {
+		t.Fatalf("exit=%d\n%s", withScripts.code, withScripts.stdout)
+	}
+	without := runCheckCLI(t, "--config.file="+writeFile(t, "config.yaml", minimalConfig), missing)
+	if without.code != 0 {
+		t.Fatalf("exit=%d\n%s", without.code, without.stdout)
+	}
+}
+
+func TestCheckValidatesTheTargetsFile(t *testing.T) {
+	t.Run("invalid on its own", func(t *testing.T) {
+		targets := writeFile(t, "targets.yaml", "targets:\n  - name: bad-name\n    collector: legacy_text\n    target: http://a.example\n")
+		out := runCheckCLI(t, "--config.file=config.otlp.example.yaml", "--otlp.targets-file="+targets)
+		if out.code != 1 || out.result(t, "targets").Status != checkFailed || !strings.Contains(out.result(t, "targets").Errors[0], "invalid name") {
+			t.Fatalf("exit=%d\n%s", out.code, out.stdout)
+		}
+	})
+	t.Run("valid, but not against this configuration", func(t *testing.T) {
+		// config.example.yaml leaves OTLP disabled, and scheduled targets
+		// need it.
+		out := runCheckCLI(t, "--config.file=config.example.yaml", "--otlp.targets-file=targets.example.yaml")
+		targets := out.result(t, "targets")
+		if out.code != 1 || targets.Status != checkFailed || !strings.Contains(targets.Errors[0], "otlp.enabled") {
+			t.Fatalf("exit=%d targets=%+v", out.code, targets)
+		}
+		if out.result(t, "config").Status != checkOK {
+			t.Fatal("the configuration itself is fine; only the pairing is not")
+		}
+	})
+	t.Run("valid, with the configuration broken", func(t *testing.T) {
+		out := runCheckCLI(t, "--config.file="+t.TempDir()+"/absent.yaml", "--otlp.targets-file=targets.example.yaml")
+		targets := out.result(t, "targets")
+		if out.code != 1 || targets.Status != checkSkipped || targets.Details["targets"] == nil {
+			t.Fatalf("targets=%+v, want skipped, still listing what it loaded", targets)
+		}
+	})
+}
+
+func TestCheckValidatesTheWatchFlags(t *testing.T) {
+	config := "--config.file=" + writeFile(t, "config.yaml", minimalConfig)
+	bad := runCheckCLI(t, config, "--config.watch", "--config.watch-interval=0s")
+	if bad.code != 1 || bad.result(t, "config_watch").Status != checkFailed {
+		t.Fatalf("exit=%d\n%s", bad.code, bad.stdout)
+	}
+	good := runCheckCLI(t, config, "--config.watch", "--config.watch-interval=90s")
+	if good.code != 0 || good.result(t, "config_watch").Details["interval"] != "1m30s" {
+		t.Fatalf("exit=%d\n%s", good.code, good.stdout)
+	}
+	// Without the watch the interval is never read, at startup or here.
+	if unused := runCheckCLI(t, config, "--config.watch-interval=0s"); unused.code != 0 || unused.has("config_watch") {
+		t.Fatalf("exit=%d\n%s", unused.code, unused.stdout)
+	}
+}
+
+// --config.export-env changes what is loaded, so it changes the verdict: a
+// check run where the variables are not set fails, as startup would.
+func TestCheckHonoursEnvironmentExpansion(t *testing.T) {
+	config := "--config.file=" + writeFile(t, "config.yaml", strings.Replace(minimalConfig, "path: /status", "path: ${CHECK_DEMO_PATH}", 1))
+	if literal := runCheckCLI(t, config); literal.code != 0 {
+		t.Fatalf("without the flag the reference is literal text: exit=%d\n%s", literal.code, literal.stdout)
+	}
+	os.Unsetenv("CHECK_DEMO_PATH")
+	missing := runCheckCLI(t, config, "--config.export-env")
+	if missing.code != 1 || !strings.Contains(missing.result(t, "config").Errors[0], "CHECK_DEMO_PATH") {
+		t.Fatalf("exit=%d\n%s", missing.code, missing.stdout)
+	}
+	t.Setenv("CHECK_DEMO_PATH", "/status")
+	if set := runCheckCLI(t, config, "--config.export-env"); set.code != 0 || set.result(t, "config").Details["config_export_env"] != true {
+		t.Fatalf("exit=%d\n%s", set.code, set.stdout)
+	}
+}
+
+// The check calls startup's own validation, so anything it fails, startup
+// refuses too. This pins that for every failing case above.
+func TestCheckAgreesWithStartup(t *testing.T) {
+	broken := strings.Replace(minimalConfig, "expression:", "error_mode: panic\n        expression:", 1)
+	badTargets := writeFile(t, "targets.yaml", "targets:\n  - name: bad-name\n    collector: legacy_text\n    target: http://a.example\n")
+	for name, args := range map[string][]string{
+		"invalid configuration":     {"--config.file=" + writeFile(t, "config.yaml", broken)},
+		"missing configuration":     {"--config.file=" + t.TempDir() + "/absent.yaml"},
+		"no interpreter":            {"--config.file=config.example.yaml", "--python.path=/nonexistent/python"},
+		"invalid targets file":      {"--config.file=config.otlp.example.yaml", "--otlp.targets-file=" + badTargets},
+		"targets without OTLP":      {"--config.file=config.example.yaml", "--otlp.targets-file=targets.example.yaml"},
+		"non-positive watch period": {"--config.file=config.example.yaml", "--config.watch", "--config.watch-interval=0s"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			if check := runCheckCLI(t, args...); check.code != 1 {
+				t.Fatalf("--dry-run exit=%d, want 1", check.code)
+			}
+			if start := runCLI(t, args...); start.code != 1 {
+				t.Fatalf("startup exit=%d, want 1: --dry-run and startup disagree", start.code)
+			}
+		})
+	}
+}
+
+// Every stderr line is JSON (runCLI fails otherwise), each step is logged, and
+// a failure is logged at ERROR with its errors.
+func TestCheckLogsEachStepAsJSON(t *testing.T) {
+	broken := strings.Replace(minimalConfig, "expression:", "error_mode: panic\n        expression:", 1)
+	out := runCheckCLI(t, "--config.file="+writeFile(t, "config.yaml", broken))
+	var failed, skipped, complete bool
+	for _, record := range out.logs {
+		switch record["msg"] {
+		case "configuration check failed":
+			failed = record["level"] == "ERROR" && record["check"] == "config" && record["errors"] != nil
+		case "configuration check skipped":
+			skipped = record["level"] == "WARN" && record["reason"] != nil
+		case "configuration check complete":
+			complete = record["status"] == checkFailed
+		}
+	}
+	if !failed || !skipped || !complete {
+		t.Fatalf("failed=%v skipped=%v complete=%v in:\n%s", failed, skipped, complete, out.stderr)
+	}
+
+	// --log.level quietens the log, never the report.
+	quiet := runCheckCLI(t, "--config.file=config.example.yaml", "--log.level=error")
+	if quiet.code != 0 || len(quiet.logs) != 0 || quiet.report.Status != checkOK {
+		t.Fatalf("exit=%d logs=%d status=%s", quiet.code, len(quiet.logs), quiet.report.Status)
+	}
+}
+
+// The check never serves: a listen address that could not be bound does not
+// matter to it.
+func TestCheckDoesNotStartTheServer(t *testing.T) {
+	out := runCheckCLI(t, "--config.file=config.example.yaml", "--web.listen-address=256.0.0.1:99999")
+	if out.code != 0 {
+		t.Fatalf("exit=%d\n%s", out.code, out.stdout)
+	}
+}
+
+// A command line that cannot be parsed is not a verdict on the configuration,
+// so it keeps the conventional status 2, and -h is not an error.
+func TestCommandLineErrorsAreNotCheckResults(t *testing.T) {
+	bad := runCLI(t, "--dry-run", "--no-such-flag")
+	if bad.code != 2 || bad.stdout != "" {
+		t.Fatalf("exit=%d stdout=%q", bad.code, bad.stdout)
+	}
+	// Even the complaint about the command line is a JSON log line.
+	if len(bad.logs) != 1 || !strings.Contains(bad.logs[0]["error"].(string), "no-such-flag") {
+		t.Fatalf("logs=%v", bad.logs)
+	}
+	help := runCLI(t, "-h")
+	if help.code != 0 || !strings.Contains(help.stdout, "-dry-run") || help.stderr != "" {
+		t.Fatalf("-h exit=%d stdout=%q stderr=%q", help.code, help.stdout, help.stderr)
+	}
+}

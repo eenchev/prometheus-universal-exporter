@@ -105,7 +105,7 @@ func (s *Server) scrapeScheduledTarget(ctx context.Context, target ScheduledTarg
 		count(func(st *serverStats) { st.cacheMisses++ })
 	}
 
-	response, err := fetch(ctx, target.Target, c, overrides, headers)
+	response, err := fetchCollector(ctx, target.Target, c, overrides, headers)
 	scraped = true
 	if err != nil {
 		if strings.Contains(strings.ToLower(err.Error()), "response size") {

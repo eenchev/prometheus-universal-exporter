@@ -39,6 +39,7 @@ Describe a collector:
 collectors:
   - name: app_json
     request:
+      type: http
       path: /status
     transform:
       type: jq
@@ -114,6 +115,7 @@ pattern needs. See the
 | `--config.watch-interval` | `60s` | How often to check, with `--config.watch`. |
 | `--config.export-env` | off | Expand `${NAME}` references in the configuration. |
 | `--otlp.targets-file` | none | Scheduled targets the exporter scrapes itself. |
+| `--dry-run` | off | Validate the files and flags above, print a JSON report and exit `0` or `1`, without starting. See [Dry run](docs/CONFIGURATION.md#dry-run). |
 
 ## Documentation
 

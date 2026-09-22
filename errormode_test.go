@@ -44,7 +44,7 @@ func jsonTarget(t *testing.T, hits *atomic.Int64) *httptest.Server {
 func modeCollector(name, mode string) Collector {
 	return Collector{
 		Name:          name,
-		Request:       RequestConfig{Method: "GET"},
+		Request:       RequestConfig{Type: RequestTypeHTTP, Method: "GET"},
 		Response:      ResponseConfig{Format: "json"},
 		Transform:     TransformConfig{Type: "jq"},
 		ErrorHandling: ErrorHandling{OnHTTPError: "fail", OnDecodeError: "fail", OnTransformError: "fail"},
@@ -356,7 +356,7 @@ func TestFailIsReportedByEveryTransform(t *testing.T) {
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			captureLogs(t)
-			c := Collector{
+			c := Collector{Request: RequestConfig{Type: RequestTypeHTTP},
 				Name:      "every",
 				Response:  ResponseConfig{Format: test.format, CSV: CSVConfig{Header: boolPtr(true)}},
 				Transform: TransformConfig{Type: test.transform},

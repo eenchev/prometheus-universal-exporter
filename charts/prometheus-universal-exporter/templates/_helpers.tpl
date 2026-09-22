@@ -21,6 +21,9 @@
 {{- fail (printf "extraArgs entry %q must start with `--`, for example \"--log.level=debug\"" $text) -}}
 {{- end -}}
 {{- $name := $text | splitList "=" | first -}}
+{{- if eq $name "--dry-run" -}}
+{{- fail (printf "extraArgs entry %q would make the exporter validate its configuration and exit, so the pod would never serve; run --dry-run as a separate command, a Job or an init container instead" $text) -}}
+{{- end -}}
 {{- if hasKey $managed $name -}}
 {{- fail (printf "extraArgs entry %q sets %s, which the chart already manages; %s" $text $name (get $managed $name)) -}}
 {{- end -}}

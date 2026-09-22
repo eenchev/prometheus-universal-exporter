@@ -198,6 +198,9 @@ func (f *TargetFile) ValidateAgainst(c *Config) error {
 		if !known[t.Collector] {
 			return fmt.Errorf("target %q references unknown collector %q", t.Name, t.Collector)
 		}
+		if err := checkTargetRequest(t, collectorByName(c, t.Collector)); err != nil {
+			return err
+		}
 		// Borrowing a collector whose request.path has placeholders works only
 		// while every one of them has a default, since nothing else can fill
 		// it; otherwise every scrape of this target would fail. Catching it

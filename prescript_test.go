@@ -48,7 +48,7 @@ func TestPreScriptReshapesTextForOrdinaryMetricRules(t *testing.T) {
 	}))
 	defer target.Close()
 
-	cfg := &Config{Collectors: []Collector{{
+	cfg := &Config{Collectors: []Collector{{Request: RequestConfig{Type: RequestTypeHTTP},
 		Name:      "worker_cpu",
 		Transform: TransformConfig{Type: "jq", PreScript: workerReshapeScript},
 		Limits:    scriptLimits(),
@@ -120,7 +120,7 @@ func TestPreScriptPromotesOnlyForStructuredTransforms(t *testing.T) {
 	}
 	for _, test := range tests {
 		t.Run(test.transform+"/"+test.kind, func(t *testing.T) {
-			c := &Collector{
+			c := &Collector{Request: RequestConfig{Type: RequestTypeHTTP},
 				Name:      "promotion",
 				Transform: TransformConfig{Type: test.transform, PreScript: test.script},
 				Limits:    scriptLimits(),
@@ -144,7 +144,7 @@ func TestPreScriptPromotesOnlyForStructuredTransforms(t *testing.T) {
 }
 
 func TestPreScriptScalarResultKeepsDecodedFormat(t *testing.T) {
-	c := validated(t, Collector{
+	c := validated(t, Collector{Request: RequestConfig{Type: RequestTypeHTTP},
 		Name:      "scalar",
 		Transform: TransformConfig{Type: "regex", PreScript: `data = data.replace("cpu", "value")`},
 		Limits:    scriptLimits(),
@@ -160,7 +160,7 @@ func TestPreScriptScalarResultKeepsDecodedFormat(t *testing.T) {
 }
 
 func TestPreScriptStillReparsesHTML(t *testing.T) {
-	c := validated(t, Collector{
+	c := validated(t, Collector{Request: RequestConfig{Type: RequestTypeHTTP},
 		Name:      "html_prescript",
 		Response:  ResponseConfig{Format: "html"},
 		Transform: TransformConfig{Type: "css", PreScript: `data = data.replace("42", "7")`},
@@ -177,7 +177,7 @@ func TestPreScriptStillReparsesHTML(t *testing.T) {
 }
 
 func TestPreScriptDoesNotPromoteForTheCSVTransform(t *testing.T) {
-	c := validated(t, Collector{
+	c := validated(t, Collector{Request: RequestConfig{Type: RequestTypeHTTP},
 		Name:      "csv_prescript",
 		Transform: TransformConfig{Type: "csv", PreScript: `data = data + [{"server": "extra", "cpu": "9"}]`},
 		Limits:    scriptLimits(),
@@ -203,7 +203,7 @@ func TestPreScriptDoesNotPromoteForTheCSVTransform(t *testing.T) {
 }
 
 func TestUnstructuredPreScriptResultStillFailsStructuredTransforms(t *testing.T) {
-	c := validated(t, Collector{
+	c := validated(t, Collector{Request: RequestConfig{Type: RequestTypeHTTP},
 		Name:      "unstructured",
 		Transform: TransformConfig{Type: "jq", PreScript: `data = "still plain text"`},
 		Limits:    scriptLimits(),
@@ -216,7 +216,7 @@ func TestUnstructuredPreScriptResultStillFailsStructuredTransforms(t *testing.T)
 }
 
 func TestPreScriptPromotionSupportsArrayResults(t *testing.T) {
-	c := validated(t, Collector{
+	c := validated(t, Collector{Request: RequestConfig{Type: RequestTypeHTTP},
 		Name:      "array_prescript",
 		Transform: TransformConfig{Type: "jq", PreScript: `data = [{"zone": "a", "cpu": 1}, {"zone": "b", "cpu": 2}]`},
 		Limits:    scriptLimits(),

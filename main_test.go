@@ -13,7 +13,7 @@ import (
 )
 
 func testCollector(name, format string) Collector {
-	return Collector{Name: name, Request: RequestConfig{Method: "GET"}, Response: ResponseConfig{Format: format}, Transform: TransformConfig{Type: "regex"}, Metrics: []MetricRule{{Name: "demo_value", Type: GaugeMetricType, Expression: `value=(\d+)`}}, ErrorHandling: ErrorHandling{OnHTTPError: "fail", OnDecodeError: "fail", OnTransformError: "fail"}, Limits: Limits{MaxResponseBytes: 1024}}
+	return Collector{Name: name, Request: RequestConfig{Type: RequestTypeHTTP, Method: "GET"}, Response: ResponseConfig{Format: format}, Transform: TransformConfig{Type: "regex"}, Metrics: []MetricRule{{Name: "demo_value", Type: GaugeMetricType, Expression: `value=(\d+)`}}, ErrorHandling: ErrorHandling{OnHTTPError: "fail", OnDecodeError: "fail", OnTransformError: "fail"}, Limits: Limits{MaxResponseBytes: 1024}}
 }
 
 func TestMetricValidationAndExpositionEscaping(t *testing.T) {
@@ -141,7 +141,7 @@ func TestParseRetryOverrides(t *testing.T) {
 }
 
 func TestHTMLBareTagSelector(t *testing.T) {
-	c := Collector{Name: "html", Response: ResponseConfig{Format: "html"}, Transform: TransformConfig{Type: "css"}, Metrics: []MetricRule{{Name: "application_status", Type: GaugeMetricType, Expression: "h1"}}, ErrorHandling: ErrorHandling{AllowMissingKeys: false}, Limits: Limits{MaxMetrics: 10}}
+	c := Collector{Request: RequestConfig{Type: RequestTypeHTTP}, Name: "html", Response: ResponseConfig{Format: "html"}, Transform: TransformConfig{Type: "css"}, Metrics: []MetricRule{{Name: "application_status", Type: GaugeMetricType, Expression: "h1"}}, ErrorHandling: ErrorHandling{AllowMissingKeys: false}, Limits: Limits{MaxMetrics: 10}}
 	r := &HTTPResponse{Body: []byte("<html><body><h1>42</h1></body></html>"), Headers: http.Header{"Content-Type": []string{"text/html"}}}
 	d, err := decode(r, &c)
 	if err != nil {
@@ -157,7 +157,7 @@ func TestHTMLBareTagSelector(t *testing.T) {
 }
 
 func TestMissingOptionalJSONValue(t *testing.T) {
-	c := Collector{Name: "json", Response: ResponseConfig{Format: "json"}, Transform: TransformConfig{Type: "jq"}, Metrics: []MetricRule{{Name: "optional_value", Type: GaugeMetricType, Expression: ".missing"}}, ErrorHandling: ErrorHandling{AllowMissingKeys: true}, Limits: Limits{MaxMetrics: 10}}
+	c := Collector{Request: RequestConfig{Type: RequestTypeHTTP}, Name: "json", Response: ResponseConfig{Format: "json"}, Transform: TransformConfig{Type: "jq"}, Metrics: []MetricRule{{Name: "optional_value", Type: GaugeMetricType, Expression: ".missing"}}, ErrorHandling: ErrorHandling{AllowMissingKeys: true}, Limits: Limits{MaxMetrics: 10}}
 	r := &HTTPResponse{Body: []byte(`{"present":1}`), Headers: make(http.Header)}
 	d, err := decode(r, &c)
 	if err != nil {
@@ -173,7 +173,7 @@ func TestMissingOptionalJSONValue(t *testing.T) {
 }
 
 func TestStandardJSONMetricAndPreScript(t *testing.T) {
-	c := Collector{Name: "json", Response: ResponseConfig{Format: "json"}, Transform: TransformConfig{Type: "jq", PreScript: `data["requests"] = 42`}, Metrics: []MetricRule{{Name: "application_requests_total", Description: "Total application requests", Type: CounterMetricType, Expression: ".requests", Labels: []LabelRule{{Name: "environment", Type: "expression", Expression: ".environment"}}}}, Limits: Limits{MaxMetrics: 10}}
+	c := Collector{Request: RequestConfig{Type: RequestTypeHTTP}, Name: "json", Response: ResponseConfig{Format: "json"}, Transform: TransformConfig{Type: "jq", PreScript: `data["requests"] = 42`}, Metrics: []MetricRule{{Name: "application_requests_total", Description: "Total application requests", Type: CounterMetricType, Expression: ".requests", Labels: []LabelRule{{Name: "environment", Type: "expression", Expression: ".environment"}}}}, Limits: Limits{MaxMetrics: 10}}
 	r := &HTTPResponse{Body: []byte(`{"environment":"test"}`), Headers: make(http.Header)}
 	if err := (&Config{Collectors: []Collector{c}}).Validate(); err != nil {
 		t.Fatal(err)
@@ -192,7 +192,7 @@ func TestStandardJSONMetricAndPreScript(t *testing.T) {
 }
 
 func TestJSONArrayMetricsPairLabelsByIndex(t *testing.T) {
-	c := Collector{
+	c := Collector{Request: RequestConfig{Type: RequestTypeHTTP},
 		Name:      "json_array",
 		Response:  ResponseConfig{Format: "json"},
 		Transform: TransformConfig{Type: "jq"},
@@ -232,7 +232,7 @@ func TestJSONArrayMetricsPairLabelsByIndex(t *testing.T) {
 func TestJSONArrayMissingValuesRespectMetricErrorMode(t *testing.T) {
 	for _, errorMode := range []string{"ignore", "log"} {
 		t.Run(errorMode, func(t *testing.T) {
-			c := Collector{
+			c := Collector{Request: RequestConfig{Type: RequestTypeHTTP},
 				Name:      "json_array_missing",
 				Response:  ResponseConfig{Format: "json"},
 				Transform: TransformConfig{Type: "jq"},
@@ -265,7 +265,7 @@ func TestJSONArrayMissingValuesRespectMetricErrorMode(t *testing.T) {
 }
 
 func TestStandardCSVMetricLabelsUseRowExpressions(t *testing.T) {
-	c := Collector{Name: "csv", Response: ResponseConfig{Format: "csv", CSV: CSVConfig{Header: boolPtr(true)}}, Transform: TransformConfig{Type: "csv"}, Metrics: []MetricRule{{Name: "server_cpu", Description: "Server CPU utilization", Type: GaugeMetricType, Expression: "cpu", Labels: []LabelRule{{Name: "server", Type: "expression", Expression: "server"}, {Name: "environment", Type: "string", Value: "production"}}}}, Limits: Limits{MaxMetrics: 10}}
+	c := Collector{Request: RequestConfig{Type: RequestTypeHTTP}, Name: "csv", Response: ResponseConfig{Format: "csv", CSV: CSVConfig{Header: boolPtr(true)}}, Transform: TransformConfig{Type: "csv"}, Metrics: []MetricRule{{Name: "server_cpu", Description: "Server CPU utilization", Type: GaugeMetricType, Expression: "cpu", Labels: []LabelRule{{Name: "server", Type: "expression", Expression: "server"}, {Name: "environment", Type: "string", Value: "production"}}}}, Limits: Limits{MaxMetrics: 10}}
 	if err := (&Config{Collectors: []Collector{c}}).Validate(); err != nil {
 		t.Fatal(err)
 	}
@@ -286,7 +286,7 @@ func TestStandardCSVMetricLabelsUseRowExpressions(t *testing.T) {
 func TestCSVFormatIsInferredAndMissingRowsRespectMetricErrorMode(t *testing.T) {
 	for _, errorMode := range []string{"ignore", "log"} {
 		t.Run(errorMode, func(t *testing.T) {
-			c := Collector{
+			c := Collector{Request: RequestConfig{Type: RequestTypeHTTP},
 				Name:      "csv_missing",
 				Response:  ResponseConfig{CSV: CSVConfig{Header: boolPtr(true)}},
 				Transform: TransformConfig{Type: "csv"},
@@ -318,7 +318,7 @@ func TestCSVFormatIsInferredAndMissingRowsRespectMetricErrorMode(t *testing.T) {
 }
 
 func TestCSVTransformDefaultsWithoutResponseConfiguration(t *testing.T) {
-	cfg := &Config{Collectors: []Collector{{
+	cfg := &Config{Collectors: []Collector{{Request: RequestConfig{Type: RequestTypeHTTP},
 		Name:      "csv_defaults",
 		Transform: TransformConfig{Type: "csv"},
 		Metrics: []MetricRule{{
@@ -354,7 +354,7 @@ func TestHTMLCSSTableValues(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	c := Collector{
+	c := Collector{Request: RequestConfig{Type: RequestTypeHTTP},
 		Name:      "html_css",
 		Response:  ResponseConfig{Format: "html"},
 		Transform: TransformConfig{Type: "css"},
@@ -380,7 +380,7 @@ func TestHTMLXPathTableValuesAndLabels(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	c := Collector{
+	c := Collector{Request: RequestConfig{Type: RequestTypeHTTP},
 		Name:      "html_xpath",
 		Response:  ResponseConfig{Format: "html"},
 		Transform: TransformConfig{Type: "xpath"},
@@ -411,7 +411,7 @@ func TestPrometheusInputFilteringAndRelabeling(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	c := Collector{
+	c := Collector{Request: RequestConfig{Type: RequestTypeHTTP},
 		Name:      "prometheus",
 		Response:  ResponseConfig{Format: "prometheus"},
 		Transform: TransformConfig{Type: "prometheus"},
@@ -439,7 +439,7 @@ func TestPrometheusInputFilteringAndRelabeling(t *testing.T) {
 }
 
 func TestPythonIsConfiguredAsTransform(t *testing.T) {
-	c := Collector{Name: "python", Response: ResponseConfig{Format: "text"}, Transform: TransformConfig{Type: "python", Script: `metric(name="python_value", type="gauge", value=7)`, Libraries: []string{"beautifulsoup4"}}, Metrics: []MetricRule{}, Limits: Limits{MaxMetrics: 10}}
+	c := Collector{Request: RequestConfig{Type: RequestTypeHTTP}, Name: "python", Response: ResponseConfig{Format: "text"}, Transform: TransformConfig{Type: "python", Script: `metric(name="python_value", type="gauge", value=7)`, Libraries: []string{"beautifulsoup4"}}, Metrics: []MetricRule{}, Limits: Limits{MaxMetrics: 10}}
 	if err := (&Config{Collectors: []Collector{c}}).Validate(); err != nil {
 		t.Fatal(err)
 	}
@@ -458,7 +458,7 @@ func TestPythonIsConfiguredAsTransform(t *testing.T) {
 }
 
 func TestTransformInfersResponseFormatAndMetricErrorMode(t *testing.T) {
-	cfg := &Config{Collectors: []Collector{{Name: "text", Transform: TransformConfig{Type: "regex"}, Metrics: []MetricRule{{Name: "value", Type: GaugeMetricType, ErrorMode: "ignore", Expression: `missing=(\d+)`}}}}}
+	cfg := &Config{Collectors: []Collector{{Request: RequestConfig{Type: RequestTypeHTTP}, Name: "text", Transform: TransformConfig{Type: "regex"}, Metrics: []MetricRule{{Name: "value", Type: GaugeMetricType, ErrorMode: "ignore", Expression: `missing=(\d+)`}}}}}
 	if err := cfg.Validate(); err != nil {
 		t.Fatal(err)
 	}
@@ -481,7 +481,7 @@ func TestTransformInfersResponseFormatAndMetricErrorMode(t *testing.T) {
 }
 
 func TestTransformRejectsIncompatibleResponseFormat(t *testing.T) {
-	cfg := &Config{Collectors: []Collector{{Name: "invalid", Response: ResponseConfig{Format: "json"}, Transform: TransformConfig{Type: "regex"}, Metrics: []MetricRule{{Name: "value", Type: GaugeMetricType, Expression: `value=(\d+)`}}}}}
+	cfg := &Config{Collectors: []Collector{{Request: RequestConfig{Type: RequestTypeHTTP}, Name: "invalid", Response: ResponseConfig{Format: "json"}, Transform: TransformConfig{Type: "regex"}, Metrics: []MetricRule{{Name: "value", Type: GaugeMetricType, Expression: `value=(\d+)`}}}}}
 	if err := cfg.Validate(); err != nil {
 		t.Fatal(err)
 	}
@@ -501,7 +501,7 @@ func boolPtr(value bool) *bool { return &value }
 func TestForwardedHeadersAreExplicitAndAllowlisted(t *testing.T) {
 	r := httptest.NewRequest(http.MethodGet, "/probe?header_X-Tenant=team-a&header_X-Unsafe=secret", nil)
 	r.Header.Set("Authorization", "Bearer monitor-token")
-	forwarded := forwardedHeaders(r, RequestConfig{ForwardAuthorization: true, ForwardHeaders: []string{"x-tenant"}})
+	forwarded := forwardedHeaders(r, RequestConfig{Type: RequestTypeHTTP, ForwardAuthorization: true, ForwardHeaders: []string{"x-tenant"}})
 	if got := forwarded.Get("Authorization"); got != "Bearer monitor-token" {
 		t.Fatalf("authorization was not forwarded: %q", got)
 	}
@@ -640,7 +640,7 @@ func TestBasicAuthFileIsUsedForTarget(t *testing.T) {
 }
 
 func TestConfigValidationAppliesDefaults(t *testing.T) {
-	cfg := &Config{Collectors: []Collector{{
+	cfg := &Config{Collectors: []Collector{{Request: RequestConfig{Type: RequestTypeHTTP},
 		Name:      "defaults",
 		Transform: TransformConfig{Type: "regex"},
 		Metrics:   []MetricRule{{Name: "value", Expression: `value=(\d+)`}},
@@ -676,42 +676,42 @@ func TestConfigValidationRejectsInvalidSettings(t *testing.T) {
 		},
 		{
 			name: "invalid collector name",
-			cfg:  &Config{Collectors: []Collector{{Name: "bad-name"}}},
+			cfg:  &Config{Collectors: []Collector{{Request: RequestConfig{Type: RequestTypeHTTP}, Name: "bad-name"}}},
 			want: "invalid name",
 		},
 		{
 			name: "unsupported method",
-			cfg:  &Config{Collectors: []Collector{{Name: "invalid_method", Request: RequestConfig{Method: "TRACE"}}}},
+			cfg:  &Config{Collectors: []Collector{{Name: "invalid_method", Request: RequestConfig{Type: RequestTypeHTTP, Method: "TRACE"}}}},
 			want: "unsupported method",
 		},
 		{
 			name: "negative retry attempts",
-			cfg:  &Config{Collectors: []Collector{{Name: "invalid_retries", Request: RequestConfig{Retry: RetryConfig{Attempts: -1}}}}},
+			cfg:  &Config{Collectors: []Collector{{Name: "invalid_retries", Request: RequestConfig{Type: RequestTypeHTTP, Retry: RetryConfig{Attempts: -1}}}}},
 			want: "retry.attempts",
 		},
 		{
 			name: "negative retry backoff",
-			cfg:  &Config{Collectors: []Collector{{Name: "invalid_backoff", Request: RequestConfig{Retry: RetryConfig{Backoff: Duration(-time.Second)}}}}},
+			cfg:  &Config{Collectors: []Collector{{Name: "invalid_backoff", Request: RequestConfig{Type: RequestTypeHTTP, Retry: RetryConfig{Backoff: Duration(-time.Second)}}}}},
 			want: "retry.backoff",
 		},
 		{
 			name: "unknown transform",
-			cfg:  &Config{Collectors: []Collector{{Name: "invalid_transform", Transform: TransformConfig{Type: "lua"}}}},
+			cfg:  &Config{Collectors: []Collector{{Request: RequestConfig{Type: RequestTypeHTTP}, Name: "invalid_transform", Transform: TransformConfig{Type: "lua"}}}},
 			want: "unknown transform",
 		},
 		{
 			name: "invalid metric type",
-			cfg:  &Config{Collectors: []Collector{{Name: "invalid_metric_type", Metrics: []MetricRule{{Name: "value", Type: "rate", Expression: ".value"}}}}},
+			cfg:  &Config{Collectors: []Collector{{Request: RequestConfig{Type: RequestTypeHTTP}, Name: "invalid_metric_type", Metrics: []MetricRule{{Name: "value", Type: "rate", Expression: ".value"}}}}},
 			want: "invalid type",
 		},
 		{
 			name: "invalid metric error mode",
-			cfg:  &Config{Collectors: []Collector{{Name: "invalid_error_mode", Metrics: []MetricRule{{Name: "value", ErrorMode: "panic", Expression: ".value"}}}}},
+			cfg:  &Config{Collectors: []Collector{{Request: RequestConfig{Type: RequestTypeHTTP}, Name: "invalid_error_mode", Metrics: []MetricRule{{Name: "value", ErrorMode: "panic", Expression: ".value"}}}}},
 			want: "want ignore, log or fail",
 		},
 		{
 			name: "invalid label type",
-			cfg:  &Config{Collectors: []Collector{{Name: "invalid_label", Transform: TransformConfig{Type: "jq"}, Metrics: []MetricRule{{Name: "value", Expression: ".value", Labels: []LabelRule{{Name: "source", Type: "xpath", Expression: ".source"}}}}}}},
+			cfg:  &Config{Collectors: []Collector{{Request: RequestConfig{Type: RequestTypeHTTP}, Name: "invalid_label", Transform: TransformConfig{Type: "jq"}, Metrics: []MetricRule{{Name: "value", Expression: ".value", Labels: []LabelRule{{Name: "source", Type: "xpath", Expression: ".source"}}}}}}},
 			want: "invalid type",
 		},
 	}
@@ -736,7 +736,7 @@ func TestLoadConfigRejectsUnknownFields(t *testing.T) {
 }
 
 func TestDecodeJSONAutoDetectionAndMalformedInput(t *testing.T) {
-	c := Collector{}
+	c := Collector{Request: RequestConfig{Type: RequestTypeHTTP}}
 	r := &HTTPResponse{Body: []byte(`[{"value":7}]`), Headers: make(http.Header)}
 	d, err := decode(r, &c)
 	if err != nil {
@@ -762,7 +762,7 @@ func TestDecodeJSONAutoDetectionAndMalformedInput(t *testing.T) {
 }
 
 func TestDecodeCSVQuotedFieldsAndRowsWithoutHeader(t *testing.T) {
-	c := Collector{Response: ResponseConfig{Format: "csv", CSV: CSVConfig{Header: boolPtr(true), Delimiter: ";", TrimSpace: true}}}
+	c := Collector{Request: RequestConfig{Type: RequestTypeHTTP}, Response: ResponseConfig{Format: "csv", CSV: CSVConfig{Header: boolPtr(true), Delimiter: ";", TrimSpace: true}}}
 	r := &HTTPResponse{Body: []byte("server;note;cpu\n\"web;01\";\"up;ok\"; 72 \n"), Headers: make(http.Header)}
 	d, err := decode(r, &c)
 	if err != nil {
@@ -788,7 +788,7 @@ func TestDecodeCSVQuotedFieldsAndRowsWithoutHeader(t *testing.T) {
 }
 
 func TestDecodePrometheusPreservesTimestamp(t *testing.T) {
-	c := Collector{Response: ResponseConfig{Format: "prometheus"}}
+	c := Collector{Request: RequestConfig{Type: RequestTypeHTTP}, Response: ResponseConfig{Format: "prometheus"}}
 	r := &HTTPResponse{Body: []byte("# TYPE vendor_value gauge\nvendor_value 42 1700000000000\n"), Headers: make(http.Header)}
 	d, err := decode(r, &c)
 	if err != nil {
@@ -812,7 +812,7 @@ func TestFetchBuildsConfiguredRequestAndBearerAuth(t *testing.T) {
 		_, _ = w.Write([]byte("value=42\n"))
 	}))
 	defer target.Close()
-	c := Collector{Name: "configured", Request: RequestConfig{Method: http.MethodPost, Path: "/status", Query: map[string]string{"region": "eu"}, Headers: map[string]string{"X-Request": "one"}, Body: "raw body", BearerToken: "target-token", AllowedSchemes: []string{"http"}}, Limits: Limits{MaxResponseBytes: 1024}}
+	c := Collector{Name: "configured", Request: RequestConfig{Type: RequestTypeHTTP, Method: http.MethodPost, Path: "/status", Query: map[string]string{"region": "eu"}, Headers: map[string]string{"X-Request": "one"}, Body: "raw body", BearerToken: "target-token", AllowedSchemes: []string{"http"}}, Limits: Limits{MaxResponseBytes: 1024}}
 	response, err := fetch(context.Background(), target.URL+"/base?existing=true", &c, RequestOverrides{})
 	if err != nil {
 		t.Fatal(err)
@@ -823,7 +823,7 @@ func TestFetchBuildsConfiguredRequestAndBearerAuth(t *testing.T) {
 }
 
 func TestFetchRejectsDisallowedSchemeAndOversizedResponse(t *testing.T) {
-	c := Collector{Name: "scheme", Request: RequestConfig{AllowedSchemes: []string{"https"}}}
+	c := Collector{Name: "scheme", Request: RequestConfig{Type: RequestTypeHTTP, AllowedSchemes: []string{"https"}}}
 	if _, err := fetch(context.Background(), "http://example.com", &c, RequestOverrides{}); err == nil || !strings.Contains(err.Error(), "not allowed") {
 		t.Fatalf("scheme error=%v", err)
 	}
@@ -847,7 +847,7 @@ func TestFetchRetriesTransientResponsesAndQueryOverrides(t *testing.T) {
 		_, _ = w.Write([]byte("recovered"))
 	}))
 	defer target.Close()
-	c := Collector{Name: "retry", Request: RequestConfig{AllowedSchemes: []string{"http"}, Retry: RetryConfig{Attempts: 1, Backoff: Duration(10 * time.Millisecond)}}, Limits: Limits{MaxResponseBytes: 1024}}
+	c := Collector{Name: "retry", Request: RequestConfig{Type: RequestTypeHTTP, AllowedSchemes: []string{"http"}, Retry: RetryConfig{Attempts: 1, Backoff: Duration(10 * time.Millisecond)}}, Limits: Limits{MaxResponseBytes: 1024}}
 	started := time.Now()
 	response, err := fetch(context.Background(), target.URL, &c, RequestOverrides{})
 	if err != nil || response.StatusCode != http.StatusOK || string(response.Body) != "recovered" {
@@ -877,7 +877,7 @@ func TestFetchDoesNotRetryNonTransientHTTPStatus(t *testing.T) {
 		w.WriteHeader(http.StatusBadRequest)
 	}))
 	defer target.Close()
-	c := Collector{Name: "no_retry", Request: RequestConfig{AllowedSchemes: []string{"http"}, Retry: RetryConfig{Attempts: 3}}, Limits: Limits{MaxResponseBytes: 1024}}
+	c := Collector{Name: "no_retry", Request: RequestConfig{Type: RequestTypeHTTP, AllowedSchemes: []string{"http"}, Retry: RetryConfig{Attempts: 3}}, Limits: Limits{MaxResponseBytes: 1024}}
 	response, err := fetch(context.Background(), target.URL, &c, RequestOverrides{})
 	if err != nil || response.StatusCode != http.StatusBadRequest || requests != 1 {
 		t.Fatalf("non-transient response=%#v error=%v requests=%d", response, err, requests)
@@ -889,7 +889,7 @@ func TestFetchTLSVerificationCanBeConfiguredAndOverridden(t *testing.T) {
 		_, _ = w.Write([]byte("secure response"))
 	}))
 	defer target.Close()
-	c := Collector{Name: "tls", Request: RequestConfig{AllowedSchemes: []string{"https"}}, Limits: Limits{MaxResponseBytes: 1024}}
+	c := Collector{Name: "tls", Request: RequestConfig{Type: RequestTypeHTTP, AllowedSchemes: []string{"https"}}, Limits: Limits{MaxResponseBytes: 1024}}
 
 	if _, err := fetch(context.Background(), target.URL, &c, RequestOverrides{}); err == nil {
 		t.Fatal("expected certificate verification to fail by default")

@@ -100,8 +100,12 @@ Example:
 ```yaml
 collectors:
   - name: elasticsearch_cluster
+    request:
+      type: http
     ...
   - name: legacy_application
+    request:
+      type: http
     ...
 ```
 
@@ -236,6 +240,7 @@ Example:
 
 ```yaml
 request:
+  type: http
   method: GET
   path: /api/status
   query:
@@ -247,6 +252,22 @@ request:
 ```
 
 Target URL and collector request path MUST be combined safely.
+
+A target without a scheme MUST be treated as `http`. Service discovery
+produces `__address__` as a bare `host:port`, and monitors pass it through as
+the target, so this is the common case. The decision MUST be made on the text —
+no `://` means no scheme — before the target is parsed, because a URL parser
+rejects `10.0.0.5:8080` outright and reads `legacy.example:8080` as the scheme
+`legacy.example`. IPv6 literals in brackets and credentials in the userinfo
+MUST survive. `allowed_schemes` MUST apply to the result, so a bare target is
+never upgraded to `https`.
+
+When neither `request.path` nor a `path` probe parameter is given, the target
+MUST be requested exactly as given, including any path it carries.
+
+Rendering a target for a log line or an error body MUST never fail, whatever
+the probe sent. A target that cannot be parsed MUST be withheld rather than
+echoed, since the credentials in it could not be located to redact them.
 
 The exporter MUST expose HTTP response status and request duration in its self-metrics.
 
@@ -260,6 +281,7 @@ Recommended top-level structure:
 collectors:
   - name: example
     request:
+      type: http
       ...
     response:
       ...
@@ -276,6 +298,71 @@ collectors:
 ```
 
 A collector MUST have a unique name.
+
+### 5.1 Request types
+
+Every collector MUST declare `request.type`, which selects how it reaches its
+data. `http` is the only type implemented; gRPC, local files and FTP are
+anticipated. The type MUST be required rather than defaulted, so that when a
+second type exists no configuration means `http` by accident. A missing type
+MUST be rejected at startup and on reload with a message naming the collector,
+stating that the type is required, listing the supported types and showing
+`type: http`; an unknown type MUST be rejected with the supported types listed.
+The value MUST be matched without regard to case or surrounding whitespace and
+stored in lower case.
+
+Each type MUST own, and the implementation MUST keep in one registry:
+
+- the request keys it accepts. A key set on a collector that its type does not
+  accept MUST be rejected, naming the key and the type, so a configuration can
+  never carry a setting that is silently ignored. Keys MUST be checked before
+  the type fills in defaults, so a default is never mistaken for something the
+  author wrote;
+- the `/probe` parameters it accepts (§ 42.10). A parameter that some type
+  accepts but the collector's type does not MUST be rejected with
+  `400 Bad Request` naming the parameter and the type, before the target is
+  contacted. A parameter no type accepts is not an override and MUST be ignored,
+  as it always has been, since a monitor may carry parameters of its own;
+- the keys a scheduled target's `request` block may set (§ 42.14). A key its
+  collector's type does not accept MUST be rejected at startup naming the
+  target, the key, the collector and the type;
+- its own validation — required keys, defaults and cross-key rules;
+- its own fetch. Decoding, transforms, error policies, limits, caching and
+  exposition MUST be shared by every type, so a new type adds only how bytes
+  are obtained.
+
+Every key of the request block, and of a scheduled target's request block, MUST
+be accepted by at least one type, and a test MUST enforce it, so a key cannot be
+added without deciding which types it belongs to.
+
+#### `http`
+
+`type` is the only required key. Everything else is optional:
+
+| Key | Default | Rule |
+| --- | --- | --- |
+| `method` | `GET` | One of GET, POST, PUT, PATCH, DELETE, HEAD, case-insensitive. |
+| `path` | none | Joined onto the target URL; may carry path parameters (§ 42.10a). Empty is valid, since the target URL may carry the whole path. |
+| `query` | none | Query parameters added to the request. |
+| `headers` | none | Headers sent to the target. |
+| `body` | none | Raw request body. |
+| `basic_auth` / `basic_auth_file` | none | Mutually exclusive; the file form needs both paths. |
+| `bearer_token` / `bearer_token_file` | none | Mutually exclusive, and exclusive with basic authentication. |
+| `forward_authorization` | `false` | Forward the probe's `Authorization` header (§ 42.4). |
+| `forward_headers` | none | Allowlist for `header_<name>` probe parameters (§ 42.4). |
+| `tls` | verify | CA, client certificate and `insecure_skip_verify` (§ 42.9). |
+| `retry` | none | `attempts` and `backoff`, both non-negative. |
+| `max_response_bytes` | limit | Response size cap. |
+| `follow_redirects` | `false` | § 42.15. |
+| `enable_http2` | `false` | § 42.15. |
+| `allowed_schemes` | `http`, `https` | Schemes a target may use. |
+
+It MUST accept these `/probe` parameters: `method`, `path`, `timeout`, `body`,
+`insecure_skip_verify`, `follow_redirects`, `enable_http2`, `retry_attempts`,
+`retry_backoff`, `header_<name>` and `param_<name>`. A scheduled target using an
+`http` collector MAY set `method`, `path`, `body`, `timeout`,
+`insecure_skip_verify`, `follow_redirects`, `enable_http2`, `retry`, `headers`,
+and the basic and bearer credential keys.
 
 A collector MAY set `cache` to a Go duration such as `60s`, `1m`, or `3h`. The
 value is the time to live of a cached collector result. Omitting `cache`, or
@@ -1612,6 +1699,7 @@ Requirements:
 collectors:
   - name: app_json
     request:
+      type: http
       method: GET
       path: /api/status
 
@@ -1635,6 +1723,7 @@ collectors:
 collectors:
   - name: app_yaml
     request:
+      type: http
       path: /status.yaml
 
     response:
@@ -1657,6 +1746,7 @@ collectors:
 collectors:
   - name: app_xml
     request:
+      type: http
       path: /status.xml
 
     response:
@@ -1679,6 +1769,7 @@ collectors:
 collectors:
   - name: app_csv
     request:
+      type: http
       path: /status.csv
 
     transform:
@@ -1701,6 +1792,7 @@ collectors:
 collectors:
   - name: app_html
     request:
+      type: http
       path: /status
 
     response:
@@ -1729,6 +1821,7 @@ declaration.
 collectors:
   - name: vendor_prometheus
     request:
+      type: http
       path: /metrics
 
     transform:
@@ -1748,6 +1841,7 @@ collectors:
 collectors:
   - name: legacy_text
     request:
+      type: http
       path: /status
 
     transform:
@@ -1771,6 +1865,7 @@ are for every other transform:
 collectors:
   - name: weird_vendor
     request:
+      type: http
       path: /status
 
     transform:
@@ -1807,6 +1902,7 @@ script emits through `metric(...)` and the `metrics` array is omitted:
 collectors:
   - name: dynamic_vendor
     request:
+      type: http
       path: /status
 
     response:
@@ -1863,6 +1959,57 @@ Optional:
 ```
 
 The exact flag names can follow Prometheus ecosystem conventions.
+
+### 30.1 Configuration check
+
+`--dry-run` MUST validate what startup would load and exit, without binding the
+listen address, starting the configuration watch or the OTLP loop, or contacting
+any target. It exists so a pipeline, a pre-deploy hook or an init container can
+ask whether a configuration would start without starting it.
+
+The check MUST run the same validation functions startup runs, in startup's
+order, and MUST honour the flags that change what startup loads:
+`--config.file`, `--otlp.targets-file`, `--config.export-env`, `--python.path`,
+and `--config.watch` with `--config.watch-interval`. A configuration that
+`--dry-run` passes MUST start with the same files and flags, and one it fails MUST
+be refused by startup; a test MUST pin this agreement for every failure the
+check can report.
+
+The steps MUST be:
+
+- `config` — the configuration file loads and validates;
+- `python_scripts` — every Python script compiles and every pre-script produces
+  `data` (§ 16), with each faulty script reported as its own error. A
+  configuration without Python MUST pass without needing an interpreter;
+- `config_watch` — only when `--config.watch` is set, that the interval is
+  positive;
+- `targets` — only when `--otlp.targets-file` is set, that the file is valid on
+  its own and against the configuration (§ 42.14).
+
+The report MUST be a single JSON document on stdout:
+
+```json
+{"status": "ok|failed", "checks": [{"check": "...", "file": "...", "status": "ok|failed|skipped", "errors": ["..."], "reason": "...", "details": {}}]}
+```
+
+A step whose input failed to load MUST be reported as `skipped` with a `reason`
+rather than omitted, so a report never looks shorter because something went
+wrong; the Python step is skipped when the configuration did not load, and the
+target step when the target file is valid on its own but the configuration did
+not load. A skipped step MUST count as not passing. An `ok` step SHOULD carry
+`details` saying what it loaded — collector names, target names, the number of
+scripts — so a passing report still says what it passed. The top-level `status`
+MUST be `ok` only when every step is `ok`.
+
+Every line on stderr MUST be JSON (§ 25): one log line per step, at INFO when it
+passed, WARN when skipped and ERROR with its errors when it failed, and a final
+summary line. `--log.level` MUST affect only the log, never the report.
+
+The exit status MUST be `0` when the report's status is `ok` and `1` otherwise.
+A command line that cannot be parsed checks nothing, so it MUST exit `2` —
+distinguishing "your command is wrong" from "your configuration is wrong" —
+and MUST report the problem as a JSON log line rather than plain text. `-h`
+MUST print usage to stdout and exit `0`.
 
 ---
 
@@ -2960,6 +3107,69 @@ receives:
   default otherwise.
 - No placeholder token reaches the requested URL, whatever the value.
 
+## 34.39 Configuration check tests
+
+Test `--dry-run` through the real command line, with stdout, stderr and the exit
+status captured:
+
+- The shipped example configurations, with and without the example target file,
+  pass with exit `0`, and the report lists their collectors and targets.
+- Only the steps that apply are reported: no `targets` step without a target
+  file and no `config_watch` step without `--config.watch`.
+- An invalid configuration and a missing one fail with exit `1` and name the
+  fault; the Python step is then `skipped` with a reason.
+- Two faulty pre-scripts are reported as two errors, each naming its collector.
+- A missing interpreter fails a configuration with scripts and does not affect
+  one without.
+- A target file invalid on its own fails; a valid one that does not match the
+  configuration fails naming the mismatch; a valid one beside a broken
+  configuration is `skipped` and still lists its targets.
+- A non-positive watch interval fails only when the watch is on.
+- An unset variable fails the check under `--config.export-env` and not
+  without it.
+- For every failing case, startup with the same arguments also exits `1`.
+- stdout carries exactly one JSON document and every stderr line is JSON; each
+  step is logged at its level; `--log.level=error` silences the log but not the
+  report.
+- An unbindable `--web.listen-address` does not affect the check.
+- An unparseable command line exits `2` with a JSON log line and nothing on
+  stdout, and `-h` exits `0` with usage on stdout.
+
+## 34.40 Request type tests
+
+- A collector without `request.type` is rejected, and the message names the
+  collector, says the type is required, lists the supported types and shows
+  `type: http`; `--dry-run` reports it as a failed configuration.
+- Unknown types — including the anticipated `grpc`, `localfile` and `ftpfile` —
+  are rejected with the supported types listed.
+- The type is matched case-insensitively and stored in lower case.
+- An `http` collector with only `type` is valid and defaults `method` to GET;
+  one setting every `http` key together is valid; the `http` cross-key rules
+  (method, credential exclusivity, retries, path parameters) still apply.
+- Every request key and every scheduled-target request key is accepted by at
+  least one type, and every type has validation and a fetch.
+- With a second type registered for the test that accepts only `path`: a
+  collector of that type setting `method` is rejected naming the key and type;
+  a probe of it is served through that type's fetch; probe parameters that
+  belong to `http` are rejected with 400 naming the parameter and the type,
+  while `path` and a parameter no type knows are accepted; a scheduled target
+  setting `method` for it is rejected and one setting `path` is not.
+- An `http` collector accepts every `http` probe parameter together.
+- The configuration the Helm chart ships by default is valid.
+
+## 34.41 Target scheme tests
+
+- Bare IPv4, hostname, hostname without port, bracketed IPv6, padded and
+  path-carrying targets resolve to `http://`; targets naming `http` or `https`
+  keep it.
+- Credentials in a scheme-less target reach the request and are redacted when
+  the target is shown.
+- Rendering a target never panics, including for an empty, unparseable or
+  scheme-less value, and never echoes a password it could not redact.
+- A collector allowing only `https` rejects a bare target.
+- A probe whose target is the bare `host:port` of a running server — what a
+  chart-generated monitor sends — is served.
+
 # 35. Documentation requirements
 
 The repository MUST include documentation covering:
@@ -3572,6 +3782,8 @@ example `60s`, `1m`, or `3h`:
 ```yaml
 collectors:
   - name: expensive_api
+    request:
+      type: http
     cache: 60s
     limits:
       max_cache_entries: 1000
@@ -3680,6 +3892,10 @@ before exiting with a non-zero status. A configuration reload that would put the
 exporter into that state while targets are loaded MUST be rejected, and the last
 valid configuration MUST remain active. Every target MUST name a configured
 collector; an unknown collector MUST be rejected at startup and at reload.
+The keys a target's `request` block may set are those its collector's request
+type accepts (§ 5.1); any other key MUST be rejected at startup naming the
+target, the key, the collector and the type. A target does not declare a type
+of its own: it inherits its collector's.
 
 The target document MUST be reloadable on the same terms as the exporter
 configuration: an invalid document MUST be rejected with the previous document

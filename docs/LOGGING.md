@@ -26,3 +26,9 @@ the target, as for any other failed probe. `ignore` writes nothing.
 `config_watch_interval` appears only when `--config.watch` is on, since that is
 what bounds how stale a running configuration can be; with the watch off there
 is no interval to report.
+
+`--dry-run` follows the same rule: its log lines on stderr are JSON, and even a
+command line that cannot be parsed is reported as a JSON line rather than the
+flag package's plain-text complaint. Its report is a separate JSON document on
+stdout, described in
+[Dry run](CONFIGURATION.md#dry-run).

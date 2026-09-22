@@ -35,6 +35,7 @@ collectors:
       # the 100ms a collector allows its scripts by default.
       script_timeout: 5s
     request:
+      type: http
       method: GET
       path: /v1/latest
       query:

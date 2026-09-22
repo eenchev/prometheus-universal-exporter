@@ -78,6 +78,10 @@ helm-test:
 		echo "helm template accepted an extraArgs entry overriding a chart-managed flag" >&2; \
 		exit 1; \
 	fi
+	@if helm template test charts/prometheus-universal-exporter --set-json 'extraArgs=["--dry-run"]' >/dev/null 2>&1; then \
+		echo "helm template accepted --dry-run in extraArgs, which would make the pod exit instead of serving" >&2; \
+		exit 1; \
+	fi
 	@if helm template test charts/prometheus-universal-exporter --set-json 'extraArgs=["log.level=debug"]' >/dev/null 2>&1; then \
 		echo "helm template accepted an extraArgs entry that is not a flag" >&2; \
 		exit 1; \

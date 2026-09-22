@@ -59,7 +59,9 @@ targets:
 Each target names a collector from the exporter configuration and takes every
 per-scrape parameter `/probe` accepts — `method`, `path`, `body`, `timeout`,
 `insecure_skip_verify`, `follow_redirects`, `enable_http2` and the `retry`
-settings — overriding the collector's own request for that target only. It also takes static `headers` and its own target
+settings — overriding the collector's own request for that target only. Which of these
+keys a target may set follows its collector's
+[request type](CONFIGURATION.md#request-types); for `http` it is all of them. It also takes static `headers` and its own target
 credentials, inline or file-backed, as basic authentication or a bearer token.
 Because the file is operator configuration rather than caller input, these
 headers are applied directly and are not filtered through the collector's
@@ -71,6 +73,12 @@ target's own `request.path` must be written out in full, and a target can
 borrow a collector whose path has `{{param_…}}` placeholders only when each one
 has a default, which is what it will use. Otherwise the exporter refuses to
 start, naming the target and the collector.
+
+Check a target file together with its configuration before deploying it:
+`prometheus-universal-exporter --dry-run --config.file=config.otlp.yaml --otlp.targets-file=targets.yaml`
+reports whether each would load, including whether every target names a
+collector that exists and whether OTLP export is enabled — see
+[Dry run](CONFIGURATION.md#dry-run).
 
 `labels` are added to every metric the target produces, without overwriting a
 label the collector already extracted. `otlp.service_name` and

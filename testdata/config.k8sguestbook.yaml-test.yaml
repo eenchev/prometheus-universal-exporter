@@ -5,6 +5,7 @@ web:
 collectors:
   - name: kubernetes_guestbook_deployment
     request:
+      type: http
       method: GET
       follow_redirects: true
       path: /kubernetes/website/master/content/en/examples/application/guestbook/frontend-deployment.yaml

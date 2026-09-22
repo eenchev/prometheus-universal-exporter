@@ -1,10 +1,32 @@
 # Target requests
 
-Everything on this page describes the request the exporter makes to the
-discovered target, not the scrape Prometheus makes of the exporter. Each setting
+Everything on this page describes the request an `http` collector — one with
+`request.type: http`, see [request types](CONFIGURATION.md#request-types) —
+makes to the discovered target, not the scrape Prometheus makes of the exporter. Each setting
 lives on a collector's `request` block, and most can be overridden for a single
 scrape through a `/probe` query parameter — which is what a monitor's `params`
 map renders into.
+
+## The request URL
+
+The URL requested is the probe's `target` with the collector's `request.path`
+joined onto it and `request.query` merged into it.
+
+A target without a scheme is `http`. That is the normal case rather than an
+exception: Prometheus service discovery produces `__address__` as a bare
+`host:port`, and the chart's monitors pass it through as the target. So
+`10.0.0.5:8080`, `legacy.example:8080` and `[fd00::5]:9000` all mean `http://`.
+A target that needs HTTPS says so, `https://secure.example:8443`, or a
+relabeling rule adds the scheme. `allowed_schemes` applies to the result, so a
+collector that allows only `https` rejects a bare target instead of upgrading
+it.
+
+`request.path` is optional. Without it, and without a `path` probe parameter,
+the target is requested exactly as given: `http://legacy.example:8080` requests
+`/`, and `http://legacy.example:8080/api/status` requests `/api/status`. A target
+that carries a path keeps it, and `request.path` is appended after it. Nothing
+warns about a missing path — a target that serves nothing at `/` fails the probe
+with its own status, or returns a page the metric rules cannot read.
 
 ## Path parameters
 
@@ -16,6 +38,7 @@ tenant, a region, an API version:
 collectors:
   - name: legacy_text
     request:
+      type: http
       path: /api/{{param_tenant}}/v{{param_version:2}}/status
 ```
 

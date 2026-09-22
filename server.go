@@ -362,6 +362,12 @@ func (s *Server) probeHandler(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
+	// Each request type accepts its own probe parameters; one that belongs to
+	// another type is a mistake, reported before anything else happens.
+	if err := checkOverrideParams(c, r.URL.Query()); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
 	// A path parameter the scrape did not supply and that has no default is the
 	// caller's mistake, reported before the target is contacted or anything is
 	// counted against it.
@@ -421,7 +427,7 @@ func (s *Server) probeHandler(w http.ResponseWriter, r *http.Request) {
 		}
 		rec.update(func(x *serverStats) { x.cacheMisses++ })
 	}
-	resp, err := fetch(ctx, target, c, overrides, forwarded)
+	resp, err := fetchCollector(ctx, target, c, overrides, forwarded)
 	scraped = true
 	if err != nil {
 		if strings.Contains(strings.ToLower(err.Error()), "response size") {
@@ -502,12 +508,37 @@ func (s *Server) probeHandler(w http.ResponseWriter, r *http.Request) {
 	s.queueOTLP(*ms)
 }
 
+// safeTarget renders a target for logs and error bodies with any credentials
+// redacted. It must never fail: it runs on the error paths, including for a
+// target that is not a URL at all.
 func safeTarget(raw string) string {
-	u, err := url.Parse(raw)
-	if err == nil && u.User != nil {
+	u, err := url.Parse(normalizeTarget(raw))
+	if err != nil {
+		// Unparseable, so the credentials cannot be located to redact them;
+		// the raw text is withheld rather than risk echoing a password.
+		return "<invalid target>"
+	}
+	if u.User != nil {
 		u.User = url.UserPassword("redacted", "redacted")
 	}
 	return u.String()
+}
+
+// normalizeTarget gives a target without a scheme the default http:// one.
+//
+// Prometheus service discovery hands over __address__, which is host:port with
+// no scheme, and the chart's monitors pass it straight through as target. It
+// cannot simply be parsed and then checked for an empty scheme: url.Parse
+// rejects 10.0.0.5:8080 outright ("first path segment cannot contain colon")
+// and reads legacy.example:8080 as the scheme "legacy.example". So the
+// decision is made on the text, before parsing: no "://" means no scheme.
+// A target that wants https says so explicitly.
+func normalizeTarget(raw string) string {
+	raw = strings.TrimSpace(raw)
+	if raw == "" || strings.Contains(raw, "://") {
+		return raw
+	}
+	return "http://" + raw
 }
 
 // forwardedHeaders extracts only explicitly allowed headers from the probe

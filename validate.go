@@ -105,9 +105,23 @@ func collectorScripts(c *Config) []pythonScript {
 // work. It is a no-op for a configuration containing none, so a deployment that
 // uses no Python needs no interpreter present.
 func ValidatePythonScripts(pythonPath string, c *Config) error {
+	problems, err := checkPythonScripts(pythonPath, c)
+	if err != nil {
+		return err
+	}
+	if len(problems) > 0 {
+		return fmt.Errorf("invalid collector Python scripts:\n  %s", strings.Join(problems, "\n  "))
+	}
+	return nil
+}
+
+// checkPythonScripts is ValidatePythonScripts with the faults kept apart: err
+// is the interpreter itself failing, and problems are the individual script
+// faults, each naming its collector. --dry-run reports the latter one by one.
+func checkPythonScripts(pythonPath string, c *Config) ([]string, error) {
 	scripts := collectorScripts(c)
 	if len(scripts) == 0 {
-		return nil
+		return nil, nil
 	}
 	if pythonPath == "" {
 		pythonPath = "python3"
@@ -116,7 +130,7 @@ func ValidatePythonScripts(pythonPath string, c *Config) error {
 		Scripts []pythonScript `json:"scripts"`
 	}{Scripts: scripts})
 	if err != nil {
-		return err
+		return nil, err
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
@@ -126,16 +140,13 @@ func ValidatePythonScripts(pythonPath string, c *Config) error {
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
 	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("checking collector Python scripts needs a working interpreter at %q: %w: %s", pythonPath, err, strings.TrimSpace(stderr.String()))
+		return nil, fmt.Errorf("checking collector Python scripts needs a working interpreter at %q: %w: %s", pythonPath, err, strings.TrimSpace(stderr.String()))
 	}
 	var result struct {
 		Problems []string `json:"problems"`
 	}
 	if err := json.Unmarshal(stdout.Bytes(), &result); err != nil {
-		return fmt.Errorf("checking collector Python scripts: %w", err)
+		return nil, fmt.Errorf("checking collector Python scripts: %w", err)
 	}
-	if len(result.Problems) > 0 {
-		return fmt.Errorf("invalid collector Python scripts:\n  %s", strings.Join(result.Problems, "\n  "))
-	}
-	return nil
+	return result.Problems, nil
 }

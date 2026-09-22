@@ -65,6 +65,13 @@ Because the file is operator configuration rather than caller input, these
 headers are applied directly and are not filtered through the collector's
 `request.forward_headers` allowlist.
 
+[Path parameters](REQUESTS.md#path-parameters) are the one probe feature a
+scheduled target cannot use: there is no probe to supply `param_<name>`. A
+target's own `request.path` must be written out in full, and a target can
+borrow a collector whose path has `{{param_…}}` placeholders only when each one
+has a default, which is what it will use. Otherwise the exporter refuses to
+start, naming the target and the collector.
+
 `labels` are added to every metric the target produces, without overwriting a
 label the collector already extracted. `otlp.service_name` and
 `otlp.resource_attributes` set the OTLP resource the target's metrics arrive

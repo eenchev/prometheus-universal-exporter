@@ -37,6 +37,7 @@ monitors:
       body: [raw request body]
       retry_attempts: ["2"]
       retry_backoff: ["2s"]
+      param_tenant: [acme]   # fills {{param_tenant}} in the collector's request.path
 ```
 
 The body is opaque text and does not need to be JSON. Without a `timeout` parameter, the exporter uses the incoming Prometheus scrape context as the target request timeout.

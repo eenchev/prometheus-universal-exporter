@@ -157,6 +157,20 @@ type MetricRule struct {
 	ErrorMode   string      `yaml:"error_mode"`
 	Required    *bool       `yaml:"required"`
 }
+
+// What a metric rule does when it cannot produce its value. The first two keep
+// the scrape going without that metric, so the response carries every metric
+// that could be extracted, or none at all; fail stops the scrape at the first
+// failure, so a response is either complete or an error.
+const (
+	// ErrorModeIgnore drops the metric silently.
+	ErrorModeIgnore = "ignore"
+	// ErrorModeLog drops the metric and logs why. It is the default.
+	ErrorModeLog = "log"
+	// ErrorModeFail logs the failure and fails the whole scrape.
+	ErrorModeFail = "fail"
+)
+
 type LabelRule struct {
 	Name       string `yaml:"name"`
 	Type       string `yaml:"type"`
@@ -208,6 +222,11 @@ func (c *Config) Validate() error {
 		}
 		if (x.Request.BasicAuth != nil || x.Request.BasicAuthFile != nil) && (x.Request.BearerToken != "" || x.Request.BearerTokenFile != "") {
 			return fmt.Errorf("collector %q cannot configure basic and bearer authentication together", x.Name)
+		}
+		if hasPathParams(x.Request.Path) {
+			if _, err := parsePathParams(x.Request.Path); err != nil {
+				return fmt.Errorf("collector %q: %w", x.Name, err)
+			}
 		}
 		if x.Request.Method == "" {
 			x.Request.Method = "GET"
@@ -305,10 +324,12 @@ func (c *Config) Validate() error {
 		for i := range x.Metrics {
 			r := &x.Metrics[i]
 			if r.ErrorMode == "" {
-				r.ErrorMode = "log"
+				r.ErrorMode = ErrorModeLog
 			}
-			if r.ErrorMode != "log" && r.ErrorMode != "ignore" {
-				return fmt.Errorf("collector %q metric %q has invalid error_mode %q; want log or ignore", x.Name, r.Name, r.ErrorMode)
+			switch r.ErrorMode {
+			case ErrorModeIgnore, ErrorModeLog, ErrorModeFail:
+			default:
+				return fmt.Errorf("collector %q metric %q has invalid error_mode %q; want ignore, log or fail", x.Name, r.Name, r.ErrorMode)
 			}
 			if r.Type == "" {
 				r.Type = GaugeMetricType

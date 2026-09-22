@@ -87,9 +87,63 @@ Label expressions use the same transform-specific language as the metric
 expression. For CSV, each row produces a metric and `expression: server`
 selects that row's `server` column.
 
-Each metric may set `error_mode: log` or `error_mode: ignore`. `log` records a
-metric-specific extraction error and skips that metric; `ignore` skips it
-silently. The default is `log`.
+### When a metric cannot be extracted
+
+Each metric sets what happens when its value cannot be produced — the
+expression matches nothing, the value is not a number, a label expression fails:
+
+| `error_mode` | The failing metric | The rest of the probe | Logged |
+| --- | --- | --- | --- |
+| `ignore` | dropped | served — every metric that could be extracted, or an empty response if none could | no |
+| `log` (default) | dropped | served, as with `ignore` | yes |
+| `fail` | — | **not served**: the probe fails with a JSON error | yes |
+
+```yaml
+metrics:
+  - name: service_up
+    expression: .up
+    error_mode: fail      # without this, the scrape means nothing
+  - name: service_queue_depth
+    expression: .queue.depth
+    error_mode: log       # nice to have; carry on without it
+```
+
+`ignore` and `log` keep the scrape going, so a response carries whatever could
+be extracted. That is the right choice for a metric that is useful but not
+essential: one missing value does not cost you the others. When nothing at all
+can be extracted, the probe still succeeds with an empty body.
+
+`fail` is for a metric the scrape is meaningless without. A single failing rule
+with `fail` fails the whole probe, even when every other metric was extracted
+perfectly well, because the point of the mode is that a response is either
+complete or an error — never quietly partial. The probe answers `502 Bad
+Gateway` with a JSON body saying which collector, which rule and why:
+
+```json
+{"status":"error","stage":"metric","collector":"exchange_rates","metric":"exchange_rate","target":"https://api.frankfurter.dev/v1/latest","error":"metric \"exchange_rate\" value is missing"}
+```
+
+Prometheus only looks at the status, which marks the scrape down (`up` becomes
+0); the body is for whoever runs the probe by hand. Credentials in the target
+URL are redacted from it. A failed probe is never cached, so the next scrape
+goes back to the target.
+
+Modes are per metric, so a collector can mix them: a `fail` rule that succeeds
+does not fail the probe because a `log` rule beside it did not.
+
+`fail` takes precedence over the collector's `error_handling.on_transform_error`.
+That policy governs the transform as a whole — a pre-script that raises, a
+response the transform cannot read — while `error_mode: fail` is a statement
+about one metric, so a lenient `on_transform_error: ignore` does not turn it
+back into a partial success.
+
+A metric that is optional — `required: false`, or a collector with
+`error_handling.allow_missing_keys: true` — is not failing when its value is
+absent, so no mode applies to it, `fail` included: it is simply left out.
+
+On a scheduled target there is no HTTP response to carry an error. `fail` there
+means the scrape exports nothing except `http_exporter_target_up` at 0, and
+`log` and `ignore` export what could be extracted.
 
 Every transform may define `transform.pre_script`. It runs once per scrape
 after decoding and before metric extraction. The script receives the decoded
@@ -195,6 +249,12 @@ and credentials of the things being scraped, which is exactly the material worth
 keeping out of a committed file — and `--config.watch` re-expands on every
 reload, so a reload cannot quietly replace a working configuration with literal
 references.
+
+Environment references are fixed when the file is read. For a value that
+changes per scrape — a tenant in the URL path — use a
+[path parameter](REQUESTS.md#path-parameters), `{{param_tenant}}`, which the probe
+fills in. The two syntaxes never overlap, and a path parameter's default can
+itself be an environment reference.
 
 ## Response caching
 

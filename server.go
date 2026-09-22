@@ -3,6 +3,8 @@ package main
 import (
 	"context"
 	"crypto/subtle"
+	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -360,10 +362,17 @@ func (s *Server) probeHandler(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
+	// A path parameter the scrape did not supply and that has no default is the
+	// caller's mistake, reported before the target is contacted or anything is
+	// counted against it.
+	if err := checkPathParams(c, overrides); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
 	var requestURL string
 	method := requestMethod(c, overrides)
-	if resolved, resolveErr := resolveRequestURL(target, c, overrides); resolveErr == nil {
-		requestURL = requestLabelURL(resolved)
+	if label, labelErr := requestLabel(target, c, overrides); labelErr == nil {
+		requestURL = label
 	}
 	st := s.statsFor(name)
 	rec := s.recorderFor(st, name, requestURL, method)
@@ -456,6 +465,23 @@ func (s *Server) probeHandler(w http.ResponseWriter, r *http.Request) {
 			}
 			x.transformErrors++
 		})
+		// A metric rule with error_mode fail asked for the scrape to fail when it
+		// cannot produce its value. That is a statement about this one metric,
+		// more specific than the collector's on_transform_error, so it is honoured
+		// even where the collector would have carried on after a failed transform.
+		var failure *MetricFailure
+		if errors.As(err, &failure) {
+			s.logger.Error("probe failed", "collector", name, "target", logTarget, "stage", "metric", "metric", failure.Metric, "error", err)
+			finish(false)
+			writeProbeError(w, http.StatusBadGateway, probeError{
+				Stage:     "metric",
+				Collector: name,
+				Metric:    failure.Metric,
+				Target:    logTarget,
+				Error:     err.Error(),
+			})
+			return
+		}
 		if !failStage("transform", err, c.ErrorHandling.OnTransformError) {
 			return
 		}
@@ -637,6 +663,30 @@ func (s *Server) selfMetricSet() MetricSet {
 	out.Metrics = append(out.Metrics, s.verboseRequestMetrics()...)
 	out.Metrics = append(out.Metrics, s.runtimeMetrics()...)
 	return out
+}
+
+// probeError is the body of a probe that failed because a metric rule with
+// error_mode fail could not produce its value. Prometheus only looks at the
+// status code, which already fails the scrape; the body is for the person who
+// runs the probe by hand to find out why, so it names the collector, the rule
+// and the error rather than leaving them to be dug out of the exporter's log.
+type probeError struct {
+	Status    string `json:"status"`
+	Stage     string `json:"stage"`
+	Collector string `json:"collector"`
+	Metric    string `json:"metric,omitempty"`
+	Target    string `json:"target,omitempty"`
+	Error     string `json:"error"`
+}
+
+// writeProbeError writes a probe failure as a JSON object. Status is always
+// "error", so a client can test one field without knowing the others.
+func writeProbeError(w http.ResponseWriter, code int, body probeError) {
+	body.Status = "error"
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	w.Header().Set("X-Content-Type-Options", "nosniff")
+	w.WriteHeader(code)
+	_ = json.NewEncoder(w).Encode(body)
 }
 
 func writeMetricSet(w http.ResponseWriter, s *MetricSet) {

@@ -996,10 +996,56 @@ to `gauge`. Metric declarations MUST be placed on the collector, alongside
 `transform`, rather than using transform-specific arrays such as `rules` or
 `expressions`.
 
-`error_mode` MUST be `log` or `ignore` and defaults to `log`. When an
-individual metric cannot be extracted, `log` MUST record the metric-specific
-error and skip that metric; `ignore` MUST skip it without logging. A
-metric-level error MUST NOT fail unrelated metrics in the same collector.
+`error_mode` MUST be `ignore`, `log` or `fail` and defaults to `log`. Any other
+value MUST be rejected at startup and on reload, and the message MUST list the
+accepted values. It governs what happens when an individual metric cannot be
+extracted — its expression or a label expression errors, its value is absent
+while the metric is required, or its value is not a number:
+
+- `ignore` MUST skip that metric without logging and carry on. The probe MUST
+  serve every metric that could be extracted; when none could, it MUST succeed
+  with an empty body rather than fail.
+- `log` MUST record the metric-specific error, naming the collector and the
+  rule, and otherwise behave exactly as `ignore`.
+- `fail` MUST record the error as `log` does and MUST then fail the whole scrape
+  at that metric. No metric from that scrape MUST be served, including metrics
+  that were extracted successfully, so a response is either complete or an
+  error and never silently partial.
+
+Under `ignore` and `log`, a metric-level error MUST NOT fail unrelated metrics in
+the same collector. Modes apply per rule: a rule with `fail` that succeeds MUST
+NOT fail the scrape because another rule, under `ignore` or `log`, did not.
+
+A metric that is not required — `required: false`, or a collector with
+`allow_missing_keys` — is not failing when its value is absent, and no mode
+applies to it; it MUST be omitted without logging, under `fail` as under the
+others.
+
+A probe failed by `fail` MUST respond `502 Bad Gateway` with
+`Content-Type: application/json` and a body of the form:
+
+```json
+{"status":"error","stage":"metric","collector":"<collector>","metric":"<rule>","target":"<target>","error":"<message>"}
+```
+
+`status` MUST always be `error`, so a client can test a single field. `target`
+MUST have any user information in the URL redacted, since the body can reach
+logs and tickets the credential should not. The failure MUST be counted as a
+failed probe in the self-metrics — no increment of `http_exporter_scrape_success`,
+an increment of `http_exporter_transform_errors_total`, and of
+`http_exporter_missing_keys_total` when the value was missing — and MUST NOT be
+cached. Besides the per-rule line, the exporter MUST log a `probe failed` line
+with `stage` `metric`, the collector, the rule and the redacted target.
+
+`fail` MUST take precedence over the collector's `on_transform_error`. That
+policy governs failures of the transform as a whole, while `fail` is a
+statement about one metric, more specific than the collector-wide setting; a
+lenient `on_transform_error` MUST NOT turn it back into a partial success.
+
+A scheduled target (§ 42.14) has no HTTP response to carry the error. Under
+`fail` its scrape MUST export nothing but `http_exporter_target_up` at 0, exactly
+as for any other failed scheduled scrape; under `ignore` and `log` it MUST export
+what could be extracted.
 
 Each label entry MUST have `name` and `type`. `type` MUST be either `string` or
 `expression`. A `string` label MUST use `value` as its literal value. An
@@ -1133,7 +1179,7 @@ With:
 allow_missing_keys: false
 ```
 
-accessing an absent field required by a metric SHOULD cause that metric or scrape to fail according to the selected error policy.
+accessing an absent field required by a metric SHOULD cause that metric or scrape to fail according to the selected error policy. For a declared metric that policy is the rule's `error_mode` (§ 18.1): `ignore` and `log` omit the metric, and `fail` fails the scrape.
 
 With:
 
@@ -1156,7 +1202,10 @@ metrics:
     required: false
 ```
 
-This overrides collector defaults where appropriate.
+This overrides collector defaults where appropriate. A metric that is not
+required is never a failure when its value is absent, so its `error_mode` does
+not apply; `required` decides whether an absent value is a failure at all, and
+`error_mode` decides what a failure does.
 
 ---
 
@@ -1340,7 +1389,9 @@ request. Userinfo credentials and the entire query string MUST be removed: a
 collector's `request.query` or a probe parameter may carry a token or a tenant
 identifier, and a metric label is persisted by Prometheus and passed to anything
 federating from it. The label MUST be derived from the same resolution the real
-request uses, so a label can never describe a URL that was not the one fetched.
+request uses, so a label can never describe a URL that was not the one fetched,
+except that a path parameter (§ 42.10a) MUST appear as its placeholder rather
+than its value, for the same reason the query string is removed.
 The request parameters MUST therefore be resolved before any counter is raised,
 so a probe cannot be counted against the collector alone.
 
@@ -1972,8 +2023,9 @@ Test:
 - Invalid regex.
 - Invalid Python source.
 - Invalid CSV configuration.
-- Invalid metric `error_mode`.
+- Invalid metric `error_mode`, with a message listing `ignore`, `log` and `fail`.
 - Missing `error_mode` defaults to `log`.
+- `error_mode: fail` is accepted.
 - Transform-specific response format incompatibility.
 - Response format inference when `response.format` is omitted.
 - Invalid error policy values.
@@ -2304,6 +2356,31 @@ Test structured pre-script results:
 Test that metric-level `error_mode: log` records an extraction error and skips
 only that metric, while `error_mode: ignore` skips it silently without failing
 the collector or unrelated metrics.
+
+Test `error_mode` end to end through `/probe`, for each mode, with one rule that
+succeeds beside one that fails:
+
+- `ignore` answers 200 with the successful metric and logs nothing; `log` does
+  the same and logs one `metric extraction failed` line naming the collector,
+  the rule and the mode.
+- `fail` answers 502 with a JSON body carrying `status`, `stage`, `collector`,
+  `metric`, `target` and `error`, serves no exposition text at all — not even
+  the metric that succeeded — and logs the failure.
+- `ignore` and `log` answer 200 with an empty body when no metric can be
+  extracted.
+- A `fail` rule that succeeds beside a failing `log` rule answers 200.
+- An optional rule (`required: false`, or `allow_missing_keys`) with an absent
+  value is not a failure under `fail`, and is not logged.
+- `fail` still answers 502 when the collector sets `on_transform_error` to
+  `ignore` or `warn`.
+- A `fail` response is not cached: two probes contact the target twice.
+- The self-metrics count a `fail` as a failed probe, a transform error and, for
+  an absent value, a missing key.
+- Credentials in the target URL do not appear in the JSON body.
+- Every per-rule transform — jq, regex, CSV, XPath over XML and HTML, and CSS —
+  reports a failing `fail` rule as the same identifiable metric failure.
+- On a scheduled target, `fail` exports `http_exporter_target_up` at 0 and no
+  collector metrics, while `log` exports what could be extracted.
 
 Test subsequent transformations such as:
 
@@ -2852,6 +2929,37 @@ Test environment variable expansion:
 - The golangci-lint version pinned in the Makefile and the one pinned in CI are
   the same.
 
+## 34.38 Path parameter tests
+
+Test, through `/probe` against a target that records the request line it
+receives:
+
+- A supplied value is bound, and an unsupplied one with a default takes the
+  default; an empty value is treated as unsupplied.
+- A value is one escaped segment: `/`, `?`, `#`, spaces and non-ASCII
+  characters arrive percent-encoded, and a dot inside a value is left alone.
+- A missing value without a default, an empty value without a default, a
+  parameter given twice, `.`, `..`, and a `param_` parameter the path does not
+  use are each rejected with `400` naming the parameter, and the target is not
+  contacted.
+- A `path` probe parameter is used as given; a `param_` parameter beside it is
+  rejected as unused; a collector without placeholders is unaffected and still
+  rejects an unused `param_` parameter.
+- An explicit empty default binds nothing.
+- Malformed placeholders — unclosed, unprefixed, empty or invalid names, padded
+  names, a default containing a brace — are rejected at startup naming the
+  collector, and the brace case points at `--config.export-env`; well-formed
+  placeholders, repeated placeholders and a stray `}}` are accepted.
+- An environment reference in a default is expanded at load with
+  `--config.export-env`, keeping the placeholder, and is refused without it.
+- Two tenants never share a cache entry, and a repeat of one is served from
+  the cache.
+- The verbose `url` label carries the placeholder and never the value.
+- A scheduled target rejects placeholders in its own path, rejects a collector
+  placeholder without a default unless it sets its own path, and binds the
+  default otherwise.
+- No placeholder token reaches the requested URL, whatever the value.
+
 # 35. Documentation requirements
 
 The repository MUST include documentation covering:
@@ -3342,6 +3450,76 @@ The chart values that render these overrides onto a monitor are specified in
 [SPECIFICATION-CHART.md](SPECIFICATION-CHART.md) § 42.10.
 
 
+## 42.10a Path parameters
+
+A collector's `request.path` MAY contain placeholders bound from the probe, so
+one collector serves targets whose paths differ only by a per-scrape value:
+
+```yaml
+request:
+  path: /api/{{param_tenant}}/v{{param_version:2}}/status
+```
+
+A placeholder MUST be written `{{param_<name>}}` or
+`{{param_<name>:<default>}}`, where `<name>` is one or more letters, digits or
+underscores. It MUST be filled from the `/probe` query parameter of exactly the
+same name, `param_<name>`. The shared `param_` prefix keeps these parameters
+disjoint from the probe's own (`target`, `collector`, `path`, `method`,
+`timeout`, `body`, `header_*`, the retry and transport overrides), so no name
+needs to be reserved.
+
+`{{` MUST always open a placeholder in `request.path`. A path that contains `{{`
+not forming a well-formed placeholder — unclosed, a name without the `param_`
+prefix or with other characters, or a default containing `{` or `}` — MUST be
+rejected at startup and on reload with a message naming the collector. A default
+containing a brace almost always means an environment reference left unexpanded,
+and the message MUST say to run with `--config.export-env`. A literal `}}` with
+no opening `{{` is ordinary text.
+
+For each placeholder, the value MUST be the probe parameter when it is given and
+non-empty, otherwise the default when one is written, otherwise the probe MUST
+fail with `400 Bad Request` naming the parameter, before the target is contacted
+and before anything is counted against it. An empty probe value MUST be treated
+as not given. A default MAY be empty, `{{param_suffix:}}`, and then binds
+nothing.
+
+A bound value MUST occupy exactly one path segment: it MUST be escaped as a path
+segment, so that `/`, `?`, `#`, spaces and non-ASCII characters are
+percent-encoded rather than changing the structure of the URL, and binding MUST
+happen after the path is joined and cleaned, so that cleaning cannot rewrite a
+value. The values `.` and `..` MUST be rejected with `400`, since escaping cannot
+make them safe and a server resolving them would serve a different path.
+
+The probe MUST also be rejected with `400` when a `param_` parameter is given
+more than once, or when the collector's path does not use it. The latter is
+almost always a misspelling, and with a default in place a misspelled parameter
+would otherwise succeed against the default and report one tenant's data as
+another's.
+
+Path parameters MUST be bound only in the collector's `request.path`. A `path`
+probe parameter replaces that path and MUST be used as given, and a `param_`
+parameter sent with it is unused and therefore rejected.
+
+Path parameters and environment references (§ 42.15a) MUST NOT overlap
+syntactically. Environment references are expanded once, textually, when the
+file is read; path parameters are bound on every probe. They MUST compose, so a
+default may be an environment reference expanded at load time:
+`{{param_tenant:${DEFAULT_TENANT}}}`.
+
+Every probe parameter is part of the response cache key (§ 42.13), so two probes
+differing only in a path parameter MUST NOT share a cache entry.
+
+The verbose self-metrics `url` label (§ 22.1) MUST show a bound placeholder as
+written, not its value. A value is typically a tenant or an account, which the
+label already keeps out of the query string, and one series per value would be
+unbounded.
+
+A scheduled target (§ 42.14) has no probe to supply a value. Its own
+`request.path` MUST NOT contain placeholders, and it MAY use a collector whose
+`request.path` has placeholders only if each has a default, which it then binds;
+any other combination MUST be rejected at startup with a message naming the
+target and the collector.
+
 ## 42.12 CI, container, and chart releases
 
 CI MUST materialize Go module checksums before running tests and MUST run the
@@ -3637,6 +3815,9 @@ expanding would replace a working configuration with one full of literal
 references, and a reload that started expanding would rewrite a configuration
 the operator never asked to have expanded. A reload whose references cannot all
 be resolved MUST be rejected with the previous configuration left active.
+
+Environment references MUST NOT be confused with path parameters (§ 42.10a),
+which use `{{param_<name>}}` and are bound per probe rather than at load time.
 
 
 ## 42.16 Automated dependency updates

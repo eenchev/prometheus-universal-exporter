@@ -125,7 +125,10 @@ the whole query string are dropped, because `request.query` or a probe parameter
 can carry a token or tenant identifier and a metric label is persisted by
 Prometheus and handed to anything federating from it. The label is built from
 the same resolution the real request uses, so it can never describe a different
-URL than the one fetched.
+URL than the one fetched — with one deliberate exception: a
+[path parameter](REQUESTS.md#path-parameters) appears as its placeholder,
+`/api/{{param_tenant}}/status`, rather than its value, for the same reason the
+query string is dropped, and because one series per tenant would be unbounded.
 
 A request URL is an unbounded label value and each combination now carries a
 whole metric family, so tracking is capped at 1000 collector/URL/method

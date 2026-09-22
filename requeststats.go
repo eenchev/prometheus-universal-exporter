@@ -175,11 +175,11 @@ func (s *Server) seedScheduledRequests() {
 			continue
 		}
 		overrides := target.overrides()
-		resolved, err := resolveRequestURL(target.Target, c, overrides)
+		label, err := requestLabel(target.Target, c, overrides)
 		if err != nil {
 			continue
 		}
-		s.registerRequest(c.Name, requestLabelURL(resolved), requestMethod(c, overrides))
+		s.registerRequest(c.Name, label, requestMethod(c, overrides))
 	}
 }
 

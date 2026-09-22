@@ -6,6 +6,94 @@ lives on a collector's `request` block, and most can be overridden for a single
 scrape through a `/probe` query parameter — which is what a monitor's `params`
 map renders into.
 
+## Path parameters
+
+A collector's `request.path` can carry placeholders the scrape fills in, so one
+collector serves targets whose paths differ only by a value the scrape knows — a
+tenant, a region, an API version:
+
+```yaml
+collectors:
+  - name: legacy_text
+    request:
+      path: /api/{{param_tenant}}/v{{param_version:2}}/status
+```
+
+```text
+/probe?target=http://legacy.us.example:8080&collector=legacy_text&param_tenant=acme
+  -> GET http://legacy.us.example:8080/api/acme/v2/status
+```
+
+A placeholder is `{{param_<name>}}`, and it is filled by the probe parameter of
+exactly the same name, `param_<name>`. Names are letters, digits and
+underscores after `param_`. The prefix keeps them out of the way of the probe's
+own parameters — `target`, `collector`, `path`, `method` and the rest — so no
+name is off limits.
+
+**Defaults.** Anything after a colon is the default: `{{param_version:2}}` binds
+`2` when the probe does not supply `param_version`. The default is optional. A
+placeholder with no default that the probe does not supply fails the probe with
+`400 Bad Request` naming the parameter, before the target is contacted — a
+request sent with the placeholder unfilled would reach a path nobody configured.
+An empty value (`param_tenant=`) counts as not supplied, so it takes the
+default, or fails if there is none. An explicit empty default, `{{param_suffix:}}`,
+is allowed and binds nothing.
+
+**Escaping.** A value is always one path segment. It is escaped, so `a/b` is
+sent as `a%2Fb` rather than becoming two segments, and `?`, `#`, spaces and
+non-ASCII characters are escaped likewise. The values `.` and `..` are rejected
+with `400`, since a server resolving them would serve a different path than the
+one configured. Defaults are escaped the same way.
+
+**Mistakes are errors, not fallbacks.** A `param_` parameter the collector's path
+does not use is rejected with `400`, and so is one given twice. The first is
+almost always a misspelling: with `{{param_tenant:acme}}`, a probe sending
+`param_tenat=globex` would otherwise succeed against the default tenant and
+report `acme`'s numbers as `globex`'s.
+
+**Scope.** Placeholders are bound only in the collector's `request.path`. A
+`path` probe parameter replaces that path wholesale and is used exactly as
+given, so a `param_` parameter sent alongside it has nothing to fill and is
+rejected. `{{` always opens a placeholder in `request.path`; anything that is not
+a well-formed `{{param_<name>}}` or `{{param_<name>:<default>}}` stops the
+exporter at startup, naming the collector.
+
+**Environment variables.** Placeholders use `{{…}}` precisely so they never meet
+the `${NAME}` references [`--config.export-env`](CONFIGURATION.md#environment-variables)
+substitutes. The environment is read once, when the file is loaded; path
+parameters are bound on every probe. The two compose, so a default can come from
+the environment:
+
+```yaml
+path: /api/{{param_tenant:${DEFAULT_TENANT}}}/status
+```
+
+With `--config.export-env` off, that reference is left in the default
+unexpanded, and the exporter refuses to start rather than bind `${DEFAULT_TENANT`
+and leave a stray brace in the path.
+
+**Caching and self-metrics.** Every probe parameter is part of the response cache
+key, so two tenants never share a cached result. The verbose self-metrics label
+a request with the placeholder, not the value —
+`url="http://legacy.us.example:8080/api/{{param_tenant}}/v{{param_version:2}}/status"` —
+because the value is a tenant or an account, which labels already keep out of
+the query string, and one series per value would be unbounded.
+
+**Scheduled targets.** A [scheduled target](OTLP.md) is scraped on the
+exporter's own timer, with no probe to supply a value. Its own `request.path`
+cannot use placeholders, and it can use a collector whose path has them only if
+every placeholder has a default; otherwise the exporter refuses to start, naming
+both.
+
+From a Prometheus Operator monitor, the values go in `params` like any other
+probe parameter:
+
+```yaml
+params:
+  collector: [legacy_text]
+  param_tenant: [acme]
+```
+
 ## Redirects and HTTP/2
 
 Two transport settings live on the collector request, both off by default:

@@ -136,6 +136,12 @@ func (f *TargetFile) Validate() error {
 				return fmt.Errorf("target %q has unsupported method %q", t.Name, t.Request.Method)
 			}
 		}
+		// A scheduled target is scraped on the exporter's own timer, with no
+		// probe to supply a path parameter, so a placeholder here could only
+		// ever take its default — or fail every scrape. Write the path out.
+		if hasPathParams(t.Request.Path) {
+			return fmt.Errorf("target %q request.path cannot use {{param_...}} placeholders: a scheduled target has no probe to supply them, so write the path out in full", t.Name)
+		}
 		if t.Request.Timeout < 0 {
 			return fmt.Errorf("target %q request.timeout must not be negative", t.Name)
 		}
@@ -188,8 +194,18 @@ func (f *TargetFile) ValidateAgainst(c *Config) error {
 		known[c.Collectors[i].Name] = true
 	}
 	for i := range f.Targets {
-		if !known[f.Targets[i].Collector] {
-			return fmt.Errorf("target %q references unknown collector %q", f.Targets[i].Name, f.Targets[i].Collector)
+		t := &f.Targets[i]
+		if !known[t.Collector] {
+			return fmt.Errorf("target %q references unknown collector %q", t.Name, t.Collector)
+		}
+		// Borrowing a collector whose request.path has placeholders works only
+		// while every one of them has a default, since nothing else can fill
+		// it; otherwise every scrape of this target would fail. Catching it
+		// here makes it a startup error naming both sides.
+		if collector := collectorByName(c, t.Collector); collector != nil && !t.Request.PathSet && hasPathParams(collector.Request.Path) {
+			if _, _, err := bindPathParams(collector.Request.Path, nil); err != nil {
+				return fmt.Errorf("target %q uses collector %q, whose request.path %q has a path parameter without a default; a scheduled target has no probe to supply it, so give the placeholder a default or set request.path on the target", t.Name, t.Collector, collector.Request.Path)
+			}
 		}
 	}
 	return nil

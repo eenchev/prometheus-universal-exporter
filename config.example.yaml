@@ -43,6 +43,10 @@ collectors:
     request:
       method: GET
       path: /api/status
+      # A path may take values from the probe: {{param_tenant}} is filled from
+      # &param_tenant=... on /probe, and {{param_version:2}} falls back to 2.
+      # A placeholder with no default that the probe omits is a 400.
+      # path: /api/{{param_tenant}}/v{{param_version:2}}/status
       # body: |
       #   raw request body for POST or PUT requests
       headers:
@@ -80,6 +84,9 @@ collectors:
       - name: application_requests_total
         description: Total application requests
         type: counter
+        # What happens when this value cannot be extracted: ignore drops the
+        # metric silently, log (the default) drops it and logs why, and fail
+        # fails the whole probe with a JSON error instead of serving the rest.
         error_mode: log
         expression: .requests
         labels:

@@ -82,6 +82,9 @@ collectors:
       - name: application_requests_total
         description: Total application requests
         type: counter
+        # What happens when this value cannot be extracted: ignore drops the
+        # metric silently, log (the default) drops it and logs why, and fail
+        # fails the whole probe with a JSON error instead of serving the rest.
         error_mode: log
         expression: .requests
         labels:

@@ -34,6 +34,9 @@ type RequestOverrides struct {
 	RetryBackoff       *time.Duration
 	FollowRedirects    *bool
 	EnableHTTP2        *bool
+	// Params are the param_<name> probe parameters, bound into the
+	// {{param_<name>}} placeholders of the collector's request.path.
+	Params map[string]string
 }
 
 // parseBoolOverride reads an optional boolean probe parameter. An absent
@@ -127,6 +130,11 @@ func parseRequestOverrides(values url.Values) (RequestOverrides, error) {
 		}
 		overrides.RetryBackoff = &parsed
 	}
+	params, err := pathParamValues(values)
+	if err != nil {
+		return overrides, err
+	}
+	overrides.Params = params
 	return overrides, nil
 }
 
@@ -134,6 +142,14 @@ func parseRequestOverrides(values url.Values) (RequestOverrides, error) {
 // the verbose self-metric label go through it, so a label can never describe a
 // different URL than the one that was fetched.
 func resolveRequestURL(target string, c *Collector, overrides RequestOverrides) (*url.URL, error) {
+	return buildRequestURL(target, c, overrides, true)
+}
+
+// buildRequestURL is resolveRequestURL with the choice of whether to bind path
+// parameters. The self-metric label is built with bind false, so it shows the
+// placeholder rather than the value; everything else is identical, which keeps
+// the label describing the URL that was fetched.
+func buildRequestURL(target string, c *Collector, overrides RequestOverrides, bind bool) (*url.URL, error) {
 	u, err := url.Parse(target)
 	if err != nil {
 		return nil, fmt.Errorf("invalid target: %w", err)
@@ -164,6 +180,16 @@ func resolveRequestURL(target string, c *Collector, overrides RequestOverrides) 
 	if overrides.PathSet {
 		requestPath = overrides.Path
 	}
+	// Path parameters are bound only in the collector's own request.path. A
+	// path probe parameter replaces it wholesale and is already the scrape's
+	// own choice, so it is used exactly as given.
+	var bound []string
+	if bind && !overrides.PathSet && hasPathParams(requestPath) {
+		requestPath, bound, err = bindPathParams(requestPath, overrides.Params)
+		if err != nil {
+			return nil, err
+		}
+	}
 	if requestPath != "" {
 		base := strings.TrimSuffix(u.Path, "/")
 		p := strings.TrimPrefix(requestPath, "/")
@@ -171,6 +197,9 @@ func resolveRequestURL(target string, c *Collector, overrides RequestOverrides) 
 		if strings.HasSuffix(requestPath, "/") {
 			u.Path += "/"
 		}
+	}
+	if len(bound) > 0 {
+		applyPathParams(u, bound)
 	}
 	q := u.Query()
 	for k, v := range c.Request.Query {

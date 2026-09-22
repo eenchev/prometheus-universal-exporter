@@ -703,6 +703,11 @@ preserved. `params.retry_attempts` and `params.retry_backoff` override the
 collector's retry settings for that scrape; when absent, the collector values
 MUST be preserved.
 
+A monitor's `params` MUST also pass `param_<name>` entries through unchanged,
+since they fill the `{{param_<name>}}` placeholders of the collector's
+`request.path` (SPECIFICATION-EXPORTER.md § 42.10a). The values schema MUST NOT
+restrict `params` to a fixed set of keys for the same reason.
+
 ## 42.11 Helm-wide default metadata
 
 The Helm chart MUST expose `defaultLabels` and `defaultAnnotations` maps. The

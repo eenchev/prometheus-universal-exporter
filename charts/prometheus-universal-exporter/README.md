@@ -178,6 +178,13 @@ Supported parameters include:
 * `follow_redirects`
 * `enable_http2`
 * retry settings
+* `param_<name>`, which fills a `{{param_<name>}}` placeholder in the collector's `request.path`
+
+For example, a collector with `path: /api/{{param_tenant}}/status` scraped by a
+monitor with `params: {param_tenant: [acme]}` requests `/api/acme/status`. A
+placeholder may have a default after a colon, `{{param_tenant:acme}}`; one with
+no default that the monitor does not supply fails the scrape with `400`. See
+[Target requests](../../docs/REQUESTS.md#path-parameters).
 
 ## Authentication
 

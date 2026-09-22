@@ -79,18 +79,40 @@ func TestMetricExtractionErrorIsLoggedAsJSON(t *testing.T) {
 	}
 }
 
-// The other error modes must stay silent, so turning a rule to `ignore` really
-// does stop the noise.
-func TestOtherErrorModesLogNothing(t *testing.T) {
+// ignore must stay silent, so turning a rule to `ignore` really does stop the
+// noise.
+func TestIgnoreErrorModeLogsNothing(t *testing.T) {
 	out := captureLogs(t)
 	collector := &Collector{Name: "quiet"}
-	if !handleMetricError(collector, MetricRule{Name: "ignored", ErrorMode: "ignore"}, errors.New("boom")) {
+	if !handleMetricError(collector, MetricRule{Name: "ignored", ErrorMode: ErrorModeIgnore}, errors.New("boom")) {
 		t.Fatal("ignore should continue the scrape")
 	}
-	if handleMetricError(collector, MetricRule{Name: "failing", ErrorMode: "fail"}, errors.New("boom")) {
+	assertJSONLines(t, out, 0)
+}
+
+// fail stops the scrape, and says why in the same line log mode writes: a rule
+// that fails reads the same in the log whichever of the two modes it has, and
+// the line is there whether the failure surfaced on a probe or on a scheduled
+// target, which has no HTTP response to put it in.
+func TestFailErrorModeLogsAndStops(t *testing.T) {
+	out := captureLogs(t)
+	collector := &Collector{Name: "strict"}
+	if handleMetricError(collector, MetricRule{Name: "failing", ErrorMode: ErrorModeFail}, errors.New("boom")) {
 		t.Fatal("fail should stop the scrape")
 	}
-	assertJSONLines(t, out, 0)
+	records := assertJSONLines(t, out, 1)
+	for key, want := range map[string]string{
+		"msg":        "metric extraction failed",
+		"collector":  "strict",
+		"metric":     "failing",
+		"error_mode": "fail",
+		"error":      "boom",
+		"level":      "ERROR",
+	} {
+		if records[0][key] != want {
+			t.Errorf("%s=%v, want %q", key, records[0][key], want)
+		}
+	}
 }
 
 // A logger obtained from newLogger and slog's default must be the same

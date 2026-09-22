@@ -57,8 +57,8 @@ func (s *Server) scrapeScheduledTarget(ctx context.Context, target ScheduledTarg
 	overrides := target.overrides()
 	method := requestMethod(c, overrides)
 	requestURL := ""
-	if resolved, err := resolveRequestURL(target.Target, c, overrides); err == nil {
-		requestURL = requestLabelURL(resolved)
+	if label, err := requestLabel(target.Target, c, overrides); err == nil {
+		requestURL = label
 	}
 	// The request is identified before anything is counted, so every counter
 	// this collection raises lands on the target's own series as well as on the

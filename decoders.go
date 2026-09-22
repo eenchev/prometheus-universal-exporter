@@ -11,9 +11,6 @@ import (
 	"encoding/json"
 	"github.com/PuerkitoBio/goquery"
 	"github.com/antchfx/xmlquery"
-	dto "github.com/prometheus/client_model/go"
-	"github.com/prometheus/common/expfmt"
-	"github.com/prometheus/common/model"
 	"gopkg.in/yaml.v3"
 )
 
@@ -167,65 +164,11 @@ func decodeCSV(r *HTTPResponse, c *Collector) (*Decoded, error) {
 }
 
 func decodePrometheus(r *HTTPResponse) (*Decoded, error) {
-	parser := expfmt.NewTextParser(model.UTF8Validation)
-	families, err := parser.TextToMetricFamilies(bytes.NewReader(r.Body))
+	metrics, err := parsePrometheusText(r.Body)
 	if err != nil {
 		return nil, fmt.Errorf("decoding Prometheus exposition: %w", err)
 	}
-	set := MetricSet{}
-	for name, mf := range families {
-		_ = name
-		typ := metricType(mf.GetType())
-		for _, x := range mf.Metric {
-			labels := map[string]string{}
-			for _, l := range x.Label {
-				labels[l.GetName()] = l.GetValue()
-			}
-			m := Metric{Name: mf.GetName(), Help: mf.GetHelp(), Type: typ, Labels: labels}
-			if x.TimestampMs != nil {
-				t := x.GetTimestampMs()
-				m.Timestamp = &t
-			}
-			switch mf.GetType() {
-			case dto.MetricType_GAUGE:
-				m.Value = x.GetGauge().GetValue()
-			case dto.MetricType_COUNTER:
-				m.Value = x.GetCounter().GetValue()
-			case dto.MetricType_UNTYPED:
-				m.Value = x.GetUntyped().GetValue()
-			case dto.MetricType_HISTOGRAM:
-				h := x.GetHistogram()
-				z := &Histogram{Sum: h.GetSampleSum(), Count: h.GetSampleCount()}
-				for _, b := range h.Bucket {
-					z.Buckets = append(z.Buckets, Bucket{UpperBound: b.GetUpperBound(), CumulativeCount: b.GetCumulativeCount()})
-				}
-				m.Histogram = z
-			case dto.MetricType_SUMMARY:
-				s := x.GetSummary()
-				z := &Summary{Sum: s.GetSampleSum(), Count: s.GetSampleCount()}
-				for _, q := range s.Quantile {
-					z.Quantiles = append(z.Quantiles, Quantile{Quantile: q.GetQuantile(), Value: q.GetValue()})
-				}
-				m.Summary = z
-			}
-			set.Metrics = append(set.Metrics, m)
-		}
-	}
-	return &Decoded{Kind: "prometheus", Data: set, Raw: r.Body}, nil
-}
-func metricType(t dto.MetricType) MetricType {
-	switch t {
-	case dto.MetricType_COUNTER:
-		return CounterMetricType
-	case dto.MetricType_HISTOGRAM:
-		return HistogramMetricType
-	case dto.MetricType_SUMMARY:
-		return SummaryMetricType
-	case dto.MetricType_UNTYPED:
-		return UntypedMetricType
-	default:
-		return GaugeMetricType
-	}
+	return &Decoded{Kind: "prometheus", Data: MetricSet{Metrics: metrics}, Raw: r.Body}, nil
 }
 
 func textValue(v string) (float64, error) { return strconv.ParseFloat(strings.TrimSpace(v), 64) }

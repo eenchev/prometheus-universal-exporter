@@ -37,7 +37,6 @@ type pin struct {
 var pins = []pin{
 	{Arg: "GO_VERSION", Source: "docker", Repo: "library/golang", Suffix: "-alpine", Policy: policy{AllowMinor: true}},
 	{Arg: "PYTHON_VERSION", Source: "docker", Repo: "library/python", Suffix: "-slim", Policy: policy{AllowMinor: true}},
-	{Arg: "BEAUTIFULSOUP4_VERSION", Source: "pypi", Repo: "beautifulsoup4", Policy: policy{AllowMinor: true}},
 	{Arg: "LXML_VERSION", Source: "pypi", Repo: "lxml", Policy: policy{AllowMinor: true}},
 	{Arg: "PYYAML_VERSION", Source: "pypi", Repo: "PyYAML", Policy: policy{AllowMinor: true}},
 	{Arg: "PYTHON_DATEUTIL_VERSION", Source: "pypi", Repo: "python-dateutil", Policy: policy{AllowMinor: true}},

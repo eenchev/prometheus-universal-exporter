@@ -290,8 +290,8 @@ func (c *Config) Validate() error {
 			}
 		}
 		for _, lib := range append(x.Transform.Libraries, x.Transform.RequiredLibs...) {
-			if !map[string]bool{"beautifulsoup4": true, "bs4": true, "lxml": true, "PyYAML": true, "yaml": true, "python-dateutil": true, "dateutil": true}[lib] {
-				return fmt.Errorf("collector %q declares unsupported Python library %q", x.Name, lib)
+			if err := checkPythonLibrary(x.Name, lib); err != nil {
+				return err
 			}
 		}
 		for i := range x.Metrics {
@@ -617,4 +617,21 @@ func tlsConfig(t TLSConfig) (*tls.Config, error) {
 		cfg.Certificates = []tls.Certificate{cert}
 	}
 	return cfg, nil
+}
+
+// pythonLibraries are the third-party libraries the image installs, under the
+// names a collector may declare them by: the package name or the import name.
+var pythonLibraries = map[string]bool{"lxml": true, "PyYAML": true, "yaml": true, "python-dateutil": true, "dateutil": true}
+
+// checkPythonLibrary rejects a declared library the image does not install.
+// BeautifulSoup gets its own message: it was installed until lxml.html took
+// over its job, so a configuration written for it needs pointing somewhere.
+func checkPythonLibrary(collector, lib string) error {
+	if pythonLibraries[lib] {
+		return nil
+	}
+	if lib == "beautifulsoup4" || lib == "bs4" {
+		return fmt.Errorf("collector %q declares Python library %q, which the image no longer installs; parse HTML with lxml.html instead and declare lxml", collector, lib)
+	}
+	return fmt.Errorf("collector %q declares unsupported Python library %q; the supported libraries are lxml, PyYAML and python-dateutil", collector, lib)
 }

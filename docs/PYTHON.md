@@ -26,7 +26,37 @@ metrics: []
 `metrics: []` is explicit for Python because the script creates the metric
 definitions dynamically through `metric(...)`.
 
-The launcher blocks `socket`, `subprocess`, `ctypes`, `multiprocessing`, `threading`, shell execution, and package installation. Python has no supported network API; `requests` and `httpx` are unnecessary. `script_timeout` and metric/output limits apply. Declared `libraries` are validated against the supported names (`beautifulsoup4`, `lxml`, `PyYAML`, and `python-dateutil`); they are never installed during a scrape.
+The launcher blocks `socket`, `subprocess`, `ctypes`, `multiprocessing`, `threading`, shell execution, and package installation. Python has no supported network API; `requests` and `httpx` are unnecessary. `script_timeout` and metric/output limits apply. Declared `libraries` are validated against the supported names (`lxml`, `PyYAML`, and `python-dateutil`, or their import names `yaml` and `dateutil`); they are never installed during a scrape, and the image has no pip to install them with.
+
+## Parsing HTML with lxml
+
+The image bundles `lxml`, and `lxml.html` is the HTML parser for Python
+scripts:
+
+```yaml
+transform:
+  type: python
+  libraries:
+    - lxml
+  script: |
+    import lxml.html
+    doc = lxml.html.fromstring(response.text)
+    for row in doc.xpath('//table[@id="servers"]//tr[td]'):
+        name, cpu = [cell.text_content().strip() for cell in row.xpath('./td')]
+        metric(name="server_cpu", value=float(cpu), labels={"server": name})
+metrics: []
+```
+
+Select elements with XPath. `lxml`'s CSS selector support needs the separate
+`cssselect` package, which is not bundled; the native `css` transform covers
+CSS selection without Python.
+
+BeautifulSoup is not bundled. It could not run in the sandbox — it imports
+`logging`, which imports the blocked `threading` module — so a collector that
+declares `beautifulsoup4` or `bs4` fails validation with a pointer to
+`lxml.html`. Replace `BeautifulSoup(response.text, "html.parser")` with
+`lxml.html.fromstring(response.text)`, `.find_all(...)`/`.select(...)` with
+`.xpath(...)`, and `.get_text()` with `.text_content()`.
 
 ## Reshaping a response instead of writing a Python transform
 

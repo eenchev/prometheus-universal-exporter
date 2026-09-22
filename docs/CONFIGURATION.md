@@ -29,6 +29,16 @@ selectors and XPath (including bare element selectors such as `h1`), text
 supports regular expressions, and Prometheus input is parsed before
 filtering/renaming.
 
+Prometheus input is the text exposition format, version 0.0.4, read by the
+exporter's own parser. It follows the reference parser's rules — families from
+HELP and TYPE lines, `_sum`/`_count`/`_bucket` grouped into summaries and
+histograms, quoted UTF-8 names such as `{"my.metric", key="value"} 1` — and
+accepts three things the reference parser rejected: a body without a final
+newline, CRLF line endings, and trailing blanks on a line. It rejects a
+negative, NaN or infinite histogram or summary count. A malformed body fails the
+decode with the offending line number, for example
+`text format parsing error in line 3: expected float as value, got "n/a"`.
+
 All non-Python transforms use the same collector-level metric declaration. Each
 entry has `name`, `description`, `type`, `labels`, and a transform-specific
 `expression`. The only allowed metric types are `gauge`, `counter`,

@@ -439,7 +439,7 @@ func TestPrometheusInputFilteringAndRelabeling(t *testing.T) {
 }
 
 func TestPythonIsConfiguredAsTransform(t *testing.T) {
-	c := Collector{Request: RequestConfig{Type: RequestTypeHTTP}, Name: "python", Response: ResponseConfig{Format: "text"}, Transform: TransformConfig{Type: "python", Script: `metric(name="python_value", type="gauge", value=7)`, Libraries: []string{"beautifulsoup4"}}, Metrics: []MetricRule{}, Limits: Limits{MaxMetrics: 10}}
+	c := Collector{Request: RequestConfig{Type: RequestTypeHTTP}, Name: "python", Response: ResponseConfig{Format: "text"}, Transform: TransformConfig{Type: "python", Script: `metric(name="python_value", type="gauge", value=7)`, Libraries: []string{"lxml"}}, Metrics: []MetricRule{}, Limits: Limits{MaxMetrics: 10}}
 	if err := (&Config{Collectors: []Collector{c}}).Validate(); err != nil {
 		t.Fatal(err)
 	}

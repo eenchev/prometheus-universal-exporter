@@ -37,6 +37,41 @@ The default test suite is intentionally local-only; no third-party endpoint is r
 
 ## Dockerfile build arguments
 
-The Dockerfile exposes `GO_VERSION`, `PYTHON_VERSION`, `BEAUTIFULSOUP4_VERSION`,
-`LXML_VERSION`, `PYYAML_VERSION`, and `PYTHON_DATEUTIL_VERSION` build arguments,
-all with pinned defaults. Override them with `docker build --build-arg NAME=value`.
+The Dockerfile exposes `GO_VERSION`, `PYTHON_VERSION`, `LXML_VERSION`,
+`PYYAML_VERSION`, and `PYTHON_DATEUTIL_VERSION` build arguments, all with pinned
+defaults. Override them with `docker build --build-arg NAME=value`.
+
+## What the image contains
+
+The runtime image is `python:<PYTHON_VERSION>-slim` with the exporter binary and
+three Python libraries: lxml, PyYAML and python-dateutil. BeautifulSoup is not
+bundled; `lxml.html` parses HTML (see [PYTHON.md](PYTHON.md)).
+
+The build keeps the image's known vulnerabilities down to the ones nobody has
+fixed yet:
+
+- `apt-get upgrade` applies every Debian security update published by build
+  time, so a rebuild picks up a fix without waiting for a new `python` image.
+- pip is uninstalled after the libraries are installed, along with the wheels
+  `ensurepip` keeps. The exporter never installs a package at runtime, so pip is
+  only attack surface, and its advisories would otherwise be reported against
+  the image.
+- `LXML_VERSION` stays at 6.1.0 or later, the first release that fixes
+  CVE-2026-41066. The scheduled updater never crosses a major version, so a
+  security fix in a new major, like this one, is a manual bump.
+
+A test (`TestDockerfileImageContents`) keeps all three in place.
+
+Scanners also report Debian packages in the base image — util-linux, glibc,
+systemd, ncurses and others — for which Debian has not published a fix. The image
+cannot fix those; they go away when the image is rebuilt after Debian ships the
+fix, which `apt-get upgrade` then applies.
+
+## Go modules
+
+The exporter's direct dependencies are `gojq` (jq and yq expressions),
+`antchfx/xmlquery`, `antchfx/htmlquery` and `antchfx/xpath` (XPath), `goquery`
+(CSS selectors), and `gopkg.in/yaml.v3`. The Prometheus text format is parsed by
+the exporter itself (`promparse.go`), not by `prometheus/common`: that module
+brought `prometheus/client_model`, the protobuf runtime and `goautoneg` with it
+for one function, and a test fails if `go.mod` requires any of them again.

@@ -152,7 +152,7 @@ func TestPolicyKeepsTheDockerfilePinsWithinTheirMajor(t *testing.T) {
 	}{
 		{"GO_VERSION", "1.23", []string{"1.22", "1.24", "2.0"}, "1.24"},
 		{"PYTHON_VERSION", "3.12", []string{"3.13", "4.0", "3.13.1"}, "3.13"},
-		{"LXML_VERSION", "5.3.0", []string{"5.3.2", "6.0.0"}, "5.3.2"},
+		{"LXML_VERSION", "6.1.3", []string{"6.1.4", "6.2.0", "7.0.0"}, "6.2.0"},
 		{"PYTHON_DATEUTIL_VERSION", "2.9.0.post0", []string{"2.9.0.post1", "3.0.0.post0"}, "2.9.0.post1"},
 	}
 	byArg := map[string]pin{}

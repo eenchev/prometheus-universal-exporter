@@ -649,7 +649,7 @@ that are better expressed with XPath predicates or attributes.
 Recommended implementation libraries:
 
 - Go HTML parser for native parsing, and/or
-- Python `beautifulsoup4` for Python decoding when Python is selected.
+- Python `lxml.html` for Python decoding when Python is selected.
 
 Example conceptual configuration:
 
@@ -769,6 +769,57 @@ Example:
 ```
 
 The implementation MUST avoid double-encoding Prometheus text. It must parse it into the common representation first.
+
+## 14.1 Parser
+
+The decoder parses the text exposition format, version 0.0.4, with its own
+parser (`promparse.go`) rather than `github.com/prometheus/common/expfmt`. That
+package was the only reason the binary carried `prometheus/common`,
+`prometheus/client_model`, the protobuf runtime and `munnerz/goautoneg`; the
+parser that replaces it is a few hundred lines, and dropping them cut the
+binary by about 14%. The exporter MUST NOT depend on those modules again, and a
+test fails if `go.mod` requires them.
+
+The parser MUST follow expfmt's rules:
+
+- A sample belongs to the family named by an earlier HELP or TYPE line, or by
+  the sample itself. For a summary or histogram family `foo`, `foo_sum` and
+  `foo_count` (and, for a histogram, `foo_bucket`) belong to `foo`; for any
+  other family they, like an OpenMetrics `_total`, are families of their own.
+- A family without a TYPE line is untyped. A TYPE line after the family's first
+  sample, and a second HELP or TYPE line, are errors. The type is
+  case-insensitive; `gauge_histogram` and anything else outside counter, gauge,
+  summary, histogram and untyped are errors.
+- Summary and histogram series are grouped by their labels without `quantile`
+  and `le`, regardless of label order, and those two labels MUST be floats.
+- Metric and label names MAY be quoted UTF-8, including the braces form
+  `{"my.metric", key="value"} 1` for a metric name that is not a bare name.
+  `__name__` is reserved, and a label name may appear once per sample.
+- HELP text and label values unescape `\\`, `\n` and `\"`; any other escape is
+  an error.
+- A value is a Go float without `p`, `P` or `_`, so `NaN`, `+Inf` and `-Inf`
+  are accepted and hexadecimal floats and digit separators are not. A
+  timestamp is an integer number of milliseconds.
+- Comments other than HELP and TYPE, including OpenMetrics' `# EOF`, are
+  ignored. A family that ends up without samples is dropped.
+- Every error names its line: `text format parsing error in line N: ...`.
+
+It deliberately differs from expfmt where expfmt was wrong for a scrape target:
+
+- It accepts a body whose last line has no newline, CRLF line endings, and
+  trailing blanks after the value, the timestamp or the TYPE; expfmt rejected
+  all three.
+- It rejects a histogram or summary count, or a bucket count, that is negative,
+  NaN or infinite, which expfmt silently turned into an arbitrary integer.
+- It rejects a label set with no metric name, such as `{a="b"} 1`, which
+  expfmt attached to the previous line's family, and names that mix bare and
+  quoted parts, such as `a"b"`, which expfmt spliced together.
+- It never panics. expfmt panicked on inputs such as `{b="c",} 1`, which a
+  target could serve to crash the exporter from a scheduled scrape, where no
+  HTTP handler recovers the panic.
+
+Families are returned in the order they were first seen, and series in the
+order of their first sample, so a decode is deterministic.
 
 ---
 
@@ -899,12 +950,16 @@ Initial recommended set:
 
 | Package | Import | Purpose |
 |---|---|---|
-| beautifulsoup4 | `bs4` | HTML parsing and CSS selection |
-| lxml | `lxml` | XML/HTML parsing and XPath |
+| lxml | `lxml` | XML parsing, HTML parsing (`lxml.html`) and XPath |
 | PyYAML | `yaml` | YAML parsing |
 | python-dateutil | `dateutil` | Date/time parsing |
 
 Do NOT bundle networking clients merely for Python convenience.
+
+BeautifulSoup (`beautifulsoup4`) MUST NOT be bundled. `lxml.html` does its job,
+and it could not run in the sandbox anyway: it imports `logging`, which imports
+the blocked `threading` module. A collector that declares `beautifulsoup4` or
+`bs4` MUST fail validation with a message that points to `lxml.html`.
 
 Initially do NOT bundle general-purpose data science packages such as `pandas`, `numpy`, or `scipy` unless a concrete project requirement is later established.
 
@@ -918,11 +973,10 @@ Preferred syntax:
 transform:
   type: python
   libraries:
-    - beautifulsoup4
     - lxml
     - PyYAML
   script: |
-    from bs4 import BeautifulSoup
+    import lxml.html
     from lxml import etree
     import yaml
 ```
@@ -1871,7 +1925,6 @@ collectors:
     transform:
       type: jq
       libraries:
-        - beautifulsoup4
         - lxml
         - python-dateutil
 
@@ -1911,7 +1964,6 @@ collectors:
     transform:
       type: python
       libraries:
-        - beautifulsoup4
         - lxml
         - python-dateutil
 
@@ -2027,6 +2079,22 @@ Requirements:
 - Reproducible/pinned build dependencies.
 
 The final runtime image MUST be self-contained for the documented supported feature set.
+
+The runtime image MUST keep its known vulnerabilities to those without a fix:
+
+- The build MUST run `apt-get upgrade`, so Debian security fixes land on the
+  next rebuild rather than waiting for a new `python` base image.
+- pip MUST be uninstalled once the bundled libraries are installed, together
+  with the wheels `ensurepip` keeps. The exporter never installs a package at
+  runtime (§32), so pip would only be attack surface, and its advisories would
+  be reported against the image.
+- Bundled Python libraries MUST be pinned at or above the first release that
+  fixes a known vulnerability. `lxml` MUST be at least 6.1.0, which fixes
+  CVE-2026-41066. That is a major version above 5.x, which the automated
+  updater (§42.16) never crosses on its own.
+
+Findings in Debian packages that have no fixed version yet cannot be fixed by
+the image; they are resolved by rebuilding once Debian publishes a fix.
 
 ---
 
@@ -2394,6 +2462,20 @@ The Prometheus decoder MUST be tested against representative Prometheus expositi
 
 Test that the decoder converts the exposition into the common internal metric model rather than simply copying raw text.
 
+Also required, for the parser in §14.1:
+
+- Histogram and summary grouping, independent of label order.
+- Quoted UTF-8 metric and label names, including the braces form.
+- Every error case names its line.
+- The inputs on which expfmt panicked are rejected without a panic.
+- A missing final newline, CRLF and trailing blanks are accepted.
+- Negative, NaN and infinite counts are rejected.
+- Output order is deterministic.
+- `go.mod` does not require `prometheus/common`, `prometheus/client_model`,
+  `google.golang.org/protobuf` or `munnerz/goautoneg`.
+- A fuzz target (`FuzzParsePrometheusText`) whose seeds run with the ordinary
+  suite, and which never produces a metric without a name.
+
 Test the canonical metric declaration shape with `name`, `description`,
 `type`, `labels`, and `expression` for every non-Python transform. Verify that
 only the five allowed Prometheus metric types are accepted, that descriptions
@@ -2609,8 +2691,8 @@ For each bundled external Python library, add a minimal test script that imports
 
 At minimum, for the initially supported libraries:
 
-- BeautifulSoup4: parse HTML and select an element.
-- lxml: parse XML and run XPath.
+- lxml: parse XML and run XPath, and parse HTML with `lxml.html` inside the
+  sandbox and select table cells with XPath.
 - PyYAML: parse YAML.
 - python-dateutil: parse a representative timestamp.
 
@@ -2863,7 +2945,7 @@ Test the built container image for:
 - Expected filesystem permissions are respected.
 - The image runs as the configured non-root user when non-root mode is enabled.
 
-The image build MUST be reproducible and MUST pin dependency versions sufficiently for production use. The Dockerfile MUST expose the Go base version, Python base version, and each bundled Python dependency version as `ARG` variables with documented defaults, so builds can override them without editing the Dockerfile.
+The image build MUST be reproducible and MUST pin dependency versions sufficiently for production use. A test MUST check the Dockerfile for the image contents §31 requires: no BeautifulSoup, pip removed, Debian updates applied, and `LXML_VERSION` at or above 6.1.0. The Dockerfile MUST expose the Go base version, Python base version, and each bundled Python dependency version as `ARG` variables with documented defaults, so builds can override them without editing the Dockerfile.
 
 ## 34.31 End-to-end scenario matrix
 

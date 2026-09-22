@@ -75,12 +75,16 @@ func TestEveryRequestTypeFileHasItsSelectionConstraint(t *testing.T) {
 // The guard must exclude itself as soon as any one type is selected, so its
 // constraint names every type.
 func TestTheGuardNamesEveryRequestType(t *testing.T) {
-	want := "//go:build select_request_types"
+	var want strings.Builder
+	want.WriteString("//go:build select_request_types")
+
 	for _, name := range requestTypeFiles(t) {
-		want += " && !request_type_" + name
+		want.WriteString(" && !request_type_")
+		want.WriteString(name)
 	}
-	if got := buildConstraint(t, requestTypeGuardFile); got != want {
-		t.Fatalf("%s: constraint %q, want %q", requestTypeGuardFile, got, want)
+
+	if got := buildConstraint(t, requestTypeGuardFile); got != want.String() {
+		t.Fatalf("%s: constraint %q, want %q", requestTypeGuardFile, got, want.String())
 	}
 }
 

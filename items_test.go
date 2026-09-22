@@ -163,17 +163,30 @@ func TestRootIsTheDocumentWithoutItems(t *testing.T) {
 // sorted, in order.
 func describeSet(set *MetricSet) []string {
 	var out []string
+
 	for _, m := range set.Metrics {
-		line := m.Name
+		var line strings.Builder
+
+		line.WriteString(m.Name)
+
 		keys := make([]string, 0, len(m.Labels))
 		for k := range m.Labels {
 			keys = append(keys, k)
 		}
 		sort.Strings(keys)
+
 		for _, k := range keys {
-			line += " " + k + "=" + m.Labels[k]
+			line.WriteByte(' ')
+			line.WriteString(k)
+			line.WriteByte('=')
+			line.WriteString(m.Labels[k])
 		}
-		out = append(out, line+" "+strconv.FormatFloat(m.Value, 'g', -1, 64))
+
+		line.WriteByte(' ')
+		line.WriteString(strconv.FormatFloat(m.Value, 'g', -1, 64))
+
+		out = append(out, line.String())
 	}
+
 	return out
 }

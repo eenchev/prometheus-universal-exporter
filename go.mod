@@ -4,10 +4,10 @@ go 1.25.0
 
 require (
 	github.com/PuerkitoBio/goquery v1.13.0
-	github.com/andybalholm/cascadia v1.3.4
+	github.com/andybalholm/cascadia v1.3.5
 	github.com/antchfx/htmlquery v1.3.6
 	github.com/antchfx/xmlquery v1.5.1
-	github.com/antchfx/xpath v1.3.6
+	github.com/antchfx/xpath v1.3.8
 	github.com/itchyny/gojq v0.12.19
 	gopkg.in/yaml.v3 v3.0.1
 )

@@ -141,6 +141,10 @@ URL than the one fetched — with one deliberate exception: a
 `/api/{{param_tenant}}/status`, rather than its value, for the same reason the
 query string is dropped, and because one series per tenant would be unbounded.
 
+A [`localfile`](LOCALFILE.md#errors-and-self-metrics) collector's reads carry
+the file's `file://` URL, placeholders kept the same way, and
+`http_method="READ"`.
+
 A request URL is an unbounded label value and each combination now carries a
 whole metric family, so tracking is capped at 1000 collector/URL/method
 combinations. Requests already tracked keep updating past the limit; only new
@@ -162,12 +166,12 @@ Verbose mode also publishes, per collector, a histogram of how long each trip to
 the target took, from sending the request to having validated metrics:
 
 ```text
-http_exporter_target_scrape_duration_seconds_bucket{collector="app_json",le="0.005"} 0
-http_exporter_target_scrape_duration_seconds_bucket{collector="app_json",le="0.01"} 3
+http_exporter_collector_scrape_duration_seconds_bucket{collector="app_json",le="0.005"} 0
+http_exporter_collector_scrape_duration_seconds_bucket{collector="app_json",le="0.01"} 3
 ...
-http_exporter_target_scrape_duration_seconds_bucket{collector="app_json",le="+Inf"} 42
-http_exporter_target_scrape_duration_seconds_sum{collector="app_json"} 0.61
-http_exporter_target_scrape_duration_seconds_count{collector="app_json"} 42
+http_exporter_collector_scrape_duration_seconds_bucket{collector="app_json",le="+Inf"} 42
+http_exporter_collector_scrape_duration_seconds_sum{collector="app_json"} 0.61
+http_exporter_collector_scrape_duration_seconds_count{collector="app_json"} 42
 ```
 
 `http_exporter_scrape_duration_seconds` only holds the last probe's duration, so
@@ -176,7 +180,7 @@ them, which is what "this collector got slow" alerts need:
 
 ```promql
 histogram_quantile(0.95,
-  sum by (collector, le) (rate(http_exporter_target_scrape_duration_seconds_bucket[5m])))
+  sum by (collector, le) (rate(http_exporter_collector_scrape_duration_seconds_bucket[5m])))
   > 2
 ```
 
@@ -223,3 +227,36 @@ increase(http_exporter_python_worker_start_failures_total[5m]) > 0
 Every label is from a fixed set, and a collector without Python has none of
 these series. The counters are kept whether or not verbose mode is on, so
 turning it on through a reload shows the counts since the exporter started.
+
+#### The Python execution pool
+
+The same five families are also published for the pool as a whole, with a
+`python_pool` name and no `collector` label:
+
+```text
+http_exporter_python_pool_workers{state="starting"} 0
+http_exporter_python_pool_workers{state="idle"} 3
+http_exporter_python_pool_workers{state="busy"} 1
+http_exporter_python_pool_worker_starts_total 12
+http_exporter_python_pool_worker_start_failures_total 0
+http_exporter_python_pool_worker_stops_total{reason="timeout"} 2
+...
+http_exporter_python_pool_runs_total{outcome="ok"} 4381
+...
+```
+
+These are always there in verbose mode, even when no collector uses Python, so
+a dashboard or alert on the pool works on every exporter without knowing which
+collectors run scripts; on an exporter without Python collectors they read zero.
+They sum every collector the pool has served, including collectors a reload has
+since removed, so the counters never go backwards. They have their own names,
+rather than being an unlabelled series of the per-collector families, so
+`sum(http_exporter_python_runs_total)` never counts a run twice.
+
+```promql
+# workers are not being reused: more than one start per ten runs
+rate(http_exporter_python_pool_worker_starts_total[15m])
+  / sum(rate(http_exporter_python_pool_runs_total[15m])) > 0.1
+# Python cannot start at all
+increase(http_exporter_python_pool_worker_start_failures_total[5m]) > 0
+```

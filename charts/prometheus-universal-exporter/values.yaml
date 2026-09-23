@@ -145,6 +145,19 @@ otlpTargets:
   #         resource_attributes:
   #           deployment.environment: production
 
+# The exporter configuration, rendered into the exporter ConfigMap. Every key of
+# data becomes a file next to config.yaml, so collector files can be added as
+# keys and listed under collector_files, relative to config.yaml. A collector
+# name must be unique across config.yaml and every collector file:
+#
+#   data:
+#     config.yaml: |
+#       collector_files:
+#         - collectors-*.yaml
+#     collectors-payments.yaml: |
+#       collectors:
+#         - name: payments_api
+#           ...
 config:
   enabled: true
   data:

@@ -112,9 +112,6 @@ func (f *TargetFile) Validate() error {
 		if strings.TrimSpace(t.Collector) == "" {
 			return fmt.Errorf("target %d has no collector", i)
 		}
-		if strings.TrimSpace(t.Target) == "" {
-			return fmt.Errorf("target %q has no target address", t.Collector)
-		}
 		if t.Name == "" {
 			t.Name = fmt.Sprintf("%s_%d", t.Collector, i)
 		}
@@ -125,9 +122,6 @@ func (f *TargetFile) Validate() error {
 			return fmt.Errorf("duplicate target %q", t.Name)
 		}
 		seen[t.Name] = true
-		if u, err := url.Parse(t.Target); err != nil || u.Host == "" {
-			return fmt.Errorf("target %q must have an absolute target URL", t.Name)
-		}
 		if t.Request.Method != "" {
 			t.Request.Method = strings.ToUpper(t.Request.Method)
 			switch t.Request.Method {
@@ -197,6 +191,15 @@ func (f *TargetFile) ValidateAgainst(c *Config) error {
 		t := &f.Targets[i]
 		if !known[t.Collector] {
 			return fmt.Errorf("target %q references unknown collector %q", t.Name, t.Collector)
+		}
+		// What a target may be depends on the collector's request type: an
+		// absolute URL for http, a file under request.root for localfile,
+		// which may also leave it out.
+		if err := checkTarget(collectorByName(c, t.Collector), t.Target, true); err != nil {
+			if errors.Is(err, errMissingTarget) {
+				return fmt.Errorf("target %q has no target address", t.Name)
+			}
+			return fmt.Errorf("target %q: %w", t.Name, err)
 		}
 		if err := checkTargetRequest(t, collectorByName(c, t.Collector)); err != nil {
 			return err

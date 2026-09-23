@@ -128,6 +128,9 @@ func checkStartup(in checkInputs) checkReport {
 		}
 		// A deprecated spelling still passes, so the check stays ok; the
 		// report says what to change before the spelling is removed.
+		if len(config.LoadedCollectorFiles) > 0 {
+			details["collector_files"] = config.LoadedCollectorFiles
+		}
 		if len(config.Deprecations) > 0 {
 			details["deprecations"] = config.Deprecations
 		}

@@ -316,13 +316,7 @@ func fetch(ctx context.Context, target string, c *Collector, overrides RequestOv
 		}
 	}
 	start := time.Now()
-	limit := c.Limits.MaxResponseBytes
-	if limit <= 0 || c.Request.MaxResponseBytes > 0 && c.Request.MaxResponseBytes < limit {
-		limit = c.Request.MaxResponseBytes
-	}
-	if limit <= 0 {
-		limit = 10 << 20
-	}
+	limit := responseLimit(c)
 	for attempt := 0; attempt <= retryAttempts; attempt++ {
 		var reqBody io.Reader
 		if requestBody != "" {
@@ -377,6 +371,20 @@ func fetch(ctx context.Context, target string, c *Collector, overrides RequestOv
 		return &HTTPResponse{StatusCode: resp.StatusCode, Headers: resp.Header.Clone(), Body: body, Target: target, Collector: c.Name, Duration: time.Since(start)}, nil
 	}
 	return nil, fmt.Errorf("HTTP request failed after %d attempts", retryAttempts+1)
+}
+
+// responseLimit is the most a collector reads from its target: the smaller of
+// limits.max_response_bytes and request.max_response_bytes, 10 MiB when
+// neither is set. Every request type reads through it.
+func responseLimit(c *Collector) int64 {
+	limit := c.Limits.MaxResponseBytes
+	if limit <= 0 || c.Request.MaxResponseBytes > 0 && c.Request.MaxResponseBytes < limit {
+		limit = c.Request.MaxResponseBytes
+	}
+	if limit <= 0 {
+		limit = 10 << 20
+	}
+	return limit
 }
 
 func retryableStatus(status int) bool {

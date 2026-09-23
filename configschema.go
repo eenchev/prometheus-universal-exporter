@@ -35,10 +35,38 @@ func configSchema() map[string]any {
 	return schema
 }
 
+// collectorFileSchemaID is where the published collector file schema lives.
+const collectorFileSchemaID = "https://raw.githubusercontent.com/eenchev/prometheus-universal-exporter/main/collector-file.schema.json"
+
+// collectorFileSchema describes a collector file (collectorfiles.go): a
+// collectors list, required and non-empty, and no other key. The collectors
+// are described exactly as in the configuration schema, from the same rules.
+func collectorFileSchema() map[string]any {
+	schema := schemaFor(reflect.TypeOf(collectorFile{}), "")
+	delete(schema, "anyOf")
+	schema["required"] = []string{collectorFileKey}
+	collectors := schema["properties"].(map[string]any)[collectorFileKey].(map[string]any)
+	collectors["minItems"] = 1
+	schema["description"] = "A collector file of the exporter, listed under collector_files in the configuration. It holds collectors and nothing else. See docs/CONFIGURATION.md#collector-files."
+	schema["$schema"] = "https://json-schema.org/draft/2020-12/schema"
+	schema["$id"] = collectorFileSchemaID
+	schema["title"] = "prometheus-universal-exporter collector file"
+	return schema
+}
+
 // configSchemaJSON renders the schema with sorted keys and a trailing newline,
 // so the committed file and a fresh render compare byte for byte.
 func configSchemaJSON() ([]byte, error) {
-	out, err := json.MarshalIndent(configSchema(), "", "  ")
+	return renderSchema(configSchema())
+}
+
+// collectorFileSchemaJSON renders the collector file schema the same way.
+func collectorFileSchemaJSON() ([]byte, error) {
+	return renderSchema(collectorFileSchema())
+}
+
+func renderSchema(schema map[string]any) ([]byte, error) {
+	out, err := json.MarshalIndent(schema, "", "  ")
 	if err != nil {
 		return nil, err
 	}
@@ -125,20 +153,30 @@ func configSchemaRules() map[string]map[string]any {
 	errorPolicy := map[string]any{"enum": []string{ErrorPolicyFail, ErrorPolicyLog, ErrorPolicyIgnore, errorPolicyWarn}, "description": "fail stops the probe, log carries on and logs why, ignore carries on quietly. Defaults to fail. warn is a deprecated spelling of log."}
 	libraries := map[string]any{"enum": sortedCopy(keysOf(pythonLibraries)), "description": "A bundled Python library the script uses. Declared libraries are imported when the interpreter starts."}
 	return map[string]map[string]any{
-		"":           {"required": []string{"collectors"}, "description": "The exporter configuration. See docs/CONFIGURATION.md."},
-		"collectors": {"minItems": 1, "description": "The collectors. A probe names one with its collector parameter."},
+		"": {
+			"anyOf": []any{
+				map[string]any{"required": []string{"collectors"}, "properties": map[string]any{"collectors": map[string]any{"minItems": 1}}},
+				map[string]any{"required": []string{"collector_files"}, "properties": map[string]any{"collector_files": map[string]any{"minItems": 1}}},
+			},
+			"description": "The exporter configuration. See docs/CONFIGURATION.md. Collectors are defined under collectors, in the files collector_files lists, or both.",
+		},
+		"collectors":        {"description": "The collectors. A probe names one with its collector parameter. A name must be unique across this list and every collector file."},
+		"collector_files":   {"description": "Further files of collectors, as paths or glob patterns such as collectors.d/*.yaml, relative to this file. A collector file holds a collectors list and nothing else. See docs/CONFIGURATION.md#collector-files."},
+		"collector_files[]": {"type": "string", "minLength": 1},
 		"collectors[]": {
 			"required":    []string{"name", "request"},
 			"description": "How to reach a kind of target and turn its response into metrics.",
 		},
-		"collectors[].name":           {"pattern": `^[a-zA-Z_][a-zA-Z0-9_]*$`, "description": "Unique name, used as the collector parameter of /probe."},
-		"collectors[].metrics_prefix": {"pattern": metricsPrefixRE.String(), "description": "Joined with _ to the front of every metric the collector exports, such as grafana for grafana_statuspage_status. Letters and digits, in parts joined by single underscores."},
-		"collectors[].cache":          {"description": "Answer a repeat of the same probe from memory for this long. Omit or 0s to disable."},
-		"collectors[].coalesce":       {"description": "Share one request to the target among identical probes that arrive while it is in flight. Defaults to true."},
-		"collectors[].request":        {"required": []string{"type"}, "description": "How the collector reaches its data. See docs/REQUESTS.md."},
-		"collectors[].request.type":   {"enum": builtRequestTypes(), "description": "Required. How the collector reaches its data."},
-		"collectors[].request.method": {"enum": []string{"GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "get", "post", "put", "patch", "delete", "head"}, "description": "HTTP method. Defaults to GET."},
-		"collectors[].request.path":   {"description": "Joined onto the target URL. May contain {{param_name}} or {{param_name:default}} path parameters, filled by param_<name> probe parameters."},
+		"collectors[].name":            {"pattern": `^[a-zA-Z_][a-zA-Z0-9_]*$`, "description": "Unique name, used as the collector parameter of /probe."},
+		"collectors[].metrics_prefix":  {"pattern": metricsPrefixRE.String(), "description": "Joined with _ to the front of every metric the collector exports, such as grafana for grafana_statuspage_status. Letters and digits, in parts joined by single underscores."},
+		"collectors[].cache":           {"description": "Answer a repeat of the same probe from memory for this long. Omit or 0s to disable."},
+		"collectors[].coalesce":        {"description": "Share one request to the target among identical probes that arrive while it is in flight. Defaults to true."},
+		"collectors[].request":         requestSchemaRule(),
+		"collectors[].request.type":    {"enum": builtRequestTypes(), "description": "Required. How the collector reaches its data."},
+		"collectors[].request.method":  {"enum": []string{"GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "get", "post", "put", "patch", "delete", "head"}, "description": "HTTP method. Defaults to GET."},
+		"collectors[].request.path":    {"description": "http: joined onto the target URL. localfile: the file, relative to request.root and joined after the target. May contain {{param_name}} or {{param_name:default}} path parameters, filled by param_<name> probe parameters."},
+		"collectors[].request.root":    {"description": "localfile, required: the absolute directory the collector may read files under. No read reaches outside it, through .. or a symbolic link. See docs/LOCALFILE.md."},
+		"collectors[].request.max_age": {"description": "localfile: refuse a file last modified longer ago than this, so a writer that has stopped fails the scrape instead of exporting its last values forever."},
 		"collectors[].response.format": {
 			"enum":        []string{"auto", "json", "yaml", "xml", "csv", "html", "prometheus", "text"},
 			"description": "How to decode the response. Defaults to auto, which the transform or the Content-Type decides.",
@@ -177,4 +215,23 @@ func keysOf(m map[string]bool) []string {
 		out = append(out, key)
 	}
 	return out
+}
+
+// requestSchemaRule requires type, and for each built request type with
+// required keys of its own, those keys when the type is chosen.
+func requestSchemaRule() map[string]any {
+	rule := map[string]any{"required": []string{"type"}, "description": "How the collector reaches its data. See docs/REQUESTS.md, and docs/LOCALFILE.md for localfile."}
+	var conditions []any
+	for _, name := range builtRequestTypes() {
+		if name == RequestTypeLocalFile {
+			conditions = append(conditions, map[string]any{
+				"if":   map[string]any{"properties": map[string]any{"type": map[string]any{"const": name}}, "required": []string{"type"}},
+				"then": map[string]any{"required": []string{"root"}},
+			})
+		}
+	}
+	if len(conditions) > 0 {
+		rule["allOf"] = conditions
+	}
+	return rule
 }

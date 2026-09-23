@@ -61,7 +61,9 @@ per-scrape parameter `/probe` accepts — `method`, `path`, `body`, `timeout`,
 `insecure_skip_verify`, `follow_redirects`, `enable_http2` and the `retry`
 settings — overriding the collector's own request for that target only. Which of these
 keys a target may set follows its collector's
-[request type](CONFIGURATION.md#request-types); for `http` it is all of them. It also takes static `headers` and its own target
+[request type](CONFIGURATION.md#request-types); for `http` it is all of them,
+and for [`localfile`](LOCALFILE.md#scheduled-targets-over-otlp) only `path` and
+`timeout`, with `target` optional. It also takes static `headers` and its own target
 credentials, inline or file-backed, as basic authentication or a bearer token.
 Because the file is operator configuration rather than caller input, these
 headers are applied directly and are not filtered through the collector's

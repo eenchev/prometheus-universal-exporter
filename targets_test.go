@@ -84,6 +84,24 @@ func TestTargetFileRejectedWithoutOTLPExport(t *testing.T) {
 	}
 }
 
+// What a target may be is the collector's request type's to say, so it is
+// checked against the configuration: an http collector needs an absolute URL.
+func TestHTTPTargetsNeedAnAbsoluteURL(t *testing.T) {
+	cfg := &Config{Collectors: []Collector{testCollector("text", "text")}, OTLP: otlpConfig("http://collector.invalid/v1/metrics")}
+	if err := cfg.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	for target, want := range map[string]string{"": `target "one" has no target address`, "not-a-url": `target "one": must have an absolute target URL`} {
+		file := &TargetFile{Targets: []ScheduledTarget{{Name: "one", Collector: "text", Target: target}}}
+		if err := file.Validate(); err != nil {
+			t.Fatal(err)
+		}
+		if err := file.ValidateAgainst(cfg); err == nil || err.Error() != want {
+			t.Errorf("target %q: ValidateAgainst() error=%v, want %q", target, err, want)
+		}
+	}
+}
+
 func TestTargetFileRejectsUnknownCollector(t *testing.T) {
 	cfg := &Config{Collectors: []Collector{testCollector("text", "text")}, OTLP: otlpConfig("http://collector.invalid/v1/metrics")}
 	if err := cfg.Validate(); err != nil {
@@ -106,8 +124,6 @@ func TestTargetFileValidationRejectsInvalidEntries(t *testing.T) {
 	}{
 		{name: "empty", file: &TargetFile{}, want: "must not be empty"},
 		{name: "no collector", file: &TargetFile{Targets: []ScheduledTarget{{Target: "http://a.invalid"}}}, want: "has no collector"},
-		{name: "no target", file: &TargetFile{Targets: []ScheduledTarget{{Collector: "text"}}}, want: "no target address"},
-		{name: "relative target", file: &TargetFile{Targets: []ScheduledTarget{{Collector: "text", Target: "not-a-url"}}}, want: "absolute target URL"},
 		{name: "invalid name", file: &TargetFile{Targets: []ScheduledTarget{{Name: "bad-name", Collector: "text", Target: "http://a.invalid"}}}, want: "invalid name"},
 		{name: "duplicate name", file: &TargetFile{Targets: []ScheduledTarget{
 			{Name: "one", Collector: "text", Target: "http://a.invalid"},

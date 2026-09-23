@@ -1,6 +1,7 @@
 # Configuration
 
-The exporter reads one YAML document, named by `--config.file`. It declares the
+The exporter reads one YAML document, named by `--config.file`, and any
+[collector files](#collector-files) it lists. It declares the
 collectors — how to call a target, how to read what comes back, and which
 metrics to publish — and, optionally, the exporter's own settings under `web`
 and `otlp`. Target URLs are deliberately not part of it: Prometheus supplies
@@ -12,6 +13,15 @@ start from. This page is the reference for what it may contain.
 ## Collectors
 
 Collectors contain request, response, decoder, transformation, error-policy, and limit settings. Target URLs are deliberately not stored in configuration.
+
+A collector's `name` is what a probe asks for, so it must be unique: across the
+configuration's `collectors` and every [collector file](#collector-files). The
+same name twice stops the exporter at startup, fails `--dry-run`, and rejects a
+reload, with an error naming both places it was defined:
+
+```text
+duplicate collector "app_json": defined in /etc/exporter/config.yaml and in /etc/exporter/collectors.d/payments.yaml
+```
 
 `response.format` is optional and defaults to `auto`. When omitted, the
 transform selects a deterministic decoder where possible: `regex` uses text,
@@ -309,9 +319,10 @@ request:
   path: /api/status
 ```
 
-`http` is the only type today; others, such as gRPC or files, are planned. A
-collector without `type` stops the exporter at startup with a message saying
-what to add, and so does an unknown type.
+There are two types: `http` asks a URL, and `localfile` reads a file from the
+exporter's own filesystem — see [Local files](LOCALFILE.md). A collector
+without `type` stops the exporter at startup with a message saying what to add,
+and so does an unknown type.
 
 Each type accepts its own keys. For `http`, `type` is the only required one —
 `path` can be left out when the target URL already carries the whole path, and
@@ -334,10 +345,13 @@ Each type accepts its own keys. For `http`, `type` is the only required one —
 | `follow_redirects`, `enable_http2` | off | See [Target requests](REQUESTS.md#redirects-and-http2). |
 | `allowed_schemes` | `http`, `https` | Schemes a target may use. |
 
+For `localfile`, `root` is required, and `path`, `max_age` and
+`max_response_bytes` are optional; its table is in [Local files](LOCALFILE.md#a-collector).
+
 A key that belongs to a different type is an error rather than being ignored,
 and the same holds for `/probe` parameters: a parameter that only another type
-accepts gets a `400`. With `http` as the only type, every key and parameter on
-these pages applies.
+accepts gets a `400`. `localfile` accepts only `path`, `timeout` and
+`param_<name>`, and its `target` is optional.
 
 #### Choosing request types at build time
 
@@ -361,8 +375,9 @@ A collector whose type the build left out stops the exporter at startup, saying
 the type exists but this build does not include it, and which types it does. The
 startup log line and the [dry run](#dry-run) report list the types the binary
 carries, so a configuration can be checked against the build that will run it.
-With `http` as the only type today, an http-only build is the same as the
-default one; the selection matters once other types exist.
+An http-only build leaves `localfile` out, and a build with
+`REQUEST_TYPES=localfile` reads files and makes no HTTP requests to targets at
+all.
 
 ### When a metric cannot be extracted
 
@@ -534,6 +549,85 @@ The check needs the interpreter from `--python.path`, so a configuration that
 contains any Python fails to start if that interpreter is unusable. A
 configuration with no Python scripts never invokes one.
 
+## Collector files
+
+A long list of collectors is easier to own in several files — one per team, per
+application, or per ConfigMap key. List them under `collector_files`:
+
+```yaml
+collector_files:
+  - shared.yaml             # one file
+  - collectors.d/*.yaml     # every file the pattern matches
+web:
+  self_metrics:
+    verbose: true
+collectors:                 # optional when collector_files supplies them
+  - name: local_status
+    ...
+```
+
+Each collector file holds a `collectors` list and nothing else:
+
+```yaml
+# collectors.d/payments.yaml
+collectors:
+  - name: payments_api
+    request:
+      type: http
+      path: /status
+    transform:
+      type: jq
+    metrics:
+      - name: payments_queue_depth
+        expression: .queue.depth
+```
+
+- **Paths.** An entry is a path or a glob pattern (`*`, `?`, `[...]`),
+  resolved against the directory of the configuration file, not the working
+  directory; an absolute path is used as it is. A path must exist; a pattern may
+  match nothing, so an empty directory of collector files is fine. A directory
+  is not a file: write `collectors.d/*.yaml`. A file matched by two entries is
+  read once, and the configuration file itself is never read as a collector
+  file, so `*.yaml` next to it is safe — although another YAML file in the same
+  directory, such as a scheduled target file, would be read and refused, so a
+  subdirectory or a naming pattern such as `collectors-*.yaml` is the better
+  habit.
+- **Only collectors.** Any other key in a collector file — `web`, `otlp`, a
+  misspelt `colectors`, or a nested `collector_files` — is an error naming the
+  file, the key and its line. The exporter-wide settings belong to the
+  configuration alone, so a file of collectors can never change them. A file
+  that is empty or has an empty `collectors` list is an error too.
+- **Order.** The configuration's own collectors come first, then each entry's
+  files in the order listed, a pattern's matches in file name order.
+- **Validated together.** The merged collectors are validated exactly as if
+  they had been written in the configuration: defaults, expressions, Python
+  scripts, everything in
+  [Checked when the configuration loads](#checked-when-the-configuration-loads).
+  A configuration needs at least one collector across all of them; with
+  `collector_files`, its own `collectors` key may be left out.
+- **Unique names.** A collector name must be unique across the configuration
+  and every collector file; see [Collectors](#collectors).
+- **Environment variables.** With `--config.export-env`, `${NAME}` references
+  are expanded in collector files as in the configuration.
+- **Reloading.** With `--config.watch`, editing, adding or removing a collector
+  file reloads the configuration, even though the configuration file itself did
+  not change. A reload that would break any rule above is rejected and the last
+  valid configuration stays active.
+- **Checking.** `--dry-run` reads the collector files too and lists them under
+  `details.collector_files` of its `config` entry.
+
+`prometheus-universal-exporter --config.collector-file-schema` prints the JSON
+Schema of a collector file, published as
+[`collector-file.schema.json`](../collector-file.schema.json). Start a collector
+file with
+
+```yaml
+# yaml-language-server: $schema=https://raw.githubusercontent.com/eenchev/prometheus-universal-exporter/main/collector-file.schema.json
+```
+
+and the editor checks it the way it checks the configuration, including that it
+has no key but `collectors`.
+
 ## Environment variables
 
 A configuration file is usually committed, and some of what belongs in it is
@@ -703,9 +797,12 @@ deliberate: Kubernetes republishes a mounted ConfigMap by atomically swapping
 the `..data` symlink, which replaces the inode a file-level event watch is
 attached to, so such a watch would stop firing after the first change.
 
+The watch follows the [collector files](#collector-files) too: a collector file
+edited, a new file matching a pattern, or a file removed triggers a reload.
+
 The watch does not relax any reload rule. An invalid configuration, one that
-would disable OTLP while scheduled targets are loaded, and a pre-script that
-stops producing `data` are all still rejected, with the last valid configuration
+would disable OTLP while scheduled targets are loaded, a collector name defined
+twice, and a pre-script that stops producing `data` are all still rejected, with the last valid configuration
 left active and the reason logged.
 
 ## Dry run
@@ -728,7 +825,9 @@ prometheus-universal-exporter --dry-run \
 It checks everything startup checks, including that every expression compiles
 (see [Checked when the configuration loads](#checked-when-the-configuration-loads)).
 A deprecated spelling does not fail the check; it is listed under
-`details.deprecations` of the `config` entry and logged.
+`details.deprecations` of the `config` entry and logged. The
+[collector files](#collector-files) the configuration read are listed under
+`details.collector_files`, and a collector name defined twice fails the check.
 
 It takes the same flags a real start does, and they matter: `--config.file` and
 `--otlp.targets-file` choose what is checked, `--config.export-env` decides
@@ -770,7 +869,7 @@ The report lists one entry per startup step, in the order startup runs them:
 
 | `check` | Present | What it validates |
 | --- | --- | --- |
-| `config` | always | The configuration file loads and is valid. |
+| `config` | always | The configuration file and its collector files load and are valid, and no collector name is defined twice. |
 | `python_scripts` | always | Every pre-script and `python` transform compiles, and every pre-script produces `data`. Each faulty script is its own entry in `errors`. A configuration without Python needs no interpreter and passes with `"scripts": 0`. |
 | `config_watch` | with `--config.watch` | `--config.watch-interval` is positive. |
 | `targets` | with `--otlp.targets-file` | The target file is valid on its own, and against the configuration: every collector exists and OTLP export is enabled. |

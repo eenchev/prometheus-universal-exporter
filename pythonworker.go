@@ -311,6 +311,31 @@ func (p *pythonPool) snapshot(collector string) pythonWorkerSnapshot {
 	return out
 }
 
+// poolSnapshot sums the statistics of every collector the pool has served,
+// including collectors a reload has since removed, so its counters never go
+// backwards.
+func (p *pythonPool) poolSnapshot() pythonWorkerSnapshot {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	out := pythonWorkerSnapshot{stops: map[string]uint64{}, runs: map[string]uint64{}}
+	for _, st := range p.stats {
+		out.starting += st.starting
+		out.busy += st.busy
+		out.starts += st.starts
+		out.startFailures += st.startFailures
+		for reason, n := range st.stops {
+			out.stops[reason] += n
+		}
+		for outcome, n := range st.runs {
+			out.runs[outcome] += n
+		}
+	}
+	for _, workers := range p.idle {
+		out.idle += len(workers)
+	}
+	return out
+}
+
 type pythonLine struct {
 	data []byte
 	err  error

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"log/slog"
 	"os"
+	"reflect"
 	"strings"
 	"testing"
 )
@@ -115,8 +116,8 @@ func TestCheckPassesTheShippedExamples(t *testing.T) {
 	if withTargets.code != 0 || withTargets.result(t, "targets").Status != checkOK {
 		t.Fatalf("exit=%d\n%s", withTargets.code, withTargets.stdout)
 	}
-	if targets, _ := withTargets.result(t, "targets").Details["targets"].([]any); len(targets) != 2 {
-		t.Fatalf("targets details=%v, want both example targets", withTargets.result(t, "targets").Details)
+	if targets, _ := withTargets.result(t, "targets").Details["targets"].([]any); !reflect.DeepEqual(targets, []any{"legacy_eu", "legacy_us", "nightly_backup"}) {
+		t.Fatalf("targets details=%v, want every example target", withTargets.result(t, "targets").Details)
 	}
 }
 

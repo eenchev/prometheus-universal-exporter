@@ -53,11 +53,11 @@ func (s *Server) scrapeScheduledTargets(ctx context.Context, budget time.Duratio
 func (s *Server) scrapeScheduledTarget(ctx context.Context, target ScheduledTarget, c *Collector, cfg OTLPConfig) {
 	start := time.Now()
 	identity := target.resource(cfg)
-	address := safeTarget(target.Target)
+	address := displayTarget(c, target.Target)
 	overrides := target.overrides()
-	method := requestMethod(c, overrides)
+	method := requestMethodFor(c, overrides)
 	requestURL := ""
-	if label, err := requestLabel(target.Target, c, overrides); err == nil {
+	if label, err := requestLabelFor(target.Target, c, overrides); err == nil {
 		requestURL = label
 	}
 	// The request is identified before anything is counted, so every counter
@@ -77,7 +77,7 @@ func (s *Server) scrapeScheduledTarget(ctx context.Context, target ScheduledTarg
 			rec.scraped(time.Now())
 			s.observeTargetScrape(c.Name, elapsed)
 		}
-		s.queueOTLPResource(scheduledHealthMetrics(target, c.Name, up, elapsed.Seconds()), identity)
+		s.queueOTLPResource(scheduledHealthMetrics(target, c, up, elapsed.Seconds()), identity)
 	}
 	fail := func(stage string, err error) {
 		s.logger.Error("scheduled target scrape failed", "target", target.Name, "collector", c.Name, "address", address, "stage", stage, "error", err)
@@ -112,7 +112,7 @@ func (s *Server) scrapeScheduledTarget(ctx context.Context, target ScheduledTarg
 		if strings.Contains(strings.ToLower(err.Error()), "response size") {
 			count(func(st *serverStats) { st.limitErrors++ })
 		}
-		fail("http", err)
+		fail(fetchStage(c), err)
 		return
 	}
 	count(func(st *serverStats) {
@@ -161,8 +161,8 @@ func (s *Server) scrapeScheduledTarget(ctx context.Context, target ScheduledTarg
 // scheduledHealthMetrics reports the outcome of one scheduled scrape. Without
 // it a failing target is simply absent from the OTLP stream, which cannot be
 // distinguished from a target that was never configured.
-func scheduledHealthMetrics(target ScheduledTarget, collector string, up, duration float64) MetricSet {
-	labels := map[string]string{"collector": collector, "scheduled_target": target.Name, "target": safeTarget(target.Target)}
+func scheduledHealthMetrics(target ScheduledTarget, c *Collector, up, duration float64) MetricSet {
+	labels := map[string]string{"collector": c.Name, "scheduled_target": target.Name, "target": displayTarget(c, target.Target)}
 	for name, value := range target.Labels {
 		if _, exists := labels[name]; !exists {
 			labels[name] = value

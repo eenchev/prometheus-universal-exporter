@@ -4,8 +4,10 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
+	"net/url"
 	"strings"
 )
 
@@ -33,11 +35,25 @@ func init() {
 			"follow_redirects", "enable_http2", "retry", "headers",
 			"basic_auth", "basic_auth_file", "bearer_token", "bearer_token_file",
 		},
-		Validate: validateHTTPRequest,
+		Validate:    validateHTTPRequest,
+		CheckTarget: checkHTTPTarget,
 		Fetch: func(ctx context.Context, target string, c *Collector, overrides RequestOverrides, forwarded http.Header) (*HTTPResponse, error) {
 			return fetch(ctx, target, c, overrides, forwarded)
 		},
 	})
+}
+
+// checkHTTPTarget checks a scheduled target's address, which must be an
+// absolute URL. A probe's target may be a bare host:port, as Prometheus
+// service discovery hands it over, and is checked when it is fetched.
+func checkHTTPTarget(_ *Collector, target string, scheduled bool) error {
+	if !scheduled {
+		return nil
+	}
+	if u, err := url.Parse(target); err != nil || u.Host == "" {
+		return errors.New("must have an absolute target URL")
+	}
+	return nil
 }
 
 // validateHTTPRequest holds the http type's rules. Nothing but type is

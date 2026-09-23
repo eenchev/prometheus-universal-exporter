@@ -118,8 +118,12 @@ func TestBuildTagsSelectTheRequestTypeFiles(t *testing.T) {
 		t.Error("a default build compiles the guard, so it cannot build")
 	}
 	onlyHTTP := included("select_request_types", "request_type_http")
-	if !onlyHTTP["requesttype_http.go"] || onlyHTTP[requestTypeGuardFile] {
+	if !onlyHTTP["requesttype_http.go"] || onlyHTTP["requesttype_localfile.go"] || onlyHTTP[requestTypeGuardFile] {
 		t.Errorf("-tags select_request_types,request_type_http compiles %v", onlyHTTP)
+	}
+	onlyFiles := included("select_request_types", "request_type_localfile")
+	if !onlyFiles["requesttype_localfile.go"] || onlyFiles["requesttype_http.go"] || onlyFiles[requestTypeGuardFile] {
+		t.Errorf("-tags select_request_types,request_type_localfile compiles %v", onlyFiles)
 	}
 	none := included("select_request_types")
 	if !none[requestTypeGuardFile] || none["requesttype_http.go"] {
@@ -191,11 +195,13 @@ func TestRequestTypeTagsScript(t *testing.T) {
 		return strings.TrimSpace(stdout.String()), stderr.String(), err
 	}
 	for list, want := range map[string]string{
-		"":           "",
-		"http":       "select_request_types,request_type_http",
-		"http,http":  "select_request_types,request_type_http",
-		" http , ":   "select_request_types,request_type_http",
-		"http,http ": "select_request_types,request_type_http",
+		"":               "",
+		"http":           "select_request_types,request_type_http",
+		"http,http":      "select_request_types,request_type_http",
+		" http , ":       "select_request_types,request_type_http",
+		"http,http ":     "select_request_types,request_type_http",
+		"localfile":      "select_request_types,request_type_localfile",
+		"localfile,http": "select_request_types,request_type_localfile,request_type_http",
 	} {
 		got, stderr, err := run(list)
 		if err != nil || got != want {

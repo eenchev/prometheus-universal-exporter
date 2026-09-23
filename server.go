@@ -344,7 +344,7 @@ func (s *Server) probeHandler(w http.ResponseWriter, r *http.Request) {
 	start := time.Now()
 	target := r.URL.Query().Get("target")
 	name := r.URL.Query().Get("collector")
-	if target == "" || name == "" {
+	if name == "" {
 		http.Error(w, "target and collector are required", http.StatusBadRequest)
 		return
 	}
@@ -360,7 +360,17 @@ func (s *Server) probeHandler(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, fmt.Sprintf("unknown collector %q", name), http.StatusBadRequest)
 		return
 	}
-	logTarget := safeTarget(target)
+	// Whether a target is needed, and what it may be, is the request type's
+	// to say: http needs a URL, localfile a file under its root, or nothing.
+	if err := checkTarget(c, target, false); err != nil {
+		if errors.Is(err, errMissingTarget) {
+			http.Error(w, "target and collector are required", http.StatusBadRequest)
+			return
+		}
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	logTarget := displayTarget(c, target)
 	// The request parameters are resolved before anything is counted, so every
 	// counter this probe raises lands on the individual request as well as on
 	// the collector rather than only on the collector.
@@ -383,8 +393,8 @@ func (s *Server) probeHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var requestURL string
-	method := requestMethod(c, overrides)
-	if label, labelErr := requestLabel(target, c, overrides); labelErr == nil {
+	method := requestMethodFor(c, overrides)
+	if label, labelErr := requestLabelFor(target, c, overrides); labelErr == nil {
 		requestURL = label
 	}
 	st := s.statsFor(name)
@@ -502,7 +512,7 @@ func (s *Server) probeUpstream(ctx context.Context, p upstreamProbe) *probeResul
 		if strings.Contains(strings.ToLower(err.Error()), "response size") {
 			rec.update(func(x *serverStats) { x.limitErrors++ })
 		}
-		return out.result(failStage("http", err, c.ErrorHandling.OnHTTPError))
+		return out.result(failStage(fetchStage(c), err, c.ErrorHandling.OnHTTPError))
 	}
 	rec.update(func(x *serverStats) {
 		x.lastStatus = resp.StatusCode

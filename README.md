@@ -13,7 +13,8 @@ Turn an HTTP endpoint that was never meant for Prometheus into a Prometheus
 target, without writing an exporter for it.
 
 Point the exporter at a service that answers with JSON, YAML, XML, CSV, HTML,
-plain text, or Prometheus exposition. A collector in the configuration says how
+plain text, or Prometheus exposition — or at a file on disk, such as the
+`.prom` files a batch job leaves for node_exporter. A collector in the configuration says how
 to call it, how to read the response, and which metrics to publish. The
 exporter does the rest — no code, no rebuild, and nothing to redeploy when the
 rules change.
@@ -57,6 +58,9 @@ every metric the collector exports. See
 For a list of things — servers, rows, components — give a metric `items` and
 write its value and labels against one item at a time; see
 [Metrics per item](docs/CONFIGURATION.md#metrics-per-item).
+Collectors can also live in files of their own, listed under `collector_files`
+— one per team or per ConfigMap key; a collector name must be unique across all
+of them. See [Collector files](docs/CONFIGURATION.md#collector-files).
 
 Your editor can check the file as you type: start it with
 
@@ -135,12 +139,14 @@ pattern needs. See the
 | `--config.export-env` | off | Expand `${NAME}` references in the configuration. |
 | `--otlp.targets-file` | none | Scheduled targets the exporter scrapes itself. |
 | `--config.schema` | off | Print the JSON Schema of the configuration file, for editors, and exit. See [Editor support](docs/CONFIGURATION.md#editor-support). |
+| `--config.collector-file-schema` | off | Print the JSON Schema of a collector file, for editors, and exit. See [Collector files](docs/CONFIGURATION.md#collector-files). |
 | `--dry-run` | off | Validate the files and flags above, print a JSON report and exit `0` or `1`, without starting. See [Dry run](docs/CONFIGURATION.md#dry-run). |
 
 ## Documentation
 
 - [Configuration](docs/CONFIGURATION.md) — collectors, decoders, transforms, metric rules, caching, environment variables, reloading.
 - [Target requests](docs/REQUESTS.md) — redirects, HTTP/2, retries, TLS, per-scrape overrides.
+- [Local files](docs/LOCALFILE.md) — the `localfile` request type: reading metrics and status files from disk.
 - [Authentication](docs/AUTHENTICATION.md) — credentials for the target and for the exporter itself.
 - [Prometheus Operator](docs/PROMETHEUS-OPERATOR.md) — ServiceMonitor and PodMonitor.
 - [Helm chart](charts/prometheus-universal-exporter/README.md) — every chart value.

@@ -35,7 +35,7 @@ func TestRequestTypeIsRequired(t *testing.T) {
 }
 
 func TestAnUnknownRequestTypeIsRejected(t *testing.T) {
-	for _, name := range []string{"grpc", "localfile", "ftpfile", "https"} {
+	for _, name := range []string{"grpc", "ftpfile", "https", "file"} {
 		err := (&Config{Collectors: []Collector{typedCollector(name)}}).Validate()
 		if err == nil || !strings.Contains(err.Error(), `unsupported request.type "`+name+`"`) || !strings.Contains(err.Error(), "http") {
 			t.Errorf("%s: err=%v, want it rejected with the supported types listed", name, err)

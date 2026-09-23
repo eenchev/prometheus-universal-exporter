@@ -18,7 +18,10 @@ import (
 // config.schema.json is the JSON Schema of the configuration file, generated
 // from the Config struct (configschema.go) and printed by --config.schema.
 
-const configSchemaFile = "config.schema.json"
+const (
+	configSchemaFile        = "config.schema.json"
+	collectorFileSchemaFile = "collector-file.schema.json"
+)
 
 // The committed schema is exactly what the code generates, so it cannot drift
 // from the configuration it describes. Regenerate it with:
@@ -157,6 +160,11 @@ func TestConfigSchemaRejectsInvalidConfigurations(t *testing.T) {
 	tests := map[string]string{
 		"unknown top-level key":   "colectors: []\n" + base,
 		"no collectors":           "collectors: []\n",
+		"nothing at all":          "web: {}\n",
+		"empty collector_files":   "collector_files: []\n",
+		"empty collector file":    "collector_files: ['']\n",
+		"collector_files string":  "collector_files: collectors.d/*.yaml\n",
+		"localfile without root":  strings.Replace(base, "type: http", "type: localfile", 1),
 		"unknown collector key":   strings.Replace(base, "    request:", "    requst: {}\n    request:", 1),
 		"missing request.type":    strings.Replace(base, "      type: http\n", "      path: /x\n", 1),
 		"unknown request.type":    strings.Replace(base, "type: http", "type: gopher", 1),
@@ -216,7 +224,12 @@ func TestExamplesReferenceTheSchema(t *testing.T) {
 
 func loadSchema(t *testing.T) map[string]any {
 	t.Helper()
-	raw, err := os.ReadFile(configSchemaFile)
+	return loadSchemaFile(t, configSchemaFile)
+}
+
+func loadSchemaFile(t *testing.T, file string) map[string]any {
+	t.Helper()
+	raw, err := os.ReadFile(file)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -290,6 +303,35 @@ func validateAgainstSchema(schema map[string]any, value any) []string {
 		if pattern, ok := schema["pattern"].(string); ok {
 			if s, ok := value.(string); ok && !regexp.MustCompile(pattern).MatchString(s) {
 				errs = append(errs, fmt.Sprintf("%s: %q does not match %s", path, s, pattern))
+			}
+		}
+		if minLength, ok := schema["minLength"].(float64); ok {
+			if s, ok := value.(string); ok && float64(len(s)) < minLength {
+				errs = append(errs, fmt.Sprintf("%s: %q is shorter than %v", path, s, minLength))
+			}
+		}
+		if constant, ok := schema["const"]; ok && constant != value {
+			errs = append(errs, fmt.Sprintf("%s: %v is not %v", path, value, constant))
+		}
+		if allOf, ok := schema["allOf"].([]any); ok {
+			for _, part := range allOf {
+				errs = append(errs, validateAgainstSchema(part.(map[string]any), value)...)
+			}
+		}
+		if condition, ok := schema["if"].(map[string]any); ok && len(validateAgainstSchema(condition, value)) == 0 {
+			if then, ok := schema["then"].(map[string]any); ok {
+				errs = append(errs, validateAgainstSchema(then, value)...)
+			}
+		}
+		if anyOf, ok := schema["anyOf"].([]any); ok {
+			matched := false
+			for _, alternative := range anyOf {
+				if len(validateAgainstSchema(alternative.(map[string]any), value)) == 0 {
+					matched = true
+				}
+			}
+			if !matched {
+				errs = append(errs, path+": matches none of anyOf")
 			}
 		}
 		if minimum, ok := schema["minimum"].(float64); ok {

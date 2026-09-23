@@ -1,4 +1,4 @@
-//go:build select_request_types && !request_type_http
+//go:build select_request_types && !request_type_http && !request_type_localfile
 
 package main
 

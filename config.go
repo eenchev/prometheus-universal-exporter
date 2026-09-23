@@ -33,8 +33,16 @@ func (d *Duration) UnmarshalYAML(n *yaml.Node) error {
 
 type Config struct {
 	Collectors []Collector `yaml:"collectors"`
-	OTLP       OTLPConfig  `yaml:"otlp"`
-	Web        WebConfig   `yaml:"web"`
+	// CollectorFiles lists further files of collectors, as paths or glob
+	// patterns relative to the configuration file (collectorfiles.go).
+	CollectorFiles []string   `yaml:"collector_files"`
+	OTLP           OTLPConfig `yaml:"otlp"`
+	Web            WebConfig  `yaml:"web"`
+	// CollectorSources records the file each collector was defined in, and
+	// LoadedCollectorFiles the collector files read, in order. Neither is read
+	// from the document.
+	CollectorSources     map[string]string `yaml:"-"`
+	LoadedCollectorFiles []string          `yaml:"-"`
 	// Deprecations lists the deprecated spellings Validate accepted and
 	// normalised, one message each, for startup, reload and --dry-run to
 	// report. It is not read from the document.
@@ -99,6 +107,10 @@ type RequestConfig struct {
 	FollowRedirects      bool              `yaml:"follow_redirects"`
 	EnableHTTP2          bool              `yaml:"enable_http2"`
 	AllowedSchemes       []string          `yaml:"allowed_schemes"`
+	// Root and MaxAge belong to the localfile type: the directory it may read
+	// under, and how old a file may be before a scrape refuses it as stale.
+	Root   string   `yaml:"root"`
+	MaxAge Duration `yaml:"max_age"`
 }
 type RetryConfig struct {
 	Attempts int      `yaml:"attempts"`
@@ -211,6 +223,9 @@ type TransformConfig struct {
 
 func (c *Config) Validate() error {
 	if len(c.Collectors) == 0 {
+		if len(c.CollectorFiles) > 0 {
+			return errors.New("no collectors: neither collectors nor the files collector_files matched define any")
+		}
 		return errors.New("collectors must not be empty")
 	}
 	seen := map[string]bool{}
@@ -441,6 +456,9 @@ func LoadConfig(path string, opts ...LoadOption) (*Config, error) {
 	if err = dec.Decode(&c); err != nil {
 		return nil, err
 	}
+	if err = mergeCollectorFiles(&c, path, opts); err != nil {
+		return nil, err
+	}
 	if err = c.Validate(); err != nil {
 		return nil, err
 	}
@@ -448,10 +466,13 @@ func LoadConfig(path string, opts ...LoadOption) (*Config, error) {
 }
 
 type ConfigManager struct {
-	current        atomic.Value
-	path           string
-	logger         *slog.Logger
-	lastMod        time.Time
+	current atomic.Value
+	path    string
+	logger  *slog.Logger
+	lastMod time.Time
+	// collectorFiles is the stamp of the collector files the configuration
+	// read when last loaded (collectorFilesStamp).
+	collectorFiles string
 	targetPath     string
 	targetFile     atomic.Pointer[TargetFile]
 	targetsLastMod time.Time
@@ -470,6 +491,9 @@ const DefaultWatchInterval = 60 * time.Second
 func NewConfigManager(c *Config, path string, l *slog.Logger) *ConfigManager {
 	m := &ConfigManager{path: path, logger: l}
 	m.current.Store(c)
+	if c != nil {
+		m.collectorFiles = collectorFilesStamp(path, c.CollectorFiles)
+	}
 	return m
 }
 func (m *ConfigManager) Get() *Config { return m.current.Load().(*Config) }
@@ -549,10 +573,17 @@ func (m *ConfigManager) ReloadLoop(ctx context.Context) {
 
 func (m *ConfigManager) reloadConfig() {
 	st, err := os.Stat(m.path)
-	if err != nil || !st.ModTime().After(m.lastMod) {
+	if err != nil {
+		return
+	}
+	// A collector file edited, added or removed is a change too, although the
+	// configuration file itself is untouched.
+	stamp := collectorFilesStamp(m.path, m.Get().CollectorFiles)
+	if !st.ModTime().After(m.lastMod) && stamp == m.collectorFiles {
 		return
 	}
 	m.lastMod = st.ModTime()
+	m.collectorFiles = stamp
 	c, err := LoadConfig(m.path, m.loadOptions()...)
 	if err != nil {
 		m.logger.Error("configuration reload rejected", "error", err)
@@ -572,8 +603,10 @@ func (m *ConfigManager) reloadConfig() {
 		}
 	}
 	m.current.Store(c)
+	// The new configuration may list other collector files.
+	m.collectorFiles = collectorFilesStamp(m.path, c.CollectorFiles)
 	logDeprecations(m.logger, m.path, c)
-	m.logger.Info("configuration reloaded", "collectors", len(c.Collectors))
+	m.logger.Info("configuration reloaded", "collectors", len(c.Collectors), "collector_files", len(c.LoadedCollectorFiles))
 }
 
 func (m *ConfigManager) reloadTargets() {

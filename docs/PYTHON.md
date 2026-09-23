@@ -57,7 +57,8 @@ start once and then serves scrape after scrape.
   Workers exit with the exporter.
 - **Metrics.** With `web.self_metrics.verbose`, the exporter publishes each
   collector's workers by state (starting, idle, busy), how many started or
-  failed to, why they stopped, and how script runs ended. See
+  failed to, why they stopped, and how script runs ended, and the same for
+  the execution pool as a whole. See
   [Python workers](SELF-METRICS.md#python-workers).
 
 ## Parsing HTML with lxml

@@ -34,11 +34,12 @@ func run(args []string, stdout, stderr io.Writer) int {
 	selfMetricsPath := flags.String("web.self-metrics-path", "/self-metrics", "Dedicated endpoint for exporter self-health metrics")
 	pythonPath := flags.String("python.path", "python3", "Python interpreter used by the python transform")
 	targetFile := flags.String("otlp.targets-file", "", "Optional file of scheduled targets scraped by the exporter and delivered over OTLP")
-	watchConfig := flags.Bool("config.watch", false, "Reload the configuration and scheduled target files when they change on disk")
+	watchConfig := flags.Bool("config.watch", false, "Reload the configuration, collector and scheduled target files when they change on disk")
 	watchInterval := flags.Duration("config.watch-interval", DefaultWatchInterval, "How often to check the configuration files for changes when config.watch is set")
 	logLevel := flags.String("log.level", "info", "Log level: debug, info, warn, or error")
-	expandEnv := flags.Bool("config.export-env", false, "Expand ${NAME} environment variable references in the configuration and scheduled target files")
+	expandEnv := flags.Bool("config.export-env", false, "Expand ${NAME} environment variable references in the configuration, collector and scheduled target files")
 	printSchema := flags.Bool("config.schema", false, "Print the JSON Schema of the configuration file, for editors, and exit")
+	printCollectorFileSchema := flags.Bool("config.collector-file-schema", false, "Print the JSON Schema of a collector file listed under collector_files, for editors, and exit")
 	check := flags.Bool("dry-run", false, "Validate the configuration and scheduled target files as startup would, print a JSON report to stdout, and exit 0 if they are valid or 1 if not, without starting the exporter")
 	if err := flags.Parse(args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
@@ -52,8 +53,12 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return 2
 	}
 
-	if *printSchema {
-		schema, err := configSchemaJSON()
+	if *printSchema || *printCollectorFileSchema {
+		render := configSchemaJSON
+		if *printCollectorFileSchema {
+			render = collectorFileSchemaJSON
+		}
+		schema, err := render()
 		if err != nil {
 			newLogger("info", stderr).Error("rendering the configuration schema failed", "error", err)
 			return 1
@@ -126,7 +131,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 	go manager.ReloadLoop(ctx)
 	go server.OTLPExportLoop(ctx)
 
-	startup := []any{"address", *listenAddress, "collectors", len(config.Collectors),
+	startup := []any{"address", *listenAddress, "collectors", len(config.Collectors), "collector_files", len(config.LoadedCollectorFiles),
 		"scheduled_targets", len(manager.Targets()), "config_watch", manager.WatchEnabled(),
 		"config_export_env", *expandEnv, "request_types", builtRequestTypes()}
 	// The interval is only meaningful when the watch is on, and its absence

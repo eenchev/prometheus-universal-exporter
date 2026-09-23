@@ -66,3 +66,12 @@ targets:
       service_name: legacy-app
       resource_attributes:
         deployment.environment: production
+
+  # A localfile collector reads a file under its request.root. The target names
+  # a file or directory under that root, or is left out when the collector's
+  # request.path names the file; only path and timeout may be set here.
+  - name: nightly_backup
+    collector: textfile
+    target: backup.prom
+    labels:
+      job: backup

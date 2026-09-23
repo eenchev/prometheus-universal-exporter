@@ -9,7 +9,7 @@ import (
 // Two families of self-metrics are only built with verbose self-metrics
 // (web.self_metrics.verbose), alongside the per-request series:
 //
-//   - http_exporter_target_scrape_duration_seconds, a histogram per collector
+//   - http_exporter_collector_scrape_duration_seconds, a histogram per collector
 //     of how long a trip to the target took — request, decode, transform and
 //     validation — so "this collector got slow" can be alerted on, where
 //     http_exporter_scrape_duration_seconds only holds the last probe's
@@ -19,6 +19,10 @@ import (
 //   - the Python worker families, per collector that runs Python: how many
 //     workers are starting, idle and busy, how many have started or failed to,
 //     why workers stopped, and how runs ended.
+//   - the same for the Python execution pool as a whole, without a collector
+//     label. These are always published in verbose mode, Python collectors or
+//     not, so the pool's status can be read and alerted on without knowing
+//     which collectors use it.
 //
 // Both are bounded: fixed buckets per collector, and fixed sets of states,
 // stop reasons and run outcomes. The histogram is only recorded while verbose
@@ -98,7 +102,36 @@ const (
 	pythonStartFailuresHelp  = "Python workers of this collector that failed to start."
 	pythonWorkerStopsHelp    = "Python workers of this collector that stopped, by reason: timeout, crash, output_limit, cancelled, retired, surplus or idle."
 	pythonRunsHelp           = "Python script runs of this collector, by outcome: ok, script_error, timeout, output_limit or failed."
+
+	pythonPoolWorkersHelp       = "Python workers in the execution pool, across all collectors, by state: starting, idle or busy."
+	pythonPoolStartsHelp        = "Python workers the execution pool started, across all collectors."
+	pythonPoolStartFailuresHelp = "Python workers the execution pool failed to start, across all collectors."
+	pythonPoolStopsHelp         = "Python workers the execution pool stopped, across all collectors, by reason: timeout, crash, output_limit, cancelled, retired, surplus or idle."
+	pythonPoolRunsHelp          = "Python script runs in the execution pool, across all collectors, by outcome: ok, script_error, timeout, output_limit or failed."
 )
+
+// pythonPoolMetrics builds the pool-wide Python families.
+func pythonPoolMetrics() []Metric {
+	snap := pythonWorkers.poolSnapshot()
+	var out []Metric
+	for _, state := range []struct {
+		name  string
+		value int
+	}{{"starting", snap.starting}, {"idle", snap.idle}, {"busy", snap.busy}} {
+		out = append(out, Metric{Name: "http_exporter_python_pool_workers", Help: pythonPoolWorkersHelp, Type: GaugeMetricType, Labels: map[string]string{"state": state.name}, Value: float64(state.value)})
+	}
+	out = append(out,
+		Metric{Name: "http_exporter_python_pool_worker_starts_total", Help: pythonPoolStartsHelp, Type: CounterMetricType, Labels: map[string]string{}, Value: float64(snap.starts)},
+		Metric{Name: "http_exporter_python_pool_worker_start_failures_total", Help: pythonPoolStartFailuresHelp, Type: CounterMetricType, Labels: map[string]string{}, Value: float64(snap.startFailures)},
+	)
+	for _, reason := range pythonStopReasons {
+		out = append(out, Metric{Name: "http_exporter_python_pool_worker_stops_total", Help: pythonPoolStopsHelp, Type: CounterMetricType, Labels: map[string]string{"reason": reason}, Value: float64(snap.stops[reason])})
+	}
+	for _, outcome := range pythonRunOutcomes {
+		out = append(out, Metric{Name: "http_exporter_python_pool_runs_total", Help: pythonPoolRunsHelp, Type: CounterMetricType, Labels: map[string]string{"outcome": outcome}, Value: float64(snap.runs[outcome])})
+	}
+	return out
+}
 
 // verboseCollectorMetrics builds the verbose-only families above for the
 // configured collectors. It returns nothing unless verbose self-metrics are on.
@@ -119,7 +152,7 @@ func (s *Server) verboseCollectorMetrics() []Metric {
 	var out []Metric
 	for _, name := range names {
 		out = append(out, Metric{
-			Name: "http_exporter_target_scrape_duration_seconds", Help: targetScrapeDurationHelp, Type: HistogramMetricType,
+			Name: "http_exporter_collector_scrape_duration_seconds", Help: targetScrapeDurationHelp, Type: HistogramMetricType,
 			Labels: map[string]string{"collector": name}, Histogram: s.durations.histogram(name),
 		})
 	}
@@ -156,5 +189,5 @@ func (s *Server) verboseCollectorMetrics() []Metric {
 	for _, family := range [][]Metric{workers, starts, failures, stops, runs} {
 		out = append(out, family...)
 	}
-	return out
+	return append(out, pythonPoolMetrics()...)
 }

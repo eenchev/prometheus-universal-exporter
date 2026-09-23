@@ -59,24 +59,24 @@ func TestTargetScrapeHistogramIsPublishedWhenVerbose(t *testing.T) {
 	}
 	exposition := selfMetrics(t, server)
 	for _, want := range []string{
-		"# TYPE http_exporter_target_scrape_duration_seconds histogram\n",
-		`http_exporter_target_scrape_duration_seconds_bucket{collector="timed",le="60"} 2` + "\n",
-		`http_exporter_target_scrape_duration_seconds_bucket{collector="timed",le="+Inf"} 2` + "\n",
-		`http_exporter_target_scrape_duration_seconds_count{collector="timed"} 2` + "\n",
+		"# TYPE http_exporter_collector_scrape_duration_seconds histogram\n",
+		`http_exporter_collector_scrape_duration_seconds_bucket{collector="timed",le="60"} 2` + "\n",
+		`http_exporter_collector_scrape_duration_seconds_bucket{collector="timed",le="+Inf"} 2` + "\n",
+		`http_exporter_collector_scrape_duration_seconds_count{collector="timed"} 2` + "\n",
 		// A collector not scraped yet has its series, at zero.
-		`http_exporter_target_scrape_duration_seconds_count{collector="idle"} 0` + "\n",
+		`http_exporter_collector_scrape_duration_seconds_count{collector="idle"} 0` + "\n",
 	} {
 		if !strings.Contains(exposition, want) {
 			t.Errorf("missing %q", want)
 		}
 	}
-	if n := strings.Count(exposition, "# TYPE http_exporter_target_scrape_duration_seconds "); n != 1 {
+	if n := strings.Count(exposition, "# TYPE http_exporter_collector_scrape_duration_seconds "); n != 1 {
 		t.Errorf("the family is declared %d times", n)
 	}
 	// The same series go out over OTLP.
 	found := false
 	for _, m := range server.selfMetricSet().Metrics {
-		if m.Name == "http_exporter_target_scrape_duration_seconds" && m.Labels["collector"] == "timed" && m.Histogram != nil && m.Histogram.Count == 2 {
+		if m.Name == "http_exporter_collector_scrape_duration_seconds" && m.Labels["collector"] == "timed" && m.Histogram != nil && m.Histogram.Count == 2 {
 			found = true
 		}
 	}
@@ -255,5 +255,98 @@ func TestAPassedThroughHistogramHasOneInfBucket(t *testing.T) {
 	body := probeOnce(t, server, "/probe?collector=passthrough&target="+url.QueryEscape(upstream.URL), nil).Body.String()
 	if n := strings.Count(body, `latency_seconds_bucket{le="+Inf"}`); n != 1 {
 		t.Fatalf("the +Inf bucket appears %d times:\n%s", n, body)
+	}
+}
+
+// The pool-wide families are published in verbose mode even when no collector
+// runs Python, and not at all otherwise.
+func TestPythonPoolMetricsWithoutPythonCollectors(t *testing.T) {
+	exposition := selfMetrics(t, verboseServer(t, true, testCollector("pool_jq_only", "text")))
+	for _, series := range []string{
+		`http_exporter_python_pool_workers{state="starting"}`,
+		`http_exporter_python_pool_workers{state="idle"}`,
+		`http_exporter_python_pool_workers{state="busy"}`,
+		`http_exporter_python_pool_worker_starts_total`,
+		`http_exporter_python_pool_worker_start_failures_total`,
+	} {
+		seriesValue(t, exposition, series)
+	}
+	for _, reason := range pythonStopReasons {
+		seriesValue(t, exposition, `http_exporter_python_pool_worker_stops_total{reason="`+reason+`"}`)
+	}
+	for _, outcome := range pythonRunOutcomes {
+		seriesValue(t, exposition, `http_exporter_python_pool_runs_total{outcome="`+outcome+`"}`)
+	}
+	for _, family := range []string{"http_exporter_python_pool_workers", "http_exporter_python_pool_worker_starts_total", "http_exporter_python_pool_worker_start_failures_total", "http_exporter_python_pool_worker_stops_total", "http_exporter_python_pool_runs_total"} {
+		for _, line := range []string{"# HELP " + family + " ", "# TYPE " + family + " "} {
+			if n := strings.Count(exposition, line); n != 1 {
+				t.Errorf("%q appears %d times, want 1", line, n)
+			}
+		}
+	}
+	if strings.Contains(exposition, "http_exporter_python_workers{") {
+		t.Fatal("a jq-only exporter has per-collector worker series")
+	}
+	if strings.Contains(selfMetrics(t, verboseServer(t, false, testCollector("pool_jq_only", "text"))), "http_exporter_python_pool_") {
+		t.Fatal("pool series without verbose self-metrics")
+	}
+}
+
+// The pool-wide values are the sum over every collector, and keep counting
+// runs of collectors that are no longer configured.
+func TestPythonPoolMetricsSumTheCollectors(t *testing.T) {
+	requirePython(t)
+	captureLogs(t)
+	target := textTarget(t, "value=42\n")
+	first := pythonCollector("pool_sum_a", `metric(name="v", value=1)`)
+	second := pythonCollector("pool_sum_b", `raise ValueError("bad data")`)
+	server := verboseServer(t, true, first, second)
+	before := pythonWorkers.poolSnapshot()
+
+	probe := func(collector string) {
+		probeOnce(t, server, "/probe?collector="+collector+"&target="+url.QueryEscape(target.URL), nil)
+	}
+	probe("pool_sum_a")
+	probe("pool_sum_a")
+	probe("pool_sum_b")
+
+	exposition := selfMetrics(t, server)
+	for series, want := range map[string]float64{
+		`http_exporter_python_pool_runs_total{outcome="ok"}`:           float64(before.runs[pythonRunOK] + 2),
+		`http_exporter_python_pool_runs_total{outcome="script_error"}`: float64(before.runs[pythonRunScriptError] + 1),
+		`http_exporter_python_pool_worker_starts_total`:                float64(before.starts + 2),
+		`http_exporter_python_pool_workers{state="idle"}`:              float64(before.idle + 2),
+		`http_exporter_python_pool_workers{state="busy"}`:              0,
+		`http_exporter_python_pool_workers{state="starting"}`:          0,
+	} {
+		if got := seriesValue(t, exposition, series); got != want {
+			t.Errorf("%s = %v, want %v", series, got, want)
+		}
+	}
+
+	// A server that no longer has these collectors still counts their runs.
+	later := selfMetrics(t, verboseServer(t, true, testCollector("pool_sum_none", "text")))
+	if got := seriesValue(t, later, `http_exporter_python_pool_runs_total{outcome="ok"}`); got != float64(before.runs[pythonRunOK]+2) {
+		t.Errorf("after the collectors went, ok runs = %v", got)
+	}
+}
+
+// A family name means one thing everywhere it is delivered. The scheduled
+// target health series go over OTLP beside the self-metrics, so none of the
+// verbose families may reuse one of their names with another type.
+func TestVerboseFamiliesDoNotReuseScheduledHealthNames(t *testing.T) {
+	server := verboseServer(t, true, pythonCollector("names_python", `metric(name="v", value=1)`))
+	types := map[string]MetricType{}
+	for _, m := range server.verboseCollectorMetrics() {
+		types[m.Name] = m.Type
+	}
+	c := testCollector("names_text", "text")
+	for _, m := range scheduledHealthMetrics(ScheduledTarget{Name: "t", Target: "http://a.example"}, &c, 1, 0.1).Metrics {
+		if other, clash := types[m.Name]; clash && other != m.Type {
+			t.Errorf("%s is a %s in the verbose self-metrics and a %s in the scheduled target health series", m.Name, other, m.Type)
+		}
+		if _, clash := types[m.Name]; clash {
+			t.Errorf("%s is both a verbose self-metric and a scheduled target health series", m.Name)
+		}
 	}
 }

@@ -33,6 +33,12 @@ otlp:
 #     # query string are never put in a label.
 #     verbose: false
 
+# Further collectors can live in files of their own, each holding a collectors
+# list and nothing else. Entries are paths or glob patterns relative to this
+# file. A collector name must be unique across this file and all of them.
+# collector_files:
+#   - collectors.d/*.yaml
+
 collectors:
   - name: app_json
     # Optional in-memory response cache. A repeat of the same probe within this
@@ -200,3 +206,21 @@ collectors:
             if match:
                 metric(name="vendor_" + match.group(1).lower(), type="gauge",
                        value=float(match.group(2)))
+
+  # Read a file from the exporter's own filesystem instead of calling a URL.
+  # root is the only directory the collector may read under; nothing outside
+  # it is reachable, through .. or a symbolic link. Here, the Prometheus text
+  # files a batch job leaves for node_exporter's textfile collector, passed
+  # through as they are. Probe it with /probe?collector=textfile, or name a
+  # file under root as the target: /probe?collector=textfile&target=backup.prom.
+  # See docs/LOCALFILE.md.
+  - name: textfile
+    request:
+      type: localfile
+      root: /var/lib/node_exporter/textfile_collector
+      path: batch.prom
+      # A writer that has stopped would leave its last values exported
+      # forever; refuse a file older than this instead.
+      max_age: 1h
+    transform:
+      type: prometheus

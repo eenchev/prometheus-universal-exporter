@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/url"
@@ -10,11 +11,10 @@ import (
 	"strings"
 )
 
-// Every collector declares how it reaches its data with request.type. Only
-// http exists today; gRPC, local files and FTP are expected. The type is
-// required rather than defaulted so that when a second type arrives, no
-// existing configuration silently means "http" by accident, and so that each
-// type can own its rules:
+// Every collector declares how it reaches its data with request.type: http
+// asks a URL, localfile reads a file from the exporter's own filesystem. The
+// type is required rather than defaulted so that no configuration means
+// "http" by accident, and so that each type can own its rules:
 //
 //   - Fields: the request keys it accepts. A key another type owns is an error
 //     for this one, so a configuration cannot carry settings that are quietly
@@ -25,15 +25,22 @@ import (
 //   - Validate: the type's required fields, defaults and cross-field rules.
 //   - Fetch: how a scrape actually gets its bytes. Everything after it —
 //     decoding, transforms, limits, caching — is shared by every type.
+//   - What a target is: whether a probe or scheduled target may leave it
+//     out, how it is checked, how it appears in logs, and the url and
+//     http_method labels of the verbose self-metrics. Left unset, these are
+//     http's.
 
-// RequestTypeHTTP is the only request type implemented so far.
-const RequestTypeHTTP = "http"
+// The request types in the source tree.
+const (
+	RequestTypeHTTP      = "http"
+	RequestTypeLocalFile = "localfile"
+)
 
 // knownRequestTypes is every request type in the source tree, whether or not
 // this binary was built with it, so a configuration that names a type the
 // build left out is told that, rather than that the type does not exist. A
 // test keeps it in step with the requesttype_<name>.go files.
-var knownRequestTypes = []string{RequestTypeHTTP}
+var knownRequestTypes = []string{RequestTypeHTTP, RequestTypeLocalFile}
 
 type requestType struct {
 	Name         string
@@ -42,6 +49,22 @@ type requestType struct {
 	TargetFields []string
 	Validate     func(c *Collector) error
 	Fetch        func(ctx context.Context, target string, c *Collector, overrides RequestOverrides, forwarded http.Header) (*HTTPResponse, error)
+
+	// OptionalTarget lets a probe or a scheduled target leave target out.
+	OptionalTarget bool
+	// CheckTarget validates a target before anything is fetched: a probe's
+	// target, answered with 400 when it fails, and a scheduled target's, at
+	// load. scheduled tells the two apart. Unset, any target is accepted.
+	CheckTarget func(c *Collector, target string, scheduled bool) error
+	// Label and Method give the url and http_method labels of the verbose
+	// self-metrics. Unset, they are http's.
+	Label  func(target string, c *Collector, overrides RequestOverrides) (string, error)
+	Method func(c *Collector, overrides RequestOverrides) string
+	// Display renders a target for logs, error bodies and the target label of
+	// a scheduled target's health series. Unset, it is safeTarget.
+	Display func(target string) string
+	// Stage names the fetch stage in logs and error bodies. Unset, "http".
+	Stage string
 }
 
 // requestTypes is the registry of the types built into this binary. Each type
@@ -177,6 +200,59 @@ func fetchCollector(ctx context.Context, target string, c *Collector, overrides 
 		return nil, fmt.Errorf("collector %q has no registered request type", c.Name)
 	}
 	return rt.Fetch(ctx, target, c, overrides, forwarded)
+}
+
+// errMissingTarget is checkTarget's answer to a target left out by a type
+// that needs one; each caller words it for its own audience.
+var errMissingTarget = errors.New("target is required")
+
+// checkTarget validates a probe's or a scheduled target's target for the
+// collector's type.
+func checkTarget(c *Collector, target string, scheduled bool) error {
+	rt := requestTypeOf(c)
+	if rt == nil {
+		return fmt.Errorf("collector %q has no registered request type", c.Name)
+	}
+	if strings.TrimSpace(target) == "" && !rt.OptionalTarget {
+		return errMissingTarget
+	}
+	if rt.CheckTarget != nil {
+		return rt.CheckTarget(c, target, scheduled)
+	}
+	return nil
+}
+
+// requestLabelFor is the url label of a request, by the collector's type.
+func requestLabelFor(target string, c *Collector, overrides RequestOverrides) (string, error) {
+	if rt := requestTypeOf(c); rt != nil && rt.Label != nil {
+		return rt.Label(target, c, overrides)
+	}
+	return requestLabel(target, c, overrides)
+}
+
+// requestMethodFor is the http_method label of a request, by the collector's
+// type.
+func requestMethodFor(c *Collector, overrides RequestOverrides) string {
+	if rt := requestTypeOf(c); rt != nil && rt.Method != nil {
+		return rt.Method(c, overrides)
+	}
+	return requestMethod(c, overrides)
+}
+
+// displayTarget renders a target for logs and labels, by the collector's type.
+func displayTarget(c *Collector, target string) string {
+	if rt := requestTypeOf(c); rt != nil && rt.Display != nil {
+		return rt.Display(target)
+	}
+	return safeTarget(target)
+}
+
+// fetchStage names the stage a failed fetch is reported under.
+func fetchStage(c *Collector) string {
+	if rt := requestTypeOf(c); rt != nil && rt.Stage != "" {
+		return rt.Stage
+	}
+	return "http"
 }
 
 // setKeys returns the yaml keys of a struct's fields that hold a non-zero

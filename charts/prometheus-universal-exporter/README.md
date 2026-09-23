@@ -259,6 +259,45 @@ Anything the chart does not render from a named value goes in `extraArgs`, descr
 
 The ConfigMap is mounted at `/etc/prometheus-universal-exporter/config.yaml`, and its checksum is part of the Deployment pod template — so a configuration change rolls the Deployment rather than waiting for the kubelet to refresh a mounted file. Set `server.watchConfig` instead when the pods should reload in place.
 
+### Collector files
+
+Every key of `config.data` becomes a file in the mounted configuration directory, next to `config.yaml`. That is where [collector files](../../docs/CONFIGURATION.md#collector-files) go: add each as a key and list them under `collector_files`, relative to `config.yaml`:
+
+```yaml
+config:
+  data:
+    config.yaml: |
+      collector_files:
+        - collectors-*.yaml
+      web:
+        self_metrics:
+          verbose: true
+    collectors-payments.yaml: |
+      collectors:
+        - name: payments_api
+          request:
+            type: http
+            path: /status
+          transform:
+            type: jq
+          metrics:
+            - name: payments_queue_depth
+              expression: .queue.depth
+    collectors-search.yaml: |
+      collectors:
+        - name: search_api
+          request:
+            type: http
+            path: /health
+          transform:
+            type: regex
+          metrics:
+            - name: search_up
+              expression: 'up=(\d+)'
+```
+
+A collector file holds `collectors` and nothing else, and a collector name must be unique across `config.yaml` and every file, or the pod refuses to start. Name the keys so a pattern matches them and nothing else: `*.yaml` would also match the scheduled target file the chart puts in the same directory. A file changes the ConfigMap checksum like `config.yaml` does, so it rolls the Deployment, or, with `server.watchConfig`, is reloaded in place. Collector files kept in a ConfigMap of their own can be mounted with `extraVolumes` and `extraVolumeMounts` at their own path, such as `/etc/collectors`, and listed by absolute path: `/etc/collectors/*.yaml`.
+
 ### Default labels and annotations
 
 `defaultLabels` and `defaultAnnotations` are applied to every object the chart creates. Metadata set on a particular object overrides a default of the same name.
@@ -431,6 +470,8 @@ Two collisions are rejected while rendering, because both fail in a way that poi
 * An `extraArgs` entry that sets a flag the chart already renders — `--web.listen-address`, `--config.file`, `--python.path` and the rest. Go keeps the last occurrence of a repeated flag, so the entry would quietly win; for the listen address the container port and the probes would still follow `server.listenAddress`, leaving a pod that listens on one port while Kubernetes checks another. The error names the value to set instead.
 * An `extraVolumeMounts` entry whose `mountPath` is one the chart already mounts. Mounting over `/etc/prometheus-universal-exporter` replaces it, so the exporter starts with no `config.yaml` and crash-loops with an error about the file rather than about the mount that hid it. To add a file to that directory, mount it at its own path — `/etc/collectors`, say — and point the configuration at it.
 
+A [`localfile`](../../docs/LOCALFILE.md) collector reads files the same way: mount the directory it names as `request.root` with these values, read-only, as shown in [Local files in Kubernetes](../../docs/LOCALFILE.md#in-kubernetes).
+
 `--dry-run` is rejected as well: it validates the configuration and exits, so a pod started with it would never serve. Run it as a separate command, a Job or an init container instead — see [Dry run](../../docs/CONFIGURATION.md#dry-run).
 
 An entry that does not begin with `--` is rejected too, since `log.level=debug` as an argument is read as a positional value and ignored.
@@ -478,7 +519,7 @@ Every value has a default, and `values.yaml` documents each one in place. `value
 | `env` / `envFrom` | array | `[]` | Container environment, in the Kubernetes shapes. |
 | `extraArgs` | array | `[]` | Extra command-line flags. |
 | `extraVolumes` / `extraVolumeMounts` | array | `[]` | Volumes and mounts beyond the chart's own. |
-| `config` | object | enabled | `enabled`, and `data` holding `config.yaml`. |
+| `config` | object | enabled | `enabled`, and `data` holding `config.yaml` and any [collector files](#collector-files). |
 | `otlpTargets` | object | disabled | Scheduled targets rendered into the ConfigMap. |
 | `monitors` | array | `[]` | `ServiceMonitor` and `PodMonitor` resources. |
 | `selfMetrics` | object | enabled | The monitor for the exporter's own endpoint, and its path. |

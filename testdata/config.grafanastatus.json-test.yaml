@@ -64,6 +64,21 @@
 # operational: the incident or maintenance behind the status, and its latest
 # update. It exists only while a component is not operational, so its text never
 # churns the status series.
+web:
+  # basic_auth:
+  #   enabled: true
+  #   username: exporter
+  #   password: change-me
+  self_metrics:
+    # Adds a series per collector, request URL and method with the last
+    # scrape's status, timestamp and duration. A request URL is an unbounded
+    # label value, so tracking is capped at 1000 combinations and
+    # http_exporter_request_series_capped reports when the cap is reached.
+    # The url label carries scheme, host and path only; credentials and the
+    # query string are never put in a label.
+    verbose: true
+    resource_metrics_enabled: true
+
 collectors:
   - name: statuspage
     # A status page changes rarely and a scrape reads a large document, so a

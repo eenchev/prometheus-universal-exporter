@@ -159,6 +159,15 @@ The chart MUST mount the configuration into the exporter container using a stabl
 
 The container arguments MUST reference that path.
 
+Every key of `config.data` MUST be rendered into the ConfigMap and the whole
+ConfigMap mounted as that directory, so collector files (§ 5.0 of the exporter
+specification) can be supplied as further keys and listed under
+`collector_files` relative to `config.yaml`. A change to any key MUST roll or
+reload the exporter as a change to `config.yaml` does (§ 33.3). The chart
+documentation MUST show collector files supplied this way, with a key naming
+pattern that cannot match the scheduled target file rendered into the same
+directory, and a test MUST load that example as the exporter would.
+
 ### 33.3 Configuration reload / rollout
 
 The chart MUST ensure that changes to the ConfigMap eventually cause the exporter to use the new configuration.
@@ -530,7 +539,10 @@ with at least these values combinations:
    the chart manages the configuration, enabling scheduled targets without
    `otlp.enabled: true`, or with an empty document, MUST fail rendering with an
    explicit message rather than producing a Deployment that cannot start.
-10. Multiple collectors in ConfigMap content.
+10. Multiple collectors in ConfigMap content, including collectors supplied as
+    collector files in further `config.data` keys: the ConfigMap template MUST
+    render every key, the configuration volume MUST mount the whole ConfigMap,
+    and the documented example MUST load as the exporter would load it.
 11. Existing Secret references for credentials where supported.
 13. Packaging: `helm package` MUST succeed, the resulting archive MUST render
    and MUST pass a client-side `helm install --dry-run`, and no packaged chart

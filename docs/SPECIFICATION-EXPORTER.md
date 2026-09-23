@@ -119,7 +119,9 @@ GET /probe?target=<TARGET>&collector=<COLLECTOR>
 
 Parameters:
 
-- `target`: required target address/URL supplied by Prometheus relabeling.
+- `target`: the target address/URL supplied by Prometheus relabeling. What it
+  may be is the collector's request type's to say (§ 5.1): `http` requires it;
+  `localfile` accepts a file or directory under its root, or no target at all.
 - `collector`: required collector name.
 - `method`: optional request method override (`GET`, `POST`, `PUT`, `PATCH`,
   `DELETE`, or `HEAD`).
@@ -299,7 +301,43 @@ collectors:
     coalesce: true   # optional; identical probes in flight share a request (§ 42.13a)
 ```
 
-A collector MUST have a unique name.
+A collector MUST have a unique name. Uniqueness MUST hold across the
+configuration's `collectors` and every collector file (§ 5.0): a name defined
+twice, in one file or in two, MUST be refused at startup, by `--dry-run` and on
+reload, with an error naming the collector and both files it was defined in.
+
+### 5.0 Collector files
+
+The configuration MAY list further files of collectors under `collector_files`:
+
+```yaml
+collector_files:
+  - shared.yaml
+  - collectors.d/*.yaml
+```
+
+- Each entry MUST be a non-empty path or glob pattern. A relative entry MUST be
+  resolved against the directory of the configuration file, not the working
+  directory, so a configuration means the same wherever the exporter is started
+  from. A plain path MUST exist and MUST NOT be a directory. A pattern MAY match
+  nothing, so an empty directory of collector files is valid.
+- A file matched by more than one entry MUST be read once, and the
+  configuration file itself MUST NOT be read as a collector file.
+- A collector file MUST be a mapping whose only key is `collectors`, holding a
+  non-empty list. Any other key — the exporter-wide `web` and `otlp` settings,
+  a nested `collector_files`, a misspelling — MUST be an error naming the file,
+  the key and its line, so a file of collectors can never change exporter-wide
+  behaviour. An empty file and an empty list MUST be errors. Unknown keys inside
+  a collector MUST be rejected exactly as in the configuration.
+- The collectors MUST be merged in a defined order: the configuration's own,
+  then each entry's files in the order listed, a pattern's matches in file name
+  order. The merged list MUST then be validated as one: defaults, the rule
+  checks of § 24.2 and the Python checks of § 16 apply to a collector from a
+  file exactly as to one written in the configuration.
+- With `collector_files`, the configuration's own `collectors` MAY be omitted;
+  the merged list MUST NOT be empty.
+- `${NAME}` expansion (§ 42.15a) MUST apply to collector files whenever it
+  applies to the configuration.
 
 ### 5.0a Metrics prefix
 
@@ -336,9 +374,9 @@ and probe errors MUST name a metric rule as configured, without the prefix.
 ### 5.1 Request types
 
 Every collector MUST declare `request.type`, which selects how it reaches its
-data. `http` is the only type implemented; gRPC, local files and FTP are
-anticipated. The type MUST be required rather than defaulted, so that when a
-second type exists no configuration means `http` by accident. A missing type
+data. `http` and `localfile` are implemented; gRPC and FTP are anticipated. The
+type MUST be required rather than defaulted, so that no configuration means
+`http` by accident. A missing type
 MUST be rejected at startup and on reload with a message naming the collector,
 stating that the type is required, listing the supported types and showing
 `type: http`; an unknown type MUST be rejected with the supported types listed.
@@ -363,7 +401,13 @@ Each type MUST own, and the implementation MUST keep in one registry:
 - its own validation — required keys, defaults and cross-key rules;
 - its own fetch. Decoding, transforms, error policies, limits, caching and
   exposition MUST be shared by every type, so a new type adds only how bytes
-  are obtained.
+  are obtained;
+- what a target is for it: whether a probe or scheduled target may leave
+  `target` out, how a target is checked — a probe's failing check answered with
+  `400` before anything is fetched, a scheduled target's at load — how a target
+  is shown in logs, error bodies and the `target` label of scheduled health
+  series, the `url` and `http_method` labels of its verbose self-metrics
+  (§ 22.1), and the name of the stage a failed fetch is reported under.
 
 Every key of the request block, and of a scheduled target's request block, MUST
 be accepted by at least one type, and a test MUST enforce it, so a key cannot be
@@ -396,7 +440,8 @@ type.
   argument and the Makefile's `REQUEST_TYPES` variable MUST both use it.
 - The types the binary carries MUST appear on the startup log line and in the
   `--dry-run` report (§ 30.1).
-- CI MUST vet and build the smallest selection as well as the default build.
+- CI MUST vet and build each single-type selection as well as the default
+  build, so no type depends on code only another type compiles.
 
 #### `http`
 
@@ -426,6 +471,65 @@ It MUST accept these `/probe` parameters: `method`, `path`, `timeout`, `body`,
 `http` collector MAY set `method`, `path`, `body`, `timeout`,
 `insecure_skip_verify`, `follow_redirects`, `enable_http2`, `retry`, `headers`,
 and the basic and bearer credential keys.
+
+#### `localfile`
+
+A `localfile` collector reads a file from the exporter's own filesystem. It
+exists for what writes metrics or a status to disk rather than serving it —
+above all the Prometheus text files batch jobs leave for node_exporter's
+textfile collector — and follows that collector's practice.
+
+| Key | Default | Rule |
+| --- | --- | --- |
+| `root` | none | **Required.** An absolute directory, stored cleaned. The filesystem root MUST be refused. Its existence is not checked at load, so a volume mounted later works. |
+| `path` | none | Relative to `root` and the target; MUST NOT be absolute or lead outside with `..`. May carry path parameters (§ 42.10a). |
+| `max_age` | off | Non-negative duration. A file last modified longer ago MUST fail the scrape, naming its age and the limit. |
+| `max_response_bytes` | limit | As for `http`. |
+
+The file read MUST be `root` / target / `path`:
+
+- `target` MAY be left out, by a probe and by a scheduled target. When given it
+  MUST be a path relative to `root`, an absolute path inside `root`, or a
+  `file://` URL of one, and a target leading outside `root` MUST be refused —
+  a probe with `400` before anything is read, a scheduled target at load. A
+  `file://` URL MUST carry an absolute path.
+- A `path` probe parameter replaces `request.path` and is held to the same
+  rules. A path parameter value MUST be a single file or directory name: `/`,
+  `\`, NUL, `.` and `..` MUST be refused.
+- When neither names a file the scrape MUST fail saying so.
+
+Every read MUST be confined to `root` by the operating system (Go's
+`os.Root`), so that neither `..` nor a symbolic link can reach outside it
+whatever the probe asks for. A symbolic link MAY be followed only while it
+stays inside `root`; an absolute link MUST be refused. Only regular files MUST
+be read: a directory, device, socket or named pipe MUST be refused before it is
+read, and files MUST be opened non-blocking so a named pipe cannot hang a
+scrape. The read MUST stop at the collector's response limit and fail beyond
+it, counted as a limit error. A file whose size or modification time changes
+while it is read MUST be read again, and the scrape MUST fail, advising an
+atomic rename, if it changes a second time. A read MUST NOT hold a probe past
+its `timeout` or context, even when the filesystem does not answer.
+
+A successful read MUST be presented to the shared pipeline as a response with
+status `200` and the headers `Content-Type`, chosen from the extension
+(`.prom` as Prometheus text version 0.0.4, `.json`, `.yaml`/`.yml`, `.xml`,
+`.csv`, `.html`/`.htm`) so `response.format: auto` picks the decoder,
+`Content-Length`, and `Last-Modified`, the file's modification time. A failed
+read MUST be reported in the `file` stage and follow `on_http_error`. A file
+that does not exist, and one the exporter may not read, MUST each be named as
+such.
+
+It MUST accept these `/probe` parameters: `path`, `timeout` and
+`param_<name>`. A scheduled target using a `localfile` collector MAY set
+`path` and `timeout`. Its verbose self-metrics MUST carry the file's `file://`
+URL, with path parameters as their placeholders, as `url`, and `READ` as
+`http_method`, so they are never mistaken for the per-collector series, which
+carry no method.
+
+A probe reads one file. It MUST NOT merge a directory of files into one
+exposition, which would hide which file a broken series came from and fail every
+file's metrics when one is malformed; several files are scraped as several
+targets.
 
 A collector MAY set `cache` to a Go duration such as `60s`, `1m`, or `3h`. The
 value is the time to live of a cached collector result. Omitting `cache`, or
@@ -1657,7 +1761,9 @@ keeps working when verbose mode is switched on.
 Every self-metric family of section 22 MUST be republished with the labels
 `collector`, `http_method` and `url`, with the single exception of
 `http_exporter_cache_entries`, which counts what a collector's response cache
-holds and belongs to no individual request.
+holds and belongs to no individual request. The two labels are the request
+type's (§ 5.1): for `http` the method and the URL described below, for
+`localfile` `READ` and the file's `file://` URL.
 
 In addition, verbose mode MUST expose
 
@@ -1750,15 +1856,20 @@ come from a fixed set, so the number of series is bounded by the number of
 configured collectors.
 
 ```text
-http_exporter_target_scrape_duration_seconds          histogram {collector}
+http_exporter_collector_scrape_duration_seconds       histogram {collector}
 http_exporter_python_workers                          gauge     {collector, state}
 http_exporter_python_worker_starts_total              counter   {collector}
 http_exporter_python_worker_start_failures_total      counter   {collector}
 http_exporter_python_worker_stops_total               counter   {collector, reason}
 http_exporter_python_runs_total                       counter   {collector, outcome}
+http_exporter_python_pool_workers                     gauge     {state}
+http_exporter_python_pool_worker_starts_total         counter
+http_exporter_python_pool_worker_start_failures_total counter
+http_exporter_python_pool_worker_stops_total          counter   {reason}
+http_exporter_python_pool_runs_total                  counter   {outcome}
 ```
 
-`http_exporter_target_scrape_duration_seconds` MUST observe the duration of
+`http_exporter_collector_scrape_duration_seconds` MUST observe the duration of
 every trip to the target, from sending the request to having validated metrics,
 for `/probe` and scheduled targets alike. A probe answered from the response
 cache, or by sharing another probe's request (§ 42.13a), made no trip and MUST
@@ -1768,6 +1879,10 @@ collector MUST have a histogram, empty until its first trip. Durations MUST only
 be recorded while verbose mode is on, so turning it on does not publish a
 history nobody asked to be kept.
 
+Its name MUST differ from `http_exporter_target_scrape_duration_seconds`, the
+gauge a scheduled target's health series carry over OTLP (§ 42.14): the two
+would otherwise reach an OTLP backend as one name with two types.
+
 The Python families MUST be published for every collector with a Python
 transform or pre-script, and for no other. `state` MUST be one of `starting`,
 `idle` and `busy`; `reason` one of `timeout`, `crash`, `output_limit`,
@@ -1776,6 +1891,15 @@ transform or pre-script, and for no other. `state` MUST be one of `starting`,
 and `outcome` MUST be published, zero included, so a rate can be taken before
 the first event. The pool MUST keep these counts regardless of verbose mode,
 since it maintains them anyway; only their publication depends on it.
+
+The `http_exporter_python_pool_` families MUST report the Python execution pool
+as a whole, with the same `state`, `reason` and `outcome` values. They MUST be
+published whenever verbose mode is on, whether or not any collector uses Python,
+so the pool's status can be monitored without knowing which collectors run
+scripts. They MUST sum every collector the pool has served, including one a
+reload has removed, so a counter never decreases. They MUST have names of their
+own rather than being unlabelled series of the per-collector families, so that
+summing a per-collector family never counts a run twice.
 
 Each family MUST declare `HELP` and `TYPE` once, before its series, and MUST be
 delivered over OTLP like the rest of the self-metrics.
@@ -1841,10 +1965,15 @@ swapping a `..data` symlink, which replaces the inode a file-level event watch
 is attached to; such a watch stops firing after the first change unless it
 watches the directory and re-arms. Polling is unaffected by this.
 
+The watch MUST cover the collector files (§ 5.0): a collector file changed, a
+file newly matching a pattern, and a file removed MUST each reload the
+configuration, although the configuration file itself did not change. A reload
+that fails MUST NOT be retried until one of the files changes again.
+
 Enabling the watch MUST NOT weaken any reload rule: an invalid configuration, a
-configuration that would disable OTLP while scheduled targets are loaded, and a
-pre-script that stops producing `data` MUST all still be rejected with the last
-valid configuration left active.
+configuration that would disable OTLP while scheduled targets are loaded, a
+collector name defined twice, and a pre-script that stops producing `data` MUST
+all still be rejected with the last valid configuration left active.
 
 When a disabled watch is configured, the exporter MUST NOT run a polling loop at
 all.
@@ -1886,6 +2015,14 @@ examples, the demo configurations and the chart's default configuration) does
 not validate against it, and when it accepts any of a set of invalid documents.
 The example configurations MUST begin with the `yaml-language-server` modeline
 pointing at the published schema.
+
+The configuration schema MUST require `collectors` or `collector_files`, each
+non-empty when it is the one present. The repository MUST also publish
+`collector-file.schema.json`, the schema of a collector file (§ 5.0): a required,
+non-empty `collectors` list and no other key, its collectors described by the
+same rules as the configuration's, which a test MUST check.
+`--config.collector-file-schema` MUST print it and exit 0; a test MUST fail when
+the committed file differs from what the code generates.
 
 The schema describes the canonical spelling, and MUST allow an unquoted number
 or boolean where the exporter reads a string, since YAML reads `expression: 1`
@@ -2299,10 +2436,11 @@ Provide clear CLI flags, for example:
 --config.watch
 --config.watch-interval=60s
 --config.schema
+--config.collector-file-schema
 ```
 
-`--config.schema` prints the configuration file's JSON Schema and exits
-(§ 24.3).
+`--config.schema` prints the configuration file's JSON Schema and exits, and
+`--config.collector-file-schema` the schema of a collector file (§ 24.3).
 
 `--otlp.targets-file` is optional and selects the scheduled target document
 defined in section 42.14.
@@ -2337,9 +2475,11 @@ check can report.
 
 The steps MUST be:
 
-- `config` — the configuration file loads and validates, including the rule
-  checks of § 24.2; deprecated spellings accepted during validation are listed
-  under `details.deprecations` and logged, and do not fail the check;
+- `config` — the configuration file and its collector files (§ 5.0) load and
+  validate, including the rule checks of § 24.2 and the uniqueness of collector
+  names; the collector files read are listed under `details.collector_files`;
+  deprecated spellings accepted during validation are listed under
+  `details.deprecations` and logged, and do not fail the check;
 - `python_scripts` — every Python script compiles and every pre-script produces
   `data` (§ 16), with each faulty script reported as its own error. A
   configuration without Python MUST pass without needing an interpreter;
@@ -3545,8 +3685,8 @@ status captured:
 - A collector without `request.type` is rejected, and the message names the
   collector, says the type is required, lists the supported types and shows
   `type: http`; `--dry-run` reports it as a failed configuration.
-- Unknown types — including the anticipated `grpc`, `localfile` and `ftpfile` —
-  are rejected with the supported types listed.
+- Unknown types — including the anticipated `grpc` and `ftpfile` — are
+  rejected with the supported types listed.
 - The type is matched case-insensitively and stored in lower case.
 - An `http` collector with only `type` is valid and defaults `method` to GET;
   one setting every `http` key together is valid; the `http` cross-key rules
@@ -3728,10 +3868,90 @@ See § 22.1a.
   reason; worker states read idle after the runs; starts are counted.
 - A worker that cannot start is counted as a start failure.
 - A collector without Python has no Python series.
+- The pool families are published in verbose mode with no Python collector, at
+  zero, with every state, reason and outcome, and are absent without verbose.
+- The pool values are the per-collector values summed, and keep counting the
+  runs of a collector no longer configured.
 - Every family has one `HELP` and one `TYPE` line, and every family added here
   is absent without verbose mode.
+- No family added here reuses the name of a scheduled target health series
+  (§ 42.14), which travel over OTLP beside them.
 - A histogram passed through from a Prometheus target is written with exactly
   one `le="+Inf"` bucket.
+
+## 34.52 Collector file tests
+
+See § 5.0.
+
+- The configuration's collectors, a named file and a pattern's files merge in
+  the defined order, and their sources and the files read are recorded; merged
+  collectors get the configuration's defaults.
+- A configuration made only of collector files loads.
+- Relative entries resolve against the configuration's directory; absolute
+  entries are used as given.
+- A collector file with `web`, `otlp`, a nested `collector_files` or a misspelt
+  key, an empty file, a comment-only file, an empty list, a list at the top, an
+  unknown collector key and invalid YAML are each refused with the file named.
+- An invalid expression and an invalid collector name in a collector file are
+  refused as in the configuration.
+- A duplicate name is refused between the configuration and a file, between two
+  files, between two matches of one pattern, within one file and within the
+  configuration, naming both places.
+- A file matched twice is read once, and `*.yaml` beside the configuration does
+  not read the configuration itself.
+- A missing file, a directory, an empty entry and a malformed pattern are
+  refused; a pattern matching nothing is accepted unless nothing then defines
+  a collector.
+- `${NAME}` references in a collector file are expanded, and an unset one is
+  refused naming the file.
+- Startup and `--dry-run` both refuse a duplicate across files, and the dry run
+  lists the collector files it read.
+- The watch reloads when a collector file is edited, added or removed, does not
+  reload when nothing changed, and rejects a reload that adds a duplicate,
+  keeping the configuration in force.
+- `collector-file.schema.json` is current, printed by its flag, describes
+  collectors as the configuration schema does, accepts a collectors list and
+  rejects any other key, an empty list and an invalid collector; the
+  configuration schema accepts a configuration of collector files alone and
+  rejects one with neither key, an empty `collector_files` and an empty entry.
+
+## 34.53 Local file request type tests
+
+See § 5.1, `localfile`.
+
+- `root` is required, absolute, cleaned and not `/`; `path` is relative and
+  stays under `root`; `max_age` and `max_response_bytes` are not negative;
+  path parameter syntax is checked; `http` keys on a `localfile` collector and
+  `root` or `max_age` on an `http` collector are rejected naming the key and the
+  type. The configuration schema requires `root` for `localfile`.
+- A probe with no target reads `request.path`. A target names a file or a
+  directory the path is read in, relative, absolute inside `root`, or as a
+  `file://` URL; a `path` probe parameter replaces `request.path`.
+- A target leading outside `root`, and a `file://` URL without an absolute
+  path, are refused with `400`; a `path` parameter leading outside or absolute,
+  and neither a target nor a path, fail the scrape.
+- A path parameter fills one name; one with `/` is refused, `..` is a `400`, an
+  unused one is a `400`, and the default applies when none is given.
+- `http` probe parameters are refused with `400`; `timeout` is accepted; an
+  `http` probe without a target is still refused.
+- A relative link inside `root` is followed; a link leading outside, an
+  absolute link and a relative link climbing out are refused. A directory, a
+  named pipe (without hanging), a missing file and an unreadable file each fail
+  with their own message.
+- A file over the size limit fails and counts as a limit error.
+- A file older than `max_age` fails naming the limit; a fresh one is read.
+- A file changed once during the read is read again and the new content served;
+  one that keeps changing fails advising an atomic rename.
+- A read that does not return is abandoned when the probe's timeout ends.
+- The response carries status `200`, the body, `Content-Type` by extension,
+  `Content-Length` and `Last-Modified`.
+- Verbose series carry the `file://` URL with placeholders and `READ`.
+- Scheduled targets with and without a target are scraped and exported over
+  OTLP; a target outside `root`, an `http` key, a credential and a placeholder
+  path are refused at load.
+- The examples in `docs/LOCALFILE.md` load and serve as documented.
+- The shipped example configurations, target file and schema include a
+  `localfile` collector and target.
 
 # 35. Documentation requirements
 
@@ -3759,6 +3979,10 @@ The repository MUST include documentation covering:
 20. PodMonitor example
 21. Troubleshooting
 22. Example collectors for JSON/YAML/XML/CSV/HTML/Prometheus/text/Python
+23. Each request type other than `http`, on a page of its own: `localfile` in
+    `docs/LOCALFILE.md`, covering its keys, which file is read, Prometheus and
+    scheduled-target setups, formats, the node_exporter practices it follows,
+    errors and self-metrics, and mounting files in Kubernetes
 
 The Python documentation MUST explicitly state that networking is owned by the exporter and that `requests`/`httpx` are unnecessary.
 
@@ -4491,7 +4715,9 @@ valid configuration MUST remain active. Every target MUST name a configured
 collector; an unknown collector MUST be rejected at startup and at reload.
 The keys a target's `request` block may set are those its collector's request
 type accepts (§ 5.1); any other key MUST be rejected at startup naming the
-target, the key, the collector and the type. A target does not declare a type
+target, the key, the collector and the type. What its `target` may be is also
+the type's: an `http` target MUST be an absolute URL, and a `localfile` target
+MAY be left out and MUST otherwise lie under the collector's `root`. A target does not declare a type
 of its own: it inherits its collector's.
 
 The target document MUST be reloadable on the same terms as the exporter
@@ -4597,8 +4823,9 @@ changing how a collector follows redirects.
 ## 42.15a Environment variable expansion in configuration
 
 The exporter MUST support an optional `--config.export-env` flag that
-substitutes `${NAME}` references in the configuration document, and in the
-scheduled target document, from the process environment before either is parsed.
+substitutes `${NAME}` references in the configuration document, in its
+collector files (§ 5.0) and in the scheduled target document, from the process
+environment before each is parsed.
 
 It MUST default to off. A configuration legitimately contains dollar signs that
 are not references — a regex metric rule, a jq expression, a Python pre-script —

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/pem"
 	"net"
 	"net/http"
@@ -155,7 +156,7 @@ func TestOTLPExportsReuseTheirConnection(t *testing.T) {
 	cfg := &Config{Collectors: []Collector{testCollector("text", "text")}, OTLP: otlpConfig(endpoint.URL + "/v1/metrics")}
 	server := newScheduledServer(t, cfg, nil)
 	for i := 0; i < 3; i++ {
-		server.pushOTLP(appendToResource(nil, defaultResourceIdentity(cfg.OTLP), server.selfMetricSet()))
+		server.exportOTLP(context.Background(), 5*time.Second)
 	}
 	if got := conns.Load(); got != 1 {
 		t.Fatalf("three exports opened %d connections, want 1", got)

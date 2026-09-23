@@ -170,6 +170,31 @@ connection is closed after 90 seconds, and a pool nothing has used for five
 minutes, such as one a reload left behind, is closed with it. OTLP exports keep
 their connection to the collector the same way.
 
+### Proxies
+
+Target requests and OTLP exports go through the proxy the environment names,
+as with curl: `HTTPS_PROXY` for `https` URLs, `HTTP_PROXY` for `http` ones, and
+`NO_PROXY` for what to reach directly — a comma-separated list of hosts,
+domains (`.internal.example` or `internal.example` covers every host under it),
+IP addresses and CIDR ranges, optionally with a port, or `*` for everything.
+The lower-case spellings work too. Requests to `localhost` and loopback
+addresses always go direct. For an `https` URL the proxy is asked to tunnel the
+connection (`CONNECT`), so TLS still runs end to end with the target and its
+[TLS settings](#tls) apply unchanged.
+
+```sh
+HTTPS_PROXY=http://proxy.corp.example:3128 \
+NO_PROXY=.svc,.cluster.local,10.0.0.0/8 \
+  prometheus-universal-exporter --config.file=config.yaml
+```
+
+A proxy URL may carry credentials, `http://user:password@proxy:3128`, sent as
+`Proxy-Authorization`. There is no proxy setting in the configuration: the
+environment applies to the whole exporter, and is read once, when the exporter
+first connects. In Kubernetes, set the variables through the chart's `env`,
+with credentials from a Secret. `localfile` collectors read files and are not
+affected.
+
 ## Retries
 
 Retries can be configured in the collector and overridden for one scrape:

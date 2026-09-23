@@ -3,7 +3,6 @@ package main
 import (
 	"context"
 	"encoding/json"
-	"io"
 	"math"
 	"net/http"
 	"net/http/httptest"
@@ -17,7 +16,7 @@ import (
 // Histograms and summaries reach OTLP with their data, and every series of a
 // family is a data point of one OTLP metric (otlp.go).
 
-func encodeOTLP(t *testing.T, metrics ...Metric) []otlpMetric {
+func roundTripOTLP(t *testing.T, metrics ...Metric) []otlpMetric {
 	t.Helper()
 	out := otlpMetrics(MetricSet{Metrics: metrics}, "1")
 	raw, err := json.Marshal(out)
@@ -59,7 +58,7 @@ func TestHistogramsAreExportedAsOTLPHistograms(t *testing.T) {
 		},
 	} {
 		t.Run(name, func(t *testing.T) {
-			out := encodeOTLP(t, Metric{Name: "latency_seconds", Type: HistogramMetricType, Labels: map[string]string{"path": "/"}, Histogram: &Histogram{Buckets: tc.buckets, Sum: 1.5, Count: tc.count}})
+			out := roundTripOTLP(t, Metric{Name: "latency_seconds", Type: HistogramMetricType, Labels: map[string]string{"path": "/"}, Histogram: &Histogram{Buckets: tc.buckets, Sum: 1.5, Count: tc.count}})
 			if len(out) != 1 || out[0].Histogram == nil || out[0].Gauge != nil {
 				t.Fatalf("not a histogram: %+v", out)
 			}
@@ -87,7 +86,7 @@ func strconvU(v uint64) string {
 }
 
 func TestSummariesAreExportedAsOTLPSummaries(t *testing.T) {
-	out := encodeOTLP(t,
+	out := roundTripOTLP(t,
 		Metric{Name: "rpc_seconds", Type: SummaryMetricType, Summary: &Summary{Count: 10, Sum: 2.5, Quantiles: []Quantile{{0.5, 0.2}, {0.99, 0.9}}}},
 		Metric{Name: "go_gc_duration_seconds", Type: SummaryMetricType, Summary: &Summary{Count: 3, Sum: 0.01}},
 	)
@@ -106,7 +105,7 @@ func TestSummariesAreExportedAsOTLPSummaries(t *testing.T) {
 // A family's series are the data points of one metric; counters are
 // monotonic cumulative sums; a histogram type without data stays a gauge.
 func TestSeriesOfAFamilyShareOneOTLPMetric(t *testing.T) {
-	out := encodeOTLP(t,
+	out := roundTripOTLP(t,
 		Metric{Name: "requests_total", Type: CounterMetricType, Value: 1, Labels: map[string]string{"code": "200"}},
 		Metric{Name: "temperature", Type: GaugeMetricType, Value: 20},
 		Metric{Name: "requests_total", Type: CounterMetricType, Value: 2, Labels: map[string]string{"code": "500"}},
@@ -126,7 +125,7 @@ func TestSeriesOfAFamilyShareOneOTLPMetric(t *testing.T) {
 // NaN and infinities are encoded the way the protobuf JSON mapping writes
 // them, instead of failing the encoding of the whole export.
 func TestNonFiniteValuesEncode(t *testing.T) {
-	out := encodeOTLP(t,
+	out := roundTripOTLP(t,
 		Metric{Name: "not_a_number", Type: GaugeMetricType, Value: math.NaN()},
 		Metric{Name: "up_high", Type: GaugeMetricType, Value: math.Inf(1)},
 		Metric{Name: "down_low", Type: GaugeMetricType, Value: math.Inf(-1)},
@@ -151,8 +150,7 @@ func TestHistogramsAndSummariesReachTheOTLPEndpoint(t *testing.T) {
 	defer target.Close()
 	received := make(chan []byte, 1)
 	endpoint := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		body, _ := io.ReadAll(r.Body)
-		received <- body
+		received <- readOTLPBody(t, r)
 	}))
 	defer endpoint.Close()
 
@@ -164,7 +162,7 @@ func TestHistogramsAndSummariesReachTheOTLPEndpoint(t *testing.T) {
 	server := newScheduledServer(t, cfg, file)
 	probeOnce(t, server, "/probe?collector=passthrough&target="+url.QueryEscape(target.URL), nil)
 	server.scrapeScheduledTargets(context.Background(), 10*time.Second)
-	server.pushOTLP(appendToResource(server.drainOTLP(), defaultResourceIdentity(cfg.OTLP), server.selfMetricSet()))
+	server.exportOTLP(context.Background(), 5*time.Second)
 
 	var payload otlpPayload
 	select {

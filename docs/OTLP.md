@@ -9,6 +9,7 @@ otlp:
   service_name: prometheus-universal-exporter
   timeout: 5s
   interval: 30s
+  # compression: gzip
   # headers:
   #   X-OTLP-Tenant: production
   # tls:
@@ -24,8 +25,42 @@ OTLP export is best-effort and does not make a Prometheus probe fail. Metric
 values are buffered as latest values and exported every `otlp.interval`;
 the default is 30 seconds. Each export request is bounded by `otlp.timeout`,
 which defaults to 5 seconds. The connection to the endpoint is kept and reused
-from export to export (see [Connections](REQUESTS.md#connections)). Self-health metrics are included in every export
-interval even when no Prometheus self-metrics scrape is running.
+from export to export (see [Connections](REQUESTS.md#connections)), and goes
+through the proxy the environment names, if any. Self-health metrics are
+included in every export interval even when no Prometheus self-metrics scrape
+is running.
+
+## Delivery
+
+Requests are gzipped (`Content-Encoding: gzip`), which every OpenTelemetry
+Collector accepts; set `otlp.compression: none` for an endpoint that does not.
+
+An export that fails with a network error, or with `429`, `502`, `503` or
+`504` — the answers the OTLP specification makes retryable — is tried again
+after 1 second, then 2, 4, and so on up to 16, or after the `Retry-After` the
+endpoint asks for. Retries go on while another attempt can still start within
+`otlp.interval`, so an export never runs into the next one. When they run out,
+the data points are kept and sent with the next export, unless a newer value of
+the same series has arrived in the meantime; nothing piles up, since only the
+latest value of each series is kept. Any other answer, such as `400` or `401`,
+would be given again: the data points are dropped and counted rather than sent
+again forever. Each failure is logged as a warning, and the export status is in
+the [self-metrics](SELF-METRICS.md#otlp-export-status):
+
+```promql
+# No export has got through for ten minutes.
+time() - http_exporter_otlp_last_export_success_timestamp_seconds > 600
+```
+
+After three failed exports in a row the exporter also reports itself not ready
+on `/ready`, until one gets through (see
+[Readiness](CONFIGURATION.md#readiness)).
+
+On `SIGTERM` or `SIGINT` the exporter first lets the probes in progress finish,
+then makes one last export, bounded by `otlp.timeout`, of what they and earlier
+probes queued, with a last self-metric snapshot. Scheduled targets are not
+scraped again for it. An export the shutdown interrupted is not lost: its data
+goes out with that last export.
 
 Metrics keep their type:
 

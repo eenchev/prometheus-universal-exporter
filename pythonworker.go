@@ -128,6 +128,9 @@ type pythonPool struct {
 	// were busy; those are stopped when they finish.
 	busy     map[string]int
 	obsolete map[string]bool
+	// closed pools keep no worker: an idle one is stopped at once, and a busy
+	// one when it finishes.
+	closed bool
 }
 
 // Why a worker stopped, and how a run ended: bounded sets, so they can be
@@ -162,7 +165,16 @@ type pythonCollectorStats struct {
 	runs           map[string]uint64
 }
 
-var pythonWorkers = newPythonPool()
+// pythonPoolRef is the exporter's worker pool. It is behind an atomic pointer
+// only so each test can run against a pool of its own (usePythonPool in the
+// tests): the counts a test checks are then its own, whatever ran before it,
+// in whatever order, however often.
+var pythonPoolRef atomic.Pointer[pythonPool]
+
+func init() { pythonPoolRef.Store(newPythonPool()) }
+
+// pythonWorkers returns the worker pool.
+func pythonWorkers() *pythonPool { return pythonPoolRef.Load() }
 
 func newPythonPool() *pythonPool {
 	return &pythonPool{idle: map[string][]*pythonWorker{}, stats: map[string]*pythonCollectorStats{}, busy: map[string]int{}, obsolete: map[string]bool{}}
@@ -288,6 +300,10 @@ func (p *pythonPool) release(spec pythonSpec, worker *pythonWorker) {
 	st.busy--
 	obsolete := p.obsolete[key]
 	p.unbusyLocked(key)
+	if p.closed {
+		worker.stop()
+		return
+	}
 	if obsolete {
 		// A reload removed or changed this script while it ran.
 		worker.stop()
@@ -321,6 +337,20 @@ func (p *pythonPool) reapLocked(now time.Time) {
 		} else {
 			p.idle[key] = kept
 		}
+	}
+}
+
+// close stops the pool's idle workers and keeps no more; a worker still busy
+// stops when it finishes. Tests close the pools they made.
+func (p *pythonPool) close() {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.closed = true
+	for key, workers := range p.idle {
+		for _, worker := range workers {
+			worker.stop()
+		}
+		delete(p.idle, key)
 	}
 }
 

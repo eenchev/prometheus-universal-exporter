@@ -32,6 +32,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 	configFile := flags.String("config.file", "/etc/prometheus-universal-exporter/config.yaml", "Path to the exporter configuration")
 	listenAddress := flags.String("web.listen-address", ":8080", "Address on which to expose HTTP endpoints")
 	selfMetricsPath := flags.String("web.self-metrics-path", "/self-metrics", "Dedicated endpoint for exporter self-health metrics")
+	enableLifecycle := flags.Bool("web.enable-lifecycle", false, "Enable POST /-/reload, which reloads the configuration and scheduled target files and reports whether they were accepted. SIGHUP reloads either way")
 	timeoutOffset := flags.Duration("probe.timeout-offset", DefaultTimeoutOffset, "How much of Prometheus's scrape timeout (X-Prometheus-Scrape-Timeout-Seconds) a probe leaves unused, so it answers with its own error before Prometheus gives up")
 	pythonPath := flags.String("python.path", "python3", "Python interpreter used by the python transform")
 	targetFile := flags.String("otlp.targets-file", "", "Optional file of scheduled targets scraped by the exporter and delivered over OTLP")
@@ -133,12 +134,18 @@ func run(args []string, stdout, stderr io.Writer) int {
 	server := NewServer(manager, *pythonPath, logger)
 	server.SetSelfMetricsPath(*selfMetricsPath)
 	server.SetTimeoutOffset(*timeoutOffset)
+	server.SetLifecycle(*enableLifecycle)
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGTERM, syscall.SIGINT)
 	defer stop()
 	go manager.ReloadLoop(ctx)
-	go pythonWorkers.reapLoop(ctx, pythonWorkerReapInterval)
-	go server.OTLPExportLoop(ctx)
+	go pythonWorkers().reapLoop(ctx, pythonWorkerReapInterval)
+	go reloadOn(ctx, reloadSignals(), manager, logger)
+	exportLoopDone := make(chan struct{})
+	go func() {
+		defer close(exportLoopDone)
+		server.OTLPExportLoop(ctx)
+	}()
 
 	startup := []any{"address", *listenAddress, "collectors", len(config.Collectors), "collector_files", len(config.LoadedCollectorFiles),
 		"scheduled_targets", len(manager.Targets()), "config_watch", manager.WatchEnabled(),
@@ -167,6 +174,10 @@ func run(args []string, stdout, stderr io.Writer) int {
 		if err := httpServer.Shutdown(shutdownCtx); err != nil {
 			logger.Error("HTTP server shutdown failed", "error", err)
 		}
+		// The probes have finished, and the export loop has stopped, so what
+		// they queued goes out in one last export, bounded by otlp.timeout.
+		<-exportLoopDone
+		server.FlushOTLP()
 	}
 	return 0
 }

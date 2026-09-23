@@ -3,11 +3,14 @@ package main
 import (
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
+
+	"golang.org/x/net/http/httpproxy"
 )
 
 // Target requests and OTLP exports reuse their connections. An http.Transport
@@ -26,6 +29,13 @@ import (
 // for transportIdleTTL is closed and forgotten, so settings a reload dropped
 // do not keep connections open. Idle connections inside a pool close after
 // transportIdleConnTimeout.
+//
+// Every transport sends its requests through the proxy the environment names,
+// as curl and most Go programs do: HTTP_PROXY for http URLs, HTTPS_PROXY for
+// https ones, and NO_PROXY for the hosts, domains and networks to reach
+// directly. The lower-case spellings work too. Requests to localhost and
+// loopback addresses always go direct. The environment is read when a
+// transport is built, which in practice is once, at the first request.
 
 const (
 	transportIdleTTL         = 5 * time.Minute
@@ -76,6 +86,7 @@ func (c *transportCache) get(settings transportSettings, now time.Time) (*http.T
 		return nil, err
 	}
 	transport := &http.Transport{
+		Proxy:               environmentProxy(),
 		TLSClientConfig:     tlsCfg,
 		ForceAttemptHTTP2:   settings.EnableHTTP2,
 		DialContext:         (&net.Dialer{Timeout: 30 * time.Second, KeepAlive: 30 * time.Second}).DialContext,
@@ -85,6 +96,15 @@ func (c *transportCache) get(settings transportSettings, now time.Time) (*http.T
 	}
 	c.entries[settings] = &cachedTransport{stamp: stamp, transport: transport, lastUsed: now}
 	return transport, nil
+}
+
+// environmentProxy is the proxy the environment names now. It is read here
+// rather than through http.ProxyFromEnvironment, which reads the environment
+// once per process, so that each transport sees the environment it was built
+// in.
+func environmentProxy() func(*http.Request) (*url.URL, error) {
+	proxy := httpproxy.FromEnvironment().ProxyFunc()
+	return func(req *http.Request) (*url.URL, error) { return proxy(req.URL) }
 }
 
 // sweepLocked closes the transports nothing has used for transportIdleTTL.

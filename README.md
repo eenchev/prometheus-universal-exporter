@@ -123,7 +123,8 @@ pattern needs. See the
 | `/probe` | Scrape a target through a collector. Takes `target` and `collector`. |
 | `/metrics` | The exporter's own metrics. |
 | `/self-metrics` | The same self-metrics on a dedicated path, so a monitor can scrape them separately. |
-| `/health`, `/ready` | Kubernetes probes. Never authenticated. |
+| `/-/reload` | `POST` reloads the configuration, with `--web.enable-lifecycle`. |
+| `/health`, `/ready` | Kubernetes probes. `/ready` is `503` while a reload is rejected or OTLP exports keep failing; see [Readiness](docs/CONFIGURATION.md#readiness). Never authenticated. |
 
 ## Command-line flags
 
@@ -141,19 +142,20 @@ pattern needs. See the
 | `--config.schema` | off | Print the JSON Schema of the configuration file, for editors, and exit. See [Editor support](docs/CONFIGURATION.md#editor-support). |
 | `--config.collector-file-schema` | off | Print the JSON Schema of a collector file, for editors, and exit. See [Collector files](docs/CONFIGURATION.md#collector-files). |
 | `--probe.timeout-offset` | `500ms` | How much of Prometheus's scrape timeout a probe leaves unused, so it answers with its own error first. See [Probe deadlines](docs/CONFIGURATION.md#probe-deadlines). |
+| `--web.enable-lifecycle` | off | Enable `POST /-/reload`, which reloads the configuration and reports whether it was accepted. `SIGHUP` reloads either way. See [Reloading on demand](docs/CONFIGURATION.md#reloading-on-demand). |
 | `--dry-run` | off | Validate the files and flags above, print a JSON report and exit `0` or `1`, without starting. See [Dry run](docs/CONFIGURATION.md#dry-run). |
 
 ## Documentation
 
 - [Configuration](docs/CONFIGURATION.md) — collectors, decoders, transforms, metric rules, caching, environment variables, reloading.
-- [Target requests](docs/REQUESTS.md) — redirects, HTTP/2, retries, TLS, per-scrape overrides.
-- [Local files](docs/LOCALFILE.md) — the `localfile` request type: reading metrics and status files from disk.
+- [Target requests](docs/REQUESTS.md) — redirects, HTTP/2, retries, TLS, proxies, per-scrape overrides.
+- [Local files](docs/LOCALFILE.md) — the `localfile` request type: reading metrics and status files from disk, one file or a whole directory.
 - [Authentication](docs/AUTHENTICATION.md) — credentials for the target and for the exporter itself.
 - [Prometheus Operator](docs/PROMETHEUS-OPERATOR.md) — ServiceMonitor and PodMonitor.
 - [Helm chart](charts/prometheus-universal-exporter/README.md) — every chart value.
 - [Python](docs/PYTHON.md) — the transform and pre-script API.
 - [Self-metrics](docs/SELF-METRICS.md) — what the exporter reports about itself.
-- [OTLP](docs/OTLP.md) — OTLP export and scheduled targets.
+- [OTLP](docs/OTLP.md) — OTLP export, its retries and compression, and scheduled targets.
 - [Logging](docs/LOGGING.md) — the log format.
 - [Exporter specification](docs/SPECIFICATION-EXPORTER.md) — the implementation specification for the exporter.
 - [Chart specification](docs/SPECIFICATION-CHART.md) — the implementation specification for the Helm chart.

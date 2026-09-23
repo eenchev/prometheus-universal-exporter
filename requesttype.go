@@ -65,6 +65,11 @@ type requestType struct {
 	Display func(target string) string
 	// Stage names the fetch stage in logs and error bodies. Unset, "http".
 	Stage string
+	// CheckOverride lets a collector refuse a probe parameter, or a scheduled
+	// target's request key, that its type accepts but its configuration has
+	// no use for, such as path for a localfile collector reading a directory.
+	// Unset, everything the type accepts is accepted.
+	CheckOverride func(c *Collector, key string) error
 }
 
 // requestTypes is the registry of the types built into this binary. Each type
@@ -162,6 +167,12 @@ func checkOverrideParams(c *Collector, values url.Values) error {
 		}
 		if matchesOverride(known, key) && !matchesOverride(rt.Overrides, key) {
 			rejected = append(rejected, key)
+			continue
+		}
+		if rt.CheckOverride != nil && matchesOverride(rt.Overrides, key) {
+			if err := rt.CheckOverride(c, key); err != nil {
+				return fmt.Errorf("probe parameter %s: %w", key, err)
+			}
 		}
 	}
 	if len(rejected) == 0 {
@@ -188,6 +199,11 @@ func checkTargetRequest(t *ScheduledTarget, c *Collector) error {
 	for _, key := range keys {
 		if !contains(rt.TargetFields, key) {
 			return fmt.Errorf("target %q sets request.%s, which does not apply to collector %q, whose request.type is %q", t.Name, key, c.Name, rt.Name)
+		}
+		if rt.CheckOverride != nil {
+			if err := rt.CheckOverride(c, key); err != nil {
+				return fmt.Errorf("target %q sets request.%s: %w", t.Name, key, err)
+			}
 		}
 	}
 	return nil

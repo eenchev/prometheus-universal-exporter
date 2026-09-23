@@ -4,7 +4,7 @@
 make fmt        # rewrite the whole tree with gofmt, tools/ included
 make fmt-check  # fail if any source needs gofmt
 make lint       # golangci-lint, same configuration as CI
-make test       # go test ./... followed by go test -race ./...
+make test       # go test ./..., then with -race, twice, in a random order
 make vet
 make build      # every request type; REQUEST_TYPES=http builds only those listed
 make helm-test  # helm lint and the template scenarios CI renders
@@ -12,6 +12,19 @@ make ci         # everything above, in CI order
 
 make test-external  # opt-in; probes real third-party endpoints
 ```
+
+## Repeatable tests
+
+Every test must pass however many times it runs and in whatever order, which
+`make test` and CI check with `go test -race -count=2 -shuffle=on ./...`. A
+failure there names the seed it used; run it again with `-shuffle=<seed>`.
+
+State shared across tests is what breaks this. The Python worker pool is one
+such thing: its counts — starts, runs, stops, idle workers — would carry over
+from test to test. A test that runs Python calls `requirePython(t)`, which also
+gives it a pool of its own and stops that pool's workers when it ends; a test
+that uses the pool without an interpreter calls `usePythonPool(t)`. Tests
+therefore must not use `t.Parallel`, which the swap assumes.
 
 ## The configuration schema
 

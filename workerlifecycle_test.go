@@ -7,7 +7,6 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -61,14 +60,14 @@ func TestScriptTimerSumsTheRuns(t *testing.T) {
 }
 
 // idleWorkers counts a collector's idle workers.
-func idleWorkers(collector string) int { return pythonWorkers.snapshot(collector).idle }
+func idleWorkers(collector string) int { return pythonWorkers().snapshot(collector).idle }
 
 // ageIdleWorkers makes a collector's idle workers look idle for longer than
 // the idle timeout.
 func ageIdleWorkers(collector string) {
-	pythonWorkers.mu.Lock()
-	defer pythonWorkers.mu.Unlock()
-	for _, workers := range pythonWorkers.idle {
+	pythonWorkers().mu.Lock()
+	defer pythonWorkers().mu.Unlock()
+	for _, workers := range pythonWorkers().idle {
 		for _, worker := range workers {
 			if worker.collector == collector {
 				worker.idleSince = time.Now().Add(-pythonWorkerIdleTimeout - time.Minute)
@@ -87,12 +86,12 @@ func TestIdleWorkersAreReapedOnATimer(t *testing.T) {
 	if idleWorkers(c.Name) != 1 {
 		t.Fatalf("idle=%d before reaping", idleWorkers(c.Name))
 	}
-	before := pythonWorkers.snapshot(c.Name).stops[pythonStopIdle]
+	before := pythonWorkers().snapshot(c.Name).stops[pythonStopIdle]
 	ageIdleWorkers(c.Name)
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})
 	go func() {
-		pythonWorkers.reapLoop(ctx, 10*time.Millisecond)
+		pythonWorkers().reapLoop(ctx, 10*time.Millisecond)
 		close(done)
 	}()
 	deadline := time.Now().Add(5 * time.Second)
@@ -104,7 +103,7 @@ func TestIdleWorkersAreReapedOnATimer(t *testing.T) {
 	}
 	cancel()
 	<-done
-	if got := pythonWorkers.snapshot(c.Name).stops[pythonStopIdle]; got != before+1 {
+	if got := pythonWorkers().snapshot(c.Name).stops[pythonStopIdle]; got != before+1 {
 		t.Fatalf("idle stops %d, want %d", got, before+1)
 	}
 }
@@ -116,9 +115,7 @@ func TestAReloadStopsTheWorkersOfChangedScripts(t *testing.T) {
 	target := textTarget(t, "value=42\n")
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config.yaml")
-	// The pool is shared by every test, so the names are this run's own.
-	suffix := strconv.FormatInt(time.Now().UnixNano(), 36)
-	changedName, keptName, busyName := "reload_changed_"+suffix, "reload_kept_"+suffix, "reload_busy_"+suffix
+	changedName, keptName, busyName := "reload_changed", "reload_kept", "reload_busy"
 	document := func(changed, slow string) string {
 		return `collectors:
   - name: ` + changedName + `
@@ -162,8 +159,8 @@ func TestAReloadStopsTheWorkersOfChangedScripts(t *testing.T) {
 	}
 	probe(changedName)
 	probe(keptName)
-	stopsBefore := pythonWorkers.snapshot(changedName).stops[pythonStopReload]
-	busyBefore := pythonWorkers.snapshot(busyName).stops[pythonStopReload]
+	stopsBefore := pythonWorkers().snapshot(changedName).stops[pythonStopReload]
+	busyBefore := pythonWorkers().snapshot(busyName).stops[pythonStopReload]
 
 	// A probe of the slow script is running while the reload lands.
 	finished := make(chan struct{})
@@ -172,7 +169,7 @@ func TestAReloadStopsTheWorkersOfChangedScripts(t *testing.T) {
 		probe(busyName)
 	}()
 	deadline := time.Now().Add(5 * time.Second)
-	for pythonWorkers.snapshot(busyName).busy == 0 {
+	for pythonWorkers().snapshot(busyName).busy == 0 {
 		if time.Now().After(deadline) {
 			t.Fatal("the slow script never started")
 		}
@@ -188,7 +185,7 @@ func TestAReloadStopsTheWorkersOfChangedScripts(t *testing.T) {
 	if got := idleWorkers(changedName); got != 0 {
 		t.Errorf("the changed script still has %d idle workers", got)
 	}
-	if got := pythonWorkers.snapshot(changedName).stops[pythonStopReload]; got != stopsBefore+1 {
+	if got := pythonWorkers().snapshot(changedName).stops[pythonStopReload]; got != stopsBefore+1 {
 		t.Errorf("reload stops %d, want %d", got, stopsBefore+1)
 	}
 	if got := idleWorkers(keptName); got != 1 {
@@ -199,7 +196,7 @@ func TestAReloadStopsTheWorkersOfChangedScripts(t *testing.T) {
 	if got := idleWorkers(busyName); got != 0 {
 		t.Errorf("the worker busy during the reload went back idle: %d", got)
 	}
-	if got := pythonWorkers.snapshot(busyName).stops[pythonStopReload]; got != busyBefore+1 {
+	if got := pythonWorkers().snapshot(busyName).stops[pythonStopReload]; got != busyBefore+1 {
 		t.Errorf("busy reload stops %d, want %d", got, busyBefore+1)
 	}
 	// The new script runs in a new worker, which stays.

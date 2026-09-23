@@ -2,8 +2,11 @@ package main
 
 import (
 	"bytes"
+	"compress/gzip"
 	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"io"
 	"math"
 	"net/http"
@@ -191,21 +194,13 @@ func sortedKeys(in map[string]string) []string {
 	return out
 }
 
-func (s *Server) pushOTLP(resources []otlpResourceSet) {
-	cfg := s.manager.Get().OTLP
-	total := 0
-	for _, resource := range resources {
-		total += len(resource.Set.Metrics)
-	}
-	if !cfg.Enabled || cfg.Endpoint == "" || total == 0 {
-		return
-	}
-	timeout := time.Duration(cfg.Timeout)
-	if timeout <= 0 {
-		timeout = 5 * time.Second
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), timeout)
-	defer cancel()
+// pushOTLP sends resources to the endpoint, and retries a network error, 429,
+// 502, 503 or 504 — the responses the OTLP specification makes retryable —
+// with exponential backoff, or after the Retry-After the endpoint asks for,
+// for as long as another attempt can start within budget. Each attempt is
+// bounded by otlp.timeout. Any other status is an otlpRefusedError, not
+// retried. It returns the number of retries made.
+func (s *Server) pushOTLP(ctx context.Context, cfg OTLPConfig, resources []otlpResourceSet, budget time.Duration) (int, error) {
 	now := strconv.FormatInt(time.Now().UnixNano(), 10)
 	payload := otlpPayload{}
 	for _, resource := range resources {
@@ -214,34 +209,92 @@ func (s *Server) pushOTLP(resources []otlpResourceSet) {
 		}
 		payload.ResourceMetrics = append(payload.ResourceMetrics, otlpResourceMetrics{Resource: otlpResource{Attributes: resource.Identity.attributes()}, ScopeMetrics: []otlpScopeMetrics{{Scope: otlpScope{Name: "prometheus-universal-exporter"}, Metrics: otlpMetrics(resource.Set, now)}}})
 	}
-	body, err := json.Marshal(payload)
+	if len(payload.ResourceMetrics) == 0 {
+		return 0, nil
+	}
+	body, err := encodeOTLP(payload, cfg.Compression)
 	if err != nil {
-		s.logger.Warn("OTLP encoding failed", "error", err)
-		return
+		return 0, fmt.Errorf("encoding the export: %w", err)
+	}
+	timeout := time.Duration(cfg.Timeout)
+	if timeout <= 0 {
+		timeout = 5 * time.Second
 	}
 	tlsSettings := cfg.TLS
 	if cfg.InsecureSkipVerify {
 		tlsSettings.InsecureSkipVerify = true
 	}
+	deadline := time.Now().Add(budget)
+	for retries := 0; ; retries++ {
+		attempt := min(timeout, time.Until(deadline))
+		retryable, wait, err := s.sendOTLP(ctx, cfg, tlsSettings, body, attempt)
+		if err == nil || !retryable {
+			return retries, err
+		}
+		if wait <= 0 {
+			wait = otlpBackoff(retries)
+		}
+		// Another attempt is only worth starting if it has time to finish.
+		if time.Until(deadline) < wait+otlpMinAttempt {
+			return retries, err
+		}
+		s.logger.Debug("retrying the OTLP export", "error", err, "retry", retries+1, "after", wait.String())
+		timer := time.NewTimer(wait)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return retries, errors.Join(err, ctx.Err())
+		case <-timer.C:
+		}
+	}
+}
+
+// otlpRetryBackoff is the wait before the first retry; each retry doubles it,
+// up to otlpMaxBackoff. A variable, so tests need not wait a second.
+var otlpRetryBackoff = time.Second
+
+const (
+	otlpMaxBackoff = 16 * time.Second
+	// otlpMinAttempt is the least time worth giving an attempt.
+	otlpMinAttempt = 100 * time.Millisecond
+)
+
+func otlpBackoff(retries int) time.Duration {
+	wait := otlpRetryBackoff << min(retries, 8)
+	return min(wait, otlpMaxBackoff)
+}
+
+// otlpRefusedError is a response the endpoint will give again: the data is
+// dropped rather than sent again.
+type otlpRefusedError struct{ status int }
+
+func (e *otlpRefusedError) Error() string {
+	return fmt.Sprintf("the OTLP endpoint answered %d", e.status)
+}
+
+// sendOTLP makes one attempt. It reports whether a failure is worth retrying
+// and how long the endpoint asked to wait first, if it did.
+func (s *Server) sendOTLP(ctx context.Context, cfg OTLPConfig, tlsSettings TLSConfig, body []byte, timeout time.Duration) (bool, time.Duration, error) {
 	// One connection to the collector is reused from export to export.
 	client, err := httpClient(transportSettings{TLS: tlsSettings}, true, timeout)
 	if err != nil {
-		s.logger.Warn("OTLP TLS configuration failed", "error", err)
-		return
+		return false, 0, fmt.Errorf("OTLP TLS configuration: %w", err)
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, cfg.Endpoint, bytes.NewReader(body))
 	if err != nil {
-		s.logger.Warn("OTLP request creation failed", "error", err)
-		return
+		return false, 0, err
 	}
 	req.Header.Set("Content-Type", "application/json")
+	if cfg.Compression != OTLPCompressionNone {
+		req.Header.Set("Content-Encoding", "gzip")
+	}
 	for k, v := range cfg.Headers {
 		req.Header.Set(k, v)
 	}
 	resp, err := client.Do(req)
 	if err != nil {
-		s.logger.Warn("OTLP export failed", "error", err)
-		return
+		// Unreachable, reset, timed out: the next attempt may get through.
+		return true, 0, err
 	}
 	// The body is read to the end, however little of it matters, so the
 	// connection goes back to the pool for the next export.
@@ -249,9 +302,51 @@ func (s *Server) pushOTLP(resources []otlpResourceSet) {
 		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 1<<20))
 		_ = resp.Body.Close()
 	}()
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		s.logger.Warn("OTLP endpoint returned an error", "status", resp.StatusCode)
+	switch {
+	case resp.StatusCode >= 200 && resp.StatusCode < 300:
+		return false, 0, nil
+	case resp.StatusCode == http.StatusTooManyRequests, resp.StatusCode == http.StatusBadGateway,
+		resp.StatusCode == http.StatusServiceUnavailable, resp.StatusCode == http.StatusGatewayTimeout:
+		return true, retryAfter(resp.Header.Get("Retry-After"), time.Now()), fmt.Errorf("the OTLP endpoint answered %d", resp.StatusCode)
+	default:
+		return false, 0, &otlpRefusedError{status: resp.StatusCode}
 	}
+}
+
+// retryAfter reads a Retry-After header, in seconds or as an HTTP date; zero
+// when there is none or it cannot be read.
+func retryAfter(value string, now time.Time) time.Duration {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return 0
+	}
+	if seconds, err := strconv.Atoi(value); err == nil {
+		return max(time.Duration(seconds)*time.Second, 0)
+	}
+	if at, err := http.ParseTime(value); err == nil {
+		return max(at.Sub(now), 0)
+	}
+	return 0
+}
+
+// encodeOTLP renders the payload as JSON, gzipped unless compression is none.
+func encodeOTLP(payload otlpPayload, compression string) ([]byte, error) {
+	raw, err := json.Marshal(payload)
+	if err != nil {
+		return nil, err
+	}
+	if compression == OTLPCompressionNone {
+		return raw, nil
+	}
+	var buf bytes.Buffer
+	zw := gzip.NewWriter(&buf)
+	if _, err := zw.Write(raw); err != nil {
+		return nil, err
+	}
+	if err := zw.Close(); err != nil {
+		return nil, err
+	}
+	return buf.Bytes(), nil
 }
 
 func otlpAttributesForLabels(labels map[string]string) []otlpAttribute {

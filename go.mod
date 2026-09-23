@@ -9,12 +9,12 @@ require (
 	github.com/antchfx/xmlquery v1.5.1
 	github.com/antchfx/xpath v1.3.8
 	github.com/itchyny/gojq v0.12.19
+	golang.org/x/net v0.58.0
 	gopkg.in/yaml.v3 v3.0.1
 )
 
 require (
 	github.com/golang/groupcache v0.0.0-20210331224755-41bb18bfe9da // indirect
 	github.com/itchyny/timefmt-go v0.1.8 // indirect
-	golang.org/x/net v0.58.0 // indirect
 	golang.org/x/text v0.41.0 // indirect
 )

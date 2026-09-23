@@ -21,6 +21,9 @@ type HTTPResponse struct {
 	Target     string
 	Collector  string
 	Duration   time.Duration
+	// Directory is set instead of Body by a localfile collector reading a
+	// directory: every file it read, each to be decoded on its own.
+	Directory *DirectoryRead
 }
 
 type RequestOverrides struct {

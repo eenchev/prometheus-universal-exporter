@@ -97,3 +97,16 @@ func (m *ConfigManager) reloadMetrics() []Metric {
 	}
 	return append(append(successful, timestamps...), reloads...)
 }
+
+// rejected lists the files whose last reload was rejected.
+func (r *reloadStatus) rejected() []string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	var out []string
+	for _, file := range []string{reloadFileConfig, reloadFileTargets} {
+		if st := r.files[file]; st != nil && !st.successful {
+			out = append(out, file)
+		}
+	}
+	return out
+}

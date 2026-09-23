@@ -11,6 +11,7 @@ import (
 	"os"
 	"regexp"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -85,6 +86,9 @@ type Collector struct {
 	// Coalesce shares one upstream request among identical probes that arrive
 	// while it is in flight. Unset means true; see probeflight.go.
 	Coalesce *bool `yaml:"coalesce"`
+	// MaxConcurrentProbes bounds the collector's trips to its targets at
+	// once; unset or 0 means DefaultMaxConcurrentProbes. See triplimit.go.
+	MaxConcurrentProbes int `yaml:"max_concurrent_probes"`
 }
 type RequestConfig struct {
 	// Type selects how the collector reaches its data. It is required; see
@@ -111,6 +115,12 @@ type RequestConfig struct {
 	// under, and how old a file may be before a scrape refuses it as stale.
 	Root   string   `yaml:"root"`
 	MaxAge Duration `yaml:"max_age"`
+	// Files, MaxFiles and MaxTotalBytes turn a localfile collector into a
+	// directory reader: every file of the directory whose name matches one of
+	// the patterns is read and checked on its own (localdir.go).
+	Files         []string `yaml:"files"`
+	MaxFiles      int      `yaml:"max_files"`
+	MaxTotalBytes int64    `yaml:"max_total_bytes"`
 }
 type RetryConfig struct {
 	Attempts int      `yaml:"attempts"`
@@ -159,7 +169,16 @@ type OTLPConfig struct {
 	InsecureSkipVerify bool              `yaml:"insecure_skip_verify"`
 	ServiceName        string            `yaml:"service_name"`
 	ResourceAttributes map[string]string `yaml:"resource_attributes"`
+	// Compression of the export requests: gzip, the default, or none.
+	Compression string `yaml:"compression"`
 }
+
+// The values of otlp.compression.
+const (
+	OTLPCompressionGzip = "gzip"
+	OTLPCompressionNone = "none"
+)
+
 type Limits struct {
 	MaxResponseBytes    int64    `yaml:"max_response_bytes"`
 	MaxMetrics          int      `yaml:"max_metrics"`
@@ -270,6 +289,9 @@ func (c *Config) Validate() error {
 		}
 		if x.Cache < 0 {
 			return fmt.Errorf("collector %q cache must not be negative", x.Name)
+		}
+		if x.MaxConcurrentProbes < 0 {
+			return fmt.Errorf("collector %q max_concurrent_probes must not be negative", x.Name)
 		}
 		if x.Response.Format == "" {
 			x.Response.Format = "auto"
@@ -415,6 +437,13 @@ func (c *Config) Validate() error {
 		if c.OTLP.ServiceName == "" {
 			c.OTLP.ServiceName = "prometheus-universal-exporter"
 		}
+		switch c.OTLP.Compression {
+		case "":
+			c.OTLP.Compression = OTLPCompressionGzip
+		case OTLPCompressionGzip, OTLPCompressionNone:
+		default:
+			return fmt.Errorf("otlp.compression must be %s or %s, not %q", OTLPCompressionGzip, OTLPCompressionNone, c.OTLP.Compression)
+		}
 	}
 	return nil
 }
@@ -481,6 +510,8 @@ type ConfigManager struct {
 	expandEnv      bool
 	// reloads records how loading each file has gone, for the self-metrics.
 	reloads *reloadStatus
+	// reloadMu serializes reloads, whatever triggers them.
+	reloadMu sync.Mutex
 }
 
 // DefaultWatchInterval is how often an enabled watch re-stats the configuration
@@ -579,7 +610,22 @@ func (m *ConfigManager) ReloadLoop(ctx context.Context) {
 	}
 }
 
+// The configuration is reloaded when the watch sees a file change
+// (reloadConfig, reloadTargets), on SIGHUP, and on POST /-/reload when the
+// lifecycle API is enabled (Reload). Every reload goes through applyConfig and
+// applyTargets under reloadMu, so two triggers at once never interleave, and
+// each is logged with what triggered it.
+const (
+	reloadTriggerWatch  = "watch"
+	reloadTriggerSignal = "sighup"
+	reloadTriggerHTTP   = "http"
+)
+
+// reloadConfig reloads the configuration when the watch finds the file, or
+// one of its collector files, changed.
 func (m *ConfigManager) reloadConfig() {
+	m.reloadMu.Lock()
+	defer m.reloadMu.Unlock()
 	st, err := os.Stat(m.path)
 	if err != nil {
 		return
@@ -590,41 +636,14 @@ func (m *ConfigManager) reloadConfig() {
 	if !st.ModTime().After(m.lastMod) && stamp == m.collectorFiles {
 		return
 	}
-	m.lastMod = st.ModTime()
-	m.collectorFiles = stamp
-	c, err := LoadConfig(m.path, m.loadOptions()...)
-	if err != nil {
-		m.logger.Error("configuration reload rejected", "error", err)
-		m.reloads.record(reloadFileConfig, false)
-		return
-	}
-	if err := ValidatePythonScripts(m.pythonPath, c); err != nil {
-		m.logger.Error("configuration reload rejected", "error", err)
-		m.reloads.record(reloadFileConfig, false)
-		return
-	}
-	// Scheduled targets exist only to feed OTLP, so a configuration that would
-	// disable OTLP while they are loaded is rejected exactly as it is at
-	// startup, and the last valid configuration stays active.
-	if f := m.targetFile.Load(); f != nil {
-		if err := f.ValidateAgainst(c); err != nil {
-			m.logger.Error("configuration reload rejected", "error", err)
-			m.reloads.record(reloadFileConfig, false)
-			return
-		}
-	}
-	m.current.Store(c)
-	m.reloads.record(reloadFileConfig, true)
-	// Interpreters of scripts this reload removed or changed are stopped now
-	// rather than after the idle timeout.
-	pythonWorkers.retain(pythonWorkerKeys(m.pythonPath, c))
-	// The new configuration may list other collector files.
-	m.collectorFiles = collectorFilesStamp(m.path, c.CollectorFiles)
-	logDeprecations(m.logger, m.path, c)
-	m.logger.Info("configuration reloaded", "collectors", len(c.Collectors), "collector_files", len(c.LoadedCollectorFiles))
+	_ = m.applyConfig(reloadTriggerWatch)
 }
 
+// reloadTargets reloads the scheduled target file when the watch finds it
+// changed.
 func (m *ConfigManager) reloadTargets() {
+	m.reloadMu.Lock()
+	defer m.reloadMu.Unlock()
 	if m.targetPath == "" {
 		return
 	}
@@ -632,7 +651,66 @@ func (m *ConfigManager) reloadTargets() {
 	if err != nil || !st.ModTime().After(m.targetsLastMod) {
 		return
 	}
-	m.targetsLastMod = st.ModTime()
+	_ = m.applyTargets(reloadTriggerWatch)
+}
+
+// Reload reloads the configuration, and the scheduled target file when there
+// is one, now, whether or not they changed, and returns why either was
+// rejected. A rejected file leaves the previous one in force.
+func (m *ConfigManager) Reload(trigger string) error {
+	m.reloadMu.Lock()
+	defer m.reloadMu.Unlock()
+	err := m.applyConfig(trigger)
+	if m.targetPath != "" {
+		err = errors.Join(err, m.applyTargets(trigger))
+	}
+	return err
+}
+
+// applyConfig loads, checks and installs the configuration. reloadMu is held.
+func (m *ConfigManager) applyConfig(trigger string) error {
+	if st, err := os.Stat(m.path); err == nil {
+		m.lastMod = st.ModTime()
+	}
+	m.collectorFiles = collectorFilesStamp(m.path, m.Get().CollectorFiles)
+	reject := func(err error) error {
+		m.logger.Error("configuration reload rejected", "trigger", trigger, "error", err)
+		m.reloads.record(reloadFileConfig, false)
+		return fmt.Errorf("configuration %s: %w", m.path, err)
+	}
+	c, err := LoadConfig(m.path, m.loadOptions()...)
+	if err != nil {
+		return reject(err)
+	}
+	if err := ValidatePythonScripts(m.pythonPath, c); err != nil {
+		return reject(err)
+	}
+	// Scheduled targets exist only to feed OTLP, so a configuration that would
+	// disable OTLP while they are loaded is rejected exactly as it is at
+	// startup, and the last valid configuration stays active.
+	if f := m.targetFile.Load(); f != nil {
+		if err := f.ValidateAgainst(c); err != nil {
+			return reject(err)
+		}
+	}
+	m.current.Store(c)
+	m.reloads.record(reloadFileConfig, true)
+	// Interpreters of scripts this reload removed or changed are stopped now
+	// rather than after the idle timeout.
+	pythonWorkers().retain(pythonWorkerKeys(m.pythonPath, c))
+	// The new configuration may list other collector files.
+	m.collectorFiles = collectorFilesStamp(m.path, c.CollectorFiles)
+	logDeprecations(m.logger, m.path, c)
+	m.logger.Info("configuration reloaded", "trigger", trigger, "collectors", len(c.Collectors), "collector_files", len(c.LoadedCollectorFiles))
+	return nil
+}
+
+// applyTargets loads, checks and installs the scheduled target file. reloadMu
+// is held.
+func (m *ConfigManager) applyTargets(trigger string) error {
+	if st, err := os.Stat(m.targetPath); err == nil {
+		m.targetsLastMod = st.ModTime()
+	}
 	f, err := LoadTargetFile(m.targetPath, m.loadOptions()...)
 	if err == nil {
 		err = f.Validate()
@@ -641,13 +719,14 @@ func (m *ConfigManager) reloadTargets() {
 		err = f.ValidateAgainst(m.Get())
 	}
 	if err != nil {
-		m.logger.Error("scheduled target reload rejected", "error", err)
+		m.logger.Error("scheduled target reload rejected", "trigger", trigger, "error", err)
 		m.reloads.record(reloadFileTargets, false)
-		return
+		return fmt.Errorf("scheduled target file %s: %w", m.targetPath, err)
 	}
 	m.targetFile.Store(f)
 	m.reloads.record(reloadFileTargets, true)
-	m.logger.Info("scheduled targets reloaded", "targets", len(f.Targets))
+	m.logger.Info("scheduled targets reloaded", "trigger", trigger, "targets", len(f.Targets))
+	return nil
 }
 
 func tlsConfig(t TLSConfig) (*tls.Config, error) {

@@ -316,6 +316,7 @@ collectors:
       ...
     cache: 60s
     coalesce: true   # optional; identical probes in flight share a request (§ 42.13a)
+    max_concurrent_probes: 32   # optional; trips to the targets at once (§ 42.13b)
 ```
 
 A collector MUST have a unique name. Uniqueness MUST hold across the
@@ -503,7 +504,13 @@ textfile collector — and follows that collector's practice.
 | `root` | none | **Required.** An absolute directory, stored cleaned. The filesystem root MUST be refused. Its existence is not checked at load, so a volume mounted later works. |
 | `path` | none | Relative to `root` and the target; MUST NOT be absolute or lead outside with `..`. May carry path parameters (§ 42.10a). |
 | `max_age` | off | Non-negative duration. A file last modified longer ago MUST fail the scrape, naming its age and the limit. |
-| `max_response_bytes` | limit | As for `http`. |
+| `max_response_bytes` | limit | As for `http`; with `files`, the limit of each file. |
+| `files` | none | A list of file name patterns, `path.Match` syntax. Setting it makes the collector read a directory (§ 5.1a). MUST NOT be combined with `path`; a pattern MUST NOT be empty, contain `/`, `\` or NUL, or be malformed. |
+| `max_files` | 100 | With `files` only; not negative. |
+| `max_total_bytes` | 64 MiB | With `files` only; not negative. |
+
+`max_files` or `max_total_bytes` without `files` MUST be rejected, naming the
+key.
 
 The file read MUST be `root` / target / `path`:
 
@@ -550,10 +557,62 @@ URL, with path parameters as their placeholders, as `url`, and `READ` as
 `http_method`, so they are never mistaken for the per-collector series, which
 carry no method.
 
-A probe reads one file. It MUST NOT merge a directory of files into one
-exposition, which would hide which file a broken series came from and fail every
-file's metrics when one is malformed; several files are scraped as several
-targets.
+A collector with `path`, or none, reads one file per probe. Merging files MUST
+happen only as § 5.1a specifies, where each file is checked on its own and
+named, never as one concatenated exposition, which would hide which file a
+broken series came from and fail every file's metrics when one is malformed.
+
+##### 5.1a Reading a directory
+
+A `localfile` collector with `files` MUST read the directory `root` / target —
+`root` when the target is left out — and every entry directly in it whose name
+matches one of the patterns. Subdirectories MUST NOT be read, and a name
+starting with `.` MUST match only a pattern starting with `.`. A missing
+directory, or a target naming something other than a directory, MUST fail the
+scrape in the `file` stage under `on_fetch_error`. There is no file to name, so
+the `path` and `param_<name>` probe parameters MUST be refused with `400`, and
+`request.path` in a scheduled target at load, each saying why.
+
+Matching files MUST be taken in name order, at most `max_files` of them; the
+rest MUST NOT be read or looked at, and MUST be counted and logged as a warning
+with how many matched and the first skipped. Every file taken MUST be read by
+the rules for one file above — confined to `root`, only regular files,
+non-blocking, re-read when it changes under the read — and additionally:
+
+- A file larger than the response limit MUST be refused from its size, before
+  it is opened.
+- A file that would take the bytes read in this scrape past `max_total_bytes`
+  MUST be refused in the same way; later files that fit MUST still be read.
+- `max_age` MUST apply to each file.
+
+The whole directory read MUST be one read for the pending-read cap and MUST end
+with the probe's `timeout`, budget or context.
+
+Each file read MUST then be decoded, transformed and validated on its own, as a
+response of its own with the headers a single file gets, so its decoder follows
+its extension under `response.format: auto`. Its series MUST be given a label
+`file` with its name. A file MUST be left out, alone, when it could not be read
+or was refused, when decoding, the transform or validation fails — including a
+metric rule with `error_mode: fail` — when a series of it already has a `file`
+label or bears one of the names below, or when one of its metrics has another
+type than the same metric in a file taken before it. A left-out file MUST NOT
+fail the probe: it MUST be logged as a warning with the file, the stage and the
+error, and counted in the collector's self-metrics as the stage's failure
+would be, and every other file's series MUST be answered. The series of a
+family MUST stay one contiguous block, declared once.
+
+The answer MUST also carry, as gauges with help text:
+
+```text
+localfile_mtime_seconds{file}   modification time, for every file whose time was read
+localfile_scrape_error{file}    1 for a left-out file, 0 for every other file taken
+localfile_files_skipped         the files beyond max_files
+```
+
+A file beyond `max_files` MUST NOT get a series of its own, so the `file`
+label never has more than `max_files` values. `limits.max_metrics` MUST apply to the whole answer. The verbose
+`url` label MUST be the directory's `file://` URL ending in `/`. Scheduled
+targets MUST read directories the same way.
 
 A collector MAY set `cache` to a Go duration such as `60s`, `1m`, or `3h`. The
 value is the time to live of a cached collector result. Omitting `cache`, or
@@ -1746,6 +1805,8 @@ http_exporter_cache_misses_total
 http_exporter_cache_entries
 
 http_exporter_probes_coalesced_total
+http_exporter_probes_in_flight
+http_exporter_probes_rejected_total
 
 http_exporter_collector_config_valid
 http_exporter_scheduled_targets
@@ -1753,6 +1814,12 @@ http_exporter_scheduled_targets
 http_exporter_config_last_reload_successful
 http_exporter_config_last_reload_success_timestamp_seconds
 http_exporter_config_reloads_total
+
+http_exporter_otlp_exports_total
+http_exporter_otlp_export_retries_total
+http_exporter_otlp_points_dropped_total
+http_exporter_otlp_export_duration_seconds
+http_exporter_otlp_last_export_success_timestamp_seconds
 ```
 
 Labels should include `collector` and, where appropriate, `target`.
@@ -1788,6 +1855,32 @@ startup, with `result` `success` or `failure`, both published from the start.
 A rejected reload MUST set `http_exporter_config_last_reload_successful` to 0
 and leave the timestamp at the last success, and a reload of one file MUST NOT
 change the other's series.
+
+### 22.0c OTLP export status
+
+OTLP export is best-effort (§ 42.1), which MUST NOT mean silent. While OTLP
+export is enabled, and only then, the exporter MUST publish:
+
+```text
+http_exporter_otlp_exports_total{result}                   counter
+http_exporter_otlp_export_retries_total                    counter
+http_exporter_otlp_points_dropped_total                    counter
+http_exporter_otlp_export_duration_seconds                 gauge
+http_exporter_otlp_last_export_success_timestamp_seconds   gauge
+```
+
+An export is one delivery of everything pending, its retries included:
+`http_exporter_otlp_exports_total` MUST count it once, with `result`
+`success` when it got through and `failure` when it did not, both published
+from the start. Retries MUST be counted in
+`http_exporter_otlp_export_retries_total`. Data points dropped because the
+endpoint refused them (§ 42.1) MUST be counted in
+`http_exporter_otlp_points_dropped_total`; data points kept for the next
+export MUST NOT be. The duration MUST be that of the most recent export,
+retries included, and the timestamp that of the last export that got through,
+0 before the first. An export cut short by shutdown MUST NOT be counted, since
+the last export delivers its data. These families MUST be part of the one
+self-metric set, so they are also exported over OTLP.
 
 Avoid unbounded label values on exporter self-metrics.
 
@@ -1849,9 +1942,10 @@ published in addition to them, so a dashboard built on the per-collector view
 keeps working when verbose mode is switched on.
 
 Every self-metric family of section 22 MUST be republished with the labels
-`collector`, `http_method` and `url`, with the single exception of
-`http_exporter_cache_entries`, which counts what a collector's response cache
-holds and belongs to no individual request. The two labels are the request
+`collector`, `http_method` and `url`, except the families that describe the
+collector rather than any request: `http_exporter_cache_entries`, which counts
+what a collector's response cache holds, and `http_exporter_probes_in_flight`,
+which counts its trips in progress. The two labels are the request
 type's (§ 5.1): for `http` the method and the URL described below, for
 `localfile` `READ` and the file's `file://` URL.
 
@@ -2010,8 +2104,16 @@ Implement:
 
 Recommended behavior:
 
-- `/health`: process is alive.
-- `/ready`: configuration loaded and exporter ready to serve requests.
+- `/health`: process is alive. MUST answer `200` for as long as the process
+  serves requests.
+- `/ready`: the exporter is doing what it was configured to do. It MUST answer
+  `503` while the last reload of the configuration or of the scheduled target
+  file was rejected (§ 22.0b), until a reload of it is accepted, and, with OTLP
+  export enabled, while the last three exports failed (§ 42.1), until one gets
+  through; `200` otherwise. A `503` body MUST name each reason on a line of its
+  own starting `not ready:`, and MUST NOT include an error's text, since the
+  endpoint is never authenticated and an error can quote a path, a URL or a
+  line of the configuration.
 - `/self-metrics`: exporter self-metrics by default; the path MUST be configurable and `/metrics` MAY remain as a compatibility alias.
 - `/probe`: execute a collector against a supplied target.
 
@@ -2067,6 +2169,27 @@ all still be rejected with the last valid configuration left active.
 
 When a disabled watch is configured, the exporter MUST NOT run a polling loop at
 all.
+
+### 24.1a Reloading on demand
+
+The exporter MUST reload when asked, not only when the watch finds a change:
+
+- On `SIGHUP`, always.
+- On `POST` or `PUT` `/-/reload`, when started with `--web.enable-lifecycle`,
+  which MUST default to off. Without the flag the endpoint MUST answer `403`
+  saying how to enable it; any other method MUST answer `405` with
+  `Allow: POST, PUT`. The endpoint MUST be protected by `web.basic_auth` like
+  `/probe` and `/metrics`. It MUST answer `200` when every file was accepted,
+  and `500` with the reason when one was rejected, the previous configuration
+  staying in force.
+
+Both MUST reload the configuration, with its collector files, and the
+scheduled target file when there is one, whether or not they changed, under the
+same rules as the watch (§ 24.1), and record the result in the reload
+self-metrics (§ 22.0b). Every reload, whatever its trigger, MUST be logged with
+the trigger — `watch`, `sighup` or `http` — and reloads MUST be serialized, so
+two triggers at once never interleave. The Helm chart MUST expose the flag as a
+value (SPECIFICATION-CHART.md § 33.10).
 
 ### 24.2 Validation of metric rules
 
@@ -2528,6 +2651,7 @@ Provide clear CLI flags, for example:
 --config.schema
 --config.collector-file-schema
 --probe.timeout-offset=500ms
+--web.enable-lifecycle
 ```
 
 `--config.schema` prints the configuration file's JSON Schema and exits, and
@@ -2669,6 +2793,15 @@ make test
 or equivalent.
 
 The test suite MUST be deterministic and MUST NOT require access to real third-party services or the public internet.
+
+It MUST also be repeatable: every test MUST pass when the suite runs more than
+once in one process and in a random order, and `make test` and CI MUST run it
+with the race detector, twice, shuffled (`go test -race -count=2 -shuffle=on`).
+A test MUST NOT depend on state another test, or an earlier run of itself, left
+behind. Process-wide state a test reads counts from MUST be replaceable per
+test: the Python worker pool MUST be reached through one replaceable reference,
+each test that uses it MUST get a fresh pool, and that pool's workers MUST be
+stopped when the test ends.
 
 ## 34.1 Test layers
 
@@ -4047,6 +4180,37 @@ See § 5.1, `localfile`.
 - The shipped example configurations, target file and schema include a
   `localfile` collector and target.
 
+## 34.53a Directory read tests
+
+See § 5.1a.
+
+- `files` gets the defaults; `files` with `path`, a pattern with `/`, a
+  malformed or empty pattern, a negative `max_files` or `max_total_bytes`,
+  either without `files`, and `files` on an `http` collector are rejected.
+- Every matching file is read, with `file` labels, mtimes and scrape errors of
+  0, and families declared once; non-matching, hidden and nested files are not
+  read; a pattern starting with a dot reads hidden files.
+- A malformed file, one with a `file` label, one using a reserved name and one
+  whose metric type conflicts with an earlier file each fail alone with a scrape
+  error of 1 and a mtime, logged with their stage; the probe succeeds; the
+  failure is counted.
+- Text files with a regex and JSON files with jq are read; a rule with
+  `error_mode: fail` fails its file only.
+- With more files than `max_files`, the first by name are read and the rest
+  skipped, counted and logged.
+- A file over the per-file limit, and one past `max_total_bytes`, are refused
+  without being read, while a later file that fits is read; both are counted
+  as limit errors and logged.
+- A file older than `max_age` fails alone, with its mtime.
+- A target names a subdirectory; an empty directory answers with no files; a
+  missing directory or a file as target fails the probe; a target outside
+  `root`, `path` and `param_<name>` are `400`.
+- A link inside `root` is followed, one outside fails its file, and a named pipe
+  fails its file without hanging.
+- The verbose `url` is the directory's `file://` URL.
+- A scheduled target reads a directory; one setting `request.path` is refused.
+- The documented example loads and reads a directory.
+
 ## 34.54 Probe deadline tests
 
 See § 3.2a.
@@ -4117,6 +4281,66 @@ See § 42.1.
   the verbose scrape-time histogram and the GC summary reach an OTLP endpoint
   with their data, and the scrape-time histogram's bucket counts add up to its
   count.
+
+## 34.58 Reload-on-demand tests
+
+See § 24.1a.
+
+- Without `--web.enable-lifecycle`, `POST /-/reload` is `403` naming the flag
+  and reloads nothing.
+- With it: `GET` is `405` with `Allow: POST, PUT`; `POST` applies a changed
+  configuration at once and answers `200`; `PUT` reloads an unchanged one; a
+  duplicate collector is `500` naming it, keeping the previous configuration;
+  the reload counters count successes and failures.
+- The scheduled target file is reloaded too, and its rejection is a `500`
+  naming it, keeping the previous targets.
+- With `web.basic_auth`, the endpoint needs the credentials.
+- `SIGHUP` reloads.
+- Reloads from `/-/reload` and the watch at once do not interleave.
+
+## 34.59 Concurrent probe limit tests
+
+See § 42.13b.
+
+- The default is 32; a set limit is used; a negative one is rejected.
+- With a limit of 2 and two probes held at the target, a third is `503` at once
+  naming `max_concurrent_probes`, never reaches the target, and is counted;
+  the in-flight gauge reads 2; the held probes succeed; the slots come back and
+  a later probe succeeds.
+- With a limit of 1, an identical probe sharing the request in flight, and a
+  cache hit while another target holds the slot, are both answered.
+- A scheduled target fails in the `concurrency` stage when no slot frees within
+  its budget, and succeeds when one frees while it waits.
+- Waiting for a slot ends with its context; collectors have limits of their
+  own.
+
+## 34.60 OTLP delivery, readiness and proxy tests
+
+See § 22.0c, § 23, § 42.1a and § 42.15b.
+
+- Exports are gzipped by default and decode; with `compression: none` they
+  are plain JSON; another value is rejected.
+- `429`, `502`, `503` and `504` are retried until the export gets through:
+  one success, the retries counted, the last success timestamp set, nothing
+  left pending.
+- `Retry-After` in seconds and as a date is read, a past or unreadable one is
+  ignored, and the backoff doubles up to its cap. Retries end within the
+  budget, and a `Retry-After` longer than it ends the export at once.
+- An export that runs out of retries is one failure; its probe metrics are
+  kept, the self-metric snapshot is not, a newer value queued meanwhile wins,
+  and the kept metrics are sent once the endpoint recovers. An unreachable
+  endpoint is retried and its data kept.
+- A `400` is tried once, its data points dropped and counted.
+- The status families exist only with OTLP enabled, and the timestamp is 0
+  before the first success.
+- The export loop stops when its context ends; an export it cut short is not
+  counted and its data is kept; the last export sends it, data queued since,
+  and a self-metric snapshot, in one request. Without OTLP there is none.
+- `/ready` is `503` after a rejected reload, without quoting the error, and
+  `200` after an accepted one; `503` after three failed exports in a row and
+  `200` after one gets through; OTLP failures do not count with OTLP disabled.
+- With `HTTP_PROXY` set, a probe and an OTLP export go through the proxy, and a
+  host in `NO_PROXY` does not.
 
 # 35. Documentation requirements
 
@@ -4408,6 +4632,34 @@ resource attributes MUST be preserved:
 - NaN and the infinities MUST be encoded as the protobuf JSON mapping writes
   them — `"NaN"`, `"Infinity"`, `"-Infinity"` — since a JSON number cannot
   express them, and one such value MUST NOT fail the encoding of an export.
+
+### 42.1a Delivery
+
+Export requests MUST be gzipped, with `Content-Encoding: gzip`, unless
+`otlp.compression` is `none`; `gzip` MUST be the default, and any other value
+MUST be rejected when the configuration loads.
+
+An export that fails with a network error, `429`, `502`, `503` or `504` — the
+responses the OTLP/HTTP specification makes retryable — MUST be retried with
+exponential backoff, 1 second doubling up to 16, or after the delay a
+`Retry-After` header gives in seconds or as an HTTP date. `otlp.timeout` MUST
+bound each attempt. Retries MUST stop when another attempt could not start
+within `otlp.interval` of the export's start, so one export never runs into the
+next, and MUST stop at once when the exporter shuts down.
+
+When retries run out, the data points of the export MUST be kept for the next
+export, except where a newer value of the same series has been queued since;
+the self-metric snapshot MUST NOT be kept, since the next export takes a new
+one. Any other non-2xx response MUST NOT be retried, and the export's data
+points MUST be dropped rather than kept, since the endpoint would refuse them
+again. Every failed export MUST be logged as a warning with the retries made,
+and counted (§ 22.0c).
+
+On `SIGTERM` or `SIGINT`, the exporter MUST stop accepting requests, let the
+probes in progress finish, stop the export loop, and then make one last
+export, bounded by `otlp.timeout`, of everything pending — including the data
+of an export the shutdown cut short — with a last self-metric snapshot, before
+it exits. Scheduled targets MUST NOT be scraped again for it.
 
 ## 42.2 CSV transformation
 
@@ -4855,6 +5107,27 @@ rate-limited endpoint.
 - Scheduled targets (§ 42.14) are scraped once per interval by the exporter
   itself and are not affected.
 
+## 42.13b Limiting concurrent probes
+
+A collector MAY set `max_concurrent_probes`, the number of trips to its
+targets — the request or file read, with decoding and transforms — it makes at
+once. Unset or `0` MUST mean 32; a negative value MUST be rejected at load.
+Coalescing (§ 42.13a) bounds identical probes only, so without this probes of
+many targets of one backend would reach it with no bound.
+
+- A probe that would exceed the limit MUST be answered `503 Service
+  Unavailable` at once, naming the collector and the limit, without contacting
+  the target, and MUST be counted in `http_exporter_probes_rejected_total`. It
+  MUST NOT be queued: Prometheus has a scrape timeout, and an immediate reason
+  is better than none.
+- A probe answered from the cache, or by sharing a request in flight, makes no
+  trip and MUST NOT take a slot.
+- A scheduled target MUST share its collector's limit, and MUST wait for a slot
+  within its scrape budget instead of failing at once; if none frees in time it
+  MUST fail in the `concurrency` stage and be counted as rejected.
+- A slot MUST be freed when the trip ends, and `http_exporter_probes_in_flight`
+  MUST report the trips in progress per collector.
+
 ## 42.14 Scheduled targets exported over OTLP
 
 The exporter MAY be started with an optional scheduled target document:
@@ -5013,6 +5286,16 @@ connections MUST time out (90 seconds), and a pool unused for five minutes —
 such as one a reload made obsolete — MUST be closed and dropped. A response
 body MUST be read to its end before it is closed where the exporter can, so
 the connection returns to the pool.
+
+Every transport MUST send its requests through the proxy the environment names:
+`HTTPS_PROXY` for `https` URLs, `HTTP_PROXY` for `http` ones, `NO_PROXY` for
+the hosts, domains, addresses and CIDR ranges reached directly, and the
+lower-case spellings, as Go's `golang.org/x/net/http/httpproxy` interprets
+them; requests to localhost and loopback addresses MUST go direct. This MUST
+apply to target requests and OTLP exports alike. The environment MUST be read
+when a transport is built rather than once per process, so a test can set it.
+There MUST NOT be a proxy setting in the configuration: the proxy belongs to
+where the exporter runs, not to a collector.
 
 These settings replace the earlier `request.redirect_policy` string, which MUST
 NOT be accepted any more. Because the configuration decoder rejects unknown

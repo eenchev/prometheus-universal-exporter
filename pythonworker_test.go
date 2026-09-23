@@ -3,7 +3,9 @@ package main
 import (
 	"context"
 	"net/http"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -12,11 +14,30 @@ import (
 // Python scripts run in long-lived workers (pythonworker.go). These tests pin
 // reuse, isolation, timeouts, crashes, output limits and the sandbox.
 
+// requirePython skips a test without python3, and gives it a worker pool of
+// its own (usePythonPool).
 func requirePython(t *testing.T) {
 	t.Helper()
 	if _, err := exec.LookPath("python3"); err != nil {
 		t.Skip("python3 is not available")
 	}
+	usePythonPool(t)
+}
+
+// usePythonPool runs the test against a fresh worker pool and restores the
+// previous one afterwards, stopping the fresh pool's workers. Every count a
+// test reads from the pool is then its own, so the tests pass under
+// -count=N and -shuffle=on. Tests do not run in parallel, so swapping the
+// package's pool is safe.
+func usePythonPool(t *testing.T) *pythonPool {
+	t.Helper()
+	pool := newPythonPool()
+	previous := pythonPoolRef.Swap(pool)
+	t.Cleanup(func() {
+		pythonPoolRef.Store(previous)
+		pool.close()
+	})
+	return pool
 }
 
 func workerCollector(name, script string) *Collector {
@@ -47,7 +68,7 @@ func workerMetricValue(t *testing.T, set *MetricSet, name string) float64 {
 func TestPythonWorkerIsReused(t *testing.T) {
 	requirePython(t)
 	c := workerCollector("reuse", `metric(name="v", value=1)`)
-	before := pythonWorkers.started.Load()
+	before := pythonWorkers().started.Load()
 	for i := 0; i < 5; i++ {
 		set, err := runWorkerScript(t, c)
 		if err != nil {
@@ -57,7 +78,7 @@ func TestPythonWorkerIsReused(t *testing.T) {
 			t.Fatal("wrong value")
 		}
 	}
-	if started := pythonWorkers.started.Load() - before; started != 1 {
+	if started := pythonWorkers().started.Load() - before; started != 1 {
 		t.Fatalf("five sequential runs started %d interpreters, want 1", started)
 	}
 }
@@ -161,7 +182,7 @@ metric(name="stdin_bytes", value=len(rest))
 // error; the worker survives and is reused.
 func TestPythonWorkerSurvivesScriptErrors(t *testing.T) {
 	requirePython(t)
-	before := pythonWorkers.started.Load()
+	before := pythonWorkers().started.Load()
 	for _, test := range []struct{ script, want string }{
 		{`raise ValueError("bad vendor data")`, "ValueError: bad vendor data"},
 		{`fail("no workers found")`, "RuntimeError: no workers found"},
@@ -177,7 +198,7 @@ func TestPythonWorkerSurvivesScriptErrors(t *testing.T) {
 	// worker, and a re-run of the last reuses it.
 	c := workerCollector("errors", `import sys; sys.exit(3)`)
 	_, _ = runWorkerScript(t, c)
-	if started := pythonWorkers.started.Load() - before; started != 3 {
+	if started := pythonWorkers().started.Load() - before; started != 3 {
 		t.Fatalf("started %d interpreters, want 3", started)
 	}
 }
@@ -186,13 +207,13 @@ func TestPythonWorkerSurvivesScriptErrors(t *testing.T) {
 func TestPythonWorkerCrashIsReplaced(t *testing.T) {
 	requirePython(t)
 	c := workerCollector("crash", `import os; os._exit(1)`)
-	before := pythonWorkers.started.Load()
+	before := pythonWorkers().started.Load()
 	for run := 0; run < 2; run++ {
 		if _, err := runWorkerScript(t, c); err == nil || !strings.Contains(err.Error(), "python transform failed: the interpreter exited") {
 			t.Fatalf("run %d: err=%v", run, err)
 		}
 	}
-	if started := pythonWorkers.started.Load() - before; started != 2 {
+	if started := pythonWorkers().started.Load() - before; started != 2 {
 		t.Fatalf("started %d interpreters for two crashing runs, want 2", started)
 	}
 }
@@ -266,16 +287,16 @@ func TestPythonWorkerIdleWorkersAreReaped(t *testing.T) {
 		t.Fatal(err)
 	}
 	key := pythonWorkerSpec("python3", c).key()
-	pythonWorkers.mu.Lock()
-	idle := pythonWorkers.idle[key]
+	pythonWorkers().mu.Lock()
+	idle := pythonWorkers().idle[key]
 	if len(idle) != 1 {
-		pythonWorkers.mu.Unlock()
+		pythonWorkers().mu.Unlock()
 		t.Fatalf("%d idle workers, want 1", len(idle))
 	}
 	idle[0].idleSince = time.Now().Add(-pythonWorkerIdleTimeout - time.Second)
-	pythonWorkers.reapLocked(time.Now())
-	_, stillThere := pythonWorkers.idle[key]
-	pythonWorkers.mu.Unlock()
+	pythonWorkers().reapLocked(time.Now())
+	_, stillThere := pythonWorkers().idle[key]
+	pythonWorkers().mu.Unlock()
 	if stillThere {
 		t.Fatal("an expired idle worker was kept")
 	}
@@ -312,10 +333,29 @@ func TestPythonWorkerConcurrentRuns(t *testing.T) {
 		}
 	}
 	key := pythonWorkerSpec("python3", c).key()
-	pythonWorkers.mu.Lock()
-	idle := len(pythonWorkers.idle[key])
-	pythonWorkers.mu.Unlock()
+	pythonWorkers().mu.Lock()
+	idle := len(pythonWorkers().idle[key])
+	pythonWorkers().mu.Unlock()
 	if idle < 1 || idle > pythonWorkerMaxIdle {
 		t.Fatalf("%d idle workers after a burst, want 1..%d", idle, pythonWorkerMaxIdle)
+	}
+}
+
+// usePythonPool swaps the package's pool for the length of a test, which is
+// only safe while no test runs in parallel with another.
+func TestNoTestRunsInParallel(t *testing.T) {
+	files, err := filepath.Glob("*_test.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	call := "t." + "Parallel("
+	for _, file := range files {
+		raw, err := os.ReadFile(file)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if strings.Contains(string(raw), call) {
+			t.Errorf("%s calls %s), but usePythonPool swaps the shared worker pool per test", file, call)
+		}
 	}
 }

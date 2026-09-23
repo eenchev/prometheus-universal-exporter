@@ -25,6 +25,8 @@ func TestSelfMetricsExpositionIsWellFormed(t *testing.T) {
 	defer target.Close()
 	server := verboseServer(t, true, testCollector("first", "text"), testCollector("second", "text"), pythonCollector("third", `metric(name="v", value=1)`))
 	server.manager.Get().Web.SelfMetrics.ResourceMetrics = true
+	// With OTLP on, so its export status families are checked too.
+	server.manager.Get().OTLP = otlpConfig("http://otel.invalid:4318/v1/metrics")
 	probeOnce(t, server, "/probe?collector=first&target="+target.URL, nil)
 	probeOnce(t, server, "/probe?collector=second&target="+target.URL, nil)
 	exposition := selfMetrics(t, server)

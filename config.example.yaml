@@ -5,6 +5,8 @@ otlp:
   timeout: 5s
   # Metrics are batched and exported at this interval.
   interval: 30s
+  # Export requests are gzipped; none sends them uncompressed.
+  # compression: gzip
   # headers:
   #   X-OTLP-Tenant: production
   # service_name: prometheus-universal-exporter
@@ -47,6 +49,9 @@ collectors:
     # missing) parameters, headers, or credentials never reads it. Omit or set
     # 0s to disable caching, which is the default.
     cache: 60s
+    # How many trips to its targets this collector makes at once; a probe over
+    # the limit is answered 503 at once. Omit or 0 for the default, 32.
+    # max_concurrent_probes: 8
     request:
       # Required. How this collector reaches its data; http is the only type
       # today, and each type accepts its own request keys and probe parameters.
@@ -221,6 +226,25 @@ collectors:
       path: batch.prom
       # A writer that has stopped would leave its last values exported
       # forever; refuse a file older than this instead.
+      max_age: 1h
+    transform:
+      type: prometheus
+
+  # The whole directory, as node_exporter's textfile collector reads it: every
+  # file matching files is checked on its own, its series get a file label,
+  # and localfile_mtime_seconds{file} and localfile_scrape_error{file} report
+  # each file, so one broken file fails alone. Probe it with
+  # /probe?collector=textfiles. See docs/LOCALFILE.md#reading-a-directory.
+  - name: textfiles
+    request:
+      type: localfile
+      root: /var/lib/node_exporter/textfile_collector
+      files: ["*.prom"]
+      # Bounds on one scrape: files beyond max_files are skipped and logged,
+      # and a file that would take the scrape past max_total_bytes, or is over
+      # max_response_bytes on its own, is refused without being read.
+      max_files: 100
+      max_total_bytes: 67108864  # 64 MiB
       max_age: 1h
     transform:
       type: prometheus

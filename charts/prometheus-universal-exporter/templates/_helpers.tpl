@@ -16,7 +16,8 @@
   "--otlp.targets-file" "set otlpTargets.enabled instead"
   "--config.export-env" "set server.expandEnv instead"
   "--log.level" "set server.logLevel instead"
-  "--probe.timeout-offset" "set server.probeTimeoutOffset instead" -}}
+  "--probe.timeout-offset" "set server.probeTimeoutOffset instead"
+  "--web.enable-lifecycle" "set server.enableLifecycle instead" -}}
 {{- /* These flags make the exporter print something and exit instead of
        serving, so a pod started with one would restart for ever. */ -}}
 {{- $oneShot := dict

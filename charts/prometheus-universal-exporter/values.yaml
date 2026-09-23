@@ -72,10 +72,18 @@ server:
   # out, so the chart also works with exporter images that predate it. Raise it
   # if Prometheus still times out first.
   probeTimeoutOffset: ""
+  # Enable POST /-/reload, which reloads the configuration at once and answers
+  # whether it was accepted, for tools that update the configuration without
+  # a rollout. Off by default; with a chart-managed ConfigMap a change rolls
+  # the Deployment anyway. The endpoint is behind web.basic_auth when that is
+  # configured. SIGHUP reloads whether or not this is set.
+  enableLifecycle: false
 
 # Environment variables for the exporter container, in the Kubernetes shapes.
 # These are what server.expandEnv substitutes from; they are also useful on
-# their own, for anything the image reads from the environment.
+# their own, for anything the image reads from the environment, such as
+# HTTPS_PROXY, HTTP_PROXY and NO_PROXY, which target requests and OTLP exports
+# go through.
 #
 #   env:
 #     - name: DEMO_TARGET

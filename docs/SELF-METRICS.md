@@ -25,6 +25,8 @@ configured:
 | `http_exporter_cache_hits_total`, `http_exporter_cache_misses_total` | counter | [Response cache](CONFIGURATION.md#response-caching) lookups. |
 | `http_exporter_cache_entries` | gauge | Entries the collector's cache holds. |
 | `http_exporter_probes_coalesced_total` | counter | Probes that [shared a request](#shared-probes). |
+| `http_exporter_probes_in_flight` | gauge | Trips to the collector's targets in progress, which [`max_concurrent_probes`](CONFIGURATION.md#limiting-concurrent-probes) bounds. |
+| `http_exporter_probes_rejected_total` | counter | Probes answered `503` because the collector was at `max_concurrent_probes`. |
 | `http_exporter_collector_config_valid` | gauge | `1` for every loaded collector. |
 
 A failure rate, for example:
@@ -59,10 +61,30 @@ http_exporter_config_reloads_total{file="config",result="failure"} 1
 [collector files](CONFIGURATION.md#collector-files); `file="targets"` is the
 [scheduled target file](OTLP.md#scheduled-targets), reported only when there is
 one. Loading at startup counts as a success; the counter counts reloads after
-it. Alert on a change that did not take:
+it, whatever triggered them: the watch, `SIGHUP` or
+[`POST /-/reload`](CONFIGURATION.md#reloading-on-demand). Alert on a change that did not take:
 
 ```promql
 http_exporter_config_last_reload_successful == 0
+```
+
+## OTLP export status
+
+With [OTLP export](OTLP.md) enabled, these say how it is going. They are
+exported over OTLP too, so the backend hears about failed exports from the
+next one that gets through, and are scraped from the self-metrics path whatever
+happens to OTLP:
+
+| Metric | Type | Meaning |
+| --- | --- | --- |
+| `http_exporter_otlp_exports_total{result}` | counter | Exports, by `result`: `success` or `failure`. An export is one delivery of everything pending; a retried export that got through is one success. |
+| `http_exporter_otlp_export_retries_total` | counter | Attempts repeated after a network error, `429`, `502`, `503` or `504`. |
+| `http_exporter_otlp_points_dropped_total` | counter | Data points dropped because the endpoint refused them with an answer that is not retried. Data points of an export that ran out of retries are kept for the next and not counted. |
+| `http_exporter_otlp_export_duration_seconds` | gauge | Duration of the most recent export, retries included. |
+| `http_exporter_otlp_last_export_success_timestamp_seconds` | gauge | Unix time of the last export that got through; `0` before the first. |
+
+```promql
+rate(http_exporter_otlp_exports_total{result="failure"}[15m]) > 0
 ```
 
 ## Shared probes

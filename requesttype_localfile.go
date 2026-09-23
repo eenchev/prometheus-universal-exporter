@@ -57,7 +57,7 @@ import (
 func init() {
 	registerRequestType(&requestType{
 		Name:           RequestTypeLocalFile,
-		Fields:         []string{"root", "path", "max_age", "max_response_bytes"},
+		Fields:         []string{"root", "path", "max_age", "max_response_bytes", "files", "max_files", "max_total_bytes"},
 		Overrides:      []string{"path", "timeout", pathParamPrefix},
 		TargetFields:   []string{"path", "timeout"},
 		Validate:       validateLocalFileRequest,
@@ -71,6 +71,12 @@ func init() {
 		Method:  func(*Collector, RequestOverrides) string { return localFileMethod },
 		Display: func(target string) string { return target },
 		Stage:   "file",
+		CheckOverride: func(c *Collector, key string) error {
+			if readsDirectory(c) && (key == "path" || strings.HasPrefix(key, pathParamPrefix)) {
+				return fmt.Errorf("collector %q reads every file of a directory that request.files matches, so there is no file for it to name; name a directory with the target instead", c.Name)
+			}
+			return nil
+		},
 	})
 }
 
@@ -114,7 +120,7 @@ func validateLocalFileRequest(x *Collector) error {
 	if err := checkLocalFileName("request.path", x.Request.Path); err != nil {
 		return fmt.Errorf("collector %q %w", x.Name, err)
 	}
-	return nil
+	return validateLocalDirectory(x)
 }
 
 // checkLocalFileName requires a path under root: relative, and without ".."
@@ -209,6 +215,13 @@ func resolveLocalFile(target string, c *Collector, overrides RequestOverrides, b
 // localFileLabel is the url label of a file read: its file:// URL, with path
 // parameters as their placeholders.
 func localFileLabel(target string, c *Collector, overrides RequestOverrides) (string, error) {
+	if readsDirectory(c) {
+		dir, err := localFileTargetDir(c, target)
+		if err != nil {
+			return "", err
+		}
+		return "file://" + filepath.ToSlash(filepath.Join(c.Request.Root, dir)) + "/", nil
+	}
 	file, err := resolveLocalFile(target, c, overrides, false)
 	if err != nil {
 		return "", err
@@ -267,6 +280,9 @@ type localFileRead struct {
 }
 
 func fetchLocalFile(ctx context.Context, target string, c *Collector, overrides RequestOverrides, _ http.Header) (*HTTPResponse, error) {
+	if readsDirectory(c) {
+		return fetchLocalDirectory(ctx, target, c, overrides)
+	}
 	start := time.Now()
 	file, err := resolveLocalFile(target, c, overrides, true)
 	if err != nil {
@@ -301,30 +317,50 @@ func fetchLocalFile(ctx context.Context, target string, c *Collector, overrides 
 	if read.err != nil {
 		return nil, read.err
 	}
-	modified := read.info.ModTime()
+	if err := checkMaxAge(c, full, read.info.ModTime()); err != nil {
+		return nil, err
+	}
+	resp := localFileResponse(file, read.body, read.info, c)
+	resp.Target, resp.Duration = target, time.Since(start)
+	return resp, nil
+}
+
+// checkMaxAge refuses a file older than request.max_age.
+func checkMaxAge(c *Collector, full string, modified time.Time) error {
 	if maxAge := time.Duration(c.Request.MaxAge); maxAge > 0 {
 		if age := time.Since(modified); age > maxAge {
-			return nil, fmt.Errorf("file %s was last modified %s ago, longer than request.max_age %s; whatever writes it has stopped", full, age.Round(time.Second), maxAge)
+			return fmt.Errorf("file %s was last modified %s ago, longer than request.max_age %s; whatever writes it has stopped", full, age.Round(time.Second), maxAge)
 		}
 	}
+	return nil
+}
+
+// localFileResponse presents a file read as a response: status 200, and
+// Content-Type from the extension, Content-Length and Last-Modified.
+func localFileResponse(name string, body []byte, info fs.FileInfo, c *Collector) *HTTPResponse {
 	headers := http.Header{}
-	if contentType := localFileContentType(file); contentType != "" {
+	if contentType := localFileContentType(name); contentType != "" {
 		headers.Set("Content-Type", contentType)
 	}
-	headers.Set("Content-Length", strconv.Itoa(len(read.body)))
-	headers.Set("Last-Modified", modified.UTC().Format(http.TimeFormat))
-	return &HTTPResponse{StatusCode: http.StatusOK, Headers: headers, Body: read.body, Target: target, Collector: c.Name, Duration: time.Since(start)}, nil
+	headers.Set("Content-Length", strconv.Itoa(len(body)))
+	headers.Set("Last-Modified", info.ModTime().UTC().Format(http.TimeFormat))
+	return &HTTPResponse{StatusCode: http.StatusOK, Headers: headers, Body: body, Collector: c.Name}
 }
 
 // readLocalFile reads root/name, confined to root, and only a regular file. A
 // file whose size or modification time moved while it was read is read again.
 func readLocalFile(rootDir, name string, limit int64) ([]byte, fs.FileInfo, error) {
-	full := filepath.Join(rootDir, name)
 	root, err := os.OpenRoot(rootDir)
 	if err != nil {
 		return nil, nil, fmt.Errorf("opening request.root: %w", err)
 	}
 	defer func() { _ = root.Close() }()
+	return readRootFile(root, rootDir, name, limit)
+}
+
+// readRootFile reads name in an opened root, as readLocalFile does.
+func readRootFile(root *os.Root, rootDir, name string, limit int64) ([]byte, fs.FileInfo, error) {
+	full := filepath.Join(rootDir, name)
 	for attempt := 1; ; attempt++ {
 		before, err := root.Stat(name)
 		if err != nil {

@@ -131,7 +131,7 @@ affinity: {}
 
 The deployment SHOULD run as a non-root user where practical.
 
-The chart MUST configure liveness/readiness probes using the exporter health endpoints.
+The chart MUST configure liveness/readiness probes using the exporter health endpoints: liveness on `/health` and readiness on `/ready`, which reports a rejected reload and failing OTLP exports (SPECIFICATION-EXPORTER.md § 23).
 
 ### 33.2 Exporter configuration
 
@@ -311,6 +311,7 @@ values schema:
 | `server.pythonPath` | `--python.path` |
 | `server.logLevel` | `--log.level`, one of `debug`, `info`, `warn`, `error`; default `info` |
 | `server.probeTimeoutOffset` | `--probe.timeout-offset`, a Go duration of zero or more |
+| `server.enableLifecycle` | `--web.enable-lifecycle`, rendered only when `true`; default `false` |
 | `server.watchConfig`, `server.watchConfigInterval` | `--config.watch`, `--config.watch-interval` |
 | `server.expandEnv` | `--config.export-env` |
 | `otlpTargets.enabled` | `--otlp.targets-file` |
@@ -791,3 +792,7 @@ The chart MUST expose the flag, and MUST provide `env` and `envFrom` in the
 ordinary Kubernetes shapes, because the flag is inert without a way to set
 variables in the container: the material an operator wants to keep out of a
 committed file generally lives in a Secret.
+The same `env` is how a proxy is set: the exporter takes `HTTPS_PROXY`,
+`HTTP_PROXY` and `NO_PROXY` from its environment (SPECIFICATION-EXPORTER.md
+§ 42.15b), and the chart MUST NOT add a proxy value of its own. The chart
+README MUST show setting them.

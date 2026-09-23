@@ -106,6 +106,14 @@ func (s *Server) scrapeScheduledTarget(ctx context.Context, target ScheduledTarg
 		count(func(st *serverStats) { st.cacheMisses++ })
 	}
 
+	// A scheduled scrape shares the collector's max_concurrent_probes with its
+	// probes, and waits for a slot within its budget rather than failing.
+	if err := s.trips.acquire(ctx, c.Name, maxConcurrentProbes(c)); err != nil {
+		count(func(st *serverStats) { st.rejected++ })
+		fail("concurrency", err)
+		return
+	}
+	defer s.trips.release(c.Name)
 	response, err := fetchCollector(ctx, target.Target, c, overrides, headers)
 	scraped = true
 	if err != nil {
@@ -123,28 +131,33 @@ func (s *Server) scrapeScheduledTarget(ctx context.Context, target ScheduledTarg
 		fail("http_status", fmt.Errorf("received HTTP status %d", response.StatusCode))
 		return
 	}
-	decoded, err := decode(response, c)
-	if err != nil {
-		count(func(st *serverStats) { st.parseErrors++ })
-		fail("decode", err)
-		return
-	}
-	count(func(st *serverStats) { st.decodeOK++ })
-	scriptCtx, timer := withScriptTimer(ctx)
-	set, err := transform(scriptCtx, decoded, response, c, s.pythonPath)
-	recordScriptDuration(rec, timer)
-	if err != nil {
-		count(func(st *serverStats) {
-			st.transformErrors++
-			if errors.Is(err, errMissingValue) {
-				st.missing++
-			}
-			if errors.Is(err, errScriptFailed) {
-				st.scriptErrors++
-			}
-		})
-		fail("transform", err)
-		return
+	var set *MetricSet
+	if response.Directory != nil {
+		set = s.collectDirectory(ctx, response.Directory, c, rec, address)
+	} else {
+		decoded, err := decode(response, c)
+		if err != nil {
+			count(func(st *serverStats) { st.parseErrors++ })
+			fail("decode", err)
+			return
+		}
+		count(func(st *serverStats) { st.decodeOK++ })
+		scriptCtx, timer := withScriptTimer(ctx)
+		set, err = transform(scriptCtx, decoded, response, c, s.pythonPath)
+		recordScriptDuration(rec, timer)
+		if err != nil {
+			count(func(st *serverStats) {
+				st.transformErrors++
+				if errors.Is(err, errMissingValue) {
+					st.missing++
+				}
+				if errors.Is(err, errScriptFailed) {
+					st.scriptErrors++
+				}
+			})
+			fail("transform", err)
+			return
+		}
 	}
 	if err := set.Validate(c.Limits); err != nil {
 		count(func(st *serverStats) { st.limitErrors++ })

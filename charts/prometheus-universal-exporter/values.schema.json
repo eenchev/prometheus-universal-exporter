@@ -116,6 +116,7 @@
         "watchConfigInterval": {"$ref": "#/$defs/duration"},
         "expandEnv": {"type": "boolean"},
         "logLevel": {"type": "string", "enum": ["debug", "info", "warn", "error"], "description": "Rendered as --log.level."},
+        "enableLifecycle": {"type": "boolean", "description": "Rendered as --web.enable-lifecycle when true: enables POST /-/reload."},
         "probeTimeoutOffset": {
           "type": "string",
           "description": "Rendered as --probe.timeout-offset when set: how much of Prometheus's scrape timeout a probe leaves unused. Empty keeps the exporter's default, 500ms.",

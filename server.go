@@ -14,7 +14,6 @@ import (
 	"strconv"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"time"
 )
 
@@ -26,6 +25,8 @@ type statsValues struct {
 	probes, success, decodeOK, parseErrors, transformErrors, missing, scriptErrors, limitErrors, emitted, cacheHits, cacheMisses uint64
 	// coalesced counts probes answered by sharing another probe's request.
 	coalesced uint64
+	// rejected counts probes turned away by max_concurrent_probes.
+	rejected uint64
 	// lastScriptDuration is how long the Python of the last probe that ran any
 	// took, in seconds.
 	lastScriptDuration float64
@@ -74,6 +75,8 @@ var selfMetricDescriptors = []selfMetricDescriptor{
 	// What a collector's cache holds belongs to the collector, not to any one
 	// request, so it has no per-request value.
 	{"http_exporter_cache_entries", GaugeMetricType, "Entries currently held in this collector's response cache.", nil},
+	{"http_exporter_probes_in_flight", GaugeMetricType, "Trips to this collector's targets in progress, which max_concurrent_probes bounds.", nil},
+	{"http_exporter_probes_rejected_total", CounterMetricType, "Probes answered 503 because this collector already had max_concurrent_probes trips to its targets in progress.", func(v statsValues) float64 { return float64(v.rejected) }},
 	{"http_exporter_probes_coalesced_total", CounterMetricType, "Probes answered by sharing an identical probe already in flight instead of going to the target.", func(v statsValues) float64 { return float64(v.coalesced) }},
 }
 
@@ -94,6 +97,11 @@ var exporterMetricHelp = map[string]string{
 	"http_exporter_config_last_reload_successful":                "Whether the last load of this configuration file, at startup or on reload, succeeded.",
 	"http_exporter_config_last_reload_success_timestamp_seconds": "Unix time this configuration file was last loaded successfully, at startup or on reload.",
 	"http_exporter_config_reloads_total":                         "Reloads of this configuration file after startup, by result: success or failure.",
+	"http_exporter_otlp_exports_total":                           "OTLP exports, each a delivery of everything pending with its retries, by result: success or failure.",
+	"http_exporter_otlp_export_retries_total":                    "OTLP export attempts repeated after a network error, 429, 502, 503 or 504.",
+	"http_exporter_otlp_points_dropped_total":                    "Data points given up on because the OTLP endpoint rejected them with a status that is not retried.",
+	"http_exporter_otlp_export_duration_seconds":                 "Duration of the most recent OTLP export, its retries included.",
+	"http_exporter_otlp_last_export_success_timestamp_seconds":   "Unix time of the last OTLP export that got through; 0 before the first.",
 }
 
 // selfMetricHelp indexes the help of every family the self-metrics carry
@@ -134,12 +142,16 @@ type Server struct {
 	requests      *requestTracker
 	flights       *probeFlights
 	durations     *scrapeDurations
-	ready         atomic.Bool
+	// trips bounds each collector's trips to its targets (triplimit.go).
+	trips *tripLimiter
+	// lifecycle enables POST /-/reload (lifecycle.go).
+	lifecycle bool
+	// otlp is how exports are going (otlpstatus.go).
+	otlp *otlpStatus
 }
 
 func NewServer(m *ConfigManager, p string, l *slog.Logger) *Server {
-	s := &Server{manager: m, pythonPath: p, logger: l, stats: map[string]*serverStats{}, otlpPending: map[string]*otlpBatch{}, cache: newResponseCache(), requests: newRequestTracker(), flights: newProbeFlights(), durations: newScrapeDurations(), timeoutOffset: DefaultTimeoutOffset}
-	s.ready.Store(true)
+	s := &Server{manager: m, pythonPath: p, logger: l, stats: map[string]*serverStats{}, otlpPending: map[string]*otlpBatch{}, cache: newResponseCache(), requests: newRequestTracker(), flights: newProbeFlights(), durations: newScrapeDurations(), trips: newTripLimiter(), otlp: &otlpStatus{}, timeoutOffset: DefaultTimeoutOffset}
 	return s
 }
 
@@ -220,6 +232,9 @@ func appendToResource(resources []otlpResourceSet, identity otlpResourceIdentity
 	return append(resources, otlpResourceSet{Identity: identity, Set: set})
 }
 
+// OTLPExportLoop scrapes the scheduled targets and exports everything pending
+// every otlp.interval until ctx ends. It returns without a last export, which
+// is FlushOTLP's to make once the HTTP server has finished its probes.
 func (s *Server) OTLPExportLoop(ctx context.Context) {
 	for {
 		interval := time.Duration(s.manager.Get().OTLP.Interval)
@@ -229,12 +244,7 @@ func (s *Server) OTLPExportLoop(ctx context.Context) {
 		timer := time.NewTimer(interval)
 		select {
 		case <-ctx.Done():
-			if !timer.Stop() {
-				select {
-				case <-timer.C:
-				default:
-				}
-			}
+			timer.Stop()
 			return
 		case <-timer.C:
 		}
@@ -244,11 +254,87 @@ func (s *Server) OTLPExportLoop(ctx context.Context) {
 			continue
 		}
 		s.scrapeScheduledTargets(ctx, interval)
-		resources := appendToResource(s.drainOTLP(), defaultResourceIdentity(cfg), s.selfMetricSet())
-		if len(resources) > 0 {
-			s.pushOTLP(resources)
+		// An export may retry for up to an interval, so it never runs into
+		// the next one.
+		s.exportOTLP(ctx, interval)
+	}
+}
+
+// FlushOTLP makes the last export at shutdown: the metrics probes queued since
+// the last export, and a final self-metric snapshot, within otlp.timeout.
+// Scheduled targets are not scraped again.
+func (s *Server) FlushOTLP() {
+	cfg := s.manager.Get().OTLP
+	if !cfg.Enabled || cfg.Endpoint == "" {
+		return
+	}
+	s.logger.Info("sending the last OTLP export before exiting")
+	s.exportOTLP(context.Background(), time.Duration(cfg.Timeout))
+}
+
+// exportOTLP sends everything pending, with a self-metric snapshot, retrying
+// within budget. Metrics that could not be delivered for a reason worth
+// retrying — a network error, 429, 502, 503, 504, or the export being cut short
+// by shutdown — are queued again for the next export, unless a newer value of
+// the same series has been queued since; the self-metrics are not, since the
+// next export takes a new snapshot. Metrics the endpoint refused outright are
+// dropped and counted, since sending them again would be refused again.
+func (s *Server) exportOTLP(ctx context.Context, budget time.Duration) {
+	cfg := s.manager.Get().OTLP
+	pending := s.drainOTLP()
+	if !cfg.Enabled || cfg.Endpoint == "" {
+		return
+	}
+	// The copy keeps the self-metrics out of pending, which may be queued again.
+	resources := appendToResource(append([]otlpResourceSet(nil), pending...), defaultResourceIdentity(cfg), s.selfMetricSet())
+	start := time.Now()
+	retries, err := s.pushOTLP(ctx, cfg, resources, budget)
+	if err != nil && ctx.Err() != nil {
+		// Shutting down: the last export sends these.
+		s.requeueOTLP(pending)
+		return
+	}
+	s.otlp.record(time.Since(start), retries, err == nil)
+	if err == nil {
+		return
+	}
+	var refused *otlpRefusedError
+	if errors.As(err, &refused) {
+		points := countPoints(pending)
+		s.otlp.drop(points)
+		s.logger.Warn("OTLP endpoint refused an export; its data points are dropped", "status", refused.status, "dropped_points", points, "retries", retries)
+		return
+	}
+	s.requeueOTLP(pending)
+	s.logger.Warn("OTLP export failed; its data points are kept for the next export", "error", err, "retries", retries)
+}
+
+// requeueOTLP queues metrics that were not delivered again, each unless a
+// newer value of its series has been queued since it was drained.
+func (s *Server) requeueOTLP(resources []otlpResourceSet) {
+	s.otlpMu.Lock()
+	defer s.otlpMu.Unlock()
+	for _, resource := range resources {
+		key := resource.Identity.key()
+		batch := s.otlpPending[key]
+		if batch == nil {
+			batch = &otlpBatch{identity: resource.Identity, metrics: map[string]Metric{}}
+			s.otlpPending[key] = batch
+		}
+		for _, metric := range resource.Set.Metrics {
+			if _, newer := batch.metrics[otlpMetricKey(metric)]; !newer {
+				batch.metrics[otlpMetricKey(metric)] = metric
+			}
 		}
 	}
+}
+
+func countPoints(resources []otlpResourceSet) int {
+	n := 0
+	for _, resource := range resources {
+		n += len(resource.Set.Metrics)
+	}
+	return n
 }
 
 func otlpMetricKey(metric Metric) string {
@@ -306,17 +392,9 @@ func (s *Server) Handler() http.Handler {
 	}
 	mux.HandleFunc("/metrics", protected(s.metricsHandler))
 	mux.HandleFunc("/probe", protected(s.probeHandler))
+	mux.HandleFunc("/-/reload", protected(s.reloadHandler))
 	return mux
 }
-func (s *Server) readyHandler(w http.ResponseWriter, _ *http.Request) {
-	if !s.ready.Load() {
-		http.Error(w, "not ready", http.StatusServiceUnavailable)
-		return
-	}
-	w.WriteHeader(http.StatusOK)
-	_, _ = w.Write([]byte("ready\n"))
-}
-
 func (s *Server) basicAuthMiddleware(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		credentials := s.manager.Get().Web.BasicAuth
@@ -478,6 +556,16 @@ func (s *Server) probeUpstream(ctx context.Context, p upstreamProbe) *probeResul
 			return out.result(true)
 		}
 	}
+	// Answered at once when the collector's backend already has all it may
+	// get, rather than queued behind the probes in progress (triplimit.go).
+	limit := maxConcurrentProbes(c)
+	if !s.trips.tryAcquire(name, limit) {
+		rec.update(func(x *serverStats) { x.rejected++ })
+		s.logger.Warn("probe rejected: the collector has too many probes in progress", "collector", name, "target", logTarget, "max_concurrent_probes", limit)
+		http.Error(out, fmt.Sprintf("collector %s already has %d probes to its targets in progress, its max_concurrent_probes; this one was not sent", name, limit), http.StatusServiceUnavailable)
+		return out.result(false)
+	}
+	defer s.trips.release(name)
 	if p.budget > 0 {
 		var cancel context.CancelFunc
 		ctx, cancel = context.WithTimeout(ctx, p.budget)
@@ -524,42 +612,49 @@ func (s *Server) probeUpstream(ctx context.Context, p upstreamProbe) *probeResul
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		return out.result(failStage("http_status", fmt.Errorf("received HTTP status %d", resp.StatusCode), c.ErrorHandling.OnFetchError))
 	}
-	d, err := decode(resp, c)
-	if err != nil {
-		rec.update(func(x *serverStats) { x.parseErrors++ })
-		return out.result(failStage("decode", err, c.ErrorHandling.OnDecodeError))
-	}
-	rec.update(func(x *serverStats) { x.decodeOK++ })
-	scriptCtx, timer := withScriptTimer(ctx)
-	ms, err := transform(scriptCtx, d, resp, c, s.pythonPath)
-	recordScriptDuration(rec, timer)
-	if err != nil {
-		rec.update(func(x *serverStats) {
-			if errors.Is(err, errMissingValue) {
-				x.missing++
-			}
-			if errors.Is(err, errScriptFailed) {
-				x.scriptErrors++
-			}
-			x.transformErrors++
-		})
-		// A metric rule with error_mode fail asked for the scrape to fail when it
-		// cannot produce its value. That is a statement about this one metric,
-		// more specific than the collector's on_transform_error, so it is honoured
-		// even where the collector would have carried on after a failed transform.
-		var failure *MetricFailure
-		if errors.As(err, &failure) {
-			s.logger.Error("probe failed", "collector", name, "target", logTarget, "stage", "metric", "metric", failure.Metric, "error", err)
-			writeProbeError(out, http.StatusBadGateway, probeError{
-				Stage:     "metric",
-				Collector: name,
-				Metric:    failure.Metric,
-				Target:    logTarget,
-				Error:     err.Error(),
-			})
-			return out.result(false)
+	var ms *MetricSet
+	if resp.Directory != nil {
+		// A directory: each file is decoded and transformed on its own, and
+		// one that fails is left out rather than failing the probe.
+		ms = s.collectDirectory(ctx, resp.Directory, c, rec, logTarget)
+	} else {
+		d, err := decode(resp, c)
+		if err != nil {
+			rec.update(func(x *serverStats) { x.parseErrors++ })
+			return out.result(failStage("decode", err, c.ErrorHandling.OnDecodeError))
 		}
-		return out.result(failStage("transform", err, c.ErrorHandling.OnTransformError))
+		rec.update(func(x *serverStats) { x.decodeOK++ })
+		scriptCtx, timer := withScriptTimer(ctx)
+		ms, err = transform(scriptCtx, d, resp, c, s.pythonPath)
+		recordScriptDuration(rec, timer)
+		if err != nil {
+			rec.update(func(x *serverStats) {
+				if errors.Is(err, errMissingValue) {
+					x.missing++
+				}
+				if errors.Is(err, errScriptFailed) {
+					x.scriptErrors++
+				}
+				x.transformErrors++
+			})
+			// A metric rule with error_mode fail asked for the scrape to fail when it
+			// cannot produce its value. That is a statement about this one metric,
+			// more specific than the collector's on_transform_error, so it is honoured
+			// even where the collector would have carried on after a failed transform.
+			var failure *MetricFailure
+			if errors.As(err, &failure) {
+				s.logger.Error("probe failed", "collector", name, "target", logTarget, "stage", "metric", "metric", failure.Metric, "error", err)
+				writeProbeError(out, http.StatusBadGateway, probeError{
+					Stage:     "metric",
+					Collector: name,
+					Metric:    failure.Metric,
+					Target:    logTarget,
+					Error:     err.Error(),
+				})
+				return out.result(false)
+			}
+			return out.result(failStage("transform", err, c.ErrorHandling.OnTransformError))
+		}
 	}
 	if err = ms.Validate(c.Limits); err != nil {
 		rec.update(func(x *serverStats) { x.limitErrors++ })
@@ -697,12 +792,19 @@ func (s *Server) selfMetricSet() MetricSet {
 	names, values := s.collectorStats()
 	cacheEntries := s.cache.Stats(time.Now())
 	requests, requestFamilies := s.verboseRequests()
+	// The families that belong to a collector rather than to a request.
+	collectorOnly := map[string]func(string) float64{
+		"http_exporter_cache_entries":    func(name string) float64 { return float64(cacheEntries[name]) },
+		"http_exporter_probes_in_flight": func(name string) float64 { return float64(s.trips.count(name)) },
+	}
 	var out []Metric
 	for _, d := range selfMetricDescriptors {
 		for _, name := range names {
-			value := float64(cacheEntries[name])
+			var value float64
 			if d.Value != nil {
 				value = d.Value(values[name])
+			} else {
+				value = collectorOnly[d.Name](name)
 			}
 			out = append(out, Metric{Name: d.Name, Help: d.Help, Type: d.Type, Value: value, Labels: map[string]string{"collector": name}})
 		}
@@ -718,6 +820,7 @@ func (s *Server) selfMetricSet() MetricSet {
 	}
 	out = append(out, Metric{Name: "http_exporter_scheduled_targets", Help: exporterMetricHelp["http_exporter_scheduled_targets"], Type: GaugeMetricType, Value: float64(len(s.manager.Targets()))})
 	out = append(out, s.manager.reloadMetrics()...)
+	out = append(out, s.otlpStatusMetrics()...)
 	out = append(out, requestFamilies...)
 	out = append(out, s.verboseCollectorMetrics()...)
 	out = append(out, s.runtimeMetrics()...)

@@ -120,6 +120,11 @@
             },
             "type": "object"
           },
+          "max_concurrent_probes": {
+            "description": "How many trips to its targets the collector makes at once; a probe over the limit is answered 503 at once, a scheduled target waits. Omit or 0 for the default, 32.",
+            "minimum": 0,
+            "type": "integer"
+          },
           "metrics": {
             "items": {
               "additionalProperties": false,
@@ -327,6 +332,17 @@
               "enable_http2": {
                 "type": "boolean"
               },
+              "files": {
+                "description": "localfile: read every file of the directory whose name matches one of these patterns (path.Match syntax, no /), each checked on its own and labelled file. Not with request.path. See docs/LOCALFILE.md#reading-a-directory.",
+                "items": {
+                  "type": [
+                    "string",
+                    "number",
+                    "boolean"
+                  ]
+                },
+                "type": "array"
+              },
               "follow_redirects": {
                 "type": "boolean"
               },
@@ -358,7 +374,17 @@
                 "pattern": "^[-+]?(0|([0-9]*(\\.[0-9]*)?(ns|us|µs|μs|ms|s|m|h))+)$",
                 "type": "string"
               },
+              "max_files": {
+                "description": "localfile with request.files: the most files one scrape reads, in name order; the rest are skipped and logged. Defaults to 100.",
+                "minimum": 0,
+                "type": "integer"
+              },
               "max_response_bytes": {
+                "minimum": 0,
+                "type": "integer"
+              },
+              "max_total_bytes": {
+                "description": "localfile with request.files: the most one scrape reads across every file; a file that would go past it is refused. Defaults to 64 MiB.",
                 "minimum": 0,
                 "type": "integer"
               },

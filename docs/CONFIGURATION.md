@@ -346,12 +346,15 @@ Each type accepts its own keys. For `http`, `type` is the only required one —
 | `allowed_schemes` | `http`, `https` | Schemes a target may use. |
 
 For `localfile`, `root` is required, and `path`, `max_age` and
-`max_response_bytes` are optional; its table is in [Local files](LOCALFILE.md#a-collector).
+`max_response_bytes` are optional, or `files`, `max_files` and
+`max_total_bytes` to [read a whole directory](LOCALFILE.md#reading-a-directory);
+its table is in [Local files](LOCALFILE.md#a-collector).
 
 A key that belongs to a different type is an error rather than being ignored,
 and the same holds for `/probe` parameters: a parameter that only another type
 accepts gets a `400`. `localfile` accepts only `path`, `timeout` and
-`param_<name>`, and its `target` is optional.
+`param_<name>` — only `timeout` when it reads a directory — and its `target`
+is optional.
 
 #### Choosing request types at build time
 
@@ -775,6 +778,39 @@ collectors:
     coalesce: false
 ```
 
+## Limiting concurrent probes
+
+Identical probes share one request, but probes of different targets, or with
+different parameters, each make their own — and all of a collector's targets
+are often one backend. `max_concurrent_probes` bounds how many trips to its
+targets a collector makes at once:
+
+```yaml
+collectors:
+  - name: inventory_api
+    max_concurrent_probes: 8   # optional; 32 when omitted or 0
+```
+
+A trip is the request or file read, with the decoding and transforms after it.
+A probe that would exceed the limit is not queued: it is answered at once with
+`503 Service Unavailable` — `collector inventory_api already has 8 probes to
+its targets in progress, its max_concurrent_probes; this one was not sent` —
+and counted in `http_exporter_probes_rejected_total`, while
+`http_exporter_probes_in_flight` shows how close to the limit a collector runs.
+Prometheus records the rejected scrape as `up` 0 with that reason, rather than
+as a timeout.
+
+Probes that make no trip take no slot: one answered from the
+[response cache](#response-caching), and one that
+[shares a request](#identical-probes-share-one-request) already in flight. A
+[scheduled target](OTLP.md#scheduled-targets) shares its collector's limit, but
+waits for a free slot within its scrape budget instead of failing at once,
+since nothing is waiting on its answer; if none frees up in time, the scrape
+fails in the `concurrency` stage. The default, 32, is well above what one
+Prometheus usually sends a single backend at once; lower it for a backend that
+cannot take many requests at a time, raise it for a collector with many slow
+targets. A negative value is a configuration error.
+
 ## Probe deadlines
 
 Prometheus says how long it will wait for each scrape, in the
@@ -810,7 +846,8 @@ Scheduled targets are unaffected: their scrapes are bounded by `otlp.interval`
 
 ## Watching the configuration
 
-The exporter reads its configuration once at startup. Pass `--config.watch` to
+The exporter reads its configuration once at startup, and again when asked —
+see [Reloading on demand](#reloading-on-demand). Pass `--config.watch` to
 have it re-read the configuration file and, when one is configured, the
 scheduled target file whenever either changes on disk:
 
@@ -840,6 +877,58 @@ twice, and a pre-script that stops producing `data` are all still rejected, with
 left active and the reason logged. `http_exporter_config_last_reload_successful`
 then reads `0` until a reload succeeds, so a change that did not take can be
 alerted on — see [Configuration reloads](SELF-METRICS.md#configuration-reloads).
+
+## Reloading on demand
+
+A tool that has just written the configuration can reload the exporter at once
+instead of waiting for the watch, and find out whether the new configuration
+was accepted:
+
+```sh
+kill -HUP "$(pidof prometheus-universal-exporter)"   # always available
+
+curl -X POST http://exporter:8080/-/reload            # with --web.enable-lifecycle
+```
+
+Both reload the configuration, with its collector files, and the scheduled
+target file, whether or not they changed, under exactly the rules the watch
+follows. `POST` (or `PUT`) `/-/reload` answers:
+
+| Status | Meaning |
+| --- | --- |
+| `200` | Every file was accepted and is in force. |
+| `500` | A file was rejected; the body says why, and the previous configuration stays in force. |
+| `403` | The exporter was started without `--web.enable-lifecycle`. |
+| `405` | Any method other than `POST` or `PUT`. |
+
+The endpoint is off unless `--web.enable-lifecycle` is passed, as in Prometheus,
+and when `web.basic_auth` is configured it needs the same credentials as the
+other endpoints. `SIGHUP` needs no flag. Either way the reload is logged with
+what triggered it — `"trigger":"http"`, `"sighup"` or `"watch"` — and counted
+in the [reload self-metrics](SELF-METRICS.md#configuration-reloads). Reloads
+from different triggers never interleave: one runs at a time.
+
+## Readiness
+
+`/health` answers `200` for as long as the process runs. `/ready` answers `200`
+when the exporter is doing what it was configured to do, and `503` when it is
+not, with one `not ready:` line per reason:
+
+- The last reload of the configuration, or of the scheduled target file, was
+  rejected. The previous configuration is still in force and still answers
+  probes, but it is not the one that was deployed. Ready again once a reload
+  is accepted.
+- With OTLP export enabled, the last three exports failed, retries included
+  (see [Delivery](OTLP.md#delivery)). Ready again once an export gets through.
+
+Neither endpoint needs credentials, so the reasons never include an error's
+text; the log and the [self-metrics](SELF-METRICS.md) have the details.
+
+In Kubernetes, a pod that is not ready is taken out of its Service, and
+Prometheus stops probing through it. With the chart's defaults a configuration
+change rolls the Deployment, and a new pod whose configuration is rejected never
+starts, so the first reason arises only with `server.watchConfig`,
+`server.enableLifecycle` or a `SIGHUP`.
 
 ## Dry run
 

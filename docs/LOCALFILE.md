@@ -33,7 +33,10 @@ collectors:
 | `root` | — | **Required.** The absolute directory the collector may read under. Nothing outside it can be read. `/` is refused. |
 | `path` | — | The file, relative to `root` and to the target. May use [path parameters](REQUESTS.md#path-parameters). |
 | `max_age` | off | Refuse a file last modified longer ago than this. |
-| `max_response_bytes` | limit | The most that is read; a larger file fails the scrape. |
+| `max_response_bytes` | limit | The most that is read of one file; a larger file fails the scrape. |
+| `files` | — | Read a whole directory instead of one file: the [file name patterns](#reading-a-directory) to read. Not with `path`. |
+| `max_files` | `100` | With `files`: the most files one scrape reads. |
+| `max_total_bytes` | `64 MiB` | With `files`: the most one scrape reads across every file. |
 
 No other request key applies, and setting one — `method`, `headers`, a
 credential — is a startup error, as it is for any key that belongs to another
@@ -133,6 +136,133 @@ targets:
     collector: textfile
 ```
 
+## Reading a directory
+
+With `files`, a collector reads every file of a directory whose name matches
+one of the patterns, the way node_exporter's textfile collector reads its
+directory:
+
+```yaml
+collectors:
+  - name: textfiles
+    request:
+      type: localfile
+      root: /var/lib/node_exporter/textfile_collector
+      files: ["*.prom"]
+      max_age: 1h
+    transform:
+      type: prometheus
+```
+
+Each file is decoded, transformed and checked on its own, as if it were the
+only one, and its series get a `file` label with its name. Next to them the
+answer carries, for every file read:
+
+```text
+backup_last_success_timestamp_seconds{file="backup.prom"} 1.7901e+09
+jobs_total{file="batch.prom",queue="default"} 7
+localfile_mtime_seconds{file="backup.prom"} 1.7901e+09
+localfile_mtime_seconds{file="batch.prom"} 1.7901e+09
+localfile_mtime_seconds{file="broken.prom"} 1.7901e+09
+localfile_scrape_error{file="backup.prom"} 0
+localfile_scrape_error{file="batch.prom"} 0
+localfile_scrape_error{file="broken.prom"} 1
+localfile_files_skipped 0
+```
+
+| Series | Meaning |
+| --- | --- |
+| `localfile_mtime_seconds{file}` | When the file was last modified, as node_exporter's `node_textfile_mtime_seconds`. Reported for every file whose modification time could be read, including one that failed. |
+| `localfile_scrape_error{file}` | `1` when the file was left out — it could not be read, decoded or transformed, or it broke a rule below — and `0` otherwise. |
+| `localfile_files_skipped` | Matching files not read because the directory had more than `max_files`. |
+
+**One bad file does not sink the rest.** A file that fails at any stage is left
+out alone: its series are missing, its `localfile_scrape_error` reads `1`, and
+the reason is logged as a warning naming the file and the stage. Every other
+file's series are answered, and the probe succeeds. The collector's
+self-metrics count the failure as usual — a malformed file in
+`http_exporter_parse_errors_total`, an oversized one in
+`http_exporter_series_limit_exceeded_total`. That includes a metric rule with
+`error_mode: fail`: it fails its file, not the probe. Alert on it:
+
+```promql
+localfile_scrape_error == 1
+time() - localfile_mtime_seconds > 3600
+```
+
+A file is also left out when:
+
+- a series of it already has a `file` label, which would collide with the one
+  added, or is named like one of the series above;
+- a metric of it has a different type than the same metric in a file read
+  before it, since one answer declares a metric's type once. Files are read in
+  name order, so the first by name wins.
+
+A directory that is missing, or a target that names a file rather than a
+directory, fails the probe in the `file` stage, following
+`error_handling.on_fetch_error`. An empty directory, or one with nothing
+matching, is an answer with no series but `localfile_files_skipped`.
+
+### Which files
+
+The patterns use [Go's `path.Match` syntax](https://pkg.go.dev/path#Match) —
+`*`, `?`, `[a-z]` — and match names in the directory, not below it:
+subdirectories are not read, and a pattern cannot contain `/`. A name starting
+with a dot matches only a pattern that starts with one, as in a shell, so the
+hidden temporary files many writers rename into place are not read half-written.
+With `*.prom`, a temporary `batch.prom.$$` is not read either.
+
+The directory is `root`, or the directory under it the probe's or scheduled
+target's `target` names; `/probe?collector=textfiles&target=nightly` reads
+`root/nightly`. There is no file to name, so the `path` and `param_<name>`
+probe parameters, and `request.path` in a scheduled target, are refused.
+
+Any file a collector can decode can be read this way, not only `.prom`. Each
+file's decoder is chosen as for one file: from its extension with
+`response.format: auto`, or the collector's `response.format` or
+`decoder.type`. The collector's one transform applies to every file, so a
+directory read by one collector should hold files of one shape — `*.prom`
+passed through, `*.json` status files with `jq`, `*.txt` or `*.log` lines with
+`regex`:
+
+```yaml
+  - name: status_files
+    request:
+      type: localfile
+      root: /var/lib/app/status
+      files: ["*.json"]
+    transform:
+      type: jq
+    metrics:
+      - name: app_queue_depth
+        type: gauge
+        expression: .queue.depth
+```
+
+### Limits
+
+A directory is easy to fill, so reading one is bounded:
+
+- **`max_files`**, 100 by default. Files are taken in name order, and the rest
+  are skipped, counted in `localfile_files_skipped` and logged as a warning
+  naming how many matched and the first one skipped. They get no series of
+  their own, so the `file` label never has more than `max_files` values.
+- **The response limit for each file**, `max_response_bytes` or the
+  collector's `limits.max_response_bytes`, 10 MiB by default. A larger file is
+  refused from its size, before it is opened, so a 1 GiB file costs a `stat`,
+  not a read.
+- **`max_total_bytes`** across the files of one scrape, 64 MiB by default. A
+  file that would go past it is refused in the same way, and later, smaller
+  files are still read.
+
+A refused file is a failed file: it is logged, its `localfile_scrape_error`
+reads `1` and its `localfile_mtime_seconds` is reported. `max_age` applies to
+each file, and `limits.max_metrics` to the whole answer.
+
+Reading the directory is one read for the [bounds on reads](#what-it-takes-from-node_exporter):
+it takes one of the collector's four pending-read slots and ends with the
+probe's `timeout` or deadline.
+
 ## Formats
 
 With `response.format` left at `auto`, the file's extension chooses the
@@ -203,10 +333,10 @@ in:
   `exporter`, so the files must be readable by it; a file it may not read fails
   the scrape with `permission denied` rather than being skipped silently.
 
-Unlike node_exporter, a probe reads one file, not a whole directory merged into
-one exposition: merging files would hide which one a broken series came from,
-and fail every file's metrics when one is malformed. Scrape each file as its own
-target instead, as above.
+A collector with `path` reads one file per probe; one with `files` reads a
+[whole directory](#reading-a-directory) as node_exporter does, each file checked
+on its own and labelled with its name, so a broken file is named and fails
+alone.
 
 ## Errors and self-metrics
 
@@ -219,7 +349,8 @@ file over the size limit counts in `http_exporter_series_limit_exceeded_total`.
 
 With [verbose self-metrics](SELF-METRICS.md#verbose-per-request-self-metrics),
 a file read is labelled with its `file://` URL, path parameters kept as their
-placeholders, and `http_method="READ"`:
+placeholders, and `http_method="READ"`; a directory read with the directory's
+URL, ending in `/`:
 
 ```text
 http_exporter_scrapes_total{collector="textfile",http_method="READ",url="file:///var/lib/node_exporter/textfile_collector/batch.prom"} 12

@@ -7,6 +7,8 @@ otlp:
   timeout: 5s
   # Metrics are batched and exported at this interval.
   interval: 30s
+  # Export requests are gzipped; none sends them uncompressed.
+  # compression: gzip
   # headers:
   #   X-OTLP-Tenant: production
   # service_name: prometheus-universal-exporter

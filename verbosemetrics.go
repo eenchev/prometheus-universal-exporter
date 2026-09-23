@@ -112,7 +112,7 @@ const (
 
 // pythonPoolMetrics builds the pool-wide Python families.
 func pythonPoolMetrics() []Metric {
-	snap := pythonWorkers.poolSnapshot()
+	snap := pythonWorkers().poolSnapshot()
 	var out []Metric
 	for _, state := range []struct {
 		name  string
@@ -161,7 +161,7 @@ func (s *Server) verboseCollectorMetrics() []Metric {
 		if !python[name] {
 			continue
 		}
-		snap := pythonWorkers.snapshot(name)
+		snap := pythonWorkers().snapshot(name)
 		labels := func(extra ...string) map[string]string {
 			l := map[string]string{"collector": name}
 			for i := 0; i+1 < len(extra); i += 2 {

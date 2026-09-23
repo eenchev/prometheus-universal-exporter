@@ -239,7 +239,7 @@ config:
           password: change-me
 ```
 
-The Kubernetes `/health` and `/ready` endpoints remain available for health checks.
+The Kubernetes `/health` and `/ready` endpoints remain available for health checks. The readiness probe uses `/ready`, which reports the pod not ready while a reload of its configuration is rejected or its OTLP exports keep failing; see [Readiness](../../docs/CONFIGURATION.md#readiness).
 
 ## Common configuration
 
@@ -256,6 +256,7 @@ The exporter's own flags are chart values rather than something to assemble by h
 | `server.probeTimeoutOffset` | `--probe.timeout-offset` | unset: the exporter's `500ms` |
 | `server.watchConfig` / `server.watchConfigInterval` | `--config.watch` / `--config.watch-interval` | off / `60s` |
 | `server.expandEnv` | `--config.export-env` | off |
+| `server.enableLifecycle` | `--web.enable-lifecycle` | off |
 | `otlpTargets.enabled` | `--otlp.targets-file` | off |
 | `config` | `--config.file` | the chart's ConfigMap |
 
@@ -270,6 +271,8 @@ helm install exporter charts/prometheus-universal-exporter \
   --set server.logLevel=debug \
   --set server.probeTimeoutOffset=1s
 ```
+
+`server.enableLifecycle` enables `POST /-/reload`, which reloads the configuration at once and answers `200` when it was accepted or `500` with the reason when it was not — see [Reloading on demand](../../docs/CONFIGURATION.md#reloading-on-demand). A chart-managed ConfigMap does not need it, since a change rolls the Deployment; it is for a ConfigMap updated in place with `config.enabled: false`. Like `probeTimeoutOffset`, the flag is only rendered when set, so older images still start.
 
 The one-shot flags — `--dry-run`, `--config.schema`, `--config.collector-file-schema` — print something and exit, so they have no values: run them as a separate command. A flag an exporter image has that this chart version does not know yet goes in `extraArgs`, described under [Extra volumes and arguments](#extra-volumes-and-arguments).
 
@@ -436,6 +439,16 @@ config:
 
 `env` and `envFrom` take the ordinary Kubernetes shapes and are useful on their own; `expandEnv` is inert without them. Expansion is off by default: only `${NAME}` is substituted and never `$NAME`, but a configuration carrying regexes, jq expressions or Python pre-scripts has dollar signs that are not references, so expanding should be a decision rather than a surprise. A reference whose variable is not set stops the exporter at startup with the variable named, rather than becoming an empty string — a missing Secret key is then a clear failure instead of a collector quietly scraping the wrong thing.
 
+Behind an egress proxy, set `HTTPS_PROXY`, `HTTP_PROXY` and `NO_PROXY` the same way. Target requests and OTLP exports use them, and nothing in the configuration does; see [Proxies](../../docs/REQUESTS.md#proxies). Keep the cluster's own names in `NO_PROXY` so in-cluster targets and the OpenTelemetry Collector are reached directly:
+
+```yaml
+env:
+  - name: HTTPS_PROXY
+    value: http://proxy.corp.example:3128
+  - name: NO_PROXY
+    value: .svc,.cluster.local,10.0.0.0/8
+```
+
 ### Exporter resource metrics
 
 Set `web.self_metrics.resource_metrics_enabled: true` inside `config.data.config.yaml` to publish the standard `go_` and `process_` series describing the exporter's own CPU and memory, under the names an existing Go dashboard already uses:
@@ -533,7 +546,7 @@ Every value has a default, and `values.yaml` documents each one in place. `value
 | `service` | object | enabled, ClusterIP, 8080 | The exporter Service. |
 | `neg` | object | disabled | GKE Network Endpoint Group annotations on the Service. |
 | `ingress` | object | disabled | Class, hosts, paths, TLS and annotations. |
-| `server` | object | see [Exporter flags](#exporter-flags) | Exporter flags: `listenAddress`, `pythonPath`, `logLevel`, `probeTimeoutOffset`, `watchConfig`, `watchConfigInterval`, `expandEnv`. |
+| `server` | object | see [Exporter flags](#exporter-flags) | Exporter flags: `listenAddress`, `pythonPath`, `logLevel`, `probeTimeoutOffset`, `enableLifecycle`, `watchConfig`, `watchConfigInterval`, `expandEnv`. |
 | `env` / `envFrom` | array | `[]` | Container environment, in the Kubernetes shapes. |
 | `extraArgs` | array | `[]` | Extra command-line flags. |
 | `extraVolumes` / `extraVolumeMounts` | array | `[]` | Volumes and mounts beyond the chart's own. |

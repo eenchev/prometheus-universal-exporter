@@ -16,7 +16,9 @@ build:
 
 test:
 	go test ./...
-	go test -race ./...
+	@# Twice, in a random order, so a test that depends on the order tests run
+	@# in, or on running only once, is caught.
+	go test -race -count=2 -shuffle=on ./...
 
 # Opt-in: probes real third-party endpoints, so it is deliberately not part of
 # `make ci`. See docs/DEVELOPMENT.md.

@@ -3,7 +3,6 @@ package main
 import (
 	"context"
 	"encoding/json"
-	"io"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -386,7 +385,7 @@ func TestScheduledScrapePayloadCarriesSeparateResources(t *testing.T) {
 
 	received := make(chan otlpPayload, 1)
 	collectorEndpoint := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		body, _ := io.ReadAll(r.Body)
+		body := readOTLPBody(t, r)
 		var payload otlpPayload
 		if err := json.Unmarshal(body, &payload); err != nil {
 			t.Errorf("payload: %v", err)
@@ -404,7 +403,7 @@ func TestScheduledScrapePayloadCarriesSeparateResources(t *testing.T) {
 	}}}
 	server := newScheduledServer(t, cfg, file)
 	server.scrapeScheduledTargets(context.Background(), 10*time.Second)
-	server.pushOTLP(appendToResource(server.drainOTLP(), defaultResourceIdentity(cfg.OTLP), server.selfMetricSet()))
+	server.exportOTLP(context.Background(), 5*time.Second)
 
 	select {
 	case payload := <-received:

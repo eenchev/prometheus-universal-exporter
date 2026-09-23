@@ -229,13 +229,14 @@ func TestPythonWorkerMetrics(t *testing.T) {
 
 // A worker that cannot start is counted as a start failure.
 func TestPythonWorkerStartFailuresAreCounted(t *testing.T) {
+	usePythonPool(t)
 	captureLogs(t)
 	c := workerCollector("py_metrics_no_interpreter", `metric(name="v", value=1)`)
 	r := &HTTPResponse{StatusCode: 200, Body: []byte("x"), Headers: http.Header{}}
 	if _, err := executePython(context.Background(), "/nonexistent/python", c.Transform.Script, &Decoded{Kind: "text", Data: "x", Raw: r.Body}, r, c); err == nil {
 		t.Fatal("a missing interpreter started")
 	}
-	snap := pythonWorkers.snapshot("py_metrics_no_interpreter")
+	snap := pythonWorkers().snapshot("py_metrics_no_interpreter")
 	if snap.startFailures != 1 || snap.starts != 0 || snap.starting != 0 || snap.runs[pythonRunFailed] != 1 {
 		t.Fatalf("snapshot=%+v", snap)
 	}
@@ -301,7 +302,7 @@ func TestPythonPoolMetricsSumTheCollectors(t *testing.T) {
 	first := pythonCollector("pool_sum_a", `metric(name="v", value=1)`)
 	second := pythonCollector("pool_sum_b", `raise ValueError("bad data")`)
 	server := verboseServer(t, true, first, second)
-	before := pythonWorkers.poolSnapshot()
+	before := pythonWorkers().poolSnapshot()
 
 	probe := func(collector string) {
 		probeOnce(t, server, "/probe?collector="+collector+"&target="+url.QueryEscape(target.URL), nil)

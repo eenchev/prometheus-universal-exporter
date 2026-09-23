@@ -14,15 +14,25 @@
   "--config.watch" "set server.watchConfig instead"
   "--config.watch-interval" "set server.watchConfigInterval instead"
   "--otlp.targets-file" "set otlpTargets.enabled instead"
-  "--config.export-env" "set server.expandEnv instead" -}}
+  "--config.export-env" "set server.expandEnv instead"
+  "--log.level" "set server.logLevel instead"
+  "--probe.timeout-offset" "set server.probeTimeoutOffset instead" -}}
+{{- /* These flags make the exporter print something and exit instead of
+       serving, so a pod started with one would restart for ever. */ -}}
+{{- $oneShot := dict
+  "--dry-run" "would make the exporter validate its configuration and exit, so the pod would never serve; run --dry-run as a separate command, a Job or an init container instead"
+  "--config.schema" "would make the exporter print the configuration schema and exit, so the pod would never serve; run it as a separate command instead"
+  "--config.collector-file-schema" "would make the exporter print the collector file schema and exit, so the pod would never serve; run it as a separate command instead"
+  "--help" "would make the exporter print its usage and exit, so the pod would never serve"
+  "--h" "would make the exporter print its usage and exit, so the pod would never serve" -}}
 {{- range $arg := .Values.extraArgs -}}
 {{- $text := $arg | toString -}}
 {{- if not (hasPrefix "--" $text) -}}
-{{- fail (printf "extraArgs entry %q must start with `--`, for example \"--log.level=debug\"" $text) -}}
+{{- fail (printf "extraArgs entry %q must start with `--`, for example \"--some.new-flag=value\"" $text) -}}
 {{- end -}}
 {{- $name := $text | splitList "=" | first -}}
-{{- if eq $name "--dry-run" -}}
-{{- fail (printf "extraArgs entry %q would make the exporter validate its configuration and exit, so the pod would never serve; run --dry-run as a separate command, a Job or an init container instead" $text) -}}
+{{- if hasKey $oneShot $name -}}
+{{- fail (printf "extraArgs entry %q %s" $text (get $oneShot $name)) -}}
 {{- end -}}
 {{- if hasKey $managed $name -}}
 {{- fail (printf "extraArgs entry %q sets %s, which the chart already manages; %s" $text $name (get $managed $name)) -}}
@@ -98,6 +108,24 @@ app.kubernetes.io/managed-by: {{ .Release.Service }}
 {{- fail (printf "server.watchConfigInterval %q must be a positive Go duration, for example \"60s\"" $interval) -}}
 {{- end -}}
 {{- $interval -}}
+{{- end }}
+{{- define "prometheus-universal-exporter.logLevel" -}}
+{{- $level := default "info" .Values.server.logLevel -}}
+{{- if not (has $level (list "debug" "info" "warn" "error")) -}}
+{{- fail (printf "server.logLevel %q must be debug, info, warn or error" $level) -}}
+{{- end -}}
+{{- $level -}}
+{{- end }}
+{{- define "prometheus-universal-exporter.probeTimeoutOffset" -}}
+{{- /* Empty leaves the flag out: the exporter's default applies, and an image
+       from before the flag existed still starts. */ -}}
+{{- $offset := .Values.server.probeTimeoutOffset | default "" | toString -}}
+{{- if $offset -}}
+{{- if not (regexMatch "^(0|([0-9]+(\\.[0-9]+)?(ns|us|ms|s|m|h))+)$" $offset) -}}
+{{- fail (printf "server.probeTimeoutOffset %q must be a Go duration of zero or more, for example \"500ms\" or \"1s\"" $offset) -}}
+{{- end -}}
+{{- $offset -}}
+{{- end -}}
 {{- end }}
 {{- define "prometheus-universal-exporter.pythonPath" -}}
 {{- default "/usr/local/bin/python3" .Values.server.pythonPath -}}

@@ -262,18 +262,18 @@ func transformJQ(ctx context.Context, data any, rules []MetricRule, c *Collector
 			return nil, ruleFailure(c, rule, fmt.Errorf("metric %q labels: %w", rule.Name, err))
 		}
 		if len(values) == 0 && requiredRule(rule, c) {
-			if handleMetricError(c, rule, fmt.Errorf("metric %q value is missing", rule.Name)) {
+			if handleMetricError(c, rule, markError(fmt.Errorf("metric %q value is missing", rule.Name), errMissingValue)) {
 				continue
 			}
-			return nil, ruleFailure(c, rule, fmt.Errorf("metric %q value is missing", rule.Name))
+			return nil, ruleFailure(c, rule, markError(fmt.Errorf("metric %q value is missing", rule.Name), errMissingValue))
 		}
 		for index, value := range values {
 			if value == nil {
 				if requiredRule(rule, c) {
-					if handleMetricError(c, rule, fmt.Errorf("metric %q value is missing", rule.Name)) {
+					if handleMetricError(c, rule, markError(fmt.Errorf("metric %q value is missing", rule.Name), errMissingValue)) {
 						continue
 					}
-					return nil, ruleFailure(c, rule, fmt.Errorf("metric %q value is missing", rule.Name))
+					return nil, ruleFailure(c, rule, markError(fmt.Errorf("metric %q value is missing", rule.Name), errMissingValue))
 				}
 				continue
 			}
@@ -314,7 +314,7 @@ func transformJQItems(ctx context.Context, data any, rule MetricRule, c *Collect
 		return metrics, failure
 	}
 	if len(items) == 0 && requiredRule(rule, c) {
-		metrics, _, failure := fail(fmt.Errorf("metric %q items selected nothing", rule.Name))
+		metrics, _, failure := fail(markError(fmt.Errorf("metric %q items selected nothing", rule.Name), errMissingValue))
 		return metrics, failure
 	}
 	var out []Metric
@@ -328,7 +328,7 @@ func transformJQItems(ctx context.Context, data any, rule MetricRule, c *Collect
 		}
 		if value == nil {
 			if requiredRule(rule, c) {
-				if _, carryOn, failure := fail(fmt.Errorf("metric %q value is missing for item %d", rule.Name, index)); !carryOn {
+				if _, carryOn, failure := fail(markError(fmt.Errorf("metric %q value is missing for item %d", rule.Name, index), errMissingValue)); !carryOn {
 					return nil, failure
 				}
 			}
@@ -457,10 +457,10 @@ func transformRegex(text string, rules []MetricRule, c *Collector) (*MetricSet, 
 		matches := re.FindAllStringSubmatchIndex(text, -1)
 		if len(matches) == 0 {
 			if requiredRule(rule, c) {
-				if handleMetricError(c, rule, fmt.Errorf("regex for metric %q matched no text", rule.Name)) {
+				if handleMetricError(c, rule, markError(fmt.Errorf("regex for metric %q matched no text", rule.Name), errMissingValue)) {
 					continue
 				}
-				return nil, ruleFailure(c, rule, fmt.Errorf("regex for metric %q matched no text", rule.Name))
+				return nil, ruleFailure(c, rule, markError(fmt.Errorf("regex for metric %q matched no text", rule.Name), errMissingValue))
 			}
 			continue
 		}
@@ -525,10 +525,10 @@ func transformXPath(root *xmlquery.Node, rules []MetricRule, c *Collector, names
 		nodes := xmlquery.QuerySelectorAll(root, expression)
 		if len(nodes) == 0 {
 			if requiredRule(rule, c) {
-				if handleMetricError(c, rule, fmt.Errorf("XPath %q matched no nodes", rule.Expression)) {
+				if handleMetricError(c, rule, markError(fmt.Errorf("XPath %q matched no nodes", rule.Expression), errMissingValue)) {
 					continue
 				}
-				return nil, ruleFailure(c, rule, fmt.Errorf("XPath %q matched no nodes", rule.Expression))
+				return nil, ruleFailure(c, rule, markError(fmt.Errorf("XPath %q matched no nodes", rule.Expression), errMissingValue))
 			}
 			continue
 		}
@@ -575,10 +575,10 @@ func transformHTMLXPath(raw []byte, rules []MetricRule, c *Collector) (*MetricSe
 		nodes := htmlquery.QuerySelectorAll(root, expression)
 		if len(nodes) == 0 {
 			if requiredRule(rule, c) {
-				if handleMetricError(c, rule, fmt.Errorf("HTML XPath %q matched no nodes", rule.Expression)) {
+				if handleMetricError(c, rule, markError(fmt.Errorf("HTML XPath %q matched no nodes", rule.Expression), errMissingValue)) {
 					continue
 				}
-				return nil, ruleFailure(c, rule, fmt.Errorf("HTML XPath %q matched no nodes", rule.Expression))
+				return nil, ruleFailure(c, rule, markError(fmt.Errorf("HTML XPath %q matched no nodes", rule.Expression), errMissingValue))
 			}
 			continue
 		}
@@ -621,10 +621,10 @@ func transformCSS(doc *goquery.Document, rules []MetricRule, c *Collector) (*Met
 		selection := doc.FindMatcher(matcher)
 		if selection.Length() == 0 {
 			if requiredRule(rule, c) {
-				if handleMetricError(c, rule, fmt.Errorf("CSS selector %q matched no nodes", rule.Expression)) {
+				if handleMetricError(c, rule, markError(fmt.Errorf("CSS selector %q matched no nodes", rule.Expression), errMissingValue)) {
 					continue
 				}
-				return nil, ruleFailure(c, rule, fmt.Errorf("CSS selector %q matched no nodes", rule.Expression))
+				return nil, ruleFailure(c, rule, markError(fmt.Errorf("CSS selector %q matched no nodes", rule.Expression), errMissingValue))
 			}
 			continue
 		}
@@ -675,10 +675,10 @@ func transformCSV(data any, rules []MetricRule, c *Collector) (*MetricSet, error
 			value, exists := row[rule.Expression]
 			if !exists || strings.TrimSpace(fmt.Sprint(value)) == "" {
 				if requiredRule(rule, c) {
-					if handleMetricError(c, rule, fmt.Errorf("CSV column %q is missing", rule.Expression)) {
+					if handleMetricError(c, rule, markError(fmt.Errorf("CSV column %q is missing", rule.Expression), errMissingValue)) {
 						continue
 					}
-					return nil, ruleFailure(c, rule, fmt.Errorf("CSV column %q is missing", rule.Expression))
+					return nil, ruleFailure(c, rule, markError(fmt.Errorf("CSV column %q is missing", rule.Expression), errMissingValue))
 				}
 				continue
 			}

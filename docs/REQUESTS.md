@@ -129,7 +129,7 @@ request:
 
 `follow_redirects` decides whether a redirect status on the target request is
 followed. Left at `false`, the exporter returns the redirect response itself, so
-the collector sees the 3xx status and — with the default `on_http_error: fail` —
+the collector sees the 3xx status and — with the default `on_fetch_error: fail` —
 the probe fails. That is deliberate: a target that has moved is worth noticing
 rather than quietly scraping somewhere else. Set it to `true` for endpoints that
 legitimately redirect, such as an API whose documented host forwards to another.
@@ -157,6 +157,18 @@ both in their own `request` block.
 These replace the earlier undocumented `request.redirect_policy`. A
 configuration still setting it now fails to load with an unknown-field error
 rather than silently changing behaviour.
+
+## Connections
+
+Connections to targets are kept and reused, so an HTTPS target pays for one TLS
+handshake rather than one per scrape. Every collector and scrape with the same
+TLS settings — `tls.ca_file`, `cert_file`, `key_file` and
+`insecure_skip_verify` — and the same `enable_http2` shares one connection pool;
+a scrape overriding either of the last two uses the pool of its own settings.
+A certificate or key replaced on disk is picked up by the next request. An idle
+connection is closed after 90 seconds, and a pool nothing has used for five
+minutes, such as one a reload left behind, is closed with it. OTLP exports keep
+their connection to the collector the same way.
 
 ## Retries
 

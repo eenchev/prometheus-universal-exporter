@@ -47,7 +47,7 @@ func modeCollector(name, mode string) Collector {
 		Request:       RequestConfig{Type: RequestTypeHTTP, Method: "GET"},
 		Response:      ResponseConfig{Format: "json"},
 		Transform:     TransformConfig{Type: "jq"},
-		ErrorHandling: ErrorHandling{OnHTTPError: "fail", OnDecodeError: "fail", OnTransformError: "fail"},
+		ErrorHandling: ErrorHandling{OnFetchError: "fail", OnDecodeError: "fail", OnTransformError: "fail"},
 		Limits:        Limits{MaxResponseBytes: 4096, MaxMetrics: 10},
 		Metrics: []MetricRule{
 			{Name: "demo_up", Type: GaugeMetricType, Expression: ".up", ErrorMode: ErrorModeLog},
@@ -325,7 +325,7 @@ func TestFailIsCountedAsAFailedProbe(t *testing.T) {
 	exposition := selfMetrics(t, server)
 	for series, want := range map[string]float64{
 		`http_exporter_scrapes_total{collector="counted"}`:          1,
-		`http_exporter_scrape_success{collector="counted"}`:         0,
+		`http_exporter_scrape_success_total{collector="counted"}`:   0,
 		`http_exporter_transform_errors_total{collector="counted"}`: 1,
 		`http_exporter_missing_keys_total{collector="counted"}`:     1,
 	} {
@@ -411,5 +411,19 @@ func TestErrorModesOnAScheduledTarget(t *testing.T) {
 				t.Fatalf("demo_up exported=%v under %s", served, mode)
 			}
 		})
+	}
+}
+
+// The fetch policy is on_fetch_error, named for the stage, for every request
+// type; the old http-only name is an unknown key.
+func TestFetchPolicyIsNamedForTheStage(t *testing.T) {
+	config := writeFile(t, "config.yaml", strings.Replace(minimalConfig, "    transform:", "    error_handling:\n      on_http_error: log\n    transform:", 1))
+	if _, err := LoadConfig(config); err == nil || !strings.Contains(err.Error(), "on_http_error") {
+		t.Fatalf("on_http_error was accepted: %v", err)
+	}
+	config = writeFile(t, "config.yaml", strings.Replace(minimalConfig, "    transform:", "    error_handling:\n      on_fetch_error: log\n    transform:", 1))
+	c, err := LoadConfig(config)
+	if err != nil || c.Collectors[0].ErrorHandling.OnFetchError != ErrorPolicyLog {
+		t.Fatalf("on_fetch_error: %v %+v", err, c)
 	}
 }

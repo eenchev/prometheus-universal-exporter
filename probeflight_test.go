@@ -140,9 +140,9 @@ func TestConcurrentIdenticalProbesShareOneRequest(t *testing.T) {
 	for _, want := range []string{
 		`http_exporter_probes_coalesced_total{collector="shared"} 4`,
 		`http_exporter_scrapes_total{collector="shared"} 5`,
-		`http_exporter_scrape_success{collector="shared"} 5`,
+		`http_exporter_scrape_success_total{collector="shared"} 5`,
 		// The trip to the target is counted once.
-		`http_exporter_decode_success{collector="shared"} 1`,
+		`http_exporter_decode_success_total{collector="shared"} 1`,
 	} {
 		if !strings.Contains(exposition, want+"\n") {
 			t.Errorf("missing %s", want)
@@ -232,7 +232,7 @@ func TestASharedFailureReachesEveryProbe(t *testing.T) {
 	if n := strings.Count(logs.String(), `"msg":"probe failed"`); n != 1 {
 		t.Fatalf("the failure was logged %d times, want once:\n%s", n, logs.String())
 	}
-	if exposition := selfMetrics(t, server); !strings.Contains(exposition, `http_exporter_scrape_success{collector="failing"} 0`+"\n") {
+	if exposition := selfMetrics(t, server); !strings.Contains(exposition, `http_exporter_scrape_success_total{collector="failing"} 0`+"\n") {
 		t.Fatal("a shared failure was counted as a success")
 	}
 }

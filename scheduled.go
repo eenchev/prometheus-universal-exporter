@@ -2,8 +2,8 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
-	"strings"
 	"sync"
 	"time"
 )
@@ -109,7 +109,7 @@ func (s *Server) scrapeScheduledTarget(ctx context.Context, target ScheduledTarg
 	response, err := fetchCollector(ctx, target.Target, c, overrides, headers)
 	scraped = true
 	if err != nil {
-		if strings.Contains(strings.ToLower(err.Error()), "response size") {
+		if errors.Is(err, errLimitExceeded) {
 			count(func(st *serverStats) { st.limitErrors++ })
 		}
 		fail(fetchStage(c), err)
@@ -130,14 +130,16 @@ func (s *Server) scrapeScheduledTarget(ctx context.Context, target ScheduledTarg
 		return
 	}
 	count(func(st *serverStats) { st.decodeOK++ })
-	set, err := transform(ctx, decoded, response, c, s.pythonPath)
+	scriptCtx, timer := withScriptTimer(ctx)
+	set, err := transform(scriptCtx, decoded, response, c, s.pythonPath)
+	recordScriptDuration(rec, timer)
 	if err != nil {
 		count(func(st *serverStats) {
 			st.transformErrors++
-			if strings.Contains(strings.ToLower(err.Error()), "missing") {
+			if errors.Is(err, errMissingValue) {
 				st.missing++
 			}
-			if strings.Contains(strings.ToLower(err.Error()), "python") {
+			if errors.Is(err, errScriptFailed) {
 				st.scriptErrors++
 			}
 		})

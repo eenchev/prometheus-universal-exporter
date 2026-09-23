@@ -190,7 +190,7 @@ func configSchemaRules() map[string]map[string]any {
 		"collectors[].transform.required_libs[]":         libraries,
 		"collectors[].transform.pre_script":              {"description": "Python run before the transform. It receives data and must leave its result in data."},
 		"collectors[].transform.script":                  {"description": "Python for the python transform. It emits metrics with metric(...)."},
-		"collectors[].error_handling.on_http_error":      errorPolicy,
+		"collectors[].error_handling.on_fetch_error":     errorPolicy,
 		"collectors[].error_handling.on_decode_error":    errorPolicy,
 		"collectors[].error_handling.on_transform_error": errorPolicy,
 		"collectors[].metrics[].name":                    {"pattern": `^[a-zA-Z_:][a-zA-Z0-9_:]*$`, "description": "The metric name, before metrics_prefix."},

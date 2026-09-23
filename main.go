@@ -32,6 +32,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 	configFile := flags.String("config.file", "/etc/prometheus-universal-exporter/config.yaml", "Path to the exporter configuration")
 	listenAddress := flags.String("web.listen-address", ":8080", "Address on which to expose HTTP endpoints")
 	selfMetricsPath := flags.String("web.self-metrics-path", "/self-metrics", "Dedicated endpoint for exporter self-health metrics")
+	timeoutOffset := flags.Duration("probe.timeout-offset", DefaultTimeoutOffset, "How much of Prometheus's scrape timeout (X-Prometheus-Scrape-Timeout-Seconds) a probe leaves unused, so it answers with its own error before Prometheus gives up")
 	pythonPath := flags.String("python.path", "python3", "Python interpreter used by the python transform")
 	targetFile := flags.String("otlp.targets-file", "", "Optional file of scheduled targets scraped by the exporter and delivered over OTLP")
 	watchConfig := flags.Bool("config.watch", false, "Reload the configuration, collector and scheduled target files when they change on disk")
@@ -49,6 +50,12 @@ func run(args []string, stdout, stderr io.Writer) int {
 			flags.PrintDefaults()
 			return 0
 		}
+		newLogger("info", stderr).Error("invalid command line; exiting", "error", err.Error())
+		return 2
+	}
+	// A negative offset is a malformed flag rather than a configuration
+	// problem, so it is refused like one, before --dry-run or startup.
+	if err := validateTimeoutOffset(*timeoutOffset); err != nil {
 		newLogger("info", stderr).Error("invalid command line; exiting", "error", err.Error())
 		return 2
 	}
@@ -125,10 +132,12 @@ func run(args []string, stdout, stderr io.Writer) int {
 	}
 	server := NewServer(manager, *pythonPath, logger)
 	server.SetSelfMetricsPath(*selfMetricsPath)
+	server.SetTimeoutOffset(*timeoutOffset)
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGTERM, syscall.SIGINT)
 	defer stop()
 	go manager.ReloadLoop(ctx)
+	go pythonWorkers.reapLoop(ctx, pythonWorkerReapInterval)
 	go server.OTLPExportLoop(ctx)
 
 	startup := []any{"address", *listenAddress, "collectors", len(config.Collectors), "collector_files", len(config.LoadedCollectorFiles),

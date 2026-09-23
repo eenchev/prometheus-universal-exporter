@@ -47,16 +47,23 @@ import (
 // reused up to pythonWorkerMaxRuns times, so a slow leak in a script or a
 // library cannot grow without bound, and at most pythonWorkerMaxIdle are kept
 // per pool once a burst of concurrent scrapes has passed. Idle workers are
-// stopped after pythonWorkerIdleTimeout. When the exporter exits, a worker
-// sees its request pipe close and exits too.
+// stopped after pythonWorkerIdleTimeout, checked every
+// pythonWorkerReapInterval whether or not anything runs Python, so a collector
+// nobody scrapes any more does not keep its interpreters. A reload stops at
+// once the idle workers of scripts it removed or changed, and those still busy
+// when they finish. When the exporter exits, a worker sees its request pipe
+// close and exits too.
 
 const (
 	pythonStartupTimeout    = 10 * time.Second
 	pythonWorkerMaxRuns     = 1000
 	pythonWorkerMaxIdle     = 4
 	pythonWorkerIdleTimeout = 5 * time.Minute
-	pythonStderrTail        = 4096
-	pythonDefaultMaxOutput  = 1 << 20
+	// pythonWorkerReapInterval is how often idle workers are checked against
+	// the idle timeout, so one lives at most the sum of the two unused.
+	pythonWorkerReapInterval = time.Minute
+	pythonStderrTail         = 4096
+	pythonDefaultMaxOutput   = 1 << 20
 )
 
 var (
@@ -116,6 +123,11 @@ type pythonPool struct {
 	// stats are kept per collector, under mu. They cost a map lookup per
 	// run, and are published only with verbose self-metrics (pythonmetrics.go).
 	stats map[string]*pythonCollectorStats
+	// busy counts the workers of each key that are running a script, and
+	// obsolete holds the keys a reload dropped while some of their workers
+	// were busy; those are stopped when they finish.
+	busy     map[string]int
+	obsolete map[string]bool
 }
 
 // Why a worker stopped, and how a run ended: bounded sets, so they can be
@@ -128,6 +140,7 @@ const (
 	pythonStopRetired     = "retired"
 	pythonStopSurplus     = "surplus"
 	pythonStopIdle        = "idle"
+	pythonStopReload      = "reload"
 
 	pythonRunOK          = "ok"
 	pythonRunScriptError = "script_error"
@@ -137,7 +150,7 @@ const (
 )
 
 var (
-	pythonStopReasons = []string{pythonStopTimeout, pythonStopCrash, pythonStopOutputLimit, pythonStopCancelled, pythonStopRetired, pythonStopSurplus, pythonStopIdle}
+	pythonStopReasons = []string{pythonStopTimeout, pythonStopCrash, pythonStopOutputLimit, pythonStopCancelled, pythonStopRetired, pythonStopSurplus, pythonStopIdle, pythonStopReload}
 	pythonRunOutcomes = []string{pythonRunOK, pythonRunScriptError, pythonRunTimeout, pythonRunOutputLimit, pythonRunFailed}
 )
 
@@ -149,7 +162,11 @@ type pythonCollectorStats struct {
 	runs           map[string]uint64
 }
 
-var pythonWorkers = &pythonPool{idle: map[string][]*pythonWorker{}, stats: map[string]*pythonCollectorStats{}}
+var pythonWorkers = newPythonPool()
+
+func newPythonPool() *pythonPool {
+	return &pythonPool{idle: map[string][]*pythonWorker{}, stats: map[string]*pythonCollectorStats{}, busy: map[string]int{}, obsolete: map[string]bool{}}
+}
 
 // statsLocked returns a collector's statistics, creating them; mu is held.
 func (p *pythonPool) statsLocked(collector string) *pythonCollectorStats {
@@ -173,19 +190,22 @@ func (p *pythonPool) recordRun(collector, outcome string) {
 	p.count(collector, func(st *pythonCollectorStats) { st.runs[outcome]++ })
 }
 
-// run sends one request to a worker for spec and returns its answer line.
-func (p *pythonPool) run(ctx context.Context, spec pythonSpec, payload []byte, timeout time.Duration) ([]byte, error) {
+// run sends one request to a worker for spec and returns its answer line and
+// how long the script ran: the call to the worker, without starting one.
+func (p *pythonPool) run(ctx context.Context, spec pythonSpec, payload []byte, timeout time.Duration) ([]byte, time.Duration, error) {
 	worker, err := p.acquire(ctx, spec)
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
+	start := time.Now()
 	line, err := worker.call(ctx, payload, timeout)
+	elapsed := time.Since(start)
 	if err != nil {
 		p.discard(worker, stopReason(err))
-		return nil, err
+		return nil, elapsed, err
 	}
 	p.release(spec, worker)
-	return line, nil
+	return line, elapsed, nil
 }
 
 func stopReason(err error) string {
@@ -203,10 +223,21 @@ func stopReason(err error) string {
 // discard stops a busy worker and counts why.
 func (p *pythonPool) discard(worker *pythonWorker, reason string) {
 	worker.stop()
-	p.count(worker.collector, func(st *pythonCollectorStats) {
-		st.busy--
-		st.stops[reason]++
-	})
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	st := p.statsLocked(worker.collector)
+	st.busy--
+	st.stops[reason]++
+	p.unbusyLocked(worker.key)
+}
+
+// unbusyLocked counts a worker of key as no longer busy; mu is held.
+func (p *pythonPool) unbusyLocked(key string) {
+	p.busy[key]--
+	if p.busy[key] <= 0 {
+		delete(p.busy, key)
+		delete(p.obsolete, key)
+	}
 }
 
 func (p *pythonPool) acquire(ctx context.Context, spec pythonSpec) (*pythonWorker, error) {
@@ -221,6 +252,7 @@ func (p *pythonPool) acquire(ctx context.Context, spec pythonSpec) (*pythonWorke
 	st := p.statsLocked(spec.Collector)
 	if worker != nil {
 		st.busy++
+		p.busy[key]++
 		p.mu.Unlock()
 		return worker, nil
 	}
@@ -229,16 +261,18 @@ func (p *pythonPool) acquire(ctx context.Context, spec pythonSpec) (*pythonWorke
 
 	p.started.Add(1)
 	worker, err := startPythonWorker(ctx, spec)
-	p.count(spec.Collector, func(st *pythonCollectorStats) {
-		st.starting--
-		if err != nil {
-			st.startFailures++
-			return
-		}
-		st.starts++
-		st.busy++
-	})
-	return worker, err
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	st = p.statsLocked(spec.Collector)
+	st.starting--
+	if err != nil {
+		st.startFailures++
+		return nil, err
+	}
+	st.starts++
+	st.busy++
+	p.busy[key]++
+	return worker, nil
 }
 
 func (p *pythonPool) release(spec pythonSpec, worker *pythonWorker) {
@@ -252,6 +286,14 @@ func (p *pythonPool) release(spec pythonSpec, worker *pythonWorker) {
 	defer p.mu.Unlock()
 	st := p.statsLocked(spec.Collector)
 	st.busy--
+	obsolete := p.obsolete[key]
+	p.unbusyLocked(key)
+	if obsolete {
+		// A reload removed or changed this script while it ran.
+		worker.stop()
+		st.stops[pythonStopReload]++
+		return
+	}
 	if len(p.idle[key]) >= pythonWorkerMaxIdle {
 		worker.stop()
 		st.stops[pythonStopSurplus]++
@@ -280,6 +322,69 @@ func (p *pythonPool) reapLocked(now time.Time) {
 			p.idle[key] = kept
 		}
 	}
+}
+
+// reapIdle stops the workers idle for longer than the idle timeout.
+func (p *pythonPool) reapIdle(now time.Time) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.reapLocked(now)
+}
+
+// reapLoop stops idle workers on a timer until ctx ends, so they are stopped
+// even when nothing asks for a worker any more.
+func (p *pythonPool) reapLoop(ctx context.Context, interval time.Duration) {
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case now := <-ticker.C:
+			p.reapIdle(now)
+		}
+	}
+}
+
+// retain makes keys the scripts in use: idle workers of any other are stopped
+// at once, and busy ones when they finish.
+func (p *pythonPool) retain(keys map[string]bool) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	for key := range keys {
+		delete(p.obsolete, key)
+	}
+	for key, count := range p.busy {
+		if count > 0 && !keys[key] {
+			p.obsolete[key] = true
+		}
+	}
+	for key, workers := range p.idle {
+		if keys[key] {
+			continue
+		}
+		for _, worker := range workers {
+			worker.stop()
+			p.statsLocked(worker.collector).stops[pythonStopReload]++
+		}
+		delete(p.idle, key)
+	}
+}
+
+// pythonWorkerKeys are the worker keys a configuration uses.
+func pythonWorkerKeys(pythonPath string, c *Config) map[string]bool {
+	keys := map[string]bool{}
+	for i := range c.Collectors {
+		x := &c.Collectors[i]
+		if x.Transform.Type == "python" || x.Transform.PreScript != "" {
+			path := pythonPath
+			if path == "" {
+				path = "python3"
+			}
+			keys[pythonWorkerSpec(path, x).key()] = true
+		}
+	}
+	return keys
 }
 
 // pythonWorkerSnapshot is one collector's worker statistics at a moment.
@@ -343,6 +448,7 @@ type pythonLine struct {
 
 type pythonWorker struct {
 	collector string
+	key       string
 	cmd       *exec.Cmd
 	requests  *os.File
 	lines     chan pythonLine
@@ -379,7 +485,7 @@ func startPythonWorker(ctx context.Context, spec pythonSpec) (*pythonWorker, err
 	// The child holds its own copies of these ends.
 	closeFiles(requestRead, answerWrite)
 
-	worker := &pythonWorker{collector: spec.Collector, cmd: cmd, requests: requestWrite, lines: make(chan pythonLine, 1), stderr: stderr}
+	worker := &pythonWorker{collector: spec.Collector, key: spec.key(), cmd: cmd, requests: requestWrite, lines: make(chan pythonLine, 1), stderr: stderr}
 	go worker.readAnswers(answerRead, spec.MaxOutput)
 	go func() { _ = cmd.Wait() }()
 

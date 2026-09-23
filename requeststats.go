@@ -1,10 +1,7 @@
 package main
 
 import (
-	"fmt"
 	"sort"
-	"strconv"
-	"strings"
 	"sync"
 	"time"
 )
@@ -184,17 +181,14 @@ func (s *Server) seedScheduledRequests() {
 }
 
 // verboseRequestSeriesNames are the self-metric families the verbose mode
-// republishes per request. They are the per-collector families minus
-// http_exporter_cache_entries, which counts the entries a collector's cache
-// holds and belongs to no single request.
+// republishes per request: the per-collector families that have a per-request
+// value, which leaves out http_exporter_cache_entries.
 func verboseRequestSeriesNames() []string {
-	all := selfMetricNames()
-	names := make([]string, 0, len(all))
-	for _, name := range all {
-		if name == "http_exporter_cache_entries" {
-			continue
+	var names []string
+	for _, d := range selfMetricDescriptors {
+		if d.Value != nil {
+			names = append(names, d.Name)
 		}
-		names = append(names, name)
 	}
 	return names
 }
@@ -206,13 +200,14 @@ func requestLabels(key requestKey) map[string]string {
 	return map[string]string{"collector": key.Collector, "http_method": key.Method, "url": key.URL}
 }
 
-// verboseRequestMetrics renders the per-request series. It returns nothing when
-// verbose self-metrics are off, and clears anything tracked earlier so a reload
-// that turns verbose off does not leave stale series behind.
-func (s *Server) verboseRequestMetrics() []Metric {
+// verboseRequests returns the tracked requests, whose series join the
+// per-collector families in selfMetricSet, and the families only verbose mode
+// has. Both are empty unless verbose self-metrics are configured, and turning
+// verbose off forgets the requests.
+func (s *Server) verboseRequests() ([]requestSample, []Metric) {
 	if !s.verboseSelfMetrics() {
 		s.requests.Reset()
-		return nil
+		return nil, nil
 	}
 	s.seedScheduledRequests()
 	samples, capped := s.requests.Snapshot()
@@ -238,43 +233,15 @@ func (s *Server) verboseRequestMetrics() []Metric {
 		},
 	}
 	for _, sample := range samples {
-		labels := requestLabels(sample.Key)
-		for _, series := range statsSeries(sample.Values) {
-			out = append(out, Metric{
-				Name:   series.Name,
-				Type:   series.Type,
-				Value:  series.Value,
-				Labels: cloneLabels(labels),
-			})
-		}
 		out = append(out, Metric{
 			Name:   "http_exporter_request_last_scrape_timestamp_seconds",
 			Help:   "Unix timestamp of the last scrape of this request, or 0 when it has not been scraped yet.",
 			Type:   GaugeMetricType,
 			Value:  scrapeTimestamp(sample.Values.lastScrape),
-			Labels: cloneLabels(labels),
+			Labels: requestLabels(sample.Key),
 		})
 	}
-	return out
-}
-
-// renderVerboseRequestMetrics writes the per-request series into the
-// self-metrics text. A family the per-collector block has already declared gets
-// no second HELP or TYPE line: repeating the metadata of a metric family makes
-// the exposition invalid, so the labelled series join the family that is
-// already open rather than starting a new one.
-func (s *Server) renderVerboseRequestMetrics(b *strings.Builder, declared map[string]bool) {
-	seen := map[string]bool{}
-	for _, m := range s.verboseRequestMetrics() {
-		if !declared[m.Name] && !seen[m.Name] {
-			if m.Help != "" {
-				fmt.Fprintf(b, "# HELP %s %s\n", m.Name, m.Help)
-			}
-			fmt.Fprintf(b, "# TYPE %s %s\n", m.Name, m.Type)
-			seen[m.Name] = true
-		}
-		fmt.Fprintf(b, "%s%s %s\n", m.Name, formatLabels(m.Labels), strconv.FormatFloat(m.Value, 'g', -1, 64))
-	}
+	return samples, out
 }
 
 // scrapeTimestamp reports a registered but never scraped request as 0 rather

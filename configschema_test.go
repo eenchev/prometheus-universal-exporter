@@ -172,7 +172,7 @@ func TestConfigSchemaRejectsInvalidConfigurations(t *testing.T) {
 		"bad metric name":         strings.Replace(base, "name: value", "name: bad-name", 1),
 		"bad metrics_prefix":      strings.Replace(base, "  - name: demo\n", "  - name: demo\n    metrics_prefix: grafana_\n", 1),
 		"bad duration":            strings.Replace(base, "  - name: demo\n", "  - name: demo\n    cache: five minutes\n", 1),
-		"bad error policy":        strings.Replace(base, "  - name: demo\n", "  - name: demo\n    error_handling:\n      on_http_error: panic\n", 1),
+		"bad error policy":        strings.Replace(base, "  - name: demo\n", "  - name: demo\n    error_handling:\n      on_fetch_error: panic\n", 1),
 		"bad label type":          base + "        labels:\n          - name: l\n            type: literal\n",
 		"negative limit":          strings.Replace(base, "  - name: demo\n", "  - name: demo\n    limits:\n      max_metrics: -1\n", 1),
 		"unsupported library":     strings.Replace(base, "      type: jq\n", "      type: jq\n      libraries: [requests]\n", 1),

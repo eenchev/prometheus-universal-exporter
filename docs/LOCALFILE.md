@@ -192,7 +192,13 @@ in:
   modification time is also available to transforms.
 - **Bounded reads.** A read stops at the collector's response limit, and a
   probe returns when its `timeout` or Prometheus's scrape timeout ends even if
-  the file lives on a network filesystem that has stopped answering.
+  the file lives on a network filesystem that has stopped answering (see
+  [Probe deadlines](CONFIGURATION.md#probe-deadlines)). A read cannot be
+  cancelled, though, so the read itself goes on; at most four of a collector's
+  reads may still be running at once. Once all four are held by reads that have
+  not returned, a probe fails at once — `collector "textfile" already has 4 file
+  reads that have not returned` — rather than adding another, and reads resume
+  as the filesystem answers.
 - **Least privilege.** The published image runs as the unprivileged user
   `exporter`, so the files must be readable by it; a file it may not read fails
   the scrape with `permission denied` rather than being skipped silently.
@@ -206,8 +212,9 @@ target instead, as above.
 
 A failed read is reported in the `file` stage — `collector textfile file
 failed: file /var/lib/.../batch.prom does not exist` — and follows
-`error_handling.on_http_error`, the policy for failing to obtain a response. A
-file over the size limit counts in `http_exporter_series_limit_exceeded`.
+`error_handling.on_fetch_error`, the policy for failing to obtain a response, as
+for an `http` collector. A
+file over the size limit counts in `http_exporter_series_limit_exceeded_total`.
 `http_exporter_scrape_http_status_code` reads `200` after a successful read.
 
 With [verbose self-metrics](SELF-METRICS.md#verbose-per-request-self-metrics),

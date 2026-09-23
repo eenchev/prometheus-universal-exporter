@@ -62,6 +62,16 @@ server:
   # not set stops the exporter at startup rather than becoming an empty string.
   # Set the variables through `env` or `envFrom` below.
   expandEnv: false
+  # Log level of the exporter: debug, info, warn or error. Logs are JSON lines
+  # on stderr.
+  logLevel: info
+  # How much of Prometheus's scrape timeout (the monitor's scrapeTimeout) a
+  # probe leaves unused, so it can answer with its own error, such as a slow
+  # target or a hung file read, before Prometheus gives up. A Go duration of
+  # zero or more; empty keeps the exporter's default, 500ms, and leaves the flag
+  # out, so the chart also works with exporter images that predate it. Raise it
+  # if Prometheus still times out first.
+  probeTimeoutOffset: ""
 
 # Environment variables for the exporter container, in the Kubernetes shapes.
 # These are what server.expandEnv substitutes from; they are also useful on
@@ -83,15 +93,20 @@ env: []
 envFrom: []
 
 # Extra command-line flags for the exporter, on top of the ones the chart
-# renders from the values above. Each entry is a whole argument:
+# renders from the values above. Every flag the exporter has today is a value
+# under server (or selfMetrics.path, otlpTargets), so this is for a flag an
+# exporter image has that this chart version does not know yet. Each entry is a
+# whole argument:
 #
 #   extraArgs:
-#     - --log.level=debug
+#     - --some.new-flag=value
 #
 # A flag the chart already manages is rejected while rendering rather than
 # silently overriding the value it came from — Go keeps the last occurrence of a
 # flag, so `--web.listen-address` here would move the listener while the
-# container port and the probes stayed on server.listenAddress.
+# container port and the probes stayed on server.listenAddress. So is a flag
+# that prints something and exits, such as --dry-run or --config.schema, which
+# would restart the pod for ever.
 extraArgs: []
 
 # Extra volumes and mounts, in the ordinary Kubernetes shapes. This is how to

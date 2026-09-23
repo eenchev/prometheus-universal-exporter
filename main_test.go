@@ -13,7 +13,7 @@ import (
 )
 
 func testCollector(name, format string) Collector {
-	return Collector{Name: name, Request: RequestConfig{Type: RequestTypeHTTP, Method: "GET"}, Response: ResponseConfig{Format: format}, Transform: TransformConfig{Type: "regex"}, Metrics: []MetricRule{{Name: "demo_value", Type: GaugeMetricType, Expression: `value=(\d+)`}}, ErrorHandling: ErrorHandling{OnHTTPError: "fail", OnDecodeError: "fail", OnTransformError: "fail"}, Limits: Limits{MaxResponseBytes: 1024}}
+	return Collector{Name: name, Request: RequestConfig{Type: RequestTypeHTTP, Method: "GET"}, Response: ResponseConfig{Format: format}, Transform: TransformConfig{Type: "regex"}, Metrics: []MetricRule{{Name: "demo_value", Type: GaugeMetricType, Expression: `value=(\d+)`}}, ErrorHandling: ErrorHandling{OnFetchError: "fail", OnDecodeError: "fail", OnTransformError: "fail"}, Limits: Limits{MaxResponseBytes: 1024}}
 }
 
 func TestMetricValidationAndExpositionEscaping(t *testing.T) {
@@ -652,7 +652,7 @@ func TestConfigValidationAppliesDefaults(t *testing.T) {
 	if c.Request.Method != http.MethodGet || c.Response.Format != "auto" || c.Decoder.Type != "text" {
 		t.Fatalf("unexpected inferred defaults: method=%q format=%q decoder=%q", c.Request.Method, c.Response.Format, c.Decoder.Type)
 	}
-	if c.ErrorHandling.OnHTTPError != "fail" || c.ErrorHandling.OnDecodeError != "fail" || c.ErrorHandling.OnTransformError != "fail" {
+	if c.ErrorHandling.OnFetchError != "fail" || c.ErrorHandling.OnDecodeError != "fail" || c.ErrorHandling.OnTransformError != "fail" {
 		t.Fatalf("unexpected error policy defaults: %#v", c.ErrorHandling)
 	}
 	if c.Metrics[0].Type != GaugeMetricType || c.Metrics[0].ErrorMode != "log" {

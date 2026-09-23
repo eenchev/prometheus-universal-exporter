@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"syscall"
 	"time"
@@ -51,6 +52,7 @@ import (
 //     modification time reaches transforms as the Last-Modified header.
 //   - Bounded. The read stops at the collector's response limit, and a probe
 //     returns when its timeout or context ends even if the filesystem hangs.
+//     The reads left running on a hung filesystem are capped per collector.
 
 func init() {
 	registerRequestType(&requestType{
@@ -214,6 +216,50 @@ func localFileLabel(target string, c *Collector, overrides RequestOverrides) (st
 	return "file://" + filepath.ToSlash(filepath.Join(c.Request.Root, file)), nil
 }
 
+// localFileMaxPendingReads is how many reads of one collector may be in
+// progress at once, including reads whose probe has already given up on them.
+// Identical probes share a read (probeflight.go), so reaching it takes
+// different files on a filesystem that has stopped answering.
+const localFileMaxPendingReads = 4
+
+// pendingReads counts the reads in progress per collector.
+type pendingReads struct {
+	mu    sync.Mutex
+	count map[string]int
+}
+
+var localFileReads = &pendingReads{count: map[string]int{}}
+
+// acquire takes a read slot for a collector, or refuses at once when every
+// slot is held by a read that has not returned. release frees it, and is
+// called when the read returns, not when the probe does.
+func (p *pendingReads) acquire(collector string) (release func(), err error) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.count[collector] >= localFileMaxPendingReads {
+		return nil, fmt.Errorf("collector %q already has %d file reads that have not returned; the filesystem under request.root is not answering, so no further read is started until one does", collector, localFileMaxPendingReads)
+	}
+	p.count[collector]++
+	var once sync.Once
+	return func() {
+		once.Do(func() {
+			p.mu.Lock()
+			defer p.mu.Unlock()
+			p.count[collector]--
+			if p.count[collector] == 0 {
+				delete(p.count, collector)
+			}
+		})
+	}, nil
+}
+
+// pending reports how many reads of a collector are in progress, for tests.
+func (p *pendingReads) pending(collector string) int {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.count[collector]
+}
+
 type localFileRead struct {
 	body []byte
 	info fs.FileInfo
@@ -233,9 +279,16 @@ func fetchLocalFile(ctx context.Context, target string, c *Collector, overrides 
 	}
 	full := filepath.Join(c.Request.Root, file)
 	// A read cannot be cancelled, and a hung network filesystem would hold it
-	// for good; the scrape stops waiting when its context ends.
+	// for good; the scrape stops waiting when its context ends, but the read
+	// goes on. The reads still going on are capped per collector, so a stuck
+	// filesystem costs a few goroutines rather than one per scrape.
+	release, err := localFileReads.acquire(c.Name)
+	if err != nil {
+		return nil, err
+	}
 	done := make(chan localFileRead, 1)
 	go func() {
+		defer release()
 		body, info, err := readLocalFile(c.Request.Root, file, responseLimit(c))
 		done <- localFileRead{body: body, info: info, err: err}
 	}()
@@ -313,8 +366,7 @@ func readOpenedFile(root *os.Root, name, full string, limit int64) ([]byte, fs.F
 		return nil, nil, localFileError(full, err)
 	}
 	if int64(len(body)) > limit {
-		// "response size" is what the limit error counter looks for.
-		return nil, nil, fmt.Errorf("file %s: response size exceeds limit %d", full, limit)
+		return nil, nil, markError(fmt.Errorf("file %s: response size exceeds limit %d", full, limit), errLimitExceeded)
 	}
 	if hook := afterLocalFileRead.Load(); hook != nil {
 		(*hook)(full)

@@ -100,13 +100,13 @@ const (
 	pythonWorkersHelp        = "Python workers of this collector, by state: starting, idle or busy."
 	pythonWorkerStartsHelp   = "Python workers this collector started."
 	pythonStartFailuresHelp  = "Python workers of this collector that failed to start."
-	pythonWorkerStopsHelp    = "Python workers of this collector that stopped, by reason: timeout, crash, output_limit, cancelled, retired, surplus or idle."
+	pythonWorkerStopsHelp    = "Python workers of this collector that stopped, by reason: timeout, crash, output_limit, cancelled, retired, surplus, idle or reload."
 	pythonRunsHelp           = "Python script runs of this collector, by outcome: ok, script_error, timeout, output_limit or failed."
 
 	pythonPoolWorkersHelp       = "Python workers in the execution pool, across all collectors, by state: starting, idle or busy."
 	pythonPoolStartsHelp        = "Python workers the execution pool started, across all collectors."
 	pythonPoolStartFailuresHelp = "Python workers the execution pool failed to start, across all collectors."
-	pythonPoolStopsHelp         = "Python workers the execution pool stopped, across all collectors, by reason: timeout, crash, output_limit, cancelled, retired, surplus or idle."
+	pythonPoolStopsHelp         = "Python workers the execution pool stopped, across all collectors, by reason: timeout, crash, output_limit, cancelled, retired, surplus, idle or reload."
 	pythonPoolRunsHelp          = "Python script runs in the execution pool, across all collectors, by outcome: ok, script_error, timeout, output_limit or failed."
 )
 

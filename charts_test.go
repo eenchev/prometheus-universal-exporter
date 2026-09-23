@@ -228,3 +228,66 @@ func readChartFile(t *testing.T, name string) string {
 	}
 	return string(raw)
 }
+
+// Every flag the exporter has is either rendered by the chart from a value, or
+// a one-shot flag the chart refuses in extraArgs because it prints something
+// and exits. A flag added to the exporter without either fails here, rather
+// than leaving chart users to discover it and pass it through extraArgs.
+func TestEveryExporterFlagIsHandledByTheChart(t *testing.T) {
+	help := runCLI(t, "-h")
+	var flags []string
+	for _, match := range regexp.MustCompile(`(?m)^  -([a-z.-]+)`).FindAllStringSubmatch(help.stdout, -1) {
+		flags = append(flags, "--"+match[1])
+	}
+	if len(flags) == 0 {
+		t.Fatal("the exporter lists no flags")
+	}
+	rendered := map[string]bool{}
+	for _, line := range argLines(readChartFile(t, "templates/deployment.yaml")) {
+		for _, match := range flagReference.FindAllString(line, -1) {
+			rendered[match] = true
+		}
+	}
+	oneShot := map[string]bool{}
+	helpers := readChartFile(t, "templates/_helpers.tpl")
+	start := strings.Index(helpers, "{{- $oneShot := dict")
+	if start < 0 {
+		t.Fatal("the extraArgs guard no longer lists the one-shot flags")
+	}
+	block, _, _ := strings.Cut(helpers[start:], "-}}")
+	for _, match := range regexp.MustCompile(`"(--[a-z][a-z0-9.-]*)"`).FindAllStringSubmatch(block, -1) {
+		oneShot[match[1]] = true
+	}
+	known := map[string]bool{"--help": true, "--h": true}
+	for _, flag := range flags {
+		known[flag] = true
+		switch {
+		case rendered[flag] && oneShot[flag]:
+			t.Errorf("%s is both rendered by the chart and refused as a one-shot flag", flag)
+		case !rendered[flag] && !oneShot[flag]:
+			t.Errorf("the exporter has %s, but the chart neither renders it from a value nor refuses it in extraArgs", flag)
+		}
+	}
+	for flag := range oneShot {
+		if !known[flag] {
+			t.Errorf("the chart refuses %s, which the exporter does not have", flag)
+		}
+	}
+}
+
+// The values behind the flags added for them default to what the exporter
+// does without them.
+func TestServerFlagValuesDefaults(t *testing.T) {
+	values := readChartFile(t, "values.yaml")
+	for _, line := range []string{"\n  logLevel: info\n", "\n  probeTimeoutOffset: \"\"\n"} {
+		if !strings.Contains(values, line) {
+			t.Errorf("values.yaml lacks %q", strings.TrimSpace(line))
+		}
+	}
+	deployment := readChartFile(t, "templates/deployment.yaml")
+	// Unset, --probe.timeout-offset is left out, so an image that predates the
+	// flag still starts.
+	if !strings.Contains(deployment, `{{- with (include "prometheus-universal-exporter.probeTimeoutOffset" .) }}`) {
+		t.Error("--probe.timeout-offset must only be rendered when server.probeTimeoutOffset is set")
+	}
+}

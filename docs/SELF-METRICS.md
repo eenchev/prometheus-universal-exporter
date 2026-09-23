@@ -2,6 +2,69 @@
 
 Exporter self-health metrics are available at `/self-metrics` by default (and `/metrics` remains a compatibility alias). Change the dedicated path with `--web.self-metrics-path=/exporter/metrics`. The Helm chart's optional self-metrics ServiceMonitor/PodMonitor scrapes the exporter pods/services separately from target-probing monitors. Configure one or more entries in `monitors`, each with a unique `name` and `type: pod` or `type: service`; each entry supports Prometheus Operator `relabelings` and `metricRelabelings`.
 
+## Collector metrics
+
+Every collector has these series, labelled `collector`, from the moment it is
+configured:
+
+| Metric | Type | Meaning |
+| --- | --- | --- |
+| `http_exporter_scrapes_total` | counter | Probes served, cache hits included. |
+| `http_exporter_scrape_success_total` | counter | Probes that completed without a fatal error. |
+| `http_exporter_scrape_duration_seconds` | gauge | Duration of the most recent probe. |
+| `http_exporter_scrape_http_status_code` | gauge | Status of the most recent response; `0` when none arrived, `200` after a file read. |
+| `http_exporter_scrape_response_bytes` | gauge | Size of the most recent response body. |
+| `http_exporter_decode_success_total` | counter | Responses decoded. |
+| `http_exporter_parse_errors_total` | counter | Responses the decoder could not parse. |
+| `http_exporter_transform_errors_total` | counter | Failed transforms. |
+| `http_exporter_missing_keys_total` | counter | Transform failures from a value the response did not contain: a jq or yq value, a CSV column, a regex that matched no text, an XPath or CSS selector that matched no nodes, `items` that selected nothing. |
+| `http_exporter_script_errors_total` | counter | Python script failures. |
+| `http_exporter_script_duration_seconds` | gauge | How long the Python of the most recent probe that ran any took — pre-script and python transform together, not counting starting an interpreter. |
+| `http_exporter_metrics_emitted_total` | counter | Metrics produced, across scrapes. |
+| `http_exporter_series_limit_exceeded_total` | counter | Scrapes rejected by a size or series limit. |
+| `http_exporter_cache_hits_total`, `http_exporter_cache_misses_total` | counter | [Response cache](CONFIGURATION.md#response-caching) lookups. |
+| `http_exporter_cache_entries` | gauge | Entries the collector's cache holds. |
+| `http_exporter_probes_coalesced_total` | counter | Probes that [shared a request](#shared-probes). |
+| `http_exporter_collector_config_valid` | gauge | `1` for every loaded collector. |
+
+A failure rate, for example:
+
+```promql
+1 - rate(http_exporter_scrape_success_total[5m]) / rate(http_exporter_scrapes_total[5m])
+```
+
+Which of the error counters a failure raises depends on what failed, not on
+the words in its message: a script error that happens to say "missing" is a
+script error, not a missing key.
+
+Every counter ends in `_total` and nothing else does. `/metrics`, the
+self-metrics path and OTLP are built from the same definitions, so a family has
+the same type, help and value in each.
+
+## Configuration reloads
+
+A reload that is rejected — an invalid file, a duplicate collector name, a
+pre-script that stops producing `data` — leaves the last valid configuration
+running and logs why, once. These series keep saying so, under the names
+Prometheus uses for its own configuration:
+
+```text
+http_exporter_config_last_reload_successful{file="config"} 0
+http_exporter_config_last_reload_success_timestamp_seconds{file="config"} 1.7901e+09
+http_exporter_config_reloads_total{file="config",result="success"} 4
+http_exporter_config_reloads_total{file="config",result="failure"} 1
+```
+
+`file="config"` is the configuration with its
+[collector files](CONFIGURATION.md#collector-files); `file="targets"` is the
+[scheduled target file](OTLP.md#scheduled-targets), reported only when there is
+one. Loading at startup counts as a success; the counter counts reloads after
+it. Alert on a change that did not take:
+
+```promql
+http_exporter_config_last_reload_successful == 0
+```
+
 ## Shared probes
 
 `http_exporter_probes_coalesced_total{collector="..."}` counts the probes that
@@ -30,6 +93,7 @@ go_threads 8
 go_info{version="go1.27.0"} 1
 go_memstats_heap_inuse_bytes 1.589248e+06
 go_memstats_alloc_bytes_total 767904
+go_gc_duration_seconds_sum 0.0021
 go_gc_duration_seconds_count 3
 go_cpu_classes_user_cpu_seconds_total 0.27687507
 process_cpu_seconds_total 0.31
@@ -51,7 +115,7 @@ Prometheus servers should not pay that unless somebody wants the numbers.
 ### What you get
 
 The `go_memstats_*`, `go_goroutines`, `go_threads`, `go_info`,
-`go_sched_gomaxprocs_threads` and `go_gc_duration_seconds_count` / `_sum` series
+`go_sched_gomaxprocs_threads` and `go_gc_duration_seconds` series
 come from the runtime and are published on every platform the exporter builds
 for.
 
@@ -68,9 +132,10 @@ They are deliberately not synthesised from runtime numbers on other platforms:
 and includes idle. Publishing one under the other's name would be wrong in a way
 that only shows up when somebody trusts the graph.
 
-`go_gc_duration_seconds` is published as its `_count` and `_sum` only. The
-quantiles a summary would carry are not available from `runtime.MemStats`, and
-inventing them would be worse than leaving them out.
+`go_gc_duration_seconds` is a summary, as in client_golang, published with its
+`_count` and `_sum` only. The quantiles a summary would carry are not available
+from `runtime.MemStats`, and inventing them would be worse than leaving them
+out.
 
 Like verbosity, this is configuration rather than a flag, so a reload turns it
 on and off.
@@ -210,8 +275,9 @@ A worker stops because of a `timeout` (the script overran `limits.script_timeout
 and the worker was killed), a `crash` (the interpreter died), an `output_limit`
 (it answered with more than `limits.max_output_bytes`), `cancelled` (the scrape
 was abandoned mid-run), `retired` (it reached 1,000 runs), `surplus` (more than
-four were idle after a burst) or `idle` (unused for five minutes). The last three
-are routine; the first four each cost the next scrape a fresh interpreter.
+four were idle after a burst), `idle` (unused for five minutes) or `reload` (a
+reload changed or removed its script). The last four are routine; the first four
+each cost the next scrape a fresh interpreter.
 
 A run ends `ok`, `script_error` (the script raised or called `fail(...)`; the
 worker carries on), `timeout`, `output_limit` or `failed` (the worker could not

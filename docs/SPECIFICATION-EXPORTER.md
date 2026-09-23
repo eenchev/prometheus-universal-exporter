@@ -152,6 +152,23 @@ Invalid request overrides MUST return a client error. When `timeout` is absent,
 the exporter MUST use the incoming scrape request context as the target request
 deadline rather than a collector-configured timeout.
 
+#### 3.2a Probe deadline
+
+When a probe carries `X-Prometheus-Scrape-Timeout-Seconds`, as Prometheus sends
+on every scrape, the exporter MUST bound the trip to the target — the request or
+file read, decoding, transforms and scripts — by that timeout less
+`--probe.timeout-offset`, which MUST default to 500ms and MUST reject a
+negative value as a command-line error (exit 2, before `--dry-run` or startup).
+When the offset would leave less than half the timeout, the probe MUST keep
+half. When the budget runs out the probe MUST fail in the stage that was
+running, and the error MUST say that the probe's budget, with its length, ran
+out, so Prometheus receives the reason before its own timeout. A missing,
+unparseable, non-positive or non-finite header MUST leave the probe
+unbounded by it. The `timeout` parameter keeps bounding the request alone; the
+earlier deadline wins. A cache hit needs no budget, and identical probes that
+share one trip (§ 42.13a) share the budget of the probe that started it.
+Scheduled targets are not affected.
+
 The `insecure_skip_verify` override MUST take precedence over
 `request.tls.insecure_skip_verify` for the individual scrape. Invalid boolean
 values MUST return HTTP 400 before the target is contacted. Disabling
@@ -423,7 +440,9 @@ type.
 - Each type MUST live in its own `requesttype_<name>.go`, which registers it
   from `init` and carries exactly the constraint
   `//go:build !select_request_types || request_type_<name>`. Code and imports
-  that only that type needs MUST live behind the same constraint.
+  that only that type needs MUST live behind the same constraint, and so MUST
+  `requesttype_<name>_test.go`, the tests that only that type needs, so that
+  vetting a single-type selection compiles its tests too.
 - A build with `-tags select_request_types` MUST carry only the types named by
   `request_type_<name>` tags. One that names none MUST fail to compile, which
   `requesttype_none.go` does with the constraint
@@ -508,14 +527,19 @@ scrape. The read MUST stop at the collector's response limit and fail beyond
 it, counted as a limit error. A file whose size or modification time changes
 while it is read MUST be read again, and the scrape MUST fail, advising an
 atomic rename, if it changes a second time. A read MUST NOT hold a probe past
-its `timeout` or context, even when the filesystem does not answer.
+its `timeout`, budget (§ 3.2a) or context, even when the filesystem does not
+answer. Because a read cannot be cancelled, the reads of one collector still in
+progress — including those whose probe has given up — MUST be capped, at four.
+A probe that would exceed the cap MUST fail at once, saying the filesystem is
+not answering, and the slot MUST be freed when the read returns rather than
+when its probe does.
 
 A successful read MUST be presented to the shared pipeline as a response with
 status `200` and the headers `Content-Type`, chosen from the extension
 (`.prom` as Prometheus text version 0.0.4, `.json`, `.yaml`/`.yml`, `.xml`,
 `.csv`, `.html`/`.htm`) so `response.format: auto` picks the decoder,
 `Content-Length`, and `Last-Modified`, the file's modification time. A failed
-read MUST be reported in the `file` stage and follow `on_http_error`. A file
+read MUST be reported in the `file` stage and follow `on_fetch_error`. A file
 that does not exist, and one the exporter may not read, MUST each be named as
 such.
 
@@ -1220,7 +1244,18 @@ typical script.
   scrape MUST start another.
 - A healthy worker MUST be reused at most 1000 times; at most four idle workers
   MUST be kept per pool, and an idle worker MUST be stopped after five minutes.
-  A worker MUST exit when the exporter does, which closing its request pipe
+  Idle workers MUST be checked against that timeout on a timer, every minute,
+  and not only when a worker is next asked for, so a collector that is no
+  longer scraped does not keep its interpreters.
+- A reload that removes or changes a collector's script MUST stop that script's
+  idle workers at once and each busy one when its run finishes, counting them
+  with the stop reason `reload`; workers of scripts the reload keeps MUST be
+  left alone.
+- The time each run takes in its worker — not starting one — MUST be kept per
+  probe, the pre-script's and the python transform's together, and published
+  as `http_exporter_script_duration_seconds` of the collector and of the
+  request (§ 22).
+- A worker MUST exit when the exporter does, which closing its request pipe
   achieves.
 
 ---
@@ -1385,7 +1420,7 @@ A probe failed by `fail` MUST respond `502 Bad Gateway` with
 `status` MUST always be `error`, so a client can test a single field. `target`
 MUST have any user information in the URL redacted, since the body can reach
 logs and tickets the credential should not. The failure MUST be counted as a
-failed probe in the self-metrics — no increment of `http_exporter_scrape_success`,
+failed probe in the self-metrics — no increment of `http_exporter_scrape_success_total`,
 an increment of `http_exporter_transform_errors_total`, and of
 `http_exporter_missing_keys_total` when the value was missing — and MUST NOT be
 cached. Besides the per-rule line, the exporter MUST log a `probe failed` line
@@ -1538,7 +1573,7 @@ Recommended collector configuration:
 
 ```yaml
 error_handling:
-  on_http_error: fail
+  on_fetch_error: fail
   on_decode_error: fail
   on_transform_error: fail
   allow_missing_keys: false
@@ -1551,6 +1586,11 @@ fail     fail the probe at that stage
 log      carry on and log the failure at warning level
 ignore   carry on, logging the failure only at debug level
 ```
+
+`on_fetch_error` MUST govern failing to obtain the response, whatever the
+request type (§ 5.1): for `http` a transport failure or a non-success status,
+for `localfile` a file that cannot be read. It is named for the stage rather
+than for one type, so it reads the same on every collector.
 
 This is the vocabulary `error_mode` uses (§ 18.1). `warn`, this setting's
 original spelling of `log`, MUST still be accepted and treated as `log`, and each
@@ -1573,6 +1613,18 @@ These MUST be treated as different classes:
 7. Metric validation failure
 8. Cardinality/limit failure
 9. Python execution failure
+
+These classes that have self-metrics of their own — a response over the size
+limit (`http_exporter_series_limit_exceeded_total`), a value the response did
+not contain (`http_exporter_missing_keys_total`) and a Python failure
+(`http_exporter_script_errors_total`) — MUST be told apart by the kind of the
+error, set where the error is made and read with `errors.Is`, and never by
+searching the error's text: an error that merely mentions "missing", "response
+size" or "python" MUST NOT raise those counters, and rewording a message MUST
+NOT stop one being counted. A value the response did not contain is any
+required value a rule could not find: a jq or yq value, a CSV column, a regex
+that matched no text, an XPath or CSS selector that matched no nodes, and an
+`items` expression that selected nothing.
 
 ### 19.2 Missing keys
 
@@ -1671,12 +1723,13 @@ Expose exporter health metrics on `/metrics`.
 At minimum:
 
 ```text
-http_exporter_scrape_success
+http_exporter_scrapes_total
+http_exporter_scrape_success_total
 http_exporter_scrape_duration_seconds
 http_exporter_scrape_http_status_code
 http_exporter_scrape_response_bytes
 
-http_exporter_decode_success
+http_exporter_decode_success_total
 http_exporter_parse_errors_total
 
 http_exporter_transform_errors_total
@@ -1685,8 +1738,8 @@ http_exporter_missing_keys_total
 http_exporter_script_errors_total
 http_exporter_script_duration_seconds
 
-http_exporter_metrics_emitted
-http_exporter_series_limit_exceeded
+http_exporter_metrics_emitted_total
+http_exporter_series_limit_exceeded_total
 
 http_exporter_cache_hits_total
 http_exporter_cache_misses_total
@@ -1696,9 +1749,45 @@ http_exporter_probes_coalesced_total
 
 http_exporter_collector_config_valid
 http_exporter_scheduled_targets
+
+http_exporter_config_last_reload_successful
+http_exporter_config_last_reload_success_timestamp_seconds
+http_exporter_config_reloads_total
 ```
 
 Labels should include `collector` and, where appropriate, `target`.
+
+Names MUST follow the Prometheus conventions: a counter's name MUST end in
+`_total`, and nothing else's may. Every family's name, type, help and value
+MUST come from one definition, from which one set of self-metrics is built and
+both rendered as text on `/metrics` and the self-metrics path and exported over
+OTLP, so a family cannot be one type in one place and another type elsewhere.
+In the text, each family MUST be one contiguous block — its `HELP` and `TYPE`
+once, then every series of it, the per-collector ones followed by the
+per-request ones of verbose mode (§ 22.1) — as the exposition format requires.
+A test MUST check each of these properties on a rendered exposition.
+
+### 22.0b Configuration reload status
+
+A rejected reload leaves the last valid configuration in force (§ 24), which
+changes nothing visible while the change somebody made is not running. The
+exporter MUST therefore publish, under the names Prometheus uses for the same
+purpose:
+
+```text
+http_exporter_config_last_reload_successful{file}                 gauge
+http_exporter_config_last_reload_success_timestamp_seconds{file}  gauge
+http_exporter_config_reloads_total{file, result}                  counter
+```
+
+`file` MUST be `config` for the configuration file with its collector files, and
+`targets` for the scheduled target document, reported only when one is
+configured. Loading at startup MUST count as a successful load, setting the
+first two; `http_exporter_config_reloads_total` MUST count only reloads after
+startup, with `result` `success` or `failure`, both published from the start.
+A rejected reload MUST set `http_exporter_config_last_reload_successful` to 0
+and leave the timestamp at the last success, and a reload of one file MUST NOT
+change the other's series.
 
 Avoid unbounded label values on exporter self-metrics.
 
@@ -1742,9 +1831,10 @@ time and includes idle. Publishing one under the other's name is wrong in a way
 that only appears when somebody trusts the graph.
 
 Where a standard series cannot be produced faithfully it MUST be omitted rather
-than approximated. `go_gc_duration_seconds` MUST therefore be published as its
-count and sum only, because the quantiles are not available from the runtime
-statistics the exporter reads.
+than approximated. `go_gc_duration_seconds` MUST therefore be published as a
+summary with its count and sum only, because the quantiles are not available
+from the runtime statistics the exporter reads; it MUST NOT be published as two
+counters, which would give the family a type client_golang does not give it.
 
 Publishing these alongside the exporter's own self-metrics MUST NOT declare any
 metric family twice, and turning the setting off through a reload MUST drop the
@@ -1886,7 +1976,7 @@ would otherwise reach an OTLP backend as one name with two types.
 The Python families MUST be published for every collector with a Python
 transform or pre-script, and for no other. `state` MUST be one of `starting`,
 `idle` and `busy`; `reason` one of `timeout`, `crash`, `output_limit`,
-`cancelled`, `retired`, `surplus` and `idle`; `outcome` one of `ok`,
+`cancelled`, `retired`, `surplus`, `idle` and `reload`; `outcome` one of `ok`,
 `script_error`, `timeout`, `output_limit` and `failed`. Every value of `reason`
 and `outcome` MUST be published, zero included, so a rate can be taken before
 the first event. The pool MUST keep these counts regardless of verbose mode,
@@ -2437,6 +2527,7 @@ Provide clear CLI flags, for example:
 --config.watch-interval=60s
 --config.schema
 --config.collector-file-schema
+--probe.timeout-offset=500ms
 ```
 
 `--config.schema` prints the configuration file's JSON Schema and exits, and
@@ -3943,6 +4034,9 @@ See § 5.1, `localfile`.
 - A file changed once during the read is read again and the new content served;
   one that keeps changing fails advising an atomic rename.
 - A read that does not return is abandoned when the probe's timeout ends.
+- With four reads of one collector stuck, a fifth probe fails at once; another
+  collector is unaffected; the slots come back when the reads return and the
+  next probe succeeds.
 - The response carries status `200`, the body, `Content-Type` by extension,
   `Content-Length` and `Last-Modified`.
 - Verbose series carry the `file://` URL with placeholders and `READ`.
@@ -3952,6 +4046,77 @@ See § 5.1, `localfile`.
 - The examples in `docs/LOCALFILE.md` load and serve as documented.
 - The shipped example configurations, target file and schema include a
   `localfile` collector and target.
+
+## 34.54 Probe deadline tests
+
+See § 3.2a.
+
+- The budget is the header less the offset; a missing, unparseable, zero,
+  negative, NaN or infinite header gives none; an offset of half or more leaves
+  half; an offset of zero leaves the whole timeout.
+- A target slower than the budget gets a `502` naming the budget and the flag,
+  about the budget's length after the probe started.
+- The budget stops a hung file read; without the header, and with a generous
+  one, the probe succeeds.
+- A negative `--probe.timeout-offset` exits 2 with a JSON log line and nothing
+  on stdout, also with `--dry-run`.
+
+## 34.55 Self-metric exposition and reload status tests
+
+See § 22.0a and § 22.0b.
+
+- On a verbose exporter with resource metrics and Python, the self-metrics
+  parse; each family is declared once and its samples are contiguous; every
+  counter ends in `_total` and nothing else does; each per-collector family has
+  the type its definition gives it; and every family in the OTLP set has the
+  type the text declares.
+- At startup the configuration reports successful with a timestamp and no
+  reloads; a rejected reload reads 0, counts a failure and keeps the timestamp;
+  a later successful reload reads 1, counts a success and moves the timestamp.
+  No `targets` series appears without a target file.
+- With a target file, a rejected target reload reports under `file="targets"`
+  and leaves `file="config"` successful.
+- The rules of § 19 use `on_fetch_error` for both request types.
+
+## 34.56 Connection reuse, worker lifecycle, script duration and error kind tests
+
+See § 42.15b, § 16 and § 19.1.
+
+- Five probes of one target open one connection, over HTTP and over HTTPS with
+  a CA file; three OTLP exports open one connection.
+- The same settings share a pool; `insecure_skip_verify` and HTTP/2 get their
+  own; a rotated CA file gets a new pool; a missing one is an error; a pool
+  unused for five minutes is dropped; idle connections time out.
+- `http_exporter_script_duration_seconds` reports at least the time a script
+  sleeps, on the collector and the request, and 0 for a collector without
+  Python; the probe's timer adds its runs up.
+- An idle worker aged past the timeout is stopped by the timer alone and
+  counted as `idle`.
+- A reload that changes one script stops its idle worker at once and its busy
+  worker when the run ends, both counted as `reload`, leaves another script's
+  idle worker alone, and the changed script's next worker is kept.
+- A marked error keeps its message and its kind through wrapping and has no
+  other kind; an unmarked error that mentions the words is none of them. A
+  Python error saying "missing" and "response size" counts only as a script
+  error; a regex that matched nothing counts as a missing value; an oversized
+  response counts as a limit error.
+
+## 34.57 OTLP metric type tests
+
+See § 42.1.
+
+- A histogram with a `+Inf` bucket, without one, with buckets out of order,
+  with a count that falls and without buckets is exported with the right
+  bounds, per-bucket counts, count, sum and attributes, and one count more than
+  bounds.
+- A summary with quantiles, and one without, keeps count, sum and quantiles.
+- Two series of one counter are two points of one monotonic sum; a histogram
+  type without data is a gauge of its value.
+- NaN and the infinities encode and decode.
+- End to end, a histogram passed through from a scheduled Prometheus target,
+  the verbose scrape-time histogram and the GC summary reach an OTLP endpoint
+  with their data, and the scrape-time histogram's bucket counts add up to its
+  count.
 
 # 35. Documentation requirements
 
@@ -4220,10 +4385,29 @@ OTLP export MUST be best-effort by default. An OTLP destination failure MUST
 NOT turn a successful Prometheus probe into a failed probe. OTLP requests MUST
 have bounded timeouts and MUST NOT log authorization headers or credentials.
 
-The initial implementation MAY use the OTLP/HTTP JSON representation. Gauge,
-counter, labels, timestamps, descriptions, and resource attributes MUST be
-preserved where available. Histogram and summary data SHOULD be preserved or
-clearly documented when represented as a reduced OTLP form.
+The implementation MAY use the OTLP/HTTP JSON representation. Gauge,
+counter, histogram and summary data, labels, timestamps, descriptions, and
+resource attributes MUST be preserved:
+
+- A gauge MUST be an OTLP gauge, and a counter a monotonic sum with cumulative
+  temporality.
+- A histogram MUST be an OTLP histogram with cumulative temporality, its count
+  and sum, and its buckets converted from Prometheus's cumulative counts to
+  OTLP's per-bucket counts: the finite upper bounds, in ascending order, as
+  explicit bounds, and one count more than bounds, the last being everything
+  above the highest bound — Prometheus's `+Inf` bucket, which MUST NOT appear
+  as a bound. A cumulative count that falls MUST count as an empty bucket rather
+  than wrap around.
+- A summary MUST be an OTLP summary with its count, sum and quantiles, and a
+  summary without quantiles, such as `go_gc_duration_seconds` (§ 22.0a), MUST
+  still carry its count and sum.
+- A metric declared a histogram or summary but carrying no such data MUST be
+  exported as a gauge of its value.
+- Every series of a family MUST be a data point of one OTLP metric, not a
+  metric of its own.
+- NaN and the infinities MUST be encoded as the protobuf JSON mapping writes
+  them — `"NaN"`, `"Infinity"`, `"-Infinity"` — since a JSON number cannot
+  express them, and one such value MUST NOT fail the encoding of an export.
 
 ## 42.2 CSV transformation
 
@@ -4631,7 +4815,7 @@ http_exporter_cache_entries
 ```
 
 A cache hit MUST count as a successful scrape in `http_exporter_scrapes_total`
-and `http_exporter_scrape_success`, and the cached metrics MUST still be queued
+and `http_exporter_scrape_success_total`, and the cached metrics MUST still be queued
 for OTLP export. Target-request self-metrics such as
 `http_exporter_scrape_http_status_code` and
 `http_exporter_scrape_response_bytes` describe the last real target request and
@@ -4657,7 +4841,7 @@ rate-limited endpoint.
   status, response bytes, decode, transform, validation and error counters, its
   log lines, its cache entry and its OTLP export. Every probe MUST still count
   in `http_exporter_scrapes_total` and, by the shared outcome,
-  `http_exporter_scrape_success`, with its own duration. Each probe answered by
+  `http_exporter_scrape_success_total`, with its own duration. Each probe answered by
   another's request MUST increment `http_exporter_probes_coalesced_total` for
   its collector.
 - The shared request MUST run detached from the probe that started it, so that
@@ -4791,7 +4975,7 @@ request:
 statuses on the target request. It MUST default to `false`. When it is false the
 exporter MUST return the redirect response itself, so the collector observes the
 3xx status rather than being sent to another host silently; a collector whose
-`error_handling.on_http_error` is `fail` therefore fails the probe, which is the
+`error_handling.on_fetch_error` is `fail` therefore fails the probe, which is the
 intended signal that the target moved. When it is true the exporter MUST follow
 redirects using the HTTP client's normal limit.
 
@@ -4813,6 +4997,22 @@ same semantics.
 
 The Helm chart MUST expose both as list-valued `params` entries on each
 `monitors` item.
+
+### 42.15b Connection reuse
+
+Requests to targets and OTLP exports MUST reuse their connections. The
+exporter MUST keep one connection pool per distinct set of TLS settings — the
+CA, client certificate and key files and `insecure_skip_verify` — and HTTP/2
+choice, shared by every collector and scrape that uses the same set, rather
+than a pool per request, which would reuse no connection, pay a TLS handshake
+on every HTTPS scrape, and leave each idle connection open until the other end
+closed it. A scrape overriding `insecure_skip_verify` or `enable_http2` MUST
+use the pool of its own settings. A TLS file rotated on disk MUST be picked up
+by the next request, with the previous pool's idle connections closed. Idle
+connections MUST time out (90 seconds), and a pool unused for five minutes —
+such as one a reload made obsolete — MUST be closed and dropped. A response
+body MUST be read to its end before it is closed where the exporter can, so
+the connection returns to the pool.
 
 These settings replace the earlier `request.redirect_policy` string, which MUST
 NOT be accepted any more. Because the configuration decoder rejects unknown

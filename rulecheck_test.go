@@ -138,18 +138,18 @@ func TestDryRunReportsAnExpressionThatDoesNotCompile(t *testing.T) {
 // as deprecated, and means log.
 func TestErrorPolicyVocabulary(t *testing.T) {
 	c := testCollector("policies", "text")
-	c.ErrorHandling = ErrorHandling{OnHTTPError: "warn", OnDecodeError: "LOG", OnTransformError: "ignore"}
+	c.ErrorHandling = ErrorHandling{OnFetchError: "warn", OnDecodeError: "LOG", OnTransformError: "ignore"}
 	c.Metrics[0].ErrorMode = "warn"
 	cfg := &Config{Collectors: []Collector{c}}
 	if err := cfg.Validate(); err != nil {
 		t.Fatal(err)
 	}
 	got := cfg.Collectors[0]
-	if got.ErrorHandling.OnHTTPError != "log" || got.ErrorHandling.OnDecodeError != "log" || got.ErrorHandling.OnTransformError != "ignore" || got.Metrics[0].ErrorMode != "log" {
+	if got.ErrorHandling.OnFetchError != "log" || got.ErrorHandling.OnDecodeError != "log" || got.ErrorHandling.OnTransformError != "ignore" || got.Metrics[0].ErrorMode != "log" {
 		t.Fatalf("normalised to %+v, error_mode %q", got.ErrorHandling, got.Metrics[0].ErrorMode)
 	}
 	if len(cfg.Deprecations) != 2 ||
-		!strings.Contains(cfg.Deprecations[0]+cfg.Deprecations[1], `collector "policies" error_handling.on_http_error: "warn" is deprecated; use "log"`) ||
+		!strings.Contains(cfg.Deprecations[0]+cfg.Deprecations[1], `collector "policies" error_handling.on_fetch_error: "warn" is deprecated; use "log"`) ||
 		!strings.Contains(cfg.Deprecations[0]+cfg.Deprecations[1], `metric "demo_value" error_mode: "warn" is deprecated`) {
 		t.Fatalf("deprecations=%q", cfg.Deprecations)
 	}
@@ -171,7 +171,7 @@ func TestDryRunReportsDeprecations(t *testing.T) {
     request:
       type: http
     error_handling:
-      on_http_error: warn
+      on_fetch_error: warn
     transform:
       type: regex
     metrics:
@@ -188,7 +188,7 @@ func TestDryRunReportsDeprecations(t *testing.T) {
 	}
 	logged := false
 	for _, record := range out.logs {
-		if record["msg"] == "deprecated configuration" && strings.Contains(record["deprecation"].(string), "on_http_error") {
+		if record["msg"] == "deprecated configuration" && strings.Contains(record["deprecation"].(string), "on_fetch_error") {
 			logged = true
 		}
 	}

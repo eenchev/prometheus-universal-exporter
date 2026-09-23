@@ -144,7 +144,7 @@ type DecoderConfig struct {
 	Type string `yaml:"type"`
 }
 type ErrorHandling struct {
-	OnHTTPError      string `yaml:"on_http_error"`
+	OnFetchError     string `yaml:"on_fetch_error"`
 	OnDecodeError    string `yaml:"on_decode_error"`
 	OnTransformError string `yaml:"on_transform_error"`
 	AllowMissingKeys bool   `yaml:"allow_missing_keys"`
@@ -306,8 +306,8 @@ func (c *Config) Validate() error {
 		if x.Transform.Type == "python" && strings.TrimSpace(x.Transform.Script) == "" {
 			return fmt.Errorf("collector %q Python transform requires a script", x.Name)
 		}
-		if x.ErrorHandling.OnHTTPError == "" {
-			x.ErrorHandling.OnHTTPError = "fail"
+		if x.ErrorHandling.OnFetchError == "" {
+			x.ErrorHandling.OnFetchError = "fail"
 		}
 		if x.ErrorHandling.OnDecodeError == "" {
 			x.ErrorHandling.OnDecodeError = "fail"
@@ -319,7 +319,7 @@ func (c *Config) Validate() error {
 			key   string
 			value *string
 		}{
-			{"on_http_error", &x.ErrorHandling.OnHTTPError},
+			{"on_fetch_error", &x.ErrorHandling.OnFetchError},
 			{"on_decode_error", &x.ErrorHandling.OnDecodeError},
 			{"on_transform_error", &x.ErrorHandling.OnTransformError},
 		} {
@@ -479,6 +479,8 @@ type ConfigManager struct {
 	pythonPath     string
 	watchInterval  time.Duration
 	expandEnv      bool
+	// reloads records how loading each file has gone, for the self-metrics.
+	reloads *reloadStatus
 }
 
 // DefaultWatchInterval is how often an enabled watch re-stats the configuration
@@ -489,8 +491,11 @@ type ConfigManager struct {
 const DefaultWatchInterval = 60 * time.Second
 
 func NewConfigManager(c *Config, path string, l *slog.Logger) *ConfigManager {
-	m := &ConfigManager{path: path, logger: l}
+	m := &ConfigManager{path: path, logger: l, reloads: newReloadStatus()}
 	m.current.Store(c)
+	if c != nil {
+		m.reloads.loaded(reloadFileConfig)
+	}
 	if c != nil {
 		m.collectorFiles = collectorFilesStamp(path, c.CollectorFiles)
 	}
@@ -535,6 +540,9 @@ func (m *ConfigManager) SetTargets(path string, f *TargetFile) {
 	m.targetPath = path
 	if f != nil {
 		m.targetFile.Store(f)
+	}
+	if path != "" && f != nil {
+		m.reloads.loaded(reloadFileTargets)
 	}
 	if path != "" {
 		if st, err := os.Stat(path); err == nil {
@@ -587,10 +595,12 @@ func (m *ConfigManager) reloadConfig() {
 	c, err := LoadConfig(m.path, m.loadOptions()...)
 	if err != nil {
 		m.logger.Error("configuration reload rejected", "error", err)
+		m.reloads.record(reloadFileConfig, false)
 		return
 	}
 	if err := ValidatePythonScripts(m.pythonPath, c); err != nil {
 		m.logger.Error("configuration reload rejected", "error", err)
+		m.reloads.record(reloadFileConfig, false)
 		return
 	}
 	// Scheduled targets exist only to feed OTLP, so a configuration that would
@@ -599,10 +609,15 @@ func (m *ConfigManager) reloadConfig() {
 	if f := m.targetFile.Load(); f != nil {
 		if err := f.ValidateAgainst(c); err != nil {
 			m.logger.Error("configuration reload rejected", "error", err)
+			m.reloads.record(reloadFileConfig, false)
 			return
 		}
 	}
 	m.current.Store(c)
+	m.reloads.record(reloadFileConfig, true)
+	// Interpreters of scripts this reload removed or changed are stopped now
+	// rather than after the idle timeout.
+	pythonWorkers.retain(pythonWorkerKeys(m.pythonPath, c))
 	// The new configuration may list other collector files.
 	m.collectorFiles = collectorFilesStamp(m.path, c.CollectorFiles)
 	logDeprecations(m.logger, m.path, c)
@@ -627,9 +642,11 @@ func (m *ConfigManager) reloadTargets() {
 	}
 	if err != nil {
 		m.logger.Error("scheduled target reload rejected", "error", err)
+		m.reloads.record(reloadFileTargets, false)
 		return
 	}
 	m.targetFile.Store(f)
+	m.reloads.record(reloadFileTargets, true)
 	m.logger.Info("scheduled targets reloaded", "targets", len(f.Targets))
 }
 

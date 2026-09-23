@@ -23,8 +23,25 @@ otlp:
 OTLP export is best-effort and does not make a Prometheus probe fail. Metric
 values are buffered as latest values and exported every `otlp.interval`;
 the default is 30 seconds. Each export request is bounded by `otlp.timeout`,
-which defaults to 5 seconds. Self-health metrics are included in every export
+which defaults to 5 seconds. The connection to the endpoint is kept and reused
+from export to export (see [Connections](REQUESTS.md#connections)). Self-health metrics are included in every export
 interval even when no Prometheus self-metrics scrape is running.
+
+Metrics keep their type:
+
+| Prometheus | OTLP |
+| --- | --- |
+| gauge, untyped | gauge |
+| counter | sum, monotonic, cumulative |
+| histogram | histogram, cumulative: count, sum, bounds and per-bucket counts |
+| summary | summary: count, sum and quantiles |
+
+Prometheus counts histogram buckets cumulatively and OTLP counts each bucket on
+its own, so the counts are converted; the `+Inf` bucket becomes the count above
+the highest bound rather than a bound. Every series of a metric is a data point
+of one OTLP metric. A `NaN` or infinite value is sent as `"NaN"`, `"Infinity"`
+or `"-Infinity"`, as the OTLP JSON encoding writes them, rather than failing
+the export.
 
 ## Scheduled targets
 

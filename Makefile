@@ -53,7 +53,8 @@ helm-test:
 	helm template test charts/prometheus-universal-exporter --set server.expandEnv=true --set-json 'env=[{"name":"DEMO_TARGET","value":"http://api.internal:8080"}]' --set-json 'envFrom=[{"secretRef":{"name":"exporter-secrets"}}]'
 	helm template test charts/prometheus-universal-exporter --set otlpTargets.enabled=true --set-file otlpTargets.data=targets.example.yaml --set-file 'config.data.config\.yaml=config.otlp.example.yaml'
 	helm template test charts/prometheus-universal-exporter --set-json 'monitors=[{"name":"a","enabled":true,"type":"service","collector":"example","interval":"30s","scrapeTimeout":"10s"},{"name":"b","enabled":true,"type":"pod","collector":"example","interval":"30s","scrapeTimeout":"10s"}]' | python3 tools/check-manifests.py
-	helm template test charts/prometheus-universal-exporter --set-json 'extraArgs=["--log.level=debug"]' --set-json 'extraVolumes=[{"name":"extra-collectors","configMap":{"name":"my-collectors"}}]' --set-json 'extraVolumeMounts=[{"name":"extra-collectors","mountPath":"/etc/collectors","readOnly":true}]'
+	helm template test charts/prometheus-universal-exporter --set server.logLevel=debug --set server.probeTimeoutOffset=1s
+	helm template test charts/prometheus-universal-exporter --set-json 'extraArgs=["--some.new-flag=value"]' --set-json 'extraVolumes=[{"name":"extra-collectors","configMap":{"name":"my-collectors"}}]' --set-json 'extraVolumeMounts=[{"name":"extra-collectors","mountPath":"/etc/collectors","readOnly":true}]'
 	@# Packaged into a temporary directory: a .tgz in the worktree is build
 	@# output, and the release workflow is what publishes one.
 	@set -e; dist=$$(mktemp -d); \
@@ -83,10 +84,22 @@ helm-test:
 		echo "helm template accepted an extraArgs entry overriding a chart-managed flag" >&2; \
 		exit 1; \
 	fi
-	@if helm template test charts/prometheus-universal-exporter --set-json 'extraArgs=["--dry-run"]' >/dev/null 2>&1; then \
-		echo "helm template accepted --dry-run in extraArgs, which would make the pod exit instead of serving" >&2; \
+	@if helm template test charts/prometheus-universal-exporter --set-json 'extraArgs=["--log.level=debug"]' >/dev/null 2>&1; then \
+		echo "helm template accepted --log.level in extraArgs, which server.logLevel manages" >&2; \
 		exit 1; \
 	fi
+	@for oneshot in --dry-run --config.schema --config.collector-file-schema --help; do \
+		if helm template test charts/prometheus-universal-exporter --set-json "extraArgs=[\"$$oneshot\"]" >/dev/null 2>&1; then \
+			echo "helm template accepted $$oneshot in extraArgs, which would make the pod exit instead of serving" >&2; \
+			exit 1; \
+		fi; \
+	done
+	@for bad in server.logLevel=verbose server.probeTimeoutOffset=-1s; do \
+		if helm template test charts/prometheus-universal-exporter --set "$$bad" >/dev/null 2>&1; then \
+			echo "helm template accepted $$bad" >&2; \
+			exit 1; \
+		fi; \
+	done
 	@if helm template test charts/prometheus-universal-exporter --set-json 'extraArgs=["log.level=debug"]' >/dev/null 2>&1; then \
 		echo "helm template accepted an extraArgs entry that is not a flag" >&2; \
 		exit 1; \

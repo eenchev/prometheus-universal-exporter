@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -64,9 +65,18 @@ func runPython(ctx context.Context, pythonPath, mode, what, script string, d *De
 	input := pythonInput{Mode: mode, Script: script, Data: pythonScriptData(d), Target: r.Target, Collector: c.Name, Response: pythonResponse{StatusCode: r.StatusCode, Headers: r.Headers, Body: string(r.Body), Text: string(r.Body)}}
 	payload, err := json.Marshal(input)
 	if err != nil {
-		return nil, err
+		return nil, markError(err, errScriptFailed)
 	}
-	line, err := pythonWorkers.run(ctx, pythonWorkerSpec(pythonPath, c), payload, timeout)
+	line, elapsed, err := pythonWorkers.run(ctx, pythonWorkerSpec(pythonPath, c), payload, timeout)
+	if timer := scriptTimerFrom(ctx); timer != nil && elapsed > 0 {
+		timer.add(elapsed)
+	}
+	out, err := pythonResult(c, what, timeout, line, err)
+	return out, markError(err, errScriptFailed)
+}
+
+// pythonResult reads a worker's answer, counting how the run ended.
+func pythonResult(c *Collector, what string, timeout time.Duration, line []byte, err error) (*pythonOutput, error) {
 	switch {
 	case errors.Is(err, errPythonTimeout):
 		pythonWorkers.recordRun(c.Name, pythonRunTimeout)
@@ -91,9 +101,55 @@ func runPython(ctx context.Context, pythonPath, mode, what, script string, d *De
 	return &out, nil
 }
 
+// A probe reports how long its Python ran in
+// http_exporter_script_duration_seconds. The scripts run deep inside the
+// transform, so the probe hands them a timer through the context, and they add
+// the time each call to a worker took: the pre-script and the python transform
+// together, without starting an interpreter.
+type scriptTimer struct {
+	mu    sync.Mutex
+	total time.Duration
+	ran   bool
+}
+
+type scriptTimerKey struct{}
+
+// withScriptTimer returns a context carrying a fresh timer.
+func withScriptTimer(ctx context.Context) (context.Context, *scriptTimer) {
+	timer := &scriptTimer{}
+	return context.WithValue(ctx, scriptTimerKey{}, timer), timer
+}
+
+func scriptTimerFrom(ctx context.Context) *scriptTimer {
+	timer, _ := ctx.Value(scriptTimerKey{}).(*scriptTimer)
+	return timer
+}
+
+func (t *scriptTimer) add(d time.Duration) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.total += d
+	t.ran = true
+}
+
+// seconds reports the time the scripts took, and whether any ran.
+func (t *scriptTimer) seconds() (float64, bool) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return t.total.Seconds(), t.ran
+}
+
 func pythonScriptData(d *Decoded) any {
 	if d.Kind == "html" || d.Kind == "xml" {
 		return string(d.Raw)
 	}
 	return d.Data
+}
+
+// recordScriptDuration keeps the duration of a probe's Python, when it ran
+// any, on the collector and the request.
+func recordScriptDuration(rec statsRecorder, timer *scriptTimer) {
+	if seconds, ran := timer.seconds(); ran {
+		rec.update(func(x *serverStats) { x.lastScriptDuration = seconds })
+	}
 }

@@ -1,14 +1,16 @@
+//go:build !select_request_types || request_type_localfile
+
 package main
 
 import (
 	"context"
 	"errors"
-	"log/slog"
 	"net/http"
 	"net/url"
 	"os"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"syscall"
 	"testing"
@@ -27,7 +29,7 @@ func fileCollector(name, root, path string) Collector {
 		Name:          name,
 		Request:       RequestConfig{Type: RequestTypeLocalFile, Root: root, Path: path},
 		Transform:     TransformConfig{Type: "prometheus"},
-		ErrorHandling: ErrorHandling{OnHTTPError: "fail", OnDecodeError: "fail", OnTransformError: "fail"},
+		ErrorHandling: ErrorHandling{OnFetchError: "fail", OnDecodeError: "fail", OnTransformError: "fail"},
 	}
 }
 
@@ -256,7 +258,7 @@ func TestLocalFileSizeLimit(t *testing.T) {
 	c.Request.MaxResponseBytes = 64
 	server := fileServer(t, c)
 	probeFile(t, server, "collector=files").must(t, http.StatusBadGateway, "response size exceeds limit 64")
-	if !strings.Contains(selfMetrics(t, server), `http_exporter_series_limit_exceeded{collector="files"} 1`) {
+	if !strings.Contains(selfMetrics(t, server), `http_exporter_series_limit_exceeded_total{collector="files"} 1`) {
 		t.Fatal("the size limit was not counted as a limit error")
 	}
 }
@@ -460,12 +462,6 @@ func TestLocalFileTargetInterpretation(t *testing.T) {
 
 func ptr[T any](v T) *T { return &v }
 
-func quietLogger(t *testing.T) *slog.Logger {
-	t.Helper()
-	captureLogs(t)
-	return slog.Default()
-}
-
 func setReadHook(hook func(string)) { afterLocalFileRead.Store(&hook) }
 
 // The examples in docs/LOCALFILE.md work as written, with their root replaced
@@ -518,5 +514,75 @@ func TestLocalFileDocumentationExamples(t *testing.T) {
 	}
 	if err != nil {
 		t.Fatal(err)
+	}
+}
+
+// Reads left running on a filesystem that has stopped answering are capped per
+// collector: once every slot is held, a probe fails at once instead of adding
+// another goroutine, and the slots come back as the reads return.
+func TestLocalFilePendingReadsAreCapped(t *testing.T) {
+	root := t.TempDir()
+	for i := 0; i <= localFileMaxPendingReads; i++ {
+		writeIn(t, root, "f"+strconv.Itoa(i)+".prom", promFile)
+	}
+	server := fileServer(t, fileCollector("stuck", root, ""), fileCollector("other", root, ""))
+	release := make(chan struct{})
+	t.Cleanup(func() { afterLocalFileRead.Store(nil) })
+	setReadHook(func(string) { <-release })
+
+	// Different files, so the probes do not share one read.
+	for i := 0; i < localFileMaxPendingReads; i++ {
+		probeFile(t, server, "collector=stuck&timeout=20ms&target=f"+strconv.Itoa(i)+".prom").must(t, http.StatusBadGateway, context.DeadlineExceeded.Error())
+	}
+	if got := localFileReads.pending("stuck"); got != localFileMaxPendingReads {
+		t.Fatalf("pending=%d, want %d", got, localFileMaxPendingReads)
+	}
+	start := time.Now()
+	probeFile(t, server, "collector=stuck&timeout=5s&target=f"+strconv.Itoa(localFileMaxPendingReads)+".prom").must(t, http.StatusBadGateway, "already has 4 file reads that have not returned")
+	if time.Since(start) > time.Second {
+		t.Fatal("a probe over the cap waited instead of failing at once")
+	}
+	// The cap is per collector.
+	if got := localFileReads.pending("other"); got != 0 {
+		t.Fatalf("other collector pending=%d", got)
+	}
+
+	close(release)
+	deadline := time.Now().Add(5 * time.Second)
+	for localFileReads.pending("stuck") > 0 {
+		if time.Now().After(deadline) {
+			t.Fatalf("pending reads never returned: %d", localFileReads.pending("stuck"))
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	afterLocalFileRead.Store(nil)
+	probeFile(t, server, "collector=stuck&target=f0.prom").must(t, http.StatusOK, "} 7")
+}
+
+// The budget bounds the whole trip, a file read included, and a probe without
+// the header is unaffected.
+func TestTheBudgetBoundsFileReadsAndIsOptional(t *testing.T) {
+	root := t.TempDir()
+	writeIn(t, root, "app.prom", promFile)
+	server := fileServer(t, fileCollector("files", root, "app.prom"))
+	server.SetTimeoutOffset(0)
+
+	release := make(chan struct{})
+	t.Cleanup(func() {
+		close(release)
+		afterLocalFileRead.Store(nil)
+	})
+	setReadHook(func(string) { <-release })
+	recorder := probeWithScrapeTimeout(t, server, "collector=files", "0.2")
+	if recorder.Code != http.StatusBadGateway || !strings.Contains(recorder.Body.String(), "200ms budget") {
+		t.Fatalf("status=%d body=%s", recorder.Code, recorder.Body)
+	}
+
+	afterLocalFileRead.Store(nil)
+	if recorder := probeOnce(t, server, "/probe?collector=files", nil); recorder.Code != http.StatusOK {
+		t.Fatalf("without the header: status=%d body=%s", recorder.Code, recorder.Body)
+	}
+	if recorder := probeWithScrapeTimeout(t, server, "collector=files", "10"); recorder.Code != http.StatusOK {
+		t.Fatalf("with a generous timeout: status=%d body=%s", recorder.Code, recorder.Body)
 	}
 }

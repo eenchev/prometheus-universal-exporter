@@ -82,7 +82,9 @@ jobs:
         if: steps.changes.outputs.chart == 'true'
       - run: helm template test charts/prometheus-universal-exporter --set otlpTargets.enabled=true --set-file otlpTargets.data=targets.example.yaml --set-file 'config.data.config\.yaml=config.otlp.example.yaml'
         if: steps.changes.outputs.chart == 'true'
-      - run: helm template test charts/prometheus-universal-exporter --set-json 'extraArgs=["--log.level=debug"]' --set-json 'extraVolumes=[{"name":"extra-collectors","configMap":{"name":"my-collectors"}}]' --set-json 'extraVolumeMounts=[{"name":"extra-collectors","mountPath":"/etc/collectors","readOnly":true}]'
+      - run: helm template test charts/prometheus-universal-exporter --set server.logLevel=debug --set server.probeTimeoutOffset=1s
+        if: steps.changes.outputs.chart == 'true'
+      - run: helm template test charts/prometheus-universal-exporter --set-json 'extraArgs=["--some.new-flag=value"]' --set-json 'extraVolumes=[{"name":"extra-collectors","configMap":{"name":"my-collectors"}}]' --set-json 'extraVolumeMounts=[{"name":"extra-collectors","mountPath":"/etc/collectors","readOnly":true}]'
         if: steps.changes.outputs.chart == 'true'
       - name: Check that every rendered manifest is its own document
         run: |
@@ -106,10 +108,22 @@ jobs:
             echo "helm template accepted an extraArgs entry overriding a chart-managed flag" >&2
             exit 1
           fi
-          if helm template test charts/prometheus-universal-exporter --set-json 'extraArgs=["--dry-run"]' >/dev/null 2>&1; then
-            echo "helm template accepted --dry-run in extraArgs, which would make the pod exit instead of serving" >&2
+          if helm template test charts/prometheus-universal-exporter --set-json 'extraArgs=["--log.level=debug"]' >/dev/null 2>&1; then
+            echo "helm template accepted --log.level in extraArgs, which server.logLevel manages" >&2
             exit 1
           fi
+          for oneshot in --dry-run --config.schema --config.collector-file-schema --help; do
+            if helm template test charts/prometheus-universal-exporter --set-json "extraArgs=[\"$oneshot\"]" >/dev/null 2>&1; then
+              echo "helm template accepted $oneshot in extraArgs, which would make the pod exit instead of serving" >&2
+              exit 1
+            fi
+          done
+          for bad in server.logLevel=verbose server.probeTimeoutOffset=-1s; do
+            if helm template test charts/prometheus-universal-exporter --set "$bad" >/dev/null 2>&1; then
+              echo "helm template accepted $bad" >&2
+              exit 1
+            fi
+          done
           if helm template test charts/prometheus-universal-exporter --set-json 'extraArgs=["log.level=debug"]' >/dev/null 2>&1; then
             echo "helm template accepted an extraArgs entry that is not a flag" >&2
             exit 1

@@ -226,3 +226,18 @@ func TestDockerfileBuildsTheSelectedRequestTypes(t *testing.T) {
 		}
 	}
 }
+
+// A type's own tests are compiled only with the type, so every single-type
+// selection vets with its tests, as CI does.
+func TestRequestTypeTestFilesCarryTheirTypesConstraint(t *testing.T) {
+	for _, name := range requestTypeFiles(t) {
+		file := "requesttype_" + name + "_test.go"
+		if _, err := os.Stat(file); err != nil {
+			continue
+		}
+		want := "//go:build !select_request_types || request_type_" + name
+		if got := buildConstraint(t, file); got != want {
+			t.Errorf("%s: constraint %q, want %q", file, got, want)
+		}
+	}
+}

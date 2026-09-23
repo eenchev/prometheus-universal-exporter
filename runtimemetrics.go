@@ -79,8 +79,9 @@ func goMetrics() []Metric {
 		gauge("go_memstats_next_gc_bytes", "Number of heap bytes when next garbage collection will take place.", float64(mem.NextGC), nil),
 		gauge("go_memstats_last_gc_time_seconds", "Number of seconds since 1970 of last garbage collection.", lastGCSeconds(mem), nil),
 
-		counter("go_gc_duration_seconds_count", "Number of completed garbage collection cycles.", float64(mem.NumGC)),
-		counter("go_gc_duration_seconds_sum", "Total time spent paused for garbage collection, in seconds.", float64(mem.PauseTotalNs)/float64(time.Second)),
+		// A summary, as client_golang publishes it, with its count and sum and
+		// without the quantiles the runtime statistics cannot give.
+		{Name: "go_gc_duration_seconds", Help: "A summary of the wall-time pause (stop-the-world) duration in garbage collection cycles.", Type: SummaryMetricType, Summary: &Summary{Count: uint64(mem.NumGC), Sum: float64(mem.PauseTotalNs) / float64(time.Second)}},
 	}
 	return append(out, cpuClassMetrics()...)
 }

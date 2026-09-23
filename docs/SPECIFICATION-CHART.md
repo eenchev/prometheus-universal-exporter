@@ -300,6 +300,27 @@ networkPolicy: {}
 
 The chart MUST provide sane production defaults and avoid hardcoding environment-specific values.
 
+Every flag a serving exporter takes MUST be rendered from a named value rather
+than left to `extraArgs`, so it is documented, validated and covered by the
+values schema:
+
+| Value | Flag |
+| --- | --- |
+| `server.listenAddress` | `--web.listen-address` |
+| `selfMetrics.path` | `--web.self-metrics-path` |
+| `server.pythonPath` | `--python.path` |
+| `server.logLevel` | `--log.level`, one of `debug`, `info`, `warn`, `error`; default `info` |
+| `server.probeTimeoutOffset` | `--probe.timeout-offset`, a Go duration of zero or more |
+| `server.watchConfig`, `server.watchConfigInterval` | `--config.watch`, `--config.watch-interval` |
+| `server.expandEnv` | `--config.export-env` |
+| `otlpTargets.enabled` | `--otlp.targets-file` |
+
+An invalid value MUST fail rendering and be refused by the values schema.
+`server.probeTimeoutOffset` MUST default to empty and, while empty, MUST NOT
+render its flag at all, so the exporter's own default applies and an image
+older than the flag still starts. A test MUST fail when the exporter has a flag
+the chart neither renders nor refuses as one-shot (§ 33.10a).
+
 ### 33.10a Extra volumes and command-line arguments
 
 The chart mounts the ConfigMap it renders and passes the flags it derives from
@@ -336,8 +357,10 @@ other than the values file:
 
 An `extraArgs` entry that does not begin with `--` MUST be rejected as well: a
 bare word is read as a positional argument and ignored, so it would fail by
-doing nothing. So MUST `--dry-run` (SPECIFICATION-EXPORTER.md § 30): it validates
-the configuration and exits, so a pod started with it would never serve.
+doing nothing. So MUST every one-shot flag, which prints something and exits so
+that a pod started with it would restart for ever instead of serving:
+`--dry-run` (SPECIFICATION-EXPORTER.md § 30), `--config.schema`,
+`--config.collector-file-schema` and `--help`.
 
 ### 33.10b Values schema
 
@@ -534,6 +557,10 @@ with at least these values combinations:
    host, renders as valid YAML and then makes the container exit immediately
    with "missing port in address", so it MUST be rejected while rendering rather
    than at run time. A port outside 1-65535 MUST be rejected too.
+   `server.logLevel` and `server.probeTimeoutOffset` set MUST render
+   `--log.level` and `--probe.timeout-offset`; an unknown level and a negative
+   offset MUST fail rendering; the default MUST render `--log.level=info` and
+   no `--probe.timeout-offset`.
 9a. Scheduled targets enabled, which MUST add the `--otlp.targets-file`
    argument and render the target document into the exporter ConfigMap. When
    the chart manages the configuration, enabling scheduled targets without
@@ -562,8 +589,9 @@ with at least these values combinations:
 
 12. `extraArgs`, `extraVolumes` and `extraVolumeMounts` set together, which MUST
    append the argument, the volume and the mount to the ones the chart renders
-   and leave those unchanged. Four further renderings MUST fail: an `extraArgs`
-   entry naming a flag the chart manages, an `extraArgs` entry of `--dry-run`, an
+   and leave those unchanged. Further renderings MUST fail: an `extraArgs`
+   entry naming a flag the chart manages, an `extraArgs` entry of `--dry-run`
+   or of another one-shot flag such as `--config.schema`, an
    `extraArgs` entry that does not begin with `--`, and an `extraVolumeMounts`
    entry whose `mountPath` is one the chart already mounts. A rendering that succeeds for any of these is a
    test failure, since each produces a pod that starts and then behaves as

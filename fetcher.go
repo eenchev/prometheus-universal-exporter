@@ -234,10 +234,6 @@ func fetch(ctx context.Context, target string, c *Collector, overrides RequestOv
 	if overrides.InsecureSkipVerify != nil {
 		tlsSettings.InsecureSkipVerify = *overrides.InsecureSkipVerify
 	}
-	tlsCfg, err := tlsConfig(tlsSettings)
-	if err != nil {
-		return nil, err
-	}
 	followRedirects := c.Request.FollowRedirects
 	if overrides.FollowRedirects != nil {
 		followRedirects = *overrides.FollowRedirects
@@ -249,11 +245,11 @@ func fetch(ctx context.Context, target string, c *Collector, overrides RequestOv
 	if overrides.EnableHTTP2 != nil {
 		enableHTTP2 = *overrides.EnableHTTP2
 	}
-	client := &http.Client{Transport: &http.Transport{TLSClientConfig: tlsCfg, ForceAttemptHTTP2: enableHTTP2}}
-	if !followRedirects {
-		// The response of the redirect itself is returned, so a collector sees
-		// the 3xx status rather than silently following it to another host.
-		client.CheckRedirect = func(_ *http.Request, _ []*http.Request) error { return http.ErrUseLastResponse }
+	// The connection pool is shared with every request made with the same
+	// TLS and HTTP/2 settings (transport.go).
+	client, err := httpClient(transportSettings{TLS: tlsSettings, EnableHTTP2: enableHTTP2}, followRedirects, 0)
+	if err != nil {
+		return nil, err
 	}
 	requestContext := ctx
 	cancel := func() {}
@@ -360,7 +356,7 @@ func fetch(ctx context.Context, target string, c *Collector, overrides RequestOv
 			return nil, fmt.Errorf("closing response: %w", closeErr)
 		}
 		if int64(len(body)) > limit {
-			return nil, fmt.Errorf("response size %d exceeds limit %d", len(body), limit)
+			return nil, markError(fmt.Errorf("response size %d exceeds limit %d", len(body), limit), errLimitExceeded)
 		}
 		if retryableStatus(resp.StatusCode) && attempt < retryAttempts {
 			if waitErr := waitRetry(requestContext, retryBackoff); waitErr != nil {

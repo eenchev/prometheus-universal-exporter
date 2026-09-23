@@ -245,15 +245,33 @@ The Kubernetes `/health` and `/ready` endpoints remain available for health chec
 
 ### Exporter flags
 
-The exporter's own flags are chart values rather than something to assemble by hand. `server.listenAddress` sets `--web.listen-address` and the container port together, so the listener and the probes cannot drift apart. `server.pythonPath` sets `--python.path`, the interpreter used by the `python` transform; its default, `/usr/local/bin/python3`, is where the exporter image's `python:3.12-slim` base installs Python, and it is worth overriding only for a custom image.
+The exporter's own flags are chart values rather than something to assemble by hand. Every flag a serving exporter takes has one:
+
+| Value | Flag | Default |
+| --- | --- | --- |
+| `server.listenAddress` | `--web.listen-address` | `:8080` |
+| `selfMetrics.path` | `--web.self-metrics-path` | `/self-metrics` |
+| `server.pythonPath` | `--python.path` | `/usr/local/bin/python3` |
+| `server.logLevel` | `--log.level` | `info` |
+| `server.probeTimeoutOffset` | `--probe.timeout-offset` | unset: the exporter's `500ms` |
+| `server.watchConfig` / `server.watchConfigInterval` | `--config.watch` / `--config.watch-interval` | off / `60s` |
+| `server.expandEnv` | `--config.export-env` | off |
+| `otlpTargets.enabled` | `--otlp.targets-file` | off |
+| `config` | `--config.file` | the chart's ConfigMap |
+
+`server.listenAddress` sets the container port too, so the listener and the probes cannot drift apart. `server.pythonPath` is the interpreter used by the `python` transform; its default is where the exporter image's `python:3.12-slim` base installs Python, and it is worth overriding only for a custom image. `server.logLevel` is one of `debug`, `info`, `warn` and `error`, and anything else fails rendering.
+
+`server.probeTimeoutOffset` is how much of Prometheus's scrape timeout — a monitor's `scrapeTimeout` — a probe leaves unused, so a slow target or a hung file read is answered with the exporter's own error before Prometheus gives up (see [Probe deadlines](../../docs/CONFIGURATION.md#probe-deadlines)). It takes a Go duration of zero or more. Left empty, the flag is not rendered at all, so the exporter's default applies and an image older than the flag still starts; set it only with an image that has it.
 
 ```sh
 helm install exporter charts/prometheus-universal-exporter \
   --set server.listenAddress=0.0.0.0:9115 \
-  --set server.pythonPath=/usr/bin/python3.11
+  --set server.pythonPath=/usr/bin/python3.11 \
+  --set server.logLevel=debug \
+  --set server.probeTimeoutOffset=1s
 ```
 
-Anything the chart does not render from a named value goes in `extraArgs`, described under [Extra volumes and arguments](#extra-volumes-and-arguments).
+The one-shot flags — `--dry-run`, `--config.schema`, `--config.collector-file-schema` — print something and exit, so they have no values: run them as a separate command. A flag an exporter image has that this chart version does not know yet goes in `extraArgs`, described under [Extra volumes and arguments](#extra-volumes-and-arguments).
 
 ### Configuration mount and rollout
 
@@ -460,21 +478,21 @@ extraVolumeMounts:
     readOnly: true
 
 extraArgs:
-  - --log.level=debug
+  - --some.new-flag=value
 ```
 
 `extraVolumes` and `extraVolumeMounts` are passed through untouched, so anything a pod can mount — a ConfigMap, a Secret, a projected volume, an emptyDir — works here, and the entries are appended after the ones the chart makes rather than replacing them. `extraArgs` entries are appended after the chart's own flags, each one a whole argument.
 
 Two collisions are rejected while rendering, because both fail in a way that points somewhere other than the values file:
 
-* An `extraArgs` entry that sets a flag the chart already renders — `--web.listen-address`, `--config.file`, `--python.path` and the rest. Go keeps the last occurrence of a repeated flag, so the entry would quietly win; for the listen address the container port and the probes would still follow `server.listenAddress`, leaving a pod that listens on one port while Kubernetes checks another. The error names the value to set instead.
+* An `extraArgs` entry that sets a flag the chart already renders — `--web.listen-address`, `--config.file`, `--python.path`, `--log.level`, `--probe.timeout-offset` and the rest. Go keeps the last occurrence of a repeated flag, so the entry would quietly win; for the listen address the container port and the probes would still follow `server.listenAddress`, leaving a pod that listens on one port while Kubernetes checks another. The error names the value to set instead.
 * An `extraVolumeMounts` entry whose `mountPath` is one the chart already mounts. Mounting over `/etc/prometheus-universal-exporter` replaces it, so the exporter starts with no `config.yaml` and crash-loops with an error about the file rather than about the mount that hid it. To add a file to that directory, mount it at its own path — `/etc/collectors`, say — and point the configuration at it.
 
 A [`localfile`](../../docs/LOCALFILE.md) collector reads files the same way: mount the directory it names as `request.root` with these values, read-only, as shown in [Local files in Kubernetes](../../docs/LOCALFILE.md#in-kubernetes).
 
-`--dry-run` is rejected as well: it validates the configuration and exits, so a pod started with it would never serve. Run it as a separate command, a Job or an init container instead — see [Dry run](../../docs/CONFIGURATION.md#dry-run).
+`--dry-run`, `--config.schema`, `--config.collector-file-schema` and `--help` are rejected as well: each prints something and exits, so a pod started with one would restart for ever instead of serving. Run them as a separate command, a Job or an init container instead — see [Dry run](../../docs/CONFIGURATION.md#dry-run).
 
-An entry that does not begin with `--` is rejected too, since `log.level=debug` as an argument is read as a positional value and ignored.
+An entry that does not begin with `--` is rejected too, since `some.new-flag=value` as an argument is read as a positional value and ignored.
 
 ## Scheduled OTLP targets
 
@@ -515,7 +533,7 @@ Every value has a default, and `values.yaml` documents each one in place. `value
 | `service` | object | enabled, ClusterIP, 8080 | The exporter Service. |
 | `neg` | object | disabled | GKE Network Endpoint Group annotations on the Service. |
 | `ingress` | object | disabled | Class, hosts, paths, TLS and annotations. |
-| `server` | object | see below | Exporter flags: `listenAddress`, `pythonPath`, `watchConfig`, `watchConfigInterval`, `expandEnv`. |
+| `server` | object | see [Exporter flags](#exporter-flags) | Exporter flags: `listenAddress`, `pythonPath`, `logLevel`, `probeTimeoutOffset`, `watchConfig`, `watchConfigInterval`, `expandEnv`. |
 | `env` / `envFrom` | array | `[]` | Container environment, in the Kubernetes shapes. |
 | `extraArgs` | array | `[]` | Extra command-line flags. |
 | `extraVolumes` / `extraVolumeMounts` | array | `[]` | Volumes and mounts beyond the chart's own. |

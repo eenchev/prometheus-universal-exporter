@@ -435,13 +435,14 @@ absent, so no mode applies to it, `fail` included: it is simply left out.
 
 ### When a stage of the probe fails
 
-`error_handling` covers the stages before any metric: reaching the target, its
-HTTP status, decoding the response, and the transform as a whole. It uses the
-same words as `error_mode`:
+`error_handling` covers the stages before any metric: fetching — reaching an
+`http` target and its HTTP status, or reading a `localfile` file — decoding the
+response, and the transform as a whole. It uses the same words as
+`error_mode`:
 
 ```yaml
 error_handling:
-  on_http_error: fail        # the default for all three
+  on_fetch_error: fail        # the default for all three
   on_decode_error: fail
   on_transform_error: log
 ```
@@ -762,7 +763,7 @@ the request is cancelled only when every probe waiting on it has gone.
 
 The trip to the target is counted once in the self-metrics, whatever number of
 probes shared it: every probe still counts in `http_exporter_scrapes_total` and
-`http_exporter_scrape_success`, and each one that shared another's request also
+`http_exporter_scrape_success_total`, and each one that shared another's request also
 counts in `http_exporter_probes_coalesced_total`. A failure is logged once.
 
 It is on by default. A collector whose target must see every probe as its own
@@ -773,6 +774,39 @@ collectors:
   - name: counts_every_call
     coalesce: false
 ```
+
+## Probe deadlines
+
+Prometheus says how long it will wait for each scrape, in the
+`X-Prometheus-Scrape-Timeout-Seconds` header — the job's `scrape_timeout`, or a
+monitor's `scrapeTimeout`. A probe that takes longer is abandoned, and all
+Prometheus records is `up` 0 and a generic timeout; why the probe was slow never
+reaches it.
+
+So a probe gives itself that long, less `--probe.timeout-offset` (500ms by
+default, as blackbox_exporter uses), and when the time runs out it stops and
+answers with the reason while Prometheus is still waiting:
+
+```text
+collector legacy_text http failed: HTTP request failed: ... context deadline exceeded (the probe ran out of its 9.5s budget: Prometheus's scrape timeout less --probe.timeout-offset)
+```
+
+- The budget bounds the whole trip: the request or file read, decoding,
+  transforms and Python scripts. The `timeout` probe parameter still bounds the
+  request alone; whichever ends first stops the probe.
+- An offset of half the scrape timeout or more would leave too little, so a
+  probe always keeps at least half.
+- Without the header — a probe from `curl`, or from anything other than
+  Prometheus — nothing changes.
+- A probe answered from the [response cache](#response-caching) needs no budget.
+  Identical probes that [share one request](#identical-probes-share-one-request)
+  share the budget of the probe that started it.
+- The offset covers writing the answer and the network between the exporter
+  and Prometheus. Raise it if Prometheus still times out first; `0` uses the
+  whole scrape timeout. A negative value is a command-line error.
+
+Scheduled targets are unaffected: their scrapes are bounded by `otlp.interval`
+(see [OTLP](OTLP.md#scheduled-targets)).
 
 ## Watching the configuration
 
@@ -803,7 +837,9 @@ edited, a new file matching a pattern, or a file removed triggers a reload.
 The watch does not relax any reload rule. An invalid configuration, one that
 would disable OTLP while scheduled targets are loaded, a collector name defined
 twice, and a pre-script that stops producing `data` are all still rejected, with the last valid configuration
-left active and the reason logged.
+left active and the reason logged. `http_exporter_config_last_reload_successful`
+then reads `0` until a reload succeeds, so a change that did not take can be
+alerted on — see [Configuration reloads](SELF-METRICS.md#configuration-reloads).
 
 ## Dry run
 

@@ -262,9 +262,9 @@ func TestPerCollectorTotalsMatchTheSumOfItsRequests(t *testing.T) {
 	exposition := selfMetrics(t, server)
 	for _, name := range []string{
 		"http_exporter_scrapes_total",
-		"http_exporter_scrape_success",
-		"http_exporter_decode_success",
-		"http_exporter_metrics_emitted",
+		"http_exporter_scrape_success_total",
+		"http_exporter_decode_success_total",
+		"http_exporter_metrics_emitted_total",
 	} {
 		total := metricValue(t, exposition, name+`{collector="summed"}`)
 		sum := 0.0

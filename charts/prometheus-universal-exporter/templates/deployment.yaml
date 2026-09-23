@@ -57,6 +57,10 @@ spec:
             {{- if .Values.server.expandEnv }}
             - --config.export-env
             {{- end }}
+            - {{ printf "--log.level=%s" (include "prometheus-universal-exporter.logLevel" .) | quote }}
+            {{- with (include "prometheus-universal-exporter.probeTimeoutOffset" .) }}
+            - {{ printf "--probe.timeout-offset=%s" . | quote }}
+            {{- end }}
             {{- include "prometheus-universal-exporter.extraArgs" . }}
             {{- range .Values.extraArgs }}
             - {{ . | quote }}

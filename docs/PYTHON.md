@@ -53,7 +53,10 @@ start once and then serves scrape after scrape.
 - **Output.** `print` inside a script is captured per run and never mixes with
   the metrics.
 - **Lifetime.** A worker is reused up to 1,000 times, at most four stay idle per
-  collector after a burst of scrapes, and an idle one stops after five minutes.
+  collector after a burst of scrapes, and an idle one stops after five minutes
+  — checked every minute, so a collector nobody scrapes any more does not keep
+  its interpreters. A reload that changes or removes a script stops its idle
+  workers at once, and a busy one when its run ends.
   Workers exit with the exporter.
 - **Metrics.** With `web.self_metrics.verbose`, the exporter publishes each
   collector's workers by state (starting, idle, busy), how many started or

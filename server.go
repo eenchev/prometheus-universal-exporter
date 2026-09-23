@@ -25,10 +25,13 @@ import (
 type statsValues struct {
 	probes, success, decodeOK, parseErrors, transformErrors, missing, scriptErrors, limitErrors, emitted, cacheHits, cacheMisses uint64
 	// coalesced counts probes answered by sharing another probe's request.
-	coalesced    uint64
-	lastStatus   int
-	lastBytes    int64
-	lastDuration float64
+	coalesced uint64
+	// lastScriptDuration is how long the Python of the last probe that ran any
+	// took, in seconds.
+	lastScriptDuration float64
+	lastStatus         int
+	lastBytes          int64
+	lastDuration       float64
 	// lastScrape is only kept per request; the per-collector series has no
 	// timestamp of its own.
 	lastScrape time.Time
@@ -45,49 +48,68 @@ func (s *serverStats) snapshot() statsValues {
 	return s.statsValues
 }
 
-// selfMetricDescriptors are the exporter's own metric families, in the order
-// they are exposed, each with the help text it is published with. A shared
-// placeholder would make the endpoint self-documenting in name only: HELP is
-// what a reader sees in Grafana's metric browser or `curl`, and sixteen
-// identical lines tell them nothing about which counter to reach for.
+// selfMetricDescriptors are the exporter's per-collector metric families, in
+// the order they are exposed: each one's name, type and help text, and how its
+// value is read from a collector's counters. They are the single source of all
+// three, for the text exposition and for OTLP alike (selfMetricSet), so a
+// family cannot be declared a gauge in one and a counter in the other. A
+// shared placeholder help would make the endpoint self-documenting in name
+// only: HELP is what a reader sees in Grafana's metric browser or `curl`.
 var selfMetricDescriptors = []selfMetricDescriptor{
-	{"http_exporter_scrapes_total", "Probes served for this collector, including those answered from the response cache."},
-	{"http_exporter_scrape_success", "Probes for this collector that completed without a fatal error."},
-	{"http_exporter_scrape_duration_seconds", "Duration of the most recent probe of this collector, in seconds."},
-	{"http_exporter_scrape_http_status_code", "HTTP status the target returned on the most recent scrape, or 0 when the request failed before a response arrived."},
-	{"http_exporter_scrape_response_bytes", "Size of the most recent response body for this collector, in bytes."},
-	{"http_exporter_decode_success", "Responses this collector decoded into its configured format."},
-	{"http_exporter_parse_errors_total", "Responses this collector's decoder could not parse."},
-	{"http_exporter_transform_errors_total", "Transforms that failed for this collector."},
-	{"http_exporter_missing_keys_total", "Transform failures caused by a key or field the response did not contain."},
-	{"http_exporter_script_errors_total", "Python script failures during this collector's transform."},
-	{"http_exporter_script_duration_seconds", "Duration of the most recent Python script run for this collector, in seconds."},
-	{"http_exporter_metrics_emitted", "Metrics this collector has produced across its scrapes."},
-	{"http_exporter_series_limit_exceeded", "Scrapes rejected for exceeding this collector's response size or series limits."},
-	{"http_exporter_cache_hits_total", "Probes answered from this collector's response cache."},
-	{"http_exporter_cache_misses_total", "Probes that found no usable cache entry and went to the target."},
-	{"http_exporter_cache_entries", "Entries currently held in this collector's response cache."},
-	{"http_exporter_probes_coalesced_total", "Probes answered by sharing an identical probe already in flight instead of going to the target."},
+	{"http_exporter_scrapes_total", CounterMetricType, "Probes served for this collector, including those answered from the response cache.", func(v statsValues) float64 { return float64(v.probes) }},
+	{"http_exporter_scrape_success_total", CounterMetricType, "Probes for this collector that completed without a fatal error.", func(v statsValues) float64 { return float64(v.success) }},
+	{"http_exporter_scrape_duration_seconds", GaugeMetricType, "Duration of the most recent probe of this collector, in seconds.", func(v statsValues) float64 { return v.lastDuration }},
+	{"http_exporter_scrape_http_status_code", GaugeMetricType, "HTTP status the target returned on the most recent scrape, or 0 when the request failed before a response arrived.", func(v statsValues) float64 { return float64(v.lastStatus) }},
+	{"http_exporter_scrape_response_bytes", GaugeMetricType, "Size of the most recent response body for this collector, in bytes.", func(v statsValues) float64 { return float64(v.lastBytes) }},
+	{"http_exporter_decode_success_total", CounterMetricType, "Responses this collector decoded into its configured format.", func(v statsValues) float64 { return float64(v.decodeOK) }},
+	{"http_exporter_parse_errors_total", CounterMetricType, "Responses this collector's decoder could not parse.", func(v statsValues) float64 { return float64(v.parseErrors) }},
+	{"http_exporter_transform_errors_total", CounterMetricType, "Transforms that failed for this collector.", func(v statsValues) float64 { return float64(v.transformErrors) }},
+	{"http_exporter_missing_keys_total", CounterMetricType, "Transform failures caused by a key or field the response did not contain.", func(v statsValues) float64 { return float64(v.missing) }},
+	{"http_exporter_script_errors_total", CounterMetricType, "Python script failures during this collector's transform.", func(v statsValues) float64 { return float64(v.scriptErrors) }},
+	{"http_exporter_script_duration_seconds", GaugeMetricType, "Duration of the most recent Python script run for this collector, in seconds.", func(v statsValues) float64 { return v.lastScriptDuration }},
+	{"http_exporter_metrics_emitted_total", CounterMetricType, "Metrics this collector has produced across its scrapes.", func(v statsValues) float64 { return float64(v.emitted) }},
+	{"http_exporter_series_limit_exceeded_total", CounterMetricType, "Scrapes rejected for exceeding this collector's response size or series limits.", func(v statsValues) float64 { return float64(v.limitErrors) }},
+	{"http_exporter_cache_hits_total", CounterMetricType, "Probes answered from this collector's response cache.", func(v statsValues) float64 { return float64(v.cacheHits) }},
+	{"http_exporter_cache_misses_total", CounterMetricType, "Probes that found no usable cache entry and went to the target.", func(v statsValues) float64 { return float64(v.cacheMisses) }},
+	// What a collector's cache holds belongs to the collector, not to any one
+	// request, so it has no per-request value.
+	{"http_exporter_cache_entries", GaugeMetricType, "Entries currently held in this collector's response cache.", nil},
+	{"http_exporter_probes_coalesced_total", CounterMetricType, "Probes answered by sharing an identical probe already in flight instead of going to the target.", func(v statsValues) float64 { return float64(v.coalesced) }},
 }
 
-// selfMetricDescriptor names one of the exporter's own metric families and the
-// help text it is published with.
+// selfMetricDescriptor describes one per-collector self-metric family. Value
+// is nil for a family that belongs to the collector rather than to a request.
 type selfMetricDescriptor struct {
-	Name string
-	Help string
+	Name  string
+	Type  MetricType
+	Help  string
+	Value func(statsValues) float64
 }
 
-// selfMetricHelp indexes the descriptors, so the self-metrics served as a
-// MetricSet carry the same help as the ones rendered as text.
+// exporterMetricHelp describes the exporter-wide families, which carry no
+// collector's counters.
+var exporterMetricHelp = map[string]string{
+	"http_exporter_collector_config_valid":                       "Whether the collector configuration is valid.",
+	"http_exporter_scheduled_targets":                            "Scheduled targets configured for OTLP delivery.",
+	"http_exporter_config_last_reload_successful":                "Whether the last load of this configuration file, at startup or on reload, succeeded.",
+	"http_exporter_config_last_reload_success_timestamp_seconds": "Unix time this configuration file was last loaded successfully, at startup or on reload.",
+	"http_exporter_config_reloads_total":                         "Reloads of this configuration file after startup, by result: success or failure.",
+}
+
+// selfMetricHelp indexes the help of every family the self-metrics carry
+// outside the verbose and runtime sets.
 var selfMetricHelp = func() map[string]string {
-	out := make(map[string]string, len(selfMetricDescriptors))
+	out := make(map[string]string, len(selfMetricDescriptors)+len(exporterMetricHelp))
 	for _, d := range selfMetricDescriptors {
 		out[d.Name] = d.Help
+	}
+	for name, help := range exporterMetricHelp {
+		out[name] = help
 	}
 	return out
 }()
 
-// selfMetricNames lists the families in exposition order.
+// selfMetricNames lists the per-collector families in exposition order.
 func selfMetricNames() []string {
 	names := make([]string, 0, len(selfMetricDescriptors))
 	for _, d := range selfMetricDescriptors {
@@ -96,55 +118,27 @@ func selfMetricNames() []string {
 	return names
 }
 
-type selfSeries struct {
-	Name  string
-	Type  MetricType
-	Value float64
-}
-
-// statsSeries turns one set of counters into the exporter's own series, in the
-// order of selfMetricNames. http_exporter_cache_entries is not here: it counts
-// what a collector's cache holds, which belongs to the collector rather than to
-// any one request, so the per-collector rendering appends it itself.
-func statsSeries(v statsValues) []selfSeries {
-	return []selfSeries{
-		{"http_exporter_scrapes_total", CounterMetricType, float64(v.probes)},
-		{"http_exporter_scrape_success", GaugeMetricType, float64(v.success)},
-		{"http_exporter_scrape_duration_seconds", GaugeMetricType, v.lastDuration},
-		{"http_exporter_scrape_http_status_code", GaugeMetricType, float64(v.lastStatus)},
-		{"http_exporter_scrape_response_bytes", GaugeMetricType, float64(v.lastBytes)},
-		{"http_exporter_decode_success", GaugeMetricType, float64(v.decodeOK)},
-		{"http_exporter_parse_errors_total", CounterMetricType, float64(v.parseErrors)},
-		{"http_exporter_transform_errors_total", CounterMetricType, float64(v.transformErrors)},
-		{"http_exporter_missing_keys_total", CounterMetricType, float64(v.missing)},
-		{"http_exporter_script_errors_total", CounterMetricType, float64(v.scriptErrors)},
-		{"http_exporter_script_duration_seconds", GaugeMetricType, 0},
-		{"http_exporter_metrics_emitted", GaugeMetricType, float64(v.emitted)},
-		{"http_exporter_series_limit_exceeded", CounterMetricType, float64(v.limitErrors)},
-		{"http_exporter_cache_hits_total", CounterMetricType, float64(v.cacheHits)},
-		{"http_exporter_cache_misses_total", CounterMetricType, float64(v.cacheMisses)},
-		{"http_exporter_probes_coalesced_total", CounterMetricType, float64(v.coalesced)},
-	}
-}
-
 type Server struct {
 	manager         *ConfigManager
 	pythonPath      string
 	logger          *slog.Logger
 	selfMetricsPath string
-	statsMu         sync.Mutex
-	stats           map[string]*serverStats
-	otlpMu          sync.Mutex
-	otlpPending     map[string]*otlpBatch
-	cache           *responseCache
-	requests        *requestTracker
-	flights         *probeFlights
-	durations       *scrapeDurations
-	ready           atomic.Bool
+	// timeoutOffset is how much of Prometheus's scrape timeout a probe leaves
+	// unused (scrapetimeout.go).
+	timeoutOffset time.Duration
+	statsMu       sync.Mutex
+	stats         map[string]*serverStats
+	otlpMu        sync.Mutex
+	otlpPending   map[string]*otlpBatch
+	cache         *responseCache
+	requests      *requestTracker
+	flights       *probeFlights
+	durations     *scrapeDurations
+	ready         atomic.Bool
 }
 
 func NewServer(m *ConfigManager, p string, l *slog.Logger) *Server {
-	s := &Server{manager: m, pythonPath: p, logger: l, stats: map[string]*serverStats{}, otlpPending: map[string]*otlpBatch{}, cache: newResponseCache(), requests: newRequestTracker(), flights: newProbeFlights(), durations: newScrapeDurations()}
+	s := &Server{manager: m, pythonPath: p, logger: l, stats: map[string]*serverStats{}, otlpPending: map[string]*otlpBatch{}, cache: newResponseCache(), requests: newRequestTracker(), flights: newProbeFlights(), durations: newScrapeDurations(), timeoutOffset: DefaultTimeoutOffset}
 	s.ready.Store(true)
 	return s
 }
@@ -431,6 +425,7 @@ func (s *Server) probeHandler(w http.ResponseWriter, r *http.Request) {
 		return s.probeUpstream(ctx, upstreamProbe{
 			collector: c, target: target, logTarget: logTarget, overrides: overrides,
 			forwarded: forwarded, rec: rec, cacheKey: cacheKey, cacheTTL: cacheTTL,
+			budget: probeBudget(r.Header, s.timeoutOffset),
 		})
 	}
 	if !coalesceProbes(c) {
@@ -463,6 +458,8 @@ type upstreamProbe struct {
 	rec       statsRecorder
 	cacheKey  string
 	cacheTTL  time.Duration
+	// budget bounds the trip when Prometheus said how long it will wait.
+	budget time.Duration
 }
 
 // probeUpstream goes to the target, decodes, transforms and validates, and
@@ -481,6 +478,11 @@ func (s *Server) probeUpstream(ctx context.Context, p upstreamProbe) *probeResul
 			return out.result(true)
 		}
 	}
+	if p.budget > 0 {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, p.budget)
+		defer cancel()
+	}
 	scraped := false
 	tripStart := time.Now()
 	defer func() {
@@ -494,6 +496,7 @@ func (s *Server) probeUpstream(ctx context.Context, p upstreamProbe) *probeResul
 	// failStage applies a stage's error policy. It reports whether the probe
 	// carries on; when it does not, the error response is already recorded.
 	failStage := func(stage string, err error, policy string) bool {
+		err = explainBudget(ctx, p.budget, err)
 		switch policy {
 		case ErrorPolicyLog, errorPolicyWarn:
 			s.logger.Warn("probe stage failed; continuing", "collector", name, "target", logTarget, "stage", stage, "error", err)
@@ -509,17 +512,17 @@ func (s *Server) probeUpstream(ctx context.Context, p upstreamProbe) *probeResul
 	resp, err := fetchCollector(ctx, p.target, c, p.overrides, p.forwarded)
 	scraped = true
 	if err != nil {
-		if strings.Contains(strings.ToLower(err.Error()), "response size") {
+		if errors.Is(err, errLimitExceeded) {
 			rec.update(func(x *serverStats) { x.limitErrors++ })
 		}
-		return out.result(failStage(fetchStage(c), err, c.ErrorHandling.OnHTTPError))
+		return out.result(failStage(fetchStage(c), err, c.ErrorHandling.OnFetchError))
 	}
 	rec.update(func(x *serverStats) {
 		x.lastStatus = resp.StatusCode
 		x.lastBytes = int64(len(resp.Body))
 	})
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return out.result(failStage("http_status", fmt.Errorf("received HTTP status %d", resp.StatusCode), c.ErrorHandling.OnHTTPError))
+		return out.result(failStage("http_status", fmt.Errorf("received HTTP status %d", resp.StatusCode), c.ErrorHandling.OnFetchError))
 	}
 	d, err := decode(resp, c)
 	if err != nil {
@@ -527,13 +530,15 @@ func (s *Server) probeUpstream(ctx context.Context, p upstreamProbe) *probeResul
 		return out.result(failStage("decode", err, c.ErrorHandling.OnDecodeError))
 	}
 	rec.update(func(x *serverStats) { x.decodeOK++ })
-	ms, err := transform(ctx, d, resp, c, s.pythonPath)
+	scriptCtx, timer := withScriptTimer(ctx)
+	ms, err := transform(scriptCtx, d, resp, c, s.pythonPath)
+	recordScriptDuration(rec, timer)
 	if err != nil {
 		rec.update(func(x *serverStats) {
-			if strings.Contains(strings.ToLower(err.Error()), "missing") {
+			if errors.Is(err, errMissingValue) {
 				x.missing++
 			}
-			if strings.Contains(strings.ToLower(err.Error()), "python") {
+			if errors.Is(err, errScriptFailed) {
 				x.scriptErrors++
 			}
 			x.transformErrors++
@@ -652,113 +657,71 @@ func forwardedHeaders(r *http.Request, request RequestConfig) http.Header {
 	return out
 }
 
+// metricsHandler serves the self-metrics. The text is rendered from the same
+// set OTLP exports, by the same code as collector output, so the two cannot
+// disagree about a family's type or help, and every family is one contiguous
+// block with one HELP and one TYPE line.
 func (s *Server) metricsHandler(w http.ResponseWriter, _ *http.Request) {
-	s.statsMu.Lock()
-	for _, c := range s.manager.Get().Collectors {
-		if s.stats[c.Name] == nil {
-			s.stats[c.Name] = &serverStats{}
-		}
-	}
-	names := make([]string, 0, len(s.stats))
-	for n := range s.stats {
-		names = append(names, n)
-	}
-	sort.Strings(names)
-	ss := make([]struct {
-		name string
-		v    *serverStats
-	}, 0, len(names))
-	for _, n := range names {
-		ss = append(ss, struct {
-			name string
-			v    *serverStats
-		}{n, s.stats[n]})
-	}
-	s.statsMu.Unlock()
-	cacheEntries := s.cache.Stats(time.Now())
-	var b strings.Builder
-	declared := map[string]bool{}
-	for _, d := range selfMetricDescriptors {
-		fmt.Fprintf(&b, "# HELP %s %s\n# TYPE %s gauge\n", d.Name, d.Help, d.Name)
-		declared[d.Name] = true
-	}
-	b.WriteString("# HELP http_exporter_collector_config_valid Whether the collector configuration is valid.\n# TYPE http_exporter_collector_config_valid gauge\n")
-	for _, x := range names {
-		fmt.Fprintf(&b, "http_exporter_collector_config_valid{collector=%q} 1\n", x)
-	}
-	fmt.Fprintf(&b, "# HELP http_exporter_scheduled_targets Scheduled targets configured for OTLP delivery.\n# TYPE http_exporter_scheduled_targets gauge\nhttp_exporter_scheduled_targets %d\n", len(s.manager.Targets()))
-	for _, x := range ss {
-		x.v.mu.Lock()
-		p, ok, d, pe, te, m, se, le, em, status, bytes, dur, hits, misses, coalesced := x.v.probes, x.v.success, x.v.decodeOK, x.v.parseErrors, x.v.transformErrors, x.v.missing, x.v.scriptErrors, x.v.limitErrors, x.v.emitted, x.v.lastStatus, x.v.lastBytes, x.v.lastDuration, x.v.cacheHits, x.v.cacheMisses, x.v.coalesced
-		x.v.mu.Unlock()
-		label := fmt.Sprintf("{collector=%q}", x.name)
-		fmt.Fprintf(&b, "http_exporter_scrapes_total%s %d\nhttp_exporter_scrape_success%s %d\nhttp_exporter_scrape_duration_seconds%s %s\nhttp_exporter_scrape_http_status_code%s %d\nhttp_exporter_scrape_response_bytes%s %d\nhttp_exporter_decode_success%s %d\nhttp_exporter_parse_errors_total%s %d\nhttp_exporter_transform_errors_total%s %d\nhttp_exporter_missing_keys_total%s %d\nhttp_exporter_script_errors_total%s %d\nhttp_exporter_script_duration_seconds%s 0\nhttp_exporter_metrics_emitted%s %d\nhttp_exporter_series_limit_exceeded%s %d\n", label, p, label, ok, label, strconv.FormatFloat(dur, 'f', -1, 64), label, status, label, bytes, label, d, label, pe, label, te, label, m, label, se, label, label, em, label, le)
-		fmt.Fprintf(&b, "http_exporter_cache_hits_total%s %d\nhttp_exporter_cache_misses_total%s %d\nhttp_exporter_cache_entries%s %d\nhttp_exporter_probes_coalesced_total%s %d\n", label, hits, label, misses, label, cacheEntries[x.name], label, coalesced)
-	}
-	s.renderVerboseRequestMetrics(&b, declared)
-	if verbose := s.verboseCollectorMetrics(); len(verbose) > 0 {
-		renderMetricSet(&b, &MetricSet{Metrics: verbose})
-	}
-	if runtime := s.runtimeMetrics(); len(runtime) > 0 {
-		renderMetricSet(&b, &MetricSet{Metrics: runtime})
-	}
-	w.Header().Set("Content-Type", "text/plain; version=0.0.4")
-	_, _ = w.Write([]byte(b.String()))
+	set := s.selfMetricSet()
+	writeMetricSet(w, &set)
 }
 
-func (s *Server) selfMetricSet() MetricSet {
-	cacheEntries := s.cache.Stats(time.Now())
+// collectorStats returns every configured collector's counters, and those of
+// collectors served before a reload removed them, sorted by name.
+func (s *Server) collectorStats() (names []string, values map[string]statsValues) {
 	s.statsMu.Lock()
 	for _, c := range s.manager.Get().Collectors {
 		if s.stats[c.Name] == nil {
 			s.stats[c.Name] = &serverStats{}
 		}
 	}
-	ss := make([]struct {
-		name string
-		v    *serverStats
-	}, 0, len(s.stats))
+	stats := make(map[string]*serverStats, len(s.stats))
 	for name, st := range s.stats {
-		ss = append(ss, struct {
-			name string
-			v    *serverStats
-		}{name, st})
+		stats[name] = st
+		names = append(names, name)
 	}
 	s.statsMu.Unlock()
-	out := MetricSet{}
-	for _, x := range ss {
-		x.v.mu.Lock()
-		labels := map[string]string{"collector": x.name}
-		add := func(name string, typ MetricType, value float64) {
-			out.Metrics = append(out.Metrics, Metric{Name: name, Help: selfMetricHelp[name], Type: typ, Value: value, Labels: cloneLabels(labels)})
+	sort.Strings(names)
+	values = make(map[string]statsValues, len(names))
+	for _, name := range names {
+		values[name] = stats[name].snapshot()
+	}
+	return names, values
+}
+
+// selfMetricSet is every self-metric, grouped by family: each per-collector
+// family with the collectors' series and then, in verbose mode, the
+// per-request ones; then the exporter-wide families; then the verbose-only and
+// runtime families.
+func (s *Server) selfMetricSet() MetricSet {
+	names, values := s.collectorStats()
+	cacheEntries := s.cache.Stats(time.Now())
+	requests, requestFamilies := s.verboseRequests()
+	var out []Metric
+	for _, d := range selfMetricDescriptors {
+		for _, name := range names {
+			value := float64(cacheEntries[name])
+			if d.Value != nil {
+				value = d.Value(values[name])
+			}
+			out = append(out, Metric{Name: d.Name, Help: d.Help, Type: d.Type, Value: value, Labels: map[string]string{"collector": name}})
 		}
-		add("http_exporter_scrapes_total", CounterMetricType, float64(x.v.probes))
-		add("http_exporter_scrape_success", GaugeMetricType, float64(x.v.success))
-		add("http_exporter_scrape_duration_seconds", GaugeMetricType, x.v.lastDuration)
-		add("http_exporter_scrape_http_status_code", GaugeMetricType, float64(x.v.lastStatus))
-		add("http_exporter_scrape_response_bytes", GaugeMetricType, float64(x.v.lastBytes))
-		add("http_exporter_decode_success", GaugeMetricType, float64(x.v.decodeOK))
-		add("http_exporter_parse_errors_total", CounterMetricType, float64(x.v.parseErrors))
-		add("http_exporter_transform_errors_total", CounterMetricType, float64(x.v.transformErrors))
-		add("http_exporter_missing_keys_total", CounterMetricType, float64(x.v.missing))
-		add("http_exporter_script_errors_total", CounterMetricType, float64(x.v.scriptErrors))
-		add("http_exporter_script_duration_seconds", GaugeMetricType, 0)
-		add("http_exporter_metrics_emitted", GaugeMetricType, float64(x.v.emitted))
-		add("http_exporter_series_limit_exceeded", CounterMetricType, float64(x.v.limitErrors))
-		add("http_exporter_cache_hits_total", CounterMetricType, float64(x.v.cacheHits))
-		add("http_exporter_cache_misses_total", CounterMetricType, float64(x.v.cacheMisses))
-		add("http_exporter_cache_entries", GaugeMetricType, float64(cacheEntries[x.name]))
-		add("http_exporter_probes_coalesced_total", CounterMetricType, float64(x.v.coalesced))
-		x.v.mu.Unlock()
+		if d.Value == nil {
+			continue
+		}
+		for _, sample := range requests {
+			out = append(out, Metric{Name: d.Name, Help: d.Help, Type: d.Type, Value: d.Value(sample.Values), Labels: requestLabels(sample.Key)})
+		}
 	}
 	for _, c := range s.manager.Get().Collectors {
-		out.Metrics = append(out.Metrics, Metric{Name: "http_exporter_collector_config_valid", Type: GaugeMetricType, Value: 1, Labels: map[string]string{"collector": c.Name}})
+		out = append(out, Metric{Name: "http_exporter_collector_config_valid", Help: exporterMetricHelp["http_exporter_collector_config_valid"], Type: GaugeMetricType, Value: 1, Labels: map[string]string{"collector": c.Name}})
 	}
-	out.Metrics = append(out.Metrics, Metric{Name: "http_exporter_scheduled_targets", Help: "Scheduled targets configured for OTLP delivery.", Type: GaugeMetricType, Value: float64(len(s.manager.Targets()))})
-	out.Metrics = append(out.Metrics, s.verboseRequestMetrics()...)
-	out.Metrics = append(out.Metrics, s.verboseCollectorMetrics()...)
-	out.Metrics = append(out.Metrics, s.runtimeMetrics()...)
-	return out
+	out = append(out, Metric{Name: "http_exporter_scheduled_targets", Help: exporterMetricHelp["http_exporter_scheduled_targets"], Type: GaugeMetricType, Value: float64(len(s.manager.Targets()))})
+	out = append(out, s.manager.reloadMetrics()...)
+	out = append(out, requestFamilies...)
+	out = append(out, s.verboseCollectorMetrics()...)
+	out = append(out, s.runtimeMetrics()...)
+	return MetricSet{Metrics: out}
 }
 
 // probeError is the body of a probe that failed because a metric rule with

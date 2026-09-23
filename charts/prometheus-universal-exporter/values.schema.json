@@ -114,7 +114,13 @@
         "pythonPath": {"type": "string", "minLength": 1},
         "watchConfig": {"type": "boolean"},
         "watchConfigInterval": {"$ref": "#/$defs/duration"},
-        "expandEnv": {"type": "boolean"}
+        "expandEnv": {"type": "boolean"},
+        "logLevel": {"type": "string", "enum": ["debug", "info", "warn", "error"], "description": "Rendered as --log.level."},
+        "probeTimeoutOffset": {
+          "type": "string",
+          "description": "Rendered as --probe.timeout-offset when set: how much of Prometheus's scrape timeout a probe leaves unused. Empty keeps the exporter's default, 500ms.",
+          "pattern": "^$|^(0|([0-9]+(\\.[0-9]+)?(ns|us|ms|s|m|h))+)$"
+        }
       }
     },
 

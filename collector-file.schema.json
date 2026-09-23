@@ -54,7 +54,7 @@
                 ],
                 "type": "string"
               },
-              "on_http_error": {
+              "on_fetch_error": {
                 "description": "fail stops the probe, log carries on and logs why, ignore carries on quietly. Defaults to fail. warn is a deprecated spelling of log.",
                 "enum": [
                   "fail",

@@ -187,7 +187,10 @@ func collectorFilesStamp(configPath string, entries []string) string {
 	for _, file := range files {
 		b.WriteString(file)
 		if st, err := os.Stat(file); err == nil {
-			b.WriteString("\x00" + strconv.FormatInt(st.ModTime().UnixNano(), 10) + "\x00" + strconv.FormatInt(st.Size(), 10))
+			b.WriteByte(0)
+			b.WriteString(strconv.FormatInt(st.ModTime().UnixNano(), 10))
+			b.WriteByte(0)
+			b.WriteString(strconv.FormatInt(st.Size(), 10))
 		}
 		b.WriteString("\n")
 	}

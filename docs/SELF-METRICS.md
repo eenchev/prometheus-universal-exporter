@@ -24,7 +24,8 @@ configured:
 | `http_exporter_invalid_utf8_total` | counter | Label values and help texts that were not valid UTF-8, whose invalid bytes were replaced with `�`. See [Character encodings](CONFIGURATION.md#character-encodings). |
 | `http_exporter_series_limit_exceeded_total` | counter | Scrapes rejected by a size or series limit. |
 | `http_exporter_cache_hits_total`, `http_exporter_cache_misses_total` | counter | [Response cache](CONFIGURATION.md#response-caching) lookups. |
-| `http_exporter_cache_entries` | gauge | Entries the collector's cache holds. |
+| `http_exporter_cache_entries` | gauge | Entries the collector's cache holds, stale ones kept for `stale_if_error` included. |
+| `http_exporter_cache_stale_served_total` | counter | Failed trips answered with the last good result under [`stale_if_error`](CONFIGURATION.md#serving-the-last-good-result-when-the-target-fails), probes and scheduled scrapes alike. |
 | `http_exporter_probes_coalesced_total` | counter | Probes that [shared a request](#shared-probes). |
 | `http_exporter_probes_in_flight` | gauge | Trips to the collector's targets in progress, which [`max_concurrent_probes`](CONFIGURATION.md#limiting-concurrent-probes) bounds. |
 | `http_exporter_probes_rejected_total` | counter | Probes answered `503` because the collector was at `max_concurrent_probes`. |

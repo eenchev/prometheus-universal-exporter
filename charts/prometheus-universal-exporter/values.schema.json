@@ -126,6 +126,11 @@
           "type": "string",
           "description": "Rendered as --web.shutdown-timeout when set: how long a stopping pod waits for the probes in progress. Whole hours, minutes and seconds, such as 30s or 1m30s. Empty keeps the exporter's default, 5s.",
           "pattern": "^$|^([0-9]+h)?([0-9]+m)?([0-9]+s)?$"
+        },
+        "shutdownDelay": {
+          "type": "string",
+          "description": "Rendered as --web.shutdown-delay when set: how long a stopping pod keeps serving, with /ready answering 503, before the graceful shutdown begins, so Kubernetes takes it out of the Service first. Whole hours, minutes and seconds, such as 5s; 0s turns it off. Empty leaves the flag out.",
+          "pattern": "^$|^([0-9]+h)?([0-9]+m)?([0-9]+s)?$"
         }
       }
     },
@@ -133,7 +138,7 @@
     "terminationGracePeriodSeconds": {
       "type": ["integer", "null"],
       "minimum": 0,
-      "description": "The pod's terminationGracePeriodSeconds. Null keeps Kubernetes' 30 unless server.shutdownTimeout needs more; set, it must be at least server.shutdownTimeout plus 10 seconds."
+      "description": "The pod's terminationGracePeriodSeconds. Null keeps Kubernetes' 30 unless the shutdown needs more; set, it must be at least server.shutdownDelay plus server.shutdownTimeout plus 10 seconds."
     },
 
     "env": {"type": "array", "items": {"type": "object", "properties": {"name": {"type": "string"}}, "required": ["name"]}},

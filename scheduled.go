@@ -85,8 +85,26 @@ func (s *Server) scrapeScheduledTarget(ctx context.Context, target ScheduledTarg
 			s.failures.recovered(s.logger, failureKey, "scheduled target recovered", "target", target.Name, "collector", c.Name, "address", address)
 		}
 	}
+	// cacheKey is set once the request is known; a failure before it has no
+	// cached result to fall back on.
+	var cacheKey string
 	fail := func(stage string, err error) {
 		s.failures.failed(s.logger, slog.LevelError, failureKey, "scheduled target scrape failed", stage, err, "target", target.Name, "collector", c.Name, "address", address, "stage", stage)
+		// With cache.stale_if_error the last good result is exported in place
+		// of nothing, marked stale; http_exporter_target_up still says the
+		// scrape failed.
+		if staleIfError(c) > 0 && cacheKey != "" {
+			now := time.Now()
+			if cached, fetched, ok := s.cache.GetStale(cacheKey, now); ok {
+				if answer, err := withFreshness(cached, c, true, fetched, now); err == nil {
+					count(func(st *serverStats) {
+						st.staleServed++
+						st.emitted += uint64(len(cached.Metrics))
+					})
+					s.queueOTLPResource(withTargetLabels(answer, target.Labels), identity)
+				}
+			}
+		}
 		finish(0)
 	}
 
@@ -95,17 +113,18 @@ func (s *Server) scrapeScheduledTarget(ctx context.Context, target ScheduledTarg
 		fail("credentials", err)
 		return
 	}
-	cacheTTL := time.Duration(c.Cache)
-	var cacheKey string
-	if cacheTTL > 0 {
+	if usesCache(c) {
 		cacheKey = probeCacheKey(c, target.Target, target.cacheQuery(), headers)
-		if cached, ok := s.cache.Get(cacheKey, time.Now()); ok {
+	}
+	if cacheTTL(c) > 0 {
+		if cached, fetched, ok := s.cache.Get(cacheKey, time.Now()); ok {
 			count(func(st *serverStats) {
 				st.cacheHits++
 				st.success++
 				st.emitted += uint64(len(cached.Metrics))
 			})
-			s.queueOTLPResource(withTargetLabels(cached, target.Labels), identity)
+			answer, _ := withFreshness(cached, c, false, fetched, time.Now())
+			s.queueOTLPResource(withTargetLabels(answer, target.Labels), identity)
 			finish(1)
 			return
 		}
@@ -171,12 +190,18 @@ func (s *Server) scrapeScheduledTarget(ctx context.Context, target ScheduledTarg
 		fail("validation", err)
 		return
 	}
-	s.cache.Put(cacheKey, c.Name, *set, cacheTTL, c.Limits.MaxCacheEntries, time.Now())
+	now := time.Now()
+	answer, err := withFreshness(*set, c, false, now, now)
+	if err != nil {
+		fail("validation", err)
+		return
+	}
+	s.cache.Put(cacheKey, c.Name, *set, cacheTTL(c), staleIfError(c), c.Limits.MaxCacheEntries, now)
 	count(func(st *serverStats) {
 		st.success++
 		st.emitted += uint64(len(set.Metrics))
 	})
-	s.queueOTLPResource(withTargetLabels(*set, target.Labels), identity)
+	s.queueOTLPResource(withTargetLabels(answer, target.Labels), identity)
 	finish(1)
 }
 

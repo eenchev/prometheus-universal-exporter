@@ -410,9 +410,9 @@ Each type accepts its own keys. For `http`, `type` is the only required one —
 | `type` | — | **Required.** `http`. |
 | `method` | `GET` | GET, POST, PUT, PATCH, DELETE or HEAD. |
 | `path` | — | Joined onto the target; may use [path parameters](REQUESTS.md#path-parameters). |
-| `query` | — | Query parameters added to the request. |
-| `headers` | — | Sent to the target. |
-| `body` | — | Raw request body. |
+| `query` | — | Query parameters added to the request; values may use [placeholders](REQUESTS.md#in-the-body-headers-and-query). |
+| `headers` | — | Sent to the target; values may use [placeholders](REQUESTS.md#in-the-body-headers-and-query). |
+| `body` | — | Request body; may use [placeholders](REQUESTS.md#in-the-body-headers-and-query), encoded with `\|json`, `\|number`, `\|form` or `\|xml`. |
 | `basic_auth`, `basic_auth_file` | — | Use one; see [Authentication](AUTHENTICATION.md). |
 | `bearer_token`, `bearer_token_file` | — | Use one; not together with basic auth. |
 | `forward_authorization`, `forward_headers` | off | See [Authentication](AUTHENTICATION.md). |
@@ -774,22 +774,25 @@ itself be an environment reference.
 
 ## Response caching
 
-A collector may set `cache` to a Go duration such as `60s`, `1m`, or `3h`:
+A collector may cache its results with `ttl`, a Go duration such as `60s`,
+`1m`, or `3h`:
 
 ```yaml
 collectors:
   - name: expensive_api
     request:
       type: http
-    cache: 60s
+    cache:
+      ttl: 60s
     limits:
       max_cache_entries: 1000
 ```
 
-While a cached result is younger than that interval, a repeat of the same probe
-is answered from memory and the target is not contacted again. Caching is off by
+While a cached result is younger than `ttl`, a repeat of the same probe is
+answered from memory and the target is not contacted again. Caching is off by
 default; omitting `cache` or setting `0s` disables it, and a negative value is
-rejected at startup.
+rejected at startup. `cache` is always a mapping: `cache: 60s` is refused with
+the form to write instead.
 
 The cache is in-memory and local to the exporter process. Nothing is written to
 disk, replicas do not share entries, and a restart empties it.
@@ -813,9 +816,63 @@ failures are not. `limits.max_cache_entries` bounds each collector's live
 entries and defaults to 1000, dropping expired entries first and then the ones
 closest to expiry.
 
+### Serving the last good result when the target fails
+
+A target that is briefly unavailable — restarting, overloaded, behind a flaky
+network — fails its probes, and every series of the collector disappears from
+Prometheus for as long as it does, breaking graphs and firing absent-series
+alerts. `stale_if_error` keeps each result for that much longer after `ttl`,
+and answers a probe whose trip fails with the last successful result instead
+of the error:
+
+```yaml
+    cache:
+      ttl: 30s
+      stale_if_error: 5m
+```
+
+Within 30 seconds of a successful probe, repeats are answered from memory as
+above. After that the target is asked again; if it answers, the new result is
+served and stored. If the trip fails — the target is down, times out, answers
+an error status, its response cannot be decoded or transformed, or the
+collector is at `max_concurrent_probes` — and the last good result of the same
+probe is less than 5m30s old, that result is answered with `200`. Past that,
+the failure is answered as usual. `ttl` may be `0s`: every probe then goes to
+the target, and the last good result is kept only as a fallback.
+
+A stale answer must never pass for a fresh one, so while `stale_if_error` is
+set every answer of the collector carries two series of the exporter's own:
+
+```text
+http_exporter_result_stale 0
+http_exporter_result_age_seconds 0
+```
+
+`http_exporter_result_stale` is `1` when the answer is the last good result
+standing in for a failed trip. `http_exporter_result_age_seconds` is how long
+ago the answered result was fetched from the target — `0` for a trip just
+made, the entry's age for a cached answer. Watch them rather than `up`, which
+stays `1` while stale results are answered: `http_exporter_result_stale == 1`
+selects the targets currently bridged by an old result.
+
+The failure is still logged and counted in the self-metrics as it would have
+been, a warning says the last good result was answered and how old it is, and
+`http_exporter_cache_stale_served_total` counts the stale answers. A stale
+answer does not count in `http_exporter_scrape_success_total`. A collector's
+rules must not produce either series name while `stale_if_error` is set.
+
+Samples are served without timestamps, so Prometheus stores the old values at
+the time of each scrape: a counter stays flat and a gauge repeats its last
+value. Keep `stale_if_error` to the outages you would rather bridge than see —
+minutes, not hours. A changed collector definition never serves a result stored
+under the old one. A [scheduled target](OTLP.md#scheduled-targets) whose scrape
+fails exports the last good result the same way, marked stale, while its
+`http_exporter_target_up` stays `0`.
+
 Cache activity is visible per collector in the self-metrics as
-`http_exporter_cache_hits_total`, `http_exporter_cache_misses_total`, and
-`http_exporter_cache_entries`. A cache hit counts as a successful scrape and
+`http_exporter_cache_hits_total`, `http_exporter_cache_misses_total`,
+`http_exporter_cache_stale_served_total` and `http_exporter_cache_entries`,
+which counts stale entries too. A cache hit counts as a successful scrape and
 cached metrics are still queued for OTLP export, while
 `http_exporter_scrape_http_status_code` and
 `http_exporter_scrape_response_bytes` continue to describe the last real target
@@ -1005,6 +1062,9 @@ not, with one `not ready:` line per reason:
   [Delivery](OTLP.md#delivery)). Ready again once an export gets through. It
   is off by default, since an exporter whose exports fail still answers
   probes.
+- The exporter received `SIGTERM` or `SIGINT` and is waiting out
+  `--web.shutdown-delay` before it stops; see [Shutting down](#shutting-down).
+  It never becomes ready again.
 
 Neither endpoint needs credentials, so the reasons never include an error's
 text; the log and the [self-metrics](SELF-METRICS.md) have the details.
@@ -1020,7 +1080,15 @@ job.
 
 ## Shutting down
 
-On `SIGTERM` or `SIGINT` the exporter stops accepting connections, lets the
+On `SIGTERM` or `SIGINT` the exporter first waits `--web.shutdown-delay`, 0 by
+default, still answering probes but with `/ready` answering `503` (`not ready:
+the exporter is shutting down`), so a load balancer or a Kubernetes Service
+takes it out of rotation before it stops listening. Kubernetes takes a few
+seconds to remove a terminating pod from its Service; without the delay,
+probes that arrive in that gap are refused and Prometheus records failed
+scrapes on every rollout. The Helm chart sets it to 5 seconds.
+
+Then it stops accepting connections, lets the
 probes in progress finish for up to `--web.shutdown-timeout` (5 seconds by
 default), makes the [last OTLP export](OTLP.md#delivery) when OTLP is enabled,
 and exits `0`. It logs that it is shutting down, and, when the timeout runs
@@ -1030,13 +1098,13 @@ scrape timeout of the monitors that probe the exporter, so a rollout does not
 cut probes off:
 
 ```sh
-prometheus-universal-exporter --web.shutdown-timeout=30s
+prometheus-universal-exporter --web.shutdown-delay=5s --web.shutdown-timeout=30s
 ```
 
 In Kubernetes the pod must also be allowed to run that long: its
-`terminationGracePeriodSeconds`, 30 by default, has to cover the timeout and
-the last OTLP export. The Helm chart's `server.shutdownTimeout` sets the flag
-and raises the grace period to match. A second `SIGTERM` or `SIGINT` during that time
+`terminationGracePeriodSeconds`, 30 by default, has to cover the delay, the
+timeout and the last OTLP export. The Helm chart's `server.shutdownDelay` and
+`server.shutdownTimeout` set the flags and raise the grace period to match. A second `SIGTERM` or `SIGINT` during that time
 ends the process at once — the second Ctrl-C of an impatient operator, or a
 supervisor that signals twice — without waiting for the probes or the export.
 

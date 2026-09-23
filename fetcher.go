@@ -198,8 +198,17 @@ func buildRequestURL(target string, c *Collector, overrides RequestOverrides, bi
 	if len(bound) > 0 {
 		applyPathParams(u, bound)
 	}
+	query := c.Request.Query
+	if bind {
+		// Placeholders in query values are filled in (requesttemplate.go);
+		// the label, built with bind false, drops the query anyway.
+		query, err = renderedValues(query, "query", "request.query.", overrides.Params)
+		if err != nil {
+			return nil, err
+		}
+	}
 	q := u.Query()
-	for k, v := range c.Request.Query {
+	for k, v := range query {
 		q.Set(k, v)
 	}
 	u.RawQuery = q.Encode()
@@ -267,6 +276,15 @@ func fetch(ctx context.Context, target string, c *Collector, overrides RequestOv
 	requestBody := c.Request.Body
 	if overrides.Body != nil {
 		requestBody = *overrides.Body
+	} else if hasPathParams(requestBody) {
+		requestBody, err = templateField{"request.body", requestBody, "body"}.render(overrides.Params)
+		if err != nil {
+			return nil, err
+		}
+	}
+	headers, err := renderedValues(c.Request.Headers, "header", "request.headers.", overrides.Params)
+	if err != nil {
+		return nil, err
 	}
 	retryAttempts := c.Request.Retry.Attempts
 	retryBackoff := time.Duration(c.Request.Retry.Backoff)
@@ -325,7 +343,7 @@ func fetch(ctx context.Context, target string, c *Collector, overrides RequestOv
 		if err != nil {
 			return nil, err
 		}
-		for k, v := range c.Request.Headers {
+		for k, v := range headers {
 			req.Header.Set(k, v)
 		}
 		if basicUsername != "" || basicPassword != "" {

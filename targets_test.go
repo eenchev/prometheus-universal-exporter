@@ -335,7 +335,7 @@ func TestScheduledScrapeUsesTheCollectorCache(t *testing.T) {
 	}))
 	defer target.Close()
 	collector := testCollector("text", "text")
-	collector.Cache = Duration(time.Minute)
+	collector.Cache.TTL = Duration(time.Minute)
 	cfg := &Config{Collectors: []Collector{collector}, OTLP: otlpConfig("http://collector.invalid/v1/metrics")}
 	file := &TargetFile{Targets: []ScheduledTarget{{Name: "cached", Collector: "text", Target: target.URL}}}
 	server := newScheduledServer(t, cfg, file)

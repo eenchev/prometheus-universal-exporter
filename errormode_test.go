@@ -301,7 +301,7 @@ func TestFailIsNotCached(t *testing.T) {
 	var hits atomic.Int64
 	target := jsonTarget(t, &hits)
 	c := modeCollector("cached", ErrorModeFail)
-	c.Cache = Duration(time.Minute)
+	c.Cache.TTL = Duration(time.Minute)
 	c.Limits.MaxCacheEntries = 10
 	server := modeServer(t, c)
 

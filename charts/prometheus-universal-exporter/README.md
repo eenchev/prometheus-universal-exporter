@@ -282,6 +282,7 @@ The exporter's own flags are chart values rather than something to assemble by h
 | `server.logLevel` | `--log.level` | `info` |
 | `server.probeTimeoutOffset` | `--probe.timeout-offset` | unset: the exporter's `500ms` |
 | `server.shutdownTimeout` | `--web.shutdown-timeout` | unset: the exporter's `5s` |
+| `server.shutdownDelay` | `--web.shutdown-delay` | `5s` |
 | `server.watchConfig` / `server.watchConfigInterval` | `--config.watch` / `--config.watch-interval` | off / `60s` |
 | `server.expandEnv` | `--config.export-env` | off |
 | `server.enableLifecycle` | `--web.enable-lifecycle` | off |
@@ -304,11 +305,13 @@ helm install exporter charts/prometheus-universal-exporter \
 
 `server.shutdownTimeout` is how long a stopping pod waits for the probes in progress before closing them, rendered as `--web.shutdown-timeout` (see [Shutting down](../../docs/CONFIGURATION.md#shutting-down)). Keep it at least as long as the monitors' `scrapeTimeout`, or a rollout cuts probes off and Prometheus records failed scrapes. It takes whole hours, minutes and seconds — `30s`, `1m30s` — so the chart can work out the grace period, and like `probeTimeoutOffset` it is rendered only when set.
 
-Kubernetes kills a pod `terminationGracePeriodSeconds` after asking it to stop, 30 seconds unless set. A stopping exporter needs its shutdown timeout and about 10 seconds more, for the last OTLP export and exiting. Left unset, `terminationGracePeriodSeconds` is rendered as the shutdown timeout plus 10 whenever that is more than 30; set, it must be at least that, or rendering fails:
+`server.shutdownDelay`, `5s` by default, is how long a stopping pod keeps answering probes before that, with `/ready` answering `503`, rendered as `--web.shutdown-delay`. Kubernetes takes a few seconds to take a terminating pod out of its Service, and probes sent to it in that gap would otherwise be refused, so Prometheus would record failed scrapes during every rollout. Raise it on a large cluster where endpoint updates are slow; `0s` turns it off, and empty leaves the flag out for an image older than it.
+
+Kubernetes kills a pod `terminationGracePeriodSeconds` after asking it to stop, 30 seconds unless set. A stopping exporter needs its shutdown delay, its shutdown timeout and about 10 seconds more, for the last OTLP export and exiting — 20 seconds with the defaults. Left unset, `terminationGracePeriodSeconds` is rendered as that sum whenever it is more than 30; set, it must be at least that, or rendering fails:
 
 ```sh
 helm install exporter charts/prometheus-universal-exporter \
-  --set server.shutdownTimeout=1m   # renders terminationGracePeriodSeconds: 70
+  --set server.shutdownTimeout=1m   # renders terminationGracePeriodSeconds: 75
 ```
 
 Raise `terminationGracePeriodSeconds` further if `otlp.timeout` is longer than its default of 5 seconds.
@@ -587,7 +590,7 @@ Every value has a default, and `values.yaml` documents each one in place. `value
 | `service` | object | enabled, ClusterIP, 8080 | The exporter Service. |
 | `neg` | object | disabled | GKE Network Endpoint Group annotations on the Service. |
 | `ingress` | object | disabled | Class, hosts, paths, TLS and annotations. |
-| `server` | object | see [Exporter flags](#exporter-flags) | Exporter flags: `listenAddress`, `pythonPath`, `logLevel`, `probeTimeoutOffset`, `shutdownTimeout`, `enableLifecycle`, `watchConfig`, `watchConfigInterval`, `expandEnv`. |
+| `server` | object | see [Exporter flags](#exporter-flags) | Exporter flags: `listenAddress`, `pythonPath`, `logLevel`, `probeTimeoutOffset`, `shutdownTimeout`, `shutdownDelay`, `enableLifecycle`, `watchConfig`, `watchConfigInterval`, `expandEnv`. |
 | `terminationGracePeriodSeconds` | integer | unset | The pod's grace period; see [Shutting down](#shutting-down). |
 | `env` / `envFrom` | array | `[]` | Container environment, in the Kubernetes shapes. |
 | `extraArgs` | array | `[]` | Extra command-line flags. |

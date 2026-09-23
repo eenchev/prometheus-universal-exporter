@@ -57,7 +57,8 @@ collectors:
     # cached entry is keyed on the whole request, so a probe with different (or
     # missing) parameters, headers, or credentials never reads it. Omit or set
     # 0s to disable caching, which is the default.
-    cache: 60s
+    cache:
+      ttl: 60s
     # How many trips to its targets this collector makes at once; a probe over
     # the limit is answered 503 at once. Omit or 0 for the default, 32.
     # max_concurrent_probes: 8

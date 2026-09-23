@@ -70,6 +70,9 @@ spec:
             {{- with (include "prometheus-universal-exporter.shutdownTimeout" .) }}
             - {{ printf "--web.shutdown-timeout=%s" . | quote }}
             {{- end }}
+            {{- with (include "prometheus-universal-exporter.shutdownDelay" .) }}
+            - {{ printf "--web.shutdown-delay=%s" . | quote }}
+            {{- end }}
             {{- include "prometheus-universal-exporter.extraArgs" . }}
             {{- range .Values.extraArgs }}
             - {{ . | quote }}

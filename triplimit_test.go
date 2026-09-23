@@ -135,7 +135,7 @@ func TestSharedAndCachedProbesTakeNoSlot(t *testing.T) {
 	target := newHeldTarget(t)
 	c := testCollector("single", "text")
 	c.MaxConcurrentProbes = 1
-	c.Cache = Duration(time.Minute)
+	c.Cache.TTL = Duration(time.Minute)
 	server := verboseServer(t, false, c)
 	probe := func(path string) int {
 		return probeOnce(t, server, "/probe?collector=single&target="+url.QueryEscape(target.server.URL+path), nil).Code

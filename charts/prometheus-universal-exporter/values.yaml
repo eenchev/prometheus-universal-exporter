@@ -86,6 +86,14 @@ server:
   # chart also works with exporter images that predate it. The pod's
   # terminationGracePeriodSeconds is raised to cover it (see below).
   shutdownTimeout: ""
+  # How long a pod that is stopping keeps serving probes, with /ready
+  # answering 503, before the graceful shutdown above begins. Kubernetes takes
+  # a few seconds to take a terminating pod out of the Service; without the
+  # delay, probes arriving in that gap are refused and Prometheus records
+  # failed scrapes during every rollout. Whole hours, minutes and seconds;
+  # "0s" turns the delay off. Empty leaves the flag out, for exporter images
+  # that predate it. Counted in terminationGracePeriodSeconds (see below).
+  shutdownDelay: 5s
 
 # Environment variables for the exporter container, in the Kubernetes shapes.
 # These are what server.expandEnv substitutes from; they are also useful on
@@ -261,9 +269,9 @@ resources:
     cpu: 500m
     memory: 512Mi
 # How long Kubernetes lets a stopping pod run before killing it. Empty leaves
-# Kubernetes' default, 30 seconds, unless server.shutdownTimeout needs more:
-# the chart then renders server.shutdownTimeout plus 10 seconds, the 10 for
-# the exporter's last OTLP export and exit. Set explicitly, it must be at
+# Kubernetes' default, 30 seconds, unless the shutdown needs more: the chart
+# then renders server.shutdownDelay plus server.shutdownTimeout plus 10
+# seconds, the 10 for the exporter's last OTLP export and exit. Set explicitly, it must be at
 # least that, or rendering fails.
 terminationGracePeriodSeconds: null
 strategy:

@@ -15,7 +15,7 @@ import (
 
 func cachingCollector(name string, ttl time.Duration) Collector {
 	c := testCollector(name, "text")
-	c.Cache = Duration(ttl)
+	c.Cache.TTL = Duration(ttl)
 	return c
 }
 
@@ -351,25 +351,25 @@ func TestResponseCacheExpiresAndEvictsBeyondLimit(t *testing.T) {
 	now := time.Now()
 	set := MetricSet{Metrics: []Metric{{Name: "demo_value", Type: GaugeMetricType, Value: 1}}}
 
-	cache.Put("first", "collector", set, time.Minute, 2, now)
-	cache.Put("second", "collector", set, 2*time.Minute, 2, now)
-	if _, ok := cache.Get("first", now.Add(time.Second)); !ok {
+	cache.Put("first", "collector", set, time.Minute, 0, 2, now)
+	cache.Put("second", "collector", set, 2*time.Minute, 0, 2, now)
+	if _, _, ok := cache.Get("first", now.Add(time.Second)); !ok {
 		t.Fatal("first entry should still be live")
 	}
-	if _, ok := cache.Get("first", now.Add(2*time.Minute)); ok {
+	if _, _, ok := cache.Get("first", now.Add(2*time.Minute)); ok {
 		t.Fatal("expired entry was served")
 	}
 
 	cache = newResponseCache()
-	cache.Put("first", "collector", set, time.Minute, 2, now)
-	cache.Put("second", "collector", set, 2*time.Minute, 2, now)
-	cache.Put("third", "collector", set, 3*time.Minute, 2, now)
-	cache.Put("other", "different", set, time.Minute, 2, now)
-	if _, ok := cache.Get("first", now); ok {
+	cache.Put("first", "collector", set, time.Minute, 0, 2, now)
+	cache.Put("second", "collector", set, 2*time.Minute, 0, 2, now)
+	cache.Put("third", "collector", set, 3*time.Minute, 0, 2, now)
+	cache.Put("other", "different", set, time.Minute, 0, 2, now)
+	if _, _, ok := cache.Get("first", now); ok {
 		t.Fatal("entry closest to expiry was not evicted")
 	}
 	for _, key := range []string{"second", "third", "other"} {
-		if _, ok := cache.Get(key, now); !ok {
+		if _, _, ok := cache.Get(key, now); !ok {
 			t.Fatalf("entry %q was evicted unexpectedly", key)
 		}
 	}
@@ -393,10 +393,10 @@ func TestCachedMetricSetIsCopiedOnStoreAndRead(t *testing.T) {
 		Timestamp: &timestamp,
 		Histogram: &Histogram{Buckets: []Bucket{{UpperBound: 1, CumulativeCount: 2}}, Sum: 3, Count: 2},
 	}}}
-	cache.Put("key", "collector", original, time.Minute, 10, now)
+	cache.Put("key", "collector", original, time.Minute, 0, 10, now)
 	original.Metrics[0].Labels["zone"] = "mutated-source"
 
-	first, ok := cache.Get("key", now)
+	first, _, ok := cache.Get("key", now)
 	if !ok {
 		t.Fatal("entry was not cached")
 	}
@@ -407,7 +407,7 @@ func TestCachedMetricSetIsCopiedOnStoreAndRead(t *testing.T) {
 	first.Metrics[0].Histogram.Buckets[0].CumulativeCount = 99
 	*first.Metrics[0].Timestamp = 99
 
-	second, _ := cache.Get("key", now)
+	second, _, _ := cache.Get("key", now)
 	if second.Metrics[0].Labels["zone"] != "a" || second.Metrics[0].Histogram.Buckets[0].CumulativeCount != 2 || *second.Metrics[0].Timestamp != 5 {
 		t.Fatalf("cached entry was mutated by a reader: %+v", second.Metrics[0])
 	}
@@ -419,7 +419,8 @@ func TestCacheConfigurationParsingAndValidation(t *testing.T) {
 		"  - name: cached\n" +
 		"    request:\n" +
 		"      type: http\n" +
-		"    cache: 90s\n" +
+		"    cache:\n" +
+		"      ttl: 90s\n" +
 		"    transform:\n" +
 		"      type: regex\n" +
 		"    limits:\n" +
@@ -434,8 +435,8 @@ func TestCacheConfigurationParsingAndValidation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if time.Duration(cfg.Collectors[0].Cache) != 90*time.Second {
-		t.Fatalf("cache=%v, want 90s", time.Duration(cfg.Collectors[0].Cache))
+	if time.Duration(cfg.Collectors[0].Cache.TTL) != 90*time.Second {
+		t.Fatalf("cache=%v, want 90s", time.Duration(cfg.Collectors[0].Cache.TTL))
 	}
 	if cfg.Collectors[0].Limits.MaxCacheEntries != 5 {
 		t.Fatalf("max_cache_entries=%d, want 5", cfg.Collectors[0].Limits.MaxCacheEntries)
@@ -445,15 +446,15 @@ func TestCacheConfigurationParsingAndValidation(t *testing.T) {
 	if err := defaults.Validate(); err != nil {
 		t.Fatal(err)
 	}
-	if defaults.Collectors[0].Cache != 0 {
-		t.Fatalf("cache=%v, want disabled by default", time.Duration(defaults.Collectors[0].Cache))
+	if defaults.Collectors[0].Cache.TTL != 0 {
+		t.Fatalf("cache=%v, want disabled by default", time.Duration(defaults.Collectors[0].Cache.TTL))
 	}
 	if defaults.Collectors[0].Limits.MaxCacheEntries != 1000 {
 		t.Fatalf("max_cache_entries=%d, want 1000", defaults.Collectors[0].Limits.MaxCacheEntries)
 	}
 
 	negative := &Config{Collectors: []Collector{cachingCollector("negative", -time.Second)}}
-	if err := negative.Validate(); err == nil || !strings.Contains(err.Error(), "cache must not be negative") {
+	if err := negative.Validate(); err == nil || !strings.Contains(err.Error(), "cache.ttl must not be negative") {
 		t.Fatalf("Validate() error=%v, want a negative cache error", err)
 	}
 }

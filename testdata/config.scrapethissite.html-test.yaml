@@ -4,7 +4,8 @@ web:
 
 collectors:
   - name: countries_html
-    cache: 60s
+    cache:
+      ttl: 60s
 
     request:
       type: http

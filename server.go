@@ -27,6 +27,9 @@ type statsValues struct {
 	coalesced uint64
 	// rejected counts probes turned away by max_concurrent_probes.
 	rejected uint64
+	// staleServed counts failed trips answered with the last good result
+	// (cache.stale_if_error).
+	staleServed uint64
 	// invalidUTF8 counts label values and help texts whose invalid UTF-8
 	// was replaced.
 	invalidUTF8 uint64
@@ -76,9 +79,10 @@ var selfMetricDescriptors = []selfMetricDescriptor{
 	{"http_exporter_series_limit_exceeded_total", CounterMetricType, "Scrapes rejected for exceeding this collector's response size or series limits.", func(v statsValues) float64 { return float64(v.limitErrors) }},
 	{"http_exporter_cache_hits_total", CounterMetricType, "Probes answered from this collector's response cache.", func(v statsValues) float64 { return float64(v.cacheHits) }},
 	{"http_exporter_cache_misses_total", CounterMetricType, "Probes that found no usable cache entry and went to the target.", func(v statsValues) float64 { return float64(v.cacheMisses) }},
+	{"http_exporter_cache_stale_served_total", CounterMetricType, "Probes and scheduled scrapes whose trip to the target failed and that were answered with the last successful result instead, under cache.stale_if_error.", func(v statsValues) float64 { return float64(v.staleServed) }},
 	// What a collector's cache holds belongs to the collector, not to any one
 	// request, so it has no per-request value.
-	{"http_exporter_cache_entries", GaugeMetricType, "Entries currently held in this collector's response cache.", nil},
+	{"http_exporter_cache_entries", GaugeMetricType, "Entries currently held in this collector's response cache, including stale ones kept for cache.stale_if_error.", nil},
 	{"http_exporter_probes_in_flight", GaugeMetricType, "Trips to this collector's targets in progress, which max_concurrent_probes bounds.", nil},
 	{"http_exporter_probes_rejected_total", CounterMetricType, "Probes answered 503 because this collector already had max_concurrent_probes trips to its targets in progress.", func(v statsValues) float64 { return float64(v.rejected) }},
 	{"http_exporter_probes_coalesced_total", CounterMetricType, "Probes answered by sharing an identical probe already in flight instead of going to the target.", func(v statsValues) float64 { return float64(v.coalesced) }},
@@ -162,6 +166,8 @@ type Server struct {
 	otlp *otlpStatus
 	// failures keeps repeated failures from flooding the log (failurelog.go).
 	failures *failureLog
+	// stopping is set when a shutdown begins; /ready answers 503 from then.
+	stopping atomic.Bool
 	// seenConfig is the configuration the per-collector state was last
 	// reconciled with (reconcile.go).
 	seenConfig atomic.Pointer[Config]
@@ -459,11 +465,12 @@ func (s *Server) Handler() http.Handler {
 		path = "/self-metrics"
 	}
 	protected := func(handler http.HandlerFunc) http.HandlerFunc { return s.basicAuthMiddleware(handler) }
+	// The answers Prometheus scrapes are gzipped when it asks (compression.go).
 	if path != "/metrics" {
-		mux.HandleFunc(path, protected(s.metricsHandler))
+		mux.HandleFunc(path, compressed(protected(s.metricsHandler)))
 	}
-	mux.HandleFunc("/metrics", protected(s.metricsHandler))
-	mux.HandleFunc("/probe", protected(s.probeHandler))
+	mux.HandleFunc("/metrics", compressed(protected(s.metricsHandler)))
+	mux.HandleFunc("/probe", compressed(protected(s.probeHandler)))
 	mux.HandleFunc("/-/reload", protected(s.reloadHandler))
 	return mux
 }
@@ -539,19 +546,22 @@ func (s *Server) probeHandler(w http.ResponseWriter, r *http.Request) {
 		})
 	}
 	forwarded := forwardedHeaders(r, c.Request)
-	cacheTTL := time.Duration(c.Cache)
 	key := probeCacheKey(c, target, r.URL.Query(), forwarded)
 	var cacheKey string
-	if cacheTTL > 0 {
+	if usesCache(c) {
 		cacheKey = key
-		if cached, ok := s.cache.Get(cacheKey, time.Now()); ok {
+	}
+	if cacheTTL(c) > 0 {
+		if cached, fetched, ok := s.cache.Get(cacheKey, time.Now()); ok {
 			rec.update(func(x *serverStats) {
 				x.cacheHits++
 				x.emitted += uint64(len(cached.Metrics))
 			})
+			// The names were checked before the result was stored.
+			answer, _ := withFreshness(cached, c, false, fetched, time.Now())
 			finish(true)
-			writeMetricSet(w, &cached)
-			s.queueOTLP(cached)
+			writeMetricSet(w, &answer)
+			s.queueOTLP(answer)
 			return
 		}
 		rec.update(func(x *serverStats) { x.cacheMisses++ })
@@ -559,7 +569,7 @@ func (s *Server) probeHandler(w http.ResponseWriter, r *http.Request) {
 	upstream := func(ctx context.Context) *probeResult {
 		return s.probeUpstream(ctx, upstreamProbe{
 			collector: c, target: target, logTarget: logTarget, overrides: overrides,
-			forwarded: forwarded, rec: rec, cacheKey: cacheKey, cacheTTL: cacheTTL,
+			forwarded: forwarded, rec: rec, cacheKey: cacheKey,
 			budget: probeBudget(r.Header, s.timeoutOffset),
 		})
 	}
@@ -592,7 +602,6 @@ type upstreamProbe struct {
 	forwarded http.Header
 	rec       statsRecorder
 	cacheKey  string
-	cacheTTL  time.Duration
 	// budget bounds the trip when Prometheus said how long it will wait.
 	budget time.Duration
 }
@@ -600,16 +609,53 @@ type upstreamProbe struct {
 // probeUpstream goes to the target, decodes, transforms and validates, and
 // records the answer instead of writing it, so identical probes waiting on it
 // can each be given a copy. Its self-metrics, logs, cache entry and OTLP
-// export happen once, however many probes share it.
+// export happen once, however many probes share it. When the trip fails and
+// the collector has cache.stale_if_error, the last good result answers
+// instead of the error (stalecache.go).
 func (s *Server) probeUpstream(ctx context.Context, p upstreamProbe) *probeResult {
+	c, name := p.collector, p.collector.Name
+	result := s.probeTrip(ctx, p)
+	if staleIfError(c) <= 0 || p.cacheKey == "" {
+		return result
+	}
+	staleKey := failureKey(name, p.logTarget, "\x00stale")
+	if result.ok {
+		s.failures.recovered(s.logger, staleKey, "probe answered with a fresh result again", "collector", name, "target", p.logTarget)
+		return result
+	}
+	now := time.Now()
+	cached, fetched, found := s.cache.GetStale(p.cacheKey, now)
+	if !found {
+		return result
+	}
+	answer, err := withFreshness(cached, c, true, fetched, now)
+	if err != nil {
+		return result
+	}
+	p.rec.update(func(x *serverStats) {
+		x.staleServed++
+		x.emitted += uint64(len(cached.Metrics))
+	})
+	s.failures.failed(s.logger, slog.LevelWarn, staleKey, "probe failed; answered with the last successful result (cache.stale_if_error)", "stale", nil, "collector", name, "target", p.logTarget, "result_age", now.Sub(fetched).Round(time.Second).String())
+	out := newProbeRecorder()
+	writeMetricSet(out, &answer)
+	s.queueOTLP(answer)
+	// A stale answer is not a success: the trip failed.
+	return out.result(false)
+}
+
+// probeTrip is one trip to the target, or the fresh cache entry a probe that
+// finished while this one waited to start left behind.
+func (s *Server) probeTrip(ctx context.Context, p upstreamProbe) *probeResult {
 	c, name, rec, logTarget := p.collector, p.collector.Name, p.rec, p.logTarget
 	out := newProbeRecorder()
 	// A probe that finished while this one was waiting to start may have just
 	// filled the cache.
-	if p.cacheKey != "" {
-		if cached, ok := s.cache.Get(p.cacheKey, time.Now()); ok {
+	if p.cacheKey != "" && cacheTTL(c) > 0 {
+		if cached, fetched, ok := s.cache.Get(p.cacheKey, time.Now()); ok {
 			rec.update(func(x *serverStats) { x.emitted += uint64(len(cached.Metrics)) })
-			writeMetricSet(out, &cached)
+			answer, _ := withFreshness(cached, c, false, fetched, time.Now())
+			writeMetricSet(out, &answer)
 			return out.result(true)
 		}
 	}
@@ -721,11 +767,17 @@ func (s *Server) probeUpstream(ctx context.Context, p upstreamProbe) *probeResul
 		failStage("validation", err, ErrorPolicyFail)
 		return out.result(false)
 	}
+	now := time.Now()
+	answer, err := withFreshness(*ms, c, false, now, now)
+	if err != nil {
+		failStage("validation", err, ErrorPolicyFail)
+		return out.result(false)
+	}
 	rec.update(func(x *serverStats) { x.emitted += uint64(len(ms.Metrics)) })
 	s.failures.recovered(s.logger, failureKey, "probe recovered", "collector", name, "target", logTarget)
-	s.cache.Put(p.cacheKey, c.Name, *ms, p.cacheTTL, c.Limits.MaxCacheEntries, time.Now())
-	writeMetricSet(out, ms)
-	s.queueOTLP(*ms)
+	s.cache.Put(p.cacheKey, c.Name, *ms, cacheTTL(c), staleIfError(c), c.Limits.MaxCacheEntries, now)
+	writeMetricSet(out, &answer)
+	s.queueOTLP(answer)
 	return out.result(true)
 }
 

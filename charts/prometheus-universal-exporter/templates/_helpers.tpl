@@ -18,7 +18,8 @@
   "--log.level" "set server.logLevel instead"
   "--probe.timeout-offset" "set server.probeTimeoutOffset instead"
   "--web.enable-lifecycle" "set server.enableLifecycle instead"
-  "--web.shutdown-timeout" "set server.shutdownTimeout instead" -}}
+  "--web.shutdown-timeout" "set server.shutdownTimeout instead"
+  "--web.shutdown-delay" "set server.shutdownDelay instead" -}}
 {{- /* These flags make the exporter print something and exit instead of
        serving, so a pod started with one would restart for ever. */ -}}
 {{- $oneShot := dict
@@ -147,6 +148,18 @@ app.kubernetes.io/managed-by: {{ .Release.Service }}
 {{- $timeout -}}
 {{- end -}}
 {{- end }}
+{{- define "prometheus-universal-exporter.shutdownDelay" -}}
+{{- /* Empty leaves the flag out; 0s is rendered and turns the delay off. Only
+       whole hours, minutes and seconds, so the chart can work out the grace
+       period. */ -}}
+{{- $delay := .Values.server.shutdownDelay | default "" | toString -}}
+{{- if $delay -}}
+{{- if not (regexMatch "^([0-9]+h)?([0-9]+m)?([0-9]+s)?$" $delay) -}}
+{{- fail (printf "server.shutdownDelay %q must be whole hours, minutes and seconds, for example \"5s\" or \"0s\"" $delay) -}}
+{{- end -}}
+{{- $delay -}}
+{{- end -}}
+{{- end }}
 {{- define "prometheus-universal-exporter.durationSeconds" -}}
 {{- $seconds := 0 -}}
 {{- range $part := regexFindAll "[0-9]+[hms]" . -1 -}}
@@ -158,15 +171,16 @@ app.kubernetes.io/managed-by: {{ .Release.Service }}
 {{- $seconds -}}
 {{- end }}
 {{- define "prometheus-universal-exporter.terminationGracePeriodSeconds" -}}
-{{- /* A stopping pod needs the shutdown timeout, then time for the last OTLP
-       export and exit. Kubernetes kills it after 30 seconds unless told
-       otherwise, which would cut both short. */ -}}
+{{- /* A stopping pod needs the shutdown delay, the shutdown timeout, then
+       time for the last OTLP export and exit. Kubernetes kills it after 30
+       seconds unless told otherwise, which would cut them short. */ -}}
+{{- $delay := include "prometheus-universal-exporter.shutdownDelay" . | default "0s" -}}
 {{- $shutdown := include "prometheus-universal-exporter.shutdownTimeout" . | default "5s" -}}
-{{- $needed := add (include "prometheus-universal-exporter.durationSeconds" $shutdown | atoi) 10 -}}
+{{- $needed := add (include "prometheus-universal-exporter.durationSeconds" $delay | atoi) (include "prometheus-universal-exporter.durationSeconds" $shutdown | atoi) 10 -}}
 {{- $explicit := .Values.terminationGracePeriodSeconds -}}
 {{- if not (kindIs "invalid" $explicit) -}}
 {{- if lt (int $explicit) (int $needed) -}}
-{{- fail (printf "terminationGracePeriodSeconds %v is shorter than the %d seconds a stopping pod needs: server.shutdownTimeout (%s) and 10 seconds for the last OTLP export and exit; raise it or lower server.shutdownTimeout" $explicit $needed $shutdown) -}}
+{{- fail (printf "terminationGracePeriodSeconds %v is shorter than the %d seconds a stopping pod needs: server.shutdownDelay (%s), server.shutdownTimeout (%s) and 10 seconds for the last OTLP export and exit; raise it or lower server.shutdownDelay or server.shutdownTimeout" $explicit $needed $delay $shutdown) -}}
 {{- end -}}
 {{- int $explicit -}}
 {{- else if gt (int $needed) 30 -}}

@@ -25,6 +25,9 @@ import (
 
 // notReadyReasons lists why the exporter is not ready, empty when it is.
 func (s *Server) notReadyReasons() []string {
+	if s.stopping.Load() {
+		return []string{"the exporter is shutting down"}
+	}
 	var reasons []string
 	if s.manager.reloads != nil {
 		for _, file := range s.manager.reloads.rejected() {

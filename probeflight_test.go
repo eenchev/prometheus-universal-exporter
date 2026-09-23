@@ -352,7 +352,7 @@ func TestSharedProbesFillTheCacheOnce(t *testing.T) {
 	captureLogs(t)
 	target := newGatedTarget(t, http.StatusOK, "value=42\n")
 	c := testCollector("cached_shared", "text")
-	c.Cache = Duration(time.Minute)
+	c.Cache.TTL = Duration(time.Minute)
 	server := flightServer(t, c)
 	var outcomes []<-chan probeOutcome
 	for i := 0; i < 3; i++ {

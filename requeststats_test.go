@@ -358,7 +358,7 @@ func TestACachedResponseDoesNotOverwriteTheLastScrape(t *testing.T) {
 	}))
 	defer target.Close()
 	collector := testCollector("cached", "text")
-	collector.Cache = Duration(time.Hour)
+	collector.Cache.TTL = Duration(time.Hour)
 	server := verboseServer(t, true, collector)
 
 	probe := "/probe?target=" + target.URL + "&collector=cached"

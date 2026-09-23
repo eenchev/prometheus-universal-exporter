@@ -83,7 +83,8 @@ collectors:
   - name: statuspage
     # A status page changes rarely and a scrape reads a large document, so a
     # repeated scrape within 30 seconds is answered from memory.
-    cache: 30s
+    cache:
+      ttl: 30s
     request:
       type: http
       path: /api/v2/summary.json

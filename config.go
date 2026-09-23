@@ -87,7 +87,9 @@ type Collector struct {
 	Metrics       []MetricRule    `yaml:"metrics"`
 	ErrorHandling ErrorHandling   `yaml:"error_handling"`
 	Limits        Limits          `yaml:"limits"`
-	Cache         Duration        `yaml:"cache"`
+	// Cache answers repeats of a probe from memory, and can stand in for a
+	// trip that fails; see cache.go and stalecache.go.
+	Cache CacheConfig `yaml:"cache"`
 	// Coalesce shares one upstream request among identical probes that arrive
 	// while it is in flight. Unset means true; see probeflight.go.
 	Coalesce *bool `yaml:"coalesce"`
@@ -308,8 +310,8 @@ func (c *Config) Validate() error {
 		if x.Limits.MaxCacheEntries <= 0 {
 			x.Limits.MaxCacheEntries = 1000
 		}
-		if x.Cache < 0 {
-			return fmt.Errorf("collector %q cache must not be negative", x.Name)
+		if err := validateCache(x); err != nil {
+			return err
 		}
 		if err := validateNameEscaping(x); err != nil {
 			return err

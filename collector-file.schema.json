@@ -11,9 +11,21 @@
         "description": "How to reach a kind of target and turn its response into metrics.",
         "properties": {
           "cache": {
-            "description": "Answer a repeat of the same probe from memory for this long. Omit or 0s to disable.",
-            "pattern": "^[-+]?(0|([0-9]*(\\.[0-9]*)?(ns|us|µs|μs|ms|s|m|h))+)$",
-            "type": "string"
+            "additionalProperties": false,
+            "description": "The collector's response cache. See docs/CONFIGURATION.md#response-caching.",
+            "properties": {
+              "stale_if_error": {
+                "description": "After ttl, keep a result this much longer to answer a probe whose trip to the target fails, marked by http_exporter_result_stale 1. Omit or 0s to answer the failure.",
+                "pattern": "^[-+]?(0|([0-9]*(\\.[0-9]*)?(ns|us|µs|μs|ms|s|m|h))+)$",
+                "type": "string"
+              },
+              "ttl": {
+                "description": "Answer a repeat of the same probe from memory for this long. Omit or 0s to always go to the target.",
+                "pattern": "^[-+]?(0|([0-9]*(\\.[0-9]*)?(ns|us|µs|μs|ms|s|m|h))+)$",
+                "type": "string"
+              }
+            },
+            "type": "object"
           },
           "coalesce": {
             "description": "Share one request to the target among identical probes that arrive while it is in flight. Defaults to true.",
@@ -342,6 +354,7 @@
                 ]
               },
               "body": {
+                "description": "http: the request body. May contain {{param_name}} placeholders, written as |json, |number, |form, |xml or |raw: {{param_service|json}}. See docs/REQUESTS.md#in-the-body-headers-and-query.",
                 "type": [
                   "string",
                   "number",

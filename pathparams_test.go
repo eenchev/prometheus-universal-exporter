@@ -283,7 +283,7 @@ func TestPathParametersAreDistinctInTheCache(t *testing.T) {
 	var recorder pathRecorder
 	target := recorder.serve(t)
 	c := pathCollector(tenantPath)
-	c.Cache = Duration(time.Minute)
+	c.Cache.TTL = Duration(time.Minute)
 	c.Limits.MaxCacheEntries = 10
 	server := pathServer(t, c)
 

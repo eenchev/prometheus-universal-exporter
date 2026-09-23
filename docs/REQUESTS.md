@@ -74,12 +74,15 @@ almost always a misspelling: with `{{param_tenant:acme}}`, a probe sending
 `param_tenat=globex` would otherwise succeed against the default tenant and
 report `acme`'s numbers as `globex`'s.
 
-**Scope.** Placeholders are bound only in the collector's `request.path`. A
-`path` probe parameter replaces that path wholesale and is used exactly as
-given, so a `param_` parameter sent alongside it has nothing to fill and is
-rejected. `{{` always opens a placeholder in `request.path`; anything that is not
-a well-formed `{{param_<name>}}` or `{{param_<name>:<default>}}` stops the
-exporter at startup, naming the collector.
+**Scope.** Placeholders are bound in the collector's `request.path` and, for
+an `http` collector, in its [body, header values and query
+values](#in-the-body-headers-and-query). A `path` probe parameter replaces the
+path wholesale and is used exactly as given, and a `body` probe parameter
+replaces the body the same way, so a `param_` parameter only they would have
+used has nothing to fill and is rejected. `{{` always opens a placeholder in
+`request.path`; anything that is not a well-formed `{{param_<name>}}` or
+`{{param_<name>:<default>}}` stops the exporter at startup, naming the
+collector.
 
 **Environment variables.** Placeholders use `{{…}}` precisely so they never meet
 the `${NAME}` references [`--config.export-env`](CONFIGURATION.md#environment-variables)
@@ -103,10 +106,24 @@ because the value is a tenant or an account, which labels already keep out of
 the query string, and one series per value would be unbounded.
 
 **Scheduled targets.** A [scheduled target](OTLP.md) is scraped on the
-exporter's own timer, with no probe to supply a value. Its own `request.path`
-cannot use placeholders, and it can use a collector whose path has them only if
-every placeholder has a default; otherwise the exporter refuses to start, naming
-both.
+exporter's own timer, with no probe to supply a value, so it gives its values
+under `params`:
+
+```yaml
+targets:
+  - name: acme_checkout
+    collector: graphql_status
+    target: https://api.example
+    params:
+      param_tenant: acme
+      param_service: checkout
+```
+
+Every placeholder of the collector's request must then be filled, by `params`
+or by a default, and every entry of `params` must fill one; otherwise the
+exporter refuses to start, naming the target, the collector and the parameter.
+The target's own `request` block — its `path`, `body` and `headers` — is
+literal and cannot use placeholders.
 
 From a Prometheus Operator monitor, the values go in `params` like any other
 probe parameter:
@@ -116,6 +133,64 @@ params:
   collector: [legacy_text]
   param_tenant: [acme]
 ```
+
+### In the body, headers and query
+
+The same placeholders work in an `http` collector's `request.body`, in the
+values of `request.headers` and in the values of `request.query`, filled by the
+same probe parameters, with the same defaults, and refused with the same `400`
+when one is missing or unused. One collector can then speak to a GraphQL or
+JSON-RPC endpoint, or an API that takes its tenant in a header:
+
+```yaml
+collectors:
+  - name: graphql_status
+    request:
+      type: http
+      method: POST
+      path: /graphql
+      headers:
+        Content-Type: application/json
+        X-Tenant: "{{param_tenant}}"
+      query:
+        region: "{{param_region:eu}}"
+      body: '{"query": "query($s: String!, $n: Int!) { status(service: $s, limit: $n) { up } }", "variables": {"s": {{param_service|json}}, "n": {{param_limit:10|number}}}}'
+```
+
+```text
+/probe?target=https://api.example&collector=graphql_status&param_tenant=acme&param_service=checkout
+  -> POST https://api.example/graphql?region=eu
+     X-Tenant: acme
+     {"query": "…", "variables": {"s": "checkout", "n": 10}}
+```
+
+**Each place has its encoding.** A value is written the way its place needs,
+so a probe parameter fills a value in rather than changing the request's
+structure:
+
+| Where | Written as |
+| --- | --- |
+| Header value | As given; a value with a control character, such as a line break, is refused with `400`, so it can never end the header and start another. |
+| Query value | Encoded as a query value: `us&x=1` stays one value and adds no parameter. |
+| Body, `{{param_x\|json}}` | A JSON string, quoted and escaped: `a "b"` becomes `"a \"b\""`. |
+| Body, `{{param_x\|number}}` | A JSON number, refused with `400` unless it is one: `12; DROP` is not. |
+| Body, `{{param_x\|form}}` | URL form encoded, for `application/x-www-form-urlencoded` bodies. |
+| Body, `{{param_x\|xml}}` | Escaped XML text, for SOAP and other XML bodies. |
+| Body, `{{param_x}}` or `{{param_x\|raw}}` | Exactly as given. Use it only where the template itself is the structure and the value comes from your own monitors. |
+
+The filter follows the default, if there is one: `{{param_limit:10|number}}`.
+Filters exist only in the body; a header or query value has one encoding and
+always gets it, so a filter there stops the exporter at startup.
+
+**Braces of the body's own.** In a body, a header value or a query value,
+`{{` opens a placeholder only when `param_` follows it, since a body may well
+contain braces of its own; `{{ param_x }}` with spaces is refused at startup
+rather than sent as text. Header names and query names cannot hold
+placeholders.
+
+The values are part of the response cache key like every probe parameter, and
+the verbose self-metrics never carry them: the `url` label has no query string,
+and the body and headers are not labels at all.
 
 ## Redirects and HTTP/2
 

@@ -133,12 +133,24 @@ Because the file is operator configuration rather than caller input, these
 headers are applied directly and are not filtered through the collector's
 `request.forward_headers` allowlist.
 
-[Path parameters](REQUESTS.md#path-parameters) are the one probe feature a
-scheduled target cannot use: there is no probe to supply `param_<name>`. A
-target's own `request.path` must be written out in full, and a target can
-borrow a collector whose path has `{{param_…}}` placeholders only when each one
-has a default, which is what it will use. Otherwise the exporter refuses to
-start, naming the target and the collector.
+A collector's [`{{param_…}}` placeholders](REQUESTS.md#path-parameters) — in
+its path, body, header values and query values — are filled by the target's
+`params`, since there is no probe to supply `param_<name>`:
+
+```yaml
+targets:
+  - name: acme_checkout
+    collector: graphql_status
+    target: https://api.example
+    params:
+      param_tenant: acme
+      param_service: checkout
+```
+
+Every placeholder must be filled, by `params` or a default, and every entry of
+`params` must fill one; otherwise the exporter refuses to start, naming the
+target, the collector and the parameter. A target's own `request.path`, `body`
+and `headers` are written out in full, without placeholders.
 
 Check a target file together with its configuration before deploying it:
 `prometheus-universal-exporter --dry-run --config.file=config.otlp.yaml --otlp.targets-file=targets.yaml`
@@ -157,7 +169,9 @@ being conflated.
 Targets are scraped once per `otlp.interval`, through the same fetch, decode and
 transform path as `/probe`, so collector limits, error handling and the response
 cache all apply — a scheduled scrape and an identical `/probe` request share
-cache entries. Scheduled targets are never exposed on `/metrics` and are not
+cache entries. With [`cache.stale_if_error`](CONFIGURATION.md#serving-the-last-good-result-when-the-target-fails),
+a failed scrape exports the target's last good result, marked by
+`http_exporter_result_stale` 1, while its `http_exporter_target_up` is `0`. Scheduled targets are never exposed on `/metrics` and are not
 reachable through `/probe`.
 
 Every scheduled scrape also exports `http_exporter_target_up` and

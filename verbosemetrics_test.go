@@ -91,7 +91,7 @@ func TestOnlyTripsToTheTargetAreObserved(t *testing.T) {
 	captureLogs(t)
 	target := textTarget(t, "value=42\n")
 	c := testCollector("cached_timed", "text")
-	c.Cache = Duration(time.Minute)
+	c.Cache.TTL = Duration(time.Minute)
 	server := verboseServer(t, true, c)
 	for i := 0; i < 3; i++ {
 		probeOnce(t, server, "/probe?collector=cached_timed&target="+url.QueryEscape(target.URL), nil)

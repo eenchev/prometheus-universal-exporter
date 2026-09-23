@@ -83,6 +83,9 @@ func validateHTTPRequest(x *Collector) error {
 			return fmt.Errorf("collector %q: %w", x.Name, err)
 		}
 	}
+	if err := validateRequestTemplates(x); err != nil {
+		return err
+	}
 	if x.Request.Method == "" {
 		x.Request.Method = http.MethodGet
 	}

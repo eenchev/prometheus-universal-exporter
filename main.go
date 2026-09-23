@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 )
 
 func main() { os.Exit(run(os.Args[1:], os.Stdout, os.Stderr)) }
@@ -32,6 +33,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 	listenAddress := flags.String("web.listen-address", ":8080", "Address on which to expose HTTP endpoints")
 	selfMetricsPath := flags.String("web.self-metrics-path", "/self-metrics", "Dedicated endpoint for exporter self-health metrics")
 	enableLifecycle := flags.Bool("web.enable-lifecycle", false, "Enable POST /-/reload, which reloads the configuration and scheduled target files and reports whether they were accepted. SIGHUP reloads either way")
+	shutdownDelay := flags.Duration("web.shutdown-delay", 0, "How long a SIGTERM or SIGINT keeps serving, with /ready answering 503, before the graceful shutdown begins, so a load balancer or Kubernetes stops sending probes first. 0, the default, begins at once")
 	shutdownTimeout := flags.Duration("web.shutdown-timeout", DefaultShutdownTimeout, "How long a SIGTERM or SIGINT waits for the probes in progress to finish before closing their connections. Keep it at least as long as Prometheus's scrape timeout")
 	timeoutOffset := flags.Duration("probe.timeout-offset", DefaultTimeoutOffset, "How much of Prometheus's scrape timeout (X-Prometheus-Scrape-Timeout-Seconds) a probe leaves unused, so it answers with its own error before Prometheus gives up")
 	pythonPath := flags.String("python.path", "python3", "Python interpreter used by the python transform")
@@ -57,6 +59,10 @@ func run(args []string, stdout, stderr io.Writer) int {
 	}
 	// A negative offset is a malformed flag rather than a configuration
 	// problem, so it is refused like one, before --dry-run or startup.
+	if err := validateShutdownDelay(*shutdownDelay); err != nil {
+		newLogger("info", stderr).Error("invalid command line; exiting", "error", err.Error())
+		return 2
+	}
 	if err := validateShutdownTimeout(*shutdownTimeout); err != nil {
 		newLogger("info", stderr).Error("invalid command line; exiting", "error", err.Error())
 		return 2
@@ -181,6 +187,15 @@ func run(args []string, stdout, stderr io.Writer) int {
 		// ends the process at once, rather than being swallowed while the
 		// probes finish and the last OTLP export is sent.
 		stop()
+		// /ready answers 503 from now, and connections are no longer kept
+		// alive, so whatever still routes probes here moves away while this
+		// exporter keeps answering them for --web.shutdown-delay.
+		server.BeginShutdown()
+		httpServer.SetKeepAlivesEnabled(false)
+		if *shutdownDelay > 0 {
+			logger.Info("shutting down: /ready answers 503 while probes are still served for --web.shutdown-delay; a second signal exits at once", "shutdown_delay", shutdownDelay.String())
+			time.Sleep(*shutdownDelay)
+		}
 		logger.Info("shutting down: finishing the probes in progress and sending the last OTLP export; a second signal exits at once", "shutdown_timeout", shutdownTimeout.String())
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), *shutdownTimeout)
 		defer cancel()

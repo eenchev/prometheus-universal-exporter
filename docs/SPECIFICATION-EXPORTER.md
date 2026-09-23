@@ -315,7 +315,8 @@ collectors:
       ...
     limits:
       ...
-    cache: 60s
+    cache:
+      ttl: 60s
     coalesce: true   # optional; identical probes in flight share a request (§ 42.13a)
     max_concurrent_probes: 32   # optional; trips to the targets at once (§ 42.13b)
 ```
@@ -645,11 +646,10 @@ label never has more than `max_files` values. `limits.max_metrics` MUST apply to
 `url` label MUST be the directory's `file://` URL ending in `/`. Scheduled
 targets MUST read directories the same way.
 
-A collector MAY set `cache` to a Go duration such as `60s`, `1m`, or `3h`. The
-value is the time to live of a cached collector result. Omitting `cache`, or
-setting it to `0s`, MUST disable caching for that collector. A negative value
-MUST be rejected during configuration validation. Section 42.13 defines the
-caching contract.
+A collector MAY set `cache`, a mapping of `ttl`, the time to live of a cached
+collector result, and `stale_if_error`, how much longer a result stands in for
+a trip that fails. Omitting `cache`, or setting both to `0s`, MUST disable
+caching for that collector. Section 42.13 defines the caching contract.
 
 Every collector uses the same `transform` and `metrics` structure. The decoder
 only selects how the response is parsed; it does not contain executable
@@ -1885,6 +1885,7 @@ http_exporter_series_limit_exceeded_total
 http_exporter_cache_hits_total
 http_exporter_cache_misses_total
 http_exporter_cache_entries
+http_exporter_cache_stale_served_total
 
 http_exporter_probes_coalesced_total
 http_exporter_probes_in_flight
@@ -2207,7 +2208,8 @@ Recommended behavior:
   file was rejected (§ 22.0b), until a reload of it is accepted, and, with OTLP
   export enabled and `otlp.unready_after_failures` set to N above 0, while the
   last N exports to the current endpoint failed (§ 42.1a), until one gets
-  through; `200` otherwise. `otlp.unready_after_failures` MUST default to 0,
+  through; from a `SIGTERM` or `SIGINT` on, while the exporter shuts down
+  (§ 30); `200` otherwise. `otlp.unready_after_failures` MUST default to 0,
   which never makes the exporter unready over OTLP: an exporter whose exports
   fail still answers probes, and a Kubernetes pod that is not ready stops
   receiving them. The failures MUST be counted per endpoint, so a reload that
@@ -2221,6 +2223,16 @@ Recommended behavior:
   `collector` MUST answer `400` saying the collector parameter is required,
   with the URL's shape, and one without a target its collector's request type
   requires MUST answer `400` naming the collector and the request type.
+
+`/probe`, `/metrics` and the self-metrics path MUST compress their answer with
+gzip when the request's `Accept-Encoding` accepts `gzip` (or `x-gzip`, or `*`)
+with a non-zero quality — Prometheus asks for it on every scrape — and answer
+uncompressed otherwise, and for `HEAD`. A compressed answer MUST carry
+`Content-Encoding: gzip` and no `Content-Length`; each of these answers, compressed or
+not, MUST carry `Vary: Accept-Encoding`. Errors are compressed like any other
+answer. `/health`, `/ready` and `/-/reload` MUST NOT be compressed: their
+answers are a line or two, and a load balancer checking health may not decode
+gzip.
 
 The exporter's own HTTP server MUST bound what a client can hold open: request
 headers within 10 seconds, the whole request within 30 seconds, and an idle
@@ -2792,6 +2804,7 @@ Provide clear CLI flags, for example:
 --probe.timeout-offset=500ms
 --web.enable-lifecycle
 --web.shutdown-timeout=5s
+--web.shutdown-delay=0s
 --version
 ```
 
@@ -2800,6 +2813,18 @@ probes in progress, 5 seconds by default; a value that is not positive MUST be
 refused as a malformed command line. When it runs out, the connections still
 open MUST be closed, which MUST be logged with the timeout, before the last
 OTLP export (§ 42.1a) and a clean exit.
+
+`--web.shutdown-delay` is how long a `SIGTERM` or `SIGINT` keeps serving before
+that graceful shutdown begins, 0 by default, which begins it at once. From the
+signal on, `/ready` MUST answer `503` with the reason `the exporter is shutting
+down`, while `/probe`, `/metrics`, the self-metrics path and `/health` MUST
+keep answering as before, so a load balancer or a Kubernetes Service stops
+sending probes before the listener closes rather than having them refused.
+Connections MUST NOT be kept alive past their current request during the
+delay, so clients reconnect to another instance. The exporter MUST log the
+delay when it starts one. A second signal during the delay MUST end the process
+at once, as during the shutdown timeout. A negative value MUST be refused as a
+malformed command line.
 
 `--version` prints the build information of § 22.0d and exits 0.
 
@@ -3948,6 +3973,26 @@ Required:
   nor a reader can mutate the stored entry.
 - Concurrent probes of a cached collector are race-free under `go test -race`.
 - Cache hit, miss, and entry self-metrics are exposed per collector.
+- `cache` parses `ttl` and `stale_if_error`, alone or together; a single
+  duration is refused with the mapping form in the message; an unknown key, a
+  list, a bad duration and negative values are rejected.
+- An entry is fresh within `ttl`, served only to a failed trip within
+  `stale_if_error` after it, then dropped; `ttl` 0 with `stale_if_error` keeps
+  a fallback without answering from the cache; neither stores nothing.
+- A failed trip — a `503`, and a page without the value under `error_mode:
+  fail` — within `stale_if_error` is answered `200` with the last good value,
+  `http_exporter_result_stale` 1 and the entry's age; it is counted in
+  `http_exporter_cache_stale_served_total` and not as a success. With `ttl` 0
+  every probe reaches the target. A recovered target answers its new value
+  with `http_exporter_result_stale` 0; past `stale_if_error` the failure is
+  answered `502`.
+- With a `ttl`, a fresh hit carries its age and does not reach the target;
+  past the `ttl` a failed trip is answered stale.
+- Without `stale_if_error` the gauges are not added and a failure is answered.
+- A rule producing `http_exporter_result_stale` fails validation with
+  `stale_if_error` and is allowed without it.
+- A scheduled target whose scrape fails exports the last good result marked
+  stale, with `http_exporter_target_up` 0, and the stale export is counted.
 - Configuration parsing accepts durations such as `90s` and rejects a negative
   `cache` value.
 
@@ -4458,6 +4503,49 @@ See § 23, § 24.1a and § 25.1.
 - Four failed probes of a target log one line and its recovery counts four; a
   scheduled target failing three times logs once and its recovery; a file of a
   directory failing on three probes logs once and its recovery.
+
+## 34.53f Request template tests
+
+See § 42.10a and § 42.10b.
+
+- Body placeholders are found among braces of the body's own, with a default
+  and a filter; `{{"…` is text; spaces, an unknown filter, an unclosed
+  placeholder, a bad name, a brace in a default, and a filter in a header or
+  query value are rejected.
+- `json` escapes quotes, backslashes, line breaks and keeps non-ASCII; `number`
+  accepts a JSON number and refuses `12; DROP` and `0x10`; `form` and `xml`
+  escape; `raw` and no filter write the value; a default takes its filter; a
+  header value with CR LF is refused.
+- A probe fills the path, a header, a query value (its default, and a given
+  value with `&` staying one value) and a JSON body; a missing body or path
+  parameter, a non-number, a header value with a line break, and an unused
+  parameter are `400` without contacting the target; a `body` override replaces
+  the template and makes a body-only parameter unused.
+- A placeholder in a header or query name, a filter in a header value and a
+  malformed body placeholder fail to load.
+- Probes differing only in a body parameter are cached apart.
+- A scheduled target's `params` fill path, header and body; a missing, unused,
+  unfit or badly named parameter fails to load naming it; targets differing only
+  in `params` have different cache keys.
+
+## 34.53g Shutdown delay and compression tests
+
+See § 23 and § 30.
+
+- After a `SIGTERM` with `--web.shutdown-delay` of 1s, `/ready` answers `503`
+  naming the shutdown while a probe is still answered `200`; the process exits
+  `0` after the delay, logging it; a negative value exits 2. Without the delay
+  nothing changes: the exporter stops at once.
+- A server marked as shutting down answers `/ready` `503` with the reason and
+  `/health` `200`.
+- `Accept-Encoding` parsing: `gzip`, `x-gzip`, `*`, a list with `gzip;q=0.5`
+  and mixed case accept gzip; no header, `identity`, `br`, `gzip;q=0` and
+  `gzip;q=0.0` do not.
+- `/probe`, `/metrics` and the self-metrics path answer gzip, with
+  `Content-Encoding` and `Vary`, when asked, decompressing to exactly the
+  uncompressed answer; they are uncompressed without the header, with `q=0`
+  and for `HEAD`; an error answer is compressed too; `/health` and `/ready` are
+  never compressed.
 
 ## 34.54 Probe deadline tests
 
@@ -5217,11 +5305,41 @@ written, not its value. A value is typically a tenant or an account, which the
 label already keeps out of the query string, and one series per value would be
 unbounded.
 
-A scheduled target (§ 42.14) has no probe to supply a value. Its own
-`request.path` MUST NOT contain placeholders, and it MAY use a collector whose
-`request.path` has placeholders only if each has a default, which it then binds;
-any other combination MUST be rejected at startup with a message naming the
-target and the collector.
+A scheduled target (§ 42.14) has no probe to supply a value; it MAY give
+values under `params`, a map of `param_<name>` names to values, which fill the
+collector's placeholders as the probe parameters of the same names would. Its
+own `request.path`, `body` and `headers` MUST NOT contain placeholders. Every
+placeholder of the collector's request — path, body, header and query values —
+MUST be filled by `params` or a default, and every entry of `params` MUST fill
+one and be a valid name; any other combination MUST be rejected at startup with
+a message naming the target, the collector and the parameter. `params` MUST be
+part of the target's cache key.
+
+## 42.10b Placeholders in the body, headers and query
+
+An `http` collector's `request.body`, the values of `request.headers` and the
+values of `request.query` MAY contain the placeholders of § 42.10a, filled by
+the same probe parameters with the same defaults; a missing value, one given
+twice and one no placeholder of the request uses MUST be refused with `400`
+before the target is contacted. In these fields `{{` MUST open a placeholder
+only when `param_` follows it, and `{{` followed by spaces and `param_` MUST be
+rejected at load. A header name or query name containing `{{` MUST be rejected
+at load. When the `body` probe parameter replaces the body, its placeholders
+MUST NOT be bound, and a parameter only they use is unused.
+
+Each value MUST be written as its place requires:
+
+- a header value MUST be refused with `400` when it contains a control
+  character other than tab;
+- a query value MUST be encoded as one query value;
+- in the body, a placeholder MAY name a filter after its default,
+  `{{param_name:default|filter}}`: `json` writes a JSON string, quoted and
+  escaped; `number` writes the value only if it is a JSON number and MUST
+  refuse it with `400` otherwise; `form` writes it URL form encoded; `xml`
+  writes it as escaped XML text; `raw`, or no filter, writes it as given.
+
+A filter MUST be rejected at load outside the body, and an unknown filter
+anywhere. The values MUST NOT reach any self-metric label.
 
 ## 42.12 CI, container, and chart releases
 
@@ -5269,24 +5387,27 @@ well-formed tags and rejects malformed ones, and that the version committed in
 
 ## 42.13 Collector response caching
 
-Each collector MUST support a `cache` parameter holding a Go duration, for
-example `60s`, `1m`, or `3h`:
+Each collector MUST support a `cache` mapping with two Go durations:
 
 ```yaml
 collectors:
   - name: expensive_api
     request:
       type: http
-    cache: 60s
+    cache:
+      ttl: 60s
+      stale_if_error: 5m
     limits:
       max_cache_entries: 1000
 ```
 
-When `cache` is greater than zero and a probe repeats a request the exporter
-has already served within that interval, the exporter MUST return the stored
-result and MUST NOT contact the target again. Omitting `cache` or setting it to
-`0s` MUST disable caching for that collector, which is the default. A negative
-value MUST be rejected during configuration validation.
+When `ttl` is greater than zero and a probe repeats a request the exporter has
+already served within that interval, the exporter MUST return the stored
+result and MUST NOT contact the target again. Omitting `cache`, or both of its
+keys, or setting them to `0s` MUST disable caching for that collector, which is
+the default. A negative value, an unknown key, and a `cache` that is not a
+mapping MUST be rejected during configuration validation; a single duration
+such as `cache: 60s` MUST be refused with a message showing the mapping form.
 
 The cache MUST be in-memory and process-local. It MUST NOT be written to disk
 and MUST NOT be shared between exporter replicas. Cached entries are lost on
@@ -5320,6 +5441,53 @@ SHOULD shorten `cache` accordingly.
 Only a fully successful probe MAY be cached. Requests that fail at the HTTP,
 decode, transform, or validation stage MUST NOT be stored.
 
+### 42.13.1 Serving stale results when the target fails
+
+`stale_if_error` MUST keep each stored result for that long after its `ttl`
+runs out. A result past its `ttl` is stale: it MUST NOT answer a probe that the
+target could answer, only one whose trip fails, as RFC 5861's
+`stale-if-error` does for HTTP caches. A trip fails when the probe would
+otherwise be answered with an error: the target cannot be reached or times
+out, answers a status outside 2xx, its response cannot be decoded, transformed
+or validated, a metric rule with `error_mode: fail` has no value, or the
+collector is at `max_concurrent_probes`. Such a probe MUST be answered `200`
+with the stored result of the identical request (the same cache key), if one
+is within `stale_if_error`, instead of the error. The failure MUST still be
+logged and counted in the self-metrics as it would have been, and the answer
+MUST NOT count in `http_exporter_scrape_success_total`. An error policy that
+carries on (`log`, `ignore`) is not a failure. `ttl` MAY be `0s` with
+`stale_if_error` set: every probe then goes to the target, and the last good
+result is kept only to stand in for a failure. A collector whose definition
+changes MUST NOT serve a result stored under the previous one.
+
+So that a stale answer never passes for a fresh one, while `stale_if_error` is
+set every answer of the collector MUST carry two gauges of the exporter's own,
+without labels, after the collector's metrics:
+
+```text
+http_exporter_result_stale        1 for a stale result standing in for a failed trip, else 0
+http_exporter_result_age_seconds  seconds since the answered result was fetched from the target
+```
+
+The age MUST be 0 for a result just fetched and the stored entry's age for a
+cached answer, fresh or stale. A result in which a rule produced either name
+MUST fail validation, since the names would clash; without `stale_if_error`
+the names are free and the gauges are not added. They MUST NOT count against
+`limits.max_metrics`. Samples of a stale answer carry no timestamps of their
+own, so Prometheus stores them at the time of the scrape.
+
+Each stale answer MUST be counted in
+`http_exporter_cache_stale_served_total{collector}` and logged at warn level
+with the result's age, sparingly like repeated failures (§ 25), with a line
+when the collector answers with a fresh result again. Identical probes sharing
+a trip (§ 42.13a) MUST share the stale answer. A scheduled target (§ 42.14)
+whose scrape fails MUST export the stale result, with its target labels and
+the two gauges, under its OTLP resource, while `http_exporter_target_up` stays
+`0`, since the target was not scraped; a probe answered stale and exported
+over OTLP exports the answer as served. `http_exporter_cache_entries` MUST
+count stale entries, and `limits.max_cache_entries` MUST evict by the end of
+the stale window.
+
 Stored metric sets MUST be copied when written and when read, so a cached entry
 can never be mutated by the probe that produced it or by a later reader, and
 concurrent probes MUST be safe.
@@ -5334,6 +5502,7 @@ The exporter MUST expose per-collector cache self-metrics:
 http_exporter_cache_hits_total
 http_exporter_cache_misses_total
 http_exporter_cache_entries
+http_exporter_cache_stale_served_total
 ```
 
 A cache hit MUST count as a successful scrape in `http_exporter_scrapes_total`
@@ -5440,7 +5609,8 @@ before exiting with a non-zero status. A configuration reload that would put the
 exporter into that state while targets are loaded MUST be rejected, and the last
 valid configuration MUST remain active. Every target MUST name a configured
 collector; an unknown collector MUST be rejected at startup and at reload.
-The keys a target's `request` block may set are those its collector's request
+A target MAY set `params`, the values of its collector's placeholders
+(§ 42.10a). The keys a target's `request` block may set are those its collector's request
 type accepts (§ 5.1); any other key MUST be rejected at startup naming the
 target, the key, the collector and the type. What its `target` may be is also
 the type's: an `http` target MUST be an absolute URL, and a `localfile` target

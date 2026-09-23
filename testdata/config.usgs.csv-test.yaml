@@ -38,7 +38,8 @@ collectors:
   - name: earthquakes
     # The feed is rebuilt about once a minute, so a repeated scrape inside that
     # minute is answered from memory instead of hitting the public API again.
-    cache: 60s
+    cache:
+      ttl: 60s
     request:
       type: http
       method: GET

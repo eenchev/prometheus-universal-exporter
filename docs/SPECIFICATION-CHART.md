@@ -312,6 +312,7 @@ values schema:
 | `server.logLevel` | `--log.level`, one of `debug`, `info`, `warn`, `error`; default `info` |
 | `server.probeTimeoutOffset` | `--probe.timeout-offset`, a Go duration of zero or more |
 | `server.shutdownTimeout` | `--web.shutdown-timeout`, whole hours, minutes and seconds such as `30s` or `1m30s`, positive |
+| `server.shutdownDelay` | `--web.shutdown-delay`, whole hours, minutes and seconds such as `5s`, `0s` allowed; default `5s`, and empty renders no flag |
 | `server.enableLifecycle` | `--web.enable-lifecycle`, rendered only when `true`; default `false` |
 | `server.watchConfig`, `server.watchConfigInterval` | `--config.watch`, `--config.watch-interval` |
 | `server.expandEnv` | `--config.export-env` |
@@ -693,8 +694,11 @@ endpoint too.
 
 ### 42.6a Shutdown and the grace period
 
-A stopping pod needs `server.shutdownTimeout` (the exporter's 5 seconds when
-empty) and 10 seconds more for the last OTLP export and exiting. The chart MUST
+A stopping pod needs `server.shutdownDelay` (none when empty), during which it
+answers probes while `/ready` answers `503` so Kubernetes removes it from its
+Service before it stops listening, then `server.shutdownTimeout` (the
+exporter's 5 seconds when empty), and 10 seconds more for the last OTLP export
+and exiting: 20 seconds with the defaults. The chart MUST
 offer `terminationGracePeriodSeconds`, empty by default. Empty, it MUST render
 none while that need is 30 seconds or less, Kubernetes' default, and the need
 itself when it is more. Set, it MUST be rendered, and rendering MUST fail when

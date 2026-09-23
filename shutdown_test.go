@@ -3,9 +3,11 @@ package main
 import (
 	"bytes"
 	"errors"
+	"io"
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"os/exec"
 	"runtime"
@@ -56,6 +58,8 @@ type exporterProcess struct {
 	cmd    *exec.Cmd
 	exited chan error
 	logs   *syncBuffer
+	// address is where the exporter listens.
+	address string
 }
 
 func startHeldExporter(t *testing.T, args ...string) *exporterProcess {
@@ -79,7 +83,7 @@ func startHeldExporter(t *testing.T, args ...string) *exporterProcess {
 	_ = listener.Close()
 	config := writeIn(t, t.TempDir(), "config.yaml", "collectors:\n  - name: slow\n    request:\n      type: http\n    transform:\n      type: regex\n    metrics:\n      - name: v\n        type: gauge\n        expression: 'v=(\\d+)'\n")
 	args = append([]string{"--config.file=" + config, "--web.listen-address=" + address}, args...)
-	p := &exporterProcess{cmd: exec.Command(os.Args[0], "-test.run=^TestRunHelperProcess$"), exited: make(chan error, 1), logs: &syncBuffer{}}
+	p := &exporterProcess{cmd: exec.Command(os.Args[0], "-test.run=^TestRunHelperProcess$"), exited: make(chan error, 1), logs: &syncBuffer{}, address: address}
 	p.cmd.Env = append(os.Environ(), helperArgsEnv+"="+strings.Join(args, "\x1f"))
 	p.cmd.Stderr = p.logs
 	if err := p.cmd.Start(); err != nil {
@@ -179,5 +183,88 @@ func TestShutdownTimeoutMustBePositive(t *testing.T) {
 		if code := run([]string{"--web.shutdown-timeout=" + value}, &stdout, &stderr); code != 2 || !strings.Contains(stderr.String(), "--web.shutdown-timeout must be positive") {
 			t.Errorf("--web.shutdown-timeout=%s: exit %d, %s", value, code, stderr.String())
 		}
+	}
+}
+
+// With --web.shutdown-delay, a SIGTERM first makes /ready answer 503 while
+// probes are still served, and only then begins the graceful shutdown.
+func TestShutdownDelayKeepsServingWhileUnready(t *testing.T) {
+	p := startHeldExporter(t, "--web.shutdown-delay=1500ms", "--web.shutdown-timeout=1s")
+	fast := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte("v=7\n"))
+	}))
+	defer fast.Close()
+	client := &http.Client{Transport: &http.Transport{DisableKeepAlives: true}, Timeout: 5 * time.Second}
+	read := func(path string) (int, string, error) {
+		resp, err := client.Get("http://" + p.address + path)
+		if err != nil {
+			return 0, "", err
+		}
+		defer func() { _ = resp.Body.Close() }()
+		body, _ := io.ReadAll(resp.Body)
+		return resp.StatusCode, string(body), nil
+	}
+	if code, _, err := read("/ready"); err != nil || code != http.StatusOK {
+		t.Fatalf("before the signal /ready is %d, %v", code, err)
+	}
+	start := time.Now()
+	p.signal(t, syscall.SIGTERM)
+	waitFor(t, "/ready to answer 503", func() bool {
+		code, body, err := read("/ready")
+		return err == nil && code == http.StatusServiceUnavailable && strings.Contains(body, "not ready: the exporter is shutting down")
+	})
+	code, body, err := read("/probe?collector=slow&target=" + url.QueryEscape(fast.URL))
+	if err != nil || code != http.StatusOK || !strings.Contains(body, "v 7") {
+		t.Fatalf("a probe during the delay: %d %v\n%s", code, err, body)
+	}
+	if code, _, err := read("/health"); err != nil || code != http.StatusOK {
+		t.Errorf("/health during the delay: %d %v", code, err)
+	}
+	select {
+	case err := <-p.exited:
+		took := time.Since(start)
+		if err != nil {
+			t.Fatalf("exit: %v\n%s", err, p.logs.String())
+		}
+		if took < 1500*time.Millisecond {
+			t.Errorf("exited after %s, before the delay ended", took)
+		}
+	case <-time.After(8 * time.Second):
+		t.Fatalf("the exporter did not exit\n%s", p.logs.String())
+	}
+	if !strings.Contains(p.logs.String(), `"shutdown_delay":"1.5s"`) {
+		t.Errorf("the log does not name the delay:\n%s", p.logs.String())
+	}
+}
+
+// Without a delay the listener closes at once, as before.
+func TestNoShutdownDelayStopsListeningAtOnce(t *testing.T) {
+	p := startHeldExporter(t, "--web.shutdown-timeout=3s")
+	p.signal(t, syscall.SIGTERM)
+	waitFor(t, "the listener to close", func() bool {
+		conn, err := net.DialTimeout("tcp", p.address, 200*time.Millisecond)
+		if err == nil {
+			_ = conn.Close()
+		}
+		return err != nil
+	})
+}
+
+func TestShutdownDelayMustNotBeNegative(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	if code := run([]string{"--web.shutdown-delay=-1s"}, &stdout, &stderr); code != 2 || !strings.Contains(stderr.String(), "--web.shutdown-delay must not be negative") {
+		t.Errorf("exit %d, %s", code, stderr.String())
+	}
+}
+
+func TestBeginShutdownMakesTheExporterUnready(t *testing.T) {
+	server, _ := newCacheTestServer(t, testCollector("app", "text"))
+	server.BeginShutdown()
+	r := get(server, http.MethodGet, "/ready", "")
+	if r.Code != http.StatusServiceUnavailable || !strings.Contains(r.Body.String(), "not ready: the exporter is shutting down") {
+		t.Errorf("/ready: %d %q", r.Code, r.Body.String())
+	}
+	if r := get(server, http.MethodGet, "/health", ""); r.Code != http.StatusOK {
+		t.Errorf("/health: %d", r.Code)
 	}
 }

@@ -58,7 +58,10 @@ marked `"repeat":true`, so `--log.level=debug` shows every one.
 The same applies to scheduled targets (`scheduled target scrape failed`, then
 `scheduled target recovered`), to a file of a directory that fails, to a
 directory over `max_files` or its listing bound, to probes rejected by
-`max_concurrent_probes`, and to output repaired for invalid UTF-8. Up to 10,000
+`max_concurrent_probes`, to output repaired for invalid UTF-8, and to probes
+answered with the last good result under `cache.stale_if_error` (`probe
+failed; answered with the last successful result`, with its `result_age`,
+then `probe answered with a fresh result again`). Up to 10,000
 failing things are remembered at a time, and one not reported for an hour is
 forgotten; past that bound, a new failure is simply logged every time.
 

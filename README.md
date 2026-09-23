@@ -124,7 +124,9 @@ pattern needs. See the
 | `/metrics` | The exporter's own metrics. |
 | `/self-metrics` | The same self-metrics on a dedicated path, so a monitor can scrape them separately. |
 | `/-/reload` | `POST` reloads the configuration, with `--web.enable-lifecycle`. |
-| `/health`, `/ready` | Kubernetes probes. `/ready` is `503` while a reload is rejected or OTLP exports keep failing; see [Readiness](docs/CONFIGURATION.md#readiness). Never authenticated. |
+| `/health`, `/ready` | Kubernetes probes. `/ready` is `503` while a reload is rejected, OTLP exports keep failing or the exporter is shutting down; see [Readiness](docs/CONFIGURATION.md#readiness). Never authenticated. |
+
+`/probe`, `/metrics` and `/self-metrics` answer gzip-compressed when the client accepts it, as Prometheus does on every scrape.
 
 ## Command-line flags
 
@@ -142,6 +144,7 @@ pattern needs. See the
 | `--config.schema` | off | Print the JSON Schema of the configuration file, for editors, and exit. See [Editor support](docs/CONFIGURATION.md#editor-support). |
 | `--config.collector-file-schema` | off | Print the JSON Schema of a collector file, for editors, and exit. See [Collector files](docs/CONFIGURATION.md#collector-files). |
 | `--probe.timeout-offset` | `500ms` | How much of Prometheus's scrape timeout a probe leaves unused, so it answers with its own error first. See [Probe deadlines](docs/CONFIGURATION.md#probe-deadlines). |
+| `--web.shutdown-delay` | `0s` | How long a shutdown keeps serving, with `/ready` answering `503`, before it begins, so a load balancer stops sending probes first. The Helm chart sets `5s`. See [Shutting down](docs/CONFIGURATION.md#shutting-down). |
 | `--web.shutdown-timeout` | `5s` | How long a shutdown waits for the probes in progress. Keep it at least as long as Prometheus's scrape timeout. See [Shutting down](docs/CONFIGURATION.md#shutting-down). |
 | `--web.enable-lifecycle` | off | Enable `POST /-/reload`, which reloads the configuration and reports whether it was accepted. `SIGHUP` reloads either way. See [Reloading on demand](docs/CONFIGURATION.md#reloading-on-demand). |
 | `--version` | off | Print the version, git revision, Go version and request types of the build, and exit. The same is in the `http_exporter_build_info` self-metric. |
@@ -149,7 +152,7 @@ pattern needs. See the
 
 ## Documentation
 
-- [Configuration](docs/CONFIGURATION.md) — collectors, decoders, transforms, metric rules, caching, environment variables, reloading.
+- [Configuration](docs/CONFIGURATION.md) — collectors, decoders, transforms, metric rules, caching and serving the last good result while a target is down, environment variables, reloading.
 - [Target requests](docs/REQUESTS.md) — redirects, HTTP/2, retries, TLS, proxies, per-scrape overrides.
 - [Local files](docs/LOCALFILE.md) — the `localfile` request type: reading metrics and status files from disk, one file or a whole directory.
 - [Authentication](docs/AUTHENTICATION.md) — credentials for the target and for the exporter itself.

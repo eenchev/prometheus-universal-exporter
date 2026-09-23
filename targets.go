@@ -32,6 +32,10 @@ type ScheduledTarget struct {
 	Request   TargetRequestConfig `yaml:"request"`
 	Labels    map[string]string   `yaml:"labels"`
 	OTLP      TargetOTLPConfig    `yaml:"otlp"`
+	// Params fills the collector's {{param_<name>}} placeholders, as the
+	// param_<name> probe parameters fill them for a probe
+	// (requesttemplate.go).
+	Params map[string]string `yaml:"params"`
 }
 
 // TargetRequestConfig mirrors the collector request block and the /probe
@@ -136,6 +140,11 @@ func (f *TargetFile) Validate() error {
 		if hasPathParams(t.Request.Path) {
 			return fmt.Errorf("target %q request.path cannot use {{param_...}} placeholders: a scheduled target has no probe to supply them, so write the path out in full", t.Name)
 		}
+		for name := range t.Params {
+			if !pathParamName.MatchString(name) {
+				return fmt.Errorf("target %q params has %q, which is not a parameter name; names are %s<name>, with letters, digits and underscores, as the placeholders they fill", t.Name, name, pathParamPrefix)
+			}
+		}
 		if t.Request.Timeout < 0 {
 			return fmt.Errorf("target %q request.timeout must not be negative", t.Name)
 		}
@@ -204,13 +213,21 @@ func (f *TargetFile) ValidateAgainst(c *Config) error {
 		if err := checkTargetRequest(t, collectorByName(c, t.Collector)); err != nil {
 			return err
 		}
-		// Borrowing a collector whose request.path has placeholders works only
-		// while every one of them has a default, since nothing else can fill
-		// it; otherwise every scrape of this target would fail. Catching it
-		// here makes it a startup error naming both sides.
-		if collector := collectorByName(c, t.Collector); collector != nil && !t.Request.PathSet && hasPathParams(collector.Request.Path) {
-			if _, _, err := bindPathParams(collector.Request.Path, nil); err != nil {
-				return fmt.Errorf("target %q uses collector %q, whose request.path %q has a path parameter without a default; a scheduled target has no probe to supply it, so give the placeholder a default or set request.path on the target", t.Name, t.Collector, collector.Request.Path)
+		// Every placeholder of the collector's request must be filled, by the
+		// target's params or a default, since nothing else can fill it; and
+		// every param must fill one, since an unused one is a misspelling.
+		// Catching both here makes them startup errors naming both sides.
+		if collector := collectorByName(c, t.Collector); collector != nil {
+			unused, err := checkRequestParams(collector, t.overrides())
+			var missing *missingParamError
+			if errors.As(err, &missing) {
+				return fmt.Errorf("target %q uses collector %q, whose %s needs %s, a parameter without a default; a scheduled target has no probe to supply it, so set it under the target's params, give the placeholder a default, or set request.path on the target", t.Name, t.Collector, missing.where, missing.name)
+			}
+			if err != nil {
+				return fmt.Errorf("target %q uses collector %q: %w", t.Name, t.Collector, err)
+			}
+			if len(unused) > 0 {
+				return fmt.Errorf("target %q params %s are not used by collector %q: no placeholder in its request names them", t.Name, strings.Join(unused, ", "), t.Collector)
 			}
 		}
 	}
@@ -220,7 +237,7 @@ func (f *TargetFile) ValidateAgainst(c *Config) error {
 // overrides translates the target request block into the same per-scrape
 // override structure the /probe endpoint produces.
 func (t *ScheduledTarget) overrides() RequestOverrides {
-	out := RequestOverrides{Method: t.Request.Method, Timeout: time.Duration(t.Request.Timeout)}
+	out := RequestOverrides{Method: t.Request.Method, Timeout: time.Duration(t.Request.Timeout), Params: t.Params}
 	if t.Request.PathSet {
 		out.PathSet = true
 		out.Path = t.Request.Path
@@ -306,6 +323,9 @@ func (t *ScheduledTarget) headers() (http.Header, error) {
 // entries and a differing one never does.
 func (t *ScheduledTarget) cacheQuery() url.Values {
 	values := url.Values{"target": {t.Target}, "collector": {t.Collector}}
+	for name, value := range t.Params {
+		values.Set(name, value)
+	}
 	if t.Request.Method != "" {
 		values.Set("method", t.Request.Method)
 	}

@@ -158,7 +158,7 @@ func TestExternalProbeIsServedFromTheCache(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cfg.Collectors[0].Cache <= 0 {
+	if cfg.Collectors[0].Cache.TTL <= 0 {
 		t.Skipf("%s does not configure a cache", test.config)
 	}
 	server := NewServer(NewConfigManager(cfg, test.config, slog.Default()), "python3", slog.Default())

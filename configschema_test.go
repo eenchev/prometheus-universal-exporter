@@ -171,7 +171,7 @@ func TestConfigSchemaRejectsInvalidConfigurations(t *testing.T) {
 		"unknown transform":       strings.Replace(base, "type: jq", "type: jsonpath", 1),
 		"bad metric name":         strings.Replace(base, "name: value", "name: bad-name", 1),
 		"bad metrics_prefix":      strings.Replace(base, "  - name: demo\n", "  - name: demo\n    metrics_prefix: grafana_\n", 1),
-		"bad duration":            strings.Replace(base, "  - name: demo\n", "  - name: demo\n    cache: five minutes\n", 1),
+		"bad duration":            strings.Replace(base, "  - name: demo\n", "  - name: demo\n    cache:\n      ttl: five minutes\n", 1),
 		"bad error policy":        strings.Replace(base, "  - name: demo\n", "  - name: demo\n    error_handling:\n      on_fetch_error: panic\n", 1),
 		"bad label type":          base + "        labels:\n          - name: l\n            type: literal\n",
 		"negative limit":          strings.Replace(base, "  - name: demo\n", "  - name: demo\n    limits:\n      max_metrics: -1\n", 1),

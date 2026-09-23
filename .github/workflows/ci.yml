@@ -86,16 +86,34 @@ jobs:
         if: steps.changes.outputs.chart == 'true'
       - run: helm template test charts/prometheus-universal-exporter --set server.logLevel=debug --set server.probeTimeoutOffset=1s
         if: steps.changes.outputs.chart == 'true'
-      - name: Render the shutdown timeout, its grace period and the exporter credential Secret
+      - name: Render the shutdown delay and timeout, their grace period and the exporter credential Secret
         if: steps.changes.outputs.chart == 'true'
         run: |
           set -eu
           out="$(helm template test charts/prometheus-universal-exporter --set server.shutdownTimeout=1m)"
           echo "$out" | grep -q -- '--web.shutdown-timeout=1m'
-          echo "$out" | grep -q 'terminationGracePeriodSeconds: 70'
-          out="$(helm template test charts/prometheus-universal-exporter --set server.shutdownTimeout=20s)"
+          echo "$out" | grep -q 'terminationGracePeriodSeconds: 75'
+          out="$(helm template test charts/prometheus-universal-exporter --set server.shutdownTimeout=15s)"
           if echo "$out" | grep -q terminationGracePeriodSeconds; then
             echo "a grace period was rendered where Kubernetes' default covers the shutdown" >&2
+            exit 1
+          fi
+          out="$(helm template test charts/prometheus-universal-exporter)"
+          echo "$out" | grep -q -- '--web.shutdown-delay=5s'
+          if echo "$out" | grep -q terminationGracePeriodSeconds; then
+            echo "the default shutdown delay and timeout rendered a grace period" >&2
+            exit 1
+          fi
+          out="$(helm template test charts/prometheus-universal-exporter --set server.shutdownDelay=20s)"
+          echo "$out" | grep -q -- '--web.shutdown-delay=20s'
+          echo "$out" | grep -q 'terminationGracePeriodSeconds: 35'
+          helm template test charts/prometheus-universal-exporter --set server.shutdownDelay=0s | grep -q -- '--web.shutdown-delay=0s'
+          if helm template test charts/prometheus-universal-exporter --set server.shutdownDelay= | grep -q -- '--web.shutdown-delay'; then
+            echo "an empty server.shutdownDelay rendered the flag" >&2
+            exit 1
+          fi
+          if helm template test charts/prometheus-universal-exporter --set server.shutdownDelay=10s --set terminationGracePeriodSeconds=20 >/dev/null 2>&1; then
+            echo "helm template accepted a grace period shorter than the shutdown delay and timeout" >&2
             exit 1
           fi
           out="$(helm template test charts/prometheus-universal-exporter --set webAuth.enabled=true --set webAuth.secretName=exporter-auth --set-json 'monitors=[{"name":"t","enabled":true,"type":"service","collector":"example"}]')"
@@ -136,7 +154,7 @@ jobs:
               exit 1
             fi
           done
-          for bad in server.logLevel=verbose server.probeTimeoutOffset=-1s server.shutdownTimeout=500ms server.shutdownTimeout=0s terminationGracePeriodSeconds=10 webAuth.enabled=true; do
+          for bad in server.logLevel=verbose server.probeTimeoutOffset=-1s server.shutdownTimeout=500ms server.shutdownTimeout=0s server.shutdownDelay=500ms server.shutdownDelay=-1s terminationGracePeriodSeconds=10 webAuth.enabled=true; do
             if helm template test charts/prometheus-universal-exporter --set "$bad" >/dev/null 2>&1; then
               echo "helm template accepted $bad" >&2
               exit 1

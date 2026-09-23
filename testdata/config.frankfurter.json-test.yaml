@@ -29,7 +29,8 @@ collectors:
   - name: exchange_rates
     # The rates change at most once a day, so a repeated scrape within the
     # minute is answered from memory instead of hitting the public API again.
-    cache: 60s
+    cache:
+      ttl: 60s
     limits:
       # A pre-script starts a Python interpreter, which takes far longer than
       # the 100ms a collector allows its scripts by default.

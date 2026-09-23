@@ -109,3 +109,17 @@ func newHTTPServer(address string, handler http.Handler) *http.Server {
 		IdleTimeout:       httpIdleTimeout,
 	}
 }
+
+// validateShutdownDelay refuses a negative delay; zero begins the shutdown at
+// once, as before the flag existed.
+func validateShutdownDelay(delay time.Duration) error {
+	if delay < 0 {
+		return fmt.Errorf("--web.shutdown-delay must not be negative, got %s", delay)
+	}
+	return nil
+}
+
+// BeginShutdown makes /ready answer 503, the first thing a shutdown does, so
+// Kubernetes and load balancers stop sending probes while the exporter still
+// answers the ones already on their way (--web.shutdown-delay).
+func (s *Server) BeginShutdown() { s.stopping.Store(true) }

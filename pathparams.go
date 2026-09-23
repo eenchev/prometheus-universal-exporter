@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"net/url"
 	"regexp"
-	"sort"
 	"strconv"
 	"strings"
 )
@@ -38,11 +37,15 @@ const pathParamPrefix = "param_"
 
 var pathParamName = regexp.MustCompile(`^param_[A-Za-z0-9_]+$`)
 
-// pathPlaceholder is one {{param_name}} or {{param_name:default}} in a path.
+// pathPlaceholder is one {{param_name}} or {{param_name:default}} in a path,
+// or, in a request body, header or query value, the same with a |filter
+// (requesttemplate.go).
 type pathPlaceholder struct {
 	Name       string
 	Default    string
 	HasDefault bool
+	// Filter is how the value is written into a request body; empty is raw.
+	Filter     string
 	start, end int // byte offsets of the whole placeholder, braces included
 }
 
@@ -54,36 +57,9 @@ func hasPathParams(path string) bool {
 
 // parsePathParams finds the placeholders in a path. The error names the
 // problem precisely because it is reported at startup, against a file someone
-// has to go and edit.
+// has to go and edit. In a path, `{{` always opens a placeholder.
 func parsePathParams(path string) ([]pathPlaceholder, error) {
-	var out []pathPlaceholder
-	for offset := 0; ; {
-		open := strings.Index(path[offset:], "{{")
-		if open < 0 {
-			return out, nil
-		}
-		open += offset
-		closing := strings.Index(path[open+2:], "}}")
-		if closing < 0 {
-			return nil, fmt.Errorf("request.path has an unclosed placeholder at %q; write {{param_name}} or {{param_name:default}}", path[open:])
-		}
-		closing += open + 2
-		inner := path[open+2 : closing]
-		name, def, hasDefault := strings.Cut(inner, ":")
-		if !pathParamName.MatchString(name) {
-			return nil, fmt.Errorf("request.path placeholder {{%s}} is not a path parameter; placeholders are named %s<name>, with letters, digits and underscores, e.g. {{param_tenant}}", inner, pathParamPrefix)
-		}
-		// A default ends at the first }}, so braces inside it can only come
-		// from something the author did not mean as a default. The common case
-		// is an environment reference left unexpanded because
-		// --config.export-env is off: {{param_x:${X}}} would otherwise bind the
-		// default "${X" and leave a stray brace in the path.
-		if strings.ContainsAny(def, "{}") {
-			return nil, fmt.Errorf("request.path placeholder {{%s}} has a default containing a brace; if it is an environment reference, run with --config.export-env so it is expanded first", inner)
-		}
-		out = append(out, pathPlaceholder{Name: name, Default: def, HasDefault: hasDefault, start: open, end: closing + 2})
-		offset = closing + 2
-	}
+	return parsePlaceholders("request.path", path, true, false)
 }
 
 // pathParamValues reads the path parameters from a probe's query string. A
@@ -129,12 +105,9 @@ func bindPathParams(path string, params map[string]string) (string, []string, er
 	values := make([]string, 0, len(placeholders))
 	previous := 0
 	for i, p := range placeholders {
-		value, given := params[p.Name]
-		if !given || value == "" {
-			if !p.HasDefault {
-				return "", nil, fmt.Errorf("request.path needs %s, which the probe did not supply and which has no default; add &%s=<value> to the probe, or give it a default as {{%s:<default>}}", p.Name, p.Name, p.Name)
-			}
-			value = p.Default
+		value, err := placeholderValue("request.path", p, params)
+		if err != nil {
+			return "", nil, err
 		}
 		// "." and ".." are the two values escaping cannot make safe: both are
 		// legal in a path segment, and a server resolving them would serve a
@@ -183,33 +156,14 @@ func applyPathParams(u *url.URL, values []string) {
 // default, the misspelled scrape would otherwise succeed against the default
 // tenant and report its numbers as the intended one's.
 func checkPathParams(c *Collector, overrides RequestOverrides) error {
-	used := map[string]bool{}
-	if !overrides.PathSet && hasPathParams(c.Request.Path) {
-		placeholders, err := parsePathParams(c.Request.Path)
-		if err != nil {
-			return err
-		}
-		for _, p := range placeholders {
-			used[p.Name] = true
-		}
-		if _, _, err := bindPathParams(c.Request.Path, overrides.Params); err != nil {
-			return err
-		}
+	unused, err := checkRequestParams(c, overrides)
+	if err != nil || len(unused) == 0 {
+		return err
 	}
-	var unused []string
-	for name := range overrides.Params {
-		if !used[name] {
-			unused = append(unused, name)
-		}
-	}
-	if len(unused) == 0 {
-		return nil
-	}
-	sort.Strings(unused)
 	if overrides.PathSet {
-		return fmt.Errorf("probe parameters %s are not used: the path probe parameter replaces request.path, and path parameters are only bound in request.path", strings.Join(unused, ", "))
+		return fmt.Errorf("probe parameters %s are not used: the path probe parameter replaces request.path, and nothing else in the request names them", strings.Join(unused, ", "))
 	}
-	return fmt.Errorf("probe parameters %s are not used by collector %q, whose request.path is %q", strings.Join(unused, ", "), c.Name, c.Request.Path)
+	return fmt.Errorf("probe parameters %s are not used by collector %q: no placeholder in its request.path (%q), body, header or query values names them", strings.Join(unused, ", "), c.Name, c.Request.Path)
 }
 
 // requestLabel is the URL a verbose self-metric carries for a request. Path

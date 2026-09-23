@@ -7,6 +7,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"unicode/utf8"
 )
 
 type MetricType string
@@ -78,8 +79,14 @@ func (s *MetricSet) Validate(l Limits) error {
 	}
 	for i := range s.Metrics {
 		m := &s.Metrics[i]
-		if !metricNameRE.MatchString(m.Name) || len(m.Name) > l.MaxMetricNameLength && l.MaxMetricNameLength > 0 {
+		if !metricNameRE.MatchString(m.Name) {
+			if m.Name != "" && utf8.ValidString(m.Name) {
+				return fmt.Errorf("metric name %q is not a classic Prometheus name; set the collector's name_escaping to underscores or values to export it escaped", m.Name)
+			}
 			return fmt.Errorf("invalid metric name %q", m.Name)
+		}
+		if len(m.Name) > l.MaxMetricNameLength && l.MaxMetricNameLength > 0 {
+			return fmt.Errorf("invalid metric name %q: longer than limits.max_metric_name_length %d", m.Name, l.MaxMetricNameLength)
 		}
 		switch m.Type {
 		case GaugeMetricType, CounterMetricType, HistogramMetricType, SummaryMetricType, UntypedMetricType:
@@ -92,6 +99,9 @@ func (s *MetricSet) Validate(l Limits) error {
 		}
 		for k, v := range m.Labels {
 			if !labelNameRE.MatchString(k) {
+				if k != "" && utf8.ValidString(k) {
+					return fmt.Errorf("metric %q has label %q, which is not a classic Prometheus label name; set the collector's name_escaping to underscores or values to export it escaped", m.Name, k)
+				}
 				return fmt.Errorf("metric %q has invalid label name %q", m.Name, k)
 			}
 			if l.MaxLabelValueLength > 0 && len(v) > l.MaxLabelValueLength {

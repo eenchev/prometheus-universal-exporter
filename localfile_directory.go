@@ -6,11 +6,14 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"os"
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -119,6 +122,19 @@ func matchesFiles(patterns []string, name string) bool {
 	return false
 }
 
+// localFileDirectoryWorkers is how many files of a directory are read at once.
+const localFileDirectoryWorkers = 4
+
+// localFileListBatch is how many directory entries are listed at a time.
+const localFileListBatch = 256
+
+// maxListedEntries bounds the entries one scrape lists: ten times max_files,
+// and at least 1000. Listing a directory of a million entries would otherwise
+// cost a million names on every scrape before max_files applies.
+func maxListedEntries(c *Collector) int {
+	return max(10*c.Request.MaxFiles, 1000)
+}
+
 func fetchLocalDirectory(ctx context.Context, target string, c *Collector, overrides RequestOverrides) (*HTTPResponse, error) {
 	start := time.Now()
 	dir, err := localFileTargetDir(c, target)
@@ -137,39 +153,109 @@ func fetchLocalDirectory(ctx context.Context, target string, c *Collector, overr
 	if err != nil {
 		return nil, err
 	}
-	type result struct {
-		read *DirectoryRead
-		err  error
-	}
-	done := make(chan result, 1)
+	progress := &directoryProgress{}
+	done := make(chan error, 1)
 	go func() {
 		defer release()
-		read, err := readLocalDirectory(c, dir)
-		done <- result{read, err}
+		done <- readLocalDirectory(c, dir, progress)
 	}()
-	var r result
+	var read *DirectoryRead
 	select {
 	case <-ctx.Done():
-		return nil, fmt.Errorf("reading directory %s: %w", full, ctx.Err())
-	case r = <-done:
+		// What was read before the deadline is answered; a file the read had
+		// not reached, or was still reading, fails alone. The read stops
+		// starting new files.
+		progress.stop.Store(true)
+		read = progress.snapshot(func(name string) error {
+			return fmt.Errorf("file %s was not read before the probe's deadline: %w", filepath.Join(full, name), ctx.Err())
+		})
+		if read == nil {
+			return nil, fmt.Errorf("listing directory %s: %w", full, ctx.Err())
+		}
+	case err := <-done:
+		if err != nil {
+			return nil, err
+		}
+		read = progress.snapshot(nil)
 	}
-	if r.err != nil {
-		return nil, r.err
-	}
-	for i := range r.read.Files {
-		if f := r.read.Files[i].Response; f != nil {
+	for i := range read.Files {
+		if f := read.Files[i].Response; f != nil {
 			f.Target = target
 		}
 	}
-	return &HTTPResponse{StatusCode: 200, Target: target, Collector: c.Name, Duration: time.Since(start), Directory: r.read}, nil
+	return &HTTPResponse{StatusCode: 200, Target: target, Collector: c.Name, Duration: time.Since(start), Directory: read}, nil
 }
 
-// readLocalDirectory reads the matching files of root/dir.
-func readLocalDirectory(c *Collector, dir string) (*DirectoryRead, error) {
+// directoryProgress is a directory read as far as it has got, so a probe that
+// stops waiting can answer with the files already read.
+type directoryProgress struct {
+	mu     sync.Mutex
+	listed bool
+	read   DirectoryRead
+	done   []bool
+	// notFile marks entries that turned out to be directories, which are left
+	// out rather than reported.
+	notFile []bool
+	stop    atomic.Bool
+}
+
+func (p *directoryProgress) finish(i int, file FileRead, bytes int64) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	file.Name = p.read.Files[i].Name
+	if file.ModTime.IsZero() {
+		file.ModTime = p.read.Files[i].ModTime
+	}
+	p.read.Files[i] = file
+	p.read.Bytes += bytes
+	p.done[i] = true
+}
+
+func (p *directoryProgress) setModTime(i int, at time.Time) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.read.Files[i].ModTime = at
+}
+
+func (p *directoryProgress) skipEntry(i int) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.notFile[i] = true
+	p.done[i] = true
+}
+
+// snapshot copies the read. unfinished gives the error of a file not read
+// yet; nil means every file is done. It is nil before the listing is.
+func (p *directoryProgress) snapshot(unfinished func(name string) error) *DirectoryRead {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if !p.listed {
+		return nil
+	}
+	out := p.read
+	out.Files = nil
+	for i, file := range p.read.Files {
+		if p.notFile[i] {
+			continue
+		}
+		if !p.done[i] && unfinished != nil {
+			file.Err = unfinished(file.Name)
+			file.Response = nil
+		}
+		out.Files = append(out.Files, file)
+	}
+	return &out
+}
+
+// readLocalDirectory reads the matching files of root/dir into progress: it
+// lists the directory, decides from each file's size which are read, and reads
+// those, several at a time. An error is returned only when the directory
+// itself cannot be read; a file that cannot be is recorded as failed.
+func readLocalDirectory(c *Collector, dir string, progress *directoryProgress) error {
 	rootDir := c.Request.Root
 	root, err := os.OpenRoot(rootDir)
 	if err != nil {
-		return nil, fmt.Errorf("opening request.root: %w", err)
+		return fmt.Errorf("opening request.root: %w", err)
 	}
 	defer func() { _ = root.Close() }()
 	name := dir
@@ -180,79 +266,144 @@ func readLocalDirectory(c *Collector, dir string) (*DirectoryRead, error) {
 	d, err := root.Open(name)
 	if err != nil {
 		if errors.Is(err, fs.ErrNotExist) {
-			return nil, fmt.Errorf("directory %s does not exist", full)
+			return fmt.Errorf("directory %s does not exist", full)
 		}
-		return nil, localFileError(full, err)
+		return localFileError(full, err)
 	}
 	defer func() { _ = d.Close() }()
 	st, err := d.Stat()
 	if err != nil {
-		return nil, localFileError(full, err)
+		return localFileError(full, err)
 	}
 	if !st.IsDir() {
-		return nil, fmt.Errorf("%s is not a directory; a collector with request.files reads a directory", full)
+		return fmt.Errorf("%s is not a directory; a collector with request.files reads a directory", full)
 	}
-	entries, err := d.ReadDir(-1)
+	names, listed, truncated, err := listMatchingFiles(d, c)
 	if err != nil {
-		return nil, localFileError(full, err)
-	}
-	var names []string
-	for _, entry := range entries {
-		if !entry.IsDir() && matchesFiles(c.Request.Files, entry.Name()) {
-			names = append(names, entry.Name())
-		}
+		return localFileError(full, err)
 	}
 	sort.Strings(names)
-	read := &DirectoryRead{Path: full, Matched: len(names)}
+	read := DirectoryRead{Path: full, Matched: len(names), Listed: listed, Truncated: truncated}
 	if len(names) > c.Request.MaxFiles {
 		read.Skipped = names[c.Request.MaxFiles:]
 		names = names[:c.Request.MaxFiles]
 	}
+	read.Files = make([]FileRead, len(names))
+	for i, base := range names {
+		read.Files[i].Name = base
+	}
+	progress.mu.Lock()
+	progress.read = read
+	progress.done = make([]bool, len(names))
+	progress.notFile = make([]bool, len(names))
+	progress.listed = true
+	progress.mu.Unlock()
+
+	// Which files are read is decided from their sizes, in name order, before
+	// any is read, so the choice does not depend on which read finishes first.
 	limit := responseLimit(c)
-	var total int64
-	for _, base := range names {
-		rel := filepath.Join(dir, base)
-		fileFull := filepath.Join(rootDir, rel)
-		file := FileRead{Name: base}
-		info, err := root.Stat(rel)
+	budget := int64(c.Request.MaxTotalBytes)
+	type pick struct {
+		index int
+		size  int64
+	}
+	var picks []pick
+	var reserved int64
+	for i, base := range names {
+		if progress.stop.Load() {
+			return nil
+		}
+		fileFull := filepath.Join(full, base)
+		info, err := root.Stat(filepath.Join(dir, base))
 		if err != nil {
-			file.Err = localFileError(fileFull, err)
-			read.Files = append(read.Files, file)
+			progress.finish(i, FileRead{Err: localFileError(fileFull, err)}, 0)
 			continue
 		}
 		if info.IsDir() {
 			// A symbolic link to a directory: not a file, and not an error.
+			progress.skipEntry(i)
 			continue
 		}
-		file.ModTime = info.ModTime()
+		progress.setModTime(i, info.ModTime())
+		var refused error
 		switch {
 		case !info.Mode().IsRegular():
-			file.Err = fmt.Errorf("%s is not a regular file (%s)", fileFull, fileKind(info.Mode()))
+			refused = fmt.Errorf("%s is not a regular file (%s)", fileFull, fileKind(info.Mode()))
 		case info.Size() > limit:
-			file.Err = markError(fmt.Errorf("file %s is %d bytes, more than the collector's limit of %d for one file; it was not read", fileFull, info.Size(), limit), errLimitExceeded)
-		case total+info.Size() > c.Request.MaxTotalBytes:
-			file.Err = markError(fmt.Errorf("file %s is %d bytes, which would take this scrape past request.max_total_bytes %d after %d bytes of other files; it was not read", fileFull, info.Size(), c.Request.MaxTotalBytes, total), errLimitExceeded)
+			refused = markError(fmt.Errorf("file %s is %d bytes, more than the collector's limit of %d for one file; it was not read", fileFull, info.Size(), limit), errLimitExceeded)
+		case reserved+info.Size() > budget:
+			refused = markError(fmt.Errorf("file %s is %d bytes, which would take this scrape past request.max_total_bytes %d after %d bytes of other files; it was not read", fileFull, info.Size(), budget, reserved), errLimitExceeded)
 		}
-		if file.Err != nil {
-			read.Files = append(read.Files, file)
+		if refused != nil {
+			progress.finish(i, FileRead{Err: refused}, 0)
 			continue
 		}
-		body, after, err := readRootFile(root, rootDir, rel, min(limit, c.Request.MaxTotalBytes-total))
-		if err != nil {
-			file.Err = err
-			read.Files = append(read.Files, file)
-			continue
-		}
-		total += int64(len(body))
-		read.Bytes = total
-		file.ModTime = after.ModTime()
-		if err := checkMaxAge(c, fileFull, file.ModTime); err != nil {
-			file.Err = err
-			read.Files = append(read.Files, file)
-			continue
-		}
-		file.Response = localFileResponse(base, body, after, c)
-		read.Files = append(read.Files, file)
+		reserved += info.Size()
+		picks = append(picks, pick{i, info.Size()})
 	}
-	return read, nil
+	// A file may grow between its size being taken and its read. What the
+	// budget has left is shared among the files read, so the scrape never
+	// reads more than max_total_bytes in all.
+	slack := (budget - reserved) / int64(max(len(picks), 1))
+	work := make(chan pick)
+	var wg sync.WaitGroup
+	for range min(localFileDirectoryWorkers, len(picks)) {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for p := range work {
+				base := names[p.index]
+				rel := filepath.Join(dir, base)
+				fileFull := filepath.Join(full, base)
+				body, after, err := readRootFile(root, rootDir, rel, min(limit, p.size+slack))
+				if err != nil {
+					if errors.Is(err, errLimitExceeded) && p.size+slack < limit {
+						err = markError(fmt.Errorf("file %s grew while the directory was read, past what request.max_total_bytes leaves it: %w", fileFull, err), errLimitExceeded)
+					}
+					progress.finish(p.index, FileRead{Err: err}, 0)
+					continue
+				}
+				file := FileRead{ModTime: after.ModTime()}
+				if err := checkMaxAge(c, fileFull, file.ModTime); err != nil {
+					file.Err = err
+				} else {
+					file.Response = localFileResponse(base, body, after, c)
+				}
+				progress.finish(p.index, file, int64(len(body)))
+			}
+		}()
+	}
+	for _, p := range picks {
+		if progress.stop.Load() {
+			break
+		}
+		work <- p
+	}
+	close(work)
+	wg.Wait()
+	return nil
+}
+
+// listMatchingFiles lists the directory in batches and keeps the names that
+// match, stopping after maxListedEntries entries.
+func listMatchingFiles(d *os.File, c *Collector) (names []string, listed int, truncated bool, err error) {
+	limit := maxListedEntries(c)
+	for {
+		entries, err := d.ReadDir(localFileListBatch)
+		for _, entry := range entries {
+			if listed == limit {
+				return names, listed, true, nil
+			}
+			listed++
+			if !entry.IsDir() && matchesFiles(c.Request.Files, entry.Name()) {
+				names = append(names, entry.Name())
+			}
+		}
+		if errors.Is(err, io.EOF) || err == nil && len(entries) == 0 {
+			return names, listed, false, nil
+		}
+		if err != nil {
+			return nil, listed, false, err
+		}
+	}
 }

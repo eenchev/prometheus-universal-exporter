@@ -6,8 +6,10 @@ import (
 	"context"
 	"encoding/json"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -122,9 +124,9 @@ func pendingValue(server *Server, name string) (float64, bool) {
 	server.otlpMu.Lock()
 	defer server.otlpMu.Unlock()
 	for _, batch := range server.otlpPending {
-		for _, metric := range batch.metrics {
-			if metric.Name == name {
-				return metric.Value, true
+		for _, pending := range batch.metrics {
+			if pending.metric.Name == name {
+				return pending.metric.Value, true
 			}
 		}
 	}
@@ -441,21 +443,31 @@ func TestNotReadyWhileTheConfigurationIsRejected(t *testing.T) {
 	}
 }
 
-// Not ready after otlpUnreadyAfter failed exports in a row, ready at the next
-// that gets through.
+// Failing exports leave readiness alone by default. With
+// otlp.unready_after_failures, the exporter is not ready after that many in a
+// row, and ready at the next that gets through.
 func TestNotReadyWhileOTLPExportsFail(t *testing.T) {
 	fastRetries(t)
 	endpoint := newOTLPEndpoint(t, http.StatusServiceUnavailable)
 	server := otlpServer(t, endpoint.server.URL)
-	for i := 1; i <= otlpUnreadyAfter; i++ {
+	for range 5 {
+		server.exportOTLP(context.Background(), 20*time.Millisecond)
+	}
+	if code, body := ready(t, server); code != http.StatusOK {
+		t.Fatalf("failing exports made the exporter unready without unready_after_failures: %d %q", code, body)
+	}
+
+	server = otlpServer(t, endpoint.server.URL)
+	server.manager.Get().OTLP.UnreadyAfterFailures = 2
+	for i := 1; i <= 2; i++ {
 		if code, _ := ready(t, server); code != http.StatusOK {
 			t.Fatalf("not ready after %d failed exports", i-1)
 		}
 		server.exportOTLP(context.Background(), 20*time.Millisecond)
 	}
 	code, body := ready(t, server)
-	if code != http.StatusServiceUnavailable || !strings.Contains(body, "the last 3 OTLP exports failed") {
-		t.Fatalf("after %d failed exports: %d %q", otlpUnreadyAfter, code, body)
+	if code != http.StatusServiceUnavailable || !strings.Contains(body, "the last 2 OTLP exports failed") {
+		t.Fatalf("after 2 failed exports: %d %q", code, body)
 	}
 	endpoint.mu.Lock()
 	endpoint.statuses = []int{http.StatusOK}
@@ -465,11 +477,100 @@ func TestNotReadyWhileOTLPExportsFail(t *testing.T) {
 		t.Fatalf("not ready after an export got through: %d", code)
 	}
 
-	// Exports that fail while OTLP is off again do not count.
+	// Failures do not count with OTLP disabled.
 	server.manager.Get().OTLP.Enabled = false
-	server.otlp.consecutiveFailures = otlpUnreadyAfter
+	server.otlp.consecutiveFailures = 5
 	if code, _ := ready(t, server); code != http.StatusOK {
 		t.Fatal("not ready over OTLP failures with OTLP disabled")
+	}
+}
+
+// A reload that points OTLP at another endpoint starts the failure count
+// again, so the new endpoint is not blamed for the old one's failures.
+func TestAnotherOTLPEndpointStartsReadinessAfresh(t *testing.T) {
+	fastRetries(t)
+	dead := newOTLPEndpoint(t, http.StatusServiceUnavailable)
+	alive := newOTLPEndpoint(t)
+	server := otlpServer(t, dead.server.URL)
+	server.manager.Get().OTLP.UnreadyAfterFailures = 1
+	server.exportOTLP(context.Background(), 20*time.Millisecond)
+	if code, _ := ready(t, server); code != http.StatusServiceUnavailable {
+		t.Fatal("not unready after a failed export")
+	}
+	server.manager.Get().OTLP.Endpoint = alive.server.URL + "/v1/metrics"
+	if code, body := ready(t, server); code != http.StatusOK {
+		t.Fatalf("a new endpoint is blamed for the old one's failures: %d %q", code, body)
+	}
+}
+
+func TestOTLPSettingsAreValidated(t *testing.T) {
+	for key, change := range map[string]func(c *OTLPConfig){
+		"max_pending_points":     func(c *OTLPConfig) { c.MaxPendingPoints = -1 },
+		"unready_after_failures": func(c *OTLPConfig) { c.UnreadyAfterFailures = -1 },
+	} {
+		cfg := &Config{Collectors: []Collector{testCollector("text", "text")}, OTLP: otlpConfig("http://otel:4318/v1/metrics")}
+		change(&cfg.OTLP)
+		if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "otlp."+key) {
+			t.Errorf("a negative %s: %v", key, err)
+		}
+	}
+	cfg := &Config{Collectors: []Collector{testCollector("text", "text")}, OTLP: otlpConfig("http://otel:4318/v1/metrics")}
+	if err := cfg.Validate(); err != nil || cfg.OTLP.MaxPendingPoints != DefaultOTLPMaxPendingPoints || cfg.OTLP.UnreadyAfterFailures != 0 {
+		t.Fatalf("defaults: %v %+v", err, cfg.OTLP)
+	}
+}
+
+// While exports fail, the data points waiting stay within
+// otlp.max_pending_points: past it the oldest go, counted and logged, and a
+// point queued again after a failed export is older than any queued since.
+func TestPendingOTLPPointsAreCapped(t *testing.T) {
+	endpoint := newOTLPEndpoint(t, http.StatusServiceUnavailable)
+	server := otlpServer(t, endpoint.server.URL)
+	server.manager.Get().OTLP.MaxPendingPoints = 10
+	logs := captureLogs(t)
+	server.logger = slog.Default()
+
+	for i := range 6 {
+		queueProbeMetric(server, "early_"+strconv.Itoa(i), 1)
+	}
+	failed := server.drainOTLP()
+	for i := range 6 {
+		queueProbeMetric(server, "late_"+strconv.Itoa(i), 1)
+	}
+	server.requeueOTLP(failed)
+	// 12 points against a limit of 10: down to 9, the three oldest going,
+	// which are the requeued ones.
+	if server.otlpPoints != 9 {
+		t.Fatalf("%d points pending, want 9", server.otlpPoints)
+	}
+	for i := range 6 {
+		if _, ok := pendingValue(server, "late_"+strconv.Itoa(i)); !ok {
+			t.Errorf("late_%d, queued last, was dropped", i)
+		}
+	}
+	early := 0
+	for i := range 6 {
+		if _, ok := pendingValue(server, "early_"+strconv.Itoa(i)); ok {
+			early++
+		}
+	}
+	if early != 3 {
+		t.Fatalf("%d of the requeued points are left, want 3", early)
+	}
+	if got := seriesValue(t, selfMetrics(t, server), "http_exporter_otlp_points_dropped_total"); got != 3 {
+		t.Fatalf("dropped %v, want 3", got)
+	}
+	if !strings.Contains(logs.String(), "reached otlp.max_pending_points") {
+		t.Fatalf("the drop was not logged:\n%s", logs.String())
+	}
+	// Replacing a pending series is not a new point.
+	queueProbeMetric(server, "late_0", 2)
+	if server.otlpPoints != 9 {
+		t.Fatalf("replacing a series changed the count to %d", server.otlpPoints)
+	}
+	server.drainOTLP()
+	if server.otlpPoints != 0 {
+		t.Fatal("draining did not reset the count")
 	}
 }
 

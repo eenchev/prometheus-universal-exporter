@@ -75,6 +75,7 @@ func renderSchema(schema map[string]any) ([]byte, error) {
 
 var (
 	durationType   = reflect.TypeOf(Duration(0))
+	byteSizeType   = reflect.TypeOf(ByteSize(0))
 	metricTypeType = reflect.TypeOf(MetricType(""))
 )
 
@@ -87,6 +88,8 @@ func schemaFor(t reflect.Type, path string) map[string]any {
 	switch t {
 	case durationType:
 		schema = map[string]any{"type": "string", "pattern": durationPattern, "description": "A duration such as 500ms, 30s or 5m."}
+	case byteSizeType:
+		schema = map[string]any{"type": []string{"integer", "string"}, "minimum": 0, "pattern": byteSizePattern, "description": "A size: a number of bytes, or a number with a unit such as 512KiB, 10MB or 1.5GiB."}
 	case metricTypeType:
 		schema = map[string]any{"type": "string", "enum": []string{string(GaugeMetricType), string(CounterMetricType), string(HistogramMetricType), string(SummaryMetricType), string(UntypedMetricType)}}
 	default:
@@ -210,6 +213,12 @@ func configSchemaRules() map[string]map[string]any {
 		"collectors[].metrics[].labels[].truncate": {"description": "Cut a value longer than limits.max_label_value_length to fit, ending in …, instead of failing the scrape."},
 		"collectors[].limits.script_timeout":       {"description": "How long a Python script may run. Starting the interpreter is not counted. Defaults to 100ms."},
 		"otlp.endpoint":                            {"description": "OTLP/HTTP metrics endpoint, such as http://otel-collector:4318/v1/metrics."},
+		"web.basic_auth.username_file":             {"description": "Read the username from this file instead of username, such as a mounted Secret. Read again when it changes."},
+		"web.basic_auth.password_file":             {"description": "Read the password from this file instead of password, such as a mounted Secret. Read again when it changes."},
+		"collectors[].name_escaping":               {"enum": []string{NameEscapingFail, NameEscapingUnderscores, NameEscapingValues}, "description": "What to do with a metric or label name that is not a classic Prometheus name, such as http.server.duration: fail the scrape (the default), replace what a classic name may not have with underscores, or use Prometheus's reversible values encoding (U__…). See docs/CONFIGURATION.md#utf-8-names."},
+		"collectors[].response.charset":            {"description": "The encoding of the response when the target does not declare it or declares it wrongly, and of local files: a WHATWG name such as windows-1252, iso-8859-2, windows-1251 or shift_jis. See docs/CONFIGURATION.md#character-encodings."},
+		"otlp.max_pending_points":                  {"description": "The most data points kept waiting for export while the endpoint fails; past it the oldest are dropped and counted. Defaults to 100000."},
+		"otlp.unready_after_failures":              {"description": "Answer /ready with 503 after this many failed exports in a row, until one gets through. 0, the default, never does: an exporter whose exports fail still answers probes."},
 		"otlp.compression":                         {"enum": []string{OTLPCompressionGzip, OTLPCompressionNone}, "description": "Compression of the export requests. Defaults to gzip."},
 		"otlp.timeout":                             {"description": "How long one export attempt may take. Defaults to 5s. Also bounds the last export at shutdown."},
 	}

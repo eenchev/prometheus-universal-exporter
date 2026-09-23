@@ -383,7 +383,7 @@ func responseLimit(c *Collector) int64 {
 	if limit <= 0 {
 		limit = 10 << 20
 	}
-	return limit
+	return int64(limit)
 }
 
 func retryableStatus(status int) bool {

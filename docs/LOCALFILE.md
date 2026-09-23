@@ -36,7 +36,7 @@ collectors:
 | `max_response_bytes` | limit | The most that is read of one file; a larger file fails the scrape. |
 | `files` | — | Read a whole directory instead of one file: the [file name patterns](#reading-a-directory) to read. Not with `path`. |
 | `max_files` | `100` | With `files`: the most files one scrape reads. |
-| `max_total_bytes` | `64 MiB` | With `files`: the most one scrape reads across every file. |
+| `max_total_bytes` | `64MiB` | With `files`: the most one scrape reads across every file. A [size](CONFIGURATION.md#sizes), with or without a unit. |
 
 No other request key applies, and setting one — `method`, `headers`, a
 credential — is a startup error, as it is for any key that belongs to another
@@ -255,13 +255,29 @@ A directory is easy to fill, so reading one is bounded:
   file that would go past it is refused in the same way, and later, smaller
   files are still read.
 
+- **The listing**, at most ten times `max_files` entries, and at least 1000,
+  whatever they are. A directory with more is listed only that far, in the
+  order the filesystem returns entries, and a warning says so; the files
+  considered are those found by then. Keep other files out of the directory,
+  or raise `max_files`.
+
+Which files are read is decided from their sizes, in name order, before any is
+read. A file that grows after that, past what `max_total_bytes` leaves it, fails
+alone rather than taking the scrape past the total.
+
 A refused file is a failed file: it is logged, its `localfile_scrape_error`
 reads `1` and its `localfile_mtime_seconds` is reported. `max_age` applies to
 each file, and `limits.max_metrics` to the whole answer.
 
-Reading the directory is one read for the [bounds on reads](#what-it-takes-from-node_exporter):
-it takes one of the collector's four pending-read slots and ends with the
-probe's `timeout` or deadline.
+Files are read four at a time, and answered in name order whichever finished
+first. Reading the directory is one read for the
+[bounds on reads](#what-it-takes-from-node_exporter): it takes one of the
+collector's four pending-read slots and ends with the probe's `timeout` or
+deadline. **A deadline does not lose what was read.** The files read by then
+are answered; a file still being read, or not reached, fails alone —
+`localfile_scrape_error` `1`, its mtime reported when it was taken, and a log
+line saying it was not read before the deadline. No further file is started.
+Only a directory that could not even be listed in time fails the probe.
 
 ## Formats
 
@@ -277,7 +293,10 @@ decoder, and anything else is recognised from its content:
 | `.csv` | CSV |
 | `.html`, `.htm` | HTML |
 
-`response.format` or `decoder.type` overrides the choice, as for `http`. A
+`response.format` or `decoder.type` overrides the choice, as for `http`. A file
+declares no encoding: one in anything but UTF-8 needs `response.charset`, such
+as `windows-1252`, unless it starts with a byte order mark (see
+[Character encodings](CONFIGURATION.md#character-encodings)). A
 `.prom` file with `transform.type: prometheus` is passed through, and
 `include`, `exclude`, `rename` and `labels` of that transform apply as usual.
 

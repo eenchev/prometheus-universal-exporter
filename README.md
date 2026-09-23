@@ -142,7 +142,9 @@ pattern needs. See the
 | `--config.schema` | off | Print the JSON Schema of the configuration file, for editors, and exit. See [Editor support](docs/CONFIGURATION.md#editor-support). |
 | `--config.collector-file-schema` | off | Print the JSON Schema of a collector file, for editors, and exit. See [Collector files](docs/CONFIGURATION.md#collector-files). |
 | `--probe.timeout-offset` | `500ms` | How much of Prometheus's scrape timeout a probe leaves unused, so it answers with its own error first. See [Probe deadlines](docs/CONFIGURATION.md#probe-deadlines). |
+| `--web.shutdown-timeout` | `5s` | How long a shutdown waits for the probes in progress. Keep it at least as long as Prometheus's scrape timeout. See [Shutting down](docs/CONFIGURATION.md#shutting-down). |
 | `--web.enable-lifecycle` | off | Enable `POST /-/reload`, which reloads the configuration and reports whether it was accepted. `SIGHUP` reloads either way. See [Reloading on demand](docs/CONFIGURATION.md#reloading-on-demand). |
+| `--version` | off | Print the version, git revision, Go version and request types of the build, and exit. The same is in the `http_exporter_build_info` self-metric. |
 | `--dry-run` | off | Validate the files and flags above, print a JSON report and exit `0` or `1`, without starting. See [Dry run](docs/CONFIGURATION.md#dry-run). |
 
 ## Documentation

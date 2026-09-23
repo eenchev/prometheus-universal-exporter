@@ -105,12 +105,22 @@
                 "type": "integer"
               },
               "max_output_bytes": {
+                "description": "A size: a number of bytes, or a number with a unit such as 512KiB, 10MB or 1.5GiB.",
                 "minimum": 0,
-                "type": "integer"
+                "pattern": "^[0-9]+(\\.[0-9]+)? ?([kKmMgGtT][iI]?)?[bB]?$",
+                "type": [
+                  "integer",
+                  "string"
+                ]
               },
               "max_response_bytes": {
+                "description": "A size: a number of bytes, or a number with a unit such as 512KiB, 10MB or 1.5GiB.",
                 "minimum": 0,
-                "type": "integer"
+                "pattern": "^[0-9]+(\\.[0-9]+)? ?([kKmMgGtT][iI]?)?[bB]?$",
+                "type": [
+                  "integer",
+                  "string"
+                ]
               },
               "script_timeout": {
                 "description": "How long a Python script may run. Starting the interpreter is not counted. Defaults to 100ms.",
@@ -233,6 +243,15 @@
           "name": {
             "description": "Unique name, used as the collector parameter of /probe.",
             "pattern": "^[a-zA-Z_][a-zA-Z0-9_]*$",
+            "type": "string"
+          },
+          "name_escaping": {
+            "description": "What to do with a metric or label name that is not a classic Prometheus name, such as http.server.duration: fail the scrape (the default), replace what a classic name may not have with underscores, or use Prometheus's reversible values encoding (U__…). See docs/CONFIGURATION.md#utf-8-names.",
+            "enum": [
+              "fail",
+              "underscores",
+              "values"
+            ],
             "type": "string"
           },
           "request": {
@@ -380,13 +399,22 @@
                 "type": "integer"
               },
               "max_response_bytes": {
+                "description": "A size: a number of bytes, or a number with a unit such as 512KiB, 10MB or 1.5GiB.",
                 "minimum": 0,
-                "type": "integer"
+                "pattern": "^[0-9]+(\\.[0-9]+)? ?([kKmMgGtT][iI]?)?[bB]?$",
+                "type": [
+                  "integer",
+                  "string"
+                ]
               },
               "max_total_bytes": {
                 "description": "localfile with request.files: the most one scrape reads across every file; a file that would go past it is refused. Defaults to 64 MiB.",
                 "minimum": 0,
-                "type": "integer"
+                "pattern": "^[0-9]+(\\.[0-9]+)? ?([kKmMgGtT][iI]?)?[bB]?$",
+                "type": [
+                  "integer",
+                  "string"
+                ]
               },
               "method": {
                 "description": "HTTP method. Defaults to GET.",
@@ -494,6 +522,14 @@
           "response": {
             "additionalProperties": false,
             "properties": {
+              "charset": {
+                "description": "The encoding of the response when the target does not declare it or declares it wrongly, and of local files: a WHATWG name such as windows-1252, iso-8859-2, windows-1251 or shift_jis. See docs/CONFIGURATION.md#character-encodings.",
+                "type": [
+                  "string",
+                  "number",
+                  "boolean"
+                ]
+              },
               "csv": {
                 "additionalProperties": false,
                 "properties": {

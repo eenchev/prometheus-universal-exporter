@@ -9,6 +9,12 @@ otlp:
   interval: 30s
   # Export requests are gzipped; none sends them uncompressed.
   # compression: gzip
+  # While the endpoint fails, undelivered data points wait for the next
+  # export, the oldest dropped past this many.
+  # max_pending_points: 100000
+  # Answer /ready with 503 after this many failed exports in a row. Off (0) by
+  # default: set it only where delivering over OTLP is the exporter's job.
+  # unready_after_failures: 3
   # headers:
   #   X-OTLP-Tenant: production
   # service_name: prometheus-universal-exporter

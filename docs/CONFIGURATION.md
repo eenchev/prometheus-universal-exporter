@@ -39,6 +39,41 @@ selectors and XPath (including bare element selectors such as `h1`), text
 supports regular expressions, and Prometheus input is parsed before
 filtering/renaming.
 
+### Character encodings
+
+Everything the exporter answers is UTF-8, as Prometheus requires; it refuses
+a whole scrape over one label value that is not. A response in another
+encoding is converted before it is decoded. The encoding comes from, in this
+order: a byte order mark (UTF-8, UTF-16LE or UTF-16BE); the collector's
+`response.charset`; the `charset` of the `Content-Type` header; and, for HTML,
+a `<meta charset>` near the top of the page or, for XML, the encoding of the
+XML declaration.
+
+```yaml
+  - name: legacy_status
+    request:
+      type: http
+    response:
+      # The target sends windows-1251 and says nothing, or says the wrong thing.
+      charset: windows-1251
+```
+
+`response.charset` is for a target that does not declare its encoding, or
+declares the wrong one, and for [local files](LOCALFILE.md), which declare
+none. Names follow the WHATWG Encoding Standard, as in a browser: `utf-8`,
+`windows-1252`, `iso-8859-2`, `windows-1251`, `koi8-r`, `shift_jis`, `gbk`,
+`euc-kr` and the rest; `iso-8859-1` and `latin1` are read as `windows-1252`,
+as browsers do. An unknown name in `response.charset` fails to load; an
+unknown name declared by a target fails the `decode` stage, naming it.
+Transforms and Python scripts see the converted body, and its `Content-Type`
+says `charset=utf-8`.
+
+What still is not valid UTF-8 after that — a target that says UTF-8 and is
+not — no longer fails the scrape: the invalid bytes in label values and help
+text are replaced with `�` (U+FFFD), counted in
+`http_exporter_invalid_utf8_total`, and logged as a warning naming the first
+metric. Setting `response.charset` fixes it at the source.
+
 Prometheus input is the text exposition format, version 0.0.4, read by the
 exporter's own parser. It follows the reference parser's rules — families from
 HELP and TYPE lines, `_sum`/`_count`/`_bucket` grouped into summaries and
@@ -125,6 +160,48 @@ collectors:
 
 exports `grafana_statuspage_status`. It is optional; without it, names are
 exactly as declared.
+
+### UTF-8 names
+
+Prometheus 3 lets a target name a metric or a label in any UTF-8 —
+`http.server.duration`, `{service.name="api"}` — as OpenTelemetry names do.
+The exporter answers in the classic text format, whose names are limited to
+letters, digits, `_` and, for metrics, `:`, as are the names older
+Prometheus servers, recording rules and dashboards expect. A name outside
+that can come from a `prometheus` transform passing a target through, a Python
+script or a pre-script. `name_escaping` says what happens to it:
+
+```yaml
+collectors:
+  - name: otel_app
+    name_escaping: underscores   # fail (the default), underscores or values
+    transform:
+      type: prometheus
+```
+
+| `name_escaping` | `{"http.server.duration", "service.name"="api"} 0.25` becomes |
+| --- | --- |
+| `fail` (default) | a failed scrape: ``metric name "http.server.duration" is not a classic Prometheus name; set the collector's name_escaping to underscores or values to export it escaped`` |
+| `underscores` | `http_server_duration{service_name="api"} 0.25` |
+| `values` | `U__http_2e_server_2e_duration{U__service_2e_name="api"} 0.25` |
+
+`underscores` replaces every character a classic name may not have with `_`,
+and a leading digit too, which reads naturally but cannot be undone.
+`values` is Prometheus's reversible encoding: `U__`, then the name with `_`
+doubled and every other character written as `_` + its hexadecimal code
+point + `_`. Prometheus 3 and its client libraries can turn it back into the
+original name. They are the escaping schemes of the same names Prometheus
+negotiates with its targets; the third, `dots`, is not offered, because it
+rewrites every name that has an underscore, classic ones included.
+
+With either scheme a classic name is never changed, and label values are never
+escaped, since they may hold any UTF-8. `metrics_prefix` is joined first, so a
+prefixed `values` name still starts with `U__`: `metrics_prefix: otel` gives
+`U__otel__http_2e_server_2e_duration`. Two names that escape to the same name
+— `a.b` and `a_b` with `underscores` — are not merged: two such metrics are a
+duplicate series, and two such labels of one series fail the scrape naming
+both. The default is `fail` so a name never changes without someone having
+asked for it.
 
 The prefix applies to every metric the collector produces, whatever the
 transform: declared metrics, the names a Python script passes to `metric(...)`,
@@ -908,6 +985,11 @@ what triggered it — `"trigger":"http"`, `"sighup"` or `"watch"` — and counte
 in the [reload self-metrics](SELF-METRICS.md#configuration-reloads). Reloads
 from different triggers never interleave: one runs at a time.
 
+Whatever the trigger, the exporter's state follows the new configuration: a
+removed collector's [self-metrics](SELF-METRICS.md#collector-metrics) stop,
+and what was kept about it is dropped, and a changed collector's cached results
+are dropped.
+
 ## Readiness
 
 `/health` answers `200` for as long as the process runs. `/ready` answers `200`
@@ -918,8 +1000,11 @@ not, with one `not ready:` line per reason:
   rejected. The previous configuration is still in force and still answers
   probes, but it is not the one that was deployed. Ready again once a reload
   is accepted.
-- With OTLP export enabled, the last three exports failed, retries included
-  (see [Delivery](OTLP.md#delivery)). Ready again once an export gets through.
+- With `otlp.unready_after_failures` set, that many OTLP exports to the
+  current endpoint failed in a row, retries included (see
+  [Delivery](OTLP.md#delivery)). Ready again once an export gets through. It
+  is off by default, since an exporter whose exports fail still answers
+  probes.
 
 Neither endpoint needs credentials, so the reasons never include an error's
 text; the log and the [self-metrics](SELF-METRICS.md) have the details.
@@ -928,7 +1013,51 @@ In Kubernetes, a pod that is not ready is taken out of its Service, and
 Prometheus stops probing through it. With the chart's defaults a configuration
 change rolls the Deployment, and a new pod whose configuration is rejected never
 starts, so the first reason arises only with `server.watchConfig`,
-`server.enableLifecycle` or a `SIGHUP`.
+`server.enableLifecycle` or a `SIGHUP`. Setting `otlp.unready_after_failures`
+takes a pod out of its Service while its OTLP endpoint fails, which also stops
+Prometheus probing through it; set it only where OTLP delivery is the pod's
+job.
+
+## Shutting down
+
+On `SIGTERM` or `SIGINT` the exporter stops accepting connections, lets the
+probes in progress finish for up to `--web.shutdown-timeout` (5 seconds by
+default), makes the [last OTLP export](OTLP.md#delivery) when OTLP is enabled,
+and exits `0`. It logs that it is shutting down, and, when the timeout runs
+out with probes still in progress, that it closed them — Prometheus records
+those as failed scrapes. Keep the timeout at least as long as the longest
+scrape timeout of the monitors that probe the exporter, so a rollout does not
+cut probes off:
+
+```sh
+prometheus-universal-exporter --web.shutdown-timeout=30s
+```
+
+In Kubernetes the pod must also be allowed to run that long: its
+`terminationGracePeriodSeconds`, 30 by default, has to cover the timeout and
+the last OTLP export. The Helm chart's `server.shutdownTimeout` sets the flag
+and raises the grace period to match. A second `SIGTERM` or `SIGINT` during that time
+ends the process at once — the second Ctrl-C of an impatient operator, or a
+supervisor that signals twice — without waiting for the probes or the export.
+
+## Sizes
+
+Every setting that is a number of bytes — `max_response_bytes`,
+`limits.max_output_bytes`, `max_total_bytes` — takes either a number of bytes
+or a number with a unit:
+
+| Written | Bytes |
+| --- | --- |
+| `1048576` | 1048576 |
+| `512KiB`, `512 KiB` | 524288 |
+| `10MB` | 10000000 |
+| `64MiB` | 67108864 |
+| `1.5GiB` | 1610612736 |
+
+`kB`, `MB`, `GB` and `TB` are powers of 1000, `KiB`, `MiB`, `GiB` and `TiB`
+powers of 1024, and `B` or no unit is bytes. The unit is case insensitive, and
+a fraction is rounded down to whole bytes. Anything else, such as `lots` or
+`-1`, fails to load, naming the value.
 
 ## Dry run
 

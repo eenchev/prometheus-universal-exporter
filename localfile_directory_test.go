@@ -209,7 +209,7 @@ func TestLocalDirectorySizeLimits(t *testing.T) {
 
 	c := dirCollector("dir", root, "*.prom")
 	c.Request.MaxResponseBytes = 1000
-	c.Request.MaxTotalBytes = int64(3*len(small) - 1)
+	c.Request.MaxTotalBytes = ByteSize(3*len(small) - 1)
 	server := fileServer(t, c)
 	logs := captureLogs(t)
 	server.logger = slog.Default()
@@ -379,4 +379,157 @@ func TestLocalDirectoryDocumentationExample(t *testing.T) {
 	writeIn(t, root, "backup.prom", "# TYPE backup_last_success_timestamp_seconds gauge\nbackup_last_success_timestamp_seconds 1.7e+09\n")
 	server := NewServer(NewConfigManager(cfg, "", quietLogger(t)), "python3", quietLogger(t))
 	probeFile(t, server, "collector="+cfg.Collectors[0].Name).must(t, http.StatusOK, `backup_last_success_timestamp_seconds{file="backup.prom"}`)
+}
+
+// A file the read has not finished by the probe's deadline fails alone; what
+// was read is answered.
+func TestLocalDirectoryAnswersWhatWasReadByTheDeadline(t *testing.T) {
+	root := t.TempDir()
+	for _, name := range []string{"a.prom", "b.prom", "slow.prom"} {
+		writeIn(t, root, name, "# TYPE v gauge\nv 1\n")
+	}
+	hold := make(chan struct{})
+	setReadHook(func(full string) {
+		if filepath.Base(full) == "slow.prom" {
+			<-hold
+		}
+	})
+	t.Cleanup(func() { close(hold); afterLocalFileRead.Store(nil) })
+	server := fileServer(t, dirCollector("dir", root, "*.prom"))
+	start := time.Now()
+	r := probeFile(t, server, "collector=dir&timeout=300ms")
+	if took := time.Since(start); took > 3*time.Second {
+		t.Fatalf("the probe took %s", took)
+	}
+	r.must(t, http.StatusOK,
+		`v{file="a.prom"} 1`, `v{file="b.prom"} 1`,
+		`localfile_scrape_error{file="slow.prom"} 1`,
+		`localfile_mtime_seconds{file="slow.prom"}`,
+	)
+	if strings.Contains(r.body, `v{file="slow.prom"}`) {
+		t.Fatalf("the file still being read was answered:\n%s", r.body)
+	}
+}
+
+// Files are read several at a time, never more than the workers.
+func TestLocalDirectoryReadsFilesConcurrently(t *testing.T) {
+	root := t.TempDir()
+	for i := range 10 {
+		writeIn(t, root, "f"+strconv.Itoa(i)+".prom", "# TYPE v gauge\nv "+strconv.Itoa(i)+"\n")
+	}
+	var mu sync.Mutex
+	current, peak := 0, 0
+	setReadHook(func(string) {
+		mu.Lock()
+		current++
+		peak = max(peak, current)
+		mu.Unlock()
+		time.Sleep(30 * time.Millisecond)
+		mu.Lock()
+		current--
+		mu.Unlock()
+	})
+	t.Cleanup(func() { afterLocalFileRead.Store(nil) })
+	server := fileServer(t, dirCollector("dir", root, "*.prom"))
+	r := probeFile(t, server, "collector=dir")
+	r.must(t, http.StatusOK, `v{file="f0.prom"} 0`, `v{file="f9.prom"} 9`)
+	// The answer is in name order whatever order the reads finished in.
+	if strings.Index(r.body, `file="f0.prom"`) > strings.Index(r.body, `file="f9.prom"`) {
+		t.Fatalf("the answer is not in name order:\n%s", r.body)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if peak < 2 || peak > localFileDirectoryWorkers {
+		t.Fatalf("%d files were read at once, want between 2 and %d", peak, localFileDirectoryWorkers)
+	}
+}
+
+// Listing stops at maxListedEntries, saying so.
+func TestLocalDirectoryListingIsBounded(t *testing.T) {
+	root := t.TempDir()
+	c := dirCollector("dir", root, "*.prom")
+	c.Request.MaxFiles = 1
+	limit := maxListedEntries(&c)
+	for i := range limit + 50 {
+		writeIn(t, root, "f"+strconv.Itoa(i)+".txt", "")
+	}
+	server := fileServer(t, c)
+	logs := captureLogs(t)
+	server.logger = slog.Default()
+	probeFile(t, server, "collector=dir").must(t, http.StatusOK, "localfile_files_skipped 0")
+	if !strings.Contains(logs.String(), "more entries than one scrape lists") || !strings.Contains(logs.String(), `"listed":`+strconv.Itoa(limit)) {
+		t.Fatalf("the bounded listing was not logged:\n%s", logs.String())
+	}
+}
+
+// A file that grows after its size was taken, past what the total leaves it,
+// fails alone, so the scrape never reads more than max_total_bytes.
+func TestLocalDirectoryTotalHoldsWhenAFileGrows(t *testing.T) {
+	root := t.TempDir()
+	small := "# TYPE v gauge\nv 1\n"
+	writeIn(t, root, "a.prom", small)
+	grow := writeIn(t, root, "b.prom", small)
+	c := dirCollector("dir", root, "*.prom")
+	c.Request.MaxTotalBytes = ByteSize(2*len(small) + 4)
+	var once sync.Once
+	// Growing b.prom during its own read makes the read start again, and
+	// find it larger than its share.
+	setReadHook(func(full string) {
+		if filepath.Base(full) == "b.prom" {
+			once.Do(func() {
+				if err := os.WriteFile(grow, []byte(small+strings.Repeat("# grown\n", 20)), 0o600); err != nil {
+					t.Error(err)
+				}
+			})
+		}
+	})
+	t.Cleanup(func() { afterLocalFileRead.Store(nil) })
+	server := fileServer(t, c)
+	logs := captureLogs(t)
+	server.logger = slog.Default()
+	probeFile(t, server, "collector=dir").must(t, http.StatusOK, `v{file="a.prom"} 1`, `localfile_scrape_error{file="b.prom"} 1`)
+	if !strings.Contains(logs.String(), "grew while the directory was read") {
+		t.Fatalf("the reason was not logged:\n%s", logs.String())
+	}
+}
+
+// Files are converted from response.charset, and what still is not valid
+// UTF-8 is repaired, file by file.
+func TestLocalDirectoryFilesInOtherEncodings(t *testing.T) {
+	root := t.TempDir()
+	writeIn(t, root, "a.txt", "v=1 caf\xe9\n")
+	c := regexCollector("latin")
+	c.Request = RequestConfig{Type: RequestTypeLocalFile, Root: root, Files: []string{"*.txt"}}
+	c.Response.Charset = "iso-8859-1"
+	broken := regexCollector("broken")
+	broken.Request = RequestConfig{Type: RequestTypeLocalFile, Root: root, Files: []string{"*.txt"}}
+	server := fileServer(t, c, broken)
+	probeFile(t, server, "collector=latin").must(t, http.StatusOK, `v{file="a.txt",who="café"} 1`)
+	probeFile(t, server, "collector=broken").must(t, http.StatusOK, `v{file="a.txt",who="caf`+"�"+`"} 1`, `localfile_scrape_error{file="a.txt"} 0`)
+	if seriesValue(t, selfMetrics(t, server), `http_exporter_invalid_utf8_total{collector="broken"}`) != 1 {
+		t.Fatal("the repaired value was not counted")
+	}
+}
+
+// A broken file of a directory logs once over many probes, and its recovery.
+func TestLocalDirectoryFileFailuresLogOnce(t *testing.T) {
+	root := t.TempDir()
+	writeIn(t, root, "good.prom", "# TYPE v gauge\nv 1\n")
+	broken := writeIn(t, root, "broken.prom", "not { prometheus\n")
+	server := fileServer(t, dirCollector("dir", root, "*.prom"))
+	logs := captureLogs(t)
+	server.logger = slog.Default()
+	for i := 0; i < 3; i++ {
+		probeFile(t, server, "collector=dir").must(t, http.StatusOK, `localfile_scrape_error{file="broken.prom"} 1`)
+	}
+	if got := strings.Count(logs.String(), `"file":"broken.prom"`); got != 1 {
+		t.Fatalf("a file failing 3 times was logged %d times:\n%s", got, logs.String())
+	}
+	if err := os.WriteFile(broken, []byte("# TYPE w gauge\nw 2\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	probeFile(t, server, "collector=dir").must(t, http.StatusOK, `localfile_scrape_error{file="broken.prom"} 0`)
+	if !strings.Contains(logs.String(), `"msg":"file of a directory recovered"`) {
+		t.Fatalf("recovery not logged:\n%s", logs.String())
+	}
 }

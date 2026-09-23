@@ -26,6 +26,11 @@ metrics: []
 `metrics: []` is explicit for Python because the script creates the metric
 definitions dynamically through `metric(...)`.
 
+A name passed to `metric(...)`, and a label name, that is not a classic
+Prometheus name — `http.server.duration`, `service.name` — fails the scrape
+unless the collector sets `name_escaping`; see
+[UTF-8 names](CONFIGURATION.md#utf-8-names).
+
 The launcher blocks `socket`, `subprocess`, `ctypes`, `multiprocessing`, `threading`, shell execution, and package installation. Python has no supported network API; `requests` and `httpx` are unnecessary. `script_timeout` and metric/output limits apply. Declared `libraries` are validated against the supported names (`lxml`, `PyYAML`, and `python-dateutil`, or their import names `yaml` and `dateutil`); they are never installed during a scrape, and the image has no pip to install them with.
 
 ## How scripts run

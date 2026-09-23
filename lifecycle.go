@@ -2,11 +2,13 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 )
 
 // A reload can be asked for, not only waited for: config management that has
@@ -68,5 +70,42 @@ func reloadOn(ctx context.Context, hup chan os.Signal, manager *ConfigManager, l
 				logger.Debug("reload on SIGHUP rejected", "error", err)
 			}
 		}
+	}
+}
+
+// DefaultShutdownTimeout is how long a shutdown waits for the probes in
+// progress when --web.shutdown-timeout is not given.
+const DefaultShutdownTimeout = 5 * time.Second
+
+// validateShutdownTimeout refuses a wait that is not positive: zero would cut
+// off every probe in progress, which is what a second signal is for.
+func validateShutdownTimeout(timeout time.Duration) error {
+	if timeout <= 0 {
+		return fmt.Errorf("--web.shutdown-timeout must be positive, got %s", timeout)
+	}
+	return nil
+}
+
+// The exporter's own HTTP server bounds what a client can hold open. Headers
+// must arrive within httpReadHeaderTimeout and a whole request within
+// httpReadTimeout, so a stalled client cannot keep a handler waiting, and a
+// keep-alive connection idle for httpIdleTimeout is closed, so a client that
+// went away without closing it does not keep it, and its goroutine, until TCP
+// notices. Prometheus reuses its connection between scrapes, which are far
+// more frequent than that. There is no write timeout: a probe may take as long
+// as its scrape timeout, and its own deadline bounds it (scrapetimeout.go).
+var (
+	httpReadHeaderTimeout = 10 * time.Second
+	httpReadTimeout       = 30 * time.Second
+	httpIdleTimeout       = 2 * time.Minute
+)
+
+func newHTTPServer(address string, handler http.Handler) *http.Server {
+	return &http.Server{
+		Addr:              address,
+		Handler:           handler,
+		ReadHeaderTimeout: httpReadHeaderTimeout,
+		ReadTimeout:       httpReadTimeout,
+		IdleTimeout:       httpIdleTimeout,
 	}
 }

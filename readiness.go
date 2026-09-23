@@ -9,10 +9,15 @@ import (
 // /health says the process is alive; /ready says whether it is doing what it
 // was configured to do. An exporter that keeps answering probes with the last
 // valid configuration after a reload was rejected is alive and useful, but it
-// is not running the configuration somebody deployed, and an exporter whose
-// OTLP exports have failed several times in a row is delivering nothing to its
-// backend. Both are reported as not ready until they recover: the next accepted
-// reload, the next export that gets through.
+// is not running the configuration somebody deployed, so it is reported as not
+// ready until the next accepted reload.
+//
+// An exporter whose OTLP exports keep failing is delivering nothing to its
+// backend, but it still answers probes, and a pod that is not ready is taken
+// out of its Service, which would stop those too. So failing exports make it
+// unready only when otlp.unready_after_failures asks for it, as it should for
+// an exporter that exists to deliver scheduled targets over OTLP; ready again
+// at the next export that gets through.
 //
 // The reasons are listed in the body, one per line, for whoever looks. They
 // never include an error's text: /ready is not authenticated, and an error can
@@ -31,7 +36,7 @@ func (s *Server) notReadyReasons() []string {
 		}
 	}
 	cfg := s.manager.Get().OTLP
-	if failing := s.otlp.failing(); cfg.Enabled && cfg.Endpoint != "" && failing >= otlpUnreadyAfter {
+	if failing := s.otlp.failing(cfg.Endpoint); cfg.Enabled && cfg.Endpoint != "" && cfg.UnreadyAfterFailures > 0 && failing >= cfg.UnreadyAfterFailures {
 		reasons = append(reasons, fmt.Sprintf("the last %d OTLP exports failed", failing))
 	}
 	return reasons

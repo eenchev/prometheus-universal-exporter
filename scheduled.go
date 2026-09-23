@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"sync"
 	"time"
 )
@@ -70,6 +71,8 @@ func (s *Server) scrapeScheduledTarget(ctx context.Context, target ScheduledTarg
 	// answered from the cache does not move the last-scrape timestamp.
 	scraped := false
 
+	// Repeats of the same failure are logged sparingly (failurelog.go).
+	failureKey := failureKey(c.Name, "scheduled target "+target.Name, "")
 	finish := func(up float64) {
 		elapsed := time.Since(start)
 		count(func(st *serverStats) { st.lastDuration = elapsed.Seconds() })
@@ -78,9 +81,12 @@ func (s *Server) scrapeScheduledTarget(ctx context.Context, target ScheduledTarg
 			s.observeTargetScrape(c.Name, elapsed)
 		}
 		s.queueOTLPResource(scheduledHealthMetrics(target, c, up, elapsed.Seconds()), identity)
+		if up == 1 {
+			s.failures.recovered(s.logger, failureKey, "scheduled target recovered", "target", target.Name, "collector", c.Name, "address", address)
+		}
 	}
 	fail := func(stage string, err error) {
-		s.logger.Error("scheduled target scrape failed", "target", target.Name, "collector", c.Name, "address", address, "stage", stage, "error", err)
+		s.failures.failed(s.logger, slog.LevelError, failureKey, "scheduled target scrape failed", stage, err, "target", target.Name, "collector", c.Name, "address", address, "stage", stage)
 		finish(0)
 	}
 
@@ -158,6 +164,7 @@ func (s *Server) scrapeScheduledTarget(ctx context.Context, target ScheduledTarg
 			fail("transform", err)
 			return
 		}
+		s.sanitizeUTF8(set, rec, c, address)
 	}
 	if err := set.Validate(c.Limits); err != nil {
 		count(func(st *serverStats) { st.limitErrors++ })

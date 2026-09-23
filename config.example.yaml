@@ -7,6 +7,12 @@ otlp:
   interval: 30s
   # Export requests are gzipped; none sends them uncompressed.
   # compression: gzip
+  # While the endpoint fails, undelivered data points wait for the next
+  # export, the oldest dropped past this many.
+  # max_pending_points: 100000
+  # Answer /ready with 503 after this many failed exports in a row. Off (0) by
+  # default: set it only where delivering over OTLP is the exporter's job.
+  # unready_after_failures: 3
   # headers:
   #   X-OTLP-Tenant: production
   # service_name: prometheus-universal-exporter
@@ -26,6 +32,9 @@ otlp:
 #     enabled: true
 #     username: exporter
 #     password: change-me
+#     # Or from files, such as a mounted Kubernetes Secret, read again when
+#     # they change: username_file and password_file.
+#     # password_file: /var/run/prometheus-universal-exporter/web-auth/password
 #   self_metrics:
 #     # Adds a series per collector, request URL and method with the last
 #     # scrape's status, timestamp and duration. A request URL is an unbounded
@@ -52,6 +61,11 @@ collectors:
     # How many trips to its targets this collector makes at once; a probe over
     # the limit is answered 503 at once. Omit or 0 for the default, 32.
     # max_concurrent_probes: 8
+    # What to do with a metric or label name that is not a classic Prometheus
+    # name, such as http.server.duration from a Prometheus 3 target: fail the
+    # scrape (the default), or export it escaped as http_server_duration
+    # (underscores) or U__http_2e_server_2e_duration (values).
+    # name_escaping: underscores
     request:
       # Required. How this collector reaches its data; http is the only type
       # today, and each type accepts its own request keys and probe parameters.
@@ -244,7 +258,7 @@ collectors:
       # and a file that would take the scrape past max_total_bytes, or is over
       # max_response_bytes on its own, is refused without being read.
       max_files: 100
-      max_total_bytes: 67108864  # 64 MiB
+      max_total_bytes: 64MiB
       max_age: 1h
     transform:
       type: prometheus

@@ -21,6 +21,7 @@ configured:
 | `http_exporter_script_errors_total` | counter | Python script failures. |
 | `http_exporter_script_duration_seconds` | gauge | How long the Python of the most recent probe that ran any took — pre-script and python transform together, not counting starting an interpreter. |
 | `http_exporter_metrics_emitted_total` | counter | Metrics produced, across scrapes. |
+| `http_exporter_invalid_utf8_total` | counter | Label values and help texts that were not valid UTF-8, whose invalid bytes were replaced with `�`. See [Character encodings](CONFIGURATION.md#character-encodings). |
 | `http_exporter_series_limit_exceeded_total` | counter | Scrapes rejected by a size or series limit. |
 | `http_exporter_cache_hits_total`, `http_exporter_cache_misses_total` | counter | [Response cache](CONFIGURATION.md#response-caching) lookups. |
 | `http_exporter_cache_entries` | gauge | Entries the collector's cache holds. |
@@ -39,9 +40,33 @@ Which of the error counters a failure raises depends on what failed, not on
 the words in its message: a script error that happens to say "missing" is a
 script error, not a missing key.
 
+A collector that a reload removes stops being reported, here and over OTLP, so
+Prometheus marks its series stale; one added again later under the same name
+starts from zero. A collector a reload changes keeps its counters, but its
+cached results are dropped, since they belong to the old definition.
+
 Every counter ends in `_total` and nothing else does. `/metrics`, the
 self-metrics path and OTLP are built from the same definitions, so a family has
 the same type, help and value in each.
+
+## Build information
+
+```text
+http_exporter_build_info{goversion="go1.25.1",request_types="http,localfile",revision="4c1f2e9…",version="v1.4.0"} 1
+```
+
+As every Prometheus exporter does, one series with value `1` carries the
+build as labels: the version, the git revision (`-modified` when built from a
+changed checkout, `unknown` when not built from git), the Go version and the
+[request types](CONFIGURATION.md#request-types) built in. `--version` prints the
+same. The version is the one a release build sets with
+`-ldflags "-X main.version=1.4.0"`, otherwise the module version Go stamps,
+`(devel)` for a local build. Join it onto other series to see which build
+produced them:
+
+```promql
+up * on (instance) group_left (version) http_exporter_build_info
+```
 
 ## Configuration reloads
 
@@ -79,7 +104,7 @@ happens to OTLP:
 | --- | --- | --- |
 | `http_exporter_otlp_exports_total{result}` | counter | Exports, by `result`: `success` or `failure`. An export is one delivery of everything pending; a retried export that got through is one success. |
 | `http_exporter_otlp_export_retries_total` | counter | Attempts repeated after a network error, `429`, `502`, `503` or `504`. |
-| `http_exporter_otlp_points_dropped_total` | counter | Data points dropped because the endpoint refused them with an answer that is not retried. Data points of an export that ran out of retries are kept for the next and not counted. |
+| `http_exporter_otlp_points_dropped_total` | counter | Data points given up on: refused by the endpoint with an answer that is not retried, or the oldest waiting past `otlp.max_pending_points`. Data points of an export that ran out of retries are kept for the next and not counted until then. |
 | `http_exporter_otlp_export_duration_seconds` | gauge | Duration of the most recent export, retries included. |
 | `http_exporter_otlp_last_export_success_timestamp_seconds` | gauge | Unix time of the last export that got through; `0` before the first. |
 

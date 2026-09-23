@@ -23,11 +23,10 @@ import (
 // retries is one failure. They are exported over OTLP too, so the backend
 // learns of a failed export at the next one that gets through.
 //
-// Consecutive failures also make the exporter unready (readiness.go): an
-// exporter that has not delivered for otlpUnreadyAfter exports is not doing
-// its job, which is what readiness is for.
-
-const otlpUnreadyAfter = 3
+// With otlp.unready_after_failures set, consecutive failures also make the
+// exporter unready (readiness.go). They are counted per endpoint: a reload
+// that points OTLP somewhere else starts the count again, so a new endpoint
+// is not held responsible for the old one's failures.
 
 type otlpStatus struct {
 	mu                  sync.Mutex
@@ -35,14 +34,19 @@ type otlpStatus struct {
 	retries, dropped    int
 	lastDuration        time.Duration
 	lastSuccess         time.Time
-	// consecutiveFailures counts the exports since the last success.
+	// consecutiveFailures counts the exports to endpoint since the last
+	// success.
 	consecutiveFailures int
+	endpoint            string
 }
 
-// record records an export and how many retries it took.
-func (o *otlpStatus) record(duration time.Duration, retries int, ok bool) {
+// record records an export to endpoint and how many retries it took.
+func (o *otlpStatus) record(endpoint string, duration time.Duration, retries int, ok bool) {
 	o.mu.Lock()
 	defer o.mu.Unlock()
+	if endpoint != o.endpoint {
+		o.endpoint, o.consecutiveFailures = endpoint, 0
+	}
 	o.lastDuration = duration
 	o.retries += retries
 	if ok {
@@ -62,10 +66,14 @@ func (o *otlpStatus) drop(points int) {
 	o.dropped += points
 }
 
-// failing reports the exports that have failed since the last success.
-func (o *otlpStatus) failing() int {
+// failing reports the exports to endpoint that have failed since the last
+// success; none when the last exports went elsewhere.
+func (o *otlpStatus) failing(endpoint string) int {
 	o.mu.Lock()
 	defer o.mu.Unlock()
+	if endpoint != o.endpoint {
+		return 0
+	}
 	return o.consecutiveFailures
 }
 

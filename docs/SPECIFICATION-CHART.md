@@ -311,14 +311,15 @@ values schema:
 | `server.pythonPath` | `--python.path` |
 | `server.logLevel` | `--log.level`, one of `debug`, `info`, `warn`, `error`; default `info` |
 | `server.probeTimeoutOffset` | `--probe.timeout-offset`, a Go duration of zero or more |
+| `server.shutdownTimeout` | `--web.shutdown-timeout`, whole hours, minutes and seconds such as `30s` or `1m30s`, positive |
 | `server.enableLifecycle` | `--web.enable-lifecycle`, rendered only when `true`; default `false` |
 | `server.watchConfig`, `server.watchConfigInterval` | `--config.watch`, `--config.watch-interval` |
 | `server.expandEnv` | `--config.export-env` |
 | `otlpTargets.enabled` | `--otlp.targets-file` |
 
 An invalid value MUST fail rendering and be refused by the values schema.
-`server.probeTimeoutOffset` MUST default to empty and, while empty, MUST NOT
-render its flag at all, so the exporter's own default applies and an image
+`server.probeTimeoutOffset` and `server.shutdownTimeout` MUST default to empty
+and, while empty, MUST NOT render their flags at all, so the exporter's own default applies and an image
 older than the flag still starts. A test MUST fail when the exporter has a flag
 the chart neither renders nor refuses as one-shot (§ 33.10a).
 
@@ -361,7 +362,7 @@ bare word is read as a positional argument and ignored, so it would fail by
 doing nothing. So MUST every one-shot flag, which prints something and exits so
 that a pod started with it would restart for ever instead of serving:
 `--dry-run` (SPECIFICATION-EXPORTER.md § 30), `--config.schema`,
-`--config.collector-file-schema` and `--help`.
+`--config.collector-file-schema`, `--version` and `--help`.
 
 ### 33.10b Values schema
 
@@ -678,6 +679,27 @@ and the corresponding bearer or basic-auth key/file settings, so the file path
 can be declared in exporter configuration without placing credentials in a
 ConfigMap.
 
+The chart MUST also offer `webAuth` (`enabled`, false by default,
+`secretName`, `usernameKey` and `passwordKey`, `username` and `password` by
+default, and `mountPath`, `/var/run/prometheus-universal-exporter/web-auth`
+by default) to mount a Secret's two keys as files named `username` and
+`password`, for the exporter's `web.basic_auth.username_file` and
+`password_file` (SPECIFICATION-EXPORTER.md § 42.5), so the exporter's own
+password need not be in the ConfigMap. `secretName` MUST be required when it
+is enabled, and an `extraVolumeMounts` entry at its `mountPath` MUST fail
+rendering. While it is enabled, the self-health monitors MUST send its
+credential as `basicAuth`, since `web.basic_auth` protects the self-metrics
+endpoint too.
+
+### 42.6a Shutdown and the grace period
+
+A stopping pod needs `server.shutdownTimeout` (the exporter's 5 seconds when
+empty) and 10 seconds more for the last OTLP export and exiting. The chart MUST
+offer `terminationGracePeriodSeconds`, empty by default. Empty, it MUST render
+none while that need is 30 seconds or less, Kubernetes' default, and the need
+itself when it is more. Set, it MUST be rendered, and rendering MUST fail when
+it is less than the need, naming both.
+
 ## 42.7 Helm monitor arrays and opt-in monitor authentication
 
 The Helm chart MUST expose a `monitors` array. Each entry MUST contain a
@@ -708,7 +730,9 @@ auth:
 When `auth.enabled` is false, the chart MUST NOT render `authorization` or
 `basicAuth`, regardless of the configured `auth.type`. When enabled, `auth.type`
 MUST select bearer or basic authentication and the chart MUST render the
-corresponding SecretKeySelectors. Tests MUST cover the disabled default, both
+corresponding SecretKeySelectors. Their keys MUST default to `token`,
+`username` and `password`, and `optional` to false, so an entry naming only
+`secretName` renders complete selectors. Tests MUST cover the disabled default, both
 monitor selector types, and enabled bearer/basic authentication rendering.
 
 ## 42.8 Monitor relabeling and Deployment rollout behavior

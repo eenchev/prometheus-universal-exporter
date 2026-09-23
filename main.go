@@ -10,7 +10,6 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
-	"time"
 )
 
 func main() { os.Exit(run(os.Args[1:], os.Stdout, os.Stderr)) }
@@ -33,6 +32,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 	listenAddress := flags.String("web.listen-address", ":8080", "Address on which to expose HTTP endpoints")
 	selfMetricsPath := flags.String("web.self-metrics-path", "/self-metrics", "Dedicated endpoint for exporter self-health metrics")
 	enableLifecycle := flags.Bool("web.enable-lifecycle", false, "Enable POST /-/reload, which reloads the configuration and scheduled target files and reports whether they were accepted. SIGHUP reloads either way")
+	shutdownTimeout := flags.Duration("web.shutdown-timeout", DefaultShutdownTimeout, "How long a SIGTERM or SIGINT waits for the probes in progress to finish before closing their connections. Keep it at least as long as Prometheus's scrape timeout")
 	timeoutOffset := flags.Duration("probe.timeout-offset", DefaultTimeoutOffset, "How much of Prometheus's scrape timeout (X-Prometheus-Scrape-Timeout-Seconds) a probe leaves unused, so it answers with its own error before Prometheus gives up")
 	pythonPath := flags.String("python.path", "python3", "Python interpreter used by the python transform")
 	targetFile := flags.String("otlp.targets-file", "", "Optional file of scheduled targets scraped by the exporter and delivered over OTLP")
@@ -42,6 +42,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 	expandEnv := flags.Bool("config.export-env", false, "Expand ${NAME} environment variable references in the configuration, collector and scheduled target files")
 	printSchema := flags.Bool("config.schema", false, "Print the JSON Schema of the configuration file, for editors, and exit")
 	printCollectorFileSchema := flags.Bool("config.collector-file-schema", false, "Print the JSON Schema of a collector file listed under collector_files, for editors, and exit")
+	showVersion := flags.Bool("version", false, "Print the version, revision, Go version and request types of this build, and exit")
 	check := flags.Bool("dry-run", false, "Validate the configuration and scheduled target files as startup would, print a JSON report to stdout, and exit 0 if they are valid or 1 if not, without starting the exporter")
 	if err := flags.Parse(args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
@@ -56,9 +57,18 @@ func run(args []string, stdout, stderr io.Writer) int {
 	}
 	// A negative offset is a malformed flag rather than a configuration
 	// problem, so it is refused like one, before --dry-run or startup.
+	if err := validateShutdownTimeout(*shutdownTimeout); err != nil {
+		newLogger("info", stderr).Error("invalid command line; exiting", "error", err.Error())
+		return 2
+	}
 	if err := validateTimeoutOffset(*timeoutOffset); err != nil {
 		newLogger("info", stderr).Error("invalid command line; exiting", "error", err.Error())
 		return 2
+	}
+
+	if *showVersion {
+		_, _ = io.WriteString(stdout, versionString()+"\n")
+		return 0
 	}
 
 	if *printSchema || *printCollectorFileSchema {
@@ -147,7 +157,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 		server.OTLPExportLoop(ctx)
 	}()
 
-	startup := []any{"address", *listenAddress, "collectors", len(config.Collectors), "collector_files", len(config.LoadedCollectorFiles),
+	startup := []any{"version", buildVersion().Version, "revision", buildVersion().Revision, "address", *listenAddress, "collectors", len(config.Collectors), "collector_files", len(config.LoadedCollectorFiles),
 		"scheduled_targets", len(manager.Targets()), "config_watch", manager.WatchEnabled(),
 		"config_export_env", *expandEnv, "request_types", builtRequestTypes()}
 	// The interval is only meaningful when the watch is on, and its absence
@@ -157,9 +167,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 		startup = append(startup, "config_watch_interval", manager.WatchInterval().String())
 	}
 	logger.Info("starting exporter", startup...)
-	// ReadHeaderTimeout bounds how long a client may take to send its request
-	// headers, so a stalled connection cannot hold a handler open indefinitely.
-	httpServer := &http.Server{Addr: *listenAddress, Handler: server.Handler(), ReadHeaderTimeout: 10 * time.Second}
+	httpServer := newHTTPServer(*listenAddress, server.Handler())
 	serverErr := make(chan error, 1)
 	go func() { serverErr <- httpServer.ListenAndServe() }()
 	select {
@@ -169,10 +177,18 @@ func run(args []string, stdout, stderr io.Writer) int {
 			return 1
 		}
 	case <-ctx.Done():
-		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		// From here a second SIGTERM or Ctrl-C takes the default action and
+		// ends the process at once, rather than being swallowed while the
+		// probes finish and the last OTLP export is sent.
+		stop()
+		logger.Info("shutting down: finishing the probes in progress and sending the last OTLP export; a second signal exits at once", "shutdown_timeout", shutdownTimeout.String())
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), *shutdownTimeout)
 		defer cancel()
 		if err := httpServer.Shutdown(shutdownCtx); err != nil {
-			logger.Error("HTTP server shutdown failed", "error", err)
+			// The wait ran out: the probes still in progress are cut off, and
+			// Prometheus records them as failed scrapes.
+			logger.Error("probes were still in progress when --web.shutdown-timeout ran out; their connections are closed", "shutdown_timeout", shutdownTimeout.String(), "error", err)
+			_ = httpServer.Close()
 		}
 		// The probes have finished, and the export loop has stopped, so what
 		// they queued goes out in one last export, bounded by otlp.timeout.

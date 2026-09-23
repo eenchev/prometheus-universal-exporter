@@ -69,6 +69,11 @@ type ExporterBasicAuth struct {
 	Enabled  bool   `yaml:"enabled"`
 	Username string `yaml:"username"`
 	Password string `yaml:"password"`
+	// UsernameFile and PasswordFile read the credential from files instead,
+	// such as a mounted Kubernetes Secret, so it stays out of the
+	// configuration; see webauth.go.
+	UsernameFile string `yaml:"username_file"`
+	PasswordFile string `yaml:"password_file"`
 }
 type Collector struct {
 	Name string `yaml:"name"`
@@ -89,6 +94,10 @@ type Collector struct {
 	// MaxConcurrentProbes bounds the collector's trips to its targets at
 	// once; unset or 0 means DefaultMaxConcurrentProbes. See triplimit.go.
 	MaxConcurrentProbes int `yaml:"max_concurrent_probes"`
+	// NameEscaping says what to do with a metric or label name that is not a
+	// classic Prometheus name: fail, the default, underscores or values. See
+	// nameescaping.go.
+	NameEscaping string `yaml:"name_escaping"`
 }
 type RequestConfig struct {
 	// Type selects how the collector reaches its data. It is required; see
@@ -107,7 +116,7 @@ type RequestConfig struct {
 	ForwardHeaders       []string          `yaml:"forward_headers"`
 	TLS                  TLSConfig         `yaml:"tls"`
 	Retry                RetryConfig       `yaml:"retry"`
-	MaxResponseBytes     int64             `yaml:"max_response_bytes"`
+	MaxResponseBytes     ByteSize          `yaml:"max_response_bytes"`
 	FollowRedirects      bool              `yaml:"follow_redirects"`
 	EnableHTTP2          bool              `yaml:"enable_http2"`
 	AllowedSchemes       []string          `yaml:"allowed_schemes"`
@@ -117,10 +126,10 @@ type RequestConfig struct {
 	MaxAge Duration `yaml:"max_age"`
 	// Files, MaxFiles and MaxTotalBytes turn a localfile collector into a
 	// directory reader: every file of the directory whose name matches one of
-	// the patterns is read and checked on its own (localdir.go).
+	// the patterns is read and checked on its own (localfile_directory.go).
 	Files         []string `yaml:"files"`
 	MaxFiles      int      `yaml:"max_files"`
-	MaxTotalBytes int64    `yaml:"max_total_bytes"`
+	MaxTotalBytes ByteSize `yaml:"max_total_bytes"`
 }
 type RetryConfig struct {
 	Attempts int      `yaml:"attempts"`
@@ -141,7 +150,10 @@ type TLSConfig struct {
 	InsecureSkipVerify bool   `yaml:"insecure_skip_verify"`
 }
 type ResponseConfig struct {
-	Format     string            `yaml:"format"`
+	Format string `yaml:"format"`
+	// Charset names the encoding of the response when the target does not
+	// declare it, or declares it wrongly (textencoding.go).
+	Charset    string            `yaml:"charset"`
 	CSV        CSVConfig         `yaml:"csv"`
 	Namespaces map[string]string `yaml:"namespaces"`
 }
@@ -171,7 +183,16 @@ type OTLPConfig struct {
 	ResourceAttributes map[string]string `yaml:"resource_attributes"`
 	// Compression of the export requests: gzip, the default, or none.
 	Compression string `yaml:"compression"`
+	// MaxPendingPoints bounds the data points waiting for export while the
+	// endpoint is failing; past it the oldest are dropped.
+	MaxPendingPoints int `yaml:"max_pending_points"`
+	// UnreadyAfterFailures makes /ready answer 503 after this many failed
+	// exports in a row; 0, the default, leaves readiness to the configuration.
+	UnreadyAfterFailures int `yaml:"unready_after_failures"`
 }
+
+// DefaultOTLPMaxPendingPoints is otlp.max_pending_points when unset.
+const DefaultOTLPMaxPendingPoints = 100000
 
 // The values of otlp.compression.
 const (
@@ -180,14 +201,14 @@ const (
 )
 
 type Limits struct {
-	MaxResponseBytes    int64    `yaml:"max_response_bytes"`
+	MaxResponseBytes    ByteSize `yaml:"max_response_bytes"`
 	MaxMetrics          int      `yaml:"max_metrics"`
 	MaxLabelsPerMetric  int      `yaml:"max_labels_per_metric"`
 	MaxLabelValueLength int      `yaml:"max_label_value_length"`
 	MaxMetricNameLength int      `yaml:"max_metric_name_length"`
 	MaxHelpLength       int      `yaml:"max_help_length"`
 	ScriptTimeout       Duration `yaml:"script_timeout"`
-	MaxOutputBytes      int      `yaml:"max_output_bytes"`
+	MaxOutputBytes      ByteSize `yaml:"max_output_bytes"`
 	MaxCacheEntries     int      `yaml:"max_cache_entries"`
 }
 type MetricRule struct {
@@ -290,6 +311,9 @@ func (c *Config) Validate() error {
 		if x.Cache < 0 {
 			return fmt.Errorf("collector %q cache must not be negative", x.Name)
 		}
+		if err := validateNameEscaping(x); err != nil {
+			return err
+		}
 		if x.MaxConcurrentProbes < 0 {
 			return fmt.Errorf("collector %q max_concurrent_probes must not be negative", x.Name)
 		}
@@ -297,6 +321,9 @@ func (c *Config) Validate() error {
 			x.Response.Format = "auto"
 		}
 		x.Response.Format = strings.ToLower(x.Response.Format)
+		if err := checkCharset(x.Response.Charset); err != nil {
+			return fmt.Errorf("collector %q response.charset: %w", x.Name, err)
+		}
 		if x.Decoder.Type == "" {
 			x.Decoder.Type = x.Response.Format
 		}
@@ -411,8 +438,8 @@ func (c *Config) Validate() error {
 		}
 	}
 	if c.Web.BasicAuth != nil && c.Web.BasicAuth.Enabled {
-		if strings.TrimSpace(c.Web.BasicAuth.Username) == "" || c.Web.BasicAuth.Password == "" {
-			return errors.New("web.basic_auth requires a username and password when enabled")
+		if err := c.Web.BasicAuth.validate(); err != nil {
+			return err
 		}
 		for _, collector := range c.Collectors {
 			if collector.Request.ForwardAuthorization {
@@ -436,6 +463,15 @@ func (c *Config) Validate() error {
 		}
 		if c.OTLP.ServiceName == "" {
 			c.OTLP.ServiceName = "prometheus-universal-exporter"
+		}
+		if c.OTLP.MaxPendingPoints < 0 {
+			return errors.New("otlp.max_pending_points must not be negative")
+		}
+		if c.OTLP.MaxPendingPoints == 0 {
+			c.OTLP.MaxPendingPoints = DefaultOTLPMaxPendingPoints
+		}
+		if c.OTLP.UnreadyAfterFailures < 0 {
+			return errors.New("otlp.unready_after_failures must not be negative")
 		}
 		switch c.OTLP.Compression {
 		case "":

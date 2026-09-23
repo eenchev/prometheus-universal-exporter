@@ -34,18 +34,18 @@ spec:
         type: Bearer
         credentials:
           name: {{ $monitor.auth.secretName | quote }}
-          key: {{ $monitor.auth.secretKey | quote }}
-          optional: {{ $monitor.auth.optional }}
+          key: {{ $monitor.auth.secretKey | default "token" | quote }}
+          optional: {{ $monitor.auth.optional | default false }}
       {{ else if and $monitor.auth $monitor.auth.enabled (eq $monitor.auth.type "basic") }}
       basicAuth:
         username:
           name: {{ $monitor.auth.secretName | quote }}
-          key: {{ $monitor.auth.usernameKey | quote }}
-          optional: {{ $monitor.auth.optional }}
+          key: {{ $monitor.auth.usernameKey | default "username" | quote }}
+          optional: {{ $monitor.auth.optional | default false }}
         password:
           name: {{ $monitor.auth.secretName | quote }}
-          key: {{ $monitor.auth.passwordKey | quote }}
-          optional: {{ $monitor.auth.optional }}
+          key: {{ $monitor.auth.passwordKey | default "password" | quote }}
+          optional: {{ $monitor.auth.optional | default false }}
       {{ end }}
       relabelings:
         - sourceLabels: [__address__]
@@ -86,6 +86,16 @@ spec:
       path: {{ .Values.selfMetrics.path | quote }}
       interval: {{ .Values.selfMetrics.interval }}
       scrapeTimeout: {{ .Values.selfMetrics.scrapeTimeout }}
+      {{- if and .Values.webAuth .Values.webAuth.enabled }}
+      {{- /* The exporter's own Basic Auth protects this endpoint too. */}}
+      basicAuth:
+        username:
+          name: {{ .Values.webAuth.secretName | quote }}
+          key: {{ .Values.webAuth.usernameKey | quote }}
+        password:
+          name: {{ .Values.webAuth.secretName | quote }}
+          key: {{ .Values.webAuth.passwordKey | quote }}
+      {{- end }}
       {{- with .Values.selfMetrics.relabelings }}
       relabelings:
         {{ toYaml . | nindent 8 }}

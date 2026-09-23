@@ -26,6 +26,11 @@ func transform(ctx context.Context, d *Decoded, r *HTTPResponse, c *Collector, p
 	}
 	truncateLabels(set, c)
 	applyMetricsPrefix(set, c.MetricsPrefix)
+	// After the prefix, so a values-escaped name still starts with U__
+	// (nameescaping.go).
+	if err := escapeNames(set, c.NameEscaping); err != nil {
+		return nil, err
+	}
 	return set, nil
 }
 

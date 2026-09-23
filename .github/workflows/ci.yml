@@ -86,6 +86,22 @@ jobs:
         if: steps.changes.outputs.chart == 'true'
       - run: helm template test charts/prometheus-universal-exporter --set server.logLevel=debug --set server.probeTimeoutOffset=1s
         if: steps.changes.outputs.chart == 'true'
+      - name: Render the shutdown timeout, its grace period and the exporter credential Secret
+        if: steps.changes.outputs.chart == 'true'
+        run: |
+          set -eu
+          out="$(helm template test charts/prometheus-universal-exporter --set server.shutdownTimeout=1m)"
+          echo "$out" | grep -q -- '--web.shutdown-timeout=1m'
+          echo "$out" | grep -q 'terminationGracePeriodSeconds: 70'
+          out="$(helm template test charts/prometheus-universal-exporter --set server.shutdownTimeout=20s)"
+          if echo "$out" | grep -q terminationGracePeriodSeconds; then
+            echo "a grace period was rendered where Kubernetes' default covers the shutdown" >&2
+            exit 1
+          fi
+          out="$(helm template test charts/prometheus-universal-exporter --set webAuth.enabled=true --set webAuth.secretName=exporter-auth --set-json 'monitors=[{"name":"t","enabled":true,"type":"service","collector":"example"}]')"
+          echo "$out" | grep -q 'mountPath: "/var/run/prometheus-universal-exporter/web-auth"'
+          echo "$out" | grep -q 'secretName: "exporter-auth"'
+          echo "$out" | grep -q 'basicAuth:'
       - run: helm template test charts/prometheus-universal-exporter --set-json 'extraArgs=["--some.new-flag=value"]' --set-json 'extraVolumes=[{"name":"extra-collectors","configMap":{"name":"my-collectors"}}]' --set-json 'extraVolumeMounts=[{"name":"extra-collectors","mountPath":"/etc/collectors","readOnly":true}]'
         if: steps.changes.outputs.chart == 'true'
       - name: Check that every rendered manifest is its own document
@@ -114,13 +130,13 @@ jobs:
             echo "helm template accepted --log.level in extraArgs, which server.logLevel manages" >&2
             exit 1
           fi
-          for oneshot in --dry-run --config.schema --config.collector-file-schema --help; do
+          for oneshot in --dry-run --config.schema --config.collector-file-schema --version --help; do
             if helm template test charts/prometheus-universal-exporter --set-json "extraArgs=[\"$oneshot\"]" >/dev/null 2>&1; then
               echo "helm template accepted $oneshot in extraArgs, which would make the pod exit instead of serving" >&2
               exit 1
             fi
           done
-          for bad in server.logLevel=verbose server.probeTimeoutOffset=-1s; do
+          for bad in server.logLevel=verbose server.probeTimeoutOffset=-1s server.shutdownTimeout=500ms server.shutdownTimeout=0s terminationGracePeriodSeconds=10 webAuth.enabled=true; do
             if helm template test charts/prometheus-universal-exporter --set "$bad" >/dev/null 2>&1; then
               echo "helm template accepted $bad" >&2
               exit 1

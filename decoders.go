@@ -61,9 +61,19 @@ func detectFormat(r *HTTPResponse, requested string) string {
 }
 
 func decode(r *HTTPResponse, c *Collector) (*Decoded, error) {
+	// The body is converted to UTF-8 before anything reads it (textencoding.go).
+	named, err := convertToUTF8(r, c)
+	if err != nil {
+		return nil, err
+	}
 	kind := detectFormat(r, c.Response.Format)
 	if c.Decoder.Type != "" && c.Decoder.Type != "auto" {
 		kind = c.Decoder.Type
+	}
+	if !named {
+		if err := convertFromDocument(r, kind); err != nil {
+			return nil, err
+		}
 	}
 	switch kind {
 	case "json":

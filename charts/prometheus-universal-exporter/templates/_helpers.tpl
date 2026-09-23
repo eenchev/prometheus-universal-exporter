@@ -17,13 +17,15 @@
   "--config.export-env" "set server.expandEnv instead"
   "--log.level" "set server.logLevel instead"
   "--probe.timeout-offset" "set server.probeTimeoutOffset instead"
-  "--web.enable-lifecycle" "set server.enableLifecycle instead" -}}
+  "--web.enable-lifecycle" "set server.enableLifecycle instead"
+  "--web.shutdown-timeout" "set server.shutdownTimeout instead" -}}
 {{- /* These flags make the exporter print something and exit instead of
        serving, so a pod started with one would restart for ever. */ -}}
 {{- $oneShot := dict
   "--dry-run" "would make the exporter validate its configuration and exit, so the pod would never serve; run --dry-run as a separate command, a Job or an init container instead"
   "--config.schema" "would make the exporter print the configuration schema and exit, so the pod would never serve; run it as a separate command instead"
   "--config.collector-file-schema" "would make the exporter print the collector file schema and exit, so the pod would never serve; run it as a separate command instead"
+  "--version" "would make the exporter print its version and exit, so the pod would never serve; the version is in the http_exporter_build_info self-metric"
   "--help" "would make the exporter print its usage and exit, so the pod would never serve"
   "--h" "would make the exporter print its usage and exit, so the pod would never serve" -}}
 {{- range $arg := .Values.extraArgs -}}
@@ -47,6 +49,9 @@
 {{- $reserved := list "/etc/prometheus-universal-exporter" -}}
 {{- if and .Values.targetAuth .Values.targetAuth.enabled -}}
 {{- $reserved = append $reserved (.Values.targetAuth.mountPath | toString) -}}
+{{- end -}}
+{{- if and .Values.webAuth .Values.webAuth.enabled -}}
+{{- $reserved = append $reserved (.Values.webAuth.mountPath | toString | trimSuffix "/") -}}
 {{- end -}}
 {{- range $mount := .Values.extraVolumeMounts -}}
 {{- $path := $mount.mountPath | toString | trimSuffix "/" -}}
@@ -126,6 +131,46 @@ app.kubernetes.io/managed-by: {{ .Release.Service }}
 {{- fail (printf "server.probeTimeoutOffset %q must be a Go duration of zero or more, for example \"500ms\" or \"1s\"" $offset) -}}
 {{- end -}}
 {{- $offset -}}
+{{- end -}}
+{{- end }}
+{{- define "prometheus-universal-exporter.shutdownTimeout" -}}
+{{- /* Empty leaves the flag out, as for probeTimeoutOffset. Only whole hours,
+       minutes and seconds, so the chart can work out the grace period. */ -}}
+{{- $timeout := .Values.server.shutdownTimeout | default "" | toString -}}
+{{- if $timeout -}}
+{{- if not (regexMatch "^([0-9]+h)?([0-9]+m)?([0-9]+s)?$" $timeout) -}}
+{{- fail (printf "server.shutdownTimeout %q must be whole hours, minutes and seconds, for example \"30s\" or \"1m30s\"" $timeout) -}}
+{{- end -}}
+{{- if eq (include "prometheus-universal-exporter.durationSeconds" $timeout) "0" -}}
+{{- fail (printf "server.shutdownTimeout %q must be positive" $timeout) -}}
+{{- end -}}
+{{- $timeout -}}
+{{- end -}}
+{{- end }}
+{{- define "prometheus-universal-exporter.durationSeconds" -}}
+{{- $seconds := 0 -}}
+{{- range $part := regexFindAll "[0-9]+[hms]" . -1 -}}
+{{- $n := $part | trimSuffix "h" | trimSuffix "m" | trimSuffix "s" | atoi -}}
+{{- if hasSuffix "h" $part -}}{{- $seconds = add $seconds (mul $n 3600) -}}
+{{- else if hasSuffix "m" $part -}}{{- $seconds = add $seconds (mul $n 60) -}}
+{{- else -}}{{- $seconds = add $seconds $n -}}{{- end -}}
+{{- end -}}
+{{- $seconds -}}
+{{- end }}
+{{- define "prometheus-universal-exporter.terminationGracePeriodSeconds" -}}
+{{- /* A stopping pod needs the shutdown timeout, then time for the last OTLP
+       export and exit. Kubernetes kills it after 30 seconds unless told
+       otherwise, which would cut both short. */ -}}
+{{- $shutdown := include "prometheus-universal-exporter.shutdownTimeout" . | default "5s" -}}
+{{- $needed := add (include "prometheus-universal-exporter.durationSeconds" $shutdown | atoi) 10 -}}
+{{- $explicit := .Values.terminationGracePeriodSeconds -}}
+{{- if not (kindIs "invalid" $explicit) -}}
+{{- if lt (int $explicit) (int $needed) -}}
+{{- fail (printf "terminationGracePeriodSeconds %v is shorter than the %d seconds a stopping pod needs: server.shutdownTimeout (%s) and 10 seconds for the last OTLP export and exit; raise it or lower server.shutdownTimeout" $explicit $needed $shutdown) -}}
+{{- end -}}
+{{- int $explicit -}}
+{{- else if gt (int $needed) 30 -}}
+{{- $needed -}}
 {{- end -}}
 {{- end }}
 {{- define "prometheus-universal-exporter.pythonPath" -}}

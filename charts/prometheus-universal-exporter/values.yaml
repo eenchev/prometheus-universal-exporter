@@ -78,6 +78,14 @@ server:
   # the Deployment anyway. The endpoint is behind web.basic_auth when that is
   # configured. SIGHUP reloads whether or not this is set.
   enableLifecycle: false
+  # How long a pod that is stopping waits for the probes in progress before
+  # closing their connections: hours, minutes and seconds such as "30s" or
+  # "1m30s". Keep it at least as long as the monitors' scrapeTimeout, or a
+  # rollout cuts probes off and Prometheus records them as failed scrapes.
+  # Empty keeps the exporter's default, 5s, and leaves the flag out, so the
+  # chart also works with exporter images that predate it. The pod's
+  # terminationGracePeriodSeconds is raised to cover it (see below).
+  shutdownTimeout: ""
 
 # Environment variables for the exporter container, in the Kubernetes shapes.
 # These are what server.expandEnv substitutes from; they are also useful on
@@ -252,6 +260,12 @@ resources:
   limits:
     cpu: 500m
     memory: 512Mi
+# How long Kubernetes lets a stopping pod run before killing it. Empty leaves
+# Kubernetes' default, 30 seconds, unless server.shutdownTimeout needs more:
+# the chart then renders server.shutdownTimeout plus 10 seconds, the 10 for
+# the exporter's last OTLP export and exit. Set explicitly, it must be at
+# least that, or rendering fails.
+terminationGracePeriodSeconds: null
 strategy:
   type: RollingUpdate
   rollingUpdate:
@@ -288,3 +302,25 @@ targetAuth:
 #   basic_auth_file:
 #     username: /var/run/prometheus-universal-exporter/target-auth/username
 #     password: /var/run/prometheus-universal-exporter/target-auth/password
+
+# The exporter's own Basic Auth credential (web.basic_auth) from a Secret, so
+# the password stays out of the configuration's ConfigMap. The Secret's
+# username and password keys are mounted as files named username and password
+# under mountPath; point the configuration at them:
+#
+#   web:
+#     basic_auth:
+#       enabled: true
+#       username_file: /var/run/prometheus-universal-exporter/web-auth/username
+#       password_file: /var/run/prometheus-universal-exporter/web-auth/password
+#
+# The self-metrics monitor uses this Secret by itself. The same Secret can give
+# the probing monitors their credential: set a monitor's auth to type basic
+# with this secretName. A rotated Secret is picked up by
+# the exporter's next request, without a restart.
+webAuth:
+  enabled: false
+  secretName: ""
+  usernameKey: username
+  passwordKey: password
+  mountPath: /var/run/prometheus-universal-exporter/web-auth

@@ -239,7 +239,34 @@ config:
           password: change-me
 ```
 
-The Kubernetes `/health` and `/ready` endpoints remain available for health checks. The readiness probe uses `/ready`, which reports the pod not ready while a reload of its configuration is rejected or its OTLP exports keep failing; see [Readiness](../../docs/CONFIGURATION.md#readiness).
+A password written there ends up in the chart's ConfigMap. To keep it in a Secret instead, mount the Secret with `webAuth` and point the configuration at the files. The same Secret can give the monitors their credential:
+
+```yaml
+webAuth:
+  enabled: true
+  secretName: exporter-auth        # keys: username, password
+config:
+  data:
+    config.yaml: |
+      web:
+        basic_auth:
+          enabled: true
+          username_file: /var/run/prometheus-universal-exporter/web-auth/username
+          password_file: /var/run/prometheus-universal-exporter/web-auth/password
+monitors:
+  - name: targets
+    enabled: true
+    type: service
+    collector: example
+    auth:
+      enabled: true
+      type: basic
+      secretName: exporter-auth
+```
+
+The self-metrics monitor uses the `webAuth` Secret by itself, since `web.basic_auth` protects the self-metrics endpoint too; the probing monitors take it through their `auth`, as above, whose keys default to `username` and `password`. `webAuth.usernameKey` and `webAuth.passwordKey` name the Secret's keys, `username` and `password` by default; the files are always named `username` and `password` under `webAuth.mountPath`. The exporter reads a file again when it changes, so a rotated Secret takes effect without a restart. An `extraVolumeMounts` entry at `webAuth.mountPath` is rejected while rendering.
+
+The Kubernetes `/health` and `/ready` endpoints remain available for health checks. The readiness probe uses `/ready`, which reports the pod not ready while a reload of its configuration is rejected, and, with `otlp.unready_after_failures` set, while its OTLP exports keep failing; see [Readiness](../../docs/CONFIGURATION.md#readiness).
 
 ## Common configuration
 
@@ -254,6 +281,7 @@ The exporter's own flags are chart values rather than something to assemble by h
 | `server.pythonPath` | `--python.path` | `/usr/local/bin/python3` |
 | `server.logLevel` | `--log.level` | `info` |
 | `server.probeTimeoutOffset` | `--probe.timeout-offset` | unset: the exporter's `500ms` |
+| `server.shutdownTimeout` | `--web.shutdown-timeout` | unset: the exporter's `5s` |
 | `server.watchConfig` / `server.watchConfigInterval` | `--config.watch` / `--config.watch-interval` | off / `60s` |
 | `server.expandEnv` | `--config.export-env` | off |
 | `server.enableLifecycle` | `--web.enable-lifecycle` | off |
@@ -272,9 +300,22 @@ helm install exporter charts/prometheus-universal-exporter \
   --set server.probeTimeoutOffset=1s
 ```
 
+### Shutting down
+
+`server.shutdownTimeout` is how long a stopping pod waits for the probes in progress before closing them, rendered as `--web.shutdown-timeout` (see [Shutting down](../../docs/CONFIGURATION.md#shutting-down)). Keep it at least as long as the monitors' `scrapeTimeout`, or a rollout cuts probes off and Prometheus records failed scrapes. It takes whole hours, minutes and seconds — `30s`, `1m30s` — so the chart can work out the grace period, and like `probeTimeoutOffset` it is rendered only when set.
+
+Kubernetes kills a pod `terminationGracePeriodSeconds` after asking it to stop, 30 seconds unless set. A stopping exporter needs its shutdown timeout and about 10 seconds more, for the last OTLP export and exiting. Left unset, `terminationGracePeriodSeconds` is rendered as the shutdown timeout plus 10 whenever that is more than 30; set, it must be at least that, or rendering fails:
+
+```sh
+helm install exporter charts/prometheus-universal-exporter \
+  --set server.shutdownTimeout=1m   # renders terminationGracePeriodSeconds: 70
+```
+
+Raise `terminationGracePeriodSeconds` further if `otlp.timeout` is longer than its default of 5 seconds.
+
 `server.enableLifecycle` enables `POST /-/reload`, which reloads the configuration at once and answers `200` when it was accepted or `500` with the reason when it was not — see [Reloading on demand](../../docs/CONFIGURATION.md#reloading-on-demand). A chart-managed ConfigMap does not need it, since a change rolls the Deployment; it is for a ConfigMap updated in place with `config.enabled: false`. Like `probeTimeoutOffset`, the flag is only rendered when set, so older images still start.
 
-The one-shot flags — `--dry-run`, `--config.schema`, `--config.collector-file-schema` — print something and exit, so they have no values: run them as a separate command. A flag an exporter image has that this chart version does not know yet goes in `extraArgs`, described under [Extra volumes and arguments](#extra-volumes-and-arguments).
+The one-shot flags — `--dry-run`, `--config.schema`, `--config.collector-file-schema`, `--version` — print something and exit, so they have no values: run them as a separate command. A flag an exporter image has that this chart version does not know yet goes in `extraArgs`, described under [Extra volumes and arguments](#extra-volumes-and-arguments).
 
 ### Configuration mount and rollout
 
@@ -503,7 +544,7 @@ Two collisions are rejected while rendering, because both fail in a way that poi
 
 A [`localfile`](../../docs/LOCALFILE.md) collector reads files the same way: mount the directory it names as `request.root` with these values, read-only, as shown in [Local files in Kubernetes](../../docs/LOCALFILE.md#in-kubernetes).
 
-`--dry-run`, `--config.schema`, `--config.collector-file-schema` and `--help` are rejected as well: each prints something and exits, so a pod started with one would restart for ever instead of serving. Run them as a separate command, a Job or an init container instead — see [Dry run](../../docs/CONFIGURATION.md#dry-run).
+`--dry-run`, `--config.schema`, `--config.collector-file-schema`, `--version` and `--help` are rejected as well: each prints something and exits, so a pod started with one would restart for ever instead of serving. Run them as a separate command, a Job or an init container instead — see [Dry run](../../docs/CONFIGURATION.md#dry-run).
 
 An entry that does not begin with `--` is rejected too, since `some.new-flag=value` as an argument is read as a positional value and ignored.
 
@@ -546,7 +587,8 @@ Every value has a default, and `values.yaml` documents each one in place. `value
 | `service` | object | enabled, ClusterIP, 8080 | The exporter Service. |
 | `neg` | object | disabled | GKE Network Endpoint Group annotations on the Service. |
 | `ingress` | object | disabled | Class, hosts, paths, TLS and annotations. |
-| `server` | object | see [Exporter flags](#exporter-flags) | Exporter flags: `listenAddress`, `pythonPath`, `logLevel`, `probeTimeoutOffset`, `enableLifecycle`, `watchConfig`, `watchConfigInterval`, `expandEnv`. |
+| `server` | object | see [Exporter flags](#exporter-flags) | Exporter flags: `listenAddress`, `pythonPath`, `logLevel`, `probeTimeoutOffset`, `shutdownTimeout`, `enableLifecycle`, `watchConfig`, `watchConfigInterval`, `expandEnv`. |
+| `terminationGracePeriodSeconds` | integer | unset | The pod's grace period; see [Shutting down](#shutting-down). |
 | `env` / `envFrom` | array | `[]` | Container environment, in the Kubernetes shapes. |
 | `extraArgs` | array | `[]` | Extra command-line flags. |
 | `extraVolumes` / `extraVolumeMounts` | array | `[]` | Volumes and mounts beyond the chart's own. |
@@ -560,6 +602,7 @@ Every value has a default, and `values.yaml` documents each one in place. `value
 | `nodeSelector` / `tolerations` / `affinity` | map/array/object | empty | Scheduling. |
 | `networkPolicy` | object | disabled | `ingress` and `egress` rules. |
 | `targetAuth` | object | disabled | Secret-backed credentials mounted for the exporter to send to the target. |
+| `webAuth` | object | disabled | A Secret's username and password mounted as files for the exporter's own Basic Auth; see [Exporter authentication](#exporter-authentication). |
 
 ## Other options
 

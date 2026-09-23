@@ -121,8 +121,19 @@
           "type": "string",
           "description": "Rendered as --probe.timeout-offset when set: how much of Prometheus's scrape timeout a probe leaves unused. Empty keeps the exporter's default, 500ms.",
           "pattern": "^$|^(0|([0-9]+(\\.[0-9]+)?(ns|us|ms|s|m|h))+)$"
+        },
+        "shutdownTimeout": {
+          "type": "string",
+          "description": "Rendered as --web.shutdown-timeout when set: how long a stopping pod waits for the probes in progress. Whole hours, minutes and seconds, such as 30s or 1m30s. Empty keeps the exporter's default, 5s.",
+          "pattern": "^$|^([0-9]+h)?([0-9]+m)?([0-9]+s)?$"
         }
       }
+    },
+
+    "terminationGracePeriodSeconds": {
+      "type": ["integer", "null"],
+      "minimum": 0,
+      "description": "The pod's terminationGracePeriodSeconds. Null keeps Kubernetes' 30 unless server.shutdownTimeout needs more; set, it must be at least server.shutdownTimeout plus 10 seconds."
     },
 
     "env": {"type": "array", "items": {"type": "object", "properties": {"name": {"type": "string"}}, "required": ["name"]}},
@@ -278,6 +289,19 @@
         "mountPath": {"type": "string", "pattern": "^/"},
         "usernameFileName": {"type": "string"},
         "passwordFileName": {"type": "string"}
+      }
+    },
+
+    "webAuth": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Mount a Secret's username and password as files for web.basic_auth.username_file and password_file.",
+      "properties": {
+        "enabled": {"type": "boolean"},
+        "secretName": {"type": "string"},
+        "usernameKey": {"type": "string", "minLength": 1},
+        "passwordKey": {"type": "string", "minLength": 1},
+        "mountPath": {"type": "string", "pattern": "^/"}
       }
     }
   },

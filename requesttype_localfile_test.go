@@ -196,7 +196,7 @@ func TestLocalFileRejectsHTTPProbeParameters(t *testing.T) {
 // An http collector still needs a target.
 func TestHTTPProbesStillNeedATarget(t *testing.T) {
 	server := fileServer(t, testCollector("web", "text"))
-	probeFile(t, server, "collector=web").must(t, http.StatusBadRequest, "target and collector are required")
+	probeFile(t, server, "collector=web").must(t, http.StatusBadRequest, `the target parameter is required for collector "web", whose request.type is http`)
 }
 
 func TestLocalFileRefusesWhatIsNotARegularFileUnderRoot(t *testing.T) {

@@ -300,6 +300,7 @@ Recommended top-level structure:
 collectors:
   - name: example
     metrics_prefix: example   # optional
+    name_escaping: fail       # optional: fail, underscores or values
     request:
       type: http
       ...
@@ -388,6 +389,18 @@ family under the prefixed name. The response cache MUST be keyed on the
 collector definition including the prefix. The exporter's own `http_exporter_*`
 metrics, including scheduled-target health metrics, MUST NOT be prefixed. Logs
 and probe errors MUST name a metric rule as configured, without the prefix.
+
+### 5.0a Sizes
+
+Every setting that is a number of bytes — `request.max_response_bytes`,
+`limits.max_response_bytes`, `limits.max_output_bytes` and
+`request.max_total_bytes` — MUST accept a YAML integer of bytes, or a string of
+a number, optionally with a fraction, followed by an optional space and unit:
+`B`; `kB`, `MB`, `GB`, `TB` as powers of 1000; `KiB`, `MiB`, `GiB`, `TiB` as
+powers of 1024. The unit MUST be case insensitive, the `B` MAY be left out, and
+a fraction MUST be rounded down to whole bytes. Anything else, including a
+negative number, an exponent or an unknown unit, MUST fail to load naming the
+value. The configuration schema MUST accept both forms for these settings.
 
 ### 5.1 Request types
 
@@ -507,7 +520,7 @@ textfile collector — and follows that collector's practice.
 | `max_response_bytes` | limit | As for `http`; with `files`, the limit of each file. |
 | `files` | none | A list of file name patterns, `path.Match` syntax. Setting it makes the collector read a directory (§ 5.1a). MUST NOT be combined with `path`; a pattern MUST NOT be empty, contain `/`, `\` or NUL, or be malformed. |
 | `max_files` | 100 | With `files` only; not negative. |
-| `max_total_bytes` | 64 MiB | With `files` only; not negative. |
+| `max_total_bytes` | 64 MiB | With `files` only; not negative. A size (§ 5.0a). |
 
 `max_files` or `max_total_bytes` without `files` MUST be rejected, naming the
 key.
@@ -573,20 +586,38 @@ scrape in the `file` stage under `on_fetch_error`. There is no file to name, so
 the `path` and `param_<name>` probe parameters MUST be refused with `400`, and
 `request.path` in a scheduled target at load, each saying why.
 
+The directory MUST be listed in batches, and the listing MUST stop after ten
+times `max_files` entries, and at least 1000, whatever they are, logging a
+warning with how many were listed; only the files found by then are
+considered.
+
 Matching files MUST be taken in name order, at most `max_files` of them; the
 rest MUST NOT be read or looked at, and MUST be counted and logged as a warning
 with how many matched and the first skipped. Every file taken MUST be read by
 the rules for one file above — confined to `root`, only regular files,
 non-blocking, re-read when it changes under the read — and additionally:
 
+- Which files are read MUST be decided from their sizes, in name order, before
+  any is read, so the choice does not depend on which read finishes first.
 - A file larger than the response limit MUST be refused from its size, before
   it is opened.
 - A file that would take the bytes read in this scrape past `max_total_bytes`
   MUST be refused in the same way; later files that fit MUST still be read.
+- What `max_total_bytes` leaves after the files chosen MUST be shared among
+  them as room to grow, and a file that grows past its size plus its share
+  before it is read MUST fail alone, so a scrape never reads more than
+  `max_total_bytes`.
 - `max_age` MUST apply to each file.
 
+The files chosen MUST be read four at a time, and answered in name order
+whichever finished first.
+
 The whole directory read MUST be one read for the pending-read cap and MUST end
-with the probe's `timeout`, budget or context.
+with the probe's `timeout`, budget or context. When it ends before the read is
+done, the files read by then MUST be answered, and each file still being read
+or not yet reached MUST fail alone with an error saying it was not read before
+the deadline, its modification time reported when it had been taken; no further
+file MUST be started. Only a directory not listed in time MUST fail the probe.
 
 Each file read MUST then be decoded, transformed and validated on its own, as a
 response of its own with the headers a single file gets, so its decoder follows
@@ -700,6 +731,29 @@ text/plain; version=0.0.4 -> potentially prometheus
 ```
 
 Ambiguous formats SHOULD be rejected or require explicit configuration rather than guessed incorrectly.
+
+### 6.1a Character encodings
+
+A response MUST be converted to UTF-8 before its format is detected or it is
+decoded, from the first of: a byte order mark (UTF-8, UTF-16LE, UTF-16BE),
+which MUST be removed; the collector's `response.charset`; the `charset`
+parameter of `Content-Type`; and, only when none of those named one, a
+`<meta charset>` or `<meta http-equiv="Content-Type">` in the first 1024 bytes
+of HTML, or the encoding of an XML declaration. Encoding names MUST be looked
+up as the WHATWG Encoding Standard defines them. An unknown
+`response.charset` MUST fail to load; an unknown declared name MUST fail the
+`decode` stage naming it. The converted body MUST be what decoders, transforms
+and Python scripts see, with `charset=utf-8` in its `Content-Type`, and an XML
+declaration naming another encoding MUST be rewritten to UTF-8 so the XML
+parser does not convert it again.
+
+After every transform, label values and help texts that are not valid UTF-8
+MUST have their invalid bytes replaced with U+FFFD rather than failing the
+scrape, since Prometheus refuses a whole scrape over one of them. Each value
+repaired MUST be counted in `http_exporter_invalid_utf8_total` for the
+collector, and a probe that repaired any MUST log a warning with the count and
+the first metric, suggesting `response.charset`. A label map a transform shares
+among metrics MUST NOT be changed in place.
 
 ---
 
@@ -1773,6 +1827,33 @@ Before exposition, validate:
 
 Metric names SHOULD be normalized only when explicitly configured; silent surprising renaming is undesirable. A collector's `metrics_prefix` (§ 5.0a) is such explicit configuration, and validation applies to the prefixed names.
 
+### 21.1 UTF-8 names
+
+The exposition MUST use classic names only: `[a-zA-Z_:][a-zA-Z0-9_:]*` for
+metrics and `[a-zA-Z_][a-zA-Z0-9_]*` for labels. A collector's
+`name_escaping` MUST say what happens to any other name a transform produces,
+including one a `prometheus` transform passes through from a UTF-8 target and
+one a Python script or pre-script emits:
+
+- `fail`, the default, MUST fail the scrape in validation, and when the name
+  is valid UTF-8 the error MUST name it and say to set `name_escaping`, for a
+  metric name and a label name alike;
+- `underscores` MUST replace every character a classic name may not have at
+  its position, including a leading digit and, in a label name, `:`, with `_`;
+- `values` MUST write `U__`, then the name with `_` doubled, every character
+  classic at its position kept, every other rune as `_`, its code point in
+  lower-case hexadecimal and `_`, and invalid UTF-8 as `_FFFD_` — Prometheus's
+  value encoding escaping, which it can reverse.
+
+Any other value MUST be rejected when the configuration loads. A classic name
+MUST NOT be changed by either scheme, and label values MUST NOT be escaped.
+Escaping MUST happen after `metrics_prefix` is joined, in the one place every
+transform's output passes through, so it applies to probes, scheduled targets
+and each file of a directory alike. A label map shared among metrics MUST NOT
+be changed in place. Two labels of one series that escape to one name MUST fail
+the scrape naming both, and two metrics that do so are duplicate series and
+fail as such.
+
 ---
 
 # 22. Exporter self-metrics
@@ -1798,6 +1879,7 @@ http_exporter_script_errors_total
 http_exporter_script_duration_seconds
 
 http_exporter_metrics_emitted_total
+http_exporter_invalid_utf8_total
 http_exporter_series_limit_exceeded_total
 
 http_exporter_cache_hits_total
@@ -1808,6 +1890,7 @@ http_exporter_probes_coalesced_total
 http_exporter_probes_in_flight
 http_exporter_probes_rejected_total
 
+http_exporter_build_info
 http_exporter_collector_config_valid
 http_exporter_scheduled_targets
 
@@ -1874,13 +1957,26 @@ An export is one delivery of everything pending, its retries included:
 `success` when it got through and `failure` when it did not, both published
 from the start. Retries MUST be counted in
 `http_exporter_otlp_export_retries_total`. Data points dropped because the
-endpoint refused them (§ 42.1) MUST be counted in
+endpoint refused them, or because they were the oldest waiting past
+`otlp.max_pending_points` (§ 42.1a), MUST be counted in
 `http_exporter_otlp_points_dropped_total`; data points kept for the next
 export MUST NOT be. The duration MUST be that of the most recent export,
 retries included, and the timestamp that of the last export that got through,
 0 before the first. An export cut short by shutdown MUST NOT be counted, since
 the last export delivers its data. These families MUST be part of the one
 self-metric set, so they are also exported over OTLP.
+
+### 22.0d Build information
+
+The exporter MUST publish `http_exporter_build_info`, a gauge of value 1 whose
+labels are `version`, `revision`, `goversion` and `request_types`, the built
+request types joined with commas. The version MUST be the one set at build time
+with `-ldflags "-X main.version=…"` when set, else the module version Go stamps
+into the binary, `(devel)` when there is none. The revision MUST be the git
+commit Go stamps, with `-modified` appended when the checkout had changes, and
+`unknown` when the build was not from git. `--version` MUST print the same
+four values on one line to stdout and exit 0 (§ 30), and the startup log line
+MUST carry the version and revision.
 
 Avoid unbounded label values on exporter self-metrics.
 
@@ -2109,13 +2205,28 @@ Recommended behavior:
 - `/ready`: the exporter is doing what it was configured to do. It MUST answer
   `503` while the last reload of the configuration or of the scheduled target
   file was rejected (§ 22.0b), until a reload of it is accepted, and, with OTLP
-  export enabled, while the last three exports failed (§ 42.1), until one gets
-  through; `200` otherwise. A `503` body MUST name each reason on a line of its
+  export enabled and `otlp.unready_after_failures` set to N above 0, while the
+  last N exports to the current endpoint failed (§ 42.1a), until one gets
+  through; `200` otherwise. `otlp.unready_after_failures` MUST default to 0,
+  which never makes the exporter unready over OTLP: an exporter whose exports
+  fail still answers probes, and a Kubernetes pod that is not ready stops
+  receiving them. The failures MUST be counted per endpoint, so a reload that
+  changes `otlp.endpoint` starts the count again, and a negative value MUST be
+  rejected. A `503` body MUST name each reason on a line of its
   own starting `not ready:`, and MUST NOT include an error's text, since the
   endpoint is never authenticated and an error can quote a path, a URL or a
   line of the configuration.
 - `/self-metrics`: exporter self-metrics by default; the path MUST be configurable and `/metrics` MAY remain as a compatibility alias.
-- `/probe`: execute a collector against a supplied target.
+- `/probe`: execute a collector against a supplied target. A request without
+  `collector` MUST answer `400` saying the collector parameter is required,
+  with the URL's shape, and one without a target its collector's request type
+  requires MUST answer `400` naming the collector and the request type.
+
+The exporter's own HTTP server MUST bound what a client can hold open: request
+headers within 10 seconds, the whole request within 30 seconds, and an idle
+keep-alive connection closed after two minutes. It MUST NOT have a write
+timeout, which would cut off a probe that legitimately takes as long as its
+scrape timeout.
 
 ---
 
@@ -2182,6 +2293,15 @@ The exporter MUST reload when asked, not only when the watch finds a change:
   `/probe` and `/metrics`. It MUST answer `200` when every file was accepted,
   and `500` with the reason when one was rejected, the previous configuration
   staying in force.
+
+After any reload, whatever its trigger, the per-collector state MUST follow the
+new configuration before it is next used: a removed collector's self-metric
+series, per-request series, scrape-time histogram, cached results and
+remembered failures MUST be dropped, so its series stop being exposed and
+exported and Prometheus marks them stale, and a collector added again under
+the name MUST start from zero; a collector whose definition changed MUST keep
+its counters and MUST have its cached results dropped, since their keys carry
+the old definition; an unchanged collector MUST keep everything.
 
 Both MUST reload the configuration, with its collector files, and the
 scheduled target file when there is one, whether or not they changed, under the
@@ -2277,6 +2397,25 @@ number of scheduled targets, and whether the configuration watch is enabled.
 When the watch is enabled it MUST also report the interval, because that is what
 bounds how stale a running configuration can be; when it is disabled the
 interval MUST be omitted rather than reported as a value that has no effect.
+
+### 25.1 Repeated failures
+
+A failure MUST be logged in full the first time. While the same thing keeps
+failing the same way — the same collector, target, file of a directory where
+there is one, stage and error text — a repeat MUST be logged at debug level
+only, marked `"repeat":true`, except that once five minutes have passed since
+the last line at the failure's own level it MUST be logged at that level again
+with `repeated`, the occurrences since that line, and `failing_since`, when the
+failure began. A different stage or error MUST be logged at once as a new
+failure. The first success after a failure MUST be logged at info level with
+the stage, `failed_for` and `failures`. This MUST apply to failed probes and
+stages continuing under `log`, a rule failing under `error_mode: fail`, probes
+rejected by `max_concurrent_probes`, failed scheduled scrapes, failed files of a
+directory, a directory over `max_files` or its listing bound, and repaired
+invalid UTF-8. At most 10,000 failures MUST be remembered; when full, those not
+reported for an hour MUST be forgotten, at most once a minute, and a new one
+that finds no room MUST be logged every time. The failures of a collector a
+reload removed MUST be forgotten.
 
 Every probe failure should include enough context to identify:
 
@@ -2652,7 +2791,17 @@ Provide clear CLI flags, for example:
 --config.collector-file-schema
 --probe.timeout-offset=500ms
 --web.enable-lifecycle
+--web.shutdown-timeout=5s
+--version
 ```
+
+`--web.shutdown-timeout` bounds how long a `SIGTERM` or `SIGINT` waits for the
+probes in progress, 5 seconds by default; a value that is not positive MUST be
+refused as a malformed command line. When it runs out, the connections still
+open MUST be closed, which MUST be logged with the timeout, before the last
+OTLP export (§ 42.1a) and a clean exit.
+
+`--version` prints the build information of § 22.0d and exits 0.
 
 `--config.schema` prints the configuration file's JSON Schema and exits, and
 `--config.collector-file-schema` the schema of a collector file (§ 24.3).
@@ -4211,6 +4360,105 @@ See § 5.1a.
 - A scheduled target reads a directory; one setting `request.path` is refused.
 - The documented example loads and reads a directory.
 
+## 34.53b Build, size, shutdown, OTLP buffer and directory read tests
+
+See § 5.0a, § 5.1a, § 22.0d, § 23 and § 42.1a.
+
+- `--version` prints the version, revision, Go version and request types;
+  `-X main.version` wins over the stamped version; `http_exporter_build_info`
+  carries the same as a gauge of 1.
+- Sizes with every unit, a space, a fraction and none are read; an empty,
+  unit-only, negative, exponent, unknown-unit, trailing-garbage and overflowing
+  size is refused; YAML integers and quoted numbers are read; a list is not.
+  Each byte setting takes a unit in a loaded configuration, a malformed one
+  fails naming it, and the schema carries the size pattern.
+- A second `SIGINT` during a shutdown held up by a probe in progress ends the
+  process within two seconds, killed by the signal, while the first alone did
+  not end it.
+- Past `otlp.max_pending_points` the points kept from a failed export go
+  before those queued since, down to nine tenths, counted and logged;
+  replacing a waiting series is not a new point; draining resets the count.
+  Negative `max_pending_points` and `unready_after_failures` are rejected.
+- Failing exports leave `/ready` at 200 by default; with
+  `unready_after_failures` 2 it is 503 after two and 200 after one gets
+  through; a reload to another endpoint makes it ready at once.
+- A directory whose file is held past the probe's timeout answers the other
+  files, and that file fails with its mtime.
+- Files of a directory are read at most four at a time and more than one at
+  once, and answered in name order.
+- A listing past its bound is logged with how many entries were listed.
+- A file that grows during its read past its share of `max_total_bytes` fails
+  alone, saying it grew.
+
+## 34.53c Encoding, shutdown timeout and credential file tests
+
+See § 6.1a, § 30 and § 42.5.
+
+- A Latin-1 body declared `iso-8859-1`, `windows-1252` or `latin1` gives
+  `café`; declared UTF-8 is left alone; `response.charset: windows-1251`
+  converts an undeclared or wrongly declared Cyrillic body; an unknown
+  `response.charset` fails to load and an unknown declared charset fails the
+  decode.
+- UTF-8, UTF-16LE and UTF-16BE byte order marks win over a wrong declaration
+  and are removed.
+- HTML with `<meta charset>` or `http-equiv`, and XML with an encoding
+  declaration, with and without a header saying the same, decode to `café`
+  once; the converted XML says UTF-8 and its `Content-Type` `charset=utf-8`.
+- A declared-UTF-8 body with an invalid byte answers 200 with U+FFFD, parses,
+  is counted and logged; a shared label map is not changed in place; files of
+  a directory are converted and repaired one by one.
+- `--web.shutdown-timeout` of 1s ends a shutdown held by a probe within
+  seconds, exit 0, logging the timeout; zero and negative values exit 2.
+- Credentials from `username_file` and `password_file`, and an inline
+  username with a password file, admit the right credential and refuse wrong
+  ones; a rotated password file takes effect and the old password stops
+  working; a removed file answers 500; both forms of one field, neither, a
+  missing and an empty file are rejected at load; a disabled `basic_auth` reads
+  nothing.
+
+## 34.53d UTF-8 name tests
+
+See § 21.1.
+
+- Classic names, including one with `:`, are unchanged; `http.server.duration`,
+  `a_b.c`, a leading digit, an accented letter, an emoji and invalid UTF-8
+  escape as specified with `underscores` and `values`; `:` in a label name is
+  escaped; `fail` changes nothing.
+- `name_escaping` defaults to `fail`; `dots` is rejected naming the values.
+- Through a probe of a target serving a UTF-8 metric and label name: `fail`
+  answers 502 naming the metric and `name_escaping`; `underscores` and `values`
+  answer the escaped names with the classic ones unchanged, and the answer
+  parses; with `metrics_prefix` the `values` name starts with `U__` and the
+  prefix; a UTF-8 label name alone fails by default.
+- Two labels escaping to one name fail naming both; two metrics escaping to one
+  name fail as duplicate series; a shared label map is not changed in place.
+
+## 34.53e Reload state, probe parameter, server timeout and failure log tests
+
+See § 23, § 24.1a and § 25.1.
+
+- After a reload removes a collector, its self-metric, cache-entry, histogram
+  and per-request series are gone and its cache is empty, while a kept
+  collector's counters stay; added again, it starts from zero.
+- A changed collector keeps its counters, its cache-entry gauge reads 0 at
+  once, and the next probe goes to the target with the new definition; an
+  unchanged reload keeps the cache.
+- A probe without `collector`, with or without a target, and one without a
+  required target, answer `400` naming what is missing; an unknown collector
+  is named.
+- The server's header, read and idle timeouts are 10s, 30s and 2m with no write
+  timeout, and an idle keep-alive connection is closed.
+- Six failures a minute apart log the first and, at five minutes, one line with
+  `repeated` 5 and `failing_since` at the failure's level; another error is
+  logged at once; a recovery logs `failed_for` and `failures`, and a success
+  without a failure logs nothing; at debug level each repeat is logged marked.
+- The remembered failures stop at the bound, a new one past it is not
+  remembered, those unseen for an hour make room, and a removed collector's
+  are forgotten.
+- Four failed probes of a target log one line and its recovery counts four; a
+  scheduled target failing three times logs once and its recovery; a file of a
+  directory failing on three probes logs once and its recovery.
+
 ## 34.54 Probe deadline tests
 
 See § 3.2a.
@@ -4659,7 +4907,17 @@ On `SIGTERM` or `SIGINT`, the exporter MUST stop accepting requests, let the
 probes in progress finish, stop the export loop, and then make one last
 export, bounded by `otlp.timeout`, of everything pending — including the data
 of an export the shutdown cut short — with a last self-metric snapshot, before
-it exits. Scheduled targets MUST NOT be scraped again for it.
+it exits. Scheduled targets MUST NOT be scraped again for it. The shutdown MUST
+be logged, and once it has begun a second `SIGTERM` or `SIGINT` MUST end the
+process at once, without waiting for the probes or the last export.
+
+The data points waiting for export MUST be bounded by `otlp.max_pending_points`,
+100000 by default, a negative value being rejected. Past it, the oldest MUST be
+dropped — points kept from failed exports before any queued since, and among
+those the older first — down to nine tenths of the limit, so that dropping is
+not repeated on every point; they MUST be counted (§ 22.0c) and logged as a
+warning. Replacing the value of a series already waiting MUST NOT count as a
+new point.
 
 ## 42.2 CSV transformation
 
@@ -4741,6 +4999,18 @@ web:
     username: exporter
     password: change-me
 ```
+
+The username MAY instead be read from `username_file` and the password from
+`password_file`, for a credential mounted from a Secret rather than written in
+the configuration; exactly one of `username` and `username_file`, and one of
+`password` and `password_file`, MUST be set. A file's content MUST be trimmed
+of surrounding whitespace. A file that is missing, unreadable or empty when
+the configuration loads MUST reject it. A file MUST be read again when its
+size or modification time changes, so a rotated Secret takes effect without a
+restart or reload; one that can no longer be read MUST make every protected
+request fail with `500`, logged, rather than admit it. The username and
+password MUST both be compared in constant time whatever the first
+comparison found.
 
 When enabled, the exporter MUST require valid Basic Authentication for
 `/probe`, `/metrics`, and the configured self-health metrics endpoint. The

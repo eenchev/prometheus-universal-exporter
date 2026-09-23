@@ -24,6 +24,9 @@ spec:
         {{- include "prometheus-universal-exporter.metadataAnnotations" (list . $podAnnotations) | nindent 8 }}
     spec:
       serviceAccountName: {{ include "prometheus-universal-exporter.serviceAccountName" . }}
+      {{- with (include "prometheus-universal-exporter.terminationGracePeriodSeconds" .) }}
+      terminationGracePeriodSeconds: {{ . }}
+      {{- end }}
       securityContext: {{- toYaml .Values.podSecurityContext | nindent 8 }}
       {{- with .Values.nodeSelector }}
       nodeSelector: {{- toYaml . | nindent 8 }}
@@ -64,6 +67,9 @@ spec:
             {{- with (include "prometheus-universal-exporter.probeTimeoutOffset" .) }}
             - {{ printf "--probe.timeout-offset=%s" . | quote }}
             {{- end }}
+            {{- with (include "prometheus-universal-exporter.shutdownTimeout" .) }}
+            - {{ printf "--web.shutdown-timeout=%s" . | quote }}
+            {{- end }}
             {{- include "prometheus-universal-exporter.extraArgs" . }}
             {{- range .Values.extraArgs }}
             - {{ . | quote }}
@@ -92,6 +98,11 @@ spec:
               mountPath: {{ .Values.targetAuth.mountPath | quote }}
               readOnly: true
             {{- end }}
+            {{- if and .Values.webAuth .Values.webAuth.enabled }}
+            - name: web-auth
+              mountPath: {{ .Values.webAuth.mountPath | quote }}
+              readOnly: true
+            {{- end }}
             {{- include "prometheus-universal-exporter.validateExtraMounts" . }}
             {{- with .Values.extraVolumeMounts }}
             {{- toYaml . | nindent 12 }}
@@ -114,6 +125,16 @@ spec:
               - key: {{ .Values.targetAuth.secretKey | quote }}
                 path: {{ .Values.targetAuth.fileName | quote }}
               {{- end }}
+        {{- end }}
+        {{- if and .Values.webAuth .Values.webAuth.enabled }}
+        - name: web-auth
+          secret:
+            secretName: {{ required "webAuth.secretName is required when webAuth.enabled is true" .Values.webAuth.secretName | quote }}
+            items:
+              - key: {{ .Values.webAuth.usernameKey | quote }}
+                path: username
+              - key: {{ .Values.webAuth.passwordKey | quote }}
+                path: password
         {{- end }}
         {{- with .Values.extraVolumes }}
         {{- toYaml . | nindent 8 }}

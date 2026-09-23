@@ -10,6 +10,8 @@ otlp:
   timeout: 5s
   interval: 30s
   # compression: gzip
+  # max_pending_points: 100000
+  # unready_after_failures: 0
   # headers:
   #   X-OTLP-Tenant: production
   # tls:
@@ -41,8 +43,13 @@ after 1 second, then 2, 4, and so on up to 16, or after the `Retry-After` the
 endpoint asks for. Retries go on while another attempt can still start within
 `otlp.interval`, so an export never runs into the next one. When they run out,
 the data points are kept and sent with the next export, unless a newer value of
-the same series has arrived in the meantime; nothing piles up, since only the
-latest value of each series is kept. Any other answer, such as `400` or `401`,
+the same series has arrived in the meantime. Only the latest value of each
+series is kept, but an outage long enough can still see many series come and
+go, so what waits is bounded by `otlp.max_pending_points`, 100000 by default:
+past it the oldest data points — those of failed exports first — are dropped,
+down to nine tenths of the limit, counted in
+`http_exporter_otlp_points_dropped_total` and logged as a warning. Any other
+answer, such as `400` or `401`,
 would be given again: the data points are dropped and counted rather than sent
 again forever. Each failure is logged as a warning, and the export status is in
 the [self-metrics](SELF-METRICS.md#otlp-export-status):
@@ -52,15 +59,20 @@ the [self-metrics](SELF-METRICS.md#otlp-export-status):
 time() - http_exporter_otlp_last_export_success_timestamp_seconds > 600
 ```
 
-After three failed exports in a row the exporter also reports itself not ready
-on `/ready`, until one gets through (see
-[Readiness](CONFIGURATION.md#readiness)).
+Failing exports do not make the exporter unready by default: it still answers
+probes, and in Kubernetes a pod that is not ready stops receiving them. For an
+exporter whose job is delivering [scheduled targets](#scheduled-targets) over
+OTLP, set `otlp.unready_after_failures: 3` to have `/ready` answer `503` after
+three failed exports in a row, until one gets through (see
+[Readiness](CONFIGURATION.md#readiness)). The count is per endpoint: a reload
+that changes `otlp.endpoint` starts it again.
 
 On `SIGTERM` or `SIGINT` the exporter first lets the probes in progress finish,
 then makes one last export, bounded by `otlp.timeout`, of what they and earlier
 probes queued, with a last self-metric snapshot. Scheduled targets are not
 scraped again for it. An export the shutdown interrupted is not lost: its data
-goes out with that last export.
+goes out with that last export. A second signal ends the process at once,
+without it (see [Shutting down](CONFIGURATION.md#shutting-down)).
 
 Metrics keep their type:
 

@@ -32,3 +32,33 @@ command line that cannot be parsed is reported as a JSON line rather than the
 flag package's plain-text complaint. Its report is a separate JSON document on
 stdout, described in
 [Dry run](CONFIGURATION.md#dry-run).
+
+## Repeated failures
+
+A target that is down fails every probe, from every Prometheus replica, every
+scrape interval. Logging each of them would bury everything else, and the
+[self-metrics](SELF-METRICS.md) already count every one exactly. So a failure is
+logged in full the first time, and while the same thing keeps failing the same
+way — the same collector, target (and file, for a
+[directory](LOCALFILE.md#reading-a-directory)), stage and error — it is
+logged again only every five minutes, at its own level, with how many times it
+happened since the last line and since when:
+
+```json
+{"level":"ERROR","msg":"probe failed","collector":"api","target":"http://api:8080","stage":"http_status","error":"received HTTP status 503"}
+{"level":"ERROR","msg":"probe failed","collector":"api","target":"http://api:8080","stage":"http_status","error":"received HTTP status 503","repeated":10,"failing_since":"2026-09-23T10:00:00Z"}
+{"level":"INFO","msg":"probe recovered","collector":"api","target":"http://api:8080","stage":"http_status","failed_for":"7m30s","failures":15}
+```
+
+A different stage or error is a new failure and is logged at once, and the
+first success after a failure is logged at info level with how long it failed
+and how many times. The repeats in between are still written at debug level,
+marked `"repeat":true`, so `--log.level=debug` shows every one.
+
+The same applies to scheduled targets (`scheduled target scrape failed`, then
+`scheduled target recovered`), to a file of a directory that fails, to a
+directory over `max_files` or its listing bound, to probes rejected by
+`max_concurrent_probes`, and to output repaired for invalid UTF-8. Up to 10,000
+failing things are remembered at a time, and one not reported for an hour is
+forgotten; past that bound, a new failure is simply logged every time.
+

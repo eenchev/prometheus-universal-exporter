@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"strings"
 	"time"
 )
@@ -35,6 +36,10 @@ type DirectoryRead struct {
 	Skipped []string
 	// Bytes is how much was read across the files.
 	Bytes int64
+	// Listed counts the directory entries listed, and Truncated says the
+	// listing stopped at its bound before the end of the directory.
+	Listed    int
+	Truncated bool
 }
 
 // FileRead is one file of a directory: a response to decode, or the reason
@@ -71,8 +76,18 @@ type fileFailure struct {
 // collectDirectory turns a directory read into one metric set.
 func (s *Server) collectDirectory(ctx context.Context, read *DirectoryRead, c *Collector, rec statsRecorder, logTarget string) *MetricSet {
 	rec.update(func(x *serverStats) { x.lastBytes = read.Bytes })
+	// These hold for as long as the directory stays as it is, so they are
+	// logged like repeated failures (failurelog.go).
+	listingKey, skippedKey := failureKey(c.Name, logTarget, "\x00listing"), failureKey(c.Name, logTarget, "\x00skipped")
+	if read.Truncated {
+		s.failures.failed(s.logger, slog.LevelWarn, listingKey, "directory has more entries than one scrape lists; only the first were considered", "listing", nil, "collector", c.Name, "target", logTarget, "directory", read.Path, "listed", read.Listed, "max_files", c.Request.MaxFiles)
+	} else {
+		s.failures.recovered(s.logger, listingKey, "directory is listed whole again", "collector", c.Name, "target", logTarget, "directory", read.Path)
+	}
 	if len(read.Skipped) > 0 {
-		s.logger.Warn("directory has more matching files than request.max_files; the rest were skipped", "collector", c.Name, "target", logTarget, "directory", read.Path, "matched", read.Matched, "max_files", c.Request.MaxFiles, "skipped", len(read.Skipped), "first_skipped", read.Skipped[0])
+		s.failures.failed(s.logger, slog.LevelWarn, skippedKey, "directory has more matching files than request.max_files; the rest were skipped", "max_files", nil, "collector", c.Name, "target", logTarget, "directory", read.Path, "matched", read.Matched, "max_files", c.Request.MaxFiles, "skipped", len(read.Skipped), "first_skipped", read.Skipped[0])
+	} else {
+		s.failures.recovered(s.logger, skippedKey, "directory is within request.max_files again", "collector", c.Name, "target", logTarget, "directory", read.Path)
 	}
 	// One script timer covers every file: the gauge is the Python this probe
 	// ran, whichever files ran it.
@@ -88,11 +103,13 @@ func (s *Server) collectDirectory(ctx context.Context, read *DirectoryRead, c *C
 		if failure == nil {
 			failure = checkFileFamilies(set, families, typeFrom)
 		}
+		fileKey := failureKey(c.Name, logTarget, file.Name)
 		if failure != nil {
 			failed[file.Name] = true
-			s.logger.Warn("file of a directory failed; its series are left out and the other files' are answered", "collector", c.Name, "target", logTarget, "file", file.Name, "stage", failure.stage, "error", failure.err)
+			s.failures.failed(s.logger, slog.LevelWarn, fileKey, "file of a directory failed; its series are left out and the other files' are answered", failure.stage, failure.err, "collector", c.Name, "target", logTarget, "file", file.Name, "stage", failure.stage)
 			continue
 		}
+		s.failures.recovered(s.logger, fileKey, "file of a directory recovered", "collector", c.Name, "target", logTarget, "file", file.Name)
 		for _, m := range set.Metrics {
 			if _, seen := families[m.Name]; !seen {
 				order = append(order, m.Name)
@@ -157,6 +174,7 @@ func (s *Server) collectFile(ctx context.Context, file FileRead, c *Collector, r
 	if set == nil {
 		set = &MetricSet{}
 	}
+	s.sanitizeUTF8(set, rec, c, file.Name)
 	if err := set.Validate(c.Limits); err != nil {
 		rec.update(func(x *serverStats) { x.limitErrors++ })
 		return nil, &fileFailure{"validation", err}

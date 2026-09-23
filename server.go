@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"crypto/subtle"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -14,6 +13,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -27,6 +27,9 @@ type statsValues struct {
 	coalesced uint64
 	// rejected counts probes turned away by max_concurrent_probes.
 	rejected uint64
+	// invalidUTF8 counts label values and help texts whose invalid UTF-8
+	// was replaced.
+	invalidUTF8 uint64
 	// lastScriptDuration is how long the Python of the last probe that ran any
 	// took, in seconds.
 	lastScriptDuration float64
@@ -69,6 +72,7 @@ var selfMetricDescriptors = []selfMetricDescriptor{
 	{"http_exporter_script_errors_total", CounterMetricType, "Python script failures during this collector's transform.", func(v statsValues) float64 { return float64(v.scriptErrors) }},
 	{"http_exporter_script_duration_seconds", GaugeMetricType, "Duration of the most recent Python script run for this collector, in seconds.", func(v statsValues) float64 { return v.lastScriptDuration }},
 	{"http_exporter_metrics_emitted_total", CounterMetricType, "Metrics this collector has produced across its scrapes.", func(v statsValues) float64 { return float64(v.emitted) }},
+	{"http_exporter_invalid_utf8_total", CounterMetricType, "Label values and help texts this collector produced that were not valid UTF-8, whose invalid bytes were replaced with U+FFFD.", func(v statsValues) float64 { return float64(v.invalidUTF8) }},
 	{"http_exporter_series_limit_exceeded_total", CounterMetricType, "Scrapes rejected for exceeding this collector's response size or series limits.", func(v statsValues) float64 { return float64(v.limitErrors) }},
 	{"http_exporter_cache_hits_total", CounterMetricType, "Probes answered from this collector's response cache.", func(v statsValues) float64 { return float64(v.cacheHits) }},
 	{"http_exporter_cache_misses_total", CounterMetricType, "Probes that found no usable cache entry and went to the target.", func(v statsValues) float64 { return float64(v.cacheMisses) }},
@@ -92,6 +96,7 @@ type selfMetricDescriptor struct {
 // exporterMetricHelp describes the exporter-wide families, which carry no
 // collector's counters.
 var exporterMetricHelp = map[string]string{
+	"http_exporter_build_info":                                   "1, with the exporter's version, revision, Go version and built request types as labels.",
 	"http_exporter_collector_config_valid":                       "Whether the collector configuration is valid.",
 	"http_exporter_scheduled_targets":                            "Scheduled targets configured for OTLP delivery.",
 	"http_exporter_config_last_reload_successful":                "Whether the last load of this configuration file, at startup or on reload, succeeded.",
@@ -99,7 +104,7 @@ var exporterMetricHelp = map[string]string{
 	"http_exporter_config_reloads_total":                         "Reloads of this configuration file after startup, by result: success or failure.",
 	"http_exporter_otlp_exports_total":                           "OTLP exports, each a delivery of everything pending with its retries, by result: success or failure.",
 	"http_exporter_otlp_export_retries_total":                    "OTLP export attempts repeated after a network error, 429, 502, 503 or 504.",
-	"http_exporter_otlp_points_dropped_total":                    "Data points given up on because the OTLP endpoint rejected them with a status that is not retried.",
+	"http_exporter_otlp_points_dropped_total":                    "Data points given up on: refused by the OTLP endpoint with a status that is not retried, or the oldest waiting past otlp.max_pending_points.",
 	"http_exporter_otlp_export_duration_seconds":                 "Duration of the most recent OTLP export, its retries included.",
 	"http_exporter_otlp_last_export_success_timestamp_seconds":   "Unix time of the last OTLP export that got through; 0 before the first.",
 }
@@ -138,27 +143,46 @@ type Server struct {
 	stats         map[string]*serverStats
 	otlpMu        sync.Mutex
 	otlpPending   map[string]*otlpBatch
-	cache         *responseCache
-	requests      *requestTracker
-	flights       *probeFlights
-	durations     *scrapeDurations
+	// otlpPoints counts the pending data points, and otlpSeq and
+	// otlpRequeueSeq order them by age for otlp.max_pending_points: queued
+	// points count up from 1, points queued again after a failed export count
+	// down from 0, so they are always the oldest.
+	otlpPoints     int
+	otlpSeq        int64
+	otlpRequeueSeq int64
+	cache          *responseCache
+	requests       *requestTracker
+	flights        *probeFlights
+	durations      *scrapeDurations
 	// trips bounds each collector's trips to its targets (triplimit.go).
 	trips *tripLimiter
 	// lifecycle enables POST /-/reload (lifecycle.go).
 	lifecycle bool
 	// otlp is how exports are going (otlpstatus.go).
 	otlp *otlpStatus
+	// failures keeps repeated failures from flooding the log (failurelog.go).
+	failures *failureLog
+	// seenConfig is the configuration the per-collector state was last
+	// reconciled with (reconcile.go).
+	seenConfig atomic.Pointer[Config]
 }
 
 func NewServer(m *ConfigManager, p string, l *slog.Logger) *Server {
-	s := &Server{manager: m, pythonPath: p, logger: l, stats: map[string]*serverStats{}, otlpPending: map[string]*otlpBatch{}, cache: newResponseCache(), requests: newRequestTracker(), flights: newProbeFlights(), durations: newScrapeDurations(), trips: newTripLimiter(), otlp: &otlpStatus{}, timeoutOffset: DefaultTimeoutOffset}
+	s := &Server{manager: m, pythonPath: p, logger: l, stats: map[string]*serverStats{}, otlpPending: map[string]*otlpBatch{}, cache: newResponseCache(), requests: newRequestTracker(), flights: newProbeFlights(), durations: newScrapeDurations(), trips: newTripLimiter(), otlp: &otlpStatus{}, failures: newFailureLog(), timeoutOffset: DefaultTimeoutOffset}
+	s.seenConfig.Store(m.Get())
 	return s
 }
 
 // otlpBatch holds the metrics pending export for one OTLP resource.
 type otlpBatch struct {
 	identity otlpResourceIdentity
-	metrics  map[string]Metric
+	metrics  map[string]pendingMetric
+}
+
+// pendingMetric is a metric waiting for export, with its age.
+type pendingMetric struct {
+	metric Metric
+	seq    int64
 }
 
 // queueOTLP stages metrics under the exporter-wide OTLP resource.
@@ -175,15 +199,64 @@ func (s *Server) queueOTLPResource(set MetricSet, identity otlpResourceIdentity)
 	}
 	s.otlpMu.Lock()
 	defer s.otlpMu.Unlock()
+	batch := s.pendingBatchLocked(identity)
+	for _, metric := range set.Metrics {
+		s.otlpSeq++
+		s.putPendingLocked(batch, otlpMetricKey(metric), pendingMetric{metric: cloneMetric(metric), seq: s.otlpSeq})
+	}
+	s.capPendingLocked(cfg.MaxPendingPoints)
+}
+
+func (s *Server) pendingBatchLocked(identity otlpResourceIdentity) *otlpBatch {
 	key := identity.key()
 	batch := s.otlpPending[key]
 	if batch == nil {
-		batch = &otlpBatch{identity: identity, metrics: map[string]Metric{}}
+		batch = &otlpBatch{identity: identity, metrics: map[string]pendingMetric{}}
 		s.otlpPending[key] = batch
 	}
-	for _, metric := range set.Metrics {
-		batch.metrics[otlpMetricKey(metric)] = cloneMetric(metric)
+	return batch
+}
+
+func (s *Server) putPendingLocked(batch *otlpBatch, key string, m pendingMetric) {
+	if _, exists := batch.metrics[key]; !exists {
+		s.otlpPoints++
 	}
+	batch.metrics[key] = m
+}
+
+// capPendingLocked keeps the pending data points within otlp.max_pending_points
+// while exports are failing. Past it, the oldest points are dropped down to
+// nine tenths of it, so the sort is paid once per tenth of the buffer rather
+// than on every point, and are counted and logged.
+func (s *Server) capPendingLocked(limit int) {
+	if limit <= 0 {
+		limit = DefaultOTLPMaxPendingPoints
+	}
+	if s.otlpPoints <= limit {
+		return
+	}
+	type aged struct {
+		batch, key string
+		seq        int64
+	}
+	all := make([]aged, 0, s.otlpPoints)
+	for batchKey, batch := range s.otlpPending {
+		for key, m := range batch.metrics {
+			all = append(all, aged{batchKey, key, m.seq})
+		}
+	}
+	sort.Slice(all, func(i, j int) bool { return all[i].seq < all[j].seq })
+	drop := s.otlpPoints - limit*9/10
+	for _, a := range all[:drop] {
+		batch := s.otlpPending[a.batch]
+		delete(batch.metrics, a.key)
+		if len(batch.metrics) == 0 {
+			delete(s.otlpPending, a.batch)
+		}
+	}
+	s.otlpPoints -= drop
+	s.otlp.drop(drop)
+	s.logger.Warn("OTLP data points waiting for export reached otlp.max_pending_points; the oldest were dropped", "max_pending_points", limit, "dropped_points", drop)
 }
 
 func (s *Server) drainOTLP() []otlpResourceSet {
@@ -199,15 +272,16 @@ func (s *Server) drainOTLP() []otlpResourceSet {
 		batch := s.otlpPending[key]
 		set := MetricSet{Metrics: make([]Metric, 0, len(batch.metrics))}
 		for _, metricKey := range sortedMetricKeys(batch.metrics) {
-			set.Metrics = append(set.Metrics, batch.metrics[metricKey])
+			set.Metrics = append(set.Metrics, batch.metrics[metricKey].metric)
 		}
 		out = append(out, otlpResourceSet{Identity: batch.identity, Set: set})
 	}
 	s.otlpPending = make(map[string]*otlpBatch)
+	s.otlpPoints = 0
 	return out
 }
 
-func sortedMetricKeys(in map[string]Metric) []string {
+func sortedMetricKeys(in map[string]pendingMetric) []string {
 	out := make([]string, 0, len(in))
 	for key := range in {
 		out = append(out, key)
@@ -294,7 +368,7 @@ func (s *Server) exportOTLP(ctx context.Context, budget time.Duration) {
 		s.requeueOTLP(pending)
 		return
 	}
-	s.otlp.record(time.Since(start), retries, err == nil)
+	s.otlp.record(cfg.Endpoint, time.Since(start), retries, err == nil)
 	if err == nil {
 		return
 	}
@@ -315,18 +389,16 @@ func (s *Server) requeueOTLP(resources []otlpResourceSet) {
 	s.otlpMu.Lock()
 	defer s.otlpMu.Unlock()
 	for _, resource := range resources {
-		key := resource.Identity.key()
-		batch := s.otlpPending[key]
-		if batch == nil {
-			batch = &otlpBatch{identity: resource.Identity, metrics: map[string]Metric{}}
-			s.otlpPending[key] = batch
-		}
+		batch := s.pendingBatchLocked(resource.Identity)
 		for _, metric := range resource.Set.Metrics {
-			if _, newer := batch.metrics[otlpMetricKey(metric)]; !newer {
-				batch.metrics[otlpMetricKey(metric)] = metric
+			key := otlpMetricKey(metric)
+			if _, newer := batch.metrics[key]; !newer {
+				s.putPendingLocked(batch, key, pendingMetric{metric: metric, seq: s.otlpRequeueSeq})
+				s.otlpRequeueSeq--
 			}
 		}
 	}
+	s.capPendingLocked(s.manager.Get().OTLP.MaxPendingPoints)
 }
 
 func countPoints(resources []otlpResourceSet) int {
@@ -395,31 +467,16 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/-/reload", protected(s.reloadHandler))
 	return mux
 }
-func (s *Server) basicAuthMiddleware(next http.HandlerFunc) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		credentials := s.manager.Get().Web.BasicAuth
-		if credentials == nil || !credentials.Enabled {
-			next(w, r)
-			return
-		}
-		username, password, ok := r.BasicAuth()
-		if !ok || subtle.ConstantTimeCompare([]byte(username), []byte(credentials.Username)) != 1 || subtle.ConstantTimeCompare([]byte(password), []byte(credentials.Password)) != 1 {
-			w.Header().Set("WWW-Authenticate", `Basic realm="prometheus-universal-exporter"`)
-			http.Error(w, "authentication required", http.StatusUnauthorized)
-			return
-		}
-		next(w, r)
-	}
-}
 
 func (s *Server) probeHandler(w http.ResponseWriter, r *http.Request) {
 	start := time.Now()
 	target := r.URL.Query().Get("target")
 	name := r.URL.Query().Get("collector")
 	if name == "" {
-		http.Error(w, "target and collector are required", http.StatusBadRequest)
+		http.Error(w, "the collector parameter is required: /probe?collector=<name>&target=<target>", http.StatusBadRequest)
 		return
 	}
+	s.reconcile()
 	cfg := s.manager.Get()
 	var c *Collector
 	for i := range cfg.Collectors {
@@ -436,7 +493,7 @@ func (s *Server) probeHandler(w http.ResponseWriter, r *http.Request) {
 	// to say: http needs a URL, localfile a file under its root, or nothing.
 	if err := checkTarget(c, target, false); err != nil {
 		if errors.Is(err, errMissingTarget) {
-			http.Error(w, "target and collector are required", http.StatusBadRequest)
+			http.Error(w, fmt.Sprintf("the target parameter is required for collector %q, whose request.type is %s", name, c.Request.Type), http.StatusBadRequest)
 			return
 		}
 		http.Error(w, err.Error(), http.StatusBadRequest)
@@ -561,7 +618,7 @@ func (s *Server) probeUpstream(ctx context.Context, p upstreamProbe) *probeResul
 	limit := maxConcurrentProbes(c)
 	if !s.trips.tryAcquire(name, limit) {
 		rec.update(func(x *serverStats) { x.rejected++ })
-		s.logger.Warn("probe rejected: the collector has too many probes in progress", "collector", name, "target", logTarget, "max_concurrent_probes", limit)
+		s.failures.failed(s.logger, slog.LevelWarn, failureKey(name, logTarget, ""), "probe rejected: the collector has too many probes in progress", "concurrency", nil, "collector", name, "target", logTarget, "max_concurrent_probes", limit)
 		http.Error(out, fmt.Sprintf("collector %s already has %d probes to its targets in progress, its max_concurrent_probes; this one was not sent", name, limit), http.StatusServiceUnavailable)
 		return out.result(false)
 	}
@@ -583,17 +640,19 @@ func (s *Server) probeUpstream(ctx context.Context, p upstreamProbe) *probeResul
 	}()
 	// failStage applies a stage's error policy. It reports whether the probe
 	// carries on; when it does not, the error response is already recorded.
+	// Repeats of the same failure are logged sparingly (failurelog.go).
+	failureKey := failureKey(name, logTarget, "")
 	failStage := func(stage string, err error, policy string) bool {
 		err = explainBudget(ctx, p.budget, err)
 		switch policy {
 		case ErrorPolicyLog, errorPolicyWarn:
-			s.logger.Warn("probe stage failed; continuing", "collector", name, "target", logTarget, "stage", stage, "error", err)
+			s.failures.failed(s.logger, slog.LevelWarn, failureKey, "probe stage failed; continuing", stage, err, "collector", name, "target", logTarget, "stage", stage)
 			return true
 		case ErrorPolicyIgnore:
 			s.logger.Debug("probe stage failed; continuing", "collector", name, "target", logTarget, "stage", stage, "error", err)
 			return true
 		}
-		s.logger.Error("probe failed", "collector", name, "target", logTarget, "stage", stage, "error", err)
+		s.failures.failed(s.logger, slog.LevelError, failureKey, "probe failed", stage, err, "collector", name, "target", logTarget, "stage", stage)
 		http.Error(out, fmt.Sprintf("collector %s %s failed: %v", name, stage, err), http.StatusBadGateway)
 		return false
 	}
@@ -643,7 +702,7 @@ func (s *Server) probeUpstream(ctx context.Context, p upstreamProbe) *probeResul
 			// even where the collector would have carried on after a failed transform.
 			var failure *MetricFailure
 			if errors.As(err, &failure) {
-				s.logger.Error("probe failed", "collector", name, "target", logTarget, "stage", "metric", "metric", failure.Metric, "error", err)
+				s.failures.failed(s.logger, slog.LevelError, failureKey, "probe failed", "metric", err, "collector", name, "target", logTarget, "stage", "metric", "metric", failure.Metric)
 				writeProbeError(out, http.StatusBadGateway, probeError{
 					Stage:     "metric",
 					Collector: name,
@@ -655,6 +714,7 @@ func (s *Server) probeUpstream(ctx context.Context, p upstreamProbe) *probeResul
 			}
 			return out.result(failStage("transform", err, c.ErrorHandling.OnTransformError))
 		}
+		s.sanitizeUTF8(ms, rec, c, logTarget)
 	}
 	if err = ms.Validate(c.Limits); err != nil {
 		rec.update(func(x *serverStats) { x.limitErrors++ })
@@ -662,6 +722,7 @@ func (s *Server) probeUpstream(ctx context.Context, p upstreamProbe) *probeResul
 		return out.result(false)
 	}
 	rec.update(func(x *serverStats) { x.emitted += uint64(len(ms.Metrics)) })
+	s.failures.recovered(s.logger, failureKey, "probe recovered", "collector", name, "target", logTarget)
 	s.cache.Put(p.cacheKey, c.Name, *ms, p.cacheTTL, c.Limits.MaxCacheEntries, time.Now())
 	writeMetricSet(out, ms)
 	s.queueOTLP(*ms)
@@ -761,19 +822,19 @@ func (s *Server) metricsHandler(w http.ResponseWriter, _ *http.Request) {
 	writeMetricSet(w, &set)
 }
 
-// collectorStats returns every configured collector's counters, and those of
-// collectors served before a reload removed them, sorted by name.
+// collectorStats returns the counters of every configured collector, sorted
+// by name. A collector a reload removed is not among them: its series stop,
+// and Prometheus marks them stale (reconcile.go).
 func (s *Server) collectorStats() (names []string, values map[string]statsValues) {
+	s.reconcile()
 	s.statsMu.Lock()
+	stats := make(map[string]*serverStats)
 	for _, c := range s.manager.Get().Collectors {
 		if s.stats[c.Name] == nil {
 			s.stats[c.Name] = &serverStats{}
 		}
-	}
-	stats := make(map[string]*serverStats, len(s.stats))
-	for name, st := range s.stats {
-		stats[name] = st
-		names = append(names, name)
+		stats[c.Name] = s.stats[c.Name]
+		names = append(names, c.Name)
 	}
 	s.statsMu.Unlock()
 	sort.Strings(names)
@@ -815,6 +876,7 @@ func (s *Server) selfMetricSet() MetricSet {
 			out = append(out, Metric{Name: d.Name, Help: d.Help, Type: d.Type, Value: d.Value(sample.Values), Labels: requestLabels(sample.Key)})
 		}
 	}
+	out = append(out, buildInfoMetric())
 	for _, c := range s.manager.Get().Collectors {
 		out = append(out, Metric{Name: "http_exporter_collector_config_valid", Help: exporterMetricHelp["http_exporter_collector_config_valid"], Type: GaugeMetricType, Value: 1, Labels: map[string]string{"collector": c.Name}})
 	}

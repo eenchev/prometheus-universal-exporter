@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"os"
 	"os/exec"
 	"sort"
@@ -104,7 +105,7 @@ func pythonWorkerSpec(pythonPath string, c *Collector) pythonSpec {
 		}
 	}
 	sort.Strings(modules)
-	maxOutput := c.Limits.MaxOutputBytes
+	maxOutput := int(min(c.Limits.MaxOutputBytes, math.MaxInt32))
 	if maxOutput <= 0 {
 		maxOutput = pythonDefaultMaxOutput
 	}

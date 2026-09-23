@@ -11,6 +11,9 @@ ARG TARGETARCH
 # REQUEST_TYPES selects the request types built in, as a comma-separated list
 # such as "http". Empty, the default, builds every type.
 ARG REQUEST_TYPES
+# VERSION is the release this image is, reported by --version and the
+# http_exporter_build_info self-metric. Empty, the version Go stamps is used.
+ARG VERSION
 
 WORKDIR /src
 
@@ -23,7 +26,7 @@ RUN tags="$(sh tools/request-type-tags.sh "${REQUEST_TYPES}")" || exit 1; \
     CGO_ENABLED=0 \
     GOOS=${TARGETOS} \
     GOARCH=${TARGETARCH} \
-    go build -trimpath -ldflags='-s -w' -tags "${tags}" \
+    go build -trimpath -ldflags="-s -w -X main.version=${VERSION}" -tags "${tags}" \
     -o /out/prometheus-universal-exporter .
 
 FROM python:${PYTHON_VERSION}-slim

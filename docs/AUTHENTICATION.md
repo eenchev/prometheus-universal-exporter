@@ -49,6 +49,28 @@ web:
     password: change-me
 ```
 
+The credential can be read from files instead, so it stays out of the
+configuration — with the Helm chart the configuration is a ConfigMap, which is
+no place for a password:
+
+```yaml
+web:
+  basic_auth:
+    enabled: true
+    username: exporter                # or username_file
+    password_file: /var/run/prometheus-universal-exporter/web-auth/password
+```
+
+Set one of `username` and `username_file`, and one of `password` and
+`password_file`. Leading and trailing whitespace, such as the newline an
+editor adds, is removed. A file that is missing or empty when the
+configuration loads is refused like any other invalid configuration. A file
+changed on disk is read again by the next request, so a rotated Kubernetes
+Secret takes effect without a restart; one that can no longer be read refuses
+every protected request with `500` and logs why, rather than letting requests
+in. The chart mounts the Secret with `webAuth` — see the
+[chart README](../charts/prometheus-universal-exporter/README.md#exporter-authentication).
+
 When enabled, Basic Auth is required for `/probe`, `/metrics`, and the configured self-metrics endpoint. `/health` and `/ready` remain unauthenticated for Kubernetes probes. Exporter-side Basic Auth is mutually exclusive with `request.forward_authorization`; enable one model or the other so the incoming Authorization header cannot be confused with the exporter credential.
 
 This conflict is rejected during startup: the exporter logs `invalid startup configuration; exiting` and terminates with a non-zero exit code. Invalid configurations detected during file reload are rejected while the last valid configuration remains active.

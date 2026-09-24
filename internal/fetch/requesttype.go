@@ -45,6 +45,11 @@ const (
 // test keeps it in step with the requesttype_<name>.go files.
 var knownRequestTypes = []string{RequestTypeHTTP, RequestTypeLocalFile}
 
+// RequestType is how one request.type reaches its data. Fields lists the
+// request keys it accepts, Overrides the probe parameters that may change them
+// and TargetFields the keys a scheduled target may set; Validate checks a
+// collector's request and fills in its defaults, and Fetch performs one.
+// Each type registers itself in RequestTypes.
 type RequestType struct {
 	Name         string
 	Fields       []string

@@ -37,6 +37,8 @@ import (
 // namespaces cannot collide with target, collector, path, method and the rest.
 const PathParamPrefix = "param_"
 
+// PathParamName matches the name of a path parameter, PathParamPrefix
+// followed by letters, digits and underscores.
 var PathParamName = regexp.MustCompile(`^param_[A-Za-z0-9_]+$`)
 
 // pathPlaceholder is one {{param_name}} or {{param_name:default}} in a path,

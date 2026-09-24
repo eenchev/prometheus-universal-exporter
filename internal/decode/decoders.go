@@ -16,12 +16,17 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
+// Decoded is a response decoded for a transform. Kind names the decoder, and
+// Data holds what it produced: normalized JSON or YAML values, CSV rows, an
+// *xmlquery.Node, an *HTMLDecoded, a model.MetricSet for Prometheus text, or
+// the body as a string. Raw is the body the decoder read.
 type Decoded struct {
 	Kind string
 	Data any
 	Raw  []byte
 }
 
+// HTMLDecoded is a parsed HTML document and the body it was parsed from.
 type HTMLDecoded struct {
 	Document *goquery.Document
 	Raw      []byte
@@ -63,6 +68,8 @@ func detectFormat(r *fetch.HTTPResponse, requested string) string {
 	return "text"
 }
 
+// Decode converts r's body to UTF-8 and decodes it with the decoder c's
+// configuration, the response's content type or its content selects.
 func Decode(r *fetch.HTTPResponse, c *model.Collector) (*Decoded, error) {
 	// The body is converted to UTF-8 before anything reads it (textencoding.go).
 	named, err := convertToUTF8(r, c)
@@ -184,4 +191,6 @@ func decodePrometheus(r *fetch.HTTPResponse) (*Decoded, error) {
 	return &Decoded{Kind: "prometheus", Data: model.MetricSet{Metrics: metrics}, Raw: r.Body}, nil
 }
 
+// TextValue reads text extracted from a document as a number, ignoring
+// surrounding space.
 func TextValue(v string) (float64, error) { return strconv.ParseFloat(strings.TrimSpace(v), 64) }

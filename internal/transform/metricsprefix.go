@@ -7,6 +7,8 @@ import (
 	"github.com/eenchev/prometheus-universal-exporter/internal/model"
 )
 
+// MetricsPrefixRE matches a valid metrics_prefix.
+//
 // A collector's metrics_prefix namespaces everything it exports: with
 // metrics_prefix: grafana, a metric declared as statuspage_status is exported
 // as grafana_statuspage_status. It applies to every transform, including the

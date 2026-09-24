@@ -93,6 +93,9 @@ func CollectorNames(c *model.Config) []string {
 	return names
 }
 
+// CaptureLogs sends slog's default logger to a JSON buffer until the test
+// ends, and returns the buffer.
+//
 // Anything consuming these logs parses them, so one differently shaped line is
 // not a cosmetic problem: it is a line the consumer drops or chokes on. The
 // failure this guards against is a log written through slog's default logger

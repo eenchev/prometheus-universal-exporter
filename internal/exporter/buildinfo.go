@@ -20,6 +20,9 @@ type buildInformation struct {
 	RequestTypes                 []string
 }
 
+// BuildVersion returns what this binary reports about its build: the
+// version, the VCS revision, the Go release and the request types built in.
+// It is worked out once.
 var BuildVersion = sync.OnceValue(computeBuildVersion)
 
 func computeBuildVersion() buildInformation {

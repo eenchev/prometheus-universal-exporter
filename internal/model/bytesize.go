@@ -54,6 +54,8 @@ func parseByteSize(s string) (ByteSize, error) {
 	return ByteSize(bytes), nil
 }
 
+// UnmarshalYAML reads a size given as a number of bytes or as a string with
+// a unit, such as 10MiB, reporting a bad one with its line.
 func (b *ByteSize) UnmarshalYAML(n *yaml.Node) error {
 	if n.Kind != yaml.ScalarNode {
 		return lineError(n, "expected a size, a number of bytes or a string such as 10MiB, not %s", describeNode(n))

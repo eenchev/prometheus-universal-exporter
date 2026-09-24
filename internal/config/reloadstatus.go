@@ -30,6 +30,8 @@ var ReloadMetricHelp = map[string]string{
 	"http_exporter_config_reloads_total":                         "Reloads of this configuration file after startup, by result: success or failure.",
 }
 
+// The files a reload status is kept for: the configuration file, with its
+// collector files, and the scheduled target file.
 const (
 	reloadFileConfig  = "config"
 	ReloadFileTargets = "targets"

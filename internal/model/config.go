@@ -26,6 +26,9 @@ func (d *Duration) UnmarshalYAML(n *yaml.Node) error {
 	return nil
 }
 
+// Config is the configuration file: its collectors, the files of further
+// collectors, the OTLP export and the settings of the exporter's own web
+// endpoints.
 type Config struct {
 	Collectors []Collector `yaml:"collectors"`
 	// CollectorFiles lists further files of collectors, as paths or glob
@@ -44,6 +47,7 @@ type Config struct {
 	Deprecations []string `yaml:"-"`
 }
 
+// WebConfig is the web block: the exporter's own HTTP endpoints.
 type WebConfig struct {
 	BasicAuth   *ExporterBasicAuth `yaml:"basic_auth"`
 	SelfMetrics SelfMetricsConfig  `yaml:"self_metrics"`
@@ -61,6 +65,8 @@ type SelfMetricsConfig struct {
 	ResourceMetrics bool `yaml:"resource_metrics_enabled"`
 }
 
+// ExporterBasicAuth is web.basic_auth, the credentials a client must present
+// to the exporter's endpoints.
 type ExporterBasicAuth struct {
 	Enabled  bool   `yaml:"enabled"`
 	Username string `yaml:"username"`
@@ -72,6 +78,8 @@ type ExporterBasicAuth struct {
 	PasswordFile string `yaml:"password_file"`
 }
 
+// Collector is one entry of collectors: how to reach a target, read its
+// response and turn it into metrics. Probes name it with ?collector=.
 type Collector struct {
 	Name string `yaml:"name"`
 	// MetricsPrefix, when set, is joined with "_" to the front of every metric
@@ -99,6 +107,8 @@ type Collector struct {
 	NameEscaping string `yaml:"name_escaping"`
 }
 
+// RequestConfig is a collector's request block: how the target is reached.
+// Which keys apply depends on Type.
 type RequestConfig struct {
 	// Type selects how the collector reaches its data. It is required; see
 	// fetch/requesttype.go for the types and the keys each accepts.
@@ -132,21 +142,29 @@ type RequestConfig struct {
 	MaxTotalBytes ByteSize `yaml:"max_total_bytes"`
 }
 
+// RetryConfig is request.retry: how often a failed request is tried again,
+// and how long to wait before each attempt.
 type RetryConfig struct {
 	Attempts int      `yaml:"attempts"`
 	Backoff  Duration `yaml:"backoff"`
 }
 
+// BasicAuth is request.basic_auth, credentials written in the configuration.
 type BasicAuth struct {
 	Username string `yaml:"username"`
 	Password string `yaml:"password"`
 }
 
+// BasicAuthFile is request.basic_auth_file: the paths of files holding the
+// username and the password, read on every request so a rotated secret is
+// picked up.
 type BasicAuthFile struct {
 	Username string `yaml:"username"`
 	Password string `yaml:"password"`
 }
 
+// TLSConfig is a tls block: the CA to verify the server with, a client
+// certificate and key, and whether verification is skipped.
 type TLSConfig struct {
 	CAFile             string `yaml:"ca_file"`
 	CertFile           string `yaml:"cert_file"`
@@ -154,6 +172,8 @@ type TLSConfig struct {
 	InsecureSkipVerify bool   `yaml:"insecure_skip_verify"`
 }
 
+// ResponseConfig is a collector's response block: how to read the body the
+// target returns.
 type ResponseConfig struct {
 	Format string `yaml:"format"`
 	// Charset names the encoding of the response when the target does not
@@ -163,16 +183,22 @@ type ResponseConfig struct {
 	Namespaces map[string]string `yaml:"namespaces"`
 }
 
+// CSVConfig is response.csv: how a CSV body is split into rows and fields.
 type CSVConfig struct {
 	Header    *bool  `yaml:"header"`
 	Delimiter string `yaml:"delimiter"`
 	TrimSpace bool   `yaml:"trim_space"`
 }
 
+// DecoderConfig is a collector's decoder block. Type overrides the decoder
+// the response's content type and the transform would pick.
 type DecoderConfig struct {
 	Type string `yaml:"type"`
 }
 
+// ErrorHandling is a collector's error_handling block: the policy, fail, log
+// or ignore, for a failed fetch, decode or transform, and whether a missing
+// value fails its metric rule.
 type ErrorHandling struct {
 	OnFetchError     string `yaml:"on_fetch_error"`
 	OnDecodeError    string `yaml:"on_decode_error"`
@@ -180,6 +206,8 @@ type ErrorHandling struct {
 	AllowMissingKeys bool   `yaml:"allow_missing_keys"`
 }
 
+// OTLPConfig is the otlp block: where and how often the scheduled targets'
+// metrics are pushed.
 type OTLPConfig struct {
 	Enabled            bool              `yaml:"enabled"`
 	Endpoint           string            `yaml:"endpoint"`
@@ -209,6 +237,8 @@ const (
 	OTLPCompressionNone = "none"
 )
 
+// Limits is a collector's limits block: bounds on what one scrape may read,
+// produce and spend. Zero means the default.
 type Limits struct {
 	MaxResponseBytes    ByteSize `yaml:"max_response_bytes"`
 	MaxMetrics          int      `yaml:"max_metrics"`
@@ -221,6 +251,8 @@ type Limits struct {
 	MaxCacheEntries     int      `yaml:"max_cache_entries"`
 }
 
+// MetricRule is one entry of a collector's metrics: a metric, the expression
+// that produces its value and the labels it carries.
 type MetricRule struct {
 	Name string `yaml:"name"`
 	// Items, for the jq and yq transforms, selects the things the metric is
@@ -248,6 +280,8 @@ const (
 	ErrorModeFail = "fail"
 )
 
+// LabelRule is one label of a metric rule: a fixed value, or one an
+// expression produces.
 type LabelRule struct {
 	Name       string `yaml:"name"`
 	Type       string `yaml:"type"`
@@ -258,6 +292,9 @@ type LabelRule struct {
 	Truncate bool `yaml:"truncate"`
 }
 
+// TransformConfig is a collector's transform block: the language its
+// expressions are written in, the scripts, and the renaming and filtering
+// applied to the metrics produced.
 type TransformConfig struct {
 	Type         string            `yaml:"type"`
 	PreScript    string            `yaml:"pre_script"`
@@ -293,6 +330,7 @@ const (
 	ErrorPolicyWarn = "warn"
 )
 
+// CollectorByName returns the collector of cfg with the given name, or nil.
 func CollectorByName(cfg *Config, name string) *Collector {
 	for i := range cfg.Collectors {
 		if cfg.Collectors[i].Name == name {
@@ -331,9 +369,11 @@ func (c *CacheConfig) UnmarshalYAML(n *yaml.Node) error {
 	return n.Decode((*plain)(c))
 }
 
-// CacheTTL and StaleIfError are a collector's two windows.
+// CacheTTL is how long a collector's result answers repeats of its probe.
 func CacheTTL(c *Collector) time.Duration { return time.Duration(c.Cache.TTL) }
 
+// StaleIfError is how long after its TTL a collector's result stands in for a
+// trip that fails.
 func StaleIfError(c *Collector) time.Duration { return time.Duration(c.Cache.StaleIfError) }
 
 // UsesCache reports whether the collector keeps results at all.

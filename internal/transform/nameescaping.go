@@ -42,6 +42,8 @@ const (
 	NameEscapingValues      = "values"
 )
 
+// ValidateNameEscaping checks a collector's name_escaping and fills in the
+// default, fail.
 func ValidateNameEscaping(c *model.Collector) error {
 	switch c.NameEscaping {
 	case "":

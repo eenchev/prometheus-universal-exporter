@@ -271,6 +271,59 @@ func requestParamNames(c *model.Collector, overrides RequestOverrides) (map[stri
 	return used, nil
 }
 
+// RequestParam is a parameter a collector's request takes from the probe, as
+// param_<name>: the value a {{param_<name>}} placeholder is filled with.
+type RequestParam struct {
+	Name string
+	// Required is set when some placeholder naming it has no default, so a
+	// probe must supply it. Default is the first default given otherwise.
+	Required bool
+	Default  string
+}
+
+// RequestParams lists the parameters a collector's request takes, in its
+// path, templated body, headers and query values, sorted by name. A request
+// whose placeholders cannot be parsed takes none; the configuration refuses
+// it before it gets here.
+func RequestParams(c *model.Collector) []RequestParam {
+	var placeholders []pathPlaceholder
+	if HasPathParams(c.Request.Path) {
+		found, err := parsePathParams(c.Request.Path)
+		if err != nil {
+			return nil
+		}
+		placeholders = append(placeholders, found...)
+	}
+	for _, f := range requestTemplates(c, RequestOverrides{}) {
+		found, err := f.parse()
+		if err != nil {
+			return nil
+		}
+		placeholders = append(placeholders, found...)
+	}
+	byName := map[string]*RequestParam{}
+	var names []string
+	for _, p := range placeholders {
+		param := byName[p.Name]
+		if param == nil {
+			param = &RequestParam{Name: p.Name}
+			byName[p.Name] = param
+			names = append(names, p.Name)
+		}
+		if !p.HasDefault {
+			param.Required = true
+		} else if param.Default == "" {
+			param.Default = p.Default
+		}
+	}
+	sort.Strings(names)
+	out := make([]RequestParam, 0, len(names))
+	for _, name := range names {
+		out = append(out, *byName[name])
+	}
+	return out
+}
+
 // CheckRequestParams binds every placeholder of a request against the
 // parameters without sending anything, so a missing or unfit value is known
 // before the target is contacted, and reports parameters nothing uses.

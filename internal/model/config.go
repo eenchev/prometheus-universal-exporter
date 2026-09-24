@@ -290,6 +290,10 @@ type LabelRule struct {
 	// Truncate cuts a value longer than limits.max_label_value_length to fit,
 	// instead of failing the scrape. See truncateLabelValue.
 	Truncate bool `yaml:"truncate"`
+	// Required makes a series whose expression gives this label no value, or
+	// an empty one, a failure of the metric rule, handled by its error_mode.
+	// Unset, such a series is exported without the label.
+	Required bool `yaml:"required"`
 }
 
 // TransformConfig is a collector's transform block: the language its

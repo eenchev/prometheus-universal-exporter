@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -365,5 +366,24 @@ func TestErrorModesOnAScheduledTarget(t *testing.T) {
 				t.Fatalf("demo_up exported=%v under %s", served, mode)
 			}
 		})
+	}
+}
+
+// A required label a series has no value for fails the probe under
+// error_mode fail, naming the label, and is counted as a missing key.
+func TestAMissingRequiredLabelFailsTheProbe(t *testing.T) {
+	testutil.CaptureLogs(t)
+	target := textTarget(t, "v=1 a\nv=2\n")
+	c := regexCollector("tenants")
+	c.Metrics[0].Expression = `v=(\d+)(?: (?P<who>\S+))?`
+	c.Metrics[0].ErrorMode = model.ErrorModeFail
+	c.Metrics[0].Labels[0].Required = true
+	server, _ := newCacheTestServer(t, c)
+	recorder := probeOnce(t, server, "/probe?collector=tenants&target="+url.QueryEscape(target.URL), nil)
+	if recorder.Code != http.StatusBadGateway || !strings.Contains(recorder.Body.String(), `label \"who\" is missing`) {
+		t.Fatalf("status=%d body=%s", recorder.Code, recorder.Body)
+	}
+	if got := seriesValue(t, selfMetrics(t, server), `http_exporter_missing_keys_total{collector="tenants"}`); got != 1 {
+		t.Fatalf("missing keys %v, want 1", got)
 	}
 }

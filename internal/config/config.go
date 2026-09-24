@@ -213,12 +213,18 @@ func validateMetricRules(c *model.Config, x *model.Collector) error {
 				if label.Expression != "" {
 					return fmt.Errorf("collector %q metric %q label %q of type string cannot set expression", x.Name, r.Name, label.Name)
 				}
+				if label.Required {
+					return fmt.Errorf("collector %q metric %q label %q of type string cannot be required; its value is always there", x.Name, r.Name, label.Name)
+				}
 			case "expression":
 				if strings.TrimSpace(label.Expression) == "" {
 					return fmt.Errorf("collector %q metric %q label %q of type expression requires expression", x.Name, r.Name, label.Name)
 				}
 				if label.Value != "" {
 					return fmt.Errorf("collector %q metric %q label %q of type expression cannot set value", x.Name, r.Name, label.Name)
+				}
+				if label.Required && x.Transform.Type == "python" {
+					return fmt.Errorf("collector %q metric %q label %q cannot be required: a python transform's labels come from its script, not from label expressions", x.Name, r.Name, label.Name)
 				}
 			default:
 				return fmt.Errorf("collector %q metric %q label %q has invalid type %q; want string or expression", x.Name, r.Name, label.Name, label.Type)

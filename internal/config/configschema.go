@@ -211,6 +211,7 @@ func configSchemaRules() map[string]map[string]any {
 		"collectors[].metrics[].labels[].name":     {"pattern": `^[a-zA-Z_][a-zA-Z0-9_]*$`},
 		"collectors[].metrics[].labels[].type":     {"enum": []string{"string", "expression"}, "description": "string for a literal value, expression for a value from the response."},
 		"collectors[].metrics[].labels[].truncate": {"description": "Cut a value longer than limits.max_label_value_length to fit, ending in …, instead of failing the scrape."},
+		"collectors[].metrics[].labels[].required": {"description": "expression labels only: a series the expression gives no value, or an empty one, fails the metric under its error_mode instead of being exported without the label. Defaults to false."},
 		"collectors[].limits.script_timeout":       {"description": "How long a Python script may run. Starting the interpreter is not counted. Defaults to 100ms."},
 		"otlp.endpoint":                            {"description": "OTLP/HTTP metrics endpoint, such as http://otel-collector:4318/v1/metrics."},
 		"web.basic_auth.username_file":             {"description": "Read the username from this file instead of username, such as a mounted Secret. Read again when it changes."},

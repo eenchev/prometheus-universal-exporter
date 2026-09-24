@@ -144,6 +144,30 @@ Label expressions use the same transform-specific language as the metric
 expression. For CSV, each row produces a metric and `expression: server`
 selects that row's `server` column.
 
+A label expression that gives a series no value — a selector or path that
+matches nothing, a missing attribute, column or capture group, a null — leaves
+the label off that series, as does an empty value, which Prometheus treats the
+same way. When a series is wrong without the label, mark it `required`:
+
+```yaml
+labels:
+  - name: server
+    type: expression
+    expression: td.name
+    required: true    # a row without a name is an error, not an unlabelled series
+```
+
+A series missing a required label is a missing value of its metric, handled by
+the metric's [`error_mode`](#when-a-metric-cannot-be-extracted): `ignore` and
+`log` drop that one series and keep the rest, `fail` fails the probe with an
+error naming the label. It is counted in `http_exporter_missing_keys_total`,
+and applies whatever `required` and `error_handling.allow_missing_keys` say
+about the value. Without `items`, jq pairs label values with series by
+position, so a required label must give one value, applied to every series, or
+exactly one per series; any other count fails the metric rather than put labels
+on the wrong series. `required` applies to `type: expression` labels, and not
+to the python transform, whose labels come from its script.
+
 ### Prefixing a collector's metrics
 
 `metrics_prefix` puts a namespace in front of everything a collector exports.

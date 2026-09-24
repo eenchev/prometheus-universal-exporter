@@ -1547,7 +1547,8 @@ vocabulary as `error_handling` (§ 19). `warn`, the older spelling of `log` in
 (§ 19). Any other value MUST be rejected at startup and on reload, and the
 message MUST list the accepted values. It governs what happens when an individual metric cannot be
 extracted — its expression or a label expression errors, its value is absent
-while the metric is required, or its value is not a number:
+while the metric is required, a required label is absent (§ 18.1), or its
+value is not a number:
 
 - `ignore` MUST skip that metric without logging and carry on. The probe MUST
   serve every metric that could be extracted; when none could, it MUST succeed
@@ -1629,6 +1630,19 @@ shortened value would surprise. Truncation MUST apply to the labels of declared
 metrics from every transform, and MUST happen before `metrics_prefix` (§ 5.0a)
 is added.
 
+An expression label that gives a series no value — a selector or path matching
+nothing, a missing attribute, column, capture group or source label, a null —
+or an empty value MUST be left off that series, in every transform, so the
+text exposition and OTLP agree. A label of `type: expression` MAY set
+`required: true`. A series missing a required label MUST then be a missing
+value of its metric: handled by the metric's `error_mode`, where `ignore` and
+`log` drop that series alone and `fail` fails the scrape with an error naming
+the label, counted as a missing key, and regardless of the metric's `required`
+and `error_handling.allow_missing_keys`. For jq without `items`, where label
+values pair with series by position, a required label giving neither one value
+nor one per series MUST fail the metric. `required` on a `type: string` label,
+or on a label of the python transform, MUST be rejected at startup.
+
 Python transforms are the exception: their script emits the common metric
 objects through `metric(...)`, so a `metrics` array is optional for them.
 
@@ -1660,7 +1674,8 @@ For one item, the value expression and each label expression MUST produce at
 most one value; more MUST be an error naming the expression. A missing or null
 value MUST be that item's missing metric, handled by `required` and `error_mode`
 as for any other metric, and the other items MUST be unaffected under `ignore`
-and `log`. A missing or null label MUST leave that label off the series. An
+and `log`. A missing or null label MUST leave that label off the series,
+unless it is required (§ 18.1). An
 `items` expression that selects nothing MUST be a missing metric when the metric
 is required and produce nothing otherwise. `items` on any other transform MUST
 be rejected at startup.

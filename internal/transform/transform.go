@@ -297,6 +297,12 @@ func transformJQ(ctx context.Context, data any, rules []model.MetricRule, c *mod
 				}
 				return nil, ruleFailure(c, rule, fmt.Errorf("metric %q: %w", rule.Name, err))
 			}
+			if missing := missingRequiredLabel(rule, labels[index]); missing != nil {
+				if handleMetricError(c, rule, missing) {
+					continue
+				}
+				return nil, ruleFailure(c, rule, missing)
+			}
 			out.Metrics = append(out.Metrics, model.Metric{Name: rule.Name, Help: rule.Description, Type: rule.Type, Value: n, Labels: model.CloneLabels(labels[index])})
 		}
 	}
@@ -370,6 +376,11 @@ func transformJQItems(ctx context.Context, data any, rule model.MetricRule, c *m
 				labels[label.Name] = fmt.Sprint(labelValue)
 			}
 		}
+		if labelErr == nil {
+			if missing := missingRequiredLabel(rule, labels); missing != nil {
+				labelErr = fmt.Errorf("%w for item %d", missing, index)
+			}
+		}
 		if labelErr != nil {
 			if _, carryOn, failure := fail(labelErr); !carryOn {
 				return nil, failure
@@ -436,6 +447,12 @@ func evaluateLabels(ctx context.Context, data any, expressions []model.LabelRule
 		if err != nil {
 			return nil, fmt.Errorf("label %q: %w", label.Name, err)
 		}
+		// Values are paired with series by position, so a required label
+		// giving a different number of values than there are series would
+		// land on the wrong ones.
+		if label.Required && len(values) != 1 && len(values) != metricCount {
+			return nil, fmt.Errorf("label %q gave %d values for %d series; a required label must give one value, or one per series", label.Name, len(values), metricCount)
+		}
 		if len(values) == 1 {
 			if values[0] != nil {
 				for index := range labels {
@@ -451,6 +468,28 @@ func evaluateLabels(ctx context.Context, data any, expressions []model.LabelRule
 		}
 	}
 	return labels, nil
+}
+
+// missingRequiredLabel finishes a series' labels. An expression label with an
+// empty value is left off, as one the expression gave no value for is: the two
+// are the same series to Prometheus, and OTLP should not tell them apart
+// either. It then reports the first label of rule marked required that the
+// series has no value for. The error is a missing value, so it is counted as
+// one and the rule's error_mode decides what happens to the series.
+func missingRequiredLabel(rule model.MetricRule, labels map[string]string) error {
+	for _, label := range rule.Labels {
+		if label.Type != "string" && labels[label.Name] == "" {
+			delete(labels, label.Name)
+		}
+	}
+	for _, label := range rule.Labels {
+		if label.Required {
+			if _, ok := labels[label.Name]; !ok {
+				return model.MarkError(fmt.Errorf("metric %q label %q is missing", rule.Name, label.Name), model.ErrMissingValue)
+			}
+		}
+	}
+	return nil
 }
 
 func requiredRule(rule model.MetricRule, c *model.Collector) bool {
@@ -507,6 +546,12 @@ func transformRegex(text string, rules []model.MetricRule, c *model.Collector) (
 				if index >= 0 && 2*index+1 < len(match) && match[2*index] >= 0 {
 					labels[label.Name] = text[match[2*index]:match[2*index+1]]
 				}
+			}
+			if missing := missingRequiredLabel(rule, labels); missing != nil {
+				if handleMetricError(c, rule, missing) {
+					continue
+				}
+				return nil, ruleFailure(c, rule, missing)
 			}
 			out.Metrics = append(out.Metrics, model.Metric{Name: rule.Name, Help: rule.Description, Type: rule.Type, Value: n, Labels: labels})
 		}
@@ -616,6 +661,12 @@ func transformXPathNodes[N any](root N, nodes xpathNodes[N], rules []model.Metri
 				}
 				return nil, ruleFailure(c, rule, fmt.Errorf("metric %q: %w", rule.Name, err))
 			}
+			if missing := missingRequiredLabel(rule, labels); missing != nil {
+				if handleMetricError(c, rule, missing) {
+					continue
+				}
+				return nil, ruleFailure(c, rule, missing)
+			}
 			out.Metrics = append(out.Metrics, model.Metric{Name: rule.Name, Help: rule.Description, Type: rule.Type, Value: value, Labels: labels})
 		}
 	}
@@ -643,9 +694,9 @@ func transformCSS(doc *goquery.Document, rules []model.MetricRule, c *model.Coll
 			}
 			continue
 		}
-		var transformErr error
+		var transformErr, failure error
 		selection.Each(func(_ int, node *goquery.Selection) {
-			if transformErr != nil {
+			if transformErr != nil || failure != nil {
 				return
 			}
 			value, err := decode.TextValue(strings.TrimSpace(node.Text()))
@@ -657,14 +708,23 @@ func transformCSS(doc *goquery.Document, rules []model.MetricRule, c *model.Coll
 			for _, label := range rule.Labels {
 				if label.Type == "string" {
 					labels[label.Name] = label.Value
-				} else {
-					if selector, err := expr.CompileCSS(label.Expression); err == nil {
-						labels[label.Name] = strings.TrimSpace(node.FindMatcher(selector).First().Text())
-					}
+				} else if selector, err := expr.CompileCSS(label.Expression); err == nil {
+					labels[label.Name] = strings.TrimSpace(node.FindMatcher(selector).First().Text())
 				}
+			}
+			// A series without a required label is dropped alone, or fails
+			// the rule, by its error_mode.
+			if missing := missingRequiredLabel(rule, labels); missing != nil {
+				if !handleMetricError(c, rule, missing) {
+					failure = ruleFailure(c, rule, missing)
+				}
+				return
 			}
 			out.Metrics = append(out.Metrics, model.Metric{Name: rule.Name, Help: rule.Description, Type: rule.Type, Value: value, Labels: labels})
 		})
+		if failure != nil {
+			return nil, failure
+		}
 		if transformErr != nil {
 			if handleMetricError(c, rule, transformErr) {
 				continue
@@ -713,6 +773,12 @@ func transformCSV(data any, rules []model.MetricRule, c *model.Collector) (*mode
 					labels[label.Name] = fmt.Sprint(labelValue)
 				}
 			}
+			if missing := missingRequiredLabel(rule, labels); missing != nil {
+				if handleMetricError(c, rule, missing) {
+					continue
+				}
+				return nil, ruleFailure(c, rule, missing)
+			}
 			out.Metrics = append(out.Metrics, model.Metric{Name: rule.Name, Help: rule.Description, Type: rule.Type, Value: n, Labels: labels})
 		}
 	}
@@ -748,15 +814,21 @@ func applyPrometheusTransform(in model.MetricSet, c *model.Collector, t model.Tr
 				if rule.Type != "" {
 					metric.Type = rule.Type
 				}
-				if metric.Labels == nil {
-					metric.Labels = map[string]string{}
-				}
+				// The series gets labels of its own: rules add and remove
+				// them, and another rule may match the same source metric.
+				metric.Labels = model.CloneLabels(source.Labels)
 				for _, label := range rule.Labels {
 					if label.Type == "string" {
 						metric.Labels[label.Name] = label.Value
 					} else if value, ok := metric.Labels[label.Expression]; ok {
 						metric.Labels[label.Name] = value
 					}
+				}
+				if missing := missingRequiredLabel(rule, metric.Labels); missing != nil {
+					if handleMetricError(c, rule, missing) {
+						continue
+					}
+					return nil, ruleFailure(c, rule, missing)
 				}
 				out.Metrics = append(out.Metrics, metric)
 			}

@@ -8,12 +8,11 @@ import (
 	"github.com/eenchev/prometheus-universal-exporter/internal/model"
 )
 
+// jqFamily reports whether a transform evaluates jq expressions against
+// decoded structured data: jq and yq. Only these support items, and only these
+// accept a pre-script result in place of the decoded response.
 func jqFamily(transformType string) bool {
-	switch transformType {
-	case "", "none", "jq", "yq":
-		return true
-	}
-	return false
+	return transformType == "jq" || transformType == "yq"
 }
 
 // CheckMetricRule validates one rule's name and compiles its expressions.

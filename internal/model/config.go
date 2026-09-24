@@ -307,6 +307,16 @@ type LabelRule struct {
 // expression.
 func (l LabelRule) Static() bool { return l.Expression == "" }
 
+// DecoderTypes are the values of decoder.type: auto, which chooses a decoder
+// for each response, and the decoders. Validation and the JSON Schema both
+// read this list, and a test keeps decode.Decode handling every decoder in it.
+var DecoderTypes = []string{"auto", "json", "yaml", "xml", "csv", "html", "prometheus", "text"}
+
+// TransformTypes are the values of transform.type, which a collector must set.
+// Validation and the JSON Schema both read this list, and a test keeps the
+// transform package handling every type in it.
+var TransformTypes = []string{"jq", "yq", "xpath", "css", "csv", "regex", "python", "prometheus"}
+
 // TransformConfig is a collector's transform block: the language its
 // expressions are written in, the scripts, and the renaming and filtering
 // applied to the metrics produced.

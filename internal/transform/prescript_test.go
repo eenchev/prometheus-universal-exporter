@@ -36,8 +36,6 @@ func TestPreScriptPromotesOnlyForStructuredTransforms(t *testing.T) {
 		script    string
 		want      string
 	}{
-		{transform: "", kind: "text", script: structured, want: "json"},
-		{transform: "none", kind: "text", script: structured, want: "json"},
 		{transform: "jq", kind: "text", script: structured, want: "json"},
 		{transform: "yq", kind: "text", script: structured, want: "json"},
 		{transform: "jq", kind: "csv", script: structured, want: "json"},

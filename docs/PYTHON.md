@@ -103,7 +103,7 @@ declares `beautifulsoup4` or `bs4` fails validation with a pointer to
 
 When a response only needs parsing, prefer a pre-script that returns a mapping
 or a sequence over `transform.type: python`. A structured pre-script result
-becomes the decoded response for the `jq`, `yq`, and `none` transforms whatever
+becomes the decoded response for the `jq` and `yq` transforms whatever
 the endpoint actually returned, so the metrics are declared exactly like any
 other collector's:
 

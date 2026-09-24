@@ -697,6 +697,10 @@ auto
 
 Python is a transform, not a decoder. Supported transform types MUST include
 `jq`, `yq`, `xpath`, `css`, `csv`, `regex`, `prometheus`, and `python`.
+`transform.type` MUST be set on every collector: a collector without it, or
+with any other value, MUST be rejected at startup naming the accepted types.
+The decoder and transform types MUST each be listed once in the code, the list
+validation and the JSON Schema both read.
 
 The decoder MUST be chosen by `decoder.type`, the one key for it; `response`
 MUST NOT take a format. `decoder.type` is optional and defaults to `auto`. When
@@ -1732,8 +1736,8 @@ when that interpreter is unusable. A configuration containing no Python MUST NOT
 invoke an interpreter at all, so a deployment that uses none is unaffected.
 
 A pre-script that returns a mapping or a sequence produces structured data. When
-the collector's transform reads structured data — `jq`, `yq`, `none`, or an
-unset transform — the exporter MUST treat that result as the decoded response
+the collector's transform reads structured data — `jq` or `yq` — the exporter
+MUST treat that result as the decoded response
 and MUST NOT reject the collector because of the response's original format. The
 decoded format becomes JSON for the rest of the scrape, whatever the response
 originally was. This lets an unstructured response be reshaped once in Python
@@ -3532,7 +3536,7 @@ Test structured pre-script results:
 - A text response reshaped into a mapping is extracted by ordinary `jq` metric
   rules, including label expressions, and produces the declared name, help, and
   type.
-- Promotion applies to `jq`, `yq`, `none`, and an unset transform, for any
+- Promotion applies to `jq` and `yq`, for any
   original response format, and to both mapping and sequence results.
 - Promotion does not apply to `csv`, `regex`, `css`, `xpath`, or `python`, which
   keep receiving their decoded format.

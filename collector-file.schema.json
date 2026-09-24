@@ -696,9 +696,8 @@
                 ]
               },
               "type": {
-                "description": "How metrics are extracted from the decoded response.",
+                "description": "How metrics are extracted from the decoded response. Required.",
                 "enum": [
-                  "none",
                   "jq",
                   "yq",
                   "xpath",
@@ -711,12 +710,16 @@
                 "type": "string"
               }
             },
+            "required": [
+              "type"
+            ],
             "type": "object"
           }
         },
         "required": [
           "name",
-          "request"
+          "request",
+          "transform"
         ],
         "type": "object"
       },

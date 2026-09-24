@@ -164,7 +164,7 @@ func configSchemaRules() map[string]map[string]any {
 		"collector_files":   {"description": "Further files of collectors, as paths or glob patterns such as collectors.d/*.yaml, relative to this file. A collector file holds a collectors list and nothing else. See docs/CONFIGURATION.md#collector-files."},
 		"collector_files[]": {"type": "string", "minLength": 1},
 		"collectors[]": {
-			"required":    []string{"name", "request"},
+			"required":    []string{"name", "request", "transform"},
 			"description": "How to reach a kind of target and turn its response into metrics.",
 		},
 		"collectors[].name":                    {"pattern": `^[a-zA-Z_][a-zA-Z0-9_]*$`, "description": "Unique name, used as the collector parameter of /probe."},
@@ -185,13 +185,14 @@ func configSchemaRules() map[string]map[string]any {
 		"collectors[].request.max_total_bytes": {"description": "localfile with request.files: the most one scrape reads across every file; a file that would go past it is refused. Defaults to 64 MiB."},
 		"collectors[].request.max_age":         {"description": "localfile: refuse a file last modified longer ago than this, so a writer that has stopped fails the scrape instead of exporting its last values forever."},
 		"collectors[].decoder.type": {
-			"enum":        []string{"auto", "json", "yaml", "xml", "csv", "html", "prometheus", "text"},
+			"enum":        model.DecoderTypes,
 			"description": "How to decode the response. Defaults to auto, which the transform or the Content-Type decides.",
 		},
 		"collectors[].transform.type": {
-			"enum":        []string{"none", "jq", "yq", "xpath", "css", "csv", "regex", "python", "prometheus"},
-			"description": "How metrics are extracted from the decoded response.",
+			"enum":        model.TransformTypes,
+			"description": "How metrics are extracted from the decoded response. Required.",
 		},
+		"collectors[].transform":                         {"required": []string{"type"}},
 		"collectors[].transform.libraries[]":             libraries,
 		"collectors[].transform.required_libs[]":         libraries,
 		"collectors[].transform.pre_script":              {"description": "Python run before the transform. It receives data and must leave its result in data."},

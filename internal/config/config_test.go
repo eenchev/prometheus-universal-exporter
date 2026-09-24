@@ -340,13 +340,28 @@ func TestConfigValidationRejectsInvalidSettings(t *testing.T) {
 		},
 		{
 			name: "invalid metric type",
-			cfg:  &model.Config{Collectors: []model.Collector{{Request: model.RequestConfig{Type: fetch.RequestTypeHTTP}, Name: "invalid_metric_type", Metrics: []model.MetricRule{{Name: "value", Type: "rate", Expression: ".value"}}}}},
+			cfg:  &model.Config{Collectors: []model.Collector{{Request: model.RequestConfig{Type: fetch.RequestTypeHTTP}, Name: "invalid_metric_type", Transform: model.TransformConfig{Type: "jq"}, Metrics: []model.MetricRule{{Name: "value", Type: "rate", Expression: ".value"}}}}},
 			want: "invalid type",
 		},
 		{
 			name: "invalid metric error mode",
-			cfg:  &model.Config{Collectors: []model.Collector{{Request: model.RequestConfig{Type: fetch.RequestTypeHTTP}, Name: "invalid_error_mode", Metrics: []model.MetricRule{{Name: "value", ErrorMode: "panic", Expression: ".value"}}}}},
+			cfg:  &model.Config{Collectors: []model.Collector{{Request: model.RequestConfig{Type: fetch.RequestTypeHTTP}, Name: "invalid_error_mode", Transform: model.TransformConfig{Type: "jq"}, Metrics: []model.MetricRule{{Name: "value", ErrorMode: "panic", Expression: ".value"}}}}},
 			want: "want fail, log or ignore",
+		},
+		{
+			name: "missing transform type",
+			cfg:  &model.Config{Collectors: []model.Collector{{Request: model.RequestConfig{Type: fetch.RequestTypeHTTP}, Name: "untransformed", Metrics: []model.MetricRule{{Name: "value", Expression: ".value"}}}}},
+			want: `collector "untransformed" has no transform.type; it is required: jq, yq, xpath, css, csv, regex, python, prometheus`,
+		},
+		{
+			name: "none transform",
+			cfg:  &model.Config{Collectors: []model.Collector{{Request: model.RequestConfig{Type: fetch.RequestTypeHTTP}, Name: "none", Transform: model.TransformConfig{Type: "none"}, Metrics: []model.MetricRule{{Name: "value", Expression: ".value"}}}}},
+			want: `collector "none" has unknown transform "none"; want one of jq, yq`,
+		},
+		{
+			name: "unknown decoder",
+			cfg:  &model.Config{Collectors: []model.Collector{{Request: model.RequestConfig{Type: fetch.RequestTypeHTTP}, Name: "gopher", Decoder: model.DecoderConfig{Type: "gopher"}, Transform: model.TransformConfig{Type: "jq"}, Metrics: []model.MetricRule{{Name: "value", Expression: ".value"}}}}},
+			want: `collector "gopher" has unknown decoder "gopher"; want one of auto, json`,
 		},
 		{
 			name: "label with a value and an expression",

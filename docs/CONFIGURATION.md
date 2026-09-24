@@ -51,8 +51,9 @@ decoder:
 ```
 
 Supported decoders are `json`, `yaml`, `xml`, `csv`, `html`,
-`prometheus`, `text`, and `auto`. Supported transforms include jq/yq, XPath,
-CSS, CSV, regex, Prometheus filtering, and Python. JSON and YAML expressions
+`prometheus`, `text`, and `auto`. Every collector sets `transform.type`, one of
+`jq`, `yq`, `xpath`, `css`, `csv`, `regex`, `prometheus` and `python`; there is
+no default, and a collector without one is refused at startup. JSON and YAML expressions
 use the embedded jq-compatible engine (the expression language is also used
 for yq-compatible transformations). XML supports XPath, HTML supports CSS
 selectors and XPath (including bare element selectors such as `h1`), text

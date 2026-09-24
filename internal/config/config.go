@@ -8,6 +8,7 @@ import (
 	"net/url"
 	"os"
 	"regexp"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -141,18 +142,29 @@ func applyLimitDefaults(l *model.Limits) {
 	}
 }
 
-// normalizeFormats lower-cases the decoder and transform, infers the decoder a
-// transform implies, and refuses what is not known.
+// normalizeFormats lower-cases the transform and decoder, refuses a missing or
+// unknown transform and an unknown decoder, and infers the decoder a transform
+// implies.
 func normalizeFormats(x *model.Collector) error {
 	if err := decode.CheckCharset(x.Response.Charset); err != nil {
 		return fmt.Errorf("collector %q response.charset: %w", x.Name, err)
 	}
-	x.Decoder.Type = strings.ToLower(x.Decoder.Type)
+	x.Transform.Type = strings.ToLower(strings.TrimSpace(x.Transform.Type))
+	switch {
+	case x.Transform.Type == "":
+		return fmt.Errorf("collector %q has no transform.type; it is required: %s", x.Name, strings.Join(model.TransformTypes, ", "))
+	case !slices.Contains(model.TransformTypes, x.Transform.Type):
+		return fmt.Errorf("collector %q has unknown transform %q; want one of %s", x.Name, x.Transform.Type, strings.Join(model.TransformTypes, ", "))
+	}
+	x.Decoder.Type = strings.ToLower(strings.TrimSpace(x.Decoder.Type))
 	if x.Decoder.Type == "" {
 		x.Decoder.Type = "auto"
 	}
+	if !slices.Contains(model.DecoderTypes, x.Decoder.Type) {
+		return fmt.Errorf("collector %q has unknown decoder %q; want one of %s", x.Name, x.Decoder.Type, strings.Join(model.DecoderTypes, ", "))
+	}
 	if x.Decoder.Type == "auto" {
-		switch strings.ToLower(x.Transform.Type) {
+		switch x.Transform.Type {
 		case "regex":
 			x.Decoder.Type = "text"
 		case "csv":
@@ -161,15 +173,6 @@ func normalizeFormats(x *model.Collector) error {
 			x.Decoder.Type = "html"
 		case "prometheus":
 			x.Decoder.Type = "prometheus"
-		}
-	}
-	if !map[string]bool{"json": true, "yaml": true, "xml": true, "csv": true, "html": true, "prometheus": true, "text": true, "auto": true}[x.Decoder.Type] {
-		return fmt.Errorf("collector %q has unknown decoder %q", x.Name, x.Decoder.Type)
-	}
-	if x.Transform.Type != "" {
-		x.Transform.Type = strings.ToLower(x.Transform.Type)
-		if !map[string]bool{"none": true, "jq": true, "yq": true, "xpath": true, "css": true, "csv": true, "regex": true, "python": true, "prometheus": true}[x.Transform.Type] {
-			return fmt.Errorf("collector %q has unknown transform %q", x.Name, x.Transform.Type)
 		}
 	}
 	if x.Transform.Type == "python" && strings.TrimSpace(x.Transform.Script) == "" {

@@ -58,13 +58,13 @@ func transformMetrics(ctx context.Context, d *decode.Decoded, r *fetch.HTTPRespo
 		return nil, err
 	}
 	if ms, ok := d.Data.(model.MetricSet); ok {
-		if c.Transform.Type == "" || c.Transform.Type == "prometheus" {
+		if c.Transform.Type == "prometheus" {
 			return applyPrometheusTransform(ms, c, c.Transform, c.Metrics)
 		}
 		return nil, fmt.Errorf("unsupported transformation %q for Prometheus", c.Transform.Type)
 	}
 	switch c.Transform.Type {
-	case "", "none", "jq", "yq":
+	case "jq", "yq":
 		return transformJQ(ctx, d.Data, c.Metrics, c)
 	case "regex":
 		text, ok := d.Data.(string)
@@ -96,20 +96,6 @@ func transformMetrics(ctx context.Context, d *decode.Decoded, r *fetch.HTTPRespo
 
 func validateTransformInput(d *decode.Decoded, transformType string) error {
 	switch transformType {
-	case "":
-		if d.Kind == "prometheus" {
-			return nil
-		}
-		if d.Kind == "text" || d.Kind == "html" || d.Kind == "xml" || d.Kind == "csv" {
-			return fmt.Errorf("transform %q cannot map response format %q; configure a compatible transform", transformType, d.Kind)
-		}
-	case "none":
-		if d.Kind == "prometheus" {
-			return nil
-		}
-		if d.Kind == "text" || d.Kind == "html" || d.Kind == "xml" || d.Kind == "csv" || d.Kind == "prometheus" {
-			return fmt.Errorf("transform %q cannot map response format %q; use a structured JSON/YAML response or a compatible transform", transformType, d.Kind)
-		}
 	case "jq", "yq":
 		if d.Kind == "text" || d.Kind == "html" || d.Kind == "xml" || d.Kind == "csv" || d.Kind == "prometheus" {
 			return fmt.Errorf("transform %q cannot map response format %q; use a structured JSON/YAML response or a compatible transform", transformType, d.Kind)
@@ -203,7 +189,7 @@ func applyPreScript(ctx context.Context, d *decode.Decoded, r *fetch.HTTPRespons
 	if err != nil {
 		return nil, err
 	}
-	if structuredTransform(c.Transform.Type) && structuredValue(data) {
+	if jqFamily(c.Transform.Type) && structuredValue(data) {
 		return &decode.Decoded{Kind: "json", Data: data, Raw: d.Raw}, nil
 	}
 	if d.Kind == "html" {
@@ -223,17 +209,6 @@ func applyPreScript(ctx context.Context, d *decode.Decoded, r *fetch.HTTPRespons
 		return &decode.Decoded{Kind: "xml", Data: node, Raw: raw}, nil
 	}
 	return &decode.Decoded{Kind: d.Kind, Data: data, Raw: d.Raw}, nil
-}
-
-// structuredTransform reports whether a transform reads decoded structured
-// data rather than the original response format. Only these transforms accept
-// a pre-script result in place of the decoded response.
-func structuredTransform(transformType string) bool {
-	switch transformType {
-	case "", "none", "jq", "yq":
-		return true
-	}
-	return false
 }
 
 // structuredValue reports whether a pre-script returned an object or an array.

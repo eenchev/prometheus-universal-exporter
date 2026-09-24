@@ -542,7 +542,10 @@ metrics:
 ```
 
 `ignore` and `log` keep the scrape going, so a response carries whatever could
-be extracted. That is the right choice for a metric that is useful but not
+be extracted. `log` writes one line per failing rule per scrape, however many
+series failed: a rule over a thousand-row table that misses its value on every
+row logs its first error with `"failures":1000`, not a thousand lines. That is
+the right choice for a metric that is useful but not
 essential: one missing value does not cost you the others. When nothing at all
 can be extracted, the probe still succeeds with an empty body.
 

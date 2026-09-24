@@ -257,8 +257,10 @@ func TestPythonWorkerSandbox(t *testing.T) {
 // blocked module itself still loads, and its import time is not the script's.
 func TestPythonWorkerPreloadsDeclaredLibraries(t *testing.T) {
 	requirePython(t)
-	if exec.Command("python3", "-c", "import dateutil.parser").Run() != nil {
-		t.Skip("python-dateutil is not installed")
+	// -I as the worker starts the interpreter: isolated, without the user's
+	// site-packages, where a library the worker cannot import may be.
+	if exec.Command("python3", "-I", "-c", "import dateutil.parser").Run() != nil {
+		t.Skip("python-dateutil is not installed where the worker's isolated interpreter finds it")
 	}
 	c := workerCollector("preload", `
 from dateutil import parser

@@ -30,7 +30,8 @@ func pythonLibraryCollector(libs ...string) model.Collector {
 // lxml.html is what replaces BeautifulSoup, so it has to work inside the
 // sandbox, not merely be installed.
 func TestLxmlHTMLParsesInsideThePythonSandbox(t *testing.T) {
-	if err := exec.Command("python3", "-c", "import lxml.html").Run(); err != nil {
+	// -I as the worker starts the interpreter (TestPythonWorkerPreloadsDeclaredLibraries).
+	if err := exec.Command("python3", "-I", "-c", "import lxml.html").Run(); err != nil {
 		t.Skip("python3 with lxml is not available")
 	}
 	c := pythonLibraryCollector("lxml")

@@ -1564,7 +1564,10 @@ value is not a number:
   serve every metric that could be extracted; when none could, it MUST succeed
   with an empty body rather than fail.
 - `log` MUST record the metric-specific error, naming the collector and the
-  rule, and otherwise behave exactly as `ignore`.
+  rule, and otherwise behave exactly as `ignore`. A rule that fails for several
+  series in one scrape — rows of a table, items — MUST be recorded once for that
+  scrape, with its first error and the number of series that failed, not once
+  per series.
 - `fail` MUST record the error as `log` does and MUST then fail the whole scrape
   at that metric. No metric from that scrape MUST be served, including metrics
   that were extracted successfully, so a response is either complete or an

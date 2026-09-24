@@ -58,7 +58,8 @@ func TestExpressionsAreCompiledAtLoad(t *testing.T) {
 		{"regex label index", "regex", model.MetricRule{Name: "m", Expression: `(\d+)`, Labels: label("2")}, `refers to capture group "2"`},
 		{"css", "css", model.MetricRule{Name: "m", Expression: "td:nth-child("}, `metric "m" CSS selector "td:nth-child("`},
 		{"css items", "css", model.MetricRule{Name: "m", Items: "tr:has(", Expression: "td"}, `metric "m" items CSS selector "tr:has("`},
-		{"css label", "css", model.MetricRule{Name: "m", Expression: "td", Labels: label("[[")}, `label "l" CSS selector "[["`},
+		{"css label", "css", model.MetricRule{Name: "m", Items: "tr", Expression: "td", Labels: label("[[")}, `label "l" CSS selector "[["`},
+		{"css label without items", "css", model.MetricRule{Name: "m", Expression: "td", Labels: label("th")}, `label "l" reads the response, which a css metric can do only with items`},
 		{"xpath", "xpath", model.MetricRule{Name: "m", Expression: "//item["}, `metric "m" XPath "//item["`},
 		{"xpath label", "xpath", model.MetricRule{Name: "m", Expression: "//item", Labels: label("name[")}, `label "l" XPath "name["`},
 		{"prometheus pattern", "prometheus", model.MetricRule{Name: "m", Expression: "^vendor_(.*"}, `metric "m" expression`},
@@ -79,11 +80,12 @@ func TestExpressionsAreCompiledAtLoad(t *testing.T) {
 // labels, and XPath with namespaces.
 func TestValidExpressionsPass(t *testing.T) {
 	for name, c := range map[string]model.Collector{
-		"regex named":     ruleCollector("regex", model.MetricRule{Name: "m", Type: model.GaugeMetricType, Expression: `(?P<server>\w+)=(\d+)`, Labels: []model.LabelRule{{Name: "s", Expression: "server"}}}),
-		"regex numbered":  ruleCollector("regex", model.MetricRule{Name: "m", Type: model.GaugeMetricType, Expression: `(\w+)=(\d+)`, Labels: []model.LabelRule{{Name: "s", Expression: "1"}}}),
-		"xpath attribute": ruleCollector("xpath", model.MetricRule{Name: "m", Type: model.GaugeMetricType, Expression: "//item", Labels: []model.LabelRule{{Name: "s", Expression: "@name"}}}),
-		"css":             ruleCollector("css", model.MetricRule{Name: "m", Type: model.GaugeMetricType, Expression: "table#servers td.cpu", Labels: []model.LabelRule{{Name: "s", Expression: "td:first-child"}}}),
-		"jq with $root":   ruleCollector("jq", model.MetricRule{Name: "m", Type: model.GaugeMetricType, Items: ".rows[]", Expression: ".v", Labels: []model.LabelRule{{Name: "s", Expression: "$root.site"}}}),
+		"regex named":      ruleCollector("regex", model.MetricRule{Name: "m", Type: model.GaugeMetricType, Expression: `(?P<server>\w+)=(\d+)`, Labels: []model.LabelRule{{Name: "s", Expression: "server"}}}),
+		"regex numbered":   ruleCollector("regex", model.MetricRule{Name: "m", Type: model.GaugeMetricType, Expression: `(\w+)=(\d+)`, Labels: []model.LabelRule{{Name: "s", Expression: "1"}}}),
+		"xpath attribute":  ruleCollector("xpath", model.MetricRule{Name: "m", Type: model.GaugeMetricType, Expression: "//item", Labels: []model.LabelRule{{Name: "s", Expression: "@name"}}}),
+		"css":              ruleCollector("css", model.MetricRule{Name: "m", Type: model.GaugeMetricType, Items: "table#servers tr:has(td)", Expression: "td.cpu", Labels: []model.LabelRule{{Name: "s", Expression: "td:first-child"}}}),
+		"css static label": ruleCollector("css", model.MetricRule{Name: "m", Type: model.GaugeMetricType, Expression: "td.cpu", Labels: []model.LabelRule{{Name: "env", Value: "prod"}}}),
+		"jq with $root":    ruleCollector("jq", model.MetricRule{Name: "m", Type: model.GaugeMetricType, Items: ".rows[]", Expression: ".v", Labels: []model.LabelRule{{Name: "s", Expression: "$root.site"}}}),
 	} {
 		if err := validateOne(c); err != nil {
 			t.Errorf("%s: %v", name, err)

@@ -29,7 +29,9 @@ can: `regex` uses text, `csv` uses CSV, `css` uses HTML, and `prometheus` uses
 Prometheus exposition. Other transforms — jq, yq, XPath, Python — decode each
 response by what it says it is: an `http` response by its `Content-Type`
 header, a `localfile` file by its extension, and by its content when neither
-says. If the decoded response cannot be used by the selected transform, the
+says: an HTML page by its doctype or `<html>` element, other markup as XML,
+JSON by its opening bracket, Prometheus text by its `# TYPE` or `# HELP`
+lines, and anything else as text. If the decoded response cannot be used by the selected transform, the
 probe fails with a clear mapping error.
 
 That fallback means a target that changes its `Content-Type`, or a file renamed
@@ -137,9 +139,9 @@ The expression and label values are interpreted by the selected transform:
   labels map to capture-group numbers or names.
 - `csv`: the expression is the numeric column name and labels map to column
   names.
-- `css`: the expression selects HTML elements whose text is numeric; labels are
-  selectors within each selected element. For tables, select the rows with
-  [`items`](#metrics-per-item) and the value and the labels as cells of each row.
+- `css`: the expression selects HTML elements whose text is numeric. Labels
+  read from the page need [`items`](#metrics-per-item): select the rows with it,
+  and the value and the labels as cells of each row.
 - `xpath`: the expression selects XML/HTML nodes whose text is numeric; labels
   are relative XPath expressions or `@attribute` selectors.
 - `prometheus`: the expression matches source metric names; it can remap the
@@ -183,10 +185,7 @@ the metric's [`error_mode`](#when-a-metric-cannot-be-extracted): `ignore` and
 `log` drop that one series and keep the rest, `fail` fails the probe with an
 error naming the label. It is counted in `http_exporter_missing_keys_total`,
 and applies whatever `required` and `error_handling.allow_missing_keys` say
-about the value. Without `items`, jq pairs label values with series by
-position, so a required label must give one value, applied to every series, or
-exactly one per series; any other count fails the metric rather than put labels
-on the wrong series. `required` applies to `expression` labels, and not to
+about the value. `required` applies to `expression` labels, and not to
 the python transform, whose labels come from its script.
 
 ### Prefixing a collector's metrics
@@ -304,12 +303,13 @@ metrics:
 
 Without `items`, the value expression and each label expression run over the
 whole document and are paired by position: the third value gets the third
-label value. That works while every expression yields exactly one value per
-element, and goes quietly wrong when one does not — a label that yields nothing
-for one server shifts every later label onto the wrong series, and a label that
-yields a single value is applied to all of them. With `items` there is nothing
-to pair: a label that yields nothing for an item is simply absent on that
-series.
+label value. A label that yields one value applies it to every series, and one
+that yields none leaves the label off. Any other count than one per series
+means values would land on the wrong series — a label that yields nothing for
+one server would shift every later label along — so the metric fails under its
+`error_mode` instead, the error saying how many values the label gave for how
+many series. With `items` there is nothing to pair: a label that yields nothing
+for an item is simply absent on that series.
 
 Per item, the value and each label must yield at most one value; two is an
 error, since there is no telling which belongs to the series. A value that is
@@ -322,8 +322,8 @@ too, where it is the same document as `.`.
 The `css` transform takes `items` too, for HTML tables and lists: `items`
 selects the rows, and the expression and each label are selectors within one
 row. Without it, the value is the whole text of each element the expression
-selects, and a label selector looks inside that element, so a label could only
-read text that is part of the number.
+selects, so its labels can only be static `value` labels: a label reading the
+page needs `items`, and is refused at startup without it.
 
 ```yaml
 transform:

@@ -61,7 +61,13 @@ func detectFormat(r *fetch.HTTPResponse) string {
 			return "json"
 		}
 	}
-	if bytes.HasPrefix(b, []byte("<?xml")) || bytes.HasPrefix(b, []byte("<")) {
+	// An HTML page is markup too, and rarely well-formed XML, so it is
+	// recognised by its doctype or root element before anything starting
+	// with < is taken for XML.
+	if head := bytes.ToLower(b[:min(len(b), 16)]); bytes.HasPrefix(head, []byte("<!doctype html")) || bytes.HasPrefix(head, []byte("<html")) {
+		return "html"
+	}
+	if bytes.HasPrefix(b, []byte("<")) {
 		return "xml"
 	}
 	return "text"

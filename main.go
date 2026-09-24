@@ -139,7 +139,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 		logger.Error("invalid startup configuration; exiting", "error", err)
 		return 1
 	}
-	config.LogDeprecations(logger, *configFile, conf)
+	config.LogNotices(logger, *configFile, conf)
 
 	if err := transform.ValidatePythonScripts(*pythonPath, conf); err != nil {
 		logger.Error("invalid startup configuration; exiting", "error", err)

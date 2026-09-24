@@ -45,3 +45,22 @@ func TestEveryListedDecoderIsHandled(t *testing.T) {
 		t.Fatalf("an unlisted decoder: err=%v", err)
 	}
 }
+
+// Without a content type that says, a body is recognised by its content, an
+// HTML page by its doctype or root element rather than as XML.
+func TestFormatIsSniffedFromTheContent(t *testing.T) {
+	for body, want := range map[string]string{
+		"<!DOCTYPE html><html><body><p>1</p></body></html>": "html",
+		"  <!doctype html>\n<title>x</title>":               "html",
+		"<HTML><body>1</body></HTML>":                       "html",
+		`<?xml version="1.0"?><r>1</r>`:                     "xml",
+		"<r><v>1</v></r>":                                   "xml",
+		`{"v":1}`:                                           "json",
+		"# TYPE v gauge\nv 1\n":                             "prometheus",
+		"v=1":                                               "text",
+	} {
+		if got := detectFormat(&fetch.HTTPResponse{Body: []byte(body), Headers: http.Header{}}); got != want {
+			t.Errorf("%q: %s, want %s", body, got, want)
+		}
+	}
+}

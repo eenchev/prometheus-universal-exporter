@@ -549,7 +549,7 @@ func (m *Manager) applyConfig(trigger string) error {
 	transform.PythonWorkers().Retain(transform.PythonWorkerKeys(m.pythonPath, c))
 	// The new configuration may list other collector files.
 	m.collectorFiles = collectorFilesStamp(m.path, c.CollectorFiles)
-	LogDeprecations(m.logger, m.path, c)
+	LogNotices(m.logger, m.path, c)
 	m.logger.Info("configuration reloaded", "trigger", trigger, "collectors", len(c.Collectors), "collector_files", len(c.LoadedCollectorFiles))
 	return nil
 }
@@ -591,10 +591,11 @@ func checkPythonLibrary(collector, lib string) error {
 	return fmt.Errorf("collector %q declares unsupported Python library %q; the supported libraries are lxml, PyYAML and python-dateutil", collector, lib)
 }
 
-// LogDeprecations warns once per deprecated spelling a loaded configuration
-// used, and once per warning Validate recorded, so the operator hears about
-// each on every start and reload until it is changed.
-func LogDeprecations(logger *slog.Logger, path string, c *model.Config) {
+// LogNotices logs what Validate recorded about a loaded configuration
+// without refusing it: once per deprecated spelling it used and once per
+// warning, so the operator hears about each on every start and reload until it
+// is changed.
+func LogNotices(logger *slog.Logger, path string, c *model.Config) {
 	for _, message := range c.Deprecations {
 		logger.Warn("deprecated configuration", "file", path, "deprecation", message)
 	}

@@ -23,15 +23,6 @@ type labelCase struct {
 	collector   func(label model.LabelRule) model.Collector
 	body        string
 	contentType string
-	// who is the first series\' label, "a" when unset.
-	who string
-}
-
-func (c labelCase) first() string {
-	if c.who == "" {
-		return "a"
-	}
-	return c.who
 }
 
 func labelCases() []labelCase {
@@ -88,16 +79,6 @@ func labelCases() []labelCase {
 				return collector("xpath", "xml", "/r/i/v", label)
 			},
 			body: `<r><i><v>1</v><w>a</w></i><i><v>2</v></i></r>`, contentType: "application/xml",
-		},
-		{
-			name: "CSS",
-			collector: func(label model.LabelRule) model.Collector {
-				label.Expression = "b"
-				return collector("css", "html", "td", label)
-			},
-			// A label selector runs inside the value's node, whose text
-			// includes it, so the label here is the value's own markup.
-			body: `<table><tr><td><b>1</b></td></tr><tr><td>2</td></tr></table>`, contentType: "text/html", who: "1",
 		},
 		{
 			name: "CSS items",
@@ -161,8 +142,8 @@ func TestAnOptionalLabelWithoutAValueIsLeftOff(t *testing.T) {
 				t.Fatal(err)
 			}
 			// Left off, not exported empty: over OTLP the two differ.
-			if got, want := whoValues(set), test.first()+",-"; got != want {
-				t.Fatalf("who labels %s, want %s", got, want)
+			if got := whoValues(set); got != "a,-" {
+				t.Fatalf("who labels %s, want a,-", got)
 			}
 		})
 	}
@@ -179,8 +160,8 @@ func TestARequiredLabelWithoutAValueFailsItsSeries(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if got := whoValues(set); got != test.first() {
-				t.Fatalf("log: who labels %s, want %s", got, test.first())
+			if got := whoValues(set); got != "a" {
+				t.Fatalf("log: who labels %s, want a", got)
 			}
 			if !strings.Contains(logs.String(), `label \"who\" is missing`) {
 				t.Fatalf("log: the missing label was not logged:\n%s", logs)
@@ -189,7 +170,7 @@ func TestARequiredLabelWithoutAValueFailsItsSeries(t *testing.T) {
 			// ignore drops it quietly.
 			logs.Reset()
 			set, err = runLabelCase(t, test, required, model.ErrorModeIgnore)
-			if err != nil || whoValues(set) != test.first() || logs.Len() != 0 {
+			if err != nil || whoValues(set) != "a" || logs.Len() != 0 {
 				t.Fatalf("ignore: err=%v who=%s logs=%s", err, whoValues(set), logs)
 			}
 
@@ -245,6 +226,44 @@ func TestPassthroughRulesDoNotShareLabels(t *testing.T) {
 	for _, m := range set.Metrics {
 		if m.Name == "second" && m.Labels["copy"] != "" {
 			t.Fatalf("the second rule's series carries the first rule's label: %v", m.Labels)
+		}
+	}
+}
+
+// An optional label that gives some values but not one per series would put
+// them on the wrong series, so the metric fails under its error_mode; no value
+// at all leaves the label off, and one applies to every series.
+func TestAnOptionalPositionalLabelMustPairWithTheSeries(t *testing.T) {
+	run := func(label, mode string) (*model.MetricSet, error) {
+		t.Helper()
+		c := model.Collector{Name: "pairs", Request: model.RequestConfig{Type: fetch.RequestTypeHTTP}, Decoder: model.DecoderConfig{Type: "json"}, Transform: model.TransformConfig{Type: "jq"}, Metrics: []model.MetricRule{{
+			Name: "v", Type: model.GaugeMetricType, Expression: ".[].v", ErrorMode: mode,
+			Labels: []model.LabelRule{{Name: "who", Expression: label}},
+		}}}
+		r := &fetch.HTTPResponse{Body: []byte(`[{"v":1},{"v":2,"who":"b"},{"v":3,"who":"c"}]`), Headers: http.Header{}}
+		d, err := decode.Decode(r, &c)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return Transform(context.Background(), d, r, &c, "python3")
+	}
+	// Without the check, b and c would label the first two series.
+	if _, err := run(".[].who | select(. != null)", model.ErrorModeFail); err == nil || !strings.Contains(err.Error(), `label "who" gave 2 values for 3 series, so they cannot be paired`) {
+		t.Fatalf("fail: err=%v", err)
+	}
+	logs := testutil.CaptureLogs(t)
+	if set, err := run(".[].who | select(. != null)", model.ErrorModeLog); err != nil || len(set.Metrics) != 0 || !strings.Contains(logs.String(), "cannot be paired") {
+		t.Fatalf("log: err=%v set=%v logs=%s", err, set, logs)
+	}
+	for label, want := range map[string]string{
+		".[].who":            "-,b,c", // one per series, a null leaving the label off
+		`.[].who | empty`:    "-,-,-", // none
+		`"all"`:              "all,all,all",
+		`[.[].who] | length`: "3,3,3",
+	} {
+		set, err := run(label, model.ErrorModeFail)
+		if err != nil || whoValues(set) != want {
+			t.Errorf("%s: err=%v who=%s, want %s", label, err, whoValues(set), want)
 		}
 	}
 }

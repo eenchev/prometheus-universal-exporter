@@ -714,7 +714,9 @@ ambiguous or incorrectly labeled endpoints.
 
 Where the transform implies no decoder and `decoder.type` is left unset, each
 response MUST be decoded by its `Content-Type` header for `http`, by its file
-extension for `localfile`, and by its content when those do not say. Such a
+extension for `localfile`, and by its content when those do not say, where an
+HTML doctype or `<html>` root element MUST be recognised as HTML before other
+markup is taken for XML. Such a
 collector MUST be reported as a configuration warning, naming it and how it
 decodes, at startup, on every reload and in the `--dry-run` report; it MUST NOT
 fail the load. An explicit `decoder.type`, `auto` included, MUST NOT be
@@ -1644,9 +1646,7 @@ text exposition and OTLP agree. An `expression` label MAY set
 value of its metric: handled by the metric's `error_mode`, where `ignore` and
 `log` drop that series alone and `fail` fails the scrape with an error naming
 the label, counted as a missing key, and regardless of the metric's `required`
-and `error_handling.allow_missing_keys`. For jq without `items`, where label
-values pair with series by position, a required label giving neither one value
-nor one per series MUST fail the metric. `required` on a `value` label, or on a
+and `error_handling.allow_missing_keys`. `required` on a `value` label, or on a
 label of the python transform, MUST be rejected at startup.
 
 Python transforms are the exception: their script emits the common metric
@@ -1659,9 +1659,12 @@ For the `jq`, `yq` and `css` transforms a metric MAY set `items`. For `jq` and
 selecting the things the metric is about. The value expression and every label
 expression MUST then be evaluated once per item, with the item as `.` and the
 whole document as `$root`, instead of as parallel streams over the whole
-document paired by position. Parallel streams drift silently: a label
-expression that yields nothing for one element shifts every later value onto
-the wrong series, and one that yields a single value is applied to all.
+document paired by position. Parallel streams drift: a label expression that
+yields nothing for one element shifts every later value onto the wrong series.
+Without `items`, a label expression yielding no value MUST leave the label off
+every series, one value MUST apply to every series, and one per series MUST
+pair by position; any other count MUST fail the metric under its `error_mode`,
+naming the label and the counts, rather than export mislabelled series.
 
 ```yaml
 metrics:
@@ -1690,9 +1693,11 @@ expression MUST be CSS selectors matched within one item at a time. Within an
 item each MUST match at most one element, the rest of this section applying as
 for jq: a value selector matching nothing is that item's missing metric, and a
 label selector matching nothing leaves the label off. Without `items`, the
-value is the text of each element the expression selects and label selectors
-are matched within that element. `items` on any other transform MUST be
-rejected at startup.
+value is the text of each element the expression selects, so a label selector
+could only read text that is part of the number: a css metric with an
+`expression` label and no `items` MUST be rejected at startup, and its static
+`value` labels are unaffected. `items` on any other transform MUST be rejected
+at startup.
 
 Every transform MAY define one `transform.pre_script`. The exporter MUST run
 it exactly once per scrape, after decoding and before evaluating the metric

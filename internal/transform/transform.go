@@ -82,7 +82,7 @@ func transformMetrics(ctx context.Context, d *decode.Decoded, r *fetch.HTTPRespo
 		return transformCSV(d.Data, c.Metrics, c)
 	case "xpath":
 		if h, ok := d.Data.(*decode.HTMLDecoded); ok {
-			return transformHTMLXPath(h.Raw, c.Metrics, c)
+			return transformHTMLXPath(h.Document, c.Metrics, c)
 		}
 		n, ok := d.Data.(*xmlquery.Node)
 		if !ok {
@@ -422,11 +422,13 @@ func evaluateLabels(ctx context.Context, data any, expressions []model.LabelRule
 		if err != nil {
 			return nil, fmt.Errorf("label %q: %w", label.Name, err)
 		}
-		// Values are paired with series by position, so a required label
-		// giving a different number of values than there are series would
-		// land on the wrong ones.
-		if label.Required && len(values) != 1 && len(values) != metricCount {
-			return nil, fmt.Errorf("label %q gave %d values for %d series; a required label must give one value, or one per series", label.Name, len(values), metricCount)
+		// Values are paired with series by position. None leaves the label
+		// off every series, and one applies to all of them; any other count
+		// than one per series means some values landed on the wrong series,
+		// so the metric fails rather than be exported mislabelled. items
+		// evaluates labels per element, which cannot drift.
+		if len(values) > 1 && len(values) != metricCount && metricCount > 0 {
+			return nil, fmt.Errorf("label %q gave %d values for %d series, so they cannot be paired; give one value, or one per series, or set items to evaluate labels per element", label.Name, len(values), metricCount)
 		}
 		if len(values) == 1 {
 			if values[0] != nil {
@@ -583,12 +585,11 @@ func transformXPath(root *xmlquery.Node, rules []model.MetricRule, c *model.Coll
 	return transformXPathNodes(root, xmlNodes, rules, c, namespaces)
 }
 
-func transformHTMLXPath(raw []byte, rules []model.MetricRule, c *model.Collector) (*model.MetricSet, error) {
-	root, err := htmlquery.Parse(strings.NewReader(string(raw)))
-	if err != nil {
-		return nil, fmt.Errorf("HTML XPath parse: %w", err)
-	}
-	return transformXPathNodes(root, htmlNodes, rules, c, nil)
+// transformHTMLXPath runs XPath over the document the html decoder already
+// parsed: goquery and htmlquery both build it with html.Parse, so the
+// document's root node is what htmlquery would have parsed from the body.
+func transformHTMLXPath(doc *goquery.Document, rules []model.MetricRule, c *model.Collector) (*model.MetricSet, error) {
+	return transformXPathNodes(doc.Nodes[0], htmlNodes, rules, c, nil)
 }
 
 // transformXPathNodes evaluates each rule's expression against the document
@@ -677,9 +678,9 @@ func transformCSS(doc *goquery.Document, rules []model.MetricRule, c *model.Coll
 			}
 			continue
 		}
-		var transformErr, failure error
+		var transformErr error
 		selection.Each(func(_ int, node *goquery.Selection) {
-			if transformErr != nil || failure != nil {
+			if transformErr != nil {
 				return
 			}
 			value, err := decode.TextValue(strings.TrimSpace(node.Text()))
@@ -687,27 +688,16 @@ func transformCSS(doc *goquery.Document, rules []model.MetricRule, c *model.Coll
 				transformErr = fmt.Errorf("metric %q: %w", rule.Name, err)
 				return
 			}
+			// Without items a rule's labels are static: validation
+			// refuses expression labels, which need items.
 			labels := map[string]string{}
 			for _, label := range rule.Labels {
 				if label.Static() {
 					labels[label.Name] = label.Value
-				} else if selector, err := expr.CompileCSS(label.Expression); err == nil {
-					labels[label.Name] = strings.TrimSpace(node.FindMatcher(selector).First().Text())
 				}
-			}
-			// A series without a required label is dropped alone, or fails
-			// the rule, by its error_mode.
-			if missing := missingRequiredLabel(rule, labels); missing != nil {
-				if !handleMetricError(c, rule, missing) {
-					failure = ruleFailure(c, rule, missing)
-				}
-				return
 			}
 			out.Metrics = append(out.Metrics, model.Metric{Name: rule.Name, Help: rule.Description, Type: rule.Type, Value: value, Labels: labels})
 		})
-		if failure != nil {
-			return nil, failure
-		}
 		if transformErr != nil {
 			if handleMetricError(c, rule, transformErr) {
 				continue

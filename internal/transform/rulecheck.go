@@ -65,6 +65,12 @@ func CheckMetricRule(x *model.Collector, r *model.MetricRule) error {
 			if _, err := expr.CompileCSS(label.Expression); err != nil {
 				return fmt.Errorf("%s label %q CSS selector %q: %w", where, label.Name, label.Expression, err)
 			}
+			// Without items a label selector could only match inside the
+			// element whose whole text is the value, so it could only read
+			// text that is part of the number.
+			if r.Items == "" {
+				return fmt.Errorf("%s label %q reads the response, which a css metric can do only with items: set items to the rows, such as '#servers tr:has(td)', and select the value and each label within a row", where, label.Name)
+			}
 		}
 	case x.Transform.Type == "xpath":
 		if _, err := expr.CompileXPath(r.Expression, x.Response.Namespaces); err != nil {

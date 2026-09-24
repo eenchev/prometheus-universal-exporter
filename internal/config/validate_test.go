@@ -329,7 +329,7 @@ func TestAnUnsetDecoderIsWarnedAbout(t *testing.T) {
 // deprecated at present, but a deprecation Validate records is logged.
 func TestDeprecationsAndWarningsAreLogged(t *testing.T) {
 	out := testutil.CaptureLogs(t)
-	LogDeprecations(slog.Default(), "config.yaml", &model.Config{
+	LogNotices(slog.Default(), "config.yaml", &model.Config{
 		Deprecations: []string{"collector \"x\" old_key is deprecated"},
 		Warnings:     []string{"collector \"x\" sets no decoder.type"},
 	})

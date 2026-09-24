@@ -1,4 +1,4 @@
-package main
+package repository
 
 import (
 	"os"
@@ -234,9 +234,9 @@ func readChartFile(t *testing.T, name string) string {
 // and exits. A flag added to the exporter without either fails here, rather
 // than leaving chart users to discover it and pass it through extraArgs.
 func TestEveryExporterFlagIsHandledByTheChart(t *testing.T) {
-	help := runCLI(t, "-h")
+	help := helpText(t)
 	var flags []string
-	for _, match := range regexp.MustCompile(`(?m)^  -([a-z.-]+)`).FindAllStringSubmatch(help.stdout, -1) {
+	for _, match := range regexp.MustCompile(`(?m)^  -([a-z.-]+)`).FindAllStringSubmatch(help, -1) {
 		flags = append(flags, "--"+match[1])
 	}
 	if len(flags) == 0 {

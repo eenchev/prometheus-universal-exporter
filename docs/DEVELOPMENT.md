@@ -16,10 +16,13 @@ make test-external  # opt-in; probes real third-party endpoints
 ## Code layout
 
 The `main` package at the root holds only the command line (`main.go`) and the
-`--dry-run` report (`check.go`), with the tests that check the repository as a
-whole: the documentation, the chart, the workflows, the shipped examples and
-schemas, and the command line itself. Everything else is under `internal/`, in
-packages that each import only the ones above them in this list:
+`--dry-run` report (`check.go`), with the tests of the command line itself
+(`cli_test.go`, `shutdown_test.go`). The tests that check the repository as a
+whole — the documentation, the chart, the workflows, the Dockerfile, the
+shipped examples and schemas, and the layering below — are in
+`test/repository`, a package of tests only, which runs from the repository
+root. Everything else is under `internal/`, in packages that each import only
+the ones above them in this list:
 
 | Package | What it holds |
 | --- | --- |
@@ -96,7 +99,7 @@ The suite also holds the status page demo's detailed tests,
 `internal/exporter/grafanastatus_external_e2e_test.go`, which run its configuration against a
 captured copy of status.grafana.com's summary. They need no network but are
 opt-in like the rest.
-A test file joins the suite by being listed in `externalgate_test.go`; every test
+A test file joins the suite by being listed in `test/repository/externalgate_test.go`; every test
 in it must be named `TestExternal*`, so `make test-external` picks it up, and
 start with `requireExternalE2E(t)`. `TestExternalSuiteTestsAreOptIn`, which
 does run by default, fails when either is missing.
@@ -118,7 +121,7 @@ bumping with it. Beyond the standard linters it enables `bodyclose`, `errorlint`
 `unconvert` and `usestdlibvars`. The repository is gofmt-clean and CI fails on
 unformatted sources rather than rewriting them.
 
-`make test` also validates the GitHub Actions workflows: `workflows_test.go`
+`make test` also validates the GitHub Actions workflows: `test/repository/workflows_test.go`
 decodes every file under `.github/workflows` with a parser that rejects
 duplicate mapping keys, and checks that each step sets exactly one of `run` or
 `uses` and uses no unknown keys. GitHub refuses to create a run for a workflow
@@ -127,7 +130,7 @@ mistake in the commit that introduces it — the checker would be in the file
 GitHub is refusing to read. Running the tests before pushing is what protects
 you.
 
-It validates the chart templates the same way. `charts_test.go` checks that
+It validates the chart templates the same way. `test/repository/charts_test.go` checks that
 every manifest a template renders begins its own YAML document. A template that
 renders more than one manifest — several declared, or one wrapped in a range —
 needs a `---` before each, and neither `helm lint` nor `helm template` notices a
@@ -164,7 +167,7 @@ within the major.
 The two can drift apart in a way that is hard to read: a dependency bump raises
 the go directive in a pull request that touches no workflow, and from then on
 every build fails with `go.mod requires go >= X` with nothing nearby to explain
-it. `goversion_test.go` ties them together — it checks that every Go version the
+it. `test/repository/goversion_test.go` ties them together — it checks that every Go version the
 workflows request, and the one the Dockerfile pins, satisfies the go directive —
 so `go test ./...` catches the mismatch instead of the next red build.
 

@@ -213,3 +213,16 @@ func TestConcurrentReloadsAreSerialized(t *testing.T) {
 		t.Fatalf("failures=%v", got)
 	}
 }
+
+// A shutdown turns /ready to 503 at once, and leaves /health answering.
+func TestBeginShutdownMakesTheExporterUnready(t *testing.T) {
+	server, _ := newCacheTestServer(t, testutil.Collector("app", "text"))
+	server.BeginShutdown()
+	r := get(server, http.MethodGet, "/ready", "")
+	if r.Code != http.StatusServiceUnavailable || !strings.Contains(r.Body.String(), "not ready: the exporter is shutting down") {
+		t.Errorf("/ready: %d %q", r.Code, r.Body.String())
+	}
+	if r := get(server, http.MethodGet, "/health", ""); r.Code != http.StatusOK {
+		t.Errorf("/health: %d", r.Code)
+	}
+}

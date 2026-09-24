@@ -236,3 +236,37 @@ func TestTheLastSuccessOfAStaticTargetIsServed(t *testing.T) {
 		t.Fatalf("up=%v after the failure", got)
 	}
 }
+
+// A clash that goes away is said to have, and one that comes back is logged
+// as new; a clash whose target is gone is forgotten without a recovery line.
+func TestAFamilyTypeClashThatEndsIsLoggedAsEnded(t *testing.T) {
+	server := newStaticServer(t, &model.Config{Collectors: []model.Collector{testutil.Collector("text", "text")}}, nil)
+	logs := testutil.CaptureLogs(t)
+	server.logger = slog.Default()
+	gauge := namedSet{name: "a", set: model.MetricSet{Metrics: []model.Metric{{Name: "shared", Type: model.GaugeMetricType, Value: 1}}}}
+	counter := namedSet{name: "b", set: model.MetricSet{Metrics: []model.Metric{{Name: "shared", Type: model.CounterMetricType, Value: 2}}}}
+	fixed := namedSet{name: "b", set: model.MetricSet{Metrics: []model.Metric{{Name: "shared", Type: model.GaugeMetricType, Value: 2}}}}
+	count := func(msg string) int { return strings.Count(logs.String(), `"msg":"`+msg+`"`) }
+	const left, back = "static target metric left out of the static targets endpoint", "static target metric back on the static targets endpoint"
+
+	server.mergeStaticTargets([]namedSet{gauge, counter})
+	server.mergeStaticTargets([]namedSet{gauge, counter})
+	if count(left) != 1 || count(back) != 0 {
+		t.Fatalf("a clash on two reads logged %d warnings and %d recoveries, want 1 and 0:\n%s", count(left), count(back), logs)
+	}
+	if merged := server.mergeStaticTargets([]namedSet{gauge, fixed}); len(merged.Metrics) != 2 {
+		t.Fatalf("once b agrees, both are served: %+v", merged.Metrics)
+	}
+	if count(back) != 1 || !strings.Contains(logs.String(), `"failures":2`) {
+		t.Fatalf("the end of the clash was not logged with its count:\n%s", logs)
+	}
+	server.mergeStaticTargets([]namedSet{gauge, counter})
+	if count(left) != 2 {
+		t.Fatalf("a clash that came back was not logged afresh:\n%s", logs)
+	}
+	server.mergeStaticTargets([]namedSet{gauge})
+	server.mergeStaticTargets([]namedSet{gauge, counter})
+	if count(back) != 1 || count(left) != 3 {
+		t.Fatalf("a clash whose target left was logged as recovered, or not forgotten: %d recoveries, %d warnings:\n%s", count(back), count(left), logs)
+	}
+}

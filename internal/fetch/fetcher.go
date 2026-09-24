@@ -382,7 +382,7 @@ func fetch(ctx context.Context, target string, c *model.Collector, overrides Req
 		if err != nil {
 			if attempt < retryAttempts && requestContext.Err() == nil {
 				if waitErr := waitRetry(requestContext, retryBackoff); waitErr != nil {
-					return nil, fmt.Errorf("HTTP request failed: %w", err)
+					return nil, fmt.Errorf("HTTP request failed: %w (the wait before retrying was cut short: %w)", err, waitErr)
 				}
 				continue
 			}
@@ -399,13 +399,18 @@ func fetch(ctx context.Context, target string, c *model.Collector, overrides Req
 		if int64(len(body)) > limit {
 			return nil, model.MarkError(fmt.Errorf("response size %d exceeds limit %d", len(body), limit), model.ErrLimitExceeded)
 		}
+		response := &HTTPResponse{StatusCode: resp.StatusCode, Headers: resp.Header.Clone(), Body: body, Target: target, Collector: c.Name, Duration: time.Since(start)}
 		if retryableStatus(resp.StatusCode) && attempt < retryAttempts {
-			if waitErr := waitRetry(requestContext, retryBackoff); waitErr != nil {
-				return nil, waitErr
+			// A wait the deadline, a shutdown or the caller cut short keeps
+			// what the target answered: the status and body say why the
+			// scrape failed, where the bare context error would only say
+			// that time ran out.
+			if waitRetry(requestContext, retryBackoff) != nil {
+				return response, nil
 			}
 			continue
 		}
-		return &HTTPResponse{StatusCode: resp.StatusCode, Headers: resp.Header.Clone(), Body: body, Target: target, Collector: c.Name, Duration: time.Since(start)}, nil
+		return response, nil
 	}
 	return nil, fmt.Errorf("HTTP request failed after %d attempts", retryAttempts+1)
 }

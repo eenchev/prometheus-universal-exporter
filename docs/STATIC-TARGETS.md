@@ -167,7 +167,9 @@ http_exporter_target_up{collector="legacy_text",region="us",static_target="legac
   removed from the file leaves it with the reload.
 - The same metric from two targets must have one type. A target whose metric
   another target already serves with a different type has that metric left
-  out, with a warning in the log, and the rest of both is served.
+  out, with a warning in the log, and the rest of both is served. When the
+  types agree again, a `static target metric back on the static targets
+  endpoint` line says so.
 - Reading the endpoint contacts no target: it is as fast as the self-metrics,
   whatever the targets are doing, so Prometheus can scrape it on any interval.
   An interval shorter than the targets' serves the same values again; a longer

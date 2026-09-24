@@ -282,3 +282,44 @@ func TestOnlyIdempotentRequestsAreRetried(t *testing.T) {
 		t.Fatalf("a POST override: %d requests, err=%v", requests.Load(), err)
 	}
 }
+
+// A retry wait the deadline cuts short keeps the target's answer: the 503 it
+// gave, with its body, rather than the bare context error, which would only
+// say that time ran out.
+func TestACutShortRetryWaitKeepsTheTargetsAnswer(t *testing.T) {
+	var requests atomic.Int64
+	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		requests.Add(1)
+		http.Error(w, "maintenance until noon", http.StatusServiceUnavailable)
+	}))
+	defer target.Close()
+	c := model.Collector{Name: "retry", Request: model.RequestConfig{Type: RequestTypeHTTP, AllowedSchemes: []string{"http"}, Retry: model.RetryConfig{Attempts: 2, Backoff: model.Duration(5 * time.Second)}}, Limits: model.Limits{MaxResponseBytes: 1024}}
+	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+	defer cancel()
+	started := time.Now()
+	response, err := fetch(ctx, target.URL, &c, RequestOverrides{})
+	if err != nil {
+		t.Fatalf("got error %v, want the target's answer", err)
+	}
+	if response.StatusCode != http.StatusServiceUnavailable || !strings.Contains(string(response.Body), "maintenance until noon") {
+		t.Fatalf("status=%d body=%q, want the 503 and its body", response.StatusCode, response.Body)
+	}
+	if requests.Load() != 1 || time.Since(started) > 2*time.Second {
+		t.Fatalf("requests=%d after %s, want one request and an answer at the deadline", requests.Load(), time.Since(started))
+	}
+}
+
+// A network error whose retry wait is cut short keeps its own error, and says
+// the wait was cut short.
+func TestACutShortRetryWaitAfterANetworkErrorKeepsTheError(t *testing.T) {
+	closed := httptest.NewServer(http.NotFoundHandler())
+	address := closed.URL
+	closed.Close()
+	c := model.Collector{Name: "retry", Request: model.RequestConfig{Type: RequestTypeHTTP, AllowedSchemes: []string{"http"}, Retry: model.RetryConfig{Attempts: 2, Backoff: model.Duration(5 * time.Second)}}, Limits: model.Limits{MaxResponseBytes: 1024}}
+	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+	defer cancel()
+	_, err := fetch(ctx, address, &c, RequestOverrides{})
+	if err == nil || !strings.Contains(err.Error(), "connection refused") || !strings.Contains(err.Error(), "the wait before retrying was cut short") {
+		t.Fatalf("got %v, want the connection error and the cut-short wait", err)
+	}
+}

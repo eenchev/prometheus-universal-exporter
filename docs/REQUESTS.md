@@ -303,6 +303,13 @@ retry count and fixed delay can be overridden for one scrape with the
 `retry_attempts` and `retry_backoff` probe parameters. Retries share the scrape/target
 timeout, so the retry loop cannot extend the configured deadline indefinitely.
 
+When the deadline, or a shutdown, cuts short the wait before a retry, the
+probe still reports what the target last answered: a `503` stays a failed
+`http_status` stage with the target's body in the log and
+`http_exporter_scrape_http_status_code` at 503, and the error adds that the
+probe ran out of its budget. After a connection that failed, the error is that
+connection error, noting that the wait before retrying was cut short.
+
 ## TLS
 
 The collector can configure target TLS verification and trust material:

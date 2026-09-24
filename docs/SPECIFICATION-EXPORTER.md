@@ -204,7 +204,12 @@ request:
 `backoff` defaults to zero and MUST NOT be exponential. The exporter SHOULD
 retry transport failures and transient HTTP statuses `408`, `425`, `429`, and
 `500` through `599`. Other HTTP statuses MUST be returned without retrying.
-The retry loop MUST share the incoming scrape or explicit target timeout.
+The retry loop MUST share the incoming scrape or explicit target timeout. When
+that deadline, a shutdown or the caller ends the wait before a retry, the
+exporter MUST keep what it received: after a retryable status, that response,
+so the failure is reported in the `http_status` stage with the status and the
+body; after a transport failure, that failure's error, saying the wait was cut
+short. A bare deadline error MUST NOT replace them.
 Only a request whose method is idempotent — `GET`, `HEAD`, `OPTIONS`, `TRACE`,
 `PUT` or `DELETE` — MUST be retried, unless `retry.non_idempotent` is set, since
 sending a `POST` or `PATCH` again may repeat what it did; this holds for a
@@ -3257,6 +3262,10 @@ Test at minimum:
 - Unsupported HTTP methods.
 - Invalid method, path, body, and timeout overrides.
 - Invalid retry count and retry backoff overrides.
+- A retry wait the deadline cuts short keeps the target's `503` and its body,
+  from the fetch up to the probe's answer, its log and the status self-metric;
+  after a refused connection it keeps the connection error, noting the wait
+  was cut short.
 - Empty response bodies.
 - Response body exactly at the maximum allowed size.
 - Response body exceeding the configured maximum size.
@@ -4185,7 +4194,9 @@ Required:
   `TYPE`; it is empty before any scrape, a removed target leaves it with the
   reload, and it parses as exposition text.
 - A family two targets produce with different types is served for the first
-  target only, and the clash is logged.
+  target only, and the clash is logged; logged once over two reads, logged as
+  ended when the types agree, logged anew when it comes back, and forgotten
+  without a line when the target is removed.
 - The endpoint is at `--web.static-targets-path`, `/static-targets` by
   default and not otherwise; it answers `401` without the exporter's
   credential when Basic Auth is on, and `405` to a method other than `GET` or
@@ -6034,7 +6045,9 @@ metrics with its labels, or its stale result, and its health result — at
   as the text format requires. A family a target produces with a different
   type than an earlier target, in target name order, MUST be left out for that
   target and logged, sparingly like repeated failures (§ 25); the rest of both
-  targets MUST be served.
+  targets MUST be served. A clash that a later read no longer finds MUST be
+  logged as ended while its target is still served, and forgotten without a
+  line when its target is gone, so a clash that comes back is logged anew.
 - A target not yet scraped MUST be absent, and a target removed from the
   document MUST leave the endpoint with the reload.
 - Serving the endpoint MUST NOT contact a target: it reads what the targets'

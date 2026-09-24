@@ -125,6 +125,7 @@ func (s *Server) staticTargetsHandler(w http.ResponseWriter, r *http.Request) {
 // target and logged, since one family cannot have two types; the rest of both
 // targets is served.
 func (s *Server) mergeStaticTargets(results []namedSet) model.MetricSet {
+	clashes := map[string]staticClash{}
 	type family struct {
 		typ     model.MetricType
 		metrics []model.Metric
@@ -145,7 +146,9 @@ func (s *Server) mergeStaticTargets(results []namedSet) model.MetricSet {
 				order = append(order, m.Name)
 			}
 			if f.typ != m.Type {
-				s.failures.failed(s.logger, slog.LevelWarn, failureKey("", "static target "+result.name, "family "+m.Name),
+				key := failureKey("", "static target "+result.name, "family "+m.Name)
+				clashes[key] = staticClash{target: result.name, metric: m.Name}
+				s.failures.failed(s.logger, slog.LevelWarn, key,
 					"static target metric left out of the static targets endpoint", "exposition", errFamilyTypeClash,
 					"target", result.name, "metric", m.Name, "type", string(m.Type), "type_in_use", string(f.typ))
 				continue
@@ -153,11 +156,42 @@ func (s *Server) mergeStaticTargets(results []namedSet) model.MetricSet {
 			f.metrics = append(f.metrics, m)
 		}
 	}
+	s.settleStaticClashes(clashes, results)
 	var out model.MetricSet
 	for _, name := range order {
 		out.Metrics = append(out.Metrics, families[name].metrics...)
 	}
 	return out
+}
+
+// staticClash is a target's metric left out of the endpoint for its type.
+type staticClash struct{ target, metric string }
+
+// settleStaticClashes ends the clashes of the previous read that this one,
+// with results, no longer has. One whose target is still served is logged as
+// back on the endpoint, as a failure that stopped is logged as recovered; one
+// whose target is gone is forgotten without a word, since nothing was fixed.
+// Without this a clash that went away was never said to have, and one that
+// came back within the failure log's memory read as the old one continuing.
+func (s *Server) settleStaticClashes(clashes map[string]staticClash, results []namedSet) {
+	served := make(map[string]bool, len(results))
+	for _, result := range results {
+		served[result.name] = true
+	}
+	s.staticClashMu.Lock()
+	previous := s.staticClashes
+	s.staticClashes = clashes
+	s.staticClashMu.Unlock()
+	for key, clash := range previous {
+		if _, still := clashes[key]; still {
+			continue
+		}
+		if !served[clash.target] {
+			s.failures.forget(key)
+			continue
+		}
+		s.failures.recovered(s.logger, key, "static target metric back on the static targets endpoint", "target", clash.target, "metric", clash.metric)
+	}
 }
 
 // staticTargetCountMetrics are the self-metrics counting the static targets:

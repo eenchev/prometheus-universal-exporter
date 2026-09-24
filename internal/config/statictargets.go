@@ -47,6 +47,12 @@ func ValidateStaticTargets(f *model.StaticTargetFile) error {
 	case f.Interval < model.Duration(time.Second):
 		return fmt.Errorf("interval %s is under the least, 1s", time.Duration(f.Interval))
 	}
+	// Past the limit targets wait for a slot within their interval, and one
+	// that finds none is skipped; the limit only bounds, so a negative one has
+	// no meaning.
+	if f.Concurrency < 0 {
+		return errors.New("concurrency must not be negative; leave it out, or 0, for the default, 8")
+	}
 	defaultInterval := f.Interval
 	seen := map[string]bool{}
 	for i := range f.Targets {
@@ -133,6 +139,13 @@ func ValidateStaticTargets(f *model.StaticTargetFile) error {
 			// target's series cannot claim it for something else.
 			if name == StaticTargetLabel {
 				return fmt.Errorf("target %q labels sets %s, which the static targets endpoint sets to the target's name", t.Name, StaticTargetLabel)
+			}
+			// Prometheus sets job and instance on every series it scrapes.
+			// The endpoint is scraped keeping the series' own labels, as the
+			// chart's monitor does, so a target's job or instance would move
+			// its series out of the job that scrapes the endpoint.
+			if name == "job" || name == "instance" {
+				return fmt.Errorf("target %q labels sets %s, which Prometheus sets when it scrapes the static targets endpoint; with honor_labels the target's would replace it, so name the label something else, such as task", t.Name, name)
 			}
 		}
 		// The OTLP resource identity is only used by a target exported over

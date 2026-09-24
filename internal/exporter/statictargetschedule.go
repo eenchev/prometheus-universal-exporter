@@ -18,14 +18,24 @@ import (
 // which delivers on otlp.interval what the scrapes queued, decides when a
 // target is scraped. Each target runs on a fixed
 // cadence measured from its first scrape, so a slow scrape does not push the
-// next one later; its first scrape is offset within its interval by a hash of
-// its name, so targets sharing an interval are spread over it rather than all
-// scraped at once. A scrape is bounded by its interval, and one still running
+// next one later. Its cadence is offset within its interval by a hash of its
+// name, so targets sharing an interval are spread over it rather than all
+// scraped at once. A target new to the schedule is first scraped sooner, within
+// firstScrapeWindow, again by the hash: otherwise a target with a long interval
+// would be missing from the static targets endpoint for up to that interval
+// after a start or a reload, which looks the same as a target nobody
+// configured. Its cadence then starts at the next point of it at least half an
+// interval after that first scrape, so the two are never close together. A scrape is bounded by its interval, and one still running
 // when the next is due makes that one skipped rather than overlapping it.
 
 // scheduleCheckInterval is the longest the scheduler sleeps, so a reloaded
 // target file takes effect within it.
 const scheduleCheckInterval = time.Second
+
+// firstScrapeWindow is the time over which targets new to the schedule are
+// first scraped, spread by name; a target whose interval is shorter uses its
+// interval.
+const firstScrapeWindow = 10 * time.Second
 
 // targetSchedule is when each static target is next due.
 type targetSchedule struct {
@@ -36,6 +46,9 @@ type targetSchedule struct {
 type staticTargetState struct {
 	interval time.Duration
 	next     time.Time
+	// cadence is where the target's regular cadence starts, until its first,
+	// earlier scrape has been made; zero after.
+	cadence time.Time
 	// running is set while a scrape of the target is in flight.
 	running atomic.Bool
 }
@@ -67,7 +80,11 @@ func (s *targetSchedule) plan(targets []model.StaticTarget, now time.Time) (due,
 		seen[target.Name] = true
 		state := s.states[target.Name]
 		if state == nil || state.interval != interval {
-			state = &staticTargetState{interval: interval, next: now.Add(scheduleOffset(target.Name, interval))}
+			state = &staticTargetState{
+				interval: interval,
+				next:     now.Add(scheduleOffset(target.Name, min(interval, firstScrapeWindow))),
+				cadence:  now.Add(scheduleOffset(target.Name, interval)),
+			}
 			s.states[target.Name] = state
 		}
 		if !now.Before(state.next) {
@@ -75,6 +92,15 @@ func (s *targetSchedule) plan(targets []model.StaticTarget, now time.Time) (due,
 				skipped = append(skipped, dueTarget{target, state})
 			} else {
 				due = append(due, dueTarget{target, state})
+			}
+			if !state.cadence.IsZero() {
+				// The first scrape: the cadence takes over, at least half an
+				// interval on.
+				state.next = state.cadence
+				state.cadence = time.Time{}
+				for state.next.Sub(now) < interval/2 {
+					state.next = state.next.Add(interval)
+				}
 			}
 			for !state.next.After(now) {
 				state.next = state.next.Add(interval)
@@ -102,18 +128,23 @@ func scheduleOffset(name string, interval time.Duration) time.Duration {
 
 var (
 	errStillRunning = errors.New("the previous scrape is still running")
-	errNoSlot       = errors.New("no scrape slot came free within the interval; other static target scrapes held them all")
+	errNoSlot       = errors.New("no scrape slot came free within the interval; other static target scrapes held them all, so raise the file's concurrency or lengthen the interval")
 )
 
-// StaticScrapeLoop scrapes every static target on its interval until
-// ctx ends, and then waits for the scrapes in flight. The results are queued
-// for the OTLP export loop, which delivers them on otlp.interval.
+// StaticScrapeLoop scrapes every static target on its interval until ctx
+// ends, and then waits for the scrapes in flight. The results are published
+// for the static targets endpoint, and queued for the OTLP export loop for a
+// target with export_via_otlp. At most the file's concurrency are scraped at
+// once; a reload that changes it applies to the scrapes that start after it.
 func (s *Server) StaticScrapeLoop(ctx context.Context) {
 	schedule := newTargetSchedule()
-	slots := make(chan struct{}, staticTargetConcurrency)
+	var slots chan struct{}
 	var wg sync.WaitGroup
 	defer wg.Wait()
 	for {
+		if limit := s.manager.StaticTargetConcurrency(); slots == nil || cap(slots) != limit {
+			slots = make(chan struct{}, limit)
+		}
 		now := time.Now()
 		due, skipped, next := schedule.plan(s.manager.StaticTargets(), now)
 		for _, d := range skipped {
@@ -124,6 +155,8 @@ func (s *Server) StaticScrapeLoop(ctx context.Context) {
 		for _, d := range due {
 			d.state.running.Store(true)
 			wg.Add(1)
+			// Each scrape frees the slot of the limit it took one under.
+			slots := slots
 			go func() {
 				defer wg.Done()
 				defer d.state.running.Store(false)

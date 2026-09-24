@@ -31,6 +31,7 @@ type Server struct {
 	staticTargetsPath string
 	staticMu          sync.Mutex
 	staticResults     map[string]model.MetricSet
+	staticLastSuccess map[string]time.Time
 	// timeoutOffset is how much of Prometheus's scrape timeout a probe leaves
 	// unused (scrapetimeout.go).
 	timeoutOffset time.Duration

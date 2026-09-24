@@ -26,6 +26,7 @@ A target file looks like this:
 
 ```yaml
 interval: 1m            # required: for every target that sets none
+concurrency: 8          # how many targets are scraped at once; 8 when unset
 targets:
   - name: legacy_eu
     collector: legacy_text
@@ -85,7 +86,10 @@ and `headers` are written out in full, without placeholders.
 
 `labels` are added to every metric the target produces, without overwriting a
 label the collector already extracted. `static_target` is the endpoint's own
-label, so a target may not set it.
+label, and `job` and `instance` are Prometheus's, set when it scrapes the
+endpoint, so a target may set none of the three: kept as the series' own
+labels, as the endpoint is scraped, a target's `job` would move its series out
+of the job that scrapes it. Name such a label something else, such as `task`.
 
 Check a target file together with its configuration before deploying it:
 `prometheus-universal-exporter --dry-run --config.file=config.yaml --static-targets-file=static-targets.yaml`
@@ -100,15 +104,22 @@ its `scrape_interval`. Neither Prometheus's scrapes of the endpoint nor the OTLP
 export decide when a target is scraped: the endpoint serves, and the export
 delivers, what the last scrape of each target left.
 
-A target's first scrape comes at a point within its interval set by its name,
-so targets sharing an interval are spread over it rather than all scraped at
-once, and then every interval from there, however long a scrape takes. A scrape
+A target is first scraped within ten seconds of the exporter starting, or of
+the reload that added it or changed its interval, so it is on the endpoint
+promptly even with an interval of an hour. After that it keeps a cadence at a
+point within its interval set by its name, so targets sharing an interval are
+spread over it rather than all scraped at once: the cadence starts at the first
+such point at least half an interval after the first scrape, and then comes
+every interval, however long a scrape takes. A scrape
 must end within its interval, so `request.timeout` may not be longer; one still
 running when the next is due makes that one skipped, with a
 `static target scrape skipped` warning, rather than overlapping it. The
-interval is at least `1s`. At most eight targets are scraped at once, and each
-waits for a slot of its collector's `max_concurrent_probes`, which it shares
-with the probes.
+interval is at least `1s`. At most `concurrency` targets are scraped at once,
+8 unless the file says otherwise; a target due while all are busy waits for a
+slot within its interval, and is skipped, with a warning, if none frees. Each
+also waits for a slot of its collector's `max_concurrent_probes`, which it
+shares with the probes. A reload that changes `concurrency` applies to the
+scrapes that start after it.
 
 Retries come from the collector's `request.retry`, and a target's own
 `request.retry` replaces them, as the `retry_attempts` and `retry_backoff`
@@ -144,6 +155,14 @@ http_exporter_target_up{collector="legacy_text",region="us",static_target="legac
 - `http_exporter_target_up` and `http_exporter_target_scrape_duration_seconds`
   report each target's last scrape, so a failing target is visible rather
   than simply absent.
+- `http_exporter_target_last_success_timestamp_seconds` is when the target was
+  last scraped successfully, 0 until it has been. The endpoint keeps serving a
+  target's last values while its scrapes fail or are skipped, so alert on
+  their age:
+
+  ```promql
+  time() - http_exporter_target_last_success_timestamp_seconds > 3 * 3600
+  ```
 - A target that has not been scraped yet is not on the endpoint, and one
   removed from the file leaves it with the reload.
 - The same metric from two targets must have one type. A target whose metric
@@ -171,7 +190,8 @@ scrape_configs:
 
 `honor_labels` keeps `static_target`, `target` and the targets' own labels as
 they are, rather than prefixed with `exported_` where Prometheus has a label of
-the same name. With the Helm chart, `staticTargets.monitor` renders the
+the same name. Prometheus still adds `job` and `instance` for the endpoint,
+which is why a target may not set either. With the Helm chart, `staticTargets.monitor` renders the
 ServiceMonitor or PodMonitor that does this — see the
 [chart README](../charts/prometheus-universal-exporter/README.md#static-targets).
 
@@ -204,8 +224,9 @@ target's metrics arrive under; both fall back to the exporter-wide `otlp`
 settings, and per-target attributes are merged over the exporter-wide ones.
 Targets with different identities are exported as separate `resourceMetrics`
 entries. The `otlp` block is only for a target with `export_via_otlp`, and
-refused on any other. Over OTLP the series do not carry `static_target`: the
-resource tells the targets apart.
+refused on any other. Over OTLP the collector's metrics do not carry
+`static_target`, since the resource tells the targets apart; the health
+metrics carry it, as they do on the endpoint.
 
 `export_via_otlp` needs OTLP export: a target with it while `otlp.enabled` is
 `false`, or without an `otlp.endpoint`, makes the exporter log

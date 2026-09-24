@@ -12,10 +12,6 @@ import (
 	"github.com/eenchev/prometheus-universal-exporter/internal/model"
 )
 
-// staticTargetConcurrency bounds how many static targets are scraped at
-// once, so a large target file cannot open an unbounded number of connections.
-const staticTargetConcurrency = 8
-
 // scrapeTarget scrapes one static target with the configuration in force.
 func (s *Server) scrapeTarget(ctx context.Context, target model.StaticTarget) {
 	cfg := s.manager.Get()
@@ -78,7 +74,8 @@ func (s *Server) scrapeStaticTarget(ctx context.Context, target model.StaticTarg
 		count(func(st *serverStats) { st.lastDuration = elapsed.Seconds() })
 		// A new slice, so the health metrics are never appended into one the
 		// result shares with a set that was cached.
-		health := staticTargetHealthMetrics(target, c, up, elapsed.Seconds()).Metrics
+		lastSuccess := s.recordStaticTargetOutcome(target.Name, up == 1, time.Now())
+		health := staticTargetHealthMetrics(target, c, up, elapsed.Seconds(), lastSuccess).Metrics
 		published := model.MetricSet{Metrics: make([]model.Metric, 0, len(result.Metrics)+len(health))}
 		published.Metrics = append(append(published.Metrics, result.Metrics...), health...)
 		s.publishStaticTarget(target, identity, published)
@@ -161,7 +158,10 @@ func (s *Server) scrapeStaticTarget(ctx context.Context, target model.StaticTarg
 // staticTargetHealthMetrics reports the outcome of one static target scrape.
 // Without it a failing target would simply be absent from the endpoint and the
 // OTLP stream, which cannot be told from a target that was never configured.
-func staticTargetHealthMetrics(target model.StaticTarget, c *model.Collector, up, duration float64) model.MetricSet {
+// lastSuccess is when the target was last scraped successfully, zero if never:
+// the endpoint keeps serving a target's last values while its scrapes are
+// skipped or failing, and the timestamp is what tells how old they are.
+func staticTargetHealthMetrics(target model.StaticTarget, c *model.Collector, up, duration float64, lastSuccess time.Time) model.MetricSet {
 	labels := map[string]string{"collector": c.Name, "static_target": target.Name, "target": fetch.DisplayTarget(c, target.Target)}
 	for name, value := range target.Labels {
 		if _, exists := labels[name]; !exists {
@@ -171,6 +171,7 @@ func staticTargetHealthMetrics(target model.StaticTarget, c *model.Collector, up
 	return model.MetricSet{Metrics: []model.Metric{
 		{Name: "http_exporter_target_up", Help: "Whether the last scrape of this static target succeeded.", Type: model.GaugeMetricType, Value: up, Labels: model.CloneLabels(labels)},
 		{Name: "http_exporter_target_scrape_duration_seconds", Help: "Duration of the last scrape of this static target in seconds.", Type: model.GaugeMetricType, Value: duration, Labels: model.CloneLabels(labels)},
+		{Name: "http_exporter_target_last_success_timestamp_seconds", Help: "Unix time of the last successful scrape of this static target; 0 if none has succeeded.", Type: model.GaugeMetricType, Value: unixSeconds(lastSuccess), Labels: model.CloneLabels(labels)},
 	}}
 }
 

@@ -288,3 +288,29 @@ func TestAMissingTargetParameterSaysHowToSupplyIt(t *testing.T) {
 		}
 	}
 }
+
+func TestStaticTargetConcurrencyIsChecked(t *testing.T) {
+	file := func(concurrency int) *model.StaticTargetFile {
+		return &model.StaticTargetFile{Interval: model.Duration(time.Minute), Concurrency: concurrency, Targets: []model.StaticTarget{{Name: "t", Collector: "text", Target: "http://t.invalid"}}}
+	}
+	for _, ok := range []int{0, 1, 50} {
+		if err := ValidateStaticTargets(file(ok)); err != nil {
+			t.Errorf("concurrency %d: %v", ok, err)
+		}
+	}
+	if err := ValidateStaticTargets(file(-1)); err == nil || !strings.Contains(err.Error(), "concurrency must not be negative") {
+		t.Fatalf("concurrency -1: got %v", err)
+	}
+}
+
+// job and instance are Prometheus's, set when it scrapes the endpoint; kept
+// as the series' own labels, a target's would move its series out of the job
+// that scrapes the endpoint, so they are refused as target labels.
+func TestStaticTargetLabelsRefuseJobAndInstance(t *testing.T) {
+	for _, name := range []string{"job", "instance"} {
+		file := &model.StaticTargetFile{Interval: model.Duration(time.Minute), Targets: []model.StaticTarget{{Name: "t", Collector: "text", Target: "http://t.invalid", Labels: map[string]string{name: "x"}}}}
+		if err := ValidateStaticTargets(file); err == nil || !strings.Contains(err.Error(), "labels sets "+name) || !strings.Contains(err.Error(), "such as task") {
+			t.Errorf("label %s: got %v", name, err)
+		}
+	}
+}

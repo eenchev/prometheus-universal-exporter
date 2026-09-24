@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"net/http"
 	"sort"
+	"time"
 
 	"github.com/eenchev/prometheus-universal-exporter/internal/config"
 	"github.com/eenchev/prometheus-universal-exporter/internal/model"
@@ -20,7 +21,8 @@ import (
 //
 // A target's result is its metrics, with the target's labels, or the last good
 // result marked stale under cache.stale_if_error, and its health metrics,
-// http_exporter_target_up and http_exporter_target_scrape_duration_seconds.
+// http_exporter_target_up, http_exporter_target_scrape_duration_seconds and
+// http_exporter_target_last_success_timestamp_seconds.
 // Every series carries static_target, the target's name, since the targets
 // share one endpoint and the same metric from two targets must stay two
 // series. A target that has not been scraped yet is absent, and one removed
@@ -85,6 +87,11 @@ func (s *Server) staticTargetResults() []namedSet {
 	for name := range s.staticResults {
 		if !current[name] {
 			delete(s.staticResults, name)
+		}
+	}
+	for name := range s.staticLastSuccess {
+		if !current[name] {
+			delete(s.staticLastSuccess, name)
 		}
 	}
 	s.staticMu.Unlock()
@@ -167,4 +174,28 @@ func (s *Server) staticTargetCountMetrics() []model.Metric {
 		{Name: "http_exporter_static_targets", Help: exporterMetricHelp["http_exporter_static_targets"], Type: model.GaugeMetricType, Value: float64(len(targets))},
 		{Name: "http_exporter_static_targets_exported_via_otlp", Help: exporterMetricHelp["http_exporter_static_targets_exported_via_otlp"], Type: model.GaugeMetricType, Value: float64(viaOTLP)},
 	}
+}
+
+// recordStaticTargetOutcome notes a scrape of the target named name, at now,
+// and returns when it last succeeded: now for a success, else the earlier
+// success, zero if there was none.
+func (s *Server) recordStaticTargetOutcome(name string, ok bool, now time.Time) time.Time {
+	s.staticMu.Lock()
+	defer s.staticMu.Unlock()
+	if s.staticLastSuccess == nil {
+		s.staticLastSuccess = map[string]time.Time{}
+	}
+	if ok {
+		s.staticLastSuccess[name] = now
+	}
+	return s.staticLastSuccess[name]
+}
+
+// unixSeconds is t as Unix seconds, 0 for the zero time, which would otherwise
+// read as a moment in year 1.
+func unixSeconds(t time.Time) float64 {
+	if t.IsZero() {
+		return 0
+	}
+	return float64(t.UnixNano()) / 1e9
 }

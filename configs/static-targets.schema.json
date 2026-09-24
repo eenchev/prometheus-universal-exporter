@@ -4,6 +4,11 @@
   "additionalProperties": false,
   "description": "Static targets of the exporter, scraped by the exporter itself on their intervals and served together on the static targets endpoint (--web.static-targets-path); a target with export_via_otlp is also delivered over OTLP. Passed with --static-targets-file. See docs/STATIC-TARGETS.md.",
   "properties": {
+    "concurrency": {
+      "description": "How many targets are scraped at once. A target due while all are busy waits for a slot within its interval, and is skipped if none frees. Omit or 0 for the default, 8.",
+      "minimum": 0,
+      "type": "integer"
+    },
     "interval": {
       "description": "How often a target that sets no interval is scraped, such as 1m. Required; at least 1s.",
       "pattern": "^[-+]?(0|([0-9]*(\\.[0-9]*)?(ns|us|µs|μs|ms|s|m|h))+)$",
@@ -40,7 +45,16 @@
                 "boolean"
               ]
             },
-            "description": "Added to every metric the target produces, without overwriting a label the collector extracted. static_target is set by the endpoint and cannot be used.",
+            "description": "Added to every metric the target produces, without overwriting a label the collector extracted. static_target is set by the endpoint, and job and instance by Prometheus when it scrapes the endpoint, so none of the three can be used.",
+            "propertyNames": {
+              "not": {
+                "enum": [
+                  "static_target",
+                  "job",
+                  "instance"
+                ]
+              }
+            },
             "type": "object"
           },
           "name": {

@@ -269,6 +269,9 @@ func TestStaticTargetsSchemaRejectsInvalidFiles(t *testing.T) {
 		"empty targets":   "interval: 1m\ntargets: []\n",
 		"no interval":     strings.Replace(base, "interval: 1m\n", "", 1),
 		"bad export flag": base + "    export_via_otlp: sometimes\n",
+		"bad concurrency": "concurrency: -1\n" + base,
+		"job label":       base + "    labels:\n      job: backup\n",
+		"endpoint label":  base + "    labels:\n      static_target: x\n",
 		"no collector":    "interval: 1m\ntargets:\n  - name: a\n    target: http://a.example\n",
 		"unknown key":     base + "    scrape_interval: 1m\n",
 		"bad interval":    base + "    interval: a minute\n",
@@ -411,6 +414,9 @@ func validateAgainstSchema(schema map[string]any, value any) []string {
 			if matched != 1 {
 				errs = append(errs, fmt.Sprintf("%s: matches %d of oneOf, want exactly one", path, matched))
 			}
+		}
+		if not, ok := schema["not"].(map[string]any); ok && len(validateAgainstSchema(not, value)) == 0 {
+			errs = append(errs, path+": matches what not refuses")
 		}
 		if minimum, ok := schema["minimum"].(float64); ok {
 			if n, ok := value.(float64); ok && n < minimum {

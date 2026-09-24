@@ -666,7 +666,7 @@ func (b *tailBuffer) String() string {
 // only then answers that it is ready. Each request runs the script in fresh
 // globals holding the same names scripts have always had, with stdout and
 // stderr captured, and answers with the metrics, the data or the error.
-const pythonWorkerLauncher = `import sys,json,builtins,contextlib,io,os,traceback
+const pythonWorkerLauncher = `import sys,json,builtins,contextlib,io,os,traceback,decimal
 requests=os.fdopen(3,'r',encoding='utf-8')
 answers=os.fdopen(4,'w',encoding='utf-8')
 for _module in json.loads(sys.argv[1]) or []:
@@ -690,6 +690,22 @@ class Response:
             import yaml
         except ImportError: raise RuntimeError('yaml library is not available')
         return yaml.safe_load(self.text)
+def label_text(name,v):
+    # A label value as text, the way jq labels are written (transform/labeltext.go):
+    # numbers as JSON writes them, booleans as true and false, None as no label.
+    if v is None or isinstance(v,str): return v
+    if isinstance(v,bool): return 'true' if v else 'false'
+    if isinstance(v,int): return str(v)
+    if isinstance(v,float):
+        if v!=v: return 'NaN'
+        if v in (float('inf'),float('-inf')): return '+Inf' if v>0 else '-Inf'
+        if v==0: return '0'
+        if 1e-6<=abs(v)<1e21:
+            text=format(decimal.Decimal(repr(v)),'f')
+            return text.rstrip('0').rstrip('.') if '.' in text else text
+        return repr(v)
+    if isinstance(v,(dict,list,tuple,set)): raise ValueError('label %r is a %s, not a single value; pass one value, or join them with ",".join(...)'%(name,type(v).__name__))
+    return str(v)
 def answer(document):
     answers.write(json.dumps(document)+'\n'); answers.flush()
 answer({'ok': True, 'ready': True})
@@ -702,6 +718,8 @@ while True:
         def metric(name,type='gauge',value=0,labels=None,help=None,timestamp=None,_metrics=metrics):
             if not isinstance(name,str): raise ValueError('metric name must be a string')
             if labels is None: labels={}
+            if not isinstance(labels,dict): raise ValueError('metric labels must be a mapping of label names to values')
+            labels={str(k):t for k,t in ((k,label_text(k,v)) for k,v in labels.items()) if t is not None}
             _metrics.append({'name':name,'type':type,'value':value,'labels':labels,'help':help or '','timestamp':timestamp})
         def fail(message): raise RuntimeError(str(message))
         scope={'__builtins__':builtins,'__name__':'__collector__','sys':sys,'json':json,'builtins':builtins,'contextlib':contextlib,'io':io,'os':os,

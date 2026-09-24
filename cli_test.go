@@ -492,6 +492,36 @@ func TestDryRunReportsAnExpressionThatDoesNotCompile(t *testing.T) {
 
 // The dry-run report and the log carry the deprecations, and the check still
 // passes: a deprecated spelling works until it is removed.
+// A collector leaving its decoder to each response still passes, and is
+// reported and logged so the operator can pin it.
+func TestDryRunWarnsOfAnUnsetDecoder(t *testing.T) {
+	path := testutil.WriteFile(t, "config.yaml", `collectors:
+  - name: undecided
+    request:
+      type: http
+    transform:
+      type: jq
+    metrics:
+      - name: value
+        expression: .value
+`)
+	out := runCheckCLI(t, "--config.file="+path)
+	result := out.result(t, "config")
+	warnings, _ := result.Details["warnings"].([]any)
+	if out.code != 0 || result.Status != checkOK || len(warnings) != 1 || !strings.Contains(warnings[0].(string), `collector "undecided" sets no decoder.type`) {
+		t.Fatalf("exit=%d config=%+v", out.code, result)
+	}
+	logged := false
+	for _, record := range out.logs {
+		if record["msg"] == "configuration warning" && strings.Contains(record["warning"].(string), "undecided") {
+			logged = true
+		}
+	}
+	if !logged {
+		t.Fatalf("no warning in the log:\n%s", out.stderr)
+	}
+}
+
 func TestDryRunReportsDeprecations(t *testing.T) {
 	path := testutil.WriteFile(t, "config.yaml", `collectors:
   - name: legacy

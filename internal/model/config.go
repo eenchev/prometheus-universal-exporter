@@ -45,6 +45,10 @@ type Config struct {
 	// normalised, one message each, for startup, reload and --dry-run to
 	// report. It is not read from the document.
 	Deprecations []string `yaml:"-"`
+	// Warnings lists what Validate accepted but the operator should know
+	// about, such as a collector that leaves its decoder to each response, one
+	// message each, reported like Deprecations.
+	Warnings []string `yaml:"-"`
 }
 
 // WebConfig is the web block: the exporter's own HTTP endpoints.

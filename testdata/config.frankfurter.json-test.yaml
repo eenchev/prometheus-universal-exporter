@@ -44,6 +44,8 @@ collectors:
         symbols: CHF,GBP,USD
       headers:
         Accept: application/json
+    decoder:
+      type: json
     transform:
       type: jq
       # A pre-script receives the decoded response as `data` (plus `response`,

@@ -280,8 +280,11 @@ Only a directory that could not even be listed in time fails the probe.
 
 ## Formats
 
-With `decoder.type` left at `auto`, the file's extension chooses the
-decoder, and anything else is recognised from its content:
+With `decoder.type` unset or `auto`, the file's extension chooses the
+decoder, and anything else is recognised from its content. Unset, and not
+implied by the transform, it is logged as a configuration warning at startup:
+set it to the decoder the files need, or to `auto` to keep choosing by
+extension.
 
 | Extension | Decoded as |
 | --- | --- |

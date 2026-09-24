@@ -708,6 +708,14 @@ decoded response cannot be mapped to the selected transform, the exporter MUST
 return a clear transform error. An explicit decoder remains available for
 ambiguous or incorrectly labeled endpoints.
 
+Where the transform implies no decoder and `decoder.type` is left unset, each
+response MUST be decoded by its `Content-Type` header for `http`, by its file
+extension for `localfile`, and by its content when those do not say. Such a
+collector MUST be reported as a configuration warning, naming it and how it
+decodes, at startup, on every reload and in the `--dry-run` report; it MUST NOT
+fail the load. An explicit `decoder.type`, `auto` included, MUST NOT be
+warned about.
+
 The entire `response` block is optional. CSV decoding MUST use a header row by
 default when `response.csv.header` is omitted. The `response.csv` block is only
 needed for non-default CSV options such as a custom delimiter, trimming, or a

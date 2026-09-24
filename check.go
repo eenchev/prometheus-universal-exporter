@@ -84,6 +84,11 @@ func runCheck(in checkInputs, stdout io.Writer, logger *slog.Logger) int {
 				logger.Warn("deprecated configuration", "file", result.File, "deprecation", message)
 			}
 		}
+		if warnings, ok := result.Details["warnings"].([]string); ok {
+			for _, message := range warnings {
+				logger.Warn("configuration warning", "file", result.File, "warning", message)
+			}
+		}
 		switch result.Status {
 		case checkOK:
 			logger.Info("configuration check passed", attrs...)
@@ -139,6 +144,9 @@ func checkStartup(in checkInputs) checkReport {
 		}
 		if len(conf.Deprecations) > 0 {
 			details["deprecations"] = conf.Deprecations
+		}
+		if len(conf.Warnings) > 0 {
+			details["warnings"] = conf.Warnings
 		}
 		results = append(results, checkResult{Check: "config", File: in.ConfigFile, Status: checkOK, Details: details})
 	}

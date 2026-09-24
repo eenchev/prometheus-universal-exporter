@@ -25,11 +25,25 @@ duplicate collector "app_json": defined in /etc/exporter/config.yaml and in /etc
 
 `decoder.type` chooses how the response is decoded. It is optional and
 defaults to `auto`, where the transform selects a deterministic decoder when it
-can: `regex` uses text,
-`csv` uses CSV, `css` uses HTML, and `prometheus` uses Prometheus exposition.
-JSON/YAML transforms use content detection. If the decoded response cannot be
-used by the selected transform, the probe fails with a clear mapping error.
-An explicit decoder remains useful for ambiguous or mislabeled endpoints:
+can: `regex` uses text, `csv` uses CSV, `css` uses HTML, and `prometheus` uses
+Prometheus exposition. Other transforms — jq, yq, XPath, Python — decode each
+response by what it says it is: an `http` response by its `Content-Type`
+header, a `localfile` file by its extension, and by its content when neither
+says. If the decoded response cannot be used by the selected transform, the
+probe fails with a clear mapping error.
+
+That fallback means a target that changes its `Content-Type`, or a file renamed
+to another extension, is quietly read another way. So a collector that leaves
+`decoder.type` unset where the transform implies none is logged at startup and
+on every reload, and listed in the [dry run](#dry-run) report:
+
+```text
+{"level":"WARN","msg":"configuration warning","file":"config.yaml","warning":"collector \"app_json\" sets no decoder.type, so it decodes by the Content-Type header of each response, and by the content when that does not say; set decoder.type to fix the decoder"}
+```
+
+Setting `decoder.type` — to `auto` too, when choosing per response is what you
+want — silences it. An explicit decoder is also what reads an ambiguous or
+mislabeled endpoint:
 
 ```yaml
 decoder:

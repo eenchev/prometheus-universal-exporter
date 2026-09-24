@@ -90,6 +90,8 @@ collectors:
       path: /api/v2/summary.json
       headers:
         Accept: application/json
+    decoder:
+      type: json
     transform:
       type: jq
     # Incident updates run to several hundred characters. The message label

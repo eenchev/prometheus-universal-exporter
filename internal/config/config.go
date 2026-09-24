@@ -70,8 +70,16 @@ func validateCollector(c *model.Config, x *model.Collector) error {
 	if x.MaxConcurrentProbes < 0 {
 		return fmt.Errorf("collector %q max_concurrent_probes must not be negative", x.Name)
 	}
+	decoderUnset := strings.TrimSpace(x.Decoder.Type) == ""
 	if err := normalizeFormats(x); err != nil {
 		return err
+	}
+	// Left unset, and not implied by the transform, the decoder is chosen
+	// for each response. That works, but a response that changes its
+	// Content-Type, or a file its extension, silently changes how it is
+	// read, so the operator is told once on every start and reload.
+	if decoderUnset && x.Decoder.Type == "auto" {
+		c.Warnings = append(c.Warnings, undecidedDecoderWarning(x))
 	}
 	for _, policy := range []struct {
 		key   string
@@ -581,12 +589,25 @@ func checkPythonLibrary(collector, lib string) error {
 }
 
 // LogDeprecations warns once per deprecated spelling a loaded configuration
-// used, so the operator hears about it on every start and reload until it is
-// changed.
+// used, and once per warning Validate recorded, so the operator hears about
+// each on every start and reload until it is changed.
 func LogDeprecations(logger *slog.Logger, path string, c *model.Config) {
 	for _, message := range c.Deprecations {
 		logger.Warn("deprecated configuration", "file", path, "deprecation", message)
 	}
+	for _, message := range c.Warnings {
+		logger.Warn("configuration warning", "file", path, "warning", message)
+	}
+}
+
+// undecidedDecoderWarning says how a collector without a decoder.type, whose
+// transform implies none, decodes what it reads.
+func undecidedDecoderWarning(x *model.Collector) string {
+	how := "by the Content-Type header of each response"
+	if x.Request.Type == fetch.RequestTypeLocalFile {
+		how = "by the extension of each file"
+	}
+	return fmt.Sprintf("collector %q sets no decoder.type, so it decodes %s, and by the content when that does not say; set decoder.type to fix the decoder", x.Name, how)
 }
 
 // normalizeErrorPolicy lower-cases a policy, maps the deprecated "warn" to

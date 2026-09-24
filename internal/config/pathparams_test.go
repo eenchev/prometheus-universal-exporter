@@ -17,7 +17,7 @@ func TestMalformedPlaceholdersAreRejectedAtStartup(t *testing.T) {
 		{"/api/{{param_}}", "not a path parameter"},
 		{"/api/{{param_a-b}}", "not a path parameter"},
 		{"/api/{{ param_tenant }}", "not a path parameter"},
-		{"/api/{{param_tenant:${DEFAULT_TENANT}}}", "--config.export-env"},
+		{"/api/{{param_tenant:${DEFAULT_TENANT}}}", "--config.expand-env"},
 	}
 	for _, test := range tests {
 		t.Run(test.path, func(t *testing.T) {

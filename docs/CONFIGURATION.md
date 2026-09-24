@@ -26,12 +26,14 @@ duplicate collector "app_json": defined in /etc/exporter/config.yaml and in /etc
 `decoder.type` chooses how the response is decoded. It is optional and
 defaults to `auto`, where the transform selects a deterministic decoder when it
 can: `regex` uses text, `csv` uses CSV, `css` uses HTML, and `prometheus` uses
-Prometheus exposition. Other transforms — jq, yq, XPath, Python — decode each
-response by what it says it is: an `http` response by its `Content-Type`
-header, a `localfile` file by its extension, and by its content when neither
-says: an HTML page by its doctype or `<html>` element, other markup as XML,
-JSON by its opening bracket, Prometheus text by its `# TYPE` or `# HELP`
-lines, and anything else as text. If the decoded response cannot be used by the selected transform, the
+Prometheus exposition. A `graphite` collector reads with the `graphite`
+decoder, whatever its transform. Other transforms — jq, yq, XPath, Python —
+decode each response by what it says it is: an `http` response by its
+`Content-Type` header, a `localfile` file by its extension, and by its content
+when neither says: an HTML page by its doctype or `<html>` element, other
+markup as XML, JSON by its opening bracket, Prometheus text by its `# TYPE` or
+`# HELP` lines, carbon lines (`<path> <value> <timestamp>`, some path with a
+dot) as Graphite series, and anything else as text. If the decoded response cannot be used by the selected transform, the
 probe fails with a clear mapping error.
 
 That fallback means a target that changes its `Content-Type`, or a file renamed
@@ -53,7 +55,9 @@ decoder:
 ```
 
 Supported decoders are `json`, `yaml`, `xml`, `csv`, `html`,
-`prometheus`, `text`, and `auto`. Every collector sets `transform.type`, one of
+`prometheus`, `text`, `graphite` and `auto`. The `graphite` decoder reads
+Graphite series — a render API answer or carbon lines — for jq, yq and Python;
+see [Graphite](GRAPHITE.md). Every collector sets `transform.type`, one of
 `jq`, `yq`, `xpath`, `css`, `csv`, `regex`, `prometheus` and `python`; there is
 no default, and a collector without one is refused at startup. JSON and YAML expressions
 use the embedded jq-compatible engine (the expression language is also used
@@ -501,8 +505,9 @@ request:
   path: /api/status
 ```
 
-There are two types: `http` asks a URL, and `localfile` reads a file from the
-exporter's own filesystem — see [Local files](LOCALFILE.md). A collector
+There are three types: `http` asks a URL, `localfile` reads a file from the
+exporter's own filesystem — see [Local files](LOCALFILE.md) — and `graphite`
+asks a Graphite render API for series — see [Graphite](GRAPHITE.md). A collector
 without `type` stops the exporter at startup with a message saying what to add,
 and so does an unknown type.
 
@@ -532,11 +537,19 @@ For `localfile`, `root` is required, and `path`, `max_age` and
 `max_total_bytes` to [read a whole directory](LOCALFILE.md#reading-a-directory);
 its table is in [Local files](LOCALFILE.md#a-collector).
 
+For `graphite`, `targets` is required: the Graphite expressions to render.
+`from` and `until` set the window, `-15min` to `now` by default, and `path`
+defaults to `/render`. Every `http` key about the connection applies —
+`query`, `headers`, credentials, `tls`, `retry`, `max_response_bytes`,
+`follow_redirects`, `enable_http2` and `allowed_schemes` — and `method` and
+`body` do not; its table is in [Graphite](GRAPHITE.md#a-collector).
+
 A key that belongs to a different type is an error rather than being ignored,
 and the same holds for `/probe` parameters: a parameter that only another type
 accepts gets a `400`. `localfile` accepts only `path`, `timeout` and
 `param_<name>` — only `timeout` when it reads a directory — and its `target`
-is optional.
+is optional. `graphite` accepts what `http` does but `method` and `body`,
+and `from` and `until`, which no other type accepts.
 
 #### Choosing request types at build time
 
@@ -560,7 +573,7 @@ A collector whose type the build left out stops the exporter at startup, saying
 the type exists but this build does not include it, and which types it does. The
 startup log line and the [dry run](#dry-run) report list the types the binary
 carries, so a configuration can be checked against the build that will run it.
-An http-only build leaves `localfile` out, and a build with
+An http-only build leaves `localfile` and `graphite` out, and a build with
 `REQUEST_TYPES=localfile` reads files and makes no HTTP requests to targets at
 all.
 
@@ -690,6 +703,10 @@ line 3: unknown key "requst" in a collector; line 7: "fast" is not a duration; w
 
 Every unknown key is refused, a static target's `request` block
 included, since a misspelt key would otherwise be ignored without a word.
+For the same reason a file holds one YAML document: the configuration, a
+collector file and the static targets file are each refused when a second
+document follows a `---`, naming the line it starts on. A leading `---`, and a
+final `---` or `...` with nothing after it but comments, are fine.
 
 ### Editor support
 
@@ -829,11 +846,14 @@ collectors:
   `collector_files`, its own `collectors` key may be left out.
 - **Unique names.** A collector name must be unique across the configuration
   and every collector file; see [Collectors](#collectors).
-- **Environment variables.** With `--config.export-env`, `${NAME}` references
+- **Environment variables.** With `--config.expand-env`, `${NAME}` references
   are expanded in collector files as in the configuration.
 - **Reloading.** With `--config.watch`, editing, adding or removing a collector
   file reloads the configuration, even though the configuration file itself did
-  not change. A reload that would break any rule above is rejected and the last
+  not change. The files watched are those the configuration file lists, even
+  while it is refused: a configuration that adds a collector file with a
+  mistake in it reloads once that file is fixed, without touching the
+  configuration again. Starting the watch reloads nothing. A reload that would break any rule above is rejected and the last
   valid configuration stays active.
 - **Checking.** `--dry-run` reads the collector files too and lists them under
   `details.collector_files` of its `config` entry.
@@ -854,7 +874,7 @@ has no key but `collectors`.
 
 A configuration file is usually committed, and some of what belongs in it is
 not: an internal hostname, a tenant identifier, a token. Pass
-`--config.export-env` and the exporter substitutes `${NAME}` references from its
+`--config.expand-env` and the exporter substitutes `${NAME}` references from its
 own environment before parsing the document:
 
 ```yaml
@@ -869,7 +889,7 @@ collectors:
 
 ```sh
 API_PATH=/v1/status API_TOKEN=... \
-  prometheus-universal-exporter --config.file=config.yaml --config.export-env
+  prometheus-universal-exporter --config.file=config.yaml --config.expand-env
 ```
 
 It is off by default, and that default is the point. A configuration is full of
@@ -887,7 +907,7 @@ A reference to a variable that is not set is a startup error, not an empty
 string:
 
 ```text
-config.yaml: environment variable "API_TOKEN" not set; --config.export-env
+config.yaml: environment variable "API_TOKEN" not set; --config.expand-env
 requires every ${NAME} it finds to be defined
 ```
 
@@ -896,16 +916,30 @@ collector with no path, credentials that are silently blank — and the exporter
 would serve it. Every missing name is listed at once. A variable that is set to
 an empty string is a deliberate choice and substitutes normally.
 
-Substitution is textual and happens before the YAML is parsed, so a reference
-can supply any part of the document, not only a scalar. For the same reason a
-value containing a line break is refused: it would end the line and turn the
-rest into YAML rather than setting a long string.
+A reference is expanded where the document holds it as a value — a value
+or a key, quoted or not, whole or part of a longer one — and the variable is
+always exactly that value. A token holding ` #`, one starting with `*`, `&` or
+`[`, quotes, backslashes and line breaks all arrive as written: the value is
+written back quoted where YAML would otherwise read it differently, and left
+unquoted where it reads the same, so a number stays a number. A reference in
+a comment is left alone, set or not. That holds in a flow collection too —
+`regions: [${PRIMARY}, ${SECONDARY}]` or `{token: ${TOKEN}}` — after an anchor,
+as in `&base ${BASE}`, and for values YAML reads specially on their own, such as
+`-` or an empty string: a key is always written quoted, an empty value is
+written quoted inside a flow collection, and `-` always is. A variable supplies a value and never
+structure: `headers: ${ALL_HEADERS}` is one string, not a mapping. Two places
+cannot take every value: a block value (`|` or `>`) takes one without a line
+break, and an unquoted value folded over several lines is refused; quote the
+reference there, as in `"${NAME}"`. Errors name the file's own line
+numbers.
 
-The static target document is read the same way — it carries the addresses
-and credentials of the things being scraped, which is exactly the material worth
-keeping out of a committed file — and `--config.watch` re-expands on every
-reload, so a reload cannot quietly replace a working configuration with literal
-references.
+`--config.watch` re-expands on every reload, so a reload cannot quietly
+replace a working configuration with literal references.
+
+The static target document has its own flag, `--static-targets.expand-env`,
+which works the same way; `--config.expand-env` does not reach it, so either
+file can take values from the environment while the other is used as written.
+See [Static targets](STATIC-TARGETS.md#environment-variables).
 
 Environment references are fixed when the file is read. For a value that
 changes per scrape — a tenant in the URL path — use a
@@ -1300,8 +1334,9 @@ A deprecated spelling does not fail the check; it is listed under
 `details.collector_files`, and a collector name defined twice fails the check.
 
 It takes the same flags a real start does, and they matter: `--config.file` and
-`--static-targets-file` choose what is checked, `--config.export-env` decides
-whether `${NAME}` references are expanded — so a check run where a referenced
+`--static-targets-file` choose what is checked, `--config.expand-env` and
+`--static-targets.expand-env` decide whether `${NAME}` references are expanded
+in each — so a check run where a referenced
 variable is not set fails, exactly as startup would — `--python.path` is the
 interpreter the Python scripts are compiled with, and `--config.watch` with
 `--config.watch-interval` are checked when the watch is on. It never binds a
@@ -1318,7 +1353,7 @@ The report lists one entry per startup step, in the order startup runs them:
       "check": "config",
       "file": "config.yaml",
       "status": "ok",
-      "details": {"collectors": ["app_json", "legacy_text"], "otlp_enabled": false, "config_export_env": false}
+      "details": {"collectors": ["app_json", "legacy_text"], "otlp_enabled": false, "config_expand_env": false}
     },
     {
       "check": "python_scripts",
@@ -1331,7 +1366,7 @@ The report lists one entry per startup step, in the order startup runs them:
       "file": "static-targets.yaml",
       "status": "failed",
       "errors": ["target \"legacy_eu\" sets export_via_otlp, which needs OTLP export; set otlp.enabled: true and otlp.endpoint, or leave the target to the static targets endpoint"],
-      "details": {"targets": ["legacy_eu", "legacy_us"]}
+      "details": {"targets": ["legacy_eu", "legacy_us"], "static_targets_expand_env": false}
     }
   ]
 }
@@ -1380,6 +1415,8 @@ which is why the Helm chart rejects it in `extraArgs`.
 
 - [PYTHON.md](PYTHON.md) — the Python transform and pre-script API.
 - [REQUESTS.md](REQUESTS.md) — redirects, HTTP/2, retries, TLS and per-scrape overrides.
+- [LOCALFILE.md](LOCALFILE.md) — the `localfile` request type.
+- [GRAPHITE.md](GRAPHITE.md) — the `graphite` request type and decoder.
 - [AUTHENTICATION.md](AUTHENTICATION.md) — credentials for the target and for the exporter itself.
 - [SELF-METRICS.md](SELF-METRICS.md) — the exporter's own metrics.
 - [STATIC-TARGETS.md](STATIC-TARGETS.md) — targets the exporter scrapes itself and serves on the static targets endpoint.

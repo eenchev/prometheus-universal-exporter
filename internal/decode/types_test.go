@@ -20,6 +20,7 @@ func TestEveryListedDecoderIsHandled(t *testing.T) {
 		"html":       "<p>1</p>",
 		"prometheus": "a 1\n",
 		"text":       "a=1",
+		"graphite":   "a.b 1 1727000000\n",
 	}
 	for _, decoder := range model.DecoderTypes {
 		if decoder == "auto" {

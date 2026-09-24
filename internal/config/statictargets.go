@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"regexp"
+	"sort"
 	"strings"
 	"time"
 
@@ -15,10 +16,12 @@ import (
 
 var targetNameRE = regexp.MustCompile(`^[a-zA-Z_][a-zA-Z0-9_]*$`)
 
-// LoadStaticTargets reads the static target document. It takes the same
-// options as Load: a target file carries the addresses and credentials of
-// the things being scraped, which is exactly the material an operator wants to
-// keep out of a committed file, so --config.export-env applies to both.
+// LoadStaticTargets reads the static target document. A target file carries
+// the addresses and credentials of the things being scraped, which is exactly
+// the material an operator wants to keep out of a committed file, so it may
+// take them from the environment: WithStaticTargetsEnvExpansion, which
+// --static-targets.expand-env turns on, independently of the configuration's
+// --config.expand-env.
 func LoadStaticTargets(path string, opts ...LoadOption) (*model.StaticTargetFile, error) {
 	b, err := readDocument(path, opts)
 	if err != nil {
@@ -29,6 +32,9 @@ func LoadStaticTargets(path string, opts ...LoadOption) (*model.StaticTargetFile
 	dec.KnownFields(true)
 	if err = dec.Decode(&f); err != nil {
 		return nil, yamlError(err)
+	}
+	if err = oneDocument(dec); err != nil {
+		return nil, err
 	}
 	return &f, nil
 }
@@ -83,6 +89,13 @@ func ValidateStaticTargets(f *model.StaticTargetFile) error {
 		// ever take its default — or fail every scrape. Write the path out.
 		if fetch.HasPathParams(t.Request.Path) {
 			return fmt.Errorf("target %q request.path cannot use {{param_...}} placeholders: a static target has no probe to supply them, so write the path out in full", t.Name)
+		}
+		// Nor anywhere else the target writes a value of its own: they are
+		// sent as written, so a placeholder would reach the target as text.
+		// This holds for a value an environment reference supplied too,
+		// since the file is checked after it is expanded.
+		if err := refuseParamPlaceholders(t); err != nil {
+			return err
 		}
 		for name := range t.Params {
 			if !fetch.PathParamName.MatchString(name) {
@@ -199,6 +212,9 @@ func ValidateStaticTargetsAgainst(f *model.StaticTargetFile, c *model.Config) er
 		if err := fetch.CheckTargetRequest(t, model.CollectorByName(c, t.Collector)); err != nil {
 			return err
 		}
+		if err := checkRetriesFitTheInterval(t, model.CollectorByName(c, t.Collector)); err != nil {
+			return err
+		}
 		// Every placeholder of the collector's request must be filled, by the
 		// target's params or a default, since nothing else can fill it; and
 		// every param must fill one, since an unused one is a misspelling.
@@ -225,4 +241,66 @@ func ValidateStaticTargetsAgainst(f *model.StaticTargetFile, c *model.Config) er
 		}
 	}
 	return nil
+}
+
+// paramPlaceholder is `{{param_`, spaces allowed after the braces, which
+// opens a probe parameter placeholder (fetch/requesttemplate.go). Only it is
+// looked for: a body may well contain braces of its own.
+var paramPlaceholder = regexp.MustCompile(`\{\{\s*` + fetch.PathParamPrefix)
+
+// refuseParamPlaceholders refuses a {{param_...}} placeholder in a value the
+// target writes itself — its target, request.body, header values and a
+// graphite collector's request.targets; its
+// request.path is checked with the collector's stricter rule. Such values are
+// sent as written, with no probe to fill a placeholder; the target's params
+// are what fill the collector's.
+func refuseParamPlaceholders(t *model.StaticTarget) error {
+	refuse := func(where string) error {
+		return fmt.Errorf("target %q %s cannot use {{param_...}} placeholders: a static target's own values are sent as written, with no probe to fill them; write the value out in full, or fill the collector's placeholders under params", t.Name, where)
+	}
+	if paramPlaceholder.MatchString(t.Target) {
+		return refuse("target")
+	}
+	if paramPlaceholder.MatchString(t.Request.Body) {
+		return refuse("request.body")
+	}
+	names := make([]string, 0, len(t.Request.Headers))
+	for name := range t.Request.Headers {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	for _, name := range names {
+		if paramPlaceholder.MatchString(t.Request.Headers[name]) {
+			return refuse("request.headers " + name)
+		}
+	}
+	for i, expression := range t.Request.Targets {
+		if paramPlaceholder.MatchString(expression) {
+			return refuse(fmt.Sprintf("request.targets[%d]", i))
+		}
+	}
+	return nil
+}
+
+// checkRetriesFitTheInterval refuses retries that could never all be made: a
+// scrape ends with its interval, so when the waits between the attempts alone
+// fill it, the last retries are cut off every time a target fails. Retries
+// that fit may still be cut short by slow attempts; that depends on the
+// target, not the file.
+func checkRetriesFitTheInterval(t *model.StaticTarget, c *model.Collector) error {
+	if c == nil {
+		return nil
+	}
+	attempts, backoff := c.Request.Retry.Attempts, time.Duration(c.Request.Retry.Backoff)
+	if t.Request.Retry != nil {
+		attempts, backoff = t.Request.Retry.Attempts, time.Duration(t.Request.Retry.Backoff)
+	}
+	if attempts <= 0 || backoff <= 0 {
+		return nil
+	}
+	waiting := time.Duration(attempts) * backoff
+	if waiting < time.Duration(t.Interval) {
+		return nil
+	}
+	return fmt.Errorf("target %q retries %d times, %s apart, which is %s of waiting alone, and a scrape ends with its interval, %s: the last retries could never be made; lower request.retry.attempts or backoff, or raise the interval", t.Name, attempts, backoff, waiting, time.Duration(t.Interval))
 }

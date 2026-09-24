@@ -70,6 +70,10 @@ type collected struct {
 	stage  string
 	err    error
 	metric string
+	// aborted is set when the trip failed because the exporter is shutting
+	// down (AbortStaticScrapes): nothing about the target is known, and
+	// nothing was logged.
+	aborted bool
 }
 
 func (r collected) failed() bool { return r.err != nil }
@@ -89,6 +93,9 @@ func (s *Server) collect(ctx context.Context, j collectJob) collected {
 	// stageFailed applies a stage's error policy.
 	// extra attributes go to the log only, never into the probe's answer.
 	stageFailed := func(stage string, err error, policy string, extra ...any) collected {
+		if shuttingDown(ctx) {
+			return collected{stage: stage, err: err, aborted: true}
+		}
 		err = explainBudget(ctx, j.budget, j.budgetSource, err)
 		attrs := append(append(append([]any{}, j.log.attrs...), "stage", stage), extra...)
 		switch policy {
@@ -127,6 +134,11 @@ func (s *Server) collect(ctx context.Context, j collectJob) collected {
 	if response.Directory != nil {
 		// A directory: each file is decoded and transformed on its own, and
 		// one that fails is left out rather than failing the trip.
+		// A read the shutdown cut short is no result of the target's
+		// (statictargetschedule.go): its files are not reported failed.
+		if response.Directory.CutShort && shuttingDown(ctx) {
+			return collected{stage: fetch.FetchStage(c), err: context.Cause(ctx), aborted: true}
+		}
 		set = s.collectDirectory(ctx, response.Directory, c, rec, j.display)
 	} else {
 		decoded, err := decode.Decode(response, c)
@@ -135,6 +147,7 @@ func (s *Server) collect(ctx context.Context, j collectJob) collected {
 			return stageFailed("decode", err, c.ErrorHandling.OnDecodeError)
 		}
 		rec.update(func(x *serverStats) { x.decodeOK++ })
+		s.noteGraphite(decoded, c, rec, j.display, "")
 		scriptCtx, timer := transform.WithScriptTimer(ctx)
 		set, err = s.transformRecorded(scriptCtx, decoded, response, c, rec)
 		recordScriptDuration(rec, timer)
@@ -155,6 +168,9 @@ func (s *Server) collect(ctx context.Context, j collectJob) collected {
 			// would have carried on after a failed transform.
 			var failure *transform.MetricFailure
 			if errors.As(err, &failure) {
+				if shuttingDown(ctx) {
+					return collected{stage: "metric", err: err, aborted: true}
+				}
 				s.logCollectFailure(j.log, "metric", err, "metric", failure.Metric)
 				return collected{stage: "metric", err: err, metric: failure.Metric}
 			}
@@ -173,7 +189,12 @@ func (s *Server) collect(ctx context.Context, j collectJob) collected {
 	}
 	rec.update(func(x *serverStats) { x.emitted += uint64(len(set.Metrics)) })
 	s.failures.recovered(s.logger, j.log.key, j.log.recovery, j.log.attrs...)
-	s.cache.Put(j.cacheKey, c.Name, *set, model.CacheTTL(c), model.StaleIfError(c), c.Limits.MaxCacheEntries, now)
+	// A directory read the deadline cut short answers this probe with what
+	// it read, but is not kept: the files it did not reach are fine as far
+	// as anyone knows, and a cached copy would serve them failed.
+	if response.Directory == nil || !response.Directory.CutShort {
+		s.cache.Put(j.cacheKey, c.Name, *set, model.CacheTTL(c), model.StaleIfError(c), c.Limits.MaxCacheEntries, now)
+	}
 	return collected{set: set, answer: answer}
 }
 

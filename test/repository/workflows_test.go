@@ -322,3 +322,33 @@ func TestTheVulnerabilityCheckNeverFails(t *testing.T) {
 		t.Error("the govulncheck step does not write its findings to the run summary, where they are meant to be read")
 	}
 }
+
+// CI vets and builds each request type on its own, so its loop names every
+// internal/fetch/requesttype_<name>.go.
+func TestCIBuildsEveryRequestTypeOnItsOwn(t *testing.T) {
+	files, err := filepath.Glob("internal/fetch/requesttype_*.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var types []string
+	for _, file := range files {
+		if strings.HasSuffix(file, "_test.go") {
+			continue
+		}
+		name := strings.TrimSuffix(strings.TrimPrefix(filepath.Base(file), "requesttype_"), ".go")
+		if name == "none" {
+			continue
+		}
+		types = append(types, name)
+	}
+	sort.Strings(types)
+	match := regexp.MustCompile(`(?m)^\s*for type in ([a-z ]+); do\s*$`).FindStringSubmatch(read(t, ".github/workflows/ci.yml"))
+	if match == nil {
+		t.Fatal("ci.yml has no loop over the request types")
+	}
+	listed := strings.Fields(match[1])
+	sort.Strings(listed)
+	if !slices.Equal(listed, types) {
+		t.Fatalf("ci.yml builds the request types %v on their own, but the tree has %v", listed, types)
+	}
+}

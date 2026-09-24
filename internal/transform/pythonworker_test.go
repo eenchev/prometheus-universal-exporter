@@ -242,6 +242,19 @@ func TestPythonWorkerSandbox(t *testing.T) {
 		{`import os; os.system("true")`, "operation disabled by exporter"},
 		{`import os; os.read(3, 10)`, "operation disabled by exporter"},
 		{`import os; os.write(4, b"x")`, "operation disabled by exporter"},
+		// The modules beneath the blocked ones, and the ways around the
+		// import guard and the replaced functions.
+		{`import _socket`, "module disabled by exporter"},
+		{`import _posixsubprocess`, "module disabled by exporter"},
+		{`import posix`, "module disabled by exporter"},
+		{`import _io`, "module disabled by exporter"},
+		{`import _thread`, "module disabled by exporter"},
+		{`import importlib`, "module disabled by exporter"},
+		{`sys.modules["posix"]`, "KeyError"},
+		{`import io; io.FileIO("/etc/passwd")`, "operation disabled by exporter"},
+		{`sys.modules["_io"].FileIO("/etc/passwd")`, "operation disabled by exporter"},
+		{`sys.modules["_io"].open("/etc/passwd")`, "operation disabled by exporter"},
+		{`sys.modules["socket"]`, "KeyError"},
 	} {
 		c := workerCollector("sandbox", test.script)
 		for run := 0; run < 2; run++ {
@@ -250,6 +263,26 @@ func TestPythonWorkerSandbox(t *testing.T) {
 				t.Fatalf("%s run %d: err=%v", test.script, run, err)
 			}
 		}
+	}
+}
+
+// The sandbox leaves the standard library a script uses alone, including
+// modules that import a module scripts may not import themselves.
+func TestPythonWorkerSandboxLeavesTheStandardLibrary(t *testing.T) {
+	requirePython(t)
+	c := workerCollector("stdlib", `
+import collections, csv, dataclasses, datetime, decimal, math, random, re, statistics
+@dataclasses.dataclass
+class Point:
+    x: int
+metric(name="v", value=Point(statistics.mean([1, 3])).x)
+`)
+	set, err := runWorkerScript(t, c)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if workerMetricValue(t, set, "v") != 2 {
+		t.Fatalf("metrics=%+v", set.Metrics)
 	}
 }
 

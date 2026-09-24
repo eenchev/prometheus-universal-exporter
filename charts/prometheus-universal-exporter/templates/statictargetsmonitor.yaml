@@ -26,6 +26,12 @@ spec:
       path: {{ include "prometheus-universal-exporter.staticTargetsPath" . | quote }}
       interval: {{ $monitor.interval }}
       scrapeTimeout: {{ $monitor.scrapeTimeout }}
+      {{- with $monitor.targets }}
+      {{- /* Read only these targets: ?targets=a&targets=b. */}}
+      params:
+        targets:
+          {{- toYaml . | nindent 10 }}
+      {{- end }}
       {{- /* The series carry their own static_target and target labels, which
              Prometheus keeps as they are rather than overwriting them with its
              own target's. */}}

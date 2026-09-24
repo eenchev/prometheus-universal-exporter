@@ -18,12 +18,15 @@ import (
 
 // Decoded is a response decoded for a transform. Kind names the decoder, and
 // Data holds what it produced: normalized JSON or YAML values, CSV rows, an
-// *xmlquery.Node, an *HTMLDecoded, a model.MetricSet for Prometheus text, or
-// the body as a string. Raw is the body the decoder read.
+// *xmlquery.Node, an *HTMLDecoded, a model.MetricSet for Prometheus text, the
+// Graphite series document (graphite.go), or the body as a string. Raw is the body the decoder read.
 type Decoded struct {
 	Kind string
 	Data any
 	Raw  []byte
+	// Graphite reports what the graphite decoder left out; nil for the
+	// others.
+	Graphite *GraphiteReport
 }
 
 // HTMLDecoded is a parsed HTML document and the body it was parsed from.
@@ -50,6 +53,8 @@ func detectFormat(r *fetch.HTTPResponse) string {
 		return "html"
 	case ct == "application/openmetrics-text" || ct == "text/plain" && strings.Contains(rawCT, "version=0.0.4"):
 		return "prometheus"
+	case ct == fetch.GraphiteContentType:
+		return "graphite"
 	}
 	b := bytes.TrimSpace(r.Body)
 	if bytes.Contains(b, []byte("# TYPE ")) || bytes.Contains(b, []byte("# HELP ")) {
@@ -69,6 +74,9 @@ func detectFormat(r *fetch.HTTPResponse) string {
 	}
 	if bytes.HasPrefix(b, []byte("<")) {
 		return "xml"
+	}
+	if looksLikeCarbon(b) {
+		return "graphite"
 	}
 	return "text"
 }
@@ -123,6 +131,8 @@ func Decode(r *fetch.HTTPResponse, c *model.Collector) (*Decoded, error) {
 		return decodePrometheus(r)
 	case "text":
 		return &Decoded{Kind: kind, Data: string(r.Body), Raw: r.Body}, nil
+	case "graphite":
+		return decodeGraphite(r, c)
 	default:
 		return nil, fmt.Errorf("unsupported decoder %q", kind)
 	}

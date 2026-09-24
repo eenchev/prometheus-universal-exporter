@@ -81,6 +81,8 @@ func targetHint(c *model.Collector, required bool) string {
 	switch c.Request.Type {
 	case fetch.RequestTypeHTTP:
 		hint = "http://host:port"
+	case fetch.RequestTypeGraphite:
+		hint = "http://graphite:8080"
 	case "localfile":
 		hint = "a file or directory under its root"
 	}
@@ -142,7 +144,7 @@ pre { margin: 0; padding: 10px; max-height: 360px; overflow: auto; background: v
 </head>
 <body>
 <main>
-<nav><a href="/">← Prometheus Universal Exporter</a></nav>
+<nav><a href="./">← Prometheus Universal Exporter</a></nav>
 <h1>Collectors</h1>
 <p class="meta">Probe a target through a collector, as Prometheus would. The answer is what Prometheus would scrape.</p>
 <noscript><p class="note">Without JavaScript the forms open <code>/probe</code> directly, and a target credential entered here is not sent.</p></noscript>
@@ -150,7 +152,7 @@ pre { margin: 0; padding: 10px; max-height: 360px; overflow: auto; background: v
 <section class="collector" id="collector-{{.Name}}">
 <h2><code>{{.Name}}</code></h2>
 <p class="kind">{{.RequestType}} · {{.Transform}}</p>
-<form class="probe" action="/probe" method="get" autocomplete="off">
+<form class="probe" action="probe" method="get" autocomplete="off">
 <input type="hidden" name="collector" value="{{.Name}}">
 <div class="row">
 <div><label for="{{.Name}}-target">Target</label>
@@ -255,12 +257,14 @@ for (const form of document.querySelectorAll("form.probe")) {
     const sent = result.querySelector(".sent");
     const body = result.querySelector("pre");
     const button = form.querySelector("button");
-    const url = "/probe?" + params.toString();
+    // Relative, as the form's action is, so the page works under a proxy's
+    // path prefix; shown as the absolute path it resolves to.
+    const url = new URL("probe?" + params.toString(), document.baseURI);
     button.disabled = true;
     result.hidden = false;
     status.className = "status";
     status.textContent = "Probing…";
-    sent.textContent = "GET " + url + ", with a " + timeout + " s timeout" + (headers.Authorization ? " and an Authorization header" : "");
+    sent.textContent = "GET " + url.pathname + url.search + ", with a " + timeout + " s timeout" + (headers.Authorization ? " and an Authorization header" : "");
     body.textContent = "";
     const started = performance.now();
     try {

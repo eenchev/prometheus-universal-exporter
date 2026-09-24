@@ -57,9 +57,12 @@ spec:
             - {{ printf "--web.static-targets-path=%s" (include "prometheus-universal-exporter.staticTargetsPath" .) | quote }}
             {{- if .Values.staticTargets.enabled }}
             - {{ printf "--static-targets-file=/etc/prometheus-universal-exporter/%s" (include "prometheus-universal-exporter.staticTargetsFile" .) | quote }}
+            {{- if .Values.staticTargets.expandEnv }}
+            - --static-targets.expand-env
+            {{- end }}
             {{- end }}
             {{- if .Values.server.expandEnv }}
-            - --config.export-env
+            - --config.expand-env
             {{- end }}
             - {{ printf "--log.level=%s" (include "prometheus-universal-exporter.logLevel" .) | quote }}
             {{- if .Values.server.enableLifecycle }}

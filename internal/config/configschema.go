@@ -214,7 +214,19 @@ func configSchemaRules() map[string]map[string]any {
 		"collectors[].request.max_files":            {"description": "localfile with request.files: the most files one scrape reads, in name order; the rest are skipped and logged. Defaults to 100."},
 		"collectors[].request.max_total_bytes":      {"description": "localfile with request.files: the most one scrape reads across every file; a file that would go past it is refused. Defaults to 64 MiB."},
 		"collectors[].request.max_age":              {"description": "localfile: refuse a file last modified longer ago than this, so a writer that has stopped fails the scrape instead of exporting its last values forever."},
+		"collectors[].request.targets":              {"minItems": 1, "description": "graphite, required: the Graphite expressions asked of the render API, each sent as a target parameter, such as app.*.requests.count. May contain {{param_name}} placeholders, filled with letters, digits and _ - . : @ % + ~ only. See docs/GRAPHITE.md."},
+		"collectors[].request.from":                 {"description": "graphite: the start of the render window, as Graphite writes a time: -15min, the default, -1h, or Unix seconds. The from probe parameter overrides it."},
+		"collectors[].request.until":                {"description": "graphite: the end of the render window. Defaults to now. The until probe parameter overrides it."},
 		"collectors[].request.retry.non_idempotent": {"description": "Retry a request whose method is not idempotent, such as POST, which sending again may repeat. Unset, only GET, HEAD, OPTIONS, TRACE, PUT and DELETE requests are retried."},
+		"collectors[].response.graphite.value": {
+			"enum":        model.GraphiteValues,
+			"description": "graphite decoder: how a series' points become its value: last, the newest point, by default, or max, min, avg or sum.",
+		},
+		"collectors[].response.graphite.max_age": {"description": "graphite decoder: leave out a series whose newest point is older than this, so a series nobody writes any more is not exported with its last value."},
+		"collectors[].response.graphite.invalid_lines": {
+			"enum":        model.GraphiteInvalidLines,
+			"description": "graphite decoder: what a carbon line that cannot be read does: fail the decode, the default, or skip, leaving it out, counted in http_exporter_decoder_lines_skipped_total and logged.",
+		},
 		"collectors[].decoder.type": {
 			"enum":        model.DecoderTypes,
 			"description": "How to decode the response. Defaults to auto, which the transform or the Content-Type decides.",
@@ -265,13 +277,14 @@ func configSchemaRules() map[string]map[string]any {
 // requestSchemaRule requires type, and for each built request type with
 // required keys of its own, those keys when the type is chosen.
 func requestSchemaRule() map[string]any {
-	rule := map[string]any{"required": []string{"type"}, "description": "How the collector reaches its data. See docs/REQUESTS.md, and docs/LOCALFILE.md for localfile."}
+	rule := map[string]any{"required": []string{"type"}, "description": "How the collector reaches its data. See docs/REQUESTS.md, docs/LOCALFILE.md for localfile and docs/GRAPHITE.md for graphite."}
 	var conditions []any
 	for _, name := range fetch.BuiltRequestTypes() {
-		if name == fetch.RequestTypeLocalFile {
+		required := map[string]string{fetch.RequestTypeLocalFile: "root", fetch.RequestTypeGraphite: "targets"}[name]
+		if required != "" {
 			conditions = append(conditions, map[string]any{
 				"if":   map[string]any{"properties": map[string]any{"type": map[string]any{"const": name}}, "required": []string{"type"}},
-				"then": map[string]any{"required": []string{"root"}},
+				"then": map[string]any{"required": []string{required}},
 			})
 		}
 	}
@@ -294,7 +307,7 @@ func staticTargetsSchemaRules() map[string]map[string]any {
 		"targets[]":           {"required": []string{"collector"}, "description": "One target: a collector of the configuration, the address it reads, and what this target overrides."},
 		"targets[].name":      {"pattern": targetNameRE.String(), "description": "Unique name, in logs and the static_target label. Defaults to <collector>_<index>."},
 		"targets[].collector": {"description": "The collector of the configuration that scrapes this target."},
-		"targets[].target":    {"description": "What the collector reads: a URL for an http collector, a file under request.root for a localfile one."},
+		"targets[].target":    {"description": "What the collector reads: a URL for an http collector, the Graphite server's URL for a graphite one, a file under request.root for a localfile one."},
 		"targets[].interval":  {"description": "How often this target is scraped, whatever Prometheus scrapes the endpoint on and otlp.interval exports on. At least 1s, and no shorter than request.timeout; defaults to the file's interval."},
 		"targets[].params": {
 			"propertyNames": map[string]any{"pattern": fetch.PathParamName.String()},
@@ -309,6 +322,9 @@ func staticTargetsSchemaRules() map[string]map[string]any {
 		"targets[].request.method":               {"enum": []string{"GET", "POST", "PUT", "PATCH", "DELETE", "HEAD"}},
 		"targets[].request.path":                 {"description": "Replaces the collector's request.path. It cannot hold {{param_...}} placeholders."},
 		"targets[].request.timeout":              {"description": "How long a scrape of this target may take. At most the target's interval."},
+		"targets[].request.targets":              {"description": "graphite: replaces the collector's request.targets for this target. It cannot hold {{param_...}} placeholders."},
+		"targets[].request.from":                 {"description": "graphite: replaces the collector's request.from for this target."},
+		"targets[].request.until":                {"description": "graphite: replaces the collector's request.until for this target."},
 		"targets[].request.retry":                {"description": "Replaces the collector's request.retry for this target."},
 		"targets[].request.retry.non_idempotent": {"description": "Retry a request whose method is not idempotent, such as POST, which sending again may repeat."},
 		"targets[].otlp":                         {"description": "The OTLP resource this target's metrics are exported under, over the exporter-wide otlp settings. Only with export_via_otlp: true."},

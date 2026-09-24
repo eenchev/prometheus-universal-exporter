@@ -51,6 +51,7 @@ func TestLocalFileResponseHeaders(t *testing.T) {
 	for name, want := range map[string]string{
 		"a.json": "application/json", "a.yml": "application/yaml", "a.yaml": "application/yaml", "a.xml": "application/xml",
 		"a.csv": "text/csv", "a.htm": "text/html", "a.html": "text/html", "a.prom": "text/plain; version=0.0.4", "a.txt": "", "a": "",
+		"a.graphite": GraphiteContentType, "a.CARBON": GraphiteContentType,
 	} {
 		if got := localFileContentType(name); got != want {
 			t.Errorf("%s: %q, want %q", name, got, want)

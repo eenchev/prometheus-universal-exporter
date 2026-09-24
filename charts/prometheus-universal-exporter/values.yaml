@@ -54,9 +54,10 @@ server:
   watchConfig: false
   # How often to re-check the files when watchConfig is true. Must be positive.
   watchConfigInterval: 60s
-  # Expand ${NAME} environment variable references in the configuration and in
-  # the static target document, so a value can come from a Secret rather than
-  # from the committed file. Off by default, because a configuration is full of
+  # Expand ${NAME} environment variable references in the configuration and
+  # its collector files (--config.expand-env), so a value can come from a
+  # Secret rather than from the committed file. The static target document has
+  # its own switch, staticTargets.expandEnv. Off by default, because a configuration is full of
   # dollar signs that are not references — a regex, a jq expression, a Python
   # pre-script — and only ${NAME} is substituted. A reference whose variable is
   # not set stops the exporter at startup rather than becoming an empty string.
@@ -171,13 +172,25 @@ extraVolumeMounts: []
 # rendering fails early rather than the pod.
 staticTargets:
   enabled: false
-  # File name inside the mounted configuration directory.
+  # File name inside the mounted configuration directory: its key in the
+  # configuration ConfigMap, so letters, digits, -, _ and ., and not a key
+  # config.data already uses.
   fileName: static-targets.yaml
   # Rendered as --web.static-targets-path: where the targets' latest results
   # are served. A path of plain segments that is not selfMetrics.path.
   path: /static-targets
+  # Expand ${NAME} environment variable references in the static target
+  # document (--static-targets.expand-env), so an address or a credential can
+  # come from a Secret through `env` or `envFrom`. Independent of
+  # server.expandEnv, and rendered only with staticTargets.enabled. As there,
+  # only ${NAME} is substituted, $$ writes a literal dollar, and an unset
+  # variable stops the exporter at startup.
+  expandEnv: false
   # The static target document. Rendered into the exporter ConfigMap, so a
   # change to it rolls the Deployment through the existing checksum annotation.
+  # Required with config.enabled. With config.enabled: false the chart renders
+  # no ConfigMap: put the file into your own under fileName, and leave this
+  # empty, or rendering fails rather than dropping it.
   data: ""
   # Example:
   # data: |
@@ -203,6 +216,11 @@ staticTargets:
     annotations: {}
     relabelings: []
     metricRelabelings: []
+    # Names of the static targets this monitor reads, rendered as the
+    # endpoint's ?targets= parameter; empty reads every target. Each must be
+    # a target in staticTargets.data, or rendering fails. To read groups of
+    # targets on different intervals, add a monitor of your own per group.
+    targets: []
   #       labels:
   #         region: eu
   #       otlp:

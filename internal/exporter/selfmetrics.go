@@ -27,6 +27,9 @@ type statsValues struct {
 	// invalidUTF8 counts label values and help texts whose invalid UTF-8
 	// was replaced.
 	invalidUTF8 uint64
+	// seriesLeftOut and linesSkipped count what the graphite decoder left
+	// out before the rules saw it (graphitereport.go).
+	seriesLeftOut, linesSkipped uint64
 	// lastScriptDuration is how long the Python of the last probe that ran any
 	// took, in seconds.
 	lastScriptDuration float64
@@ -81,6 +84,8 @@ var selfMetricDescriptors = []selfMetricDescriptor{
 	{"http_exporter_script_duration_seconds", model.GaugeMetricType, "Duration of the most recent Python script run for this collector, in seconds.", func(v statsValues) float64 { return v.lastScriptDuration }},
 	{"http_exporter_metrics_emitted_total", model.CounterMetricType, "Metrics this collector has produced across its scrapes.", func(v statsValues) float64 { return float64(v.emitted) }},
 	{"http_exporter_invalid_utf8_total", model.CounterMetricType, "Label values and help texts this collector produced that were not valid UTF-8, whose invalid bytes were replaced with U+FFFD.", func(v statsValues) float64 { return float64(v.invalidUTF8) }},
+	{"http_exporter_decoder_series_left_out_total", model.CounterMetricType, "Series the graphite decoder left out before the metric rules saw them: with no point that has a value, with the newest point older than response.graphite.max_age, or answered twice.", func(v statsValues) float64 { return float64(v.seriesLeftOut) }},
+	{"http_exporter_decoder_lines_skipped_total", model.CounterMetricType, "Carbon lines the graphite decoder could not read and skipped, under response.graphite.invalid_lines: skip.", func(v statsValues) float64 { return float64(v.linesSkipped) }},
 	{"http_exporter_series_limit_exceeded_total", model.CounterMetricType, "Scrapes rejected for exceeding this collector's response size or series limits.", func(v statsValues) float64 { return float64(v.limitErrors) }},
 	{"http_exporter_cache_hits_total", model.CounterMetricType, "Probes answered from this collector's response cache.", func(v statsValues) float64 { return float64(v.cacheHits) }},
 	{"http_exporter_cache_misses_total", model.CounterMetricType, "Probes that found no usable cache entry and went to the target.", func(v statsValues) float64 { return float64(v.cacheMisses) }},

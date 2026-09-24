@@ -38,10 +38,15 @@ import (
 //   - In a header value, the value is refused if it holds a control
 //     character, so it can never end the header and start another.
 //   - In a query value, the value is encoded as a query value.
+//   - In a graphite collector's request.targets, the value lands inside a
+//     Graphite expression, which has no escaping, so it may hold only what a
+//     path node or a tag value is made of: letters, digits and _ - . : @ % +
+//     ~. Anything else — a quote, a comma, a parenthesis, a glob — could
+//     change the expression rather than fill a value in it, and is refused.
 //
-// Filters exist only in the body: the path, header and query each have one
-// safe encoding, applied always. In the body, a header value and a query
-// value, `{{` opens a placeholder only when `param_` follows it, since a
+// Filters exist only in the body: the path, header, query and targets each
+// have one safe encoding, applied always. In the body, a header value, a
+// query value and a target, `{{` opens a placeholder only when `param_` follows it, since a
 // body may well contain braces of its own; `{{ param_x }}` with spaces is
 // refused rather than sent as text. In a path, `{{` always opens one.
 
@@ -49,6 +54,11 @@ import (
 var bodyFilters = []string{"json", "number", "form", "xml", "raw"}
 
 var jsonNumber = regexp.MustCompile(`^-?(0|[1-9][0-9]*)(\.[0-9]+)?([eE][+-]?[0-9]+)?$`)
+
+// graphiteValue is what a placeholder may be filled with in a Graphite
+// expression: the characters of a path node or a tag value, and none that
+// Graphite's grammar gives a meaning.
+var graphiteValue = regexp.MustCompile(`^[A-Za-z0-9_.:@%+~-]*$`)
 
 // parsePlaceholders finds the placeholders of text, reported as where. strict
 // makes every `{{` a placeholder; otherwise only `{{param_`. filters allows a
@@ -96,10 +106,10 @@ func parsePlaceholders(where, text string, strict, filters bool) ([]pathPlacehol
 		// A default ends at the first }}, so braces inside it can only come
 		// from something the author did not mean as a default. The common case
 		// is an environment reference left unexpanded because
-		// --config.export-env is off: {{param_x:${X}}} would otherwise bind the
+		// --config.expand-env is off: {{param_x:${X}}} would otherwise bind the
 		// default "${X" and leave a stray brace behind.
 		if strings.ContainsAny(def, "{}") {
-			return nil, fmt.Errorf("%s placeholder {{%s}} has a default containing a brace; if it is an environment reference, run with --config.export-env so it is expanded first", where, inner)
+			return nil, fmt.Errorf("%s placeholder {{%s}} has a default containing a brace; if it is an environment reference, run with --config.expand-env so it is expanded first", where, inner)
 		}
 		out = append(out, pathPlaceholder{Name: name, Default: def, HasDefault: hasDefault, Filter: filter, start: open, end: closing + 2})
 		offset = closing + 2
@@ -130,7 +140,8 @@ func (e *MissingParamError) Error() string {
 type templateField struct {
 	where string
 	text  string
-	// kind is "body", "header" or "query", which decides the encoding.
+	// kind is "body", "header", "query" or "graphite", which decides the
+	// encoding.
 	kind string
 }
 
@@ -149,6 +160,15 @@ func requestTemplates(c *model.Collector, overrides RequestOverrides) []template
 	for _, name := range model.SortedKeys(c.Request.Query) {
 		if value := c.Request.Query[name]; HasPathParams(value) {
 			out = append(out, templateField{"request.query." + name, value, "query"})
+		}
+	}
+	// A static target's own targets replace the collector's, placeholders
+	// and all.
+	if overrides.Targets == nil {
+		for i, target := range c.Request.Targets {
+			if HasPathParams(target) {
+				out = append(out, templateField{fmt.Sprintf("request.targets[%d]", i), target, "graphite"})
+			}
 		}
 	}
 	return out
@@ -198,6 +218,11 @@ func (f templateField) write(p pathPlaceholder, value string) (string, error) {
 	case "query":
 		// url.Values.Encode escapes the whole value.
 		return value, nil
+	case "graphite":
+		if !graphiteValue.MatchString(value) {
+			return "", fmt.Errorf("%s: the value of %s, %q, may hold only letters, digits and _ - . : @ %% + ~, since it lands inside a Graphite expression, where anything else could change the expression", f.where, p.Name, value)
+		}
+		return value, nil
 	}
 	switch p.Filter {
 	case "json":
@@ -221,28 +246,6 @@ func (f templateField) write(p pathPlaceholder, value string) (string, error) {
 		return b.String(), nil
 	}
 	return value, nil
-}
-
-// validateRequestTemplates checks the templated fields of an http collector
-// when the configuration loads: placeholders well formed, filters known, and
-// no placeholder in a header or query name.
-func validateRequestTemplates(c *model.Collector) error {
-	for name := range c.Request.Headers {
-		if strings.Contains(name, "{{") {
-			return fmt.Errorf("collector %q request.headers name %q has a placeholder; placeholders stand only in header values", c.Name, name)
-		}
-	}
-	for name := range c.Request.Query {
-		if strings.Contains(name, "{{") {
-			return fmt.Errorf("collector %q request.query name %q has a placeholder; placeholders stand only in query values", c.Name, name)
-		}
-	}
-	for _, f := range requestTemplates(c, RequestOverrides{}) {
-		if _, err := f.parse(); err != nil {
-			return fmt.Errorf("collector %q: %w", c.Name, err)
-		}
-	}
-	return nil
 }
 
 // requestParamNames lists the parameters a collector's request uses: in its

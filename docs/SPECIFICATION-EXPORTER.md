@@ -435,7 +435,8 @@ value. The configuration schema MUST accept both forms for these settings.
 ### 5.1 Request types
 
 Every collector MUST declare `request.type`, which selects how it reaches its
-data. `http` and `localfile` are implemented; gRPC and FTP are anticipated. The
+data. `http`, `localfile` and `graphite` are implemented; gRPC and FTP are
+anticipated. The
 type MUST be required rather than defaulted, so that no configuration means
 `http` by accident. A missing type
 MUST be rejected at startup and on reload with a message naming the collector,
@@ -487,6 +488,10 @@ type.
   that only that type needs MUST live behind the same constraint, and so MUST
   `requesttype_<name>_test.go`, the tests that only that type needs, so that
   vetting a single-type selection compiles its tests too.
+- Code that some types share and others do not, such as the rules of a
+  request made over HTTP, which `http` and `graphite` share, MUST live behind
+  a constraint naming each type that uses it, so no selection compiles code
+  it does not use.
 - A build with `-tags select_request_types` MUST carry only the types named by
   `request_type_<name>` tags. One that names none MUST fail to compile, which
   `requesttype_none.go` does with the constraint
@@ -648,6 +653,10 @@ done, the files read by then MUST be answered, and each file still being read
 or not yet reached MUST fail alone with an error saying it was not read before
 the deadline, its modification time reported when it had been taken; no further
 file MUST be started. Only a directory not listed in time MUST fail the probe.
+An answer cut short this way MUST NOT be cached, since the cache would go on
+serving the files not reached as failed. When the exporter's shutdown cut it
+short, on a static target, it MUST be dropped like any static target scrape the
+shutdown aborts: nothing published and no failure logged.
 
 Each file read MUST then be decoded, transformed and validated on its own, as a
 response of its own with the headers a single file gets, so its decoder follows
@@ -674,6 +683,65 @@ A file beyond `max_files` MUST NOT get a series of its own, so the `file`
 label never has more than `max_files` values. `limits.max_metrics` MUST apply to the whole answer. The verbose
 `url` label MUST be the directory's `file://` URL ending in `/`. Static
 targets MUST read directories the same way.
+
+#### `graphite`
+
+A `graphite` collector asks a Graphite render API — graphite-web, carbonapi or
+anything answering `/render` alike — for the series of one or more Graphite
+expressions. The probe's `target` is the Graphite server, required, and
+checked as an `http` target is. The exporter MUST NOT accept pushed carbon
+lines: it only pulls. Its keys:
+
+| Key | Default | Rule |
+| --- | --- | --- |
+| `targets` | none | **Required**, at least one. Graphite expressions, each sent as a `target` query parameter. |
+| `from` | `-15min` | The window's start, sent as `from`. Wide enough to hold a point of a series stored at one- or five-minute resolution. |
+| `until` | `now` | The window's end, sent as `until`. |
+| `path` | `/render` | As `http`'s. |
+| `query`, `headers`, `basic_auth` / `basic_auth_file`, `bearer_token` / `bearer_token_file`, `forward_authorization`, `forward_headers`, `tls`, `retry`, `max_response_bytes`, `follow_redirects`, `enable_http2`, `allowed_schemes` | as `http` | With `http`'s rules. |
+
+- The request MUST be `http`'s in everything but its URL — the same transport,
+  credentials, retries, limits and proxy — and a `GET`; `method` and `body`
+  MUST be rejected. The method MUST be left unset in the configuration, so a
+  configuration validated again does not read as one that sets it.
+- The URL MUST be the target with `path`, `query`, then every expression as a
+  `target` parameter, `from`, `until` and `format=json`. `request.query` MUST
+  NOT set `target`, `from`, `until` or `format`, in any case.
+- When the expressions a request carries, as configured and URL-encoded with
+  `&target=` each, exceed 2048 bytes, the request MUST instead be a `POST` of
+  the same parameters as an `application/x-www-form-urlencoded` body, with no
+  query in the URL, retried as a `GET` would be. The `http_method` label MUST
+  say which method, decided by the expressions alone, so it never changes
+  between scrapes of one collector or static target.
+- Every expression MUST be checked at load: not empty, no control character,
+  quotes closed and brackets balanced, a quoted bracket not counted and a
+  backslash inside quotes escaping the character after it; an expression
+  listed twice, surrounding whitespace aside, MUST be refused naming both.
+  Graphite functions MUST NOT be checked, since render APIs differ in them.
+  `from` and `until` MUST NOT hold whitespace.
+- An expression MAY hold `{{param_<name>}}` placeholders (§ 42.10a), filled
+  as in the path, defaults, missing and unused parameters included. A value
+  MUST hold only letters, digits and `_ - . : @ % + ~`; any other value MUST be
+  refused with `400` before Graphite is contacted, since an expression has no
+  escaping and a quote, comma, bracket or glob could change it.
+- It MUST accept the `/probe` parameters `path`, `timeout`,
+  `insecure_skip_verify`, `follow_redirects`, `enable_http2`, `retry_attempts`,
+  `retry_backoff`, `header_<name>`, `param_<name>`, and `from` and `until`,
+  which replace the window for the probe; an empty one, or one holding
+  whitespace, MUST be answered `400`, and so must either for a collector of
+  another type. A static target using a `graphite` collector MAY set `path`,
+  `timeout`, `insecure_skip_verify`, `follow_redirects`, `enable_http2`,
+  `retry`, `headers`, the basic and bearer credential keys, and `targets`,
+  `from` and `until`, which replace the collector's. A static target's
+  `targets` MUST be checked like the collector's, repeats included, and MUST
+  NOT hold placeholders. Its `from` and `until` MUST enter its cache key as
+  the probe parameters of the same name, so it shares cached results with a
+  probe asking for the same window; its `targets`, which no probe can set,
+  MUST enter it in a section a probe's key never has, so two targets asking
+  one server for different series never share a cached result, and a probe
+  never reads one.
+- `decoder.type` left unset or `auto` MUST be `graphite` (§ 15a); `json`
+  MAY be set to read the answer as Graphite sent it.
 
 A collector MAY set `cache`, a mapping of `ttl`, the time to live of a cached
 collector result, and `stale_if_error`, how much longer a result stands in for
@@ -712,6 +780,7 @@ csv
 html
 prometheus
 text
+graphite
 auto
 ```
 
@@ -737,7 +806,8 @@ The decoder MUST be chosen by `decoder.type`, the one key for it; `response`
 MUST NOT take a format. `decoder.type` is optional and defaults to `auto`. When
 it is omitted, the implementation MUST infer a deterministic response decoder from the transform
 where possible: `regex` to text, `csv` to CSV, `css` to HTML, and `prometheus`
-to Prometheus exposition. jq/yq, XPath, and Python MAY use content detection
+to Prometheus exposition, and a `graphite` collector to the `graphite`
+decoder. jq/yq, XPath, and Python MAY use content detection
 because they can operate on more than one response representation. If the
 decoded response cannot be mapped to the selected transform, the exporter MUST
 return a clear transform error. An explicit decoder remains available for
@@ -747,7 +817,12 @@ Where the transform implies no decoder and `decoder.type` is left unset, each
 response MUST be decoded by its `Content-Type` header for `http`, by its file
 extension for `localfile`, and by its content when those do not say, where an
 HTML doctype or `<html>` root element MUST be recognised as HTML before other
-markup is taken for XML. Such a
+markup is taken for XML, and a body whose every line other than blank and `#`
+lines is `<path> <number> <number>`, with some path holding a dot or a `;`
+and none a brace or quote, MUST be recognised as carbon lines, after JSON,
+HTML and XML and before text. A local file ending in `.graphite` or `.carbon`
+MUST be given the Content-Type `text/x-graphite`, which MUST select the
+`graphite` decoder. Such a
 collector MUST be reported as a configuration warning, naming it and how it
 decodes, at startup, on every reload and in the `--dry-run` report; it MUST NOT
 fail the load. An explicit `decoder.type`, `auto` included, MUST NOT be
@@ -1250,6 +1325,70 @@ until the response is read.
 
 ---
 
+# 15a. Graphite decoder
+
+The `graphite` decoder MUST read Graphite series from either of:
+
+- the render API's `format=json` answer, a body starting with `[`: a list of
+  `{"target", "tags", "datapoints": [[value, timestamp], ...]}`;
+- carbon plaintext lines, `<path> <value> [<timestamp>]` one a line, blank and
+  `#` lines skipped. A missing timestamp, or `-1`, MUST be the time of the
+  decode. A timestamp of 10¹¹ or more MUST be refused as one in milliseconds,
+  naming the line. Lines of one path and one set of tags, in any order, MUST
+  be one series with a point per line.
+
+For a `graphite` collector the answer MUST be render JSON: any other, empty
+included, MUST fail the decode saying the Graphite server did not answer with
+render JSON and quoting the start of the answer, never be read as carbon
+lines.
+
+A tagged name, `path;tag=value;...`, MUST be split into its path and tags. The
+decoder MUST produce one document for every transform:
+
+```json
+{"series": [{"path": "a.b", "segments": ["a", "b"], "tags": {"name": "a.b"},
+             "value": 42, "time": 1727000000, "points": [[40, 1726999940], [42, 1727000000]]}]}
+```
+
+- `path` MUST be the series' name without tags; `segments` it split on dots;
+  `tags` the render API's tags when it gives them, else those of the tagged
+  name, always holding `name`, the path when the render API's tags lack it.
+- `points` MUST be every point with a finite value and time, oldest first,
+  points for one time kept in the order read. A `null`, NaN or infinite value
+  MUST be left out, and a series left with no point MUST be left out of the
+  document.
+- `value` MUST be the points reduced by `response.graphite.value`: `last`, the
+  default, the newest point, the last read among points for one time; or
+  `max`, `min`, `avg` or `sum` over every point. `time` MUST be the newest
+  point's time in Unix seconds. Samples MUST NOT be exported with it as a
+  timestamp.
+- A series whose newest point is older than `response.graphite.max_age`, when
+  set, MUST be left out. Its age MUST be computed from whole and fractional
+  seconds, without overflow for any time a float can hold.
+- A render series equal to an earlier one — path, tags and points — MUST be
+  left out; one with the same path and other points or tags MUST be kept.
+- Series MUST keep the order the answer or the file gave them.
+- A malformed answer — a point that is not two numbers, a series without a
+  path, a tag that is not `name=value` — MUST fail the decode, naming the
+  series. A line that is not a carbon line MUST fail it naming the line
+  number, unless `response.graphite.invalid_lines` is `skip`, when it MUST be
+  left out and the rest read.
+- What was left out — series with no point, older than `max_age` and repeated,
+  and skipped lines, the first described — MUST be reported with the
+  document. The series left out MUST be counted in
+  `http_exporter_decoder_series_left_out_total` and logged at debug level with
+  the count for each reason; skipped lines MUST be counted in
+  `http_exporter_decoder_lines_skipped_total` and logged at warn level with
+  the first of them, repeats suppressed and the end logged as the failure log
+  does (§ 25.1), per collector, target and file.
+
+`response.graphite` MUST be refused at load on a collector whose decoder is
+neither `graphite` nor `auto`, as must a `value` outside the five, an
+`invalid_lines` other than `fail` or `skip`, and a negative `max_age`. A collector whose decoder is `graphite` MUST have a `jq`,
+`yq` or `python` transform; any other MUST be refused at load.
+
+---
+
 # 16. Python transform
 
 Python MUST be a first-class transform type.
@@ -1405,6 +1544,32 @@ threading
 ```
 
 The exact sandboxing mechanism is an implementation decision. Trusted collector configuration may permit a broader runtime than untrusted configuration, but the default should be conservative.
+
+The worker's sandbox:
+
+- MUST refuse importing, from anywhere, `socket`, `ssl`, `subprocess`,
+  `ctypes`, `multiprocessing`, `threading`, `mmap`, `pty`, `pathlib`, `shutil`,
+  `tempfile`, `urllib.request`, `urllib.error` and `urllib.robotparser`, and
+  the C modules beneath them (`_socket`, `_ssl`, `_posixsubprocess`,
+  `_ctypes`, `_multiprocessing`), and MUST remove them from `sys.modules`, so a
+  module a declared library loaded is not reachable there.
+- MUST refuse a script importing, itself, `posix`, `_io`, `_thread`, `select`,
+  `selectors`, `fcntl`, `termios` and `importlib`, whose `import_module` would
+  go around the import guard. The standard library may still import them, so
+  modules such as `dataclasses` keep working. `posix` MUST also be removed from
+  `sys.modules`.
+- MUST replace `open`, `io.open`, `io.FileIO`, `_io.FileIO` and the `os`
+  functions that start processes, open, list, change or remove files, or read,
+  write, duplicate or close descriptors. `_io.open`, which the importer reads
+  module source and bytecode with, MUST only open `.py` and `.pyc` files, for
+  reading.
+
+A sandbox inside the interpreter guards against a script doing by mistake what
+it should not; it is not a boundary against a script written to escape it,
+since Python leaves too many ways to reach the objects it replaces. The
+collector configuration MUST be trusted as the exporter's own code is, and the
+container — a non-root user, a read-only root file system, and network policy —
+is the boundary.
 
 ### 16.6 Python execution controls
 
@@ -2033,6 +2198,8 @@ http_exporter_script_duration_seconds
 
 http_exporter_metrics_emitted_total
 http_exporter_invalid_utf8_total
+http_exporter_decoder_series_left_out_total
+http_exporter_decoder_lines_skipped_total
 http_exporter_series_limit_exceeded_total
 
 http_exporter_cache_hits_total
@@ -2471,7 +2638,11 @@ watches the directory and re-arms. Polling is unaffected by this.
 The watch MUST cover the collector files (§ 5.0): a collector file changed, a
 file newly matching a pattern, and a file removed MUST each reload the
 configuration, although the configuration file itself did not change. A reload
-that fails MUST NOT be retried until one of the files changes again.
+that fails MUST NOT be retried until one of the files changes again. The
+collector files watched MUST be those the configuration file lists, even when
+that configuration is refused, so a configuration adding a collector file with
+a mistake in it reloads once that file is fixed. Starting the watch MUST NOT
+reload a configuration that has not changed since it was loaded.
 
 Enabling the watch MUST NOT weaken any reload rule: an invalid configuration, a
 configuration that would disable OTLP while a loaded static target sets
@@ -2554,6 +2725,11 @@ Unknown keys MUST be refused everywhere in these files, including in blocks
 decoded by custom code such as a static target's `request`, where they
 would otherwise be ignored without a word.
 
+Each of these files MUST hold one YAML document. A second document after a
+`---` MUST be refused naming the line it starts on, since it would otherwise
+be ignored without a word. A leading `---`, and a final `---` or `...` with
+nothing after it but comments, MUST be accepted.
+
 ### 24.3 Configuration schema
 
 The repository MUST publish a JSON Schema (draft 2020-12) of the configuration
@@ -2620,7 +2796,10 @@ breaks silently, and the resulting line looks like
 
 which is the text handler's default format, not the exporter's.
 
-The configured log level MUST apply to those lines too.
+The configured log level MUST apply to those lines too. `--log.level` MUST be
+one of `debug`, `info`, `warn` and `error`, matched case-insensitively; any
+other value MUST be refused as a malformed command line, with exit status 2
+before `--dry-run` or startup, rather than falling back to `info`.
 
 A logged metric extraction failure MUST name the collector as well as the rule.
 A metric name is not unique across collectors — the same rule is often copied
@@ -3047,6 +3226,15 @@ delay when it starts one. A second signal during the delay MUST end the process
 at once, as during the shutdown timeout. A negative value MUST be refused as a
 malformed command line.
 
+Static targets (§ 42.14) MUST keep being scraped during the delay, while their
+endpoint is still served. When the delay ends no static target scrape MUST
+start, and one waiting for a slot MUST give up without logging advice about
+`concurrency`; those in flight MUST be allowed to finish within
+`--web.shutdown-timeout`, and publish as usual. One the timeout cuts short
+MUST publish nothing — on the endpoint or over OTLP — and MUST NOT be logged as
+a failure: the target did not fail, so it MUST NOT be reported down, and its
+last result stands.
+
 `--version` prints the build information of § 22.0d and exits 0.
 
 `--config.schema` prints the configuration file's JSON Schema and exits, and
@@ -3079,7 +3267,8 @@ ask whether a configuration would start without starting it.
 
 The check MUST run the same validation functions startup runs, in startup's
 order, and MUST honour the flags that change what startup loads:
-`--config.file`, `--static-targets-file`, `--config.export-env`, `--python.path`,
+`--config.file`, `--static-targets-file`, `--config.expand-env`,
+`--static-targets.expand-env`, `--python.path`,
 and `--config.watch` with `--config.watch-interval`. A configuration that
 `--dry-run` passes MUST start with the same files and flags, and one it fails MUST
 be refused by startup; a test MUST pin this agreement for every failure the
@@ -3335,6 +3524,9 @@ Test:
   type or YAML tag in any message, and YAML syntax errors unchanged.
 - Unknown keys in a static target's `request`, its `retry` and
   `basic_auth` refused, and a valid block accepted.
+- A second document refused, naming its line, in the configuration, a
+  collector file and the static targets file; a leading `---`, a final `---`,
+  a final `...`, and a final `---` followed by a comment accepted.
 
 Configuration validation MUST identify the collector and relevant field in the error message.
 
@@ -3951,7 +4143,8 @@ Test that logs:
 - Never expose authentication secrets.
 - Do not dump entire potentially sensitive response bodies by default.
 - Respect configured log level, including for lines written through the default
-  logger.
+  logger; accept the four levels in any case, and refuse any other value, on
+  startup and with `--dry-run`, with exit status 2.
 - Are JSON on every line: a metric rule failing under `error_mode: log` — which
   reports from inside a transform rather than through a passed-down logger —
   produces a JSON object carrying the time, level, message, the failing rule's
@@ -4197,6 +4390,12 @@ Required:
   target only, and the clash is logged; logged once over two reads, logged as
   ended when the types agree, logged anew when it comes back, and forgotten
   without a line when the target is removed.
+- `?targets=` serves only the named targets, given with commas, repeated,
+  with spaces or empty names, or both, for `GET` and `HEAD`, each line one the
+  whole endpoint serves; an unknown name, and a parameter naming none, is
+  `400` naming the unknown names and serving nothing; a named target not yet
+  scraped is absent; a narrowed read leaves a type clash as a whole read does,
+  logged once over mixed reads and not ended by them.
 - The endpoint is at `--web.static-targets-path`, `/static-targets` by
   default and not otherwise; it answers `401` without the exporter's
   credential when Basic Auth is on, and `405` to a method other than `GET` or
@@ -4207,6 +4406,9 @@ Required:
 - A target with an hour's interval is first due within ten seconds; its
   cadence then keeps its offset within the interval, starting between half an
   interval and one and a half after the first scrape, and then every interval.
+- Retries whose waits alone reach the interval are refused, from the
+  collector or the target, and retries within it, or turned off by the
+  target, are accepted.
 - The last success timestamp is 0 before a success, set by one, and kept
   through a later failure.
 - The scrape loop never runs more scrapes at once than the document's
@@ -4310,12 +4512,27 @@ Test environment variable expansion:
   produces a literal dollar.
 - An unset variable is an error naming every missing variable and the document;
   a variable set to an empty string substitutes normally.
-- A value containing a line break is refused.
+- A value arrives exactly as the variable holds it: ` #`, a leading `*`, `&`,
+  `!`, `|`, `>`, `@`, `%`, `-`, `[` or `{`, `key: value`, quotes,
+  backslashes and line breaks, in a plain, single- or double-quoted value,
+  whole or in part, and as a key; a number stays a number, an empty variable
+  in a quoted value is an empty string, `$$` is a dollar, and a reference in
+  a comment is left alone, set or not.
+- A reference in a block value is expanded in its lines, and one with a line
+  break is refused there; a plain value folded over lines and an explicitly
+  tagged one with a reference are refused naming the line; the document keeps
+  its line numbers, so a later error names the file's line; a document that
+  is not YAML gets the YAML error.
+- A reference expands, reading back as the value, after an anchor on a plain
+  and a quoted value, bare in a flow sequence and a flow mapping, as a flow
+  key, beside quoted items in a flow collection, as a lone `-`, as an empty
+  value in a flow sequence and mapping and as a key, as an empty block value,
+  and as a key starting a line; the line count is unchanged in each.
 - A reload keeps expanding, a reload does not start expanding when startup did
   not, and a reload with an unresolvable reference leaves the previous
   configuration active.
-- Expansion precedes parsing, so a reference can supply a non-scalar part of the
-  document.
+- A reference supplies a value, never structure: a mapping-shaped value is one
+  string.
 - Every Go version the workflows request satisfies the go directive in
   `go.mod`, as does the version the Dockerfile pins, and the comparison itself
   is covered for versions of differing granularity.
@@ -4329,6 +4546,10 @@ receives:
 
 - A supplied value is bound, and an unsupplied one with a default takes the
   default; an empty value is treated as unsupplied.
+- A static target's `target`, `request.body` and header values refuse a
+  `{{param_…}}` placeholder, with or without a default or spaces, naming the
+  target and the field, including one an environment variable supplied; a
+  JSON body, other double braces and `params` are accepted.
 - A value is one escaped segment: `/`, `?`, `#`, spaces and non-ASCII
   characters arrive percent-encoded, and a dot inside a value is left alone.
 - A missing value without a default, an empty value without a default, a
@@ -4341,10 +4562,10 @@ receives:
 - An explicit empty default binds nothing.
 - Malformed placeholders — unclosed, unprefixed, empty or invalid names, padded
   names, a default containing a brace — are rejected at startup naming the
-  collector, and the brace case points at `--config.export-env`; well-formed
+  collector, and the brace case points at `--config.expand-env`; well-formed
   placeholders, repeated placeholders and a stray `}}` are accepted.
 - An environment reference in a default is expanded at load with
-  `--config.export-env`, keeping the placeholder, and is refused without it.
+  `--config.expand-env`, keeping the placeholder, and is refused without it.
 - Two tenants never share a cache entry, and a repeat of one is served from
   the cache.
 - The verbose `url` label carries the placeholder and never the value.
@@ -4374,8 +4595,14 @@ status captured:
   configuration fails naming the mismatch; a valid one beside a broken
   configuration is `skipped` and still lists its targets.
 - A non-positive watch interval fails only when the watch is on.
-- An unset variable fails the check under `--config.export-env` and not
+- An unset variable fails the check under `--config.expand-env` and not
   without it.
+- A static target file with a reference is expanded under
+  `--static-targets.expand-env` and not under `--config.expand-env`, and the
+  configuration the other way round; the report says which in
+  `config_expand_env` and `static_targets_expand_env`; an unset variable the
+  file needs fails the check, and startup, naming
+  `--static-targets.expand-env`. A reload reads each file by its own flag.
 - For every failing case, startup with the same arguments also exits `1`.
 - stdout carries exactly one JSON document and every stderr line is JSON; each
   step is logged at its level; `--log.level=error` silences the log but not the
@@ -4409,8 +4636,10 @@ status captured:
   constraint and the list of known types matches the files; the guard's
   constraint names every type; evaluated with the Go toolchain's constraint
   rules, a default build compiles every type and not the guard,
-  `select_request_types,request_type_http` compiles http and not the guard, and
-  `select_request_types` alone compiles only the guard; a default build
+  `select_request_types,request_type_http` compiles http and not the guard,
+  `select_request_types,request_type_graphite` compiles graphite alone, and
+  `select_request_types` alone compiles only the guard; CI's loop over
+  single-type builds names every type in the tree; a default build
   registers every known type; a known type missing from the build is rejected
   as left out of the build, naming the tag, while an unknown name is not;
   registering a type twice panics; the `--dry-run` report lists the built
@@ -4530,6 +4759,13 @@ status captured:
   next run succeeds.
 - `socket`, `subprocess` and `threading` imports, `open`, `os.system`, and
   reading or writing the protocol descriptors are refused on every run.
+- The ways around those are refused too: importing `_socket`,
+  `_posixsubprocess`, `posix`, `_io`, `_thread` or `importlib`, reaching
+  `posix` or `socket` through `sys.modules`, and opening a file through
+  `io.FileIO`, `_io.FileIO` or `_io.open`.
+- A script importing `collections`, `csv`, `dataclasses`, `datetime`,
+  `decimal`, `math`, `random`, `re` and `statistics` runs, though some of them
+  import modules the script may not import itself.
 - A declared library is preloaded, including one that imports a blocked module.
 - Expired idle workers are stopped; pools are keyed by script; a burst of
   concurrent runs succeeds and leaves at most the idle limit.
@@ -4623,6 +4859,9 @@ See § 5.0.
 - The watch reloads when a collector file is edited, added or removed, does not
   reload when nothing changed, and rejects a reload that adds a duplicate,
   keeping the configuration in force.
+- A configuration refused for a collector file it newly lists reloads when
+  only that file is fixed, and the first watch tick after start reloads
+  nothing.
 - `configs/collector-file.schema.json` is current, printed by its flag, describes
   collectors as the configuration schema does, accepts a collectors list and
   rejects any other key, an empty list and an invalid collector; the
@@ -4724,7 +4963,11 @@ See § 5.0a, § 5.1a, § 22.0d, § 23 and § 42.1a.
   `unready_after_failures` 2 it is 503 after two and 200 after one gets
   through; a reload to another endpoint makes it ready at once.
 - A directory whose file is held past the probe's timeout answers the other
-  files, and that file fails with its mtime.
+  files, and that file fails with its mtime; the read is marked cut short, and
+  a read that finishes is not.
+- A caching collector whose directory read was cut short reads again on the
+  next probe, and one whose read finished is served from the cache; a read the
+  shutdown cut short is aborted and logs no failure.
 - Files of a directory are read at most four at a time and more than one at
   once, and answered in name order.
 - A listing past its bound is logged with how many entries were listed.
@@ -4828,6 +5071,14 @@ See § 42.10a and § 42.10b.
 
 See § 23 and § 30.
 
+- A scrape in flight when the scrape loop stops finishes and publishes; one
+  the shutdown cuts short publishes nothing, is queued for nothing and logs
+  no failure, leaving the last result; one waiting for a slot is not begun
+  and logs no advice; static targets keep being scraped through
+  `--web.shutdown-delay`, and the shutdown logs no static target failing.
+- A target given a new interval while its scrape runs is skipped, not
+  scraped beside it, until that scrape ends; a removed target's result is
+  neither kept nor queued.
 - After a `SIGTERM` with `--web.shutdown-delay` of 1s, `/ready` answers `503`
   naming the shutdown while a probe is still answered `200`; the process exits
   `0` after the delay, logging it; a negative value exits 2. Without the delay
@@ -4854,6 +5105,101 @@ See § 7.1.
   directory's files (§ 5.1), which it decodes and transforms one at a time.
 - A static target's scrape failed by a metric rule with `error_mode: fail`
   is logged with stage `metric` and the metric's name, as a probe's is.
+
+## 34.53i Graphite tests
+
+See § 5.1 (`graphite`) and § 15a.
+
+- A graphite collector defaults path `/render`, from `-15min`, until `now`,
+  and the `http_method` label `GET`; its URL carries every expression as a
+  `target`, the window, `format=json` and `request.query`; the verbose `url`
+  label is the render URL without its query; a set path and window are used,
+  the window trimmed.
+- Placeholders in expressions are filled from the probe and their defaults;
+  a missing one fails naming the target and parameter; a value with a quote,
+  a comma, a `*`, a space or a closing bracket is refused; an unused probe
+  parameter is reported; the collector's parameters are listed with their
+  defaults.
+- Refused at load: no targets, an empty target, an unclosed or stray or
+  crossed bracket, an unclosed quote, a line break, a malformed placeholder,
+  `target` or `format` in `request.query`, a window with a space, `method`,
+  `body`, a `localfile` key, basic and bearer together, negative retries, and
+  a malformed header placeholder; nested functions, globs, character classes
+  and quoted brackets are accepted. `targets` on an `http` collector is
+  refused, and so is the `method` probe parameter on a graphite one, while
+  `timeout` and `path` are accepted.
+- A static target's `targets`, `from` and `until` replace the collector's and
+  its placeholders; a malformed expression, a spaced window, `method` and
+  `body` are refused, naming the target; an `http` collector's static target
+  cannot set `from`; a placeholder in a static target's `targets` is refused.
+- The request goes to `/render` with `GET`, the collector's headers and bearer
+  token; a probe needs a target, and a static target an absolute URL.
+- The configuration loads with `decoder.type` graphite and no decoder
+  warning, validates again unchanged, and refuses an unknown key under
+  `response.graphite` in the file's terms.
+- `response.graphite` refuses an unknown `value`, a negative `max_age`, and a
+  collector whose decoder is `json`; a graphite decoder refuses a `regex` or
+  `prometheus` transform, and accepts `jq`, `yq` and `python`, `value` in any
+  case, `decoder.type: json` on a graphite collector, and `localfile`
+  collectors with `auto` or `graphite`.
+- The decoder turns a render answer into the series document — paths,
+  segments, tags from the answer or the tagged target, the newest value, its
+  time and the points with a value — leaving out nulls, a series of nulls and
+  an empty one; malformed points, a series without a path, a bad tag and bad
+  JSON fail naming the series; `value` `last`, `max`, `min`, `sum` and `avg`
+  reduce the points; `max_age` leaves out older series; an unknown `value`
+  fails.
+- Carbon lines: one series per path and tag set in any order, a missing or
+  `-1` timestamp as now, NaN and infinities left out, comments and blank
+  lines skipped, the last line written for one time the newest, `max_age`
+  applied; a wrong field count, a value or timestamp that is not a number, a
+  bad tag and a missing path fail naming the line.
+- `text/x-graphite`, and carbon lines by their content, are read as Graphite,
+  while a Prometheus sample with a timestamp, a mixed body, two fields, a
+  labelled sample, a non-numeric value and a comment alone are text, and a
+  render answer without a content type is JSON; `.graphite` and `.carbon`
+  files get `text/x-graphite`.
+- A probe asks Graphite for the configured expressions with the probe's
+  parameters and maps the series with jq, leaving out a series of nulls and
+  one older than `max_age`; a value that would change an expression and the
+  `method` parameter are answered `400` without contacting Graphite; a Python
+  transform reads the same document; a static target's own targets are asked
+  for and its series published with `static_target`; the collectors page
+  shows a Graphite target hint; static targets of one caching collector on one
+  server with different `targets` or `from`, and a probe of it, are each asked
+  for once and answered from the cache when scraped again.
+- A `localfile` collector reads carbon lines from a `.graphite` file, a
+  `.carbon` file and a `.txt` file by content, and a directory of them file by
+  file, leaving out series older than `max_age`.
+- The examples in `docs/GRAPHITE.md` load and work as written, and the carbon
+  lines example reads the file it shows.
+
+Further:
+
+- The tags hold `name` when the render API's leave it out; times keep their
+  fractions, and one far in the future is not taken for an old one; a carbon
+  timestamp in milliseconds is refused naming the line.
+- A graphite collector's answer that is HTML, a JSON object, empty, or carbon
+  lines is refused as not render JSON, quoting its start.
+- A series answered twice is kept once and counted, while one with other
+  points or tags is kept; series of nulls and stale ones are counted.
+- Under `invalid_lines: skip` unreadable carbon lines are left out, counted,
+  the first described, and the rest read; by default the first fails.
+- Escaped quotes are accepted and an escaped closing quote leaves the string
+  open; a repeated expression is refused in a collector and a static target.
+- `from` and `until` probe parameters set the window, are refused when empty
+  or spaced, and are refused for an `http` collector.
+- Expressions over 2 KiB are posted as a form with the query in the body, the
+  `Content-Type` set, the `http_method` label `POST`, and retried; a static
+  target's short targets are a `GET` again.
+- A static target's `from` and `until` enter its cache query as probe
+  parameters, and only its `targets` its own section.
+- `invalid_lines` is refused unless `fail` or `skip`, in any case.
+- A carbon file with a torn line under `skip` answers the rest, counts the
+  skipped lines and the stale series in the self-metrics, warns once, logs the
+  series left out at debug level, and logs the recovery once the file is
+  whole; a probe counts its series left out.
+- The window example in `docs/GRAPHITE.md` loads.
 
 ## 34.54 Probe deadline tests
 
@@ -5600,7 +5946,7 @@ not forming a well-formed placeholder — unclosed, a name without the `param_`
 prefix or with other characters, or a default containing `{` or `}` — MUST be
 rejected at startup and on reload with a message naming the collector. A default
 containing a brace almost always means an environment reference left unexpanded,
-and the message MUST say to run with `--config.export-env`. A literal `}}` with
+and the message MUST say to run with `--config.expand-env`. A literal `}}` with
 no opening `{{` is ordinary text.
 
 For each placeholder, the value MUST be the probe parameter when it is given and
@@ -5628,8 +5974,8 @@ probe parameter replaces that path and MUST be used as given, and a `param_`
 parameter sent with it is unused and therefore rejected.
 
 Path parameters and environment references (§ 42.15a) MUST NOT overlap
-syntactically. Environment references are expanded once, textually, when the
-file is read; path parameters are bound on every probe. They MUST compose, so a
+syntactically. Environment references are expanded once, when the file is
+read; path parameters are bound on every probe. They MUST compose, so a
 default may be an environment reference expanded at load time:
 `{{param_tenant:${DEFAULT_TENANT}}}`.
 
@@ -5644,7 +5990,13 @@ unbounded.
 A static target (§ 42.14) has no probe to supply a value; it MAY give
 values under `params`, a map of `param_<name>` names to values, which fill the
 collector's placeholders as the probe parameters of the same names would. Its
-own `request.path`, `body` and `headers` MUST NOT contain placeholders. Every
+own values — `target`, `request.path`, `request.body` and header values —
+MUST NOT contain a placeholder: they are sent as written, and one would reach
+the target as text. The file MUST be refused when it loads, naming the target
+and the field; in `request.path` any `{{` is refused, as in a collector's path,
+and elsewhere `{{` followed by `param_`, spaces allowed between, so a JSON
+body's own braces are not. The check MUST run after environment expansion
+(§ 42.15a), so a placeholder a variable supplies is refused too. Every
 placeholder of the collector's request — path, body, header and query values —
 MUST be filled by `params` or a default, and every entry of `params` MUST fill
 one and be a valid name; any other combination MUST be rejected at startup with
@@ -5988,6 +6340,10 @@ Prometheus scrapes the static targets endpoint and of the OTLP export
 interval. A target's `interval` MUST default to the file's `interval`, MUST be
 at least one second, and MUST NOT be shorter than the target's
 `request.timeout`; the file's `interval` MUST be at least one second too.
+Retries whose waits alone — `attempts` × `backoff`, the target's
+`request.retry` or else its collector's — reach the target's interval MUST be
+refused naming the target, since the scrape ends with its interval and the
+last retries could never be made.
 A target new to the schedule — at startup, or added or given a new interval by
 a reload — MUST be first scraped within ten seconds, or within its interval if
 that is shorter, so it does not stay absent from the endpoint for up to an
@@ -5995,7 +6351,10 @@ interval. Its scrapes MUST then keep a fixed cadence, which SHOULD be offset
 within its interval by a stable hash of its name so targets are spread over
 it, starting no sooner than half an interval after the first scrape. A scrape
 MUST be bounded by its interval, and one still running when the next is due
-MUST make that one skipped, logged, rather than overlapping it. The exporter
+MUST make that one skipped, logged, rather than overlapping it — including
+when a reload gave the target a new interval while that scrape runs. A result
+of a target a reload removed while its scrape was in flight MUST NOT be
+published or exported. The exporter
 MUST scrape at most the document's `concurrency` targets at once, 8 when it is
 unset or 0, and MUST refuse a negative one; a target due while all are busy
 MUST wait for a slot within its interval and be skipped, logged, if none
@@ -6052,6 +6411,17 @@ metrics with its labels, or its stale result, and its health result — at
   document MUST leave the endpoint with the reload.
 - Serving the endpoint MUST NOT contact a target: it reads what the targets'
   last scrapes left.
+- An optional `targets` query parameter MUST narrow a read to the targets it
+  names, given separated by commas, as the parameter repeated (as Prometheus
+  renders a scrape config's `params`), or both; spaces around a name and empty
+  names MUST be ignored. A name no target in force has MUST be answered `400`
+  naming every such name, and so MUST a parameter that names no target,
+  rather than an empty answer. A named target not yet scraped MUST be absent,
+  as without the parameter. A narrowed read MUST serve exactly the lines of
+  the named targets that a whole read would serve at that moment: the type
+  clash rule above MUST be applied over every target, so which target keeps a
+  clashing family, and what is logged about the clash, does not depend on
+  the parameter.
 - The endpoint MUST answer `GET` and `HEAD`, and `405` otherwise. It MUST be
   gzipped like `/probe` (§ 23) and protected by `web.basic_auth` like the
   self-metrics path (§ 42.5).
@@ -6082,9 +6452,11 @@ under. Both MUST default to the exporter-wide `otlp.service_name` and
 `otlp.resource_attributes`, and per-target attributes MUST be merged over the
 exporter-wide ones rather than replacing them. The exporter MUST emit one
 `resourceMetrics` entry per distinct resource in an export, so metrics from
-targets with different identities are not conflated. The collector's metrics
-exported over OTLP do not carry `static_target`, since the resource tells the
-targets apart; the health result carries it, as on the endpoint.
+targets with different identities are not conflated. Every series exported
+over OTLP — the collector's metrics and the health result — MUST carry
+`static_target`, as on the endpoint: targets sharing a resource, such as two
+of one collector under the exporter-wide identity, would otherwise export the
+same series, and one target's values would replace the other's.
 
 ### 42.14c Static target self-metrics
 
@@ -6167,10 +6539,16 @@ changing how a collector follows redirects.
 
 ## 42.15a Environment variable expansion in configuration
 
-The exporter MUST support an optional `--config.export-env` flag that
-substitutes `${NAME}` references in the configuration document, in its
-collector files (§ 5.0) and in the static target document, from the process
-environment before each is parsed.
+The exporter MUST support an optional `--config.expand-env` flag that
+substitutes `${NAME}` references in the configuration document and in its
+collector files (§ 5.0), and an optional `--static-targets.expand-env` flag
+that does the same for the static target document (§ 42.14), from the process
+environment before each is parsed. The two MUST be independent: each document
+MUST be expanded only when its own flag is on, so an operator can take the
+static targets' addresses and credentials from the environment while the
+configuration is used as written, or the other way round. Everything below
+applies to both, and an error about an unset variable MUST name the flag that
+asked for the expansion.
 
 It MUST default to off. A configuration legitimately contains dollar signs that
 are not references — a regex metric rule, a jq expression, a Python pre-script —
@@ -6190,10 +6568,23 @@ which the exporter would then serve. Every unset name MUST be reported in one
 message, and the message MUST name the document. A variable that is set to an
 empty string MUST substitute normally: that is a deliberate choice.
 
-Substitution is textual and precedes parsing, so a reference MAY supply any part
-of the document rather than only a scalar. For the same reason a value
-containing a line break MUST be refused: it would end the line and turn the
-remainder into YAML rather than setting a long value.
+A reference MUST be expanded where the document holds it as a value — a
+scalar value or key, plain or quoted, whole or in part — and the expansion
+MUST read back as exactly the variable's value, whatever it holds: a ` #`
+MUST NOT start a comment, a leading `*` or `&` MUST NOT become an alias or an
+anchor, and a line break MUST NOT end the line and turn the rest into YAML. A
+variable supplies a value, never structure. The expansion SHOULD read as the
+value would written by hand — unquoted where that reads it back unchanged, so
+a number stays a number, and a double-quoted string otherwise. A reference in
+a comment MUST be left alone, set or not. This MUST hold in a flow sequence
+or mapping, where a bare reference is not valid YAML until the exporter
+quotes it, after an anchor, and for values YAML reads specially on their own:
+an expanded key MUST be written quoted, an empty value MUST be written quoted
+inside a flow collection, and `-` MUST always be. Where a value cannot be rewritten
+in place — a block value given a line break, an unquoted value folded over
+lines, an explicitly tagged one — the document MUST be refused naming the
+line and how to write it. The expanded document MUST keep the file's line
+numbers, which its errors name.
 
 A reload MUST read the documents the way startup did. A reload that stopped
 expanding would replace a working configuration with one full of literal

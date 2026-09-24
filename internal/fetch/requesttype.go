@@ -15,7 +15,8 @@ import (
 )
 
 // Every collector declares how it reaches its data with request.type: http
-// asks a URL, localfile reads a file from the exporter's own filesystem. The
+// asks a URL, localfile reads a file from the exporter's own filesystem,
+// graphite asks a Graphite render API for series. The
 // type is required rather than defaulted so that no configuration means
 // "http" by accident, and so that each type can own its rules:
 //
@@ -37,13 +38,14 @@ import (
 const (
 	RequestTypeHTTP      = "http"
 	RequestTypeLocalFile = "localfile"
+	RequestTypeGraphite  = "graphite"
 )
 
 // knownRequestTypes is every request type in the source tree, whether or not
 // this binary was built with it, so a configuration that names a type the
 // build left out is told that, rather than that the type does not exist. A
 // test keeps it in step with the requesttype_<name>.go files.
-var knownRequestTypes = []string{RequestTypeHTTP, RequestTypeLocalFile}
+var knownRequestTypes = []string{RequestTypeHTTP, RequestTypeLocalFile, RequestTypeGraphite}
 
 // RequestType is how one request.type reaches its data. Fields lists the
 // request keys it accepts, Overrides the probe parameters that may change them
@@ -78,6 +80,14 @@ type RequestType struct {
 	// no use for, such as path for a localfile collector reading a directory.
 	// Unset, everything the type accepts is accepted.
 	CheckOverride func(c *model.Collector, key string) error
+	// Query adds the query parameters the type builds itself to the URL
+	// of a request made over HTTP, such as graphite's repeated target, which
+	// request.query, one value to a name, cannot hold. Unset, it adds none.
+	Query func(c *model.Collector, overrides RequestOverrides) (url.Values, error)
+	// CheckTargetRequest checks the values of a static target's request
+	// block, where CheckOverride sees only its keys. Unset, any value of an
+	// accepted key is accepted.
+	CheckTargetRequest func(c *model.Collector, t *model.StaticTarget) error
 }
 
 // RequestTypes is the registry of the types built into this binary. Each type
@@ -212,6 +222,11 @@ func CheckTargetRequest(t *model.StaticTarget, c *model.Collector) error {
 			if err := rt.CheckOverride(c, key); err != nil {
 				return fmt.Errorf("target %q sets request.%s: %w", t.Name, key, err)
 			}
+		}
+	}
+	if rt.CheckTargetRequest != nil {
+		if err := rt.CheckTargetRequest(c, t); err != nil {
+			return fmt.Errorf("target %q: %w", t.Name, err)
 		}
 	}
 	return nil

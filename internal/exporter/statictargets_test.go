@@ -96,19 +96,6 @@ targets:
 		t.Fatal("export_via_otlp was not read")
 	}
 
-	overrides := fetch.TargetOverrides(&target)
-	if overrides.Method != http.MethodPost || !overrides.PathSet || overrides.Path != "/api/status" {
-		t.Fatalf("method/path overrides: %+v", overrides)
-	}
-	if overrides.Body == nil || *overrides.Body != "raw payload" || overrides.Timeout != 5*time.Second {
-		t.Fatalf("body/timeout overrides: %+v", overrides)
-	}
-	if overrides.InsecureSkipVerify == nil || !*overrides.InsecureSkipVerify {
-		t.Fatalf("tls override: %+v", overrides.InsecureSkipVerify)
-	}
-	if overrides.RetryAttempts == nil || *overrides.RetryAttempts != 2 || overrides.RetryBackoff == nil || *overrides.RetryBackoff != time.Second {
-		t.Fatalf("retry overrides: %+v", overrides)
-	}
 	headers, err := fetch.TargetHeaders(&target)
 	if err != nil {
 		t.Fatal(err)

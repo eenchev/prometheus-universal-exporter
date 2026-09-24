@@ -44,7 +44,8 @@
                   "csv",
                   "html",
                   "prometheus",
-                  "text"
+                  "text",
+                  "graphite"
                 ],
                 "type": "string"
               }
@@ -286,6 +287,23 @@
                 "if": {
                   "properties": {
                     "type": {
+                      "const": "graphite"
+                    }
+                  },
+                  "required": [
+                    "type"
+                  ]
+                },
+                "then": {
+                  "required": [
+                    "targets"
+                  ]
+                }
+              },
+              {
+                "if": {
+                  "properties": {
+                    "type": {
                       "const": "localfile"
                     }
                   },
@@ -300,7 +318,7 @@
                 }
               }
             ],
-            "description": "How the collector reaches its data. See docs/REQUESTS.md, and docs/LOCALFILE.md for localfile.",
+            "description": "How the collector reaches its data. See docs/REQUESTS.md, docs/LOCALFILE.md for localfile and docs/GRAPHITE.md for graphite.",
             "properties": {
               "allowed_schemes": {
                 "items": {
@@ -404,6 +422,14 @@
                 },
                 "type": "array"
               },
+              "from": {
+                "description": "graphite: the start of the render window, as Graphite writes a time: -15min, the default, -1h, or Unix seconds. The from probe parameter overrides it.",
+                "type": [
+                  "string",
+                  "number",
+                  "boolean"
+                ]
+              },
               "headers": {
                 "additionalProperties": {
                   "type": [
@@ -505,6 +531,18 @@
                   "boolean"
                 ]
               },
+              "targets": {
+                "description": "graphite, required: the Graphite expressions asked of the render API, each sent as a target parameter, such as app.*.requests.count. May contain {{param_name}} placeholders, filled with letters, digits and _ - . : @ % + ~ only. See docs/GRAPHITE.md.",
+                "items": {
+                  "type": [
+                    "string",
+                    "number",
+                    "boolean"
+                  ]
+                },
+                "minItems": 1,
+                "type": "array"
+              },
               "tls": {
                 "additionalProperties": false,
                 "properties": {
@@ -538,10 +576,19 @@
               "type": {
                 "description": "Required. How the collector reaches its data.",
                 "enum": [
+                  "graphite",
                   "http",
                   "localfile"
                 ],
                 "type": "string"
+              },
+              "until": {
+                "description": "graphite: the end of the render window. Defaults to now. The until probe parameter overrides it.",
+                "type": [
+                  "string",
+                  "number",
+                  "boolean"
+                ]
               }
             },
             "required": [
@@ -575,6 +622,36 @@
                   },
                   "trim_space": {
                     "type": "boolean"
+                  }
+                },
+                "type": "object"
+              },
+              "graphite": {
+                "additionalProperties": false,
+                "properties": {
+                  "invalid_lines": {
+                    "description": "graphite decoder: what a carbon line that cannot be read does: fail the decode, the default, or skip, leaving it out, counted in http_exporter_decoder_lines_skipped_total and logged.",
+                    "enum": [
+                      "fail",
+                      "skip"
+                    ],
+                    "type": "string"
+                  },
+                  "max_age": {
+                    "description": "graphite decoder: leave out a series whose newest point is older than this, so a series nobody writes any more is not exported with its last value.",
+                    "pattern": "^[-+]?(0|([0-9]*(\\.[0-9]*)?(ns|us|µs|μs|ms|s|m|h))+)$",
+                    "type": "string"
+                  },
+                  "value": {
+                    "description": "graphite decoder: how a series' points become its value: last, the newest point, by default, or max, min, avg or sum.",
+                    "enum": [
+                      "last",
+                      "max",
+                      "min",
+                      "avg",
+                      "sum"
+                    ],
+                    "type": "string"
                   }
                 },
                 "type": "object"

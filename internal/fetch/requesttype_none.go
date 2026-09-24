@@ -1,4 +1,4 @@
-//go:build select_request_types && !request_type_http && !request_type_localfile
+//go:build select_request_types && !request_type_graphite && !request_type_http && !request_type_localfile
 
 package fetch
 

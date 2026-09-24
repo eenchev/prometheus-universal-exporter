@@ -57,15 +57,16 @@ every per-scrape parameter `/probe` accepts — `method`, `path`, `body`,
 `retry` settings — overriding the collector's own request for that target only.
 Which of these keys a target may set follows its collector's
 [request type](CONFIGURATION.md#request-types); for `http` it is all of them,
-and for [`localfile`](LOCALFILE.md#static-targets) only `path` and `timeout`,
-with `target` optional. It also takes static `headers` and its own target
+for [`localfile`](LOCALFILE.md#static-targets) only `path` and `timeout`,
+with `target` optional, and for [`graphite`](GRAPHITE.md#static-targets) all
+but `method` and `body`, plus its own `targets`, `from` and `until`. It also takes static `headers` and its own target
 credentials, inline or file-backed, as basic authentication or a bearer token.
 Because the file is operator configuration rather than caller input, these
 headers are applied directly and are not filtered through the collector's
 `request.forward_headers` allowlist.
 
 A collector's [`{{param_…}}` placeholders](REQUESTS.md#path-parameters) — in
-its path, body, header values and query values — are filled by the target's
+its path, body, header values, query values and Graphite targets — are filled by the target's
 `params`, since there is no probe to supply `param_<name>`:
 
 ```yaml
@@ -81,8 +82,16 @@ targets:
 
 Every placeholder must be filled, by `params` or a default, and every entry of
 `params` must fill one; otherwise the exporter refuses to start, naming the
-target, the collector and the parameter. A target's own `request.path`, `body`
+target, the collector and the parameter. A target's own `target`, `request.path`, `body`
 and `headers` are written out in full, without placeholders.
+
+A `{{param_…}}` placeholder anywhere a target writes a value of its own — its
+`target`, `request.path`, `request.body` or a header value — is refused when
+the file loads, naming the target and the field: there is no probe to fill
+it, and it would reach the target as text. Braces that do not open
+`{{param_` are left alone, so a JSON body is written as usual. The same holds
+for a value an environment variable supplies, since the file is checked after
+it is expanded.
 
 `labels` are added to every metric the target produces, without overwriting a
 label the collector already extracted. `static_target` is the endpoint's own
@@ -111,7 +120,11 @@ point within its interval set by its name, so targets sharing an interval are
 spread over it rather than all scraped at once: the cadence starts at the first
 such point at least half an interval after the first scrape, and then comes
 every interval, however long a scrape takes. A scrape
-must end within its interval, so `request.timeout` may not be longer; one still
+must end within its interval, so `request.timeout` may not be longer, and
+retries — the target's `request.retry`, else the collector's — whose waits
+alone fill the interval (`attempts` × `backoff`) are refused, since the last of
+them could never be made; retries that fit can still be cut short by slow
+attempts. A scrape still
 running when the next is due makes that one skipped, with a
 `static target scrape skipped` warning, rather than overlapping it. The
 interval is at least `1s`. At most `concurrency` targets are scraped at once,
@@ -134,6 +147,47 @@ a failed scrape serves the target's last good result, marked by
 `http_exporter_result_stale` 1, while its `http_exporter_target_up` is `0`.
 
 Static targets are not reachable through `/probe`.
+
+## Environment variables
+
+A target file carries the addresses and credentials of what is scraped, which
+is exactly what is worth keeping out of a committed file. Run with
+`--static-targets.expand-env` and `${NAME}` references in it are replaced from
+the exporter's environment before it is parsed:
+
+```yaml
+interval: 1m
+targets:
+  - name: billing
+    collector: billing_status
+    target: ${BILLING_URL}
+    request:
+      bearer_token: ${BILLING_TOKEN}
+    labels:
+      region: ${REGION}
+```
+
+```sh
+BILLING_URL=https://billing.internal BILLING_TOKEN=... REGION=eu \
+  prometheus-universal-exporter --config.file=config.yaml \
+    --static-targets-file=static-targets.yaml --static-targets.expand-env
+```
+
+It follows the configuration's [rules](CONFIGURATION.md#environment-variables):
+only the braced `${NAME}` is a reference, `$$` writes a literal dollar, a
+variable that is not set stops the exporter at startup — and fails
+`--dry-run` — with every missing name listed, and a value arrives exactly
+as the variable holds it, whatever characters it has, a `#`, quotes or line
+breaks included. A reload expands the file again.
+
+The flag is the file's own. `--config.expand-env` expands the configuration
+and its collector files and leaves this file as written, and this flag leaves
+them as written, so each is expanded only when asked for.
+
+An environment reference is fixed when the file is read; it is not a
+`{{param_…}}` placeholder, which a static target cannot use in its own values
+(see [The target file](#the-target-file)). To fill a collector's placeholders, set
+`params`, whose values may themselves come from the environment.
 
 ## The static targets endpoint
 
@@ -174,6 +228,14 @@ http_exporter_target_up{collector="legacy_text",region="us",static_target="legac
   whatever the targets are doing, so Prometheus can scrape it on any interval.
   An interval shorter than the targets' serves the same values again; a longer
   one misses the values in between.
+- `?targets=` narrows a read to the targets it names, separated by commas or
+  with the parameter repeated: `/static-targets?targets=legacy_eu,legacy_us`
+  serves those two and nothing of the rest. A name no target has, or a
+  parameter that names none, is answered `400` saying which, so a misspelt or
+  removed target fails the scrape rather than quietly serving nothing. A
+  target named but not scraped yet is simply absent, as without the
+  parameter. What is served of a target is exactly what the whole endpoint
+  serves of it, a metric left out for its type included.
 - The path must be one fixed path that no other endpoint uses, including
   `--web.self-metrics-path`; otherwise the exporter does not start.
 - It is gzipped when asked, like `/probe`, and behind the exporter's
@@ -186,6 +248,23 @@ scrape_configs:
   - job_name: static-targets
     metrics_path: /static-targets
     honor_labels: true
+    static_configs:
+      - targets: ['exporter:8080']
+```
+
+To read only some targets, list them under `params`; Prometheus repeats the
+parameter for each, which the endpoint accepts as it does commas. With the Helm
+chart, `staticTargets.monitor.targets` renders the same for its monitor. One job per
+group of targets lets each be scraped on its own interval, or with its own
+timeout:
+
+```yaml
+scrape_configs:
+  - job_name: static-targets-eu
+    metrics_path: /static-targets
+    honor_labels: true
+    params:
+      targets: [legacy_eu, billing_eu]
     static_configs:
       - targets: ['exporter:8080']
 ```
@@ -226,9 +305,9 @@ target's metrics arrive under; both fall back to the exporter-wide `otlp`
 settings, and per-target attributes are merged over the exporter-wide ones.
 Targets with different identities are exported as separate `resourceMetrics`
 entries. The `otlp` block is only for a target with `export_via_otlp`, and
-refused on any other. Over OTLP the collector's metrics do not carry
-`static_target`, since the resource tells the targets apart; the health
-metrics carry it, as they do on the endpoint.
+refused on any other. Over OTLP every series carries `static_target`, as on
+the endpoint: targets often share a resource — the same collector, the
+exporter-wide identity — and the label is what keeps their series apart.
 
 `export_via_otlp` needs OTLP export: a target with it while `otlp.enabled` is
 `false`, or without an `otlp.endpoint`, makes the exporter log
@@ -244,7 +323,16 @@ The file is reloaded on the same terms as the exporter configuration — on
 [Watching the configuration](CONFIGURATION.md#watching-the-configuration)). An invalid
 document, or a configuration change that would disable OTLP export while a
 loaded target sets `export_via_otlp`, is rejected, and the last valid pair
-stays active. A target whose interval changes starts a cadence of its own.
+stays active. A target whose interval changes starts a cadence of its own,
+once a scrape begun on the old interval has ended, so two never overlap; a
+target removed while its scrape runs publishes nothing.
+
+On `SIGTERM` or `SIGINT` the targets keep being scraped through
+`--web.shutdown-delay`, while their endpoint is still served. Then no scrape
+starts, and those in flight finish within `--web.shutdown-timeout`; one it
+cuts short publishes nothing and logs no failure, so a restart never reports
+a target down, over OTLP or anywhere else, and the target's last result
+stands.
 
 ## Self-metrics
 

@@ -10,11 +10,13 @@ import (
 	"context"
 	"errors"
 	"flag"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -68,7 +70,8 @@ func run(args []string, stdout, stderr io.Writer) int {
 	watchConfig := flags.Bool("config.watch", false, "Reload the configuration, collector and static target files when they change on disk")
 	watchInterval := flags.Duration("config.watch-interval", config.DefaultWatchInterval, "How often to check the configuration files for changes when config.watch is set")
 	logLevel := flags.String("log.level", "info", "Log level: debug, info, warn, or error")
-	expandEnv := flags.Bool("config.export-env", false, "Expand ${NAME} environment variable references in the configuration, collector and static target files")
+	expandEnv := flags.Bool("config.expand-env", false, "Expand ${NAME} environment variable references in the configuration and collector files")
+	expandStaticTargetsEnv := flags.Bool("static-targets.expand-env", false, "Expand ${NAME} environment variable references in the static target file")
 	printSchema := flags.Bool("config.schema", false, "Print the JSON Schema of the configuration file, for editors, and exit")
 	printCollectorFileSchema := flags.Bool("config.collector-file-schema", false, "Print the JSON Schema of a collector file listed under collector_files, for editors, and exit")
 	printStaticTargetsSchema := flags.Bool("static-targets-file-schema", false, "Print the JSON Schema of the static target file, for editors, and exit")
@@ -113,6 +116,12 @@ func run(args []string, stdout, stderr io.Writer) int {
 		newLogger("info", stderr).Error("invalid command line; exiting", "error", err.Error())
 		return 2
 	}
+	// A misspelt level would otherwise log at info without a word: debug
+	// output that never comes, or warnings that were meant to be the least.
+	if _, err := parseLogLevel(*logLevel); err != nil {
+		newLogger("info", stderr).Error("invalid command line; exiting", "error", err.Error())
+		return 2
+	}
 
 	if *showVersion {
 		_, _ = io.WriteString(stdout, exporter.VersionString()+"\n")
@@ -136,11 +145,14 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return 0
 	}
 
-	// Every document is read the same way, and the manager is told so its
-	// reloads keep expanding.
-	var loadOptions []config.LoadOption
+	// Each document is read as its own flag says, and the manager is told so
+	// its reloads keep expanding.
+	var loadOptions, staticTargetsLoadOptions []config.LoadOption
 	if *expandEnv {
 		loadOptions = append(loadOptions, config.WithEnvExpansion())
+	}
+	if *expandStaticTargetsEnv {
+		staticTargetsLoadOptions = append(staticTargetsLoadOptions, config.WithStaticTargetsEnvExpansion())
 	}
 
 	logger := newLogger(*logLevel, stderr)
@@ -150,6 +162,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 			StaticTargetFile: *targetFile,
 			PythonPath:       *pythonPath,
 			ExpandEnv:        *expandEnv,
+			ExpandTargetsEnv: *expandStaticTargetsEnv,
 			Watch:            *watchConfig,
 			WatchInterval:    *watchInterval,
 		}, stdout, logger)
@@ -174,11 +187,12 @@ func run(args []string, stdout, stderr io.Writer) int {
 	manager := config.NewManager(conf, *configFile, logger)
 	manager.SetPythonPath(*pythonPath)
 	manager.SetEnvExpansion(*expandEnv)
+	manager.SetStaticTargetsEnvExpansion(*expandStaticTargetsEnv)
 	if *watchConfig {
 		manager.SetWatchInterval(*watchInterval)
 	}
 	if *targetFile != "" {
-		targets, err := config.LoadStaticTargets(*targetFile, loadOptions...)
+		targets, err := config.LoadStaticTargets(*targetFile, staticTargetsLoadOptions...)
 		if err == nil {
 			err = config.ValidateStaticTargets(targets)
 		}
@@ -209,15 +223,20 @@ func run(args []string, stdout, stderr io.Writer) int {
 		defer close(exportLoopDone)
 		server.OTLPExportLoop(ctx)
 	}()
+	// The static targets keep being scraped through --web.shutdown-delay,
+	// while their endpoint is still served, so they have a context of their
+	// own rather than the signal's.
+	scrapeLoopCtx, stopScrapeLoop := context.WithCancel(context.Background())
+	defer stopScrapeLoop()
 	scrapeLoopDone := make(chan struct{})
 	go func() {
 		defer close(scrapeLoopDone)
-		server.StaticScrapeLoop(ctx)
+		server.StaticScrapeLoop(scrapeLoopCtx)
 	}()
 
 	startup := []any{"version", exporter.BuildVersion().Version, "revision", exporter.BuildVersion().Revision, "address", *listenAddress, "collectors", len(conf.Collectors), "collector_files", len(conf.LoadedCollectorFiles),
 		"static_targets", len(manager.StaticTargets()), "config_watch", manager.WatchEnabled(),
-		"config_export_env", *expandEnv, "request_types", fetch.BuiltRequestTypes()}
+		"config_expand_env", *expandEnv, "static_targets_expand_env", *expandStaticTargetsEnv, "request_types", fetch.BuiltRequestTypes()}
 	// The interval is only meaningful when the watch is on, and its absence
 	// would otherwise leave the operator guessing how stale a running
 	// configuration can be.
@@ -251,6 +270,15 @@ func run(args []string, stdout, stderr io.Writer) int {
 		logger.Info("shutting down: finishing the probes in progress and sending the last OTLP export; a second signal exits at once", "shutdown_timeout", shutdownTimeout.String())
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), *shutdownTimeout)
 		defer cancel()
+		// No static target scrape starts from here; those in flight finish
+		// within --web.shutdown-timeout, or are cut short without
+		// publishing anything, so a target is never reported down only
+		// because the exporter stopped.
+		stopScrapeLoop()
+		go func() {
+			<-shutdownCtx.Done()
+			server.AbortStaticScrapes()
+		}()
 		if err := httpServer.Shutdown(shutdownCtx); err != nil {
 			// The wait ran out: the probes still in progress are cut off, and
 			// Prometheus records them as failed scrapes.
@@ -274,18 +302,25 @@ func run(args []string, stdout, stderr io.Writer) int {
 // signatures would buy nothing. Those lines go through slog's default logger,
 // which without this would be the text handler and would emit a differently
 // shaped line into the middle of an otherwise machine-readable stream.
-func newLogger(level string, out io.Writer) *slog.Logger {
-	var l slog.Level
-	switch level {
+// parseLogLevel reads --log.level: debug, info, warn or error, in any case.
+func parseLogLevel(level string) (slog.Level, error) {
+	switch strings.ToLower(level) {
 	case "debug":
-		l = slog.LevelDebug
+		return slog.LevelDebug, nil
+	case "info":
+		return slog.LevelInfo, nil
 	case "warn":
-		l = slog.LevelWarn
+		return slog.LevelWarn, nil
 	case "error":
-		l = slog.LevelError
-	default:
-		l = slog.LevelInfo
+		return slog.LevelError, nil
 	}
+	return slog.LevelInfo, fmt.Errorf("--log.level %q is not a level; use debug, info, warn or error", level)
+}
+
+// newLogger logs JSON lines to out at level, which parseLogLevel has checked,
+// and makes the logger slog's default.
+func newLogger(level string, out io.Writer) *slog.Logger {
+	l, _ := parseLogLevel(level)
 	logger := slog.New(slog.NewJSONHandler(out, &slog.HandlerOptions{Level: l}))
 	slog.SetDefault(logger)
 	return logger

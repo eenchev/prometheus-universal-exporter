@@ -126,6 +126,9 @@ func loadCollectorFile(path string, opts []LoadOption) ([]model.Collector, error
 	if err := dec.Decode(&file); err != nil && !errors.Is(err, io.EOF) {
 		return nil, fmt.Errorf("collector file %s: %w", path, yamlError(err))
 	}
+	if err := oneDocument(dec); err != nil {
+		return nil, fmt.Errorf("collector file %s: %w", path, err)
+	}
 	if len(file.Collectors) == 0 {
 		return nil, fmt.Errorf("collector file %s defines no collectors", path)
 	}

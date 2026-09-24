@@ -13,6 +13,7 @@ import (
 	"runtime"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"testing"
 	"time"
@@ -256,5 +257,35 @@ func TestShutdownDelayMustNotBeNegative(t *testing.T) {
 	var stdout, stderr bytes.Buffer
 	if code := run([]string{"--web.shutdown-delay=-1s"}, &stdout, &stderr); code != 2 || !strings.Contains(stderr.String(), "--web.shutdown-delay must not be negative") {
 		t.Errorf("exit %d, %s", code, stderr.String())
+	}
+}
+
+// Static targets keep being scraped through --web.shutdown-delay, while their
+// endpoint is still served, and the shutdown reports none of them failed.
+func TestStaticTargetsAreScrapedThroughTheShutdownDelay(t *testing.T) {
+	var scrapes atomic.Int64
+	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		scrapes.Add(1)
+		_, _ = w.Write([]byte("v=1\n"))
+	}))
+	defer target.Close()
+	targets := testutil.WriteIn(t, t.TempDir(), "targets.yaml", "interval: 1s\ntargets:\n  - name: fast\n    collector: slow\n    target: "+target.URL+"\n")
+	p := startHeldExporter(t, "--static-targets-file="+targets, "--web.shutdown-delay=2500ms", "--web.shutdown-timeout=1s")
+	testutil.WaitFor(t, "the static target to be scraped", func() bool { return scrapes.Load() >= 1 })
+	p.signal(t, syscall.SIGTERM)
+	atSignal := scrapes.Load()
+	select {
+	case err := <-p.exited:
+		if err != nil {
+			t.Fatalf("exit: %v\n%s", err, p.logs.String())
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatalf("the exporter did not exit\n%s", p.logs.String())
+	}
+	if during := scrapes.Load() - atSignal; during < 1 {
+		t.Errorf("the static target was scraped %d times during the 2.5s delay, want at least one", during)
+	}
+	if strings.Contains(p.logs.String(), "static target scrape failed") || strings.Contains(p.logs.String(), "no scrape slot came free") {
+		t.Errorf("the shutdown reported a static target failing:\n%s", p.logs.String())
 	}
 }

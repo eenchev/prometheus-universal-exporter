@@ -12,7 +12,6 @@ import (
 	"time"
 
 	"github.com/eenchev/prometheus-universal-exporter/internal/config"
-	"github.com/eenchev/prometheus-universal-exporter/internal/fetch"
 	"github.com/eenchev/prometheus-universal-exporter/internal/model"
 	"github.com/eenchev/prometheus-universal-exporter/internal/testutil"
 )
@@ -193,13 +192,6 @@ func TestStaticTargetCarriesTransportSettings(t *testing.T) {
 		t.Fatal(err)
 	}
 	target := file.Targets[0]
-	overrides := fetch.TargetOverrides(&target)
-	if overrides.FollowRedirects == nil || !*overrides.FollowRedirects {
-		t.Fatalf("follow_redirects=%v", overrides.FollowRedirects)
-	}
-	if overrides.EnableHTTP2 == nil || !*overrides.EnableHTTP2 {
-		t.Fatalf("enable_http2=%v", overrides.EnableHTTP2)
-	}
 	query := targetCacheQuery(&target)
 	if query.Get("follow_redirects") != "true" || query.Get("enable_http2") != "true" {
 		t.Fatalf("the settings must reach the cache key: %v", query)

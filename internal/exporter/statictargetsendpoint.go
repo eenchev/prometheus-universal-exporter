@@ -5,7 +5,10 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"sort"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/eenchev/prometheus-universal-exporter/internal/config"
@@ -26,7 +29,8 @@ import (
 // Every series carries static_target, the target's name, since the targets
 // share one endpoint and the same metric from two targets must stay two
 // series. A target that has not been scraped yet is absent, and one removed
-// from the file is dropped with the reload.
+// from the file is dropped with the reload. ?targets= narrows a read to the
+// targets it names (requestedStaticTargets).
 
 // DefaultStaticTargetsPath is where the static targets are served unless
 // --web.static-targets-path says otherwise.
@@ -59,7 +63,17 @@ func (s *Server) staticTargetsEndpoint() string {
 
 // publishStaticTarget records set as target's latest result, for the endpoint,
 // and queues it for OTLP when the target is exported that way.
+//
+// Over OTLP every series carries static_target too, as on the endpoint. Two
+// targets of one collector, without labels or an OTLP identity of their own,
+// arrive under the same resource with the same series, and without it the
+// later target's values would replace the earlier's in the pending export.
 func (s *Server) publishStaticTarget(target model.StaticTarget, identity otlpResourceIdentity, set model.MetricSet) {
+	// A reload may have removed the target while its scrape was in flight;
+	// its result then goes nowhere, over OTLP included.
+	if !s.staticTargetInForce(target.Name) {
+		return
+	}
 	s.staticMu.Lock()
 	if s.staticResults == nil {
 		s.staticResults = map[string]model.MetricSet{}
@@ -67,8 +81,34 @@ func (s *Server) publishStaticTarget(target model.StaticTarget, identity otlpRes
 	s.staticResults[target.Name] = set
 	s.staticMu.Unlock()
 	if target.ExportViaOTLP {
-		s.queueOTLPResource(set, identity)
+		s.queueOTLPResource(withStaticTargetLabel(set, target.Name), identity)
 	}
+}
+
+// staticTargetInForce reports whether a target of that name is in force.
+func (s *Server) staticTargetInForce(name string) bool {
+	for _, target := range s.manager.StaticTargets() {
+		if target.Name == name {
+			return true
+		}
+	}
+	return false
+}
+
+// withStaticTargetLabel is set with every series labelled static_target, the
+// target's name, over any label of that name the series had, as the endpoint
+// labels it (mergeStaticTargets). set itself is left alone.
+func withStaticTargetLabel(set model.MetricSet, name string) model.MetricSet {
+	out := model.MetricSet{Metrics: make([]model.Metric, len(set.Metrics))}
+	for i, m := range set.Metrics {
+		m.Labels = model.CloneLabels(m.Labels)
+		if m.Labels == nil {
+			m.Labels = map[string]string{}
+		}
+		m.Labels[config.StaticTargetLabel] = name
+		out.Metrics[i] = m
+	}
+	return out
 }
 
 // staticTargetResults returns the latest result of each target in force, by
@@ -114,8 +154,69 @@ func (s *Server) staticTargetsHandler(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "use GET or HEAD to read the static targets", http.StatusMethodNotAllowed)
 		return
 	}
+	names, err := s.requestedStaticTargets(r.URL.Query())
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	// Every target is merged, filtered or not, so which family keeps its type
+	// in a clash — and what is logged about it — does not depend on which
+	// targets a read asked for: a filtered read serves exactly the named
+	// targets' part of what an unfiltered one would.
 	merged := s.mergeStaticTargets(s.staticTargetResults())
+	if names != nil {
+		kept := merged.Metrics[:0]
+		for _, m := range merged.Metrics {
+			if names[m.Labels[config.StaticTargetLabel]] {
+				kept = append(kept, m)
+			}
+		}
+		merged.Metrics = kept
+	}
 	writeMetricSet(w, &merged)
+}
+
+// staticTargetsParam is the query parameter that narrows the endpoint to some
+// targets: ?targets=eu,us, or repeated, ?targets=eu&targets=us, which is how
+// Prometheus renders a scrape config's params list.
+const staticTargetsParam = "targets"
+
+// requestedStaticTargets reads the targets parameter: nil when there is none,
+// so every target is served, else the names it gives. A name no target in
+// force has is refused rather than served as nothing, so a misspelt or
+// removed target fails the scrape where it can be seen; so is a parameter
+// that names no target at all.
+func (s *Server) requestedStaticTargets(query url.Values) (map[string]bool, error) {
+	values, given := query[staticTargetsParam]
+	if !given {
+		return nil, nil
+	}
+	names := map[string]bool{}
+	for _, value := range values {
+		for _, name := range strings.Split(value, ",") {
+			if name = strings.TrimSpace(name); name != "" {
+				names[name] = true
+			}
+		}
+	}
+	if len(names) == 0 {
+		return nil, fmt.Errorf("the %s parameter names no static target; give one or more names, separated by commas, or leave it out to read every target", staticTargetsParam)
+	}
+	known := map[string]bool{}
+	for _, target := range s.manager.StaticTargets() {
+		known[target.Name] = true
+	}
+	var unknown []string
+	for name := range names {
+		if !known[name] {
+			unknown = append(unknown, strconv.Quote(name))
+		}
+	}
+	if len(unknown) > 0 {
+		sort.Strings(unknown)
+		return nil, fmt.Errorf("no static target is named %s", strings.Join(unknown, ", "))
+	}
+	return names, nil
 }
 
 // mergeStaticTargets puts the targets' results into one exposition: every

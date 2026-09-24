@@ -1,8 +1,10 @@
 package exporter
 
 import (
+	"html"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"regexp"
 	"strings"
 	"testing"
@@ -74,12 +76,12 @@ func TestTheLandingPageLinksTheEndpointsAndTheCollectorsPage(t *testing.T) {
 		"<title>Prometheus Universal Exporter</title>",
 		"Version "+BuildVersion().Version,
 		"1 collector loaded.",
-		`href="/collectors"`, `href="/self-metrics"`, `href="/health"`, `href="/ready"`,
+		`href="collectors"`, `href="self-metrics"`, `href="health"`, `href="ready"`,
 	)
 	if strings.Contains(page, "<form") {
 		t.Error("the landing page carries a probe form; they belong on /collectors")
 	}
-	if strings.Contains(page, `href="/metrics"`) {
+	if strings.Contains(page, `href="metrics"`) {
 		t.Error("the page links /metrics, which serves nothing unless it is the self-metrics path")
 	}
 	if strings.Contains(page, "/-/reload") {
@@ -129,8 +131,8 @@ func TestTheCollectorsPageHasAProbeFormPerCollector(t *testing.T) {
 	server := landingServer(t, weatherConfig())
 	page := getPage(t, server, "/collectors")
 	requireContains(t, page,
-		`href="/"`,
-		`<form class="probe" action="/probe" method="get" autocomplete="off">`,
+		`href="./"`,
+		`<form class="probe" action="probe" method="get" autocomplete="off">`,
 		`<input type="hidden" name="collector" value="weather">`,
 		`name="target" placeholder="http://host:port" required>`,
 	)
@@ -242,4 +244,45 @@ func TestTheCollectorsPageHintsALocalfileTarget(t *testing.T) {
 	c.Request = model.RequestConfig{Type: "localfile", Root: t.TempDir(), Path: "batch.prom"}
 	page := getPage(t, landingServer(t, &model.Config{Collectors: []model.Collector{c}}), "/collectors")
 	requireContains(t, page, `placeholder="a file or directory under its root (optional)"`)
+}
+
+// The pages link relatively, so they keep working behind a reverse proxy that
+// serves the exporter under a path of its own: every link, form and request
+// the pages make, resolved from where the page is under a prefix, stays under
+// it and reaches the endpoint it names.
+func TestThePagesWorkUnderAPathPrefix(t *testing.T) {
+	server := landingServer(t, weatherConfig())
+	server.SetSelfMetricsPath("/internal/self-metrics")
+	server.SetStaticTargetsPath("/static/targets")
+	absolute := regexp.MustCompile(`(?:href|action|src)="/|fetch\("/|"/probe\?`)
+	link := regexp.MustCompile(`(?:href|action)="([^"]+)"|new URL\("([^"?]+)`)
+	for path, base := range map[string]string{"/": "https://proxy.example/exporter/", "/collectors": "https://proxy.example/exporter/collectors"} {
+		page := getPage(t, server, path)
+		if found := absolute.FindString(page); found != "" {
+			t.Errorf("%s links absolutely: %s", path, found)
+		}
+		from, err := url.Parse(base)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, match := range link.FindAllStringSubmatch(page, -1) {
+			ref := match[1] + match[2]
+			if strings.HasPrefix(ref, "https://") {
+				continue // the documentation
+			}
+			target, err := from.Parse(html.UnescapeString(ref))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !strings.HasPrefix(target.Path, "/exporter/") {
+				t.Errorf("%s: %q resolves to %s, outside the prefix", path, ref, target)
+				continue
+			}
+			// Without the prefix, it is an endpoint the exporter answers.
+			local := strings.TrimPrefix(target.Path, "/exporter")
+			if code := getPath(server, http.MethodGet, local).Code; code == http.StatusNotFound {
+				t.Errorf("%s: %q resolves to %s, which the exporter does not serve", path, ref, local)
+			}
+		}
+	}
 }

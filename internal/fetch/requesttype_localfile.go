@@ -444,7 +444,10 @@ func fileKind(mode fs.FileMode) string {
 
 // localFileContentType lets decoder.type auto pick the decoder a file's
 // extension implies. .prom is the textfile collector's Prometheus text
-// format. Anything else is detected from its content.
+// format, and .graphite and .carbon carbon's plaintext lines, which the
+// graphite decoder reads (decode/graphite.go); text/x-graphite is the
+// exporter's own name for them, since they have no registered type. Anything
+// else is detected from its content.
 func localFileContentType(name string) string {
 	switch strings.ToLower(filepath.Ext(name)) {
 	case ".json":
@@ -459,6 +462,8 @@ func localFileContentType(name string) string {
 		return "text/html"
 	case ".prom":
 		return "text/plain; version=0.0.4"
+	case ".graphite", ".carbon":
+		return GraphiteContentType
 	}
 	return ""
 }

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"html/template"
 	"net/http"
+	"strings"
 )
 
 // The exporter's HTML pages: the landing page at /, as Prometheus exporters
@@ -57,15 +58,22 @@ func (s *Server) renderPage(w http.ResponseWriter, t *template.Template, data an
 	_, _ = w.Write(body.Bytes())
 }
 
+// The pages link to each other and to the endpoints relatively — collectors,
+// probe, not /collectors, /probe — so they keep working behind a reverse proxy
+// that serves the exporter under a path of its own, such as /exporter/. The
+// paths shown as text stay absolute: they are what the exporter answers.
+
 type landingPage struct {
 	Version, Revision, GoVersion string
 	SelfMetricsPath              string
-	Lifecycle                    bool
-	Collectors                   int
-	StaticTargetsPath            string
-	StaticTargets                int
-	StaticTargetsViaOTLP         int
-	Docs                         string
+	// SelfMetricsHref and StaticTargetsHref are the paths as relative links.
+	SelfMetricsHref, StaticTargetsHref string
+	Lifecycle                          bool
+	Collectors                         int
+	StaticTargetsPath                  string
+	StaticTargets                      int
+	StaticTargetsViaOTLP               int
+	Docs                               string
 }
 
 var landingTemplate = template.Must(template.New("landing").Parse(`<!DOCTYPE html>
@@ -82,20 +90,20 @@ var landingTemplate = template.Must(template.New("landing").Parse(`<!DOCTYPE htm
 <p class="meta">Version {{.Version}}, revision {{.Revision}}, {{.GoVersion}}</p>
 
 <h2>Collectors</h2>
-<p>{{.Collectors}} collector{{if ne .Collectors 1}}s{{end}} loaded. <a href="/collectors">Probe a target through one</a>, with the parameters and credentials it takes.</p>
+<p>{{.Collectors}} collector{{if ne .Collectors 1}}s{{end}} loaded. <a href="collectors">Probe a target through one</a>, with the parameters and credentials it takes.</p>
 {{- if .StaticTargets}}
 
 <h2>Static targets</h2>
-<p>{{.StaticTargets}} static target{{if ne .StaticTargets 1}}s{{end}}, scraped by the exporter on their own intervals and served at <a href="{{.StaticTargetsPath}}">{{.StaticTargetsPath}}</a>{{if .StaticTargetsViaOTLP}}; {{.StaticTargetsViaOTLP}} also exported over OTLP{{end}}.</p>
+<p>{{.StaticTargets}} static target{{if ne .StaticTargets 1}}s{{end}}, scraped by the exporter on their own intervals and served at <a href="{{.StaticTargetsHref}}">{{.StaticTargetsPath}}</a>{{if .StaticTargetsViaOTLP}}; {{.StaticTargetsViaOTLP}} also exported over OTLP{{end}}.</p>
 {{- end}}
 
 <h2>Endpoints</h2>
 <ul class="links">
-<li><a href="/collectors">/collectors</a> — the collectors, and a form to probe through each</li>
+<li><a href="collectors">/collectors</a> — the collectors, and a form to probe through each</li>
 <li><code>/probe?collector=&lt;name&gt;&amp;target=&lt;target&gt;</code> — scrape a target through a collector</li>
-<li><a href="{{.StaticTargetsPath}}">{{.StaticTargetsPath}}</a> — the static targets' latest results</li>
-<li><a href="{{.SelfMetricsPath}}">{{.SelfMetricsPath}}</a> — the exporter's own metrics</li>
-<li><a href="/health">/health</a> and <a href="/ready">/ready</a> — liveness and readiness</li>
+<li><a href="{{.StaticTargetsHref}}">{{.StaticTargetsPath}}</a> — the static targets' latest results</li>
+<li><a href="{{.SelfMetricsHref}}">{{.SelfMetricsPath}}</a> — the exporter's own metrics</li>
+<li><a href="health">/health</a> and <a href="ready">/ready</a> — liveness and readiness</li>
 {{- if .Lifecycle}}
 <li><code>POST /-/reload</code> — reload the configuration</li>
 {{- end}}
@@ -114,6 +122,8 @@ func (s *Server) landingHandler(w http.ResponseWriter, _ *http.Request) {
 	page := landingPage{
 		Version: build.Version, Revision: build.Revision, GoVersion: build.GoVersion,
 		SelfMetricsPath:   s.selfMetricsEndpoint(),
+		SelfMetricsHref:   relativeLink(s.selfMetricsEndpoint()),
+		StaticTargetsHref: relativeLink(s.staticTargetsEndpoint()),
 		Lifecycle:         s.lifecycle,
 		Collectors:        len(cfg.Collectors),
 		StaticTargetsPath: s.staticTargetsEndpoint(),
@@ -127,3 +137,7 @@ func (s *Server) landingHandler(w http.ResponseWriter, _ *http.Request) {
 	}
 	s.renderPage(w, landingTemplate, page)
 }
+
+// relativeLink is path, an endpoint's absolute path, as a link relative to the
+// pages, which are served at the root.
+func relativeLink(path string) string { return strings.TrimPrefix(path, "/") }

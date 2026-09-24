@@ -12,6 +12,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/eenchev/prometheus-universal-exporter/internal/model"
 )
@@ -32,6 +33,11 @@ type HTTPResponse struct {
 	Directory *DirectoryRead
 }
 
+// GraphiteContentType is the Content-Type a local file of carbon plaintext
+// lines is given by its extension, .graphite or .carbon, so decoder.type auto
+// reads it with the graphite decoder.
+const GraphiteContentType = "text/x-graphite"
+
 // RequestOverrides are the probe parameters that change a collector's request
 // for one probe. An unset field leaves the collector's setting in force.
 type RequestOverrides struct {
@@ -48,6 +54,16 @@ type RequestOverrides struct {
 	RetryBackoff       *time.Duration
 	FollowRedirects    *bool
 	EnableHTTP2        *bool
+	// Targets, From and Until are a static target's request.targets, from
+	// and until, replacing a graphite collector's; no probe parameter sets
+	// them. Targets is nil when the target does not set it.
+	Targets []string
+	From    string
+	Until   string
+	// formPost sends the query as a form body with POST instead of in the
+	// URL, for a graphite request whose expressions are too long for a URL
+	// (requesttype_graphite.go). Only the type's own fetch sets it.
+	formPost bool
 	// Params are the param_<name> probe parameters, bound into the
 	// {{param_<name>}} placeholders of the collector's request.path.
 	Params map[string]string
@@ -146,6 +162,23 @@ func ParseRequestOverrides(values url.Values) (RequestOverrides, error) {
 		}
 		overrides.RetryBackoff = &parsed
 	}
+	for _, window := range []struct {
+		name  string
+		value *string
+	}{{"from", &overrides.From}, {"until", &overrides.Until}} {
+		value, ok := values[window.name]
+		if !ok {
+			continue
+		}
+		raw := ""
+		if len(value) > 0 {
+			raw = strings.TrimSpace(value[0])
+		}
+		if raw == "" || strings.IndexFunc(raw, unicode.IsSpace) >= 0 {
+			return overrides, fmt.Errorf("invalid %s override %q; want a Graphite time such as -1h, now or 1727000000", window.name, raw)
+		}
+		*window.value = raw
+	}
 	params, err := pathParamValues(values)
 	if err != nil {
 		return overrides, err
@@ -223,6 +256,17 @@ func buildRequestURL(target string, c *model.Collector, overrides RequestOverrid
 	q := u.Query()
 	for k, v := range query {
 		q.Set(k, v)
+	}
+	// What the type builds itself goes last, over request.query; the
+	// label drops the query, so it is built only for the request.
+	if rt := requestTypeOf(c); bind && rt != nil && rt.Query != nil {
+		own, err := rt.Query(c, overrides)
+		if err != nil {
+			return nil, err
+		}
+		for k, v := range own {
+			q[k] = v
+		}
 	}
 	u.RawQuery = q.Encode()
 	return u, nil
@@ -314,6 +358,15 @@ func fetch(ctx context.Context, target string, c *model.Collector, overrides Req
 	if overrides.RetryNonIdempotent != nil {
 		retryAnyMethod = *overrides.RetryNonIdempotent
 	}
+	contentType := ""
+	if overrides.formPost {
+		// The query, the type's own parameters and request.query alike,
+		// goes in the body. The request only reads, so it is retried as a
+		// GET would be.
+		method, requestBody, contentType = http.MethodPost, u.RawQuery, "application/x-www-form-urlencoded"
+		u.RawQuery = ""
+		retryAnyMethod = true
+	}
 	if !retryAnyMethod && !IdempotentMethod(method) {
 		retryAttempts = 0
 	}
@@ -362,6 +415,9 @@ func fetch(ctx context.Context, target string, c *model.Collector, overrides Req
 		req, err := http.NewRequestWithContext(requestContext, method, u.String(), reqBody)
 		if err != nil {
 			return nil, err
+		}
+		if contentType != "" {
+			req.Header.Set("Content-Type", contentType)
 		}
 		for k, v := range headers {
 			req.Header.Set(k, v)
@@ -495,6 +551,9 @@ type DirectoryRead struct {
 	// listing stopped at its bound before the end of the directory.
 	Listed    int
 	Truncated bool
+	// CutShort says the probe's deadline, or a shutdown, ended the read:
+	// the files it had not read fail with that, and are no fault of theirs.
+	CutShort bool
 }
 
 // FileRead is one file of a directory: a response to decode, or the reason

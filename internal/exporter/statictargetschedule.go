@@ -49,8 +49,11 @@ type staticTargetState struct {
 	// cadence is where the target's regular cadence starts, until its first,
 	// earlier scrape has been made; zero after.
 	cadence time.Time
-	// running is set while a scrape of the target is in flight.
-	running atomic.Bool
+	// running is set while a scrape of the target is in flight. A target
+	// given a new interval by a reload starts a new state that shares it, so
+	// a scrape begun on the old interval still keeps the next one from
+	// starting beside it, where the older could publish after the newer.
+	running *atomic.Bool
 }
 
 // dueTarget is a target to scrape now, with its state.
@@ -80,10 +83,15 @@ func (s *targetSchedule) plan(targets []model.StaticTarget, now time.Time) (due,
 		seen[target.Name] = true
 		state := s.states[target.Name]
 		if state == nil || state.interval != interval {
+			running := &atomic.Bool{}
+			if state != nil {
+				running = state.running
+			}
 			state = &staticTargetState{
 				interval: interval,
 				next:     now.Add(scheduleOffset(target.Name, min(interval, firstScrapeWindow))),
 				cadence:  now.Add(scheduleOffset(target.Name, interval)),
+				running:  running,
 			}
 			s.states[target.Name] = state
 		}
@@ -129,13 +137,49 @@ func scheduleOffset(name string, interval time.Duration) time.Duration {
 var (
 	errStillRunning = errors.New("the previous scrape is still running")
 	errNoSlot       = errors.New("no scrape slot came free within the interval; other static target scrapes held them all, so raise the file's concurrency or lengthen the interval")
+	// errShuttingDown is why AbortStaticScrapes cancels the scrapes in flight.
+	errShuttingDown = errors.New("the exporter is shutting down")
 )
 
+// A shutdown stops the static targets in two steps. When the loop's context
+// ends, no scrape starts, and a scrape still waiting for a slot gives up,
+// without a word of advice about the file's concurrency; the scrapes in
+// flight go on, under their own context, and the loop waits for them. When
+// that wait has to end — --web.shutdown-timeout running out —
+// AbortStaticScrapes cancels them. A scrape cut short that way publishes
+// nothing and logs no failure: the target did not fail, the exporter stopped,
+// and its last result stands. Without this every restart published each
+// target in flight as down, and sent that over OTLP on the way out.
+
+// staticScrapes is the context static target scrapes run under, and
+// AbortStaticScrapes cancels it.
+func (s *Server) staticScrapes() context.Context {
+	s.scrapesOnce.Do(s.initStaticScrapes)
+	return s.scrapesCtx
+}
+
+func (s *Server) initStaticScrapes() {
+	s.scrapesCtx, s.abortScrapes = context.WithCancelCause(context.Background())
+}
+
+// AbortStaticScrapes cancels the static target scrapes in flight, as a
+// shutdown whose wait has run out does. They publish nothing.
+func (s *Server) AbortStaticScrapes() {
+	s.scrapesOnce.Do(s.initStaticScrapes)
+	s.abortScrapes(errShuttingDown)
+}
+
+// shuttingDown reports whether ctx ended because the exporter is shutting down.
+func shuttingDown(ctx context.Context) bool {
+	return errors.Is(context.Cause(ctx), errShuttingDown)
+}
+
 // StaticScrapeLoop scrapes every static target on its interval until ctx
-// ends, and then waits for the scrapes in flight. The results are published
-// for the static targets endpoint, and queued for the OTLP export loop for a
-// target with export_via_otlp. At most the file's concurrency are scraped at
-// once; a reload that changes it applies to the scrapes that start after it.
+// ends, and then waits for the scrapes in flight, which run until they end or
+// AbortStaticScrapes cancels them. The results are published for the static
+// targets endpoint, and queued for the OTLP export loop for a target with
+// export_via_otlp. At most the file's concurrency are scraped at once; a
+// reload that changes it applies to the scrapes that start after it.
 func (s *Server) StaticScrapeLoop(ctx context.Context) {
 	schedule := newTargetSchedule()
 	var slots chan struct{}
@@ -160,12 +204,19 @@ func (s *Server) StaticScrapeLoop(ctx context.Context) {
 			go func() {
 				defer wg.Done()
 				defer d.state.running.Store(false)
-				scrapeCtx, cancel := context.WithTimeout(ctx, d.state.interval)
+				scrapeCtx, cancel := context.WithTimeout(s.staticScrapes(), d.state.interval)
 				defer cancel()
 				// Waiting for a slot counts against the scrape's interval.
 				select {
 				case slots <- struct{}{}:
+				case <-ctx.Done():
+					// The loop is stopping: a scrape not yet begun is not
+					// begun, and is no one's failure.
+					return
 				case <-scrapeCtx.Done():
+					if shuttingDown(scrapeCtx) {
+						return
+					}
 					s.failures.failed(s.logger, slog.LevelWarn, failureKey(d.target.Collector, "static target "+d.target.Name, "schedule"),
 						"static target scrape skipped", "schedule", errNoSlot, "target", d.target.Name, "collector", d.target.Collector, "interval", d.state.interval.String())
 					return

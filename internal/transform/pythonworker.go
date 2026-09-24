@@ -672,16 +672,28 @@ answers=os.fdopen(4,'w',encoding='utf-8')
 for _module in json.loads(sys.argv[1]) or []:
     try: __import__(_module)
     except Exception: pass
-blocked={'socket','subprocess','ctypes','multiprocessing','threading','_ctypes','pathlib','shutil','tempfile'}
+blocked={'socket','_socket','ssl','_ssl','subprocess','_posixsubprocess','ctypes','_ctypes','multiprocessing','_multiprocessing','threading','mmap','pty','pathlib','shutil','tempfile'}
+script_blocked={'importlib','posix','nt','_io','_thread','select','selectors','fcntl','termios'}
+import _io
 real_import=builtins.__import__
-def guarded_import(name,*a,**kw):
-    if name.split('.')[0] in blocked or name in {'urllib.request','urllib.error','urllib.robotparser'}: raise ImportError('module disabled by exporter')
-    return real_import(name,*a,**kw)
+def guarded_import(name,globals=None,*a,**kw):
+    top=name.split('.')[0]
+    if top in blocked or name in {'urllib.request','urllib.error','urllib.robotparser'}: raise ImportError('module disabled by exporter')
+    if top in script_blocked and (globals or {}).get('__name__')=='__collector__': raise ImportError('module disabled by exporter')
+    return real_import(name,globals,*a,**kw)
 builtins.__import__=guarded_import
+for _name in [n for n in sys.modules if n.split('.')[0] in blocked or n in {'posix','nt'}]: del sys.modules[_name]
 def denied(*a,**kw): raise RuntimeError('operation disabled by exporter')
-for _name in ('system','popen','spawnl','spawnlp','spawnv','spawnvp','execv','execve','execvp','fork','open','listdir','scandir','walk','remove','unlink','rename','replace','mkdir','makedirs','rmdir','fdopen','read','write','dup','dup2','close','kill','killpg'):
+for _name in ('system','popen','spawnl','spawnle','spawnlp','spawnlpe','spawnv','spawnve','spawnvp','spawnvpe','posix_spawn','posix_spawnp','execl','execle','execlp','execlpe','execv','execve','execvp','execvpe','fork','forkpty','openpty','pipe','pipe2','open','listdir','scandir','walk','fwalk','remove','unlink','rename','replace','mkdir','makedirs','rmdir','removedirs','link','symlink','truncate','ftruncate','chmod','chown','lchown','mkfifo','mknod','fdopen','read','readv','pread','write','writev','pwrite','sendfile','dup','dup2','close','closerange','kill','killpg'):
     if hasattr(os,_name): setattr(os,_name,denied)
-builtins.open=denied; io.open=denied
+def code_only(open_code):
+    # The importer reads a module's source and bytecode through _io.open.
+    def opened(file,mode='r',*a,**kw):
+        if mode=='rb' and isinstance(file,str) and file.endswith(('.py','.pyc')): return open_code(file,mode,*a,**kw)
+        raise RuntimeError('operation disabled by exporter')
+    return opened
+builtins.open=denied; io.open=denied; _io.open=code_only(_io.open); io.FileIO=denied; _io.FileIO=denied
+del _io, _name, code_only
 class Response:
     def __init__(self,x): self.status_code=x['status_code']; self.headers=x['headers']; self.body=x['body']; self.text=x['text']
     def json(self): return json.loads(self.text)

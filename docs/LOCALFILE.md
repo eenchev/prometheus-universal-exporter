@@ -11,6 +11,8 @@ Use it for what writes metrics, or a status, to disk rather than serving it:
   collector;
 - a JSON, YAML, CSV or XML status file an appliance, an agent or a deployment
   writes;
+- a file of Graphite carbon lines, `path value timestamp`, from a job that
+  used to send them to carbon (see [Graphite](GRAPHITE.md#carbon-lines-from-a-file));
 - a small file under `/proc` or `/sys` that is mounted into the container.
 
 ## A collector
@@ -277,7 +279,11 @@ deadline. **A deadline does not lose what was read.** The files read by then
 are answered; a file still being read, or not reached, fails alone —
 `localfile_scrape_error` `1`, its mtime reported when it was taken, and a log
 line saying it was not read before the deadline. No further file is started.
-Only a directory that could not even be listed in time fails the probe.
+An answer cut short this way is not cached, since `cache.ttl` would go on
+serving the files it did not reach as failed; the next probe reads the
+directory again. A read the exporter's shutdown cut short, on a static target,
+publishes nothing and logs no failure, as any static target scrape the
+shutdown ends. Only a directory that could not even be listed in time fails the probe.
 
 ## Formats
 
@@ -295,6 +301,11 @@ extension.
 | `.xml` | XML |
 | `.csv` | CSV |
 | `.html`, `.htm` | HTML |
+| `.graphite`, `.carbon` | Graphite carbon lines, into [series](GRAPHITE.md#the-series-document) |
+
+A file with another extension whose every line is a carbon line — a path, a
+value and a timestamp, some path with a dot or a tag — is read as Graphite
+series too.
 
 `decoder.type` overrides the choice, as for `http`. A file
 declares no encoding: one in anything but UTF-8 needs `response.charset`, such

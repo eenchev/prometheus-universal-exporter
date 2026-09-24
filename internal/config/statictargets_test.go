@@ -155,7 +155,7 @@ func TestConfigReloadRejectedWhenItWouldDisableOTLPWithTargets(t *testing.T) {
 		t.Fatal(err)
 	}
 	manager.lastMod = time.Time{}
-	manager.reloadConfig()
+	manager.reloadChanged()
 	if !manager.Get().OTLP.Enabled {
 		t.Fatal("a reload that disables OTLP while targets are loaded must be rejected")
 	}
@@ -186,7 +186,7 @@ func TestStaticTargetFileReloadRejectsInvalidDocument(t *testing.T) {
 		t.Fatal(err)
 	}
 	manager.targetsLastMod = time.Time{}
-	manager.reloadTargets()
+	manager.reloadChanged()
 	targets := manager.StaticTargets()
 	if len(targets) != 1 || targets[0].Name != "one" {
 		t.Fatalf("an invalid target reload must keep the previous document, got %+v", targets)
@@ -196,7 +196,7 @@ func TestStaticTargetFileReloadRejectsInvalidDocument(t *testing.T) {
 		t.Fatal(err)
 	}
 	manager.targetsLastMod = time.Time{}
-	manager.reloadTargets()
+	manager.reloadChanged()
 	if targets := manager.StaticTargets(); len(targets) != 1 || targets[0].Name != "three" {
 		t.Fatalf("a valid target reload should take effect, got %+v", targets)
 	}
@@ -312,5 +312,96 @@ func TestStaticTargetLabelsRefuseJobAndInstance(t *testing.T) {
 		if err := ValidateStaticTargets(file); err == nil || !strings.Contains(err.Error(), "labels sets "+name) || !strings.Contains(err.Error(), "such as task") {
 			t.Errorf("label %s: got %v", name, err)
 		}
+	}
+}
+
+// A static target has no probe, so a {{param_...}} placeholder in a value it
+// writes itself — its target, body or a header — could never be filled and
+// would reach the target as text. Each is refused, naming where; ordinary
+// braces in a body are not placeholders.
+func TestStaticTargetsRefuseParamPlaceholdersInTheirOwnValues(t *testing.T) {
+	target := func(edit func(*model.StaticTarget)) *model.StaticTargetFile {
+		st := model.StaticTarget{Name: "one", Collector: "text", Target: "http://a.invalid"}
+		edit(&st)
+		return &model.StaticTargetFile{Interval: model.Duration(time.Minute), Targets: []model.StaticTarget{st}}
+	}
+	for name, tc := range map[string]struct {
+		edit func(*model.StaticTarget)
+		want string
+	}{
+		"target":           {func(st *model.StaticTarget) { st.Target = "http://{{param_host}}.example" }, `target "one" target cannot use {{param_...}}`},
+		"body":             {func(st *model.StaticTarget) { st.Request.Body, st.Request.BodySet = `{"q": {{param_q|json}}}`, true }, `target "one" request.body cannot use {{param_...}}`},
+		"body with spaces": {func(st *model.StaticTarget) { st.Request.Body = `{{ param_q }}` }, `request.body cannot use`},
+		"header": {func(st *model.StaticTarget) {
+			st.Request.Headers = map[string]string{"X-Ok": "fine", "X-Tenant": "{{param_tenant}}"}
+		}, `target "one" request.headers X-Tenant cannot use {{param_...}}`},
+		"path, as before": {func(st *model.StaticTarget) { st.Request.Path, st.Request.PathSet = "/{{param_v}}", true }, `request.path cannot use {{param_...}}`},
+		"a default, too": {func(st *model.StaticTarget) {
+			st.Request.Headers = map[string]string{"X-Tenant": "{{param_tenant:acme}}"}
+		}, `request.headers X-Tenant cannot use`},
+	} {
+		t.Run(name, func(t *testing.T) {
+			err := ValidateStaticTargets(target(tc.edit))
+			if err == nil || !strings.Contains(err.Error(), tc.want) || !strings.Contains(err.Error(), "params") && name != "path, as before" {
+				t.Fatalf("err=%v, want %q", err, tc.want)
+			}
+		})
+	}
+	for name, edit := range map[string]func(*model.StaticTarget){
+		"a JSON body":             func(st *model.StaticTarget) { st.Request.Body = `{"a": {"b": [1, {"c": 2}]}}` },
+		"braces that are not one": func(st *model.StaticTarget) { st.Request.Headers = map[string]string{"X-Template": "{{name}}"} },
+		"params":                  func(st *model.StaticTarget) { st.Params = map[string]string{"param_tenant": "acme"} },
+	} {
+		if err := ValidateStaticTargets(target(edit)); err != nil {
+			t.Errorf("%s was refused: %v", name, err)
+		}
+	}
+}
+
+// The file is checked after it is expanded, so a placeholder an environment
+// variable supplies is refused as one written in the file is.
+func TestAParamPlaceholderFromTheEnvironmentIsRefused(t *testing.T) {
+	t.Setenv("DEMO_TENANT_HEADER", "{{param_tenant}}")
+	path := testutil.WriteIn(t, t.TempDir(), "targets.yaml", "interval: 1m\ntargets:\n  - name: one\n    collector: text\n    target: http://a.invalid\n    request:\n      headers:\n        X-Tenant: \"${DEMO_TENANT_HEADER}\"\n")
+	file, err := LoadStaticTargets(path, WithStaticTargetsEnvExpansion())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := ValidateStaticTargets(file); err == nil || !strings.Contains(err.Error(), "request.headers X-Tenant cannot use {{param_...}}") {
+		t.Fatalf("err=%v", err)
+	}
+}
+
+// A scrape ends with its interval, so retries whose waits alone fill it are
+// refused, whether the collector or the target sets them; retries that fit are
+// accepted.
+func TestStaticTargetRetriesMustFitTheInterval(t *testing.T) {
+	collector := testutil.Collector("text", "text")
+	collector.Request.Retry = model.RetryConfig{Attempts: 3, Backoff: model.Duration(20 * time.Second)}
+	cfg := &model.Config{Collectors: []model.Collector{collector}}
+	if err := Validate(cfg); err != nil {
+		t.Fatal(err)
+	}
+	check := func(interval time.Duration, retry *model.RetryConfig) error {
+		file := &model.StaticTargetFile{Interval: model.Duration(interval), Targets: []model.StaticTarget{{Name: "one", Collector: "text", Target: "http://a.invalid", Request: model.TargetRequestConfig{Retry: retry}}}}
+		if err := ValidateStaticTargets(file); err != nil {
+			t.Fatal(err)
+		}
+		return ValidateStaticTargetsAgainst(file, cfg)
+	}
+	if err := check(time.Minute, nil); err == nil || !strings.Contains(err.Error(), `target "one" retries 3 times, 20s apart, which is 1m0s of waiting alone`) {
+		t.Errorf("the collector's retries filling the interval: %v", err)
+	}
+	if err := check(2*time.Minute, nil); err != nil {
+		t.Errorf("the collector's retries within the interval: %v", err)
+	}
+	if err := check(time.Minute, &model.RetryConfig{Attempts: 2, Backoff: model.Duration(10 * time.Second)}); err != nil {
+		t.Errorf("the target's own retries within the interval: %v", err)
+	}
+	if err := check(time.Minute, &model.RetryConfig{Attempts: 6, Backoff: model.Duration(10 * time.Second)}); err == nil || !strings.Contains(err.Error(), "retries 6 times, 10s apart") {
+		t.Errorf("the target's own retries filling the interval: %v", err)
+	}
+	if err := check(time.Minute, &model.RetryConfig{Attempts: 0}); err != nil {
+		t.Errorf("a target turning retries off: %v", err)
 	}
 }

@@ -76,6 +76,10 @@ type TargetRequestConfig struct {
 	BasicAuthFile      *BasicAuthFile    `yaml:"basic_auth_file"`
 	BearerToken        string            `yaml:"bearer_token"`
 	BearerTokenFile    string            `yaml:"bearer_token_file"`
+	// Targets, From and Until replace a graphite collector's own.
+	Targets []string `yaml:"targets"`
+	From    string   `yaml:"from"`
+	Until   string   `yaml:"until"`
 }
 
 // TargetOTLPConfig overrides the exporter-wide OTLP resource identity for one

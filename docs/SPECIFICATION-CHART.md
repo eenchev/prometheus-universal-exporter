@@ -168,6 +168,12 @@ documentation MUST show collector files supplied this way, with a key naming
 pattern that cannot match the static target file rendered into the same
 directory, and a test MUST load that example as the exporter would.
 
+The chart MUST NOT depend on the collectors' request types: an `http`,
+`localfile` or `graphite` collector is configured in `config.data` alone, and
+a monitor's `params` reach any of them as `/probe` parameters. The chart
+documentation MUST say how a `graphite` collector is monitored: a monitor
+selecting the Graphite Service, whose address becomes the target.
+
 ### 33.3 Configuration reload / rollout
 
 The chart MUST ensure that changes to the ConfigMap eventually cause the exporter to use the new configuration.
@@ -316,7 +322,8 @@ values schema:
 | `server.shutdownDelay` | `--web.shutdown-delay`, whole hours, minutes and seconds such as `5s`, `0s` allowed; default `5s`, and empty renders no flag |
 | `server.enableLifecycle` | `--web.enable-lifecycle`, rendered only when `true`; default `false` |
 | `server.watchConfig`, `server.watchConfigInterval` | `--config.watch`, `--config.watch-interval` |
-| `server.expandEnv` | `--config.export-env` |
+| `server.expandEnv` | `--config.expand-env` |
+| `staticTargets.expandEnv` | `--static-targets.expand-env`, rendered only when `true` and `staticTargets.enabled` |
 | `staticTargets.enabled`, `staticTargets.fileName` | `--static-targets-file`, rendered only when enabled |
 | `staticTargets.path` | `--web.static-targets-path`, always rendered; a path of plain segments that is neither `selfMetrics.path` nor another endpoint's; default `/static-targets` |
 
@@ -573,8 +580,18 @@ with at least these values combinations:
    export in the configuration; when the chart manages the configuration, a
    target setting `export_via_otlp` without `otlp.enabled: true` MUST fail
    rendering with an explicit message naming the target, rather than
-   producing a Deployment that cannot start. `staticTargets.path` equal to
-   `selfMetrics.path` MUST fail rendering.
+   producing a Deployment that cannot start. `staticTargets.fileName` MUST be
+   a ConfigMap key — letters, digits, `-`, `_` and `.`, not `.` or `..` — and,
+   with `config.enabled`, not a key of `config.data`, which it would collide
+   with or replace; otherwise rendering MUST fail, as the values schema MUST
+   refuse the first. With `config.enabled: false` the chart renders no
+   ConfigMap, so `staticTargets.data` MUST NOT be required, and a non-empty
+   one MUST fail rendering, saying to put the file into the supplied
+   ConfigMap under `fileName`, rather than be dropped; the monitor's target
+   names are then not checked. `staticTargets.path` equal to
+   `selfMetrics.path` MUST fail rendering. `staticTargets.expandEnv` MUST add
+   `--static-targets.expand-env` with static targets enabled, and nothing
+   without; `server.expandEnv` MUST NOT add it.
 9b. The static targets monitor: with `staticTargets.enabled` and
    `staticTargets.monitor.enabled`, the default, a ServiceMonitor, or a
    PodMonitor with `staticTargets.monitor.type: pod`, named
@@ -583,7 +600,11 @@ with at least these values combinations:
    so the series keep their `static_target`, `target` and target labels, and
    MUST present the exporter's credential when `webAuth` is enabled. With
    either off it MUST NOT render; a type other than `service` or `pod` MUST
-   fail rendering.
+   fail rendering. `staticTargets.monitor.targets` MUST render as the
+   endpoint's `params.targets` list, and nothing when empty; a name that is
+   not a target of `staticTargets.data` — a target without a name being
+   `<collector>_<index>`, as the exporter names it — MUST fail rendering, since
+   the endpoint would answer every scrape `400`.
 10. Multiple collectors in ConfigMap content, including collectors supplied as
     collector files in further `config.data` keys: the ConfigMap template MUST
     render every key, the configuration volume MUST mount the whole ConfigMap,

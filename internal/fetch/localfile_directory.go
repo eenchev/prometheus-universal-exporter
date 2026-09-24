@@ -174,6 +174,7 @@ func fetchLocalDirectory(ctx context.Context, target string, c *model.Collector,
 		if read == nil {
 			return nil, fmt.Errorf("listing directory %s: %w", full, ctx.Err())
 		}
+		read.CutShort = true
 	case err := <-done:
 		if err != nil {
 			return nil, err

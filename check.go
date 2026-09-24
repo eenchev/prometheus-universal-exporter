@@ -42,6 +42,7 @@ type checkInputs struct {
 	StaticTargetFile string
 	PythonPath       string
 	ExpandEnv        bool
+	ExpandTargetsEnv bool
 	Watch            bool
 	WatchInterval    time.Duration
 }
@@ -152,7 +153,11 @@ func checkStartup(in checkInputs) checkReport {
 	}
 
 	if in.StaticTargetFile != "" {
-		results = append(results, checkTargets(in.StaticTargetFile, options, conf))
+		var targetOptions []config.LoadOption
+		if in.ExpandTargetsEnv {
+			targetOptions = append(targetOptions, config.WithStaticTargetsEnvExpansion())
+		}
+		results = append(results, checkTargets(in.StaticTargetFile, targetOptions, in.ExpandTargetsEnv, conf))
 	}
 
 	status := checkOK
@@ -178,7 +183,7 @@ func configDetails(conf *model.Config, expandEnv bool) map[string]any {
 	details := map[string]any{
 		"collectors":        names,
 		"otlp_enabled":      conf.OTLP.Enabled,
-		"config_export_env": expandEnv,
+		"config_expand_env": expandEnv,
 	}
 	if len(conf.LoadedCollectorFiles) > 0 {
 		details["collector_files"] = conf.LoadedCollectorFiles
@@ -207,7 +212,7 @@ func logNotices(logger *slog.Logger, result checkResult) {
 	}
 }
 
-func checkTargets(path string, options []config.LoadOption, conf *model.Config) checkResult {
+func checkTargets(path string, options []config.LoadOption, expandEnv bool, conf *model.Config) checkResult {
 	file, err := config.LoadStaticTargets(path, options...)
 	if err == nil {
 		err = config.ValidateStaticTargets(file)
@@ -219,7 +224,7 @@ func checkTargets(path string, options []config.LoadOption, conf *model.Config) 
 	for _, target := range file.Targets {
 		names = append(names, target.Name)
 	}
-	details := map[string]any{"targets": names}
+	details := map[string]any{"targets": names, "static_targets_expand_env": expandEnv}
 	if conf == nil {
 		result := skippedCheck("static_targets", path, "the file is valid on its own, but could not be checked against the configuration, which did not load")
 		result.Details = details

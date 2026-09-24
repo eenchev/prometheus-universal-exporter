@@ -22,7 +22,7 @@ import (
 // can be read side by side.
 //
 // The syntax is chosen not to meet ${NAME}, the environment reference
-// --config.export-env substitutes. Environment references are expanded once,
+// --config.expand-env substitutes. Environment references are expanded once,
 // textually, when the file is read; path parameters are bound on every probe.
 // The two compose: {{param_tenant:${DEFAULT_TENANT}}} takes its default from the
 // environment and its value from the probe.

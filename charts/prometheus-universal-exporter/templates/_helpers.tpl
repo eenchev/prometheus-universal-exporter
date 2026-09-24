@@ -15,7 +15,8 @@
   "--config.watch-interval" "set server.watchConfigInterval instead"
   "--static-targets-file" "set staticTargets.enabled and staticTargets.data instead"
   "--web.static-targets-path" "set staticTargets.path instead"
-  "--config.export-env" "set server.expandEnv instead"
+  "--config.expand-env" "set server.expandEnv instead"
+  "--static-targets.expand-env" "set staticTargets.expandEnv instead"
   "--log.level" "set server.logLevel instead"
   "--probe.timeout-offset" "set server.probeTimeoutOffset instead"
   "--probe.default-timeout" "set server.probeDefaultTimeout instead"
@@ -215,8 +216,44 @@ app.kubernetes.io/managed-by: {{ .Release.Service }}
 {{- end }}
 {{- define "prometheus-universal-exporter.validateTargets" -}}
 {{- if .Values.staticTargets.enabled -}}
-{{- if not (trim (.Values.staticTargets.data | default "")) -}}
+{{- /* The file is a key of the configuration ConfigMap, so its name must be
+       a ConfigMap key, and not one config.data already uses, which it would
+       collide with or silently replace. */ -}}
+{{- $fileName := include "prometheus-universal-exporter.staticTargetsFile" . -}}
+{{- if or (not (regexMatch "^[-._a-zA-Z0-9]+$" $fileName)) (eq $fileName ".") (eq $fileName "..") -}}
+{{- fail (printf "staticTargets.fileName %q must be a ConfigMap key: letters, digits, -, _ and ., with no /" $fileName) -}}
+{{- end -}}
+{{- if and .Values.config.enabled (hasKey (.Values.config.data | default dict) $fileName) -}}
+{{- fail (printf "staticTargets.fileName %q is also a key of config.data; the static target file needs a name of its own in the ConfigMap" $fileName) -}}
+{{- end -}}
+{{- $data := trim (.Values.staticTargets.data | default "") -}}
+{{- if .Values.config.enabled -}}
+{{- if not $data -}}
 {{- fail "staticTargets.enabled requires staticTargets.data to hold the static target document" -}}
+{{- end -}}
+{{- else if $data -}}
+{{- /* Without config.enabled the chart renders no ConfigMap, so the data
+       would be dropped without a word, and the exporter would read whatever
+       the ConfigMap supplied instead has under the file name. */ -}}
+{{- fail (printf "staticTargets.data is rendered into the chart's ConfigMap, which config.enabled: false leaves out; put the static target file into your ConfigMap %s under the key %s, and leave staticTargets.data empty" (include "prometheus-universal-exporter.fullname" .) $fileName) -}}
+{{- end -}}
+{{- /* The monitor may read only some targets. A name the document does not
+       have would make every scrape of the endpoint fail with 400, so
+       rendering fails first. A target without a name is called
+       <collector>_<index>, as the exporter calls it. */ -}}
+{{- $wanted := .Values.staticTargets.monitor.targets | default list -}}
+{{- if and .Values.staticTargets.monitor.enabled $wanted $data -}}
+{{- $names := dict -}}
+{{- range $index, $target := (get (fromYaml .Values.staticTargets.data) "targets" | default list) -}}
+{{- if kindIs "map" $target -}}
+{{- $_ := set $names (get $target "name" | default (printf "%v_%d" (get $target "collector") $index) | toString) true -}}
+{{- end -}}
+{{- end -}}
+{{- range $wanted -}}
+{{- if not (hasKey $names (toString .)) -}}
+{{- fail (printf "staticTargets.monitor.targets names %q, but staticTargets.data has no target of that name; the endpoint would answer every scrape with 400" (toString .)) -}}
+{{- end -}}
+{{- end -}}
 {{- end -}}
 {{- if .Values.config.enabled -}}
 {{- $raw := index .Values.config.data "config.yaml" | default "" -}}

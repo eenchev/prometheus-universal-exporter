@@ -171,6 +171,14 @@
               "follow_redirects": {
                 "type": "boolean"
               },
+              "from": {
+                "description": "graphite: replaces the collector's request.from for this target.",
+                "type": [
+                  "string",
+                  "number",
+                  "boolean"
+                ]
+              },
               "headers": {
                 "additionalProperties": {
                   "type": [
@@ -223,16 +231,35 @@
                 },
                 "type": "object"
               },
+              "targets": {
+                "description": "graphite: replaces the collector's request.targets for this target. It cannot hold {{param_...}} placeholders.",
+                "items": {
+                  "type": [
+                    "string",
+                    "number",
+                    "boolean"
+                  ]
+                },
+                "type": "array"
+              },
               "timeout": {
                 "description": "How long a scrape of this target may take. At most the target's interval.",
                 "pattern": "^[-+]?(0|([0-9]*(\\.[0-9]*)?(ns|us|µs|μs|ms|s|m|h))+)$",
                 "type": "string"
+              },
+              "until": {
+                "description": "graphite: replaces the collector's request.until for this target.",
+                "type": [
+                  "string",
+                  "number",
+                  "boolean"
+                ]
               }
             },
             "type": "object"
           },
           "target": {
-            "description": "What the collector reads: a URL for an http collector, a file under request.root for a localfile one.",
+            "description": "What the collector reads: a URL for an http collector, the Graphite server's URL for a graphite one, a file under request.root for a localfile one.",
             "type": [
               "string",
               "number",

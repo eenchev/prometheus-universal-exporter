@@ -227,8 +227,8 @@ func TestEnvironmentReferencesAndPathParametersCompose(t *testing.T) {
 
 	// Without expansion the reference is not a default, and the load says so
 	// rather than binding "${DEFAULT_TENANT" and leaving a brace behind.
-	if _, err := config.Load(path); err == nil || !strings.Contains(err.Error(), "--config.export-env") {
-		t.Fatalf("err=%v, want a pointer at --config.export-env", err)
+	if _, err := config.Load(path); err == nil || !strings.Contains(err.Error(), "--config.expand-env") {
+		t.Fatalf("err=%v, want a pointer at --config.expand-env", err)
 	}
 }
 

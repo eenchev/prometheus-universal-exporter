@@ -3,6 +3,7 @@ package config
 import (
 	"errors"
 	"fmt"
+	"io"
 	"regexp"
 	"strings"
 
@@ -35,6 +36,7 @@ var yamlPlaces = map[string]string{
 	"TLSConfig":           "tls",
 	"ResponseConfig":      "response",
 	"CSVConfig":           "response.csv",
+	"GraphiteConfig":      "response.graphite",
 	"DecoderConfig":       "decoder",
 	"ErrorHandling":       "error_handling",
 	"OTLPConfig":          "otlp",
@@ -139,4 +141,21 @@ func yamlFound(tag, value string) string {
 		return "an empty value"
 	}
 	return "!!" + tag
+}
+
+// oneDocument refuses a second YAML document after the one dec has read: a
+// file that goes on after --- would have everything after it ignored without
+// a word. An empty document after a final --- is nothing, and is let be.
+func oneDocument(dec *yaml.Decoder) error {
+	var next yaml.Node
+	err := dec.Decode(&next)
+	switch {
+	case errors.Is(err, io.EOF):
+		return nil
+	case err != nil:
+		return yamlError(err)
+	case len(next.Content) == 0 || next.Content[0].Kind == yaml.ScalarNode && next.Content[0].Tag == "!!null":
+		return oneDocument(dec)
+	}
+	return fmt.Errorf("line %d: a second document starts here, after ---; the file must hold one, since the rest would be ignored", next.Content[0].Line)
 }

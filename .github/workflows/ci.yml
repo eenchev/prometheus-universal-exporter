@@ -64,7 +64,7 @@ jobs:
       # its own too, so code one type needs cannot quietly depend on another.
       - name: Build with each request type on its own
         run: |
-          for type in http localfile; do
+          for type in graphite http localfile; do
             tags="$(sh tools/request-type-tags.sh "$type")"
             go vet -tags "$tags" ./...
             go build -tags "$tags" ./...

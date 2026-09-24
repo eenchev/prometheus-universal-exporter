@@ -228,7 +228,7 @@ func TestWatchAndTriggeredReloadsAreSerialized(t *testing.T) {
 			if err := os.Chtimes(path, later, later); err != nil {
 				t.Error(err)
 			}
-			manager.reloadConfig()
+			manager.reloadChanged()
 		}()
 	}
 	wg.Wait()

@@ -12,7 +12,10 @@ import (
 // TargetOverrides translates the target request block into the same per-scrape
 // override structure the /probe endpoint produces.
 func TargetOverrides(t *model.StaticTarget) RequestOverrides {
-	out := RequestOverrides{Method: t.Request.Method, Timeout: time.Duration(t.Request.Timeout), Params: t.Params}
+	out := RequestOverrides{Method: t.Request.Method, Timeout: time.Duration(t.Request.Timeout), Params: t.Params, From: t.Request.From, Until: t.Request.Until}
+	if len(t.Request.Targets) > 0 {
+		out.Targets = append([]string(nil), t.Request.Targets...)
+	}
 	if t.Request.PathSet {
 		out.PathSet = true
 		out.Path = t.Request.Path

@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/url"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -173,20 +174,25 @@ func (c *responseCache) Stats(now time.Time) map[string]int {
 // or a TLS override therefore produces a different key and can never read an
 // entry populated by a request that supplied one. An empty result means the
 // request must not be cached.
-func probeCacheKey(c *model.Collector, target string, query url.Values, forwarded http.Header) string {
-	return probeCacheKeyWith(collectorFingerprint(c), c, target, query, forwarded)
+//
+// own is what a static target sets that no probe parameter can: a graphite
+// collector's targets (statictarget.go). It is written in a
+// section of its own after the headers, which a probe never writes, so a probe
+// cannot be given a key that reads a result made with them.
+func probeCacheKey(c *model.Collector, target string, query url.Values, forwarded http.Header, own ...string) string {
+	return probeCacheKeyWith(collectorFingerprint(c), c, target, query, forwarded, own...)
 }
 
 // probeCacheKey is the key of a probe of c in cfg, with the collector's
 // fingerprint remembered for as long as cfg is the configuration
 // (fingerprint.go).
-func (s *Server) probeCacheKey(cfg *model.Config, c *model.Collector, target string, query url.Values, forwarded http.Header) string {
-	return probeCacheKeyWith(s.fingerprints.fingerprint(cfg, c), c, target, query, forwarded)
+func (s *Server) probeCacheKey(cfg *model.Config, c *model.Collector, target string, query url.Values, forwarded http.Header, own ...string) string {
+	return probeCacheKeyWith(s.fingerprints.fingerprint(cfg, c), c, target, query, forwarded, own...)
 }
 
 // probeCacheKeyWith is probeCacheKey for a collector whose fingerprint is
 // already known.
-func probeCacheKeyWith(fingerprint string, c *model.Collector, target string, query url.Values, forwarded http.Header) string {
+func probeCacheKeyWith(fingerprint string, c *model.Collector, target string, query url.Values, forwarded http.Header, own ...string) string {
 	if fingerprint == "" {
 		return ""
 	}
@@ -218,6 +224,10 @@ func probeCacheKeyWith(fingerprint string, c *model.Collector, target string, qu
 	for _, name := range headerNames {
 		write(name)
 		write(forwarded[name]...)
+	}
+	if len(own) > 0 {
+		write("own", strconv.Itoa(len(own)))
+		write(own...)
 	}
 	return hex.EncodeToString(digest.Sum(nil))
 }

@@ -273,7 +273,7 @@ func TestCheckValidatesTheWatchFlags(t *testing.T) {
 	}
 }
 
-// --config.export-env changes what is loaded, so it changes the verdict: a
+// --config.expand-env changes what is loaded, so it changes the verdict: a
 // check run where the variables are not set fails, as startup would.
 func TestCheckHonoursEnvironmentExpansion(t *testing.T) {
 	conf := "--config.file=" + testutil.WriteFile(t, "config.yaml", strings.Replace(testutil.MinimalConfig, "path: /status", "path: ${CHECK_DEMO_PATH}", 1))
@@ -281,13 +281,45 @@ func TestCheckHonoursEnvironmentExpansion(t *testing.T) {
 		t.Fatalf("without the flag the reference is literal text: exit=%d\n%s", literal.code, literal.stdout)
 	}
 	os.Unsetenv("CHECK_DEMO_PATH")
-	missing := runCheckCLI(t, conf, "--config.export-env")
+	missing := runCheckCLI(t, conf, "--config.expand-env")
 	if missing.code != 1 || !strings.Contains(missing.result(t, "config").Errors[0], "CHECK_DEMO_PATH") {
 		t.Fatalf("exit=%d\n%s", missing.code, missing.stdout)
 	}
 	t.Setenv("CHECK_DEMO_PATH", "/status")
-	if set := runCheckCLI(t, conf, "--config.export-env"); set.code != 0 || set.result(t, "config").Details["config_export_env"] != true {
+	if set := runCheckCLI(t, conf, "--config.expand-env"); set.code != 0 || set.result(t, "config").Details["config_expand_env"] != true {
 		t.Fatalf("exit=%d\n%s", set.code, set.stdout)
+	}
+}
+
+// The static target file has its own flag, --static-targets.expand-env, and
+// --config.expand-env does not reach it: each file is expanded only when its
+// own flag says so.
+func TestCheckExpandsTheStaticTargetFileByItsOwnFlag(t *testing.T) {
+	conf := "--config.file=" + testutil.WriteFile(t, "config.yaml", strings.Replace(testutil.MinimalConfig, "path: /status", "path: ${CHECK_DEMO_PATH}", 1))
+	targets := "--static-targets-file=" + testutil.WriteFile(t, "targets.yaml", "interval: 1m\ntargets:\n  - name: one\n    collector: demo\n    target: ${CHECK_DEMO_TARGET}\n")
+	t.Setenv("CHECK_DEMO_PATH", "/status")
+	t.Setenv("CHECK_DEMO_TARGET", "http://api.example:8080")
+
+	// The configuration's flag leaves the target a literal reference, which
+	// is not an absolute URL.
+	configOnly := runCheckCLI(t, conf, targets, "--config.expand-env")
+	if configOnly.code != 1 || configOnly.result(t, "config").Details["config_expand_env"] != true || configOnly.result(t, "static_targets").Status != checkFailed {
+		t.Fatalf("--config.expand-env alone: exit=%d\n%s", configOnly.code, configOnly.stdout)
+	}
+	// The file's own flag expands it, and leaves the configuration literal.
+	targetsOnly := runCheckCLI(t, conf, targets, "--static-targets.expand-env")
+	if targetsOnly.code != 0 || targetsOnly.result(t, "static_targets").Details["static_targets_expand_env"] != true || targetsOnly.result(t, "config").Details["config_expand_env"] != false {
+		t.Fatalf("--static-targets.expand-env alone: exit=%d\n%s", targetsOnly.code, targetsOnly.stdout)
+	}
+	if both := runCheckCLI(t, conf, targets, "--config.expand-env", "--static-targets.expand-env"); both.code != 0 {
+		t.Fatalf("both flags: exit=%d\n%s", both.code, both.stdout)
+	}
+	// A variable the file needs and the environment lacks is named, with
+	// the file's own flag.
+	os.Unsetenv("CHECK_DEMO_TARGET")
+	missing := runCheckCLI(t, conf, targets, "--static-targets.expand-env")
+	if missing.code != 1 || !strings.Contains(missing.result(t, "static_targets").Errors[0], `"CHECK_DEMO_TARGET" not set; --static-targets.expand-env requires`) {
+		t.Fatalf("exit=%d\n%s", missing.code, missing.stdout)
 	}
 }
 
@@ -614,5 +646,48 @@ func TestStaticTargetsFileSchemaFlagPrintsTheSchema(t *testing.T) {
 	generated, _ := config.StaticTargetsSchemaJSON()
 	if out.code != 0 || out.stdout != string(generated) || out.stderr != "" {
 		t.Fatalf("exit=%d stderr=%q stdout starts %q", out.code, out.stderr, testutil.FirstLines(out.stdout, 3))
+	}
+}
+
+// Startup reads the static target file with its own flag, as --dry-run does:
+// the configuration's flag leaves a reference in it literal, and the file's
+// own flag expands it, refusing to start without the variable.
+func TestStartupExpandsTheStaticTargetFileByItsOwnFlag(t *testing.T) {
+	conf := "--config.file=" + testutil.WriteFile(t, "config.yaml", testutil.MinimalConfig)
+	targets := "--static-targets-file=" + testutil.WriteFile(t, "targets.yaml", "interval: 1m\ntargets:\n  - name: one\n    collector: demo\n    target: ${STARTUP_DEMO_TARGET}\n")
+	os.Unsetenv("STARTUP_DEMO_TARGET")
+	for flag, want := range map[string]string{
+		"--config.expand-env":         "must have an absolute target URL",
+		"--static-targets.expand-env": `STARTUP_DEMO_TARGET\" not set; --static-targets.expand-env requires`,
+	} {
+		out := runCLI(t, conf, targets, flag, "--web.listen-address=127.0.0.1:0")
+		if out.code != 1 || !strings.Contains(out.stderr, "invalid static target configuration") || !strings.Contains(out.stderr, want) {
+			t.Errorf("%s: exit=%d, want 1 with %q:\n%s", flag, out.code, want, out.stderr)
+		}
+	}
+}
+
+// --log.level takes debug, info, warn or error, in any case. Anything else is
+// a malformed command line, refused before --dry-run or startup, rather than
+// quietly logging at info.
+func TestTheLogLevelIsChecked(t *testing.T) {
+	conf := "--config.file=" + testutil.WriteFile(t, "config.yaml", testutil.MinimalConfig)
+	for _, level := range []string{"debgu", "warning", "", "trace"} {
+		for _, args := range [][]string{{conf, "--log.level=" + level}, {"--dry-run", conf, "--log.level=" + level}} {
+			out := runCLI(t, args...)
+			if out.code != 2 || !strings.Contains(out.stderr, `is not a level; use debug, info, warn or error`) {
+				t.Errorf("%v: exit=%d, want 2 naming the levels:\n%s", args, out.code, out.stderr)
+			}
+		}
+	}
+	for _, level := range []string{"debug", "INFO", "Warn", "error"} {
+		if out := runCheckCLI(t, conf, "--log.level="+level); out.code != 0 {
+			t.Errorf("--log.level=%s: exit=%d\n%s", level, out.code, out.stderr)
+		}
+	}
+	// WARN is warn: the check's info lines are not logged, its warnings are.
+	quiet := runCheckCLI(t, conf, "--log.level=WARN")
+	if strings.Contains(quiet.stderr, `"level":"INFO"`) {
+		t.Errorf("--log.level=WARN logged at info:\n%s", quiet.stderr)
 	}
 }

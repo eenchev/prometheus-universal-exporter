@@ -260,14 +260,35 @@ func TestSelfMetricsPathIsChecked(t *testing.T) {
 		"/self-metrics":   "/self-metrics",
 		"metrics":         "/metrics",
 		"/internal/stats": "/internal/stats",
+		"/v1.2/.well":     "/v1.2/.well",
+		"/a..b/..c":       "/a..b/..c",
 	} {
 		if got, err := SelfMetricsPath(path); err != nil || got != want {
 			t.Errorf("SelfMetricsPath(%q) = %q, %v; want %q", path, got, err, want)
 		}
 	}
-	for _, path := range []string{"", "/", "/probe", "/health", "/ready", "/collectors", "/-/reload", "/stats/", "/stats?x=1", "/{name}", "/a b", "//x"} {
+	for _, path := range []string{"", "/", "/probe", "/health", "/ready", "/collectors", "/-/reload", "/stats/", "/stats?x=1", "/{name}", "/a b", "//x", "/m/..", "/m/.", "/./m", "/../m", "/...", "/.."} {
 		if _, err := SelfMetricsPath(path); err == nil {
 			t.Errorf("SelfMetricsPath(%q) was accepted", path)
+		}
+	}
+}
+
+// Every path the checks accept is one a request reaches: ServeMux cleans a
+// request's path before routing it, so a path it would clean differently
+// could never be served.
+func TestAcceptedEndpointPathsAreReachable(t *testing.T) {
+	for _, path := range []string{"/self", "/v1.2/.well", "/a..b/..c", "/x/y-z_~"} {
+		checked, err := SelfMetricsPath(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		server := NewServer(config.NewManager(&model.Config{}, "", testutil.QuietLogger(t)), "python3", testutil.QuietLogger(t))
+		server.SetSelfMetricsPath(checked)
+		recorder := httptest.NewRecorder()
+		server.Handler().ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, checked, nil))
+		if recorder.Code != http.StatusOK || !strings.Contains(recorder.Body.String(), "http_exporter_build_info") {
+			t.Errorf("%s answered %d", checked, recorder.Code)
 		}
 	}
 }

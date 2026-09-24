@@ -7,8 +7,10 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"os"
+	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/eenchev/prometheus-universal-exporter/internal/config"
 	"github.com/eenchev/prometheus-universal-exporter/internal/exporter"
@@ -119,4 +121,28 @@ func (r *httpResult) must(t *testing.T, code int, fragments ...string) {
 			t.Fatalf("body does not contain %q:\n%s", fragment, r.body)
 		}
 	}
+}
+
+// The carbon lines example in docs/GRAPHITE.md reads the file the page shows,
+// its timestamps moved to now so max_age keeps them.
+func TestCarbonLinesDocumentationExample(t *testing.T) {
+	doc := read(t, "docs/GRAPHITE.md")
+	_, section, ok := strings.Cut(doc, "## Carbon lines from a file")
+	if !ok {
+		t.Fatal("docs/GRAPHITE.md has no Carbon lines from a file section")
+	}
+	_, lines, _ := strings.Cut(section, "```text\n")
+	lines, _, _ = strings.Cut(lines, "```")
+	_, conf, _ := strings.Cut(section, "```yaml\n")
+	conf, _, _ = strings.Cut(conf, "```")
+	root := t.TempDir()
+	testutil.WriteIn(t, root, "backup.graphite", strings.ReplaceAll(lines, "1727000000", strconv.FormatInt(time.Now().Unix()-60, 10)))
+	conf = strings.ReplaceAll(conf, "/var/lib/metrics", root)
+	path := testutil.WriteIn(t, t.TempDir(), "config.yaml", conf)
+	cfg, err := config.Load(path)
+	if err != nil {
+		t.Fatalf("%v\n%s", err, conf)
+	}
+	server := exporter.NewServer(config.NewManager(cfg, path, testutil.QuietLogger(t)), "python3", testutil.QuietLogger(t))
+	probeFile(t, server, "collector=backups").must(t, http.StatusOK, `backup_duration_seconds{host="web01"} 42`, `backup_duration_seconds{host="web02"} 17`)
 }

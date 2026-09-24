@@ -212,7 +212,8 @@ func TestLocalDirectoryAnswersWhatWasReadByTheDeadline(t *testing.T) {
 		testutil.WriteIn(t, root, name, "# TYPE v gauge\nv 1\n")
 	}
 	hold := make(chan struct{})
-	t.Cleanup(func() { close(hold) })
+	release := sync.OnceFunc(func() { close(hold) })
+	t.Cleanup(release)
 	onFileRead(t, func(full string) {
 		if filepath.Base(full) == "slow.prom" {
 			<-hold
@@ -234,6 +235,16 @@ func TestLocalDirectoryAnswersWhatWasReadByTheDeadline(t *testing.T) {
 	}
 	if err := errs["slow.prom"]; !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatalf("the file still being read: err=%v", err)
+	}
+	// The read says it was cut short, so the answer is not cached.
+	if !resp.Directory.CutShort {
+		t.Fatal("a read the deadline ended is not marked cut short")
+	}
+	release()
+	afterLocalFileRead.Store(nil)
+	whole, err := fetchLocalFile(context.Background(), "", validated(t, dirCollector("dir", root, "*.prom")), RequestOverrides{}, nil)
+	if err != nil || whole.Directory.CutShort {
+		t.Fatalf("a whole read: err=%v, cut short=%v", err, whole != nil && whole.Directory.CutShort)
 	}
 }
 

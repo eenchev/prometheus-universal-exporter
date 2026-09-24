@@ -189,12 +189,19 @@ Supported parameters include:
 * `enable_http2`
 * retry settings
 * `param_<name>`, which fills a `{{param_<name>}}` placeholder in the collector's `request.path`
+* `from` and `until`, the render window of a [`graphite`](../../docs/GRAPHITE.md) collector
 
 For example, a collector with `path: /api/{{param_tenant}}/status` scraped by a
 monitor with `params: {param_tenant: [acme]}` requests `/api/acme/status`. A
 placeholder may have a default after a colon, `{{param_tenant:acme}}`; one with
 no default that the monitor does not supply fails the scrape with `400`. See
 [Target requests](../../docs/REQUESTS.md#path-parameters).
+
+A [`graphite`](../../docs/GRAPHITE.md) collector is monitored the same way: a
+monitor selects the Graphite Service, whose address becomes the `target`, and
+its `params` fill the placeholders of the collector's `request.targets`, such
+as `param_env: [staging]`, or set the window, such as `from: [-1h]`. `method`
+and `body` do not apply to it and are answered with `400`.
 
 ## Authentication
 
@@ -285,9 +292,10 @@ The exporter's own flags are chart values rather than something to assemble by h
 | `server.shutdownTimeout` | `--web.shutdown-timeout` | unset: the exporter's `5s` |
 | `server.shutdownDelay` | `--web.shutdown-delay` | `5s` |
 | `server.watchConfig` / `server.watchConfigInterval` | `--config.watch` / `--config.watch-interval` | off / `60s` |
-| `server.expandEnv` | `--config.export-env` | off |
+| `server.expandEnv` | `--config.expand-env` | off |
 | `server.enableLifecycle` | `--web.enable-lifecycle` | off |
 | `staticTargets.enabled` | `--static-targets-file` | off |
+| `staticTargets.expandEnv` | `--static-targets.expand-env`, with `staticTargets.enabled` | off |
 | `config` | `--config.file` | the chart's ConfigMap |
 
 `server.listenAddress` sets the container port too, so the listener and the probes cannot drift apart. `server.pythonPath` is the interpreter used by the `python` transform; its default is where the exporter image's `python:3.12-slim` base installs Python, and it is worth overriding only for a custom image. `server.logLevel` is one of `debug`, `info`, `warn` and `error`, and anything else fails rendering.
@@ -456,7 +464,7 @@ This allows the exporter to reload the configuration when the mounted ConfigMap 
 
 ### Environment variables in the configuration
 
-`server.expandEnv` adds `--config.export-env`, which substitutes `${NAME}` references in the configuration and in the static target document from the container's environment before either is parsed. That lets a hostname, tenant or token come from a Secret rather than from the ConfigMap the chart renders:
+`server.expandEnv` adds `--config.expand-env`, which substitutes `${NAME}` references in the configuration and its collector files from the container's environment before they are parsed; `staticTargets.expandEnv` adds `--static-targets.expand-env`, which does the same for the static target document, independently. That lets a hostname, tenant or token come from a Secret rather than from the ConfigMap the chart renders:
 
 ```yaml
 server:
@@ -482,6 +490,22 @@ config:
             type: http
             headers:
               Authorization: Bearer ${API_TOKEN}
+```
+
+For a static target's address or credentials, set `staticTargets.expandEnv` the same way:
+
+```yaml
+staticTargets:
+  enabled: true
+  expandEnv: true
+  data: |
+    interval: 1m
+    targets:
+      - name: billing
+        collector: example
+        target: ${BILLING_URL}
+        request:
+          bearer_token: ${BILLING_TOKEN}
 ```
 
 `env` and `envFrom` take the ordinary Kubernetes shapes and are useful on their own; `expandEnv` is inert without them. Expansion is off by default: only `${NAME}` is substituted and never `$NAME`, but a configuration carrying regexes, jq expressions or Python pre-scripts has dollar signs that are not references, so expanding should be a decision rather than a surprise. A reference whose variable is not set stops the exporter at startup with the variable named, rather than becoming an empty string — a missing Secret key is then a clear failure instead of a collector quietly scraping the wrong thing.
@@ -579,14 +603,16 @@ staticTargets:
 | Value | Default | Purpose |
 | --- | --- | --- |
 | `staticTargets.enabled` | `false` | Render `data` into the ConfigMap and pass it with `--static-targets-file`. |
-| `staticTargets.fileName` | `static-targets.yaml` | Its file name in the mounted configuration directory. |
+| `staticTargets.fileName` | `static-targets.yaml` | Its file name in the mounted configuration directory, which is its key in the ConfigMap: letters, digits, `-`, `_` and `.`, and not a key of `config.data`. |
 | `staticTargets.path` | `/static-targets` | Rendered as `--web.static-targets-path`, always: where the targets' latest results are served. It may not be `selfMetrics.path` or another endpoint's. |
-| `staticTargets.data` | `""` | The static target document. A change rolls the Deployment. |
+| `staticTargets.data` | `""` | The static target document. A change rolls the Deployment. Required with `config.enabled`; with `config.enabled: false`, which renders no ConfigMap, leave it empty and put the file into your own ConfigMap under `fileName`. |
+| `staticTargets.expandEnv` | `false` | Rendered as `--static-targets.expand-env` with `enabled`: expand `${NAME}` references in `data` from the container's environment. Independent of `server.expandEnv`. |
 | `staticTargets.monitor.enabled` | `true` | Render the monitor that scrapes the endpoint, when `staticTargets.enabled` is. It needs the Prometheus Operator's CRDs. |
 | `staticTargets.monitor.type` | `service` | `service` for a ServiceMonitor, `pod` for a PodMonitor. |
 | `staticTargets.monitor.interval` / `scrapeTimeout` | `30s` / `10s` | How often Prometheus reads the endpoint. The exporter scrapes the targets on the document's own intervals whatever this is. |
 | `staticTargets.monitor.labels` / `annotations` | `{}` | Added to the monitor. |
 | `staticTargets.monitor.relabelings` / `metricRelabelings` | `[]` | Passed to the monitor's endpoint. |
+| `staticTargets.monitor.targets` | `[]` | Names of the static targets the monitor reads, rendered as the endpoint's `targets` parameter; empty reads every target. A name that is not a target in `data` fails rendering. |
 
 The monitor sets `honorLabels: true`, so the series keep their own
 `static_target` and `target` labels, and the targets' labels, rather than

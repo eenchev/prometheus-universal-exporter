@@ -22,6 +22,8 @@ configured:
 | `http_exporter_script_duration_seconds` | gauge | How long the Python of the most recent probe that ran any took — pre-script and python transform together, not counting starting an interpreter. |
 | `http_exporter_metrics_emitted_total` | counter | Metrics produced, across scrapes. |
 | `http_exporter_invalid_utf8_total` | counter | Label values and help texts that were not valid UTF-8, whose invalid bytes were replaced with `�`. See [Character encodings](CONFIGURATION.md#character-encodings). |
+| `http_exporter_decoder_series_left_out_total` | counter | Series the [`graphite` decoder](GRAPHITE.md#the-series-document) left out before the metric rules saw them: with no point that has a value, older than `response.graphite.max_age`, or answered twice. `0` for other decoders. |
+| `http_exporter_decoder_lines_skipped_total` | counter | Carbon lines the `graphite` decoder could not read and skipped, under [`response.graphite.invalid_lines: skip`](GRAPHITE.md#carbon-lines-from-a-file). |
 | `http_exporter_series_limit_exceeded_total` | counter | Scrapes rejected by a size or series limit. |
 | `http_exporter_cache_hits_total`, `http_exporter_cache_misses_total` | counter | [Response cache](CONFIGURATION.md#response-caching) lookups. |
 | `http_exporter_cache_entries` | gauge | Entries the collector's cache holds, stale ones kept for `stale_if_error` included. |
@@ -54,7 +56,7 @@ help and value in both.
 ## Build information
 
 ```text
-http_exporter_build_info{goversion="go1.25.1",request_types="http,localfile",revision="4c1f2e9…",version="v1.4.0"} 1
+http_exporter_build_info{goversion="go1.25.1",request_types="graphite,http,localfile",revision="4c1f2e9…",version="v1.4.0"} 1
 ```
 
 As every Prometheus exporter does, one series with value `1` carries the

@@ -29,7 +29,7 @@ the ones above them in this list:
 | --- | --- |
 | `internal/model` | The shared data types: the configuration as written, the static target file, and `MetricSet`, what a probe produces. |
 | `internal/expr` | jq, regex, CSS and XPath compilation, with bounded caches. |
-| `internal/fetch` | Request types — `http` and `localfile`, each in its own build-tagged `requesttype_<name>.go` — probe parameters, path parameters, request templates and the HTTP transports. |
+| `internal/fetch` | Request types — `http`, `localfile` and `graphite`, each in its own build-tagged `requesttype_<name>.go` — probe parameters, path parameters, request templates and the HTTP transports. |
 | `internal/decode` | Decoders for every response format, the Prometheus text parser, and charset conversion. |
 | `internal/transform` | The transforms and metric rules, the Python worker pool, and the checks run on rules and scripts at load. |
 | `internal/config` | Loading, validating and reloading the configuration, collector and target files, and their JSON Schemas. |

@@ -72,7 +72,7 @@ func (s *Server) collectDirectory(ctx context.Context, read *fetch.DirectoryRead
 	typeFrom := map[string]string{}
 	failed := map[string]bool{}
 	for _, file := range read.Files {
-		set, failure := s.collectFile(scriptCtx, file, c, rec)
+		set, failure := s.collectFile(scriptCtx, file, c, rec, logTarget)
 		if failure == nil {
 			failure = checkFileFamilies(set, families, typeFrom)
 		}
@@ -118,7 +118,7 @@ func (s *Server) collectDirectory(ctx context.Context, read *fetch.DirectoryRead
 
 // collectFile decodes, transforms and validates one file, counting each stage
 // in the collector's self-metrics as a probe of one file would.
-func (s *Server) collectFile(ctx context.Context, file fetch.FileRead, c *model.Collector, rec statsRecorder) (*model.MetricSet, *fileFailure) {
+func (s *Server) collectFile(ctx context.Context, file fetch.FileRead, c *model.Collector, rec statsRecorder, logTarget string) (*model.MetricSet, *fileFailure) {
 	if file.Err != nil {
 		if errors.Is(file.Err, model.ErrLimitExceeded) {
 			rec.update(func(x *serverStats) { x.limitErrors++ })
@@ -131,6 +131,7 @@ func (s *Server) collectFile(ctx context.Context, file fetch.FileRead, c *model.
 		return nil, &fileFailure{"decode", err}
 	}
 	rec.update(func(x *serverStats) { x.decodeOK++ })
+	s.noteGraphite(d, c, rec, logTarget, file.Name)
 	set, err := s.transformRecorded(ctx, d, file.Response, c, rec)
 	if err != nil {
 		rec.update(func(x *serverStats) {

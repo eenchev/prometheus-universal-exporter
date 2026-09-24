@@ -146,6 +146,12 @@ type RequestConfig struct {
 	Files         []string `yaml:"files"`
 	MaxFiles      int      `yaml:"max_files"`
 	MaxTotalBytes ByteSize `yaml:"max_total_bytes"`
+	// Targets, From and Until belong to the graphite type: the Graphite
+	// expressions asked of the render API, each sent as a target parameter,
+	// and the window they are rendered over (fetch/requesttype_graphite.go).
+	Targets []string `yaml:"targets"`
+	From    string   `yaml:"from"`
+	Until   string   `yaml:"until"`
 }
 
 // RetryConfig is request.retry: how often a failed request is tried again,
@@ -190,7 +196,29 @@ type ResponseConfig struct {
 	Charset    string            `yaml:"charset"`
 	CSV        CSVConfig         `yaml:"csv"`
 	Namespaces map[string]string `yaml:"namespaces"`
+	Graphite   GraphiteConfig    `yaml:"graphite"`
 }
+
+// GraphiteConfig is response.graphite: how the graphite decoder turns each
+// series' points into the one value a metric rule reads (decode/graphite.go).
+type GraphiteConfig struct {
+	// Value is how the points of a series become its value: last, the
+	// newest point, by default, or max, min, avg or sum.
+	Value string `yaml:"value"`
+	// MaxAge leaves out a series whose newest point is older than this, so
+	// a series whose writer stopped is not exported with its last value.
+	MaxAge Duration `yaml:"max_age"`
+	// InvalidLines is what a carbon line that cannot be read does: fail,
+	// the default, fails the decode; skip leaves the line out, counted and
+	// logged.
+	InvalidLines string `yaml:"invalid_lines"`
+}
+
+// GraphiteValues are the values of response.graphite.value.
+var GraphiteValues = []string{"last", "max", "min", "avg", "sum"}
+
+// GraphiteInvalidLines are the values of response.graphite.invalid_lines.
+var GraphiteInvalidLines = []string{"fail", "skip"}
 
 // CSVConfig is response.csv: how a CSV body is split into rows and fields.
 type CSVConfig struct {
@@ -200,7 +228,8 @@ type CSVConfig struct {
 }
 
 // DecoderConfig is a collector's decoder block. Type names the decoder that
-// reads the response: json, yaml, xml, csv, html, prometheus or text. Unset or
+// reads the response: json, yaml, xml, csv, html, prometheus, text or
+// graphite. Unset or
 // auto, the transform's type picks it when it implies one, and otherwise the
 // response's content type or its content.
 type DecoderConfig struct {
@@ -314,7 +343,7 @@ func (l LabelRule) Static() bool { return l.Expression == "" }
 // DecoderTypes are the values of decoder.type: auto, which chooses a decoder
 // for each response, and the decoders. Validation and the JSON Schema both
 // read this list, and a test keeps decode.Decode handling every decoder in it.
-var DecoderTypes = []string{"auto", "json", "yaml", "xml", "csv", "html", "prometheus", "text"}
+var DecoderTypes = []string{"auto", "json", "yaml", "xml", "csv", "html", "prometheus", "text", "graphite"}
 
 // TransformTypes are the values of transform.type, which a collector must set.
 // Validation and the JSON Schema both read this list, and a test keeps the

@@ -6,6 +6,7 @@ import (
 	"net/url"
 	"runtime/debug"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/eenchev/prometheus-universal-exporter/internal/fetch"
@@ -111,7 +112,7 @@ func (s *Server) scrapeStaticTarget(ctx context.Context, target model.StaticTarg
 		return
 	}
 	if model.UsesCache(c) {
-		cacheKey = s.probeCacheKey(cfg, c, target.Target, targetCacheQuery(&target), headers)
+		cacheKey = s.probeCacheKey(cfg, c, target.Target, targetCacheQuery(&target), headers, targetOwnRequest(&target)...)
 	}
 	if model.CacheTTL(c) > 0 {
 		if cached, fetched, ok := s.cache.Get(cacheKey, time.Now()); ok {
@@ -131,6 +132,10 @@ func (s *Server) scrapeStaticTarget(ctx context.Context, target model.StaticTarg
 	// A static target scrape shares the collector's max_concurrent_probes with its
 	// probes, and waits for a slot within its budget rather than failing.
 	if err := s.trips.acquire(ctx, c.Name, maxConcurrentProbes(c)); err != nil {
+		if shuttingDown(ctx) {
+			s.abortedByShutdown(target, c)
+			return
+		}
 		count(func(st *serverStats) { st.rejected++ })
 		s.logCollectFailure(log, "concurrency", err)
 		failed()
@@ -141,6 +146,11 @@ func (s *Server) scrapeStaticTarget(ctx context.Context, target model.StaticTarg
 		collector: c, target: target.Target, overrides: overrides, headers: headers,
 		rec: rec, display: address, cacheKey: cacheKey, log: log,
 	})
+	if trip.aborted {
+		failedOnPanic = nil
+		s.abortedByShutdown(target, c)
+		return
+	}
 	if trip.failed() {
 		failed()
 		return
@@ -153,6 +163,13 @@ func (s *Server) scrapeStaticTarget(ctx context.Context, target model.StaticTarg
 		result = withTargetLabels(trip.answer, target.Labels)
 	}
 	finish(1)
+}
+
+// abortedByShutdown notes a scrape the shutdown cut short
+// (AbortStaticScrapes): it publishes nothing and is no failure of the
+// target's, whose last result stands.
+func (s *Server) abortedByShutdown(target model.StaticTarget, c *model.Collector) {
+	s.logger.Debug("static target scrape cut short by the shutdown; its last result stands", "target", target.Name, "collector", c.Name)
 }
 
 // staticTargetHealthMetrics reports the outcome of one static target scrape.
@@ -231,7 +248,22 @@ func targetCacheQuery(t *model.StaticTarget) url.Values {
 		values.Set("retry_attempts", strconv.Itoa(t.Request.Retry.Attempts))
 		values.Set("retry_backoff", time.Duration(t.Request.Retry.Backoff).String())
 	}
+	if from := strings.TrimSpace(t.Request.From); from != "" {
+		values.Set("from", from)
+	}
+	if until := strings.TrimSpace(t.Request.Until); until != "" {
+		values.Set("until", until)
+	}
 	return values
+}
+
+// targetOwnRequest is what the target's request sets that no probe can, for
+// its cache key: a graphite collector's targets.
+func targetOwnRequest(t *model.StaticTarget) []string {
+	if len(t.Request.Targets) == 0 {
+		return nil
+	}
+	return append([]string{"targets"}, t.Request.Targets...)
 }
 
 // targetResource resolves the OTLP resource identity for this target, with the

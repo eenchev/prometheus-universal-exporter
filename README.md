@@ -13,8 +13,9 @@ Turn an HTTP endpoint that was never meant for Prometheus into a Prometheus
 target, without writing an exporter for it.
 
 Point the exporter at a service that answers with JSON, YAML, XML, CSV, HTML,
-plain text, or Prometheus exposition — or at a file on disk, such as the
-`.prom` files a batch job leaves for node_exporter. A collector in the configuration says how
+plain text, or Prometheus exposition — at a Graphite server, whose series it
+renders — or at a file on disk, such as the `.prom` files a batch job leaves
+for node_exporter. A collector in the configuration says how
 to call it, how to read the response, and which metrics to publish. The
 exporter does the rest — no code, no rebuild, and nothing to redeploy when the
 rules change.
@@ -129,7 +130,7 @@ pattern needs. See the
 | `/collectors` | Each collector with a form that probes a target through it, taking its request parameters, forwarded headers and, when it forwards `Authorization`, a target credential. See [Probing from the browser](docs/AUTHENTICATION.md#probing-from-the-browser). |
 | `/probe` | Scrape a target through a collector. Takes `target` and `collector`, with `GET` or `HEAD`; any other method is answered `405`. |
 | `/self-metrics` | The exporter's own metrics, at `--web.self-metrics-path`. See [Self-metrics](docs/SELF-METRICS.md). |
-| `/static-targets` | The latest results of the [static targets](docs/STATIC-TARGETS.md), at `--web.static-targets-path`. |
+| `/static-targets` | The latest results of the [static targets](docs/STATIC-TARGETS.md), at `--web.static-targets-path`. `?targets=a,b` serves only the targets named. |
 | `/-/reload` | `POST` reloads the configuration, with `--web.enable-lifecycle`. |
 | `/health`, `/ready` | Kubernetes probes. `/ready` is `503` while a reload is rejected, OTLP exports keep failing or the exporter is shutting down; see [Readiness](docs/CONFIGURATION.md#readiness). Never authenticated. |
 
@@ -144,10 +145,11 @@ pattern needs. See the
 | `--web.self-metrics-path` | `/self-metrics` | Path of the exporter's own metrics, served there and nowhere else; `/metrics` for the conventional path. A path another endpoint uses is refused. |
 | `--web.static-targets-path` | `/static-targets` | Path the static targets' latest results are served at, for Prometheus to scrape. A path another endpoint uses is refused. |
 | `--python.path` | `python3` | Interpreter used by the `python` transform. |
-| `--log.level` | `info` | `debug`, `info`, `warn` or `error`. |
+| `--log.level` | `info` | `debug`, `info`, `warn` or `error`, in any case; anything else is refused. |
 | `--config.watch` | off | Re-read the configuration when it changes on disk. |
 | `--config.watch-interval` | `60s` | How often to check, with `--config.watch`. |
-| `--config.export-env` | off | Expand `${NAME}` references in the configuration. |
+| `--config.expand-env` | off | Expand `${NAME}` references in the configuration and its collector files. |
+| `--static-targets.expand-env` | off | Expand `${NAME}` references in the static target file. See [Static targets](docs/STATIC-TARGETS.md#environment-variables). |
 | `--static-targets-file` | none | Static targets the exporter scrapes itself, on their own intervals. See [Static targets](docs/STATIC-TARGETS.md). |
 | `--config.schema` | off | Print the JSON Schema of the configuration file, for editors, and exit. See [Editor support](docs/CONFIGURATION.md#editor-support). |
 | `--config.collector-file-schema` | off | Print the JSON Schema of a collector file, for editors, and exit. See [Collector files](docs/CONFIGURATION.md#collector-files). |
@@ -165,6 +167,7 @@ pattern needs. See the
 - [Configuration](docs/CONFIGURATION.md) — collectors, decoders, transforms, metric rules, caching and serving the last good result while a target is down, environment variables, reloading.
 - [Target requests](docs/REQUESTS.md) — redirects, HTTP/2, retries, TLS, proxies, per-scrape overrides.
 - [Local files](docs/LOCALFILE.md) — the `localfile` request type: reading metrics and status files from disk, one file or a whole directory.
+- [Graphite](docs/GRAPHITE.md) — the `graphite` request type: Graphite series from a render API, or carbon lines from a file, as Prometheus metrics.
 - [Authentication](docs/AUTHENTICATION.md) — credentials for the target and for the exporter itself.
 - [Prometheus Operator](docs/PROMETHEUS-OPERATOR.md) — ServiceMonitor and PodMonitor.
 - [Helm chart](charts/prometheus-universal-exporter/README.md) — every chart value.

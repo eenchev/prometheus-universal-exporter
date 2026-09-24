@@ -2,7 +2,9 @@
 
 Everything on this page describes the request an `http` collector — one with
 `request.type: http`, see [request types](CONFIGURATION.md#request-types) —
-makes to the discovered target, not the scrape Prometheus makes of the exporter. Each setting
+makes to the discovered target, and a `graphite` collector's too, which is the
+same request with a URL built for the Graphite render API
+([Graphite](GRAPHITE.md)), not the scrape Prometheus makes of the exporter. Each setting
 lives on a collector's `request` block, and most can be overridden for a single
 scrape through a `/probe` query parameter — which is what a monitor's `params`
 map renders into.
@@ -85,7 +87,7 @@ used has nothing to fill and is rejected. `{{` always opens a placeholder in
 collector.
 
 **Environment variables.** Placeholders use `{{…}}` precisely so they never meet
-the `${NAME}` references [`--config.export-env`](CONFIGURATION.md#environment-variables)
+the `${NAME}` references [`--config.expand-env`](CONFIGURATION.md#environment-variables)
 substitutes. The environment is read once, when the file is loaded; path
 parameters are bound on every probe. The two compose, so a default can come from
 the environment:
@@ -94,7 +96,7 @@ the environment:
 path: /api/{{param_tenant:${DEFAULT_TENANT}}}/status
 ```
 
-With `--config.export-env` off, that reference is left in the default
+With `--config.expand-env` off, that reference is left in the default
 unexpanded, and the exporter refuses to start rather than bind `${DEFAULT_TENANT`
 and leave a stray brace in the path.
 
@@ -177,6 +179,7 @@ structure:
 | Body, `{{param_x\|form}}` | URL form encoded, for `application/x-www-form-urlencoded` bodies. |
 | Body, `{{param_x\|xml}}` | Escaped XML text, for SOAP and other XML bodies. |
 | Body, `{{param_x}}` or `{{param_x\|raw}}` | Exactly as given. Use it only where the template itself is the structure and the value comes from your own monitors. |
+| Graphite target | As given, and only letters, digits and `_ - . : @ % + ~`; anything else — a quote, a comma, a bracket, a glob — is refused with `400`, since Graphite expressions have no escaping. See [Graphite](GRAPHITE.md#placeholders). |
 
 The filter follows the default, if there is one: `{{param_limit:10|number}}`.
 Filters exist only in the body; a header or query value has one encoding and

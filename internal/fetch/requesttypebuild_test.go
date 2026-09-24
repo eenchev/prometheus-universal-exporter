@@ -123,6 +123,10 @@ func TestBuildTagsSelectTheRequestTypeFiles(t *testing.T) {
 	if !onlyFiles["requesttype_localfile.go"] || onlyFiles["requesttype_http.go"] || onlyFiles[requestTypeGuardFile] {
 		t.Errorf("-tags select_request_types,request_type_localfile compiles %v", onlyFiles)
 	}
+	onlyGraphite := included("select_request_types", "request_type_graphite")
+	if !onlyGraphite["requesttype_graphite.go"] || onlyGraphite["requesttype_http.go"] || onlyGraphite["requesttype_localfile.go"] || onlyGraphite[requestTypeGuardFile] {
+		t.Errorf("-tags select_request_types,request_type_graphite compiles %v", onlyGraphite)
+	}
 	none := included("select_request_types")
 	if !none[requestTypeGuardFile] || none["requesttype_http.go"] {
 		t.Errorf("-tags select_request_types alone compiles %v; it should compile only the guard", none)

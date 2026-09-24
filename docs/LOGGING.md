@@ -1,7 +1,9 @@
 # Logging
 
 Every line the exporter writes is a JSON object, at the level set by
-`--log.level` (`debug`, `info`, `warn` or `error`):
+`--log.level` (`debug`, `info`, `warn` or `error`, in any case; any other
+value is refused with exit status 2, rather than logging at `info` without a
+word):
 
 ```json
 {"time":"2026-09-18T21:49:52+03:00","level":"INFO","msg":"starting exporter","address":":8080","collectors":1,"static_targets":0,"config_watch":true,"config_watch_interval":"1m30s"}

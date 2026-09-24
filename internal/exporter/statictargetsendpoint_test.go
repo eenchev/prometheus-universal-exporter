@@ -5,6 +5,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"sort"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -186,7 +187,7 @@ func TestStaticTargetsPathIsChecked(t *testing.T) {
 			t.Errorf("StaticTargetsPath(%q) = %q, %v; want %q", path, got, err, want)
 		}
 	}
-	for _, path := range []string{"", "/", "/probe", "/collectors", "/self-metrics", "/x/", "/{a}"} {
+	for _, path := range []string{"", "/", "/probe", "/collectors", "/self-metrics", "/x/", "/{a}", "/x/..", "/./x"} {
 		if _, err := StaticTargetsPath(path, "/self-metrics"); err == nil {
 			t.Errorf("StaticTargetsPath(%q) was accepted", path)
 		}
@@ -268,5 +269,180 @@ func TestAFamilyTypeClashThatEndsIsLoggedAsEnded(t *testing.T) {
 	server.mergeStaticTargets([]namedSet{gauge, counter})
 	if count(back) != 1 || count(left) != 3 {
 		t.Fatalf("a clash whose target left was logged as recovered, or not forgotten: %d recoveries, %d warnings:\n%s", count(back), count(left), logs)
+	}
+}
+
+func staticTargetsAnswer(t *testing.T, server *Server, method, path string) *httptest.ResponseRecorder {
+	t.Helper()
+	recorder := httptest.NewRecorder()
+	server.Handler().ServeHTTP(recorder, httptest.NewRequest(method, path, nil))
+	return recorder
+}
+
+// staticTargetsIn lists the static_target values of an answer, in order of
+// first appearance.
+func staticTargetsIn(body string) []string {
+	var out []string
+	seen := map[string]bool{}
+	for _, line := range strings.Split(body, "\n") {
+		_, rest, found := strings.Cut(line, `static_target="`)
+		if !found || strings.HasPrefix(line, "#") {
+			continue
+		}
+		name, _, _ := strings.Cut(rest, `"`)
+		if !seen[name] {
+			seen[name] = true
+			out = append(out, name)
+		}
+	}
+	sort.Strings(out)
+	return out
+}
+
+// ?targets= narrows the endpoint to the targets it names, given separated by
+// commas or as the parameter repeated, which is how Prometheus renders a
+// scrape config's params; without it every target is served.
+func TestTheStaticTargetsEndpointServesTheNamedTargets(t *testing.T) {
+	target := textTarget(t, "value=5\n")
+	cfg := &model.Config{Collectors: []model.Collector{testutil.Collector("text", "text")}}
+	file := &model.StaticTargetFile{Interval: model.Duration(time.Minute), Targets: []model.StaticTarget{
+		{Name: "eu", Collector: "text", Target: target.URL},
+		{Name: "us", Collector: "text", Target: target.URL},
+		{Name: "asia", Collector: "text", Target: target.URL},
+	}}
+	server := newStaticServer(t, cfg, file)
+	server.scrapeStaticTargets(context.Background(), 10*time.Second)
+
+	all := getStaticTargets(t, server, "/static-targets")
+	for query, want := range map[string]string{
+		"":                          "asia eu us",
+		"?targets=eu":               "eu",
+		"?targets=eu,us":            "eu us",
+		"?targets=eu&targets=asia":  "asia eu",
+		"?targets=+eu+,,us":         "eu us",
+		"?targets=eu&targets=eu,eu": "eu",
+		"?other=x&targets=asia":     "asia",
+	} {
+		body := getStaticTargets(t, server, "/static-targets"+query)
+		if got := strings.Join(staticTargetsIn(body), " "); got != want {
+			t.Errorf("%q served %q, want %q", query, got, want)
+		}
+		// What is served of a target is the same as without the filter:
+		// every line of the narrowed answer is a line of the whole one.
+		for _, line := range strings.Split(body, "\n") {
+			if line != "" && !strings.Contains(all, line+"\n") {
+				t.Errorf("%q served %q, which the whole endpoint does not", query, line)
+			}
+		}
+		if strings.Count(body, "# TYPE demo_value ") != 1 {
+			t.Errorf("%q: demo_value is not under one TYPE:\n%s", query, body)
+		}
+	}
+	if head := staticTargetsAnswer(t, server, http.MethodHead, "/static-targets?targets=eu"); head.Code != http.StatusOK {
+		t.Errorf("HEAD with targets: %d", head.Code)
+	}
+}
+
+// A name no target has, and a parameter naming none, are refused with 400
+// saying so, rather than answered with nothing, so a misspelt or removed
+// target fails the scrape where it shows. A target that exists but has not
+// been scraped yet is simply absent.
+func TestTheStaticTargetsParameterRefusesUnknownNames(t *testing.T) {
+	target := textTarget(t, "value=5\n")
+	cfg := &model.Config{Collectors: []model.Collector{testutil.Collector("text", "text")}}
+	file := &model.StaticTargetFile{Interval: model.Duration(time.Minute), Targets: []model.StaticTarget{
+		{Name: "eu", Collector: "text", Target: target.URL},
+	}}
+	server := newStaticServer(t, cfg, file)
+	if body := getStaticTargets(t, server, "/static-targets?targets=eu"); body != "" {
+		t.Fatalf("a target not scraped yet was served:\n%s", body)
+	}
+	server.scrapeStaticTargets(context.Background(), 10*time.Second)
+	for query, want := range map[string]string{
+		"?targets=eu,uss,apac": `no static target is named "apac", "uss"`,
+		"?targets=":            "the targets parameter names no static target",
+		"?targets=,+,":         "the targets parameter names no static target",
+	} {
+		answer := staticTargetsAnswer(t, server, http.MethodGet, "/static-targets"+query)
+		if answer.Code != http.StatusBadRequest || !strings.Contains(answer.Body.String(), want) {
+			t.Errorf("%q: %d %s, want 400 with %q", query, answer.Code, answer.Body, want)
+		}
+		if strings.Contains(answer.Body.String(), "demo_value") {
+			t.Errorf("%q served metrics with its error", query)
+		}
+	}
+}
+
+// A narrowed read keeps a type clash as a whole read does: the later target
+// still has the clashing family left out when it is the only one asked for,
+// and the clash is not logged as ended and begun again between the two kinds
+// of read.
+func TestANarrowedReadKeepsTheClashAsAWholeReadDoes(t *testing.T) {
+	cfg := &model.Config{Collectors: []model.Collector{testutil.Collector("text", "text")}}
+	file := &model.StaticTargetFile{Interval: model.Duration(time.Minute), Targets: []model.StaticTarget{
+		{Name: "a", Collector: "text", Target: "http://a.invalid"},
+		{Name: "b", Collector: "text", Target: "http://b.invalid"},
+	}}
+	server := newStaticServer(t, cfg, file)
+	logs := testutil.CaptureLogs(t)
+	server.logger = slog.Default()
+	server.publishStaticTarget(file.Targets[0], otlpResourceIdentity{}, model.MetricSet{Metrics: []model.Metric{{Name: "shared", Type: model.GaugeMetricType, Value: 1}}})
+	server.publishStaticTarget(file.Targets[1], otlpResourceIdentity{}, model.MetricSet{Metrics: []model.Metric{{Name: "shared", Type: model.CounterMetricType, Value: 2}, {Name: "own", Type: model.GaugeMetricType, Value: 3}}})
+
+	for _, query := range []string{"", "?targets=b", "", "?targets=b"} {
+		body := getStaticTargets(t, server, "/static-targets"+query)
+		if strings.Contains(body, `shared{static_target="b"}`) {
+			t.Fatalf("%q served b's clashing family:\n%s", query, body)
+		}
+		if query != "" && (strings.Contains(body, `static_target="a"`) || !strings.Contains(body, `own{static_target="b"} 3`)) {
+			t.Fatalf("%q served:\n%s", query, body)
+		}
+	}
+	if n := strings.Count(logs.String(), "static target metric left out of the static targets endpoint"); n != 1 {
+		t.Errorf("the clash was logged %d times over four reads, want once:\n%s", n, logs)
+	}
+	if strings.Contains(logs.String(), "back on the static targets endpoint") {
+		t.Errorf("a narrowed read ended the clash:\n%s", logs)
+	}
+}
+
+// Two targets of one collector, without labels or an OTLP identity of their
+// own, share a resource. Over OTLP each series carries static_target, as on
+// the endpoint, so neither target's values replace the other's.
+func TestStaticTargetsSharingAResourceStayApartOverOTLP(t *testing.T) {
+	eu, us := textTarget(t, "value=1\n"), textTarget(t, "value=2\n")
+	cfg := &model.Config{Collectors: []model.Collector{testutil.Collector("text", "text")}, OTLP: otlpConfig("http://collector.invalid/v1/metrics")}
+	file := &model.StaticTargetFile{Interval: model.Duration(time.Minute), Targets: []model.StaticTarget{
+		{Name: "eu", Collector: "text", Target: eu.URL, ExportViaOTLP: true},
+		{Name: "us", Collector: "text", Target: us.URL, ExportViaOTLP: true},
+	}}
+	server := newStaticServer(t, cfg, file)
+	server.scrapeStaticTargets(context.Background(), 10*time.Second)
+
+	values := map[string]float64{}
+	for _, resource := range server.drainOTLP() {
+		for _, m := range resource.Set.Metrics {
+			if m.Name == "demo_value" {
+				values[m.Labels["static_target"]] = m.Value
+			}
+		}
+	}
+	if len(values) != 2 || values["eu"] != 1 || values["us"] != 2 {
+		t.Fatalf("exported %v, want eu=1 and us=2", values)
+	}
+	// The endpoint serves both, each labelled once, and what the target
+	// keeps for it is unlabelled: the label is the endpoint's to add.
+	body := getStaticTargets(t, server, "/static-targets")
+	for series, want := range map[string]float64{`demo_value{static_target="eu"}`: 1, `demo_value{static_target="us"}`: 2} {
+		if got := metricValue(t, body, series); got != want {
+			t.Errorf("%s = %v, want %v", series, got, want)
+		}
+	}
+	for _, result := range server.staticTargetResults() {
+		for _, m := range result.set.Metrics {
+			if m.Name == "demo_value" && m.Labels["static_target"] != "" {
+				t.Fatalf("the published result of %s was labelled in place: %v", result.name, m.Labels)
+			}
+		}
 	}
 }

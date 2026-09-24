@@ -101,7 +101,7 @@ func TestAnUnsetVariableIsAnError(t *testing.T) {
 	}
 	// Every missing name at once: finding them one restart at a time is
 	// miserable.
-	for _, want := range []string{"DEMO_ABSENT_ONE", "DEMO_ABSENT_TWO", "--config.export-env"} {
+	for _, want := range []string{"DEMO_ABSENT_ONE", "DEMO_ABSENT_TWO", "--config.expand-env"} {
 		if !strings.Contains(err.Error(), want) {
 			t.Fatalf("error %q should mention %q", err, want)
 		}
@@ -120,18 +120,19 @@ func TestAnEmptyVariableExpandsToNothing(t *testing.T) {
 	}
 }
 
-// A value is substituted before the document is parsed, so a line break in one
-// does not make a long string: it ends the line and the rest becomes YAML.
-func TestAValueWithALineBreakIsRefused(t *testing.T) {
+// A value with a line break is a value: it cannot end the line it is on and
+// turn the rest into YAML.
+func TestAValueWithALineBreakStaysAValue(t *testing.T) {
 	t.Setenv("DEMO_MULTILINE", "/one\nmetrics: []")
-	_, err := Load(envConfig(t, collectorWithPath("${DEMO_MULTILINE}")), WithEnvExpansion())
-	if err == nil {
-		t.Fatal("a value containing a line break must be refused")
+	cfg, err := Load(envConfig(t, collectorWithPath("${DEMO_MULTILINE}")), WithEnvExpansion())
+	if err != nil {
+		t.Fatal(err)
 	}
-	for _, want := range []string{"DEMO_MULTILINE", "line break"} {
-		if !strings.Contains(err.Error(), want) {
-			t.Fatalf("error %q should mention %q", err, want)
-		}
+	if got := cfg.Collectors[0].Request.Path; got != "/one\nmetrics: []" {
+		t.Fatalf("path=%q", got)
+	}
+	if len(cfg.Collectors[0].Metrics) != 1 {
+		t.Fatalf("the value changed the document: %d metrics", len(cfg.Collectors[0].Metrics))
 	}
 }
 
@@ -146,17 +147,18 @@ func TestTheErrorNamesTheDocument(t *testing.T) {
 	}
 }
 
-// The static target document carries the addresses and credentials of the
-// things being scraped, which is exactly the material an operator keeps out of
-// a committed file, so the flag applies to it too.
-func TestStaticTargetFilesExpandTheSameWay(t *testing.T) {
+// A static target file carries the addresses and credentials of the things
+// being scraped, which is exactly the material an operator keeps out of a
+// committed file. It is expanded with its own flag,
+// --static-targets.expand-env; that the configuration's flag does not reach
+// it is pinned by the manager and the command line.
+func TestStaticTargetFilesExpandWithTheirOwnFlag(t *testing.T) {
 	t.Setenv("DEMO_TARGET", "http://api.example:8080")
 	path := t.TempDir() + "/targets.yaml"
-	body := "interval: 1m\ntargets:\n  - name: one\n    collector: example\n    target: ${DEMO_TARGET}\n"
+	body := "interval: 1m\ntargets:\n  - name: one\n    collector: example\n    target: ${DEMO_TARGET}\n    labels:\n      price: $${NOT_A_REFERENCE}\n"
 	if err := os.WriteFile(path, []byte(body), 0600); err != nil {
 		t.Fatal(err)
 	}
-
 	plain, err := LoadStaticTargets(path)
 	if err != nil {
 		t.Fatal(err)
@@ -165,12 +167,92 @@ func TestStaticTargetFilesExpandTheSameWay(t *testing.T) {
 		t.Fatalf("target=%q, want the reference left alone without the flag", got)
 	}
 
-	expanded, err := LoadStaticTargets(path, WithEnvExpansion())
+	expanded, err := LoadStaticTargets(path, WithStaticTargetsEnvExpansion())
 	if err != nil {
 		t.Fatal(err)
 	}
 	if got := expanded.Targets[0].Target; got != "http://api.example:8080" {
 		t.Fatalf("target=%q, want the expanded value", got)
+	}
+	if got := expanded.Targets[0].Labels["price"]; got != "${NOT_A_REFERENCE}" {
+		t.Fatalf("$$ should escape a dollar: %q", got)
+	}
+
+	// An unset variable is an error naming the file's own flag.
+	os.Unsetenv("DEMO_ABSENT_TARGET")
+	if err := os.WriteFile(path, []byte(strings.Replace(body, "DEMO_TARGET", "DEMO_ABSENT_TARGET", 1)), 0600); err != nil {
+		t.Fatal(err)
+	}
+	_, err = LoadStaticTargets(path, WithStaticTargetsEnvExpansion())
+	if err == nil || !strings.Contains(err.Error(), `"DEMO_ABSENT_TARGET" not set; --static-targets.expand-env requires`) {
+		t.Fatalf("err=%v, want the missing variable and --static-targets.expand-env named", err)
+	}
+}
+
+// The configuration's flag and the static target file's are independent: a
+// manager reloads each file the way its own flag says.
+func TestAReloadExpandsEachFileByItsOwnFlag(t *testing.T) {
+	t.Setenv("DEMO_PATH", "/from-env")
+	t.Setenv("DEMO_REGION", "eu")
+	configPath := envConfig(t, collectorWithPath("${DEMO_PATH}"))
+	targetsPath := t.TempDir() + "/targets.yaml"
+	targets := "interval: 1m\ntargets:\n  - name: one\n    collector: example\n    target: http://api.example:8080\n    labels:\n      region: ${DEMO_REGION}\n"
+	if err := os.WriteFile(targetsPath, []byte(targets), 0600); err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		name                 string
+		config, staticFiles  bool
+		wantPath, wantRegion string
+	}{
+		{"neither", false, false, "${DEMO_PATH}", "${DEMO_REGION}"},
+		{"configuration only", true, false, "/from-env", "${DEMO_REGION}"},
+		{"static targets only", false, true, "${DEMO_PATH}", "eu"},
+		{"both", true, true, "/from-env", "eu"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var configOptions, targetOptions []LoadOption
+			if tc.config {
+				configOptions = append(configOptions, WithEnvExpansion())
+			}
+			if tc.staticFiles {
+				targetOptions = append(targetOptions, WithStaticTargetsEnvExpansion())
+			}
+			cfg, err := Load(configPath, configOptions...)
+			if err != nil {
+				t.Fatal(err)
+			}
+			file, err := LoadStaticTargets(targetsPath, targetOptions...)
+			if err != nil {
+				t.Fatal(err)
+			}
+			manager := NewManager(cfg, configPath, slog.Default())
+			manager.SetEnvExpansion(tc.config)
+			manager.SetStaticTargetsEnvExpansion(tc.staticFiles)
+			manager.SetTargets(targetsPath, file)
+			// The values change underneath, so what the reload reads shows
+			// which way it read each file.
+			t.Setenv("DEMO_PATH", "/reloaded")
+			t.Setenv("DEMO_REGION", "us")
+			if err := manager.Reload("test"); err != nil {
+				t.Fatal(err)
+			}
+			wantPath, wantRegion := tc.wantPath, tc.wantRegion
+			if tc.config {
+				wantPath = "/reloaded"
+			}
+			if tc.staticFiles {
+				wantRegion = "us"
+			}
+			if got := manager.Get().Collectors[0].Request.Path; got != wantPath {
+				t.Errorf("path=%q, want %q", got, wantPath)
+			}
+			if got := manager.StaticTargets()[0].Labels["region"]; got != wantRegion {
+				t.Errorf("region=%q, want %q", got, wantRegion)
+			}
+			t.Setenv("DEMO_PATH", "/from-env")
+			t.Setenv("DEMO_REGION", "eu")
+		})
 	}
 }
 
@@ -194,7 +276,7 @@ func TestAReloadKeepsExpanding(t *testing.T) {
 		t.Fatal(err)
 	}
 	manager.lastMod = manager.lastMod.Add(-1)
-	manager.reloadConfig()
+	manager.reloadChanged()
 	if got := manager.Get().Collectors[0].Request.Path; got != "/second/v2" {
 		t.Fatalf("path=%q after reload, want the reference expanded again", got)
 	}
@@ -215,7 +297,7 @@ func TestAReloadDoesNotStartExpanding(t *testing.T) {
 		t.Fatal(err)
 	}
 	manager.lastMod = manager.lastMod.Add(-1)
-	manager.reloadConfig()
+	manager.reloadChanged()
 	if got := manager.Get().Collectors[0].Request.Path; got != "${DEMO_PATH}" {
 		t.Fatalf("path=%q, want the reference untouched", got)
 	}
@@ -239,7 +321,7 @@ func TestAReloadWithAMissingVariableIsRejected(t *testing.T) {
 		t.Fatal(err)
 	}
 	manager.lastMod = manager.lastMod.Add(-1)
-	manager.reloadConfig()
+	manager.reloadChanged()
 	if got := manager.Get().Collectors[0].Request.Path; got != "/first" {
 		t.Fatalf("path=%q, want the previous configuration to stay active", got)
 	}

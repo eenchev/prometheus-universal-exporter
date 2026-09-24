@@ -169,6 +169,12 @@ func normalizeFormats(x *model.Collector) error {
 	if !slices.Contains(model.DecoderTypes, x.Decoder.Type) {
 		return fmt.Errorf("collector %q has unknown decoder %q; want one of %s", x.Name, x.Decoder.Type, strings.Join(model.DecoderTypes, ", "))
 	}
+	if x.Decoder.Type == "auto" && x.Request.Type == fetch.RequestTypeGraphite {
+		// The render API answers JSON a jq rule could read as it is, but
+		// the graphite decoder is what a graphite collector is for; decoder
+		// json reads the answer as it came.
+		x.Decoder.Type = "graphite"
+	}
 	if x.Decoder.Type == "auto" {
 		switch x.Transform.Type {
 		case "regex":
@@ -183,6 +189,38 @@ func normalizeFormats(x *model.Collector) error {
 	}
 	if x.Transform.Type == "python" && strings.TrimSpace(x.Transform.Script) == "" {
 		return fmt.Errorf("collector %q Python transform requires a script", x.Name)
+	}
+	return checkGraphiteResponse(x)
+}
+
+// checkGraphiteResponse checks response.graphite; value left out is last. It
+// applies to the graphite decoder, which a decoder chosen per response may
+// turn out to be; a collector whose decoder is another refuses it, since it
+// would be ignored. The graphite decoder's document is JSON-like, so only the
+// transforms that read one can map it.
+func checkGraphiteResponse(x *model.Collector) error {
+	g := &x.Response.Graphite
+	set := *g != model.GraphiteConfig{}
+	if set && x.Decoder.Type != "graphite" && x.Decoder.Type != "auto" {
+		return fmt.Errorf("collector %q sets response.graphite, which applies to the graphite decoder, but its decoder is %s", x.Name, x.Decoder.Type)
+	}
+	g.Value = strings.ToLower(strings.TrimSpace(g.Value))
+	if g.Value != "" && !slices.Contains(model.GraphiteValues, g.Value) {
+		return fmt.Errorf("collector %q response.graphite.value is %q; want one of %s", x.Name, g.Value, strings.Join(model.GraphiteValues, ", "))
+	}
+	if g.MaxAge < 0 {
+		return fmt.Errorf("collector %q response.graphite.max_age must not be negative", x.Name)
+	}
+	g.InvalidLines = strings.ToLower(strings.TrimSpace(g.InvalidLines))
+	if g.InvalidLines != "" && !slices.Contains(model.GraphiteInvalidLines, g.InvalidLines) {
+		return fmt.Errorf("collector %q response.graphite.invalid_lines is %q; want fail or skip", x.Name, g.InvalidLines)
+	}
+	if x.Decoder.Type == "graphite" {
+		switch x.Transform.Type {
+		case "jq", "yq", "python":
+		default:
+			return fmt.Errorf("collector %q decodes Graphite series, which a %s transform cannot read; use jq, yq or python, whose rules read the series document, as in items: .series[]", x.Name, x.Transform.Type)
+		}
 	}
 	return nil
 }
@@ -299,11 +337,36 @@ func validateOTLP(o *model.OTLPConfig) error {
 // every default path does — stays the plain call it was.
 type LoadOption func(*loadOptions)
 
-type loadOptions struct{ expandEnv bool }
+type loadOptions struct {
+	expandEnv bool
+	// flag is the flag that turned expansion on, named when a reference
+	// cannot be expanded.
+	flag string
+}
+
+// Each document has its own flag for expansion: the configuration and its
+// collector files --config.expand-env, the static target file
+// --static-targets.expand-env. The static target file carries the addresses
+// and credentials of what is scraped, which an operator may want from the
+// environment while the configuration is committed as written, or the other
+// way round.
+const (
+	configEnvFlag        = "--config.expand-env"
+	staticTargetsEnvFlag = "--static-targets.expand-env"
+)
 
 // WithEnvExpansion substitutes ${NAME} references from the process environment
-// before the document is parsed. It is what --config.export-env turns on.
-func WithEnvExpansion() LoadOption { return func(o *loadOptions) { o.expandEnv = true } }
+// before the configuration is parsed. It is what --config.expand-env turns on.
+func WithEnvExpansion() LoadOption {
+	return func(o *loadOptions) { o.expandEnv, o.flag = true, configEnvFlag }
+}
+
+// WithStaticTargetsEnvExpansion does for the static target file what
+// WithEnvExpansion does for the configuration. It is what
+// --static-targets.expand-env turns on.
+func WithStaticTargetsEnvExpansion() LoadOption {
+	return func(o *loadOptions) { o.expandEnv, o.flag = true, staticTargetsEnvFlag }
+}
 
 func readDocument(path string, opts []LoadOption) ([]byte, error) {
 	var options loadOptions
@@ -317,7 +380,7 @@ func readDocument(path string, opts []LoadOption) ([]byte, error) {
 	if !options.expandEnv {
 		return b, nil
 	}
-	return expandEnvironment(path, b)
+	return expandEnvironment(path, b, options.flag)
 }
 
 // Load reads the configuration file at path and the collector files it
@@ -332,6 +395,9 @@ func Load(path string, opts ...LoadOption) (*model.Config, error) {
 	dec.KnownFields(true)
 	if err = dec.Decode(&c); err != nil {
 		return nil, yamlError(err)
+	}
+	if err = oneDocument(dec); err != nil {
+		return nil, err
 	}
 	if err = mergeCollectorFiles(&c, path, opts); err != nil {
 		return nil, err
@@ -352,14 +418,24 @@ type Manager struct {
 	logger  *slog.Logger
 	lastMod time.Time
 	// collectorFiles is the stamp of the collector files the configuration
-	// read when last loaded (collectorFilesStamp).
+	// read when last loaded (collectorFilesStamp), and watchedFiles the
+	// collector_files entries it was taken from: those of the file last
+	// read, even when it was refused, so fixing a collector file it added
+	// is a change the watch sees.
 	collectorFiles string
+	watchedFiles   []string
 	targetPath     string
 	targetFile     atomic.Pointer[model.StaticTargetFile]
 	targetsLastMod time.Time
 	pythonPath     string
 	watchInterval  time.Duration
 	expandEnv      bool
+	// expandStaticTargetsEnv is expandEnv for the static target file.
+	expandStaticTargetsEnv bool
+	// configWaits and targetsWaits say that file's last reload was refused
+	// only because the other file, as in force, disagrees with it, so a
+	// change to the other file reads it again (apply).
+	configWaits, targetsWaits bool
 	// reloads records how loading each file has gone, for the self-metrics.
 	Reloads *reloadStatus
 	// reloadMu serializes reloads, whatever triggers them.
@@ -381,7 +457,11 @@ func NewManager(c *model.Config, path string, l *slog.Logger) *Manager {
 		m.Reloads.loaded(reloadFileConfig)
 	}
 	if c != nil {
-		m.collectorFiles = collectorFilesStamp(path, c.CollectorFiles)
+		m.watchCollectorFiles(c.CollectorFiles)
+	}
+	// The file as read at startup is not a change for the first watch tick.
+	if st, err := os.Stat(path); err == nil && c != nil {
+		m.lastMod = st.ModTime()
 	}
 	return m
 }
@@ -402,15 +482,28 @@ func (m *Manager) WatchEnabled() bool { return m.watchInterval > 0 }
 // bounds how stale a running configuration can be.
 func (m *Manager) WatchInterval() time.Duration { return m.watchInterval }
 
-// SetEnvExpansion records that the documents were read with ${NAME} expansion,
-// so a reload reads them the same way. A reload that quietly stopped expanding
-// would replace a working configuration with one full of literal references.
+// SetEnvExpansion records that the configuration was read with ${NAME}
+// expansion, so a reload reads it the same way. A reload that quietly stopped
+// expanding would replace a working configuration with one full of literal
+// references.
 func (m *Manager) SetEnvExpansion(expand bool) { m.expandEnv = expand }
 
-// loadOptions returns the options the documents were first read with.
+// SetStaticTargetsEnvExpansion is SetEnvExpansion for the static target file.
+func (m *Manager) SetStaticTargetsEnvExpansion(expand bool) { m.expandStaticTargetsEnv = expand }
+
+// loadOptions returns the options the configuration was first read with.
 func (m *Manager) loadOptions() []LoadOption {
 	if m.expandEnv {
 		return []LoadOption{WithEnvExpansion()}
+	}
+	return nil
+}
+
+// staticTargetsLoadOptions returns the options the static target file was
+// first read with.
+func (m *Manager) staticTargetsLoadOptions() []LoadOption {
+	if m.expandStaticTargetsEnv {
+		return []LoadOption{WithStaticTargetsEnvExpansion()}
 	}
 	return nil
 }
@@ -465,54 +558,68 @@ func (m *Manager) ReloadLoop(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			m.reloadConfig()
-			m.reloadTargets()
+			m.reloadChanged()
 		}
 	}
 }
 
 // The configuration is reloaded when the watch sees a file change
-// (reloadConfig, reloadTargets), on SIGHUP, and on POST /-/reload when the
-// lifecycle API is enabled (Reload). Every reload goes through applyConfig and
-// applyTargets under reloadMu, so two triggers at once never interleave, and
-// each is logged with what triggered it.
+// (reloadChanged), on SIGHUP, and on POST /-/reload when the lifecycle API is
+// enabled (Reload). Every reload goes through apply under reloadMu, so two
+// triggers at once never interleave, and each is logged with what triggered
+// it.
 const (
 	reloadTriggerWatch  = "watch"
 	ReloadTriggerSignal = "sighup"
 	ReloadTriggerHTTP   = "http"
 )
 
-// reloadConfig reloads the configuration when the watch finds the file, or
-// one of its collector files, changed.
-func (m *Manager) reloadConfig() {
+// The configuration and the static target file are checked against each
+// other — a target names a collector, and one exported over OTLP needs OTLP
+// on — so a change that spans both, such as removing a collector and the
+// target that uses it, is only valid as a whole. apply therefore reads the
+// files it reloads together and installs them together when they agree. A
+// file refused only because the other one, as in force, disagrees with it
+// waits: when the other file changes, the watch reads it again with it,
+// although its own modification time has been seen. Without this a change
+// written to both files, in either order or at once, left the configuration
+// refused until it was touched again.
+
+// reloadChanged reloads what the watch finds changed: the configuration, when
+// the file or one of its collector files changed, and the static target file,
+// when it changed; and with either, the other when it waits for it.
+func (m *Manager) reloadChanged() {
 	m.reloadMu.Lock()
 	defer m.reloadMu.Unlock()
+	configChanged, targetsChanged := m.configChanged(), m.targetsChanged()
+	doConfig := configChanged || targetsChanged && m.configWaits
+	doTargets := targetsChanged || configChanged && m.targetsWaits
+	if !doConfig && !doTargets {
+		return
+	}
+	_ = m.apply(reloadTriggerWatch, doConfig, doTargets)
+}
+
+// configChanged reports whether the configuration file, or one of its
+// collector files, changed since it was last read.
+func (m *Manager) configChanged() bool {
 	st, err := os.Stat(m.path)
 	if err != nil {
-		return
+		return false
 	}
 	// A collector file edited, added or removed is a change too, although the
 	// configuration file itself is untouched.
-	stamp := collectorFilesStamp(m.path, m.Get().CollectorFiles)
-	if !st.ModTime().After(m.lastMod) && stamp == m.collectorFiles {
-		return
-	}
-	_ = m.applyConfig(reloadTriggerWatch)
+	return st.ModTime().After(m.lastMod) || collectorFilesStamp(m.path, m.watchedFiles) != m.collectorFiles
 }
 
-// reloadTargets reloads the static target file when the watch finds it
-// changed.
-func (m *Manager) reloadTargets() {
-	m.reloadMu.Lock()
-	defer m.reloadMu.Unlock()
+// targetsChanged reports whether the static target file changed since it was
+// last read.
+func (m *Manager) targetsChanged() bool {
 	if m.targetPath == "" {
-		return
+		return false
 	}
 	st, err := os.Stat(m.targetPath)
-	if err != nil || !st.ModTime().After(m.targetsLastMod) {
-		return
-	}
-	_ = m.applyTargets(reloadTriggerWatch)
+	return err == nil && st.ModTime().After(m.targetsLastMod)
 }
 
 // Reload reloads the configuration, and the static target file when there
@@ -521,74 +628,184 @@ func (m *Manager) reloadTargets() {
 func (m *Manager) Reload(trigger string) error {
 	m.reloadMu.Lock()
 	defer m.reloadMu.Unlock()
-	err := m.applyConfig(trigger)
-	if m.targetPath != "" {
-		err = errors.Join(err, m.applyTargets(trigger))
-	}
-	return err
+	return m.apply(trigger, true, m.targetPath != "")
 }
 
-// applyConfig loads, checks and installs the configuration. reloadMu is held.
-func (m *Manager) applyConfig(trigger string) error {
+// apply reads the configuration when doConfig and the static target file when
+// doTargets, and installs what is valid. reloadMu is held.
+func (m *Manager) apply(trigger string, doConfig, doTargets bool) error {
+	var errs []error
+	var cfg *model.Config
+	var targets *model.StaticTargetFile
+	if doConfig {
+		c, err := m.loadConfig()
+		if err != nil {
+			errs = append(errs, m.rejectConfig(trigger, err, false))
+		}
+		cfg = c
+	}
+	if doTargets {
+		f, err := m.loadTargets()
+		if err != nil {
+			errs = append(errs, m.rejectTargets(trigger, err, false))
+		}
+		targets = f
+	}
+	if cfg == nil && targets == nil {
+		return errors.Join(errs...)
+	}
+	// Together: each read file with the other as read, or as in force.
+	pairConfig, pairTargets := cfg, targets
+	if pairConfig == nil {
+		pairConfig = m.Get()
+	}
+	if pairTargets == nil {
+		pairTargets = m.targetFile.Load()
+	}
+	if agree(pairTargets, pairConfig) == nil {
+		if cfg != nil {
+			m.installConfig(trigger, cfg)
+		}
+		if targets != nil {
+			m.installTargets(trigger, targets)
+		}
+		return errors.Join(errs...)
+	}
+	// They disagree. When both were read, one may still go alone, with the
+	// other in force; what is left is refused, and waits for the other file.
+	if cfg != nil && agree(m.targetFile.Load(), cfg) == nil {
+		m.installConfig(trigger, cfg)
+		cfg = nil
+	}
+	if targets != nil && agree(targets, m.Get()) == nil {
+		m.installTargets(trigger, targets)
+		targets = nil
+	}
+	if cfg != nil {
+		errs = append(errs, m.rejectConfig(trigger, agree(m.targetFile.Load(), cfg), true))
+	}
+	if targets != nil {
+		errs = append(errs, m.rejectTargets(trigger, agree(targets, m.Get()), true))
+	}
+	return errors.Join(errs...)
+}
+
+// agree checks a static target file against a configuration; no file agrees
+// with every configuration.
+func agree(f *model.StaticTargetFile, c *model.Config) error {
+	if f == nil {
+		return nil
+	}
+	return ValidateStaticTargetsAgainst(f, c)
+}
+
+// watchCollectorFiles makes entries the collector files the watch stamps.
+func (m *Manager) watchCollectorFiles(entries []string) {
+	m.watchedFiles = entries
+	m.collectorFiles = collectorFilesStamp(m.path, entries)
+}
+
+// listedCollectorFiles is the collector_files a configuration file lists,
+// read without the rest of it, which may be what is wrong with it.
+func listedCollectorFiles(path string, opts []LoadOption) ([]string, bool) {
+	b, err := readDocument(path, opts)
+	if err != nil {
+		return nil, false
+	}
+	var listed struct {
+		CollectorFiles []string `yaml:"collector_files"`
+	}
+	if yaml.Unmarshal(b, &listed) != nil {
+		return nil, false
+	}
+	return listed.CollectorFiles, true
+}
+
+// loadConfig reads and checks the configuration on its own. reloadMu is held.
+func (m *Manager) loadConfig() (*model.Config, error) {
 	if st, err := os.Stat(m.path); err == nil {
 		m.lastMod = st.ModTime()
 	}
-	m.collectorFiles = collectorFilesStamp(m.path, m.Get().CollectorFiles)
-	reject := func(err error) error {
-		m.logger.Error("configuration reload rejected", "trigger", trigger, "error", err)
-		m.Reloads.record(reloadFileConfig, false)
-		return fmt.Errorf("configuration %s: %w", m.path, err)
+	// The collector files watched from now are the ones this file lists,
+	// read on its own, so a refused file that added one is read again
+	// when that one is fixed; a file that cannot say keeps the old list.
+	entries := m.Get().CollectorFiles
+	if listed, ok := listedCollectorFiles(m.path, m.loadOptions()); ok {
+		entries = listed
 	}
+	m.watchCollectorFiles(entries)
 	c, err := Load(m.path, m.loadOptions()...)
 	if err != nil {
-		return reject(err)
+		return nil, err
 	}
 	if err := transform.ValidatePythonScripts(m.pythonPath, c); err != nil {
-		return reject(err)
+		return nil, err
 	}
-	// The loaded static targets are checked against the new configuration:
-	// one that drops a collector a target names, or disables OTLP while a
-	// target sets export_via_otlp, is rejected exactly as it is at startup,
-	// and the last valid configuration stays active.
-	if f := m.targetFile.Load(); f != nil {
-		if err := ValidateStaticTargetsAgainst(f, c); err != nil {
-			return reject(err)
-		}
+	return c, nil
+}
+
+// loadTargets reads and checks the static target file on its own. reloadMu is
+// held.
+func (m *Manager) loadTargets() (*model.StaticTargetFile, error) {
+	if st, err := os.Stat(m.targetPath); err == nil {
+		m.targetsLastMod = st.ModTime()
 	}
+	f, err := LoadStaticTargets(m.targetPath, m.staticTargetsLoadOptions()...)
+	if err == nil {
+		err = ValidateStaticTargets(f)
+	}
+	if err != nil {
+		return nil, err
+	}
+	return f, nil
+}
+
+// installConfig puts c in force. reloadMu is held.
+func (m *Manager) installConfig(trigger string, c *model.Config) {
 	m.current.Store(c)
+	m.configWaits = false
 	m.Reloads.record(reloadFileConfig, true)
 	// Interpreters of scripts this reload removed or changed are stopped now
 	// rather than after the idle timeout.
 	transform.PythonWorkers().Retain(transform.PythonWorkerKeys(m.pythonPath, c))
 	// The new configuration may list other collector files.
-	m.collectorFiles = collectorFilesStamp(m.path, c.CollectorFiles)
+	m.watchCollectorFiles(c.CollectorFiles)
 	LogNotices(m.logger, m.path, c)
 	m.logger.Info("configuration reloaded", "trigger", trigger, "collectors", len(c.Collectors), "collector_files", len(c.LoadedCollectorFiles))
-	return nil
 }
 
-// applyTargets loads, checks and installs the static target file. reloadMu
-// is held.
-func (m *Manager) applyTargets(trigger string) error {
-	if st, err := os.Stat(m.targetPath); err == nil {
-		m.targetsLastMod = st.ModTime()
-	}
-	f, err := LoadStaticTargets(m.targetPath, m.loadOptions()...)
-	if err == nil {
-		err = ValidateStaticTargets(f)
-	}
-	if err == nil {
-		err = ValidateStaticTargetsAgainst(f, m.Get())
-	}
-	if err != nil {
-		m.logger.Error("static target reload rejected", "trigger", trigger, "error", err)
-		m.Reloads.record(ReloadFileStaticTargets, false)
-		return fmt.Errorf("static target file %s: %w", m.targetPath, err)
-	}
+// installTargets puts f in force. reloadMu is held.
+func (m *Manager) installTargets(trigger string, f *model.StaticTargetFile) {
 	m.targetFile.Store(f)
+	m.targetsWaits = false
 	m.Reloads.record(ReloadFileStaticTargets, true)
 	m.logger.Info("static targets reloaded", "trigger", trigger, "targets", len(f.Targets))
-	return nil
+}
+
+// rejectConfig refuses a configuration, which stays as it was. waits says it
+// was refused only by the static target file in force, and is read again when
+// that changes. reloadMu is held.
+func (m *Manager) rejectConfig(trigger string, err error, waits bool) error {
+	m.configWaits = waits
+	attrs := []any{"trigger", trigger, "error", err}
+	if waits {
+		attrs = append(attrs, "retried_when", "the static target file changes")
+	}
+	m.logger.Error("configuration reload rejected", attrs...)
+	m.Reloads.record(reloadFileConfig, false)
+	return fmt.Errorf("configuration %s: %w", m.path, err)
+}
+
+// rejectTargets is rejectConfig for the static target file.
+func (m *Manager) rejectTargets(trigger string, err error, waits bool) error {
+	m.targetsWaits = waits
+	attrs := []any{"trigger", trigger, "error", err}
+	if waits {
+		attrs = append(attrs, "retried_when", "the configuration changes")
+	}
+	m.logger.Error("static target reload rejected", attrs...)
+	m.Reloads.record(ReloadFileStaticTargets, false)
+	return fmt.Errorf("static target file %s: %w", m.targetPath, err)
 }
 
 // checkPythonLibrary rejects a declared library the image does not install.

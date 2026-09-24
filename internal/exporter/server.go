@@ -65,6 +65,11 @@ type Server struct {
 	otlp *otlpStatus
 	// failures keeps repeated failures from flooding the log (failurelog.go).
 	failures *failureLog
+	// scrapesCtx is what static target scrapes run under, until
+	// AbortStaticScrapes cancels it (statictargetschedule.go).
+	scrapesOnce  sync.Once
+	scrapesCtx   context.Context
+	abortScrapes context.CancelCauseFunc
 	// fingerprints remembers each collector's fingerprint for the cache
 	// keys of the current configuration (fingerprint.go).
 	fingerprints *fingerprintMemo
@@ -88,10 +93,12 @@ func NewServer(m *config.Manager, p string, l *slog.Logger) *Server {
 const DefaultSelfMetricsPath = "/self-metrics"
 
 // endpointPathRE, for the self-metrics and static targets paths, is a path of
-// plain segments: no query, fragment, trailing
-// slash or ServeMux wildcard, any of which would make the endpoint something
-// other than one fixed path.
-var endpointPathRE = regexp.MustCompile(`^(/[A-Za-z0-9._~-]+)+$`)
+// plain segments: no query, fragment, trailing slash or ServeMux wildcard, any
+// of which would make the endpoint something other than one fixed path, and no
+// segment of dots alone. ServeMux cleans a request's path before routing it,
+// so /metrics/.. is asked for as / and an endpoint registered there is never
+// reached; a segment needs a character other than a dot.
+var endpointPathRE = regexp.MustCompile(`^(/[A-Za-z0-9._~-]*[A-Za-z0-9_~-][A-Za-z0-9._~-]*)+$`)
 
 // SelfMetricsPath checks --web.self-metrics-path and returns it with its
 // leading slash. The exporter serves its own metrics there and nowhere else,
@@ -107,7 +114,7 @@ func endpointPath(flag, path, example string) (string, error) {
 		path = "/" + path
 	}
 	if !endpointPathRE.MatchString(path) {
-		return "", fmt.Errorf("%s %q must be a path of letters, digits and . _ ~ - segments, such as %s", flag, path, example)
+		return "", fmt.Errorf("%s %q must be a path of letters, digits and . _ ~ - segments, each with a character other than a dot, such as %s", flag, path, example)
 	}
 	switch path {
 	case "/probe", "/health", "/ready", "/collectors", "/-/reload":

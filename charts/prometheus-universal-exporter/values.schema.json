@@ -175,14 +175,15 @@
       "additionalProperties": false,
       "properties": {
         "enabled": {"type": "boolean", "description": "Render the static target document and pass it with --static-targets-file."},
-        "fileName": {"type": "string", "minLength": 1},
+        "fileName": {"type": "string", "description": "The static target file's key in the configuration ConfigMap.", "pattern": "^[-._a-zA-Z0-9]+$", "not": {"enum": [".", ".."]}},
         "path": {
           "type": "string",
           "description": "Rendered as --web.static-targets-path: where the static targets' latest results are served. A path of plain segments that no other endpoint uses, and not selfMetrics.path.",
-          "pattern": "^(/[A-Za-z0-9._~-]+)+$",
+          "pattern": "^(/[A-Za-z0-9._~-]*[A-Za-z0-9_~-][A-Za-z0-9._~-]*)+$",
           "not": {"enum": ["/probe", "/health", "/ready", "/collectors", "/-/reload"]}
         },
         "data": {"type": "string", "description": "The static target document, YAML."},
+        "expandEnv": {"type": "boolean", "description": "Rendered as --static-targets.expand-env with enabled: expands ${NAME} environment references in the static target document."},
         "monitor": {
           "type": "object",
           "additionalProperties": false,
@@ -195,7 +196,13 @@
             "labels": {"$ref": "#/$defs/stringMap"},
             "annotations": {"$ref": "#/$defs/stringMap"},
             "relabelings": {"type": "array", "items": {"type": "object"}},
-            "metricRelabelings": {"type": "array", "items": {"type": "object"}}
+            "metricRelabelings": {"type": "array", "items": {"type": "object"}},
+            "targets": {
+              "type": "array",
+              "description": "Static targets this monitor reads, rendered as the endpoint's targets parameter; empty reads every target.",
+              "uniqueItems": true,
+              "items": {"type": "string", "pattern": "^[a-zA-Z_][a-zA-Z0-9_]*$"}
+            }
           }
         }
       }
@@ -258,7 +265,7 @@
         "path": {
           "type": "string",
           "description": "Rendered as --web.self-metrics-path: the one path the exporter serves its own metrics at, such as /self-metrics or /metrics. A path of plain segments that no other endpoint uses.",
-          "pattern": "^(/[A-Za-z0-9._~-]+)+$",
+          "pattern": "^(/[A-Za-z0-9._~-]*[A-Za-z0-9_~-][A-Za-z0-9._~-]*)+$",
           "not": {"enum": ["/probe", "/health", "/ready", "/collectors", "/-/reload"]}
         },
         "enabled": {"type": "boolean"},

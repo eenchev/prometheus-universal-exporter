@@ -3,12 +3,15 @@
 package exporter
 
 import (
+	"bytes"
 	"context"
+	"log/slog"
 	"net/http"
 	"net/url"
 	"os"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"syscall"
 	"testing"
@@ -259,5 +262,79 @@ func TestLocalFileStaticTargets(t *testing.T) {
 				t.Fatalf("err=%v, want %q", err, tc.want)
 			}
 		})
+	}
+}
+
+// A file of carbon lines is read with the graphite decoder, by its extension
+// or by its content, into series a jq rule maps; a directory of them is read
+// file by file.
+func TestLocalFileCarbonLines(t *testing.T) {
+	root := t.TempDir()
+	now := time.Now().Unix()
+	lines := func(value int) string {
+		return strings.Join([]string{
+			"# written by the nightly job",
+			"backup.web01.duration_seconds 40 " + strconv.FormatInt(now-600, 10),
+			"backup.web01.duration_seconds " + strconv.Itoa(value) + " " + strconv.FormatInt(now-60, 10),
+			"backup.web02.duration_seconds 7 " + strconv.FormatInt(now-7200, 10),
+		}, "\n") + "\n"
+	}
+	testutil.WriteIn(t, root, "backup.graphite", lines(42))
+	testutil.WriteIn(t, root, "batch/backup.carbon", lines(5))
+	testutil.WriteIn(t, root, "backup.txt", lines(9))
+	c := fileCollector("carbon", root, "")
+	c.Transform = model.TransformConfig{Type: "jq"}
+	c.Response.Graphite = model.GraphiteConfig{MaxAge: model.Duration(time.Hour)}
+	c.Metrics = []model.MetricRule{{Name: "backup_duration_seconds", Items: ".series[]", Expression: ".value", Labels: []model.LabelRule{{Name: "host", Expression: ".segments[1]"}}}}
+	dir := dirCollector("carbon_dir", root, "*.graphite", "*.txt")
+	dir.Transform, dir.Response, dir.Metrics = c.Transform, c.Response, c.Metrics
+	server := fileServer(t, c, dir)
+	probeFile(t, server, "collector=carbon&target=backup.graphite").must(t, http.StatusOK, `backup_duration_seconds{host="web01"} 42`)
+	probeFile(t, server, "collector=carbon&target=batch/backup.carbon").must(t, http.StatusOK, `backup_duration_seconds{host="web01"} 5`)
+	probeFile(t, server, "collector=carbon&target=backup.txt").must(t, http.StatusOK, `backup_duration_seconds{host="web01"} 9`)
+	result := probeFile(t, server, "collector=carbon_dir")
+	result.must(t, http.StatusOK, `backup_duration_seconds{file="backup.graphite",host="web01"} 42`, `backup_duration_seconds{file="backup.txt",host="web01"} 9`)
+	if strings.Contains(result.body, "web02") {
+		t.Fatalf("a series older than max_age is exported:\n%s", result.body)
+	}
+}
+
+// With invalid_lines: skip, a carbon file with a torn line is read without
+// it: the skipped lines and the series left out are counted in the
+// self-metrics, the skipping logged once as a failure is and its end as a
+// recovery, and the series left out logged at debug level.
+func TestLocalFileCarbonLinesSkipped(t *testing.T) {
+	root := t.TempDir()
+	now := strconv.FormatInt(time.Now().Unix(), 10)
+	file := testutil.WriteIn(t, root, "jobs.graphite", "jobs.a.done 1 "+now+"\njobs.b.do\njobs.old.done 1 1000\n")
+	c := fileCollector("carbon", root, "jobs.graphite")
+	c.Transform = model.TransformConfig{Type: "jq"}
+	c.Response.Graphite = model.GraphiteConfig{MaxAge: model.Duration(time.Hour), InvalidLines: "skip"}
+	c.Metrics = []model.MetricRule{{Name: "jobs_done", Items: ".series[]", Expression: ".value", Labels: []model.LabelRule{{Name: "job", Expression: ".segments[1]"}}}}
+	server := fileServer(t, c)
+	var logs bytes.Buffer
+	server.logger = slog.New(slog.NewJSONHandler(&logs, &slog.HandlerOptions{Level: slog.LevelDebug}))
+	for range 2 {
+		probeFile(t, server, "collector=carbon").must(t, http.StatusOK, `jobs_done{job="a"} 1`)
+	}
+	metrics := selfMetrics(t, server)
+	for _, want := range []string{`http_exporter_decoder_lines_skipped_total{collector="carbon"} 2`, `http_exporter_decoder_series_left_out_total{collector="carbon"} 2`} {
+		if !strings.Contains(metrics, want) {
+			t.Errorf("missing %s", want)
+		}
+	}
+	text := logs.String()
+	if n := strings.Count(text, `"level":"WARN","msg":"carbon lines skipped"`); n != 1 || !strings.Contains(text, `carbon line 2: \"jobs.b.do\" has 1 fields`) || !strings.Contains(text, `"skipped":1`) {
+		t.Fatalf("%d warnings:\n%s", n, text)
+	}
+	if !strings.Contains(text, `"msg":"graphite series left out"`) || !strings.Contains(text, `"older_than_max_age":1`) {
+		t.Fatalf("no debug line for the series left out:\n%s", text)
+	}
+	if err := os.WriteFile(file, []byte("jobs.a.done 2 "+now+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	probeFile(t, server, "collector=carbon").must(t, http.StatusOK, `jobs_done{job="a"} 2`)
+	if !strings.Contains(logs.String(), `"msg":"carbon lines read whole again"`) {
+		t.Fatalf("no recovery:\n%s", logs.String())
 	}
 }

@@ -24,8 +24,8 @@ func CheckMetricRule(x *model.Collector, r *model.MetricRule) error {
 			return fmt.Errorf("%s: %w", where, err)
 		}
 	}
-	if r.Items != "" && !jqFamily(x.Transform.Type) {
-		return fmt.Errorf("%s sets items, which only the jq and yq transforms support", where)
+	if r.Items != "" && !jqFamily(x.Transform.Type) && x.Transform.Type != "css" {
+		return fmt.Errorf("%s sets items, which only the jq, yq and css transforms support", where)
 	}
 	switch {
 	case jqFamily(x.Transform.Type):
@@ -54,6 +54,11 @@ func CheckMetricRule(x *model.Collector, r *model.MetricRule) error {
 			}
 		}
 	case x.Transform.Type == "css":
+		if r.Items != "" {
+			if _, err := expr.CompileCSS(r.Items); err != nil {
+				return fmt.Errorf("%s items CSS selector %q: %w", where, r.Items, err)
+			}
+		}
 		if _, err := expr.CompileCSS(r.Expression); err != nil {
 			return fmt.Errorf("%s CSS selector %q: %w", where, r.Expression, err)
 		}

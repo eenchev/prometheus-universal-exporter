@@ -207,7 +207,7 @@
                   ]
                 },
                 "items": {
-                  "description": "jq and yq only: selects the things the metric is about. The expression and labels are then evaluated once per item, with the item as . and the whole document as $root.",
+                  "description": "jq, yq and css only: selects the things the metric is about, such as table rows. The expression and labels are then evaluated once per item: for jq and yq with the item as . and the whole document as $root, for css as selectors within the item.",
                   "type": [
                     "string",
                     "number",

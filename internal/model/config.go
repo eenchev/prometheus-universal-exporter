@@ -255,9 +255,9 @@ type Limits struct {
 // that produces its value and the labels it carries.
 type MetricRule struct {
 	Name string `yaml:"name"`
-	// Items, for the jq and yq transforms, selects the things the metric is
-	// about; the expression and the labels are then evaluated once per item.
-	// See transformJQItems.
+	// Items, for the jq, yq and css transforms, selects the things the metric
+	// is about; the expression and the labels are then evaluated once per
+	// item. See transformJQItems and transformCSSItems.
 	Items       string      `yaml:"items"`
 	Description string      `yaml:"description"`
 	Type        MetricType  `yaml:"type"`

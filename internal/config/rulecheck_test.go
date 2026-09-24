@@ -57,11 +57,12 @@ func TestExpressionsAreCompiledAtLoad(t *testing.T) {
 		{"regex label capture", "regex", model.MetricRule{Name: "m", Expression: `(?P<value>\d+)`, Labels: label("server")}, `label "l" refers to capture group "server", which the regex does not have`},
 		{"regex label index", "regex", model.MetricRule{Name: "m", Expression: `(\d+)`, Labels: label("2")}, `refers to capture group "2"`},
 		{"css", "css", model.MetricRule{Name: "m", Expression: "td:nth-child("}, `metric "m" CSS selector "td:nth-child("`},
+		{"css items", "css", model.MetricRule{Name: "m", Items: "tr:has(", Expression: "td"}, `metric "m" items CSS selector "tr:has("`},
 		{"css label", "css", model.MetricRule{Name: "m", Expression: "td", Labels: label("[[")}, `label "l" CSS selector "[["`},
 		{"xpath", "xpath", model.MetricRule{Name: "m", Expression: "//item["}, `metric "m" XPath "//item["`},
 		{"xpath label", "xpath", model.MetricRule{Name: "m", Expression: "//item", Labels: label("name[")}, `label "l" XPath "name["`},
 		{"prometheus pattern", "prometheus", model.MetricRule{Name: "m", Expression: "^vendor_(.*"}, `metric "m" expression`},
-		{"items on regex", "regex", model.MetricRule{Name: "m", Items: ".rows[]", Expression: `(\d+)`}, "sets items, which only the jq and yq transforms support"},
+		{"items on regex", "regex", model.MetricRule{Name: "m", Items: ".rows[]", Expression: `(\d+)`}, "sets items, which only the jq, yq and css transforms support"},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {

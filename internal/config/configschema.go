@@ -201,7 +201,7 @@ func configSchemaRules() map[string]map[string]any {
 		"collectors[].error_handling.on_decode_error":    errorPolicy,
 		"collectors[].error_handling.on_transform_error": errorPolicy,
 		"collectors[].metrics[].name":                    {"pattern": `^[a-zA-Z_:][a-zA-Z0-9_:]*$`, "description": "The metric name, before metrics_prefix."},
-		"collectors[].metrics[].items":                   {"description": "jq and yq only: selects the things the metric is about. The expression and labels are then evaluated once per item, with the item as . and the whole document as $root."},
+		"collectors[].metrics[].items":                   {"description": "jq, yq and css only: selects the things the metric is about, such as table rows. The expression and labels are then evaluated once per item: for jq and yq with the item as . and the whole document as $root, for css as selectors within the item."},
 		"collectors[].metrics[].expression":              {"description": "Where the value comes from, in the transform's language: jq, a regex, a CSS selector, an XPath expression, a CSV column or a source metric pattern."},
 		"collectors[].metrics[].error_mode": {
 			"enum":        []string{model.ErrorModeFail, model.ErrorModeLog, model.ErrorModeIgnore, model.ErrorPolicyWarn},

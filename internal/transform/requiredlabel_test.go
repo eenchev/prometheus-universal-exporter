@@ -100,6 +100,16 @@ func labelCases() []labelCase {
 			body: `<table><tr><td><b>1</b></td></tr><tr><td>2</td></tr></table>`, contentType: "text/html", who: "1",
 		},
 		{
+			name: "CSS items",
+			collector: func(label model.LabelRule) model.Collector {
+				label.Expression = "td.who"
+				c := collector("css", "html", "td.v", label)
+				c.Metrics[0].Items = "tr"
+				return c
+			},
+			body: `<table><tr><td class="v">1</td><td class="who">a</td></tr><tr><td class="v">2</td></tr></table>`, contentType: "text/html",
+		},
+		{
 			name: "CSV",
 			collector: func(label model.LabelRule) model.Collector {
 				label.Expression = "who"

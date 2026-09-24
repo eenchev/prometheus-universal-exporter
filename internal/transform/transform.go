@@ -676,6 +676,14 @@ func transformXPathNodes[N any](root N, nodes xpathNodes[N], rules []model.Metri
 func transformCSS(doc *goquery.Document, rules []model.MetricRule, c *model.Collector) (*model.MetricSet, error) {
 	out := &model.MetricSet{}
 	for _, rule := range rules {
+		if rule.Items != "" {
+			metrics, err := transformCSSItems(doc, rule, c)
+			if err != nil {
+				return nil, err
+			}
+			out.Metrics = append(out.Metrics, metrics...)
+			continue
+		}
 		matcher, err := expr.CompileCSS(rule.Expression)
 		if err != nil {
 			if handleMetricError(c, rule, err) {
@@ -731,6 +739,105 @@ func transformCSS(doc *goquery.Document, rules []model.MetricRule, c *model.Coll
 			}
 			return nil, ruleFailure(c, rule, transformErr)
 		}
+	}
+	return out, nil
+}
+
+// transformCSSItems evaluates a rule item by item, as transformJQItems does:
+// items selects the elements the metric is about — table rows, status
+// entries — and the value selector and every label selector are matched
+// within one item at a time. Without items the value is the whole text of
+// each selected element, so a label can only read text that is part of the
+// number; with items, the value and the labels are cells of the same row.
+//
+// Within one item the value selector and each label selector must match at
+// most one element; more is an error, since there would be no telling which
+// belongs to the series. A value selector matching nothing is a missing
+// metric for that item, handled by required and error_mode like any other; a
+// label selector matching nothing leaves the label off.
+func transformCSSItems(doc *goquery.Document, rule model.MetricRule, c *model.Collector) ([]model.Metric, error) {
+	fail := func(err error) (bool, error) {
+		if handleMetricError(c, rule, err) {
+			return true, nil
+		}
+		return false, ruleFailure(c, rule, err)
+	}
+	itemsMatcher, err := expr.CompileCSS(rule.Items)
+	if err != nil {
+		_, failure := fail(fmt.Errorf("metric %q items CSS selector %q: %w", rule.Name, rule.Items, err))
+		return nil, failure
+	}
+	valueMatcher, err := expr.CompileCSS(rule.Expression)
+	if err != nil {
+		_, failure := fail(fmt.Errorf("metric %q CSS selector %q: %w", rule.Name, rule.Expression, err))
+		return nil, failure
+	}
+	items := doc.FindMatcher(itemsMatcher)
+	if items.Length() == 0 && requiredRule(rule, c) {
+		_, failure := fail(model.MarkError(fmt.Errorf("metric %q items CSS selector %q matched no nodes", rule.Name, rule.Items), model.ErrMissingValue))
+		return nil, failure
+	}
+	// one is the trimmed text of the element selector matches within item, or
+	// false when it matches none.
+	one := func(item *goquery.Selection, index int, selector string, matcher goquery.Matcher) (string, bool, error) {
+		found := item.FindMatcher(matcher)
+		switch found.Length() {
+		case 0:
+			return "", false, nil
+		case 1:
+			return strings.TrimSpace(found.Text()), true, nil
+		default:
+			return "", false, fmt.Errorf("metric %q item %d: CSS selector %q matched %d elements; within an item it must match at most one", rule.Name, index, selector, found.Length())
+		}
+	}
+	var out []model.Metric
+	for index := range items.Length() {
+		item := items.Eq(index)
+		text, found, err := one(item, index, rule.Expression, valueMatcher)
+		if err == nil && !found {
+			if !requiredRule(rule, c) {
+				continue
+			}
+			err = model.MarkError(fmt.Errorf("metric %q value is missing for item %d: CSS selector %q matched nothing", rule.Name, index, rule.Expression), model.ErrMissingValue)
+		}
+		var value float64
+		if err == nil {
+			value, err = decode.TextValue(text)
+			if err != nil {
+				err = fmt.Errorf("metric %q item %d: %w", rule.Name, index, err)
+			}
+		}
+		labels := map[string]string{}
+		for _, label := range rule.Labels {
+			if err != nil {
+				break
+			}
+			if label.Type == "string" {
+				labels[label.Name] = label.Value
+				continue
+			}
+			matcher, compileErr := expr.CompileCSS(label.Expression)
+			if compileErr != nil {
+				err = fmt.Errorf("metric %q label %q CSS selector %q: %w", rule.Name, label.Name, label.Expression, compileErr)
+				break
+			}
+			var labelText string
+			if labelText, _, err = one(item, index, label.Expression, matcher); err == nil {
+				labels[label.Name] = labelText
+			}
+		}
+		if err == nil {
+			if missing := missingRequiredLabel(rule, labels); missing != nil {
+				err = fmt.Errorf("%w for item %d", missing, index)
+			}
+		}
+		if err != nil {
+			if carryOn, failure := fail(err); !carryOn {
+				return nil, failure
+			}
+			continue
+		}
+		out = append(out, model.Metric{Name: rule.Name, Help: rule.Description, Type: rule.Type, Value: value, Labels: labels})
 	}
 	return out, nil
 }

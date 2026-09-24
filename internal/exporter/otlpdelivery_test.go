@@ -370,21 +370,42 @@ func TestTheLastOTLPExportAtShutdown(t *testing.T) {
 	t.Cleanup(endpoint.Close)
 	t.Cleanup(func() { close(block) })
 	server := otlpServer(t, endpoint.URL)
-	server.manager.Get().OTLP.Interval = model.Duration(10 * time.Millisecond)
 	queueProbeMetric(server, "before_shutdown", 1)
 
+	// The loop waits an interval before its first export, and stops at once
+	// when its context ends, without exporting.
+	server.manager.Get().OTLP.Interval = model.Duration(time.Hour)
+	loopCtx, stopLoop := context.WithCancel(context.Background())
+	loopDone := make(chan struct{})
+	go func() {
+		defer close(loopDone)
+		server.OTLPExportLoop(loopCtx)
+	}()
+	stopLoop()
+	select {
+	case <-loopDone:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the export loop did not stop when its context ended")
+	}
+	if requests.Load() != 0 {
+		t.Fatal("the loop exported at shutdown")
+	}
+
+	// An export in flight when shutdown begins is cut short. Its budget is
+	// long, so only the shutdown ends it: an export that ran out of budget
+	// would rightly be a failure.
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		server.OTLPExportLoop(ctx)
+		server.exportOTLP(ctx, time.Minute)
 	}()
-	testutil.WaitFor(t, "the loop to start an export", func() bool { return requests.Load() == 1 })
+	testutil.WaitFor(t, "the export to reach the endpoint", func() bool { return requests.Load() == 1 })
 	cancel()
 	select {
 	case <-done:
 	case <-time.After(5 * time.Second):
-		t.Fatal("the export loop did not stop when its context ended")
+		t.Fatal("the export did not stop when its context ended")
 	}
 	if _, ok := pendingValue(server, "before_shutdown"); !ok {
 		t.Fatal("the export cut short by shutdown lost its data")

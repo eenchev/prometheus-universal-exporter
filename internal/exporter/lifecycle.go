@@ -102,6 +102,8 @@ var (
 	httpIdleTimeout       = 2 * time.Minute
 )
 
+// NewHTTPServer returns the exporter's HTTP server on address, with the read
+// and idle timeouts above.
 func NewHTTPServer(address string, handler http.Handler) *http.Server {
 	return &http.Server{
 		Addr:              address,

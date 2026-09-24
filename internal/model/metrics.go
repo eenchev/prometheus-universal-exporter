@@ -11,8 +11,11 @@ import (
 	"unicode/utf8"
 )
 
+// MetricType is the type of a metric family, as the exposition format names
+// it.
 type MetricType string
 
+// The metric types.
 const (
 	GaugeMetricType     MetricType = "gauge"
 	CounterMetricType   MetricType = "counter"
@@ -21,6 +24,9 @@ const (
 	UntypedMetricType   MetricType = "untyped"
 )
 
+// Metric is one series: a name, labels and a value. A histogram or a summary
+// carries its buckets or quantiles in Histogram or Summary instead of Value.
+// Timestamp, when set, is in milliseconds since the Unix epoch.
 type Metric struct {
 	Name      string            `json:"name"`
 	Help      string            `json:"help,omitempty"`
@@ -32,32 +38,40 @@ type Metric struct {
 	Summary   *Summary          `json:"-"`
 }
 
+// Histogram is the value of a histogram series.
 type Histogram struct {
 	Buckets []Bucket
 	Sum     float64
 	Count   uint64
 }
 
+// Bucket is one bucket of a histogram: how many observations were at most
+// UpperBound.
 type Bucket struct {
 	UpperBound      float64
 	CumulativeCount uint64
 }
 
+// Summary is the value of a summary series.
 type Summary struct {
 	Quantiles []Quantile
 	Sum       float64
 	Count     uint64
 }
 
+// Quantile is one quantile of a summary and its value.
 type Quantile struct {
 	Quantile float64
 	Value    float64
 }
 
+// MetricSet is the metrics one scrape of a collector produced.
 type MetricSet struct{ Metrics []Metric }
 
+// MetricNameRE matches a classic Prometheus metric name.
 var MetricNameRE = regexp.MustCompile(`^[a-zA-Z_:][a-zA-Z0-9_:]*$`)
 
+// LabelNameRE matches a classic Prometheus label name.
 var LabelNameRE = regexp.MustCompile(`^[a-zA-Z_][a-zA-Z0-9_]*$`)
 
 func (m Metric) seriesKey() string {
@@ -77,6 +91,9 @@ func (m Metric) seriesKey() string {
 	return b.String()
 }
 
+// Validate checks the set against the collector's limits and the rules of
+// the exposition format: valid names and types, no duplicate series, one type
+// per family. It stops at the first problem, which the error describes.
 func (s *MetricSet) Validate(l Limits) error {
 	seen := map[string]struct{}{}
 	types := map[string]MetricType{}
@@ -129,6 +146,8 @@ func (s *MetricSet) Validate(l Limits) error {
 	return nil
 }
 
+// Number reads a decoded value as a number: any numeric type, a string
+// holding one, or a boolean as 1 or 0.
 func Number(v any) (float64, error) {
 	switch x := v.(type) {
 	case float64:
@@ -155,6 +174,9 @@ func Number(v any) (float64, error) {
 	}
 }
 
+// Normalize rewrites decoded JSON or YAML in place into the shapes the
+// transforms expect: maps keyed by string, and a json.Number as a float64,
+// or as its text when it is not one.
 func Normalize(v any) any {
 	switch x := v.(type) {
 	case map[any]any:
@@ -183,6 +205,8 @@ func Normalize(v any) any {
 	}
 }
 
+// CloneMetricSet returns a deep copy of in, which the copy's user may change
+// without affecting in.
 func CloneMetricSet(in MetricSet) MetricSet {
 	out := MetricSet{Metrics: make([]Metric, 0, len(in.Metrics))}
 	for _, metric := range in.Metrics {
@@ -191,6 +215,7 @@ func CloneMetricSet(in MetricSet) MetricSet {
 	return out
 }
 
+// CloneMetric returns a deep copy of in.
 func CloneMetric(in Metric) Metric {
 	out := in
 	if in.Labels != nil {
@@ -213,6 +238,7 @@ func CloneMetric(in Metric) Metric {
 	return out
 }
 
+// CloneLabels returns a copy of in, never nil.
 func CloneLabels(in map[string]string) map[string]string {
 	out := map[string]string{}
 	for k, v := range in {
@@ -221,6 +247,7 @@ func CloneLabels(in map[string]string) map[string]string {
 	return out
 }
 
+// SortedKeys returns the keys of in in sorted order.
 func SortedKeys[V any](in map[string]V) []string {
 	out := make([]string, 0, len(in))
 	for key := range in {

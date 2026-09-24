@@ -16,6 +16,9 @@ import (
 	"github.com/eenchev/prometheus-universal-exporter/internal/model"
 )
 
+// Server answers the exporter's HTTP endpoints — probes, its own metrics,
+// health and readiness, and reloads — and keeps the state they share: the
+// cache, the statistics and the OTLP queue.
 type Server struct {
 	manager         *config.Manager
 	pythonPath      string
@@ -57,12 +60,16 @@ type Server struct {
 	seenConfig atomic.Pointer[model.Config]
 }
 
+// NewServer returns a server using the configuration m holds and running
+// Python scripts with the interpreter at p.
 func NewServer(m *config.Manager, p string, l *slog.Logger) *Server {
 	s := &Server{manager: m, pythonPath: p, logger: l, stats: map[string]*serverStats{}, otlpPending: map[string]*otlpBatch{}, cache: newResponseCache(), requests: newRequestTracker(), flights: newProbeFlights(), durations: newScrapeDurations(), trips: newTripLimiter(), otlp: &otlpStatus{}, failures: newFailureLog(), fingerprints: &fingerprintMemo{}, timeoutOffset: DefaultTimeoutOffset}
 	s.seenConfig.Store(m.Get())
 	return s
 }
 
+// SetSelfMetricsPath serves the exporter's own metrics at path as well as at
+// /metrics. A path an endpoint already uses falls back to /self-metrics.
 func (s *Server) SetSelfMetricsPath(path string) {
 	if path == "" || path[0] != '/' {
 		path = "/" + path
@@ -85,6 +92,8 @@ func (s *Server) statsFor(name string) *serverStats {
 	return x
 }
 
+// Handler routes the exporter's endpoints: /probe, /metrics and the self-
+// metrics path, /health, /ready and /-/reload.
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/health", func(w http.ResponseWriter, _ *http.Request) {

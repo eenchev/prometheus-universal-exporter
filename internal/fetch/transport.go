@@ -48,6 +48,8 @@ const (
 	transportMaxIdlePerHost  = 8
 )
 
+// TransportSettings are what a connection pool depends on. Requests with the
+// same settings share one pool.
 type TransportSettings struct {
 	TLS         model.TLSConfig
 	EnableHTTP2 bool

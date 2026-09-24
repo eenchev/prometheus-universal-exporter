@@ -16,6 +16,10 @@ import (
 	"github.com/eenchev/prometheus-universal-exporter/internal/model"
 )
 
+// HTTPResponse is what a fetch returned, whatever the request type: a
+// status, headers and a body, or, for a localfile collector reading a
+// directory, the files it read. Target and Collector say what was fetched,
+// Duration how long it took.
 type HTTPResponse struct {
 	StatusCode int
 	Headers    http.Header
@@ -28,6 +32,8 @@ type HTTPResponse struct {
 	Directory *DirectoryRead
 }
 
+// RequestOverrides are the probe parameters that change a collector's request
+// for one probe. An unset field leaves the collector's setting in force.
 type RequestOverrides struct {
 	Method             string
 	Path               string
@@ -68,6 +74,8 @@ func parseBoolOverride(values url.Values, name string) (*bool, error) {
 	return &parsed, nil
 }
 
+// ParseRequestOverrides reads the overrides from a probe's query parameters,
+// refusing a malformed one.
 func ParseRequestOverrides(values url.Values) (RequestOverrides, error) {
 	overrides := RequestOverrides{}
 	if method := strings.TrimSpace(values.Get("method")); method != "" {
@@ -429,6 +437,8 @@ func waitRetry(ctx context.Context, backoff time.Duration) error {
 	}
 }
 
+// ReadCredentialFile reads a credential from the file at path, without the
+// surrounding whitespace an editor or a Secret mount may leave.
 func ReadCredentialFile(path string) (string, error) {
 	if strings.TrimSpace(path) == "" {
 		return "", errors.New("path is empty")

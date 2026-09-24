@@ -123,6 +123,9 @@ func (s pythonSpec) key() string {
 	return strings.Join([]string{s.Path, s.Collector, strings.Join(s.Modules, ","), strconv.Itoa(s.MaxOutput), s.Scripts}, "\x00")
 }
 
+// PythonPool keeps the Python workers that run collector scripts, idle ones
+// ready for the next run of the same script, and counts what they do for the
+// self-metrics.
 type PythonPool struct {
 	mu      sync.Mutex
 	idle    map[string][]*pythonWorker
@@ -159,6 +162,8 @@ const (
 	pythonRunFailed      = "failed"
 )
 
+// PythonStopReasons and PythonRunOutcomes are every reason a worker stops and
+// every way a run ends, so each has a series from the start.
 var (
 	PythonStopReasons = []string{pythonStopTimeout, pythonStopCrash, pythonStopOutputLimit, pythonStopCancelled, pythonStopRetired, pythonStopSurplus, pythonStopIdle, pythonStopReload}
 	PythonRunOutcomes = []string{pythonRunOK, pythonRunScriptError, pythonRunTimeout, pythonRunOutputLimit, pythonRunFailed}

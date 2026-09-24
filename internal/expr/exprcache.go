@@ -80,10 +80,12 @@ var jqPrograms = newExprCache(func(expression string) (*gojq.Code, error) {
 	return gojq.Compile(query, gojq.WithVariables([]string{jqRootVariable}))
 })
 
+// CompileJQ compiles a jq expression, once per distinct expression.
 func CompileJQ(expression string) (*gojq.Code, error) { return jqPrograms.get(expression) }
 
 var regexPrograms = newExprCache(regexp.Compile)
 
+// CompileRegex compiles a regular expression, once per distinct expression.
 func CompileRegex(expression string) (*regexp.Regexp, error) { return regexPrograms.get(expression) }
 
 // cssSelectors are compiled with cascadia, which goquery uses underneath.
@@ -91,6 +93,7 @@ func CompileRegex(expression string) (*regexp.Regexp, error) { return regexProgr
 // nothing, which turned a typo into "matched no nodes" on every scrape.
 var cssSelectors = newExprCache(cascadia.Compile)
 
+// CompileCSS compiles a CSS selector, once per distinct selector.
 func CompileCSS(selector string) (cascadia.Selector, error) { return cssSelectors.get(selector) }
 
 // xpathPrograms are keyed by the expression and the namespace bindings, which
@@ -103,6 +106,8 @@ var xpathPrograms = newExprCache(func(key string) (*xpath.Expr, error) {
 	return xpath.CompileWithNS(expression, namespaces)
 })
 
+// CompileXPath compiles an XPath expression with the given namespace
+// bindings, once per distinct expression and bindings.
 func CompileXPath(expression string, namespaces map[string]string) (*xpath.Expr, error) {
 	return xpathPrograms.get(xpathKey(expression, namespaces))
 }

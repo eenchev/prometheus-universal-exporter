@@ -314,6 +314,8 @@ func readDocument(path string, opts []LoadOption) ([]byte, error) {
 	return expandEnvironment(path, b)
 }
 
+// Load reads the configuration file at path and the collector files it
+// lists, and validates the result.
 func Load(path string, opts ...LoadOption) (*model.Config, error) {
 	b, err := readDocument(path, opts)
 	if err != nil {
@@ -334,6 +336,10 @@ func Load(path string, opts ...LoadOption) (*model.Config, error) {
 	return &c, nil
 }
 
+// Manager holds the configuration in force and the scheduled target file,
+// and reloads them: when the watch finds a file changed, on SIGHUP and on
+// POST /-/reload. A rejected reload leaves the previous configuration in
+// force.
 type Manager struct {
 	current atomic.Value
 	path    string
@@ -361,6 +367,7 @@ type Manager struct {
 // is attached to, so such a watch stops firing after the first change.
 const DefaultWatchInterval = 60 * time.Second
 
+// NewManager returns a manager holding c, which was read from path.
 func NewManager(c *model.Config, path string, l *slog.Logger) *Manager {
 	m := &Manager{path: path, logger: l, Reloads: newReloadStatus()}
 	m.current.Store(c)
@@ -373,6 +380,7 @@ func NewManager(c *model.Config, path string, l *slog.Logger) *Manager {
 	return m
 }
 
+// Get returns the configuration in force.
 func (m *Manager) Get() *model.Config { return m.current.Load().(*model.Config) }
 
 // SetWatchInterval enables the configuration watch and sets how often the

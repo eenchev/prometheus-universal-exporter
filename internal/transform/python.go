@@ -106,6 +106,8 @@ func pythonResult(c *model.Collector, what string, timeout time.Duration, line [
 	return &out, nil
 }
 
+// ScriptTimer adds up how long a probe's Python ran.
+//
 // A probe reports how long its Python ran in
 // http_exporter_script_duration_seconds. The scripts run deep inside the
 // transform, so the probe hands them a timer through the context, and they add

@@ -28,6 +28,13 @@ linters:
         - name: empty-block
         - name: error-strings
         - name: errorf
+        # Every exported name says what it is for. The comments exclusion
+        # preset would hide these findings, so it is not used. The stutter
+        # check is off: fetch.FetchCollector and fetch.FetchStage read better
+        # at their call sites than fetch.Collector and fetch.Stage would.
+        - name: exported
+          arguments:
+            - disableStutteringCheck
         - name: increment-decrement
         - name: indent-error-flow
         - name: redefines-builtin-id
@@ -51,7 +58,6 @@ linters:
   exclusions:
     generated: lax
     presets:
-      - comments
       - std-error-handling
     rules:
       # Tests exercise failure paths deliberately and do not need the same

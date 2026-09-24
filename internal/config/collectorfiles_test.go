@@ -234,12 +234,12 @@ func TestTheWatchFollowsCollectorFiles(t *testing.T) {
 	}
 	manager := NewManager(c, conf, slog.Default())
 	if st, err := os.Stat(conf); err == nil {
-		manager.LastMod = st.ModTime()
+		manager.lastMod = st.ModTime()
 	}
 	names := func() []string { return testutil.CollectorNames(manager.Get()) }
 
 	// Nothing changed: no reload.
-	manager.ReloadConfig()
+	manager.reloadConfig()
 	if manager.Get() != c {
 		t.Fatal("reloaded without a change")
 	}
@@ -250,14 +250,14 @@ func TestTheWatchFollowsCollectorFiles(t *testing.T) {
 	if err := os.Chtimes(filepath.Join(dir, "collectors.d/a.yaml"), later, later); err != nil {
 		t.Fatal(err)
 	}
-	manager.ReloadConfig()
+	manager.reloadConfig()
 	if got := names(); !reflect.DeepEqual(got, []string{"first", "second"}) {
 		t.Fatalf("after an edit collectors=%v", got)
 	}
 
 	// A file added.
 	testutil.WriteIn(t, dir, "collectors.d/b.yaml", testutil.CollectorsDocument("third"))
-	manager.ReloadConfig()
+	manager.reloadConfig()
 	if got := names(); !reflect.DeepEqual(got, []string{"first", "second", "third"}) {
 		t.Fatalf("after an addition collectors=%v", got)
 	}
@@ -266,7 +266,7 @@ func TestTheWatchFollowsCollectorFiles(t *testing.T) {
 	// until something changes again.
 	testutil.WriteIn(t, dir, "collectors.d/c.yaml", testutil.CollectorsDocument("first"))
 	before := manager.Get()
-	manager.ReloadConfig()
+	manager.reloadConfig()
 	if manager.Get() != before {
 		t.Fatalf("a duplicate collector was accepted on reload: %v", names())
 	}
@@ -278,7 +278,7 @@ func TestTheWatchFollowsCollectorFiles(t *testing.T) {
 	if err := os.Remove(filepath.Join(dir, "collectors.d/b.yaml")); err != nil {
 		t.Fatal(err)
 	}
-	manager.ReloadConfig()
+	manager.reloadConfig()
 	if got := names(); !reflect.DeepEqual(got, []string{"first", "second"}) {
 		t.Fatalf("after a removal collectors=%v", got)
 	}

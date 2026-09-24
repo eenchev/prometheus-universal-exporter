@@ -65,7 +65,7 @@ func detectFormat(r *fetch.HTTPResponse, requested string) string {
 
 func Decode(r *fetch.HTTPResponse, c *model.Collector) (*Decoded, error) {
 	// The body is converted to UTF-8 before anything reads it (textencoding.go).
-	named, err := ConvertToUTF8(r, c)
+	named, err := convertToUTF8(r, c)
 	if err != nil {
 		return nil, err
 	}
@@ -177,7 +177,7 @@ func decodeCSV(r *fetch.HTTPResponse, c *model.Collector) (*Decoded, error) {
 }
 
 func decodePrometheus(r *fetch.HTTPResponse) (*Decoded, error) {
-	metrics, err := ParsePrometheusText(r.Body)
+	metrics, err := parsePrometheusText(r.Body)
 	if err != nil {
 		return nil, fmt.Errorf("decoding Prometheus exposition: %w", err)
 	}

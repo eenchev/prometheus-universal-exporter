@@ -170,14 +170,14 @@ func CheckPathParams(c *model.Collector, overrides RequestOverrides) error {
 
 // requestLabel is the URL a verbose self-metric carries for a request. Path
 // parameters stay as their placeholders: the value is exactly the kind of thing
-// RequestLabelURL keeps out of labels already — a tenant, an account — and one
+// requestLabelURL keeps out of labels already — a tenant, an account — and one
 // series per value would be unbounded besides.
 func requestLabel(target string, c *model.Collector, overrides RequestOverrides) (string, error) {
 	u, err := buildRequestURL(target, c, overrides, false)
 	if err != nil {
 		return "", err
 	}
-	label := RequestLabelURL(u)
+	label := requestLabelURL(u)
 	if !overrides.PathSet && HasPathParams(c.Request.Path) {
 		label = strings.NewReplacer("%7B%7B", "{{", "%7D%7D", "}}").Replace(label)
 	}

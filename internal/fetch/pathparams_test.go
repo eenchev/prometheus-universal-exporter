@@ -20,7 +20,7 @@ func pathCollector(path string) model.Collector {
 func TestNoPlaceholderTokenLeaksIntoTheURL(t *testing.T) {
 	c := pathCollector("/{{param_a}}/{{param_b:x}}/{{param_a}}/")
 	for _, value := range []string{"v", "a/b", "%00", "0", "1"} {
-		u, err := ResolveRequestURL("http://h.example/base", &c, RequestOverrides{Params: map[string]string{"param_a": value}})
+		u, err := resolveRequestURL("http://h.example/base", &c, RequestOverrides{Params: map[string]string{"param_a": value}})
 		if err != nil {
 			t.Fatal(err)
 		}

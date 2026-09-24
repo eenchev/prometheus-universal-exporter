@@ -184,3 +184,61 @@ func TestSafeTargetRedactsCredentials(t *testing.T) {
 		t.Fatalf("safe target=%q", got)
 	}
 }
+
+// The smaller of the two response limits applies, and 10 MiB when neither is
+// set.
+func TestResponseLimit(t *testing.T) {
+	for _, test := range []struct {
+		request, limits model.ByteSize
+		want            int64
+	}{
+		{0, 0, 10 << 20},
+		{1 << 20, 0, 1 << 20},
+		{0, 2_000_000, 2_000_000},
+		{1 << 20, 2_000_000, 1 << 20},
+		{3_000_000, 2_000_000, 2_000_000},
+	} {
+		c := model.Collector{Request: model.RequestConfig{MaxResponseBytes: test.request}, Limits: model.Limits{MaxResponseBytes: test.limits}}
+		if got := responseLimit(&c); got != test.want {
+			t.Errorf("request=%d limits=%d: limit %d, want %d", test.request, test.limits, got, test.want)
+		}
+	}
+}
+
+// A metric label is persisted by Prometheus and handed to anything federating
+// from it, so credentials and query strings must never reach one.
+func TestRequestLabelDropsCredentialsAndQuery(t *testing.T) {
+	tests := []struct {
+		target string
+		path   string
+		query  map[string]string
+		want   string
+	}{
+		{target: "http://api.example:8080", want: "http://api.example:8080"},
+		{target: "http://user:secret@api.example:8080", want: "http://api.example:8080"},
+		{target: "https://api.example", path: "/v1/status", want: "https://api.example/v1/status"},
+		{target: "http://api.example?token=abc", want: "http://api.example"},
+		{target: "http://api.example", query: map[string]string{"token": "abc"}, want: "http://api.example"},
+		{target: "http://api.example/base", path: "/v1", query: map[string]string{"t": "1"}, want: "http://api.example/base/v1"},
+		{target: "api.example", want: "http://api.example"},
+	}
+	for _, test := range tests {
+		t.Run(test.target+test.path, func(t *testing.T) {
+			c := pathCollector("")
+			c.Request.Path = test.path
+			c.Request.Query = test.query
+			resolved, err := resolveRequestURL(test.target, &c, RequestOverrides{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := requestLabelURL(resolved); got != test.want {
+				t.Fatalf("label=%q, want %q", got, test.want)
+			}
+			for _, leaked := range []string{"secret", "token", "abc"} {
+				if strings.Contains(requestLabelURL(resolved), leaked) {
+					t.Fatalf("label %q leaked %q", requestLabelURL(resolved), leaked)
+				}
+			}
+		})
+	}
+}

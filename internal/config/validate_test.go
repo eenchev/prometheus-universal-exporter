@@ -240,8 +240,8 @@ func TestConfigReloadRejectsAPreScriptThatDoesNotProduceData(t *testing.T) {
 	if err := os.WriteFile(path, []byte(broken), 0600); err != nil {
 		t.Fatal(err)
 	}
-	manager.LastMod = time.Time{}
-	manager.ReloadConfig()
+	manager.lastMod = time.Time{}
+	manager.reloadConfig()
 	if got := manager.Get().Collectors[0].Transform.PreScript; !strings.Contains(got, "data =") {
 		t.Fatalf("a reload whose pre-script stops producing data must be rejected; active script is %q", got)
 	}
@@ -250,8 +250,8 @@ func TestConfigReloadRejectsAPreScriptThatDoesNotProduceData(t *testing.T) {
 	if err := os.WriteFile(path, []byte(fixed), 0600); err != nil {
 		t.Fatal(err)
 	}
-	manager.LastMod = time.Time{}
-	manager.ReloadConfig()
+	manager.lastMod = time.Time{}
+	manager.reloadConfig()
 	if got := manager.Get().Collectors[0].Transform.PreScript; !strings.Contains(got, `"value": 2`) {
 		t.Fatalf("a valid reload should take effect, got %q", got)
 	}

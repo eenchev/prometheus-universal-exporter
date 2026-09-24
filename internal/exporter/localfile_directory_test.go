@@ -11,13 +11,11 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
-	"sync"
 	"syscall"
 	"testing"
 	"time"
 
 	"github.com/eenchev/prometheus-universal-exporter/internal/config"
-	"github.com/eenchev/prometheus-universal-exporter/internal/decode"
 	"github.com/eenchev/prometheus-universal-exporter/internal/fetch"
 	"github.com/eenchev/prometheus-universal-exporter/internal/model"
 	"github.com/eenchev/prometheus-universal-exporter/internal/testutil"
@@ -55,7 +53,7 @@ func TestLocalDirectoryReadsEveryMatchingFile(t *testing.T) {
 	if strings.Count(r.body, "# TYPE jobs_total counter") != 1 {
 		t.Fatalf("jobs_total is declared more than once:\n%s", r.body)
 	}
-	if _, err := decode.ParsePrometheusText([]byte(r.body)); err != nil {
+	if err := parseExposition([]byte(r.body)); err != nil {
 		t.Fatalf("the answer does not parse: %v\n%s", err, r.body)
 	}
 	// A pattern starting with a dot reads hidden files.
@@ -143,8 +141,8 @@ func TestLocalDirectoryMaxFiles(t *testing.T) {
 	}
 }
 
-// A file over the per-file limit, or past the scrape's total, is refused
-// without being read, and fails alone.
+// A file over the per-file limit, or past the scrape's total, fails alone
+// (fetch/localfile_reads_test.go checks it is not read).
 func TestLocalDirectorySizeLimits(t *testing.T) {
 	root := t.TempDir()
 	small := "# TYPE v gauge\nv 1\n"
@@ -152,15 +150,6 @@ func TestLocalDirectorySizeLimits(t *testing.T) {
 	testutil.WriteIn(t, root, "b-huge.prom", small+strings.Repeat("# padding\n", 1000))
 	testutil.WriteIn(t, root, "c.prom", small)
 	testutil.WriteIn(t, root, "d.prom", small)
-	var mu sync.Mutex
-	read := map[string]bool{}
-	setReadHook(func(full string) {
-		mu.Lock()
-		defer mu.Unlock()
-		read[filepath.Base(full)] = true
-	})
-	t.Cleanup(func() { fetch.AfterLocalFileRead.Store(nil) })
-
 	c := dirCollector("dir", root, "*.prom")
 	c.Request.MaxResponseBytes = 1000
 	c.Request.MaxTotalBytes = model.ByteSize(3*len(small) - 1)
@@ -174,11 +163,6 @@ func TestLocalDirectorySizeLimits(t *testing.T) {
 		`localfile_scrape_error{file="d.prom"} 1`,
 		`localfile_mtime_seconds{file="b-huge.prom"}`,
 	)
-	mu.Lock()
-	if read["b-huge.prom"] || read["d.prom"] {
-		t.Errorf("refused files were read: %v", read)
-	}
-	mu.Unlock()
 	for _, want := range []string{"more than the collector's limit of 1000 for one file", "past request.max_total_bytes"} {
 		if !strings.Contains(logs.String(), want) {
 			t.Errorf("the log is missing %q:\n%s", want, logs.String())
@@ -311,75 +295,13 @@ func TestLocalDirectoryScheduledTargets(t *testing.T) {
 	}
 }
 
-// A file the read has not finished by the probe's deadline fails alone; what
-// was read is answered.
-func TestLocalDirectoryAnswersWhatWasReadByTheDeadline(t *testing.T) {
-	root := t.TempDir()
-	for _, name := range []string{"a.prom", "b.prom", "slow.prom"} {
-		testutil.WriteIn(t, root, name, "# TYPE v gauge\nv 1\n")
-	}
-	hold := make(chan struct{})
-	setReadHook(func(full string) {
-		if filepath.Base(full) == "slow.prom" {
-			<-hold
-		}
-	})
-	t.Cleanup(func() { close(hold); fetch.AfterLocalFileRead.Store(nil) })
-	server := fileServer(t, dirCollector("dir", root, "*.prom"))
-	start := time.Now()
-	r := probeFile(t, server, "collector=dir&timeout=300ms")
-	if took := time.Since(start); took > 3*time.Second {
-		t.Fatalf("the probe took %s", took)
-	}
-	r.must(t, http.StatusOK,
-		`v{file="a.prom"} 1`, `v{file="b.prom"} 1`,
-		`localfile_scrape_error{file="slow.prom"} 1`,
-		`localfile_mtime_seconds{file="slow.prom"}`,
-	)
-	if strings.Contains(r.body, `v{file="slow.prom"}`) {
-		t.Fatalf("the file still being read was answered:\n%s", r.body)
-	}
-}
-
-// Files are read several at a time, never more than the workers.
-func TestLocalDirectoryReadsFilesConcurrently(t *testing.T) {
-	root := t.TempDir()
-	for i := range 10 {
-		testutil.WriteIn(t, root, "f"+strconv.Itoa(i)+".prom", "# TYPE v gauge\nv "+strconv.Itoa(i)+"\n")
-	}
-	var mu sync.Mutex
-	current, peak := 0, 0
-	setReadHook(func(string) {
-		mu.Lock()
-		current++
-		peak = max(peak, current)
-		mu.Unlock()
-		time.Sleep(30 * time.Millisecond)
-		mu.Lock()
-		current--
-		mu.Unlock()
-	})
-	t.Cleanup(func() { fetch.AfterLocalFileRead.Store(nil) })
-	server := fileServer(t, dirCollector("dir", root, "*.prom"))
-	r := probeFile(t, server, "collector=dir")
-	r.must(t, http.StatusOK, `v{file="f0.prom"} 0`, `v{file="f9.prom"} 9`)
-	// The answer is in name order whatever order the reads finished in.
-	if strings.Index(r.body, `file="f0.prom"`) > strings.Index(r.body, `file="f9.prom"`) {
-		t.Fatalf("the answer is not in name order:\n%s", r.body)
-	}
-	mu.Lock()
-	defer mu.Unlock()
-	if peak < 2 || peak > fetch.LocalFileDirectoryWorkers {
-		t.Fatalf("%d files were read at once, want between 2 and %d", peak, fetch.LocalFileDirectoryWorkers)
-	}
-}
-
-// Listing stops at MaxListedEntries, saying so.
+// Listing stops at its bound, saying so. With max_files 1 the bound is its
+// floor of 1000 entries (fetch/localfile_directory.go).
 func TestLocalDirectoryListingIsBounded(t *testing.T) {
 	root := t.TempDir()
 	c := dirCollector("dir", root, "*.prom")
 	c.Request.MaxFiles = 1
-	limit := fetch.MaxListedEntries(&c)
+	limit := 1000
 	for i := range limit + 50 {
 		testutil.WriteIn(t, root, "f"+strconv.Itoa(i)+".txt", "")
 	}
@@ -389,37 +311,6 @@ func TestLocalDirectoryListingIsBounded(t *testing.T) {
 	probeFile(t, server, "collector=dir").must(t, http.StatusOK, "localfile_files_skipped 0")
 	if !strings.Contains(logs.String(), "more entries than one scrape lists") || !strings.Contains(logs.String(), `"listed":`+strconv.Itoa(limit)) {
 		t.Fatalf("the bounded listing was not logged:\n%s", logs.String())
-	}
-}
-
-// A file that grows after its size was taken, past what the total leaves it,
-// fails alone, so the scrape never reads more than max_total_bytes.
-func TestLocalDirectoryTotalHoldsWhenAFileGrows(t *testing.T) {
-	root := t.TempDir()
-	small := "# TYPE v gauge\nv 1\n"
-	testutil.WriteIn(t, root, "a.prom", small)
-	grow := testutil.WriteIn(t, root, "b.prom", small)
-	c := dirCollector("dir", root, "*.prom")
-	c.Request.MaxTotalBytes = model.ByteSize(2*len(small) + 4)
-	var once sync.Once
-	// Growing b.prom during its own read makes the read start again, and
-	// find it larger than its share.
-	setReadHook(func(full string) {
-		if filepath.Base(full) == "b.prom" {
-			once.Do(func() {
-				if err := os.WriteFile(grow, []byte(small+strings.Repeat("# grown\n", 20)), 0o600); err != nil {
-					t.Error(err)
-				}
-			})
-		}
-	})
-	t.Cleanup(func() { fetch.AfterLocalFileRead.Store(nil) })
-	server := fileServer(t, c)
-	logs := testutil.CaptureLogs(t)
-	server.logger = slog.Default()
-	probeFile(t, server, "collector=dir").must(t, http.StatusOK, `v{file="a.prom"} 1`, `localfile_scrape_error{file="b.prom"} 1`)
-	if !strings.Contains(logs.String(), "grew while the directory was read") {
-		t.Fatalf("the reason was not logged:\n%s", logs.String())
 	}
 }
 

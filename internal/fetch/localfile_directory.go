@@ -124,16 +124,16 @@ func matchesFiles(patterns []string, name string) bool {
 	return false
 }
 
-// LocalFileDirectoryWorkers is how many files of a directory are read at once.
-const LocalFileDirectoryWorkers = 4
+// localFileDirectoryWorkers is how many files of a directory are read at once.
+const localFileDirectoryWorkers = 4
 
 // localFileListBatch is how many directory entries are listed at a time.
 const localFileListBatch = 256
 
-// MaxListedEntries bounds the entries one scrape lists: ten times max_files,
+// maxListedEntries bounds the entries one scrape lists: ten times max_files,
 // and at least 1000. Listing a directory of a million entries would otherwise
 // cost a million names on every scrape before max_files applies.
-func MaxListedEntries(c *model.Collector) int {
+func maxListedEntries(c *model.Collector) int {
 	return max(10*c.Request.MaxFiles, 1000)
 }
 
@@ -151,7 +151,7 @@ func fetchLocalDirectory(ctx context.Context, target string, c *model.Collector,
 	full := filepath.Join(c.Request.Root, dir)
 	// As for one file, the reading goes on in its own goroutine, holding one of
 	// the collector's pending-read slots until the filesystem answers.
-	release, err := LocalFileReads.acquire(c.Name)
+	release, err := localFileReads.acquire(c.Name)
 	if err != nil {
 		return nil, err
 	}
@@ -303,7 +303,7 @@ func readLocalDirectory(c *model.Collector, dir string, progress *directoryProgr
 
 	// Which files are read is decided from their sizes, in name order, before
 	// any is read, so the choice does not depend on which read finishes first.
-	limit := ResponseLimit(c)
+	limit := responseLimit(c)
 	budget := int64(c.Request.MaxTotalBytes)
 	type pick struct {
 		index int
@@ -349,7 +349,7 @@ func readLocalDirectory(c *model.Collector, dir string, progress *directoryProgr
 	slack := (budget - reserved) / int64(max(len(picks), 1))
 	work := make(chan pick)
 	var wg sync.WaitGroup
-	for range min(LocalFileDirectoryWorkers, len(picks)) {
+	for range min(localFileDirectoryWorkers, len(picks)) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
@@ -387,9 +387,9 @@ func readLocalDirectory(c *model.Collector, dir string, progress *directoryProgr
 }
 
 // listMatchingFiles lists the directory in batches and keeps the names that
-// match, stopping after MaxListedEntries entries.
+// match, stopping after maxListedEntries entries.
 func listMatchingFiles(d *os.File, c *model.Collector) (names []string, listed int, truncated bool, err error) {
-	limit := MaxListedEntries(c)
+	limit := maxListedEntries(c)
 	for {
 		entries, err := d.ReadDir(localFileListBatch)
 		for _, entry := range entries {

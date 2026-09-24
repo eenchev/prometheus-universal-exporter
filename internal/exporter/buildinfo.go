@@ -20,9 +20,9 @@ type buildInformation struct {
 	RequestTypes                 []string
 }
 
-var BuildVersion = sync.OnceValue(ComputeBuildVersion)
+var BuildVersion = sync.OnceValue(computeBuildVersion)
 
-func ComputeBuildVersion() buildInformation {
+func computeBuildVersion() buildInformation {
 	out := buildInformation{Version: Version, Revision: "unknown", GoVersion: runtime.Version(), RequestTypes: fetch.BuiltRequestTypes()}
 	if info, ok := debug.ReadBuildInfo(); ok {
 		if out.Version == "" {

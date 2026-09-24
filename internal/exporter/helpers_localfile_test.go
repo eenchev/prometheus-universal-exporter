@@ -79,5 +79,3 @@ func (r *httpResult) must(t *testing.T, code int, fragments ...string) {
 		}
 	}
 }
-
-func setReadHook(hook func(string)) { fetch.AfterLocalFileRead.Store(&hook) }

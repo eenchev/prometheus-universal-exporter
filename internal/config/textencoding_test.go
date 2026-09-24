@@ -168,9 +168,13 @@ func TestDocumentsDeclareTheirEncoding(t *testing.T) {
 			t.Errorf("%s: %q", contentType, got)
 		}
 	}
-	// What transforms see says UTF-8.
+	// What transforms see after the decode says UTF-8.
+	cfg := &model.Config{Collectors: []model.Collector{xml}}
+	if err := Validate(cfg); err != nil {
+		t.Fatal(err)
+	}
 	r := &fetch.HTTPResponse{Body: doc, Headers: http.Header{"Content-Type": {"application/xml; charset=iso-8859-1"}}}
-	if _, err := decode.ConvertToUTF8(r, &xml); err != nil {
+	if _, err := decode.Decode(r, &cfg.Collectors[0]); err != nil {
 		t.Fatal(err)
 	}
 	if !strings.Contains(string(r.Body), `encoding="UTF-8"`) || r.Headers.Get("Content-Type") != "application/xml; charset=utf-8" {

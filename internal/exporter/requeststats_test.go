@@ -11,7 +11,6 @@ import (
 	"time"
 
 	"github.com/eenchev/prometheus-universal-exporter/internal/config"
-	"github.com/eenchev/prometheus-universal-exporter/internal/fetch"
 	"github.com/eenchev/prometheus-universal-exporter/internal/model"
 	"github.com/eenchev/prometheus-universal-exporter/internal/testutil"
 )
@@ -165,44 +164,6 @@ func metricValue(t *testing.T, exposition, series string) float64 {
 	}
 	t.Fatalf("series %q not found in:\n%s", series, exposition)
 	return 0
-}
-
-// A metric label is persisted by Prometheus and handed to anything federating
-// from it, so credentials and query strings must never reach one.
-func TestRequestLabelDropsCredentialsAndQuery(t *testing.T) {
-	tests := []struct {
-		target string
-		path   string
-		query  map[string]string
-		want   string
-	}{
-		{target: "http://api.example:8080", want: "http://api.example:8080"},
-		{target: "http://user:secret@api.example:8080", want: "http://api.example:8080"},
-		{target: "https://api.example", path: "/v1/status", want: "https://api.example/v1/status"},
-		{target: "http://api.example?token=abc", want: "http://api.example"},
-		{target: "http://api.example", query: map[string]string{"token": "abc"}, want: "http://api.example"},
-		{target: "http://api.example/base", path: "/v1", query: map[string]string{"t": "1"}, want: "http://api.example/base/v1"},
-		{target: "api.example", want: "http://api.example"},
-	}
-	for _, test := range tests {
-		t.Run(test.target+test.path, func(t *testing.T) {
-			c := testutil.Collector("labels", "text")
-			c.Request.Path = test.path
-			c.Request.Query = test.query
-			resolved, err := fetch.ResolveRequestURL(test.target, &c, fetch.RequestOverrides{})
-			if err != nil {
-				t.Fatal(err)
-			}
-			if got := fetch.RequestLabelURL(resolved); got != test.want {
-				t.Fatalf("label=%q, want %q", got, test.want)
-			}
-			for _, leaked := range []string{"secret", "token", "abc"} {
-				if strings.Contains(fetch.RequestLabelURL(resolved), leaked) {
-					t.Fatalf("label %q leaked %q", fetch.RequestLabelURL(resolved), leaked)
-				}
-			}
-		})
-	}
 }
 
 func TestVerboseRequestMetricsSeparateMethodsAndURLs(t *testing.T) {
@@ -505,13 +466,13 @@ func TestVerbosityFollowsTheConfiguration(t *testing.T) {
 	if err := config.Validate(loud); err != nil {
 		t.Fatal(err)
 	}
-	manager.Current.Store(loud)
+	installConfig(server, loud)
 	probeOnce(t, server, probe, nil)
 	if !strings.Contains(selfMetrics(t, server), "http_method=") {
 		t.Fatal("verbose series did not appear after the configuration enabled them")
 	}
 
-	manager.Current.Store(quiet)
+	installConfig(server, quiet)
 	exposition := selfMetrics(t, server)
 	if strings.Contains(exposition, "http_method=") {
 		t.Fatalf("turning verbose off must drop the series rather than leave them stale:\n%s", exposition)

@@ -40,9 +40,9 @@ type pythonOutput struct {
 	Log     string         `json:"log"`
 }
 
-// ExecutePython runs a python transform in one of the collector's workers
+// executePython runs a python transform in one of the collector's workers
 // (pythonworker.go) and returns the metrics it emitted.
-func ExecutePython(ctx context.Context, pythonPath, script string, d *decode.Decoded, r *fetch.HTTPResponse, c *model.Collector) (*model.MetricSet, error) {
+func executePython(ctx context.Context, pythonPath, script string, d *decode.Decoded, r *fetch.HTTPResponse, c *model.Collector) (*model.MetricSet, error) {
 	out, err := runPython(ctx, pythonPath, "metrics", "transform", script, d, r, c)
 	if err != nil {
 		return nil, err
@@ -90,19 +90,19 @@ func pythonResult(c *model.Collector, what string, timeout time.Duration, line [
 		PythonWorkers().recordRun(c.Name, pythonRunOutputLimit)
 		return nil, fmt.Errorf("python %s output exceeds limit", what)
 	case err != nil:
-		PythonWorkers().recordRun(c.Name, PythonRunFailed)
+		PythonWorkers().recordRun(c.Name, pythonRunFailed)
 		return nil, fmt.Errorf("python %s failed: %w", what, err)
 	}
 	var out pythonOutput
 	if err := json.Unmarshal(line, &out); err != nil {
-		PythonWorkers().recordRun(c.Name, PythonRunFailed)
+		PythonWorkers().recordRun(c.Name, pythonRunFailed)
 		return nil, fmt.Errorf("python %s output: %w", what, err)
 	}
 	if !out.OK {
-		PythonWorkers().recordRun(c.Name, PythonRunScriptError)
+		PythonWorkers().recordRun(c.Name, pythonRunScriptError)
 		return nil, fmt.Errorf("python %s failed: %s", what, strings.TrimSpace(out.Error))
 	}
-	PythonWorkers().recordRun(c.Name, PythonRunOK)
+	PythonWorkers().recordRun(c.Name, pythonRunOK)
 	return &out, nil
 }
 

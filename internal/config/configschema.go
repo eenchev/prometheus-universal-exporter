@@ -10,10 +10,10 @@ import (
 	"github.com/eenchev/prometheus-universal-exporter/internal/transform"
 )
 
-// SchemaID is where the published schema lives, for editors to fetch.
-const SchemaID = "https://raw.githubusercontent.com/eenchev/prometheus-universal-exporter/main/config.schema.json"
+// configSchemaID is where the published schema lives, for editors to fetch.
+const configSchemaID = "https://raw.githubusercontent.com/eenchev/prometheus-universal-exporter/main/config.schema.json"
 
-// Schema describes the configuration file as JSON Schema (draft
+// configSchema describes the configuration file as JSON Schema (draft
 // 2020-12), for editors: with the yaml-language-server modeline at the top of
 // a configuration, VS Code and other editors complete keys, show descriptions
 // and flag unknown keys and bad values as you type.
@@ -30,10 +30,10 @@ const SchemaID = "https://raw.githubusercontent.com/eenchev/prometheus-universal
 // error policy — and startup validation remains the authority on what is
 // valid: it also checks what a schema cannot, such as that expressions
 // compile. The request types listed are the ones this binary was built with.
-func Schema() map[string]any {
+func configSchema() map[string]any {
 	schema := schemaFor(reflect.TypeOf(model.Config{}), "")
 	schema["$schema"] = "https://json-schema.org/draft/2020-12/schema"
-	schema["$id"] = SchemaID
+	schema["$id"] = configSchemaID
 	schema["title"] = "prometheus-universal-exporter configuration"
 	return schema
 }
@@ -41,10 +41,10 @@ func Schema() map[string]any {
 // collectorFileSchemaID is where the published collector file schema lives.
 const collectorFileSchemaID = "https://raw.githubusercontent.com/eenchev/prometheus-universal-exporter/main/collector-file.schema.json"
 
-// CollectorFileSchema describes a collector file (collectorfiles.go): a
+// collectorFileSchema describes a collector file (collectorfiles.go): a
 // collectors list, required and non-empty, and no other key. The collectors
 // are described exactly as in the configuration schema, from the same rules.
-func CollectorFileSchema() map[string]any {
+func collectorFileSchema() map[string]any {
 	schema := schemaFor(reflect.TypeOf(collectorFile{}), "")
 	delete(schema, "anyOf")
 	schema["required"] = []string{collectorFileKey}
@@ -60,12 +60,12 @@ func CollectorFileSchema() map[string]any {
 // SchemaJSON renders the schema with sorted keys and a trailing newline,
 // so the committed file and a fresh render compare byte for byte.
 func SchemaJSON() ([]byte, error) {
-	return renderSchema(Schema())
+	return renderSchema(configSchema())
 }
 
 // CollectorFileSchemaJSON renders the collector file schema the same way.
 func CollectorFileSchemaJSON() ([]byte, error) {
-	return renderSchema(CollectorFileSchema())
+	return renderSchema(collectorFileSchema())
 }
 
 func renderSchema(schema map[string]any) ([]byte, error) {

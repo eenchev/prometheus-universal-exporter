@@ -58,8 +58,9 @@ func TestCommittedCollectorFileSchemaIsCurrent(t *testing.T) {
 	if err := json.Unmarshal(generated, &parsed); err != nil {
 		t.Fatal(err)
 	}
-	fileItems := config.CollectorFileSchema()["properties"].(map[string]any)["collectors"].(map[string]any)["items"]
-	configItems := config.Schema()["properties"].(map[string]any)["collectors"].(map[string]any)["items"]
+	configSchema := parsedSchema(t, config.SchemaJSON)
+	fileItems := parsed["properties"].(map[string]any)["collectors"].(map[string]any)["items"]
+	configItems := configSchema["properties"].(map[string]any)["collectors"].(map[string]any)["items"]
 	if !reflect.DeepEqual(fileItems, configItems) {
 		t.Fatal("the collector file schema describes collectors differently from the configuration schema")
 	}
@@ -277,7 +278,7 @@ func TestConfigSchemaRejectsInvalidConfigurations(t *testing.T) {
 
 // The examples point editors at the published schema.
 func TestExamplesReferenceTheSchema(t *testing.T) {
-	modeline := "# yaml-language-server: $schema=" + config.SchemaID
+	modeline := "# yaml-language-server: $schema=" + parsedSchema(t, config.SchemaJSON)["$id"].(string)
 	for _, file := range []string{"config.example.yaml", "config.otlp.example.yaml"} {
 		raw, err := os.ReadFile(file)
 		if err != nil {
@@ -771,4 +772,18 @@ func TestInternalPackagesAreLayered(t *testing.T) {
 			}
 		}
 	}
+}
+
+// parsedSchema is a schema as render prints it, parsed.
+func parsedSchema(t *testing.T, render func() ([]byte, error)) map[string]any {
+	t.Helper()
+	raw, err := render()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var schema map[string]any
+	if err := json.Unmarshal(raw, &schema); err != nil {
+		t.Fatal(err)
+	}
+	return schema
 }

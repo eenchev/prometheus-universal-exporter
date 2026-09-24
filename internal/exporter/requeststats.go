@@ -19,7 +19,7 @@ import (
 const VerboseRequestSeriesLimit = 1000
 
 // requestKey identifies one tracked request. The URL carries no credentials and
-// no query string; RequestLabelURL strips both.
+// no query string: fetch leaves both out of the request label.
 type requestKey struct {
 	Collector string
 	URL       string

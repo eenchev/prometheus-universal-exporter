@@ -11,6 +11,7 @@ import (
 	"github.com/eenchev/prometheus-universal-exporter/internal/decode"
 	"github.com/eenchev/prometheus-universal-exporter/internal/fetch"
 	"github.com/eenchev/prometheus-universal-exporter/internal/model"
+	"github.com/eenchev/prometheus-universal-exporter/internal/testutil"
 )
 
 // Python scripts run in long-lived workers (pythonworker.go). These tests pin
@@ -27,19 +28,12 @@ func requirePython(t *testing.T) {
 }
 
 // usePythonPool runs the test against a fresh worker pool and restores the
-// previous one afterwards, stopping the fresh pool's workers. Every count a
-// test reads from the pool is then its own, so the tests pass under
-// -count=N and -shuffle=on. Tests do not run in parallel, so swapping the
-// package's pool is safe.
-func usePythonPool(t *testing.T) *PythonPool {
+// previous one afterwards (IsolatePythonWorkers). Every count a test reads
+// from the pool is then its own, so the tests pass under -count=N and
+// -shuffle=on. Tests do not run in parallel, so swapping the pool is safe.
+func usePythonPool(t *testing.T) {
 	t.Helper()
-	pool := NewPythonPool()
-	previous := PythonPoolRef.Swap(pool)
-	t.Cleanup(func() {
-		PythonPoolRef.Store(previous)
-		pool.Close()
-	})
-	return pool
+	t.Cleanup(IsolatePythonWorkers())
 }
 
 func workerCollector(name, script string) *model.Collector {
@@ -53,7 +47,7 @@ func workerCollector(name, script string) *model.Collector {
 func runWorkerScript(t *testing.T, c *model.Collector) (*model.MetricSet, error) {
 	t.Helper()
 	r := &fetch.HTTPResponse{StatusCode: 200, Body: []byte("value=7"), Headers: http.Header{}}
-	return ExecutePython(context.Background(), "python3", c.Transform.Script, &decode.Decoded{Kind: "text", Data: "value=7", Raw: r.Body}, r, c)
+	return executePython(context.Background(), "python3", c.Transform.Script, &decode.Decoded{Kind: "text", Data: "value=7", Raw: r.Body}, r, c)
 }
 
 func workerMetricValue(t *testing.T, set *model.MetricSet, name string) float64 {
@@ -340,5 +334,20 @@ func TestPythonWorkerConcurrentRuns(t *testing.T) {
 	PythonWorkers().mu.Unlock()
 	if idle < 1 || idle > pythonWorkerMaxIdle {
 		t.Fatalf("%d idle workers after a burst, want 1..%d", idle, pythonWorkerMaxIdle)
+	}
+}
+
+// A worker that cannot start is counted as a start failure.
+func TestPythonWorkerStartFailuresAreCounted(t *testing.T) {
+	usePythonPool(t)
+	testutil.CaptureLogs(t)
+	c := workerCollector("py_metrics_no_interpreter", `metric(name="v", value=1)`)
+	r := &fetch.HTTPResponse{StatusCode: 200, Body: []byte("x"), Headers: http.Header{}}
+	if _, err := executePython(context.Background(), "/nonexistent/python", c.Transform.Script, &decode.Decoded{Kind: "text", Data: "x", Raw: r.Body}, r, c); err == nil {
+		t.Fatal("a missing interpreter started")
+	}
+	snap := PythonWorkers().Snapshot("py_metrics_no_interpreter")
+	if snap.StartFailures != 1 || snap.Starts != 0 || snap.Starting != 0 || snap.Runs[pythonRunFailed] != 1 {
+		t.Fatalf("snapshot=%+v", snap)
 	}
 }

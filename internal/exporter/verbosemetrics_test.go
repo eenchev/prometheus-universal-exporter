@@ -10,7 +10,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/eenchev/prometheus-universal-exporter/internal/decode"
 	"github.com/eenchev/prometheus-universal-exporter/internal/fetch"
 	"github.com/eenchev/prometheus-universal-exporter/internal/model"
 	"github.com/eenchev/prometheus-universal-exporter/internal/testutil"
@@ -233,21 +232,6 @@ func TestPythonWorkerMetrics(t *testing.T) {
 	}
 }
 
-// A worker that cannot start is counted as a start failure.
-func TestPythonWorkerStartFailuresAreCounted(t *testing.T) {
-	usePythonPool(t)
-	testutil.CaptureLogs(t)
-	c := workerCollector("py_metrics_no_interpreter", `metric(name="v", value=1)`)
-	r := &fetch.HTTPResponse{StatusCode: 200, Body: []byte("x"), Headers: http.Header{}}
-	if _, err := transform.ExecutePython(context.Background(), "/nonexistent/python", c.Transform.Script, &decode.Decoded{Kind: "text", Data: "x", Raw: r.Body}, r, c); err == nil {
-		t.Fatal("a missing interpreter started")
-	}
-	snap := transform.PythonWorkers().Snapshot("py_metrics_no_interpreter")
-	if snap.StartFailures != 1 || snap.Starts != 0 || snap.Starting != 0 || snap.Runs[transform.PythonRunFailed] != 1 {
-		t.Fatalf("snapshot=%+v", snap)
-	}
-}
-
 // A histogram passed through from a Prometheus source keeps one +Inf bucket.
 // It used to be written twice: once from the source's own +Inf bucket and once
 // from the count.
@@ -319,8 +303,8 @@ func TestPythonPoolMetricsSumTheCollectors(t *testing.T) {
 
 	exposition := selfMetrics(t, server)
 	for series, want := range map[string]float64{
-		`http_exporter_python_pool_runs_total{outcome="ok"}`:           float64(before.Runs[transform.PythonRunOK] + 2),
-		`http_exporter_python_pool_runs_total{outcome="script_error"}`: float64(before.Runs[transform.PythonRunScriptError] + 1),
+		`http_exporter_python_pool_runs_total{outcome="ok"}`:           float64(before.Runs["ok"] + 2),
+		`http_exporter_python_pool_runs_total{outcome="script_error"}`: float64(before.Runs["script_error"] + 1),
 		`http_exporter_python_pool_worker_starts_total`:                float64(before.Starts + 2),
 		`http_exporter_python_pool_workers{state="idle"}`:              float64(before.Idle + 2),
 		`http_exporter_python_pool_workers{state="busy"}`:              0,
@@ -333,7 +317,7 @@ func TestPythonPoolMetricsSumTheCollectors(t *testing.T) {
 
 	// A server that no longer has these collectors still counts their runs.
 	later := selfMetrics(t, verboseServer(t, true, testutil.Collector("pool_sum_none", "text")))
-	if got := seriesValue(t, later, `http_exporter_python_pool_runs_total{outcome="ok"}`); got != float64(before.Runs[transform.PythonRunOK]+2) {
+	if got := seriesValue(t, later, `http_exporter_python_pool_runs_total{outcome="ok"}`); got != float64(before.Runs["ok"]+2) {
 		t.Errorf("after the collectors went, ok runs = %v", got)
 	}
 }

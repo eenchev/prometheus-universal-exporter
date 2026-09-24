@@ -11,8 +11,6 @@ import (
 	"time"
 
 	"github.com/eenchev/prometheus-universal-exporter/internal/config"
-	"github.com/eenchev/prometheus-universal-exporter/internal/decode"
-	"github.com/eenchev/prometheus-universal-exporter/internal/model"
 	"github.com/eenchev/prometheus-universal-exporter/internal/testutil"
 )
 
@@ -35,7 +33,7 @@ func TestSelfMetricsExpositionIsWellFormed(t *testing.T) {
 	probeOnce(t, server, "/probe?collector=first&target="+target.URL, nil)
 	probeOnce(t, server, "/probe?collector=second&target="+target.URL, nil)
 	exposition := selfMetrics(t, server)
-	if _, err := decode.ParsePrometheusText([]byte(exposition)); err != nil {
+	if err := parseExposition([]byte(exposition)); err != nil {
 		t.Fatalf("the self-metrics do not parse: %v\n%s", err, exposition)
 	}
 
@@ -135,8 +133,7 @@ func TestReloadStatusMetrics(t *testing.T) {
 	if err := os.WriteFile(path, []byte("collectors: [\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	manager.LastMod = time.Time{}
-	manager.ReloadConfig()
+	_ = manager.Reload(config.ReloadTriggerSignal)
 	if got := expect("after a rejected reload", map[string]float64{
 		`http_exporter_config_last_reload_successful{file="config"}`:         0,
 		`http_exporter_config_reloads_total{file="config",result="success"}`: 0,
@@ -149,8 +146,7 @@ func TestReloadStatusMetrics(t *testing.T) {
 	if err := os.WriteFile(path, []byte(good), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	manager.LastMod = time.Time{}
-	manager.ReloadConfig()
+	_ = manager.Reload(config.ReloadTriggerSignal)
 	if got := expect("after a successful reload", map[string]float64{
 		`http_exporter_config_last_reload_successful{file="config"}`:         1,
 		`http_exporter_config_reloads_total{file="config",result="success"}`: 1,
@@ -162,31 +158,14 @@ func TestReloadStatusMetrics(t *testing.T) {
 
 // With a scheduled target file, its reloads are reported under file="targets".
 func TestReloadStatusCoversTheTargetFile(t *testing.T) {
-	cfg := &model.Config{Collectors: []model.Collector{testutil.Collector("text", "text")}, OTLP: otlpConfig("http://collector.invalid/v1/metrics")}
-	if err := config.Validate(cfg); err != nil {
-		t.Fatal(err)
-	}
-	targets := filepath.Join(t.TempDir(), "targets.yaml")
-	good := "targets:\n  - name: one\n    collector: text\n    target: http://a.example\n"
-	if err := os.WriteFile(targets, []byte(good), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	file, err := config.LoadTargets(targets)
-	if err != nil {
-		t.Fatal(err)
-	}
-	manager := config.NewManager(cfg, "", testutil.QuietLogger(t))
-	manager.SetTargets(targets, file)
-	server := NewServer(manager, "python3", slog.Default())
-	if got := seriesValue(t, selfMetrics(t, server), `http_exporter_config_last_reload_successful{file="targets"}`); got != 1 {
+	conf := strings.Replace(testutil.CollectorsDocument("text"), "collectors:", "otlp:\n  enabled: true\n  endpoint: http://collector.invalid/v1/metrics\ncollectors:", 1)
+	r := newReloadable(t, conf, "targets:\n  - name: one\n    collector: text\n    target: http://a.example\n")
+	if got := seriesValue(t, selfMetrics(t, r.server), `http_exporter_config_last_reload_successful{file="targets"}`); got != 1 {
 		t.Fatalf("targets at startup = %v", got)
 	}
-	if err := os.WriteFile(targets, []byte("targets:\n  - name: one\n    collector: missing\n    target: http://a.example\n"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	manager.TargetsLastMod = time.Time{}
-	manager.ReloadTargets()
-	exposition := selfMetrics(t, server)
+	r.write(r.targets, "targets:\n  - name: one\n    collector: missing\n    target: http://a.example\n")
+	_ = r.manager.Reload(config.ReloadTriggerSignal)
+	exposition := selfMetrics(t, r.server)
 	if got := seriesValue(t, exposition, `http_exporter_config_last_reload_successful{file="targets"}`); got != 0 {
 		t.Errorf("after a rejected target reload = %v", got)
 	}

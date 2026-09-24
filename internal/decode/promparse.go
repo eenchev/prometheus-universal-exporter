@@ -13,7 +13,7 @@ import (
 	"github.com/eenchev/prometheus-universal-exporter/internal/model"
 )
 
-// ParsePrometheusText parses the Prometheus text exposition format, version
+// parsePrometheusText parses the Prometheus text exposition format, version
 // 0.0.4, which is what the prometheus decoder reads. It replaces the parser in
 // github.com/prometheus/common/expfmt, which brought protobuf and four other
 // modules into the binary for this one function, and it follows that parser's
@@ -47,7 +47,7 @@ import (
 //
 // Families come back in the order they were first seen, and series in the
 // order of their first sample, so a decode is deterministic.
-func ParsePrometheusText(body []byte) ([]model.Metric, error) {
+func parsePrometheusText(body []byte) ([]model.Metric, error) {
 	p := promParser{byName: map[string]*promFamily{}}
 	lines := bytes.Split(body, []byte("\n"))
 	for i, raw := range lines {

@@ -150,18 +150,18 @@ const (
 	pythonStopRetired     = "retired"
 	pythonStopSurplus     = "surplus"
 	pythonStopIdle        = "idle"
-	PythonStopReload      = "reload"
+	pythonStopReload      = "reload"
 
-	PythonRunOK          = "ok"
-	PythonRunScriptError = "script_error"
+	pythonRunOK          = "ok"
+	pythonRunScriptError = "script_error"
 	pythonRunTimeout     = "timeout"
 	pythonRunOutputLimit = "output_limit"
-	PythonRunFailed      = "failed"
+	pythonRunFailed      = "failed"
 )
 
 var (
-	PythonStopReasons = []string{pythonStopTimeout, pythonStopCrash, pythonStopOutputLimit, pythonStopCancelled, pythonStopRetired, pythonStopSurplus, pythonStopIdle, PythonStopReload}
-	PythonRunOutcomes = []string{PythonRunOK, PythonRunScriptError, pythonRunTimeout, pythonRunOutputLimit, PythonRunFailed}
+	PythonStopReasons = []string{pythonStopTimeout, pythonStopCrash, pythonStopOutputLimit, pythonStopCancelled, pythonStopRetired, pythonStopSurplus, pythonStopIdle, pythonStopReload}
+	PythonRunOutcomes = []string{pythonRunOK, pythonRunScriptError, pythonRunTimeout, pythonRunOutputLimit, pythonRunFailed}
 )
 
 type pythonCollectorStats struct {
@@ -172,18 +172,31 @@ type pythonCollectorStats struct {
 	runs           map[string]uint64
 }
 
-// PythonPoolRef is the exporter's worker pool. It is behind an atomic pointer
-// only so each test can run against a pool of its own (usePythonPool in the
-// tests): the counts a test checks are then its own, whatever ran before it,
-// in whatever order, however often.
-var PythonPoolRef atomic.Pointer[PythonPool]
+// pythonPoolRef is the exporter's worker pool. It is behind an atomic pointer
+// only so each test can run against a pool of its own (IsolatePythonWorkers):
+// the counts a test checks are then its own, whatever ran before it, in
+// whatever order, however often.
+var pythonPoolRef atomic.Pointer[PythonPool]
 
-func init() { PythonPoolRef.Store(NewPythonPool()) }
+func init() { pythonPoolRef.Store(newPythonPool()) }
 
 // PythonWorkers returns the worker pool.
-func PythonWorkers() *PythonPool { return PythonPoolRef.Load() }
+func PythonWorkers() *PythonPool { return pythonPoolRef.Load() }
 
-func NewPythonPool() *PythonPool {
+// IsolatePythonWorkers puts a fresh worker pool in place of the current one
+// and returns what puts the previous pool back, stopping the fresh pool's
+// workers. It is for tests, which read the pool's counts, and must not run in
+// parallel with anything else using the pool.
+func IsolatePythonWorkers() (restore func()) {
+	pool := newPythonPool()
+	previous := pythonPoolRef.Swap(pool)
+	return func() {
+		pythonPoolRef.Store(previous)
+		pool.shutdown()
+	}
+}
+
+func newPythonPool() *PythonPool {
 	return &PythonPool{idle: map[string][]*pythonWorker{}, stats: map[string]*pythonCollectorStats{}, busy: map[string]int{}, obsolete: map[string]bool{}}
 }
 
@@ -314,7 +327,7 @@ func (p *PythonPool) release(spec pythonSpec, worker *pythonWorker) {
 	if obsolete {
 		// A reload removed or changed this script while it ran.
 		worker.stop()
-		st.stops[PythonStopReload]++
+		st.stops[pythonStopReload]++
 		return
 	}
 	if len(p.idle[key]) >= pythonWorkerMaxIdle {
@@ -347,9 +360,9 @@ func (p *PythonPool) reapLocked(now time.Time) {
 	}
 }
 
-// Close stops the pool's idle workers and keeps no more; a worker still busy
-// stops when it finishes. Tests close the pools they made.
-func (p *PythonPool) Close() {
+// shutdown stops the pool's idle workers and keeps no more; a worker still
+// busy stops when it finishes.
+func (p *PythonPool) shutdown() {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	p.closed = true
@@ -402,7 +415,7 @@ func (p *PythonPool) Retain(keys map[string]bool) {
 		}
 		for _, worker := range workers {
 			worker.stop()
-			p.statsLocked(worker.collector).stops[PythonStopReload]++
+			p.statsLocked(worker.collector).stops[pythonStopReload]++
 		}
 		delete(p.idle, key)
 	}

@@ -1,14 +1,17 @@
 package exporter
 
 import (
+	"context"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/eenchev/prometheus-universal-exporter/internal/config"
+	"github.com/eenchev/prometheus-universal-exporter/internal/fetch"
 	"github.com/eenchev/prometheus-universal-exporter/internal/model"
 	"github.com/eenchev/prometheus-universal-exporter/internal/testutil"
 )
@@ -85,5 +88,47 @@ func TestProbeAnswersBeforePrometheusGivesUp(t *testing.T) {
 	}
 	if elapsed < 250*time.Millisecond || elapsed > 2*time.Second {
 		t.Fatalf("answered after %s, want about the 300ms budget", elapsed)
+	}
+}
+
+// The budget bounds the whole trip whatever the request type, and a probe
+// without the header is unaffected. That a localfile read which has not
+// returned is abandoned at the deadline is pinned in
+// fetch/localfile_reads_test.go.
+func TestTheBudgetBoundsEveryRequestTypeAndIsOptional(t *testing.T) {
+	var stall atomic.Bool
+	stall.Store(true)
+	fetch.RequestTypes["stalling"] = &fetch.RequestType{
+		Name:     "stalling",
+		Validate: func(*model.Collector) error { return nil },
+		Fetch: func(ctx context.Context, target string, c *model.Collector, _ fetch.RequestOverrides, _ http.Header) (*fetch.HTTPResponse, error) {
+			if stall.Load() {
+				<-ctx.Done()
+				return nil, ctx.Err()
+			}
+			return &fetch.HTTPResponse{StatusCode: http.StatusOK, Headers: http.Header{"Content-Type": {"text/plain"}}, Body: []byte("value=5\n"), Target: target, Collector: c.Name}, nil
+		},
+	}
+	t.Cleanup(func() { delete(fetch.RequestTypes, "stalling") })
+	c := testutil.Collector("stalled", "text")
+	c.Request = model.RequestConfig{Type: "stalling"}
+	cfg := &model.Config{Collectors: []model.Collector{c}}
+	if err := config.Validate(cfg); err != nil {
+		t.Fatal(err)
+	}
+	server := NewServer(config.NewManager(cfg, "", testutil.QuietLogger(t)), "python3", testutil.QuietLogger(t))
+	server.SetTimeoutOffset(0)
+
+	recorder := probeWithScrapeTimeout(t, server, "collector=stalled&target=somewhere", "0.2")
+	if recorder.Code != http.StatusBadGateway || !strings.Contains(recorder.Body.String(), "200ms budget") {
+		t.Fatalf("status=%d body=%s", recorder.Code, recorder.Body)
+	}
+
+	stall.Store(false)
+	if recorder := probeOnce(t, server, "/probe?collector=stalled&target=somewhere", nil); recorder.Code != http.StatusOK {
+		t.Fatalf("without the header: status=%d body=%s", recorder.Code, recorder.Body)
+	}
+	if recorder := probeWithScrapeTimeout(t, server, "collector=stalled&target=somewhere", "10"); recorder.Code != http.StatusOK {
+		t.Fatalf("with a generous timeout: status=%d body=%s", recorder.Code, recorder.Body)
 	}
 }

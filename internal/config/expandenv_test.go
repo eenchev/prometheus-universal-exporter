@@ -193,8 +193,8 @@ func TestAReloadKeepsExpanding(t *testing.T) {
 	if err := os.WriteFile(path, []byte(collectorWithPath("${DEMO_PATH}/v2")), 0600); err != nil {
 		t.Fatal(err)
 	}
-	manager.LastMod = manager.LastMod.Add(-1)
-	manager.ReloadConfig()
+	manager.lastMod = manager.lastMod.Add(-1)
+	manager.reloadConfig()
 	if got := manager.Get().Collectors[0].Request.Path; got != "/second/v2" {
 		t.Fatalf("path=%q after reload, want the reference expanded again", got)
 	}
@@ -214,8 +214,8 @@ func TestAReloadDoesNotStartExpanding(t *testing.T) {
 	if err := os.WriteFile(path, []byte(collectorWithPath("${DEMO_PATH}")), 0600); err != nil {
 		t.Fatal(err)
 	}
-	manager.LastMod = manager.LastMod.Add(-1)
-	manager.ReloadConfig()
+	manager.lastMod = manager.lastMod.Add(-1)
+	manager.reloadConfig()
 	if got := manager.Get().Collectors[0].Request.Path; got != "${DEMO_PATH}" {
 		t.Fatalf("path=%q, want the reference untouched", got)
 	}
@@ -238,8 +238,8 @@ func TestAReloadWithAMissingVariableIsRejected(t *testing.T) {
 	if err := os.WriteFile(path, []byte(collectorWithPath("${DEMO_ABSENT_FOUR}")), 0600); err != nil {
 		t.Fatal(err)
 	}
-	manager.LastMod = manager.LastMod.Add(-1)
-	manager.ReloadConfig()
+	manager.lastMod = manager.lastMod.Add(-1)
+	manager.reloadConfig()
 	if got := manager.Get().Collectors[0].Request.Path; got != "/first" {
 		t.Fatalf("path=%q, want the previous configuration to stay active", got)
 	}

@@ -136,8 +136,8 @@ func TestConfigReloadRejectedWhenItWouldDisableOTLPWithTargets(t *testing.T) {
 	if err := os.WriteFile(configPath, []byte(disabled), 0600); err != nil {
 		t.Fatal(err)
 	}
-	manager.LastMod = time.Time{}
-	manager.ReloadConfig()
+	manager.lastMod = time.Time{}
+	manager.reloadConfig()
 	if !manager.Get().OTLP.Enabled {
 		t.Fatal("a reload that disables OTLP while targets are loaded must be rejected")
 	}
@@ -167,8 +167,8 @@ func TestTargetFileReloadRejectsInvalidDocument(t *testing.T) {
 	if err := os.WriteFile(targetsPath, []byte("targets:\n  - name: two\n    collector: missing\n    target: http://a.invalid\n"), 0600); err != nil {
 		t.Fatal(err)
 	}
-	manager.TargetsLastMod = time.Time{}
-	manager.ReloadTargets()
+	manager.targetsLastMod = time.Time{}
+	manager.reloadTargets()
 	targets := manager.Targets()
 	if len(targets) != 1 || targets[0].Name != "one" {
 		t.Fatalf("an invalid target reload must keep the previous document, got %+v", targets)
@@ -177,8 +177,8 @@ func TestTargetFileReloadRejectsInvalidDocument(t *testing.T) {
 	if err := os.WriteFile(targetsPath, []byte("targets:\n  - name: three\n    collector: text\n    target: http://b.invalid\n"), 0600); err != nil {
 		t.Fatal(err)
 	}
-	manager.TargetsLastMod = time.Time{}
-	manager.ReloadTargets()
+	manager.targetsLastMod = time.Time{}
+	manager.reloadTargets()
 	if targets := manager.Targets(); len(targets) != 1 || targets[0].Name != "three" {
 		t.Fatalf("a valid target reload should take effect, got %+v", targets)
 	}

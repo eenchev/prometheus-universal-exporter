@@ -36,14 +36,15 @@ func TestVersionFlag(t *testing.T) {
 	}
 }
 
-// -X main.version wins over what Go stamped.
+// -X main.version reaches the build information, where it wins over what Go
+// stamped (exporter/buildinfo_test.go).
 func TestVersionCanBeSetAtBuildTime(t *testing.T) {
 	previous, previousVersion := version, exporter.Version
 	version = "9.9.9"
 	applyVersion()
 	t.Cleanup(func() { version, exporter.Version = previous, previousVersion })
-	if info := exporter.ComputeBuildVersion(); info.Version != "9.9.9" {
-		t.Fatalf("version=%q, want the one set at build time", info.Version)
+	if exporter.Version != "9.9.9" {
+		t.Fatalf("version=%q, want the one set at build time", exporter.Version)
 	}
 }
 

@@ -97,8 +97,8 @@ func TestAReloadStopsTheWorkersOfChangedScripts(t *testing.T) {
 	}
 	probe(changedName)
 	probe(keptName)
-	stopsBefore := transform.PythonWorkers().Snapshot(changedName).Stops[transform.PythonStopReload]
-	busyBefore := transform.PythonWorkers().Snapshot(busyName).Stops[transform.PythonStopReload]
+	stopsBefore := transform.PythonWorkers().Snapshot(changedName).Stops["reload"]
+	busyBefore := transform.PythonWorkers().Snapshot(busyName).Stops["reload"]
 
 	// A probe of the slow script is running while the reload lands.
 	finished := make(chan struct{})
@@ -115,15 +115,16 @@ func TestAReloadStopsTheWorkersOfChangedScripts(t *testing.T) {
 	}
 
 	write(document(`metric(name="new", value=1)`, `metric(name="busy", value=2)`))
-	manager.LastMod = time.Time{}
-	manager.ReloadConfig()
+	if err := manager.Reload(config.ReloadTriggerSignal); err != nil {
+		t.Fatal(err)
+	}
 	if manager.Get() == cfg {
 		t.Fatal("the reload was not applied")
 	}
 	if got := idleWorkers(changedName); got != 0 {
 		t.Errorf("the changed script still has %d idle workers", got)
 	}
-	if got := transform.PythonWorkers().Snapshot(changedName).Stops[transform.PythonStopReload]; got != stopsBefore+1 {
+	if got := transform.PythonWorkers().Snapshot(changedName).Stops["reload"]; got != stopsBefore+1 {
 		t.Errorf("reload stops %d, want %d", got, stopsBefore+1)
 	}
 	if got := idleWorkers(keptName); got != 1 {
@@ -134,7 +135,7 @@ func TestAReloadStopsTheWorkersOfChangedScripts(t *testing.T) {
 	if got := idleWorkers(busyName); got != 0 {
 		t.Errorf("the worker busy during the reload went back idle: %d", got)
 	}
-	if got := transform.PythonWorkers().Snapshot(busyName).Stops[transform.PythonStopReload]; got != busyBefore+1 {
+	if got := transform.PythonWorkers().Snapshot(busyName).Stops["reload"]; got != busyBefore+1 {
 		t.Errorf("busy reload stops %d, want %d", got, busyBefore+1)
 	}
 	// The new script runs in a new worker, which stays.

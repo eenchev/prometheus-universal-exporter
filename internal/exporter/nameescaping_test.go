@@ -7,7 +7,6 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/eenchev/prometheus-universal-exporter/internal/decode"
 	"github.com/eenchev/prometheus-universal-exporter/internal/model"
 	"github.com/eenchev/prometheus-universal-exporter/internal/testutil"
 	"github.com/eenchev/prometheus-universal-exporter/internal/transform"
@@ -66,7 +65,7 @@ func TestUTF8NamesThroughAProbe(t *testing.T) {
 				t.Errorf("%s: missing %s in\n%s", collector, w, body)
 			}
 		}
-		if _, err := decode.ParsePrometheusText([]byte(body)); err != nil {
+		if err := parseExposition([]byte(body)); err != nil {
 			t.Errorf("%s: the answer does not parse: %v", collector, err)
 		}
 	}

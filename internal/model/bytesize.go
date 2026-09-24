@@ -28,8 +28,8 @@ var byteSizeUnits = map[string]float64{
 	"ki": 1 << 10, "kib": 1 << 10, "mi": 1 << 20, "mib": 1 << 20, "gi": 1 << 30, "gib": 1 << 30, "ti": 1 << 40, "tib": 1 << 40,
 }
 
-// ParseByteSize reads a size as the configuration writes it.
-func ParseByteSize(s string) (ByteSize, error) {
+// parseByteSize reads a size as the configuration writes it.
+func parseByteSize(s string) (ByteSize, error) {
 	s = strings.TrimSpace(s)
 	if !byteSizeRE.MatchString(s) {
 		return 0, fmt.Errorf("size %q is not a number of bytes or a number with a unit such as 512KiB, 10MB or 1.5GiB", s)
@@ -66,7 +66,7 @@ func (b *ByteSize) UnmarshalYAML(n *yaml.Node) error {
 		*b = ByteSize(v)
 		return nil
 	}
-	v, err := ParseByteSize(n.Value)
+	v, err := parseByteSize(n.Value)
 	if err != nil {
 		return lineError(n, "%v", err)
 	}

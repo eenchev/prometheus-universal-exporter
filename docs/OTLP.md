@@ -94,9 +94,17 @@ the export.
 
 The exporter can also scrape a fixed list of targets itself and deliver only
 those metrics over OTLP, with no Prometheus involved. Pass the list with
-`--otlp.targets-file`; `targets.example.yaml` is a complete example, and
-`config.otlp.example.yaml` is the matching exporter configuration with OTLP
-export enabled:
+`--otlp.targets-file`; `configs/targets.example.yaml` is a complete example, and
+`configs/config.otlp.example.yaml` is the matching exporter configuration with OTLP
+export enabled. `configs/targets.schema.json`, printed by
+`--otlp.targets-file-schema`, is the file's JSON Schema, for editors; start a
+target file with
+
+```yaml
+# yaml-language-server: $schema=https://raw.githubusercontent.com/eenchev/prometheus-universal-exporter/main/configs/targets.schema.json
+```
+
+A target file looks like this:
 
 ```yaml
 targets:

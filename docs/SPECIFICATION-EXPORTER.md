@@ -2484,7 +2484,7 @@ would otherwise be ignored without a word.
 ### 24.3 Configuration schema
 
 The repository MUST publish a JSON Schema (draft 2020-12) of the configuration
-file, `config.schema.json`, so editors can complete keys, show descriptions and
+file, `configs/config.schema.json`, so editors can complete keys, show descriptions and
 flag unknown keys and invalid values. It MUST be generated from the Go
 configuration structs, with the allowed values, patterns, required keys and
 descriptions the structs cannot express added by path, so a key added to the
@@ -2502,11 +2502,23 @@ pointing at the published schema.
 
 The configuration schema MUST require `collectors` or `collector_files`, each
 non-empty when it is the one present. The repository MUST also publish
-`collector-file.schema.json`, the schema of a collector file (§ 5.0): a required,
+`configs/collector-file.schema.json`, the schema of a collector file (§ 5.0): a required,
 non-empty `collectors` list and no other key, its collectors described by the
 same rules as the configuration's, which a test MUST check.
 `--config.collector-file-schema` MUST print it and exit 0; a test MUST fail when
 the committed file differs from what the code generates.
+
+The repository MUST likewise publish `configs/targets.schema.json`, the schema
+of the scheduled target file (§ 42.14), generated from the Go target structs
+with its own rules by path, and `--otlp.targets-file-schema` MUST print it and
+exit 0. A test MUST fail when the committed file differs from what the code
+generates, when the example target file does not validate against it, and when
+it accepts any of a set of invalid target files; the example target file MUST
+begin with the modeline pointing at it.
+
+The schemas and the example configurations MUST live together in `configs/`,
+not at the repository root, and the schemas' published addresses MUST be under
+it. `make schemas` MUST regenerate all three.
 
 The schema describes the canonical spelling, and MUST allow an unquoted number
 or boolean where the exporter reads a string, since YAML reads `expression: 1`
@@ -4325,7 +4337,7 @@ status captured:
   prefixed name over the limit fails validation at scrape time.
 - `--dry-run` reports an invalid prefix as a failed `config` check.
 - Changing the prefix changes the cache key.
-- `config.example.yaml` demonstrates the key.
+- `configs/config.example.yaml` demonstrates the key.
 
 ## 34.43 Metric rule validation tests
 
@@ -4494,7 +4506,7 @@ See § 5.0.
 - The watch reloads when a collector file is edited, added or removed, does not
   reload when nothing changed, and rejects a reload that adds a duplicate,
   keeping the configuration in force.
-- `collector-file.schema.json` is current, printed by its flag, describes
+- `configs/collector-file.schema.json` is current, printed by its flag, describes
   collectors as the configuration schema does, accepts a collectors list and
   rejects any other key, an empty list and an invalid collector; the
   configuration schema accepts a configuration of collector files alone and

@@ -7,7 +7,7 @@ metrics to publish — and, optionally, the exporter's own settings under `web`
 and `otlp`. Target URLs are deliberately not part of it: Prometheus supplies
 each one per scrape.
 
-`config.example.yaml` in the repository root is a complete working document to
+`configs/config.example.yaml` is a complete working document to
 start from. This page is the reference for what it may contain.
 
 ## Collectors
@@ -672,17 +672,24 @@ included, since a misspelt key would otherwise be ignored without a word.
 
 ### Editor support
 
-[`config.schema.json`](../config.schema.json) is a JSON Schema of this file.
+[`configs/config.schema.json`](../configs/config.schema.json) is a JSON Schema of this file.
 With the YAML extension for VS Code, or any editor that uses the YAML language
 server, start a configuration with
 
 ```yaml
-# yaml-language-server: $schema=https://raw.githubusercontent.com/eenchev/prometheus-universal-exporter/main/config.schema.json
+# yaml-language-server: $schema=https://raw.githubusercontent.com/eenchev/prometheus-universal-exporter/main/configs/config.schema.json
 ```
 
 and the editor completes keys, shows what each one does, and flags unknown keys
 and values that are not allowed as you type. The example configurations start
 with it.
+
+The [scheduled target file](OTLP.md#scheduled-targets) has a schema of its own,
+[`configs/targets.schema.json`](../configs/targets.schema.json), which
+`configs/targets.example.yaml` points editors at the same way. All three
+schemas — this one, the [collector file](#collector-files) one and the target
+file one — are in `configs/` with the examples, and are regenerated with
+`make schemas` (see [Development](DEVELOPMENT.md#the-configuration-schema)).
 
 `prometheus-universal-exporter --config.schema` prints the schema of the binary
 you are running; its `request.type` values are the request types that binary
@@ -812,11 +819,11 @@ collectors:
 
 `prometheus-universal-exporter --config.collector-file-schema` prints the JSON
 Schema of a collector file, published as
-[`collector-file.schema.json`](../collector-file.schema.json). Start a collector
+[`configs/collector-file.schema.json`](../configs/collector-file.schema.json). Start a collector
 file with
 
 ```yaml
-# yaml-language-server: $schema=https://raw.githubusercontent.com/eenchev/prometheus-universal-exporter/main/collector-file.schema.json
+# yaml-language-server: $schema=https://raw.githubusercontent.com/eenchev/prometheus-universal-exporter/main/configs/collector-file.schema.json
 ```
 
 and the editor checks it the way it checks the configuration, including that it

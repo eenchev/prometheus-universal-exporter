@@ -55,18 +55,21 @@ therefore must not use `t.Parallel`, which the swap assumes.
 
 ## The configuration schema
 
-`config.schema.json`, and `collector-file.schema.json` for
-[collector files](CONFIGURATION.md#collector-files), are generated from the
-configuration structs. After adding or changing a configuration key, regenerate
-both, or the test suite fails:
+`configs/config.schema.json`, `configs/collector-file.schema.json` for
+[collector files](CONFIGURATION.md#collector-files) and
+`configs/targets.schema.json` for the
+[scheduled target file](OTLP.md#scheduled-targets) are generated from the
+configuration structs. After adding or changing a key, regenerate all three, or
+the test suite fails:
 
 ```sh
-go run . --config.schema > config.schema.json
-go run . --config.collector-file-schema > collector-file.schema.json
+make schemas
 ```
 
 Allowed values, patterns and descriptions that a struct cannot express are added
-by path in `configSchemaRules` in `internal/config/configschema.go`.
+by path, in `configSchemaRules` for the configuration and collector files and
+in `targetsSchemaRules` for the target file, both in
+`internal/config/configschema.go`.
 
 ## Tests that reach the internet
 

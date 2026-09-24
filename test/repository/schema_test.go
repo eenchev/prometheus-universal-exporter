@@ -9,6 +9,7 @@ import (
 	"reflect"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -17,7 +18,7 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-// collector-file.schema.json is committed, current (its flag printing it is
+// configs/collector-file.schema.json is committed, current (its flag printing it is
 // checked in cli_test.go), and
 // describes collectors exactly as the configuration schema does.
 func TestCommittedCollectorFileSchemaIsCurrent(t *testing.T) {
@@ -30,7 +31,7 @@ func TestCommittedCollectorFileSchemaIsCurrent(t *testing.T) {
 		t.Fatal(err)
 	}
 	if !bytes.Equal(committed, generated) {
-		t.Fatalf("%s is out of date; regenerate it with: go run . --config.collector-file-schema > %s", collectorFileSchemaFile, collectorFileSchemaFile)
+		t.Fatalf("%s is out of date; regenerate the schemas with: make schemas", collectorFileSchemaFile)
 	}
 	var parsed map[string]any
 	if err := json.Unmarshal(generated, &parsed); err != nil {
@@ -80,18 +81,19 @@ func TestCollectorFileSchemaAcceptsCollectorsOnly(t *testing.T) {
 	}
 }
 
-// config.schema.json is the JSON Schema of the configuration file, generated
+// configs/config.schema.json is the JSON Schema of the configuration file, generated
 // from the Config struct (config/configschema.go) and printed by --config.schema.
 
 const (
-	configSchemaFile        = "config.schema.json"
-	collectorFileSchemaFile = "collector-file.schema.json"
+	configSchemaFile        = "configs/config.schema.json"
+	collectorFileSchemaFile = "configs/collector-file.schema.json"
+	targetsSchemaFile       = "configs/targets.schema.json"
 )
 
 // The committed schema is exactly what the code generates, so it cannot drift
-// from the configuration it describes. Regenerate it with:
+// from the configuration it describes. Regenerate it, with the others, with:
 //
-//	go run . --config.schema > config.schema.json
+//	make schemas
 func TestCommittedConfigSchemaIsCurrent(t *testing.T) {
 	committed, err := os.ReadFile(configSchemaFile)
 	if err != nil {
@@ -102,7 +104,7 @@ func TestCommittedConfigSchemaIsCurrent(t *testing.T) {
 		t.Fatal(err)
 	}
 	if !bytes.Equal(committed, generated) {
-		t.Fatalf("%s is out of date; regenerate it with: go run . --config.schema > %s", configSchemaFile, configSchemaFile)
+		t.Fatalf("%s is out of date; regenerate the schemas with: make schemas", configSchemaFile)
 	}
 }
 
@@ -110,7 +112,7 @@ func TestCommittedConfigSchemaIsCurrent(t *testing.T) {
 // pointed at it shows no false errors on the examples.
 func TestShippedConfigurationsMatchTheSchema(t *testing.T) {
 	schema := loadSchema(t)
-	files := []string{"config.example.yaml", "config.otlp.example.yaml"}
+	files := []string{"configs/config.example.yaml", "configs/config.otlp.example.yaml"}
 	testdata, _ := filepath.Glob("testdata/config.*.yaml")
 	files = append(files, testdata...)
 	for _, file := range files {
@@ -210,10 +212,15 @@ func TestConfigSchemaRejectsInvalidConfigurations(t *testing.T) {
 	}
 }
 
-// The examples point editors at the published schema.
+// The examples point editors at the published schema: the configurations at
+// the configuration's, the target file at the target file's.
 func TestExamplesReferenceTheSchema(t *testing.T) {
-	modeline := "# yaml-language-server: $schema=" + parsedSchema(t, config.SchemaJSON)["$id"].(string)
-	for _, file := range []string{"config.example.yaml", "config.otlp.example.yaml"} {
+	for file, render := range map[string]func() ([]byte, error){
+		"configs/config.example.yaml":      config.SchemaJSON,
+		"configs/config.otlp.example.yaml": config.SchemaJSON,
+		"configs/targets.example.yaml":     config.TargetsSchemaJSON,
+	} {
+		modeline := "# yaml-language-server: $schema=" + parsedSchema(t, render)["$id"].(string)
 		raw, err := os.ReadFile(file)
 		if err != nil {
 			t.Fatal(err)
@@ -221,6 +228,61 @@ func TestExamplesReferenceTheSchema(t *testing.T) {
 		if !strings.HasPrefix(string(raw), modeline+"\n") {
 			t.Errorf("%s does not start with %q", file, modeline)
 		}
+	}
+}
+
+// configs/targets.schema.json is the JSON Schema of the scheduled target
+// file, generated from the TargetFile struct and printed by
+// --otlp.targets-file-schema. The committed file is exactly what the code
+// generates, and the shipped example matches it.
+func TestCommittedTargetsSchemaIsCurrent(t *testing.T) {
+	committed, err := os.ReadFile(targetsSchemaFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	generated, err := config.TargetsSchemaJSON()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(committed, generated) {
+		t.Fatalf("%s is out of date; regenerate the schemas with: make schemas", targetsSchemaFile)
+	}
+	if errs := validateAgainstSchema(loadSchemaFile(t, targetsSchemaFile), readYAMLDocument(t, "configs/targets.example.yaml")); len(errs) > 0 {
+		t.Fatalf("configs/targets.example.yaml does not match the schema:\n%s", strings.Join(errs, "\n"))
+	}
+}
+
+// The target file schema refuses what startup refuses and a schema can see.
+func TestTargetsSchemaRejectsInvalidFiles(t *testing.T) {
+	schema := loadSchemaFile(t, targetsSchemaFile)
+	base := "targets:\n  - name: a\n    collector: app\n    target: http://a.example\n"
+	var doc any
+	if err := yaml.Unmarshal([]byte(base), &doc); err != nil {
+		t.Fatal(err)
+	}
+	if errs := validateAgainstSchema(schema, normalizeYAML(doc)); len(errs) > 0 {
+		t.Fatalf("the base document should be valid: %v", errs)
+	}
+	for name, document := range map[string]string{
+		"no targets":      "interval: 1m\n",
+		"empty targets":   "targets: []\n",
+		"no collector":    "targets:\n  - name: a\n    target: http://a.example\n",
+		"unknown key":     base + "    scrape_interval: 1m\n",
+		"bad interval":    base + "    interval: a minute\n",
+		"bad name":        strings.Replace(base, "name: a", "name: bad-name", 1),
+		"bad method":      base + "    request:\n      method: FETCH\n",
+		"bad param name":  base + "    params:\n      tenant: acme\n",
+		"unknown request": base + "    request:\n      query: {a: b}\n",
+	} {
+		t.Run(name, func(t *testing.T) {
+			var doc any
+			if err := yaml.Unmarshal([]byte(document), &doc); err != nil {
+				t.Fatal(err)
+			}
+			if errs := validateAgainstSchema(schema, normalizeYAML(doc)); len(errs) == 0 {
+				t.Fatalf("accepted:\n%s", document)
+			}
+		})
 	}
 }
 
@@ -280,8 +342,8 @@ func normalizeYAML(v any) any {
 }
 
 // validateAgainstSchema checks the part of JSON Schema the generated schema
-// uses: type, properties, additionalProperties, required, items, minItems,
-// enum, pattern and minimum. It is enough to test the schema without a
+// uses: type, properties, additionalProperties, propertyNames, required,
+// items, minItems, enum, pattern and minimum. It is enough to test the schema without a
 // third-party validator.
 func validateAgainstSchema(schema map[string]any, value any) []string {
 	var errs []string
@@ -365,6 +427,11 @@ func validateAgainstSchema(schema map[string]any, value any) []string {
 				keys = append(keys, k)
 			}
 			sort.Strings(keys)
+			if names, ok := schema["propertyNames"].(map[string]any); ok {
+				for _, key := range keys {
+					check(names, key, path+" key "+strconv.Quote(key))
+				}
+			}
 			for _, key := range keys {
 				if sub, ok := properties[key].(map[string]any); ok {
 					check(sub, x[key], path+"."+key)

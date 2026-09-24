@@ -59,7 +59,7 @@ jobs:
       - run: helm template test charts/prometheus-universal-exporter --set-json 'monitors=[{"name":"service-targets","enabled":true,"type":"service","collector":"example","interval":"30s","scrapeTimeout":"10s"}]'
       - run: helm template test charts/prometheus-universal-exporter --set-json 'monitors=[{"name":"pod-targets","enabled":true,"type":"pod","collector":"example","interval":"30s","scrapeTimeout":"10s"}]'
       - run: helm template test charts/prometheus-universal-exporter --set server.listenAddress=0.0.0.0:9115 --set server.pythonPath=/usr/bin/python3.11
-      - run: helm template test charts/prometheus-universal-exporter --set otlpTargets.enabled=true --set-file otlpTargets.data=targets.example.yaml --set-file 'config.data.config\.yaml=config.otlp.example.yaml'
+      - run: helm template test charts/prometheus-universal-exporter --set otlpTargets.enabled=true --set-file otlpTargets.data=configs/targets.example.yaml --set-file 'config.data.config\.yaml=configs/config.otlp.example.yaml'
 
       # Artifact Hub reads .artifacthub-repo.yml from this repository to verify
       # who owns the OCI repository it indexes. A release that publishes a chart

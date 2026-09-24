@@ -1,39 +1,9 @@
 {
-  "$id": "https://raw.githubusercontent.com/eenchev/prometheus-universal-exporter/main/config.schema.json",
+  "$id": "https://raw.githubusercontent.com/eenchev/prometheus-universal-exporter/main/configs/collector-file.schema.json",
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "additionalProperties": false,
-  "anyOf": [
-    {
-      "properties": {
-        "collectors": {
-          "minItems": 1
-        }
-      },
-      "required": [
-        "collectors"
-      ]
-    },
-    {
-      "properties": {
-        "collector_files": {
-          "minItems": 1
-        }
-      },
-      "required": [
-        "collector_files"
-      ]
-    }
-  ],
-  "description": "The exporter configuration. See docs/CONFIGURATION.md. Collectors are defined under collectors, in the files collector_files lists, or both.",
+  "description": "A collector file of the exporter, listed under collector_files in the configuration. It holds collectors and nothing else. See docs/CONFIGURATION.md#collector-files.",
   "properties": {
-    "collector_files": {
-      "description": "Further files of collectors, as paths or glob patterns such as collectors.d/*.yaml, relative to this file. A collector file holds a collectors list and nothing else. See docs/CONFIGURATION.md#collector-files.",
-      "items": {
-        "minLength": 1,
-        "type": "string"
-      },
-      "type": "array"
-    },
     "collectors": {
       "description": "The collectors. A probe names one with its collector parameter. A name must be unique across this list and every collector file.",
       "items": {
@@ -757,171 +727,13 @@
         ],
         "type": "object"
       },
+      "minItems": 1,
       "type": "array"
-    },
-    "otlp": {
-      "additionalProperties": false,
-      "properties": {
-        "compression": {
-          "description": "Compression of the export requests. Defaults to gzip.",
-          "enum": [
-            "gzip",
-            "none"
-          ],
-          "type": "string"
-        },
-        "enabled": {
-          "type": "boolean"
-        },
-        "endpoint": {
-          "description": "OTLP/HTTP metrics endpoint, such as http://otel-collector:4318/v1/metrics.",
-          "type": [
-            "string",
-            "number",
-            "boolean"
-          ]
-        },
-        "headers": {
-          "additionalProperties": {
-            "type": [
-              "string",
-              "number",
-              "boolean"
-            ]
-          },
-          "type": "object"
-        },
-        "insecure_skip_verify": {
-          "type": "boolean"
-        },
-        "interval": {
-          "description": "A duration such as 500ms, 30s or 5m.",
-          "pattern": "^[-+]?(0|([0-9]*(\\.[0-9]*)?(ns|us|µs|μs|ms|s|m|h))+)$",
-          "type": "string"
-        },
-        "max_pending_points": {
-          "description": "The most data points kept waiting for export while the endpoint fails; past it the oldest are dropped and counted. Defaults to 100000.",
-          "minimum": 0,
-          "type": "integer"
-        },
-        "resource_attributes": {
-          "additionalProperties": {
-            "type": [
-              "string",
-              "number",
-              "boolean"
-            ]
-          },
-          "type": "object"
-        },
-        "service_name": {
-          "type": [
-            "string",
-            "number",
-            "boolean"
-          ]
-        },
-        "timeout": {
-          "description": "How long one export attempt may take. Defaults to 5s. Also bounds the last export at shutdown.",
-          "pattern": "^[-+]?(0|([0-9]*(\\.[0-9]*)?(ns|us|µs|μs|ms|s|m|h))+)$",
-          "type": "string"
-        },
-        "tls": {
-          "additionalProperties": false,
-          "properties": {
-            "ca_file": {
-              "type": [
-                "string",
-                "number",
-                "boolean"
-              ]
-            },
-            "cert_file": {
-              "type": [
-                "string",
-                "number",
-                "boolean"
-              ]
-            },
-            "insecure_skip_verify": {
-              "type": "boolean"
-            },
-            "key_file": {
-              "type": [
-                "string",
-                "number",
-                "boolean"
-              ]
-            }
-          },
-          "type": "object"
-        },
-        "unready_after_failures": {
-          "description": "Answer /ready with 503 after this many failed exports in a row, until one gets through. 0, the default, never does: an exporter whose exports fail still answers probes.",
-          "minimum": 0,
-          "type": "integer"
-        }
-      },
-      "type": "object"
-    },
-    "web": {
-      "additionalProperties": false,
-      "properties": {
-        "basic_auth": {
-          "additionalProperties": false,
-          "properties": {
-            "enabled": {
-              "type": "boolean"
-            },
-            "password": {
-              "type": [
-                "string",
-                "number",
-                "boolean"
-              ]
-            },
-            "password_file": {
-              "description": "Read the password from this file instead of password, such as a mounted Secret. Read again when it changes.",
-              "type": [
-                "string",
-                "number",
-                "boolean"
-              ]
-            },
-            "username": {
-              "type": [
-                "string",
-                "number",
-                "boolean"
-              ]
-            },
-            "username_file": {
-              "description": "Read the username from this file instead of username, such as a mounted Secret. Read again when it changes.",
-              "type": [
-                "string",
-                "number",
-                "boolean"
-              ]
-            }
-          },
-          "type": "object"
-        },
-        "self_metrics": {
-          "additionalProperties": false,
-          "properties": {
-            "resource_metrics_enabled": {
-              "type": "boolean"
-            },
-            "verbose": {
-              "type": "boolean"
-            }
-          },
-          "type": "object"
-        }
-      },
-      "type": "object"
     }
   },
-  "title": "prometheus-universal-exporter configuration",
+  "required": [
+    "collectors"
+  ],
+  "title": "prometheus-universal-exporter collector file",
   "type": "object"
 }

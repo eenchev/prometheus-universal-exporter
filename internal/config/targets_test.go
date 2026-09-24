@@ -231,3 +231,44 @@ func TestScheduledTargetIntervals(t *testing.T) {
 		t.Fatalf("intervals %s, %s", time.Duration(loaded.Targets[0].Interval), time.Duration(loaded.Targets[1].Interval))
 	}
 }
+
+// A target missing a parameter is told how to supply it; setting request.path
+// is offered only when the placeholder is in the path, the one a target can
+// replace.
+func TestAMissingTargetParameterSaysHowToSupplyIt(t *testing.T) {
+	collector := func(request model.RequestConfig) *model.Config {
+		c := testutil.Collector("templated", "text")
+		request.Type = "http"
+		c.Request = request
+		cfg := &model.Config{Collectors: []model.Collector{c}, OTLP: model.OTLPConfig{Enabled: true, Endpoint: "http://otel.invalid/v1/metrics"}}
+		if err := Validate(cfg); err != nil {
+			t.Fatal(err)
+		}
+		return cfg
+	}
+	targets := func() *model.TargetFile {
+		f := &model.TargetFile{Targets: []model.ScheduledTarget{{Name: "acme", Collector: "templated", Target: "http://orders.invalid"}}}
+		if err := ValidateTargets(f); err != nil {
+			t.Fatal(err)
+		}
+		return f
+	}
+	for name, test := range map[string]struct {
+		request     model.RequestConfig
+		where       string
+		offersPaths bool
+	}{
+		"path":   {model.RequestConfig{Path: "/tenants/{{param_tenant}}"}, "request.path", true},
+		"query":  {model.RequestConfig{Query: map[string]string{"tenant": "{{param_tenant}}"}}, "request.query.tenant", false},
+		"header": {model.RequestConfig{Headers: map[string]string{"X-Tenant": "{{param_tenant}}"}}, "request.headers.X-Tenant", false},
+	} {
+		err := ValidateTargetsAgainst(targets(), collector(test.request))
+		if err == nil || !strings.Contains(err.Error(), "whose "+test.where+" needs param_tenant") || !strings.Contains(err.Error(), "set it under the target's params") {
+			t.Errorf("%s: err=%v", name, err)
+			continue
+		}
+		if got := strings.Contains(err.Error(), "set request.path on the target"); got != test.offersPaths {
+			t.Errorf("%s: offers request.path %v, want %v: %v", name, got, test.offersPaths, err)
+		}
+	}
+}

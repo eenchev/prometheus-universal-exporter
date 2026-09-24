@@ -65,24 +65,24 @@ of them. See [Collector files](docs/CONFIGURATION.md#collector-files).
 Your editor can check the file as you type: start it with
 
 ```yaml
-# yaml-language-server: $schema=https://raw.githubusercontent.com/eenchev/prometheus-universal-exporter/main/config.schema.json
+# yaml-language-server: $schema=https://raw.githubusercontent.com/eenchev/prometheus-universal-exporter/main/configs/config.schema.json
 ```
 
 and the YAML language server completes keys and flags mistakes against
-[`config.schema.json`](config.schema.json). Every expression is also compiled
+[`configs/config.schema.json`](configs/config.schema.json). Every expression is also compiled
 when the exporter starts, so a typo stops it with a message naming the
 collector and metric, rather than failing each scrape.
 
 Run the exporter and probe a target through it:
 
 ```sh
-go run . --config.file=config.example.yaml
+go run . --config.file=configs/config.example.yaml
 
 curl 'http://localhost:8080/probe?target=http://127.0.0.1:9000&collector=app_json'
 ```
 
 The response is ordinary Prometheus exposition, which is what Prometheus
-scrapes. `config.example.yaml` in the repository root is a complete working
+scrapes. `configs/config.example.yaml` is a complete working
 document covering every decoder.
 
 Or run the published image:
@@ -101,14 +101,14 @@ The chart is published to GitHub Container Registry as an OCI artifact. It is pu
 helm install exporter \
   oci://ghcr.io/eenchev/charts/prometheus-universal-exporter \
   --version 0.2.1 \
-  --set-file 'config.data.config\.yaml=config.example.yaml'
+  --set-file 'config.data.config\.yaml=configs/config.example.yaml'
 ```
 
 Omitting `--version` takes the newest published chart; pin it for anything you deploy more than once. To install from a checkout instead:
 
 ```sh
 helm install exporter charts/prometheus-universal-exporter \
-  --set-file 'config.data.config\.yaml=config.example.yaml'
+  --set-file 'config.data.config\.yaml=configs/config.example.yaml'
 ```
 
 The chart creates the Deployment, Service, ConfigMap and, on request,
@@ -143,6 +143,7 @@ pattern needs. See the
 | `--otlp.targets-file` | none | Scheduled targets the exporter scrapes itself. |
 | `--config.schema` | off | Print the JSON Schema of the configuration file, for editors, and exit. See [Editor support](docs/CONFIGURATION.md#editor-support). |
 | `--config.collector-file-schema` | off | Print the JSON Schema of a collector file, for editors, and exit. See [Collector files](docs/CONFIGURATION.md#collector-files). |
+| `--otlp.targets-file-schema` | off | Print the JSON Schema of the scheduled target file, for editors, and exit. See [Scheduled targets](docs/OTLP.md#scheduled-targets). |
 | `--probe.timeout-offset` | `500ms` | How much of Prometheus's scrape timeout a probe leaves unused, so it answers with its own error first. See [Probe deadlines](docs/CONFIGURATION.md#probe-deadlines). |
 | `--web.shutdown-delay` | `0s` | How long a shutdown keeps serving, with `/ready` answering `503`, before it begins, so a load balancer stops sending probes first. The Helm chart sets `5s`. See [Shutting down](docs/CONFIGURATION.md#shutting-down). |
 | `--web.shutdown-timeout` | `5s` | How long a shutdown waits for the probes in progress. Keep it at least as long as Prometheus's scrape timeout. See [Shutting down](docs/CONFIGURATION.md#shutting-down). |

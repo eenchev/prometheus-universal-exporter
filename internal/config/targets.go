@@ -171,7 +171,14 @@ func ValidateTargetsAgainst(f *model.TargetFile, c *model.Config) error {
 			unused, err := fetch.CheckRequestParams(collector, fetch.TargetOverrides(t))
 			var missing *fetch.MissingParamError
 			if errors.As(err, &missing) {
-				return fmt.Errorf("target %q uses collector %q, whose %s needs %s, a parameter without a default; a scheduled target has no probe to supply it, so set it under the target's params, give the placeholder a default, or set request.path on the target", t.Name, t.Collector, missing.Where, missing.Name)
+				// Only a path the target sets itself replaces the
+				// collector's placeholder; a query value, header or body
+				// placeholder has no such way around it.
+				alternatives := "set it under the target's params, or give the placeholder a default"
+				if missing.Where == "request.path" {
+					alternatives = "set it under the target's params, give the placeholder a default, or set request.path on the target"
+				}
+				return fmt.Errorf("target %q uses collector %q, whose %s needs %s, a parameter without a default; a scheduled target has no probe to supply it, so %s", t.Name, t.Collector, missing.Where, missing.Name, alternatives)
 			}
 			if err != nil {
 				return fmt.Errorf("target %q uses collector %q: %w", t.Name, t.Collector, err)

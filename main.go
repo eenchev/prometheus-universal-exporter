@@ -69,6 +69,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 	expandEnv := flags.Bool("config.export-env", false, "Expand ${NAME} environment variable references in the configuration, collector and scheduled target files")
 	printSchema := flags.Bool("config.schema", false, "Print the JSON Schema of the configuration file, for editors, and exit")
 	printCollectorFileSchema := flags.Bool("config.collector-file-schema", false, "Print the JSON Schema of a collector file listed under collector_files, for editors, and exit")
+	printTargetsSchema := flags.Bool("otlp.targets-file-schema", false, "Print the JSON Schema of the scheduled target file, for editors, and exit")
 	showVersion := flags.Bool("version", false, "Print the version, revision, Go version and request types of this build, and exit")
 	check := flags.Bool("dry-run", false, "Validate the configuration and scheduled target files as startup would, print a JSON report to stdout, and exit 0 if they are valid or 1 if not, without starting the exporter")
 	if err := flags.Parse(args); err != nil {
@@ -102,10 +103,13 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return 0
 	}
 
-	if *printSchema || *printCollectorFileSchema {
+	if *printSchema || *printCollectorFileSchema || *printTargetsSchema {
 		render := config.SchemaJSON
-		if *printCollectorFileSchema {
+		switch {
+		case *printCollectorFileSchema:
 			render = config.CollectorFileSchemaJSON
+		case *printTargetsSchema:
+			render = config.TargetsSchemaJSON
 		}
 		schema, err := render()
 		if err != nil {

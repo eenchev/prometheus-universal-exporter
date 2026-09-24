@@ -101,7 +101,7 @@ jobs:
             arch="${target#*/}"
             output="prometheus-universal-exporter-${VERSION}-${os}-${arch}"
             CGO_ENABLED=0 GOOS="$os" GOARCH="$arch" go build -trimpath -ldflags="-s -w -X main.version=${VERSION}" -o "dist/$output/prometheus-universal-exporter" .
-            cp config.example.yaml "dist/$output/"
+            cp configs/config.example.yaml "dist/$output/"
             tar -czf "dist/$output.tar.gz" -C "dist/$output" .
             rm -rf "dist/$output"
           done

@@ -1,9 +1,7 @@
-# yaml-language-server: $schema=https://raw.githubusercontent.com/eenchev/prometheus-universal-exporter/main/config.schema.json
-# Companion to config.example.yaml with OTLP export enabled. Scheduled targets
-# (targets.example.yaml, passed with --otlp.targets-file) require this.
+# yaml-language-server: $schema=https://raw.githubusercontent.com/eenchev/prometheus-universal-exporter/main/configs/config.schema.json
 otlp:
-  enabled: true
-  endpoint: http://otel-collector:4318/v1/metrics
+  enabled: false
+  # endpoint: http://otel-collector:4318/v1/metrics
   timeout: 5s
   # Metrics are batched and exported at this interval.
   interval: 30s
@@ -34,6 +32,9 @@ otlp:
 #     enabled: true
 #     username: exporter
 #     password: change-me
+#     # Or from files, such as a mounted Kubernetes Secret, read again when
+#     # they change: username_file and password_file.
+#     # password_file: /var/run/prometheus-universal-exporter/web-auth/password
 #   self_metrics:
 #     # Adds a series per collector, request URL and method with the last
 #     # scrape's status, timestamp and duration. A request URL is an unbounded
@@ -42,6 +43,12 @@ otlp:
 #     # The url label carries scheme, host and path only; credentials and the
 #     # query string are never put in a label.
 #     verbose: false
+
+# Further collectors can live in files of their own, each holding a collectors
+# list and nothing else. Entries are paths or glob patterns relative to this
+# file. A collector name must be unique across this file and all of them.
+# collector_files:
+#   - collectors.d/*.yaml
 
 collectors:
   - name: app_json
@@ -52,12 +59,24 @@ collectors:
     # 0s to disable caching, which is the default.
     cache:
       ttl: 60s
+    # How many trips to its targets this collector makes at once; a probe over
+    # the limit is answered 503 at once. Omit or 0 for the default, 32.
+    # max_concurrent_probes: 8
+    # What to do with a metric or label name that is not a classic Prometheus
+    # name, such as http.server.duration from a Prometheus 3 target: fail the
+    # scrape (the default), or export it escaped as http_server_duration
+    # (underscores) or U__http_2e_server_2e_duration (values).
+    # name_escaping: underscores
     request:
       # Required. How this collector reaches its data; http is the only type
       # today, and each type accepts its own request keys and probe parameters.
       type: http
       method: GET
       path: /api/status
+      # A path may take values from the probe: {{param_tenant}} is filled from
+      # &param_tenant=... on /probe, and {{param_version:2}} falls back to 2.
+      # A placeholder with no default that the probe omits is a 400.
+      # path: /api/{{param_tenant}}/v{{param_version:2}}/status
       # body: |
       #   raw request body for POST or PUT requests
       headers:
@@ -147,13 +166,18 @@ collectors:
             expression: server
 
   - name: vendor_prometheus
+    # Optional. Joined with "_" to the front of every metric this collector
+    # exports, so the rule below is exported as vendor_requests_total. It must
+    # start with a letter and use only letters, digits, and single underscores
+    # between them, without a trailing underscore.
+    metrics_prefix: vendor
     request:
       type: http
       path: /metrics
     transform:
       type: prometheus
     metrics:
-      - name: vendor_requests_total
+      - name: requests_total
         description: Vendor HTTP requests
         type: counter
         error_mode: log
@@ -220,6 +244,25 @@ collectors:
       path: batch.prom
       # A writer that has stopped would leave its last values exported
       # forever; refuse a file older than this instead.
+      max_age: 1h
+    transform:
+      type: prometheus
+
+  # The whole directory, as node_exporter's textfile collector reads it: every
+  # file matching files is checked on its own, its series get a file label,
+  # and localfile_mtime_seconds{file} and localfile_scrape_error{file} report
+  # each file, so one broken file fails alone. Probe it with
+  # /probe?collector=textfiles. See docs/LOCALFILE.md#reading-a-directory.
+  - name: textfiles
+    request:
+      type: localfile
+      root: /var/lib/node_exporter/textfile_collector
+      files: ["*.prom"]
+      # Bounds on one scrape: files beyond max_files are skipped and logged,
+      # and a file that would take the scrape past max_total_bytes, or is over
+      # max_response_bytes on its own, is refused without being read.
+      max_files: 100
+      max_total_bytes: 64MiB
       max_age: 1h
     transform:
       type: prometheus

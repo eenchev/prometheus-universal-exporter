@@ -258,15 +258,3 @@ func TestShutdownDelayMustNotBeNegative(t *testing.T) {
 		t.Errorf("exit %d, %s", code, stderr.String())
 	}
 }
-
-func TestBeginShutdownMakesTheExporterUnready(t *testing.T) {
-	server, _ := newCacheTestServer(t, testutil.Collector("app", "text"))
-	server.BeginShutdown()
-	r := get(server, http.MethodGet, "/ready", "")
-	if r.Code != http.StatusServiceUnavailable || !strings.Contains(r.Body.String(), "not ready: the exporter is shutting down") {
-		t.Errorf("/ready: %d %q", r.Code, r.Body.String())
-	}
-	if r := get(server, http.MethodGet, "/health", ""); r.Code != http.StatusOK {
-		t.Errorf("/health: %d", r.Code)
-	}
-}

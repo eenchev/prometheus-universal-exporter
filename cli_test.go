@@ -401,6 +401,14 @@ func TestConfigSchemaFlagPrintsTheSchema(t *testing.T) {
 	}
 }
 
+func TestCollectorFileSchemaFlagPrintsTheSchema(t *testing.T) {
+	out := runCLI(t, "--config.collector-file-schema")
+	generated, _ := config.CollectorFileSchemaJSON()
+	if out.code != 0 || out.stdout != string(generated) || out.stderr != "" {
+		t.Fatalf("exit=%d stderr=%q stdout starts %q", out.code, out.stderr, testutil.FirstLines(out.stdout, 3))
+	}
+}
+
 func TestLogLevelIsHonoured(t *testing.T) {
 	previous := slog.Default()
 	t.Cleanup(func() { slog.SetDefault(previous) })

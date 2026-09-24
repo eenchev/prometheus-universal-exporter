@@ -813,7 +813,10 @@ share them.
 ## 7.1 Source layout
 
 The root package MUST hold only the command line and the `--dry-run` report,
-with the tests that check the repository as a whole. The rest MUST live under
+with their own tests. The tests that check the repository as a whole — the
+documentation, the chart, the workflows, the Dockerfile, the committed schemas
+and the examples — MUST live in `test/repository`, a package of tests only. The
+rest MUST live under
 `internal/`, in packages layered so that each imports only packages before it in
 this order, without cycles:
 

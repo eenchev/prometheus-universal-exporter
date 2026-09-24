@@ -1,4 +1,4 @@
-package main
+package repository
 
 import (
 	"os"
@@ -11,9 +11,9 @@ import (
 // The README's command-line table lists every flag the exporter has, and
 // nothing it does not.
 func TestReadmeListsEveryFlag(t *testing.T) {
-	help := runCLI(t, "-h")
+	help := helpText(t)
 	var flags []string
-	for _, match := range regexp.MustCompile(`(?m)^  -([a-z.-]+)`).FindAllStringSubmatch(help.stdout, -1) {
+	for _, match := range regexp.MustCompile(`(?m)^  -([a-z.-]+)`).FindAllStringSubmatch(help, -1) {
 		flags = append(flags, match[1])
 	}
 	raw, err := os.ReadFile("README.md")

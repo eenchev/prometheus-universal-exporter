@@ -1,6 +1,6 @@
 # Exporter self-metrics
 
-Exporter self-health metrics are available at `/self-metrics` by default (and `/metrics` remains a compatibility alias). Change the dedicated path with `--web.self-metrics-path=/exporter/metrics`. The Helm chart's optional self-metrics ServiceMonitor/PodMonitor scrapes the exporter pods/services separately from target-probing monitors. Configure one or more entries in `monitors`, each with a unique `name` and `type: pod` or `type: service`; each entry supports Prometheus Operator `relabelings` and `metricRelabelings`.
+Exporter self-health metrics are served at `/self-metrics` by default, and at that one path only. Change it with `--web.self-metrics-path`, for example `--web.self-metrics-path=/metrics` for the conventional path; a path another endpoint uses, such as `/probe`, is refused at startup. The Helm chart's optional self-metrics ServiceMonitor/PodMonitor scrapes the exporter pods/services separately from target-probing monitors. Configure one or more entries in `monitors`, each with a unique `name` and `type: pod` or `type: service`; each entry supports Prometheus Operator `relabelings` and `metricRelabelings`.
 
 ## Collector metrics
 
@@ -47,9 +47,9 @@ Prometheus marks its series stale; one added again later under the same name
 starts from zero. A collector a reload changes keeps its counters, but its
 cached results are dropped, since they belong to the old definition.
 
-Every counter ends in `_total` and nothing else does. `/metrics`, the
-self-metrics path and OTLP are built from the same definitions, so a family has
-the same type, help and value in each.
+Every counter ends in `_total` and nothing else does. The self-metrics path
+and OTLP are built from the same definitions, so a family has the same type,
+help and value in both.
 
 ## Build information
 

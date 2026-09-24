@@ -219,7 +219,7 @@ entries, and under `log` or `ignore` a failed stage leaves the target up with
 nothing of the collector's to export, as it answers a probe `200` with an
 empty body. With [`cache.stale_if_error`](CONFIGURATION.md#serving-the-last-good-result-when-the-target-fails),
 a failed scrape exports the target's last good result, marked by
-`http_exporter_result_stale` 1, while its `http_exporter_target_up` is `0`. Scheduled targets are never exposed on `/metrics` and are not
+`http_exporter_result_stale` 1, while its `http_exporter_target_up` is `0`. Scheduled targets are never exposed on the self-metrics path and are not
 reachable through `/probe`.
 
 Every scheduled scrape also exports `http_exporter_target_up` and

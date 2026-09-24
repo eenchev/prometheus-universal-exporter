@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"regexp"
 	"sort"
 	"strings"
 	"sync"
@@ -72,17 +73,42 @@ func NewServer(m *config.Manager, p string, l *slog.Logger) *Server {
 	return s
 }
 
-// SetSelfMetricsPath serves the exporter's own metrics at path as well as at
-// /metrics. A path an endpoint already uses falls back to /self-metrics.
-func (s *Server) SetSelfMetricsPath(path string) {
-	if path == "" || path[0] != '/' {
+// DefaultSelfMetricsPath is where the exporter serves its own metrics unless
+// --web.self-metrics-path says otherwise.
+const DefaultSelfMetricsPath = "/self-metrics"
+
+// selfMetricsPathRE is a path of plain segments: no query, fragment, trailing
+// slash or ServeMux wildcard, any of which would make the endpoint something
+// other than one fixed path.
+var selfMetricsPathRE = regexp.MustCompile(`^(/[A-Za-z0-9._~-]+)+$`)
+
+// SelfMetricsPath checks --web.self-metrics-path and returns it with its
+// leading slash. The exporter serves its own metrics there and nowhere else,
+// so a path another endpoint uses is refused rather than moved aside.
+func SelfMetricsPath(path string) (string, error) {
+	if path != "" && path[0] != '/' {
 		path = "/" + path
 	}
-	switch path {
-	case "/probe", "/health", "/ready":
-		path = "/self-metrics"
+	if !selfMetricsPathRE.MatchString(path) {
+		return "", fmt.Errorf("--web.self-metrics-path %q must be a path of letters, digits and . _ ~ - segments, such as /self-metrics or /metrics", path)
 	}
-	s.selfMetricsPath = path
+	switch path {
+	case "/probe", "/health", "/ready", "/collectors", "/-/reload":
+		return "", fmt.Errorf("--web.self-metrics-path %q is the exporter's %s endpoint; choose another path, such as /self-metrics or /metrics", path, path)
+	}
+	return path, nil
+}
+
+// SetSelfMetricsPath serves the exporter's own metrics at path, which
+// SelfMetricsPath has checked.
+func (s *Server) SetSelfMetricsPath(path string) { s.selfMetricsPath = path }
+
+// selfMetricsEndpoint is the path the exporter's own metrics are served at.
+func (s *Server) selfMetricsEndpoint() string {
+	if s.selfMetricsPath == "" {
+		return DefaultSelfMetricsPath
+	}
+	return s.selfMetricsPath
 }
 
 func (s *Server) statsFor(name string) *serverStats {
@@ -97,7 +123,7 @@ func (s *Server) statsFor(name string) *serverStats {
 }
 
 // Handler routes the exporter's endpoints: the landing page at /, the
-// collectors page at /collectors, /probe, /metrics and the self-metrics path,
+// collectors page at /collectors, /probe, the self-metrics path,
 // /health, /ready and /-/reload.
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
@@ -106,16 +132,9 @@ func (s *Server) Handler() http.Handler {
 		_, _ = w.Write([]byte("ok\n"))
 	})
 	mux.HandleFunc("/ready", s.readyHandler)
-	path := s.selfMetricsPath
-	if path == "" {
-		path = "/self-metrics"
-	}
 	protected := func(handler http.HandlerFunc) http.HandlerFunc { return s.basicAuthMiddleware(handler) }
 	// The answers Prometheus scrapes are gzipped when it asks (compression.go).
-	if path != "/metrics" {
-		mux.HandleFunc(path, compressed(protected(s.metricsHandler)))
-	}
-	mux.HandleFunc("/metrics", compressed(protected(s.metricsHandler)))
+	mux.HandleFunc(s.selfMetricsEndpoint(), compressed(protected(s.metricsHandler)))
 	mux.HandleFunc("/probe", compressed(protected(s.probeHandler)))
 	mux.HandleFunc("/-/reload", protected(s.reloadHandler))
 	// Only / itself: any other unknown path is still a 404.

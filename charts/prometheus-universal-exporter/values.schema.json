@@ -234,7 +234,12 @@
       "type": "object",
       "additionalProperties": false,
       "properties": {
-        "path": {"type": "string", "pattern": "^/"},
+        "path": {
+          "type": "string",
+          "description": "Rendered as --web.self-metrics-path: the one path the exporter serves its own metrics at, such as /self-metrics or /metrics. A path of plain segments that no other endpoint uses.",
+          "pattern": "^(/[A-Za-z0-9._~-]+)+$",
+          "not": {"enum": ["/probe", "/health", "/ready", "/collectors", "/-/reload"]}
+        },
         "enabled": {"type": "boolean"},
         "interval": {"$ref": "#/$defs/duration"},
         "scrapeTimeout": {"$ref": "#/$defs/duration"},

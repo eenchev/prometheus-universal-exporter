@@ -127,7 +127,7 @@ func TestExporterBasicAuthProtection(t *testing.T) {
 	}
 	server := NewServer(config.NewManager(cfg, "", slog.Default()), "python3", slog.Default())
 	unauthorized := httptest.NewRecorder()
-	server.Handler().ServeHTTP(unauthorized, httptest.NewRequest(http.MethodGet, "/metrics", nil))
+	server.Handler().ServeHTTP(unauthorized, httptest.NewRequest(http.MethodGet, "/self-metrics", nil))
 	if unauthorized.Code != http.StatusUnauthorized {
 		t.Fatalf("status=%d body=%s", unauthorized.Code, unauthorized.Body.String())
 	}
@@ -135,7 +135,7 @@ func TestExporterBasicAuthProtection(t *testing.T) {
 		t.Fatal("missing WWW-Authenticate challenge")
 	}
 	authorized := httptest.NewRecorder()
-	request := httptest.NewRequest(http.MethodGet, "/metrics", nil)
+	request := httptest.NewRequest(http.MethodGet, "/self-metrics", nil)
 	request.SetBasicAuth("exporter", "secret")
 	server.Handler().ServeHTTP(authorized, request)
 	if authorized.Code != http.StatusOK {
@@ -214,30 +214,60 @@ func TestBasicAuthFileIsUsedForTarget(t *testing.T) {
 	}
 }
 
-func TestServerHealthAndCustomSelfMetricsEndpoint(t *testing.T) {
+// The exporter's own metrics are served at one path: /self-metrics unless
+// --web.self-metrics-path names another, and nowhere else.
+func TestSelfMetricsAreServedAtOnePath(t *testing.T) {
 	cfg := &model.Config{Collectors: []model.Collector{testutil.Collector("health", "text")}}
 	if err := config.Validate(cfg); err != nil {
 		t.Fatal(err)
 	}
-	server := NewServer(config.NewManager(cfg, "", slog.Default()), "python3", slog.Default())
-	server.SetSelfMetricsPath("/probe")
-	handler := server.Handler()
-	for _, test := range []struct {
-		path   string
-		status int
-		body   string
+	for _, tc := range []struct {
+		set       string
+		served    string
+		notServed []string
 	}{
-		{path: "/health", status: http.StatusOK, body: "ok\n"},
-		{path: "/ready", status: http.StatusOK, body: "ready\n"},
-		{path: "/self-metrics", status: http.StatusOK, body: "http_exporter_collector_config_valid"},
-		{path: "/metrics", status: http.StatusOK, body: "http_exporter_collector_config_valid"},
+		{set: "", served: "/self-metrics", notServed: []string{"/metrics"}},
+		{set: "/metrics", served: "/metrics", notServed: []string{"/self-metrics"}},
+		{set: "/internal/stats", served: "/internal/stats", notServed: []string{"/metrics", "/self-metrics"}},
 	} {
-		t.Run(test.path, func(t *testing.T) {
-			rr := httptest.NewRecorder()
-			handler.ServeHTTP(rr, httptest.NewRequest(http.MethodGet, test.path, nil))
-			if rr.Code != test.status || !strings.Contains(rr.Body.String(), test.body) {
-				t.Fatalf("status=%d body=%q", rr.Code, rr.Body.String())
+		t.Run(tc.served, func(t *testing.T) {
+			server := NewServer(config.NewManager(cfg, "", slog.Default()), "python3", slog.Default())
+			if tc.set != "" {
+				server.SetSelfMetricsPath(tc.set)
+			}
+			handler := server.Handler()
+			for path, want := range map[string]string{"/health": "ok\n", "/ready": "ready\n", tc.served: "http_exporter_collector_config_valid"} {
+				rr := httptest.NewRecorder()
+				handler.ServeHTTP(rr, httptest.NewRequest(http.MethodGet, path, nil))
+				if rr.Code != http.StatusOK || !strings.Contains(rr.Body.String(), want) {
+					t.Fatalf("%s: status=%d body=%q", path, rr.Code, rr.Body.String())
+				}
+			}
+			for _, path := range tc.notServed {
+				rr := httptest.NewRecorder()
+				handler.ServeHTTP(rr, httptest.NewRequest(http.MethodGet, path, nil))
+				if rr.Code != http.StatusNotFound {
+					t.Fatalf("%s answered %d, want 404: self-metrics are served at %s only", path, rr.Code, tc.served)
+				}
 			}
 		})
+	}
+}
+
+// --web.self-metrics-path must be one fixed path no other endpoint uses.
+func TestSelfMetricsPathIsChecked(t *testing.T) {
+	for path, want := range map[string]string{
+		"/self-metrics":   "/self-metrics",
+		"metrics":         "/metrics",
+		"/internal/stats": "/internal/stats",
+	} {
+		if got, err := SelfMetricsPath(path); err != nil || got != want {
+			t.Errorf("SelfMetricsPath(%q) = %q, %v; want %q", path, got, err, want)
+		}
+	}
+	for _, path := range []string{"", "/", "/probe", "/health", "/ready", "/collectors", "/-/reload", "/stats/", "/stats?x=1", "/{name}", "/a b", "//x"} {
+		if _, err := SelfMetricsPath(path); err == nil {
+			t.Errorf("SelfMetricsPath(%q) was accepted", path)
+		}
 	}
 }

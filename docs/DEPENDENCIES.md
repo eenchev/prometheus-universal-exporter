@@ -33,7 +33,7 @@ Both schedules land mid-morning on a Tuesday in Sofia. Dependabot uses an
 explicit `Europe/Sofia` timezone; the workflow's cron is UTC, which has no
 daylight saving, so `0 8 * * 2` is 10:00 in winter and 11:00 in summer.
 
-The default test suite is intentionally local-only; no third-party endpoint is required. The opt-in external checks in [DEVELOPMENT.md](DEVELOPMENT.md) are the exception, and they do not run unless you ask for them. The exporter exposes `/health`, `/ready`, `/metrics`, and `/probe`.
+The default test suite is intentionally local-only; no third-party endpoint is required. The opt-in external checks in [DEVELOPMENT.md](DEVELOPMENT.md) are the exception, and they do not run unless you ask for them. The exporter exposes `/health`, `/ready`, `/self-metrics`, and `/probe`.
 
 ## Dockerfile build arguments
 

@@ -307,7 +307,7 @@ values schema:
 | Value | Flag |
 | --- | --- |
 | `server.listenAddress` | `--web.listen-address` |
-| `selfMetrics.path` | `--web.self-metrics-path` |
+| `selfMetrics.path` | `--web.self-metrics-path`, a path of plain segments no other endpoint uses; the values schema refuses one the exporter would |
 | `server.pythonPath` | `--python.path` |
 | `server.logLevel` | `--log.level`, one of `debug`, `info`, `warn`, `error`; default `info` |
 | `server.probeTimeoutOffset` | `--probe.timeout-offset`, a Go duration of zero or more |

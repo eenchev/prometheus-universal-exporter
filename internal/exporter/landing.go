@@ -90,10 +90,7 @@ var landingTemplate = template.Must(template.New("landing").Parse(`<!DOCTYPE htm
 <ul class="links">
 <li><a href="/collectors">/collectors</a> — the collectors, and a form to probe through each</li>
 <li><code>/probe?collector=&lt;name&gt;&amp;target=&lt;target&gt;</code> — scrape a target through a collector</li>
-<li><a href="/metrics">/metrics</a> — the exporter's own metrics</li>
-{{- if ne .SelfMetricsPath "/metrics"}}
-<li><a href="{{.SelfMetricsPath}}">{{.SelfMetricsPath}}</a> — the same self-metrics on their dedicated path</li>
-{{- end}}
+<li><a href="{{.SelfMetricsPath}}">{{.SelfMetricsPath}}</a> — the exporter's own metrics</li>
 <li><a href="/health">/health</a> and <a href="/ready">/ready</a> — liveness and readiness</li>
 {{- if .Lifecycle}}
 <li><code>POST /-/reload</code> — reload the configuration</li>
@@ -112,15 +109,12 @@ func (s *Server) landingHandler(w http.ResponseWriter, _ *http.Request) {
 	build := BuildVersion()
 	page := landingPage{
 		Version: build.Version, Revision: build.Revision, GoVersion: build.GoVersion,
-		SelfMetricsPath:  s.selfMetricsPath,
+		SelfMetricsPath:  s.selfMetricsEndpoint(),
 		Lifecycle:        s.lifecycle,
 		Collectors:       len(cfg.Collectors),
 		ScheduledTargets: len(s.manager.Targets()),
 		OTLPEnabled:      cfg.OTLP.Enabled,
 		Docs:             landingDocs,
-	}
-	if page.SelfMetricsPath == "" {
-		page.SelfMetricsPath = "/self-metrics"
 	}
 	s.renderPage(w, landingTemplate, page)
 }

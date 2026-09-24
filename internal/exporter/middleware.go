@@ -13,9 +13,9 @@ import (
 
 // Prometheus asks for gzip on every scrape, and a probe answer can be large: a
 // passed-through target's whole exposition, or the verbose self-metrics with a
-// series per request. The answers of /probe, /metrics and the self-metrics
-// path are gzipped for a client that accepts it, as Prometheus's own client
-// library does; an answer is text that typically shrinks to a tenth. Other
+// series per request. The answers of /probe and the self-metrics path are
+// gzipped for a client that accepts it, as Prometheus's own client library
+// does; an answer is text that typically shrinks to a tenth. Other
 // endpoints answer a line or two, and /health and /ready are read by kubelets
 // that do not ask.
 

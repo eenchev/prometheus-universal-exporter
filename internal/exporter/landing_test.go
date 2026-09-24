@@ -74,10 +74,13 @@ func TestTheLandingPageLinksTheEndpointsAndTheCollectorsPage(t *testing.T) {
 		"<title>Prometheus Universal Exporter</title>",
 		"Version "+BuildVersion().Version,
 		"1 collector loaded.",
-		`href="/collectors"`, `href="/metrics"`, `href="/self-metrics"`, `href="/health"`, `href="/ready"`,
+		`href="/collectors"`, `href="/self-metrics"`, `href="/health"`, `href="/ready"`,
 	)
 	if strings.Contains(page, "<form") {
 		t.Error("the landing page carries a probe form; they belong on /collectors")
+	}
+	if strings.Contains(page, `href="/metrics"`) {
+		t.Error("the page links /metrics, which serves nothing unless it is the self-metrics path")
 	}
 	if strings.Contains(page, "/-/reload") {
 		t.Error("the page offers /-/reload without --web.enable-lifecycle")

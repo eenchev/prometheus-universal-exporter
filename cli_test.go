@@ -567,6 +567,19 @@ func TestANegativeDefaultProbeTimeoutIsACommandLineError(t *testing.T) {
 	}
 }
 
+func TestASelfMetricsPathOfAnotherEndpointIsACommandLineError(t *testing.T) {
+	for _, args := range [][]string{
+		{"--web.self-metrics-path=/probe"},
+		{"--dry-run", "--config.file=configs/config.example.yaml", "--web.self-metrics-path=/"},
+		{"--web.self-metrics-path=/stats/"},
+	} {
+		out := runCLI(t, args...)
+		if out.code != 2 || !strings.Contains(out.stderr, "--web.self-metrics-path") || out.stdout != "" {
+			t.Fatalf("%v: exit=%d stderr=%s stdout=%s", args, out.code, out.stderr, out.stdout)
+		}
+	}
+}
+
 func TestTargetsFileSchemaFlagPrintsTheSchema(t *testing.T) {
 	out := runCLI(t, "--otlp.targets-file-schema")
 	generated, _ := config.TargetsSchemaJSON()

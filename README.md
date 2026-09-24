@@ -123,12 +123,11 @@ pattern needs. See the
 | `/` | A landing page: the build and links to the endpoints. |
 | `/collectors` | Each collector with a form that probes a target through it, taking its request parameters, forwarded headers and, when it forwards `Authorization`, a target credential. See [Probing from the browser](docs/AUTHENTICATION.md#probing-from-the-browser). |
 | `/probe` | Scrape a target through a collector. Takes `target` and `collector`, with `GET` or `HEAD`; any other method is answered `405`. |
-| `/metrics` | The exporter's own metrics. |
-| `/self-metrics` | The same self-metrics on a dedicated path, so a monitor can scrape them separately. |
+| `/self-metrics` | The exporter's own metrics, at `--web.self-metrics-path`. See [Self-metrics](docs/SELF-METRICS.md). |
 | `/-/reload` | `POST` reloads the configuration, with `--web.enable-lifecycle`. |
 | `/health`, `/ready` | Kubernetes probes. `/ready` is `503` while a reload is rejected, OTLP exports keep failing or the exporter is shutting down; see [Readiness](docs/CONFIGURATION.md#readiness). Never authenticated. |
 
-`/probe`, `/metrics` and `/self-metrics` answer gzip-compressed when the client accepts it, as Prometheus does on every scrape.
+`/probe` and the self-metrics path answer gzip-compressed when the client accepts it, as Prometheus does on every scrape.
 
 ## Command-line flags
 
@@ -136,7 +135,7 @@ pattern needs. See the
 | --- | --- | --- |
 | `--config.file` | `/etc/prometheus-universal-exporter/config.yaml` | The configuration document. |
 | `--web.listen-address` | `:8080` | Address the HTTP endpoints listen on. |
-| `--web.self-metrics-path` | `/self-metrics` | Path for the dedicated self-metrics endpoint. |
+| `--web.self-metrics-path` | `/self-metrics` | Path of the exporter's own metrics, served there and nowhere else; `/metrics` for the conventional path. A path another endpoint uses is refused. |
 | `--python.path` | `python3` | Interpreter used by the `python` transform. |
 | `--log.level` | `info` | `debug`, `info`, `warn` or `error`. |
 | `--config.watch` | off | Re-read the configuration when it changes on disk. |

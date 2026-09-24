@@ -226,7 +226,7 @@ Bearer authentication is also supported.
 
 ### Exporter authentication
 
-To protect the exporter's `/probe`, `/metrics`, and self-metrics endpoints:
+To protect the exporter's `/probe` and self-metrics endpoints:
 
 ```yaml
 config:

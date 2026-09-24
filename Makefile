@@ -110,7 +110,7 @@ helm-test:
 			exit 1; \
 		fi; \
 	done
-	@for bad in server.logLevel=verbose server.probeTimeoutOffset=-1s server.probeDefaultTimeout=-1s; do \
+	@for bad in server.logLevel=verbose server.probeTimeoutOffset=-1s server.probeDefaultTimeout=-1s selfMetrics.path=/probe selfMetrics.path=/stats/; do \
 		if helm template test charts/prometheus-universal-exporter --set "$$bad" >/dev/null 2>&1; then \
 			echo "helm template accepted $$bad" >&2; \
 			exit 1; \

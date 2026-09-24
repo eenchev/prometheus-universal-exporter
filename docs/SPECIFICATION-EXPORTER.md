@@ -2003,7 +2003,7 @@ fail as such.
 
 # 22. Exporter self-metrics
 
-Expose exporter health metrics on `/metrics`.
+Expose exporter health metrics on the self-metrics path (§ 42), `/self-metrics` by default.
 
 At minimum:
 
@@ -2058,7 +2058,7 @@ Labels should include `collector` and, where appropriate, `target`.
 Names MUST follow the Prometheus conventions: a counter's name MUST end in
 `_total`, and nothing else's may. Every family's name, type, help and value
 MUST come from one definition, from which one set of self-metrics is built and
-both rendered as text on `/metrics` and the self-metrics path and exported over
+both rendered as text on the self-metrics path and exported over
 OTLP, so a family cannot be one type in one place and another type elsewhere.
 In the text, each family MUST be one contiguous block — its `HELP` and `TYPE`
 once, then every series of it, the per-collector ones followed by the
@@ -2137,7 +2137,7 @@ exposition and the self-metrics delivered over OTLP carry the same text, and a
 family exposed without a description MUST fail the repository's tests rather
 than reach an operator undocumented.
 
-`/metrics` MUST NOT require a target query parameter.
+The self-metrics path MUST NOT require a target query parameter.
 
 ### 22.0a Resource metrics
 
@@ -2344,7 +2344,7 @@ Implement:
 /collectors
 /health
 /ready
-/metrics
+/self-metrics
 /probe
 ```
 
@@ -2393,13 +2393,13 @@ Recommended behavior:
   own starting `not ready:`, and MUST NOT include an error's text, since the
   endpoint is never authenticated and an error can quote a path, a URL or a
   line of the configuration.
-- `/self-metrics`: exporter self-metrics by default; the path MUST be configurable and `/metrics` MAY remain as a compatibility alias.
+- `/self-metrics`: exporter self-metrics by default; the path MUST be configurable (§ 42), and the self-metrics MUST be served at that one path only.
 - `/probe`: execute a collector against a supplied target. A request without
   `collector` MUST answer `400` saying the collector parameter is required,
   with the URL's shape, and one without a target its collector's request type
   requires MUST answer `400` naming the collector and the request type.
 
-`/probe`, `/metrics` and the self-metrics path MUST compress their answer with
+`/probe` and the self-metrics path MUST compress their answer with
 gzip when the request's `Accept-Encoding` accepts `gzip` (or `x-gzip`, or `*`)
 with a non-zero quality — Prometheus asks for it on every scrape — and answer
 uncompressed otherwise, and for `HEAD`. A compressed answer MUST carry
@@ -2477,7 +2477,7 @@ The exporter MUST reload when asked, not only when the watch finds a change:
   which MUST default to off. Without the flag the endpoint MUST answer `403`
   saying how to enable it; any other method MUST answer `405` with
   `Allow: POST, PUT`. The endpoint MUST be protected by `web.basic_auth` like
-  `/probe` and `/metrics`. It MUST answer `200` when every file was accepted,
+  `/probe` and the self-metrics path. It MUST answer `200` when every file was accepted,
   and `500` with the reason when one was rejected, the previous configuration
   staying in force.
 
@@ -3023,7 +3023,7 @@ OTLP export (§ 42.1a) and a clean exit.
 `--web.shutdown-delay` is how long a `SIGTERM` or `SIGINT` keeps serving before
 that graceful shutdown begins, 0 by default, which begins it at once. From the
 signal on, `/ready` MUST answer `503` with the reason `the exporter is shutting
-down`, while `/probe`, `/metrics`, the self-metrics path and `/health` MUST
+down`, while `/probe`, the self-metrics path and `/health` MUST
 keep answering as before, so a load balancer or a Kubernetes Service stops
 sending probes before the listener closes rather than having them refused.
 Connections MUST NOT be kept alive past their current request during the
@@ -4006,7 +4006,7 @@ Test the built container image for:
 - Process starts successfully.
 - `/health` returns healthy.
 - `/ready` returns the expected readiness state.
-- `/metrics` exposes exporter metrics.
+- `/self-metrics` exposes exporter metrics, and `/metrics` answers `404`.
 - `/probe` is reachable.
 - Default configuration loads.
 - Python transform execution is available.
@@ -4518,7 +4518,7 @@ the exporter has.
 See § 22.1a.
 
 - The histogram's buckets are the ones listed, cumulative, with `_sum` and
-  `_count`; it is published when verbose, over `/metrics` and over OTLP, and not
+  `_count`; it is published when verbose, over the self-metrics path and over OTLP, and not
   published or recorded when verbose is off.
 - A probe to the target is observed; a cache hit and a coalesced probe are not;
   a scheduled scrape is.
@@ -4782,7 +4782,7 @@ See § 23 and § 30.
 - `Accept-Encoding` parsing: `gzip`, `x-gzip`, `*`, a list with `gzip;q=0.5`
   and mixed case accept gzip; no header, `identity`, `br`, `gzip;q=0` and
   `gzip;q=0.0` do not.
-- `/probe`, `/metrics` and the self-metrics path answer gzip, with
+- `/probe` and the self-metrics path answer gzip, with
   `Content-Encoding` and `Vary`, when asked, decompressing to exactly the
   uncompressed answer; they are uncompressed without the header, with `q=0`
   and for `HEAD`; an error answer is compressed too; `/health` and `/ready` are
@@ -5032,7 +5032,7 @@ The architecture should leave room for future decoders, but the initial implemen
 
 Implement in this order:
 
-1. Go HTTP server and `/probe`, `/metrics`, `/health`, `/ready`.
+1. Go HTTP server and `/probe`, `/self-metrics`, `/health`, `/ready`.
 2. Collector configuration and validation.
 3. HTTP fetcher.
 4. Common metric model.
@@ -5176,8 +5176,14 @@ probe output. The dedicated endpoint MUST be configurable, for example:
 --web.self-metrics-path=/self-metrics
 ```
 
-The default path SHOULD be `/self-metrics`. `/metrics` MAY remain as a
-backwards-compatible alias, but the dedicated path is the canonical endpoint.
+The default path MUST be `/self-metrics`, and the self-metrics MUST be served
+at the configured path and nowhere else: one endpoint to scrape and protect,
+with no alias. A deployment that wants the conventional `/metrics` sets
+`--web.self-metrics-path=/metrics`. The path MUST be one fixed path of plain
+segments — no query, fragment, trailing slash or pattern syntax — and a path
+another endpoint uses (`/`, `/probe`, `/health`, `/ready`, `/collectors`,
+`/-/reload`) MUST be a command-line error (exit 2, before `--dry-run` or
+startup) rather than moved aside.
 The endpoint MUST NOT require `target` or `collector` query parameters and
 MUST expose configuration, scrape, decode, transform, Python, limit, status,
 duration, response-size, and emitted-series health metrics.
@@ -5374,7 +5380,7 @@ password MUST both be compared in constant time whatever the first
 comparison found.
 
 When enabled, the exporter MUST require valid Basic Authentication for
-`/probe`, `/metrics`, the configured self-health metrics endpoint, the
+`/probe`, the configured self-health metrics endpoint, the
 landing page at `/` and the collectors page at `/collectors`. The
 `/health` and `/ready` endpoints SHOULD remain unauthenticated so Kubernetes
 liveness and readiness probes can operate without credentials.
@@ -5942,7 +5948,7 @@ request that would produce a byte-for-byte identical request MUST share cache
 entries, which requires the cache key to be derived from the same request
 fingerprint.
 
-Scheduled targets MUST NOT be exposed on `/metrics` or reachable through
+Scheduled targets MUST NOT be exposed on the self-metrics path or reachable through
 `/probe`; their metrics are delivered only over OTLP.
 
 Each scheduled scrape MUST export a health result under that target's resource

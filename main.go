@@ -56,7 +56,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 	flags.SetOutput(io.Discard)
 	configFile := flags.String("config.file", "/etc/prometheus-universal-exporter/config.yaml", "Path to the exporter configuration")
 	listenAddress := flags.String("web.listen-address", ":8080", "Address on which to expose HTTP endpoints")
-	selfMetricsPath := flags.String("web.self-metrics-path", "/self-metrics", "Dedicated endpoint for exporter self-health metrics")
+	selfMetricsPath := flags.String("web.self-metrics-path", exporter.DefaultSelfMetricsPath, "Path of the exporter's own metrics, such as /metrics; it is served there and nowhere else")
 	enableLifecycle := flags.Bool("web.enable-lifecycle", false, "Enable POST /-/reload, which reloads the configuration and scheduled target files and reports whether they were accepted. SIGHUP reloads either way")
 	shutdownDelay := flags.Duration("web.shutdown-delay", 0, "How long a SIGTERM or SIGINT keeps serving, with /ready answering 503, before the graceful shutdown begins, so a load balancer or Kubernetes stops sending probes first. 0, the default, begins at once")
 	shutdownTimeout := flags.Duration("web.shutdown-timeout", exporter.DefaultShutdownTimeout, "How long a SIGTERM or SIGINT waits for the probes in progress to finish before closing their connections. Keep it at least as long as Prometheus's scrape timeout")
@@ -99,6 +99,11 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return 2
 	}
 	if err := exporter.ValidateDefaultProbeTimeout(*defaultProbeTimeout); err != nil {
+		newLogger("info", stderr).Error("invalid command line; exiting", "error", err.Error())
+		return 2
+	}
+	selfMetricsEndpoint, err := exporter.SelfMetricsPath(*selfMetricsPath)
+	if err != nil {
 		newLogger("info", stderr).Error("invalid command line; exiting", "error", err.Error())
 		return 2
 	}
@@ -182,7 +187,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 		logger.Info("scheduled targets loaded", "file", *targetFile, "targets", len(targets.Targets))
 	}
 	server := exporter.NewServer(manager, *pythonPath, logger)
-	server.SetSelfMetricsPath(*selfMetricsPath)
+	server.SetSelfMetricsPath(selfMetricsEndpoint)
 	server.SetTimeoutOffset(*timeoutOffset)
 	server.SetDefaultProbeTimeout(*defaultProbeTimeout)
 	server.SetLifecycle(*enableLifecycle)

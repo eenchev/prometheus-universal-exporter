@@ -1088,8 +1088,8 @@ collector legacy_text http failed: HTTP request failed: ... context deadline exc
   and Prometheus. Raise it if Prometheus still times out first; `0` uses the
   whole scrape timeout. A negative value is a command-line error.
 
-Scheduled targets are unaffected: their scrapes are bounded by `otlp.interval`
-(see [OTLP](OTLP.md#scheduled-targets)).
+Scheduled targets are unaffected: their scrapes are bounded by their own
+`interval` (see [OTLP](OTLP.md#scheduled-targets)).
 
 ## Watching the configuration
 

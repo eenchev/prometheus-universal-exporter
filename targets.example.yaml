@@ -2,14 +2,22 @@
 #
 # Pass this file with --otlp.targets-file. It is only accepted when OTLP export
 # is enabled in the exporter configuration; starting with targets while
-# otlp.enabled is false is a startup error. Targets are scraped once per OTLP
-# interval (otlp.interval) and are never exposed on /metrics or /probe. The
-# selected collector's cache, limits, and error handling all still apply.
+# otlp.enabled is false is a startup error. Each target is scraped on its own
+# interval, like a Prometheus scrape_interval, and the results are delivered on
+# the OTLP export interval (otlp.interval). Targets are never exposed on
+# /metrics or /probe. The selected collector's cache, retries, limits, and
+# error handling all still apply.
+
+# How often a target that sets no interval is scraped; 1m when unset.
+interval: 1m
 targets:
   - name: legacy_eu
     # Any collector defined in the exporter configuration.
     collector: legacy_text
     target: http://legacy.eu.example:8080
+    # This target's own scrape interval, overriding the one above. At least
+    # 1s, and no shorter than request.timeout.
+    interval: 30s
 
     # Every per-scrape parameter the /probe endpoint accepts is available here
     # and overrides the collector's own request settings for this target.

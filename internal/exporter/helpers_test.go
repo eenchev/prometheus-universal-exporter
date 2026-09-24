@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -164,4 +165,27 @@ func parseExposition(body []byte) error {
 	r := &fetch.HTTPResponse{Body: body, Headers: http.Header{"Content-Type": {"text/plain; version=0.0.4"}}}
 	_, err := decode.Decode(r, &model.Collector{Decoder: model.DecoderConfig{Type: "prometheus"}})
 	return err
+}
+
+// scrapeScheduledTargets scrapes every scheduled target once, now, within
+// budget, as ScheduledScrapeLoop would when each came due: the tests drive
+// scrapes directly rather than wait for the schedule.
+func (s *Server) scrapeScheduledTargets(ctx context.Context, budget time.Duration) {
+	if budget <= 0 {
+		budget = 30 * time.Second
+	}
+	scrapeCtx, cancel := context.WithTimeout(ctx, budget)
+	defer cancel()
+	var wg sync.WaitGroup
+	slots := make(chan struct{}, scheduledTargetConcurrency)
+	for _, target := range s.manager.Targets() {
+		wg.Add(1)
+		slots <- struct{}{}
+		go func() {
+			defer wg.Done()
+			defer func() { <-slots }()
+			s.scrapeTarget(scrapeCtx, target)
+		}()
+	}
+	wg.Wait()
 }

@@ -166,7 +166,38 @@ attributes are merged over the exporter-wide ones. Targets with different
 identities are exported as separate `resourceMetrics` entries rather than
 being conflated.
 
-Targets are scraped once per `otlp.interval`, through the same fetch, decode and
+Each target is scraped on its own `interval`, as Prometheus scrapes a probe on
+its `scrape_interval`, not on the export's `otlp.interval`: the export only
+delivers what the scrapes queued since the last one, the latest value of each
+series.
+
+```yaml
+interval: 1m            # for every target that sets none; 1m when unset
+targets:
+  - name: payments
+    collector: app_json
+    target: http://payments:8080
+    interval: 15s       # this target's own
+    request:
+      timeout: 10s      # at most the interval
+      retry:
+        attempts: 2
+        backoff: 1s
+```
+
+A target's first scrape comes at a point within its interval set by its name,
+so targets sharing an interval are spread over it rather than all scraped at
+once, and then every interval from there, however long a scrape takes. A scrape
+must end within its interval, so `request.timeout` may not be longer; one still
+running when the next is due makes that one skipped, with a
+`scheduled target scrape skipped` warning, rather than overlapping it. The
+interval is at least `1s`. A target scraped more often than `otlp.interval`
+exports only its latest values; one scraped less often exports its last
+result again only when scraped again.
+
+Retries come from the collector's `request.retry`, and a target's own
+`request.retry` replaces them, as the `retry_attempts` and `retry_backoff`
+probe parameters do for a probe. Scrapes go through the same fetch, decode and
 transform path as `/probe`, so collector limits, the response cache and
 [`error_handling`](CONFIGURATION.md#when-a-stage-of-the-probe-fails) all
 apply. A scheduled scrape and an identical `/probe` request share cache

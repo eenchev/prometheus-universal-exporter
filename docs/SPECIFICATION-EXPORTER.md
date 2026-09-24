@@ -5826,9 +5826,17 @@ replacing them. The exporter MUST emit one `resourceMetrics` entry per distinct
 resource in an export, so metrics from targets with different identities are not
 conflated.
 
-The scrape period MUST be the OTLP export interval, so every export carries a
-freshly collected set. The exporter MUST bound one scrape pass by that interval
-and SHOULD limit how many targets it scrapes concurrently. Scheduled scrapes MUST
+Each target MUST be scraped on its own `interval`, independent of the OTLP
+export interval, which MUST only decide when queued results are delivered. A
+target's `interval` MUST default to the file's top-level `interval`, and that to
+60 seconds, MUST be at least one second, and MUST NOT be shorter than the
+target's `request.timeout`. Scrapes of a target MUST keep a fixed cadence from
+its first, which SHOULD be offset within its interval by a stable hash of its
+name so targets are spread over it. A scrape MUST be bounded by its interval,
+and one still running when the next is due MUST make that one skipped, logged,
+rather than overlapping it. The exporter SHOULD limit how many targets it
+scrapes concurrently. Retries MUST follow the collector's `request.retry`, which
+a target's `request.retry` replaces. Scheduled scrapes MUST
 run through the same fetch, decode, and transform path as `/probe`, including the
 collector's cache, limits, and validation. A scheduled scrape and a `/probe`
 request that would produce a byte-for-byte identical request MUST share cache

@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"regexp"
 	"strings"
+	"time"
 
 	"github.com/eenchev/prometheus-universal-exporter/internal/fetch"
 	"github.com/eenchev/prometheus-universal-exporter/internal/model"
@@ -37,6 +38,13 @@ func LoadTargets(path string, opts ...LoadOption) (*model.TargetFile, error) {
 func ValidateTargets(f *model.TargetFile) error {
 	if len(f.Targets) == 0 {
 		return errors.New("targets must not be empty")
+	}
+	if f.Interval < 0 {
+		return errors.New("interval must not be negative")
+	}
+	defaultInterval := f.Interval
+	if defaultInterval == 0 {
+		defaultInterval = model.DefaultScheduledTargetInterval
 	}
 	seen := map[string]bool{}
 	for i := range f.Targets {
@@ -75,6 +83,20 @@ func ValidateTargets(f *model.TargetFile) error {
 		}
 		if t.Request.Timeout < 0 {
 			return fmt.Errorf("target %q request.timeout must not be negative", t.Name)
+		}
+		switch {
+		case t.Interval < 0:
+			return fmt.Errorf("target %q interval must not be negative", t.Name)
+		case t.Interval == 0:
+			t.Interval = defaultInterval
+		}
+		if t.Interval < model.Duration(time.Second) {
+			return fmt.Errorf("target %q interval %s is under the least, 1s", t.Name, time.Duration(t.Interval))
+		}
+		// A scrape is bounded by its interval, so the next one never finds it
+		// still running; a longer timeout could never take effect.
+		if t.Request.Timeout > t.Interval {
+			return fmt.Errorf("target %q request.timeout %s is longer than its interval %s; a scrape must end before the next is due", t.Name, time.Duration(t.Request.Timeout), time.Duration(t.Interval))
 		}
 		if t.Request.Retry != nil {
 			if t.Request.Retry.Attempts < 0 {

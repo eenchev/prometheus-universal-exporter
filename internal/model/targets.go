@@ -2,27 +2,39 @@ package model
 
 import (
 	"reflect"
+	"time"
 
 	"gopkg.in/yaml.v3"
 )
 
 // TargetFile is the optional scheduled-target document. Its targets are
-// scraped by the exporter itself on the OTLP export interval and are only
+// scraped by the exporter itself, each on its own interval, and are only
 // delivered over OTLP, so the file is rejected unless OTLP export is enabled.
 type TargetFile struct {
-	Targets []ScheduledTarget `yaml:"targets"`
+	// Interval is how often a target that sets none is scraped;
+	// DefaultScheduledTargetInterval when unset.
+	Interval Duration          `yaml:"interval"`
+	Targets  []ScheduledTarget `yaml:"targets"`
 }
+
+// DefaultScheduledTargetInterval is how often a scheduled target is scraped
+// when neither it nor its file says: Prometheus's own default scrape interval.
+const DefaultScheduledTargetInterval = Duration(60 * time.Second)
 
 // ScheduledTarget describes one fully specified request. Every per-scrape
 // parameter the /probe endpoint accepts is available here, alongside the labels
 // and OTLP resource identity the exported metrics carry.
 type ScheduledTarget struct {
-	Name      string              `yaml:"name"`
-	Collector string              `yaml:"collector"`
-	Target    string              `yaml:"target"`
-	Request   TargetRequestConfig `yaml:"request"`
-	Labels    map[string]string   `yaml:"labels"`
-	OTLP      TargetOTLPConfig    `yaml:"otlp"`
+	Name      string `yaml:"name"`
+	Collector string `yaml:"collector"`
+	Target    string `yaml:"target"`
+	// Interval is how often the target is scraped, whatever otlp.interval
+	// exports on. Validation fills it from the file's interval or the
+	// default, so it is always set on a loaded target.
+	Interval Duration            `yaml:"interval"`
+	Request  TargetRequestConfig `yaml:"request"`
+	Labels   map[string]string   `yaml:"labels"`
+	OTLP     TargetOTLPConfig    `yaml:"otlp"`
 	// Params fills the collector's {{param_<name>}} placeholders, as the
 	// param_<name> probe parameters fill them for a probe
 	// (fetch/requesttemplate.go).

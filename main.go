@@ -187,6 +187,11 @@ func run(args []string, stdout, stderr io.Writer) int {
 		defer close(exportLoopDone)
 		server.OTLPExportLoop(ctx)
 	}()
+	scrapeLoopDone := make(chan struct{})
+	go func() {
+		defer close(scrapeLoopDone)
+		server.ScheduledScrapeLoop(ctx)
+	}()
 
 	startup := []any{"version", exporter.BuildVersion().Version, "revision", exporter.BuildVersion().Revision, "address", *listenAddress, "collectors", len(conf.Collectors), "collector_files", len(conf.LoadedCollectorFiles),
 		"scheduled_targets", len(manager.Targets()), "config_watch", manager.WatchEnabled(),
@@ -230,9 +235,11 @@ func run(args []string, stdout, stderr io.Writer) int {
 			logger.Error("probes were still in progress when --web.shutdown-timeout ran out; their connections are closed", "shutdown_timeout", shutdownTimeout.String(), "error", err)
 			_ = httpServer.Close()
 		}
-		// The probes have finished, and the export loop has stopped, so what
-		// they queued goes out in one last export, bounded by otlp.timeout.
+		// The probes have finished, and the export and scheduled scrape loops
+		// have stopped, so what they queued goes out in one last export,
+		// bounded by otlp.timeout.
 		<-exportLoopDone
+		<-scrapeLoopDone
 		server.FlushOTLP()
 	}
 	return 0

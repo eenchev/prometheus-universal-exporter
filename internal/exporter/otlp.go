@@ -745,9 +745,10 @@ func (s *Server) OTLPExportLoop(ctx context.Context) {
 			_ = s.drainOTLP()
 			continue
 		}
-		s.scrapeScheduledTargets(ctx, interval)
-		// An export may retry for up to an interval, so it never runs into
-		// the next one.
+		// Scheduled targets are scraped on their own intervals
+		// (ScheduledScrapeLoop); an export delivers what they and the probes
+		// queued since the last one. It may retry for up to an interval, so it
+		// never runs into the next one.
 		s.exportOTLP(ctx, interval)
 	}
 }

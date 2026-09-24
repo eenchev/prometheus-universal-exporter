@@ -387,3 +387,41 @@ func TestAMissingRequiredLabelFailsTheProbe(t *testing.T) {
 		t.Fatalf("missing keys %v, want 1", got)
 	}
 }
+
+// Rules that carry on without some series, under log or ignore, are counted:
+// each series in http_exporter_rule_failures_total by metric, and missing
+// values in http_exporter_missing_keys_total too. A rule that never failed
+// has its series at zero, and the probe still answers with what worked.
+func TestRuleFailuresThatCarryOnAreCounted(t *testing.T) {
+	testutil.CaptureLogs(t)
+	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`[{"name":"a","v":1},{"name":"b"},{"name":"c"},{"name":"d","v":4}]`))
+	}))
+	t.Cleanup(target.Close)
+	c := model.Collector{
+		Name: "rows", Request: model.RequestConfig{Type: fetch.RequestTypeHTTP}, Decoder: model.DecoderConfig{Type: "json"}, Transform: model.TransformConfig{Type: "jq"},
+		Metrics: []model.MetricRule{
+			{Name: "logged_value", Type: model.GaugeMetricType, Items: ".[]", Expression: ".v", ErrorMode: model.ErrorModeLog, Labels: []model.LabelRule{{Name: "row", Expression: ".name"}}},
+			{Name: "ignored_value", Type: model.GaugeMetricType, Items: ".[]", Expression: ".v", ErrorMode: model.ErrorModeIgnore, Labels: []model.LabelRule{{Name: "row", Expression: ".name"}}},
+			{Name: "rows", Type: model.GaugeMetricType, Expression: "length", ErrorMode: model.ErrorModeLog},
+		},
+	}
+	server, _ := newCacheTestServer(t, c)
+	response := probeOnce(t, server, "/probe?collector=rows&target="+url.QueryEscape(target.URL), nil)
+	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), `logged_value{row="a"} 1`) {
+		t.Fatalf("status=%d body=%s", response.Code, response.Body)
+	}
+	exposition := selfMetrics(t, server)
+	for series, want := range map[string]float64{
+		`http_exporter_rule_failures_total{collector="rows",metric="logged_value"}`:  2,
+		`http_exporter_rule_failures_total{collector="rows",metric="ignored_value"}`: 2,
+		`http_exporter_rule_failures_total{collector="rows",metric="rows"}`:          0,
+		`http_exporter_missing_keys_total{collector="rows"}`:                         4,
+		`http_exporter_transform_errors_total{collector="rows"}`:                     0,
+	} {
+		if got := seriesValue(t, exposition, series); got != want {
+			t.Errorf("%s = %v, want %v", series, got, want)
+		}
+	}
+}

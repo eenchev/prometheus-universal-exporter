@@ -55,6 +55,11 @@ first success after a failure is logged at info level with how long it failed
 and how many times. The repeats in between are still written at debug level,
 marked `"repeat":true`, so `--log.level=debug` shows every one.
 
+A target that answers with an error status usually says why in the body, so
+the line for a `http_status` failure adds `response_body`: the start of the
+body, at most 256 bytes, on one line. It is logged only, never put in the
+probe's answer.
+
 The same applies to scheduled targets (`scheduled target scrape failed`, then
 `scheduled target recovered`; a stage passed over under `error_handling` `log`
 is `scheduled target stage failed; continuing`, at warning level, as a probe's

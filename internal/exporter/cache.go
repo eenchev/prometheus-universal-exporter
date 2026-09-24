@@ -36,10 +36,41 @@ type cacheEntry struct {
 type responseCache struct {
 	mu      sync.Mutex
 	entries map[string]*cacheEntry
+	// byCollector indexes the keys of entries by collector, so keeping one
+	// collector within its max_cache_entries looks at its entries alone.
+	// Every change to entries goes through putLocked or removeLocked, which
+	// keep the two in step.
+	byCollector map[string]map[string]struct{}
 }
 
 func newResponseCache() *responseCache {
-	return &responseCache{entries: map[string]*cacheEntry{}}
+	return &responseCache{entries: map[string]*cacheEntry{}, byCollector: map[string]map[string]struct{}{}}
+}
+
+// putLocked stores entry under key, replacing any entry there.
+func (c *responseCache) putLocked(key string, entry *cacheEntry) {
+	c.removeLocked(key)
+	c.entries[key] = entry
+	keys := c.byCollector[entry.collector]
+	if keys == nil {
+		keys = map[string]struct{}{}
+		c.byCollector[entry.collector] = keys
+	}
+	keys[key] = struct{}{}
+}
+
+// removeLocked removes the entry under key, if there is one.
+func (c *responseCache) removeLocked(key string) {
+	entry, ok := c.entries[key]
+	if !ok {
+		return
+	}
+	delete(c.entries, key)
+	keys := c.byCollector[entry.collector]
+	delete(keys, key)
+	if len(keys) == 0 {
+		delete(c.byCollector, entry.collector)
+	}
 }
 
 // Get returns a private copy of the cached metric set, and when it was
@@ -66,7 +97,7 @@ func (c *responseCache) lookup(key string, now time.Time, stale bool) (model.Met
 		return model.MetricSet{}, time.Time{}, false
 	}
 	if !entry.expires.After(now) {
-		delete(c.entries, key)
+		c.removeLocked(key)
 		return model.MetricSet{}, time.Time{}, false
 	}
 	if !stale && !entry.freshUntil.After(now) {
@@ -85,7 +116,7 @@ func (c *responseCache) Put(key, collector string, set model.MetricSet, ttl, sta
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	freshUntil := now.Add(ttl)
-	c.entries[key] = &cacheEntry{collector: collector, fetched: now, freshUntil: freshUntil, expires: freshUntil.Add(staleIfError), set: model.CloneMetricSet(set)}
+	c.putLocked(key, &cacheEntry{collector: collector, fetched: now, freshUntil: freshUntil, expires: freshUntil.Add(staleIfError), set: model.CloneMetricSet(set)})
 	c.evictLocked(collector, maxEntries, now)
 }
 
@@ -97,12 +128,9 @@ func (c *responseCache) evictLocked(collector string, maxEntries int, now time.T
 		return
 	}
 	var live []string
-	for key, entry := range c.entries {
-		if entry.collector != collector {
-			continue
-		}
-		if !entry.expires.After(now) {
-			delete(c.entries, key)
+	for key := range c.byCollector[collector] {
+		if !c.entries[key].expires.After(now) {
+			c.removeLocked(key)
 			continue
 		}
 		live = append(live, key)
@@ -118,7 +146,7 @@ func (c *responseCache) evictLocked(collector string, maxEntries int, now time.T
 		return first.expires.Before(second.expires)
 	})
 	for _, key := range live[:len(live)-maxEntries] {
-		delete(c.entries, key)
+		c.removeLocked(key)
 	}
 }
 
@@ -130,7 +158,7 @@ func (c *responseCache) Stats(now time.Time) map[string]int {
 	counts := make(map[string]int, len(c.entries))
 	for key, entry := range c.entries {
 		if !entry.expires.After(now) {
-			delete(c.entries, key)
+			c.removeLocked(key)
 			continue
 		}
 		counts[entry.collector]++

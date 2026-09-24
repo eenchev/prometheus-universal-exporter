@@ -184,8 +184,9 @@ labels:
 A series missing a required label is a missing value of its metric, handled by
 the metric's [`error_mode`](#when-a-metric-cannot-be-extracted): `ignore` and
 `log` drop that one series and keep the rest, `fail` fails the probe with an
-error naming the label. It is counted in `http_exporter_missing_keys_total`,
-and applies whatever `required` and `error_handling.allow_missing_keys` say
+error naming the label. It is counted in `http_exporter_missing_keys_total`
+and, under `ignore` and `log`, in `http_exporter_rule_failures_total`, and it
+applies whatever `required` and `error_handling.allow_missing_keys` say
 about the value. `required` applies to `expression` labels, and not to
 the python transform, whose labels come from its script.
 
@@ -575,7 +576,9 @@ essential: one missing value does not cost you the others. When nothing at all
 can be extracted, the probe still succeeds with an empty body. `log` writes one
 line per failing rule per scrape, however many series failed: a rule over a
 thousand-row table that misses its value on every row logs its first error
-with `"failures":1000`, not a thousand lines.
+with `"failures":1000`, not a thousand lines. Either way the series a rule carried on
+without are counted per rule in `http_exporter_rule_failures_total{collector,
+metric}`, so a rule that keeps failing can be graphed and alerted on.
 
 `fail` is for a metric the scrape is meaningless without. A single failing rule
 with `fail` fails the whole probe, even when every other metric was extracted

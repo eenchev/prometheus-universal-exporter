@@ -2,6 +2,7 @@ package exporter
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -756,5 +757,54 @@ func TestScheduledScrapeExportsTheLastGoodResultMarkedStale(t *testing.T) {
 	}
 	if !strings.Contains(selfMetrics(t, server), `http_exporter_cache_stale_served_total{collector="flaky"} 1`) {
 		t.Error("the stale export was not counted")
+	}
+}
+
+// The per-collector index always holds exactly the keys of the entries, and a
+// collector's max_cache_entries leaves the others' entries alone.
+func TestTheCacheIndexFollowsItsEntries(t *testing.T) {
+	cache := newResponseCache()
+	now := time.Now()
+	set := model.MetricSet{Metrics: []model.Metric{{Name: "v", Type: model.GaugeMetricType, Value: 1}}}
+	check := func(when string) {
+		t.Helper()
+		indexed := 0
+		for collector, keys := range cache.byCollector {
+			if len(keys) == 0 {
+				t.Errorf("%s: %s has an empty index", when, collector)
+			}
+			for key := range keys {
+				indexed++
+				if entry := cache.entries[key]; entry == nil || entry.collector != collector {
+					t.Errorf("%s: %s indexes %s, which it does not hold", when, collector, key)
+				}
+			}
+		}
+		if indexed != len(cache.entries) {
+			t.Errorf("%s: %d keys indexed, %d entries", when, indexed, len(cache.entries))
+		}
+	}
+	for i := range 20 {
+		cache.Put(fmt.Sprint("a", i), "a", set, time.Minute, 0, 5, now.Add(time.Duration(i)*time.Second))
+		cache.Put(fmt.Sprint("b", i), "b", set, time.Duration(i+1)*time.Second, 0, 0, now)
+	}
+	check("after the puts")
+	if counts := cache.Stats(now); counts["a"] != 5 || counts["b"] != 20 {
+		t.Fatalf("counts %v: a is capped at 5, b is not capped", counts)
+	}
+	cache.Put("a19", "a", set, time.Minute, 0, 5, now) // replaced in place
+	check("after a replacement")
+	if _, _, ok := cache.Get("b0", now.Add(2*time.Second)); ok {
+		t.Fatal("an expired entry was served")
+	}
+	check("after an expiry")
+	cache.Stats(now.Add(10 * time.Second))
+	check("after a sweep")
+	if dropped := cache.dropCollectors(map[string]bool{"a": true}); dropped != 5 {
+		t.Fatalf("dropped %d, want 5", dropped)
+	}
+	check("after a drop")
+	if _, ok := cache.byCollector["a"]; ok {
+		t.Fatal("a dropped collector is still indexed")
 	}
 }

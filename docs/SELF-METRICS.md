@@ -17,7 +17,7 @@ configured:
 | `http_exporter_decode_success_total` | counter | Responses decoded. |
 | `http_exporter_parse_errors_total` | counter | Responses the decoder could not parse. |
 | `http_exporter_transform_errors_total` | counter | Failed transforms. |
-| `http_exporter_missing_keys_total` | counter | Transform failures from a value the response did not contain: a jq or yq value, a CSV column, a regex that matched no text, an XPath or CSS selector that matched no nodes, `items` that selected nothing. |
+| `http_exporter_missing_keys_total` | counter | Values the response did not contain: a jq or yq value, a CSV column, a regex that matched no text, an XPath or CSS selector that matched no nodes, `items` that selected nothing, a required label. Counted when a transform fails for it, and for each series a metric rule carried on without under `error_mode` `log` or `ignore`. |
 | `http_exporter_script_errors_total` | counter | Python script failures. |
 | `http_exporter_script_duration_seconds` | gauge | How long the Python of the most recent probe that ran any took — pre-script and python transform together, not counting starting an interpreter. |
 | `http_exporter_metrics_emitted_total` | counter | Metrics produced, across scrapes. |
@@ -30,6 +30,7 @@ configured:
 | `http_exporter_probes_in_flight` | gauge | Trips to the collector's targets in progress, which [`max_concurrent_probes`](CONFIGURATION.md#limiting-concurrent-probes) bounds. |
 | `http_exporter_probes_rejected_total` | counter | Probes answered `503` because the collector was at `max_concurrent_probes`. |
 | `http_exporter_collector_config_valid` | gauge | `1` for every loaded collector. |
+| `http_exporter_rule_failures_total` | counter | Labelled `collector` and `metric`: the series a metric rule could not produce and the probe carried on without, under `error_mode` `log` or `ignore`. Every rule has its series from zero. A rule under `fail` fails the probe instead, counted in `http_exporter_transform_errors_total`. |
 
 A failure rate, for example:
 

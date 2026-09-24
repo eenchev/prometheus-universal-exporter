@@ -9,6 +9,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"sync"
 
 	"github.com/PuerkitoBio/goquery"
 	"github.com/antchfx/htmlquery"
@@ -26,8 +27,9 @@ import (
 // collector's metrics_prefix is applied in exactly one place, before the limits
 // are checked, the set is cached, or it is written to /probe or OTLP.
 func Transform(ctx context.Context, d *decode.Decoded, r *fetch.HTTPResponse, c *model.Collector, pythonPath string) (*model.MetricSet, error) {
+	report, _ := ctx.Value(ruleReportKey{}).(*RuleReport)
 	ctx, failures := withRuleFailures(ctx)
-	defer failures.log(c)
+	defer failures.finish(c, report)
 	set, err := transformMetrics(ctx, d, r, c, pythonPath)
 	if err != nil || set == nil {
 		return set, err
@@ -180,19 +182,24 @@ func applyCollectorLabels(set *model.MetricSet, t model.TransformConfig) {
 // — so within a Transform its failures are gathered (withRuleFailures) and the
 // rule is logged once when the scrape's transform ends, with the first error and
 // how many series failed. Without that gathering, as when called directly, the
-// line is written at once.
+// line is written at once. The failures of ignore are gathered too, unlogged,
+// so the caller's RuleReport counts every series a rule could not produce.
 //
 // This logs through slog's default logger rather than one passed down: it is
 // called from inside the transforms, several frames below anything holding a
 // logger. The exporter installs its JSON logger as the process default at
 // startup so these lines match every other line it writes.
 func handleMetricError(ctx context.Context, c *model.Collector, rule model.MetricRule, err error) bool {
+	failures, gathering := ctx.Value(ruleFailuresKey{}).(*ruleFailures)
 	switch rule.ErrorMode {
 	case model.ErrorModeIgnore:
+		if gathering {
+			failures.add(rule, err, false)
+		}
 		return true
 	case model.ErrorModeLog:
-		if failures, ok := ctx.Value(ruleFailuresKey{}).(*ruleFailures); ok {
-			failures.add(rule, err)
+		if gathering {
+			failures.add(rule, err, true)
 		} else {
 			logRuleFailure(c, rule, err, 1)
 		}
@@ -203,22 +210,26 @@ func handleMetricError(ctx context.Context, c *model.Collector, rule model.Metri
 	return false
 }
 
-func logRuleFailure(c *model.Collector, rule model.MetricRule, err error, failures int) {
+func logRuleFailure(c *model.Collector, rule model.MetricRule, err error, failures uint64) {
 	slog.Default().Error("metric extraction failed", "collector", collectorName(c), "metric", rule.Name, "error_mode", rule.ErrorMode, "error", err, "failures", failures)
 }
 
-// ruleFailures gathers the failures of log-mode rules during one Transform, so
-// each rule is logged once per scrape however many of its series failed.
+// ruleFailures gathers the failures of rules that carried on, under log or
+// ignore, during one Transform, so each log rule is logged once per scrape
+// however many of its series failed, and the caller can count them all.
 type ruleFailures struct {
 	rules []*failedRule
 }
 
 // failedRule is one rule's failures in a scrape: the first, which the log
-// line shows, and how many there were.
+// line shows, how many there were, how many of them were missing values, and
+// whether the rule logs them.
 type failedRule struct {
-	rule  model.MetricRule
-	first error
-	count int
+	rule    model.MetricRule
+	first   error
+	count   uint64
+	missing uint64
+	logged  bool
 }
 
 type ruleFailuresKey struct{}
@@ -232,21 +243,77 @@ func withRuleFailures(ctx context.Context) (context.Context, *ruleFailures) {
 
 // add counts a failure of rule. Rules are told apart by name and expression,
 // since two rules may export the same metric name.
-func (f *ruleFailures) add(rule model.MetricRule, err error) {
+func (f *ruleFailures) add(rule model.MetricRule, err error, logged bool) {
+	var missing uint64
+	if errors.Is(err, model.ErrMissingValue) {
+		missing = 1
+	}
 	for _, known := range f.rules {
 		if known.rule.Name == rule.Name && known.rule.Expression == rule.Expression && known.rule.Items == rule.Items {
 			known.count++
+			known.missing += missing
 			return
 		}
 	}
-	f.rules = append(f.rules, &failedRule{rule: rule, first: err, count: 1})
+	f.rules = append(f.rules, &failedRule{rule: rule, first: err, count: 1, missing: missing, logged: logged})
 }
 
-// log writes one line per rule that failed, in the order they first failed.
-func (f *ruleFailures) log(c *model.Collector) {
+// finish writes one line per log rule that failed, in the order they first
+// failed, and adds every failure to report when the caller asked for one.
+func (f *ruleFailures) finish(c *model.Collector, report *RuleReport) {
 	for _, failed := range f.rules {
-		logRuleFailure(c, failed.rule, failed.first, failed.count)
+		if failed.logged {
+			logRuleFailure(c, failed.rule, failed.first, failed.count)
+		}
+		if report != nil {
+			report.add(failed.rule.Name, failed.count, failed.missing)
+		}
 	}
+}
+
+// RuleReport counts, for its caller, the series metric rules could not
+// produce and carried on without, under error_mode log or ignore, across the
+// Transforms made with its context (WithRuleReport). A rule that fails the
+// scrape is not in it: that failure is the Transform's error.
+type RuleReport struct {
+	mu       sync.Mutex
+	failures []RuleFailure
+}
+
+// RuleFailure is how many series of one metric failed, and how many of those
+// because the response did not contain the value.
+type RuleFailure struct {
+	Metric            string
+	Failures, Missing uint64
+}
+
+type ruleReportKey struct{}
+
+// WithRuleReport returns a context whose Transforms report their rules'
+// failures in the returned RuleReport.
+func WithRuleReport(ctx context.Context) (context.Context, *RuleReport) {
+	report := &RuleReport{}
+	return context.WithValue(ctx, ruleReportKey{}, report), report
+}
+
+func (r *RuleReport) add(metric string, failures, missing uint64) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for i := range r.failures {
+		if r.failures[i].Metric == metric {
+			r.failures[i].Failures += failures
+			r.failures[i].Missing += missing
+			return
+		}
+	}
+	r.failures = append(r.failures, RuleFailure{Metric: metric, Failures: failures, Missing: missing})
+}
+
+// Failures returns the failures reported, one entry per metric name.
+func (r *RuleReport) Failures() []RuleFailure {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return append([]RuleFailure(nil), r.failures...)
 }
 
 // MetricFailure is a metric rule that could not produce its value and whose

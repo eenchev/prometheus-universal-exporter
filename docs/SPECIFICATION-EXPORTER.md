@@ -196,6 +196,14 @@ request:
 retry transport failures and transient HTTP statuses `408`, `425`, `429`, and
 `500` through `599`. Other HTTP statuses MUST be returned without retrying.
 The retry loop MUST share the incoming scrape or explicit target timeout.
+Only a request whose method is idempotent — `GET`, `HEAD`, `OPTIONS`, `TRACE`,
+`PUT` or `DELETE` — MUST be retried, unless `retry.non_idempotent` is set, since
+sending a `POST` or `PATCH` again may repeat what it did; this holds for a
+method a probe parameter chooses too. A collector with `retry.attempts` and a
+non-idempotent method, without `retry.non_idempotent`, MUST be reported as a
+configuration warning. When a target answers with a status outside `2xx`, the
+logged failure SHOULD carry the start of the body, at most 256 bytes on one
+line, and the probe's answer MUST NOT.
 
 The exporter MUST validate and normalize the target according to collector request configuration.
 
@@ -1576,7 +1584,10 @@ value is not a number:
   rule, and otherwise behave exactly as `ignore`. A rule that fails for several
   series in one scrape — rows of a table, items — MUST be recorded once for that
   scrape, with its first error and the number of series that failed, not once
-  per series.
+  per series. Every series a rule carries on without, under `ignore` or `log`,
+  MUST be counted in `http_exporter_rule_failures_total{collector, metric}`, a
+  series present from zero for every rule, and in
+  `http_exporter_missing_keys_total` when the value was missing.
 - `fail` MUST record the error as `log` does and MUST then fail the whole scrape
   at that metric. No metric from that scrape MUST be served, including metrics
   that were extracted successfully, so a response is either complete or an
@@ -2003,6 +2014,8 @@ http_exporter_scheduled_targets
 http_exporter_config_last_reload_successful
 http_exporter_config_last_reload_success_timestamp_seconds
 http_exporter_config_reloads_total
+
+http_exporter_rule_failures_total
 
 http_exporter_otlp_exports_total
 http_exporter_otlp_export_retries_total

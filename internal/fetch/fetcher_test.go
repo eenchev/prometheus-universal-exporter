@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -240,5 +241,44 @@ func TestRequestLabelDropsCredentialsAndQuery(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// A request whose method is not idempotent is sent once however many retries
+// are configured, unless retry.non_idempotent allows them: sending a POST again
+// may repeat what it did. GET is retried as configured.
+func TestOnlyIdempotentRequestsAreRetried(t *testing.T) {
+	var requests atomic.Int64
+	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		requests.Add(1)
+		w.WriteHeader(http.StatusServiceUnavailable)
+	}))
+	t.Cleanup(target.Close)
+	for _, test := range []struct {
+		method        string
+		nonIdempotent bool
+		want          int64
+	}{
+		{http.MethodGet, false, 3},
+		{http.MethodPut, false, 3},
+		{http.MethodPost, false, 1},
+		{http.MethodPatch, false, 1},
+		{http.MethodPost, true, 3},
+	} {
+		requests.Store(0)
+		c := model.Collector{Name: "retries", Request: model.RequestConfig{Type: RequestTypeHTTP, Method: test.method, Retry: model.RetryConfig{Attempts: 2, NonIdempotent: test.nonIdempotent}}}
+		resp, err := fetch(context.Background(), target.URL, &c, RequestOverrides{})
+		if err != nil || resp.StatusCode != http.StatusServiceUnavailable {
+			t.Fatalf("%s: resp=%v err=%v", test.method, resp, err)
+		}
+		if got := requests.Load(); got != test.want {
+			t.Errorf("%s non_idempotent=%v: %d requests, want %d", test.method, test.nonIdempotent, got, test.want)
+		}
+	}
+	// A probe asking for POST cannot bring back the retries its method rules out.
+	requests.Store(0)
+	c := model.Collector{Name: "retries", Request: model.RequestConfig{Type: RequestTypeHTTP, Method: http.MethodGet, Retry: model.RetryConfig{Attempts: 2}}}
+	if _, err := fetch(context.Background(), target.URL, &c, RequestOverrides{Method: http.MethodPost}); err != nil || requests.Load() != 1 {
+		t.Fatalf("a POST override: %d requests, err=%v", requests.Load(), err)
 	}
 }

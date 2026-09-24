@@ -282,7 +282,23 @@ request:
 ```
 
 The exporter retries transport failures and transient HTTP responses (`408`,
-`425`, `429`, and `5xx`). Other HTTP statuses are returned immediately. The
+`425`, `429`, and `5xx`). Other HTTP statuses are returned immediately.
+
+Only requests whose method is idempotent are retried — `GET`, `HEAD`,
+`OPTIONS`, `TRACE`, `PUT` and `DELETE` — since sending a `POST` or `PATCH`
+again may repeat what it did. When a target is known to handle a repeated
+`POST` safely, allow it:
+
+```yaml
+request:
+  method: POST
+  retry:
+    attempts: 2
+    non_idempotent: true   # retry this POST too
+```
+
+Without it, a `POST` collector with `retry.attempts` is logged as a
+configuration warning at startup, and its failed requests are not retried. The
 retry count and fixed delay can be overridden for one scrape with the
 `retry_attempts` and `retry_backoff` probe parameters. Retries share the scrape/target
 timeout, so the retry loop cannot extend the configured deadline indefinitely.

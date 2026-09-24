@@ -341,3 +341,23 @@ func TestDeprecationsAndWarningsAreLogged(t *testing.T) {
 		t.Fatalf("warning record=%v", records[1])
 	}
 }
+
+// Retries configured on a POST are not made without retry.non_idempotent,
+// which the load warns about.
+func TestRetriesOfANonIdempotentMethodAreWarnedAbout(t *testing.T) {
+	post := testutil.Collector("post", "text")
+	post.Request.Method = "POST"
+	post.Request.Retry.Attempts = 2
+	allowed := testutil.Collector("allowed", "text")
+	allowed.Request.Method = "POST"
+	allowed.Request.Retry = model.RetryConfig{Attempts: 2, NonIdempotent: true}
+	get := testutil.Collector("get", "text")
+	get.Request.Retry.Attempts = 2
+	cfg := &model.Config{Collectors: []model.Collector{post, allowed, get}}
+	if err := Validate(cfg); err != nil {
+		t.Fatal(err)
+	}
+	if len(cfg.Warnings) != 1 || !strings.Contains(cfg.Warnings[0], `collector "post" sets request.retry.attempts, but its method POST is not idempotent`) {
+		t.Fatalf("warnings=%q", cfg.Warnings)
+	}
+}

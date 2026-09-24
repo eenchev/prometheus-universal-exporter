@@ -6,7 +6,10 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"strings"
 	"time"
+	"unicode"
+	"unicode/utf8"
 
 	"github.com/eenchev/prometheus-universal-exporter/internal/decode"
 	"github.com/eenchev/prometheus-universal-exporter/internal/fetch"
@@ -83,9 +86,10 @@ func (s *Server) collect(ctx context.Context, j collectJob) collected {
 		s.observeTargetScrape(c.Name, time.Since(start))
 	}()
 	// stageFailed applies a stage's error policy.
-	stageFailed := func(stage string, err error, policy string) collected {
+	// extra attributes go to the log only, never into the probe's answer.
+	stageFailed := func(stage string, err error, policy string, extra ...any) collected {
 		err = explainBudget(ctx, j.budget, err)
-		attrs := append(append([]any{}, j.log.attrs...), "stage", stage)
+		attrs := append(append(append([]any{}, j.log.attrs...), "stage", stage), extra...)
 		switch policy {
 		case model.ErrorPolicyLog:
 			s.failures.failed(s.logger, slog.LevelWarn, j.log.key, j.log.continuing, stage, err, attrs...)
@@ -94,7 +98,7 @@ func (s *Server) collect(ctx context.Context, j collectJob) collected {
 			s.logger.Debug(j.log.continuing, append(attrs, "error", err)...)
 			return collected{carriedOn: true}
 		}
-		s.logCollectFailure(j.log, stage, err)
+		s.logCollectFailure(j.log, stage, err, extra...)
 		return collected{stage: stage, err: err}
 	}
 
@@ -110,7 +114,13 @@ func (s *Server) collect(ctx context.Context, j collectJob) collected {
 		x.lastBytes = int64(len(response.Body))
 	})
 	if response.StatusCode < 200 || response.StatusCode >= 300 {
-		return stageFailed("http_status", fmt.Errorf("received HTTP status %d", response.StatusCode), c.ErrorHandling.OnFetchError)
+		// The target's own explanation is usually in the body; the start of
+		// it goes to the log, not to the answer, which Prometheus may keep.
+		var excerpt []any
+		if body := bodyExcerpt(response.Body); body != "" {
+			excerpt = []any{"response_body", body}
+		}
+		return stageFailed("http_status", fmt.Errorf("received HTTP status %d", response.StatusCode), c.ErrorHandling.OnFetchError, excerpt...)
 	}
 	var set *model.MetricSet
 	if response.Directory != nil {
@@ -125,7 +135,7 @@ func (s *Server) collect(ctx context.Context, j collectJob) collected {
 		}
 		rec.update(func(x *serverStats) { x.decodeOK++ })
 		scriptCtx, timer := transform.WithScriptTimer(ctx)
-		set, err = transform.Transform(scriptCtx, decoded, response, c, s.pythonPath)
+		set, err = s.transformRecorded(scriptCtx, decoded, response, c, rec)
 		recordScriptDuration(rec, timer)
 		if err != nil {
 			rec.update(func(x *serverStats) {
@@ -164,4 +174,59 @@ func (s *Server) collect(ctx context.Context, j collectJob) collected {
 	s.failures.recovered(s.logger, j.log.key, j.log.recovery, j.log.attrs...)
 	s.cache.Put(j.cacheKey, c.Name, *set, model.CacheTTL(c), model.StaleIfError(c), c.Limits.MaxCacheEntries, now)
 	return collected{set: set, answer: answer}
+}
+
+// transformRecorded transforms a decoded response, and counts in the
+// collector's self-metrics the series its rules carried on without: each in
+// http_exporter_rule_failures_total, and those whose value the response did
+// not contain in http_exporter_missing_keys_total too.
+func (s *Server) transformRecorded(ctx context.Context, d *decode.Decoded, r *fetch.HTTPResponse, c *model.Collector, rec statsRecorder) (*model.MetricSet, error) {
+	ctx, report := transform.WithRuleReport(ctx)
+	set, err := transform.Transform(ctx, d, r, c, s.pythonPath)
+	failures := report.Failures()
+	if len(failures) == 0 {
+		return set, err
+	}
+	rec.update(func(x *serverStats) {
+		for _, f := range failures {
+			x.missing += f.Missing
+		}
+	})
+	if rec.collector != nil {
+		rec.collector.mu.Lock()
+		if rec.collector.ruleFailures == nil {
+			rec.collector.ruleFailures = map[string]uint64{}
+		}
+		for _, f := range failures {
+			rec.collector.ruleFailures[f.Metric] += f.Failures
+		}
+		rec.collector.mu.Unlock()
+	}
+	return set, err
+}
+
+// bodyExcerptBytes is how much of an error response's body the log shows.
+const bodyExcerptBytes = 256
+
+// bodyExcerpt is the start of a response body for a log line: at most
+// bodyExcerptBytes, with invalid UTF-8 and
+// control characters replaced and runs of whitespace collapsed, so an HTML
+// error page or a binary body reads as one tidy line. It ends in … when cut.
+func bodyExcerpt(body []byte) string {
+	cut := len(body) > bodyExcerptBytes
+	if cut {
+		// A character cut in two is replaced below like any invalid UTF-8.
+		body = body[:bodyExcerptBytes]
+	}
+	text := strings.Map(func(r rune) rune {
+		if r == utf8.RuneError || unicode.IsControl(r) {
+			return ' '
+		}
+		return r
+	}, strings.ToValidUTF8(string(body), " "))
+	text = strings.Join(strings.Fields(text), " ")
+	if cut && text != "" {
+		text += "…"
+	}
+	return text
 }

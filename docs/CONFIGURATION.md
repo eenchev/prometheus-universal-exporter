@@ -162,7 +162,8 @@ labels:
 ```
 
 A label setting both, or neither, is refused at startup. For a static label on
-every metric of a collector, use `transform.labels` instead.
+every metric of a collector, use [`transform.labels`](#collector-wide-labels)
+instead.
 
 Label expressions use the same transform-specific language as the metric
 expression. For CSV, each row produces a metric and `expression: server`
@@ -187,6 +188,33 @@ error naming the label. It is counted in `http_exporter_missing_keys_total`,
 and applies whatever `required` and `error_handling.allow_missing_keys` say
 about the value. `required` applies to `expression` labels, and not to
 the python transform, whose labels come from its script.
+
+### Collector-wide labels
+
+Three `transform` settings change the labels of every metric a collector
+exports, whatever its transform — jq, CSS, XPath, CSV, regex, Python or a
+Prometheus passthrough — after its metric rules, in this order:
+
+```yaml
+transform:
+  type: jq
+  labels:            # added to every metric
+    environment: production
+  remove_labels:     # dropped from every metric
+    - internal_id
+  rename_labels:     # renamed on every metric
+    host: instance
+```
+
+Renames are made at once, from the labels as they were before any of them, so
+they never chain: with `a: b` and `b: c`, `b` gets the value `a` had and `c`
+the value `b` had. Two renames to the same label are refused at startup.
+
+A `prometheus` transform passing metrics through without `metrics` rules can
+also pick and rename them: `include` and `exclude` are patterns a metric name
+must, or must not, match, and `rename` maps source names to new ones. With
+`metrics` rules, the rules choose and name the metrics, so these three are
+refused at startup there, as on any other transform, rather than ignored.
 
 ### Prefixing a collector's metrics
 
@@ -619,8 +647,11 @@ metric and the label:
   expressions, CSS selectors, XPath with the collector's namespaces, and a
   `prometheus` transform's patterns, `include` and `exclude`;
 - a `regex` label must name a capture group the regex has;
-- a `prometheus` transform's `rename` targets must be metric names, and its
-  `labels` and `rename_labels` label names.
+- a `prometheus` transform's `rename` targets must be metric names;
+  `include`, `exclude` and `rename` apply only to a `prometheus` transform
+  without `metrics` rules;
+- `transform.labels` and `rename_labels` must give label names, and two renames
+  may not target the same label.
 
 A CSS selector that does not compile used to match nothing, on every scrape,
 without saying why; it is now refused when the configuration loads. The

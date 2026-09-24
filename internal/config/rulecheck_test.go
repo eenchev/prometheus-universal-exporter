@@ -144,3 +144,52 @@ func TestErrorPolicyVocabulary(t *testing.T) {
 		}
 	}
 }
+
+// include, exclude and rename apply only to a prometheus transform passing
+// metrics through, and are refused anywhere else rather than ignored; the
+// label settings apply to every transform, but two renames to one label are
+// refused.
+func TestTransformSettingsWhereTheyApply(t *testing.T) {
+	passthrough := func(t model.TransformConfig) model.Collector {
+		t.Type = "prometheus"
+		return model.Collector{Name: "checked", Request: model.RequestConfig{Type: fetch.RequestTypeHTTP}, Transform: t}
+	}
+	withRules := func(t model.TransformConfig) model.Collector {
+		c := passthrough(t)
+		c.Metrics = []model.MetricRule{{Name: "v", Type: model.GaugeMetricType, Expression: "^v$"}}
+		return c
+	}
+	jq := func(t model.TransformConfig) model.Collector {
+		c := testutil.Collector("checked", "text")
+		t.Type = "jq"
+		c.Transform = t
+		c.Metrics[0].Expression = ".v"
+		return c
+	}
+	for name, test := range map[string]struct {
+		collector model.Collector
+		want      string
+	}{
+		"include on jq":            {jq(model.TransformConfig{Include: []string{"^v$"}}), "sets transform.include, which picks or renames the metrics a prometheus transform passes through"},
+		"rename on jq":             {jq(model.TransformConfig{Rename: map[string]string{"a": "b"}}), "sets transform.rename"},
+		"exclude with rules":       {withRules(model.TransformConfig{Exclude: []string{"^x$"}}), "sets transform.exclude"},
+		"two renames to one label": {jq(model.TransformConfig{RenameLabels: map[string]string{"a": "c", "b": "c"}}), `renames both "a" and "b" to "c"`},
+		"bad collector label name": {jq(model.TransformConfig{Labels: map[string]string{"bad-name": "x"}}), `transform.labels has invalid label name "bad-name"`},
+	} {
+		t.Run(name, func(t *testing.T) {
+			err := Validate(&model.Config{Collectors: []model.Collector{test.collector}})
+			if err == nil || !strings.Contains(err.Error(), test.want) {
+				t.Fatalf("err=%v, want %q", err, test.want)
+			}
+		})
+	}
+	for name, c := range map[string]model.Collector{
+		"passthrough filters": passthrough(model.TransformConfig{Include: []string{"^v"}, Exclude: []string{"^v_x$"}, Rename: map[string]string{"v": "w"}}),
+		"labels on jq":        jq(model.TransformConfig{Labels: map[string]string{"env": "prod"}, RemoveLabels: []string{"x"}, RenameLabels: map[string]string{"a": "b", "b": "c"}}),
+		"labels with rules":   withRules(model.TransformConfig{Labels: map[string]string{"env": "prod"}}),
+	} {
+		if err := Validate(&model.Config{Collectors: []model.Collector{c}}); err != nil {
+			t.Errorf("%s: %v", name, err)
+		}
+	}
+}

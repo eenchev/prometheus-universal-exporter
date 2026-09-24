@@ -108,7 +108,7 @@ func validateCollector(c *model.Config, x *model.Collector) error {
 	if err := validateMetricRules(c, x); err != nil {
 		return err
 	}
-	return transform.CheckPrometheusTransform(x)
+	return transform.CheckTransformSettings(x)
 }
 
 // applyLimitDefaults gives every limit left unset its default.

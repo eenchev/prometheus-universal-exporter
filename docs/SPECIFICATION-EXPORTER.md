@@ -702,6 +702,15 @@ with any other value, MUST be rejected at startup naming the accepted types.
 The decoder and transform types MUST each be listed once in the code, the list
 validation and the JSON Schema both read.
 
+`transform.labels`, `transform.remove_labels` and `transform.rename_labels`
+MUST apply to every metric a collector produces, whatever its transform, after
+its metric rules and in that order: add, remove, rename. The renames MUST be
+made at once from the labels as they were before any of them, so they never
+chain and the result does not depend on the order they are listed or walked in.
+`transform.include`, `transform.exclude` and `transform.rename` pick and rename
+the metrics a `prometheus` transform passes through, and apply only to one
+without `metrics` rules.
+
 The decoder MUST be chosen by `decoder.type`, the one key for it; `response`
 MUST NOT take a format. `decoder.type` is optional and defaults to `auto`. When
 it is omitted, the implementation MUST infer a deterministic response decoder from the transform
@@ -2435,8 +2444,11 @@ label:
   and relative label expressions, with the collector's namespaces; and a
   prometheus transform's patterns, `include` and `exclude`.
 - A regex label MUST name a capture group the regex has, by number or name.
-- A prometheus transform's `rename` targets MUST be valid metric names, and its
-  `labels` keys and `rename_labels` targets valid label names.
+- A prometheus transform's `rename` targets MUST be valid metric names.
+  `include`, `exclude` and `rename` MUST be rejected on any collector other
+  than a prometheus transform without `metrics` rules, rather than ignored.
+- `transform.labels` keys and `rename_labels` targets MUST be valid label
+  names, and two `rename_labels` entries with one target MUST be rejected.
 
 ### 24.2a Decoding errors
 
@@ -4316,7 +4328,12 @@ status captured:
   rule and the label. Named and numbered captures, `@attribute` labels,
   namespaced XPath and `$root` pass.
 - A prometheus transform's invalid `include` and `exclude` patterns, `rename`
-  targets, `labels` keys and `rename_labels` targets are rejected.
+  targets, `labels` keys and `rename_labels` targets are rejected; so are
+  `include`, `exclude` and `rename` outside a passthrough, and two renames to
+  one label.
+- `transform.labels`, `remove_labels` and `rename_labels` apply to the metrics
+  of every transform, and renames give the same result however they are
+  ordered, never chaining.
 - `--dry-run` reports an expression that does not compile as a failed `config`
   check.
 

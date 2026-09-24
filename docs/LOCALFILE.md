@@ -300,7 +300,8 @@ declares no encoding: one in anything but UTF-8 needs `response.charset`, such
 as `windows-1252`, unless it starts with a byte order mark (see
 [Character encodings](CONFIGURATION.md#character-encodings)). A
 `.prom` file with `transform.type: prometheus` is passed through, and
-`include`, `exclude`, `rename` and `labels` of that transform apply as usual.
+`include`, `exclude`, `rename` and the
+[collector-wide labels](CONFIGURATION.md#collector-wide-labels) apply as usual.
 
 Transforms and Python scripts see the file as a response with status `200` and
 three headers: `Content-Type` from the extension, `Content-Length`, and

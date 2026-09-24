@@ -32,6 +32,7 @@ func Transform(ctx context.Context, d *decode.Decoded, r *fetch.HTTPResponse, c 
 	if err != nil || set == nil {
 		return set, err
 	}
+	applyCollectorLabels(set, c.Transform)
 	truncateLabels(set, c)
 	applyMetricsPrefix(set, c.MetricsPrefix)
 	// After the prefix, so a values-escaped name still starts with U__
@@ -124,6 +125,43 @@ func validateTransformInput(d *decode.Decoded, transformType string) error {
 		}
 	}
 	return nil
+}
+
+// applyCollectorLabels applies the collector-wide label settings to every
+// metric, whatever the transform: transform.labels adds static labels,
+// remove_labels drops labels, and rename_labels renames them, in that order.
+//
+// The renames are made at once, from the labels as they were before any of
+// them, so they never chain: with a to b and b to c, b gets a's value and c
+// gets b's, whatever order the map is walked in. Two renames to one label are
+// refused at load (CheckTransformSettings). Each metric gets a label map of
+// its own, so a transform's output never shares one with its input.
+func applyCollectorLabels(set *model.MetricSet, t model.TransformConfig) {
+	if len(t.Labels) == 0 && len(t.RemoveLabels) == 0 && len(t.RenameLabels) == 0 {
+		return
+	}
+	for i := range set.Metrics {
+		labels := model.CloneLabels(set.Metrics[i].Labels)
+		for name, value := range t.Labels {
+			labels[name] = value
+		}
+		for _, name := range t.RemoveLabels {
+			delete(labels, name)
+		}
+		renamed := map[string]string{}
+		for from, to := range t.RenameLabels {
+			if value, ok := labels[from]; ok {
+				renamed[to] = value
+			}
+		}
+		for from := range t.RenameLabels {
+			delete(labels, from)
+		}
+		for name, value := range renamed {
+			labels[name] = value
+		}
+		set.Metrics[i].Labels = labels
+	}
 }
 
 // handleMetricError applies a rule's error mode and reports whether the scrape
@@ -999,21 +1037,6 @@ func applyPrometheusTransform(ctx context.Context, in model.MetricSet, c *model.
 		}
 		if name, ok := t.Rename[metric.Name]; ok {
 			metric.Name = name
-		}
-		if metric.Labels == nil {
-			metric.Labels = map[string]string{}
-		}
-		for name, value := range t.Labels {
-			metric.Labels[name] = value
-		}
-		for _, name := range t.RemoveLabels {
-			delete(metric.Labels, name)
-		}
-		for old, name := range t.RenameLabels {
-			if value, ok := metric.Labels[old]; ok {
-				delete(metric.Labels, old)
-				metric.Labels[name] = value
-			}
 		}
 		out.Metrics = append(out.Metrics, metric)
 	}

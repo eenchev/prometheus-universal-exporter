@@ -98,6 +98,11 @@ collector:
   body, headers and query — get a field each, required unless the placeholder
   has a default, which is shown.
 
+Each form also has a timeout, 10 seconds to start with, sent as the
+scrape timeout Prometheus would send, so a target that never answers ends
+in the exporter's own error after it rather than a page waiting for ever.
+A credential left blank is not sent at all.
+
 The page itself is behind the exporter's Basic Auth when that is on, and the
 browser sends the same credential with each probe. Since exporter Basic Auth
 and `forward_authorization` cannot be combined, the `Authorization` header is

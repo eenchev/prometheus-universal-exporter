@@ -1099,8 +1099,14 @@ collector legacy_text http failed: HTTP request failed: ... context deadline exc
   request alone; whichever ends first stops the probe.
 - An offset of half the scrape timeout or more would leave too little, so a
   probe always keeps at least half.
-- Without the header — a probe from `curl`, or from anything other than
-  Prometheus — nothing changes.
+- Without the header and without a `timeout` parameter — a probe from `curl`,
+  a script, or anything other than Prometheus — the probe gets
+  `--probe.default-timeout`, 30s by default, so a target that accepts the
+  connection and never answers cannot hold it, and its collector's
+  `max_concurrent_probes` slot, for ever. Its error names that flag instead.
+  `0` leaves such a probe unbounded; a negative value is a command-line
+  error. A `timeout` parameter bounds the request itself, so a probe that
+  sets one gets no default.
 - A probe answered from the [response cache](#response-caching) needs no budget.
   Identical probes that [share one request](#identical-probes-share-one-request)
   share the budget of the probe that started it.

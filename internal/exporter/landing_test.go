@@ -40,6 +40,14 @@ func getPage(t *testing.T, server *Server, path string) string {
 	if got := response.Header().Get("Cache-Control"); got != "no-store" {
 		t.Fatalf("%s Cache-Control=%q", path, got)
 	}
+	// No other site may frame the pages: the collectors page takes target
+	// credentials.
+	if got := response.Header().Get("X-Frame-Options"); got != "DENY" {
+		t.Fatalf("%s X-Frame-Options=%q", path, got)
+	}
+	if got := response.Header().Get("Content-Security-Policy"); !strings.Contains(got, "frame-ancestors 'none'") || !strings.Contains(got, "connect-src 'self'") {
+		t.Fatalf("%s Content-Security-Policy=%q", path, got)
+	}
 	return response.Body.String()
 }
 
@@ -195,4 +203,40 @@ func TestTheCollectorsPageNeverShowsAConfiguredCredential(t *testing.T) {
 	if strings.Contains(page, "Target credential") {
 		t.Error("a collector that does not forward Authorization asks for a credential")
 	}
+}
+
+// Each form starts with a timeout the page's script sends as Prometheus's
+// scrape timeout header, so a probe from the page cannot hang; the field has
+// no name, since it is a header, not a probe parameter.
+func TestTheCollectorsPageSendsATimeout(t *testing.T) {
+	page := getPage(t, landingServer(t, weatherConfig()), "/collectors")
+	requireContains(t, page,
+		`type="number" data-timeout min="1" max="600" step="any" value="10" required>`,
+		`"X-Prometheus-Scrape-Timeout-Seconds": String(timeout)`,
+		`AbortSignal.timeout(`,
+	)
+	field := regexp.MustCompile(`<input[^>]*data-timeout[^>]*>`).FindString(page)
+	if field == "" || strings.Contains(field, "name=") {
+		t.Fatalf("the timeout field is missing or named: %q", field)
+	}
+}
+
+// Basic auth with both fields blank sends no credential, as a blank bearer
+// token does.
+func TestABlankTargetCredentialIsNotSent(t *testing.T) {
+	c := testutil.Collector("tenant_status", "text")
+	c.Request.ForwardAuthorization = true
+	page := getPage(t, landingServer(t, &model.Config{Collectors: []model.Collector{c}}), "/collectors")
+	requireContains(t, page,
+		`scheme.value === "bearer" && field("token").value !== ""`,
+		`scheme.value === "basic" && (field("username").value !== "" || field("password").value !== "")`,
+	)
+}
+
+// A localfile target names a file or a directory under the collector's root.
+func TestTheCollectorsPageHintsALocalfileTarget(t *testing.T) {
+	c := testutil.Collector("textfile", "text")
+	c.Request = model.RequestConfig{Type: "localfile", Root: t.TempDir(), Path: "batch.prom"}
+	page := getPage(t, landingServer(t, &model.Config{Collectors: []model.Collector{c}}), "/collectors")
+	requireContains(t, page, `placeholder="a file or directory under its root (optional)"`)
 }

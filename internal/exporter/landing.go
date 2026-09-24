@@ -32,6 +32,9 @@ code { background: var(--code); padding: 1px 5px; border-radius: 4px; font-size:
 ul.links { padding-left: 20px; }
 `
 
+// pagePolicy is the pages' Content-Security-Policy.
+const pagePolicy = "default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; connect-src 'self'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'"
+
 // renderPage executes t with data and writes it as HTML. The page is rendered
 // whole before anything is written, so a failure is a clean 500 rather than
 // half a page.
@@ -45,6 +48,12 @@ func (s *Server) renderPage(w http.ResponseWriter, t *template.Template, data an
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	// The pages list the configuration in force; a cached copy would not.
 	w.Header().Set("Cache-Control", "no-store")
+	// The collectors page takes target credentials, so no other site may
+	// frame the pages and steer what is typed into them. The policy also
+	// keeps the pages to what they are: their own inline style and script,
+	// requests to the exporter itself, and forms sent nowhere else.
+	w.Header().Set("X-Frame-Options", "DENY")
+	w.Header().Set("Content-Security-Policy", pagePolicy)
 	_, _ = w.Write(body.Bytes())
 }
 

@@ -34,10 +34,11 @@ type collectJob struct {
 	// display is the target as logs and self-metrics show it.
 	display  string
 	cacheKey string
-	// budget bounds the trip when Prometheus said how long it will wait; a
-	// failure that ran out of it says so.
-	budget time.Duration
-	log    collectLog
+	// budget bounds the trip when the probe has a deadline (scrapetimeout.go);
+	// a failure that ran out of it says so, and where it came from.
+	budget       time.Duration
+	budgetSource string
+	log          collectLog
 }
 
 // collectLog is how a caller's failures are logged: under which key of the
@@ -88,7 +89,7 @@ func (s *Server) collect(ctx context.Context, j collectJob) collected {
 	// stageFailed applies a stage's error policy.
 	// extra attributes go to the log only, never into the probe's answer.
 	stageFailed := func(stage string, err error, policy string, extra ...any) collected {
-		err = explainBudget(ctx, j.budget, err)
+		err = explainBudget(ctx, j.budget, j.budgetSource, err)
 		attrs := append(append(append([]any{}, j.log.attrs...), "stage", stage), extra...)
 		switch policy {
 		case model.ErrorPolicyLog:

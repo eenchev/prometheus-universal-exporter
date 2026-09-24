@@ -61,6 +61,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 	shutdownDelay := flags.Duration("web.shutdown-delay", 0, "How long a SIGTERM or SIGINT keeps serving, with /ready answering 503, before the graceful shutdown begins, so a load balancer or Kubernetes stops sending probes first. 0, the default, begins at once")
 	shutdownTimeout := flags.Duration("web.shutdown-timeout", exporter.DefaultShutdownTimeout, "How long a SIGTERM or SIGINT waits for the probes in progress to finish before closing their connections. Keep it at least as long as Prometheus's scrape timeout")
 	timeoutOffset := flags.Duration("probe.timeout-offset", exporter.DefaultTimeoutOffset, "How much of Prometheus's scrape timeout (X-Prometheus-Scrape-Timeout-Seconds) a probe leaves unused, so it answers with its own error before Prometheus gives up")
+	defaultProbeTimeout := flags.Duration("probe.default-timeout", exporter.DefaultProbeTimeout, "How long a probe may take when it names no deadline: no X-Prometheus-Scrape-Timeout-Seconds header and no timeout parameter, as from curl or a script. 0 leaves such a probe unbounded")
 	pythonPath := flags.String("python.path", "python3", "Python interpreter used by the python transform")
 	targetFile := flags.String("otlp.targets-file", "", "Optional file of scheduled targets scraped by the exporter and delivered over OTLP")
 	watchConfig := flags.Bool("config.watch", false, "Reload the configuration, collector and scheduled target files when they change on disk")
@@ -94,6 +95,10 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return 2
 	}
 	if err := exporter.ValidateTimeoutOffset(*timeoutOffset); err != nil {
+		newLogger("info", stderr).Error("invalid command line; exiting", "error", err.Error())
+		return 2
+	}
+	if err := exporter.ValidateDefaultProbeTimeout(*defaultProbeTimeout); err != nil {
 		newLogger("info", stderr).Error("invalid command line; exiting", "error", err.Error())
 		return 2
 	}
@@ -179,6 +184,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 	server := exporter.NewServer(manager, *pythonPath, logger)
 	server.SetSelfMetricsPath(*selfMetricsPath)
 	server.SetTimeoutOffset(*timeoutOffset)
+	server.SetDefaultProbeTimeout(*defaultProbeTimeout)
 	server.SetLifecycle(*enableLifecycle)
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGTERM, syscall.SIGINT)

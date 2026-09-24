@@ -172,7 +172,16 @@ running, and the error MUST say that the probe's budget, with its length, ran
 out, so Prometheus receives the reason before its own timeout. A missing,
 unparseable, non-positive or non-finite header MUST leave the probe
 unbounded by it. The `timeout` parameter keeps bounding the request alone; the
-earlier deadline wins. A cache hit needs no budget, and identical probes that
+earlier deadline wins.
+
+A probe that names no deadline — no usable header and no `timeout` parameter,
+as from curl, a script or the collectors page without its script — MUST be
+bounded the same way by `--probe.default-timeout`, which MUST default to 30s,
+MUST reject a negative value as a command-line error like the offset, and
+leaves such a probe unbounded at 0. Its error MUST name that flag rather than
+Prometheus's scrape timeout, so a probe that ran out says which deadline it
+had. A target that accepts the connection and never answers MUST NOT be able
+to hold a probe, and its collector's `max_concurrent_probes` slot, for ever. A cache hit needs no budget, and identical probes that
 share one trip (§ 42.13a) share the budget of the probe that started it.
 Scheduled targets are not affected.
 
@@ -2338,18 +2347,24 @@ Recommended behavior:
   and another method `405`.
 - `/collectors`: an HTML page listing the collectors in force, each with a form
   that probes a target through it and shows the answer in place. The form MUST
-  offer a field for the target, required when the request type needs one; for
-  each request parameter, required unless its placeholder has a default, which
+  offer a field for the target, required when the request type needs one; a
+  timeout, 10 seconds to start with, sent as the
+  `X-Prometheus-Scrape-Timeout-Seconds` header so the probe answers with its
+  own error, with the page giving up a few seconds after it; for each request
+  parameter, required unless its placeholder has a default, which
   it shows; for each header in `request.forward_headers` that can be
   forwarded, sent as `header_<name>`; and, when `request.forward_authorization`
   is set, a bearer token or a username and password, sent to `/probe` as the
-  `Authorization` header and never in the URL. Credential fields MUST NOT be
-  named form fields, so a submission without the page's script leaves them
-  out. A credential the collector's configuration holds MUST be named by kind
+  `Authorization` header and never in the URL, and not at all when left
+  blank. Credential fields MUST NOT be named form fields, so a submission
+  without the page's script leaves them out. A credential the collector's configuration holds MUST be named by kind
   and its value MUST NOT appear on the page.
 - Both pages MUST be protected like `/probe` when the exporter's Basic
   Authentication is on (§ 42.5), since they list the collectors, MUST escape
-  what they show, MUST NOT be cached, and MUST lay out at phone width and
+  what they show, MUST NOT be cached, MUST NOT be framed by another site
+  (`X-Frame-Options: DENY` and a `Content-Security-Policy` with
+  `frame-ancestors 'none'`), since the collectors page takes credentials, and
+  MUST lay out at phone width and
   follow the browser's light or dark preference.
 
 - `/health`: process is alive. MUST answer `200` for as long as the process
@@ -2983,6 +2998,7 @@ Provide clear CLI flags, for example:
 --config.schema
 --config.collector-file-schema
 --probe.timeout-offset=500ms
+--probe.default-timeout=30s
 --web.enable-lifecycle
 --web.shutdown-timeout=5s
 --web.shutdown-delay=0s
@@ -4787,7 +4803,12 @@ See § 3.2a.
 - The budget stops a hung file read; without the header, and with a generous
   one, the probe succeeds.
 - A negative `--probe.timeout-offset` exits 2 with a JSON log line and nothing
-  on stdout, also with `--dry-run`.
+  on stdout, also with `--dry-run`; so does a negative
+  `--probe.default-timeout`.
+- A probe without the header or a `timeout` parameter to a target that never
+  answers fails with `502` after `--probe.default-timeout`, naming that flag.
+  The header takes precedence over the default; a `timeout` parameter, or a
+  default of 0, leaves the probe without the default.
 
 ## 34.55 Self-metric exposition and reload status tests
 
@@ -5294,8 +5315,10 @@ collector-scoped:
    the selected collector sets `request.forward_authorization: true`.
 3. The exporter MUST forward a `header_<Header-Name>` endpoint parameter to the
    target only when the selected collector lists that header in
-   `request.forward_headers`. The chart value that produces those parameters
-   is specified in [SPECIFICATION-CHART.md](SPECIFICATION-CHART.md) § 42.4.
+   `request.forward_headers`. An empty value MUST NOT be forwarded, as an
+   empty `param_<name>` counts as not given. The chart value that produces
+   those parameters is specified in
+   [SPECIFICATION-CHART.md](SPECIFICATION-CHART.md) § 42.4.
 4. The exporter MUST reject or ignore forwarding of transport and hop-by-hop
    headers, including `Host`, `Connection`, `Content-Length`, `Proxy-*`,
    `Transfer-Encoding`, `Trailer`, `Upgrade`, and `TE`. `Authorization` MUST

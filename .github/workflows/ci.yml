@@ -84,7 +84,7 @@ jobs:
         if: steps.changes.outputs.chart == 'true'
       - run: helm template test charts/prometheus-universal-exporter --set otlpTargets.enabled=true --set-file otlpTargets.data=configs/targets.example.yaml --set-file 'config.data.config\.yaml=configs/config.otlp.example.yaml'
         if: steps.changes.outputs.chart == 'true'
-      - run: helm template test charts/prometheus-universal-exporter --set server.logLevel=debug --set server.probeTimeoutOffset=1s
+      - run: helm template test charts/prometheus-universal-exporter --set server.logLevel=debug --set server.probeTimeoutOffset=1s --set server.probeDefaultTimeout=45s
         if: steps.changes.outputs.chart == 'true'
       - name: Render the shutdown delay and timeout, their grace period and the exporter credential Secret
         if: steps.changes.outputs.chart == 'true'
@@ -154,7 +154,7 @@ jobs:
               exit 1
             fi
           done
-          for bad in server.logLevel=verbose server.probeTimeoutOffset=-1s server.shutdownTimeout=500ms server.shutdownTimeout=0s server.shutdownDelay=500ms server.shutdownDelay=-1s terminationGracePeriodSeconds=10 webAuth.enabled=true; do
+          for bad in server.logLevel=verbose server.probeTimeoutOffset=-1s server.probeDefaultTimeout=-1s server.shutdownTimeout=500ms server.shutdownTimeout=0s server.shutdownDelay=500ms server.shutdownDelay=-1s terminationGracePeriodSeconds=10 webAuth.enabled=true; do
             if helm template test charts/prometheus-universal-exporter --set "$bad" >/dev/null 2>&1; then
               echo "helm template accepted $bad" >&2
               exit 1

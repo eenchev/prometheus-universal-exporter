@@ -555,6 +555,18 @@ func TestANegativeTimeoutOffsetIsACommandLineError(t *testing.T) {
 	}
 }
 
+func TestANegativeDefaultProbeTimeoutIsACommandLineError(t *testing.T) {
+	for _, args := range [][]string{
+		{"--probe.default-timeout=-1s"},
+		{"--dry-run", "--config.file=configs/config.example.yaml", "--probe.default-timeout=-1s"},
+	} {
+		out := runCLI(t, args...)
+		if out.code != 2 || !strings.Contains(out.stderr, "--probe.default-timeout must not be negative") || out.stdout != "" {
+			t.Fatalf("%v: exit=%d stderr=%s stdout=%s", args, out.code, out.stderr, out.stdout)
+		}
+	}
+}
+
 func TestTargetsFileSchemaFlagPrintsTheSchema(t *testing.T) {
 	out := runCLI(t, "--otlp.targets-file-schema")
 	generated, _ := config.TargetsSchemaJSON()

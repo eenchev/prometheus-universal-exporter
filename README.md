@@ -147,6 +147,7 @@ pattern needs. See the
 | `--config.collector-file-schema` | off | Print the JSON Schema of a collector file, for editors, and exit. See [Collector files](docs/CONFIGURATION.md#collector-files). |
 | `--otlp.targets-file-schema` | off | Print the JSON Schema of the scheduled target file, for editors, and exit. See [Scheduled targets](docs/OTLP.md#scheduled-targets). |
 | `--probe.timeout-offset` | `500ms` | How much of Prometheus's scrape timeout a probe leaves unused, so it answers with its own error first. See [Probe deadlines](docs/CONFIGURATION.md#probe-deadlines). |
+| `--probe.default-timeout` | `30s` | How long a probe may take when it names no deadline: no `X-Prometheus-Scrape-Timeout-Seconds` header and no `timeout` parameter, as from curl or a script. `0` leaves such a probe unbounded. See [Probe deadlines](docs/CONFIGURATION.md#probe-deadlines). |
 | `--web.shutdown-delay` | `0s` | How long a shutdown keeps serving, with `/ready` answering `503`, before it begins, so a load balancer stops sending probes first. The Helm chart sets `5s`. See [Shutting down](docs/CONFIGURATION.md#shutting-down). |
 | `--web.shutdown-timeout` | `5s` | How long a shutdown waits for the probes in progress. Keep it at least as long as Prometheus's scrape timeout. See [Shutting down](docs/CONFIGURATION.md#shutting-down). |
 | `--web.enable-lifecycle` | off | Enable `POST /-/reload`, which reloads the configuration and reports whether it was accepted. `SIGHUP` reloads either way. See [Reloading on demand](docs/CONFIGURATION.md#reloading-on-demand). |

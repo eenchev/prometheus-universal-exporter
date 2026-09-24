@@ -122,6 +122,11 @@
           "description": "Rendered as --probe.timeout-offset when set: how much of Prometheus's scrape timeout a probe leaves unused. Empty keeps the exporter's default, 500ms.",
           "pattern": "^$|^(0|([0-9]+(\\.[0-9]+)?(ns|us|ms|s|m|h))+)$"
         },
+        "probeDefaultTimeout": {
+          "type": "string",
+          "description": "Rendered as --probe.default-timeout when set: how long a probe that names no deadline may take. Empty keeps the exporter's default, 30s; 0 leaves such a probe unbounded.",
+          "pattern": "^$|^(0|([0-9]+(\\.[0-9]+)?(ns|us|ms|s|m|h))+)$"
+        },
         "shutdownTimeout": {
           "type": "string",
           "description": "Rendered as --web.shutdown-timeout when set: how long a stopping pod waits for the probes in progress. Whole hours, minutes and seconds, such as 30s or 1m30s. Empty keeps the exporter's default, 5s.",

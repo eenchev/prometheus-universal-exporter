@@ -69,7 +69,7 @@ helm-test:
 	helm template test charts/prometheus-universal-exporter --set server.expandEnv=true --set-json 'env=[{"name":"DEMO_TARGET","value":"http://api.internal:8080"}]' --set-json 'envFrom=[{"secretRef":{"name":"exporter-secrets"}}]'
 	helm template test charts/prometheus-universal-exporter --set otlpTargets.enabled=true --set-file otlpTargets.data=configs/targets.example.yaml --set-file 'config.data.config\.yaml=configs/config.otlp.example.yaml'
 	helm template test charts/prometheus-universal-exporter --set-json 'monitors=[{"name":"a","enabled":true,"type":"service","collector":"example","interval":"30s","scrapeTimeout":"10s"},{"name":"b","enabled":true,"type":"pod","collector":"example","interval":"30s","scrapeTimeout":"10s"}]' | python3 tools/check-manifests.py
-	helm template test charts/prometheus-universal-exporter --set server.logLevel=debug --set server.probeTimeoutOffset=1s
+	helm template test charts/prometheus-universal-exporter --set server.logLevel=debug --set server.probeTimeoutOffset=1s --set server.probeDefaultTimeout=45s
 	helm template test charts/prometheus-universal-exporter --set-json 'extraArgs=["--some.new-flag=value"]' --set-json 'extraVolumes=[{"name":"extra-collectors","configMap":{"name":"my-collectors"}}]' --set-json 'extraVolumeMounts=[{"name":"extra-collectors","mountPath":"/etc/collectors","readOnly":true}]'
 	@# Packaged into a temporary directory: a .tgz in the worktree is build
 	@# output, and the release workflow is what publishes one.
@@ -110,7 +110,7 @@ helm-test:
 			exit 1; \
 		fi; \
 	done
-	@for bad in server.logLevel=verbose server.probeTimeoutOffset=-1s; do \
+	@for bad in server.logLevel=verbose server.probeTimeoutOffset=-1s server.probeDefaultTimeout=-1s; do \
 		if helm template test charts/prometheus-universal-exporter --set "$$bad" >/dev/null 2>&1; then \
 			echo "helm template accepted $$bad" >&2; \
 			exit 1; \

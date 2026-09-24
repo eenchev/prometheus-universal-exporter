@@ -102,6 +102,21 @@ func TestForwardedHeadersAreExplicitAndAllowlisted(t *testing.T) {
 	}
 }
 
+// A header_ parameter left empty, as a blank field of the collectors page's
+// form sends it, is a header not given: it is not forwarded empty, and a
+// non-empty value beside it still is.
+func TestAnEmptyForwardedHeaderIsNotSent(t *testing.T) {
+	request := model.RequestConfig{Type: fetch.RequestTypeHTTP, ForwardHeaders: []string{"X-Tenant", "X-Region"}}
+	r := httptest.NewRequest(http.MethodGet, "/probe?header_X-Tenant=&header_X-Region=eu&header_X-Region=", nil)
+	forwarded := forwardedHeaders(r, request)
+	if _, sent := forwarded["X-Tenant"]; sent {
+		t.Fatalf("an empty header was forwarded: %v", forwarded)
+	}
+	if got := forwarded.Values("X-Region"); len(got) != 1 || got[0] != "eu" {
+		t.Fatalf("X-Region=%q, want only eu", got)
+	}
+}
+
 func TestExporterBasicAuthProtection(t *testing.T) {
 	cfg := &model.Config{
 		Collectors: []model.Collector{testutil.Collector("text", "text")},

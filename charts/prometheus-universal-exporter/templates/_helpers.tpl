@@ -17,6 +17,7 @@
   "--config.export-env" "set server.expandEnv instead"
   "--log.level" "set server.logLevel instead"
   "--probe.timeout-offset" "set server.probeTimeoutOffset instead"
+  "--probe.default-timeout" "set server.probeDefaultTimeout instead"
   "--web.enable-lifecycle" "set server.enableLifecycle instead"
   "--web.shutdown-timeout" "set server.shutdownTimeout instead"
   "--web.shutdown-delay" "set server.shutdownDelay instead" -}}
@@ -133,6 +134,16 @@ app.kubernetes.io/managed-by: {{ .Release.Service }}
 {{- fail (printf "server.probeTimeoutOffset %q must be a Go duration of zero or more, for example \"500ms\" or \"1s\"" $offset) -}}
 {{- end -}}
 {{- $offset -}}
+{{- end -}}
+{{- end }}
+{{- define "prometheus-universal-exporter.probeDefaultTimeout" -}}
+{{- /* Empty leaves the flag out, as for probeTimeoutOffset. */ -}}
+{{- $timeout := .Values.server.probeDefaultTimeout | default "" | toString -}}
+{{- if $timeout -}}
+{{- if not (regexMatch "^(0|([0-9]+(\\.[0-9]+)?(ns|us|ms|s|m|h))+)$" $timeout) -}}
+{{- fail (printf "server.probeDefaultTimeout %q must be a Go duration of zero or more, for example \"30s\" or \"1m\"; 0 leaves a probe without a deadline unbounded" $timeout) -}}
+{{- end -}}
+{{- $timeout -}}
 {{- end -}}
 {{- end }}
 {{- define "prometheus-universal-exporter.shutdownTimeout" -}}

@@ -28,10 +28,13 @@ type Server struct {
 	// timeoutOffset is how much of Prometheus's scrape timeout a probe leaves
 	// unused (scrapetimeout.go).
 	timeoutOffset time.Duration
-	statsMu       sync.Mutex
-	stats         map[string]*serverStats
-	otlpMu        sync.Mutex
-	otlpPending   map[string]*otlpBatch
+	// defaultProbeTimeout bounds a probe that names no deadline
+	// (scrapetimeout.go).
+	defaultProbeTimeout time.Duration
+	statsMu             sync.Mutex
+	stats               map[string]*serverStats
+	otlpMu              sync.Mutex
+	otlpPending         map[string]*otlpBatch
 	// otlpPoints counts the pending data points, and otlpSeq and
 	// otlpRequeueSeq order them by age for otlp.max_pending_points: queued
 	// points count up from 1, points queued again after a failed export count
@@ -64,7 +67,7 @@ type Server struct {
 // NewServer returns a server using the configuration m holds and running
 // Python scripts with the interpreter at p.
 func NewServer(m *config.Manager, p string, l *slog.Logger) *Server {
-	s := &Server{manager: m, pythonPath: p, logger: l, stats: map[string]*serverStats{}, otlpPending: map[string]*otlpBatch{}, cache: newResponseCache(), requests: newRequestTracker(), flights: newProbeFlights(), durations: newScrapeDurations(), trips: newTripLimiter(), otlp: &otlpStatus{}, failures: newFailureLog(), fingerprints: &fingerprintMemo{}, timeoutOffset: DefaultTimeoutOffset}
+	s := &Server{manager: m, pythonPath: p, logger: l, stats: map[string]*serverStats{}, otlpPending: map[string]*otlpBatch{}, cache: newResponseCache(), requests: newRequestTracker(), flights: newProbeFlights(), durations: newScrapeDurations(), trips: newTripLimiter(), otlp: &otlpStatus{}, failures: newFailureLog(), fingerprints: &fingerprintMemo{}, timeoutOffset: DefaultTimeoutOffset, defaultProbeTimeout: DefaultProbeTimeout}
 	s.seenConfig.Store(m.Get())
 	return s
 }
@@ -220,11 +223,12 @@ func (s *Server) probeHandler(w http.ResponseWriter, r *http.Request) {
 		}
 		rec.update(func(x *serverStats) { x.cacheMisses++ })
 	}
+	budget, budgetSource := s.probeDeadline(r.Header, overrides)
 	upstream := func(ctx context.Context) *probeResult {
 		return s.probeUpstream(ctx, upstreamProbe{
 			collector: c, target: target, logTarget: logTarget, overrides: overrides,
 			forwarded: forwarded, rec: rec, cacheKey: cacheKey,
-			budget: probeBudget(r.Header, s.timeoutOffset),
+			budget: budget, budgetSource: budgetSource,
 		})
 	}
 	if !coalesceProbes(c) {
@@ -256,8 +260,10 @@ type upstreamProbe struct {
 	forwarded http.Header
 	rec       statsRecorder
 	cacheKey  string
-	// budget bounds the trip when Prometheus said how long it will wait.
-	budget time.Duration
+	// budget bounds the trip (scrapetimeout.go); budgetSource says where it
+	// came from.
+	budget       time.Duration
+	budgetSource string
 }
 
 // probeUpstream goes to the target, decodes, transforms and validates, and
@@ -330,7 +336,7 @@ func (s *Server) probeTrip(ctx context.Context, p upstreamProbe) *probeResult {
 	}
 	result := s.collect(ctx, collectJob{
 		collector: c, target: p.target, overrides: p.overrides, headers: p.forwarded,
-		rec: rec, display: logTarget, cacheKey: p.cacheKey, budget: p.budget,
+		rec: rec, display: logTarget, cacheKey: p.cacheKey, budget: p.budget, budgetSource: p.budgetSource,
 		log: collectLog{
 			key:    failureKey(name, logTarget, ""),
 			failed: "probe failed", continuing: "probe stage failed; continuing", recovery: "probe recovered",
@@ -420,8 +426,12 @@ func forwardedHeaders(r *http.Request, request model.RequestConfig) http.Header 
 		if name == "" || !allowed[name] {
 			continue
 		}
+		// An empty value is left out, as an empty param_ value is: a form
+		// field left blank is a header not given, not one sent empty.
 		for _, value := range values {
-			out.Add(name, value)
+			if value != "" {
+				out.Add(name, value)
+			}
 		}
 	}
 	return out

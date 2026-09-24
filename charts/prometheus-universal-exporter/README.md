@@ -281,6 +281,7 @@ The exporter's own flags are chart values rather than something to assemble by h
 | `server.pythonPath` | `--python.path` | `/usr/local/bin/python3` |
 | `server.logLevel` | `--log.level` | `info` |
 | `server.probeTimeoutOffset` | `--probe.timeout-offset` | unset: the exporter's `500ms` |
+| `server.probeDefaultTimeout` | `--probe.default-timeout` | unset: the exporter's `30s` |
 | `server.shutdownTimeout` | `--web.shutdown-timeout` | unset: the exporter's `5s` |
 | `server.shutdownDelay` | `--web.shutdown-delay` | `5s` |
 | `server.watchConfig` / `server.watchConfigInterval` | `--config.watch` / `--config.watch-interval` | off / `60s` |
@@ -292,6 +293,8 @@ The exporter's own flags are chart values rather than something to assemble by h
 `server.listenAddress` sets the container port too, so the listener and the probes cannot drift apart. `server.pythonPath` is the interpreter used by the `python` transform; its default is where the exporter image's `python:3.12-slim` base installs Python, and it is worth overriding only for a custom image. `server.logLevel` is one of `debug`, `info`, `warn` and `error`, and anything else fails rendering.
 
 `server.probeTimeoutOffset` is how much of Prometheus's scrape timeout — a monitor's `scrapeTimeout` — a probe leaves unused, so a slow target or a hung file read is answered with the exporter's own error before Prometheus gives up (see [Probe deadlines](../../docs/CONFIGURATION.md#probe-deadlines)). It takes a Go duration of zero or more. Left empty, the flag is not rendered at all, so the exporter's default applies and an image older than the flag still starts; set it only with an image that has it.
+
+`server.probeDefaultTimeout` bounds a probe that names no deadline — no scrape timeout header and no `timeout` parameter, as from curl, a script or the exporter's collectors page with JavaScript off. Prometheus always sends a scrape timeout, so its scrapes are unaffected. It takes a Go duration of zero or more, `0` leaving such a probe unbounded, and like `probeTimeoutOffset` it is rendered only when set.
 
 ```sh
 helm install exporter charts/prometheus-universal-exporter \
@@ -590,7 +593,7 @@ Every value has a default, and `values.yaml` documents each one in place. `value
 | `service` | object | enabled, ClusterIP, 8080 | The exporter Service. |
 | `neg` | object | disabled | GKE Network Endpoint Group annotations on the Service. |
 | `ingress` | object | disabled | Class, hosts, paths, TLS and annotations. |
-| `server` | object | see [Exporter flags](#exporter-flags) | Exporter flags: `listenAddress`, `pythonPath`, `logLevel`, `probeTimeoutOffset`, `shutdownTimeout`, `shutdownDelay`, `enableLifecycle`, `watchConfig`, `watchConfigInterval`, `expandEnv`. |
+| `server` | object | see [Exporter flags](#exporter-flags) | Exporter flags: `listenAddress`, `pythonPath`, `logLevel`, `probeTimeoutOffset`, `probeDefaultTimeout`, `shutdownTimeout`, `shutdownDelay`, `enableLifecycle`, `watchConfig`, `watchConfigInterval`, `expandEnv`. |
 | `terminationGracePeriodSeconds` | integer | unset | The pod's grace period; see [Shutting down](#shutting-down). |
 | `env` / `envFrom` | array | `[]` | Container environment, in the Kubernetes shapes. |
 | `extraArgs` | array | `[]` | Extra command-line flags. |

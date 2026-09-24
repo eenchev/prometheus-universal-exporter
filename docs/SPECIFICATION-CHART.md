@@ -311,6 +311,7 @@ values schema:
 | `server.pythonPath` | `--python.path` |
 | `server.logLevel` | `--log.level`, one of `debug`, `info`, `warn`, `error`; default `info` |
 | `server.probeTimeoutOffset` | `--probe.timeout-offset`, a Go duration of zero or more |
+| `server.probeDefaultTimeout` | `--probe.default-timeout`, a Go duration of zero or more |
 | `server.shutdownTimeout` | `--web.shutdown-timeout`, whole hours, minutes and seconds such as `30s` or `1m30s`, positive |
 | `server.shutdownDelay` | `--web.shutdown-delay`, whole hours, minutes and seconds such as `5s`, `0s` allowed; default `5s`, and empty renders no flag |
 | `server.enableLifecycle` | `--web.enable-lifecycle`, rendered only when `true`; default `false` |
@@ -319,7 +320,7 @@ values schema:
 | `otlpTargets.enabled` | `--otlp.targets-file` |
 
 An invalid value MUST fail rendering and be refused by the values schema.
-`server.probeTimeoutOffset` and `server.shutdownTimeout` MUST default to empty
+`server.probeTimeoutOffset`, `server.probeDefaultTimeout` and `server.shutdownTimeout` MUST default to empty
 and, while empty, MUST NOT render their flags at all, so the exporter's own default applies and an image
 older than the flag still starts. A test MUST fail when the exporter has a flag
 the chart neither renders nor refuses as one-shot (§ 33.10a).
@@ -560,10 +561,11 @@ with at least these values combinations:
    host, renders as valid YAML and then makes the container exit immediately
    with "missing port in address", so it MUST be rejected while rendering rather
    than at run time. A port outside 1-65535 MUST be rejected too.
-   `server.logLevel` and `server.probeTimeoutOffset` set MUST render
-   `--log.level` and `--probe.timeout-offset`; an unknown level and a negative
-   offset MUST fail rendering; the default MUST render `--log.level=info` and
-   no `--probe.timeout-offset`.
+   `server.logLevel`, `server.probeTimeoutOffset` and
+   `server.probeDefaultTimeout` set MUST render `--log.level`,
+   `--probe.timeout-offset` and `--probe.default-timeout`; an unknown level
+   and a negative offset or default timeout MUST fail rendering; the default
+   MUST render `--log.level=info` and neither timeout flag.
 9a. Scheduled targets enabled, which MUST add the `--otlp.targets-file`
    argument and render the target document into the exporter ConfigMap. When
    the chart manages the configuration, enabling scheduled targets without

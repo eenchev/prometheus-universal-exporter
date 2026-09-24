@@ -117,8 +117,9 @@ The expression and label values are interpreted by the selected transform:
   labels map to capture-group numbers or names.
 - `csv`: the expression is the numeric column name and labels map to column
   names.
-- `css`: the expression selects HTML nodes whose text is numeric; labels are
-  selectors relative to each selected node.
+- `css`: the expression selects HTML elements whose text is numeric; labels are
+  selectors within each selected element. For tables, select the rows with
+  [`items`](#metrics-per-item) and the value and the labels as cells of each row.
 - `xpath`: the expression selects XML/HTML nodes whose text is numeric; labels
   are relative XPath expressions or `@attribute` selectors.
 - `prometheus`: the expression matches source metric names; it can remap the
@@ -143,6 +144,30 @@ labels:
 Label expressions use the same transform-specific language as the metric
 expression. For CSV, each row produces a metric and `expression: server`
 selects that row's `server` column.
+
+A label expression that gives a series no value — a selector or path that
+matches nothing, a missing attribute, column or capture group, a null — leaves
+the label off that series, as does an empty value, which Prometheus treats the
+same way. When a series is wrong without the label, mark it `required`:
+
+```yaml
+labels:
+  - name: server
+    type: expression
+    expression: td.name
+    required: true    # a row without a name is an error, not an unlabelled series
+```
+
+A series missing a required label is a missing value of its metric, handled by
+the metric's [`error_mode`](#when-a-metric-cannot-be-extracted): `ignore` and
+`log` drop that one series and keep the rest, `fail` fails the probe with an
+error naming the label. It is counted in `http_exporter_missing_keys_total`,
+and applies whatever `required` and `error_handling.allow_missing_keys` say
+about the value. Without `items`, jq pairs label values with series by
+position, so a required label must give one value, applied to every series, or
+exactly one per series; any other count fails the metric rather than put labels
+on the wrong series. `required` applies to `type: expression` labels, and not
+to the python transform, whose labels come from its script.
 
 ### Prefixing a collector's metrics
 
@@ -275,6 +300,30 @@ missing or null for one item is that item's missing metric, handled by
 the rest. `items` selecting nothing is a missing metric when the metric is
 required, and produces nothing when it is not. `$root` works without `items`
 too, where it is the same document as `.`.
+
+The `css` transform takes `items` too, for HTML tables and lists: `items`
+selects the rows, and the expression and each label are selectors within one
+row. Without it, the value is the whole text of each element the expression
+selects, and a label selector looks inside that element, so a label could only
+read text that is part of the number.
+
+```yaml
+transform:
+  type: css
+metrics:
+  - name: server_cpu
+    items: '#servers tr:has(td)'   # the rows with cells, not the header row
+    expression: td:nth-child(2)
+    labels:
+      - name: server
+        type: expression
+        expression: td:nth-child(1)
+```
+
+The rules are the same as for jq: within a row, the value and each label
+selector must match at most one element, a row without the value cell is that
+row's missing metric, and a label selector matching nothing leaves the label
+off.
 
 ### Long label values
 

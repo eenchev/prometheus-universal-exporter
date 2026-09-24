@@ -1547,7 +1547,8 @@ vocabulary as `error_handling` (§ 19). `warn`, the older spelling of `log` in
 (§ 19). Any other value MUST be rejected at startup and on reload, and the
 message MUST list the accepted values. It governs what happens when an individual metric cannot be
 extracted — its expression or a label expression errors, its value is absent
-while the metric is required, or its value is not a number:
+while the metric is required, a required label is absent (§ 18.1), or its
+value is not a number:
 
 - `ignore` MUST skip that metric without logging and carry on. The probe MUST
   serve every metric that could be extracted; when none could, it MUST succeed
@@ -1629,12 +1630,26 @@ shortened value would surprise. Truncation MUST apply to the labels of declared
 metrics from every transform, and MUST happen before `metrics_prefix` (§ 5.0a)
 is added.
 
+An expression label that gives a series no value — a selector or path matching
+nothing, a missing attribute, column, capture group or source label, a null —
+or an empty value MUST be left off that series, in every transform, so the
+text exposition and OTLP agree. A label of `type: expression` MAY set
+`required: true`. A series missing a required label MUST then be a missing
+value of its metric: handled by the metric's `error_mode`, where `ignore` and
+`log` drop that series alone and `fail` fails the scrape with an error naming
+the label, counted as a missing key, and regardless of the metric's `required`
+and `error_handling.allow_missing_keys`. For jq without `items`, where label
+values pair with series by position, a required label giving neither one value
+nor one per series MUST fail the metric. `required` on a `type: string` label,
+or on a label of the python transform, MUST be rejected at startup.
+
 Python transforms are the exception: their script emits the common metric
 objects through `metric(...)`, so a `metrics` array is optional for them.
 
 ## 18.2 Metrics per item
 
-For the `jq` and `yq` transforms a metric MAY set `items`, a jq expression
+For the `jq`, `yq` and `css` transforms a metric MAY set `items`. For `jq` and
+`yq` it is a jq expression
 selecting the things the metric is about. The value expression and every label
 expression MUST then be evaluated once per item, with the item as `.` and the
 whole document as `$root`, instead of as parallel streams over the whole
@@ -1660,10 +1675,20 @@ For one item, the value expression and each label expression MUST produce at
 most one value; more MUST be an error naming the expression. A missing or null
 value MUST be that item's missing metric, handled by `required` and `error_mode`
 as for any other metric, and the other items MUST be unaffected under `ignore`
-and `log`. A missing or null label MUST leave that label off the series. An
+and `log`. A missing or null label MUST leave that label off the series,
+unless it is required (§ 18.1). An
 `items` expression that selects nothing MUST be a missing metric when the metric
-is required and produce nothing otherwise. `items` on any other transform MUST
-be rejected at startup.
+is required and produce nothing otherwise.
+
+For `css`, `items` is a CSS selector choosing the elements the metric is
+about, typically table rows, and the value expression and every label
+expression MUST be CSS selectors matched within one item at a time. Within an
+item each MUST match at most one element, the rest of this section applying as
+for jq: a value selector matching nothing is that item's missing metric, and a
+label selector matching nothing leaves the label off. Without `items`, the
+value is the text of each element the expression selects and label selectors
+are matched within that element. `items` on any other transform MUST be
+rejected at startup.
 
 Every transform MAY define one `transform.pre_script`. The exporter MUST run
 it exactly once per scrape, after decoding and before evaluating the metric
@@ -2674,7 +2699,8 @@ collectors:
         description: Server CPU utilization
         type: gauge
         error_mode: log
-        expression: '#servers tr'
+        items: '#servers tr:has(td)'
+        expression: 'td:nth-child(2)'
         labels:
           - name: server
             type: expression
@@ -4274,8 +4300,9 @@ status captured:
 - A jq expression with a syntax error, an undefined function or an undefined
   variable; a jq label or `items` expression; a regex; a regex label naming a
   capture group the regex lacks, by name or by number; a CSS selector and a CSS
-  label selector; an XPath expression and an XPath label; a prometheus pattern;
-  and `items` on a non-jq transform are each rejected naming the collector, the
+  label selector and a CSS `items` selector; an XPath expression and an XPath
+  label; a prometheus pattern; and `items` on a transform other than jq, yq and
+  css are each rejected naming the collector, the
   rule and the label. Named and numbered captures, `@attribute` labels,
   namespaced XPath and `$root` pass.
 - A prometheus transform's invalid `include` and `exclude` patterns, `rename`
@@ -4307,6 +4334,10 @@ status captured:
 - `items` selecting nothing is a missing metric when required and nothing
   otherwise.
 - Without `items`, `$root` is the whole document.
+- With `css`, `items` selecting table rows gives one series per row, its value
+  and labels read from that row's cells; a header row is left out with
+  `:has(td)`, a row without the value cell is that row's missing metric, and a
+  selector matching two elements in one row is an error.
 
 ## 34.46 Label truncation tests
 

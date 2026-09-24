@@ -256,3 +256,27 @@ func TestConfigReloadRejectsAPreScriptThatDoesNotProduceData(t *testing.T) {
 		t.Fatalf("a valid reload should take effect, got %q", got)
 	}
 }
+
+// required is for labels an expression fills: a fixed value is always there,
+// and a python transform's labels come from its script.
+func TestRequiredLabelsNeedAnExpression(t *testing.T) {
+	fixed := testutil.Collector("fixed", "text")
+	fixed.Metrics[0].Labels = []model.LabelRule{{Name: "env", Type: "string", Value: "prod", Required: true}}
+	if err := Validate(&model.Config{Collectors: []model.Collector{fixed}}); err == nil || !strings.Contains(err.Error(), `label "env" of type string cannot be required`) {
+		t.Fatalf("err=%v", err)
+	}
+
+	script := testutil.Collector("script", "text")
+	script.Transform = model.TransformConfig{Type: "python", Script: `metric(name="v", value=1)`}
+	script.Metrics = []model.MetricRule{{Name: "v", Type: model.GaugeMetricType, Labels: []model.LabelRule{{Name: "who", Type: "expression", Expression: "who", Required: true}}}}
+	if err := Validate(&model.Config{Collectors: []model.Collector{script}}); err == nil || !strings.Contains(err.Error(), "a python transform's labels come from its script") {
+		t.Fatalf("err=%v", err)
+	}
+
+	expression := testutil.Collector("expression", "text")
+	expression.Metrics[0].Expression = `v=(\d+) (?P<who>\S+)`
+	expression.Metrics[0].Labels = []model.LabelRule{{Name: "who", Type: "expression", Expression: "who", Required: true}}
+	if err := Validate(&model.Config{Collectors: []model.Collector{expression}}); err != nil {
+		t.Fatal(err)
+	}
+}

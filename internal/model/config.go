@@ -255,9 +255,9 @@ type Limits struct {
 // that produces its value and the labels it carries.
 type MetricRule struct {
 	Name string `yaml:"name"`
-	// Items, for the jq and yq transforms, selects the things the metric is
-	// about; the expression and the labels are then evaluated once per item.
-	// See transformJQItems.
+	// Items, for the jq, yq and css transforms, selects the things the metric
+	// is about; the expression and the labels are then evaluated once per
+	// item. See transformJQItems and transformCSSItems.
 	Items       string      `yaml:"items"`
 	Description string      `yaml:"description"`
 	Type        MetricType  `yaml:"type"`
@@ -290,6 +290,10 @@ type LabelRule struct {
 	// Truncate cuts a value longer than limits.max_label_value_length to fit,
 	// instead of failing the scrape. See truncateLabelValue.
 	Truncate bool `yaml:"truncate"`
+	// Required makes a series whose expression gives this label no value, or
+	// an empty one, a failure of the metric rule, handled by its error_mode.
+	// Unset, such a series is exported without the label.
+	Required bool `yaml:"required"`
 }
 
 // TransformConfig is a collector's transform block: the language its

@@ -208,26 +208,16 @@ func validateMetricRules(c *model.Config, x *model.Collector) error {
 			if !namePattern.MatchString(label.Name) {
 				return fmt.Errorf("collector %q metric %q has invalid label name %q", x.Name, r.Name, label.Name)
 			}
-			switch label.Type {
-			case "string":
-				if label.Expression != "" {
-					return fmt.Errorf("collector %q metric %q label %q of type string cannot set expression", x.Name, r.Name, label.Name)
-				}
-				if label.Required {
-					return fmt.Errorf("collector %q metric %q label %q of type string cannot be required; its value is always there", x.Name, r.Name, label.Name)
-				}
-			case "expression":
-				if strings.TrimSpace(label.Expression) == "" {
-					return fmt.Errorf("collector %q metric %q label %q of type expression requires expression", x.Name, r.Name, label.Name)
-				}
-				if label.Value != "" {
-					return fmt.Errorf("collector %q metric %q label %q of type expression cannot set value", x.Name, r.Name, label.Name)
-				}
-				if label.Required && x.Transform.Type == "python" {
-					return fmt.Errorf("collector %q metric %q label %q cannot be required: a python transform's labels come from its script, not from label expressions", x.Name, r.Name, label.Name)
-				}
-			default:
-				return fmt.Errorf("collector %q metric %q label %q has invalid type %q; want string or expression", x.Name, r.Name, label.Name, label.Type)
+			hasValue, hasExpression := label.Value != "", strings.TrimSpace(label.Expression) != ""
+			switch {
+			case hasValue && hasExpression:
+				return fmt.Errorf("collector %q metric %q label %q sets both value and expression; set value for a static label, or expression to read it from the response", x.Name, r.Name, label.Name)
+			case !hasValue && !hasExpression:
+				return fmt.Errorf("collector %q metric %q label %q needs a value, for a static label, or an expression, to read it from the response", x.Name, r.Name, label.Name)
+			case hasValue && label.Required:
+				return fmt.Errorf("collector %q metric %q label %q has a static value, so it cannot be required; its value is always there", x.Name, r.Name, label.Name)
+			case label.Required && x.Transform.Type == "python":
+				return fmt.Errorf("collector %q metric %q label %q cannot be required: a python transform's labels come from its script, not from label expressions", x.Name, r.Name, label.Name)
 			}
 		}
 		if err := transform.CheckMetricRule(x, r); err != nil {

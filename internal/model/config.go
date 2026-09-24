@@ -280,11 +280,11 @@ const (
 	ErrorModeFail = "fail"
 )
 
-// LabelRule is one label of a metric rule: a fixed value, or one an
-// expression produces.
+// LabelRule is one label of a metric rule. It sets exactly one of Value, a
+// static value exported as written, and Expression, evaluated against the
+// response in the collector's transform language.
 type LabelRule struct {
 	Name       string `yaml:"name"`
-	Type       string `yaml:"type"`
 	Value      string `yaml:"value"`
 	Expression string `yaml:"expression"`
 	// Truncate cuts a value longer than limits.max_label_value_length to fit,
@@ -295,6 +295,10 @@ type LabelRule struct {
 	// Unset, such a series is exported without the label.
 	Required bool `yaml:"required"`
 }
+
+// Static reports whether the label has a static value rather than an
+// expression.
+func (l LabelRule) Static() bool { return l.Expression == "" }
 
 // TransformConfig is a collector's transform block: the language its
 // expressions are written in, the scripts, and the renaming and filtering

@@ -52,7 +52,7 @@ func TestHTMLCSSTableValues(t *testing.T) {
 		Name:      "html_css",
 		Response:  model.ResponseConfig{Format: "html"},
 		Transform: model.TransformConfig{Type: "css"},
-		Metrics:   []model.MetricRule{{Name: "server_cpu", Type: model.GaugeMetricType, Expression: "#servers td:nth-child(2)", Labels: []model.LabelRule{{Name: "environment", Type: "string", Value: "production"}}}},
+		Metrics:   []model.MetricRule{{Name: "server_cpu", Type: model.GaugeMetricType, Expression: "#servers td:nth-child(2)", Labels: []model.LabelRule{{Name: "environment", Value: "production"}}}},
 		Limits:    model.Limits{MaxMetrics: 10},
 	}
 	r := &fetch.HTTPResponse{Body: body, Headers: http.Header{"Content-Type": []string{"text/html"}}}
@@ -82,7 +82,7 @@ func TestHTMLXPathTableValuesAndLabels(t *testing.T) {
 			Name:       "server_cpu",
 			Type:       model.GaugeMetricType,
 			Expression: `//table[@id='servers']//tr/td[2]`,
-			Labels:     []model.LabelRule{{Name: "server", Type: "expression", Expression: "preceding-sibling::td[1]"}},
+			Labels:     []model.LabelRule{{Name: "server", Expression: "preceding-sibling::td[1]"}},
 		}},
 		Limits: model.Limits{MaxMetrics: 10},
 	}
@@ -114,7 +114,7 @@ func TestPrometheusInputFilteringAndRelabeling(t *testing.T) {
 			Description: "Application requests",
 			Type:        model.CounterMetricType,
 			Expression:  `^vendor_requests_total$`,
-			Labels:      []model.LabelRule{{Name: "component", Type: "expression", Expression: "service"}},
+			Labels:      []model.LabelRule{{Name: "component", Expression: "service"}},
 		}},
 		Limits: model.Limits{MaxMetrics: 10},
 	}

@@ -102,7 +102,6 @@ collectors:
         expression: .requests
         labels:
           - name: environment
-            type: expression
             expression: .environment
 
   # Set targetAuth.enabled=true in the Helm chart and store the token in the
@@ -143,7 +142,6 @@ collectors:
         expression: cpu
         labels:
           - name: server
-            type: expression
             expression: server
 
   - name: vendor_prometheus
@@ -182,7 +180,6 @@ collectors:
         expression: .workers[].cpu
         labels:
           - name: worker
-            type: expression
             expression: .workers[].name
 
   # Reserve the Python transform for collectors whose metric names are not known

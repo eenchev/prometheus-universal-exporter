@@ -139,7 +139,7 @@ func checkMetricName(name string) error {
 func expressionLabels(r *model.MetricRule) []model.LabelRule {
 	var out []model.LabelRule
 	for _, label := range r.Labels {
-		if label.Type == "expression" {
+		if !label.Static() {
 			out = append(out, label)
 		}
 	}

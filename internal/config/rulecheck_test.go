@@ -40,7 +40,7 @@ func quote(s string) string { return `"` + strings.ReplaceAll(s, `"`, `\"`) + `"
 // names the collector, the metric and, for a label, the label.
 func TestExpressionsAreCompiledAtLoad(t *testing.T) {
 	label := func(expression string) []model.LabelRule {
-		return []model.LabelRule{{Name: "l", Type: "expression", Expression: expression}}
+		return []model.LabelRule{{Name: "l", Expression: expression}}
 	}
 	tests := []struct {
 		name      string
@@ -79,11 +79,11 @@ func TestExpressionsAreCompiledAtLoad(t *testing.T) {
 // labels, and XPath with namespaces.
 func TestValidExpressionsPass(t *testing.T) {
 	for name, c := range map[string]model.Collector{
-		"regex named":     ruleCollector("regex", model.MetricRule{Name: "m", Type: model.GaugeMetricType, Expression: `(?P<server>\w+)=(\d+)`, Labels: []model.LabelRule{{Name: "s", Type: "expression", Expression: "server"}}}),
-		"regex numbered":  ruleCollector("regex", model.MetricRule{Name: "m", Type: model.GaugeMetricType, Expression: `(\w+)=(\d+)`, Labels: []model.LabelRule{{Name: "s", Type: "expression", Expression: "1"}}}),
-		"xpath attribute": ruleCollector("xpath", model.MetricRule{Name: "m", Type: model.GaugeMetricType, Expression: "//item", Labels: []model.LabelRule{{Name: "s", Type: "expression", Expression: "@name"}}}),
-		"css":             ruleCollector("css", model.MetricRule{Name: "m", Type: model.GaugeMetricType, Expression: "table#servers td.cpu", Labels: []model.LabelRule{{Name: "s", Type: "expression", Expression: "td:first-child"}}}),
-		"jq with $root":   ruleCollector("jq", model.MetricRule{Name: "m", Type: model.GaugeMetricType, Items: ".rows[]", Expression: ".v", Labels: []model.LabelRule{{Name: "s", Type: "expression", Expression: "$root.site"}}}),
+		"regex named":     ruleCollector("regex", model.MetricRule{Name: "m", Type: model.GaugeMetricType, Expression: `(?P<server>\w+)=(\d+)`, Labels: []model.LabelRule{{Name: "s", Expression: "server"}}}),
+		"regex numbered":  ruleCollector("regex", model.MetricRule{Name: "m", Type: model.GaugeMetricType, Expression: `(\w+)=(\d+)`, Labels: []model.LabelRule{{Name: "s", Expression: "1"}}}),
+		"xpath attribute": ruleCollector("xpath", model.MetricRule{Name: "m", Type: model.GaugeMetricType, Expression: "//item", Labels: []model.LabelRule{{Name: "s", Expression: "@name"}}}),
+		"css":             ruleCollector("css", model.MetricRule{Name: "m", Type: model.GaugeMetricType, Expression: "table#servers td.cpu", Labels: []model.LabelRule{{Name: "s", Expression: "td:first-child"}}}),
+		"jq with $root":   ruleCollector("jq", model.MetricRule{Name: "m", Type: model.GaugeMetricType, Items: ".rows[]", Expression: ".v", Labels: []model.LabelRule{{Name: "s", Expression: "$root.site"}}}),
 	} {
 		if err := validateOne(c); err != nil {
 			t.Errorf("%s: %v", name, err)

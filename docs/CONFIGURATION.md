@@ -106,7 +106,6 @@ collectors:
         expression: .requests
         labels:
           - name: environment
-            type: expression
             expression: .environment
 ```
 
@@ -128,18 +127,19 @@ The expression and label values are interpreted by the selected transform:
 CSS remains available specifically for HTML tables and HTML status pages; it is
 not used for CSV.
 
-Metric labels are explicit typed entries. Use `type: expression` when the
-value comes from the response, or `type: string` with `value` for a literal:
+Each label sets one of two keys. `expression` reads the label from the
+response, and `value` gives a static label, exported exactly as written:
 
 ```yaml
 labels:
   - name: server
-    type: expression
     expression: server       # CSV column for the current row
   - name: environment
-    type: string
-    value: production
+    value: production        # static, on this metric only
 ```
+
+A label setting both, or neither, is refused at startup. For a static label on
+every metric of a collector, use `transform.labels` instead.
 
 Label expressions use the same transform-specific language as the metric
 expression. For CSV, each row produces a metric and `expression: server`
@@ -153,7 +153,6 @@ same way. When a series is wrong without the label, mark it `required`:
 ```yaml
 labels:
   - name: server
-    type: expression
     expression: td.name
     required: true    # a row without a name is an error, not an unlabelled series
 ```
@@ -166,8 +165,8 @@ and applies whatever `required` and `error_handling.allow_missing_keys` say
 about the value. Without `items`, jq pairs label values with series by
 position, so a required label must give one value, applied to every series, or
 exactly one per series; any other count fails the metric rather than put labels
-on the wrong series. `required` applies to `type: expression` labels, and not
-to the python transform, whose labels come from its script.
+on the wrong series. `required` applies to `expression` labels, and not to
+the python transform, whose labels come from its script.
 
 ### Prefixing a collector's metrics
 
@@ -277,10 +276,8 @@ metrics:
     expression: .cpu
     labels:
       - name: server
-        type: expression
         expression: .name
       - name: site
-        type: expression
         expression: $root.site
 ```
 
@@ -316,7 +313,6 @@ metrics:
     expression: td:nth-child(2)
     labels:
       - name: server
-        type: expression
         expression: td:nth-child(1)
 ```
 
@@ -335,7 +331,6 @@ can ask to be cut instead:
 ```yaml
 labels:
   - name: message
-    type: expression
     expression: .latest_update
     truncate: true
 ```
@@ -358,10 +353,8 @@ has a status:
   expression: 1
   labels:
     - name: component
-      type: expression
       expression: .name
     - name: status
-      type: expression
       expression: .status
 ```
 
@@ -406,7 +399,6 @@ series distinct. The group is found through `$root`:
 
 ```yaml
 - name: group
-  type: expression
   expression: '.group_id as $id | first($root.components[] | select(.id == $id)) | .name'
 ```
 
@@ -416,7 +408,6 @@ jq's `capture`:
 
 ```yaml
 - name: cloud_zone
-  type: expression
   expression: 'first(.name | capture("^(?<provider>AWS|Azure|GCP|GCS) (?<location>.+?)(?: - | )(?<zone>[a-z][a-z0-9-]*[0-9])(?::|$)")) | .zone'
 ```
 

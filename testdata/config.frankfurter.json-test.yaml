@@ -85,10 +85,8 @@ collectors:
         expression: .rates[] | .rate
         labels:
           - name: currency
-            type: expression
             expression: .rates[] | .currency
           - name: base
-            type: expression
             expression: .base
 
       - name: exchange_rate_inverse
@@ -98,10 +96,8 @@ collectors:
         expression: .rates[] | .inverse
         labels:
           - name: currency
-            type: expression
             expression: .rates[] | .currency
           - name: base
-            type: expression
             expression: .base
 
       - name: exchange_rate_observation_timestamp_seconds
@@ -112,5 +108,4 @@ collectors:
         expression: .observed_at
         labels:
           - name: base
-            type: expression
             expression: .base

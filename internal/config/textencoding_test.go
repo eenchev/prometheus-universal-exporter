@@ -65,7 +65,7 @@ func regexCollector(name string) model.Collector {
 		Name:      name,
 		Request:   model.RequestConfig{Type: fetch.RequestTypeHTTP},
 		Transform: model.TransformConfig{Type: "regex"},
-		Metrics:   []model.MetricRule{{Name: "v", Type: model.GaugeMetricType, Expression: `v=(\d+) (?P<who>\S+)`, Labels: []model.LabelRule{{Name: "who", Type: "expression", Expression: "who"}}}},
+		Metrics:   []model.MetricRule{{Name: "v", Type: model.GaugeMetricType, Expression: `v=(\d+) (?P<who>\S+)`, Labels: []model.LabelRule{{Name: "who", Expression: "who"}}}},
 	}
 }
 
@@ -111,7 +111,7 @@ func TestResponseCharsetOverridesTheTarget(t *testing.T) {
 
 // A byte order mark wins, and is removed.
 func TestByteOrderMarks(t *testing.T) {
-	c := model.Collector{Name: "json", Request: model.RequestConfig{Type: fetch.RequestTypeHTTP}, Transform: model.TransformConfig{Type: "jq"}, Metrics: []model.MetricRule{{Name: "v", Type: model.GaugeMetricType, Expression: ".v", Labels: []model.LabelRule{{Name: "who", Type: "expression", Expression: ".who"}}}}}
+	c := model.Collector{Name: "json", Request: model.RequestConfig{Type: fetch.RequestTypeHTTP}, Transform: model.TransformConfig{Type: "jq"}, Metrics: []model.MetricRule{{Name: "v", Type: model.GaugeMetricType, Expression: ".v", Labels: []model.LabelRule{{Name: "who", Expression: ".who"}}}}}
 	doc := `{"v": 2, "who": "Zoë"}`
 	utf16le, err := unicode.UTF16(unicode.LittleEndian, unicode.UseBOM).NewEncoder().Bytes([]byte(doc))
 	if err != nil {

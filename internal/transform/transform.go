@@ -363,7 +363,7 @@ func transformJQItems(ctx context.Context, data any, rule model.MetricRule, c *m
 		labels := map[string]string{}
 		var labelErr error
 		for _, label := range rule.Labels {
-			if label.Type == "string" {
+			if label.Static() {
 				labels[label.Name] = label.Value
 				continue
 			}
@@ -437,7 +437,7 @@ func evaluateLabels(ctx context.Context, data any, expressions []model.LabelRule
 		labels[index] = map[string]string{}
 	}
 	for _, label := range expressions {
-		if label.Type == "string" {
+		if label.Static() {
 			for index := range labels {
 				labels[index][label.Name] = label.Value
 			}
@@ -478,7 +478,7 @@ func evaluateLabels(ctx context.Context, data any, expressions []model.LabelRule
 // one and the rule's error_mode decides what happens to the series.
 func missingRequiredLabel(rule model.MetricRule, labels map[string]string) error {
 	for _, label := range rule.Labels {
-		if label.Type != "string" && labels[label.Name] == "" {
+		if !label.Static() && labels[label.Name] == "" {
 			delete(labels, label.Name)
 		}
 	}
@@ -538,7 +538,7 @@ func transformRegex(text string, rules []model.MetricRule, c *model.Collector) (
 			}
 			labels := map[string]string{}
 			for _, label := range rule.Labels {
-				if label.Type == "string" {
+				if label.Static() {
 					labels[label.Name] = label.Value
 					continue
 				}
@@ -644,7 +644,7 @@ func transformXPathNodes[N any](root N, nodes xpathNodes[N], rules []model.Metri
 		for _, node := range selected {
 			labels := map[string]string{}
 			for _, label := range rule.Labels {
-				if label.Type == "string" {
+				if label.Static() {
 					labels[label.Name] = label.Value
 				} else if strings.HasPrefix(label.Expression, "@") {
 					labels[label.Name] = nodes.attr(node, strings.TrimPrefix(label.Expression, "@"))
@@ -714,7 +714,7 @@ func transformCSS(doc *goquery.Document, rules []model.MetricRule, c *model.Coll
 			}
 			labels := map[string]string{}
 			for _, label := range rule.Labels {
-				if label.Type == "string" {
+				if label.Static() {
 					labels[label.Name] = label.Value
 				} else if selector, err := expr.CompileCSS(label.Expression); err == nil {
 					labels[label.Name] = strings.TrimSpace(node.FindMatcher(selector).First().Text())
@@ -812,7 +812,7 @@ func transformCSSItems(doc *goquery.Document, rule model.MetricRule, c *model.Co
 			if err != nil {
 				break
 			}
-			if label.Type == "string" {
+			if label.Static() {
 				labels[label.Name] = label.Value
 				continue
 			}
@@ -874,7 +874,7 @@ func transformCSV(data any, rules []model.MetricRule, c *model.Collector) (*mode
 			}
 			labels := map[string]string{}
 			for _, label := range rule.Labels {
-				if label.Type == "string" {
+				if label.Static() {
 					labels[label.Name] = label.Value
 				} else if labelValue, exists := row[label.Expression]; exists {
 					labels[label.Name] = fmt.Sprint(labelValue)
@@ -925,7 +925,7 @@ func applyPrometheusTransform(in model.MetricSet, c *model.Collector, t model.Tr
 				// them, and another rule may match the same source metric.
 				metric.Labels = model.CloneLabels(source.Labels)
 				for _, label := range rule.Labels {
-					if label.Type == "string" {
+					if label.Static() {
 						metric.Labels[label.Name] = label.Value
 					} else if value, ok := metric.Labels[label.Expression]; ok {
 						metric.Labels[label.Name] = value

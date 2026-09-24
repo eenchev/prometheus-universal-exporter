@@ -217,8 +217,23 @@
                 "labels": {
                   "items": {
                     "additionalProperties": false,
+                    "description": "Set value for a static label, or expression to read it from the response.",
+                    "oneOf": [
+                      {
+                        "required": [
+                          "value"
+                        ]
+                      },
+                      {
+                        "required": [
+                          "expression"
+                        ]
+                      }
+                    ],
                     "properties": {
                       "expression": {
+                        "description": "Reads the label from the response, in the transform's language, like the metric's expression.",
+                        "minLength": 1,
                         "type": [
                           "string",
                           "number",
@@ -237,15 +252,9 @@
                         "description": "Cut a value longer than limits.max_label_value_length to fit, ending in …, instead of failing the scrape.",
                         "type": "boolean"
                       },
-                      "type": {
-                        "description": "string for a literal value, expression for a value from the response.",
-                        "enum": [
-                          "string",
-                          "expression"
-                        ],
-                        "type": "string"
-                      },
                       "value": {
+                        "description": "A static label value, exported as written.",
+                        "minLength": 1,
                         "type": [
                           "string",
                           "number",
@@ -253,6 +262,9 @@
                         ]
                       }
                     },
+                    "required": [
+                      "name"
+                    ],
                     "type": "object"
                   },
                   "type": "array"

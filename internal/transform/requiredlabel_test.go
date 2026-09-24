@@ -156,7 +156,7 @@ func whoValues(set *model.MetricSet) string {
 func TestAnOptionalLabelWithoutAValueIsLeftOff(t *testing.T) {
 	for _, test := range labelCases() {
 		t.Run(test.name, func(t *testing.T) {
-			set, err := runLabelCase(t, test, model.LabelRule{Name: "who", Type: "expression"}, model.ErrorModeFail)
+			set, err := runLabelCase(t, test, model.LabelRule{Name: "who"}, model.ErrorModeFail)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -169,7 +169,7 @@ func TestAnOptionalLabelWithoutAValueIsLeftOff(t *testing.T) {
 }
 
 func TestARequiredLabelWithoutAValueFailsItsSeries(t *testing.T) {
-	required := model.LabelRule{Name: "who", Type: "expression", Required: true}
+	required := model.LabelRule{Name: "who", Required: true}
 	for _, test := range labelCases() {
 		t.Run(test.name, func(t *testing.T) {
 			// log drops the series without the label, keeps the other,
@@ -209,7 +209,7 @@ func TestARequiredLabelWithoutAValueFailsItsSeries(t *testing.T) {
 func TestARequiredPositionalLabelMustPairWithTheSeries(t *testing.T) {
 	c := model.Collector{Name: "pairs", Request: model.RequestConfig{Type: fetch.RequestTypeHTTP}, Response: model.ResponseConfig{Format: "json"}, Transform: model.TransformConfig{Type: "jq"}, Metrics: []model.MetricRule{{
 		Name: "v", Type: model.GaugeMetricType, Expression: ".[].v", ErrorMode: model.ErrorModeFail,
-		Labels: []model.LabelRule{{Name: "who", Type: "expression", Expression: ".[].who | select(. != null)", Required: true}},
+		Labels: []model.LabelRule{{Name: "who", Expression: ".[].who | select(. != null)", Required: true}},
 	}}}
 	r := &fetch.HTTPResponse{Body: []byte(`[{"v":1},{"v":2,"who":"b"},{"v":3,"who":"c"}]`), Headers: http.Header{}}
 	d, err := decode.Decode(r, &c)
@@ -230,7 +230,7 @@ func TestARequiredPositionalLabelMustPairWithTheSeries(t *testing.T) {
 // Two rules matching one source metric each label their own copy of it.
 func TestPassthroughRulesDoNotShareLabels(t *testing.T) {
 	c := model.Collector{Name: "copies", Request: model.RequestConfig{Type: fetch.RequestTypeHTTP}, Transform: model.TransformConfig{Type: "prometheus"}, Metrics: []model.MetricRule{
-		{Name: "first", Expression: "^v$", Labels: []model.LabelRule{{Name: "copy", Type: "string", Value: "first"}}},
+		{Name: "first", Expression: "^v$", Labels: []model.LabelRule{{Name: "copy", Value: "first"}}},
 		{Name: "second", Expression: "^v$"},
 	}}
 	r := &fetch.HTTPResponse{Body: []byte("# TYPE v gauge\nv{instance=\"a\"} 1\n"), Headers: http.Header{"Content-Type": {"text/plain; version=0.0.4"}}}

@@ -2,6 +2,7 @@ package config
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"os"
 	"strings"
@@ -16,7 +17,7 @@ import (
 )
 
 func TestStandardJSONMetricAndPreScript(t *testing.T) {
-	c := model.Collector{Request: model.RequestConfig{Type: fetch.RequestTypeHTTP}, Name: "json", Response: model.ResponseConfig{Format: "json"}, Transform: model.TransformConfig{Type: "jq", PreScript: `data["requests"] = 42`}, Metrics: []model.MetricRule{{Name: "application_requests_total", Description: "Total application requests", Type: model.CounterMetricType, Expression: ".requests", Labels: []model.LabelRule{{Name: "environment", Type: "expression", Expression: ".environment"}}}}, Limits: model.Limits{MaxMetrics: 10}}
+	c := model.Collector{Request: model.RequestConfig{Type: fetch.RequestTypeHTTP}, Name: "json", Response: model.ResponseConfig{Format: "json"}, Transform: model.TransformConfig{Type: "jq", PreScript: `data["requests"] = 42`}, Metrics: []model.MetricRule{{Name: "application_requests_total", Description: "Total application requests", Type: model.CounterMetricType, Expression: ".requests", Labels: []model.LabelRule{{Name: "environment", Expression: ".environment"}}}}, Limits: model.Limits{MaxMetrics: 10}}
 	r := &fetch.HTTPResponse{Body: []byte(`{"environment":"test"}`), Headers: make(http.Header)}
 	if err := Validate(&model.Config{Collectors: []model.Collector{c}}); err != nil {
 		t.Fatal(err)
@@ -46,7 +47,6 @@ func TestJSONArrayMetricsPairLabelsByIndex(t *testing.T) {
 			Expression:  ".servers[] | .cpu",
 			Labels: []model.LabelRule{{
 				Name:       "server",
-				Type:       "expression",
 				Expression: ".servers[] | .name",
 			}},
 		}},
@@ -84,7 +84,7 @@ func TestJSONArrayMissingValuesRespectMetricErrorMode(t *testing.T) {
 					Type:       model.GaugeMetricType,
 					ErrorMode:  errorMode,
 					Expression: ".servers[] | .cpu",
-					Labels:     []model.LabelRule{{Name: "server", Type: "expression", Expression: ".servers[] | .name"}},
+					Labels:     []model.LabelRule{{Name: "server", Expression: ".servers[] | .name"}},
 				}},
 				Limits: model.Limits{MaxMetrics: 10},
 			}
@@ -108,7 +108,7 @@ func TestJSONArrayMissingValuesRespectMetricErrorMode(t *testing.T) {
 }
 
 func TestStandardCSVMetricLabelsUseRowExpressions(t *testing.T) {
-	c := model.Collector{Request: model.RequestConfig{Type: fetch.RequestTypeHTTP}, Name: "csv", Response: model.ResponseConfig{Format: "csv", CSV: model.CSVConfig{Header: boolPtr(true)}}, Transform: model.TransformConfig{Type: "csv"}, Metrics: []model.MetricRule{{Name: "server_cpu", Description: "Server CPU utilization", Type: model.GaugeMetricType, Expression: "cpu", Labels: []model.LabelRule{{Name: "server", Type: "expression", Expression: "server"}, {Name: "environment", Type: "string", Value: "production"}}}}, Limits: model.Limits{MaxMetrics: 10}}
+	c := model.Collector{Request: model.RequestConfig{Type: fetch.RequestTypeHTTP}, Name: "csv", Response: model.ResponseConfig{Format: "csv", CSV: model.CSVConfig{Header: boolPtr(true)}}, Transform: model.TransformConfig{Type: "csv"}, Metrics: []model.MetricRule{{Name: "server_cpu", Description: "Server CPU utilization", Type: model.GaugeMetricType, Expression: "cpu", Labels: []model.LabelRule{{Name: "server", Expression: "server"}, {Name: "environment", Value: "production"}}}}, Limits: model.Limits{MaxMetrics: 10}}
 	if err := Validate(&model.Config{Collectors: []model.Collector{c}}); err != nil {
 		t.Fatal(err)
 	}
@@ -133,7 +133,7 @@ func TestCSVFormatIsInferredAndMissingRowsRespectMetricErrorMode(t *testing.T) {
 				Name:      "csv_missing",
 				Response:  model.ResponseConfig{CSV: model.CSVConfig{Header: boolPtr(true)}},
 				Transform: model.TransformConfig{Type: "csv"},
-				Metrics:   []model.MetricRule{{Name: "server_cpu", Type: model.GaugeMetricType, ErrorMode: errorMode, Expression: "cpu", Labels: []model.LabelRule{{Name: "server", Type: "expression", Expression: "server"}}}},
+				Metrics:   []model.MetricRule{{Name: "server_cpu", Type: model.GaugeMetricType, ErrorMode: errorMode, Expression: "cpu", Labels: []model.LabelRule{{Name: "server", Expression: "server"}}}},
 				Limits:    model.Limits{MaxMetrics: 10},
 			}
 			cfg := &model.Config{Collectors: []model.Collector{c}}
@@ -168,7 +168,7 @@ func TestCSVTransformDefaultsWithoutResponseConfiguration(t *testing.T) {
 			Name:       "server_cpu",
 			Type:       model.GaugeMetricType,
 			Expression: "cpu",
-			Labels:     []model.LabelRule{{Name: "server", Type: "expression", Expression: "server"}},
+			Labels:     []model.LabelRule{{Name: "server", Expression: "server"}},
 		}},
 	}}}
 	if err := Validate(cfg); err != nil {
@@ -349,9 +349,14 @@ func TestConfigValidationRejectsInvalidSettings(t *testing.T) {
 			want: "want fail, log or ignore",
 		},
 		{
-			name: "invalid label type",
-			cfg:  &model.Config{Collectors: []model.Collector{{Request: model.RequestConfig{Type: fetch.RequestTypeHTTP}, Name: "invalid_label", Transform: model.TransformConfig{Type: "jq"}, Metrics: []model.MetricRule{{Name: "value", Expression: ".value", Labels: []model.LabelRule{{Name: "source", Type: "xpath", Expression: ".source"}}}}}}},
-			want: "invalid type",
+			name: "label with a value and an expression",
+			cfg:  &model.Config{Collectors: []model.Collector{{Request: model.RequestConfig{Type: fetch.RequestTypeHTTP}, Name: "invalid_label", Transform: model.TransformConfig{Type: "jq"}, Metrics: []model.MetricRule{{Name: "value", Expression: ".value", Labels: []model.LabelRule{{Name: "source", Value: "api", Expression: ".source"}}}}}}},
+			want: `label "source" sets both value and expression`,
+		},
+		{
+			name: "label with neither a value nor an expression",
+			cfg:  &model.Config{Collectors: []model.Collector{{Request: model.RequestConfig{Type: fetch.RequestTypeHTTP}, Name: "invalid_label", Transform: model.TransformConfig{Type: "jq"}, Metrics: []model.MetricRule{{Name: "value", Expression: ".value", Labels: []model.LabelRule{{Name: "source"}}}}}}},
+			want: `label "source" needs a value, for a static label, or an expression`,
 		},
 	}
 	for _, test := range tests {
@@ -371,5 +376,54 @@ func TestLoadConfigRejectsUnknownFields(t *testing.T) {
 	}
 	if _, err := Load(path); err == nil || !strings.Contains(err.Error(), "unknown") {
 		t.Fatalf("Load() error=%v, want unknown-field error", err)
+	}
+}
+
+// A label is static with value and read from the response with expression;
+// no type says which.
+func TestLabelsAreStaticOrReadByTheirKeys(t *testing.T) {
+	path := testutil.WriteIn(t, t.TempDir(), "config.yaml", `collectors:
+  - name: servers
+    request:
+      type: http
+    response:
+      format: html
+    transform:
+      type: css
+    metrics:
+      - name: server_cpu
+        items: '#servers tr:has(td)'
+        expression: td:nth-child(2)
+        labels:
+          - name: environment
+            value: production
+          - name: server
+            expression: td:nth-child(1)
+            required: true
+`)
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, err := os.ReadFile("../../testdata/html/status.html")
+	if err != nil {
+		t.Fatal(err)
+	}
+	r := &fetch.HTTPResponse{Body: body, Headers: http.Header{"Content-Type": {"text/html"}}}
+	c := &cfg.Collectors[0]
+	d, err := decode.Decode(r, c)
+	if err != nil {
+		t.Fatal(err)
+	}
+	set, err := transform.Transform(context.Background(), d, r, c, "python3")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got []string
+	for _, m := range set.Metrics {
+		got = append(got, fmt.Sprintf("%s{%s,%s} %g", m.Name, m.Labels["environment"], m.Labels["server"], m.Value))
+	}
+	if want := "server_cpu{production,web01} 72 server_cpu{production,web02} 31"; strings.Join(got, " ") != want {
+		t.Fatalf("got %v, want %s", got, want)
 	}
 }

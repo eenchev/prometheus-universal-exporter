@@ -95,7 +95,7 @@ func regexCollector(name string) model.Collector {
 		Name:      name,
 		Request:   model.RequestConfig{Type: fetch.RequestTypeHTTP},
 		Transform: model.TransformConfig{Type: "regex"},
-		Metrics:   []model.MetricRule{{Name: "v", Type: model.GaugeMetricType, Expression: `v=(\d+) (?P<who>\S+)`, Labels: []model.LabelRule{{Name: "who", Type: "expression", Expression: "who"}}}},
+		Metrics:   []model.MetricRule{{Name: "v", Type: model.GaugeMetricType, Expression: `v=(\d+) (?P<who>\S+)`, Labels: []model.LabelRule{{Name: "who", Expression: "who"}}}},
 	}
 }
 

@@ -122,7 +122,6 @@ metrics:
     expression: .workers[].cpu
     labels:
       - name: worker
-        type: expression
         expression: .workers[].name
 ```
 
@@ -151,7 +150,6 @@ metrics:
     expression: cpu
     labels:
       - name: server
-        type: expression
         expression: server
 transform:
   type: csv

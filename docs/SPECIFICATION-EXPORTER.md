@@ -914,7 +914,6 @@ Example:
       expression: '.requests'
       labels:
         - name: environment
-          type: expression
           expression: '.environment'
 ```
 
@@ -1017,7 +1016,6 @@ Example conceptual configuration:
       expression: '#servers td:nth-child(2)'
       labels:
         - name: environment
-          type: string
           value: production
 ```
 
@@ -1529,7 +1527,6 @@ metrics:
     error_mode: log
     labels:
       - name: environment
-        type: expression
         expression: .environment
     expression: .requests
 ```
@@ -1595,10 +1592,10 @@ A scheduled target (§ 42.14) has no HTTP response to carry the error. Under
 as for any other failed scheduled scrape; under `ignore` and `log` it MUST export
 what could be extracted.
 
-Each label entry MUST have `name` and `type`. `type` MUST be either `string` or
-`expression`. A `string` label MUST use `value` as its literal value. An
-`expression` label MUST provide `expression`, interpreted by the same transform
-as the metric expression:
+Each label entry MUST have `name` and exactly one of `value` and `expression`;
+setting both or neither MUST be rejected at startup. A `value` label is static:
+its value MUST be exported as written and never evaluated. An `expression`
+label MUST be interpreted by the same transform as the metric expression:
 
 | Transform | `expression` | `labels` |
 | --- | --- | --- |
@@ -1615,10 +1612,8 @@ constant:
 ```yaml
 labels:
   - name: server
-    type: expression
     expression: server       # current CSV row's server column
   - name: environment
-    type: string
     value: production
 ```
 
@@ -1633,15 +1628,15 @@ is added.
 An expression label that gives a series no value — a selector or path matching
 nothing, a missing attribute, column, capture group or source label, a null —
 or an empty value MUST be left off that series, in every transform, so the
-text exposition and OTLP agree. A label of `type: expression` MAY set
+text exposition and OTLP agree. An `expression` label MAY set
 `required: true`. A series missing a required label MUST then be a missing
 value of its metric: handled by the metric's `error_mode`, where `ignore` and
 `log` drop that series alone and `fail` fails the scrape with an error naming
 the label, counted as a missing key, and regardless of the metric's `required`
 and `error_handling.allow_missing_keys`. For jq without `items`, where label
 values pair with series by position, a required label giving neither one value
-nor one per series MUST fail the metric. `required` on a `type: string` label,
-or on a label of the python transform, MUST be rejected at startup.
+nor one per series MUST fail the metric. `required` on a `value` label, or on a
+label of the python transform, MUST be rejected at startup.
 
 Python transforms are the exception: their script emits the common metric
 objects through `metric(...)`, so a `metrics` array is optional for them.
@@ -1664,10 +1659,8 @@ metrics:
     expression: .cpu
     labels:
       - name: server
-        type: expression
         expression: .name
       - name: site
-        type: expression
         expression: $root.site
 ```
 
@@ -2676,7 +2669,6 @@ collectors:
         expression: cpu
         labels:
           - name: server
-            type: expression
             expression: server
 ```
 
@@ -2703,7 +2695,6 @@ collectors:
         expression: 'td:nth-child(2)'
         labels:
           - name: server
-            type: expression
             expression: 'td:nth-child(1)'
 ```
 
@@ -2783,7 +2774,6 @@ collectors:
         expression: .workers[].cpu
         labels:
           - name: worker
-            type: expression
             expression: .workers[].name
 ```
 
@@ -5163,7 +5153,6 @@ metrics:
     expression: cpu
     labels:
       - name: server
-        type: expression
         expression: server
 transform:
   type: csv

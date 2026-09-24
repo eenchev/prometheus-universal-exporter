@@ -51,7 +51,7 @@ func TestCSSItemsReadATable(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	c := cssItemsCollector("#servers tr:has(td)", "td:nth-child(2)", model.LabelRule{Name: "server", Type: "expression", Expression: "td:nth-child(1)", Required: true})
+	c := cssItemsCollector("#servers tr:has(td)", "td:nth-child(2)", model.LabelRule{Name: "server", Expression: "td:nth-child(1)", Required: true})
 	set, err := runCSS(t, c, string(body))
 	if err != nil {
 		t.Fatal(err)
@@ -66,7 +66,7 @@ func TestCSSItemsReadATable(t *testing.T) {
 // skips the row quietly.
 func TestCSSItemsAMissingValueIsThatRowsMissingMetric(t *testing.T) {
 	const body = `<table><tr><td class="s">web01</td><td class="v">72</td></tr><tr><td class="s">web02</td></tr><tr><td class="s">web03</td><td class="v">5</td></tr></table>`
-	label := model.LabelRule{Name: "server", Type: "expression", Expression: "td.s"}
+	label := model.LabelRule{Name: "server", Expression: "td.s"}
 
 	logs := testutil.CaptureLogs(t)
 	c := cssItemsCollector("tr", "td.v", label)
@@ -94,12 +94,12 @@ func TestCSSItemsAMissingValueIsThatRowsMissingMetric(t *testing.T) {
 // telling which belongs to the series.
 func TestCSSItemsSelectorsMatchAtMostOneElementPerRow(t *testing.T) {
 	const body = `<table><tr><td>web01</td><td>72</td></tr></table>`
-	c := cssItemsCollector("tr", "td", model.LabelRule{Name: "server", Type: "expression", Expression: "td:nth-child(1)"})
+	c := cssItemsCollector("tr", "td", model.LabelRule{Name: "server", Expression: "td:nth-child(1)"})
 	c.Metrics[0].ErrorMode = model.ErrorModeFail
 	if _, err := runCSS(t, c, body); err == nil || !strings.Contains(err.Error(), `CSS selector "td" matched 2 elements`) {
 		t.Fatalf("value: err=%v", err)
 	}
-	c = cssItemsCollector("tr", "td:nth-child(2)", model.LabelRule{Name: "server", Type: "expression", Expression: "td"})
+	c = cssItemsCollector("tr", "td:nth-child(2)", model.LabelRule{Name: "server", Expression: "td"})
 	c.Metrics[0].ErrorMode = model.ErrorModeFail
 	if _, err := runCSS(t, c, body); err == nil || !strings.Contains(err.Error(), `CSS selector "td" matched 2 elements`) {
 		t.Fatalf("label: err=%v", err)

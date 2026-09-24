@@ -105,10 +105,8 @@ collectors:
         expression: 1
         labels:
           - name: page
-            type: expression
             expression: .page.name
           - name: time_zone
-            type: expression
             expression: .page.time_zone
 
       # The overall status of the page: none (all operational), minor, major or
@@ -120,7 +118,6 @@ collectors:
         expression: 1
         labels:
           - name: indicator
-            type: expression
             expression: .status.indicator
 
       # Every component that is not a group, one series each. items selects the
@@ -134,27 +131,21 @@ collectors:
         expression: 1
         labels:
           - name: component_id
-            type: expression
             expression: .id
           - name: component
-            type: expression
             expression: .name
           # The cloud provider and zone, parsed from names such as
           # "AWS Ireland - prod-eu-west-6: API"; absent for a component whose
           # name does not carry them, such as "Support Tickets".
           - name: cloud_provider
-            type: expression
             expression: 'first(.name | capture("^(?<provider>AWS|Azure|GCP|GCS) (?<location>.+?)(?: - | )(?<zone>[a-z][a-z0-9-]*[0-9])(?::|$)")) | .provider'
           - name: cloud_zone
-            type: expression
             expression: 'first(.name | capture("^(?<provider>AWS|Azure|GCP|GCS) (?<location>.+?)(?: - | )(?<zone>[a-z][a-z0-9-]*[0-9])(?::|$)")) | .zone'
           # The name of the group the component is in; absent when it stands
           # alone.
           - name: group
-            type: expression
             expression: '.group_id as $id | first($root.components[] | select(.id == $id)) | .name'
           - name: status
-            type: expression
             expression: .status
 
       # One series per component that is not operational, naming what the page
@@ -179,25 +170,18 @@ collectors:
         expression: 1
         labels:
           - name: component_id
-            type: expression
             expression: .id
           - name: component
-            type: expression
             expression: .name
           - name: cloud_provider
-            type: expression
             expression: 'first(.name | capture("^(?<provider>AWS|Azure|GCP|GCS) (?<location>.+?)(?: - | )(?<zone>[a-z][a-z0-9-]*[0-9])(?::|$)")) | .provider'
           - name: cloud_zone
-            type: expression
             expression: 'first(.name | capture("^(?<provider>AWS|Azure|GCP|GCS) (?<location>.+?)(?: - | )(?<zone>[a-z][a-z0-9-]*[0-9])(?::|$)")) | .zone'
           - name: group
-            type: expression
             expression: '.group_id as $id | first($root.components[] | select(.id == $id)) | .name'
           - name: status
-            type: expression
             expression: .status
           - name: incident
-            type: expression
             expression: |
               .id as $id
               | [($root.incidents + [$root.scheduled_maintenances[] | select(.status == "in_progress" or .status == "verifying")])[]
@@ -205,7 +189,6 @@ collectors:
               | max_by(.updated_at)
               | .name
           - name: incident_status
-            type: expression
             expression: |
               .id as $id
               | [($root.incidents + [$root.scheduled_maintenances[] | select(.status == "in_progress" or .status == "verifying")])[]
@@ -213,7 +196,6 @@ collectors:
               | max_by(.updated_at)
               | .status
           - name: impact
-            type: expression
             expression: |
               .id as $id
               | [($root.incidents + [$root.scheduled_maintenances[] | select(.status == "in_progress" or .status == "verifying")])[]
@@ -221,7 +203,6 @@ collectors:
               | max_by(.updated_at)
               | .impact
           - name: message
-            type: expression
             truncate: true
             expression: |
               .id as $id
@@ -241,10 +222,8 @@ collectors:
         expression: 1
         labels:
           - name: group
-            type: expression
             expression: .name
           - name: status
-            type: expression
             expression: .status
 
       # The summary lists only incidents that are not resolved yet. These are
@@ -260,7 +239,6 @@ collectors:
           | [$incidents[] | select(.impact == $impact)] | length
         labels:
           - name: impact
-            type: expression
             expression: '["none", "minor", "major", "critical"][]'
 
       # The summary lists maintenances that are upcoming or in progress.
@@ -274,7 +252,6 @@ collectors:
           | [$maintenances[] | select(.status == $status)] | length
         labels:
           - name: status
-            type: expression
             expression: '["scheduled", "in_progress", "verifying"][]'
 
       # Absent when nothing is scheduled, hence required: false. Statuspage

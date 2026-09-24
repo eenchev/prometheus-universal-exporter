@@ -76,7 +76,7 @@ func TestPreScriptDoesNotPromoteForTheCSVTransform(t *testing.T) {
 			Name:       "server_cpu",
 			Type:       model.GaugeMetricType,
 			Expression: "cpu",
-			Labels:     []model.LabelRule{{Name: "server", Type: "expression", Expression: "server"}},
+			Labels:     []model.LabelRule{{Name: "server", Expression: "server"}},
 		}},
 	})
 	set, err := transformResponse(t, c, "server,cpu\nalpha,42\n", "text/csv")
@@ -115,7 +115,7 @@ func TestPreScriptPromotionSupportsArrayResults(t *testing.T) {
 			Name:       "zone_cpu",
 			Type:       model.GaugeMetricType,
 			Expression: ".[].cpu",
-			Labels:     []model.LabelRule{{Name: "zone", Type: "expression", Expression: ".[].zone"}},
+			Labels:     []model.LabelRule{{Name: "zone", Expression: ".[].zone"}},
 		}},
 	})
 	set, err := transformResponse(t, c, "ignored\n", "text/plain")

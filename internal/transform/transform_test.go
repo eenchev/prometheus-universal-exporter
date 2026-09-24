@@ -12,7 +12,7 @@ import (
 )
 
 func TestHTMLBareTagSelector(t *testing.T) {
-	c := model.Collector{Request: model.RequestConfig{Type: fetch.RequestTypeHTTP}, Name: "html", Response: model.ResponseConfig{Format: "html"}, Transform: model.TransformConfig{Type: "css"}, Metrics: []model.MetricRule{{Name: "application_status", Type: model.GaugeMetricType, Expression: "h1"}}, ErrorHandling: model.ErrorHandling{AllowMissingKeys: false}, Limits: model.Limits{MaxMetrics: 10}}
+	c := model.Collector{Request: model.RequestConfig{Type: fetch.RequestTypeHTTP}, Name: "html", Decoder: model.DecoderConfig{Type: "html"}, Transform: model.TransformConfig{Type: "css"}, Metrics: []model.MetricRule{{Name: "application_status", Type: model.GaugeMetricType, Expression: "h1"}}, ErrorHandling: model.ErrorHandling{AllowMissingKeys: false}, Limits: model.Limits{MaxMetrics: 10}}
 	r := &fetch.HTTPResponse{Body: []byte("<html><body><h1>42</h1></body></html>"), Headers: http.Header{"Content-Type": []string{"text/html"}}}
 	d, err := decode.Decode(r, &c)
 	if err != nil {
@@ -28,7 +28,7 @@ func TestHTMLBareTagSelector(t *testing.T) {
 }
 
 func TestMissingOptionalJSONValue(t *testing.T) {
-	c := model.Collector{Request: model.RequestConfig{Type: fetch.RequestTypeHTTP}, Name: "json", Response: model.ResponseConfig{Format: "json"}, Transform: model.TransformConfig{Type: "jq"}, Metrics: []model.MetricRule{{Name: "optional_value", Type: model.GaugeMetricType, Expression: ".missing"}}, ErrorHandling: model.ErrorHandling{AllowMissingKeys: true}, Limits: model.Limits{MaxMetrics: 10}}
+	c := model.Collector{Request: model.RequestConfig{Type: fetch.RequestTypeHTTP}, Name: "json", Decoder: model.DecoderConfig{Type: "json"}, Transform: model.TransformConfig{Type: "jq"}, Metrics: []model.MetricRule{{Name: "optional_value", Type: model.GaugeMetricType, Expression: ".missing"}}, ErrorHandling: model.ErrorHandling{AllowMissingKeys: true}, Limits: model.Limits{MaxMetrics: 10}}
 	r := &fetch.HTTPResponse{Body: []byte(`{"present":1}`), Headers: make(http.Header)}
 	d, err := decode.Decode(r, &c)
 	if err != nil {
@@ -50,7 +50,7 @@ func TestHTMLCSSTableValues(t *testing.T) {
 	}
 	c := model.Collector{Request: model.RequestConfig{Type: fetch.RequestTypeHTTP},
 		Name:      "html_css",
-		Response:  model.ResponseConfig{Format: "html"},
+		Decoder:   model.DecoderConfig{Type: "html"},
 		Transform: model.TransformConfig{Type: "css"},
 		Metrics:   []model.MetricRule{{Name: "server_cpu", Type: model.GaugeMetricType, Expression: "#servers td:nth-child(2)", Labels: []model.LabelRule{{Name: "environment", Value: "production"}}}},
 		Limits:    model.Limits{MaxMetrics: 10},
@@ -76,7 +76,7 @@ func TestHTMLXPathTableValuesAndLabels(t *testing.T) {
 	}
 	c := model.Collector{Request: model.RequestConfig{Type: fetch.RequestTypeHTTP},
 		Name:      "html_xpath",
-		Response:  model.ResponseConfig{Format: "html"},
+		Decoder:   model.DecoderConfig{Type: "html"},
 		Transform: model.TransformConfig{Type: "xpath"},
 		Metrics: []model.MetricRule{{
 			Name:       "server_cpu",
@@ -107,7 +107,7 @@ func TestPrometheusInputFilteringAndRelabeling(t *testing.T) {
 	}
 	c := model.Collector{Request: model.RequestConfig{Type: fetch.RequestTypeHTTP},
 		Name:      "prometheus",
-		Response:  model.ResponseConfig{Format: "prometheus"},
+		Decoder:   model.DecoderConfig{Type: "prometheus"},
 		Transform: model.TransformConfig{Type: "prometheus"},
 		Metrics: []model.MetricRule{{
 			Name:        "application_requests_total",

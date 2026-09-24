@@ -133,23 +133,17 @@ func applyLimitDefaults(l *model.Limits) {
 	}
 }
 
-// normalizeFormats lower-cases the response format, decoder and transform,
-// infers the decoder a transform implies, and refuses what is not known.
+// normalizeFormats lower-cases the decoder and transform, infers the decoder a
+// transform implies, and refuses what is not known.
 func normalizeFormats(x *model.Collector) error {
-	if x.Response.Format == "" {
-		x.Response.Format = "auto"
-	}
-	x.Response.Format = strings.ToLower(x.Response.Format)
 	if err := decode.CheckCharset(x.Response.Charset); err != nil {
 		return fmt.Errorf("collector %q response.charset: %w", x.Name, err)
 	}
-	if x.Decoder.Type == "" {
-		x.Decoder.Type = x.Response.Format
-	}
+	x.Decoder.Type = strings.ToLower(x.Decoder.Type)
 	if x.Decoder.Type == "" {
 		x.Decoder.Type = "auto"
 	}
-	if x.Response.Format == "auto" && x.Decoder.Type == "auto" {
+	if x.Decoder.Type == "auto" {
 		switch strings.ToLower(x.Transform.Type) {
 		case "regex":
 			x.Decoder.Type = "text"
@@ -161,7 +155,6 @@ func normalizeFormats(x *model.Collector) error {
 			x.Decoder.Type = "prometheus"
 		}
 	}
-	x.Decoder.Type = strings.ToLower(x.Decoder.Type)
 	if !map[string]bool{"json": true, "yaml": true, "xml": true, "csv": true, "html": true, "prometheus": true, "text": true, "auto": true}[x.Decoder.Type] {
 		return fmt.Errorf("collector %q has unknown decoder %q", x.Name, x.Decoder.Type)
 	}

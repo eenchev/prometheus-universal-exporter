@@ -158,7 +158,7 @@ transform:
 The entire `response` block may be omitted. The exporter infers CSV for the
 `csv` transform, and header-based CSV parsing is enabled by default. Use
 `response.csv` only when changing CSV behavior, such as selecting a custom
-delimiter or disabling the header row. Likewise, `response.format: text` is
+delimiter or disabling the header row. Likewise, `decoder.type: text` is
 unnecessary for a regex or Python transform unless an explicit decoder is
 needed for an ambiguous endpoint.
 

@@ -65,6 +65,7 @@
             "additionalProperties": false,
             "properties": {
               "type": {
+                "description": "How to decode the response. Defaults to auto, which the transform or the Content-Type decides.",
                 "enum": [
                   "auto",
                   "json",
@@ -607,20 +608,6 @@
                   }
                 },
                 "type": "object"
-              },
-              "format": {
-                "description": "How to decode the response. Defaults to auto, which the transform or the Content-Type decides.",
-                "enum": [
-                  "auto",
-                  "json",
-                  "yaml",
-                  "xml",
-                  "csv",
-                  "html",
-                  "prometheus",
-                  "text"
-                ],
-                "type": "string"
               },
               "namespaces": {
                 "additionalProperties": {

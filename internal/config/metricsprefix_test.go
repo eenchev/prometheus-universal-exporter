@@ -87,8 +87,8 @@ func loadPrefixedCollector(t *testing.T, line string) model.Collector {
     ` + line + `
     request:
       type: http
-    response:
-      format: text
+    decoder:
+      type: text
     transform:
       type: regex
     metrics:
@@ -183,7 +183,7 @@ func TestMetricsPrefixAppliesToPythonMetrics(t *testing.T) {
 	}
 	c := model.Collector{
 		Name: "prefixed", MetricsPrefix: "acme", Request: model.RequestConfig{Type: fetch.RequestTypeHTTP},
-		Response:  model.ResponseConfig{Format: "text"},
+		Decoder:   model.DecoderConfig{Type: "text"},
 		Transform: model.TransformConfig{Type: "python", Script: `metric(name="script_value", value=4)`},
 		Metrics:   []model.MetricRule{}, Limits: model.Limits{MaxMetrics: 10, ScriptTimeout: model.Duration(5 * time.Second)},
 	}

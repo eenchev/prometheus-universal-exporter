@@ -88,3 +88,12 @@ func TestALabelTypeSaysWhatReplacedIt(t *testing.T) {
 		t.Fatalf("err=%v", err)
 	}
 }
+
+// response.format is gone; decoder.type chooses the decoder.
+func TestAResponseFormatSaysWhatReplacedIt(t *testing.T) {
+	path := testutil.WriteIn(t, t.TempDir(), "config.yaml", strings.Replace(testutil.MinimalConfig, "    transform:\n", "    response:\n      format: text\n    transform:\n", 1))
+	_, err := Load(path)
+	if err == nil || !strings.Contains(err.Error(), `unknown key "format" in response; the decoder is chosen by decoder.type`) {
+		t.Fatalf("err=%v", err)
+	}
+}

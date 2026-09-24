@@ -30,7 +30,7 @@ var errorStageCases = []errorStageCase{
 	{
 		name: "decode", stage: "decode", status: http.StatusOK, body: "{not json",
 		setup: func(c *model.Collector, policy string) {
-			c.Response.Format = "json"
+			c.Decoder.Type = "json"
 			c.Transform.Type = "jq"
 			c.Metrics = []model.MetricRule{{Name: "demo_value", Type: model.GaugeMetricType, Expression: ".value"}}
 			c.ErrorHandling.OnDecodeError = policy
@@ -41,7 +41,7 @@ var errorStageCases = []errorStageCase{
 		// stage itself, before any metric rule runs.
 		name: "transform", stage: "transform", status: http.StatusOK, body: `{"value": 1}`,
 		setup: func(c *model.Collector, policy string) {
-			c.Response.Format = "json"
+			c.Decoder.Type = "json"
 			c.ErrorHandling.OnTransformError = policy
 		},
 	},

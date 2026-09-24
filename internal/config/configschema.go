@@ -184,11 +184,10 @@ func configSchemaRules() map[string]map[string]any {
 		"collectors[].request.max_files":       {"description": "localfile with request.files: the most files one scrape reads, in name order; the rest are skipped and logged. Defaults to 100."},
 		"collectors[].request.max_total_bytes": {"description": "localfile with request.files: the most one scrape reads across every file; a file that would go past it is refused. Defaults to 64 MiB."},
 		"collectors[].request.max_age":         {"description": "localfile: refuse a file last modified longer ago than this, so a writer that has stopped fails the scrape instead of exporting its last values forever."},
-		"collectors[].response.format": {
+		"collectors[].decoder.type": {
 			"enum":        []string{"auto", "json", "yaml", "xml", "csv", "html", "prometheus", "text"},
 			"description": "How to decode the response. Defaults to auto, which the transform or the Content-Type decides.",
 		},
-		"collectors[].decoder.type": {"enum": []string{"auto", "json", "yaml", "xml", "csv", "html", "prometheus", "text"}},
 		"collectors[].transform.type": {
 			"enum":        []string{"none", "jq", "yq", "xpath", "css", "csv", "regex", "python", "prometheus"},
 			"description": "How metrics are extracted from the decoded response.",

@@ -53,7 +53,7 @@ func TestPreScriptScalarResultKeepsDecodedFormat(t *testing.T) {
 func TestPreScriptStillReparsesHTML(t *testing.T) {
 	c := validated(t, model.Collector{Request: model.RequestConfig{Type: fetch.RequestTypeHTTP},
 		Name:      "html_prescript",
-		Response:  model.ResponseConfig{Format: "html"},
+		Decoder:   model.DecoderConfig{Type: "html"},
 		Transform: model.TransformConfig{Type: "css", PreScript: `data = data.replace("42", "7")`},
 		Limits:    scriptLimits(),
 		Metrics:   []model.MetricRule{{Name: "page_value", Type: model.GaugeMetricType, Expression: "#value"}},

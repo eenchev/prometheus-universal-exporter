@@ -565,7 +565,7 @@ when its probe does.
 A successful read MUST be presented to the shared pipeline as a response with
 status `200` and the headers `Content-Type`, chosen from the extension
 (`.prom` as Prometheus text version 0.0.4, `.json`, `.yaml`/`.yml`, `.xml`,
-`.csv`, `.html`/`.htm`) so `response.format: auto` picks the decoder,
+`.csv`, `.html`/`.htm`) so `decoder.type: auto` picks the decoder,
 `Content-Length`, and `Last-Modified`, the file's modification time. A failed
 read MUST be reported in the `file` stage and follow `on_fetch_error`. A file
 that does not exist, and one the exporter may not read, MUST each be named as
@@ -629,7 +629,7 @@ file MUST be started. Only a directory not listed in time MUST fail the probe.
 
 Each file read MUST then be decoded, transformed and validated on its own, as a
 response of its own with the headers a single file gets, so its decoder follows
-its extension under `response.format: auto`. Its series MUST be given a label
+its extension under `decoder.type: auto`. Its series MUST be given a label
 `file` with its name. A file MUST be left out, alone, when it could not be read
 or was refused, when decoding, the transform or validation fails — including a
 metric rule with `error_mode: fail` — when a series of it already has a `file`
@@ -698,14 +698,15 @@ auto
 Python is a transform, not a decoder. Supported transform types MUST include
 `jq`, `yq`, `xpath`, `css`, `csv`, `regex`, `prometheus`, and `python`.
 
-`response.format` is optional and defaults to `auto`. When it is omitted, the
-implementation MUST infer a deterministic response decoder from the transform
+The decoder MUST be chosen by `decoder.type`, the one key for it; `response`
+MUST NOT take a format. `decoder.type` is optional and defaults to `auto`. When
+it is omitted, the implementation MUST infer a deterministic response decoder from the transform
 where possible: `regex` to text, `csv` to CSV, `css` to HTML, and `prometheus`
 to Prometheus exposition. jq/yq, XPath, and Python MAY use content detection
 because they can operate on more than one response representation. If the
 decoded response cannot be mapped to the selected transform, the exporter MUST
-return a clear transform error. An explicit response format remains available
-for ambiguous or incorrectly labeled endpoints.
+return a clear transform error. An explicit decoder remains available for
+ambiguous or incorrectly labeled endpoints.
 
 The entire `response` block is optional. CSV decoding MUST use a header row by
 default when `response.csv.header` is omitted. The `response.csv` block is only
@@ -901,8 +902,8 @@ Example:
 
 ```yaml
 - name: application_json
-  response:
-    format: json
+  decoder:
+    type: json
 
   transform:
     type: jq
@@ -932,8 +933,8 @@ Example:
 
 ```yaml
 - name: application_yaml
-  response:
-    format: yaml
+  decoder:
+    type: yaml
 
   transform:
     type: yq
@@ -961,8 +962,8 @@ Example:
 
 ```yaml
 - name: application_xml
-  response:
-    format: xml
+  decoder:
+    type: xml
 
   transform:
     type: xpath
@@ -1003,8 +1004,8 @@ Example conceptual configuration:
 
 ```yaml
 - name: application_html
-  response:
-    format: html
+  decoder:
+    type: html
 
   transform:
     type: css
@@ -2590,8 +2591,8 @@ collectors:
       method: GET
       path: /api/status
 
-    response:
-      format: json
+    decoder:
+      type: json
 
     transform:
       type: jq
@@ -2613,8 +2614,8 @@ collectors:
       type: http
       path: /status.yaml
 
-    response:
-      format: yaml
+    decoder:
+      type: yaml
 
     transform:
       type: yq
@@ -2636,8 +2637,8 @@ collectors:
       type: http
       path: /status.xml
 
-    response:
-      format: xml
+    decoder:
+      type: xml
 
     transform:
       type: xpath
@@ -2681,8 +2682,8 @@ collectors:
       type: http
       path: /status
 
-    response:
-      format: html
+    decoder:
+      type: html
 
     transform:
       type: css
@@ -2788,9 +2789,6 @@ collectors:
     request:
       type: http
       path: /status
-
-    response:
-      format: auto
 
     transform:
       type: python
@@ -3187,7 +3185,8 @@ Test:
 - Missing `error_mode` defaults to `log`.
 - `error_mode: fail` is accepted.
 - Transform-specific response format incompatibility.
-- Response format inference when `response.format` is omitted.
+- Decoder inference when `decoder.type` is omitted, and a leftover
+  `response.format` rejected with a pointer to `decoder.type`.
 - Invalid error policy values.
 - Missing required configuration fields.
 - Unknown configuration fields according to the chosen strictness policy.

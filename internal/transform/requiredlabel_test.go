@@ -39,7 +39,7 @@ func labelCases() []labelCase {
 		return []model.MetricRule{{Name: "v", Type: model.GaugeMetricType, Expression: expression, Labels: []model.LabelRule{label}}}
 	}
 	collector := func(transform, format, expression string, label model.LabelRule) model.Collector {
-		c := model.Collector{Name: "labels", Request: model.RequestConfig{Type: fetch.RequestTypeHTTP}, Response: model.ResponseConfig{Format: format}, Transform: model.TransformConfig{Type: transform}, Metrics: rule(expression, label)}
+		c := model.Collector{Name: "labels", Request: model.RequestConfig{Type: fetch.RequestTypeHTTP}, Decoder: model.DecoderConfig{Type: format}, Transform: model.TransformConfig{Type: transform}, Metrics: rule(expression, label)}
 		if format == "csv" {
 			header := true
 			c.Response.CSV.Header = &header
@@ -207,7 +207,7 @@ func TestARequiredLabelWithoutAValueFailsItsSeries(t *testing.T) {
 // label giving a different number of values than there are series fails the
 // rule rather than land on the wrong series.
 func TestARequiredPositionalLabelMustPairWithTheSeries(t *testing.T) {
-	c := model.Collector{Name: "pairs", Request: model.RequestConfig{Type: fetch.RequestTypeHTTP}, Response: model.ResponseConfig{Format: "json"}, Transform: model.TransformConfig{Type: "jq"}, Metrics: []model.MetricRule{{
+	c := model.Collector{Name: "pairs", Request: model.RequestConfig{Type: fetch.RequestTypeHTTP}, Decoder: model.DecoderConfig{Type: "json"}, Transform: model.TransformConfig{Type: "jq"}, Metrics: []model.MetricRule{{
 		Name: "v", Type: model.GaugeMetricType, Expression: ".[].v", ErrorMode: model.ErrorModeFail,
 		Labels: []model.LabelRule{{Name: "who", Expression: ".[].who | select(. != null)", Required: true}},
 	}}}

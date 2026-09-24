@@ -173,9 +173,8 @@ type TLSConfig struct {
 }
 
 // ResponseConfig is a collector's response block: how to read the body the
-// target returns.
+// target returns. Which decoder reads it is decoder.type.
 type ResponseConfig struct {
-	Format string `yaml:"format"`
 	// Charset names the encoding of the response when the target does not
 	// declare it, or declares it wrongly (decode/textencoding.go).
 	Charset    string            `yaml:"charset"`
@@ -190,8 +189,10 @@ type CSVConfig struct {
 	TrimSpace bool   `yaml:"trim_space"`
 }
 
-// DecoderConfig is a collector's decoder block. Type overrides the decoder
-// the response's content type and the transform would pick.
+// DecoderConfig is a collector's decoder block. Type names the decoder that
+// reads the response: json, yaml, xml, csv, html, prometheus or text. Unset or
+// auto, the transform's type picks it when it implies one, and otherwise the
+// response's content type or its content.
 type DecoderConfig struct {
 	Type string `yaml:"type"`
 }

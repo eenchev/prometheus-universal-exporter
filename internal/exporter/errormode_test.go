@@ -50,7 +50,7 @@ func modeCollector(name, mode string) model.Collector {
 	return model.Collector{
 		Name:          name,
 		Request:       model.RequestConfig{Type: fetch.RequestTypeHTTP, Method: "GET"},
-		Response:      model.ResponseConfig{Format: "json"},
+		Decoder:       model.DecoderConfig{Type: "json"},
 		Transform:     model.TransformConfig{Type: "jq"},
 		ErrorHandling: model.ErrorHandling{OnFetchError: "fail", OnDecodeError: "fail", OnTransformError: "fail"},
 		Limits:        model.Limits{MaxResponseBytes: 4096, MaxMetrics: 10},

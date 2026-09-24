@@ -32,10 +32,9 @@ type HTMLDecoded struct {
 	Raw      []byte
 }
 
-func detectFormat(r *fetch.HTTPResponse, requested string) string {
-	if requested != "" && requested != "auto" {
-		return requested
-	}
+// detectFormat picks the decoder for a collector whose decoder.type is auto,
+// by the response's content type, and then by its content.
+func detectFormat(r *fetch.HTTPResponse) string {
 	rawCT := strings.ToLower(r.Headers.Get("Content-Type"))
 	ct := strings.TrimSpace(strings.Split(rawCT, ";")[0])
 	switch {
@@ -76,9 +75,9 @@ func Decode(r *fetch.HTTPResponse, c *model.Collector) (*Decoded, error) {
 	if err != nil {
 		return nil, err
 	}
-	kind := detectFormat(r, c.Response.Format)
-	if c.Decoder.Type != "" && c.Decoder.Type != "auto" {
-		kind = c.Decoder.Type
+	kind := c.Decoder.Type
+	if kind == "" || kind == "auto" {
+		kind = detectFormat(r)
 	}
 	if !named {
 		if err := convertFromDocument(r, kind); err != nil {

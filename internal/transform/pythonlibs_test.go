@@ -20,7 +20,7 @@ func pythonLibraryCollector(libs ...string) model.Collector {
 	return model.Collector{
 		Name:      "python",
 		Request:   model.RequestConfig{Type: fetch.RequestTypeHTTP},
-		Response:  model.ResponseConfig{Format: "text"},
+		Decoder:   model.DecoderConfig{Type: "text"},
 		Transform: model.TransformConfig{Type: "python", Script: `metric(name="v", value=1)`, Libraries: libs},
 		Metrics:   []model.MetricRule{},
 		Limits:    model.Limits{MaxMetrics: 10},

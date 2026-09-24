@@ -219,8 +219,7 @@ probe parameters, and `request.path` in a scheduled target, are refused.
 
 Any file a collector can decode can be read this way, not only `.prom`. Each
 file's decoder is chosen as for one file: from its extension with
-`response.format: auto`, or the collector's `response.format` or
-`decoder.type`. The collector's one transform applies to every file, so a
+`decoder.type: auto`, or the collector's `decoder.type`. The collector's one transform applies to every file, so a
 directory read by one collector should hold files of one shape — `*.prom`
 passed through, `*.json` status files with `jq`, `*.txt` or `*.log` lines with
 `regex`:
@@ -281,7 +280,7 @@ Only a directory that could not even be listed in time fails the probe.
 
 ## Formats
 
-With `response.format` left at `auto`, the file's extension chooses the
+With `decoder.type` left at `auto`, the file's extension chooses the
 decoder, and anything else is recognised from its content:
 
 | Extension | Decoded as |
@@ -293,7 +292,7 @@ decoder, and anything else is recognised from its content:
 | `.csv` | CSV |
 | `.html`, `.htm` | HTML |
 
-`response.format` or `decoder.type` overrides the choice, as for `http`. A file
+`decoder.type` overrides the choice, as for `http`. A file
 declares no encoding: one in anything but UTF-8 needs `response.charset`, such
 as `windows-1252`, unless it starts with a byte order mark (see
 [Character encodings](CONFIGURATION.md#character-encodings)). A

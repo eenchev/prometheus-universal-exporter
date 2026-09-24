@@ -17,7 +17,7 @@ import (
 )
 
 func TestStandardJSONMetricAndPreScript(t *testing.T) {
-	c := model.Collector{Request: model.RequestConfig{Type: fetch.RequestTypeHTTP}, Name: "json", Response: model.ResponseConfig{Format: "json"}, Transform: model.TransformConfig{Type: "jq", PreScript: `data["requests"] = 42`}, Metrics: []model.MetricRule{{Name: "application_requests_total", Description: "Total application requests", Type: model.CounterMetricType, Expression: ".requests", Labels: []model.LabelRule{{Name: "environment", Expression: ".environment"}}}}, Limits: model.Limits{MaxMetrics: 10}}
+	c := model.Collector{Request: model.RequestConfig{Type: fetch.RequestTypeHTTP}, Name: "json", Decoder: model.DecoderConfig{Type: "json"}, Transform: model.TransformConfig{Type: "jq", PreScript: `data["requests"] = 42`}, Metrics: []model.MetricRule{{Name: "application_requests_total", Description: "Total application requests", Type: model.CounterMetricType, Expression: ".requests", Labels: []model.LabelRule{{Name: "environment", Expression: ".environment"}}}}, Limits: model.Limits{MaxMetrics: 10}}
 	r := &fetch.HTTPResponse{Body: []byte(`{"environment":"test"}`), Headers: make(http.Header)}
 	if err := Validate(&model.Config{Collectors: []model.Collector{c}}); err != nil {
 		t.Fatal(err)
@@ -38,7 +38,7 @@ func TestStandardJSONMetricAndPreScript(t *testing.T) {
 func TestJSONArrayMetricsPairLabelsByIndex(t *testing.T) {
 	c := model.Collector{Request: model.RequestConfig{Type: fetch.RequestTypeHTTP},
 		Name:      "json_array",
-		Response:  model.ResponseConfig{Format: "json"},
+		Decoder:   model.DecoderConfig{Type: "json"},
 		Transform: model.TransformConfig{Type: "jq"},
 		Metrics: []model.MetricRule{{
 			Name:        "server_cpu",
@@ -77,7 +77,7 @@ func TestJSONArrayMissingValuesRespectMetricErrorMode(t *testing.T) {
 		t.Run(errorMode, func(t *testing.T) {
 			c := model.Collector{Request: model.RequestConfig{Type: fetch.RequestTypeHTTP},
 				Name:      "json_array_missing",
-				Response:  model.ResponseConfig{Format: "json"},
+				Decoder:   model.DecoderConfig{Type: "json"},
 				Transform: model.TransformConfig{Type: "jq"},
 				Metrics: []model.MetricRule{{
 					Name:       "server_cpu",
@@ -108,7 +108,7 @@ func TestJSONArrayMissingValuesRespectMetricErrorMode(t *testing.T) {
 }
 
 func TestStandardCSVMetricLabelsUseRowExpressions(t *testing.T) {
-	c := model.Collector{Request: model.RequestConfig{Type: fetch.RequestTypeHTTP}, Name: "csv", Response: model.ResponseConfig{Format: "csv", CSV: model.CSVConfig{Header: boolPtr(true)}}, Transform: model.TransformConfig{Type: "csv"}, Metrics: []model.MetricRule{{Name: "server_cpu", Description: "Server CPU utilization", Type: model.GaugeMetricType, Expression: "cpu", Labels: []model.LabelRule{{Name: "server", Expression: "server"}, {Name: "environment", Value: "production"}}}}, Limits: model.Limits{MaxMetrics: 10}}
+	c := model.Collector{Request: model.RequestConfig{Type: fetch.RequestTypeHTTP}, Name: "csv", Decoder: model.DecoderConfig{Type: "csv"}, Response: model.ResponseConfig{CSV: model.CSVConfig{Header: boolPtr(true)}}, Transform: model.TransformConfig{Type: "csv"}, Metrics: []model.MetricRule{{Name: "server_cpu", Description: "Server CPU utilization", Type: model.GaugeMetricType, Expression: "cpu", Labels: []model.LabelRule{{Name: "server", Expression: "server"}, {Name: "environment", Value: "production"}}}}, Limits: model.Limits{MaxMetrics: 10}}
 	if err := Validate(&model.Config{Collectors: []model.Collector{c}}); err != nil {
 		t.Fatal(err)
 	}
@@ -175,8 +175,8 @@ func TestCSVTransformDefaultsWithoutResponseConfiguration(t *testing.T) {
 		t.Fatal(err)
 	}
 	c := &cfg.Collectors[0]
-	if c.Response.Format != "auto" || c.Decoder.Type != "csv" || c.Response.CSV.Header != nil {
-		t.Fatalf("unexpected CSV defaults: format=%q decoder=%q header=%v", c.Response.Format, c.Decoder.Type, c.Response.CSV.Header)
+	if c.Decoder.Type != "csv" || c.Response.CSV.Header != nil {
+		t.Fatalf("unexpected CSV defaults: decoder=%q header=%v", c.Decoder.Type, c.Response.CSV.Header)
 	}
 	r := &fetch.HTTPResponse{Body: []byte("server,cpu\nweb01,72\nweb02,31\n"), Headers: make(http.Header)}
 	d, err := decode.Decode(r, c)
@@ -193,7 +193,7 @@ func TestCSVTransformDefaultsWithoutResponseConfiguration(t *testing.T) {
 }
 
 func TestPythonIsConfiguredAsTransform(t *testing.T) {
-	c := model.Collector{Request: model.RequestConfig{Type: fetch.RequestTypeHTTP}, Name: "python", Response: model.ResponseConfig{Format: "text"}, Transform: model.TransformConfig{Type: "python", Script: `metric(name="python_value", type="gauge", value=7)`, Libraries: []string{"lxml"}}, Metrics: []model.MetricRule{}, Limits: model.Limits{MaxMetrics: 10}}
+	c := model.Collector{Request: model.RequestConfig{Type: fetch.RequestTypeHTTP}, Name: "python", Decoder: model.DecoderConfig{Type: "text"}, Transform: model.TransformConfig{Type: "python", Script: `metric(name="python_value", type="gauge", value=7)`, Libraries: []string{"lxml"}}, Metrics: []model.MetricRule{}, Limits: model.Limits{MaxMetrics: 10}}
 	if err := Validate(&model.Config{Collectors: []model.Collector{c}}); err != nil {
 		t.Fatal(err)
 	}
@@ -235,7 +235,7 @@ func TestTransformInfersResponseFormatAndMetricErrorMode(t *testing.T) {
 }
 
 func TestTransformRejectsIncompatibleResponseFormat(t *testing.T) {
-	cfg := &model.Config{Collectors: []model.Collector{{Request: model.RequestConfig{Type: fetch.RequestTypeHTTP}, Name: "invalid", Response: model.ResponseConfig{Format: "json"}, Transform: model.TransformConfig{Type: "regex"}, Metrics: []model.MetricRule{{Name: "value", Type: model.GaugeMetricType, Expression: `value=(\d+)`}}}}}
+	cfg := &model.Config{Collectors: []model.Collector{{Request: model.RequestConfig{Type: fetch.RequestTypeHTTP}, Name: "invalid", Decoder: model.DecoderConfig{Type: "json"}, Transform: model.TransformConfig{Type: "regex"}, Metrics: []model.MetricRule{{Name: "value", Type: model.GaugeMetricType, Expression: `value=(\d+)`}}}}}
 	if err := Validate(cfg); err != nil {
 		t.Fatal(err)
 	}
@@ -288,8 +288,8 @@ func TestConfigValidationAppliesDefaults(t *testing.T) {
 		t.Fatal(err)
 	}
 	c := cfg.Collectors[0]
-	if c.Request.Method != http.MethodGet || c.Response.Format != "auto" || c.Decoder.Type != "text" {
-		t.Fatalf("unexpected inferred defaults: method=%q format=%q decoder=%q", c.Request.Method, c.Response.Format, c.Decoder.Type)
+	if c.Request.Method != http.MethodGet || c.Decoder.Type != "text" {
+		t.Fatalf("unexpected inferred defaults: method=%q decoder=%q", c.Request.Method, c.Decoder.Type)
 	}
 	if c.ErrorHandling.OnFetchError != "fail" || c.ErrorHandling.OnDecodeError != "fail" || c.ErrorHandling.OnTransformError != "fail" {
 		t.Fatalf("unexpected error policy defaults: %#v", c.ErrorHandling)
@@ -386,8 +386,8 @@ func TestLabelsAreStaticOrReadByTheirKeys(t *testing.T) {
   - name: servers
     request:
       type: http
-    response:
-      format: html
+    decoder:
+      type: html
     transform:
       type: css
     metrics:

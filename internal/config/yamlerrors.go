@@ -86,8 +86,11 @@ func yamlError(err error) error {
 func yamlMessage(message string) string {
 	if m := unknownFieldError.FindStringSubmatch(message); m != nil {
 		out := fmt.Sprintf("%s: unknown key %q in %s", m[1], m[2], yamlPlace(m[3]))
-		if m[2] == "type" && shortTypeName(m[3]) == "LabelRule" {
+		switch {
+		case m[2] == "type" && shortTypeName(m[3]) == "LabelRule":
 			out += "; a label has no type: set value for a static label, or expression to read it from the response"
+		case m[2] == "format" && shortTypeName(m[3]) == "ResponseConfig":
+			out += "; the decoder is chosen by decoder.type"
 		}
 		return out
 	}

@@ -83,7 +83,7 @@ func TestTruncateWorksWithAMetricsPrefix(t *testing.T) {
 // transform's output.
 func TestTruncateWithRegex(t *testing.T) {
 	c := model.Collector{
-		Name: "truncate", Request: model.RequestConfig{Type: fetch.RequestTypeHTTP}, Response: model.ResponseConfig{Format: "text"}, Transform: model.TransformConfig{Type: "regex"},
+		Name: "truncate", Request: model.RequestConfig{Type: fetch.RequestTypeHTTP}, Decoder: model.DecoderConfig{Type: "text"}, Transform: model.TransformConfig{Type: "regex"},
 		Limits: model.Limits{MaxLabelValueLength: 10},
 		Metrics: []model.MetricRule{{Name: "status", Type: model.GaugeMetricType, Expression: `(?P<value>\d+) (?P<text>.*)`, Labels: []model.LabelRule{
 			{Name: "text", Expression: "text", Truncate: true},

@@ -23,14 +23,20 @@ reload, with an error naming both places it was defined:
 duplicate collector "app_json": defined in /etc/exporter/config.yaml and in /etc/exporter/collectors.d/payments.yaml
 ```
 
-`response.format` is optional and defaults to `auto`. When omitted, the
-transform selects a deterministic decoder where possible: `regex` uses text,
+`decoder.type` chooses how the response is decoded. It is optional and
+defaults to `auto`, where the transform selects a deterministic decoder when it
+can: `regex` uses text,
 `csv` uses CSV, `css` uses HTML, and `prometheus` uses Prometheus exposition.
 JSON/YAML transforms use content detection. If the decoded response cannot be
 used by the selected transform, the probe fails with a clear mapping error.
-An explicit format remains useful for ambiguous or mislabeled endpoints.
+An explicit decoder remains useful for ambiguous or mislabeled endpoints:
 
-Supported response formats are `json`, `yaml`, `xml`, `csv`, `html`,
+```yaml
+decoder:
+  type: json   # the endpoint says text/plain, but sends JSON
+```
+
+Supported decoders are `json`, `yaml`, `xml`, `csv`, `html`,
 `prometheus`, `text`, and `auto`. Supported transforms include jq/yq, XPath,
 CSS, CSV, regex, Prometheus filtering, and Python. JSON and YAML expressions
 use the embedded jq-compatible engine (the expression language is also used

@@ -20,7 +20,7 @@ import (
 
 func cssItemsCollector(items, expression string, labels ...model.LabelRule) model.Collector {
 	return model.Collector{
-		Name: "rows", Request: model.RequestConfig{Type: fetch.RequestTypeHTTP}, Response: model.ResponseConfig{Format: "html"}, Transform: model.TransformConfig{Type: "css"},
+		Name: "rows", Request: model.RequestConfig{Type: fetch.RequestTypeHTTP}, Decoder: model.DecoderConfig{Type: "html"}, Transform: model.TransformConfig{Type: "css"},
 		Metrics: []model.MetricRule{{Name: "server_cpu", Type: model.GaugeMetricType, Items: items, Expression: expression, Labels: labels}},
 	}
 }

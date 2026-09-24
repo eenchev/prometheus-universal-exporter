@@ -1,6 +1,6 @@
 # OTLP export
 
-Optional OTLP/HTTP JSON export is configured at the top level. Probe metric sets and self-health metric sets are forwarded when enabled:
+Optional OTLP/HTTP JSON export is configured at the top level. Probe metric sets, self-health metric sets and the [static targets](STATIC-TARGETS.md) that set `export_via_otlp` are forwarded when enabled:
 
 ```yaml
 otlp:
@@ -67,17 +67,17 @@ time() - http_exporter_otlp_last_export_success_timestamp_seconds > 600
 
 Failing exports do not make the exporter unready by default: it still answers
 probes, and in Kubernetes a pod that is not ready stops receiving them. For an
-exporter whose job is delivering [scheduled targets](#scheduled-targets) over
+exporter whose job is delivering [static targets](STATIC-TARGETS.md) over
 OTLP, set `otlp.unready_after_failures: 3` to have `/ready` answer `503` after
 three failed exports in a row, until one gets through (see
 [Readiness](CONFIGURATION.md#readiness)). The count is per endpoint: a reload
 that changes `otlp.endpoint` starts it again.
 
 On `SIGTERM` or `SIGINT` the exporter first lets the probes in progress finish,
-then makes one last export, bounded by `otlp.timeout`, of what they and earlier
-probes queued, with a last self-metric snapshot. Scheduled targets are not
-scraped again for it. An export the shutdown interrupted is not lost: its data
-goes out with that last export. A second signal ends the process at once,
+then makes one last export, bounded by `otlp.timeout`, of what they, earlier
+probes and static targets queued, with a last self-metric snapshot. Static
+targets are not scraped again for it. An export the shutdown interrupted is not
+lost: its data goes out with that last export. A second signal ends the process at once,
 without it (see [Shutting down](CONFIGURATION.md#shutting-down)).
 
 Metrics keep their type:
@@ -96,143 +96,30 @@ of one OTLP metric. A `NaN` or infinite value is sent as `"NaN"`, `"Infinity"`
 or `"-Infinity"`, as the OTLP JSON encoding writes them, rather than failing
 the export.
 
-## Scheduled targets
+## Static targets
 
-The exporter can also scrape a fixed list of targets itself and deliver only
-those metrics over OTLP, with no Prometheus involved. Pass the list with
-`--otlp.targets-file`; `configs/targets.example.yaml` is a complete example, and
-`configs/config.otlp.example.yaml` is the matching exporter configuration with OTLP
-export enabled. `configs/targets.schema.json`, printed by
-`--otlp.targets-file-schema`, is the file's JSON Schema, for editors; start a
-target file with
+[Static targets](STATIC-TARGETS.md) are scraped by the exporter itself and
+served on the static targets endpoint. A target with `export_via_otlp: true` is
+also delivered here, on `otlp.interval`, with its health metrics, under an OTLP
+resource of its own that its `otlp` block sets over the exporter-wide
+`service_name` and `resource_attributes`:
 
 ```yaml
-# yaml-language-server: $schema=https://raw.githubusercontent.com/eenchev/prometheus-universal-exporter/main/configs/targets.schema.json
-```
-
-A target file looks like this:
-
-```yaml
+interval: 1m
 targets:
   - name: legacy_eu
     collector: legacy_text
     target: http://legacy.eu.example:8080
-    request:
-      path: /status
-      timeout: 5s
-      retry:
-        attempts: 2
-        backoff: 2s
-      headers:
-        X-Tenant: team-a
-      bearer_token_file: /var/run/prometheus-universal-exporter/target-auth/token
-    labels:
-      region: eu
+    export_via_otlp: true
     otlp:
       service_name: legacy-app
       resource_attributes:
         deployment.environment: production
 ```
 
-Each target names a collector from the exporter configuration and takes every
-per-scrape parameter `/probe` accepts — `method`, `path`, `body`, `timeout`,
-`insecure_skip_verify`, `follow_redirects`, `enable_http2` and the `retry`
-settings — overriding the collector's own request for that target only. Which of these
-keys a target may set follows its collector's
-[request type](CONFIGURATION.md#request-types); for `http` it is all of them,
-and for [`localfile`](LOCALFILE.md#scheduled-targets-over-otlp) only `path` and
-`timeout`, with `target` optional. It also takes static `headers` and its own target
-credentials, inline or file-backed, as basic authentication or a bearer token.
-Because the file is operator configuration rather than caller input, these
-headers are applied directly and are not filtered through the collector's
-`request.forward_headers` allowlist.
-
-A collector's [`{{param_…}}` placeholders](REQUESTS.md#path-parameters) — in
-its path, body, header values and query values — are filled by the target's
-`params`, since there is no probe to supply `param_<name>`:
-
-```yaml
-targets:
-  - name: acme_checkout
-    collector: graphql_status
-    target: https://api.example
-    params:
-      param_tenant: acme
-      param_service: checkout
-```
-
-Every placeholder must be filled, by `params` or a default, and every entry of
-`params` must fill one; otherwise the exporter refuses to start, naming the
-target, the collector and the parameter. A target's own `request.path`, `body`
-and `headers` are written out in full, without placeholders.
-
-Check a target file together with its configuration before deploying it:
-`prometheus-universal-exporter --dry-run --config.file=config.otlp.yaml --otlp.targets-file=targets.yaml`
-reports whether each would load, including whether every target names a
-collector that exists and whether OTLP export is enabled — see
-[Dry run](CONFIGURATION.md#dry-run).
-
-`labels` are added to every metric the target produces, without overwriting a
-label the collector already extracted. `otlp.service_name` and
-`otlp.resource_attributes` set the OTLP resource the target's metrics arrive
-under; both fall back to the exporter-wide `otlp` settings, and per-target
-attributes are merged over the exporter-wide ones. Targets with different
-identities are exported as separate `resourceMetrics` entries rather than
-being conflated.
-
-Each target is scraped on its own `interval`, as Prometheus scrapes a probe on
-its `scrape_interval`, not on the export's `otlp.interval`: the export only
-delivers what the scrapes queued since the last one, the latest value of each
-series.
-
-```yaml
-interval: 1m            # for every target that sets none; 1m when unset
-targets:
-  - name: payments
-    collector: app_json
-    target: http://payments:8080
-    interval: 15s       # this target's own
-    request:
-      timeout: 10s      # at most the interval
-      retry:
-        attempts: 2
-        backoff: 1s
-```
-
-A target's first scrape comes at a point within its interval set by its name,
-so targets sharing an interval are spread over it rather than all scraped at
-once, and then every interval from there, however long a scrape takes. A scrape
-must end within its interval, so `request.timeout` may not be longer; one still
-running when the next is due makes that one skipped, with a
-`scheduled target scrape skipped` warning, rather than overlapping it. The
-interval is at least `1s`. A target scraped more often than `otlp.interval`
-exports only its latest values; one scraped less often exports its last
-result again only when scraped again.
-
-Retries come from the collector's `request.retry`, and a target's own
-`request.retry` replaces them, as the `retry_attempts` and `retry_backoff`
-probe parameters do for a probe. Scrapes go through the same fetch, decode and
-transform path as `/probe`, so collector limits, the response cache and
-[`error_handling`](CONFIGURATION.md#when-a-stage-of-the-probe-fails) all
-apply. A scheduled scrape and an identical `/probe` request share cache
-entries, and under `log` or `ignore` a failed stage leaves the target up with
-nothing of the collector's to export, as it answers a probe `200` with an
-empty body. With [`cache.stale_if_error`](CONFIGURATION.md#serving-the-last-good-result-when-the-target-fails),
-a failed scrape exports the target's last good result, marked by
-`http_exporter_result_stale` 1, while its `http_exporter_target_up` is `0`. Scheduled targets are never exposed on the self-metrics path and are not
-reachable through `/probe`.
-
-Every scheduled scrape also exports `http_exporter_target_up` and
-`http_exporter_target_scrape_duration_seconds` under that target's resource and
-labels, so a failing target is visible in the OTLP backend instead of simply
-being absent. Their scrapes are counted in the existing per-collector
-self-metrics rather than per-target series, and `http_exporter_scheduled_targets`
-reports how many targets loaded.
-
-The file is only accepted when OTLP export is enabled. Starting the exporter
-with a targets file while `otlp.enabled` is `false`, or without an
-`otlp.endpoint`, logs `invalid scheduled target configuration; exiting` and
-terminates with a non-zero exit code. The file is reloaded on the same terms as
-the exporter configuration: an invalid document, or a configuration change that
-would disable OTLP while targets are loaded, is rejected and the last valid pair
-stays active.
+Targets with different identities are exported as separate `resourceMetrics`
+entries. Each export delivers the latest value of each series the targets'
+scrapes left since the last one: they are scraped on their own intervals, not
+on `otlp.interval`. A target that sets `export_via_otlp` while OTLP export is
+disabled or has no endpoint stops the exporter at startup, and a reload that
+would disable OTLP export while one is loaded is rejected.

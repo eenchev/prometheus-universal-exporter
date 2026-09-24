@@ -16,7 +16,7 @@ import (
 
 func landingServer(t *testing.T, cfg *model.Config) *Server {
 	t.Helper()
-	server := newScheduledServer(t, cfg, nil)
+	server := newStaticServer(t, cfg, nil)
 	server.logger = testutil.QuietLogger(t)
 	return server
 }

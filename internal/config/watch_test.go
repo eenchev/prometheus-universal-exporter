@@ -139,7 +139,7 @@ func TestWatchStillRejectsAnInvalidConfiguration(t *testing.T) {
 	}
 }
 
-func TestWatchReloadsTheScheduledTargetFile(t *testing.T) {
+func TestWatchReloadsTheStaticTargetFile(t *testing.T) {
 	dir := t.TempDir()
 	configPath := dir + "/config.yaml"
 	document := "otlp:\n  enabled: true\n  endpoint: http://collector.invalid/v1/metrics\n" +
@@ -153,14 +153,14 @@ func TestWatchReloadsTheScheduledTargetFile(t *testing.T) {
 		t.Fatal(err)
 	}
 	targetsPath := dir + "/targets.yaml"
-	if err := os.WriteFile(targetsPath, []byte("targets:\n  - name: one\n    collector: watched\n    target: http://a.invalid\n"), 0600); err != nil {
+	if err := os.WriteFile(targetsPath, []byte("interval: 1m\ntargets:\n  - name: one\n    collector: watched\n    target: http://a.invalid\n"), 0600); err != nil {
 		t.Fatal(err)
 	}
-	file, err := LoadTargets(targetsPath)
+	file, err := LoadStaticTargets(targetsPath)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := ValidateTargets(file); err != nil {
+	if err := ValidateStaticTargets(file); err != nil {
 		t.Fatal(err)
 	}
 	manager := NewManager(cfg, configPath, slog.Default())
@@ -172,17 +172,17 @@ func TestWatchReloadsTheScheduledTargetFile(t *testing.T) {
 	defer cancel()
 	go manager.ReloadLoop(ctx)
 
-	if err := os.WriteFile(targetsPath, []byte("targets:\n  - name: two\n    collector: watched\n    target: http://b.invalid\n"), 0600); err != nil {
+	if err := os.WriteFile(targetsPath, []byte("interval: 1m\ntargets:\n  - name: two\n    collector: watched\n    target: http://b.invalid\n"), 0600); err != nil {
 		t.Fatal(err)
 	}
 	deadline := time.Now().Add(5 * time.Second)
 	for time.Now().Before(deadline) {
-		if targets := manager.Targets(); len(targets) == 1 && targets[0].Name == "two" {
+		if targets := manager.StaticTargets(); len(targets) == 1 && targets[0].Name == "two" {
 			return
 		}
 		time.Sleep(5 * time.Millisecond)
 	}
-	t.Fatalf("the watch did not reload the target file; targets are %+v", manager.Targets())
+	t.Fatalf("the watch did not reload the target file; targets are %+v", manager.StaticTargets())
 }
 
 func TestWatchIntervalIsHonoured(t *testing.T) {

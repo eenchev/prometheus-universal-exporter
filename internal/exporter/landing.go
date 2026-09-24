@@ -62,8 +62,9 @@ type landingPage struct {
 	SelfMetricsPath              string
 	Lifecycle                    bool
 	Collectors                   int
-	ScheduledTargets             int
-	OTLPEnabled                  bool
+	StaticTargetsPath            string
+	StaticTargets                int
+	StaticTargetsViaOTLP         int
 	Docs                         string
 }
 
@@ -82,14 +83,17 @@ var landingTemplate = template.Must(template.New("landing").Parse(`<!DOCTYPE htm
 
 <h2>Collectors</h2>
 <p>{{.Collectors}} collector{{if ne .Collectors 1}}s{{end}} loaded. <a href="/collectors">Probe a target through one</a>, with the parameters and credentials it takes.</p>
-{{- if .OTLPEnabled}}
-<p class="meta">{{.ScheduledTargets}} scheduled target{{if ne .ScheduledTargets 1}}s{{end}} exported over OTLP.</p>
+{{- if .StaticTargets}}
+
+<h2>Static targets</h2>
+<p>{{.StaticTargets}} static target{{if ne .StaticTargets 1}}s{{end}}, scraped by the exporter on their own intervals and served at <a href="{{.StaticTargetsPath}}">{{.StaticTargetsPath}}</a>{{if .StaticTargetsViaOTLP}}; {{.StaticTargetsViaOTLP}} also exported over OTLP{{end}}.</p>
 {{- end}}
 
 <h2>Endpoints</h2>
 <ul class="links">
 <li><a href="/collectors">/collectors</a> — the collectors, and a form to probe through each</li>
 <li><code>/probe?collector=&lt;name&gt;&amp;target=&lt;target&gt;</code> — scrape a target through a collector</li>
+<li><a href="{{.StaticTargetsPath}}">{{.StaticTargetsPath}}</a> — the static targets' latest results</li>
 <li><a href="{{.SelfMetricsPath}}">{{.SelfMetricsPath}}</a> — the exporter's own metrics</li>
 <li><a href="/health">/health</a> and <a href="/ready">/ready</a> — liveness and readiness</li>
 {{- if .Lifecycle}}
@@ -109,12 +113,17 @@ func (s *Server) landingHandler(w http.ResponseWriter, _ *http.Request) {
 	build := BuildVersion()
 	page := landingPage{
 		Version: build.Version, Revision: build.Revision, GoVersion: build.GoVersion,
-		SelfMetricsPath:  s.selfMetricsEndpoint(),
-		Lifecycle:        s.lifecycle,
-		Collectors:       len(cfg.Collectors),
-		ScheduledTargets: len(s.manager.Targets()),
-		OTLPEnabled:      cfg.OTLP.Enabled,
-		Docs:             landingDocs,
+		SelfMetricsPath:   s.selfMetricsEndpoint(),
+		Lifecycle:         s.lifecycle,
+		Collectors:        len(cfg.Collectors),
+		StaticTargetsPath: s.staticTargetsEndpoint(),
+		Docs:              landingDocs,
+	}
+	for _, target := range s.manager.StaticTargets() {
+		page.StaticTargets++
+		if target.ExportViaOTLP {
+			page.StaticTargetsViaOTLP++
+		}
 	}
 	s.renderPage(w, landingTemplate, page)
 }

@@ -42,7 +42,7 @@ type RequestOverrides struct {
 	Body               *string
 	InsecureSkipVerify *bool
 	RetryAttempts      *int
-	// RetryNonIdempotent is a scheduled target's retry.non_idempotent; no
+	// RetryNonIdempotent is a static target's retry.non_idempotent; no
 	// probe parameter sets it.
 	RetryNonIdempotent *bool
 	RetryBackoff       *time.Duration
@@ -473,7 +473,7 @@ func ReadCredentialFile(path string) (string, error) {
 }
 
 // DirectoryRead is what reading a directory produced. It and FileRead live
-// outside the localfile build tag because the probe and scheduled-scrape paths
+// outside the localfile build tag because the probe and static target paths
 // that consume them are shared by every request type.
 type DirectoryRead struct {
 	// Path is the directory, for logs.

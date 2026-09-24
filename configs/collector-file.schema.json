@@ -141,7 +141,7 @@
             "type": "object"
           },
           "max_concurrent_probes": {
-            "description": "How many trips to its targets the collector makes at once; a probe over the limit is answered 503 at once, a scheduled target waits. Omit or 0 for the default, 32.",
+            "description": "How many trips to its targets the collector makes at once; a probe over the limit is answered 503 at once, a static target waits. Omit or 0 for the default, 32.",
             "minimum": 0,
             "type": "integer"
           },

@@ -17,12 +17,12 @@ import (
 	"github.com/eenchev/prometheus-universal-exporter/internal/transform"
 )
 
-// A probe and a scheduled target's scrape make the same trip: fetch the
+// A probe and a static target's scrape make the same trip: fetch the
 // target, decode the response, transform it and validate the result, with
 // the collector's error_handling deciding what a failed stage does. collect
 // is that trip, for both. What differs is around it: how a probe waits for a
-// slot, what it answers and where a scheduled target's result goes, which
-// the callers keep (server.go, scheduled.go).
+// slot, what it answers and where a static target's result goes, which
+// the callers keep (server.go, statictarget.go).
 
 // collectJob is what one trip needs.
 type collectJob struct {

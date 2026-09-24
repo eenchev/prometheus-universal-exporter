@@ -13,7 +13,8 @@
   "--python.path" "set server.pythonPath instead"
   "--config.watch" "set server.watchConfig instead"
   "--config.watch-interval" "set server.watchConfigInterval instead"
-  "--otlp.targets-file" "set otlpTargets.enabled instead"
+  "--static-targets-file" "set staticTargets.enabled and staticTargets.data instead"
+  "--web.static-targets-path" "set staticTargets.path instead"
   "--config.export-env" "set server.expandEnv instead"
   "--log.level" "set server.logLevel instead"
   "--probe.timeout-offset" "set server.probeTimeoutOffset instead"
@@ -27,7 +28,7 @@
   "--dry-run" "would make the exporter validate its configuration and exit, so the pod would never serve; run --dry-run as a separate command, a Job or an init container instead"
   "--config.schema" "would make the exporter print the configuration schema and exit, so the pod would never serve; run it as a separate command instead"
   "--config.collector-file-schema" "would make the exporter print the collector file schema and exit, so the pod would never serve; run it as a separate command instead"
-  "--otlp.targets-file-schema" "would make the exporter print the scheduled target file schema and exit, so the pod would never serve; run it as a separate command instead"
+  "--static-targets-file-schema" "would make the exporter print the static target file schema and exit, so the pod would never serve; run it as a separate command instead"
   "--version" "would make the exporter print its version and exit, so the pod would never serve; the version is in the http_exporter_build_info self-metric"
   "--help" "would make the exporter print its usage and exit, so the pod would never serve"
   "--h" "would make the exporter print its usage and exit, so the pod would never serve" -}}
@@ -202,22 +203,36 @@ app.kubernetes.io/managed-by: {{ .Release.Service }}
 {{- define "prometheus-universal-exporter.pythonPath" -}}
 {{- default "/usr/local/bin/python3" .Values.server.pythonPath -}}
 {{- end }}
-{{- define "prometheus-universal-exporter.targetsFile" -}}
-{{- default "targets.yaml" .Values.otlpTargets.fileName -}}
+{{- define "prometheus-universal-exporter.staticTargetsFile" -}}
+{{- default "static-targets.yaml" .Values.staticTargets.fileName -}}
+{{- end }}
+{{- define "prometheus-universal-exporter.staticTargetsPath" -}}
+{{- $path := default "/static-targets" .Values.staticTargets.path -}}
+{{- if eq $path .Values.selfMetrics.path -}}
+{{- fail (printf "staticTargets.path %q is also selfMetrics.path; the two endpoints need paths of their own" $path) -}}
+{{- end -}}
+{{- $path -}}
 {{- end }}
 {{- define "prometheus-universal-exporter.validateTargets" -}}
-{{- if .Values.otlpTargets.enabled -}}
-{{- if .Values.config.enabled -}}
-{{- if not (trim (.Values.otlpTargets.data | default "")) -}}
-{{- fail "otlpTargets.enabled requires otlpTargets.data to hold the scheduled target document" -}}
+{{- if .Values.staticTargets.enabled -}}
+{{- if not (trim (.Values.staticTargets.data | default "")) -}}
+{{- fail "staticTargets.enabled requires staticTargets.data to hold the static target document" -}}
 {{- end -}}
+{{- if .Values.config.enabled -}}
 {{- $raw := index .Values.config.data "config.yaml" | default "" -}}
 {{- if not (trim $raw) -}}
 {{- fail "config.data must contain a config.yaml entry, which is the file the exporter reads. When supplying it with --set-file, quote the whole argument so the escaped dot reaches helm instead of being consumed by the shell." -}}
 {{- end -}}
 {{- $config := fromYaml $raw -}}
+{{- $targets := fromYaml .Values.staticTargets.data -}}
+{{- /* A target exported over OTLP needs OTLP export; the exporter refuses to
+       start without it, so rendering fails first. */ -}}
 {{- if not (dig "otlp" "enabled" false $config) -}}
-{{- fail "otlpTargets.enabled requires otlp.enabled: true in config.data.config.yaml; the exporter refuses to start with scheduled targets while OTLP export is disabled" -}}
+{{- range (get $targets "targets" | default list) -}}
+{{- if and (kindIs "map" .) (get . "export_via_otlp") -}}
+{{- fail (printf "static target %v sets export_via_otlp, which needs otlp.enabled: true in config.data.config.yaml; the exporter refuses to start without it" (get . "name" | default "(unnamed)")) -}}
+{{- end -}}
+{{- end -}}
 {{- end -}}
 {{- end -}}
 {{- end -}}

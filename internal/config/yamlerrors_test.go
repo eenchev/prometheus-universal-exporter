@@ -50,27 +50,27 @@ func TestYAMLSyntaxErrorsAreUnchanged(t *testing.T) {
 	}
 }
 
-// A scheduled target's request block refuses keys it does not know, at any
+// A static target's request block refuses keys it does not know, at any
 // depth, as the rest of the file does, instead of ignoring them.
 func TestTargetRequestRefusesUnknownKeys(t *testing.T) {
 	for name, test := range map[string]struct {
 		request string
 		want    string
 	}{
-		"misspelt key":     {"{pth: /status}", `line 5: unknown key "pth" in a scheduled target's request`},
-		"nested key":       {"{retry: {atempts: 2}}", `line 5: unknown key "atempts" in retry`},
-		"basic_auth key":   {"{basic_auth: {user: a}}", `line 5: unknown key "user" in basic_auth`},
-		"list for a value": {"{method: [GET]}", "line 5: expected a single value, not a list"},
+		"misspelt key":     {"{pth: /status}", `line 6: unknown key "pth" in a static target's request`},
+		"nested key":       {"{retry: {atempts: 2}}", `line 6: unknown key "atempts" in retry`},
+		"basic_auth key":   {"{basic_auth: {user: a}}", `line 6: unknown key "user" in basic_auth`},
+		"list for a value": {"{method: [GET]}", "line 6: expected a single value, not a list"},
 	} {
 		t.Run(name, func(t *testing.T) {
-			document := "targets:\n  - name: a\n    collector: c\n    target: http://x\n    request: " + test.request + "\n"
-			_, err := LoadTargets(testutil.WriteFile(t, "targets.yaml", document))
+			document := "interval: 1m\ntargets:\n  - name: a\n    collector: c\n    target: http://x\n    request: " + test.request + "\n"
+			_, err := LoadStaticTargets(testutil.WriteFile(t, "targets.yaml", document))
 			if err == nil || err.Error() != test.want {
 				t.Fatalf("error %v, want %q", err, test.want)
 			}
 		})
 	}
-	file, err := LoadTargets(testutil.WriteFile(t, "targets.yaml", "targets:\n  - name: a\n    collector: c\n    target: http://x\n    request: {path: /s, retry: {attempts: 2, backoff: 1s}, headers: {X-A: b}}\n"))
+	file, err := LoadStaticTargets(testutil.WriteFile(t, "targets.yaml", "interval: 1m\ntargets:\n  - name: a\n    collector: c\n    target: http://x\n    request: {path: /s, retry: {attempts: 2, backoff: 1s}, headers: {X-A: b}}\n"))
 	if err != nil {
 		t.Fatalf("a valid request block was refused: %v", err)
 	}

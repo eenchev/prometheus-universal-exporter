@@ -176,7 +176,7 @@ func applyCollectorLabels(set *model.MetricSet, t model.TransformConfig) {
 // across collectors, and without it a logged failure does not say which
 // collector to go and look at. The line reads the same for log and fail, so a
 // failing rule reads the same in the log whichever mode it has and whether it
-// failed on a probe or on a scheduled target.
+// failed on a probe or on a static target.
 //
 // Under log, a rule can fail once per series — every row of a table, every item
 // — so within a Transform its failures are gathered (withRuleFailures) and the

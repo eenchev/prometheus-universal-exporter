@@ -340,19 +340,19 @@ func TestFailIsCountedAsAFailedProbe(t *testing.T) {
 	}
 }
 
-// A scheduled target has no HTTP response to carry an error in. fail there
+// A static target has no HTTP response to carry an error in. fail there
 // means the scrape exports nothing but the health metric saying it failed, and
 // log means it exports what it could.
-func TestErrorModesOnAScheduledTarget(t *testing.T) {
+func TestErrorModesOnAStaticTarget(t *testing.T) {
 	for mode, wantUp := range map[string]float64{model.ErrorModeFail: 0, model.ErrorModeLog: 1} {
 		t.Run(mode, func(t *testing.T) {
 			testutil.CaptureLogs(t)
 			target := jsonTarget(t, nil)
 			cfg := &model.Config{Collectors: []model.Collector{modeCollector("scheduled", mode)}, OTLP: otlpConfig("http://collector.invalid/v1/metrics")}
-			file := &model.TargetFile{Targets: []model.ScheduledTarget{{Name: "one", Collector: "scheduled", Target: target.URL}}}
-			server := newScheduledServer(t, cfg, file)
+			file := &model.StaticTargetFile{Interval: model.Duration(time.Minute), Targets: []model.StaticTarget{{ExportViaOTLP: true, Name: "one", Collector: "scheduled", Target: target.URL}}}
+			server := newStaticServer(t, cfg, file)
 
-			server.scrapeScheduledTargets(context.Background(), 10*time.Second)
+			server.scrapeStaticTargets(context.Background(), 10*time.Second)
 			resources := server.drainOTLP()
 			if len(resources) != 1 {
 				t.Fatalf("resources=%d", len(resources))

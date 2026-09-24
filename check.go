@@ -20,7 +20,7 @@ import (
 //
 // Every check below calls the function startup calls for the same step —
 // config.Load, transform.CheckPythonScripts, validateWatchInterval,
-// config.LoadTargets, config.ValidateTargets and config.ValidateTargetsAgainst —
+// config.LoadStaticTargets, config.ValidateStaticTargets and config.ValidateStaticTargetsAgainst —
 // so the verdict cannot drift from what a real
 // start would do. A check that passes means the same files, with the same
 // flags, would start; one that fails names the step and the reason.
@@ -38,12 +38,12 @@ const (
 
 // checkInputs are the flags that decide what startup loads and how.
 type checkInputs struct {
-	ConfigFile    string
-	TargetFile    string
-	PythonPath    string
-	ExpandEnv     bool
-	Watch         bool
-	WatchInterval time.Duration
+	ConfigFile       string
+	StaticTargetFile string
+	PythonPath       string
+	ExpandEnv        bool
+	Watch            bool
+	WatchInterval    time.Duration
 }
 
 // checkReport is the document --dry-run prints. Status is "ok" only when every
@@ -151,8 +151,8 @@ func checkStartup(in checkInputs) checkReport {
 		}
 	}
 
-	if in.TargetFile != "" {
-		results = append(results, checkTargets(in.TargetFile, options, conf))
+	if in.StaticTargetFile != "" {
+		results = append(results, checkTargets(in.StaticTargetFile, options, conf))
 	}
 
 	status := checkOK
@@ -164,7 +164,7 @@ func checkStartup(in checkInputs) checkReport {
 	return checkReport{Status: status, Checks: results, RequestTypes: fetch.BuiltRequestTypes()}
 }
 
-// checkTargets validates the scheduled target document on its own and then
+// checkTargets validates the static target document on its own and then
 // against the configuration. The first half needs no configuration, so a
 // broken target file is still reported when the configuration is broken too.
 // configDetails summarises a configuration that loaded. A deprecated spelling
@@ -208,12 +208,12 @@ func logNotices(logger *slog.Logger, result checkResult) {
 }
 
 func checkTargets(path string, options []config.LoadOption, conf *model.Config) checkResult {
-	file, err := config.LoadTargets(path, options...)
+	file, err := config.LoadStaticTargets(path, options...)
 	if err == nil {
-		err = config.ValidateTargets(file)
+		err = config.ValidateStaticTargets(file)
 	}
 	if err != nil {
-		return failedCheck("targets", path, err)
+		return failedCheck("static_targets", path, err)
 	}
 	names := make([]string, 0, len(file.Targets))
 	for _, target := range file.Targets {
@@ -221,16 +221,16 @@ func checkTargets(path string, options []config.LoadOption, conf *model.Config) 
 	}
 	details := map[string]any{"targets": names}
 	if conf == nil {
-		result := skippedCheck("targets", path, "the file is valid on its own, but could not be checked against the configuration, which did not load")
+		result := skippedCheck("static_targets", path, "the file is valid on its own, but could not be checked against the configuration, which did not load")
 		result.Details = details
 		return result
 	}
-	if err := config.ValidateTargetsAgainst(file, conf); err != nil {
-		result := failedCheck("targets", path, err)
+	if err := config.ValidateStaticTargetsAgainst(file, conf); err != nil {
+		result := failedCheck("static_targets", path, err)
 		result.Details = details
 		return result
 	}
-	return checkResult{Check: "targets", File: path, Status: checkOK, Details: details}
+	return checkResult{Check: "static_targets", File: path, Status: checkOK, Details: details}
 }
 
 func failedCheck(check, file string, err error) checkResult {

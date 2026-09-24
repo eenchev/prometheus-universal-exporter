@@ -183,7 +183,7 @@ Prometheus's scrape timeout, so a probe that ran out says which deadline it
 had. A target that accepts the connection and never answers MUST NOT be able
 to hold a probe, and its collector's `max_concurrent_probes` slot, for ever. A cache hit needs no budget, and identical probes that
 share one trip (§ 42.13a) share the budget of the probe that started it.
-Scheduled targets are not affected.
+Static targets are not affected.
 
 The `insecure_skip_verify` override MUST take precedence over
 `request.tls.insecure_skip_verify` for the individual scrape. Invalid boolean
@@ -412,7 +412,7 @@ are checked, the result is cached, or it is written to `/probe` or queued for
 OTLP, so every consumer sees the same names. A histogram or summary keeps its
 family under the prefixed name. The response cache MUST be keyed on the
 collector definition including the prefix. The exporter's own `http_exporter_*`
-metrics, including scheduled-target health metrics, MUST NOT be prefixed. Logs
+metrics, including static target health metrics, MUST NOT be prefixed. Logs
 and probe errors MUST name a metric rule as configured, without the prefix.
 
 ### 5.0a Sizes
@@ -451,21 +451,21 @@ Each type MUST own, and the implementation MUST keep in one registry:
   `400 Bad Request` naming the parameter and the type, before the target is
   contacted. A parameter no type accepts is not an override and MUST be ignored,
   as it always has been, since a monitor may carry parameters of its own;
-- the keys a scheduled target's `request` block may set (§ 42.14). A key its
+- the keys a static target's `request` block may set (§ 42.14). A key its
   collector's type does not accept MUST be rejected at startup naming the
   target, the key, the collector and the type;
 - its own validation — required keys, defaults and cross-key rules;
 - its own fetch. Decoding, transforms, error policies, limits, caching and
   exposition MUST be shared by every type, so a new type adds only how bytes
   are obtained;
-- what a target is for it: whether a probe or scheduled target may leave
+- what a target is for it: whether a probe or static target may leave
   `target` out, how a target is checked — a probe's failing check answered with
-  `400` before anything is fetched, a scheduled target's at load — how a target
-  is shown in logs, error bodies and the `target` label of scheduled health
+  `400` before anything is fetched, a static target's at load — how a target
+  is shown in logs, error bodies and the `target` label of static target health
   series, the `url` and `http_method` labels of its verbose self-metrics
   (§ 22.1), and the name of the stage a failed fetch is reported under.
 
-Every key of the request block, and of a scheduled target's request block, MUST
+Every key of the request block, and of a static target's request block, MUST
 be accepted by at least one type, and a test MUST enforce it, so a key cannot be
 added without deciding which types it belongs to.
 
@@ -525,7 +525,7 @@ type.
 
 It MUST accept these `/probe` parameters: `method`, `path`, `timeout`, `body`,
 `insecure_skip_verify`, `follow_redirects`, `enable_http2`, `retry_attempts`,
-`retry_backoff`, `header_<name>` and `param_<name>`. A scheduled target using an
+`retry_backoff`, `header_<name>` and `param_<name>`. A static target using an
 `http` collector MAY set `method`, `path`, `body`, `timeout`,
 `insecure_skip_verify`, `follow_redirects`, `enable_http2`, `retry`, `headers`,
 and the basic and bearer credential keys.
@@ -552,10 +552,10 @@ key.
 
 The file read MUST be `root` / target / `path`:
 
-- `target` MAY be left out, by a probe and by a scheduled target. When given it
+- `target` MAY be left out, by a probe and by a static target. When given it
   MUST be a path relative to `root`, an absolute path inside `root`, or a
   `file://` URL of one, and a target leading outside `root` MUST be refused —
-  a probe with `400` before anything is read, a scheduled target at load. A
+  a probe with `400` before anything is read, a static target at load. A
   `file://` URL MUST carry an absolute path.
 - A `path` probe parameter replaces `request.path` and is held to the same
   rules. A path parameter value MUST be a single file or directory name: `/`,
@@ -589,7 +589,7 @@ that does not exist, and one the exporter may not read, MUST each be named as
 such.
 
 It MUST accept these `/probe` parameters: `path`, `timeout` and
-`param_<name>`. A scheduled target using a `localfile` collector MAY set
+`param_<name>`. A static target using a `localfile` collector MAY set
 `path` and `timeout`. Its verbose self-metrics MUST carry the file's `file://`
 URL, with path parameters as their placeholders, as `url`, and `READ` as
 `http_method`, so they are never mistaken for the per-collector series, which
@@ -609,7 +609,7 @@ starting with `.` MUST match only a pattern starting with `.`. A missing
 directory, or a target naming something other than a directory, MUST fail the
 scrape in the `file` stage under `on_fetch_error`. There is no file to name, so
 the `path` and `param_<name>` probe parameters MUST be refused with `400`, and
-`request.path` in a scheduled target at load, each saying why.
+`request.path` in a static target at load, each saying why.
 
 The directory MUST be listed in batches, and the listing MUST stop after ten
 times `max_files` entries, and at least 1000, whatever they are, logging a
@@ -667,7 +667,7 @@ localfile_files_skipped         the files beyond max_files
 
 A file beyond `max_files` MUST NOT get a series of its own, so the `file`
 label never has more than `max_files` values. `limits.max_metrics` MUST apply to the whole answer. The verbose
-`url` label MUST be the directory's `file://` URL ending in `/`. Scheduled
+`url` label MUST be the directory's `file://` URL ending in `/`. Static
 targets MUST read directories the same way.
 
 A collector MAY set `cache`, a mapping of `ttl`, the time to live of a cached
@@ -868,13 +868,13 @@ this order, without cycles:
 5. `transform`: transforms, metric rules and the Python worker pool.
 6. `config`: loading, validating and reloading the configuration and target
    files, and their schemas.
-7. `exporter`: the HTTP server, the probe pipeline, self-metrics, scheduled
+7. `exporter`: the HTTP server, the probe pipeline, self-metrics, static
    targets and OTLP export.
 
 `internal/testutil` MAY hold helpers shared by the tests of several packages
 and MUST NOT be imported outside tests.
 
-A probe and a scheduled target's scrape MUST make their trip to the target —
+A probe and a static target's scrape MUST make their trip to the target —
 fetch, decode, transform, validate, with the collector's `error_handling` —
 through one shared function, so the two cannot drift apart; only what
 surrounds the trip differs (waiting for or refusing a concurrency slot, the
@@ -1203,7 +1203,7 @@ It deliberately differs from expfmt where expfmt was wrong for a scrape target:
   expfmt attached to the previous line's family, and names that mix bare and
   quoted parts, such as `a"b"`, which expfmt spliced together.
 - It never panics. expfmt panicked on inputs such as `{b="c",} 1`, which a
-  target could serve to crash the exporter from a scheduled scrape, where no
+  target could serve to crash the exporter from a static target scrape, where no
   HTTP handler recovers the panic.
 
 Families are returned in the order they were first seen, and series in the
@@ -1640,10 +1640,10 @@ policy governs failures of the transform as a whole, while `fail` is a
 statement about one metric, more specific than the collector-wide setting; a
 lenient `on_transform_error` MUST NOT turn it back into a partial success.
 
-A scheduled target (§ 42.14) has no HTTP response to carry the error. Under
-`fail` its scrape MUST export nothing but `http_exporter_target_up` at 0, exactly
-as for any other failed scheduled scrape; under `ignore` and `log` it MUST export
-what could be extracted.
+A static target (§ 42.14) has no HTTP response to carry the error. Under
+`fail` its scrape MUST produce nothing but `http_exporter_target_up` at 0,
+exactly as for any other failed static target scrape; under `ignore` and `log`
+it MUST produce what could be extracted.
 
 Each label entry MUST have `name` and exactly one of `value` and `expression`;
 setting both or neither MUST be rejected at startup. A `value` label is static:
@@ -1831,11 +1831,11 @@ log      carry on and log the failure at warning level
 ignore   carry on, logging the failure only at debug level
 ```
 
-The policies MUST apply alike to a probe and to a scheduled target's scrape
+The policies MUST apply alike to a probe and to a static target's scrape
 (§ 42.14). A probe carrying on answers `200` with no collector metrics; a
-scheduled scrape carrying on exports `http_exporter_target_up` 1 and no
+static target scrape carrying on produces `http_exporter_target_up` 1 and no
 collector metrics, counts as a success, and is logged at warning level under
-`log` as `scheduled target stage failed; continuing` — through the failure log
+`log` as `static target stage failed; continuing` — through the failure log
 (§ 25.1), and without logging the target as recovered, since the stage still
 failed. A metric rule with `error_mode: fail` (§ 18.1) MUST fail the scrape of
 either whatever `on_transform_error` says. Failing to read target credentials,
@@ -1993,7 +1993,7 @@ one a Python script or pre-script emits:
 Any other value MUST be rejected when the configuration loads. A classic name
 MUST NOT be changed by either scheme, and label values MUST NOT be escaped.
 Escaping MUST happen after `metrics_prefix` is joined, in the one place every
-transform's output passes through, so it applies to probes, scheduled targets
+transform's output passes through, so it applies to probes, static targets
 and each file of a directory alike. A label map shared among metrics MUST NOT
 be changed in place. Two labels of one series that escape to one name MUST fail
 the scrape naming both, and two metrics that do so are duplicate series and
@@ -2038,7 +2038,8 @@ http_exporter_probes_rejected_total
 
 http_exporter_build_info
 http_exporter_collector_config_valid
-http_exporter_scheduled_targets
+http_exporter_static_targets
+http_exporter_static_targets_exported_via_otlp
 
 http_exporter_config_last_reload_successful
 http_exporter_config_last_reload_success_timestamp_seconds
@@ -2079,7 +2080,7 @@ http_exporter_config_reloads_total{file, result}                  counter
 ```
 
 `file` MUST be `config` for the configuration file with its collector files, and
-`targets` for the scheduled target document, reported only when one is
+`static_targets` for the static target document, reported only when one is
 configured. Loading at startup MUST count as a successful load, setting the
 first two; `http_exporter_config_reloads_total` MUST count only reloads after
 startup, with `result` `success` or `failure`, both published from the start.
@@ -2258,7 +2259,7 @@ MUST therefore join the family the per-collector block has already declared,
 without a second `HELP` or `TYPE` line; only the families verbose mode
 introduces may declare their own.
 
-Scheduled targets MUST be recorded the same way as probe requests. A scheduled
+Static targets MUST be recorded the same way as probe requests. A static
 target's request is fully described by the configuration, so its series MUST
 exist from the first scrape of the self-metrics endpoint rather than only after
 the target has been collected once, and MUST survive a reload that adds or keeps
@@ -2274,7 +2275,7 @@ A response served from the collector response cache MUST NOT move the request's
 last-scrape timestamp. No HTTP request is made, so the status, duration and
 timestamp MUST keep describing the scrape that filled the cache; the cache hit
 itself MUST still be counted, on the collector and on the request alike. This
-applies to both `/probe` and scheduled targets.
+applies to both `/probe` and static targets.
 
 ### 22.1a Verbose collector metrics
 
@@ -2299,7 +2300,7 @@ http_exporter_python_pool_runs_total                  counter   {outcome}
 
 `http_exporter_collector_scrape_duration_seconds` MUST observe the duration of
 every trip to the target, from sending the request to having validated metrics,
-for `/probe` and scheduled targets alike. A probe answered from the response
+for `/probe` and static targets alike. A probe answered from the response
 cache, or by sharing another probe's request (§ 42.13a), made no trip and MUST
 NOT be observed. The buckets MUST be fixed at 0.005, 0.01, 0.025, 0.05, 0.1,
 0.25, 0.5, 1, 2.5, 5, 10, 30 and 60 seconds, plus `+Inf`. Every configured
@@ -2308,7 +2309,8 @@ be recorded while verbose mode is on, so turning it on does not publish a
 history nobody asked to be kept.
 
 Its name MUST differ from `http_exporter_target_scrape_duration_seconds`, the
-gauge a scheduled target's health series carry over OTLP (§ 42.14): the two
+gauge a static target's health series carry on its endpoint and over OTLP
+(§ 42.14): the two
 would otherwise reach an OTLP backend as one name with two types.
 
 The Python families MUST be published for every collector with a Python
@@ -2345,6 +2347,7 @@ Implement:
 /health
 /ready
 /self-metrics
+/static-targets
 /probe
 ```
 
@@ -2379,7 +2382,7 @@ Recommended behavior:
 - `/health`: process is alive. MUST answer `200` for as long as the process
   serves requests.
 - `/ready`: the exporter is doing what it was configured to do. It MUST answer
-  `503` while the last reload of the configuration or of the scheduled target
+  `503` while the last reload of the configuration or of the static target
   file was rejected (§ 22.0b), until a reload of it is accepted, and, with OTLP
   export enabled and `otlp.unready_after_failures` set to N above 0, while the
   last N exports to the current endpoint failed (§ 42.1a), until one gets
@@ -2394,14 +2397,16 @@ Recommended behavior:
   endpoint is never authenticated and an error can quote a path, a URL or a
   line of the configuration.
 - `/self-metrics`: exporter self-metrics by default; the path MUST be configurable (§ 42), and the self-metrics MUST be served at that one path only.
+- `/static-targets`: the latest results of the static targets by default; the
+  path MUST be configurable (§ 42.14a).
 - `/probe`: execute a collector against a supplied target. A request without
   `collector` MUST answer `400` saying the collector parameter is required,
   with the URL's shape, and one without a target its collector's request type
   requires MUST answer `400` naming the collector and the request type.
 
-`/probe` and the self-metrics path MUST compress their answer with
-gzip when the request's `Accept-Encoding` accepts `gzip` (or `x-gzip`, or `*`)
-with a non-zero quality — Prometheus asks for it on every scrape — and answer
+`/probe`, the self-metrics path and the static targets path MUST compress
+their answer with gzip when the request's `Accept-Encoding` accepts `gzip` (or
+`x-gzip`, or `*`) with a non-zero quality — Prometheus asks for it on every scrape — and answer
 uncompressed otherwise, and for `HEAD`. A compressed answer MUST carry
 `Content-Encoding: gzip` and no `Content-Length`; each of these answers, compressed or
 not, MUST carry `Vary: Accept-Encoding`. Errors are compressed like any other
@@ -2439,7 +2444,7 @@ If a new configuration is invalid, the exporter should retain the last known val
 Watching the configuration files for changes MUST be opt-in through a CLI flag
 and MUST be disabled by default, so an exporter started without it reads its
 configuration once and picks up changes on restart. The flag MUST cover every
-configuration file the exporter was given, including the scheduled target
+configuration file the exporter was given, including the static target
 document, so a deployment does not have to reason about which files are watched.
 
 The watch interval MUST be configurable and MUST have a documented default of
@@ -2461,7 +2466,8 @@ configuration, although the configuration file itself did not change. A reload
 that fails MUST NOT be retried until one of the files changes again.
 
 Enabling the watch MUST NOT weaken any reload rule: an invalid configuration, a
-configuration that would disable OTLP while scheduled targets are loaded, a
+configuration that would disable OTLP while a loaded static target sets
+`export_via_otlp`, a
 collector name defined twice, and a pre-script that stops producing `data` MUST
 all still be rejected with the last valid configuration left active.
 
@@ -2491,7 +2497,7 @@ its counters and MUST have its cached results dropped, since their keys carry
 the old definition; an unchanged collector MUST keep everything.
 
 Both MUST reload the configuration, with its collector files, and the
-scheduled target file when there is one, whether or not they changed, under the
+static target file when there is one, whether or not they changed, under the
 same rules as the watch (§ 24.1), and record the result in the reload
 self-metrics (§ 22.0b). Every reload, whatever its trigger, MUST be logged with
 the trigger — `watch`, `sighup` or `http` — and reloads MUST be serialized, so
@@ -2524,11 +2530,11 @@ label:
 
 ### 24.2a Decoding errors
 
-A configuration, collector or scheduled target file that cannot be decoded
+A configuration, collector or static target file that cannot be decoded
 MUST be refused with errors in the file's own terms, never the
 implementation's: each names its line and says what was wrong there — an
 unknown key and where it was found (`in a collector`, `in retry`, `in a
-scheduled target's request`), a value of the wrong kind with what was
+static target's request`), a value of the wrong kind with what was
 expected (`a duration such as 30s`, `a whole number`, `a list of values`,
 `true or false`) and what was found (`a list`, `a mapping`, `the string
 "fast"`, `the number 3`). A message MUST NOT name a Go type or package or a
@@ -2537,7 +2543,7 @@ rather than only the first. A YAML syntax error is reported as the YAML
 parser words it.
 
 Unknown keys MUST be refused everywhere in these files, including in blocks
-decoded by custom code such as a scheduled target's `request`, where they
+decoded by custom code such as a static target's `request`, where they
 would otherwise be ignored without a word.
 
 ### 24.3 Configuration schema
@@ -2567,9 +2573,9 @@ same rules as the configuration's, which a test MUST check.
 `--config.collector-file-schema` MUST print it and exit 0; a test MUST fail when
 the committed file differs from what the code generates.
 
-The repository MUST likewise publish `configs/targets.schema.json`, the schema
-of the scheduled target file (§ 42.14), generated from the Go target structs
-with its own rules by path, and `--otlp.targets-file-schema` MUST print it and
+The repository MUST likewise publish `configs/static-targets.schema.json`, the schema
+of the static target file (§ 42.14), generated from the Go target structs
+with its own rules by path, and `--static-targets-file-schema` MUST print it and
 exit 0. A test MUST fail when the committed file differs from what the code
 generates, when the example target file does not validate against it, and when
 it accepts any of a set of invalid target files; the example target file MUST
@@ -2615,7 +2621,7 @@ look at. A logging path MUST NOT be what fails a scrape, so an absent collector
 MUST degrade to an empty name rather than panicking.
 
 The startup line MUST report the listen address, the number of collectors, the
-number of scheduled targets, and whether the configuration watch is enabled.
+number of static targets, and whether the configuration watch is enabled.
 When the watch is enabled it MUST also report the interval, because that is what
 bounds how stale a running configuration can be; when it is disabled the
 interval MUST be omitted rather than reported as a value that has no effect.
@@ -2632,7 +2638,7 @@ failure began. A different stage or error MUST be logged at once as a new
 failure. The first success after a failure MUST be logged at info level with
 the stage, `failed_for` and `failures`. This MUST apply to failed probes and
 stages continuing under `log`, a rule failing under `error_mode: fail`, probes
-rejected by `max_concurrent_probes`, failed scheduled scrapes, failed files of a
+rejected by `max_concurrent_probes`, failed static target scrapes, failed files of a
 directory, a directory over `max_files` or its listing bound, and repaired
 invalid UTF-8. At most 10,000 failures MUST be remembered; when full, those not
 reported for an hour MUST be forgotten, at most once a minute, and a new one
@@ -3000,8 +3006,9 @@ Provide clear CLI flags, for example:
 --config.file=/etc/exporter/config.yaml
 --web.listen-address=:8080
 --web.self-metrics-path=/self-metrics
+--web.static-targets-path=/static-targets
 --python.path=/usr/local/bin/python3
---otlp.targets-file=/etc/exporter/targets.yaml
+--static-targets-file=/etc/exporter/static-targets.yaml
 --config.watch
 --config.watch-interval=60s
 --config.schema
@@ -3037,8 +3044,10 @@ malformed command line.
 `--config.schema` prints the configuration file's JSON Schema and exits, and
 `--config.collector-file-schema` the schema of a collector file (§ 24.3).
 
-`--otlp.targets-file` is optional and selects the scheduled target document
-defined in section 42.14.
+`--static-targets-file` is optional and selects the static target document
+defined in section 42.14, and `--web.static-targets-path` where its targets are
+served (§ 42.14a). `--static-targets-file-schema` prints the document's schema
+and exits, like the other schema flags.
 
 `--python.path` selects the interpreter used by the `python` transform. It MUST
 default to an interpreter resolvable through `PATH` and MUST accept an absolute
@@ -3062,7 +3071,7 @@ ask whether a configuration would start without starting it.
 
 The check MUST run the same validation functions startup runs, in startup's
 order, and MUST honour the flags that change what startup loads:
-`--config.file`, `--otlp.targets-file`, `--config.export-env`, `--python.path`,
+`--config.file`, `--static-targets-file`, `--config.export-env`, `--python.path`,
 and `--config.watch` with `--config.watch-interval`. A configuration that
 `--dry-run` passes MUST start with the same files and flags, and one it fails MUST
 be refused by startup; a test MUST pin this agreement for every failure the
@@ -3080,8 +3089,8 @@ The steps MUST be:
   configuration without Python MUST pass without needing an interpreter;
 - `config_watch` — only when `--config.watch` is set, that the interval is
   positive;
-- `targets` — only when `--otlp.targets-file` is set, that the file is valid on
-  its own and against the configuration (§ 42.14).
+- `static_targets` — only when `--static-targets-file` is set, that the file is
+  valid on its own and against the configuration (§ 42.14).
 
 The report MUST be a single JSON document on stdout:
 
@@ -3312,7 +3321,7 @@ Test:
   its place, a wrong kind of value with what was expected and found, a bad
   duration or size with its line, several errors reported together, no Go
   type or YAML tag in any message, and YAML syntax errors unchanged.
-- Unknown keys in a scheduled target's `request`, its `retry` and
+- Unknown keys in a static target's `request`, its `retry` and
   `basic_auth` refused, and a valid block accepted.
 
 Configuration validation MUST identify the collector and relevant field in the error message.
@@ -3584,13 +3593,13 @@ Test verbose per-request self-metrics:
 - Distinct URLs and methods produce distinct series, and repeating a request
   updates its series rather than adding one.
 - A failing scrape records its HTTP status code on its own series.
-- Scheduled target scrapes are recorded per request.
+- Static target scrapes are recorded per request.
 - The series set stops growing at 1000 combinations, an already-tracked request
   keeps updating past the limit, and the capped indicator reads 1.
 - A response served from the collector cache leaves the last-scrape timestamp
   and status of the scrape that filled it untouched, and the cache hit is
   counted on the request's own series.
-- A scheduled target is listed with zero counters and a zero timestamp before
+- A static target is listed with zero counters and a zero timestamp before
   its first collection, and `http_exporter_request_series_tracked` counts it.
 - `http_exporter_request_series_tracked` counts distinct combinations, so
   scraping the same request twice does not increase it.
@@ -3603,7 +3612,7 @@ Test the configuration watch:
 
 - The watch is off by default, and the reload loop returns immediately rather
   than idling, so a configuration change is not picked up.
-- An enabled watch reloads a changed configuration file and a changed scheduled
+- An enabled watch reloads a changed configuration file and a changed static
   target file.
 - The watch stops when its context is cancelled and reloads nothing afterwards.
 - An enabled watch still rejects an invalid configuration and leaves the
@@ -3676,8 +3685,8 @@ succeeds beside one that fails:
 - Credentials in the target URL do not appear in the JSON body.
 - Every per-rule transform — jq, regex, CSV, XPath over XML and HTML, and CSS —
   reports a failing `fail` rule as the same identifiable metric failure.
-- On a scheduled target, `fail` exports `http_exporter_target_up` at 0 and no
-  collector metrics, while `log` exports what could be extracted.
+- On a static target, `fail` produces `http_exporter_target_up` at 0 and no
+  collector metrics, while `log` produces what could be extracted.
 
 Test subsequent transformations such as:
 
@@ -4140,12 +4149,17 @@ The project MUST document how to run the complete suite locally without external
 
 The test suite SHOULD avoid time-dependent assertions and random network behavior. Where time is required, use injectable clocks or bounded assertions.
 
-## 34.35 Scheduled target tests
+## 34.35 Static target tests
 
 Required:
 
-- A target document is rejected unless OTLP export is enabled and an endpoint is
-  configured, and the exporter exits non-zero with that error at startup.
+- A target document without `interval` is rejected, as is one whose
+  `interval` is under a second; a target without its own interval takes the
+  file's.
+- A target without `export_via_otlp` needs no OTLP export; one with it is
+  rejected, naming the target, unless OTLP export is enabled with an endpoint,
+  and the exporter exits non-zero with that error at startup. An `otlp` block
+  without `export_via_otlp`, and a `static_target` label, are rejected.
 - A target naming an unconfigured collector is rejected.
 - Document validation rejects a missing collector or target, a relative target
   URL, an invalid or duplicate target name, an unsupported method, a negative
@@ -4159,9 +4173,22 @@ Required:
   name falls back to the exporter default.
 - Target labels are applied to exported metrics without overwriting labels the
   collector extracted, and without mutating the cached metric set.
-- A scheduled scrape reuses the collector cache, and the reused scrape is
+- A static target scrape reuses the collector cache, and the reused scrape is
   counted in the existing per-collector self-metrics.
-- A failed scrape exports a zero health metric and no collector metrics.
+- A failed scrape produces a zero health metric and no collector metrics.
+- The static targets endpoint serves every scraped target's metrics and
+  health metrics, each series labelled `static_target`, each family under one
+  `TYPE`; it is empty before any scrape, a removed target leaves it with the
+  reload, and it parses as exposition text.
+- A family two targets produce with different types is served for the first
+  target only, and the clash is logged.
+- The endpoint is at `--web.static-targets-path`, `/static-targets` by
+  default and not otherwise; it answers `401` without the exporter's
+  credential when Basic Auth is on, and `405` to a method other than `GET` or
+  `HEAD`. A path another endpoint uses, the self-metrics path included, exits
+  2.
+- Only a target with `export_via_otlp` is queued for OTLP; every target is
+  served on the endpoint.
 - A failed fetch, HTTP status, decode or transform follows the collector's
   `error_handling`: under `fail` the target is down and the failure logged at
   error level; under `log` it is up, with no collector metrics, a success
@@ -4172,8 +4199,9 @@ Required:
   recovered.
 - The delivered OTLP payload contains one `resourceMetrics` entry per distinct
   resource.
-- A configuration reload that would disable OTLP while targets are loaded is
-  rejected, and an invalid target reload keeps the previous document.
+- A configuration reload that would disable OTLP while a loaded target sets
+  `export_via_otlp` is rejected, and an invalid target reload keeps the
+  previous document.
 
 ## 34.36 Collector cache tests
 
@@ -4222,8 +4250,8 @@ Required:
 - Without `stale_if_error` the gauges are not added and a failure is answered.
 - A rule producing `http_exporter_result_stale` fails validation with
   `stale_if_error` and is allowed without it.
-- A scheduled target whose scrape fails exports the last good result marked
-  stale, with `http_exporter_target_up` 0, and the stale export is counted.
+- A static target whose scrape fails produces the last good result marked
+  stale, with `http_exporter_target_up` 0, and the stale result is counted.
 - Configuration parsing accepts durations such as `90s` and rejects a negative
   `cache` value.
 
@@ -4252,7 +4280,7 @@ Required:
 Test environment variable expansion:
 
 - References are literal without the flag and substituted with it, in both the
-  configuration and the scheduled target document.
+  configuration and the static target document.
 - Only `${NAME}` is a reference: `$NAME`, a trailing `$`, an unterminated `${`
   and a name that does not match the spelling are all left alone, and `$$`
   produces a literal dollar.
@@ -4296,7 +4324,7 @@ receives:
 - Two tenants never share a cache entry, and a repeat of one is served from
   the cache.
 - The verbose `url` label carries the placeholder and never the value.
-- A scheduled target rejects placeholders in its own path, rejects a collector
+- A static target rejects placeholders in its own path, rejects a collector
   placeholder without a default unless it sets its own path, and binds the
   default otherwise.
 - No placeholder token reaches the requested URL, whatever the value.
@@ -4308,8 +4336,11 @@ status captured:
 
 - The shipped example configurations, with and without the example target file,
   pass with exit `0`, and the report lists their collectors and targets.
-- Only the steps that apply are reported: no `targets` step without a target
-  file and no `config_watch` step without `--config.watch`.
+- Only the steps that apply are reported: no `static_targets` step without a
+  target file and no `config_watch` step without `--config.watch`.
+- A target file with no target exported over OTLP passes against a
+  configuration without OTLP export; one with `export_via_otlp` fails against
+  it.
 - An invalid configuration and a missing one fail with exit `1` and name the
   fault; the Python step is then `skipped` with a reason.
 - Two faulty pre-scripts are reported as two errors, each naming its collector.
@@ -4340,13 +4371,13 @@ status captured:
 - An `http` collector with only `type` is valid and defaults `method` to GET;
   one setting every `http` key together is valid; the `http` cross-key rules
   (method, credential exclusivity, retries, path parameters) still apply.
-- Every request key and every scheduled-target request key is accepted by at
+- Every request key and every static target request key is accepted by at
   least one type, and every type has validation and a fetch.
 - With a second type registered for the test that accepts only `path`: a
   collector of that type setting `method` is rejected naming the key and type;
   a probe of it is served through that type's fetch; probe parameters that
   belong to `http` are rejected with 400 naming the parameter and the type,
-  while `path` and a parameter no type knows are accepted; a scheduled target
+  while `path` and a parameter no type knows are accepted; a static target
   setting `method` for it is rejected and one setting `path` is not.
 - An `http` collector accepts every `http` probe parameter together.
 - The configuration the Helm chart ships by default is valid.
@@ -4390,8 +4421,8 @@ status captured:
   `_count` series carry the prefix; no unprefixed series leaks; a second
   collector without a prefix is unaffected; the exporter's own metrics are not
   prefixed.
-- OTLP export, from a probe and from a scheduled target, carries the prefixed
-  names, and the scheduled target's health metrics do not.
+- OTLP export, from a probe and from a static target, carries the prefixed
+  names, and the static target's health metrics do not.
 - A declared name too long once prefixed, and a prefix leaving no room for a
   name, are rejected at startup; a name exactly at the limit is accepted; a
   prefixed name over the limit fails validation at scrape time.
@@ -4510,7 +4541,7 @@ the exporter has.
 - With a cache, concurrent probes make one request and fill the cache, and the
   next probe is a cache hit.
 - A panic in the shared work answers with `500` and leaves nothing in flight.
-- A panic in a scheduled scrape is logged and exports that target as down,
+- A panic in a static target scrape is logged and exports that target as down,
   and the other targets are scraped as usual.
 
 ## 34.51 Verbose collector metric tests
@@ -4521,7 +4552,7 @@ See § 22.1a.
   `_count`; it is published when verbose, over the self-metrics path and over OTLP, and not
   published or recorded when verbose is off.
 - A probe to the target is observed; a cache hit and a coalesced probe are not;
-  a scheduled scrape is.
+  a static target scrape is.
 - A Python collector's runs are counted by outcome — `ok`, `script_error`,
   `timeout` — and a timed-out or crashed worker is counted as a stop with that
   reason; worker states read idle after the runs; starts are counted.
@@ -4533,7 +4564,7 @@ See § 22.1a.
   runs of a collector no longer configured.
 - Every family has one `HELP` and one `TYPE` line, and every family added here
   is absent without verbose mode.
-- No family added here reuses the name of a scheduled target health series
+- No family added here reuses the name of a static target health series
   (§ 42.14), which travel over OTLP beside them.
 - A histogram passed through from a Prometheus target is written with exactly
   one `le="+Inf"` bucket.
@@ -4608,8 +4639,8 @@ See § 5.1, `localfile`.
 - The response carries status `200`, the body, `Content-Type` by extension,
   `Content-Length` and `Last-Modified`.
 - Verbose series carry the `file://` URL with placeholders and `READ`.
-- Scheduled targets with and without a target are scraped and exported over
-  OTLP; a target outside `root`, an `http` key, a credential and a placeholder
+- Static targets with and without a target are scraped and their results
+  published; a target outside `root`, an `http` key, a credential and a placeholder
   path are refused at load.
 - The examples in `docs/LOCALFILE.md` load and serve as documented.
 - The shipped example configurations, target file and schema include a
@@ -4643,7 +4674,7 @@ See § 5.1a.
 - A link inside `root` is followed, one outside fails its file, and a named pipe
   fails its file without hanging.
 - The verbose `url` is the directory's `file://` URL.
-- A scheduled target reads a directory; one setting `request.path` is refused.
+- A static target reads a directory; one setting `request.path` is refused.
 - The documented example loads and reads a directory.
 
 ## 34.53b Build, size, shutdown, OTLP buffer and directory read tests
@@ -4742,7 +4773,7 @@ See § 23, § 24.1a and § 25.1.
   remembered, those unseen for an hour make room, and a removed collector's
   are forgotten.
 - Four failed probes of a target log one line and its recovery counts four; a
-  scheduled target failing three times logs once and its recovery; a file of a
+  static target failing three times logs once and its recovery; a file of a
   directory failing on three probes logs once and its recovery.
 
 ## 34.53f Request template tests
@@ -4765,7 +4796,7 @@ See § 42.10a and § 42.10b.
 - A placeholder in a header or query name, a filter in a header value and a
   malformed body placeholder fail to load.
 - Probes differing only in a body parameter are cached apart.
-- A scheduled target's `params` fill path, header and body; a missing, unused,
+- A static target's `params` fill path, header and body; a missing, unused,
   unfit or badly named parameter fails to load naming it; targets differing only
   in `params` have different cache keys.
 
@@ -4797,7 +4828,7 @@ See § 7.1.
   non-test file imports `internal/testutil`.
 - Only the shared trip fetches, decodes and transforms, apart from a
   directory's files (§ 5.1), which it decodes and transforms one at a time.
-- A scheduled target's scrape failed by a metric rule with `error_mode: fail`
+- A static target's scrape failed by a metric rule with `error_mode: fail`
   is logged with stage `metric` and the metric's name, as a probe's is.
 
 ## 34.54 Probe deadline tests
@@ -4831,8 +4862,9 @@ See § 22.0a and § 22.0b.
 - At startup the configuration reports successful with a timestamp and no
   reloads; a rejected reload reads 0, counts a failure and keeps the timestamp;
   a later successful reload reads 1, counts a success and moves the timestamp.
-  No `targets` series appears without a target file.
-- With a target file, a rejected target reload reports under `file="targets"`
+  No `static_targets` series appears without a target file.
+- With a target file, a rejected target reload reports under
+  `file="static_targets"`
   and leaves `file="config"` successful.
 - The rules of § 19 use `on_fetch_error` for both request types.
 
@@ -4871,7 +4903,7 @@ See § 42.1.
 - Two series of one counter are two points of one monotonic sum; a histogram
   type without data is a gauge of its value.
 - NaN and the infinities encode and decode.
-- End to end, a histogram passed through from a scheduled Prometheus target,
+- End to end, a histogram passed through from a static Prometheus target,
   the verbose scrape-time histogram and the GC summary reach an OTLP endpoint
   with their data, and the scrape-time histogram's bucket counts add up to its
   count.
@@ -4886,7 +4918,7 @@ See § 24.1a.
   configuration at once and answers `200`; `PUT` reloads an unchanged one; a
   duplicate collector is `500` naming it, keeping the previous configuration;
   the reload counters count successes and failures.
-- The scheduled target file is reloaded too, and its rejection is a `500`
+- The static target file is reloaded too, and its rejection is a `500`
   naming it, keeping the previous targets.
 - With `web.basic_auth`, the endpoint needs the credentials.
 - `SIGHUP` reloads.
@@ -4903,7 +4935,7 @@ See § 42.13b.
   a later probe succeeds.
 - With a limit of 1, an identical probe sharing the request in flight, and a
   cache hit while another target holds the slot, are both answered.
-- A scheduled target fails in the `concurrency` stage when no slot frees within
+- A static target fails in the `concurrency` stage when no slot frees within
   its budget, and succeeds when one frees while it waits.
 - Waiting for a slot ends with its context; collectors have limits of their
   own.
@@ -4969,7 +5001,7 @@ The repository MUST include documentation covering:
 22. Example collectors for JSON/YAML/XML/CSV/HTML/Prometheus/text/Python
 23. Each request type other than `http`, on a page of its own: `localfile` in
     `docs/LOCALFILE.md`, covering its keys, which file is read, Prometheus and
-    scheduled-target setups, formats, the node_exporter practices it follows,
+    static target setups, formats, the node_exporter practices it follows,
     errors and self-metrics, and mounting files in Kubernetes
 
 The Python documentation MUST explicitly state that networking is owned by the exporter and that `requests`/`httpx` are unnecessary.
@@ -5022,7 +5054,7 @@ Do NOT implement these unless required to support the core design:
 - gRPC/Protobuf decoding
 - GraphQL client logic
 - Long-running background jobs per target
-- Scheduled scraping outside Prometheus
+- Static targets scraped by the exporter itself
 
 The architecture should leave room for future decoders, but the initial implementation should stay focused on HTTP-to-Prometheus conversion.
 
@@ -5273,7 +5305,7 @@ On `SIGTERM` or `SIGINT`, the exporter MUST stop accepting requests, let the
 probes in progress finish, stop the export loop, and then make one last
 export, bounded by `otlp.timeout`, of everything pending — including the data
 of an export the shutdown cut short — with a last self-metric snapshot, before
-it exits. Scheduled targets MUST NOT be scraped again for it. The shutdown MUST
+it exits. Static targets MUST NOT be scraped again for it. The shutdown MUST
 be logged, and once it has begun a second `SIGTERM` or `SIGINT` MUST end the
 process at once, without waiting for the probes or the last export.
 
@@ -5380,8 +5412,8 @@ password MUST both be compared in constant time whatever the first
 comparison found.
 
 When enabled, the exporter MUST require valid Basic Authentication for
-`/probe`, the configured self-health metrics endpoint, the
-landing page at `/` and the collectors page at `/collectors`. The
+`/probe`, the configured self-health metrics endpoint, the static targets
+endpoint, the landing page at `/` and the collectors page at `/collectors`. The
 `/health` and `/ready` endpoints SHOULD remain unauthenticated so Kubernetes
 liveness and readiness probes can operate without credentials.
 
@@ -5585,7 +5617,7 @@ written, not its value. A value is typically a tenant or an account, which the
 label already keeps out of the query string, and one series per value would be
 unbounded.
 
-A scheduled target (§ 42.14) has no probe to supply a value; it MAY give
+A static target (§ 42.14) has no probe to supply a value; it MAY give
 values under `params`, a map of `param_<name>` names to values, which fill the
 collector's placeholders as the probe parameters of the same names would. Its
 own `request.path`, `body` and `headers` MUST NOT contain placeholders. Every
@@ -5765,7 +5797,7 @@ Each stale answer MUST be counted in
 `http_exporter_cache_stale_served_total{collector}` and logged at warn level
 with the result's age, sparingly like repeated failures (§ 25), with a line
 when the collector answers with a fresh result again. Identical probes sharing
-a trip (§ 42.13a) MUST share the stale answer. A scheduled target (§ 42.14)
+a trip (§ 42.13a) MUST share the stale answer. A static target (§ 42.14)
 whose scrape fails MUST export the stale result, with its target labels and
 the two gauges, under its OTLP resource, while `http_exporter_target_up` stays
 `0`, since the target was not scraped; a probe answered stale and exported
@@ -5828,7 +5860,7 @@ rate-limited endpoint.
   than stop the exporter.
 - It MUST be on by default, and a collector MUST be able to turn it off with
   `coalesce: false`, for a target that must see every probe as a request.
-- Scheduled targets (§ 42.14) are scraped once per interval by the exporter
+- Static targets (§ 42.14) are scraped once per interval by the exporter
   itself and are not affected.
 
 ## 42.13b Limiting concurrent probes
@@ -5846,27 +5878,31 @@ many targets of one backend would reach it with no bound.
   is better than none.
 - A probe answered from the cache, or by sharing a request in flight, makes no
   trip and MUST NOT take a slot.
-- A scheduled target MUST share its collector's limit, and MUST wait for a slot
+- A static target MUST share its collector's limit, and MUST wait for a slot
   within its scrape budget instead of failing at once; if none frees in time it
   MUST fail in the `concurrency` stage and be counted as rejected.
 - A slot MUST be freed when the trip ends, and `http_exporter_probes_in_flight`
   MUST report the trips in progress per collector.
 
-## 42.14 Scheduled targets exported over OTLP
+## 42.14 Static targets
 
-The exporter MAY be started with an optional scheduled target document:
+The exporter MAY be started with an optional static target document:
 
 ```text
---otlp.targets-file=/etc/prometheus-universal-exporter/targets.yaml
+--static-targets-file=/etc/prometheus-universal-exporter/static-targets.yaml
 ```
 
-The document lists fully specified requests that the exporter scrapes itself:
+The document lists fully specified requests that the exporter scrapes itself,
+each on its own interval, and serves together on the static targets endpoint
+for Prometheus to scrape:
 
 ```yaml
+interval: 1m
 targets:
   - name: legacy_eu
     collector: legacy_text
     target: http://legacy.eu.example:8080
+    interval: 30s
     request:
       method: GET
       path: /status
@@ -5881,26 +5917,26 @@ targets:
       bearer_token_file: /var/run/prometheus-universal-exporter/target-auth/token
     labels:
       region: eu
+    export_via_otlp: true
     otlp:
       service_name: legacy-app
       resource_attributes:
         deployment.environment: production
 ```
 
-The feature exists only to deliver metrics over OTLP. The exporter MUST refuse
-to start when a target document is supplied while `otlp.enabled` is false or no
-`otlp.endpoint` is configured, and MUST report that requirement explicitly
-before exiting with a non-zero status. A configuration reload that would put the
-exporter into that state while targets are loaded MUST be rejected, and the last
-valid configuration MUST remain active. Every target MUST name a configured
-collector; an unknown collector MUST be rejected at startup and at reload.
-A target MAY set `params`, the values of its collector's placeholders
-(§ 42.10a). The keys a target's `request` block may set are those its collector's request
-type accepts (§ 5.1); any other key MUST be rejected at startup naming the
-target, the key, the collector and the type. What its `target` may be is also
-the type's: an `http` target MUST be an absolute URL, and a `localfile` target
-MAY be left out and MUST otherwise lie under the collector's `root`. A target does not declare a type
-of its own: it inherits its collector's.
+`interval` and `targets` MUST be required, and `targets` MUST NOT be empty; a
+document without either MUST be refused. `--static-targets-file-schema` MUST
+print the document's JSON Schema, and the committed
+`configs/static-targets.schema.json` MUST be that output (§ 24.3). Every
+target MUST name a configured collector; an unknown collector MUST be rejected
+at startup and at reload. A target MAY set `params`, the values of its
+collector's placeholders (§ 42.10a). The keys a target's `request` block may
+set are those its collector's request type accepts (§ 5.1); any other key MUST
+be rejected at startup naming the target, the key, the collector and the type.
+What its `target` may be is also the type's: an `http` target MUST be an
+absolute URL, and a `localfile` target MAY be left out and MUST otherwise lie
+under the collector's `root`. A target does not declare a type of its own: it
+inherits its collector's.
 
 The target document MUST be reloadable on the same terms as the exporter
 configuration: an invalid document MUST be rejected with the previous document
@@ -5918,58 +5954,106 @@ directly and MUST NOT be filtered through the collector's
 
 Each target MAY declare `labels`, which the exporter MUST add to every metric
 that target produces. A label the collector already extracted MUST NOT be
-overwritten.
+overwritten. `static_target` MUST be refused as a target label, since the
+endpoint sets it.
 
-Each target MAY declare `otlp.service_name` and `otlp.resource_attributes`.
-These form the OTLP resource the target's metrics are exported under. Both MUST
-default to the exporter-wide `otlp.service_name` and `otlp.resource_attributes`,
-and per-target attributes MUST be merged over the exporter-wide ones rather than
-replacing them. The exporter MUST emit one `resourceMetrics` entry per distinct
-resource in an export, so metrics from targets with different identities are not
-conflated.
-
-Each target MUST be scraped on its own `interval`, independent of the OTLP
-export interval, which MUST only decide when queued results are delivered. A
-target's `interval` MUST default to the file's top-level `interval`, and that to
-60 seconds, MUST be at least one second, and MUST NOT be shorter than the
-target's `request.timeout`. Scrapes of a target MUST keep a fixed cadence from
-its first, which SHOULD be offset within its interval by a stable hash of its
-name so targets are spread over it. A scrape MUST be bounded by its interval,
-and one still running when the next is due MUST make that one skipped, logged,
-rather than overlapping it. The exporter SHOULD limit how many targets it
-scrapes concurrently. A panic during a scheduled scrape MUST NOT end the
-process: it MUST be logged with its stack and end that scrape as failed, with
+Each target MUST be scraped on its own `interval`, independent of when
+Prometheus scrapes the static targets endpoint and of the OTLP export
+interval. A target's `interval` MUST default to the file's `interval`, MUST be
+at least one second, and MUST NOT be shorter than the target's
+`request.timeout`; the file's `interval` MUST be at least one second too.
+Scrapes of a target MUST keep a fixed cadence from its first, which SHOULD be
+offset within its interval by a stable hash of its name so targets are spread
+over it. A scrape MUST be bounded by its interval, and one still running when
+the next is due MUST make that one skipped, logged, rather than overlapping
+it. The exporter SHOULD limit how many targets it scrapes concurrently. A
+panic during a static target scrape MUST NOT end the process: it MUST be
+logged with its stack and end that scrape as failed, with
 `http_exporter_target_up` 0, leaving the other targets' scrapes unaffected.
-Retries MUST follow the collector's `request.retry`, which
-a target's `request.retry` replaces. Scheduled scrapes MUST
-run through the same fetch, decode, and transform path as `/probe`, including the
-collector's cache, limits, and validation. A scheduled scrape and a `/probe`
-request that would produce a byte-for-byte identical request MUST share cache
-entries, which requires the cache key to be derived from the same request
-fingerprint.
+Retries MUST follow the collector's `request.retry`, which a target's
+`request.retry` replaces. Static target scrapes MUST run through the same
+fetch, decode, and transform path as `/probe`, including the collector's
+cache, limits, and validation. A static target scrape and a `/probe` request
+that would produce a byte-for-byte identical request MUST share cache entries,
+which requires the cache key to be derived from the same request fingerprint.
 
-Scheduled targets MUST NOT be exposed on the self-metrics path or reachable through
-`/probe`; their metrics are delivered only over OTLP.
+Static targets MUST NOT be reachable through `/probe`, and MUST NOT appear on
+the self-metrics path.
 
-Each scheduled scrape MUST export a health result under that target's resource
-and labels:
+Each static target scrape MUST produce a health result with that target's
+labels:
 
 ```text
 http_exporter_target_up
 http_exporter_target_scrape_duration_seconds
 ```
 
-Without them a failing target is absent from the OTLP stream and cannot be
-distinguished from a target that was never configured. A failed scrape MUST
-export the health result with `http_exporter_target_up` set to zero and MUST NOT
-export collector metrics for that target. Whether a failed stage fails the
+Without them a failing target is absent and cannot be distinguished from a
+target that was never configured. A failed scrape MUST produce the health
+result with `http_exporter_target_up` set to zero and MUST NOT produce
+collector metrics for that target, except the last good result, marked stale,
+under `cache.stale_if_error` (§ 42.13). Whether a failed stage fails the
 scrape is the collector's `error_handling` to say, as on a probe (§ 19).
 
-Scheduled scrapes MUST be counted in the existing per-collector self-metrics
-rather than in per-target series, so exporter self-metric cardinality does not
-grow with the number of targets. The exporter MUST expose
-`http_exporter_scheduled_targets` so an operator can confirm the document
-loaded.
+### 42.14a The static targets endpoint
+
+The exporter MUST serve the latest result of every static target — its
+metrics with its labels, or its stale result, and its health result — at
+`--web.static-targets-path`, which MUST default to `/static-targets`:
+
+- Every series MUST carry `static_target` with the target's name, so the same
+  metric from two targets stays two series.
+- Each family's series MUST be served together under one `HELP` and `TYPE`,
+  as the text format requires. A family a target produces with a different
+  type than an earlier target, in target name order, MUST be left out for that
+  target and logged, sparingly like repeated failures (§ 25); the rest of both
+  targets MUST be served.
+- A target not yet scraped MUST be absent, and a target removed from the
+  document MUST leave the endpoint with the reload.
+- Serving the endpoint MUST NOT contact a target: it reads what the targets'
+  last scrapes left.
+- The endpoint MUST answer `GET` and `HEAD`, and `405` otherwise. It MUST be
+  gzipped like `/probe` (§ 23) and protected by `web.basic_auth` like the
+  self-metrics path (§ 42.5).
+- The path MUST be one fixed path of plain segments, and MUST NOT be the
+  self-metrics path or another endpoint's; otherwise the exporter MUST exit
+  with status 2 before `--dry-run` or startup, as for the self-metrics path
+  (§ 42).
+
+The endpoint MUST be served, empty, without a static target document.
+
+### 42.14b Static targets over OTLP
+
+A target MAY set `export_via_otlp`, which MUST default to `false`. A target
+with it MUST also be delivered over OTLP: each scrape's result and health
+result MUST be queued for export under the target's OTLP resource, and
+delivered on `otlp.interval` like probe results (§ 42.1a). A target without it
+MUST NOT be queued. The exporter MUST refuse to start when a target sets
+`export_via_otlp` while `otlp.enabled` is false or no `otlp.endpoint` is
+configured, naming the target, and a configuration reload that would put the
+exporter into that state MUST be rejected with the last valid configuration
+left in force. Static targets without `export_via_otlp` MUST NOT need OTLP
+export.
+
+Each target MAY declare `otlp.service_name` and `otlp.resource_attributes`,
+only with `export_via_otlp`; set without it, the block MUST be refused rather
+than ignored. These form the OTLP resource the target's metrics are exported
+under. Both MUST default to the exporter-wide `otlp.service_name` and
+`otlp.resource_attributes`, and per-target attributes MUST be merged over the
+exporter-wide ones rather than replacing them. The exporter MUST emit one
+`resourceMetrics` entry per distinct resource in an export, so metrics from
+targets with different identities are not conflated. Series exported over
+OTLP do not carry `static_target`: the resource tells the targets apart.
+
+### 42.14c Static target self-metrics
+
+Static target scrapes MUST be counted in the existing per-collector
+self-metrics rather than in per-target series, so exporter self-metric
+cardinality does not grow with the number of targets. The exporter MUST
+expose `http_exporter_static_targets`, the number of targets loaded, and
+`http_exporter_static_targets_exported_via_otlp`, the number with
+`export_via_otlp`. The document's reloads MUST be reported under
+`file="static_targets"` (§ 22.0b).
 
 ## 42.15 Redirect following and HTTP/2 negotiation
 
@@ -6002,7 +6086,7 @@ collector's own setting in force, and the presence or absence of either
 parameter MUST be part of the response cache key, so a scrape that requested
 different transport behaviour never reads another scrape's cached result.
 
-Scheduled targets MUST accept both settings in their `request` block with the
+Static targets MUST accept both settings in their `request` block with the
 same semantics.
 
 The Helm chart MUST expose both as list-valued `params` entries on each
@@ -6044,7 +6128,7 @@ changing how a collector follows redirects.
 
 The exporter MUST support an optional `--config.export-env` flag that
 substitutes `${NAME}` references in the configuration document, in its
-collector files (§ 5.0) and in the scheduled target document, from the process
+collector files (§ 5.0) and in the static target document, from the process
 environment before each is parsed.
 
 It MUST default to off. A configuration legitimately contains dollar signs that

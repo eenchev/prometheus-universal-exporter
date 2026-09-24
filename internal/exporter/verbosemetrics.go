@@ -17,7 +17,7 @@ import (
 //     validation — so "this collector got slow" can be alerted on, where
 //     http_exporter_scrape_duration_seconds only holds the last probe's
 //     duration. Probes answered from the cache or by sharing another probe's
-//     request are not trips to the target and are not observed; scheduled
+//     request are not trips to the target and are not observed; static
 //     target scrapes are.
 //   - the Python worker families, per collector that runs Python: how many
 //     workers are starting, idle and busy, how many have started or failed to,

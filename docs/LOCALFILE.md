@@ -118,14 +118,15 @@ scrape_configs:
         replacement: exporter.example:8080
 ```
 
-## Scheduled targets over OTLP
+## Static targets
 
-A [scheduled target](OTLP.md#scheduled-targets) of a `localfile` collector
-reads the file on the exporter's own timer and sends the result over OTLP.
-`target` is optional, and only `path` and `timeout` may be set under its
-`request`:
+A [static target](STATIC-TARGETS.md) of a `localfile` collector reads the file
+on the exporter's own timer and serves the result on the static targets
+endpoint, and over OTLP with `export_via_otlp`. `target` is optional, and only
+`path` and `timeout` may be set under its `request`:
 
 ```yaml
+interval: 1m
 targets:
   - name: nightly_backup
     collector: any_textfile
@@ -212,10 +213,10 @@ with a dot matches only a pattern that starts with one, as in a shell, so the
 hidden temporary files many writers rename into place are not read half-written.
 With `*.prom`, a temporary `batch.prom.$$` is not read either.
 
-The directory is `root`, or the directory under it the probe's or scheduled
+The directory is `root`, or the directory under it the probe's or static
 target's `target` names; `/probe?collector=textfiles&target=nightly` reads
 `root/nightly`. There is no file to name, so the `path` and `param_<name>`
-probe parameters, and `request.path` in a scheduled target, are refused.
+probe parameters, and `request.path` in a static target, are refused.
 
 Any file a collector can decode can be read this way, not only `.prom`. Each
 file's decoder is chosen as for one file: from its extension with

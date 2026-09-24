@@ -262,7 +262,7 @@ func TestVerboseRequestMetricsRecordFailures(t *testing.T) {
 	}
 }
 
-func TestVerboseRequestMetricsCoverScheduledTargets(t *testing.T) {
+func TestVerboseRequestMetricsCoverStaticTargets(t *testing.T) {
 	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "text/plain")
 		_, _ = w.Write([]byte("value=42\n"))
@@ -273,31 +273,31 @@ func TestVerboseRequestMetricsCoverScheduledTargets(t *testing.T) {
 		OTLP:       otlpConfig("http://collector.invalid/v1/metrics"),
 		Web:        model.WebConfig{SelfMetrics: model.SelfMetricsConfig{Verbose: true}},
 	}
-	file := &model.TargetFile{Targets: []model.ScheduledTarget{{Name: "one", Collector: "text", Target: target.URL}}}
-	server := newScheduledServer(t, cfg, file)
-	server.scrapeScheduledTargets(context.Background(), 10*time.Second)
+	file := &model.StaticTargetFile{Interval: model.Duration(time.Minute), Targets: []model.StaticTarget{{Name: "one", Collector: "text", Target: target.URL}}}
+	server := newStaticServer(t, cfg, file)
+	server.scrapeStaticTargets(context.Background(), 10*time.Second)
 
 	exposition := selfMetrics(t, server)
 	labels := fmt.Sprintf(`{collector="text",http_method="GET",url="%s"}`, target.URL)
 	if got := metricValue(t, exposition, "http_exporter_scrape_http_status_code"+labels); got != http.StatusOK {
-		t.Fatalf("a scheduled scrape should be recorded on its own series:\n%s", exposition)
+		t.Fatalf("a static target scrape should be recorded on its own series:\n%s", exposition)
 	}
 	if got := metricValue(t, exposition, "http_exporter_scrapes_total"+labels); got != 1 {
-		t.Fatalf("scheduled scrapes=%v, want 1", got)
+		t.Fatalf("static target scrapes=%v, want 1", got)
 	}
 }
 
-// A scheduled target's request is fully described by the configuration, so its
+// A static target's request is fully described by the configuration, so its
 // series exist from the first scrape of /self-metrics rather than only after
 // the target has been collected once.
-func TestScheduledTargetsAreVisibleBeforeTheirFirstCollection(t *testing.T) {
+func TestStaticTargetsAreVisibleBeforeTheirFirstCollection(t *testing.T) {
 	cfg := &model.Config{
 		Collectors: []model.Collector{testutil.Collector("text", "text")},
 		OTLP:       otlpConfig("http://collector.invalid/v1/metrics"),
 		Web:        model.WebConfig{SelfMetrics: model.SelfMetricsConfig{Verbose: true}},
 	}
-	file := &model.TargetFile{Targets: []model.ScheduledTarget{{Name: "one", Collector: "text", Target: "http://api.example:8080"}}}
-	server := newScheduledServer(t, cfg, file)
+	file := &model.StaticTargetFile{Interval: model.Duration(time.Minute), Targets: []model.StaticTarget{{Name: "one", Collector: "text", Target: "http://api.example:8080"}}}
+	server := newStaticServer(t, cfg, file)
 
 	exposition := selfMetrics(t, server)
 	labels := `{collector="text",http_method="GET",url="http://api.example:8080"}`

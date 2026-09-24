@@ -12,34 +12,36 @@ import (
 	"github.com/eenchev/prometheus-universal-exporter/internal/model"
 )
 
-// scheduledTargetConcurrency bounds how many scheduled targets are scraped at
+// staticTargetConcurrency bounds how many static targets are scraped at
 // once, so a large target file cannot open an unbounded number of connections.
-const scheduledTargetConcurrency = 8
+const staticTargetConcurrency = 8
 
-// scrapeTarget scrapes one scheduled target with the configuration in force.
-func (s *Server) scrapeTarget(ctx context.Context, target model.ScheduledTarget) {
+// scrapeTarget scrapes one static target with the configuration in force.
+func (s *Server) scrapeTarget(ctx context.Context, target model.StaticTarget) {
 	cfg := s.manager.Get()
 	collector := model.CollectorByName(cfg, target.Collector)
 	if collector == nil {
-		s.logger.Error("scheduled target references unknown collector", "target", target.Name, "collector", target.Collector)
+		s.logger.Error("static target references unknown collector", "target", target.Name, "collector", target.Collector)
 		return
 	}
-	s.scrapeScheduledTarget(ctx, target, cfg, collector)
+	s.scrapeStaticTarget(ctx, target, cfg, collector)
 }
 
-// scrapeScheduledTarget collects one target through the same fetch, decode, and
-// transform path as /probe, including the collector response cache, and stages
-// the result under the target's own OTLP resource.
-func (s *Server) scrapeScheduledTarget(ctx context.Context, target model.ScheduledTarget, cfg *model.Config, c *model.Collector) {
+// scrapeStaticTarget collects one target through the same fetch, decode, and
+// transform path as /probe, including the collector response cache, and
+// publishes the result with the target's health metrics: as its latest result
+// on the static targets endpoint, and, with export_via_otlp, queued for OTLP
+// under the target's own resource (statictargetsendpoint.go).
+func (s *Server) scrapeStaticTarget(ctx context.Context, target model.StaticTarget, cfg *model.Config, c *model.Collector) {
 	start := time.Now()
-	// A scheduled scrape runs on a goroutine of the scrape loop, where a panic
+	// A static target scrape runs on a goroutine of the scrape loop, where a panic
 	// would take the whole exporter down rather than one scrape, as a probe's
 	// does (probeflight.go). It is logged and the scrape ends as failed, once
 	// the scrape has got far enough to be counted.
 	var failedOnPanic func()
 	defer func() {
 		if recovered := recover(); recovered != nil {
-			s.logger.Error("scheduled target scrape panicked", "target", target.Name, "collector", c.Name, "panic", fmt.Sprint(recovered), "stack", string(debug.Stack()))
+			s.logger.Error("static target scrape panicked", "target", target.Name, "collector", c.Name, "panic", fmt.Sprint(recovered), "stack", string(debug.Stack()))
 			if failedOnPanic != nil {
 				failedOnPanic()
 			}
@@ -62,16 +64,24 @@ func (s *Server) scrapeScheduledTarget(ctx context.Context, target model.Schedul
 
 	// Repeats of the same failure are logged sparingly (failurelog.go).
 	log := collectLog{
-		key:    failureKey(c.Name, "scheduled target "+target.Name, ""),
-		failed: "scheduled target scrape failed", continuing: "scheduled target stage failed; continuing", recovery: "scheduled target recovered",
+		key:    failureKey(c.Name, "static target "+target.Name, ""),
+		failed: "static target scrape failed", continuing: "static target stage failed; continuing", recovery: "static target recovered",
 		attrs: []any{"target", target.Name, "collector", c.Name, "address", address},
 	}
+	// result is what the scrape publishes besides the health metrics: the
+	// target's metrics, or a stale result in their place.
+	var result model.MetricSet
 	finish := func(up float64) {
 		// The scrape is counted once, even when what follows panics.
 		failedOnPanic = nil
 		elapsed := time.Since(start)
 		count(func(st *serverStats) { st.lastDuration = elapsed.Seconds() })
-		s.queueOTLPResource(scheduledHealthMetrics(target, c, up, elapsed.Seconds()), identity)
+		// A new slice, so the health metrics are never appended into one the
+		// result shares with a set that was cached.
+		health := staticTargetHealthMetrics(target, c, up, elapsed.Seconds()).Metrics
+		published := model.MetricSet{Metrics: make([]model.Metric, 0, len(result.Metrics)+len(health))}
+		published.Metrics = append(append(published.Metrics, result.Metrics...), health...)
+		s.publishStaticTarget(target, identity, published)
 	}
 	// cacheKey is set once the request is known; a failure before it has no
 	// cached result to fall back on.
@@ -89,7 +99,7 @@ func (s *Server) scrapeScheduledTarget(ctx context.Context, target model.Schedul
 						st.staleServed++
 						st.emitted += uint64(len(cached.Metrics))
 					})
-					s.queueOTLPResource(withTargetLabels(answer, target.Labels), identity)
+					result = withTargetLabels(answer, target.Labels)
 				}
 			}
 		}
@@ -114,14 +124,14 @@ func (s *Server) scrapeScheduledTarget(ctx context.Context, target model.Schedul
 				st.emitted += uint64(len(cached.Metrics))
 			})
 			answer, _ := withFreshness(cached, c, false, fetched, time.Now())
-			s.queueOTLPResource(withTargetLabels(answer, target.Labels), identity)
+			result = withTargetLabels(answer, target.Labels)
 			finish(1)
 			return
 		}
 		count(func(st *serverStats) { st.cacheMisses++ })
 	}
 
-	// A scheduled scrape shares the collector's max_concurrent_probes with its
+	// A static target scrape shares the collector's max_concurrent_probes with its
 	// probes, and waits for a slot within its budget rather than failing.
 	if err := s.trips.acquire(ctx, c.Name, maxConcurrentProbes(c)); err != nil {
 		count(func(st *serverStats) { st.rejected++ })
@@ -130,11 +140,11 @@ func (s *Server) scrapeScheduledTarget(ctx context.Context, target model.Schedul
 		return
 	}
 	defer s.trips.release(c.Name)
-	result := s.collect(ctx, collectJob{
+	trip := s.collect(ctx, collectJob{
 		collector: c, target: target.Target, overrides: overrides, headers: headers,
 		rec: rec, display: address, cacheKey: cacheKey, log: log,
 	})
-	if result.failed() {
+	if trip.failed() {
 		failed()
 		return
 	}
@@ -142,32 +152,32 @@ func (s *Server) scrapeScheduledTarget(ctx context.Context, target model.Schedul
 	// with nothing of the collector's to export, as it answers a probe 200
 	// with an empty body.
 	count(func(st *serverStats) { st.success++ })
-	if !result.carriedOn {
-		s.queueOTLPResource(withTargetLabels(result.answer, target.Labels), identity)
+	if !trip.carriedOn {
+		result = withTargetLabels(trip.answer, target.Labels)
 	}
 	finish(1)
 }
 
-// scheduledHealthMetrics reports the outcome of one scheduled scrape. Without
-// it a failing target is simply absent from the OTLP stream, which cannot be
-// distinguished from a target that was never configured.
-func scheduledHealthMetrics(target model.ScheduledTarget, c *model.Collector, up, duration float64) model.MetricSet {
-	labels := map[string]string{"collector": c.Name, "scheduled_target": target.Name, "target": fetch.DisplayTarget(c, target.Target)}
+// staticTargetHealthMetrics reports the outcome of one static target scrape.
+// Without it a failing target would simply be absent from the endpoint and the
+// OTLP stream, which cannot be told from a target that was never configured.
+func staticTargetHealthMetrics(target model.StaticTarget, c *model.Collector, up, duration float64) model.MetricSet {
+	labels := map[string]string{"collector": c.Name, "static_target": target.Name, "target": fetch.DisplayTarget(c, target.Target)}
 	for name, value := range target.Labels {
 		if _, exists := labels[name]; !exists {
 			labels[name] = value
 		}
 	}
 	return model.MetricSet{Metrics: []model.Metric{
-		{Name: "http_exporter_target_up", Help: "Whether the last scheduled scrape of this target succeeded.", Type: model.GaugeMetricType, Value: up, Labels: model.CloneLabels(labels)},
-		{Name: "http_exporter_target_scrape_duration_seconds", Help: "Duration of the last scheduled scrape of this target in seconds.", Type: model.GaugeMetricType, Value: duration, Labels: model.CloneLabels(labels)},
+		{Name: "http_exporter_target_up", Help: "Whether the last scrape of this static target succeeded.", Type: model.GaugeMetricType, Value: up, Labels: model.CloneLabels(labels)},
+		{Name: "http_exporter_target_scrape_duration_seconds", Help: "Duration of the last scrape of this static target in seconds.", Type: model.GaugeMetricType, Value: duration, Labels: model.CloneLabels(labels)},
 	}}
 }
 
 // withTargetLabels adds a target's configured labels to every metric it
 // produced. A label the collector already extracted is never overwritten, so
 // declared metric labels keep precedence over target-wide ones. The cached
-// metric set stays unlabelled, which is what lets a scheduled scrape and an
+// metric set stays unlabelled, which is what lets a static target scrape and an
 // equivalent probe share cache entries.
 func withTargetLabels(set model.MetricSet, labels map[string]string) model.MetricSet {
 	if len(labels) == 0 {
@@ -188,9 +198,9 @@ func withTargetLabels(set model.MetricSet, labels map[string]string) model.Metri
 }
 
 // targetCacheQuery reproduces the /probe query a caller would have to send to make
-// the same request, so a scheduled scrape and an equivalent probe share cache
+// the same request, so a static target scrape and an equivalent probe share cache
 // entries and a differing one never does.
-func targetCacheQuery(t *model.ScheduledTarget) url.Values {
+func targetCacheQuery(t *model.StaticTarget) url.Values {
 	values := url.Values{"target": {t.Target}, "collector": {t.Collector}}
 	for name, value := range t.Params {
 		values.Set(name, value)
@@ -225,7 +235,7 @@ func targetCacheQuery(t *model.ScheduledTarget) url.Values {
 
 // targetResource resolves the OTLP resource identity for this target, with the
 // exporter-wide service name and attributes as the defaults.
-func targetResource(t *model.ScheduledTarget, cfg model.OTLPConfig) otlpResourceIdentity {
+func targetResource(t *model.StaticTarget, cfg model.OTLPConfig) otlpResourceIdentity {
 	identity := otlpResourceIdentity{ServiceName: cfg.ServiceName, Attributes: map[string]string{}}
 	for key, value := range cfg.ResourceAttributes {
 		identity.Attributes[key] = value

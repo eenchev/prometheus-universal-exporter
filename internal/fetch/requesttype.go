@@ -24,11 +24,11 @@ import (
 //     ignored.
 //   - Overrides: the /probe parameters it accepts. A parameter that belongs to
 //     some other type is rejected with 400 rather than ignored.
-//   - TargetFields: the keys a scheduled target's request block may set.
+//   - TargetFields: the keys a static target's request block may set.
 //   - Validate: the type's required fields, defaults and cross-field rules.
 //   - Fetch: how a scrape actually gets its bytes. Everything after it —
 //     decoding, transforms, limits, caching — is shared by every type.
-//   - What a target is: whether a probe or scheduled target may leave it
+//   - What a target is: whether a probe or static target may leave it
 //     out, how it is checked, how it appears in logs, and the url and
 //     http_method labels of the verbose self-metrics. Left unset, these are
 //     http's.
@@ -47,7 +47,7 @@ var knownRequestTypes = []string{RequestTypeHTTP, RequestTypeLocalFile}
 
 // RequestType is how one request.type reaches its data. Fields lists the
 // request keys it accepts, Overrides the probe parameters that may change them
-// and TargetFields the keys a scheduled target may set; Validate checks a
+// and TargetFields the keys a static target may set; Validate checks a
 // collector's request and fills in its defaults, and Fetch performs one.
 // Each type registers itself in RequestTypes.
 type RequestType struct {
@@ -58,22 +58,22 @@ type RequestType struct {
 	Validate     func(c *model.Collector) error
 	Fetch        func(ctx context.Context, target string, c *model.Collector, overrides RequestOverrides, forwarded http.Header) (*HTTPResponse, error)
 
-	// OptionalTarget lets a probe or a scheduled target leave target out.
+	// OptionalTarget lets a probe or a static target leave target out.
 	OptionalTarget bool
 	// CheckTarget validates a target before anything is fetched: a probe's
-	// target, answered with 400 when it fails, and a scheduled target's, at
-	// load. scheduled tells the two apart. Unset, any target is accepted.
-	CheckTarget func(c *model.Collector, target string, scheduled bool) error
+	// target, answered with 400 when it fails, and a static target's, at
+	// load. static tells the two apart. Unset, any target is accepted.
+	CheckTarget func(c *model.Collector, target string, static bool) error
 	// Label and Method give the url and http_method labels of the verbose
 	// self-metrics. Unset, they are http's.
 	Label  func(target string, c *model.Collector, overrides RequestOverrides) (string, error)
 	Method func(c *model.Collector, overrides RequestOverrides) string
 	// Display renders a target for logs, error bodies and the target label of
-	// a scheduled target's health series. Unset, it is safeTarget.
+	// a static target's health series. Unset, it is safeTarget.
 	Display func(target string) string
 	// Stage names the fetch stage in logs and error bodies. Unset, "http".
 	Stage string
-	// CheckOverride lets a collector refuse a probe parameter, or a scheduled
+	// CheckOverride lets a collector refuse a probe parameter, or a static
 	// target's request key, that its type accepts but its configuration has
 	// no use for, such as path for a localfile collector reading a directory.
 	// Unset, everything the type accepts is accepted.
@@ -190,9 +190,9 @@ func CheckOverrideParams(c *model.Collector, values url.Values) error {
 	return fmt.Errorf("probe parameters %s do not apply to collector %q, whose request.type is %q", strings.Join(rejected, ", "), c.Name, rt.Name)
 }
 
-// CheckTargetRequest rejects a scheduled target request block that sets keys
+// CheckTargetRequest rejects a static target request block that sets keys
 // its collector's request type does not accept.
-func CheckTargetRequest(t *model.ScheduledTarget, c *model.Collector) error {
+func CheckTargetRequest(t *model.StaticTarget, c *model.Collector) error {
 	rt := requestTypeOf(c)
 	if rt == nil {
 		return fmt.Errorf("target %q uses collector %q, which has no registered request type", t.Name, c.Name)
@@ -230,9 +230,9 @@ func FetchCollector(ctx context.Context, target string, c *model.Collector, over
 // that needs one; each caller words it for its own audience.
 var ErrMissingTarget = errors.New("target is required")
 
-// CheckTarget validates a probe's or a scheduled target's target for the
+// CheckTarget validates a probe's or a static target's target for the
 // collector's type.
-func CheckTarget(c *model.Collector, target string, scheduled bool) error {
+func CheckTarget(c *model.Collector, target string, static bool) error {
 	rt := requestTypeOf(c)
 	if rt == nil {
 		return fmt.Errorf("collector %q has no registered request type", c.Name)
@@ -241,7 +241,7 @@ func CheckTarget(c *model.Collector, target string, scheduled bool) error {
 		return ErrMissingTarget
 	}
 	if rt.CheckTarget != nil {
-		return rt.CheckTarget(c, target, scheduled)
+		return rt.CheckTarget(c, target, static)
 	}
 	return nil
 }

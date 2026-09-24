@@ -105,7 +105,7 @@ a request with the placeholder, not the value —
 because the value is a tenant or an account, which labels already keep out of
 the query string, and one series per value would be unbounded.
 
-**Scheduled targets.** A [scheduled target](OTLP.md) is scraped on the
+**Static targets.** A [static target](STATIC-TARGETS.md) is scraped on the
 exporter's own timer, with no probe to supply a value, so it gives its values
 under `params`:
 
@@ -226,7 +226,7 @@ Each accepts exactly `true` or `false`; anything else returns HTTP 400 before
 the target is contacted, so a typo cannot quietly fall back to a default. An
 absent parameter leaves the collector's setting in force, and both parameters
 are part of the response cache key, so a scrape asking for different transport
-behaviour never reads another scrape's cached result. Scheduled targets accept
+behaviour never reads another scrape's cached result. Static targets accept
 both in their own `request` block.
 
 These replace the earlier undocumented `request.redirect_policy`. A

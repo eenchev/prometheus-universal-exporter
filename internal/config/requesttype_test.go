@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/eenchev/prometheus-universal-exporter/internal/fetch"
 	"github.com/eenchev/prometheus-universal-exporter/internal/model"
@@ -12,7 +13,7 @@ import (
 )
 
 // request.type is required and selects how a collector reaches its data. Each
-// type owns the request keys, probe parameters and scheduled-target keys it
+// type owns the request keys, probe parameters and static-target keys it
 // accepts, its own validation, and its own fetch.
 
 func typedCollector(requestType string) model.Collector {
@@ -148,24 +149,24 @@ func TestAKeyThatBelongsToAnotherTypeIsRejected(t *testing.T) {
 	}
 }
 
-func TestScheduledTargetKeysFollowTheRequestType(t *testing.T) {
+func TestStaticTargetKeysFollowTheRequestType(t *testing.T) {
 	registerFixtureType(t)
 	cfg := &model.Config{Collectors: []model.Collector{fixtureCollector()}, OTLP: otlpConfig("http://collector.invalid/v1/metrics")}
 	if err := Validate(cfg); err != nil {
 		t.Fatal(err)
 	}
-	withMethod := &model.TargetFile{Targets: []model.ScheduledTarget{{Name: "one", Collector: "fixed", Target: "fixture://a", Request: model.TargetRequestConfig{Method: "POST"}}}}
-	if err := ValidateTargets(withMethod); err != nil {
+	withMethod := &model.StaticTargetFile{Interval: model.Duration(time.Minute), Targets: []model.StaticTarget{{Name: "one", Collector: "fixed", Target: "fixture://a", Request: model.TargetRequestConfig{Method: "POST"}}}}
+	if err := ValidateStaticTargets(withMethod); err != nil {
 		t.Fatal(err)
 	}
-	if err := ValidateTargetsAgainst(withMethod, cfg); err == nil || !strings.Contains(err.Error(), `request.method, which does not apply to collector "fixed"`) {
+	if err := ValidateStaticTargetsAgainst(withMethod, cfg); err == nil || !strings.Contains(err.Error(), `request.method, which does not apply to collector "fixed"`) {
 		t.Fatalf("err=%v", err)
 	}
-	withPath := &model.TargetFile{Targets: []model.ScheduledTarget{{Name: "one", Collector: "fixed", Target: "fixture://a", Request: model.TargetRequestConfig{Path: "/b", PathSet: true}}}}
-	if err := ValidateTargets(withPath); err != nil {
+	withPath := &model.StaticTargetFile{Interval: model.Duration(time.Minute), Targets: []model.StaticTarget{{Name: "one", Collector: "fixed", Target: "fixture://a", Request: model.TargetRequestConfig{Path: "/b", PathSet: true}}}}
+	if err := ValidateStaticTargets(withPath); err != nil {
 		t.Fatal(err)
 	}
-	if err := ValidateTargetsAgainst(withPath, cfg); err != nil {
+	if err := ValidateStaticTargetsAgainst(withPath, cfg); err != nil {
 		t.Fatalf("a key the type accepts should pass: %v", err)
 	}
 }

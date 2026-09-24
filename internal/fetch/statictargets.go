@@ -11,7 +11,7 @@ import (
 
 // TargetOverrides translates the target request block into the same per-scrape
 // override structure the /probe endpoint produces.
-func TargetOverrides(t *model.ScheduledTarget) RequestOverrides {
+func TargetOverrides(t *model.StaticTarget) RequestOverrides {
 	out := RequestOverrides{Method: t.Request.Method, Timeout: time.Duration(t.Request.Timeout), Params: t.Params}
 	if t.Request.PathSet {
 		out.PathSet = true
@@ -44,12 +44,12 @@ func TargetOverrides(t *model.ScheduledTarget) RequestOverrides {
 	return out
 }
 
-// TargetHeaders builds the headers sent to the target. Scheduled targets are operator
+// TargetHeaders builds the headers sent to the target. Static targets are operator
 // configuration rather than caller input, so they are applied directly instead
 // of through the collector's forwarding allowlist. Credentials are resolved
 // here so that they are part of the cache key and can never be shared with a
 // request that did not present them.
-func TargetHeaders(t *model.ScheduledTarget) (http.Header, error) {
+func TargetHeaders(t *model.StaticTarget) (http.Header, error) {
 	out := make(http.Header)
 	for name, value := range t.Request.Headers {
 		out.Set(name, value)

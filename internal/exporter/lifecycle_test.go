@@ -21,7 +21,7 @@ import (
 // (lifecycle.go).
 
 // reloadable is a server over a configuration file the test can rewrite, and
-// optionally a scheduled target file.
+// optionally a static target file.
 type reloadable struct {
 	t       *testing.T
 	path    string
@@ -44,7 +44,7 @@ func newReloadable(t *testing.T, conf string, targets string) *reloadable {
 	if targets != "" {
 		r.targets = filepath.Join(dir, "targets.yaml")
 		r.write(r.targets, targets)
-		file, err := config.LoadTargets(r.targets)
+		file, err := config.LoadStaticTargets(r.targets)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -126,26 +126,26 @@ func TestReloadEndpoint(t *testing.T) {
 	}
 }
 
-// The scheduled target file is reloaded with the configuration, and its
+// The static target file is reloaded with the configuration, and its
 // rejection is reported.
 func TestReloadEndpointCoversTheTargetFile(t *testing.T) {
 	conf := strings.Replace(testutil.CollectorsDocument("text"), "collectors:", "otlp:\n  enabled: true\n  endpoint: http://collector.invalid/v1/metrics\ncollectors:", 1)
-	targets := "targets:\n  - name: one\n    collector: text\n    target: http://a.example\n"
+	targets := "interval: 1m\ntargets:\n  - name: one\n    collector: text\n    target: http://a.example\n"
 	r := newReloadable(t, conf, targets)
 	r.server.SetLifecycle(true)
 	r.write(r.targets, targets+"  - name: two\n    collector: text\n    target: http://b.example\n")
 	if recorder := r.request(http.MethodPost, nil); recorder.Code != http.StatusOK {
 		t.Fatalf("status=%d body=%s", recorder.Code, recorder.Body)
 	}
-	if got := len(r.manager.Targets()); got != 2 {
+	if got := len(r.manager.StaticTargets()); got != 2 {
 		t.Fatalf("targets after reload: %d", got)
 	}
-	r.write(r.targets, "targets:\n  - name: one\n    collector: missing\n    target: http://a.example\n")
+	r.write(r.targets, "interval: 1m\ntargets:\n  - name: one\n    collector: missing\n    target: http://a.example\n")
 	recorder := r.request(http.MethodPost, nil)
-	if recorder.Code != http.StatusInternalServerError || !strings.Contains(recorder.Body.String(), "scheduled target file") {
+	if recorder.Code != http.StatusInternalServerError || !strings.Contains(recorder.Body.String(), "static target file") {
 		t.Fatalf("status=%d body=%s", recorder.Code, recorder.Body)
 	}
-	if got := len(r.manager.Targets()); got != 2 {
+	if got := len(r.manager.StaticTargets()); got != 2 {
 		t.Fatalf("a rejected target file replaced the targets: %d", got)
 	}
 }

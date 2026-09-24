@@ -161,10 +161,10 @@ func TestHistogramsAndSummariesReachTheOTLPEndpoint(t *testing.T) {
 	c.Transform = model.TransformConfig{Type: "prometheus"}
 	c.Metrics = nil
 	cfg := &model.Config{Collectors: []model.Collector{c}, OTLP: otlpConfig(endpoint.URL + "/v1/metrics"), Web: model.WebConfig{SelfMetrics: model.SelfMetricsConfig{Verbose: true, ResourceMetrics: true}}}
-	file := &model.TargetFile{Targets: []model.ScheduledTarget{{Name: "scheduled", Collector: "passthrough", Target: target.URL}}}
-	server := newScheduledServer(t, cfg, file)
+	file := &model.StaticTargetFile{Interval: model.Duration(time.Minute), Targets: []model.StaticTarget{{ExportViaOTLP: true, Name: "scheduled", Collector: "passthrough", Target: target.URL}}}
+	server := newStaticServer(t, cfg, file)
 	probeOnce(t, server, "/probe?collector=passthrough&target="+url.QueryEscape(target.URL), nil)
-	server.scrapeScheduledTargets(context.Background(), 10*time.Second)
+	server.scrapeStaticTargets(context.Background(), 10*time.Second)
 	server.exportOTLP(context.Background(), 5*time.Second)
 
 	var payload otlpPayload

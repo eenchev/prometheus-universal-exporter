@@ -45,11 +45,11 @@ func init() {
 	})
 }
 
-// checkHTTPTarget checks a scheduled target's address, which must be an
+// checkHTTPTarget checks a static target's address, which must be an
 // absolute URL. A probe's target may be a bare host:port, as Prometheus
 // service discovery hands it over, and is checked when it is fetched.
-func checkHTTPTarget(_ *model.Collector, target string, scheduled bool) error {
-	if !scheduled {
+func checkHTTPTarget(_ *model.Collector, target string, static bool) error {
+	if !static {
 		return nil
 	}
 	if u, err := url.Parse(target); err != nil || u.Host == "" {

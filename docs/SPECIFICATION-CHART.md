@@ -165,7 +165,7 @@ specification) can be supplied as further keys and listed under
 `collector_files` relative to `config.yaml`. A change to any key MUST roll or
 reload the exporter as a change to `config.yaml` does (§ 33.3). The chart
 documentation MUST show collector files supplied this way, with a key naming
-pattern that cannot match the scheduled target file rendered into the same
+pattern that cannot match the static target file rendered into the same
 directory, and a test MUST load that example as the exporter would.
 
 ### 33.3 Configuration reload / rollout
@@ -287,7 +287,7 @@ resources: {}
 server: {}
 service: {}
 config: {}
-otlpTargets: {}
+staticTargets: {}
 serviceAccount: {}
 securityContext: {}
 podSecurityContext: {}
@@ -317,7 +317,8 @@ values schema:
 | `server.enableLifecycle` | `--web.enable-lifecycle`, rendered only when `true`; default `false` |
 | `server.watchConfig`, `server.watchConfigInterval` | `--config.watch`, `--config.watch-interval` |
 | `server.expandEnv` | `--config.export-env` |
-| `otlpTargets.enabled` | `--otlp.targets-file` |
+| `staticTargets.enabled`, `staticTargets.fileName` | `--static-targets-file`, rendered only when enabled |
+| `staticTargets.path` | `--web.static-targets-path`, always rendered; a path of plain segments that is neither `selfMetrics.path` nor another endpoint's; default `/static-targets` |
 
 An invalid value MUST fail rendering and be refused by the values schema.
 `server.probeTimeoutOffset`, `server.probeDefaultTimeout` and `server.shutdownTimeout` MUST default to empty
@@ -566,11 +567,23 @@ with at least these values combinations:
    `--probe.timeout-offset` and `--probe.default-timeout`; an unknown level
    and a negative offset or default timeout MUST fail rendering; the default
    MUST render `--log.level=info` and neither timeout flag.
-9a. Scheduled targets enabled, which MUST add the `--otlp.targets-file`
-   argument and render the target document into the exporter ConfigMap. When
-   the chart manages the configuration, enabling scheduled targets without
-   `otlp.enabled: true`, or with an empty document, MUST fail rendering with an
-   explicit message rather than producing a Deployment that cannot start.
+9a. Static targets enabled, which MUST add the `--static-targets-file`
+   argument and render the target document into the exporter ConfigMap. An
+   empty document MUST fail rendering. Static targets MUST render without OTLP
+   export in the configuration; when the chart manages the configuration, a
+   target setting `export_via_otlp` without `otlp.enabled: true` MUST fail
+   rendering with an explicit message naming the target, rather than
+   producing a Deployment that cannot start. `staticTargets.path` equal to
+   `selfMetrics.path` MUST fail rendering.
+9b. The static targets monitor: with `staticTargets.enabled` and
+   `staticTargets.monitor.enabled`, the default, a ServiceMonitor, or a
+   PodMonitor with `staticTargets.monitor.type: pod`, named
+   `<fullname>-static-targets`, MUST scrape `staticTargets.path` on the `http`
+   port with the monitor's interval and scrape timeout and `honorLabels: true`,
+   so the series keep their `static_target`, `target` and target labels, and
+   MUST present the exporter's credential when `webAuth` is enabled. With
+   either off it MUST NOT render; a type other than `service` or `pod` MUST
+   fail rendering.
 10. Multiple collectors in ConfigMap content, including collectors supplied as
     collector files in further `config.data` keys: the ConfigMap template MUST
     render every key, the configuration volume MUST mount the whole ConfigMap,

@@ -18,16 +18,16 @@ import (
 	"github.com/eenchev/prometheus-universal-exporter/internal/testutil"
 )
 
-func newScheduledServer(t *testing.T, cfg *model.Config, file *model.TargetFile) *Server {
+func newStaticServer(t *testing.T, cfg *model.Config, file *model.StaticTargetFile) *Server {
 	t.Helper()
 	if err := config.Validate(cfg); err != nil {
 		t.Fatal(err)
 	}
 	if file != nil {
-		if err := config.ValidateTargets(file); err != nil {
+		if err := config.ValidateStaticTargets(file); err != nil {
 			t.Fatal(err)
 		}
-		if err := config.ValidateTargetsAgainst(file, cfg); err != nil {
+		if err := config.ValidateStaticTargetsAgainst(file, cfg); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -54,9 +54,10 @@ func metricByName(set model.MetricSet, name string) *model.Metric {
 	return nil
 }
 
-func TestLoadTargetFileParsesEveryRequestParameter(t *testing.T) {
+func TestLoadStaticTargetFileParsesEveryRequestParameter(t *testing.T) {
 	path := t.TempDir() + "/targets.yaml"
-	document := `targets:
+	document := `interval: 1m
+targets:
   - name: legacy_eu
     collector: text
     target: http://legacy.example:8080
@@ -74,6 +75,7 @@ func TestLoadTargetFileParsesEveryRequestParameter(t *testing.T) {
       bearer_token: monitor-token
     labels:
       environment: production
+    export_via_otlp: true
     otlp:
       service_name: legacy-app
       resource_attributes:
@@ -82,14 +84,17 @@ func TestLoadTargetFileParsesEveryRequestParameter(t *testing.T) {
 	if err := os.WriteFile(path, []byte(document), 0600); err != nil {
 		t.Fatal(err)
 	}
-	file, err := config.LoadTargets(path)
+	file, err := config.LoadStaticTargets(path)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := config.ValidateTargets(file); err != nil {
+	if err := config.ValidateStaticTargets(file); err != nil {
 		t.Fatal(err)
 	}
 	target := file.Targets[0]
+	if !target.ExportViaOTLP {
+		t.Fatal("export_via_otlp was not read")
+	}
 
 	overrides := fetch.TargetOverrides(&target)
 	if overrides.Method != http.MethodPost || !overrides.PathSet || overrides.Path != "/api/status" {
@@ -127,9 +132,9 @@ func TestLoadTargetFileParsesEveryRequestParameter(t *testing.T) {
 	}
 }
 
-func TestScheduledTargetResourceInheritsExporterDefaults(t *testing.T) {
+func TestStaticTargetResourceInheritsExporterDefaults(t *testing.T) {
 	cfg := otlpConfig("http://collector.invalid/v1/metrics")
-	target := model.ScheduledTarget{Name: "plain", Collector: "text", Target: "http://a.invalid"}
+	target := model.StaticTarget{ExportViaOTLP: true, Name: "plain", Collector: "text", Target: "http://a.invalid"}
 	identity := targetResource(&target, cfg)
 	if identity.ServiceName != cfg.ServiceName || identity.Attributes["deployment.environment"] != "test" {
 		t.Fatalf("identity=%+v, want the exporter defaults", identity)
@@ -144,7 +149,7 @@ func TestScheduledTargetResourceInheritsExporterDefaults(t *testing.T) {
 	}
 }
 
-func TestScheduledScrapeGroupsMetricsByTargetResource(t *testing.T) {
+func TestStaticScrapeGroupsMetricsByTargetResource(t *testing.T) {
 	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Header.Get("Authorization") != "Bearer monitor-token" || r.Header.Get("X-Tenant") != "team-a" {
 			t.Errorf("request headers=%v", r.Header)
@@ -155,21 +160,21 @@ func TestScheduledScrapeGroupsMetricsByTargetResource(t *testing.T) {
 	defer target.Close()
 
 	cfg := &model.Config{Collectors: []model.Collector{testutil.Collector("text", "text")}, OTLP: otlpConfig("http://collector.invalid/v1/metrics")}
-	file := &model.TargetFile{Targets: []model.ScheduledTarget{
+	file := &model.StaticTargetFile{Interval: model.Duration(time.Minute), Targets: []model.StaticTarget{
 		{
-			Name: "eu", Collector: "text", Target: target.URL,
+			Name: "eu", Collector: "text", Target: target.URL, ExportViaOTLP: true,
 			Request: model.TargetRequestConfig{Headers: map[string]string{"X-Tenant": "team-a"}, BearerToken: "monitor-token"},
 			Labels:  map[string]string{"region": "eu"},
 			OTLP:    model.TargetOTLPConfig{ServiceName: "legacy-app", ResourceAttributes: map[string]string{"team": "platform"}},
 		},
 		{
-			Name: "us", Collector: "text", Target: target.URL,
+			Name: "us", Collector: "text", Target: target.URL, ExportViaOTLP: true,
 			Request: model.TargetRequestConfig{Headers: map[string]string{"X-Tenant": "team-a"}, BearerToken: "monitor-token"},
 			Labels:  map[string]string{"region": "us"},
 		},
 	}}
-	server := newScheduledServer(t, cfg, file)
-	server.scrapeScheduledTargets(context.Background(), 10*time.Second)
+	server := newStaticServer(t, cfg, file)
+	server.scrapeStaticTargets(context.Background(), 10*time.Second)
 	resources := server.drainOTLP()
 	if len(resources) != 2 {
 		t.Fatalf("expected one resource per service name, got %d", len(resources))
@@ -186,7 +191,7 @@ func TestScheduledScrapeGroupsMetricsByTargetResource(t *testing.T) {
 	if value == nil || value.Value != 42 || value.Labels["region"] != "eu" {
 		t.Fatalf("collector metric=%+v", value)
 	}
-	if up := metricByName(legacy.Set, "http_exporter_target_up"); up == nil || up.Value != 1 || up.Labels["scheduled_target"] != "eu" {
+	if up := metricByName(legacy.Set, "http_exporter_target_up"); up == nil || up.Value != 1 || up.Labels["static_target"] != "eu" {
 		t.Fatalf("health metric=%+v", up)
 	}
 	if metricByName(legacy.Set, "http_exporter_target_scrape_duration_seconds") == nil {
@@ -202,16 +207,16 @@ func TestScheduledScrapeGroupsMetricsByTargetResource(t *testing.T) {
 	}
 }
 
-func TestScheduledScrapeReportsFailureAsTargetDown(t *testing.T) {
+func TestStaticScrapeReportsFailureAsTargetDown(t *testing.T) {
 	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		http.Error(w, "unavailable", http.StatusServiceUnavailable)
 	}))
 	defer target.Close()
 	cfg := &model.Config{Collectors: []model.Collector{testutil.Collector("text", "text")}, OTLP: otlpConfig("http://collector.invalid/v1/metrics")}
-	file := &model.TargetFile{Targets: []model.ScheduledTarget{{Name: "down", Collector: "text", Target: target.URL}}}
-	server := newScheduledServer(t, cfg, file)
+	file := &model.StaticTargetFile{Interval: model.Duration(time.Minute), Targets: []model.StaticTarget{{ExportViaOTLP: true, Name: "down", Collector: "text", Target: target.URL}}}
+	server := newStaticServer(t, cfg, file)
 
-	server.scrapeScheduledTargets(context.Background(), 10*time.Second)
+	server.scrapeStaticTargets(context.Background(), 10*time.Second)
 	resources := server.drainOTLP()
 	if len(resources) != 1 {
 		t.Fatalf("resources=%d", len(resources))
@@ -225,7 +230,7 @@ func TestScheduledScrapeReportsFailureAsTargetDown(t *testing.T) {
 	}
 }
 
-func TestScheduledScrapeUsesTheCollectorCache(t *testing.T) {
+func TestStaticScrapeUsesTheCollectorCache(t *testing.T) {
 	var requests atomic.Int64
 	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		requests.Add(1)
@@ -236,12 +241,12 @@ func TestScheduledScrapeUsesTheCollectorCache(t *testing.T) {
 	collector := testutil.Collector("text", "text")
 	collector.Cache.TTL = model.Duration(time.Minute)
 	cfg := &model.Config{Collectors: []model.Collector{collector}, OTLP: otlpConfig("http://collector.invalid/v1/metrics")}
-	file := &model.TargetFile{Targets: []model.ScheduledTarget{{Name: "cached", Collector: "text", Target: target.URL}}}
-	server := newScheduledServer(t, cfg, file)
+	file := &model.StaticTargetFile{Interval: model.Duration(time.Minute), Targets: []model.StaticTarget{{ExportViaOTLP: true, Name: "cached", Collector: "text", Target: target.URL}}}
+	server := newStaticServer(t, cfg, file)
 
-	server.scrapeScheduledTargets(context.Background(), 10*time.Second)
+	server.scrapeStaticTargets(context.Background(), 10*time.Second)
 	_ = server.drainOTLP()
-	server.scrapeScheduledTargets(context.Background(), 10*time.Second)
+	server.scrapeStaticTargets(context.Background(), 10*time.Second)
 	resources := server.drainOTLP()
 	if got := requests.Load(); got != 1 {
 		t.Fatalf("target requests=%d, want 1", got)
@@ -253,7 +258,7 @@ func TestScheduledScrapeUsesTheCollectorCache(t *testing.T) {
 	for _, want := range []string{
 		`http_exporter_cache_hits_total{collector="text"} 1`,
 		`http_exporter_scrapes_total{collector="text"} 2`,
-		"http_exporter_scheduled_targets 1",
+		"http_exporter_static_targets 1",
 	} {
 		if !strings.Contains(exposition, want) {
 			t.Fatalf("self-metrics missing %q:\n%s", want, exposition)
@@ -261,7 +266,7 @@ func TestScheduledScrapeUsesTheCollectorCache(t *testing.T) {
 	}
 }
 
-func TestScheduledTargetLabelsDoNotOverrideMetricLabels(t *testing.T) {
+func TestStaticTargetLabelsDoNotOverrideMetricLabels(t *testing.T) {
 	set := model.MetricSet{Metrics: []model.Metric{{Name: "demo", Labels: map[string]string{"region": "from-metric"}}}}
 	out := withTargetLabels(set, map[string]string{"region": "from-target", "environment": "production"})
 	if out.Metrics[0].Labels["region"] != "from-metric" {
@@ -275,7 +280,7 @@ func TestScheduledTargetLabelsDoNotOverrideMetricLabels(t *testing.T) {
 	}
 }
 
-func TestScheduledScrapePayloadCarriesSeparateResources(t *testing.T) {
+func TestStaticScrapePayloadCarriesSeparateResources(t *testing.T) {
 	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "text/plain")
 		_, _ = w.Write([]byte("value=42\n"))
@@ -295,13 +300,13 @@ func TestScheduledScrapePayloadCarriesSeparateResources(t *testing.T) {
 	defer collectorEndpoint.Close()
 
 	cfg := &model.Config{Collectors: []model.Collector{testutil.Collector("text", "text")}, OTLP: otlpConfig(collectorEndpoint.URL + "/v1/metrics")}
-	file := &model.TargetFile{Targets: []model.ScheduledTarget{{
-		Name: "eu", Collector: "text", Target: target.URL,
+	file := &model.StaticTargetFile{Interval: model.Duration(time.Minute), Targets: []model.StaticTarget{{
+		Name: "eu", Collector: "text", Target: target.URL, ExportViaOTLP: true,
 		Labels: map[string]string{"region": "eu"},
 		OTLP:   model.TargetOTLPConfig{ServiceName: "legacy-app"},
 	}}}
-	server := newScheduledServer(t, cfg, file)
-	server.scrapeScheduledTargets(context.Background(), 10*time.Second)
+	server := newStaticServer(t, cfg, file)
+	server.scrapeStaticTargets(context.Background(), 10*time.Second)
 	server.exportOTLP(context.Background(), 5*time.Second)
 
 	select {

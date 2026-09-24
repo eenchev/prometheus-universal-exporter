@@ -25,7 +25,7 @@ configured:
 | `http_exporter_series_limit_exceeded_total` | counter | Scrapes rejected by a size or series limit. |
 | `http_exporter_cache_hits_total`, `http_exporter_cache_misses_total` | counter | [Response cache](CONFIGURATION.md#response-caching) lookups. |
 | `http_exporter_cache_entries` | gauge | Entries the collector's cache holds, stale ones kept for `stale_if_error` included. |
-| `http_exporter_cache_stale_served_total` | counter | Failed trips answered with the last good result under [`stale_if_error`](CONFIGURATION.md#serving-the-last-good-result-when-the-target-fails), probes and scheduled scrapes alike. |
+| `http_exporter_cache_stale_served_total` | counter | Failed trips answered with the last good result under [`stale_if_error`](CONFIGURATION.md#serving-the-last-good-result-when-the-target-fails), probes and static target scrapes alike. |
 | `http_exporter_probes_coalesced_total` | counter | Probes that [shared a request](#shared-probes). |
 | `http_exporter_probes_in_flight` | gauge | Trips to the collector's targets in progress, which [`max_concurrent_probes`](CONFIGURATION.md#limiting-concurrent-probes) bounds. |
 | `http_exporter_probes_rejected_total` | counter | Probes answered `503` because the collector was at `max_concurrent_probes`. |
@@ -70,6 +70,19 @@ produced them:
 up * on (instance) group_left (version) http_exporter_build_info
 ```
 
+## Static targets
+
+| Family | Type | Meaning |
+| --- | --- | --- |
+| `http_exporter_static_targets` | gauge | [Static targets](STATIC-TARGETS.md) loaded from the static target file; 0 without one. |
+| `http_exporter_static_targets_exported_via_otlp` | gauge | Those of them with `export_via_otlp`, also delivered over OTLP. |
+
+A static target's scrapes are counted in its collector's families above, as
+probes are. Each target's own health, `http_exporter_target_up` and
+`http_exporter_target_scrape_duration_seconds`, is served with its results on
+the [static targets endpoint](STATIC-TARGETS.md#the-static-targets-endpoint),
+not here.
+
 ## Configuration reloads
 
 A reload that is rejected — an invalid file, a duplicate collector name, a
@@ -85,8 +98,8 @@ http_exporter_config_reloads_total{file="config",result="failure"} 1
 ```
 
 `file="config"` is the configuration with its
-[collector files](CONFIGURATION.md#collector-files); `file="targets"` is the
-[scheduled target file](OTLP.md#scheduled-targets), reported only when there is
+[collector files](CONFIGURATION.md#collector-files); `file="static_targets"` is the
+[static target file](STATIC-TARGETS.md), reported only when there is
 one. Loading at startup counts as a success; the counter counts reloads after
 it, whatever triggered them: the watch, `SIGHUP` or
 [`POST /-/reload`](CONFIGURATION.md#reloading-on-demand). Alert on a change that did not take:
@@ -228,7 +241,7 @@ response arrived, so a transport failure is distinguishable from an HTTP error.
 The two views are raised through the same path, so a collector's total is always
 the sum of its requests'; a test checks that.
 
-Scheduled targets are recorded the same way, and because their requests are
+Static targets are recorded the same way, and because their requests are
 fully described by the target file they are listed from startup with zero
 counters and a zero timestamp, before their first collection. A `/probe` request
 cannot be listed in advance — its URL comes from the probe's own `target`
@@ -303,7 +316,7 @@ The buckets are fixed: 5 ms, 10 ms, 25 ms, 50 ms, 100 ms, 250 ms, 500 ms, 1 s,
 answered from the response cache, or by [sharing another probe's
 request](#shared-probes), made no trip and is not counted, so the histogram
 describes the target and the collector's processing, not how quickly the
-exporter could answer. Scheduled targets are observed like probes. Every
+exporter could answer. Static targets are observed like probes. Every
 configured collector has a histogram, empty until its first trip, and the
 durations are only recorded while verbose mode is on.
 

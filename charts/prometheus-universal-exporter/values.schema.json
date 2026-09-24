@@ -170,13 +170,34 @@
       }
     },
 
-    "otlpTargets": {
+    "staticTargets": {
       "type": "object",
       "additionalProperties": false,
       "properties": {
-        "enabled": {"type": "boolean"},
+        "enabled": {"type": "boolean", "description": "Render the static target document and pass it with --static-targets-file."},
         "fileName": {"type": "string", "minLength": 1},
-        "data": {"type": "string"}
+        "path": {
+          "type": "string",
+          "description": "Rendered as --web.static-targets-path: where the static targets' latest results are served. A path of plain segments that no other endpoint uses, and not selfMetrics.path.",
+          "pattern": "^(/[A-Za-z0-9._~-]+)+$",
+          "not": {"enum": ["/probe", "/health", "/ready", "/collectors", "/-/reload"]}
+        },
+        "data": {"type": "string", "description": "The static target document, YAML."},
+        "monitor": {
+          "type": "object",
+          "additionalProperties": false,
+          "description": "The ServiceMonitor or PodMonitor scraping the static targets endpoint.",
+          "properties": {
+            "enabled": {"type": "boolean"},
+            "type": {"type": "string", "enum": ["service", "pod"]},
+            "interval": {"$ref": "#/$defs/duration"},
+            "scrapeTimeout": {"$ref": "#/$defs/duration"},
+            "labels": {"$ref": "#/$defs/stringMap"},
+            "annotations": {"$ref": "#/$defs/stringMap"},
+            "relabelings": {"type": "array", "items": {"type": "object"}},
+            "metricRelabelings": {"type": "array", "items": {"type": "object"}}
+          }
+        }
       }
     },
 

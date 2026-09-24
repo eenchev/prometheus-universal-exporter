@@ -157,7 +157,7 @@ type otlpNumberDataPoint struct {
 	AsInt             string          `json:"asInt,omitempty"`
 }
 
-// otlpResourceIdentity is the OTLP resource a metric set belongs to. Scheduled
+// otlpResourceIdentity is the OTLP resource a metric set belongs to. Static
 // targets may each declare their own service name and resource attributes, so
 // one export can carry several resources.
 type otlpResourceIdentity struct {
@@ -670,7 +670,7 @@ func (s *Server) queueOTLP(set model.MetricSet) {
 	s.queueOTLPResource(set, defaultResourceIdentity(s.manager.Get().OTLP))
 }
 
-// queueOTLPResource stages metrics under a specific resource, so a scheduled
+// queueOTLPResource stages metrics under a specific resource, so a static
 // target's own service name and resource attributes survive to the exporter.
 func (s *Server) queueOTLPResource(set model.MetricSet, identity otlpResourceIdentity) {
 	cfg := s.manager.Get().OTLP
@@ -777,8 +777,8 @@ func appendToResource(resources []otlpResourceSet, identity otlpResourceIdentity
 	return append(resources, otlpResourceSet{Identity: identity, Set: set})
 }
 
-// OTLPExportLoop scrapes the scheduled targets and exports everything pending
-// every otlp.interval until ctx ends. It returns without a last export, which
+// OTLPExportLoop exports everything pending every otlp.interval until ctx
+// ends. It returns without a last export, which
 // is FlushOTLP's to make once the HTTP server has finished its probes.
 func (s *Server) OTLPExportLoop(ctx context.Context) {
 	for {
@@ -798,9 +798,9 @@ func (s *Server) OTLPExportLoop(ctx context.Context) {
 			_ = s.drainOTLP()
 			continue
 		}
-		// Scheduled targets are scraped on their own intervals
-		// (ScheduledScrapeLoop); an export delivers what they and the probes
-		// queued since the last one. It may retry for up to an interval, so it
+		// Static targets are scraped on their own intervals
+		// (StaticScrapeLoop); an export delivers what the probes and the
+		// targets with export_via_otlp queued since the last one. It may retry for up to an interval, so it
 		// never runs into the next one.
 		s.exportOTLP(ctx, interval)
 	}
@@ -808,7 +808,7 @@ func (s *Server) OTLPExportLoop(ctx context.Context) {
 
 // FlushOTLP makes the last export at shutdown: the metrics probes queued since
 // the last export, and a final self-metric snapshot, within otlp.timeout.
-// Scheduled targets are not scraped again.
+// Static targets are not scraped again.
 func (s *Server) FlushOTLP() {
 	cfg := s.manager.Get().OTLP
 	if !cfg.Enabled || cfg.Endpoint == "" {

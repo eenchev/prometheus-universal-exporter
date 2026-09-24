@@ -20,7 +20,7 @@ import (
 //
 // A probe over the limit is answered 503 Service Unavailable at once, rather
 // than queued behind the others: Prometheus has a scrape timeout, and an
-// answer saying why beats one that never comes. A scheduled target over the
+// answer saying why beats one that never comes. A static target over the
 // limit waits for a free slot within its scrape budget instead, since nothing
 // is waiting on it. Probes answered from the cache or by sharing another
 // probe's request make no trip and take no slot.
@@ -41,7 +41,7 @@ type tripLimiter struct {
 	mu       sync.Mutex
 	inFlight map[string]int
 	// freed is closed, and replaced, whenever a slot is released, which is
-	// what a waiting scheduled scrape waits on.
+	// what a waiting static target scrape waits on.
 	freed chan struct{}
 }
 

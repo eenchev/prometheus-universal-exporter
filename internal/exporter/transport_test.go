@@ -178,18 +178,18 @@ func TestInvalidBooleanOverrideIsRejectedBeforeTheTarget(t *testing.T) {
 	}
 }
 
-func TestScheduledTargetCarriesTransportSettings(t *testing.T) {
+func TestStaticTargetCarriesTransportSettings(t *testing.T) {
 	path := t.TempDir() + "/targets.yaml"
-	document := "targets:\n  - name: legacy_eu\n    collector: text\n    target: http://legacy.example:8080\n" +
+	document := "interval: 1m\ntargets:\n  - export_via_otlp: true\n    name: legacy_eu\n    collector: text\n    target: http://legacy.example:8080\n" +
 		"    request:\n      follow_redirects: true\n      enable_http2: true\n"
 	if err := os.WriteFile(path, []byte(document), 0600); err != nil {
 		t.Fatal(err)
 	}
-	file, err := config.LoadTargets(path)
+	file, err := config.LoadStaticTargets(path)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := config.ValidateTargets(file); err != nil {
+	if err := config.ValidateStaticTargets(file); err != nil {
 		t.Fatal(err)
 	}
 	target := file.Targets[0]
@@ -206,24 +206,24 @@ func TestScheduledTargetCarriesTransportSettings(t *testing.T) {
 	}
 }
 
-func TestScheduledTargetFollowsRedirectsWhenConfigured(t *testing.T) {
+func TestStaticTargetFollowsRedirectsWhenConfigured(t *testing.T) {
 	target, reached := redirectingTarget()
 	defer target.Close()
 	cfg := &model.Config{Collectors: []model.Collector{testutil.Collector("text", "text")}, OTLP: otlpConfig("http://collector.invalid/v1/metrics")}
 	follow := true
-	file := &model.TargetFile{Targets: []model.ScheduledTarget{{
-		Name: "followed", Collector: "text", Target: target.URL,
+	file := &model.StaticTargetFile{Interval: model.Duration(time.Minute), Targets: []model.StaticTarget{{
+		Name: "followed", Collector: "text", Target: target.URL, ExportViaOTLP: true,
 		Request: model.TargetRequestConfig{FollowRedirects: &follow},
 	}}}
-	server := newScheduledServer(t, cfg, file)
+	server := newStaticServer(t, cfg, file)
 
-	server.scrapeScheduledTargets(context.Background(), 10*time.Second)
+	server.scrapeStaticTargets(context.Background(), 10*time.Second)
 	resources := server.drainOTLP()
 	if len(resources) != 1 {
 		t.Fatalf("resources=%d", len(resources))
 	}
 	if value := metricByName(resources[0].Set, "demo_value"); value == nil || value.Value != 42 {
-		t.Fatalf("the scheduled scrape did not follow the redirect: %+v", resources[0].Set.Metrics)
+		t.Fatalf("the static target scrape did not follow the redirect: %+v", resources[0].Set.Metrics)
 	}
 	if got := reached.Load(); got != 1 {
 		t.Fatalf("redirect destination reached %d times, want 1", got)

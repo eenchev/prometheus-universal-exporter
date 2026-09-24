@@ -23,7 +23,7 @@ import (
 var yamlPlaces = map[string]string{
 	"Config":              "the configuration",
 	"collectorFile":       "a collector file",
-	"TargetFile":          "the scheduled target file",
+	"StaticTargetFile":    "the static target file",
 	"WebConfig":           "web",
 	"SelfMetricsConfig":   "web.self_metrics",
 	"ExporterBasicAuth":   "web.basic_auth",
@@ -43,25 +43,25 @@ var yamlPlaces = map[string]string{
 	"LabelRule":           "a label",
 	"TransformConfig":     "transform",
 	"CacheConfig":         "cache",
-	"ScheduledTarget":     "a scheduled target",
-	"TargetRequestConfig": "a scheduled target's request",
-	"TargetOTLPConfig":    "a scheduled target's otlp",
+	"StaticTarget":        "a static target",
+	"TargetRequestConfig": "a static target's request",
+	"TargetOTLPConfig":    "a static target's otlp",
 }
 
 // yamlValues describes what a value of each other type must be.
 var yamlValues = map[string]string{
-	"int":                     "a whole number",
-	"int64":                   "a whole number",
-	"float64":                 "a number",
-	"bool":                    "true or false",
-	"string":                  "a single value",
-	"[]string":                "a list of values",
-	"map[string]string":       "a mapping of names to values",
-	"[]model.Collector":       "a list of collectors",
-	"[]model.MetricRule":      "a list of metric rules",
-	"[]model.LabelRule":       "a list of labels",
-	"[]model.ScheduledTarget": "a list of scheduled targets",
-	"model.MetricType":        "a metric type: gauge, counter, histogram, summary or untyped",
+	"int":                  "a whole number",
+	"int64":                "a whole number",
+	"float64":              "a number",
+	"bool":                 "true or false",
+	"string":               "a single value",
+	"[]string":             "a list of values",
+	"map[string]string":    "a mapping of names to values",
+	"[]model.Collector":    "a list of collectors",
+	"[]model.MetricRule":   "a list of metric rules",
+	"[]model.LabelRule":    "a list of labels",
+	"[]model.StaticTarget": "a list of static targets",
+	"model.MetricType":     "a metric type: gauge, counter, histogram, summary or untyped",
 }
 
 var (

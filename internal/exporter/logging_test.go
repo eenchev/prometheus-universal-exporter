@@ -106,7 +106,7 @@ func TestSelfMetricDescriptionsMatchTheExposition(t *testing.T) {
 		}
 		// The families verbose mode adds carry their own help inline.
 		if strings.HasPrefix(name, "http_exporter_request_") ||
-			name == "http_exporter_collector_config_valid" || name == "http_exporter_scheduled_targets" {
+			name == "http_exporter_collector_config_valid" || name == "http_exporter_static_targets" {
 			continue
 		}
 		t.Errorf("%s is exposed but has no descriptor", name)

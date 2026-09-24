@@ -146,18 +146,18 @@ func TestTheErrorNamesTheDocument(t *testing.T) {
 	}
 }
 
-// The scheduled target document carries the addresses and credentials of the
+// The static target document carries the addresses and credentials of the
 // things being scraped, which is exactly the material an operator keeps out of
 // a committed file, so the flag applies to it too.
-func TestTargetFilesExpandTheSameWay(t *testing.T) {
+func TestStaticTargetFilesExpandTheSameWay(t *testing.T) {
 	t.Setenv("DEMO_TARGET", "http://api.example:8080")
 	path := t.TempDir() + "/targets.yaml"
-	body := "targets:\n  - name: one\n    collector: example\n    target: ${DEMO_TARGET}\n"
+	body := "interval: 1m\ntargets:\n  - name: one\n    collector: example\n    target: ${DEMO_TARGET}\n"
 	if err := os.WriteFile(path, []byte(body), 0600); err != nil {
 		t.Fatal(err)
 	}
 
-	plain, err := LoadTargets(path)
+	plain, err := LoadStaticTargets(path)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -165,7 +165,7 @@ func TestTargetFilesExpandTheSameWay(t *testing.T) {
 		t.Fatalf("target=%q, want the reference left alone without the flag", got)
 	}
 
-	expanded, err := LoadTargets(path, WithEnvExpansion())
+	expanded, err := LoadStaticTargets(path, WithEnvExpansion())
 	if err != nil {
 		t.Fatal(err)
 	}

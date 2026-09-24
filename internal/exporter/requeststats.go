@@ -162,14 +162,14 @@ func (s *Server) registerRequest(collector, labelURL, method string) {
 	s.requests.statsFor(requestKey{Collector: collector, URL: labelURL, Method: method})
 }
 
-// seedScheduledRequests registers every scheduled target, so the targets the
+// seedStaticRequests registers every static target, so the targets the
 // configuration names are visible before their first collection and remain
 // visible across a reload that adds one. A request driven by /probe cannot be
 // seeded this way: its URL comes from the probe's own target parameter, so it
 // appears the first time it is asked for.
-func (s *Server) seedScheduledRequests() {
+func (s *Server) seedStaticRequests() {
 	cfg := s.manager.Get()
-	for _, target := range s.manager.Targets() {
+	for _, target := range s.manager.StaticTargets() {
 		c := model.CollectorByName(cfg, target.Collector)
 		if c == nil {
 			continue
@@ -212,7 +212,7 @@ func (s *Server) verboseRequests() ([]requestSample, []model.Metric) {
 		s.requests.Reset()
 		return nil, nil
 	}
-	s.seedScheduledRequests()
+	s.seedStaticRequests()
 	samples, capped := s.requests.Snapshot()
 	cappedValue := 0.0
 	if capped {

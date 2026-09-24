@@ -18,7 +18,7 @@ import (
 // backend, but it still answers probes, and a pod that is not ready is taken
 // out of its Service, which would stop those too. So failing exports make it
 // unready only when otlp.unready_after_failures asks for it, as it should for
-// an exporter that exists to deliver scheduled targets over OTLP; ready again
+// an exporter that exists to deliver its targets over OTLP; ready again
 // at the next export that gets through.
 //
 // The reasons are listed in the body, one per line, for whoever looks. They
@@ -34,8 +34,8 @@ func (s *Server) notReadyReasons() []string {
 	if s.manager.Reloads != nil {
 		for _, file := range s.manager.Reloads.Rejected() {
 			name := "configuration"
-			if file == config.ReloadFileTargets {
-				name = "scheduled target file"
+			if file == config.ReloadFileStaticTargets {
+				name = "static target file"
 			}
 			reasons = append(reasons, fmt.Sprintf("the last reload of the %s was rejected; the previous one is still in force", name))
 		}

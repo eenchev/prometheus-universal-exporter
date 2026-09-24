@@ -260,8 +260,8 @@ func TestLocalDirectoryVerboseLabel(t *testing.T) {
 	}
 }
 
-// A scheduled target reads a directory too; its request may not name a path.
-func TestLocalDirectoryScheduledTargets(t *testing.T) {
+// A static target reads a directory too; its request may not name a path.
+func TestLocalDirectoryStaticTargets(t *testing.T) {
 	root := t.TempDir()
 	testutil.WriteIn(t, root, "a.prom", "# TYPE v gauge\nv 1\n")
 	testutil.WriteIn(t, root, "b.prom", "broken {\n")
@@ -269,10 +269,10 @@ func TestLocalDirectoryScheduledTargets(t *testing.T) {
 	if err := config.Validate(cfg); err != nil {
 		t.Fatal(err)
 	}
-	file := &model.TargetFile{Targets: []model.ScheduledTarget{{Name: "textfiles", Collector: "dir", Labels: map[string]string{"source": "node"}}}}
-	server := newScheduledServer(t, cfg, file)
+	file := &model.StaticTargetFile{Interval: model.Duration(time.Minute), Targets: []model.StaticTarget{{ExportViaOTLP: true, Name: "textfiles", Collector: "dir", Labels: map[string]string{"source": "node"}}}}
+	server := newStaticServer(t, cfg, file)
 	server.logger = testutil.QuietLogger(t)
-	server.scrapeScheduledTargets(context.Background(), 10*time.Second)
+	server.scrapeStaticTargets(context.Background(), 10*time.Second)
 	found := map[string]float64{}
 	for _, resource := range server.drainOTLP() {
 		for _, m := range resource.Set.Metrics {
@@ -285,13 +285,13 @@ func TestLocalDirectoryScheduledTargets(t *testing.T) {
 		}
 	}
 
-	bad := &model.TargetFile{Targets: []model.ScheduledTarget{{Name: "bad", Collector: "dir", Request: model.TargetRequestConfig{Path: "a.prom", PathSet: true}}}}
-	err := config.ValidateTargets(bad)
+	bad := &model.StaticTargetFile{Interval: model.Duration(time.Minute), Targets: []model.StaticTarget{{ExportViaOTLP: true, Name: "bad", Collector: "dir", Request: model.TargetRequestConfig{Path: "a.prom", PathSet: true}}}}
+	err := config.ValidateStaticTargets(bad)
 	if err == nil {
-		err = config.ValidateTargetsAgainst(bad, cfg)
+		err = config.ValidateStaticTargetsAgainst(bad, cfg)
 	}
 	if err == nil || !strings.Contains(err.Error(), "reads every file of a directory") {
-		t.Fatalf("a scheduled target naming a path: %v", err)
+		t.Fatalf("a static target naming a path: %v", err)
 	}
 }
 

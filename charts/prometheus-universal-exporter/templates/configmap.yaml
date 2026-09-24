@@ -13,8 +13,8 @@ data:
   {{ $name }}: |
 {{ $content | indent 4 }}
   {{- end }}
-  {{- if .Values.otlpTargets.enabled }}
-  {{ include "prometheus-universal-exporter.targetsFile" . }}: |
-{{ .Values.otlpTargets.data | indent 4 }}
+  {{- if .Values.staticTargets.enabled }}
+  {{ include "prometheus-universal-exporter.staticTargetsFile" . }}: |
+{{ .Values.staticTargets.data | indent 4 }}
   {{- end }}
 {{- end }}

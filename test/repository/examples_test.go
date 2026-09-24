@@ -16,7 +16,7 @@ import (
 // In the chart, every key of config.data is a file beside config.yaml, which is
 // how collector files are supplied. The template renders every key and the
 // whole ConfigMap is mounted, and the example the chart README documents loads
-// as the exporter would load it, beside the scheduled target file the chart
+// as the exporter would load it, beside the static target file the chart
 // renders into the same directory.
 func TestChartSuppliesCollectorFilesAsConfigMapKeys(t *testing.T) {
 	configmap := readChartFile(t, "templates/configmap.yaml")
@@ -108,22 +108,22 @@ func TestShippedExampleFilesLoadTogether(t *testing.T) {
 	if !cfg.OTLP.Enabled {
 		t.Fatal("configs/config.otlp.example.yaml must enable OTLP export")
 	}
-	file, err := config.LoadTargets("configs/targets.example.yaml")
+	file, err := config.LoadStaticTargets("configs/static-targets.example.yaml")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := config.ValidateTargets(file); err != nil {
+	if err := config.ValidateStaticTargets(file); err != nil {
 		t.Fatal(err)
 	}
-	if err := config.ValidateTargetsAgainst(file, cfg); err != nil {
-		t.Fatalf("configs/targets.example.yaml does not match configs/config.otlp.example.yaml: %v", err)
+	if err := config.ValidateStaticTargetsAgainst(file, cfg); err != nil {
+		t.Fatalf("configs/static-targets.example.yaml does not match configs/config.otlp.example.yaml: %v", err)
 	}
 
 	plain, err := config.Load("configs/config.example.yaml")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := config.ValidateTargetsAgainst(file, plain); err == nil {
+	if err := config.ValidateStaticTargetsAgainst(file, plain); err == nil {
 		t.Fatal("configs/config.example.yaml leaves OTLP disabled, so the target file must be rejected against it")
 	}
 }

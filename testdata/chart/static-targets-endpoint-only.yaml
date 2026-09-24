@@ -1,0 +1,7 @@
+# A static target document with no target exported over OTLP, for the chart's
+# render checks: it needs no OTLP export in the configuration.
+interval: 1m
+targets:
+  - name: app
+    collector: app_json
+    target: http://app.example:8080

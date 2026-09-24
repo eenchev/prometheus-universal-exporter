@@ -31,7 +31,7 @@ import (
 //	  path: app.prom              # optional: the file, relative to root
 //	  max_age: 10m                # optional: refuse a file older than this
 //
-// The file is root/target/path. A probe or a scheduled target may name the
+// The file is root/target/path. A probe or a static target may name the
 // file, or a directory under root, as its target, or leave target out when
 // request.path names the file. Everything after the read — decoding,
 // transforms, limits, caching, coalescing — is shared with http.

@@ -730,18 +730,18 @@ func TestStaleIfErrorReservesTheFreshnessNames(t *testing.T) {
 	}
 }
 
-func TestScheduledScrapeExportsTheLastGoodResultMarkedStale(t *testing.T) {
+func TestStaticScrapeExportsTheLastGoodResultMarkedStale(t *testing.T) {
 	flaky, target := newFlakyTarget(t)
 	flaky.value.Store(5)
 	collector := staleCollector(0, 5*time.Minute)
 	cfg := &model.Config{Collectors: []model.Collector{collector}, OTLP: otlpConfig("http://collector.invalid/v1/metrics")}
-	file := &model.TargetFile{Targets: []model.ScheduledTarget{{Name: "t", Collector: "flaky", Target: target.URL}}}
-	server := newScheduledServer(t, cfg, file)
+	file := &model.StaticTargetFile{Interval: model.Duration(time.Minute), Targets: []model.StaticTarget{{ExportViaOTLP: true, Name: "t", Collector: "flaky", Target: target.URL}}}
+	server := newStaticServer(t, cfg, file)
 
-	server.scrapeScheduledTargets(context.Background(), 10*time.Second)
+	server.scrapeStaticTargets(context.Background(), 10*time.Second)
 	_ = server.drainOTLP()
 	flaky.mode.Store("status")
-	server.scrapeScheduledTargets(context.Background(), 10*time.Second)
+	server.scrapeStaticTargets(context.Background(), 10*time.Second)
 	var all model.MetricSet
 	for _, resource := range server.drainOTLP() {
 		all.Metrics = append(all.Metrics, resource.Set.Metrics...)

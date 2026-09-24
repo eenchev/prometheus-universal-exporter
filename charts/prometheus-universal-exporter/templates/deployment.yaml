@@ -54,8 +54,9 @@ spec:
             - --config.watch
             - {{ printf "--config.watch-interval=%s" (include "prometheus-universal-exporter.watchConfigInterval" .) | quote }}
             {{- end }}
-            {{- if .Values.otlpTargets.enabled }}
-            - {{ printf "--otlp.targets-file=/etc/prometheus-universal-exporter/%s" (include "prometheus-universal-exporter.targetsFile" .) | quote }}
+            - {{ printf "--web.static-targets-path=%s" (include "prometheus-universal-exporter.staticTargetsPath" .) | quote }}
+            {{- if .Values.staticTargets.enabled }}
+            - {{ printf "--static-targets-file=/etc/prometheus-universal-exporter/%s" (include "prometheus-universal-exporter.staticTargetsFile" .) | quote }}
             {{- end }}
             {{- if .Values.server.expandEnv }}
             - --config.export-env

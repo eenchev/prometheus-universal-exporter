@@ -342,7 +342,7 @@ func Load(path string, opts ...LoadOption) (*model.Config, error) {
 	return &c, nil
 }
 
-// Manager holds the configuration in force and the scheduled target file,
+// Manager holds the configuration in force and the static target file,
 // and reloads them: when the watch finds a file changed, on SIGHUP and on
 // POST /-/reload. A rejected reload leaves the previous configuration in
 // force.
@@ -355,7 +355,7 @@ type Manager struct {
 	// read when last loaded (collectorFilesStamp).
 	collectorFiles string
 	targetPath     string
-	targetFile     atomic.Pointer[model.TargetFile]
+	targetFile     atomic.Pointer[model.StaticTargetFile]
 	targetsLastMod time.Time
 	pythonPath     string
 	watchInterval  time.Duration
@@ -420,15 +420,15 @@ func (m *Manager) loadOptions() []LoadOption {
 // the exporter started with.
 func (m *Manager) SetPythonPath(path string) { m.pythonPath = path }
 
-// SetTargets installs the scheduled target document and the file it was read
+// SetTargets installs the static target document and the file it was read
 // from. An empty path leaves the feature disabled.
-func (m *Manager) SetTargets(path string, f *model.TargetFile) {
+func (m *Manager) SetTargets(path string, f *model.StaticTargetFile) {
 	m.targetPath = path
 	if f != nil {
 		m.targetFile.Store(f)
 	}
 	if path != "" && f != nil {
-		m.Reloads.loaded(ReloadFileTargets)
+		m.Reloads.loaded(ReloadFileStaticTargets)
 	}
 	if path != "" {
 		if st, err := os.Stat(path); err == nil {
@@ -437,8 +437,8 @@ func (m *Manager) SetTargets(path string, f *model.TargetFile) {
 	}
 }
 
-// Targets returns the scheduled targets currently in force.
-func (m *Manager) Targets() []model.ScheduledTarget {
+// StaticTargets returns the static targets currently in force.
+func (m *Manager) StaticTargets() []model.StaticTarget {
 	f := m.targetFile.Load()
 	if f == nil {
 		return nil
@@ -494,7 +494,7 @@ func (m *Manager) reloadConfig() {
 	_ = m.applyConfig(reloadTriggerWatch)
 }
 
-// reloadTargets reloads the scheduled target file when the watch finds it
+// reloadTargets reloads the static target file when the watch finds it
 // changed.
 func (m *Manager) reloadTargets() {
 	m.reloadMu.Lock()
@@ -509,7 +509,7 @@ func (m *Manager) reloadTargets() {
 	_ = m.applyTargets(reloadTriggerWatch)
 }
 
-// Reload reloads the configuration, and the scheduled target file when there
+// Reload reloads the configuration, and the static target file when there
 // is one, now, whether or not they changed, and returns why either was
 // rejected. A rejected file leaves the previous one in force.
 func (m *Manager) Reload(trigger string) error {
@@ -540,11 +540,12 @@ func (m *Manager) applyConfig(trigger string) error {
 	if err := transform.ValidatePythonScripts(m.pythonPath, c); err != nil {
 		return reject(err)
 	}
-	// Scheduled targets exist only to feed OTLP, so a configuration that would
-	// disable OTLP while they are loaded is rejected exactly as it is at
-	// startup, and the last valid configuration stays active.
+	// The loaded static targets are checked against the new configuration:
+	// one that drops a collector a target names, or disables OTLP while a
+	// target sets export_via_otlp, is rejected exactly as it is at startup,
+	// and the last valid configuration stays active.
 	if f := m.targetFile.Load(); f != nil {
-		if err := ValidateTargetsAgainst(f, c); err != nil {
+		if err := ValidateStaticTargetsAgainst(f, c); err != nil {
 			return reject(err)
 		}
 	}
@@ -560,27 +561,27 @@ func (m *Manager) applyConfig(trigger string) error {
 	return nil
 }
 
-// applyTargets loads, checks and installs the scheduled target file. reloadMu
+// applyTargets loads, checks and installs the static target file. reloadMu
 // is held.
 func (m *Manager) applyTargets(trigger string) error {
 	if st, err := os.Stat(m.targetPath); err == nil {
 		m.targetsLastMod = st.ModTime()
 	}
-	f, err := LoadTargets(m.targetPath, m.loadOptions()...)
+	f, err := LoadStaticTargets(m.targetPath, m.loadOptions()...)
 	if err == nil {
-		err = ValidateTargets(f)
+		err = ValidateStaticTargets(f)
 	}
 	if err == nil {
-		err = ValidateTargetsAgainst(f, m.Get())
+		err = ValidateStaticTargetsAgainst(f, m.Get())
 	}
 	if err != nil {
-		m.logger.Error("scheduled target reload rejected", "trigger", trigger, "error", err)
-		m.Reloads.record(ReloadFileTargets, false)
-		return fmt.Errorf("scheduled target file %s: %w", m.targetPath, err)
+		m.logger.Error("static target reload rejected", "trigger", trigger, "error", err)
+		m.Reloads.record(ReloadFileStaticTargets, false)
+		return fmt.Errorf("static target file %s: %w", m.targetPath, err)
 	}
 	m.targetFile.Store(f)
-	m.Reloads.record(ReloadFileTargets, true)
-	m.logger.Info("scheduled targets reloaded", "trigger", trigger, "targets", len(f.Targets))
+	m.Reloads.record(ReloadFileStaticTargets, true)
+	m.logger.Info("static targets reloaded", "trigger", trigger, "targets", len(f.Targets))
 	return nil
 }
 

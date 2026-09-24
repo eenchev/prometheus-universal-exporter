@@ -15,16 +15,16 @@ import (
 
 var targetNameRE = regexp.MustCompile(`^[a-zA-Z_][a-zA-Z0-9_]*$`)
 
-// LoadTargets reads the scheduled target document. It takes the same
+// LoadStaticTargets reads the static target document. It takes the same
 // options as Load: a target file carries the addresses and credentials of
 // the things being scraped, which is exactly the material an operator wants to
 // keep out of a committed file, so --config.export-env applies to both.
-func LoadTargets(path string, opts ...LoadOption) (*model.TargetFile, error) {
+func LoadStaticTargets(path string, opts ...LoadOption) (*model.StaticTargetFile, error) {
 	b, err := readDocument(path, opts)
 	if err != nil {
 		return nil, err
 	}
-	var f model.TargetFile
+	var f model.StaticTargetFile
 	dec := yaml.NewDecoder(strings.NewReader(string(b)))
 	dec.KnownFields(true)
 	if err = dec.Decode(&f); err != nil {
@@ -33,19 +33,21 @@ func LoadTargets(path string, opts ...LoadOption) (*model.TargetFile, error) {
 	return &f, nil
 }
 
-// ValidateTargets checks the document in isolation. ValidateTargetsAgainst
+// ValidateStaticTargets checks the document in isolation. ValidateStaticTargetsAgainst
 // applies the checks that need the exporter configuration.
-func ValidateTargets(f *model.TargetFile) error {
+func ValidateStaticTargets(f *model.StaticTargetFile) error {
 	if len(f.Targets) == 0 {
 		return errors.New("targets must not be empty")
 	}
-	if f.Interval < 0 {
-		return errors.New("interval must not be negative")
+	// The file's interval is required: a target scraped on a default nobody
+	// wrote down is a scrape rate nobody chose.
+	switch {
+	case f.Interval == 0:
+		return errors.New("interval is required: how often a target that sets none is scraped, such as 1m")
+	case f.Interval < model.Duration(time.Second):
+		return fmt.Errorf("interval %s is under the least, 1s", time.Duration(f.Interval))
 	}
 	defaultInterval := f.Interval
-	if defaultInterval == 0 {
-		defaultInterval = model.DefaultScheduledTargetInterval
-	}
 	seen := map[string]bool{}
 	for i := range f.Targets {
 		t := &f.Targets[i]
@@ -70,11 +72,11 @@ func ValidateTargets(f *model.TargetFile) error {
 				return fmt.Errorf("target %q has unsupported method %q", t.Name, t.Request.Method)
 			}
 		}
-		// A scheduled target is scraped on the exporter's own timer, with no
+		// A static target is scraped on the exporter's own timer, with no
 		// probe to supply a path parameter, so a placeholder here could only
 		// ever take its default — or fail every scrape. Write the path out.
 		if fetch.HasPathParams(t.Request.Path) {
-			return fmt.Errorf("target %q request.path cannot use {{param_...}} placeholders: a scheduled target has no probe to supply them, so write the path out in full", t.Name)
+			return fmt.Errorf("target %q request.path cannot use {{param_...}} placeholders: a static target has no probe to supply them, so write the path out in full", t.Name)
 		}
 		for name := range t.Params {
 			if !fetch.PathParamName.MatchString(name) {
@@ -127,20 +129,41 @@ func ValidateTargets(f *model.TargetFile) error {
 			if !model.LabelNameRE.MatchString(name) {
 				return fmt.Errorf("target %q has invalid label name %q", t.Name, name)
 			}
+			// static_target names the target on the endpoint, so the
+			// target's series cannot claim it for something else.
+			if name == StaticTargetLabel {
+				return fmt.Errorf("target %q labels sets %s, which the static targets endpoint sets to the target's name", t.Name, StaticTargetLabel)
+			}
+		}
+		// The OTLP resource identity is only used by a target exported over
+		// OTLP; set without it, it would be quietly ignored.
+		if !t.ExportViaOTLP && (t.OTLP.ServiceName != "" || len(t.OTLP.ResourceAttributes) > 0) {
+			return fmt.Errorf("target %q sets otlp, which only a target with export_via_otlp: true uses", t.Name)
 		}
 	}
 	return nil
 }
 
-// ValidateTargetsAgainst enforces the preconditions that depend on the exporter
-// configuration: scheduled targets exist only to feed OTLP, and every target
-// must name a configured collector.
-func ValidateTargetsAgainst(f *model.TargetFile, c *model.Config) error {
-	if !c.OTLP.Enabled {
-		return errors.New("scheduled targets require OTLP export; set otlp.enabled: true or remove the target file")
-	}
-	if strings.TrimSpace(c.OTLP.Endpoint) == "" {
-		return errors.New("scheduled targets require otlp.endpoint")
+// StaticTargetLabel is the label the static targets endpoint puts on every
+// series of a target, naming it: the targets share one endpoint, and it keeps
+// their series apart.
+const StaticTargetLabel = "static_target"
+
+// ValidateStaticTargetsAgainst enforces the preconditions that depend on the
+// exporter configuration: every target must name a configured collector, and a
+// target exported over OTLP needs OTLP export enabled.
+func ValidateStaticTargetsAgainst(f *model.StaticTargetFile, c *model.Config) error {
+	for i := range f.Targets {
+		t := &f.Targets[i]
+		if !t.ExportViaOTLP {
+			continue
+		}
+		if !c.OTLP.Enabled {
+			return fmt.Errorf("target %q sets export_via_otlp, which needs OTLP export; set otlp.enabled: true and otlp.endpoint, or leave the target to the static targets endpoint", t.Name)
+		}
+		if strings.TrimSpace(c.OTLP.Endpoint) == "" {
+			return fmt.Errorf("target %q sets export_via_otlp, which needs otlp.endpoint", t.Name)
+		}
 	}
 	known := map[string]bool{}
 	for i := range c.Collectors {
@@ -178,7 +201,7 @@ func ValidateTargetsAgainst(f *model.TargetFile, c *model.Config) error {
 				if missing.Where == "request.path" {
 					alternatives = "set it under the target's params, give the placeholder a default, or set request.path on the target"
 				}
-				return fmt.Errorf("target %q uses collector %q, whose %s needs %s, a parameter without a default; a scheduled target has no probe to supply it, so %s", t.Name, t.Collector, missing.Where, missing.Name, alternatives)
+				return fmt.Errorf("target %q uses collector %q, whose %s needs %s, a parameter without a default; a static target has no probe to supply it, so %s", t.Name, t.Collector, missing.Where, missing.Name, alternatives)
 			}
 			if err != nil {
 				return fmt.Errorf("target %q uses collector %q: %w", t.Name, t.Collector, err)

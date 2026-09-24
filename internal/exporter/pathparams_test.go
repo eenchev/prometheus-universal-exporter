@@ -281,12 +281,12 @@ func TestTheRequestLabelKeepsThePlaceholder(t *testing.T) {
 	}
 }
 
-// A scheduled target has no probe, so it cannot supply a path parameter.
-func TestScheduledTargetsAndPathParameters(t *testing.T) {
+// A static target has no probe, so it cannot supply a path parameter.
+func TestStaticTargetsAndPathParameters(t *testing.T) {
 	t.Run("placeholders in the target's own path are rejected", func(t *testing.T) {
-		file := &model.TargetFile{Targets: []model.ScheduledTarget{{Name: "one", Collector: "tenants", Target: "http://a.example",
+		file := &model.StaticTargetFile{Interval: model.Duration(time.Minute), Targets: []model.StaticTarget{{Name: "one", Collector: "tenants", Target: "http://a.example",
 			Request: model.TargetRequestConfig{Path: "/api/{{param_tenant:acme}}", PathSet: true}}}}
-		if err := config.ValidateTargets(file); err == nil || !strings.Contains(err.Error(), "no probe to supply them") {
+		if err := config.ValidateStaticTargets(file); err == nil || !strings.Contains(err.Error(), "no probe to supply them") {
 			t.Fatalf("err=%v", err)
 		}
 	})
@@ -296,11 +296,11 @@ func TestScheduledTargetsAndPathParameters(t *testing.T) {
 		if err := config.Validate(cfg); err != nil {
 			t.Fatal(err)
 		}
-		file := &model.TargetFile{Targets: []model.ScheduledTarget{{Name: "one", Collector: "tenants", Target: "http://a.example"}}}
-		if err := config.ValidateTargets(file); err != nil {
+		file := &model.StaticTargetFile{Interval: model.Duration(time.Minute), Targets: []model.StaticTarget{{Name: "one", Collector: "tenants", Target: "http://a.example"}}}
+		if err := config.ValidateStaticTargets(file); err != nil {
 			t.Fatal(err)
 		}
-		if err := config.ValidateTargetsAgainst(file, cfg); err == nil || !strings.Contains(err.Error(), "without a default") {
+		if err := config.ValidateStaticTargetsAgainst(file, cfg); err == nil || !strings.Contains(err.Error(), "without a default") {
 			t.Fatalf("err=%v", err)
 		}
 	})
@@ -310,12 +310,12 @@ func TestScheduledTargetsAndPathParameters(t *testing.T) {
 		if err := config.Validate(cfg); err != nil {
 			t.Fatal(err)
 		}
-		file := &model.TargetFile{Targets: []model.ScheduledTarget{{Name: "one", Collector: "tenants", Target: "http://a.example",
+		file := &model.StaticTargetFile{Interval: model.Duration(time.Minute), Targets: []model.StaticTarget{{Name: "one", Collector: "tenants", Target: "http://a.example",
 			Request: model.TargetRequestConfig{Path: "/api/acme/v2/status", PathSet: true}}}}
-		if err := config.ValidateTargets(file); err != nil {
+		if err := config.ValidateStaticTargets(file); err != nil {
 			t.Fatal(err)
 		}
-		if err := config.ValidateTargetsAgainst(file, cfg); err != nil {
+		if err := config.ValidateStaticTargetsAgainst(file, cfg); err != nil {
 			t.Fatal(err)
 		}
 	})
@@ -324,10 +324,10 @@ func TestScheduledTargetsAndPathParameters(t *testing.T) {
 		var recorder pathRecorder
 		target := recorder.serve(t)
 		cfg := &model.Config{Collectors: []model.Collector{pathCollector("/api/{{param_tenant:acme}}/status")}, OTLP: otlpConfig("http://collector.invalid/v1/metrics")}
-		file := &model.TargetFile{Targets: []model.ScheduledTarget{{Name: "one", Collector: "tenants", Target: target.URL}}}
-		server := newScheduledServer(t, cfg, file)
+		file := &model.StaticTargetFile{Interval: model.Duration(time.Minute), Targets: []model.StaticTarget{{Name: "one", Collector: "tenants", Target: target.URL}}}
+		server := newStaticServer(t, cfg, file)
 
-		server.scrapeScheduledTargets(context.Background(), 10*time.Second)
+		server.scrapeStaticTargets(context.Background(), 10*time.Second)
 		if got := recorder.last(t); got != "/api/acme/status" {
 			t.Fatalf("target received %q, want the default", got)
 		}

@@ -204,7 +204,12 @@ request:
 `backoff` defaults to zero and MUST NOT be exponential. The exporter SHOULD
 retry transport failures and transient HTTP statuses `408`, `425`, `429`, and
 `500` through `599`. Other HTTP statuses MUST be returned without retrying.
-The retry loop MUST share the incoming scrape or explicit target timeout.
+The retry loop MUST share the incoming scrape or explicit target timeout. When
+that deadline, a shutdown or the caller ends the wait before a retry, the
+exporter MUST keep what it received: after a retryable status, that response,
+so the failure is reported in the `http_status` stage with the status and the
+body; after a transport failure, that failure's error, saying the wait was cut
+short. A bare deadline error MUST NOT replace them.
 Only a request whose method is idempotent — `GET`, `HEAD`, `OPTIONS`, `TRACE`,
 `PUT` or `DELETE` — MUST be retried, unless `retry.non_idempotent` is set, since
 sending a `POST` or `PATCH` again may repeat what it did; this holds for a
@@ -1685,7 +1690,10 @@ exponent form otherwise; `NaN`, `+Inf` and `-Inf` for non-finite numbers;
 `true` and `false` for booleans; a string as it is. An object or an array MUST
 be a failure of the metric rule, handled by its `error_mode`, with an error
 saying to select a field or join the array, rather than a label in any
-language's syntax for it.
+language's syntax for it. A Python script's label values passed to `metric()`
+MUST be written the same way: a number or a boolean as its text, `None` as no
+label, and a list, tuple, set or dict refused with an error naming the label,
+as MUST be `labels` that is not a mapping.
 
 An expression label that gives a series no value — a selector or path matching
 nothing, a missing attribute, column, capture group or source label, a null —
@@ -3254,6 +3262,10 @@ Test at minimum:
 - Unsupported HTTP methods.
 - Invalid method, path, body, and timeout overrides.
 - Invalid retry count and retry backoff overrides.
+- A retry wait the deadline cuts short keeps the target's `503` and its body,
+  from the fetch up to the probe's answer, its log and the status self-metric;
+  after a refused connection it keeps the connection error, noting the wait
+  was cut short.
 - Empty response bodies.
 - Response body exactly at the maximum allowed size.
 - Response body exceeding the configured maximum size.
@@ -3733,7 +3745,8 @@ Test:
 - Target access.
 - Metric creation.
 - Multiple metrics.
-- Labels.
+- Labels, with number, boolean and `None` values written as a jq label's
+  are, and a list or a mapping-less `labels` refused.
 - Metric types.
 - Help text.
 - Timestamps.
@@ -4181,7 +4194,9 @@ Required:
   `TYPE`; it is empty before any scrape, a removed target leaves it with the
   reload, and it parses as exposition text.
 - A family two targets produce with different types is served for the first
-  target only, and the clash is logged.
+  target only, and the clash is logged; logged once over two reads, logged as
+  ended when the types agree, logged anew when it comes back, and forgotten
+  without a line when the target is removed.
 - The endpoint is at `--web.static-targets-path`, `/static-targets` by
   default and not otherwise; it answers `401` without the exporter's
   credential when Basic Auth is on, and `405` to a method other than `GET` or
@@ -4189,6 +4204,15 @@ Required:
   2.
 - Only a target with `export_via_otlp` is queued for OTLP; every target is
   served on the endpoint.
+- A target with an hour's interval is first due within ten seconds; its
+  cadence then keeps its offset within the interval, starting between half an
+  interval and one and a half after the first scrape, and then every interval.
+- The last success timestamp is 0 before a success, set by one, and kept
+  through a later failure.
+- The scrape loop never runs more scrapes at once than the document's
+  `concurrency`, which defaults to 8, and a negative one is refused.
+- `job` and `instance` are refused as target labels, and so is
+  `static_target`, at load and by the schema.
 - A failed fetch, HTTP status, decode or transform follows the collector's
   `error_handling`: under `fail` the target is down and the failure logged at
   error level; under `log` it is up, with no collector metrics, a success
@@ -5955,18 +5979,28 @@ directly and MUST NOT be filtered through the collector's
 Each target MAY declare `labels`, which the exporter MUST add to every metric
 that target produces. A label the collector already extracted MUST NOT be
 overwritten. `static_target` MUST be refused as a target label, since the
-endpoint sets it.
+endpoint sets it, and so MUST `job` and `instance`, which Prometheus sets when
+it scrapes the endpoint and which, kept with `honor_labels`, a target's would
+replace.
 
 Each target MUST be scraped on its own `interval`, independent of when
 Prometheus scrapes the static targets endpoint and of the OTLP export
 interval. A target's `interval` MUST default to the file's `interval`, MUST be
 at least one second, and MUST NOT be shorter than the target's
 `request.timeout`; the file's `interval` MUST be at least one second too.
-Scrapes of a target MUST keep a fixed cadence from its first, which SHOULD be
-offset within its interval by a stable hash of its name so targets are spread
-over it. A scrape MUST be bounded by its interval, and one still running when
-the next is due MUST make that one skipped, logged, rather than overlapping
-it. The exporter SHOULD limit how many targets it scrapes concurrently. A
+A target new to the schedule — at startup, or added or given a new interval by
+a reload — MUST be first scraped within ten seconds, or within its interval if
+that is shorter, so it does not stay absent from the endpoint for up to an
+interval. Its scrapes MUST then keep a fixed cadence, which SHOULD be offset
+within its interval by a stable hash of its name so targets are spread over
+it, starting no sooner than half an interval after the first scrape. A scrape
+MUST be bounded by its interval, and one still running when the next is due
+MUST make that one skipped, logged, rather than overlapping it. The exporter
+MUST scrape at most the document's `concurrency` targets at once, 8 when it is
+unset or 0, and MUST refuse a negative one; a target due while all are busy
+MUST wait for a slot within its interval and be skipped, logged, if none
+frees. A reload that changes `concurrency` MUST apply to the scrapes that
+start after it. A
 panic during a static target scrape MUST NOT end the process: it MUST be
 logged with its stack and end that scrape as failed, with
 `http_exporter_target_up` 0, leaving the other targets' scrapes unaffected.
@@ -5986,10 +6020,14 @@ labels:
 ```text
 http_exporter_target_up
 http_exporter_target_scrape_duration_seconds
+http_exporter_target_last_success_timestamp_seconds
 ```
 
 Without them a failing target is absent and cannot be distinguished from a
-target that was never configured. A failed scrape MUST produce the health
+target that was never configured. The last success timestamp MUST be the Unix
+time of the target's last successful scrape, kept through later failures, and
+0 until one succeeds, so the age of the values the endpoint keeps serving can
+be alerted on. A failed scrape MUST produce the health
 result with `http_exporter_target_up` set to zero and MUST NOT produce
 collector metrics for that target, except the last good result, marked stale,
 under `cache.stale_if_error` (§ 42.13). Whether a failed stage fails the
@@ -6007,7 +6045,9 @@ metrics with its labels, or its stale result, and its health result — at
   as the text format requires. A family a target produces with a different
   type than an earlier target, in target name order, MUST be left out for that
   target and logged, sparingly like repeated failures (§ 25); the rest of both
-  targets MUST be served.
+  targets MUST be served. A clash that a later read no longer finds MUST be
+  logged as ended while its target is still served, and forgotten without a
+  line when its target is gone, so a clash that comes back is logged anew.
 - A target not yet scraped MUST be absent, and a target removed from the
   document MUST leave the endpoint with the reload.
 - Serving the endpoint MUST NOT contact a target: it reads what the targets'
@@ -6042,8 +6082,9 @@ under. Both MUST default to the exporter-wide `otlp.service_name` and
 `otlp.resource_attributes`, and per-target attributes MUST be merged over the
 exporter-wide ones rather than replacing them. The exporter MUST emit one
 `resourceMetrics` entry per distinct resource in an export, so metrics from
-targets with different identities are not conflated. Series exported over
-OTLP do not carry `static_target`: the resource tells the targets apart.
+targets with different identities are not conflated. The collector's metrics
+exported over OTLP do not carry `static_target`, since the resource tells the
+targets apart; the health result carries it, as on the endpoint.
 
 ### 42.14c Static target self-metrics
 

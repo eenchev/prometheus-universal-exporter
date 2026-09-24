@@ -132,7 +132,7 @@ targets:
     collector: any_textfile
     target: backup.prom
     labels:
-      job: backup
+      task: backup
   - name: batch
     collector: textfile
 ```

@@ -446,6 +446,12 @@ func (m *Manager) StaticTargets() []model.StaticTarget {
 	return f.Targets
 }
 
+// StaticTargetConcurrency is how many static targets are scraped at once, as
+// the file in force says.
+func (m *Manager) StaticTargetConcurrency() int {
+	return m.targetFile.Load().ScrapeConcurrency()
+}
+
 // ReloadLoop watches the configuration files when the watch is enabled and
 // returns immediately when it is not, so the opt-in costs nothing.
 func (m *Manager) ReloadLoop(ctx context.Context) {

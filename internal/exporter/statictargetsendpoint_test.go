@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -189,5 +190,83 @@ func TestStaticTargetsPathIsChecked(t *testing.T) {
 		if _, err := StaticTargetsPath(path, "/self-metrics"); err == nil {
 			t.Errorf("StaticTargetsPath(%q) was accepted", path)
 		}
+	}
+}
+
+// A target's last successful scrape is served as a timestamp: 0 until one
+// succeeds, and kept through later failures, so how old the values it serves
+// are can be alerted on.
+func TestTheLastSuccessOfAStaticTargetIsServed(t *testing.T) {
+	var failing atomic.Bool
+	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		if failing.Load() {
+			http.Error(w, "down", http.StatusServiceUnavailable)
+			return
+		}
+		_, _ = w.Write([]byte("value=1\n"))
+	}))
+	t.Cleanup(target.Close)
+	cfg := &model.Config{Collectors: []model.Collector{testutil.Collector("text", "text")}}
+	file := &model.StaticTargetFile{Interval: model.Duration(time.Minute), Targets: []model.StaticTarget{{Name: "t", Collector: "text", Target: target.URL}}}
+	server := newStaticServer(t, cfg, file)
+	server.logger = testutil.QuietLogger(t)
+	series := `http_exporter_target_last_success_timestamp_seconds{collector="text",static_target="t",target="` + target.URL + `"}`
+
+	failing.Store(true)
+	server.scrapeStaticTargets(context.Background(), 10*time.Second)
+	if got := metricValue(t, getStaticTargets(t, server, "/static-targets"), series); got != 0 {
+		t.Fatalf("before any success the timestamp is %v, want 0", got)
+	}
+
+	failing.Store(false)
+	before := float64(time.Now().Unix())
+	server.scrapeStaticTargets(context.Background(), 10*time.Second)
+	succeeded := metricValue(t, getStaticTargets(t, server, "/static-targets"), series)
+	if succeeded < before || succeeded > float64(time.Now().Unix()+1) {
+		t.Fatalf("after a success the timestamp is %v, want about %v", succeeded, before)
+	}
+
+	failing.Store(true)
+	server.scrapeStaticTargets(context.Background(), 10*time.Second)
+	body := getStaticTargets(t, server, "/static-targets")
+	if got := metricValue(t, body, series); got != succeeded {
+		t.Fatalf("after a failure the timestamp is %v, want the earlier success %v", got, succeeded)
+	}
+	if got := metricValue(t, body, `http_exporter_target_up{collector="text",static_target="t",target="`+target.URL+`"}`); got != 0 {
+		t.Fatalf("up=%v after the failure", got)
+	}
+}
+
+// A clash that goes away is said to have, and one that comes back is logged
+// as new; a clash whose target is gone is forgotten without a recovery line.
+func TestAFamilyTypeClashThatEndsIsLoggedAsEnded(t *testing.T) {
+	server := newStaticServer(t, &model.Config{Collectors: []model.Collector{testutil.Collector("text", "text")}}, nil)
+	logs := testutil.CaptureLogs(t)
+	server.logger = slog.Default()
+	gauge := namedSet{name: "a", set: model.MetricSet{Metrics: []model.Metric{{Name: "shared", Type: model.GaugeMetricType, Value: 1}}}}
+	counter := namedSet{name: "b", set: model.MetricSet{Metrics: []model.Metric{{Name: "shared", Type: model.CounterMetricType, Value: 2}}}}
+	fixed := namedSet{name: "b", set: model.MetricSet{Metrics: []model.Metric{{Name: "shared", Type: model.GaugeMetricType, Value: 2}}}}
+	count := func(msg string) int { return strings.Count(logs.String(), `"msg":"`+msg+`"`) }
+	const left, back = "static target metric left out of the static targets endpoint", "static target metric back on the static targets endpoint"
+
+	server.mergeStaticTargets([]namedSet{gauge, counter})
+	server.mergeStaticTargets([]namedSet{gauge, counter})
+	if count(left) != 1 || count(back) != 0 {
+		t.Fatalf("a clash on two reads logged %d warnings and %d recoveries, want 1 and 0:\n%s", count(left), count(back), logs)
+	}
+	if merged := server.mergeStaticTargets([]namedSet{gauge, fixed}); len(merged.Metrics) != 2 {
+		t.Fatalf("once b agrees, both are served: %+v", merged.Metrics)
+	}
+	if count(back) != 1 || !strings.Contains(logs.String(), `"failures":2`) {
+		t.Fatalf("the end of the clash was not logged with its count:\n%s", logs)
+	}
+	server.mergeStaticTargets([]namedSet{gauge, counter})
+	if count(left) != 2 {
+		t.Fatalf("a clash that came back was not logged afresh:\n%s", logs)
+	}
+	server.mergeStaticTargets([]namedSet{gauge})
+	server.mergeStaticTargets([]namedSet{gauge, counter})
+	if count(back) != 1 || count(left) != 3 {
+		t.Fatalf("a clash whose target left was logged as recovered, or not forgotten: %d recoveries, %d warnings:\n%s", count(back), count(left), logs)
 	}
 }

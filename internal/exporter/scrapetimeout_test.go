@@ -2,6 +2,7 @@ package exporter
 
 import (
 	"context"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -199,5 +200,36 @@ func TestWhichDeadlineAProbeGets(t *testing.T) {
 				t.Fatalf("got %s from %q, want %s from %q", budget, source, tc.wantBudget, tc.wantSource)
 			}
 		})
+	}
+}
+
+// A probe whose retry wait runs into its deadline reports the target's own
+// answer — the http_status stage, the status and the body, in the answer, the
+// log and last_status — rather than a bare deadline error.
+func TestAProbeWhoseRetryRunsOutOfTimeReportsTheTargetsAnswer(t *testing.T) {
+	logs := testutil.CaptureLogs(t)
+	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		http.Error(w, "maintenance until noon", http.StatusServiceUnavailable)
+	}))
+	t.Cleanup(target.Close)
+	c := testutil.Collector("retrying", "text")
+	c.Request.Retry = model.RetryConfig{Attempts: 2, Backoff: model.Duration(5 * time.Second)}
+	cfg := &model.Config{Collectors: []model.Collector{c}}
+	if err := config.Validate(cfg); err != nil {
+		t.Fatal(err)
+	}
+	server := NewServer(config.NewManager(cfg, "", slog.Default()), "python3", slog.Default())
+	server.SetTimeoutOffset(0)
+
+	recorder := probeWithScrapeTimeout(t, server, "collector=retrying&target="+url.QueryEscape(target.URL), "0.3")
+	body := recorder.Body.String()
+	if recorder.Code != http.StatusBadGateway || !strings.Contains(body, "http_status failed") || !strings.Contains(body, "received HTTP status 503") || !strings.Contains(body, "ran out of its 300ms budget") {
+		t.Fatalf("status=%d body=%s", recorder.Code, body)
+	}
+	if !strings.Contains(logs.String(), "maintenance until noon") {
+		t.Fatalf("the target's explanation is not in the log:\n%s", logs)
+	}
+	if got := seriesValue(t, selfMetrics(t, server), `http_exporter_scrape_http_status_code{collector="retrying"}`); got != 503 {
+		t.Fatalf("last status %v, want 503", got)
 	}
 }

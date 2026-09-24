@@ -177,7 +177,7 @@ func (s *Server) scrapeStaticTargets(ctx context.Context, budget time.Duration) 
 	scrapeCtx, cancel := context.WithTimeout(ctx, budget)
 	defer cancel()
 	var wg sync.WaitGroup
-	slots := make(chan struct{}, staticTargetConcurrency)
+	slots := make(chan struct{}, s.manager.StaticTargetConcurrency())
 	for _, target := range s.manager.StaticTargets() {
 		wg.Add(1)
 		slots <- struct{}{}

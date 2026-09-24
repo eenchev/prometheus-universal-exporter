@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"net/http"
 	"sort"
+	"time"
 
 	"github.com/eenchev/prometheus-universal-exporter/internal/config"
 	"github.com/eenchev/prometheus-universal-exporter/internal/model"
@@ -20,7 +21,8 @@ import (
 //
 // A target's result is its metrics, with the target's labels, or the last good
 // result marked stale under cache.stale_if_error, and its health metrics,
-// http_exporter_target_up and http_exporter_target_scrape_duration_seconds.
+// http_exporter_target_up, http_exporter_target_scrape_duration_seconds and
+// http_exporter_target_last_success_timestamp_seconds.
 // Every series carries static_target, the target's name, since the targets
 // share one endpoint and the same metric from two targets must stay two
 // series. A target that has not been scraped yet is absent, and one removed
@@ -87,6 +89,11 @@ func (s *Server) staticTargetResults() []namedSet {
 			delete(s.staticResults, name)
 		}
 	}
+	for name := range s.staticLastSuccess {
+		if !current[name] {
+			delete(s.staticLastSuccess, name)
+		}
+	}
 	s.staticMu.Unlock()
 	sort.Slice(out, func(i, j int) bool { return out[i].name < out[j].name })
 	return out
@@ -118,6 +125,7 @@ func (s *Server) staticTargetsHandler(w http.ResponseWriter, r *http.Request) {
 // target and logged, since one family cannot have two types; the rest of both
 // targets is served.
 func (s *Server) mergeStaticTargets(results []namedSet) model.MetricSet {
+	clashes := map[string]staticClash{}
 	type family struct {
 		typ     model.MetricType
 		metrics []model.Metric
@@ -138,7 +146,9 @@ func (s *Server) mergeStaticTargets(results []namedSet) model.MetricSet {
 				order = append(order, m.Name)
 			}
 			if f.typ != m.Type {
-				s.failures.failed(s.logger, slog.LevelWarn, failureKey("", "static target "+result.name, "family "+m.Name),
+				key := failureKey("", "static target "+result.name, "family "+m.Name)
+				clashes[key] = staticClash{target: result.name, metric: m.Name}
+				s.failures.failed(s.logger, slog.LevelWarn, key,
 					"static target metric left out of the static targets endpoint", "exposition", errFamilyTypeClash,
 					"target", result.name, "metric", m.Name, "type", string(m.Type), "type_in_use", string(f.typ))
 				continue
@@ -146,11 +156,42 @@ func (s *Server) mergeStaticTargets(results []namedSet) model.MetricSet {
 			f.metrics = append(f.metrics, m)
 		}
 	}
+	s.settleStaticClashes(clashes, results)
 	var out model.MetricSet
 	for _, name := range order {
 		out.Metrics = append(out.Metrics, families[name].metrics...)
 	}
 	return out
+}
+
+// staticClash is a target's metric left out of the endpoint for its type.
+type staticClash struct{ target, metric string }
+
+// settleStaticClashes ends the clashes of the previous read that this one,
+// with results, no longer has. One whose target is still served is logged as
+// back on the endpoint, as a failure that stopped is logged as recovered; one
+// whose target is gone is forgotten without a word, since nothing was fixed.
+// Without this a clash that went away was never said to have, and one that
+// came back within the failure log's memory read as the old one continuing.
+func (s *Server) settleStaticClashes(clashes map[string]staticClash, results []namedSet) {
+	served := make(map[string]bool, len(results))
+	for _, result := range results {
+		served[result.name] = true
+	}
+	s.staticClashMu.Lock()
+	previous := s.staticClashes
+	s.staticClashes = clashes
+	s.staticClashMu.Unlock()
+	for key, clash := range previous {
+		if _, still := clashes[key]; still {
+			continue
+		}
+		if !served[clash.target] {
+			s.failures.forget(key)
+			continue
+		}
+		s.failures.recovered(s.logger, key, "static target metric back on the static targets endpoint", "target", clash.target, "metric", clash.metric)
+	}
 }
 
 // staticTargetCountMetrics are the self-metrics counting the static targets:
@@ -167,4 +208,28 @@ func (s *Server) staticTargetCountMetrics() []model.Metric {
 		{Name: "http_exporter_static_targets", Help: exporterMetricHelp["http_exporter_static_targets"], Type: model.GaugeMetricType, Value: float64(len(targets))},
 		{Name: "http_exporter_static_targets_exported_via_otlp", Help: exporterMetricHelp["http_exporter_static_targets_exported_via_otlp"], Type: model.GaugeMetricType, Value: float64(viaOTLP)},
 	}
+}
+
+// recordStaticTargetOutcome notes a scrape of the target named name, at now,
+// and returns when it last succeeded: now for a success, else the earlier
+// success, zero if there was none.
+func (s *Server) recordStaticTargetOutcome(name string, ok bool, now time.Time) time.Time {
+	s.staticMu.Lock()
+	defer s.staticMu.Unlock()
+	if s.staticLastSuccess == nil {
+		s.staticLastSuccess = map[string]time.Time{}
+	}
+	if ok {
+		s.staticLastSuccess[name] = now
+	}
+	return s.staticLastSuccess[name]
+}
+
+// unixSeconds is t as Unix seconds, 0 for the zero time, which would otherwise
+// read as a moment in year 1.
+func unixSeconds(t time.Time) float64 {
+	if t.IsZero() {
+		return 0
+	}
+	return float64(t.UnixNano()) / 1e9
 }

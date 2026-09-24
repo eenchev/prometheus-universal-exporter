@@ -13,8 +13,24 @@ import (
 // A target with export_via_otlp is also delivered over OTLP.
 type StaticTargetFile struct {
 	// Interval is how often a target that sets none is scraped. Required.
-	Interval Duration       `yaml:"interval"`
-	Targets  []StaticTarget `yaml:"targets"`
+	Interval Duration `yaml:"interval"`
+	// Concurrency is how many targets are scraped at once;
+	// DefaultStaticTargetConcurrency when unset or 0.
+	Concurrency int            `yaml:"concurrency"`
+	Targets     []StaticTarget `yaml:"targets"`
+}
+
+// DefaultStaticTargetConcurrency is how many static targets are scraped at
+// once when the file does not say, so a large file cannot open an unbounded
+// number of connections.
+const DefaultStaticTargetConcurrency = 8
+
+// ScrapeConcurrency is how many of the file's targets are scraped at once.
+func (f *StaticTargetFile) ScrapeConcurrency() int {
+	if f == nil || f.Concurrency <= 0 {
+		return DefaultStaticTargetConcurrency
+	}
+	return f.Concurrency
 }
 
 // StaticTarget describes one fully specified request. Every per-scrape

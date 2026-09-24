@@ -590,7 +590,9 @@ staticTargets:
 
 The monitor sets `honorLabels: true`, so the series keep their own
 `static_target` and `target` labels, and the targets' labels, rather than
-Prometheus's. With `webAuth.enabled` it presents the exporter's credential, as
+Prometheus's. That is why a target may not set `job` or `instance`: the
+exporter refuses them, since they would replace the ones Prometheus gives the
+endpoint's series. With `webAuth.enabled` it presents the exporter's credential, as
 the self-metrics monitor does.
 
 A target with `export_via_otlp` needs `otlp.enabled: true` in the exporter

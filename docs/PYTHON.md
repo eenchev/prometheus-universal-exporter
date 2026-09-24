@@ -31,6 +31,12 @@ Prometheus name — `http.server.duration`, `service.name` — fails the scrape
 unless the collector sets `name_escaping`; see
 [UTF-8 names](CONFIGURATION.md#utf-8-names).
 
+`labels` is a mapping of label names to values. A value that is not a string
+is written the way a [jq label](CONFIGURATION.md#collectors) is: `1234567`
+as `1234567`, `0.5` as `0.5`, `True` as `true`, and `None` leaves the label
+off. A list or a dict is not one value and fails the script, saying so; join
+it into one first, with `",".join(tags)`.
+
 The launcher blocks `socket`, `subprocess`, `ctypes`, `multiprocessing`, `threading`, shell execution, and package installation. Python has no supported network API; `requests` and `httpx` are unnecessary. `script_timeout` and metric/output limits apply. Declared `libraries` are validated against the supported names (`lxml`, `PyYAML`, and `python-dateutil`, or their import names `yaml` and `dateutil`); they are never installed during a scrape, and the image has no pip to install them with.
 
 ## How scripts run

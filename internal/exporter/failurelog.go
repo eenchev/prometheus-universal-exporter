@@ -122,6 +122,14 @@ func (f *failureLog) recovered(logger *slog.Logger, key, msg string, attrs ...an
 	logger.Info(msg, append(attrs, "stage", st.stage, "failed_for", f.now().Sub(st.first).Round(time.Second).String(), "failures", st.failures)...)
 }
 
+// forget drops what is remembered about key without logging a recovery, for
+// a failure whose subject is gone rather than fixed.
+func (f *failureLog) forget(key string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	delete(f.entries, key)
+}
+
 // forgetCollectors drops what is remembered about collectors a reload removed.
 func (f *failureLog) forgetCollectors(names map[string]bool) {
 	f.mu.Lock()

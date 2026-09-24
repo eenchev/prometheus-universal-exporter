@@ -31,6 +31,11 @@ type Server struct {
 	staticTargetsPath string
 	staticMu          sync.Mutex
 	staticResults     map[string]model.MetricSet
+	staticLastSuccess map[string]time.Time
+	// staticClashes are the targets' metrics the last read of the endpoint
+	// left out for their type (statictargetsendpoint.go).
+	staticClashMu sync.Mutex
+	staticClashes map[string]staticClash
 	// timeoutOffset is how much of Prometheus's scrape timeout a probe leaves
 	// unused (scrapetimeout.go).
 	timeoutOffset time.Duration

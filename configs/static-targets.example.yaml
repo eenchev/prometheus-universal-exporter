@@ -87,4 +87,4 @@ targets:
     collector: textfile
     target: backup.prom
     labels:
-      job: backup
+      task: backup

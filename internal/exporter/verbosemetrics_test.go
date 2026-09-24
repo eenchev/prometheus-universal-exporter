@@ -332,7 +332,7 @@ func TestVerboseFamiliesDoNotReuseStaticHealthNames(t *testing.T) {
 		types[m.Name] = m.Type
 	}
 	c := testutil.Collector("names_text", "text")
-	for _, m := range staticTargetHealthMetrics(model.StaticTarget{Name: "t", Target: "http://a.example"}, &c, 1, 0.1).Metrics {
+	for _, m := range staticTargetHealthMetrics(model.StaticTarget{Name: "t", Target: "http://a.example"}, &c, 1, 0.1, time.Now()).Metrics {
 		if other, clash := types[m.Name]; clash && other != m.Type {
 			t.Errorf("%s is a %s in the verbose self-metrics and a %s in the static target health series", m.Name, other, m.Type)
 		}

@@ -80,6 +80,6 @@ The exporter's direct dependencies are `gojq` (jq and yq expressions),
 `http/httpproxy` package, which reads the proxy environment variables per
 transport rather than once per process; `golang.org/x/net` was already in the
 build for goquery's HTML parser. The Prometheus text format is parsed by
-the exporter itself (`promparse.go`), not by `prometheus/common`: that module
+the exporter itself (`internal/decode/promparse.go`), not by `prometheus/common`: that module
 brought `prometheus/client_model`, the protobuf runtime and `goautoneg` with it
 for one function, and a test fails if `go.mod` requires any of them again.

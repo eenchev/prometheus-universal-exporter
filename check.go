@@ -6,6 +6,11 @@ import (
 	"io"
 	"log/slog"
 	"time"
+
+	"github.com/eenchev/prometheus-universal-exporter/internal/config"
+	"github.com/eenchev/prometheus-universal-exporter/internal/fetch"
+	"github.com/eenchev/prometheus-universal-exporter/internal/model"
+	"github.com/eenchev/prometheus-universal-exporter/internal/transform"
 )
 
 // --dry-run validates what the exporter would load and exits, without binding a
@@ -14,8 +19,9 @@ import (
 // answered without starting it.
 //
 // Every check below calls the function startup calls for the same step —
-// LoadConfig, checkPythonScripts, validateWatchInterval, LoadTargetFile,
-// Validate, ValidateAgainst — so the verdict cannot drift from what a real
+// config.Load, transform.CheckPythonScripts, validateWatchInterval,
+// config.LoadTargets, config.ValidateTargets and config.ValidateTargetsAgainst —
+// so the verdict cannot drift from what a real
 // start would do. A check that passes means the same files, with the same
 // flags, would start; one that fails names the step and the reason.
 //
@@ -107,41 +113,41 @@ func runCheck(in checkInputs, stdout io.Writer, logger *slog.Logger) int {
 // whose input failed to load is reported as skipped rather than silently
 // omitted, so a report never looks shorter because something went wrong.
 func checkStartup(in checkInputs) checkReport {
-	var options []LoadOption
+	var options []config.LoadOption
 	if in.ExpandEnv {
-		options = append(options, WithEnvExpansion())
+		options = append(options, config.WithEnvExpansion())
 	}
 	var results []checkResult
 
-	config, err := LoadConfig(in.ConfigFile, options...)
+	conf, err := config.Load(in.ConfigFile, options...)
 	if err != nil {
 		results = append(results, failedCheck("config", in.ConfigFile, err))
 	} else {
-		names := make([]string, 0, len(config.Collectors))
-		for _, c := range config.Collectors {
+		names := make([]string, 0, len(conf.Collectors))
+		for _, c := range conf.Collectors {
 			names = append(names, c.Name)
 		}
 		details := map[string]any{
 			"collectors":        names,
-			"otlp_enabled":      config.OTLP.Enabled,
+			"otlp_enabled":      conf.OTLP.Enabled,
 			"config_export_env": in.ExpandEnv,
 		}
 		// A deprecated spelling still passes, so the check stays ok; the
 		// report says what to change before the spelling is removed.
-		if len(config.LoadedCollectorFiles) > 0 {
-			details["collector_files"] = config.LoadedCollectorFiles
+		if len(conf.LoadedCollectorFiles) > 0 {
+			details["collector_files"] = conf.LoadedCollectorFiles
 		}
-		if len(config.Deprecations) > 0 {
-			details["deprecations"] = config.Deprecations
+		if len(conf.Deprecations) > 0 {
+			details["deprecations"] = conf.Deprecations
 		}
 		results = append(results, checkResult{Check: "config", File: in.ConfigFile, Status: checkOK, Details: details})
 	}
 
-	if config == nil {
+	if conf == nil {
 		results = append(results, skippedCheck("python_scripts", in.ConfigFile, "the configuration did not load, so its scripts could not be read"))
 	} else {
-		scripts := len(collectorScripts(config))
-		problems, err := checkPythonScripts(in.PythonPath, config)
+		scripts := len(transform.CollectorScripts(conf))
+		problems, err := transform.CheckPythonScripts(in.PythonPath, conf)
 		switch {
 		case err != nil:
 			results = append(results, failedCheck("python_scripts", in.ConfigFile, err))
@@ -167,7 +173,7 @@ func checkStartup(in checkInputs) checkReport {
 	}
 
 	if in.TargetFile != "" {
-		results = append(results, checkTargets(in.TargetFile, options, config))
+		results = append(results, checkTargets(in.TargetFile, options, conf))
 	}
 
 	status := checkOK
@@ -176,16 +182,16 @@ func checkStartup(in checkInputs) checkReport {
 			status = checkFailed
 		}
 	}
-	return checkReport{Status: status, Checks: results, RequestTypes: builtRequestTypes()}
+	return checkReport{Status: status, Checks: results, RequestTypes: fetch.BuiltRequestTypes()}
 }
 
 // checkTargets validates the scheduled target document on its own and then
 // against the configuration. The first half needs no configuration, so a
 // broken target file is still reported when the configuration is broken too.
-func checkTargets(path string, options []LoadOption, config *Config) checkResult {
-	file, err := LoadTargetFile(path, options...)
+func checkTargets(path string, options []config.LoadOption, conf *model.Config) checkResult {
+	file, err := config.LoadTargets(path, options...)
 	if err == nil {
-		err = file.Validate()
+		err = config.ValidateTargets(file)
 	}
 	if err != nil {
 		return failedCheck("targets", path, err)
@@ -195,12 +201,12 @@ func checkTargets(path string, options []LoadOption, config *Config) checkResult
 		names = append(names, target.Name)
 	}
 	details := map[string]any{"targets": names}
-	if config == nil {
+	if conf == nil {
 		result := skippedCheck("targets", path, "the file is valid on its own, but could not be checked against the configuration, which did not load")
 		result.Details = details
 		return result
 	}
-	if err := file.ValidateAgainst(config); err != nil {
+	if err := config.ValidateTargetsAgainst(file, conf); err != nil {
 		result := failedCheck("targets", path, err)
 		result.Details = details
 		return result

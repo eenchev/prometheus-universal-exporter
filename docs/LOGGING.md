@@ -56,7 +56,9 @@ and how many times. The repeats in between are still written at debug level,
 marked `"repeat":true`, so `--log.level=debug` shows every one.
 
 The same applies to scheduled targets (`scheduled target scrape failed`, then
-`scheduled target recovered`), to a file of a directory that fails, to a
+`scheduled target recovered`; a stage passed over under `error_handling` `log`
+is `scheduled target stage failed; continuing`, at warning level, as a probe's
+is `probe stage failed; continuing`), to a file of a directory that fails, to a
 directory over `max_files` or its listing bound, to probes rejected by
 `max_concurrent_probes`, to output repaired for invalid UTF-8, and to probes
 answered with the last good result under `cache.stale_if_error` (`probe

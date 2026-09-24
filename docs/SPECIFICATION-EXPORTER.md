@@ -148,6 +148,13 @@ request is still valid. Section 42.13 defines caching.
 
 The exporter MUST reject missing or unknown collector names with a useful error.
 
+`/probe` MUST accept `GET` and `HEAD`; `HEAD` runs the probe in full and
+answers its status and headers without the body. Any other method MUST be
+answered `405 Method Not Allowed` with `Allow: GET, HEAD`, before the target
+is contacted or the probe counted in the self-metrics. Authentication, where
+configured (§ 42.5), is checked first. The `method` parameter above is the
+target request's method and is unrelated.
+
 Invalid request overrides MUST return a client error. When `timeout` is absent,
 the exporter MUST use the incoming scrape request context as the target request
 deadline rather than a collector-configured timeout.
@@ -452,7 +459,7 @@ can leave out types it does not need together with the code and libraries only
 they use. A default build — no tags, and the published image — MUST carry every
 type.
 
-- Each type MUST live in its own `requesttype_<name>.go`, which registers it
+- Each type MUST live in its own `internal/fetch/requesttype_<name>.go`, which registers it
   from `init` and carries exactly the constraint
   `//go:build !select_request_types || request_type_<name>`. Code and imports
   that only that type needs MUST live behind the same constraint, and so MUST
@@ -799,6 +806,41 @@ The exact internal representation may be improved during implementation, but the
 
 For native Prometheus input, preserve supported metric metadata where possible.
 
+These types, and the configuration types, MUST live in one package that
+imports no other package of the exporter (`internal/model`), so every stage can
+share them.
+
+## 7.1 Source layout
+
+The root package MUST hold only the command line and the `--dry-run` report,
+with the tests that check the repository as a whole. The rest MUST live under
+`internal/`, in packages layered so that each imports only packages before it in
+this order, without cycles:
+
+1. `model`: the shared data types.
+2. `expr`: expression compilation and its caches.
+3. `fetch`: request types, probe parameters and transports.
+4. `decode`: response decoding and charset conversion.
+5. `transform`: transforms, metric rules and the Python worker pool.
+6. `config`: loading, validating and reloading the configuration and target
+   files, and their schemas.
+7. `exporter`: the HTTP server, the probe pipeline, self-metrics, scheduled
+   targets and OTLP export.
+
+`internal/testutil` MAY hold helpers shared by the tests of several packages
+and MUST NOT be imported outside tests.
+
+A probe and a scheduled target's scrape MUST make their trip to the target —
+fetch, decode, transform, validate, with the collector's `error_handling` —
+through one shared function, so the two cannot drift apart; only what
+surrounds the trip differs (waiting for or refusing a concurrency slot, the
+probe's time budget, and where the result goes). Its failures are logged
+under each caller's own messages and failure-log key (§ 25.1).
+
+The binary MUST still be built from the
+repository root (`go build .`), and `-X main.version` MUST still set the version
+it reports.
+
 ---
 
 ## 8. Decoder interface
@@ -1077,7 +1119,7 @@ The implementation MUST avoid double-encoding Prometheus text. It must parse it 
 ## 14.1 Parser
 
 The decoder parses the text exposition format, version 0.0.4, with its own
-parser (`promparse.go`) rather than `github.com/prometheus/common/expfmt`. That
+parser (`internal/decode/promparse.go`) rather than `github.com/prometheus/common/expfmt`. That
 package was the only reason the binary carried `prometheus/common`,
 `prometheus/client_model`, the protobuf runtime and `munnerz/goautoneg`; the
 parser that replaces it is a few hundred lines, and dropping them cut the
@@ -1699,6 +1741,17 @@ fail     fail the probe at that stage
 log      carry on and log the failure at warning level
 ignore   carry on, logging the failure only at debug level
 ```
+
+The policies MUST apply alike to a probe and to a scheduled target's scrape
+(§ 42.14). A probe carrying on answers `200` with no collector metrics; a
+scheduled scrape carrying on exports `http_exporter_target_up` 1 and no
+collector metrics, counts as a success, and is logged at warning level under
+`log` as `scheduled target stage failed; continuing` — through the failure log
+(§ 25.1), and without logging the target as recovered, since the stage still
+failed. A metric rule with `error_mode: fail` (§ 18.1) MUST fail the scrape of
+either whatever `on_transform_error` says. Failing to read target credentials,
+the concurrency limit (§ 42.13b) and validation of the result are not stages
+these policies cover, and always fail.
 
 `on_fetch_error` MUST govern failing to obtain the response, whatever the
 request type (§ 5.1): for `http` a transport failure or a non-success status,
@@ -2341,6 +2394,24 @@ label:
 - A regex label MUST name a capture group the regex has, by number or name.
 - A prometheus transform's `rename` targets MUST be valid metric names, and its
   `labels` keys and `rename_labels` targets valid label names.
+
+### 24.2a Decoding errors
+
+A configuration, collector or scheduled target file that cannot be decoded
+MUST be refused with errors in the file's own terms, never the
+implementation's: each names its line and says what was wrong there — an
+unknown key and where it was found (`in a collector`, `in retry`, `in a
+scheduled target's request`), a value of the wrong kind with what was
+expected (`a duration such as 30s`, `a whole number`, `a list of values`,
+`true or false`) and what was found (`a list`, `a mapping`, `the string
+"fast"`, `the number 3`). A message MUST NOT name a Go type or package or a
+YAML tag. Every error in the file MUST be reported at once, joined by `; `,
+rather than only the first. A YAML syntax error is reported as the YAML
+parser words it.
+
+Unknown keys MUST be refused everywhere in these files, including in blocks
+decoded by custom code such as a scheduled target's `request`, where they
+would otherwise be ignored without a word.
 
 ### 24.3 Configuration schema
 
@@ -3065,6 +3136,10 @@ Test `/probe` with:
 - Multiple simultaneous probes for the same collector.
 - Multiple simultaneous probes for different collectors.
 
+- `POST`, `PUT`, `DELETE`, `PATCH` and `OPTIONS` answered `405` with
+  `Allow: GET, HEAD`, the target not contacted and no probe counted; `HEAD`
+  and `GET` still probe.
+
 Verify correct HTTP status codes, useful error text, and that probe failures do not crash the process.
 
 ## 34.5 Configuration tests
@@ -3097,6 +3172,12 @@ Test:
 - Invalid error policy values.
 - Missing required configuration fields.
 - Unknown configuration fields according to the chosen strictness policy.
+- Decoding errors in the file's terms (§ 24.2a): an unknown key named with
+  its place, a wrong kind of value with what was expected and found, a bad
+  duration or size with its line, several errors reported together, no Go
+  type or YAML tag in any message, and YAML syntax errors unchanged.
+- Unknown keys in a scheduled target's `request`, its `retry` and
+  `basic_auth` refused, and a valid block accepted.
 
 Configuration validation MUST identify the collector and relevant field in the error message.
 
@@ -3945,6 +4026,14 @@ Required:
 - A scheduled scrape reuses the collector cache, and the reused scrape is
   counted in the existing per-collector self-metrics.
 - A failed scrape exports a zero health metric and no collector metrics.
+- A failed fetch, HTTP status, decode or transform follows the collector's
+  `error_handling`: under `fail` the target is down and the failure logged at
+  error level; under `log` it is up, with no collector metrics, a success
+  counted and one warning; under `ignore` the same with nothing logged at info
+  or above. A probe of the same target agrees on whether it succeeded, a
+  metric rule with `error_mode: fail` fails both whatever
+  `on_transform_error` says, and a target carrying on is never logged as
+  recovered.
 - The delivered OTLP payload contains one `resourceMetrics` entry per distinct
   resource.
 - A configuration reload that would disable OTLP while targets are loaded is
@@ -3967,6 +4056,12 @@ Required:
   carried one, and probes carrying different credentials never share an entry.
 - A configuration reload retires entries cached under the previous collector
   definition.
+- A collector's fingerprint is the same whether worked out afresh or
+  remembered; it is remembered per configuration and worked out afresh for
+  the next one, a probe holding the previous configuration still gets its
+  own, a collector outside the configuration is never remembered, concurrent
+  probes over two configurations get the right fingerprint, and the key a
+  probe files its result under is the one `probeCacheKey` gives.
 - Failed probes are not cached.
 - Entries beyond `limits.max_cache_entries` are evicted, expired entries first.
 - A cached metric set is copied on store and on read, so neither the producer
@@ -4119,7 +4214,7 @@ status captured:
   setting `method` for it is rejected and one setting `path` is not.
 - An `http` collector accepts every `http` probe parameter together.
 - The configuration the Helm chart ships by default is valid.
-- Build-time selection: every `requesttype_<name>.go` carries its selection
+- Build-time selection: every `internal/fetch/requesttype_<name>.go` carries its selection
   constraint and the list of known types matches the files; the guard's
   constraint names every type; evaluated with the Go toolchain's constraint
   rules, a default build compiles every type and not the guard,
@@ -4546,6 +4641,18 @@ See § 23 and § 30.
   uncompressed answer; they are uncompressed without the header, with `q=0`
   and for `HEAD`; an error answer is compressed too; `/health` and `/ready` are
   never compressed.
+
+## 34.53h Source layout tests
+
+See § 7.1.
+
+- Every package under `internal/` imports only the packages before it in the
+  layer order, `internal/testutil` imports only `internal/model`, and no
+  non-test file imports `internal/testutil`.
+- Only the shared trip fetches, decodes and transforms, apart from a
+  directory's files (§ 5.1), which it decodes and transforms one at a time.
+- A scheduled target's scrape failed by a metric rule with `error_mode: fail`
+  is logged with stage `metric` and the metric's name, as a probe's is.
 
 ## 34.54 Probe deadline tests
 
@@ -5432,7 +5539,12 @@ MUST NOT share an entry. This is a confidentiality requirement: a cached result
 may only ever be returned to a byte-for-byte identical request.
 
 Because the collector definition is part of the key, a configuration reload
-MUST retire every entry cached under the previous definition. Credentials read
+MUST retire every entry cached under the previous definition. A loaded
+configuration is never changed in place — a reload publishes a new one — so
+the definition's fingerprint SHOULD be worked out once per collector and
+configuration and remembered, rather than on every probe: encoding a large
+collector costs far more than the rest of the key. A collector that is not
+one of the current configuration's own MUST be fingerprinted afresh. Credentials read
 from files at request time are covered only through their configured paths, so
 a rotated credential file takes effect for a cached request once the entry
 expires; deployments that rotate credentials faster than the cache interval
@@ -5666,7 +5778,8 @@ http_exporter_target_scrape_duration_seconds
 Without them a failing target is absent from the OTLP stream and cannot be
 distinguished from a target that was never configured. A failed scrape MUST
 export the health result with `http_exporter_target_up` set to zero and MUST NOT
-export collector metrics for that target.
+export collector metrics for that target. Whether a failed stage fails the
+scrape is the collector's `error_handling` to say, as on a probe (§ 19).
 
 Scheduled scrapes MUST be counted in the existing per-collector self-metrics
 rather than in per-target series, so exporter self-metric cardinality does not

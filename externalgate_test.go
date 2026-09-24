@@ -13,8 +13,8 @@ import (
 // `make test-external`, which runs `-run TestExternal`, and skipped unless
 // EXTERNAL_E2E is set. Adding a file to the suite means adding it here.
 var externalSuiteFiles = []string{
-	"external_e2e_test.go",
-	"grafanastatus_external_e2e_test.go",
+	"internal/exporter/external_e2e_test.go",
+	"internal/exporter/grafanastatus_external_e2e_test.go",
 }
 
 // This test itself runs in the default suite: it reads source, not the network.

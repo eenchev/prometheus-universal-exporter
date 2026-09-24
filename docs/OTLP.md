@@ -167,9 +167,12 @@ identities are exported as separate `resourceMetrics` entries rather than
 being conflated.
 
 Targets are scraped once per `otlp.interval`, through the same fetch, decode and
-transform path as `/probe`, so collector limits, error handling and the response
-cache all apply — a scheduled scrape and an identical `/probe` request share
-cache entries. With [`cache.stale_if_error`](CONFIGURATION.md#serving-the-last-good-result-when-the-target-fails),
+transform path as `/probe`, so collector limits, the response cache and
+[`error_handling`](CONFIGURATION.md#when-a-stage-of-the-probe-fails) all
+apply. A scheduled scrape and an identical `/probe` request share cache
+entries, and under `log` or `ignore` a failed stage leaves the target up with
+nothing of the collector's to export, as it answers a probe `200` with an
+empty body. With [`cache.stale_if_error`](CONFIGURATION.md#serving-the-last-good-result-when-the-target-fails),
 a failed scrape exports the target's last good result, marked by
 `http_exporter_result_stale` 1, while its `http_exporter_target_up` is `0`. Scheduled targets are never exposed on `/metrics` and are not
 reachable through `/probe`.

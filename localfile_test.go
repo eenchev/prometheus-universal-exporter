@@ -1,0 +1,92 @@
+//go:build !select_request_types || request_type_localfile
+
+package main
+
+import (
+	"net/http"
+	"net/url"
+	"os"
+	"strings"
+	"testing"
+
+	"github.com/eenchev/prometheus-universal-exporter/internal/config"
+	"github.com/eenchev/prometheus-universal-exporter/internal/exporter"
+	"github.com/eenchev/prometheus-universal-exporter/internal/testutil"
+)
+
+// The documented example loads and reads a textfile directory.
+func TestLocalDirectoryDocumentationExample(t *testing.T) {
+	doc, err := os.ReadFile("docs/LOCALFILE.md")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, rest, ok := strings.Cut(string(doc), "## Reading a directory")
+	if !ok {
+		t.Fatal("docs/LOCALFILE.md has no Reading a directory section")
+	}
+	_, block, _ := strings.Cut(rest, "```yaml\n")
+	block, _, _ = strings.Cut(block, "```")
+	root := t.TempDir()
+	block = strings.ReplaceAll(block, "/var/lib/node_exporter/textfile_collector", root)
+	path := testutil.WriteIn(t, t.TempDir(), "config.yaml", block)
+	cfg, err := config.Load(path)
+	if err != nil {
+		t.Fatalf("the example does not load: %v\n%s", err, block)
+	}
+	testutil.WriteIn(t, root, "backup.prom", "# TYPE backup_last_success_timestamp_seconds gauge\nbackup_last_success_timestamp_seconds 1.7e+09\n")
+	server := exporter.NewServer(config.NewManager(cfg, "", testutil.QuietLogger(t)), "python3", testutil.QuietLogger(t))
+	probeFile(t, server, "collector="+cfg.Collectors[0].Name).must(t, http.StatusOK, `backup_last_success_timestamp_seconds{file="backup.prom"}`)
+}
+
+// The examples in docs/LOCALFILE.md work as written, with their root replaced
+// by a temporary directory.
+func TestLocalFileDocumentationExamples(t *testing.T) {
+	doc := read(t, "docs/LOCALFILE.md")
+	const documentedRoot = "/var/lib/node_exporter/textfile_collector"
+	var blocks []string
+	for _, part := range strings.Split(doc, "```yaml\n")[1:] {
+		block, _, _ := strings.Cut(part, "```")
+		blocks = append(blocks, block)
+	}
+	find := func(prefix string) string {
+		for _, block := range blocks {
+			if strings.HasPrefix(block, prefix) {
+				return block
+			}
+		}
+		t.Fatalf("docs/LOCALFILE.md has no example starting %q", prefix)
+		return ""
+	}
+	root := t.TempDir()
+	testutil.WriteIn(t, root, "batch.prom", promFile)
+	testutil.WriteIn(t, root, "backup.prom", strings.Replace(promFile, "7", "2", 1))
+	testutil.WriteIn(t, root, "nightly/batch.prom", strings.Replace(promFile, "7", "5", 1))
+	conf := strings.ReplaceAll(find("collectors:\n")+find("  - name: any_textfile\n"), documentedRoot, root)
+	conf += "otlp:\n  enabled: true\n  endpoint: http://collector.invalid/v1/metrics\n"
+	path := testutil.WriteIn(t, t.TempDir(), "config.yaml", conf)
+	cfg, err := config.Load(path)
+	if err != nil {
+		t.Fatalf("%v\n%s", err, conf)
+	}
+	server := exporter.NewServer(config.NewManager(cfg, path, testutil.QuietLogger(t)), "python3", testutil.QuietLogger(t))
+	for query, want := range map[string]string{
+		"collector=textfile":                                                      "} 7",
+		"collector=textfile&target=nightly":                                       "} 5",
+		"collector=textfile&path=backup.prom":                                     "} 2",
+		"collector=any_textfile&target=backup.prom":                               "} 2",
+		"collector=textfile&target=" + url.QueryEscape("file://"+root+"/nightly"): "} 5",
+	} {
+		probeFile(t, server, query).must(t, http.StatusOK, want)
+	}
+	targets := testutil.WriteIn(t, t.TempDir(), "targets.yaml", find("targets:\n"))
+	file, err := config.LoadTargets(targets)
+	if err == nil {
+		err = config.ValidateTargets(file)
+	}
+	if err == nil {
+		err = config.ValidateTargetsAgainst(file, cfg)
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+}

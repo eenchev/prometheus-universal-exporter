@@ -16,6 +16,8 @@ import (
 	"syscall"
 	"testing"
 	"time"
+
+	"github.com/eenchev/prometheus-universal-exporter/internal/testutil"
 )
 
 // Shutting down: the wait for the probes in progress, and the second signal
@@ -81,8 +83,8 @@ func startHeldExporter(t *testing.T, args ...string) *exporterProcess {
 	}
 	address := listener.Addr().String()
 	_ = listener.Close()
-	config := writeIn(t, t.TempDir(), "config.yaml", "collectors:\n  - name: slow\n    request:\n      type: http\n    transform:\n      type: regex\n    metrics:\n      - name: v\n        type: gauge\n        expression: 'v=(\\d+)'\n")
-	args = append([]string{"--config.file=" + config, "--web.listen-address=" + address}, args...)
+	conf := testutil.WriteIn(t, t.TempDir(), "config.yaml", "collectors:\n  - name: slow\n    request:\n      type: http\n    transform:\n      type: regex\n    metrics:\n      - name: v\n        type: gauge\n        expression: 'v=(\\d+)'\n")
+	args = append([]string{"--config.file=" + conf, "--web.listen-address=" + address}, args...)
 	p := &exporterProcess{cmd: exec.Command(os.Args[0], "-test.run=^TestRunHelperProcess$"), exited: make(chan error, 1), logs: &syncBuffer{}, address: address}
 	p.cmd.Env = append(os.Environ(), helperArgsEnv+"="+strings.Join(args, "\x1f"))
 	p.cmd.Stderr = p.logs
@@ -91,7 +93,7 @@ func startHeldExporter(t *testing.T, args ...string) *exporterProcess {
 	}
 	go func() { p.exited <- p.cmd.Wait() }()
 	t.Cleanup(func() { _ = p.cmd.Process.Kill() })
-	waitFor(t, "the exporter to listen", func() bool {
+	testutil.WaitFor(t, "the exporter to listen", func() bool {
 		resp, err := http.Get("http://" + address + "/health")
 		if err == nil {
 			_ = resp.Body.Close()
@@ -105,7 +107,7 @@ func startHeldExporter(t *testing.T, args ...string) *exporterProcess {
 			_ = resp.Body.Close()
 		}
 	}()
-	waitFor(t, "the probe to start", func() bool {
+	testutil.WaitFor(t, "the probe to start", func() bool {
 		resp, err := http.Get("http://" + address + "/self-metrics")
 		if err != nil {
 			return false
@@ -209,7 +211,7 @@ func TestShutdownDelayKeepsServingWhileUnready(t *testing.T) {
 	}
 	start := time.Now()
 	p.signal(t, syscall.SIGTERM)
-	waitFor(t, "/ready to answer 503", func() bool {
+	testutil.WaitFor(t, "/ready to answer 503", func() bool {
 		code, body, err := read("/ready")
 		return err == nil && code == http.StatusServiceUnavailable && strings.Contains(body, "not ready: the exporter is shutting down")
 	})
@@ -241,7 +243,7 @@ func TestShutdownDelayKeepsServingWhileUnready(t *testing.T) {
 func TestNoShutdownDelayStopsListeningAtOnce(t *testing.T) {
 	p := startHeldExporter(t, "--web.shutdown-timeout=3s")
 	p.signal(t, syscall.SIGTERM)
-	waitFor(t, "the listener to close", func() bool {
+	testutil.WaitFor(t, "the listener to close", func() bool {
 		conn, err := net.DialTimeout("tcp", p.address, 200*time.Millisecond)
 		if err == nil {
 			_ = conn.Close()
@@ -258,7 +260,7 @@ func TestShutdownDelayMustNotBeNegative(t *testing.T) {
 }
 
 func TestBeginShutdownMakesTheExporterUnready(t *testing.T) {
-	server, _ := newCacheTestServer(t, testCollector("app", "text"))
+	server, _ := newCacheTestServer(t, testutil.Collector("app", "text"))
 	server.BeginShutdown()
 	r := get(server, http.MethodGet, "/ready", "")
 	if r.Code != http.StatusServiceUnavailable || !strings.Contains(r.Body.String(), "not ready: the exporter is shutting down") {

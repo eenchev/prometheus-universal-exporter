@@ -1,3 +1,9 @@
+// Command prometheus-universal-exporter turns HTTP endpoints and files that
+// were never meant for Prometheus into Prometheus targets, as configured by
+// collectors. See README.md and docs/.
+//
+// The command line and the process lifecycle are here, and the --dry-run
+// report in check.go; everything else is under internal/.
 package main
 
 import (
@@ -11,7 +17,26 @@ import (
 	"os/signal"
 	"syscall"
 	"time"
+
+	"github.com/eenchev/prometheus-universal-exporter/internal/config"
+	"github.com/eenchev/prometheus-universal-exporter/internal/exporter"
+	"github.com/eenchev/prometheus-universal-exporter/internal/fetch"
+	"github.com/eenchev/prometheus-universal-exporter/internal/transform"
 )
+
+// version is the release, set at build time with
+//
+//	go build -ldflags "-X main.version=1.4.0"
+//
+// Left empty, the module version Go stamps into the binary is used: the tag
+// of a build from a tagged checkout, or "(devel)". The revision is always
+// the commit Go stamps, when it built from a git checkout.
+var version string
+
+func init() { applyVersion() }
+
+// applyVersion hands the version set at build time to the build information.
+func applyVersion() { exporter.Version = version }
 
 func main() { os.Exit(run(os.Args[1:], os.Stdout, os.Stderr)) }
 
@@ -34,12 +59,12 @@ func run(args []string, stdout, stderr io.Writer) int {
 	selfMetricsPath := flags.String("web.self-metrics-path", "/self-metrics", "Dedicated endpoint for exporter self-health metrics")
 	enableLifecycle := flags.Bool("web.enable-lifecycle", false, "Enable POST /-/reload, which reloads the configuration and scheduled target files and reports whether they were accepted. SIGHUP reloads either way")
 	shutdownDelay := flags.Duration("web.shutdown-delay", 0, "How long a SIGTERM or SIGINT keeps serving, with /ready answering 503, before the graceful shutdown begins, so a load balancer or Kubernetes stops sending probes first. 0, the default, begins at once")
-	shutdownTimeout := flags.Duration("web.shutdown-timeout", DefaultShutdownTimeout, "How long a SIGTERM or SIGINT waits for the probes in progress to finish before closing their connections. Keep it at least as long as Prometheus's scrape timeout")
-	timeoutOffset := flags.Duration("probe.timeout-offset", DefaultTimeoutOffset, "How much of Prometheus's scrape timeout (X-Prometheus-Scrape-Timeout-Seconds) a probe leaves unused, so it answers with its own error before Prometheus gives up")
+	shutdownTimeout := flags.Duration("web.shutdown-timeout", exporter.DefaultShutdownTimeout, "How long a SIGTERM or SIGINT waits for the probes in progress to finish before closing their connections. Keep it at least as long as Prometheus's scrape timeout")
+	timeoutOffset := flags.Duration("probe.timeout-offset", exporter.DefaultTimeoutOffset, "How much of Prometheus's scrape timeout (X-Prometheus-Scrape-Timeout-Seconds) a probe leaves unused, so it answers with its own error before Prometheus gives up")
 	pythonPath := flags.String("python.path", "python3", "Python interpreter used by the python transform")
 	targetFile := flags.String("otlp.targets-file", "", "Optional file of scheduled targets scraped by the exporter and delivered over OTLP")
 	watchConfig := flags.Bool("config.watch", false, "Reload the configuration, collector and scheduled target files when they change on disk")
-	watchInterval := flags.Duration("config.watch-interval", DefaultWatchInterval, "How often to check the configuration files for changes when config.watch is set")
+	watchInterval := flags.Duration("config.watch-interval", config.DefaultWatchInterval, "How often to check the configuration files for changes when config.watch is set")
 	logLevel := flags.String("log.level", "info", "Log level: debug, info, warn, or error")
 	expandEnv := flags.Bool("config.export-env", false, "Expand ${NAME} environment variable references in the configuration, collector and scheduled target files")
 	printSchema := flags.Bool("config.schema", false, "Print the JSON Schema of the configuration file, for editors, and exit")
@@ -59,28 +84,28 @@ func run(args []string, stdout, stderr io.Writer) int {
 	}
 	// A negative offset is a malformed flag rather than a configuration
 	// problem, so it is refused like one, before --dry-run or startup.
-	if err := validateShutdownDelay(*shutdownDelay); err != nil {
+	if err := exporter.ValidateShutdownDelay(*shutdownDelay); err != nil {
 		newLogger("info", stderr).Error("invalid command line; exiting", "error", err.Error())
 		return 2
 	}
-	if err := validateShutdownTimeout(*shutdownTimeout); err != nil {
+	if err := exporter.ValidateShutdownTimeout(*shutdownTimeout); err != nil {
 		newLogger("info", stderr).Error("invalid command line; exiting", "error", err.Error())
 		return 2
 	}
-	if err := validateTimeoutOffset(*timeoutOffset); err != nil {
+	if err := exporter.ValidateTimeoutOffset(*timeoutOffset); err != nil {
 		newLogger("info", stderr).Error("invalid command line; exiting", "error", err.Error())
 		return 2
 	}
 
 	if *showVersion {
-		_, _ = io.WriteString(stdout, versionString()+"\n")
+		_, _ = io.WriteString(stdout, exporter.VersionString()+"\n")
 		return 0
 	}
 
 	if *printSchema || *printCollectorFileSchema {
-		render := configSchemaJSON
+		render := config.SchemaJSON
 		if *printCollectorFileSchema {
-			render = collectorFileSchemaJSON
+			render = config.CollectorFileSchemaJSON
 		}
 		schema, err := render()
 		if err != nil {
@@ -93,9 +118,9 @@ func run(args []string, stdout, stderr io.Writer) int {
 
 	// Every document is read the same way, and the manager is told so its
 	// reloads keep expanding.
-	var loadOptions []LoadOption
+	var loadOptions []config.LoadOption
 	if *expandEnv {
-		loadOptions = append(loadOptions, WithEnvExpansion())
+		loadOptions = append(loadOptions, config.WithEnvExpansion())
 	}
 
 	logger := newLogger(*logLevel, stderr)
@@ -109,14 +134,14 @@ func run(args []string, stdout, stderr io.Writer) int {
 			WatchInterval: *watchInterval,
 		}, stdout, logger)
 	}
-	config, err := LoadConfig(*configFile, loadOptions...)
+	conf, err := config.Load(*configFile, loadOptions...)
 	if err != nil {
 		logger.Error("invalid startup configuration; exiting", "error", err)
 		return 1
 	}
-	logDeprecations(logger, *configFile, config)
+	config.LogDeprecations(logger, *configFile, conf)
 
-	if err := ValidatePythonScripts(*pythonPath, config); err != nil {
+	if err := transform.ValidatePythonScripts(*pythonPath, conf); err != nil {
 		logger.Error("invalid startup configuration; exiting", "error", err)
 		return 1
 	}
@@ -126,19 +151,19 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return 1
 	}
 
-	manager := NewConfigManager(config, *configFile, logger)
+	manager := config.NewManager(conf, *configFile, logger)
 	manager.SetPythonPath(*pythonPath)
 	manager.SetEnvExpansion(*expandEnv)
 	if *watchConfig {
 		manager.SetWatchInterval(*watchInterval)
 	}
 	if *targetFile != "" {
-		targets, err := LoadTargetFile(*targetFile, loadOptions...)
+		targets, err := config.LoadTargets(*targetFile, loadOptions...)
 		if err == nil {
-			err = targets.Validate()
+			err = config.ValidateTargets(targets)
 		}
 		if err == nil {
-			err = targets.ValidateAgainst(config)
+			err = config.ValidateTargetsAgainst(targets, conf)
 		}
 		if err != nil {
 			logger.Error("invalid scheduled target configuration; exiting", "file", *targetFile, "error", err)
@@ -147,7 +172,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 		manager.SetTargets(*targetFile, targets)
 		logger.Info("scheduled targets loaded", "file", *targetFile, "targets", len(targets.Targets))
 	}
-	server := NewServer(manager, *pythonPath, logger)
+	server := exporter.NewServer(manager, *pythonPath, logger)
 	server.SetSelfMetricsPath(*selfMetricsPath)
 	server.SetTimeoutOffset(*timeoutOffset)
 	server.SetLifecycle(*enableLifecycle)
@@ -155,17 +180,17 @@ func run(args []string, stdout, stderr io.Writer) int {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGTERM, syscall.SIGINT)
 	defer stop()
 	go manager.ReloadLoop(ctx)
-	go pythonWorkers().reapLoop(ctx, pythonWorkerReapInterval)
-	go reloadOn(ctx, reloadSignals(), manager, logger)
+	go transform.PythonWorkers().ReapLoop(ctx, transform.PythonWorkerReapInterval)
+	go exporter.ReloadOn(ctx, exporter.ReloadSignals(), manager, logger)
 	exportLoopDone := make(chan struct{})
 	go func() {
 		defer close(exportLoopDone)
 		server.OTLPExportLoop(ctx)
 	}()
 
-	startup := []any{"version", buildVersion().Version, "revision", buildVersion().Revision, "address", *listenAddress, "collectors", len(config.Collectors), "collector_files", len(config.LoadedCollectorFiles),
+	startup := []any{"version", exporter.BuildVersion().Version, "revision", exporter.BuildVersion().Revision, "address", *listenAddress, "collectors", len(conf.Collectors), "collector_files", len(conf.LoadedCollectorFiles),
 		"scheduled_targets", len(manager.Targets()), "config_watch", manager.WatchEnabled(),
-		"config_export_env", *expandEnv, "request_types", builtRequestTypes()}
+		"config_export_env", *expandEnv, "request_types", fetch.BuiltRequestTypes()}
 	// The interval is only meaningful when the watch is on, and its absence
 	// would otherwise leave the operator guessing how stale a running
 	// configuration can be.
@@ -173,7 +198,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 		startup = append(startup, "config_watch_interval", manager.WatchInterval().String())
 	}
 	logger.Info("starting exporter", startup...)
-	httpServer := newHTTPServer(*listenAddress, server.Handler())
+	httpServer := exporter.NewHTTPServer(*listenAddress, server.Handler())
 	serverErr := make(chan error, 1)
 	go func() { serverErr <- httpServer.ListenAndServe() }()
 	select {

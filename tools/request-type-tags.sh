@@ -5,7 +5,7 @@
 #
 #   go build -tags "$(tools/request-type-tags.sh http)" .
 #
-# Each name must be a request type in this tree: a requesttype_<name>.go whose
+# Each name must be a request type in this tree: an internal/fetch/requesttype_<name>.go whose
 # build constraint includes it under request_type_<name>. A misspelt name is an
 # error rather than a type silently left out. Run it from the repository root.
 set -eu
@@ -15,7 +15,7 @@ list="${1:-}"
 
 tags="select_request_types"
 for type in $(printf '%s' "$list" | tr ',' ' '); do
-	if ! grep -qx "//go:build !select_request_types || request_type_${type}" "requesttype_${type}.go" 2>/dev/null; then
+	if ! grep -qx "//go:build !select_request_types || request_type_${type}" "internal/fetch/requesttype_${type}.go" 2>/dev/null; then
 		echo "request-type-tags: no request type \"${type}\"" >&2
 		exit 1
 	fi

@@ -70,7 +70,7 @@ linters:
       # allowlist, the response size limit, and the operator's own target
       # allowlist — so the finding is excluded here, and only on the file that
       # makes the request.
-      - path: fetcher\.go
+      - path: internal/fetch/fetcher\.go
         text: G704
         linters:
           - gosec

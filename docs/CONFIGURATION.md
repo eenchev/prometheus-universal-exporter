@@ -533,6 +533,15 @@ error_handling:
 | `log` | carries on without that stage's output | yes, at warning level |
 | `ignore` | carries on without that stage's output | only at debug level |
 
+A [scheduled target](OTLP.md#scheduled-targets) follows the same policies.
+Under `fail` its scrape fails: `http_exporter_target_up` is `0` and, with
+[`cache.stale_if_error`](#serving-the-last-good-result-when-the-target-fails),
+the last good result is exported in its place. Under `log` and `ignore` the
+scrape carries on as a probe does: the target is up, with nothing of the
+collector's to export, and the scrape counts as a success. A metric rule with
+`error_mode: fail` fails the scrape whatever `on_transform_error` says, on a
+probe and a scheduled target alike.
+
 `warn` is the older spelling of `log` here. It still works, but each use is
 logged as deprecated at startup and on every reload, and listed by `--dry-run`;
 change it to `log`.
@@ -556,6 +565,16 @@ metric and the label:
 A CSS selector that does not compile used to match nothing, on every scrape,
 without saying why; it is now refused when the configuration loads. The
 expressions are compiled once, then, and every scrape reuses them.
+
+A file that cannot be read as a configuration is refused in its own terms:
+each error names the line and what was expected there, as in
+
+```text
+line 3: unknown key "requst" in a collector; line 7: "fast" is not a duration; write one such as 500ms, 30s or 1m30s
+```
+
+Every unknown key is refused, a scheduled target's `request` block
+included, since a misspelt key would otherwise be ignored without a word.
 
 ### Editor support
 

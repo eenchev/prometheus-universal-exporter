@@ -13,6 +13,30 @@ make ci         # everything above, in CI order
 make test-external  # opt-in; probes real third-party endpoints
 ```
 
+## Code layout
+
+The `main` package at the root holds only the command line (`main.go`) and the
+`--dry-run` report (`check.go`), with the tests that check the repository as a
+whole: the documentation, the chart, the workflows, the shipped examples and
+schemas, and the command line itself. Everything else is under `internal/`, in
+packages that each import only the ones above them in this list:
+
+| Package | What it holds |
+| --- | --- |
+| `internal/model` | The shared data types: the configuration as written, the scheduled target file, and `MetricSet`, what a probe produces. |
+| `internal/expr` | jq, regex, CSS and XPath compilation, with bounded caches. |
+| `internal/fetch` | Request types — `http` and `localfile`, each in its own build-tagged `requesttype_<name>.go` — probe parameters, path parameters, request templates and the HTTP transports. |
+| `internal/decode` | Decoders for every response format, the Prometheus text parser, and charset conversion. |
+| `internal/transform` | The transforms and metric rules, the Python worker pool, and the checks run on rules and scripts at load. |
+| `internal/config` | Loading, validating and reloading the configuration, collector and target files, and their JSON Schemas. |
+| `internal/exporter` | The HTTP server and the one pipeline probes and scheduled targets share (`pipeline.go`): cache, shared probes, limits, self-metrics, readiness, scheduled targets and OTLP export. |
+| `internal/testutil` | Helpers shared by the tests of several packages; imported only by tests. |
+
+A package's tests live beside it, unless they need more than it can import: a
+test that validates a whole configuration lives in `internal/config`, and one
+that probes through a running `Server` lives in `internal/exporter`, even when
+what it checks is a transform or a request type.
+
 ## Repeatable tests
 
 Every test must pass however many times it runs and in whatever order, which
@@ -39,7 +63,7 @@ go run . --config.collector-file-schema > collector-file.schema.json
 ```
 
 Allowed values, patterns and descriptions that a struct cannot express are added
-by path in `configSchemaRules` in `configschema.go`.
+by path in `configSchemaRules` in `internal/config/configschema.go`.
 
 ## Tests that reach the internet
 
@@ -48,7 +72,7 @@ describe real services, though, and a stub replaying a captured response cannot
 tell you when one of those services renames a field or a column: the local
 tests go on passing while the shipped configuration quietly stops working.
 
-`external_e2e_test.go` closes that gap by probing the real endpoints, and it is
+`internal/exporter/external_e2e_test.go` closes that gap by probing the real endpoints, and it is
 off unless asked for:
 
 ```sh
@@ -69,7 +93,7 @@ returned 200, that each metric the configuration declares is present, and that
 the per-row or per-entry labels survived.
 
 The suite also holds the status page demo's detailed tests,
-`grafanastatus_external_e2e_test.go`, which run its configuration against a
+`internal/exporter/grafanastatus_external_e2e_test.go`, which run its configuration against a
 captured copy of status.grafana.com's summary. They need no network but are
 opt-in like the rest.
 A test file joins the suite by being listed in `externalgate_test.go`; every test
@@ -121,9 +145,9 @@ document and credential files whose paths the operator supplies (G304).
 Two more are scoped to the single file each applies to rather than excluded
 globally. G704 reports the outbound request as server-side request forgery,
 which is an accurate description of what this program is — an exporter whose job
-is to fetch a URL an operator supplied — so it is excluded on `fetcher.go` only,
-with the exposure bounded by the scheme allowlist, the response size limit and
-the operator's own target allowlist. G703 reports the Dockerfile path that
+is to fetch a URL an operator supplied — so it is excluded on
+`internal/fetch/fetcher.go` only, with the exposure bounded by the scheme
+allowlist, the response size limit and the operator's own target allowlist. G703 reports the Dockerfile path that
 `tools/depupdate` takes on the command line as attacker-controlled; that is a
 developer tool with no untrusted caller, so it is excluded under `tools/`.
 

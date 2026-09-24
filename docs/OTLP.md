@@ -51,7 +51,13 @@ down to nine tenths of the limit, counted in
 `http_exporter_otlp_points_dropped_total` and logged as a warning. Any other
 answer, such as `400` or `401`,
 would be given again: the data points are dropped and counted rather than sent
-again forever. Each failure is logged as a warning, and the export status is in
+again forever, and the warning quotes the start of the endpoint's explanation
+as `response_body`. An endpoint can also accept an export but reject some of
+its data points, saying so in the answer's `partialSuccess`: those points are
+counted in `http_exporter_otlp_points_dropped_total` too, and the warning
+carries `rejected_points` and the endpoint's `error_message`. The export itself
+still counts as a success. A `partialSuccess` with a message and nothing
+rejected is logged as a warning only. Each failure is logged as a warning, and the export status is in
 the [self-metrics](SELF-METRICS.md#otlp-export-status):
 
 ```promql

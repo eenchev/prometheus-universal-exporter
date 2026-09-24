@@ -92,8 +92,8 @@ func (s *Server) statsFor(name string) *serverStats {
 	return x
 }
 
-// Handler routes the exporter's endpoints: /probe, /metrics and the self-
-// metrics path, /health, /ready and /-/reload.
+// Handler routes the exporter's endpoints: the landing page at /, /probe,
+// /metrics and the self-metrics path, /health, /ready and /-/reload.
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/health", func(w http.ResponseWriter, _ *http.Request) {
@@ -113,6 +113,8 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/metrics", compressed(protected(s.metricsHandler)))
 	mux.HandleFunc("/probe", compressed(protected(s.probeHandler)))
 	mux.HandleFunc("/-/reload", protected(s.reloadHandler))
+	// Only / itself: any other unknown path is still a 404.
+	mux.HandleFunc("GET /{$}", protected(s.landingHandler))
 	return mux
 }
 

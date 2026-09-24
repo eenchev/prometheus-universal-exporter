@@ -2322,6 +2322,7 @@ delivered over OTLP like the rest of the self-metrics.
 Implement:
 
 ```text
+/
 /health
 /ready
 /metrics
@@ -2329,6 +2330,15 @@ Implement:
 ```
 
 Recommended behavior:
+
+- `/`: an HTML landing page, as Prometheus exporters usually serve, naming the
+  build and linking the endpoints, and listing the collectors in force with a
+  form per collector that probes a target through it. Only `/` itself MUST be
+  the page, for `GET` and `HEAD`; another unknown path MUST still answer `404`,
+  and another method `405`. It MUST be protected like `/probe` when the
+  exporter's Basic Authentication is on (§ 42.5), since it lists the
+  collectors, and MUST escape what it shows. It MUST lay out at phone width
+  and follow the browser's light or dark preference.
 
 - `/health`: process is alive. MUST answer `200` for as long as the process
   serves requests.
@@ -4872,7 +4882,12 @@ See § 22.0c, § 23, § 42.1a and § 42.15b.
   kept, the self-metric snapshot is not, a newer value queued meanwhile wins,
   and the kept metrics are sent once the endpoint recovers. An unreachable
   endpoint is retried and its data kept.
-- A `400` is tried once, its data points dropped and counted.
+- A `400` is tried once, its data points dropped and counted, and its body
+  quoted in the warning.
+- A partial success counts its rejected data points as dropped, with the
+  count written as a string or a number, and logs the endpoint's message; a
+  message alone is logged and drops nothing; an empty answer, `{}`, a
+  protobuf answer and one that is not JSON are full successes.
 - The status families exist only with OTLP enabled, and the timestamp is 0
   before the first success.
 - The export loop stops when its context ends; an export it cut short is not
@@ -5194,8 +5209,17 @@ export, except where a newer value of the same series has been queued since;
 the self-metric snapshot MUST NOT be kept, since the next export takes a new
 one. Any other non-2xx response MUST NOT be retried, and the export's data
 points MUST be dropped rather than kept, since the endpoint would refuse them
-again. Every failed export MUST be logged as a warning with the retries made,
-and counted (§ 22.0c).
+again; its warning MUST include the start of the response body, where the
+endpoint says why. Every failed export MUST be logged as a warning with the
+retries made, and counted (§ 22.0c).
+
+A 2xx JSON response MAY carry a `partialSuccess` with `rejectedDataPoints`,
+written as a string or a number, and an `errorMessage`. Rejected data points
+MUST be counted in `http_exporter_otlp_points_dropped_total` and logged as a
+warning with the count and the message, and MUST NOT be sent again; the export
+is still a success. A message with no rejected data points MUST be logged as a
+warning. A response that is empty, not JSON, or has no `partialSuccess` is a
+full success.
 
 On `SIGTERM` or `SIGINT`, the exporter MUST stop accepting requests, let the
 probes in progress finish, stop the export loop, and then make one last
@@ -5306,7 +5330,8 @@ password MUST both be compared in constant time whatever the first
 comparison found.
 
 When enabled, the exporter MUST require valid Basic Authentication for
-`/probe`, `/metrics`, and the configured self-health metrics endpoint. The
+`/probe`, `/metrics`, the configured self-health metrics endpoint and the
+landing page at `/`. The
 `/health` and `/ready` endpoints SHOULD remain unauthenticated so Kubernetes
 liveness and readiness probes can operate without credentials.
 

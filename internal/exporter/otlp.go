@@ -207,8 +207,9 @@ func defaultResourceIdentity(cfg model.OTLPConfig) otlpResourceIdentity {
 // with exponential backoff, or after the Retry-After the endpoint asks for,
 // for as long as another attempt can start within budget. Each attempt is
 // bounded by otlp.timeout. Any other status is an otlpRefusedError, not
-// retried. It returns the number of retries made.
-func (s *Server) pushOTLP(ctx context.Context, cfg model.OTLPConfig, resources []otlpResourceSet, budget time.Duration) (int, error) {
+// retried. It returns the number of retries made, and the partial success the
+// endpoint reported when it accepted the export without some of it.
+func (s *Server) pushOTLP(ctx context.Context, cfg model.OTLPConfig, resources []otlpResourceSet, budget time.Duration) (int, otlpPartialSuccess, error) {
 	now := strconv.FormatInt(time.Now().UnixNano(), 10)
 	payload := otlpPayload{}
 	for _, resource := range resources {
@@ -218,11 +219,11 @@ func (s *Server) pushOTLP(ctx context.Context, cfg model.OTLPConfig, resources [
 		payload.ResourceMetrics = append(payload.ResourceMetrics, otlpResourceMetrics{Resource: otlpResource{Attributes: resource.Identity.attributes()}, ScopeMetrics: []otlpScopeMetrics{{Scope: otlpScope{Name: "prometheus-universal-exporter"}, Metrics: otlpMetrics(resource.Set, now)}}})
 	}
 	if len(payload.ResourceMetrics) == 0 {
-		return 0, nil
+		return 0, otlpPartialSuccess{}, nil
 	}
 	body, err := encodeOTLP(payload, cfg.Compression)
 	if err != nil {
-		return 0, fmt.Errorf("encoding the export: %w", err)
+		return 0, otlpPartialSuccess{}, fmt.Errorf("encoding the export: %w", err)
 	}
 	timeout := time.Duration(cfg.Timeout)
 	if timeout <= 0 {
@@ -235,23 +236,24 @@ func (s *Server) pushOTLP(ctx context.Context, cfg model.OTLPConfig, resources [
 	deadline := time.Now().Add(budget)
 	for retries := 0; ; retries++ {
 		attempt := min(timeout, time.Until(deadline))
-		retryable, wait, err := s.sendOTLP(ctx, cfg, tlsSettings, body, attempt)
-		if err == nil || !retryable {
-			return retries, err
+		answer, err := s.sendOTLP(ctx, cfg, tlsSettings, body, attempt)
+		if err == nil || !answer.retryable {
+			return retries, answer.partial, err
 		}
+		wait := answer.wait
 		if wait <= 0 {
 			wait = otlpBackoff(retries)
 		}
 		// Another attempt is only worth starting if it has time to finish.
 		if time.Until(deadline) < wait+otlpMinAttempt {
-			return retries, err
+			return retries, otlpPartialSuccess{}, err
 		}
 		s.logger.Debug("retrying the OTLP export", "error", err, "retry", retries+1, "after", wait.String())
 		timer := time.NewTimer(wait)
 		select {
 		case <-ctx.Done():
 			timer.Stop()
-			return retries, errors.Join(err, ctx.Err())
+			return retries, otlpPartialSuccess{}, errors.Join(err, ctx.Err())
 		case <-timer.C:
 		}
 	}
@@ -273,24 +275,49 @@ func otlpBackoff(retries int) time.Duration {
 }
 
 // otlpRefusedError is a response the endpoint will give again: the data is
-// dropped rather than sent again.
-type otlpRefusedError struct{ status int }
+// dropped rather than sent again. body is the start of the endpoint's
+// explanation, for the log.
+type otlpRefusedError struct {
+	status int
+	body   string
+}
 
 func (e *otlpRefusedError) Error() string {
 	return fmt.Sprintf("the OTLP endpoint answered %d", e.status)
 }
 
-// sendOTLP makes one attempt. It reports whether a failure is worth retrying
-// and how long the endpoint asked to wait first, if it did.
-func (s *Server) sendOTLP(ctx context.Context, cfg model.OTLPConfig, tlsSettings model.TLSConfig, body []byte, timeout time.Duration) (bool, time.Duration, error) {
+// otlpAnswer is how one attempt ended: whether a failure is worth retrying and
+// how long the endpoint asked to wait first, if it did, and on success, what
+// the endpoint said it rejected.
+type otlpAnswer struct {
+	retryable bool
+	wait      time.Duration
+	partial   otlpPartialSuccess
+}
+
+// otlpPartialSuccess is the partialSuccess of an ExportMetricsServiceResponse:
+// the endpoint accepted the export but rejected rejected of its data points,
+// saying why in message. The endpoint may also send a message alone, as a
+// warning. Both are zero for a full success.
+type otlpPartialSuccess struct {
+	rejected int64
+	message  string
+}
+
+// otlpResponseLimit is the most of an answer's body read: an
+// ExportMetricsServiceResponse or an error Status is far smaller.
+const otlpResponseLimit = 1 << 20
+
+// sendOTLP makes one attempt.
+func (s *Server) sendOTLP(ctx context.Context, cfg model.OTLPConfig, tlsSettings model.TLSConfig, body []byte, timeout time.Duration) (otlpAnswer, error) {
 	// One connection to the collector is reused from export to export.
 	client, err := fetch.HTTPClient(fetch.TransportSettings{TLS: tlsSettings}, true, timeout)
 	if err != nil {
-		return false, 0, fmt.Errorf("OTLP TLS configuration: %w", err)
+		return otlpAnswer{}, fmt.Errorf("OTLP TLS configuration: %w", err)
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, cfg.Endpoint, bytes.NewReader(body))
 	if err != nil {
-		return false, 0, err
+		return otlpAnswer{}, err
 	}
 	req.Header.Set("Content-Type", "application/json")
 	if cfg.Compression != model.OTLPCompressionNone {
@@ -302,23 +329,49 @@ func (s *Server) sendOTLP(ctx context.Context, cfg model.OTLPConfig, tlsSettings
 	resp, err := client.Do(req)
 	if err != nil {
 		// Unreachable, reset, timed out: the next attempt may get through.
-		return true, 0, err
+		return otlpAnswer{retryable: true}, err
 	}
 	// The body is read to the end, however little of it matters, so the
 	// connection goes back to the pool for the next export.
-	defer func() {
-		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 1<<20))
-		_ = resp.Body.Close()
-	}()
+	answer, _ := io.ReadAll(io.LimitReader(resp.Body, otlpResponseLimit))
+	_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, otlpResponseLimit))
+	_ = resp.Body.Close()
 	switch {
 	case resp.StatusCode >= 200 && resp.StatusCode < 300:
-		return false, 0, nil
+		return otlpAnswer{partial: partialSuccess(answer, resp.Header.Get("Content-Type"))}, nil
 	case resp.StatusCode == http.StatusTooManyRequests, resp.StatusCode == http.StatusBadGateway,
 		resp.StatusCode == http.StatusServiceUnavailable, resp.StatusCode == http.StatusGatewayTimeout:
-		return true, retryAfter(resp.Header.Get("Retry-After"), time.Now()), fmt.Errorf("the OTLP endpoint answered %d", resp.StatusCode)
+		return otlpAnswer{retryable: true, wait: retryAfter(resp.Header.Get("Retry-After"), time.Now())}, fmt.Errorf("the OTLP endpoint answered %d", resp.StatusCode)
 	default:
-		return false, 0, &otlpRefusedError{status: resp.StatusCode}
+		return otlpAnswer{}, &otlpRefusedError{status: resp.StatusCode, body: bodyExcerpt(answer)}
 	}
+}
+
+// partialSuccess reads the partialSuccess of a JSON export response. An
+// answer that is empty, is not JSON, or does not carry one is a full success:
+// the field is optional, and a protobuf answer is not read.
+func partialSuccess(body []byte, contentType string) otlpPartialSuccess {
+	if len(bytes.TrimSpace(body)) == 0 || contentType != "" && !strings.Contains(strings.ToLower(contentType), "json") {
+		return otlpPartialSuccess{}
+	}
+	var response struct {
+		PartialSuccess struct {
+			// OTLP/JSON writes an int64 as a string, and a number is
+			// accepted too; json.Number reads either.
+			RejectedDataPoints json.Number `json:"rejectedDataPoints"`
+			ErrorMessage       string      `json:"errorMessage"`
+		} `json:"partialSuccess"`
+	}
+	decoder := json.NewDecoder(bytes.NewReader(body))
+	decoder.UseNumber()
+	if err := decoder.Decode(&response); err != nil {
+		return otlpPartialSuccess{}
+	}
+	partial := otlpPartialSuccess{message: response.PartialSuccess.ErrorMessage}
+	if rejected, err := strconv.ParseInt(strings.Trim(string(response.PartialSuccess.RejectedDataPoints), `"`), 10, 64); err == nil && rejected > 0 {
+		partial.rejected = rejected
+	}
+	return partial
 }
 
 // retryAfter reads a Retry-After header, in seconds or as an HTTP date; zero
@@ -781,7 +834,7 @@ func (s *Server) exportOTLP(ctx context.Context, budget time.Duration) {
 	// The copy keeps the self-metrics out of pending, which may be queued again.
 	resources := appendToResource(append([]otlpResourceSet(nil), pending...), defaultResourceIdentity(cfg), s.selfMetricSet())
 	start := time.Now()
-	retries, err := s.pushOTLP(ctx, cfg, resources, budget)
+	retries, partial, err := s.pushOTLP(ctx, cfg, resources, budget)
 	if err != nil && ctx.Err() != nil {
 		// Shutting down: the last export sends these.
 		s.requeueOTLP(pending)
@@ -789,13 +842,27 @@ func (s *Server) exportOTLP(ctx context.Context, budget time.Duration) {
 	}
 	s.otlp.record(cfg.Endpoint, time.Since(start), retries, err == nil)
 	if err == nil {
+		// The endpoint took the export but not all of it. The rejected
+		// points would be rejected again, so they are dropped and counted
+		// like a refused export's.
+		switch {
+		case partial.rejected > 0:
+			s.otlp.drop(int(min(partial.rejected, int64(math.MaxInt32))))
+			s.logger.Warn("OTLP endpoint accepted an export but rejected some of its data points; they are dropped", "rejected_points", partial.rejected, "error_message", partial.message, "retries", retries)
+		case partial.message != "":
+			s.logger.Warn("OTLP endpoint accepted an export with a warning", "error_message", partial.message)
+		}
 		return
 	}
 	var refused *otlpRefusedError
 	if errors.As(err, &refused) {
 		points := countPoints(pending)
 		s.otlp.drop(points)
-		s.logger.Warn("OTLP endpoint refused an export; its data points are dropped", "status", refused.status, "dropped_points", points, "retries", retries)
+		attrs := []any{"status", refused.status, "dropped_points", points, "retries", retries}
+		if refused.body != "" {
+			attrs = append(attrs, "response_body", refused.body)
+		}
+		s.logger.Warn("OTLP endpoint refused an export; its data points are dropped", attrs...)
 		return
 	}
 	s.requeueOTLP(pending)

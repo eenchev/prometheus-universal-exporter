@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"sort"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -92,8 +93,9 @@ func (s *Server) statsFor(name string) *serverStats {
 	return x
 }
 
-// Handler routes the exporter's endpoints: the landing page at /, /probe,
-// /metrics and the self-metrics path, /health, /ready and /-/reload.
+// Handler routes the exporter's endpoints: the landing page at /, the
+// collectors page at /collectors, /probe, /metrics and the self-metrics path,
+// /health, /ready and /-/reload.
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/health", func(w http.ResponseWriter, _ *http.Request) {
@@ -115,6 +117,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/-/reload", protected(s.reloadHandler))
 	// Only / itself: any other unknown path is still a 404.
 	mux.HandleFunc("GET /{$}", protected(s.landingHandler))
+	mux.HandleFunc("GET /collectors", protected(s.collectorsHandler))
 	return mux
 }
 
@@ -356,6 +359,38 @@ func (s *Server) probeTrip(ctx context.Context, p upstreamProbe) *probeResult {
 	return out.result(true)
 }
 
+// unforwardableHeaders are never forwarded, whatever request.forward_headers
+// lists: Authorization has request.forward_authorization of its own, and the
+// rest describe the connection to the exporter, not the request to the target.
+var unforwardableHeaders = map[string]bool{
+	"Authorization":       true,
+	"Connection":          true,
+	"Content-Length":      true,
+	"Host":                true,
+	"Proxy-Authenticate":  true,
+	"Proxy-Authorization": true,
+	"Te":                  true,
+	"Trailer":             true,
+	"Transfer-Encoding":   true,
+	"Upgrade":             true,
+}
+
+// forwardableHeaders is request.forward_headers as they are forwarded:
+// canonical, without the ones never forwarded, each once, sorted.
+func forwardableHeaders(request model.RequestConfig) []string {
+	seen := map[string]bool{}
+	var out []string
+	for _, name := range request.ForwardHeaders {
+		name = http.CanonicalHeaderKey(strings.TrimSpace(name))
+		if name != "" && !unforwardableHeaders[name] && !seen[name] {
+			seen[name] = true
+			out = append(out, name)
+		}
+	}
+	sort.Strings(out)
+	return out
+}
+
 // forwardedHeaders extracts only explicitly allowed headers from the probe
 // request. Prometheus Operator monitor params use the header_<name> convention
 // for static, non-secret target headers. Authorization is handled separately so
@@ -363,24 +398,9 @@ func (s *Server) probeTrip(ctx context.Context, p upstreamProbe) *probeResult {
 // URL parameter.
 func forwardedHeaders(r *http.Request, request model.RequestConfig) http.Header {
 	out := make(http.Header)
-	blocked := map[string]bool{
-		"Authorization":       true,
-		"Connection":          true,
-		"Content-Length":      true,
-		"Host":                true,
-		"Proxy-Authenticate":  true,
-		"Proxy-Authorization": true,
-		"Te":                  true,
-		"Trailer":             true,
-		"Transfer-Encoding":   true,
-		"Upgrade":             true,
-	}
-	allowed := make(map[string]bool, len(request.ForwardHeaders))
-	for _, name := range request.ForwardHeaders {
-		name = http.CanonicalHeaderKey(strings.TrimSpace(name))
-		if name != "" && !blocked[name] {
-			allowed[name] = true
-		}
+	allowed := map[string]bool{}
+	for _, name := range forwardableHeaders(request) {
+		allowed[name] = true
 	}
 	if request.ForwardAuthorization {
 		if value := r.Header.Get("Authorization"); value != "" {
@@ -397,7 +417,7 @@ func forwardedHeaders(r *http.Request, request model.RequestConfig) http.Header 
 			continue
 		}
 		name := http.CanonicalHeaderKey(strings.TrimSpace(key[len("header_"):]))
-		if name == "" || !allowed[name] || blocked[name] {
+		if name == "" || !allowed[name] {
 			continue
 		}
 		for _, value := range values {

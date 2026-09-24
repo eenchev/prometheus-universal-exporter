@@ -120,7 +120,8 @@ pattern needs. See the
 
 | Path | Purpose |
 | --- | --- |
-| `/` | A landing page: the build, links to the endpoints, and each collector with a form that probes a target through it. |
+| `/` | A landing page: the build and links to the endpoints. |
+| `/collectors` | Each collector with a form that probes a target through it, taking its request parameters, forwarded headers and, when it forwards `Authorization`, a target credential. See [Probing from the browser](docs/AUTHENTICATION.md#probing-from-the-browser). |
 | `/probe` | Scrape a target through a collector. Takes `target` and `collector`, with `GET` or `HEAD`; any other method is answered `405`. |
 | `/metrics` | The exporter's own metrics. |
 | `/self-metrics` | The same self-metrics on a dedicated path, so a monitor can scrape them separately. |

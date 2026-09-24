@@ -71,9 +71,37 @@ every protected request with `500` and logs why, rather than letting requests
 in. The chart mounts the Secret with `webAuth` — see the
 [chart README](../charts/prometheus-universal-exporter/README.md#exporter-authentication).
 
-When enabled, Basic Auth is required for `/probe`, `/metrics`, the configured self-metrics endpoint and the landing page at `/`, which lists the collectors. `/health` and `/ready` remain unauthenticated for Kubernetes probes. Exporter-side Basic Auth is mutually exclusive with `request.forward_authorization`; enable one model or the other so the incoming Authorization header cannot be confused with the exporter credential.
+When enabled, Basic Auth is required for `/probe`, `/metrics`, the configured self-metrics endpoint, the landing page at `/` and the collectors page at `/collectors`, which list the collectors. `/health` and `/ready` remain unauthenticated for Kubernetes probes. Exporter-side Basic Auth is mutually exclusive with `request.forward_authorization`; enable one model or the other so the incoming Authorization header cannot be confused with the exporter credential.
 
 This conflict is rejected during startup: the exporter logs `invalid startup configuration; exiting` and terminates with a non-zero exit code. Invalid configurations detected during file reload are rejected while the last valid configuration remains active.
+
+## Probing from the browser
+
+`/collectors` lists every collector with a form that probes a target through
+it and shows the answer in place. What the form asks for follows the
+collector:
+
+- **A credential in the collector's configuration** — `basic_auth`,
+  `basic_auth_file`, `bearer_token`, `bearer_token_file`, a TLS client
+  certificate — is the exporter's to send. The page says which kind the
+  collector sends, never its value, and there is nothing to enter.
+- **`forward_authorization: true`** adds a *Target credential*: a bearer
+  token or a username and password. The page sends it to `/probe` as the
+  `Authorization` header, which the exporter forwards to the target exactly as
+  it forwards a Prometheus monitor's, in place of any credential the
+  configuration holds. It is never put in the URL: the fields have no name, so
+  with JavaScript off the form still probes, without the credential.
+- **`forward_headers`** adds a field per header, sent as a `header_<name>`
+  probe parameter as the chart sends a monitor's `headers`. These appear in
+  the URL, so they are not for secrets.
+- **Request parameters** — the `{{param_<name>}}` placeholders of the path,
+  body, headers and query — get a field each, required unless the placeholder
+  has a default, which is shown.
+
+The page itself is behind the exporter's Basic Auth when that is on, and the
+browser sends the same credential with each probe. Since exporter Basic Auth
+and `forward_authorization` cannot be combined, the `Authorization` header is
+never asked to carry both.
 
 ## Credentials from a Kubernetes Secret
 

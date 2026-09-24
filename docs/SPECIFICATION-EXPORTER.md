@@ -2323,6 +2323,7 @@ Implement:
 
 ```text
 /
+/collectors
 /health
 /ready
 /metrics
@@ -2332,13 +2333,24 @@ Implement:
 Recommended behavior:
 
 - `/`: an HTML landing page, as Prometheus exporters usually serve, naming the
-  build and linking the endpoints, and listing the collectors in force with a
-  form per collector that probes a target through it. Only `/` itself MUST be
+  build and linking the endpoints and `/collectors`. Only `/` itself MUST be
   the page, for `GET` and `HEAD`; another unknown path MUST still answer `404`,
-  and another method `405`. It MUST be protected like `/probe` when the
-  exporter's Basic Authentication is on (§ 42.5), since it lists the
-  collectors, and MUST escape what it shows. It MUST lay out at phone width
-  and follow the browser's light or dark preference.
+  and another method `405`.
+- `/collectors`: an HTML page listing the collectors in force, each with a form
+  that probes a target through it and shows the answer in place. The form MUST
+  offer a field for the target, required when the request type needs one; for
+  each request parameter, required unless its placeholder has a default, which
+  it shows; for each header in `request.forward_headers` that can be
+  forwarded, sent as `header_<name>`; and, when `request.forward_authorization`
+  is set, a bearer token or a username and password, sent to `/probe` as the
+  `Authorization` header and never in the URL. Credential fields MUST NOT be
+  named form fields, so a submission without the page's script leaves them
+  out. A credential the collector's configuration holds MUST be named by kind
+  and its value MUST NOT appear on the page.
+- Both pages MUST be protected like `/probe` when the exporter's Basic
+  Authentication is on (§ 42.5), since they list the collectors, MUST escape
+  what they show, MUST NOT be cached, and MUST lay out at phone width and
+  follow the browser's light or dark preference.
 
 - `/health`: process is alive. MUST answer `200` for as long as the process
   serves requests.
@@ -5330,8 +5342,8 @@ password MUST both be compared in constant time whatever the first
 comparison found.
 
 When enabled, the exporter MUST require valid Basic Authentication for
-`/probe`, `/metrics`, the configured self-health metrics endpoint and the
-landing page at `/`. The
+`/probe`, `/metrics`, the configured self-health metrics endpoint, the
+landing page at `/` and the collectors page at `/collectors`. The
 `/health` and `/ready` endpoints SHOULD remain unauthenticated so Kubernetes
 liveness and readiness probes can operate without credentials.
 

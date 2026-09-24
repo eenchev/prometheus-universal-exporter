@@ -1,0 +1,28 @@
+{{- if .Values.podDisruptionBudget.enabled }}
+{{- $pdb := .Values.podDisruptionBudget }}
+{{- if and (not (kindIs "invalid" $pdb.minAvailable)) (not (kindIs "invalid" $pdb.maxUnavailable)) }}
+{{- fail "podDisruptionBudget sets both minAvailable and maxUnavailable; Kubernetes takes one" }}
+{{- end }}
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ include "prometheus-universal-exporter.fullname" . }}
+  {{ with .Values.namespaceOverride }}namespace: {{ . }}{{ end }}
+  labels:
+    {{- include "prometheus-universal-exporter.metadataLabels" (list .) | nindent 4 }}
+  annotations:
+    {{- include "prometheus-universal-exporter.metadataAnnotations" (list .) | nindent 4 }}
+spec:
+  {{- if not (kindIs "invalid" $pdb.minAvailable) }}
+  minAvailable: {{ $pdb.minAvailable }}
+  {{- else }}
+  maxUnavailable: {{ $pdb.maxUnavailable | default 1 }}
+  {{- end }}
+  {{- with $pdb.unhealthyPodEvictionPolicy }}
+  unhealthyPodEvictionPolicy: {{ . }}
+  {{- end }}
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: {{ include "prometheus-universal-exporter.name" . }}
+      app.kubernetes.io/instance: {{ .Release.Name }}
+{{- end }}

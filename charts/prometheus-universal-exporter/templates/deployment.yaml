@@ -1,4 +1,6 @@
 {{- include "prometheus-universal-exporter.validateTargets" . }}
+{{- include "prometheus-universal-exporter.validateProbe" (list "livenessProbe" .Values.livenessProbe) }}
+{{- include "prometheus-universal-exporter.validateProbe" (list "readinessProbe" .Values.readinessProbe) }}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -9,7 +11,11 @@ metadata:
   annotations:
     {{- include "prometheus-universal-exporter.metadataAnnotations" (list .) | nindent 4 }}
 spec:
+  {{- if not .Values.autoscaling.enabled }}
+  {{- /* With the HorizontalPodAutoscaler the replica count is its to set: a
+         count here would be put back on every upgrade. */}}
   replicas: {{ .Values.replicaCount }}
+  {{- end }}
   strategy: {{- toYaml .Values.strategy | nindent 4 }}
   selector:
     matchLabels:
@@ -74,6 +80,12 @@ spec:
             {{- with (include "prometheus-universal-exporter.probeDefaultTimeout" .) }}
             - {{ printf "--probe.default-timeout=%s" . | quote }}
             {{- end }}
+            {{- with (include "prometheus-universal-exporter.countFlag" (list "server.probeMaxConcurrent" .Values.server.probeMaxConcurrent)) }}
+            - {{ printf "--probe.max-concurrent=%s" . | quote }}
+            {{- end }}
+            {{- with (include "prometheus-universal-exporter.countFlag" (list "server.pythonMaxWorkers" .Values.server.pythonMaxWorkers)) }}
+            - {{ printf "--python.max-workers=%s" . | quote }}
+            {{- end }}
             {{- with (include "prometheus-universal-exporter.shutdownTimeout" .) }}
             - {{ printf "--web.shutdown-timeout=%s" . | quote }}
             {{- end }}
@@ -84,8 +96,21 @@ spec:
             {{- range .Values.extraArgs }}
             - {{ . | quote }}
             {{- end }}
-          {{- with .Values.env }}
-          env: {{- toYaml . | nindent 12 }}
+          {{- $goMemLimit := and .Values.goMemLimit.enabled (dig "limits" "memory" "" (.Values.resources | default dict)) (not (include "prometheus-universal-exporter.envSets" (list .Values.env "GOMEMLIMIT"))) }}
+          {{- if or .Values.env $goMemLimit }}
+          env:
+            {{- if $goMemLimit }}
+            # The Go runtime collects harder as its heap nears the container's
+            # memory limit, instead of growing past it into an OOM kill.
+            - name: GOMEMLIMIT
+              valueFrom:
+                resourceFieldRef:
+                  containerName: exporter
+                  resource: limits.memory
+            {{- end }}
+            {{- with .Values.env }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
           {{- end }}
           {{- with .Values.envFrom }}
           envFrom: {{- toYaml . | nindent 12 }}
@@ -96,8 +121,14 @@ spec:
               protocol: TCP
           livenessProbe:
             httpGet: {path: /health, port: http}
+            {{- with .Values.livenessProbe }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
           readinessProbe:
             httpGet: {path: /ready, port: http}
+            {{- with .Values.readinessProbe }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
           resources: {{- toYaml .Values.resources | nindent 12 }}
           volumeMounts:
             - name: config

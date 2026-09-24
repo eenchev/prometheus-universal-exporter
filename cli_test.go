@@ -599,6 +599,20 @@ func TestANegativeDefaultProbeTimeoutIsACommandLineError(t *testing.T) {
 	}
 }
 
+func TestNegativeConcurrencyLimitsAreCommandLineErrors(t *testing.T) {
+	for flag, message := range map[string]string{
+		"--probe.max-concurrent=-1": "--probe.max-concurrent must not be negative",
+		"--python.max-workers=-1":   "--python.max-workers must not be negative",
+	} {
+		for _, args := range [][]string{{flag}, {"--dry-run", "--config.file=configs/config.example.yaml", flag}} {
+			out := runCLI(t, args...)
+			if out.code != 2 || !strings.Contains(out.stderr, message) || out.stdout != "" {
+				t.Fatalf("%v: exit=%d stderr=%s stdout=%s", args, out.code, out.stderr, out.stdout)
+			}
+		}
+	}
+}
+
 func TestASelfMetricsPathOfAnotherEndpointIsACommandLineError(t *testing.T) {
 	for _, args := range [][]string{
 		{"--web.self-metrics-path=/probe"},

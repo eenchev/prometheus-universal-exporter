@@ -377,7 +377,10 @@ missing or null for one item is that item's missing metric, handled by
 `required` and `error_mode` like any other: `log` drops that one series and keeps
 the rest. `items` selecting nothing is a missing metric when the metric is
 required, and produces nothing when it is not. `$root` works without `items`
-too, where it is the same document as `.`.
+too, where it is the same document as `.`. Every jq and yq expression also
+has `$status`, the response's HTTP status, and `$headers`, its headers by
+lower-case name, for a target whose status or headers say something the body
+does not (see [Accepting other statuses](REQUESTS.md#accepting-other-statuses)).
 
 The `css` transform takes `items` too, for HTML tables and lists: `items`
 selects the rows, and the expression and each label are selectors within one
@@ -466,7 +469,7 @@ statuspage_component_status{status!="operational"}
   and on (component_id) statuspage_component_incident_info
 ```
 
-[`testdata/config.grafanastatus.json-test.yaml`](../testdata/config.grafanastatus.json-test.yaml)
+[`examples/config.grafanastatus.json-test.yaml`](../examples/config.grafanastatus.json-test.yaml)
 is a complete collector for [status.grafana.com](https://status.grafana.com),
 and for any page hosted on Atlassian Statuspage, which all publish the same
 `/api/v2/summary.json`:
@@ -510,6 +513,44 @@ No series carries the page's name: Prometheus labels every series with the
 target it probed (`instance`), which already tells two pages apart.
 `statuspage_info{page="Grafana Cloud"}` carries the name once, for dashboards.
 
+### Mapping text to values and scaling them
+
+When a status has an order — up, degraded, down — one number per status is
+simpler than a series per status. `value_map` turns the text an expression
+gives into the value, and `"*"` maps any value it does not list:
+
+```yaml
+- name: app_state
+  description: 1 up, 0.5 degraded, 0 down, -1 anything else
+  expression: 'state: (\w+)'
+  value_map:
+    up: 1
+    degraded: 0.5
+    down: 0
+    "*": -1
+```
+
+The value is looked up as text: a regex capture, a CSS element's or XPath
+node's text or a CSV cell without its surrounding blanks, a jq or yq number as
+JSON writes it (`7`, `0.5`) and a boolean as `true` or `false`. Case matters.
+`"*"` catches numbers too; without it, a value the map does not list is read as
+a number, and one that is not a number fails the rule, saying so.
+
+`scale` multiplies the value, mapped or read as a number — `0.001` for
+milliseconds to seconds, `100` for a fraction to a percentage:
+
+```yaml
+- name: api_latency_seconds
+  expression: .latency_ms
+  scale: 0.001
+```
+
+Both work in every transform with rules: `regex`, `css`, `xpath`, `csv`, `jq`
+and `yq`. A `prometheus` rule takes `scale`, for plain samples only — a
+histogram's or summary's bounds are values too — and not `value_map`, since its
+values are numbers already; a `python` script sets its values itself, and
+takes neither. `scale` must be a finite number other than 0.
+
 ### Request types
 
 Every collector's `request` block starts with `type`, which is required and
@@ -548,6 +589,8 @@ Each type accepts its own keys. For `http`, `type` is the only required one —
 | `max_response_bytes` | 10 MiB | Response size cap. With `limits.max_response_bytes` set too, the smaller wins; either alone may be above 10 MiB. |
 | `follow_redirects`, `enable_http2` | off | See [Target requests](REQUESTS.md#redirects-and-http2). |
 | `allowed_schemes` | `http`, `https` | Schemes a target may use. |
+| `accept_status` | every 2xx | Statuses whose answers are decoded, such as `["2xx", 503]`; see [Accepting other statuses](REQUESTS.md#accepting-other-statuses). |
+| `allowed_targets`, `denied_targets` | none | Hosts, globs, addresses and networks its requests may and may not reach; see [Restricting targets](REQUESTS.md#restricting-targets). |
 
 For `localfile`, `root` is required, and `path`, `max_age` and
 `max_response_bytes` are optional, or `files`, `max_files` and
@@ -558,15 +601,16 @@ For `graphite`, `targets` is required: the Graphite expressions to render.
 `from` and `until` set the window, `-15min` to `now` by default, and `path`
 defaults to `/render`. Every `http` key about the connection applies —
 `query`, `headers`, credentials, `tls`, `retry`, `max_response_bytes`,
-`follow_redirects`, `enable_http2` and `allowed_schemes` — and `method` and
+`follow_redirects`, `enable_http2`, `allowed_schemes`, `accept_status`,
+`allowed_targets` and `denied_targets` — and `method` and
 `body` do not; its table is in [Graphite](GRAPHITE.md#a-collector).
 
 For `grpc`, `rpc` is required, the method as `package.Service/Method`, and
 so is `descriptors`, where its message types come from — `reflection`,
 `protoset` or `proto` — except for the built-in health service. `message` is
 the request as JSON, `{}` by default, and `metadata` its metadata; the
-credential keys, `tls`, `retry` with its `codes`, `max_response_bytes` and the
-forwarding keys apply as for `http`, and the other `http` keys do not; its
+credential keys, `tls`, `retry` with its `codes`, `max_response_bytes`, the
+forwarding keys, `allowed_targets` and `denied_targets` apply as for `http`, and the other `http` keys do not; its
 table is in [gRPC](GRPC.md#a-collector).
 
 A key that belongs to a different type is an error rather than being ignored,
@@ -772,7 +816,8 @@ Every transform may define `transform.pre_script`. It runs once per scrape
 after decoding and before metric extraction. The script receives the decoded
 value as `data` and may mutate it or replace it by assigning to `data`.
 HTML/XML pre-scripts receive raw document text, which is parsed again after the
-script. A `prometheus` transform's pre-script receives the series as
+script, so they must leave a string: a dict or a list fails the scrape, naming
+what the script left. A `prometheus` transform's pre-script receives the series as
 `{"metrics": [...]}` and must leave them in that shape, read back into series
 for the rules; see [Python](PYTHON.md#reshaping-a-response-instead-of-writing-a-python-transform). Python transforms emit metrics with the `metric(...)` API.
 
@@ -818,6 +863,60 @@ required to produce `data`.
 The check needs the interpreter from `--python.path`, so a configuration that
 contains any Python fails to start if that interpreter is unusable. A
 configuration with no Python scripts never invokes one.
+
+## Reusing settings with YAML anchors
+
+Collectors of one API often share their request, transform and rule
+settings. YAML anchors write them once: `&name` marks a value, `*name` repeats
+it, and `<<: *name` merges a mapping into another. A top-level key that begins
+with `x-` is the file's own — the exporter ignores it, whatever it holds — so
+it is the place for the shared parts:
+
+```yaml
+x-weather-request: &weather_request
+  type: http
+  path: /v1/forecast
+  allowed_schemes: [https]
+  retry: {attempts: 1, backoff: 2s}
+
+x-location-labels: &location
+  - name: latitude
+    expression: .latitude | tostring
+  - name: longitude
+    expression: .longitude | tostring
+
+collectors:
+  - name: weather_current
+    request:
+      <<: *weather_request
+      query: {current: temperature_2m, latitude: "{{param_latitude}}", longitude: "{{param_longitude}}"}
+    transform: {type: jq}
+    metrics:
+      - name: weather_temperature_celsius
+        expression: .current.temperature_2m
+        labels: *location
+  - name: weather_daily
+    request:
+      <<: *weather_request
+      query: {daily: temperature_2m_max, latitude: "{{param_latitude}}", longitude: "{{param_longitude}}"}
+    transform: {type: jq}
+    metrics:
+      - name: weather_daily_max_celsius
+        expression: .daily.temperature_2m_max[0]
+        labels: *location
+```
+
+An anchor can also sit where it is first used, as the Open-Meteo example's
+`labels: &location` does on its first metric; an `x-` key is for what no
+collector uses as it is. A key written beside `<<:` replaces that key of the
+merged mapping whole — `query` above, or a `request` set beside a merged
+collector — rather than being merged into it. Anchors work in collector
+files and the [static target file](STATIC-TARGETS.md#the-target-file) too,
+each file on its own: an anchor in one file cannot be used in another.
+
+An `x-` key is only ignored at the top level; anywhere else it is an unknown
+key like any other, and so is a bare `x-`. The published
+[schemas](#editor-support) accept top-level `x-` keys too.
 
 ## Collector files
 
@@ -1057,7 +1156,11 @@ http_exporter_result_age_seconds 0
 `http_exporter_result_stale` is `1` when the answer is the last good result
 standing in for a failed trip. `http_exporter_result_age_seconds` is how long
 ago the answered result was fetched from the target — `0` for a trip just
-made, the entry's age for a cached answer. Watch them rather than `up`, which
+made, the entry's age for a cached answer. On the
+[static targets endpoint](STATIC-TARGETS.md), which serves each target's last
+result until its next scrape, it is worked out at every read, so it says how
+old the data is when Prometheus reads it: a target scraped every 10 minutes
+reads from `0` up to about `600` before its next scrape. Watch them rather than `up`, which
 stays `1` while stale results are answered: `http_exporter_result_stale == 1`
 selects the targets currently bridged by an old result.
 
@@ -1133,8 +1236,8 @@ collectors:
 
 A trip is the request or file read, with the decoding and transforms after it.
 A probe that would exceed the limit is not queued: it is answered at once with
-`503 Service Unavailable` — `collector inventory_api already has 8 probes to
-its targets in progress, its max_concurrent_probes; this one was not sent` —
+`503 Service Unavailable` — `collector inventory_api already has 8 trips to
+its targets in progress, its max_concurrent_probes; this probe was not sent` —
 and counted in `http_exporter_probes_rejected_total`, while
 `http_exporter_probes_in_flight` shows how close to the limit a collector runs.
 Prometheus records the rejected scrape as `up` 0 with that reason, rather than
@@ -1150,6 +1253,23 @@ fails in the `concurrency` stage. The default, 32, is well above what one
 Prometheus usually sends a single backend at once; lower it for a backend that
 cannot take many requests at a time, raise it for a collector with many slow
 targets. A negative value is a configuration error.
+
+Each collector's limit leaves the process as a whole unbounded: twenty
+collectors of 32 could hold 640 responses, and their series, in memory at
+once. `--probe.max-concurrent` bounds the trips of every collector together,
+on top of each collector's own limit:
+
+```sh
+prometheus-universal-exporter --probe.max-concurrent=64
+```
+
+A probe over it is answered `503` in the same way, naming the flag — `the
+exporter already has 64 trips to targets in progress, its
+--probe.max-concurrent; this probe was not sent` — and counted as rejected; a
+static target scrape waits for a slot. `0`, the default, leaves only the
+per-collector limits; a negative value is a command-line error. Size it to the
+memory the exporter has, together with `--python.max-workers` (see
+[Python](PYTHON.md#how-scripts-run)).
 
 ## Probe deadlines
 
@@ -1172,14 +1292,13 @@ collector legacy_text http failed: HTTP request failed: ... context deadline exc
   request alone; whichever ends first stops the probe.
 - An offset of half the scrape timeout or more would leave too little, so a
   probe always keeps at least half.
-- Without the header and without a `timeout` parameter — a probe from `curl`,
-  a script, or anything other than Prometheus — the probe gets
-  `--probe.default-timeout`, 30s by default, so a target that accepts the
-  connection and never answers cannot hold it, and its collector's
-  `max_concurrent_probes` slot, for ever. Its error names that flag instead.
-  `0` leaves such a probe unbounded; a negative value is a command-line
-  error. A `timeout` parameter bounds the request itself, so a probe that
-  sets one gets no default.
+- Without the header — a probe from `curl`, a script, or anything other than
+  Prometheus — the probe gets `--probe.default-timeout`, 30s by default, so a
+  target that accepts the connection and never answers cannot hold it, and
+  its collector's `max_concurrent_probes` slot, for ever. Its error names
+  that flag instead. A `timeout` parameter bounds the request within that
+  budget and cannot lift it: `timeout=1h` still ends after 30s. `0` leaves
+  such a probe unbounded; a negative value is a command-line error.
 - A probe answered from the [response cache](#response-caching) needs no budget.
   Identical probes that [share one request](#identical-probes-share-one-request)
   share the budget of the probe that started it.
@@ -1304,8 +1423,8 @@ keep being scraped, and the [OTLP export](OTLP.md#shutting-down) keeps running,
 through the delay.
 
 Then it stops accepting connections, lets the
-probes in progress finish for up to `--web.shutdown-timeout` (5 seconds by
-default), makes the [last OTLP export](OTLP.md#delivery) when OTLP is enabled,
+probes in progress finish for up to `--web.shutdown-timeout` (15 seconds by
+default, long enough for a typical 10s scrape timeout), makes the [last OTLP export](OTLP.md#delivery) when OTLP is enabled,
 and exits `0`. It logs that it is shutting down, and, when the timeout runs
 out with probes still in progress, that it closed them — Prometheus records
 those as failed scrapes. Keep the timeout at least as long as the longest

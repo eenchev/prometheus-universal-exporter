@@ -54,6 +54,7 @@ func TestCollectorFileSchemaAcceptsCollectorsOnly(t *testing.T) {
 	}{
 		"collectors":        {valid, true},
 		"another key":       {"web: {}\n" + valid, false},
+		"an x- key":         {"x-common: {anything: [1, 2]}\n" + valid, true},
 		"collector_files":   {"collector_files: [x.yaml]\n" + valid, false},
 		"no collectors":     {"collectors: []\n", false},
 		"nothing":           {"{}\n", false},
@@ -113,8 +114,8 @@ func TestCommittedConfigSchemaIsCurrent(t *testing.T) {
 func TestShippedConfigurationsMatchTheSchema(t *testing.T) {
 	schema := loadSchema(t)
 	files := []string{"configs/config.example.yaml", "configs/config.otlp.example.yaml"}
-	testdata, _ := filepath.Glob("testdata/config.*.yaml")
-	files = append(files, testdata...)
+	examples, _ := filepath.Glob("examples/config.*.yaml")
+	files = append(files, examples...)
 	for _, file := range files {
 		t.Run(file, func(t *testing.T) {
 			if errs := validateAgainstSchema(schema, readYAMLDocument(t, file)); len(errs) > 0 {
@@ -441,10 +442,18 @@ func validateAgainstSchema(schema map[string]any, value any) []string {
 					check(names, key, path+" key "+strconv.Quote(key))
 				}
 			}
+			patterns, _ := schema["patternProperties"].(map[string]any)
+		keys:
 			for _, key := range keys {
 				if sub, ok := properties[key].(map[string]any); ok {
 					check(sub, x[key], path+"."+key)
 					continue
+				}
+				for pattern, sub := range patterns {
+					if regexp.MustCompile(pattern).MatchString(key) {
+						check(sub.(map[string]any), x[key], path+"."+key)
+						continue keys
+					}
 				}
 				switch additional := schema["additionalProperties"].(type) {
 				case bool:

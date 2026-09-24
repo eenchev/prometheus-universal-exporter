@@ -86,6 +86,7 @@ func init() {
 			"basic_auth", "basic_auth_file", "bearer_token", "bearer_token_file",
 			"forward_authorization", "forward_headers",
 			"tls", "retry", "max_response_bytes",
+			"allowed_targets", "denied_targets",
 		},
 		Overrides: []string{
 			"timeout", "insecure_skip_verify", "retry_attempts", "retry_backoff",

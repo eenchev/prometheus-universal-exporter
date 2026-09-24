@@ -75,7 +75,7 @@ in `targetsSchemaRules` for the target file, both in
 
 ## Tests that reach the internet
 
-`make ci` never touches the network. The demo configurations under `testdata/`
+`make ci` never touches the network. The demo configurations under `examples/`
 describe real services, though, and a stub replaying a captured response cannot
 tell you when one of those services renames a field or a column: the local
 tests go on passing while the shipped configuration quietly stops working.
@@ -165,7 +165,10 @@ globally. G704 reports the outbound request as server-side request forgery,
 which is an accurate description of what this program is — an exporter whose job
 is to fetch a URL an operator supplied — so it is excluded on
 `internal/fetch/fetcher.go` only, with the exposure bounded by the scheme
-allowlist, the response size limit and the operator's own target allowlist. G703 reports the Dockerfile path that
+allowlist, the response size limit and each collector's
+`request.allowed_targets` and `request.denied_targets`, which the operator sets
+to say which hosts, addresses and networks its requests may reach, checked
+again on every redirect and connection (`internal/fetch/targetpolicy.go`). G703 reports the Dockerfile path that
 `tools/depupdate` takes on the command line as attacker-controlled; that is a
 developer tool with no untrusted caller, so it is excluded under `tools/`.
 

@@ -64,8 +64,10 @@ func run(args []string, stdout, stderr io.Writer) int {
 	shutdownDelay := flags.Duration("web.shutdown-delay", 0, "How long a SIGTERM or SIGINT keeps serving, with /ready answering 503, before the graceful shutdown begins, so a load balancer or Kubernetes stops sending probes first. 0, the default, begins at once")
 	shutdownTimeout := flags.Duration("web.shutdown-timeout", exporter.DefaultShutdownTimeout, "How long a SIGTERM or SIGINT waits for the probes in progress to finish before closing their connections. Keep it at least as long as Prometheus's scrape timeout")
 	timeoutOffset := flags.Duration("probe.timeout-offset", exporter.DefaultTimeoutOffset, "How much of Prometheus's scrape timeout (X-Prometheus-Scrape-Timeout-Seconds) a probe leaves unused, so it answers with its own error before Prometheus gives up")
-	defaultProbeTimeout := flags.Duration("probe.default-timeout", exporter.DefaultProbeTimeout, "How long a probe may take when it names no deadline: no X-Prometheus-Scrape-Timeout-Seconds header and no timeout parameter, as from curl or a script. 0 leaves such a probe unbounded")
+	defaultProbeTimeout := flags.Duration("probe.default-timeout", exporter.DefaultProbeTimeout, "How long a probe may take without an X-Prometheus-Scrape-Timeout-Seconds header, as from curl or a script. A timeout parameter bounds the request within it and cannot lift it. 0 leaves such a probe unbounded")
+	maxConcurrent := flags.Int("probe.max-concurrent", 0, "How many trips to targets, probes and static target scrapes of every collector together, may be in progress at once, each on top of its collector's max_concurrent_probes. A probe over it is answered 503; a static target scrape waits. 0, the default, leaves them bounded only per collector")
 	pythonPath := flags.String("python.path", "python3", "Python interpreter used by the python transform")
+	pythonMaxWorkers := flags.Int("python.max-workers", 0, "How many Python workers, of every collector together, may be alive at once, starting, running a script or idle. A run that finds none free takes the place of the idle worker unused for longest, or waits within its probe's deadline. 0, the default, leaves them bounded only per script")
 	targetFile := flags.String("static-targets-file", "", "Optional file of static targets, scraped by the exporter on their intervals and served at --web.static-targets-path; a target with export_via_otlp is also delivered over OTLP")
 	watchConfig := flags.Bool("config.watch", false, "Reload the configuration, collector and static target files when they change on disk")
 	watchInterval := flags.Duration("config.watch-interval", config.DefaultWatchInterval, "How often to check the configuration files for changes when config.watch is set")
@@ -103,6 +105,14 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return 2
 	}
 	if err := exporter.ValidateDefaultProbeTimeout(*defaultProbeTimeout); err != nil {
+		newLogger("info", stderr).Error("invalid command line; exiting", "error", err.Error())
+		return 2
+	}
+	if err := exporter.ValidateMaxConcurrent(*maxConcurrent); err != nil {
+		newLogger("info", stderr).Error("invalid command line; exiting", "error", err.Error())
+		return 2
+	}
+	if err := transform.ValidateMaxWorkers(*pythonMaxWorkers); err != nil {
 		newLogger("info", stderr).Error("invalid command line; exiting", "error", err.Error())
 		return 2
 	}
@@ -211,11 +221,13 @@ func run(args []string, stdout, stderr io.Writer) int {
 	server.SetStaticTargetsPath(staticTargetsEndpoint)
 	server.SetTimeoutOffset(*timeoutOffset)
 	server.SetDefaultProbeTimeout(*defaultProbeTimeout)
+	server.SetMaxConcurrent(*maxConcurrent)
 	server.SetLifecycle(*enableLifecycle)
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGTERM, syscall.SIGINT)
 	defer stop()
 	go manager.ReloadLoop(ctx)
+	transform.PythonWorkers().SetMaxWorkers(*pythonMaxWorkers)
 	go transform.PythonWorkers().ReapLoop(ctx, transform.PythonWorkerReapInterval)
 	// SIGHUP is caught until the process exits, not only until the first
 	// SIGTERM: a reload sidecar sending one during the shutdown would

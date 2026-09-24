@@ -73,6 +73,7 @@ func init() {
 			"tls", "retry", "max_response_bytes",
 			"follow_redirects", "enable_http2", "allowed_schemes",
 			"targets", "from", "until",
+			"allowed_targets", "denied_targets", "accept_status",
 		},
 		Overrides: []string{
 			"path", "timeout", "insecure_skip_verify",

@@ -124,12 +124,24 @@
         },
         "probeDefaultTimeout": {
           "type": "string",
-          "description": "Rendered as --probe.default-timeout when set: how long a probe that names no deadline may take. Empty keeps the exporter's default, 30s; 0 leaves such a probe unbounded.",
+          "description": "Rendered as --probe.default-timeout when set: how long a probe without a scrape timeout header may take, whatever timeout parameter it gives. Empty keeps the exporter's default, 30s; 0 leaves such a probe unbounded.",
           "pattern": "^$|^(0|([0-9]+(\\.[0-9]+)?(ns|us|ms|s|m|h))+)$"
+        },
+        "probeMaxConcurrent": {
+          "type": ["string", "integer", "null"],
+          "description": "Rendered as --probe.max-concurrent when set: how many trips to targets, of every collector together, may be in progress at once. 0 or empty leaves them bounded only per collector.",
+          "pattern": "^$|^[0-9]+$",
+          "minimum": 0
+        },
+        "pythonMaxWorkers": {
+          "type": ["string", "integer", "null"],
+          "description": "Rendered as --python.max-workers when set: how many Python workers, of every collector together, may be alive at once. 0 or empty leaves them bounded only per script.",
+          "pattern": "^$|^[0-9]+$",
+          "minimum": 0
         },
         "shutdownTimeout": {
           "type": "string",
-          "description": "Rendered as --web.shutdown-timeout when set: how long a stopping pod waits for the probes in progress. Whole hours, minutes and seconds, such as 30s or 1m30s. Empty keeps the exporter's default, 5s.",
+          "description": "Rendered as --web.shutdown-timeout when set: how long a stopping pod waits for the probes in progress. Whole hours, minutes and seconds, such as 30s or 1m30s. Empty keeps the exporter's default, 15s.",
           "pattern": "^$|^([0-9]+h)?([0-9]+m)?([0-9]+s)?$"
         },
         "shutdownDelay": {
@@ -285,6 +297,39 @@
         "limits": {"$ref": "#/$defs/quantityMap"}
       }
     },
+    "goMemLimit": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Set GOMEMLIMIT from resources.limits.memory through the downward API, when a memory limit is set and env does not set GOMEMLIMIT.",
+      "properties": {"enabled": {"type": "boolean"}}
+    },
+    "livenessProbe": {"$ref": "#/$defs/probeTimings", "description": "Timings of the liveness probe, which checks /health on the http port."},
+    "readinessProbe": {"$ref": "#/$defs/probeTimings", "description": "Timings of the readiness probe, which checks /ready on the http port."},
+    "autoscaling": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "An optional HorizontalPodAutoscaler for the Deployment, which then leaves replicaCount out. Every replica scrapes every static target, and exports those with export_via_otlp once per replica: keep static targets in a release without it.",
+      "properties": {
+        "enabled": {"type": "boolean"},
+        "minReplicas": {"type": "integer", "minimum": 1},
+        "maxReplicas": {"type": "integer", "minimum": 1},
+        "targetCPUUtilizationPercentage": {"type": ["integer", "null"], "minimum": 1},
+        "targetMemoryUtilizationPercentage": {"type": ["integer", "null"], "minimum": 1},
+        "metrics": {"type": "array", "items": {"type": "object"}},
+        "behavior": {"type": "object"}
+      }
+    },
+    "podDisruptionBudget": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "An optional PodDisruptionBudget for the exporter's pods; set minAvailable or maxUnavailable, not both.",
+      "properties": {
+        "enabled": {"type": "boolean"},
+        "minAvailable": {"type": ["integer", "string", "null"], "pattern": "^[0-9]+%?$", "minimum": 0},
+        "maxUnavailable": {"type": ["integer", "string", "null"], "pattern": "^[0-9]+%?$", "minimum": 0},
+        "unhealthyPodEvictionPolicy": {"type": "string", "enum": ["", "IfHealthyBudget", "AlwaysAllow"]}
+      }
+    },
 
     "strategy": {
       "type": "object",
@@ -351,6 +396,18 @@
 
   "$defs": {
     "stringMap": {"type": "object", "additionalProperties": {"type": "string"}},
+    "probeTimings": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "initialDelaySeconds": {"type": "integer", "minimum": 0},
+        "periodSeconds": {"type": "integer", "minimum": 1},
+        "timeoutSeconds": {"type": "integer", "minimum": 1},
+        "successThreshold": {"type": "integer", "minimum": 1},
+        "failureThreshold": {"type": "integer", "minimum": 1},
+        "terminationGracePeriodSeconds": {"type": ["integer", "null"], "minimum": 1}
+      }
+    },
     "quantityMap": {"type": "object", "additionalProperties": {"type": ["string", "number"]}},
     "port": {"type": "integer", "minimum": 1, "maximum": 65535},
     "countOrPercent": {"type": ["integer", "string"], "pattern": "^[0-9]+%?$"},

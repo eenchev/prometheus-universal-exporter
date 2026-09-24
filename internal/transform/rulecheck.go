@@ -26,6 +26,9 @@ func CheckMetricRule(x *model.Collector, r *model.MetricRule) error {
 	if r.Items != "" && !jqFamily(x.Transform.Type) && x.Transform.Type != "css" {
 		return fmt.Errorf("%s sets items, which only the jq, yq and css transforms support", where)
 	}
+	if err := checkValueRules(x, r, where); err != nil {
+		return err
+	}
 	switch {
 	case jqFamily(x.Transform.Type):
 		if r.Items != "" {

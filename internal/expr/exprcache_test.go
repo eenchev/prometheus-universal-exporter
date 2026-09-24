@@ -45,7 +45,7 @@ func BenchmarkJQCompiledPerEvaluation(b *testing.B) {
 		if err != nil {
 			b.Fatal(err)
 		}
-		code, err := gojq.Compile(query, gojq.WithVariables([]string{jqRootVariable}))
+		code, err := gojq.Compile(query, gojq.WithVariables(JQVariables))
 		if err != nil {
 			b.Fatal(err)
 		}

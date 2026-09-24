@@ -9,8 +9,6 @@ import (
 	"strconv"
 	"strings"
 	"time"
-
-	"github.com/eenchev/prometheus-universal-exporter/internal/fetch"
 )
 
 // Prometheus tells a target how long it will wait for a scrape in the
@@ -27,11 +25,12 @@ import (
 // never need it. Identical probes that share one trip (probeflight.go) share
 // the budget of the probe that started it.
 //
-// A probe that names no deadline at all — no header and no timeout parameter,
-// as from curl, a script or the collectors page with its script off — gets
-// --probe.default-timeout, so a target that accepts the connection and never
-// answers cannot hold the probe, and its collector's max_concurrent_probes
-// slot, for ever.
+// A probe without Prometheus's header — from curl, a script or the
+// collectors page with its script off — gets --probe.default-timeout, so a
+// target that accepts the connection and never answers cannot hold the probe,
+// and its collector's max_concurrent_probes slot, for ever. A timeout
+// parameter bounds the request within that budget and cannot lift it: a
+// caller asking for timeout=24h still gets the default.
 
 const scrapeTimeoutHeader = "X-Prometheus-Scrape-Timeout-Seconds"
 
@@ -40,13 +39,13 @@ const scrapeTimeoutHeader = "X-Prometheus-Scrape-Timeout-Seconds"
 // the same default.
 const DefaultTimeoutOffset = 500 * time.Millisecond
 
-// DefaultProbeTimeout is how long a probe that names no deadline may take.
+// DefaultProbeTimeout is how long a probe without a scrape timeout may take.
 const DefaultProbeTimeout = 30 * time.Second
 
 // Where a probe's budget came from, for the error that says it ran out.
 const (
 	budgetFromScrapeTimeout = "Prometheus's scrape timeout less --probe.timeout-offset"
-	budgetFromDefault       = "--probe.default-timeout, as the probe named neither a scrape timeout nor a timeout parameter"
+	budgetFromDefault       = "--probe.default-timeout, as the probe named no scrape timeout"
 )
 
 // probeBudget reads the scrape timeout Prometheus sent and returns how long the
@@ -84,7 +83,7 @@ func ValidateTimeoutOffset(offset time.Duration) error {
 func (s *Server) SetTimeoutOffset(offset time.Duration) { s.timeoutOffset = offset }
 
 // ValidateDefaultProbeTimeout refuses a negative --probe.default-timeout; zero
-// gives a probe that names no deadline none.
+// gives a probe without a scrape timeout none.
 func ValidateDefaultProbeTimeout(timeout time.Duration) error {
 	if timeout < 0 {
 		return fmt.Errorf("--probe.default-timeout must not be negative, got %s", timeout)
@@ -92,19 +91,19 @@ func ValidateDefaultProbeTimeout(timeout time.Duration) error {
 	return nil
 }
 
-// SetDefaultProbeTimeout sets how long a probe that names no deadline may
+// SetDefaultProbeTimeout sets how long a probe without a scrape timeout may
 // take; zero leaves it unbounded.
 func (s *Server) SetDefaultProbeTimeout(timeout time.Duration) { s.defaultProbeTimeout = timeout }
 
 // probeDeadline is the budget of a probe: Prometheus's scrape timeout less the
-// offset when it sent one, else the default timeout when the probe did not
-// bound its request with a timeout parameter either, else none. source says
-// where it came from.
-func (s *Server) probeDeadline(h http.Header, overrides fetch.RequestOverrides) (budget time.Duration, source string) {
+// offset when it sent one, else the default timeout, whatever timeout
+// parameter the probe gave, unless the default is 0. source says where it
+// came from.
+func (s *Server) probeDeadline(h http.Header) (budget time.Duration, source string) {
 	if budget := probeBudget(h, s.timeoutOffset); budget > 0 {
 		return budget, budgetFromScrapeTimeout
 	}
-	if overrides.Timeout <= 0 && s.defaultProbeTimeout > 0 {
+	if s.defaultProbeTimeout > 0 {
 		return s.defaultProbeTimeout, budgetFromDefault
 	}
 	return 0, ""

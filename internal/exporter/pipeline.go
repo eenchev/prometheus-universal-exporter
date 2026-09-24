@@ -78,6 +78,10 @@ type collected struct {
 	// waiting for the trip went away. Nothing about the target is known, and
 	// nothing was logged.
 	aborted bool
+	// refused is set when the collector's allowed_targets or
+	// denied_targets refused the target: whatever error_handling says, the
+	// trip fails, and a probe is answered 403.
+	refused bool
 }
 
 // cutShort reports whether ctx was cancelled rather than run out of time: by
@@ -92,6 +96,10 @@ func (r collected) failed() bool { return r.err != nil }
 // collect makes one trip to the target. It counts every stage in the
 // collector's self-metrics, logs failures and recovery, and caches a result
 // that went through whole.
+// stageTargetPolicy is the stage of a trip the collector's allowed_targets or
+// denied_targets refused.
+const stageTargetPolicy = "target_policy"
+
 func (s *Server) collect(ctx context.Context, j collectJob) collected {
 	c, rec := j.collector, j.rec
 	start := time.Now()
@@ -138,6 +146,11 @@ func (s *Server) collect(ctx context.Context, j collectJob) collected {
 				x.grpcCode, x.grpcCalled = grpcCode, true
 			}
 		})
+		if errors.Is(err, fetch.ErrTargetRefused) {
+			rec.update(func(x *serverStats) { x.refused++ })
+			s.logCollectFailure(j.log, stageTargetPolicy, err)
+			return collected{stage: stageTargetPolicy, err: err, refused: true}
+		}
 		var extra []any
 		var status *fetch.CallStatusError
 		if errors.As(err, &status) {
@@ -152,7 +165,7 @@ func (s *Server) collect(ctx context.Context, j collectJob) collected {
 			x.grpcCode, x.grpcCalled = grpcCode, true
 		}
 	})
-	if response.StatusCode < 200 || response.StatusCode >= 300 {
+	if !fetch.AcceptedStatus(c, response.StatusCode) {
 		// The target's own explanation is usually in the body; the start of
 		// it goes to the log, not to the answer, which Prometheus may keep.
 		var excerpt []any

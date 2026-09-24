@@ -1,7 +1,7 @@
 # Demo collector for the Grafana Cloud status page, https://status.grafana.com.
 # It needs no authentication.
 #
-#   go run . --config.file=testdata/config.grafanastatus.json-test.yaml
+#   go run . --config.file=examples/config.grafanastatus.json-test.yaml
 #   curl 'http://localhost:8080/probe?collector=statuspage&target=https://status.grafana.com'
 #
 # The page is hosted on Atlassian Statuspage, which publishes the whole page as

@@ -51,6 +51,31 @@ func TestDockerfileImageContents(t *testing.T) {
 	}
 }
 
+// The image names its user by number, and the chart runs the pod as the same
+// user: Kubernetes can verify runAsNonRoot only for a numeric user, so an
+// image whose USER is a name would not start under the chart's defaults.
+func TestTheImageUserIsNumeric(t *testing.T) {
+	raw, err := os.ReadFile("Dockerfile")
+	if err != nil {
+		t.Skipf("no Dockerfile to check: %v", err)
+	}
+	users := regexp.MustCompile(`(?m)^USER\s+(\S+)\s*$`).FindAllStringSubmatch(string(raw), -1)
+	if len(users) == 0 {
+		t.Fatal("the Dockerfile sets no USER, so the image runs as root")
+	}
+	last := users[len(users)-1][1]
+	if !regexp.MustCompile(`^[1-9][0-9]*(:[0-9]+)?$`).MatchString(last) {
+		t.Fatalf("the image's USER %q is not a non-zero number, which runAsNonRoot cannot verify", last)
+	}
+	uid, _, _ := strings.Cut(last, ":")
+	values := readChartFile(t, "values.yaml")
+	for _, key := range []string{"runAsUser", "runAsGroup", "fsGroup"} {
+		if !strings.Contains(values, "\n  "+key+": "+uid+"\n") {
+			t.Errorf("podSecurityContext.%s is not the image's user, %s", key, uid)
+		}
+	}
+}
+
 // tools/request-type-tags.sh turns REQUEST_TYPES into build tags for the
 // Dockerfile and the Makefile.
 func TestRequestTypeTagsScript(t *testing.T) {

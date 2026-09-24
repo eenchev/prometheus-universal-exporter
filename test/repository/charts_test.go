@@ -279,7 +279,7 @@ func TestEveryExporterFlagIsHandledByTheChart(t *testing.T) {
 // does without them.
 func TestServerFlagValuesDefaults(t *testing.T) {
 	values := readChartFile(t, "values.yaml")
-	for _, line := range []string{"\n  logLevel: info\n", "\n  probeTimeoutOffset: \"\"\n", "\n  probeDefaultTimeout: \"\"\n"} {
+	for _, line := range []string{"\n  logLevel: info\n", "\n  probeTimeoutOffset: \"\"\n", "\n  probeDefaultTimeout: \"\"\n", "\n  probeMaxConcurrent: \"\"\n", "\n  pythonMaxWorkers: \"\"\n"} {
 		if !strings.Contains(values, line) {
 			t.Errorf("values.yaml lacks %q", strings.TrimSpace(line))
 		}
@@ -292,5 +292,113 @@ func TestServerFlagValuesDefaults(t *testing.T) {
 	}
 	if !strings.Contains(deployment, `{{- with (include "prometheus-universal-exporter.probeDefaultTimeout" .) }}`) {
 		t.Error("--probe.default-timeout must only be rendered when server.probeDefaultTimeout is set")
+	}
+}
+
+// GOMEMLIMIT follows the container's memory limit through the downward API,
+// and only when there is one and env does not set it.
+func TestTheChartSetsGOMEMLIMITFromTheMemoryLimit(t *testing.T) {
+	deployment := readChartFile(t, "templates/deployment.yaml")
+	for _, want := range []string{
+		`.Values.goMemLimit.enabled`,
+		`dig "limits" "memory" ""`,
+		`"prometheus-universal-exporter.envSets" (list .Values.env "GOMEMLIMIT")`,
+		"- name: GOMEMLIMIT\n              valueFrom:\n                resourceFieldRef:\n                  containerName: exporter\n                  resource: limits.memory",
+	} {
+		if !strings.Contains(deployment, want) {
+			t.Errorf("the Deployment lacks %q", want)
+		}
+	}
+	if !strings.Contains(readChartFile(t, "values.yaml"), "\ngoMemLimit:\n  enabled: true\n") {
+		t.Error("goMemLimit.enabled must default to true")
+	}
+}
+
+// The probes' timings come from values, with some slack for liveness, and
+// the check itself stays the chart's.
+func TestTheProbesTimingsAreValues(t *testing.T) {
+	values := readChartFile(t, "values.yaml")
+	for _, want := range []string{
+		"\nlivenessProbe:\n  periodSeconds: 10\n  timeoutSeconds: 3\n  failureThreshold: 5\n",
+		"\nreadinessProbe:\n  periodSeconds: 10\n  timeoutSeconds: 3\n  failureThreshold: 3\n",
+	} {
+		if !strings.Contains(values, want) {
+			t.Errorf("values.yaml lacks %q", want)
+		}
+	}
+	deployment := readChartFile(t, "templates/deployment.yaml")
+	for _, want := range []string{
+		"httpGet: {path: /health, port: http}\n            {{- with .Values.livenessProbe }}",
+		"httpGet: {path: /ready, port: http}\n            {{- with .Values.readinessProbe }}",
+		`"prometheus-universal-exporter.validateProbe" (list "livenessProbe" .Values.livenessProbe)`,
+		`"prometheus-universal-exporter.validateProbe" (list "readinessProbe" .Values.readinessProbe)`,
+	} {
+		if !strings.Contains(deployment, want) {
+			t.Errorf("the Deployment lacks %q", want)
+		}
+	}
+}
+
+// The PodDisruptionBudget is optional, off by default, selects the
+// Deployment's pods and takes one of minAvailable and maxUnavailable.
+func TestThePodDisruptionBudget(t *testing.T) {
+	pdb := readChartFile(t, "templates/poddisruptionbudget.yaml")
+	deployment := readChartFile(t, "templates/deployment.yaml")
+	for _, want := range []string{
+		"{{- if .Values.podDisruptionBudget.enabled }}",
+		"apiVersion: policy/v1\nkind: PodDisruptionBudget",
+		"sets both minAvailable and maxUnavailable",
+		"maxUnavailable: {{ $pdb.maxUnavailable | default 1 }}",
+		"app.kubernetes.io/name: {{ include \"prometheus-universal-exporter.name\" . }}\n      app.kubernetes.io/instance: {{ .Release.Name }}",
+	} {
+		if !strings.Contains(pdb, want) {
+			t.Errorf("the PodDisruptionBudget lacks %q", want)
+		}
+	}
+	if !strings.Contains(deployment, "app.kubernetes.io/name: {{ include \"prometheus-universal-exporter.name\" . }}\n      app.kubernetes.io/instance: {{ .Release.Name }}") {
+		t.Error("the Deployment's selector changed; the PodDisruptionBudget must select the same pods")
+	}
+	if !strings.Contains(readChartFile(t, "values.yaml"), "\npodDisruptionBudget:\n  enabled: false\n") {
+		t.Error("podDisruptionBudget must be disabled by default")
+	}
+}
+
+// Every replica scrapes every static target, which the chart says in its
+// notes when it renders more than one or autoscales, naming the targets
+// exported over OTLP.
+func TestTheChartWarnsAboutReplicatedStaticTargets(t *testing.T) {
+	notes := readChartFile(t, "templates/NOTES.txt")
+	for _, want := range []string{
+		"{{- if or (gt $replicas 1) .Values.autoscaling.enabled }}",
+		"{{- $replicas = int .Values.autoscaling.maxReplicas }}",
+		`(get . "export_via_otlp")`,
+		"OTLP once per replica, as duplicate series",
+	} {
+		if !strings.Contains(notes, want) {
+			t.Errorf("NOTES.txt lacks %q", want)
+		}
+	}
+}
+
+// The HorizontalPodAutoscaler is optional, scales the Deployment, and then
+// owns its replica count.
+func TestTheHorizontalPodAutoscaler(t *testing.T) {
+	hpa := readChartFile(t, "templates/horizontalpodautoscaler.yaml")
+	for _, want := range []string{
+		"{{- if .Values.autoscaling.enabled }}",
+		"apiVersion: autoscaling/v2\nkind: HorizontalPodAutoscaler",
+		"kind: Deployment\n    name: {{ include \"prometheus-universal-exporter.fullname\" . }}",
+		"is below autoscaling.minReplicas",
+		"needs something to scale on",
+	} {
+		if !strings.Contains(hpa, want) {
+			t.Errorf("the HorizontalPodAutoscaler lacks %q", want)
+		}
+	}
+	if !strings.Contains(readChartFile(t, "templates/deployment.yaml"), "{{- if not .Values.autoscaling.enabled }}") {
+		t.Error("the Deployment renders replicas under autoscaling")
+	}
+	if !strings.Contains(readChartFile(t, "values.yaml"), "\nautoscaling:\n  enabled: false\n") {
+		t.Error("autoscaling must be disabled by default")
 	}
 }

@@ -135,13 +135,14 @@ func TestTheBudgetBoundsEveryRequestTypeAndIsOptional(t *testing.T) {
 	}
 }
 
-// A probe that names no deadline gets --probe.default-timeout, so a target
+// A probe without a scrape timeout gets --probe.default-timeout, so a target
 // that never answers cannot hold it for ever, and the error says whose
 // deadline it was.
 func TestAProbeWithoutADeadlineGetsTheDefaultTimeout(t *testing.T) {
 	fetch.RequestTypes["hanging"] = &fetch.RequestType{
-		Name:     "hanging",
-		Validate: func(*model.Collector) error { return nil },
+		Name:      "hanging",
+		Overrides: []string{"timeout"},
+		Validate:  func(*model.Collector) error { return nil },
 		Fetch: func(ctx context.Context, _ string, _ *model.Collector, _ fetch.RequestOverrides, _ http.Header) (*fetch.HTTPResponse, error) {
 			<-ctx.Done()
 			return nil, ctx.Err()
@@ -171,11 +172,16 @@ func TestAProbeWithoutADeadlineGetsTheDefaultTimeout(t *testing.T) {
 	if elapsed > 2*time.Second {
 		t.Fatalf("answered after %s, want about the 200ms default", elapsed)
 	}
+	// A timeout parameter cannot lift the default.
+	start = time.Now()
+	recorder = probeOnce(t, server, "/probe?collector=hung&target=somewhere&timeout=1h", nil)
+	if elapsed := time.Since(start); elapsed > 2*time.Second || !strings.Contains(recorder.Body.String(), "--probe.default-timeout") {
+		t.Fatalf("timeout=1h ran %s: %d %s", elapsed, recorder.Code, recorder.Body)
+	}
 }
 
 // Which deadline a probe gets: Prometheus's when it sent one, else the
-// default, unless the probe bounded its request with a timeout parameter or
-// the default is 0.
+// default, which a timeout parameter cannot lift, unless the default is 0.
 func TestWhichDeadlineAProbeGets(t *testing.T) {
 	withHeader := http.Header{scrapeTimeoutHeader: {"10"}}
 	for name, tc := range map[string]struct {
@@ -185,18 +191,19 @@ func TestWhichDeadlineAProbeGets(t *testing.T) {
 		wantBudget time.Duration
 		wantSource string
 	}{
-		"Prometheus's scrape timeout":             {header: withHeader, wantBudget: 9500 * time.Millisecond, wantSource: budgetFromScrapeTimeout},
-		"the header wins over a timeout":          {header: withHeader, overrides: fetch.RequestOverrides{Timeout: time.Second}, wantBudget: 9500 * time.Millisecond, wantSource: budgetFromScrapeTimeout},
-		"no deadline named":                       {wantBudget: 30 * time.Second, wantSource: budgetFromDefault},
-		"a timeout parameter bounds the request":  {overrides: fetch.RequestOverrides{Timeout: time.Second}},
-		"a default of 0 leaves the probe unbound": {noDefault: true},
+		"Prometheus's scrape timeout":              {header: withHeader, wantBudget: 9500 * time.Millisecond, wantSource: budgetFromScrapeTimeout},
+		"the header wins over a timeout":           {header: withHeader, overrides: fetch.RequestOverrides{Timeout: time.Second}, wantBudget: 9500 * time.Millisecond, wantSource: budgetFromScrapeTimeout},
+		"no deadline named":                        {wantBudget: 30 * time.Second, wantSource: budgetFromDefault},
+		"a short timeout keeps the default budget": {overrides: fetch.RequestOverrides{Timeout: time.Second}, wantBudget: 30 * time.Second, wantSource: budgetFromDefault},
+		"a long timeout cannot lift the default":   {overrides: fetch.RequestOverrides{Timeout: 24 * time.Hour}, wantBudget: 30 * time.Second, wantSource: budgetFromDefault},
+		"a default of 0 leaves the probe unbound":  {noDefault: true},
 	} {
 		t.Run(name, func(t *testing.T) {
 			s := &Server{timeoutOffset: 500 * time.Millisecond, defaultProbeTimeout: 30 * time.Second}
 			if tc.noDefault {
 				s.defaultProbeTimeout = 0
 			}
-			budget, source := s.probeDeadline(tc.header, tc.overrides)
+			budget, source := s.probeDeadline(tc.header)
 			if budget != tc.wantBudget || source != tc.wantSource {
 				t.Fatalf("got %s from %q, want %s from %q", budget, source, tc.wantBudget, tc.wantSource)
 			}

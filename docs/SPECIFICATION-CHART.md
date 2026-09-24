@@ -129,9 +129,41 @@ tolerations: []
 affinity: {}
 ```
 
-The deployment SHOULD run as a non-root user where practical.
+The deployment MUST run as a non-root user: `podSecurityContext` MUST set
+`runAsNonRoot`, and `runAsUser`, `runAsGroup` and `fsGroup` to the image's
+numeric user, 65532, since Kubernetes can verify `runAsNonRoot` only for a
+numeric user.
 
 The chart MUST configure liveness/readiness probes using the exporter health endpoints: liveness on `/health` and readiness on `/ready`, which reports a rejected reload and failing OTLP exports (SPECIFICATION-EXPORTER.md § 23).
+Their timings MUST come from the `livenessProbe` and `readinessProbe` values,
+defaulting to `periodSeconds: 10`, `timeoutSeconds: 3` and a `failureThreshold`
+of 5 for liveness and 3 for readiness, so a pod busy with a burst of probes is
+not restarted as dead. The check itself is the chart's: a value setting
+`httpGet`, `exec`, `tcpSocket` or `grpc` MUST fail rendering.
+
+With `goMemLimit.enabled`, the default, and a `resources.limits.memory`, the
+container MUST get `GOMEMLIMIT` from `limits.memory` through a
+`resourceFieldRef`, unless `env` sets `GOMEMLIMIT` itself; without a memory
+limit it MUST NOT be rendered.
+
+The chart MUST offer an optional PodDisruptionBudget, `podDisruptionBudget`,
+disabled by default, selecting the Deployment's pods with `minAvailable` or
+`maxUnavailable`, `maxUnavailable: 1` when neither is set; setting both MUST
+fail rendering.
+
+The chart MUST offer an optional `autoscaling/v2` HorizontalPodAutoscaler,
+`autoscaling`, disabled by default, scaling the Deployment on CPU utilization
+(80% by default), memory utilization, further metrics or none of these but
+not all absent, with `behavior` passed through; with it the Deployment MUST NOT
+render `replicas`. `maxReplicas` below `minReplicas`, or nothing to scale on,
+MUST fail rendering.
+
+Every replica scrapes every static target, so the chart MUST document running
+static targets with one replica and without autoscaling: each added replica
+contacts every target again, and exports every target with `export_via_otlp`
+again, as duplicate series. Its notes MUST warn when `staticTargets.enabled`
+is rendered with `replicaCount` above 1 or with autoscaling, naming the
+targets exported over OTLP.
 
 ### 33.2 Exporter configuration
 
@@ -321,6 +353,8 @@ values schema:
 | `server.logLevel` | `--log.level`, one of `debug`, `info`, `warn`, `error`; default `info` |
 | `server.probeTimeoutOffset` | `--probe.timeout-offset`, a Go duration of zero or more |
 | `server.probeDefaultTimeout` | `--probe.default-timeout`, a Go duration of zero or more |
+| `server.probeMaxConcurrent` | `--probe.max-concurrent`, a whole number of zero or more; empty renders no flag |
+| `server.pythonMaxWorkers` | `--python.max-workers`, a whole number of zero or more; empty renders no flag |
 | `server.shutdownTimeout` | `--web.shutdown-timeout`, whole hours, minutes and seconds such as `30s` or `1m30s`, positive |
 | `server.shutdownDelay` | `--web.shutdown-delay`, whole hours, minutes and seconds such as `5s`, `0s` allowed; default `5s`, and empty renders no flag |
 | `server.enableLifecycle` | `--web.enable-lifecycle`, rendered only when `true`; default `false` |
@@ -331,7 +365,7 @@ values schema:
 | `staticTargets.path` | `--web.static-targets-path`, always rendered; a path of plain segments that is neither `selfMetrics.path` nor another endpoint's; default `/static-targets` |
 
 An invalid value MUST fail rendering and be refused by the values schema.
-`server.probeTimeoutOffset`, `server.probeDefaultTimeout` and `server.shutdownTimeout` MUST default to empty
+`server.probeTimeoutOffset`, `server.probeDefaultTimeout`, `server.probeMaxConcurrent`, `server.pythonMaxWorkers` and `server.shutdownTimeout` MUST default to empty
 and, while empty, MUST NOT render their flags at all, so the exporter's own default applies and an image
 older than the flag still starts. A test MUST fail when the exporter has a flag
 the chart neither renders nor refuses as one-shot (§ 33.10a).
@@ -628,6 +662,17 @@ with at least these values combinations:
 16. The documented install: a version pinned in a documented `helm install`
    command MUST equal the version `Chart.yaml` declares, so a chart bump cannot
    leave a reader with a command that installs something else.
+17. Resources and availability: the default MUST render `GOMEMLIMIT` from
+   `limits.memory`, and none without a memory limit or with `GOMEMLIMIT` in
+   `env`; `server.probeMaxConcurrent` and `server.pythonMaxWorkers` set MUST
+   render their flags, and a negative or fractional one MUST fail rendering;
+   the probes' timings MUST follow their values, and a probe value setting
+   `httpGet` MUST fail rendering; `podDisruptionBudget.enabled` MUST render a
+   `policy/v1` PodDisruptionBudget selecting the pods, `maxUnavailable: 1`
+   with neither of `minAvailable` and `maxUnavailable`, and both MUST fail
+   rendering; `autoscaling.enabled` MUST render a HorizontalPodAutoscaler for
+   the Deployment and leave `replicas` out of it, and `maxReplicas` below
+   `minReplicas` MUST fail rendering.
 
 12. `extraArgs`, `extraVolumes` and `extraVolumeMounts` set together, which MUST
    append the argument, the volume and the mount to the ones the chart renders
@@ -736,8 +781,8 @@ endpoint too.
 A stopping pod needs `server.shutdownDelay` (none when empty), during which it
 answers probes while `/ready` answers `503` so Kubernetes removes it from its
 Service before it stops listening, then `server.shutdownTimeout` (the
-exporter's 5 seconds when empty), and 10 seconds more for the last OTLP export
-and exiting: 20 seconds with the defaults. The chart MUST
+exporter's 15 seconds when empty), and 10 seconds more for the last OTLP export
+and exiting: 30 seconds with the defaults. The chart MUST
 offer `terminationGracePeriodSeconds`, empty by default. Empty, it MUST render
 none while that need is 30 seconds or less, Kubernetes' default, and the need
 itself when it is more. Set, it MUST be rendered, and rendering MUST fail when

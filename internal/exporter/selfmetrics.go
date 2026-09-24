@@ -21,6 +21,9 @@ type statsValues struct {
 	coalesced uint64
 	// rejected counts probes turned away by max_concurrent_probes.
 	rejected uint64
+	// refused counts trips request.allowed_targets or denied_targets
+	// refused.
+	refused uint64
 	// staleServed counts failed trips answered with the last good result
 	// (cache.stale_if_error).
 	staleServed uint64
@@ -106,6 +109,7 @@ var selfMetricDescriptors = []selfMetricDescriptor{
 	{"http_exporter_cache_entries", model.GaugeMetricType, "Entries currently held in this collector's response cache, including stale ones kept for cache.stale_if_error.", nil},
 	{"http_exporter_probes_in_flight", model.GaugeMetricType, "Trips to this collector's targets in progress, which max_concurrent_probes bounds.", nil},
 	{"http_exporter_probes_rejected_total", model.CounterMetricType, "Probes answered 503 because this collector already had max_concurrent_probes trips to its targets in progress.", func(v statsValues) float64 { return float64(v.rejected) }},
+	{"http_exporter_targets_refused_total", model.CounterMetricType, "Probes and static target scrapes whose target, or a redirect's, this collector's request.allowed_targets or denied_targets refused; a probe is answered 403.", func(v statsValues) float64 { return float64(v.refused) }},
 	{"http_exporter_probes_coalesced_total", model.CounterMetricType, "Probes answered by sharing an identical probe already in flight instead of going to the target.", func(v statsValues) float64 { return float64(v.coalesced) }},
 }
 

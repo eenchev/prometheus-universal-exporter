@@ -60,6 +60,7 @@ The probe's `target` is the server, `host:port`:
 | `bearer_token`, `bearer_token_file`, `basic_auth`, `basic_auth_file` | — | Sent as the `authorization` metadata. See [Authentication](#authentication). |
 | `forward_authorization`, `forward_headers` | off | The probe's `Authorization` and listed headers, forwarded as metadata. |
 | `retry` | none | `attempts`, `backoff`, and `codes`, the status codes retried: `[UNAVAILABLE]` when left out. See [Errors and retries](#errors-and-retries). |
+| `allowed_targets`, `denied_targets` | none | Hosts, globs, addresses and networks the calls may and may not reach, checked for the server and each connection; see [Restricting targets](REQUESTS.md#restricting-targets). |
 | `max_response_bytes` | the collector's limit | The largest answer accepted: the message as it arrives, and the JSON it becomes, which writing every zero value can make several times larger. |
 
 `path`, `query`, `headers`, `body`, `method`, `follow_redirects`,

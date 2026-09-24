@@ -65,6 +65,9 @@ func validateCollector(c *model.Config, x *model.Collector) error {
 	if x.Limits.MaxResponseBytes < 0 {
 		return fmt.Errorf("collector %q limits.max_response_bytes must not be negative", x.Name)
 	}
+	if m := x.Limits.MaxScriptMemory; m < 0 || (m > 0 && m < minScriptMemory) {
+		return fmt.Errorf("collector %q limits.max_script_memory must be 0, for no limit, or at least 32MiB, since it bounds the Python interpreter and its libraries too; got %d bytes", x.Name, m)
+	}
 	applyLimitDefaults(&x.Limits)
 	if err := validateCache(x); err != nil {
 		return err
@@ -157,6 +160,10 @@ func checkCSVColumns(x *model.Collector) error {
 // applyLimitDefaults gives every limit left unset its default.
 // limits.max_response_bytes is not filled in: left unset, request.max_response_bytes
 // alone decides, and 10 MiB when neither is set (fetch.responseLimit).
+// minScriptMemory is the least limits.max_script_memory: less than an
+// interpreter with its libraries needs to start.
+const minScriptMemory = 32 << 20
+
 func applyLimitDefaults(l *model.Limits) {
 	if l.MaxMetrics <= 0 {
 		l.MaxMetrics = 10000
@@ -455,7 +462,7 @@ func Load(path string, opts ...LoadOption) (*model.Config, error) {
 	var c model.Config
 	dec := yaml.NewDecoder(strings.NewReader(string(b)))
 	dec.KnownFields(true)
-	if err = dec.Decode(&c); err != nil {
+	if err = withoutExtensionKeys(dec.Decode(&c)); err != nil {
 		return nil, yamlError(err)
 	}
 	if err = oneDocument(dec); err != nil {

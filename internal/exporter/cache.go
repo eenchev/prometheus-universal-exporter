@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -104,10 +105,16 @@ func (c *responseCache) lookup(key string, now time.Time, stale bool) (model.Met
 	if !stale && !entry.freshUntil.After(now) {
 		return model.MetricSet{}, time.Time{}, false
 	}
-	return model.CloneMetricSet(entry.set), entry.fetched, true
+	// The entry's series are shared, not copied: nothing changes a stored
+	// set after Put, and every reader that adds to one, as withFreshness
+	// does, appends to a slice clipped to its length, so it gets a new
+	// array rather than writing into the entry's.
+	set := entry.set
+	set.Metrics = slices.Clip(set.Metrics)
+	return set, entry.fetched, true
 }
 
-// Put stores a private copy of set under key, fresh for ttl and then kept
+// Put stores a private copy of set under key, which readers then share, fresh for ttl and then kept
 // stale for StaleIfError more. When both are zero the collector does not
 // cache and nothing is stored.
 func (c *responseCache) Put(key, collector string, set model.MetricSet, ttl, staleIfError time.Duration, maxEntries int, now time.Time) {
@@ -277,7 +284,9 @@ func collectorFingerprint(c *model.Collector) string {
 //	http_exporter_result_age_seconds  how long ago the answered result was
 //	                                  fetched from the target: 0 for a trip
 //	                                  just made, the entry's age for a
-//	                                  cached answer, fresh or stale
+//	                                  cached answer, fresh or stale; on the
+//	                                  static targets endpoint, as of each
+//	                                  read (statictargetsendpoint.go)
 //
 // The failure is still logged and counted as it would have been, and the
 // collector's http_exporter_cache_stale_served_total counts the stale
@@ -291,7 +300,7 @@ const (
 
 var resultFreshnessHelp = map[string]string{
 	resultStaleMetric: "1 when this answer is the last successful result, served because the trip to the target failed (cache.stale_if_error), else 0.",
-	resultAgeMetric:   "Seconds since the answered result was fetched from the target: 0 for a trip just made, the cache entry's age otherwise.",
+	resultAgeMetric:   "Seconds since the answered result was fetched from the target: 0 for a trip just made, the cache entry's age otherwise; on the static targets endpoint, as of the read.",
 }
 
 // withFreshness adds the freshness series to an answer of a collector with

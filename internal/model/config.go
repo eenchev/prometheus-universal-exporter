@@ -136,6 +136,13 @@ type RequestConfig struct {
 	FollowRedirects      bool              `yaml:"follow_redirects"`
 	EnableHTTP2          bool              `yaml:"enable_http2"`
 	AllowedSchemes       []string          `yaml:"allowed_schemes"`
+	// AllowedTargets and DeniedTargets are the hosts, host globs, addresses
+	// and networks the collector's requests may, and may not, reach.
+	AllowedTargets []string `yaml:"allowed_targets"`
+	DeniedTargets  []string `yaml:"denied_targets"`
+	// AcceptStatus is the HTTP statuses whose answers are decoded, such as
+	// [200, 503] or ["2xx", 503]; every 2xx when empty.
+	AcceptStatus []string `yaml:"accept_status"`
 	// Root and MaxAge belong to the localfile type: the directory it may read
 	// under, and how old a file may be before a scrape refuses it as stale.
 	Root   string   `yaml:"root"`
@@ -312,7 +319,10 @@ type Limits struct {
 	MaxHelpLength       int      `yaml:"max_help_length"`
 	ScriptTimeout       Duration `yaml:"script_timeout"`
 	MaxOutputBytes      ByteSize `yaml:"max_output_bytes"`
-	MaxCacheEntries     int      `yaml:"max_cache_entries"`
+	// MaxScriptMemory bounds the address space of the collector's Python
+	// workers; 0 leaves it unbounded.
+	MaxScriptMemory ByteSize `yaml:"max_script_memory"`
+	MaxCacheEntries int      `yaml:"max_cache_entries"`
 }
 
 // MetricRule is one entry of a collector's metrics: a metric, the expression
@@ -329,6 +339,12 @@ type MetricRule struct {
 	Expression  string      `yaml:"expression"`
 	ErrorMode   string      `yaml:"error_mode"`
 	Required    *bool       `yaml:"required"`
+	// ValueMap turns the text an expression gives into the value, such as
+	// {up: 1, down: 0}, with "*" for any other text. Scale multiplies the
+	// value, mapped or read as a number, such as 0.001 for milliseconds to
+	// seconds.
+	ValueMap map[string]float64 `yaml:"value_map"`
+	Scale    *float64           `yaml:"scale"`
 }
 
 // What a metric rule does when it cannot produce its value. The first two keep

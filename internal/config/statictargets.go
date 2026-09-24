@@ -30,7 +30,7 @@ func LoadStaticTargets(path string, opts ...LoadOption) (*model.StaticTargetFile
 	var f model.StaticTargetFile
 	dec := yaml.NewDecoder(strings.NewReader(string(b)))
 	dec.KnownFields(true)
-	if err = dec.Decode(&f); err != nil {
+	if err = withoutExtensionKeys(dec.Decode(&f)); err != nil {
 		return nil, yamlError(err)
 	}
 	if err = oneDocument(dec); err != nil {

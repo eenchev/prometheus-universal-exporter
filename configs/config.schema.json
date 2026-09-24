@@ -25,6 +25,11 @@
     }
   ],
   "description": "The exporter configuration. See docs/CONFIGURATION.md. Collectors are defined under collectors, in the files collector_files lists, or both.",
+  "patternProperties": {
+    "^x-.+": {
+      "description": "The file's own, ignored by the exporter: a place for YAML anchors (\u0026name) the rest of the file reuses with aliases (*name) and merge keys (\u003c\u003c: *name)."
+    }
+  },
   "properties": {
     "collector_files": {
       "description": "Further files of collectors, as paths or glob patterns such as collectors.d/*.yaml, relative to this file. A collector file holds a collectors list and nothing else. See docs/CONFIGURATION.md#collector-files.",
@@ -163,6 +168,15 @@
                   "string"
                 ]
               },
+              "max_script_memory": {
+                "description": "The most memory, as address space, each of the collector's Python workers may use, the interpreter and its libraries included, such as 256MiB. A script that needs more fails with a MemoryError. At least 32MiB; 0, the default, leaves it unbounded. Enforced on Linux.",
+                "minimum": 0,
+                "pattern": "^[0-9]+(\\.[0-9]+)? ?([kKmMgGtT][iI]?)?[bB]?$",
+                "type": [
+                  "integer",
+                  "string"
+                ]
+              },
               "script_timeout": {
                 "description": "How long a Python script may run. Starting the interpreter is not counted. Defaults to 100ms.",
                 "pattern": "^[-+]?(0|([0-9]*(\\.[0-9]*)?(ns|us|µs|μs|ms|s|m|h))+)$",
@@ -276,6 +290,10 @@
                   "description": "When false, a missing value is skipped without an error. Defaults to true.",
                   "type": "boolean"
                 },
+                "scale": {
+                  "description": "Multiplies the value, mapped or read as a number, such as 0.001 for milliseconds to seconds. Finite and not 0. Not for the python transform; for prometheus, plain samples only.",
+                  "type": "number"
+                },
                 "type": {
                   "enum": [
                     "gauge",
@@ -285,6 +303,13 @@
                     "untyped"
                   ],
                   "type": "string"
+                },
+                "value_map": {
+                  "additionalProperties": {
+                    "type": "number"
+                  },
+                  "description": "Turns the text the expression gives into the value, such as {up: 1, down: 0}; \"*\" maps any value it does not list, numbers included. Without a match and without \"*\", the value is read as a number. Not for the prometheus and python transforms.",
+                  "type": "object"
                 }
               },
               "type": "object"
@@ -367,7 +392,31 @@
             ],
             "description": "How the collector reaches its data. See docs/REQUESTS.md, docs/LOCALFILE.md for localfile, docs/GRAPHITE.md for graphite and docs/GRPC.md for grpc.",
             "properties": {
+              "accept_status": {
+                "description": "The HTTP statuses whose answers are decoded, such as [200, 503] or [\"2xx\", 503]; every 2xx when left out. Any other status fails the scrape in the http_status stage. An accepted status is not retried. http and graphite.",
+                "items": {
+                  "maximum": 599,
+                  "minimum": 100,
+                  "pattern": "^[1-5][xX][xX]$|^[1-5][0-9][0-9]$",
+                  "type": [
+                    "integer",
+                    "string"
+                  ]
+                },
+                "type": "array"
+              },
               "allowed_schemes": {
+                "items": {
+                  "type": [
+                    "string",
+                    "number",
+                    "boolean"
+                  ]
+                },
+                "type": "array"
+              },
+              "allowed_targets": {
+                "description": "Hosts, globs such as *.example.com, IP addresses and CIDR networks the collector's requests may reach: a target is allowed when its host matches by name, or every address it resolves to is in an allowed network. Checked before the request, on every redirect and on every connection. http, graphite and grpc.",
                 "items": {
                   "type": [
                     "string",
@@ -438,6 +487,17 @@
                   "number",
                   "boolean"
                 ]
+              },
+              "denied_targets": {
+                "description": "Hosts, globs, IP addresses and CIDR networks the collector's requests may not reach: a target matching by name, or resolving to any address in a denied network, is refused with 403. Wins over allowed_targets.",
+                "items": {
+                  "type": [
+                    "string",
+                    "number",
+                    "boolean"
+                  ]
+                },
+                "type": "array"
               },
               "descriptors": {
                 "description": "grpc, required but for grpc.health.v1.Health: where the message types come from. reflection asks the server's reflection service; protoset reads protoset_file; proto compiles proto_files.",

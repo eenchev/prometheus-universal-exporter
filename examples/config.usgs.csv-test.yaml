@@ -1,7 +1,7 @@
 # Demo collector for the USGS earthquake feed, a public CSV endpoint that needs
 # no authentication and no API key.
 #
-#   go run . --config.file=testdata/config.usgs.csv-test.yaml
+#   go run . --config.file=examples/config.usgs.csv-test.yaml
 #   curl 'http://localhost:8080/probe?collector=earthquakes&target=https://earthquake.usgs.gov'
 #
 # The response is a header row followed by one row per earthquake recorded in

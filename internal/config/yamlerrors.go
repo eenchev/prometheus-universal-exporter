@@ -60,6 +60,7 @@ var yamlValues = map[string]string{
 	"string":               "a single value",
 	"[]string":             "a list of values",
 	"map[string]string":    "a mapping of names to values",
+	"map[string]float64":   "a mapping of values to numbers",
 	"[]model.Collector":    "a list of collectors",
 	"[]model.MetricRule":   "a list of metric rules",
 	"[]model.LabelRule":    "a list of labels",
@@ -71,6 +72,41 @@ var (
 	unknownFieldError = regexp.MustCompile(`^(line \d+): field (\S+) not found in type (\S+)$`)
 	wrongKindError    = regexp.MustCompile("^(line \\d+): cannot unmarshal !!(\\w+)(?: `(.*)`)? into (\\S+)$")
 )
+
+// Extension keys: a top-level key of the configuration, a collector file or
+// the static target file that begins with x- is the file's own, ignored by
+// the exporter. It holds what YAML anchors (&name) define for the rest of the
+// file to reuse with aliases (*name) and merge keys (<<: *name), such as the
+// request and transform several collectors share, without the definition
+// itself being read as a setting. Only the top level is open: an x- key
+// anywhere else is a misspelt setting like any other unknown key.
+
+// extensionKeyTypes are the documents whose top level takes x- keys.
+var extensionKeyTypes = map[string]bool{"Config": true, "collectorFile": true, "StaticTargetFile": true}
+
+// isExtensionKey says whether a top-level key is the file's own.
+func isExtensionKey(key string) bool { return strings.HasPrefix(key, "x-") && len(key) > len("x-") }
+
+// withoutExtensionKeys drops from a decoding error the unknown top-level x-
+// keys, which the decoder reports but reads the rest of the document past;
+// nil when nothing else is wrong.
+func withoutExtensionKeys(err error) error {
+	var typeErr *yaml.TypeError
+	if !errors.As(err, &typeErr) {
+		return err
+	}
+	kept := typeErr.Errors[:0:0]
+	for _, message := range typeErr.Errors {
+		if m := unknownFieldError.FindStringSubmatch(message); m != nil && isExtensionKey(m[2]) && extensionKeyTypes[shortTypeName(m[3])] {
+			continue
+		}
+		kept = append(kept, message)
+	}
+	if len(kept) == 0 {
+		return nil
+	}
+	return &yaml.TypeError{Errors: kept}
+}
 
 // yamlError rewrites a decoding error in the file's terms. Any other error is
 // returned as it is.

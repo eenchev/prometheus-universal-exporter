@@ -93,10 +93,12 @@ func (c *transportCache) get(settings TransportSettings, now time.Time) (*http.T
 		return nil, err
 	}
 	transport := &http.Transport{
-		Proxy:               environmentProxy(),
-		TLSClientConfig:     tlsCfg,
-		ForceAttemptHTTP2:   settings.EnableHTTP2,
-		DialContext:         (&net.Dialer{Timeout: 30 * time.Second, KeepAlive: 30 * time.Second}).DialContext,
+		Proxy:             environmentProxy(),
+		TLSClientConfig:   tlsCfg,
+		ForceAttemptHTTP2: settings.EnableHTTP2,
+		// Every connection is checked against the allowed_targets and
+		// denied_targets of the request that made it (targetpolicy.go).
+		DialContext:         policyDialer((&net.Dialer{Timeout: 30 * time.Second, KeepAlive: 30 * time.Second}).DialContext),
 		MaxIdleConnsPerHost: transportMaxIdlePerHost,
 		IdleConnTimeout:     transportIdleConnTimeout,
 		TLSHandshakeTimeout: 10 * time.Second,
@@ -161,7 +163,16 @@ func HTTPClient(settings TransportSettings, followRedirects bool, timeout time.D
 		return nil, err
 	}
 	client := &http.Client{Transport: transport, Timeout: timeout}
-	if !followRedirects {
+	if followRedirects {
+		// Go's own limit, and the collector's allowed_targets and
+		// denied_targets for the host each redirect leads to.
+		client.CheckRedirect = func(req *http.Request, via []*http.Request) error {
+			if len(via) >= 10 {
+				return errors.New("stopped after 10 redirects")
+			}
+			return checkRedirect(req.Context(), req.URL.Hostname())
+		}
+	} else {
 		// The response of the redirect itself is returned, so a collector sees
 		// the 3xx status rather than silently following it to another host.
 		client.CheckRedirect = func(_ *http.Request, _ []*http.Request) error { return http.ErrUseLastResponse }

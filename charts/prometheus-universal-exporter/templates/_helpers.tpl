@@ -20,6 +20,8 @@
   "--log.level" "set server.logLevel instead"
   "--probe.timeout-offset" "set server.probeTimeoutOffset instead"
   "--probe.default-timeout" "set server.probeDefaultTimeout instead"
+  "--probe.max-concurrent" "set server.probeMaxConcurrent instead"
+  "--python.max-workers" "set server.pythonMaxWorkers instead"
   "--web.enable-lifecycle" "set server.enableLifecycle instead"
   "--web.shutdown-timeout" "set server.shutdownTimeout instead"
   "--web.shutdown-delay" "set server.shutdownDelay instead" -}}
@@ -148,6 +150,19 @@ app.kubernetes.io/managed-by: {{ .Release.Service }}
 {{- $timeout -}}
 {{- end -}}
 {{- end }}
+{{- define "prometheus-universal-exporter.countFlag" -}}
+{{- /* A count flag's value, from (list name value): empty or null leaves the
+       flag out; otherwise a whole number of zero or more. */ -}}
+{{- $name := index . 0 -}}
+{{- $value := index . 1 -}}
+{{- if not (or (kindIs "invalid" $value) (eq (toString $value) "")) -}}
+{{- $text := toString $value -}}
+{{- if not (regexMatch "^[0-9]+$" $text) -}}
+{{- fail (printf "%s %q must be a whole number of zero or more, 0 for no limit, or empty to keep the exporter's default" $name $text) -}}
+{{- end -}}
+{{- $text -}}
+{{- end -}}
+{{- end }}
 {{- define "prometheus-universal-exporter.shutdownTimeout" -}}
 {{- /* Empty leaves the flag out, as for probeTimeoutOffset. Only whole hours,
        minutes and seconds, so the chart can work out the grace period. */ -}}
@@ -189,7 +204,7 @@ app.kubernetes.io/managed-by: {{ .Release.Service }}
        time for the last OTLP export and exit. Kubernetes kills it after 30
        seconds unless told otherwise, which would cut them short. */ -}}
 {{- $delay := include "prometheus-universal-exporter.shutdownDelay" . | default "0s" -}}
-{{- $shutdown := include "prometheus-universal-exporter.shutdownTimeout" . | default "5s" -}}
+{{- $shutdown := include "prometheus-universal-exporter.shutdownTimeout" . | default "15s" -}}
 {{- $needed := add (include "prometheus-universal-exporter.durationSeconds" $delay | atoi) (include "prometheus-universal-exporter.durationSeconds" $shutdown | atoi) 10 -}}
 {{- $explicit := .Values.terminationGracePeriodSeconds -}}
 {{- if not (kindIs "invalid" $explicit) -}}
@@ -276,4 +291,22 @@ app.kubernetes.io/managed-by: {{ .Release.Service }}
 {{- end }}
 {{- define "prometheus-universal-exporter.serviceAccountName" -}}
 {{- if .Values.serviceAccount.create }}{{ default (include "prometheus-universal-exporter.fullname" .) .Values.serviceAccount.name }}{{ else }}{{ default "default" .Values.serviceAccount.name }}{{ end }}
+{{- end }}
+
+{{- define "prometheus-universal-exporter.envSets" -}}
+{{- /* "true" when the env list, (list env name), sets the variable name. */ -}}
+{{- $name := index . 1 -}}
+{{- range (index . 0 | default list) -}}
+{{- if eq (toString .name) $name }}true{{ end -}}
+{{- end -}}
+{{- end }}
+{{- define "prometheus-universal-exporter.validateProbe" -}}
+{{- /* A probe's settings must not replace the check itself: the chart owns
+       the path and port. (list name probe) */ -}}
+{{- $name := index . 0 -}}
+{{- range $key := list "httpGet" "exec" "tcpSocket" "grpc" -}}
+{{- if hasKey (index $ 1 | default dict) $key -}}
+{{- fail (printf "%s.%s is set by the chart, which checks /health and /ready on the http port; set only timings such as timeoutSeconds and failureThreshold" $name $key) -}}
+{{- end -}}
+{{- end -}}
 {{- end }}

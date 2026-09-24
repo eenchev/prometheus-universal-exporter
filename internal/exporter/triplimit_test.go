@@ -211,7 +211,10 @@ func TestStaticTargetsWaitForASlot(t *testing.T) {
 
 func TestTripLimiterAcquireHonoursItsContext(t *testing.T) {
 	limiter := newTripLimiter()
-	if !limiter.tryAcquire("c", 1) || limiter.tryAcquire("c", 1) {
+	if ok, _ := limiter.tryAcquire("c", 1); !ok {
+		t.Fatal("no slot")
+	}
+	if ok, _ := limiter.tryAcquire("c", 1); ok {
 		t.Fatal("the limit of one was not enforced")
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
@@ -223,7 +226,53 @@ func TestTripLimiterAcquireHonoursItsContext(t *testing.T) {
 	if err := limiter.acquire(context.Background(), "c", 1); err != nil {
 		t.Fatal(err)
 	}
-	if limiter.count("c") != 1 || limiter.tryAcquire("d", 1) != true {
+	if ok, _ := limiter.tryAcquire("d", 1); limiter.count("c") != 1 || !ok {
 		t.Fatal("collectors do not have limits of their own")
 	}
+}
+
+// --probe.max-concurrent bounds the trips of all collectors together, on top
+// of each collector's own limit.
+func TestTripLimiterProcessWideLimit(t *testing.T) {
+	limiter := newTripLimiter()
+	limiter.setMax(2)
+	for _, c := range []string{"a", "b"} {
+		if ok, why := limiter.tryAcquire(c, 10); !ok {
+			t.Fatal(why)
+		}
+	}
+	ok, why := limiter.tryAcquire("c", 10)
+	if ok || !strings.Contains(why, "--probe.max-concurrent") {
+		t.Fatalf("a third trip was let through: %v %q", ok, why)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	defer cancel()
+	if err := limiter.acquire(ctx, "c", 10); err == nil || !strings.Contains(err.Error(), "--probe.max-concurrent") {
+		t.Fatalf("err=%v", err)
+	}
+	limiter.release("a")
+	if ok, why := limiter.tryAcquire("c", 10); !ok {
+		t.Fatal(why)
+	}
+	if ValidateMaxConcurrent(-1) == nil || ValidateMaxConcurrent(0) != nil {
+		t.Fatal("validation")
+	}
+}
+
+// A probe over --probe.max-concurrent is answered 503, saying so.
+func TestAProbeOverTheProcessLimitIsRefused(t *testing.T) {
+	target := newHeldTarget(t)
+	c := testutil.Collector("capped", "text")
+	server := flightServer(t, c)
+	server.SetMaxConcurrent(1)
+	first := probeAsync(context.Background(), server, probePath("capped", target.server.URL+"/a", ""), nil)
+	for deadline := time.Now().Add(5 * time.Second); target.requests() < 1 && time.Now().Before(deadline); {
+		time.Sleep(time.Millisecond)
+	}
+	got := probeOnce(t, server, probePath("capped", target.server.URL+"/b", ""), nil)
+	if got.Code != http.StatusServiceUnavailable || !strings.Contains(got.Body.String(), "--probe.max-concurrent") {
+		t.Fatalf("%d %s", got.Code, got.Body)
+	}
+	target.open()
+	<-first
 }

@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/http"
 	"os/exec"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -384,5 +385,113 @@ func TestPythonWorkerStartFailuresAreCounted(t *testing.T) {
 	snap := PythonWorkers().Snapshot("py_metrics_no_interpreter")
 	if snap.StartFailures != 1 || snap.Starts != 0 || snap.Starting != 0 || snap.Runs[pythonRunFailed] != 1 {
 		t.Fatalf("snapshot=%+v", snap)
+	}
+}
+
+// --python.max-workers bounds the workers alive at once, of every collector
+// together: a burst waits for a worker instead of starting one each, and a
+// script with no worker of its own takes the place of the idle worker unused
+// for longest.
+func TestPythonWorkersAreCappedProcessWide(t *testing.T) {
+	requirePython(t)
+	pool := PythonWorkers()
+	pool.SetMaxWorkers(2)
+	stop := make(chan struct{})
+	most := make(chan int, 1)
+	go func() {
+		seen := 0
+		for {
+			pool.mu.Lock()
+			seen = max(seen, pool.live)
+			pool.mu.Unlock()
+			select {
+			case <-stop:
+				most <- seen
+				return
+			case <-time.After(time.Millisecond):
+			}
+		}
+	}()
+	a := workerCollector("capped_a", "import time\ntime.sleep(0.05)\nmetric(name=\"v\", value=1)")
+	errs := make(chan error, 6)
+	for i := 0; i < 6; i++ {
+		go func() {
+			_, err := runWorkerScript(t, a)
+			errs <- err
+		}()
+	}
+	for i := 0; i < 6; i++ {
+		if err := <-errs; err != nil {
+			t.Fatal(err)
+		}
+	}
+	b := workerCollector("capped_b", `metric(name="v", value=2)`)
+	if _, err := runWorkerScript(t, b); err != nil {
+		t.Fatal(err)
+	}
+	close(stop)
+	if seen := <-most; seen > 2 {
+		t.Fatalf("%d workers alive at once, want at most 2", seen)
+	}
+	if evicted := pool.Snapshot("capped_a").Stops[pythonStopEvicted]; evicted != 1 {
+		t.Fatalf("%d idle workers evicted, want 1", evicted)
+	}
+}
+
+// A run that finds every worker busy waits only as long as its own deadline,
+// and says why it gave up.
+func TestPythonWorkerWaitEndsWithTheRun(t *testing.T) {
+	requirePython(t)
+	pool := PythonWorkers()
+	pool.SetMaxWorkers(1)
+	slow := workerCollector("waited_slow", "import time\ntime.sleep(1)\nmetric(name=\"v\", value=1)")
+	done := make(chan error, 1)
+	go func() {
+		_, err := runWorkerScript(t, slow)
+		done <- err
+	}()
+	for deadline := time.Now().Add(5 * time.Second); time.Now().Before(deadline); time.Sleep(time.Millisecond) {
+		if pool.Snapshot("waited_slow").Busy == 1 {
+			break
+		}
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+	other := workerCollector("waited_other", `metric(name="v", value=1)`)
+	if _, _, err := pool.run(ctx, pythonWorkerSpec("python3", other), []byte(`{}`), time.Second); err == nil || !strings.Contains(err.Error(), "--python.max-workers") {
+		t.Fatalf("err=%v", err)
+	}
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+	if ValidateMaxWorkers(-1) == nil || ValidateMaxWorkers(0) != nil {
+		t.Fatal("validation")
+	}
+}
+
+// limits.max_script_memory bounds a worker's address space: a script that
+// needs more fails saying so, and the worker goes on serving the next run.
+func TestPythonWorkerMemoryLimit(t *testing.T) {
+	requirePython(t)
+	if runtime.GOOS != "linux" {
+		t.Skip("RLIMIT_AS is enforced on Linux")
+	}
+	c := workerCollector("memory", "size = 1 << 30\nblob = bytearray(size)\nmetric(name=\"v\", value=len(blob))")
+	c.Limits.MaxScriptMemory = 256 << 20
+	if _, err := runWorkerScript(t, c); err == nil || !strings.Contains(err.Error(), "limits.max_script_memory") {
+		t.Fatalf("err=%v", err)
+	}
+	small := workerCollector("memory", "metric(name=\"v\", value=len(bytearray(1 << 20)))")
+	small.Limits.MaxScriptMemory = 256 << 20
+	set, err := runWorkerScript(t, small)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if v := workerMetricValue(t, set, "v"); v != 1<<20 {
+		t.Fatalf("v=%v", v)
+	}
+	unlimited := workerCollector("memory", c.Transform.Script)
+	if pythonWorkerSpec("python3", unlimited).key() == pythonWorkerSpec("python3", c).key() {
+		t.Fatal("a memory limit does not change the worker a script runs in")
 	}
 }

@@ -385,8 +385,16 @@ type reflectedEntry struct {
 
 var reflectionAnswers = &reflected{entries: map[reflectedKey]*reflectedEntry{}, asking: map[reflectedKey]*reflectionCall{}}
 
+// reflectionQuestionTimeout bounds a question to a reflection service. The
+// question belongs to no single probe: it runs detached from the context of
+// the probe that started it, so that probe's deadline or cancellation does
+// not fail the others waiting for the same answer.
+var reflectionQuestionTimeout = 30 * time.Second
+
 // files returns the service's files, asking the server when there is no
-// answer younger than reflectionTTL.
+// answer younger than reflectionTTL. Every caller, the one that started the
+// question included, waits for the shared answer only as long as its own
+// context allows.
 func (r *reflected) files(ctx context.Context, conn *grpc.ClientConn, key reflectedKey, now time.Time) (*protoregistry.Files, error) {
 	r.mu.Lock()
 	r.sweepLocked(now)
@@ -394,27 +402,33 @@ func (r *reflected) files(ctx context.Context, conn *grpc.ClientConn, key reflec
 		r.mu.Unlock()
 		return entry.files, nil
 	}
-	if call := r.asking[key]; call != nil {
-		r.mu.Unlock()
-		select {
-		case <-call.done:
-			return call.files, call.err
-		case <-ctx.Done():
-			return nil, ctx.Err()
-		}
+	call := r.asking[key]
+	if call == nil {
+		call = &reflectionCall{done: make(chan struct{})}
+		r.asking[key] = call
+		// The question keeps the probe's values (its metadata) but not its
+		// deadline or cancellation.
+		detached, cancel := context.WithTimeout(context.WithoutCancel(ctx), reflectionQuestionTimeout)
+		go func() {
+			defer cancel()
+			files, err := askReflection(detached, conn, key.service)
+			r.mu.Lock()
+			call.files, call.err = files, err
+			delete(r.asking, key)
+			if err == nil {
+				r.entries[key] = &reflectedEntry{files: files, fetched: now}
+			}
+			r.mu.Unlock()
+			close(call.done)
+		}()
 	}
-	call := &reflectionCall{done: make(chan struct{})}
-	r.asking[key] = call
 	r.mu.Unlock()
-	call.files, call.err = askReflection(ctx, conn, key.service)
-	r.mu.Lock()
-	delete(r.asking, key)
-	if call.err == nil {
-		r.entries[key] = &reflectedEntry{files: call.files, fetched: now}
+	select {
+	case <-call.done:
+		return call.files, call.err
+	case <-ctx.Done():
+		return nil, ctx.Err()
 	}
-	r.mu.Unlock()
-	close(call.done)
-	return call.files, call.err
 }
 
 // sweepLocked forgets the answers older than reflectionTTL.

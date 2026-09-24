@@ -199,6 +199,9 @@ type Options struct {
 	TLS bool
 	// Answer answers the queue service's unary calls; nil answers {}.
 	Answer Answer
+	// ReflectionDelay holds each reflection stream this long before it is
+	// served.
+	ReflectionDelay time.Duration
 }
 
 // Server is a running test server.
@@ -244,6 +247,13 @@ func Start(t testing.TB, opts Options) *Server {
 	serverOpts = append(serverOpts, grpc.StreamInterceptor(func(srv any, stream grpc.ServerStream, info *grpc.StreamServerInfo, handler grpc.StreamHandler) error {
 		if strings.HasSuffix(info.FullMethod, "/ServerReflectionInfo") {
 			s.ReflectionStreams.Add(1)
+			if opts.ReflectionDelay > 0 {
+				select {
+				case <-time.After(opts.ReflectionDelay):
+				case <-stream.Context().Done():
+					return stream.Context().Err()
+				}
+			}
 		}
 		return handler(srv, stream)
 	}))

@@ -68,6 +68,9 @@ func (s *Server) scrapeStaticTarget(ctx context.Context, target model.StaticTarg
 	// result is what the scrape publishes besides the health metrics: the
 	// target's metrics, or a stale result in their place.
 	var result model.MetricSet
+	// fetched is when the data in result came from the target: now for a
+	// trip just made, the cache entry's time for a cached or stale result.
+	var fetched time.Time
 	finish := func(up float64) {
 		// The scrape is counted once, even when what follows panics.
 		failedOnPanic = nil
@@ -79,7 +82,10 @@ func (s *Server) scrapeStaticTarget(ctx context.Context, target model.StaticTarg
 		health := staticTargetHealthMetrics(target, c, up, elapsed.Seconds(), lastSuccess).Metrics
 		published := model.MetricSet{Metrics: make([]model.Metric, 0, len(result.Metrics)+len(health))}
 		published.Metrics = append(append(published.Metrics, result.Metrics...), health...)
-		s.publishStaticTarget(target, identity, published)
+		if model.StaleIfError(c) <= 0 || len(result.Metrics) == 0 {
+			fetched = time.Time{}
+		}
+		s.publishStaticResult(target, identity, published, fetched)
 	}
 	// cacheKey is set once the request is known; a failure before it has no
 	// cached result to fall back on.
@@ -91,8 +97,9 @@ func (s *Server) scrapeStaticTarget(ctx context.Context, target model.StaticTarg
 	failed := func() {
 		if model.StaleIfError(c) > 0 && cacheKey != "" {
 			now := time.Now()
-			if cached, fetched, ok := s.cache.GetStale(cacheKey, now); ok {
-				if answer, err := withFreshness(cached, c, true, fetched, now); err == nil {
+			if cached, cachedAt, ok := s.cache.GetStale(cacheKey, now); ok {
+				if answer, err := withFreshness(cached, c, true, cachedAt, now); err == nil {
+					fetched = cachedAt
 					count(func(st *serverStats) {
 						st.staleServed++
 						st.emitted += uint64(len(cached.Metrics))
@@ -115,13 +122,14 @@ func (s *Server) scrapeStaticTarget(ctx context.Context, target model.StaticTarg
 		cacheKey = s.probeCacheKey(cfg, c, target.Target, targetCacheQuery(&target), headers, targetOwnRequest(&target)...)
 	}
 	if model.CacheTTL(c) > 0 {
-		if cached, fetched, ok := s.cache.Get(cacheKey, time.Now()); ok {
+		if cached, cachedAt, ok := s.cache.Get(cacheKey, time.Now()); ok {
 			count(func(st *serverStats) {
 				st.cacheHits++
 				st.success++
 				st.emitted += uint64(len(cached.Metrics))
 			})
-			answer, _ := withFreshness(cached, c, false, fetched, time.Now())
+			fetched = cachedAt
+			answer, _ := withFreshness(cached, c, false, cachedAt, time.Now())
 			result = withTargetLabels(answer, target.Labels)
 			finish(1)
 			return
@@ -162,6 +170,7 @@ func (s *Server) scrapeStaticTarget(ctx context.Context, target model.StaticTarg
 	count(func(st *serverStats) { st.success++ })
 	if !trip.carriedOn {
 		result = withTargetLabels(trip.answer, target.Labels)
+		fetched = time.Now()
 	}
 	finish(1)
 }
@@ -272,20 +281,22 @@ func targetCacheQuery(t *model.StaticTarget) url.Values {
 
 // targetOwnRequest is what the target's request sets that no probe can, for
 // its cache key: a graphite collector's targets, a grpc collector's metadata
-// and retry codes.
+// and retry codes. Each section names itself and how many values follow, so
+// a value that looks like the next section's name cannot move the boundary
+// between two sections, and two different targets never share a key.
 func targetOwnRequest(t *model.StaticTarget) []string {
 	var own []string
 	if len(t.Request.Targets) > 0 {
-		own = append(append(own, "targets"), t.Request.Targets...)
+		own = append(append(own, "targets", strconv.Itoa(len(t.Request.Targets))), t.Request.Targets...)
 	}
 	if len(t.Request.Metadata) > 0 {
-		own = append(own, "metadata")
+		own = append(own, "metadata", strconv.Itoa(len(t.Request.Metadata)))
 		for _, key := range model.SortedKeys(t.Request.Metadata) {
 			own = append(own, key, t.Request.Metadata[key])
 		}
 	}
 	if retry := t.Request.Retry; retry != nil && retry.Codes != nil {
-		own = append(append(own, "retry_codes"), retry.Codes...)
+		own = append(append(own, "retry_codes", strconv.Itoa(len(retry.Codes))), retry.Codes...)
 	}
 	return own
 }

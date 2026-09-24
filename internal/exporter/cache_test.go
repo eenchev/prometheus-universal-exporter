@@ -389,34 +389,41 @@ func TestResponseCacheExpiresAndEvictsBeyondLimit(t *testing.T) {
 	}
 }
 
-func TestCachedMetricSetIsCopiedOnStoreAndRead(t *testing.T) {
+// A stored set is the cache's own copy, which readers share rather than copy
+// on every hit: appending to what a read returns, as the freshness series
+// do, never reaches the entry or another read.
+func TestCachedMetricSetIsCopiedOnStoreAndSharedOnRead(t *testing.T) {
 	cache := newResponseCache()
 	now := time.Now()
 	timestamp := int64(5)
-	original := model.MetricSet{Metrics: []model.Metric{{
+	original := model.MetricSet{Metrics: make([]model.Metric, 1, 8)}
+	original.Metrics[0] = model.Metric{
 		Name:      "demo_value",
 		Type:      model.HistogramMetricType,
 		Labels:    map[string]string{"zone": "a"},
 		Timestamp: &timestamp,
 		Histogram: &model.Histogram{Buckets: []model.Bucket{{UpperBound: 1, CumulativeCount: 2}}, Sum: 3, Count: 2},
-	}}}
+	}
 	cache.Put("key", "collector", original, time.Minute, 0, 10, now)
 	original.Metrics[0].Labels["zone"] = "mutated-source"
+	timestamp = 99
 
 	first, _, ok := cache.Get("key", now)
 	if !ok {
 		t.Fatal("entry was not cached")
 	}
-	if first.Metrics[0].Labels["zone"] != "a" {
-		t.Fatalf("cache stored an aliased label map: %v", first.Metrics[0].Labels)
+	if first.Metrics[0].Labels["zone"] != "a" || *first.Metrics[0].Timestamp != 5 {
+		t.Fatalf("cache stored an aliased series: %+v", first.Metrics[0])
 	}
-	first.Metrics[0].Labels["zone"] = "mutated-read"
-	first.Metrics[0].Histogram.Buckets[0].CumulativeCount = 99
-	*first.Metrics[0].Timestamp = 99
-
 	second, _, _ := cache.Get("key", now)
-	if second.Metrics[0].Labels["zone"] != "a" || second.Metrics[0].Histogram.Buckets[0].CumulativeCount != 2 || *second.Metrics[0].Timestamp != 5 {
-		t.Fatalf("cached entry was mutated by a reader: %+v", second.Metrics[0])
+	a := append(first.Metrics, model.Metric{Name: "a"})
+	b := append(second.Metrics, model.Metric{Name: "b"})
+	if a[1].Name != "a" || b[1].Name != "b" {
+		t.Fatal("two reads appended into one array")
+	}
+	third, _, _ := cache.Get("key", now)
+	if len(third.Metrics) != 1 {
+		t.Fatalf("an append reached the entry: %d series", len(third.Metrics))
 	}
 }
 

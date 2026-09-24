@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"math"
+	"net"
 	"net/http"
 	"slices"
 	"strings"
@@ -50,7 +51,16 @@ func callGRPC(ctx context.Context, target string, c *model.Collector, overrides 
 	if err != nil {
 		return nil, err
 	}
-	key := grpcConnKey{dial: address.dial, tls: secure}
+	// The collector's allowed_targets and denied_targets: the server's name
+	// and addresses now, and each connection's address when it is made.
+	policy := policyOf(c)
+	if policy != nil {
+		host, _, _ := net.SplitHostPort(address.hostPort)
+		if _, err := policy.check(ctx, host); err != nil {
+			return nil, err
+		}
+	}
+	key := grpcConnKey{dial: address.dial, tls: secure, policy: policy}
 	if secure {
 		key.settings = c.Request.TLS
 		if overrides.InsecureSkipVerify != nil {

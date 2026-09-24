@@ -165,6 +165,12 @@ func ValidateRequest(c *model.Collector) error {
 	if c.Request.MaxResponseBytes < 0 {
 		return fmt.Errorf("collector %q request.max_response_bytes must not be negative", c.Name)
 	}
+	if err := validateTargetPolicy(c); err != nil {
+		return err
+	}
+	if err := validateAcceptStatus(c); err != nil {
+		return err
+	}
 	return rt.Validate(c)
 }
 

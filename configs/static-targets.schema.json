@@ -3,6 +3,11 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "additionalProperties": false,
   "description": "Static targets of the exporter, scraped by the exporter itself on their intervals and served together on the static targets endpoint (--web.static-targets-path); a target with export_via_otlp is also delivered over OTLP. Passed with --static-targets-file. See docs/STATIC-TARGETS.md.",
+  "patternProperties": {
+    "^x-.+": {
+      "description": "The file's own, ignored by the exporter: a place for YAML anchors (\u0026name) the rest of the file reuses with aliases (*name) and merge keys (\u003c\u003c: *name)."
+    }
+  },
   "properties": {
     "concurrency": {
       "description": "How many targets are scraped at once. A target due while all are busy waits for a slot within its interval, and is skipped if none frees. Omit or 0 for the default, 8.",

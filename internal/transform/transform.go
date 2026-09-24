@@ -29,6 +29,7 @@ import (
 // are checked, the set is cached, or it is written to /probe or OTLP.
 func Transform(ctx context.Context, d *decode.Decoded, r *fetch.HTTPResponse, c *model.Collector, pythonPath string) (*model.MetricSet, error) {
 	report, _ := ctx.Value(ruleReportKey{}).(*RuleReport)
+	ctx = withResponseVariables(ctx, r)
 	ctx, failures := withRuleFailures(ctx)
 	defer failures.finish(c, report)
 	set, err := transformMetrics(ctx, d, r, c, pythonPath)
@@ -368,6 +369,15 @@ func applyPreScript(ctx context.Context, d *decode.Decoded, r *fetch.HTTPRespons
 		}
 		return &decode.Decoded{Kind: "prometheus", Data: set, Raw: d.Raw}, nil
 	}
+	if d.Kind == "html" || d.Kind == "xml" {
+		// Markup is parsed again from the text the script left. A mapping
+		// or a list is no markup: rendered as Go writes it, it would parse
+		// into a document every rule then matches nothing in, and the
+		// mistake would read as a selector's.
+		if _, ok := data.(string); !ok {
+			return nil, model.MarkError(fmt.Errorf("python pre-script of a %s transform must leave data as a string of %s, not %s; to hand the rules structured data, use a jq or yq transform, which reads a mapping or a list from a pre-script", c.Transform.Type, strings.ToUpper(d.Kind), pythonTypeName(data)), model.ErrScriptFailed)
+		}
+	}
 	if d.Kind == "html" {
 		raw := fmt.Append(nil, data)
 		doc, parseErr := goquery.NewDocumentFromReader(bytes.NewReader(raw))
@@ -385,6 +395,23 @@ func applyPreScript(ctx context.Context, d *decode.Decoded, r *fetch.HTTPRespons
 		return &decode.Decoded{Kind: "xml", Data: node, Raw: raw}, nil
 	}
 	return &decode.Decoded{Kind: d.Kind, Data: data, Raw: d.Raw}, nil
+}
+
+// pythonTypeName names a value a script left as Python calls its type.
+func pythonTypeName(v any) string {
+	switch v.(type) {
+	case map[string]any:
+		return "a dict"
+	case []any:
+		return "a list"
+	case nil:
+		return "None"
+	case bool:
+		return "a bool"
+	case float64:
+		return "a number"
+	}
+	return fmt.Sprintf("%T", v)
 }
 
 // structuredValue reports whether a pre-script returned an object or an array.
@@ -441,7 +468,7 @@ func transformJQ(ctx context.Context, data any, rules []model.MetricRule, c *mod
 				}
 				continue
 			}
-			n, err := model.Number(value)
+			n, err := ruleValue(rule, value)
 			if err != nil {
 				if handleMetricError(ctx, c, rule, err) {
 					continue
@@ -504,7 +531,7 @@ func transformJQItems(ctx context.Context, data any, rule model.MetricRule, c *m
 			}
 			continue
 		}
-		n, err := model.Number(value)
+		n, err := ruleValue(rule, value)
 		if err != nil {
 			if _, carryOn, failure := fail(fmt.Errorf("metric %q item %d: %w", rule.Name, index, err)); !carryOn {
 				return nil, failure
@@ -555,7 +582,8 @@ func evaluateJQ(ctx context.Context, input, root any, expression string) ([]any,
 	if err != nil {
 		return nil, err
 	}
-	iterator := code.RunWithContext(ctx, input, root)
+	vars, _ := ctx.Value(responseVariablesKey{}).(responseVariables)
+	iterator := code.RunWithContext(ctx, input, root, vars.status, vars.headers)
 	values := []any{}
 	for {
 		value, ok := iterator.Next()
@@ -568,6 +596,36 @@ func evaluateJQ(ctx context.Context, input, root any, expression string) ([]any,
 		values = append(values, value)
 	}
 	return values, nil
+}
+
+// responseVariables are $status and $headers, as jq sees them: the
+// response's status as a number and its headers as an object of lower-case
+// names, each with its values joined by ", ", as HTTP allows; null when the
+// response has none.
+type responseVariables struct {
+	status  any
+	headers any
+}
+
+type responseVariablesKey struct{}
+
+// withResponseVariables puts $status and $headers for r into ctx.
+func withResponseVariables(ctx context.Context, r *fetch.HTTPResponse) context.Context {
+	if r == nil {
+		return ctx
+	}
+	vars := responseVariables{}
+	if r.StatusCode != 0 {
+		vars.status = r.StatusCode
+	}
+	if r.Headers != nil {
+		headers := make(map[string]any, len(r.Headers))
+		for name, values := range r.Headers {
+			headers[strings.ToLower(name)] = strings.Join(values, ", ")
+		}
+		vars.headers = headers
+	}
+	return context.WithValue(ctx, responseVariablesKey{}, vars)
 }
 
 // evaluateJQOne runs a program that must produce at most one value; no value
@@ -712,7 +770,7 @@ func transformRegex(ctx context.Context, text string, rules []model.MetricRule, 
 				}
 				continue
 			}
-			n, err := decode.TextValue(text[match[2]:match[3]])
+			n, err := ruleValue(rule, text[match[2]:match[3]])
 			if err != nil {
 				if handleMetricError(ctx, c, rule, err) {
 					continue
@@ -868,22 +926,20 @@ func addComputedXPathSeries[N any](ctx context.Context, out *model.MetricSet, no
 	var problem error
 	switch v := value.(type) {
 	case float64:
-		number = v
 		if math.IsNaN(v) {
 			problem = model.MarkError(fmt.Errorf("%s %q computed NaN, not a number", nodes.kind, rule.Expression), model.ErrMissingValue)
-		}
-	case bool:
-		if v {
-			number = 1
 		}
 	case string:
 		if isBlank(v) {
 			problem = model.MarkError(fmt.Errorf("%s %q computed an empty string", nodes.kind, rule.Expression), model.ErrMissingValue)
-		} else if n, err := decode.TextValue(v); err != nil {
-			problem = fmt.Errorf("metric %q: %w", rule.Name, err)
-		} else {
-			number = n
 		}
+	}
+	if problem == nil {
+		n, err := ruleValue(rule, value)
+		if err != nil {
+			problem = fmt.Errorf("metric %q: %w", rule.Name, err)
+		}
+		number = n
 	}
 	if problem != nil {
 		if errors.Is(problem, model.ErrMissingValue) && !requiredRule(rule, c) {
@@ -945,7 +1001,7 @@ func transformXPathNodes[N any](ctx context.Context, root N, nodes xpathNodes[N]
 				}
 				continue
 			}
-			value, err := decode.TextValue(text)
+			value, err := ruleValue(rule, text)
 			if err != nil {
 				if handleMetricError(ctx, c, rule, err) {
 					continue
@@ -1014,7 +1070,7 @@ func transformCSS(ctx context.Context, doc *goquery.Document, rules []model.Metr
 			}
 			continue
 		}
-		value, err := decode.TextValue(text)
+		value, err := ruleValue(rule, text)
 		if err != nil {
 			err = fmt.Errorf("metric %q: %w", rule.Name, err)
 			if handleMetricError(ctx, c, rule, err) {
@@ -1096,7 +1152,7 @@ func transformCSSItems(ctx context.Context, doc *goquery.Document, rule model.Me
 		}
 		var value float64
 		if err == nil {
-			value, err = decode.TextValue(text)
+			value, err = ruleValue(rule, text)
 			if err != nil {
 				err = fmt.Errorf("metric %q item %d: %w", rule.Name, index, err)
 			}
@@ -1173,7 +1229,7 @@ func transformCSV(ctx context.Context, data any, rules []model.MetricRule, c *mo
 				}
 				continue
 			}
-			n, err := model.Number(value)
+			n, err := ruleValue(rule, value)
 			if err != nil {
 				if handleMetricError(ctx, c, rule, err) {
 					continue
@@ -1252,6 +1308,16 @@ func applyPrometheusTransform(ctx context.Context, in model.MetricSet, c *model.
 						return nil, ruleFailure(c, rule, err)
 					}
 					metric.Type = rule.Type
+				}
+				if rule.Scale != nil {
+					if metric.Histogram != nil || metric.Summary != nil {
+						err := fmt.Errorf("metric %q scale cannot apply to %s, a %s: its buckets and quantiles are bounds as well as counts", rule.Name, source.Name, source.Type)
+						if handleMetricError(ctx, c, rule, err) {
+							continue
+						}
+						return nil, ruleFailure(c, rule, err)
+					}
+					metric.Value = scaled(rule, metric.Value)
 				}
 				// The series gets labels of its own: rules add and remove
 				// them, and another rule may match the same source metric.

@@ -36,10 +36,20 @@ func maxConcurrentProbes(c *model.Collector) int {
 	return DefaultMaxConcurrentProbes
 }
 
-// tripLimiter counts the trips in progress per collector.
+// --probe.max-concurrent bounds the trips of every collector together, since
+// each holds a response body, its decoded form and its series in memory
+// while it runs: without it, many collectors each within their own limit
+// could still hold more than the process has. A probe over it is answered 503
+// too, and a static target scrape waits for a slot, as with a collector's
+// own limit. 0 leaves the process unbounded.
+
+// tripLimiter counts the trips in progress per collector and in all.
 type tripLimiter struct {
 	mu       sync.Mutex
 	inFlight map[string]int
+	// total is the trips in progress of every collector; ceiling, when
+	// positive, bounds it.
+	total, ceiling int
 	// freed is closed, and replaced, whenever a slot is released, which is
 	// what a waiting static target scrape waits on.
 	freed chan struct{}
@@ -49,23 +59,48 @@ func newTripLimiter() *tripLimiter {
 	return &tripLimiter{inFlight: map[string]int{}, freed: make(chan struct{})}
 }
 
-// tryAcquire takes a slot for a collector if one is free.
-func (l *tripLimiter) tryAcquire(collector string, limit int) bool {
+// setMax sets the process-wide limit; 0 leaves it unbounded.
+func (l *tripLimiter) setMax(ceiling int) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
+	l.ceiling = ceiling
+}
+
+// fullLocked says why no slot is free for collector, or "" when one is.
+func (l *tripLimiter) fullLocked(collector string, limit int) string {
 	if l.inFlight[collector] >= limit {
-		return false
+		return fmt.Sprintf("collector %s already has %d trips to its targets in progress, its max_concurrent_probes", collector, limit)
 	}
+	if l.ceiling > 0 && l.total >= l.ceiling {
+		return fmt.Sprintf("the exporter already has %d trips to targets in progress, its --probe.max-concurrent", l.ceiling)
+	}
+	return ""
+}
+
+func (l *tripLimiter) takeLocked(collector string) {
 	l.inFlight[collector]++
-	return true
+	l.total++
+}
+
+// tryAcquire takes a slot for a collector if one is free, or says why none
+// is.
+func (l *tripLimiter) tryAcquire(collector string, limit int) (bool, string) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if full := l.fullLocked(collector, limit); full != "" {
+		return false, full
+	}
+	l.takeLocked(collector)
+	return true, ""
 }
 
 // acquire waits for a slot until ctx ends.
 func (l *tripLimiter) acquire(ctx context.Context, collector string, limit int) error {
 	for {
 		l.mu.Lock()
-		if l.inFlight[collector] < limit {
-			l.inFlight[collector]++
+		full := l.fullLocked(collector, limit)
+		if full == "" {
+			l.takeLocked(collector)
 			l.mu.Unlock()
 			return nil
 		}
@@ -73,7 +108,7 @@ func (l *tripLimiter) acquire(ctx context.Context, collector string, limit int) 
 		l.mu.Unlock()
 		select {
 		case <-ctx.Done():
-			return fmt.Errorf("collector %q already has %d trips to its targets in progress (max_concurrent_probes) and none finished in time: %w", collector, limit, ctx.Err())
+			return fmt.Errorf("%s, and none finished in time: %w", full, ctx.Err())
 		case <-freed:
 		}
 	}
@@ -84,6 +119,7 @@ func (l *tripLimiter) release(collector string) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	l.inFlight[collector]--
+	l.total--
 	if l.inFlight[collector] <= 0 {
 		delete(l.inFlight, collector)
 	}
@@ -97,3 +133,15 @@ func (l *tripLimiter) count(collector string) int {
 	defer l.mu.Unlock()
 	return l.inFlight[collector]
 }
+
+// ValidateMaxConcurrent refuses a negative --probe.max-concurrent.
+func ValidateMaxConcurrent(limit int) error {
+	if limit < 0 {
+		return fmt.Errorf("--probe.max-concurrent must not be negative, got %d", limit)
+	}
+	return nil
+}
+
+// SetMaxConcurrent bounds the trips of all collectors together; 0 leaves
+// them unbounded.
+func (s *Server) SetMaxConcurrent(limit int) { s.trips.setMax(limit) }

@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"strconv"
 	"strings"
 
 	"github.com/PuerkitoBio/goquery"
@@ -208,7 +207,3 @@ func decodePrometheus(r *fetch.HTTPResponse) (*Decoded, error) {
 	}
 	return &Decoded{Kind: "prometheus", Data: model.MetricSet{Metrics: metrics}, Raw: r.Body}, nil
 }
-
-// TextValue reads text extracted from a document as a number, ignoring
-// surrounding space.
-func TextValue(v string) (float64, error) { return strconv.ParseFloat(strings.TrimSpace(v), 64) }

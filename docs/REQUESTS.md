@@ -283,6 +283,48 @@ These replace the earlier undocumented `request.redirect_policy`. A
 configuration still setting it now fails to load with an unknown-field error
 rather than silently changing behaviour.
 
+## Restricting targets
+
+Whoever can reach `/probe` chooses the `target`, and a target that redirects
+chooses where a followed redirect goes. `allowed_targets` and
+`denied_targets` bound where a collector's requests may go, for `http`,
+`graphite` and `grpc` collectors:
+
+```yaml
+request:
+  type: http
+  allowed_targets:
+    - "*.example.com"      # a glob: * and ? match any characters, dots too
+    - api.partner.net      # a host name
+    - 203.0.113.0/24       # a network: every address the target resolves to must be in one
+  denied_targets:
+    - 169.254.169.254      # an address: the cloud metadata service
+    - 10.0.0.0/8
+    - 127.0.0.0/8
+    - "::1"
+```
+
+Each entry is a host name, a glob of one, an IP address or a CIDR network,
+without a scheme, port or path. A target is refused when its host is denied
+by name, or any address it resolves to is in a denied network; and, when
+`allowed_targets` is set, unless its host is allowed by name, or every address
+it resolves to is in an allowed network. `denied_targets` wins. Names are
+compared without case; `*.example.com` matches `a.b.example.com`, not
+`example.com` itself.
+
+The check runs before the request, again for every redirect followed, and
+against the address each connection is actually made to, so a name that
+resolves somewhere else between the check and the connection is still
+refused. Behind a [proxy](#proxies) the exporter connects to the proxy, and the
+target's addresses are those it resolves the name to itself.
+
+A refused probe is answered `403 Forbidden` — `collector web refused the
+target: target 10.1.2.3 refused: its address 10.1.2.3 is in 10.0.0.0/8 in
+request.denied_targets` — without the target being contacted, whatever
+`error_handling.on_fetch_error` says, and is counted in
+`http_exporter_targets_refused_total`. A refused static target fails in the
+`target_policy` stage.
+
 ## Connections
 
 Connections to targets are kept and reused, so an HTTPS target pays for one TLS
@@ -360,9 +402,45 @@ probe still reports what the target last answered: a `503` stays a failed
 probe ran out of its budget. After a connection that failed, the error is that
 connection error, noting that the wait before retrying was cut short.
 
+A status the collector [accepts](#accepting-other-statuses) is its answer and
+is not retried, even a `503`.
+
 A `grpc` collector retries by gRPC status code instead, with `retry.codes`,
 `[UNAVAILABLE]` by default, and has no `non_idempotent`; `retry.codes` is
 refused for every other type. See [gRPC](GRPC.md#errors-and-retries).
+
+## Accepting other statuses
+
+A response is decoded when its status is 2xx; any other fails the scrape in
+the `http_status` stage. Some targets answer with a useful body under another
+status — a health endpoint that reports its checks with `503`, an API that says
+`404` with a JSON body for an empty queue. `accept_status` lists the statuses
+whose answers are decoded, for `http` and `graphite` collectors:
+
+```yaml
+request:
+  type: http
+  path: /health
+  accept_status: ["2xx", 503]   # statuses from 100 to 599, or classes such as 2xx
+transform:
+  type: jq
+metrics:
+  - name: app_healthy
+    expression: 'if $status == 200 then 1 else 0 end'
+  - name: app_check_up
+    items: .checks[]
+    expression: 'if .ok then 1 else 0 end'
+    labels:
+      - name: check
+        expression: .name
+```
+
+Listing statuses replaces the default, so write `2xx` to keep the successful
+ones. An accepted status is not [retried](#retries). jq and yq rules read the
+status as `$status` and the headers as `$headers`, an object of lower-case
+header names, each with its values joined by `, `:
+`$headers["retry-after"]`. A Python script has them as `response.status_code`
+and `response.headers`.
 
 ## TLS
 

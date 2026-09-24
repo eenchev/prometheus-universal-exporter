@@ -301,7 +301,9 @@ The exporter's own flags are chart values rather than something to assemble by h
 | `server.logLevel` | `--log.level` | `info` |
 | `server.probeTimeoutOffset` | `--probe.timeout-offset` | unset: the exporter's `500ms` |
 | `server.probeDefaultTimeout` | `--probe.default-timeout` | unset: the exporter's `30s` |
-| `server.shutdownTimeout` | `--web.shutdown-timeout` | unset: the exporter's `5s` |
+| `server.probeMaxConcurrent` | `--probe.max-concurrent` | unset: no limit across collectors |
+| `server.pythonMaxWorkers` | `--python.max-workers` | unset: no limit across scripts |
+| `server.shutdownTimeout` | `--web.shutdown-timeout` | unset: the exporter's `15s` |
 | `server.shutdownDelay` | `--web.shutdown-delay` | `5s` |
 | `server.watchConfig` / `server.watchConfigInterval` | `--config.watch` / `--config.watch-interval` | off / `60s` |
 | `server.expandEnv` | `--config.expand-env` | off |
@@ -314,7 +316,9 @@ The exporter's own flags are chart values rather than something to assemble by h
 
 `server.probeTimeoutOffset` is how much of Prometheus's scrape timeout — a monitor's `scrapeTimeout` — a probe leaves unused, so a slow target or a hung file read is answered with the exporter's own error before Prometheus gives up (see [Probe deadlines](../../docs/CONFIGURATION.md#probe-deadlines)). It takes a Go duration of zero or more. Left empty, the flag is not rendered at all, so the exporter's default applies and an image older than the flag still starts; set it only with an image that has it.
 
-`server.probeDefaultTimeout` bounds a probe that names no deadline — no scrape timeout header and no `timeout` parameter, as from curl, a script or the exporter's collectors page with JavaScript off. Prometheus always sends a scrape timeout, so its scrapes are unaffected. It takes a Go duration of zero or more, `0` leaving such a probe unbounded, and like `probeTimeoutOffset` it is rendered only when set.
+`server.probeDefaultTimeout` bounds a probe without a scrape timeout header, as from curl, a script or the exporter's collectors page with JavaScript off; a `timeout` parameter bounds the request within it and cannot lift it. Prometheus always sends a scrape timeout, so its scrapes are unaffected. It takes a Go duration of zero or more, `0` leaving such a probe unbounded, and like `probeTimeoutOffset` it is rendered only when set.
+
+`server.probeMaxConcurrent` bounds the trips to targets, probes and static target scrapes of every collector together, on top of each collector's `max_concurrent_probes`; each holds a response and its series in memory, so this bounds what a burst of probes can cost the pod. `server.pythonMaxWorkers` bounds the Python workers of every collector together, each a process with memory of its own; pair it with a collector's `limits.max_script_memory` (see [Python](../../docs/PYTHON.md)). Both take a whole number, `0` for no limit, and are rendered only when set. Size them to `resources.limits.memory`.
 
 ```sh
 helm install exporter charts/prometheus-universal-exporter \
@@ -330,7 +334,7 @@ helm install exporter charts/prometheus-universal-exporter \
 
 `server.shutdownDelay`, `5s` by default, is how long a stopping pod keeps answering probes before that, with `/ready` answering `503`, rendered as `--web.shutdown-delay`. Kubernetes takes a few seconds to take a terminating pod out of its Service, and probes sent to it in that gap would otherwise be refused, so Prometheus would record failed scrapes during every rollout. Raise it on a large cluster where endpoint updates are slow; `0s` turns it off, and empty leaves the flag out for an image older than it.
 
-Kubernetes kills a pod `terminationGracePeriodSeconds` after asking it to stop, 30 seconds unless set. A stopping exporter needs its shutdown delay, its shutdown timeout and about 10 seconds more, for the last OTLP export and exiting — 20 seconds with the defaults. Left unset, `terminationGracePeriodSeconds` is rendered as that sum whenever it is more than 30; set, it must be at least that, or rendering fails:
+Kubernetes kills a pod `terminationGracePeriodSeconds` after asking it to stop, 30 seconds unless set. A stopping exporter needs its shutdown delay, its shutdown timeout and about 10 seconds more, for the last OTLP export and exiting — 30 seconds with the defaults, which Kubernetes' default already covers. Left unset, `terminationGracePeriodSeconds` is rendered as that sum whenever it is more than 30; set, it must be at least that, or rendering fails:
 
 ```sh
 helm install exporter charts/prometheus-universal-exporter \
@@ -409,10 +413,52 @@ resources:
     memory: 512Mi
 ```
 
+`goMemLimit.enabled`, on by default, sets `GOMEMLIMIT` to `resources.limits.memory` through the downward API, so the Go runtime collects harder as its heap nears the limit instead of growing past it into an OOM kill. It is rendered only when a memory limit is set, and not when `env` sets `GOMEMLIMIT` itself, for a lower value. Python workers use memory outside it; bound them with `server.pythonMaxWorkers` and `limits.max_script_memory`.
+
+### Probes
+
+The chart checks `/health` for liveness and `/ready` for readiness on the `http` port. `livenessProbe` and `readinessProbe` set their timings; the check itself is the chart's, and setting `httpGet`, `exec`, `tcpSocket` or `grpc` fails rendering. The liveness probe has some slack by default, since a pod busy with a burst of probes is slow rather than dead, and a restart would lose its cache and Python workers:
+
+```yaml
+livenessProbe:
+  periodSeconds: 10
+  timeoutSeconds: 3
+  failureThreshold: 5
+readinessProbe:
+  periodSeconds: 10
+  timeoutSeconds: 3
+  failureThreshold: 3
+```
+
 ### Replicas
 
 ```yaml
 replicaCount: 2
+```
+
+Probes scale with replicas, since Prometheus sends each to one pod through the Service. Static targets do not: every replica scrapes every static target on its own schedule and serves its own results, so run [static targets](#static-targets) with `replicaCount: 1` (the chart's notes warn otherwise), or split them over releases.
+
+### Autoscaling
+
+`autoscaling` renders an `autoscaling/v2` HorizontalPodAutoscaler, which then sets the Deployment's replica count itself; `replicaCount` is left out of the Deployment so an upgrade does not put it back. It scales on CPU utilization by default, measured against `resources.requests`; `targetMemoryUtilizationPercentage` and further `metrics` can be added, and `behavior` takes the scale-up and scale-down policies. `maxReplicas` below `minReplicas`, or nothing to scale on, fails rendering.
+
+```yaml
+autoscaling:
+  enabled: true
+  minReplicas: 2
+  maxReplicas: 6
+  targetCPUUtilizationPercentage: 75
+```
+
+Autoscaling suits a release that serves probes. It does not suit [static targets](#static-targets): every replica scrapes every static target, so each replica the autoscaler adds is another full set of requests to every target — the load it was scaling out from grows with it — and each replica serves its own results. A target with `export_via_otlp` is exported over OTLP by every replica, so the OTLP backend receives duplicate series under the same resource. The chart's notes warn when static targets are rendered with autoscaling, naming the targets exported over OTLP. Put static targets in a release of their own, with `replicaCount: 1` and autoscaling off.
+
+`podDisruptionBudget` renders a PodDisruptionBudget, so a node drain does not take every replica down at once. Set one of `minAvailable` or `maxUnavailable`, a count or a percentage; both fail rendering, and neither gives `maxUnavailable: 1`. With one replica, `minAvailable: 1` would block a drain until the pod is deleted by hand.
+
+```yaml
+replicaCount: 3
+podDisruptionBudget:
+  enabled: true
+  maxUnavailable: 1
 ```
 
 ### Service
@@ -597,6 +643,14 @@ interval, and serve their latest results together on one endpoint for
 Prometheus to scrape; a target with `export_via_otlp: true` is also delivered
 over OTLP. See [Static targets](../../docs/STATIC-TARGETS.md) for the document.
 
+Run static targets with `replicaCount: 1` and [autoscaling](#autoscaling) off.
+Every replica scrapes every static target, so with three replicas each target
+is contacted three times per interval, each replica serves results of its own
+through the one Service, and a target with `export_via_otlp` is exported over
+OTLP three times, as duplicate series.
+To spread many static targets, split them over releases, each with a document
+of its own.
+
 ```yaml
 staticTargets:
   enabled: true
@@ -652,7 +706,7 @@ Every value has a default, and `values.yaml` documents each one in place. `value
 | `service` | object | enabled, ClusterIP, 8080 | The exporter Service. |
 | `neg` | object | disabled | GKE Network Endpoint Group annotations on the Service. |
 | `ingress` | object | disabled | Class, hosts, paths, TLS and annotations. |
-| `server` | object | see [Exporter flags](#exporter-flags) | Exporter flags: `listenAddress`, `pythonPath`, `logLevel`, `probeTimeoutOffset`, `probeDefaultTimeout`, `shutdownTimeout`, `shutdownDelay`, `enableLifecycle`, `watchConfig`, `watchConfigInterval`, `expandEnv`. |
+| `server` | object | see [Exporter flags](#exporter-flags) | Exporter flags: `listenAddress`, `pythonPath`, `logLevel`, `probeTimeoutOffset`, `probeDefaultTimeout`, `probeMaxConcurrent`, `pythonMaxWorkers`, `shutdownTimeout`, `shutdownDelay`, `enableLifecycle`, `watchConfig`, `watchConfigInterval`, `expandEnv`. |
 | `terminationGracePeriodSeconds` | integer | unset | The pod's grace period; see [Shutting down](#shutting-down). |
 | `env` / `envFrom` | array | `[]` | Container environment, in the Kubernetes shapes. |
 | `extraArgs` | array | `[]` | Extra command-line flags. |
@@ -662,8 +716,12 @@ Every value has a default, and `values.yaml` documents each one in place. `value
 | `monitors` | array | `[]` | `ServiceMonitor` and `PodMonitor` resources. |
 | `selfMetrics` | object | enabled | The monitor for the exporter's own endpoint, and its path. |
 | `resources` | object | 100m/128Mi, 500m/512Mi | Requests and limits. |
+| `goMemLimit` | object | enabled | `GOMEMLIMIT` from `resources.limits.memory`; see [Resources](#resources). |
+| `livenessProbe` / `readinessProbe` | object | see [Probes](#probes) | The probes' timings. |
+| `autoscaling` | object | disabled | `enabled`, `minReplicas`, `maxReplicas`, `targetCPUUtilizationPercentage`, `targetMemoryUtilizationPercentage`, `metrics`, `behavior`; see [Autoscaling](#autoscaling). |
+| `podDisruptionBudget` | object | disabled | `enabled`, `minAvailable` or `maxUnavailable`, `unhealthyPodEvictionPolicy`; see [Replicas](#replicas). |
 | `strategy` | object | RollingUpdate | Deployment strategy and its `rollingUpdate` settings. |
-| `podSecurityContext` / `securityContext` | object | hardened | Pod and container security context. |
+| `podSecurityContext` / `securityContext` | object | hardened | Pod and container security context; the pod runs as user, group and `fsGroup` 65532. |
 | `nodeSelector` / `tolerations` / `affinity` | map/array/object | empty | Scheduling. |
 | `networkPolicy` | object | disabled | `ingress` and `egress` rules. |
 | `targetAuth` | object | disabled | Secret-backed credentials mounted for the exporter to send to the target. |
@@ -698,7 +756,7 @@ The requirements this chart is built to are in
 
 The chart runs the exporter with security-focused defaults:
 
-* Non-root container
+* Non-root container, as user and group 65532, set by number in the image and in `podSecurityContext` so `runAsNonRoot` can verify it
 * Read-only root filesystem
 * All Linux capabilities dropped
 * Privilege escalation disabled

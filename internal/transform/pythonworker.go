@@ -96,6 +96,9 @@ type pythonSpec struct {
 	Collector string
 	Modules   []string
 	MaxOutput int
+	// MaxMemory bounds the worker's address space (RLIMIT_AS); 0 leaves it
+	// unbounded.
+	MaxMemory int64
 	Scripts   string // a digest of the collector's scripts
 }
 
@@ -116,11 +119,11 @@ func pythonWorkerSpec(pythonPath string, c *model.Collector) pythonSpec {
 		maxOutput = pythonDefaultMaxOutput
 	}
 	digest := sha256.Sum256([]byte(c.Transform.PreScript + "\x00" + c.Transform.Script))
-	return pythonSpec{Path: pythonPath, Collector: c.Name, Modules: modules, MaxOutput: maxOutput, Scripts: hex.EncodeToString(digest[:8])}
+	return pythonSpec{Path: pythonPath, Collector: c.Name, Modules: modules, MaxOutput: maxOutput, MaxMemory: int64(c.Limits.MaxScriptMemory), Scripts: hex.EncodeToString(digest[:8])}
 }
 
 func (s pythonSpec) key() string {
-	return strings.Join([]string{s.Path, s.Collector, strings.Join(s.Modules, ","), strconv.Itoa(s.MaxOutput), s.Scripts}, "\x00")
+	return strings.Join([]string{s.Path, s.Collector, strings.Join(s.Modules, ","), strconv.Itoa(s.MaxOutput), strconv.FormatInt(s.MaxMemory, 10), s.Scripts}, "\x00")
 }
 
 // PythonPool keeps the Python workers that run collector scripts, idle ones
@@ -141,6 +144,13 @@ type PythonPool struct {
 	// closed pools keep no worker: an idle one is stopped at once, and a busy
 	// one when it finishes.
 	closed bool
+	// maxWorkers, when positive, bounds the workers alive at once, starting,
+	// busy or idle, of every collector together (--python.max-workers).
+	// live counts them, and changed is closed, and replaced, whenever one
+	// stops or goes idle, which is what a run waiting for a worker waits on.
+	maxWorkers int
+	live       int
+	changed    chan struct{}
 }
 
 // Why a worker stopped, and how a run ended: bounded sets, so they can be
@@ -154,6 +164,7 @@ const (
 	pythonStopSurplus     = "surplus"
 	pythonStopIdle        = "idle"
 	pythonStopReload      = "reload"
+	pythonStopEvicted     = "evicted"
 
 	pythonRunOK          = "ok"
 	pythonRunScriptError = "script_error"
@@ -165,7 +176,7 @@ const (
 // PythonStopReasons and PythonRunOutcomes are every reason a worker stops and
 // every way a run ends, so each has a series from the start.
 var (
-	PythonStopReasons = []string{pythonStopTimeout, pythonStopCrash, pythonStopOutputLimit, pythonStopCancelled, pythonStopRetired, pythonStopSurplus, pythonStopIdle, pythonStopReload}
+	PythonStopReasons = []string{pythonStopTimeout, pythonStopCrash, pythonStopOutputLimit, pythonStopCancelled, pythonStopRetired, pythonStopSurplus, pythonStopIdle, pythonStopReload, pythonStopEvicted}
 	PythonRunOutcomes = []string{pythonRunOK, pythonRunScriptError, pythonRunTimeout, pythonRunOutputLimit, pythonRunFailed}
 )
 
@@ -202,7 +213,38 @@ func IsolatePythonWorkers() (restore func()) {
 }
 
 func newPythonPool() *PythonPool {
-	return &PythonPool{idle: map[string][]*pythonWorker{}, stats: map[string]*pythonCollectorStats{}, busy: map[string]int{}, obsolete: map[string]bool{}}
+	return &PythonPool{idle: map[string][]*pythonWorker{}, stats: map[string]*pythonCollectorStats{}, busy: map[string]int{}, obsolete: map[string]bool{}, changed: make(chan struct{})}
+}
+
+// SetMaxWorkers bounds the workers alive at once, of every collector
+// together; 0 leaves them unbounded.
+func (p *PythonPool) SetMaxWorkers(limit int) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.maxWorkers = limit
+	p.notifyLocked()
+}
+
+// ValidateMaxWorkers refuses a negative --python.max-workers.
+func ValidateMaxWorkers(limit int) error {
+	if limit < 0 {
+		return fmt.Errorf("--python.max-workers must not be negative, got %d", limit)
+	}
+	return nil
+}
+
+// notifyLocked wakes the runs waiting for a worker; mu is held.
+func (p *PythonPool) notifyLocked() {
+	close(p.changed)
+	p.changed = make(chan struct{})
+}
+
+// stopLocked stops a worker that is no longer counted as busy or idle, and
+// frees its place; mu is held.
+func (p *PythonPool) stopLocked(worker *pythonWorker) {
+	worker.stop()
+	p.live--
+	p.notifyLocked()
 }
 
 // statsLocked returns a collector's statistics, creating them; mu is held.
@@ -259,9 +301,9 @@ func stopReason(err error) string {
 
 // discard stops a busy worker and counts why.
 func (p *PythonPool) discard(worker *pythonWorker, reason string) {
-	worker.stop()
 	p.mu.Lock()
 	defer p.mu.Unlock()
+	p.stopLocked(worker)
 	st := p.statsLocked(worker.collector)
 	st.busy--
 	st.stops[reason]++
@@ -281,18 +323,34 @@ func (p *PythonPool) acquire(ctx context.Context, spec pythonSpec) (*pythonWorke
 	key := spec.key()
 	p.mu.Lock()
 	p.reapLocked(time.Now())
-	var worker *pythonWorker
-	if idle := p.idle[key]; len(idle) > 0 {
-		worker = idle[len(idle)-1]
-		p.idle[key] = idle[:len(idle)-1]
-	}
-	st := p.statsLocked(spec.Collector)
-	if worker != nil {
-		st.busy++
-		p.busy[key]++
+	for {
+		var worker *pythonWorker
+		if idle := p.idle[key]; len(idle) > 0 {
+			worker = idle[len(idle)-1]
+			p.idle[key] = idle[:len(idle)-1]
+		}
+		if worker != nil {
+			p.statsLocked(spec.Collector).busy++
+			p.busy[key]++
+			p.mu.Unlock()
+			return worker, nil
+		}
+		if p.maxWorkers <= 0 || p.live < p.maxWorkers || p.evictIdleLocked() {
+			break
+		}
+		// Every worker the limit allows is starting or busy: wait for one
+		// to finish, within the run's own deadline.
+		changed := p.changed
 		p.mu.Unlock()
-		return worker, nil
+		select {
+		case <-changed:
+		case <-ctx.Done():
+			return nil, fmt.Errorf("the exporter already runs %d Python workers, its --python.max-workers, and none was free in time: %w", p.maxWorkersNow(), ctx.Err())
+		}
+		p.mu.Lock()
 	}
+	p.live++
+	st := p.statsLocked(spec.Collector)
 	st.starting++
 	p.mu.Unlock()
 
@@ -303,6 +361,8 @@ func (p *PythonPool) acquire(ctx context.Context, spec pythonSpec) (*pythonWorke
 	st = p.statsLocked(spec.Collector)
 	st.starting--
 	if err != nil {
+		p.live--
+		p.notifyLocked()
 		st.startFailures++
 		return nil, err
 	}
@@ -310,6 +370,41 @@ func (p *PythonPool) acquire(ctx context.Context, spec pythonSpec) (*pythonWorke
 	st.busy++
 	p.busy[key]++
 	return worker, nil
+}
+
+func (p *PythonPool) maxWorkersNow() int {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.maxWorkers
+}
+
+// evictIdleLocked stops the idle worker unused for longest, of whatever
+// script, to make room under --python.max-workers, and says whether there
+// was one; mu is held.
+func (p *PythonPool) evictIdleLocked() bool {
+	var oldestKey string
+	oldest := -1
+	for key, workers := range p.idle {
+		for i, worker := range workers {
+			if oldest < 0 || worker.idleSince.Before(p.idle[oldestKey][oldest].idleSince) {
+				oldestKey, oldest = key, i
+			}
+		}
+	}
+	if oldest < 0 {
+		return false
+	}
+	workers := p.idle[oldestKey]
+	worker := workers[oldest]
+	workers = append(workers[:oldest], workers[oldest+1:]...)
+	if len(workers) == 0 {
+		delete(p.idle, oldestKey)
+	} else {
+		p.idle[oldestKey] = workers
+	}
+	p.stopLocked(worker)
+	p.statsLocked(worker.collector).stops[pythonStopEvicted]++
+	return true
 }
 
 func (p *PythonPool) release(spec pythonSpec, worker *pythonWorker) {
@@ -326,22 +421,23 @@ func (p *PythonPool) release(spec pythonSpec, worker *pythonWorker) {
 	obsolete := p.obsolete[key]
 	p.unbusyLocked(key)
 	if p.closed {
-		worker.stop()
+		p.stopLocked(worker)
 		return
 	}
 	if obsolete {
 		// A reload removed or changed this script while it ran.
-		worker.stop()
+		p.stopLocked(worker)
 		st.stops[pythonStopReload]++
 		return
 	}
 	if len(p.idle[key]) >= pythonWorkerMaxIdle {
-		worker.stop()
+		p.stopLocked(worker)
 		st.stops[pythonStopSurplus]++
 		return
 	}
 	worker.idleSince = time.Now()
 	p.idle[key] = append(p.idle[key], worker)
+	p.notifyLocked()
 }
 
 // reapLocked stops workers idle for longer than the idle timeout, which also
@@ -351,7 +447,7 @@ func (p *PythonPool) reapLocked(now time.Time) {
 		kept := workers[:0]
 		for _, worker := range workers {
 			if now.Sub(worker.idleSince) > pythonWorkerIdleTimeout {
-				worker.stop()
+				p.stopLocked(worker)
 				p.statsLocked(worker.collector).stops[pythonStopIdle]++
 				continue
 			}
@@ -373,7 +469,7 @@ func (p *PythonPool) shutdown() {
 	p.closed = true
 	for key, workers := range p.idle {
 		for _, worker := range workers {
-			worker.stop()
+			p.stopLocked(worker)
 		}
 		delete(p.idle, key)
 	}
@@ -419,7 +515,7 @@ func (p *PythonPool) Retain(keys map[string]bool) {
 			continue
 		}
 		for _, worker := range workers {
-			worker.stop()
+			p.stopLocked(worker)
 			p.statsLocked(worker.collector).stops[pythonStopReload]++
 		}
 		delete(p.idle, key)
@@ -529,8 +625,8 @@ func startPythonWorker(ctx context.Context, spec pythonSpec) (*pythonWorker, err
 	}
 	// The worker outlives the scrape that starts it, so it must not be tied to
 	// that scrape's context; stop() ends it.
-	cmd := exec.CommandContext(context.WithoutCancel(ctx), spec.Path, "-I", "-c", pythonWorkerLauncher, string(modules)) // #nosec G204 -- the interpreter is the operator's --python.path
-	cmd.ExtraFiles = []*os.File{requestRead, answerWrite}                                                                // descriptors 3 and 4
+	cmd := exec.CommandContext(context.WithoutCancel(ctx), spec.Path, "-I", "-c", pythonWorkerLauncher, string(modules), strconv.FormatInt(spec.MaxMemory, 10)) // #nosec G204 -- the interpreter is the operator's --python.path
+	cmd.ExtraFiles = []*os.File{requestRead, answerWrite}                                                                                                       // descriptors 3 and 4
 	stderr := &tailBuffer{max: pythonStderrTail}
 	cmd.Stderr = stderr
 	if err := cmd.Start(); err != nil {
@@ -672,6 +768,13 @@ answers=os.fdopen(4,'w',encoding='utf-8')
 for _module in json.loads(sys.argv[1]) or []:
     try: __import__(_module)
     except Exception: pass
+max_memory=int(sys.argv[2]) if len(sys.argv)>2 else 0
+if max_memory>0:
+    # limits.max_script_memory: the worker's whole address space, the
+    # interpreter and its preloaded libraries included, set after they have
+    # loaded so a limit too small for them fails a run, not the start.
+    import resource
+    resource.setrlimit(resource.RLIMIT_AS,(max_memory,max_memory))
 blocked={'socket','_socket','ssl','_ssl','subprocess','_posixsubprocess','ctypes','_ctypes','multiprocessing','_multiprocessing','threading','mmap','pty','pathlib','shutil','tempfile'}
 script_blocked={'importlib','posix','nt','_io','_thread','select','selectors','fcntl','termios'}
 import _io
@@ -767,5 +870,7 @@ while True:
         if p.get('mode')=='data': result['data']=scope.get('data')
         else: result['metrics']=metrics
         answer(result)
+    except MemoryError:
+        answer({'ok': False, 'error': 'MemoryError: the script ran out of memory under limits.max_script_memory (%d bytes)'%max_memory if max_memory>0 else traceback.format_exc(limit=5)})
     except BaseException:
         answer({'ok': False, 'error': traceback.format_exc(limit=5)})`

@@ -46,3 +46,19 @@ func TestJSONIsSniffedBeforePrometheusComments(t *testing.T) {
 		t.Fatalf("%v %+v", err, d)
 	}
 }
+
+// A tag value may hold quotes and brackets; only the path is read with
+// brackets and quotes in mind.
+func TestGraphiteTagValuesWithQuotesAndBrackets(t *testing.T) {
+	graphiteNowIs(t, time.Unix(1727000000, 0))
+	series := decodeGraphiteBody(t, "cpu.load;owner=o'neil;env=prod 1 1727000000\ndisk.free;mount=C:\\(x;env=prod 2 1727000000\n", model.GraphiteConfig{})
+	for _, s := range series {
+		tags := s.(map[string]any)["tags"].(map[string]any)
+		if tags["env"] != "prod" {
+			t.Fatalf("%s", asJSON(t, s))
+		}
+	}
+	if tags := series[0].(map[string]any)["tags"].(map[string]any); tags["owner"] != "o'neil" && tags["mount"] != "C:\\(x" {
+		t.Fatalf("%s", asJSON(t, series))
+	}
+}

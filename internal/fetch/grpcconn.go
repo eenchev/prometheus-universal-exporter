@@ -3,6 +3,11 @@
 package fetch
 
 import (
+	"context"
+	"net"
+	"net/netip"
+	"slices"
+	"strings"
 	"sync"
 	"time"
 
@@ -27,6 +32,9 @@ type grpcConnKey struct {
 	dial     string
 	tls      bool
 	settings model.TLSConfig
+	// policy is the collector's allowed_targets and denied_targets, which
+	// every connection is checked against; nil for none.
+	policy *targetPolicy
 }
 
 type grpcConnEntry struct {
@@ -72,7 +80,11 @@ func (c *grpcConnCache) get(key grpcConnKey, now time.Time) (*grpc.ClientConn, e
 		}
 		creds = credentials.NewTLS(cfg)
 	}
-	conn, err := grpc.NewClient(key.dial, grpc.WithTransportCredentials(creds))
+	options := []grpc.DialOption{grpc.WithTransportCredentials(creds)}
+	if key.policy != nil {
+		options = append(options, grpc.WithContextDialer(grpcPolicyDialer(key.policy, strings.TrimPrefix(key.dial, "dns:///"))))
+	}
+	conn, err := grpc.NewClient(key.dial, options...)
 	if err != nil {
 		return nil, err
 	}
@@ -95,4 +107,38 @@ func (c *grpcConnCache) size() int {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	return len(c.entries)
+}
+
+// grpcPolicyDialer connects to address and checks the address it connected
+// to against policy, for the server hostPort. An address the server's name
+// does not resolve to is a proxy's, whose target the call checked already.
+func grpcPolicyDialer(policy *targetPolicy, hostPort string) func(context.Context, string) (net.Conn, error) {
+	host, _, _ := net.SplitHostPort(hostPort)
+	host = strings.ToLower(strings.TrimSuffix(host, "."))
+	return func(ctx context.Context, address string) (net.Conn, error) {
+		conn, err := (&net.Dialer{Timeout: 30 * time.Second, KeepAlive: 30 * time.Second}).DialContext(ctx, "tcp", address)
+		if err != nil {
+			return nil, err
+		}
+		remote, ok := conn.RemoteAddr().(*net.TCPAddr)
+		if !ok {
+			return conn, nil
+		}
+		connected, ok := netip.AddrFromSlice(remote.IP)
+		if !ok {
+			return conn, nil
+		}
+		connected = connected.Unmap()
+		nameAllowed, err := policy.checkName(host)
+		if err == nil {
+			if addrs, resolveErr := resolveHost(ctx, host); resolveErr != nil || slices.ContainsFunc(addrs, func(a netip.Addr) bool { return a.Unmap() == connected }) {
+				err = policy.checkAddr(host, connected, nameAllowed)
+			}
+		}
+		if err != nil {
+			_ = conn.Close()
+			return nil, err
+		}
+		return conn, nil
+	}
 }

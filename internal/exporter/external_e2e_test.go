@@ -62,7 +62,7 @@ type externalCase struct {
 var externalCases = []externalCase{
 	{
 		name:        "frankfurter/json",
-		config:      "../../testdata/config.frankfurter.json-test.yaml",
+		config:      "../../examples/config.frankfurter.json-test.yaml",
 		collector:   "exchange_rates",
 		target:      "https://api.frankfurter.dev",
 		wantMetrics: []string{"exchange_rate", "exchange_rate_inverse", "exchange_rate_observation_timestamp_seconds"},
@@ -70,7 +70,7 @@ var externalCases = []externalCase{
 	},
 	{
 		name:        "usgs/csv",
-		config:      "../../testdata/config.usgs.csv-test.yaml",
+		config:      "../../examples/config.usgs.csv-test.yaml",
 		collector:   "earthquakes",
 		target:      "https://earthquake.usgs.gov",
 		wantMetrics: []string{"earthquake_magnitude", "earthquake_depth_kilometers"},
@@ -78,7 +78,7 @@ var externalCases = []externalCase{
 	},
 	{
 		name:      "k8s-guestbook/yaml",
-		config:    "../../testdata/config.k8sguestbook.yaml-test.yaml",
+		config:    "../../examples/config.k8sguestbook.yaml-test.yaml",
 		collector: "kubernetes_guestbook_deployment",
 		target:    "https://raw.githubusercontent.com",
 		wantMetrics: []string{
@@ -91,7 +91,7 @@ var externalCases = []externalCase{
 	},
 	{
 		name:        "scrapethissite/html",
-		config:      "../../testdata/config.scrapethissite.html-test.yaml",
+		config:      "../../examples/config.scrapethissite.html-test.yaml",
 		collector:   "countries_html",
 		target:      "https://www.scrapethissite.com",
 		wantMetrics: []string{"country_population", "country_area"},
@@ -99,7 +99,7 @@ var externalCases = []externalCase{
 	},
 	{
 		name:      "grafana-status/json",
-		config:    "../../testdata/config.grafanastatus.json-test.yaml",
+		config:    "../../examples/config.grafanastatus.json-test.yaml",
 		collector: "statuspage",
 		target:    "https://status.grafana.com",
 		wantMetrics: []string{

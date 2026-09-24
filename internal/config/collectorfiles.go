@@ -116,14 +116,14 @@ func loadCollectorFile(path string, opts []LoadOption) ([]model.Collector, error
 		return nil, fmt.Errorf("collector file %s must be a mapping with a collectors list", path)
 	}
 	for i := 0; i+1 < len(root.Content); i += 2 {
-		if key := root.Content[i].Value; key != collectorFileKey {
-			return nil, fmt.Errorf("collector file %s: line %d: %q is not allowed; a collector file may only contain %s", path, root.Content[i].Line, key, collectorFileKey)
+		if key := root.Content[i].Value; key != collectorFileKey && !isExtensionKey(key) {
+			return nil, fmt.Errorf("collector file %s: line %d: %q is not allowed; a collector file may only contain %s, and x- keys of its own for YAML anchors", path, root.Content[i].Line, key, collectorFileKey)
 		}
 	}
 	var file collectorFile
 	dec := yaml.NewDecoder(bytes.NewReader(b))
 	dec.KnownFields(true)
-	if err := dec.Decode(&file); err != nil && !errors.Is(err, io.EOF) {
+	if err := withoutExtensionKeys(dec.Decode(&file)); err != nil && !errors.Is(err, io.EOF) {
 		return nil, fmt.Errorf("collector file %s: %w", path, yamlError(err))
 	}
 	if err := oneDocument(dec); err != nil {

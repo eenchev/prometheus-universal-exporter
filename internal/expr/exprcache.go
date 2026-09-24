@@ -66,10 +66,12 @@ func (c *exprCache[T]) len() int {
 	return len(c.entries)
 }
 
-// jqRootVariable is bound in every jq program to the whole decoded document,
-// so an expression evaluated against one item of a metric's items can still
-// look things up elsewhere in the response.
-const jqRootVariable = "$root"
+// JQVariables are bound in every jq program, in this order: $root, the whole
+// decoded document, so an expression evaluated against one item of a
+// metric's items can still look things up elsewhere in the response;
+// $status, the response's HTTP status; and $headers, its headers by
+// lower-case name.
+var JQVariables = []string{"$root", "$status", "$headers"}
 
 // A compiled program is safe to run from many goroutines at once.
 var jqPrograms = newExprCache(func(expression string) (*gojq.Code, error) {
@@ -77,7 +79,7 @@ var jqPrograms = newExprCache(func(expression string) (*gojq.Code, error) {
 	if err != nil {
 		return nil, err
 	}
-	return gojq.Compile(query, gojq.WithVariables([]string{jqRootVariable}))
+	return gojq.Compile(query, gojq.WithVariables(JQVariables))
 })
 
 // CompileJQ compiles a jq expression, once per distinct expression.

@@ -73,8 +73,8 @@ server:
   # out, so the chart also works with exporter images that predate it. Raise it
   # if Prometheus still times out first.
   probeTimeoutOffset: ""
-  # How long a probe may take when it names no deadline: no scrape timeout
-  # header and no timeout parameter, as from curl or a script. Prometheus
+  # How long a probe may take without a scrape timeout header, as from curl
+  # or a script; a timeout parameter cannot lift it. Prometheus
   # always sends one, so this does not change its scrapes. A Go duration of
   # zero or more, 0 leaving such a probe unbounded; empty keeps the exporter's
   # default, 30s, and leaves the flag out.
@@ -85,11 +85,26 @@ server:
   # the Deployment anyway. The endpoint is behind web.basic_auth when that is
   # configured. SIGHUP reloads whether or not this is set.
   enableLifecycle: false
+  # How many trips to targets, probes and static target scrapes of every
+  # collector together, may be in progress at once (--probe.max-concurrent),
+  # on top of each collector's max_concurrent_probes. Each holds a response
+  # and its series in memory, so this bounds what a burst can cost the pod.
+  # A probe over it is answered 503; a static target scrape waits. A whole
+  # number; 0 or empty leaves them bounded only per collector, and empty
+  # leaves the flag out.
+  probeMaxConcurrent: ""
+  # How many Python workers, of every collector together, may be alive at
+  # once (--python.max-workers): each is a Python process with its own
+  # memory. A run that finds none free takes the place of the idle worker
+  # unused for longest, or waits within its probe's deadline. A whole
+  # number; 0 or empty leaves them bounded only per script, and empty leaves
+  # the flag out.
+  pythonMaxWorkers: ""
   # How long a pod that is stopping waits for the probes in progress before
   # closing their connections: hours, minutes and seconds such as "30s" or
   # "1m30s". Keep it at least as long as the monitors' scrapeTimeout, or a
   # rollout cuts probes off and Prometheus records them as failed scrapes.
-  # Empty keeps the exporter's default, 5s, and leaves the flag out, so the
+  # Empty keeps the exporter's default, 15s, and leaves the flag out, so the
   # chart also works with exporter images that predate it. The pod's
   # terminationGracePeriodSeconds is raised to cover it (see below).
   shutdownTimeout: ""
@@ -170,6 +185,15 @@ extraVolumeMounts: []
 # A target with export_via_otlp: true is also delivered over OTLP, which needs
 # otlp.enabled in the configuration; when the chart manages the configuration,
 # rendering fails early rather than the pod.
+#
+# Run static targets with replicaCount: 1 and autoscaling off. Every replica
+# scrapes every static target on its own schedule, so with more replicas each
+# target is contacted once per replica per interval, each replica serves
+# results of its own at the static targets endpoint, which the monitor below
+# then reads through whichever pod the Service picks, and a target with
+# export_via_otlp is exported over OTLP once per replica, as duplicate series. Probes, which Prometheus sends, scale with
+# replicas; static targets do not. To spread static targets, split them over
+# several releases, each with a document of its own.
 staticTargets:
   enabled: false
   # File name inside the mounted configuration directory: its key in the
@@ -312,6 +336,59 @@ resources:
   limits:
     cpu: 500m
     memory: 512Mi
+# Set GOMEMLIMIT to the container's memory limit, resources.limits.memory,
+# through the downward API, so the Go runtime collects harder as its heap
+# nears the limit instead of growing past it into an OOM kill. Rendered only
+# when a memory limit is set and env does not set GOMEMLIMIT itself. Python
+# workers use memory of their own outside it: bound them with
+# server.pythonMaxWorkers and limits.max_script_memory.
+goMemLimit:
+  enabled: true
+# Timings of the container's probes. The chart sets what they check, /health
+# for liveness and /ready for readiness on the http port; these add to it.
+# /health only says the process answers, so a liveness probe is given some
+# slack: a pod busy with a burst of probes is slow, not dead, and a restart
+# would lose its cache and Python workers.
+livenessProbe:
+  periodSeconds: 10
+  timeoutSeconds: 3
+  failureThreshold: 5
+readinessProbe:
+  periodSeconds: 10
+  timeoutSeconds: 3
+  failureThreshold: 3
+# A HorizontalPodAutoscaler for the Deployment, which then sets the replica
+# count itself: replicaCount is not rendered. Probes scale out with it, since
+# Prometheus sends each to one pod through the Service. Static targets do
+# not: every replica scrapes every static target, so with static targets
+# configured each extra replica is another full set of requests to every
+# target, and each replica serves its own results at the static targets
+# endpoint. A target with export_via_otlp is then exported over OTLP once per
+# replica, as duplicate series under the same resource. Keep static targets
+# in a release without autoscaling. Utilization is measured against
+# resources.requests, so keep those set.
+autoscaling:
+  enabled: false
+  minReplicas: 1
+  maxReplicas: 3
+  targetCPUUtilizationPercentage: 80
+  targetMemoryUtilizationPercentage: null
+  # Further autoscaling/v2 metrics, such as a Pods metric from an adapter.
+  metrics: []
+  # autoscaling/v2 behavior: scaleUp and scaleDown policies.
+  behavior: {}
+# A PodDisruptionBudget for the exporter's pods, so a node drain does not
+# take them all down at once. It helps with replicaCount above 1; with one
+# replica, minAvailable: 1 would block a drain until the pod is deleted by
+# hand, so use maxUnavailable: 1 there if you want one at all. Set one of
+# minAvailable or maxUnavailable, a count or a percentage; with neither, the
+# budget is maxUnavailable: 1.
+podDisruptionBudget:
+  enabled: false
+  minAvailable: null
+  maxUnavailable: null
+  # IfHealthyBudget or AlwaysAllow; empty leaves Kubernetes' default.
+  unhealthyPodEvictionPolicy: ""
 # How long Kubernetes lets a stopping pod run before killing it. Empty leaves
 # Kubernetes' default, 30 seconds, unless the shutdown needs more: the chart
 # then renders server.shutdownDelay plus server.shutdownTimeout plus 10
@@ -323,8 +400,14 @@ strategy:
   rollingUpdate:
     maxUnavailable: 0
     maxSurge: 1
+# The image runs as user and group 65532, set here too so the pod starts
+# under runAsNonRoot with images that name their user, and mounted Secrets and
+# ConfigMaps are readable by that group.
 podSecurityContext:
   runAsNonRoot: true
+  runAsUser: 65532
+  runAsGroup: 65532
+  fsGroup: 65532
   seccompProfile: {type: RuntimeDefault}
 securityContext:
   allowPrivilegeEscalation: false

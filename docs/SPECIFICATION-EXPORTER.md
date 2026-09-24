@@ -174,9 +174,10 @@ unparseable, non-positive or non-finite header MUST leave the probe
 unbounded by it. The `timeout` parameter keeps bounding the request alone; the
 earlier deadline wins.
 
-A probe that names no deadline — no usable header and no `timeout` parameter,
-as from curl, a script or the collectors page without its script — MUST be
-bounded the same way by `--probe.default-timeout`, which MUST default to 30s,
+A probe without a usable header, as from curl, a script or the collectors
+page without its script, MUST be bounded the same way by
+`--probe.default-timeout`, whatever `timeout` parameter it gives: the
+parameter bounds the request within that budget and MUST NOT lift it. The flag MUST default to 30s,
 MUST reject a negative value as a command-line error like the offset, and
 leaves such a probe unbounded at 0. Its error MUST name that flag rather than
 Prometheus's scrape timeout, so a probe that ran out says which deadline it
@@ -537,6 +538,8 @@ type.
 | `follow_redirects` | `false` | § 42.15. |
 | `enable_http2` | `false` | § 42.15. |
 | `allowed_schemes` | `http`, `https` | Schemes a target may use. |
+| `accept_status` | every 2xx | Statuses whose answers are decoded: numbers from 100 to 599 and classes such as `2xx`, written as YAML numbers or strings; any other entry MUST be refused at load. A response with another status MUST fail in the `http_status` stage, and an accepted status MUST NOT be retried. |
+| `allowed_targets`, `denied_targets` | none | Hosts, globs, addresses and networks its requests may and may not reach (§ 26.1). |
 
 It MUST accept these `/probe` parameters: `method`, `path`, `timeout`, `body`,
 `insecure_skip_verify`, `follow_redirects`, `enable_http2`, `retry_attempts`,
@@ -703,7 +706,7 @@ lines: it only pulls. Its keys:
 | `from` | `-15min` | The window's start, sent as `from`. Wide enough to hold a point of a series stored at one- or five-minute resolution. |
 | `until` | `now` | The window's end, sent as `until`. |
 | `path` | `/render` | As `http`'s. |
-| `query`, `headers`, `basic_auth` / `basic_auth_file`, `bearer_token` / `bearer_token_file`, `forward_authorization`, `forward_headers`, `tls`, `retry`, `max_response_bytes`, `follow_redirects`, `enable_http2`, `allowed_schemes` | as `http` | With `http`'s rules. |
+| `query`, `headers`, `basic_auth` / `basic_auth_file`, `bearer_token` / `bearer_token_file`, `forward_authorization`, `forward_headers`, `tls`, `retry`, `max_response_bytes`, `follow_redirects`, `enable_http2`, `allowed_schemes`, `accept_status`, `allowed_targets`, `denied_targets` | as `http` | With `http`'s rules. |
 
 - The request MUST be `http`'s in everything but its URL — the same transport,
   credentials, retries, limits and proxy — and a `GET`; `method` and `body`
@@ -793,6 +796,10 @@ keys:
   and `v1alpha` when the server does not implement v1, for the file defining
   the service and every file it imports, asking by name for any the answer
   left out. An answer MUST be kept per connection and service for 10 minutes.
+  Probes missing the same answer together MUST share one question, which MUST
+  run with its own timeout, detached from the deadline and cancellation of the
+  probe that started it, so that probe ending does not fail the others; each
+  probe MUST wait for the answer only as long as its own deadline allows.
   A call failing with `UNIMPLEMENTED`, or whose answer does not decode, MUST
   drop the answer, ask again and call again once, apart from the retries. A
   server without reflection MUST fail saying so and naming `protoset` and
@@ -1451,10 +1458,12 @@ included, MUST fail the decode saying the Graphite server did not answer with
 render JSON and quoting the start of the answer, never be read as carbon
 lines.
 
-A tagged name, `path;tag=value;...`, MUST be split into its path and tags,
-at a `;` outside brackets and quotes only, so a function's result named after
-a tagged argument, `movingAverage(cpu.load;env=prod,'5min')`, keeps that name
-as its path; a render target that does not read as a tagged name but whose
+A tagged name, `path;tag=value;...`, MUST be split into its path and tags
+at the first `;` outside brackets and quotes, so a function's result named
+after a tagged argument, `movingAverage(cpu.load;env=prod,'5min')`, keeps that
+name as its path; the tags after it MUST then be split on every `;`, since a
+tag value may hold a quote or a bracket, `owner=o'neil`, which MUST NOT swallow
+the tags after it; a render target that does not read as a tagged name but whose
 tags the render API gave MUST be kept as its name. The
 decoder MUST produce one document for every transform:
 
@@ -1581,6 +1590,11 @@ A series typed `histogram` MUST have buckets and one typed `summary`
 quantiles, and a series with either MUST have that type; a `prometheus` rule
 MUST NOT give a histogram or summary another type, nor another series one of
 theirs. A count of observations MUST be refused outside 0 to 2^64-1.
+
+A pre-script of a transform reading HTML or XML (`css`, `xpath`) MUST leave
+`data` a string, which is parsed again; anything else MUST fail the scrape
+naming what the script left and that a `jq` or `yq` transform reads structured
+data.
 
 A pre-script of a `prometheus` transform MUST receive the series as
 `{"metrics": [...]}`, as a Python transform does, and what it leaves MUST be
@@ -1755,6 +1769,19 @@ typical script.
   error and leave the worker in service. A worker that exits, crashes, or writes
   an answer longer than `limits.max_output_bytes` MUST be discarded, and the next
   scrape MUST start another.
+- `limits.max_script_memory`, a size, MUST bound each of the collector's
+  workers' address space (`RLIMIT_AS`), set after the declared libraries are
+  imported. A script that needs more MUST fail the run with a `MemoryError`
+  naming the limit and leave the worker in service. It MUST be at least 32MiB
+  or `0`, the default, for none; a smaller one MUST be refused at load. A
+  different limit MUST mean a different pool of workers.
+- `--python.max-workers` MUST bound the workers alive at once, starting, busy
+  or idle, of every collector together. A run that finds no idle worker for its
+  script while the limit is reached MUST stop the idle worker unused for
+  longest, of any script, counting it with the reason `evicted`, and start its
+  own; when every worker is busy it MUST wait for one within its own deadline
+  and otherwise fail naming the flag. `0`, the default, MUST leave the workers
+  bounded only per pool; a negative value MUST be a command-line error.
 - A healthy worker MUST be reused at most 1000 times; at most four idle workers
   MUST be kept per pool, and an idle worker MUST be stopped after five minutes.
   Idle workers MUST be checked against that timeout on a timer, every minute,
@@ -1824,7 +1851,10 @@ concurrent use, cached by expression text (and namespace bindings for XPath),
 and bounded in number, so repeated reloads cannot grow the cache without limit.
 
 Every jq program MUST have `$root` bound to the whole decoded document, so an
-expression evaluated against one item (§ 18.2) can reach the rest of it.
+expression evaluated against one item (§ 18.2) can reach the rest of it,
+`$status` bound to the response's HTTP status, and `$headers` to its headers,
+an object of lower-case names, each with its values joined by `, `; both
+MUST be `null` for a response without them.
 
 ---
 
@@ -1897,6 +1927,22 @@ refused at load on a rule of any other transform, since a rule reading one
 value has no buckets or quantiles to expose. Metric declarations MUST be placed on the collector, alongside
 `transform`, rather than using transform-specific arrays such as `rules` or
 `expressions`.
+
+A rule MAY set `value_map`, a mapping of text to numbers, and `scale`, a
+number. The value an expression gives — a regex capture, a CSS element's or
+XPath node's text or computed value, a CSV cell, a jq or yq result — MUST be
+looked up in `value_map` as text: without surrounding blanks, a number as JSON
+writes it and a boolean as `true` or `false`, case-sensitively. A value it
+lists MUST take the mapped number; any other MUST take the number mapped to
+`"*"` when there is one, numbers included, and otherwise be read as a number
+as without the map, failing the rule, naming `value_map`, when it is not one.
+`scale` MUST then multiply the value, mapped or read. Both MUST apply the same
+way in the `regex`, `css`, `xpath`, `csv`, `jq` and `yq` transforms; on a
+`prometheus` rule `scale` MUST multiply plain samples and fail the rule for a
+histogram or summary, and `value_map` MUST be refused at load; a `python`
+rule MUST refuse both at load. A `scale` of 0 or one that is not finite, and a
+`value_map` key that is empty or has surrounding blanks, MUST be refused at
+load.
 
 `error_mode` MUST be `ignore`, `log` or `fail` and defaults to `log`; the same
 vocabulary as `error_handling` (§ 19). Any other value MUST be rejected at
@@ -2380,6 +2426,7 @@ http_exporter_cache_stale_served_total
 http_exporter_probes_coalesced_total
 http_exporter_probes_in_flight
 http_exporter_probes_rejected_total
+http_exporter_targets_refused_total
 
 http_exporter_build_info
 http_exporter_collector_config_valid
@@ -2672,7 +2719,7 @@ would otherwise reach an OTLP backend as one name with two types.
 The Python families MUST be published for every collector with a Python
 transform or pre-script, and for no other. `state` MUST be one of `starting`,
 `idle` and `busy`; `reason` one of `timeout`, `crash`, `output_limit`,
-`cancelled`, `retired`, `surplus`, `idle` and `reload`; `outcome` one of `ok`,
+`cancelled`, `retired`, `surplus`, `idle`, `reload` and `evicted`; `outcome` one of `ok`,
 `script_error`, `timeout`, `output_limit` and `failed`. Every value of `reason`
 and `outcome` MUST be published, zero included, so a rate can be taken before
 the first event. The pool MUST keep these counts regardless of verbose mode,
@@ -2907,7 +2954,17 @@ parser words it.
 
 Unknown keys MUST be refused everywhere in these files, including in blocks
 decoded by custom code such as a static target's `request`, where they
-would otherwise be ignored without a word.
+would otherwise be ignored without a word. The one exception is a top-level
+key of the configuration, a collector file or the static target file that
+begins with `x-` and has more after it: it MUST be ignored, whatever it holds,
+and the rest of the file decoded and checked as usual, so the file can keep
+YAML anchors (`&name`) there for the rest of it to reuse with aliases
+(`*name`) and merge keys (`<<: *name`), such as the request and transform
+several collectors share. An `x-` key anywhere below the top level, and a bare
+`x-`, MUST be refused as unknown keys. The published schemas MUST accept such
+top-level keys through `patternProperties`. Aliases and merge keys MUST work
+in all three files as YAML defines them: a key set beside a merge replaces the
+merged value of that key whole.
 
 Each of these files MUST hold one YAML document. A second document after a
 `---` MUST be refused naming the line it starts on, since it would otherwise
@@ -3046,13 +3103,39 @@ Requirements:
 - Never log credentials.
 - Avoid SSRF escalation where reasonable.
 - Consider configurable allowed URL schemes (`http`, `https`).
-- Consider optional target allowlists/deny lists.
+- Offer per-collector target allowlists and deny lists (§ 26.1).
 - Protect against excessively large responses.
 - Bound regex, jq, yq, and Python execution.
 - Restrict Python networking/process/file capabilities.
 - Do not install packages dynamically during probes.
 - Do not accept arbitrary Python code through query parameters.
 - Collector names MUST map only to server-side configured code/config.
+
+## 26.1 Target allowlists and deny lists
+
+An `http`, `graphite` or `grpc` collector MAY set `request.allowed_targets`
+and `request.denied_targets`, lists of host names, globs of host names
+(`*` and `?`, `*` matching dots too, so `*.example.com` matches
+`a.b.example.com` but not `example.com`), IP addresses and CIDR networks. An
+entry that is none of these, such as one with a scheme, a port or a path,
+MUST be refused at load; another request type setting either MUST be refused
+as any key of another type is. Names MUST be compared without case and
+without a final dot, and an IPv4-mapped IPv6 address as its IPv4 address.
+
+- A target MUST be refused when its host matches `denied_targets` by name, or
+  any address it resolves to is in a denied network.
+- With `allowed_targets` set, a target MUST be refused unless its host
+  matches it by name, or every address it resolves to is in an allowed
+  network. `denied_targets` MUST win over `allowed_targets`.
+- The check MUST run before the request, again for the host of every
+  redirect followed, and against the address each connection is actually
+  made to, so a name that resolves elsewhere between the check and the
+  connection is still refused. A connection to a proxy MUST NOT be checked
+  as the target; the target's own addresses are those the exporter resolves.
+- A refused probe MUST be answered `403 Forbidden` naming the rule, whatever
+  `error_handling.on_fetch_error` says, without contacting the target, and
+  MUST be counted in `http_exporter_targets_refused_total`; a refused static
+  target MUST fail in the `target_policy` stage and be counted there too.
 
 The `collector` URL parameter selects configuration; it MUST NOT contain executable code.
 
@@ -3314,7 +3397,7 @@ statuses: a count of `0` is a real value and MUST still be exported. The
 per-component and per-group metrics MUST use `items` (§ 18.2), so each label is
 evaluated against its own component and `$root` reaches the rest of the page.
 
-`testdata/config.grafanastatus.json-test.yaml` is the reference: a collector
+`examples/config.grafanastatus.json-test.yaml` is the reference: a collector
 for any Atlassian Statuspage page, demonstrated against
 <https://status.grafana.com>, reading `/api/v2/summary.json`. It MUST expose:
 
@@ -3387,13 +3470,13 @@ Provide clear CLI flags, for example:
 --probe.timeout-offset=500ms
 --probe.default-timeout=30s
 --web.enable-lifecycle
---web.shutdown-timeout=5s
+--web.shutdown-timeout=15s
 --web.shutdown-delay=0s
 --version
 ```
 
 `--web.shutdown-timeout` bounds how long a `SIGTERM` or `SIGINT` waits for the
-probes in progress, 5 seconds by default; a value that is not positive MUST be
+probes in progress, 15 seconds by default, longer than a typical scrape timeout; a value that is not positive MUST be
 refused as a malformed command line. When it runs out, the connections still
 open MUST be closed, which MUST be logged with the timeout, before the last
 OTLP export (§ 42.1a) and a clean exit.
@@ -4382,7 +4465,11 @@ Maintain a documented seed corpus of representative difficult inputs.
 
 Test at minimum:
 
-- SSRF protections according to the documented target policy.
+- SSRF protections according to the documented target policy: a denied
+  name, glob, address or network, an address outside `allowed_targets`, a
+  redirect to a refused host, and a connection made to a refused address
+  after the check are each refused, and a refused probe is answered `403`
+  without contacting the target, also for `grpc`.
 - Target URL validation.
 - Disallowed schemes if only HTTP/HTTPS are intended.
 - TLS verification behavior.
@@ -4412,7 +4499,9 @@ Test the built container image for:
 - Every documented bundled Python library imports successfully.
 - No runtime package installation is required.
 - Expected filesystem permissions are respected.
-- The image runs as the configured non-root user when non-root mode is enabled.
+- The image runs as a non-root user named by number, `USER 65532:65532`, so
+  Kubernetes can verify `runAsNonRoot`; a test MUST check that the image's
+  `USER` is numeric and that the chart's `podSecurityContext` runs the same user.
 
 The image build MUST be reproducible and MUST pin dependency versions sufficiently for production use. A test MUST check the Dockerfile for the image contents §31 requires: no BeautifulSoup, pip removed, Debian updates applied, and `LXML_VERSION` at or above 6.1.0. The Dockerfile MUST expose the Go base version, Python base version, and each bundled Python dependency version as `ARG` variables with documented defaults, so builds can override them without editing the Dockerfile.
 
@@ -5400,10 +5489,10 @@ See § 3.2a.
 - A negative `--probe.timeout-offset` exits 2 with a JSON log line and nothing
   on stdout, also with `--dry-run`; so does a negative
   `--probe.default-timeout`.
-- A probe without the header or a `timeout` parameter to a target that never
-  answers fails with `502` after `--probe.default-timeout`, naming that flag.
-  The header takes precedence over the default; a `timeout` parameter, or a
-  default of 0, leaves the probe without the default.
+- A probe without the header to a target that never answers fails with `502`
+  after `--probe.default-timeout`, naming that flag, also with `timeout=1h`.
+  The header takes precedence over the default; a default of 0 leaves the
+  probe without one.
 
 ## 34.55 Self-metric exposition and reload status tests
 
@@ -5680,14 +5769,77 @@ sources at run time, so they need neither the network nor `protoc`.
   out-of-range timestamp fail naming the metric, and so does `metric(...)`
   with a timestamp of `1e22`.
 - A summary count of `1e20` is refused as out of range.
-- A Graphite target splits on `;` only outside brackets and quotes, and a
-  target the render API tagged itself is kept as its name.
+- A Graphite target's path ends at the first `;` outside brackets and quotes,
+  and a target the render API tagged itself is kept as its name.
 - A JSON body with `# HELP ` in a string is read as JSON, and exposition text
   still as Prometheus.
 - A gRPC answer within the limit as a message but over it as JSON fails as a
   limit, the gauge at `0`; concurrent probes of a new target open one
   reflection stream; a slow descriptor read keeps no other set waiting.
 - A YAML type error does not quote the string it found.
+- A `css` pre-script leaving a dict and an `xpath` pre-script leaving a list
+  fail naming the type; one rewriting the markup is parsed again.
+- On the static targets endpoint a result's age is worked out at every read:
+  under a second just after a scrape, about ninety seconds when its data is
+  that old, the stored result left unchanged; a collector without
+  `stale_if_error` has no age.
+
+## 34.64 Review fixes: image, limits, memory, deadlines, chart and rule tests
+
+Tests MUST show:
+
+- The image's `USER` is a non-zero number, and the chart's
+  `podSecurityContext` runs that user, group and `fsGroup`.
+- A Graphite tag value holding a quote or a bracket, `owner=o'neil`, keeps the
+  tags after it.
+- A probe whose deadline ends while the shared reflection question is in
+  flight fails alone: a probe waiting for the same answer gets it, over one
+  reflection stream.
+- A static target whose `targets` hold a value reading `metadata` has another
+  cache key than one with those metadata.
+- A third trip under `--probe.max-concurrent=2` is refused naming the flag, a
+  waiting one gives up at its deadline, and a probe over it is answered `503`;
+  a negative `--probe.max-concurrent` or `--python.max-workers` exits 2, also
+  with `--dry-run`.
+- Under `--python.max-workers=2`, a burst of six runs never has more than two
+  workers alive, and another script's run evicts one idle worker; with one
+  worker busy, another script's run gives up at its deadline naming the flag.
+- A script allocating 1 GiB under `limits.max_script_memory: 256MiB` fails
+  naming the limit, and the worker then runs a small script; a limit under
+  32MiB is refused at load.
+- The static targets endpoint serves results stored labelled, and a read
+  leaves them unchanged.
+- Cache hits share the stored entry, and two hits appending to what they read
+  neither write into the entry nor into each other's series.
+- The exposition of help and label escaping, sorted labels, `le` and
+  `quantile` over a label of that name, the `+Inf` bucket, special floats and
+  timestamps is exact, and an answer from a reused buffer holds nothing of the
+  last.
+- A probe without the header and with `timeout=1h` to a target that never
+  answers ends after `--probe.default-timeout`, naming it.
+- `allowed_targets` and `denied_targets`: entries with a scheme, a port, a
+  path or a bad network are refused, and `localfile` refuses both; the
+  decisions for denied names, globs, networks, mixed addresses, allowed names
+  and networks, IPv4-mapped and IPv6 addresses hold; a refused target is not
+  contacted; a redirect to a refused address is refused without being
+  followed; a connection to a refused address after the check is closed, and
+  one to a proxy is not; a `grpc` server is refused before any call and its
+  connection checked; a refused probe is answered `403` and counted, and a
+  refused static target is down.
+- `accept_status` refuses `600`, `99`, `6xx`, `2x` and `ok`, reads YAML
+  numbers and strings, decodes an accepted `503` without retrying it, and
+  still fails on a status it does not list; jq reads `$status` and
+  `$headers["x-mode"]`.
+- A configuration whose collectors and rules merge `x-` anchors loads with
+  the merged settings, a key beside a merge replacing the merged one whole;
+  so do a collector file and a static target file with `x-` anchors; an `x-`
+  key inside a collector, a bare `x-` and another unknown top-level key are
+  refused; and an error after an `x-` key is still reported.
+- `value_map` and `scale` give the same values in `regex`, `css`, `xpath`,
+  `csv`, `jq` and `yq`, `"*"` catches an unlisted value, a value without a
+  match and without `"*"` is read as a number or fails naming `value_map`;
+  `scale` multiplies a `prometheus` sample and fails for a histogram; the
+  combinations refused at load are refused.
 
 # 35. Documentation requirements
 
@@ -6512,11 +6664,20 @@ exactly. The cache key MUST be a fingerprint covering at least:
   value.
 
 The presence and the absence of a parameter, a header, or a credential MUST
-produce different keys. A probe that supplies no credential, no forwarded
+produce different keys. Every list the key is built from — a parameter's
+values, a header's values, and a static target's own sections (`targets`,
+`metadata`, `retry_codes`) — MUST be written with its length, so a value that
+reads like the next item cannot move a boundary and make two different
+requests share a key. A probe that supplies no credential, no forwarded
 header, or no TLS override therefore MUST NOT be able to read an entry stored
 by a probe that supplied one, and two probes presenting different credentials
 MUST NOT share an entry. This is a confidentiality requirement: a cached result
 may only ever be returned to a byte-for-byte identical request.
+
+A stored entry MUST be the cache's own copy of the result, taken when it is
+stored. Hits MAY share that copy rather than copy it again, provided nothing
+changes a stored entry and a reader that adds series to what it read, as the
+freshness series do, never writes into the entry's storage.
 
 Because the collector definition is part of the key, a configuration reload
 MUST retire every entry cached under the previous definition. A loaded
@@ -6562,7 +6723,10 @@ http_exporter_result_age_seconds  seconds since the answered result was fetched 
 ```
 
 The age MUST be 0 for a result just fetched and the stored entry's age for a
-cached answer, fresh or stale. A result in which a rule produced either name
+cached answer, fresh or stale. On the static targets endpoint (§ 42.14), which
+serves a target's last result until its next scrape, the age MUST be worked
+out at every read of the endpoint, from when the result's data came from the
+target, so it says how old the data is when it is read. A result in which a rule produced either name
 MUST fail validation, since the names would clash; without `stale_if_error`
 the names are free and the gauges are not added. They MUST NOT count against
 `limits.max_metrics`. Samples of a stale answer carry no timestamps of their
@@ -6663,6 +6827,12 @@ many targets of one backend would reach it with no bound.
   MUST fail in the `concurrency` stage and be counted as rejected.
 - A slot MUST be freed when the trip ends, and `http_exporter_probes_in_flight`
   MUST report the trips in progress per collector.
+- `--probe.max-concurrent` MUST bound the trips of every collector together,
+  on top of each collector's limit, since each trip holds a response and its
+  series in memory. A probe over it MUST be answered `503` naming the flag and
+  counted as rejected; a static target MUST wait for a slot as for its
+  collector's. `0`, the default, MUST leave only the per-collector limits; a
+  negative value MUST be a command-line error, also with `--dry-run`.
 
 ## 42.14 Static targets
 
@@ -6822,7 +6992,9 @@ metrics with its labels, or its stale result, and its health result — at
 - A target not yet scraped MUST be absent, and a target removed from the
   document MUST leave the endpoint with the reload.
 - Serving the endpoint MUST NOT contact a target: it reads what the targets'
-  last scrapes left.
+  last scrapes left. A target's result SHOULD be stored already labelled with
+  `static_target` when its scrape publishes it, so a read only merges and
+  writes, and a read MUST NOT change what is stored.
 - An optional `targets` query parameter MUST narrow a read to the targets it
   names, given separated by commas, as the parameter repeated (as Prometheus
   renders a scrape config's `params`), or both; spaces around a name and empty
@@ -6843,6 +7015,12 @@ metrics with its labels, or its stale result, and its health result — at
   (§ 42).
 
 The endpoint MUST be served, empty, without a static target document.
+
+Every replica of the exporter scrapes every static target; running static
+targets with more than one replica, or with autoscaling, contacts each target
+once per replica and exports each target with `export_via_otlp` once per
+replica, as duplicate series, and the chart MUST say so
+(SPECIFICATION-CHART.md § 33.1).
 
 ### 42.14b Static targets over OTLP
 

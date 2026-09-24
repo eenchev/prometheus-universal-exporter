@@ -6,3 +6,29 @@ The exporter Service was disabled with service.enabled=false.
 {{- end }}
 
 The chart does not install Prometheus Operator CRDs. Enable entries in monitors only when the selected ServiceMonitor or PodMonitor CRD is installed.
+{{- if .Values.staticTargets.enabled }}
+{{- $replicas := int .Values.replicaCount }}
+{{- $source := printf "replicaCount %d" $replicas }}
+{{- if .Values.autoscaling.enabled }}
+{{- $replicas = int .Values.autoscaling.maxReplicas }}
+{{- $source = printf "autoscaling up to %d replicas" $replicas }}
+{{- end }}
+{{- if or (gt $replicas 1) .Values.autoscaling.enabled }}
+{{- $viaOTLP := list }}
+{{- range (get (fromYaml (.Values.staticTargets.data | default "")) "targets" | default list) }}
+{{- if and (kindIs "map" .) (get . "export_via_otlp") }}
+{{- $viaOTLP = append $viaOTLP (get . "name" | default (get . "collector")) }}
+{{- end }}
+{{- end }}
+
+WARNING: staticTargets.enabled with {{ $source }}. Every replica scrapes every
+static target, so each target can be contacted up to {{ $replicas }} times per interval,
+once per replica, and each replica serves its own results at {{ .Values.staticTargets.path }}.
+{{- if $viaOTLP }}
+Targets with export_via_otlp ({{ join ", " $viaOTLP }}) are also exported over
+OTLP once per replica, as duplicate series.
+{{- end }}
+Run static targets with replicaCount: 1 and autoscaling off, or split them
+into a release of their own.
+{{- end }}
+{{- end }}

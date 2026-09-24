@@ -1,0 +1,48 @@
+{{- if .Values.autoscaling.enabled }}
+{{- $scaling := .Values.autoscaling }}
+{{- if lt (int $scaling.maxReplicas) (int $scaling.minReplicas) }}
+{{- fail (printf "autoscaling.maxReplicas %v is below autoscaling.minReplicas %v" $scaling.maxReplicas $scaling.minReplicas) }}
+{{- end }}
+{{- if and (not $scaling.targetCPUUtilizationPercentage) (not $scaling.targetMemoryUtilizationPercentage) (not $scaling.metrics) }}
+{{- fail "autoscaling.enabled needs something to scale on: targetCPUUtilizationPercentage, targetMemoryUtilizationPercentage or metrics" }}
+{{- end }}
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: {{ include "prometheus-universal-exporter.fullname" . }}
+  {{ with .Values.namespaceOverride }}namespace: {{ . }}{{ end }}
+  labels:
+    {{- include "prometheus-universal-exporter.metadataLabels" (list .) | nindent 4 }}
+  annotations:
+    {{- include "prometheus-universal-exporter.metadataAnnotations" (list .) | nindent 4 }}
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: {{ include "prometheus-universal-exporter.fullname" . }}
+  minReplicas: {{ $scaling.minReplicas }}
+  maxReplicas: {{ $scaling.maxReplicas }}
+  metrics:
+    {{- with $scaling.targetCPUUtilizationPercentage }}
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: {{ . }}
+    {{- end }}
+    {{- with $scaling.targetMemoryUtilizationPercentage }}
+    - type: Resource
+      resource:
+        name: memory
+        target:
+          type: Utilization
+          averageUtilization: {{ . }}
+    {{- end }}
+    {{- with $scaling.metrics }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+  {{- with $scaling.behavior }}
+  behavior: {{- toYaml . | nindent 4 }}
+  {{- end }}
+{{- end }}

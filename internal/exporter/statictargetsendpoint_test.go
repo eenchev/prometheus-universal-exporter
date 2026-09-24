@@ -430,8 +430,8 @@ func TestStaticTargetsSharingAResourceStayApartOverOTLP(t *testing.T) {
 	if len(values) != 2 || values["eu"] != 1 || values["us"] != 2 {
 		t.Fatalf("exported %v, want eu=1 and us=2", values)
 	}
-	// The endpoint serves both, each labelled once, and what the target
-	// keeps for it is unlabelled: the label is the endpoint's to add.
+	// The endpoint serves both, each labelled once, from results stored
+	// already labelled, so a read only merges and writes them.
 	body := getStaticTargets(t, server, "/static-targets")
 	for series, want := range map[string]float64{`demo_value{static_target="eu"}`: 1, `demo_value{static_target="us"}`: 2} {
 		if got := metricValue(t, body, series); got != want {
@@ -439,10 +439,19 @@ func TestStaticTargetsSharingAResourceStayApartOverOTLP(t *testing.T) {
 		}
 	}
 	for _, result := range server.staticTargetResults() {
+		if !result.labelled {
+			t.Fatalf("the result of %s is not stored labelled", result.name)
+		}
 		for _, m := range result.set.Metrics {
-			if m.Name == "demo_value" && m.Labels["static_target"] != "" {
-				t.Fatalf("the published result of %s was labelled in place: %v", result.name, m.Labels)
+			if m.Labels["static_target"] != result.name {
+				t.Fatalf("the published result of %s is labelled %v", result.name, m.Labels)
 			}
 		}
+	}
+	// A read leaves the stored series as they were.
+	before := server.staticTargetResults()[0].set.Metrics[0].Labels
+	getStaticTargets(t, server, "/static-targets")
+	if after := server.staticTargetResults()[0].set.Metrics[0].Labels; len(after) != len(before) || after["static_target"] != before["static_target"] {
+		t.Fatalf("a read changed the stored series: %v -> %v", before, after)
 	}
 }

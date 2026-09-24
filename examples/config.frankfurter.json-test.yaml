@@ -1,7 +1,7 @@
 # Demo collector for the Frankfurter foreign-exchange API, a public endpoint
 # that needs no authentication and no API key.
 #
-#   go run . --config.file=config.frankfurter.yaml
+#   go run . --config.file=examples/config.frankfurter.json-test.yaml
 #   curl 'http://localhost:8080/probe?collector=exchange_rates&target=https://api.frankfurter.dev'
 #
 # Note the target host: api.frankfurter.app answers with a 302 to

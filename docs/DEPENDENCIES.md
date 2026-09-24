@@ -67,6 +67,13 @@ fixed yet:
 
 A test (`TestDockerfileImageContents`) keeps all three in place.
 
+The image runs as user and group 65532, named by number (`USER 65532:65532`)
+rather than by name: Kubernetes can check `runAsNonRoot` only against a numeric
+user, and refuses to start a pod whose image names one. The chart's
+`podSecurityContext` sets the same user, group and `fsGroup`, so mounted
+Secrets and ConfigMaps are readable. `TestTheImageUserIsNumeric` keeps the two
+in step.
+
 Scanners also report Debian packages in the base image — util-linux, glibc,
 systemd, ncurses and others — for which Debian has not published a fix. The image
 cannot fix those; they go away when the image is rebuilt after Debian ships the

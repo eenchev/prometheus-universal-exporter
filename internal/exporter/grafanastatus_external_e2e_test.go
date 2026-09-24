@@ -17,7 +17,7 @@ import (
 	"github.com/eenchev/prometheus-universal-exporter/internal/config"
 )
 
-// testdata/config.grafanastatus.json-test.yaml turns an Atlassian Statuspage
+// examples/config.grafanastatus.json-test.yaml turns an Atlassian Statuspage
 // summary into metrics. This runs it against a trimmed capture of
 // status.grafana.com's real summary, served locally, and pins the exposition.
 //
@@ -32,7 +32,7 @@ import (
 // component in partial outage, an unresolved incident, and maintenances both
 // in progress and scheduled.
 
-const grafanaStatusConfig = "../../testdata/config.grafanastatus.json-test.yaml"
+const grafanaStatusConfig = "../../examples/config.grafanastatus.json-test.yaml"
 
 func probeGrafanaStatus(t *testing.T, fixture string) string {
 	t.Helper()

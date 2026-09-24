@@ -52,13 +52,15 @@ RUN apt-get update \
     python-dateutil==${PYTHON_DATEUTIL_VERSION} \
     && python -m pip uninstall -y pip \
     && rm -rf /usr/local/lib/python3*/ensurepip/_bundled \
-    && groupadd --system exporter \
-    && useradd --system --gid exporter exporter \
+    && groupadd --system --gid 65532 exporter \
+    && useradd --system --uid 65532 --gid exporter exporter \
     && rm -rf /var/lib/apt/lists/*
 
 COPY --from=build /out/prometheus-universal-exporter /bin/prometheus-universal-exporter
 
-USER exporter
+# By number, not name: Kubernetes checks runAsNonRoot against the image's
+# user only when it is numeric, and refuses to start a named one.
+USER 65532:65532
 
 EXPOSE 8080
 

@@ -396,6 +396,12 @@ func fetch(ctx context.Context, target string, c *model.Collector, overrides Req
 	if err != nil {
 		return nil, err
 	}
+	// The collector's allowed_targets and denied_targets, checked here, on
+	// every redirect and on every connection the request makes.
+	ctx, err = withTargetPolicy(ctx, c, u.Hostname())
+	if err != nil {
+		return nil, err
+	}
 	requestContext := ctx
 	cancel := func() {}
 	if overrides.Timeout > 0 {
@@ -508,7 +514,9 @@ func fetch(ctx context.Context, target string, c *model.Collector, overrides Req
 			return nil, model.MarkError(fmt.Errorf("response size %d exceeds limit %d", len(body), limit), model.ErrLimitExceeded)
 		}
 		response := &HTTPResponse{StatusCode: resp.StatusCode, Headers: resp.Header.Clone(), Body: body, Target: target, Collector: c.Name, Duration: time.Since(start)}
-		if retryableStatus(resp.StatusCode) && attempt < retryAttempts {
+		// An answer the collector accepts is its answer, not a failure to
+		// retry, even a 503 it asked to read.
+		if retryableStatus(resp.StatusCode) && !AcceptedStatus(c, resp.StatusCode) && attempt < retryAttempts {
 			// A wait the deadline, a shutdown or the caller cut short keeps
 			// what the target answered: the status and body say why the
 			// scrape failed, where the bare context error would only say
@@ -668,4 +676,36 @@ func normalizeTarget(raw string) string {
 		return raw
 	}
 	return "http://" + raw
+}
+
+// validateAcceptStatus checks request.accept_status at load: each entry a
+// status from 100 to 599, or a class such as 2xx, written in lower case.
+func validateAcceptStatus(c *model.Collector) error {
+	for i, raw := range c.Request.AcceptStatus {
+		entry := strings.ToLower(strings.TrimSpace(raw))
+		c.Request.AcceptStatus[i] = entry
+		if len(entry) == 3 && entry[1:] == "xx" && entry[0] >= '1' && entry[0] <= '5' {
+			continue
+		}
+		if code, err := strconv.Atoi(entry); err == nil && code >= 100 && code <= 599 {
+			continue
+		}
+		return fmt.Errorf("collector %q request.accept_status entry %q is not an HTTP status from 100 to 599 or a class such as 2xx", c.Name, raw)
+	}
+	return nil
+}
+
+// AcceptedStatus says whether a response with status is decoded: one of
+// request.accept_status, or any 2xx when it is empty.
+func AcceptedStatus(c *model.Collector, status int) bool {
+	if len(c.Request.AcceptStatus) == 0 {
+		return status >= 200 && status < 300
+	}
+	code := strconv.Itoa(status)
+	for _, entry := range c.Request.AcceptStatus {
+		if entry == code || (len(code) == 3 && entry[0] == code[0] && entry[1:] == "xx") {
+			return true
+		}
+	}
+	return false
 }

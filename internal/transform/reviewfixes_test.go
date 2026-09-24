@@ -155,3 +155,32 @@ metrics.append({"name": "a", "value": 1, "labels": {"code": 200, "gone": None, "
 		}
 	}
 }
+
+// A pre-script of a css or xpath transform must leave markup: a dict or a
+// list fails, saying so, rather than parsing into a document no rule matches.
+func TestAMarkupPreScriptMustLeaveText(t *testing.T) {
+	requirePython(t)
+	for _, tc := range []struct {
+		decoder, transform, contentType, body, rule, want string
+	}{
+		{"html", "css", "text/html", "<html><body><p class=v>1</p></body></html>", "p.v", "css transform must leave data as a string of HTML, not a dict"},
+		{"xml", "xpath", "application/xml", "<r><v>1</v></r>", "/r/v", "xpath transform must leave data as a string of XML, not a list"},
+	} {
+		script := `data = {"v": 1}`
+		if tc.decoder == "xml" {
+			script = `data = [1]`
+		}
+		c := model.Collector{Name: "markup", Decoder: model.DecoderConfig{Type: tc.decoder}, Limits: scriptLimits(),
+			Transform: model.TransformConfig{Type: tc.transform, PreScript: script},
+			Metrics:   []model.MetricRule{{Name: "v", Type: model.GaugeMetricType, Expression: tc.rule}}}
+		if _, err := runBody(t, c, tc.contentType, tc.body); err == nil || !strings.Contains(err.Error(), tc.want) || !strings.Contains(err.Error(), "use a jq or yq transform") {
+			t.Errorf("%s: %v, want %q", tc.transform, err, tc.want)
+		}
+		// Markup the script rewrites is parsed again, as before.
+		c.Transform.PreScript = `data = data.replace("1", "7")`
+		set, err := runBody(t, c, tc.contentType, tc.body)
+		if err != nil || len(set.Metrics) != 1 || set.Metrics[0].Value != 7 {
+			t.Errorf("%s rewritten: %v %+v", tc.transform, err, set)
+		}
+	}
+}

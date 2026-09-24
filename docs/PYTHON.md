@@ -95,6 +95,21 @@ start once and then serves scrape after scrape.
   transform printed` or `python pre-script printed` with the collector, so
   `--log.level=debug` shows it while a script is being written; the rest is
   dropped, and counts against `limits.max_output_bytes` no further.
+- **Memory.** `limits.max_script_memory`, such as `256MiB`, bounds the address
+  space of each of the collector's workers — the interpreter and its libraries
+  included — through `RLIMIT_AS`, set after the libraries are loaded. A script
+  that needs more fails the scrape with `MemoryError: the script ran out of
+  memory under limits.max_script_memory`, and the worker carries on. It is at
+  least 32MiB; `0`, the default, leaves it unbounded. It is enforced on Linux,
+  where the exporter's image runs.
+- **Workers across collectors.** Each script has workers of its own, so many
+  Python collectors can run many interpreters. `--python.max-workers` bounds the
+  workers alive at once, starting, busy or idle, of every collector together. A
+  run that finds none free for its script stops the idle worker unused for
+  longest, of any script, and starts its own in its place, or, when every
+  worker is busy, waits for one within its probe's deadline and otherwise fails
+  saying so. A worker stopped this way is counted with the reason `evicted`.
+  `0`, the default, leaves the workers bounded only per script.
 - **Lifetime.** A worker is reused up to 1,000 times, at most four stay idle per
   collector after a burst of scrapes, and an idle one stops after five minutes
   — checked every minute, so a collector nobody scrapes any more does not keep
@@ -173,7 +188,10 @@ the response is read; those still emit through `metric(...)` and may omit the
 The promotion is deliberately limited to the transforms that read structured
 data. `csv`, `regex`, `css`, `xpath`, and `prometheus` keep receiving their own
 decoded format, and a pre-script that returns a string still leaves the format
-alone, so HTML and XML output is reparsed as before.
+alone, so HTML and XML output is reparsed as before. A pre-script of a `css` or
+`xpath` transform must leave `data` a string of markup: a dict or a list fails
+the scrape saying so, rather than parsing into a document none of the rules
+matches. To hand the rules structured data, use a `jq` or `yq` transform.
 
 A pre-script of a `prometheus` transform gets `{"metrics": [...]}`, [as above](#what-data-is),
 and must leave `data` in the same shape: it may drop series, change their

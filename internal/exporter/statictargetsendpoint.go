@@ -69,19 +69,39 @@ func (s *Server) staticTargetsEndpoint() string {
 // arrive under the same resource with the same series, and without it the
 // later target's values would replace the earlier's in the pending export.
 func (s *Server) publishStaticTarget(target model.StaticTarget, identity otlpResourceIdentity, set model.MetricSet) {
+	s.publishStaticResult(target, identity, set, time.Time{})
+}
+
+// publishStaticResult is publishStaticTarget for a result whose data came
+// from the target at fetched: its http_exporter_result_age_seconds is worked
+// out again at every read of the endpoint, so it says how old the data is
+// when Prometheus reads it, not how old it was when the scrape made it.
+// fetched is zero for a result without that series.
+func (s *Server) publishStaticResult(target model.StaticTarget, identity otlpResourceIdentity, set model.MetricSet, fetched time.Time) {
 	// A reload may have removed the target while its scrape was in flight;
 	// its result then goes nowhere, over OTLP included.
 	if !s.staticTargetInForce(target.Name) {
 		return
 	}
+	// Stored already labelled with its target, as the endpoint and OTLP
+	// serve it, so a read of the endpoint only merges and writes, and the
+	// labelling is done once per scrape rather than once per read. The
+	// stored series are never changed after this: readers share them.
+	labelled := withStaticTargetLabel(set, target.Name)
 	s.staticMu.Lock()
 	if s.staticResults == nil {
 		s.staticResults = map[string]model.MetricSet{}
+		s.staticFetched = map[string]time.Time{}
 	}
-	s.staticResults[target.Name] = set
+	s.staticResults[target.Name] = labelled
+	if fetched.IsZero() {
+		delete(s.staticFetched, target.Name)
+	} else {
+		s.staticFetched[target.Name] = fetched
+	}
 	s.staticMu.Unlock()
 	if target.ExportViaOTLP {
-		s.queueOTLPResource(withStaticTargetLabel(set, target.Name), identity)
+		s.queueOTLPResource(labelled, identity)
 	}
 }
 
@@ -112,21 +132,27 @@ func withStaticTargetLabel(set model.MetricSet, name string) model.MetricSet {
 }
 
 // staticTargetResults returns the latest result of each target in force, by
-// name, and forgets the results of targets no longer in force.
+// name, its data's age as of now, and forgets the results of targets no
+// longer in force.
 func (s *Server) staticTargetResults() []namedSet {
 	targets := s.manager.StaticTargets()
 	current := make(map[string]bool, len(targets))
 	var out []namedSet
+	now := time.Now()
 	s.staticMu.Lock()
 	for _, target := range targets {
 		current[target.Name] = true
 		if set, ok := s.staticResults[target.Name]; ok {
-			out = append(out, namedSet{name: target.Name, set: set})
+			if fetched, aged := s.staticFetched[target.Name]; aged {
+				set = withResultAge(set, now.Sub(fetched))
+			}
+			out = append(out, namedSet{name: target.Name, set: set, labelled: true})
 		}
 	}
 	for name := range s.staticResults {
 		if !current[name] {
 			delete(s.staticResults, name)
+			delete(s.staticFetched, name)
 		}
 	}
 	for name := range s.staticLastSuccess {
@@ -139,9 +165,25 @@ func (s *Server) staticTargetResults() []namedSet {
 	return out
 }
 
+// withResultAge is set with its http_exporter_result_age_seconds set to age,
+// in a copy of its series, so the stored result is left as it was.
+func withResultAge(set model.MetricSet, age time.Duration) model.MetricSet {
+	out := model.MetricSet{Metrics: make([]model.Metric, len(set.Metrics))}
+	copy(out.Metrics, set.Metrics)
+	for i := range out.Metrics {
+		if out.Metrics[i].Name == resultAgeMetric {
+			out.Metrics[i].Value = max(age.Seconds(), 0)
+		}
+	}
+	return out
+}
+
+// namedSet is a target's result; labelled when its series already carry
+// static_target, as the stored results do.
 type namedSet struct {
-	name string
-	set  model.MetricSet
+	name     string
+	set      model.MetricSet
+	labelled bool
 }
 
 // errFamilyTypeClash is a target's family whose type another target's family
@@ -234,12 +276,11 @@ func (s *Server) mergeStaticTargets(results []namedSet) model.MetricSet {
 	families := map[string]*family{}
 	var order []string
 	for _, result := range results {
-		for _, m := range result.set.Metrics {
-			m.Labels = model.CloneLabels(m.Labels)
-			if m.Labels == nil {
-				m.Labels = map[string]string{}
-			}
-			m.Labels[config.StaticTargetLabel] = result.name
+		set := result.set
+		if !result.labelled {
+			set = withStaticTargetLabel(set, result.name)
+		}
+		for _, m := range set.Metrics {
 			f := families[m.Name]
 			if f == nil {
 				f = &family{typ: m.Type}

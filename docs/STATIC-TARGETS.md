@@ -103,6 +103,27 @@ endpoint, so a target may set none of the three: kept as the series' own
 labels, as the endpoint is scraped, a target's `job` would move its series out
 of the job that scrapes it. Name such a label something else, such as `task`.
 
+Targets that share a collector, a target or labels can write them once with
+a YAML anchor under a top-level `x-` key, which the exporter ignores, and
+merge it into each target (see
+[Reusing settings with YAML anchors](CONFIGURATION.md#reusing-settings-with-yaml-anchors)):
+
+```yaml
+x-open-meteo: &open_meteo
+  collector: open_meteo_current
+  target: https://api.open-meteo.com
+interval: 10m
+targets:
+  - <<: *open_meteo
+    name: sofia
+    params: {param_latitude: "42.6977", param_longitude: "23.3219"}
+    labels: {city: Sofia}
+  - <<: *open_meteo
+    name: varna
+    params: {param_latitude: "43.2141", param_longitude: "27.9147"}
+    labels: {city: Varna}
+```
+
 Check a target file together with its configuration before deploying it:
 `prometheus-universal-exporter --dry-run --config.file=config.yaml --static-targets-file=static-targets.yaml`
 reports whether each would load, including whether every target names a
@@ -115,6 +136,15 @@ Each target is scraped on its own `interval`, as Prometheus scrapes a probe on
 its `scrape_interval`. Neither Prometheus's scrapes of the endpoint nor the OTLP
 export decide when a target is scraped: the endpoint serves, and the export
 delivers, what the last scrape of each target left.
+
+Every running exporter scrapes every target in its file. Run one replica for
+a static target file, without a HorizontalPodAutoscaler: each further replica
+contacts every target again on the same interval, serves results of its own
+on the endpoint, and exports every target with `export_via_otlp` again, so the
+OTLP backend receives duplicate series. To spread many targets, split them
+into files served by separate exporters. The Helm chart warns when it renders
+static targets with more than one replica or with autoscaling (see
+[Autoscaling](../charts/prometheus-universal-exporter/README.md#autoscaling)).
 
 A target is first scraped within ten seconds of the exporter starting, or of
 the reload that added it or changed it in any way — its address, its request,
@@ -151,6 +181,9 @@ nothing of the collector's to serve, as it answers a probe `200` with an empty
 body. With [`cache.stale_if_error`](CONFIGURATION.md#serving-the-last-good-result-when-the-target-fails),
 a failed scrape serves the target's last good result, marked by
 `http_exporter_result_stale` 1, while its `http_exporter_target_up` is `0`.
+Its `http_exporter_result_age_seconds` is how old the data is when the
+endpoint is read, worked out at every read: it grows between scrapes, and
+starts again from `0` at a scrape that goes to the target.
 
 Static targets are not reachable through `/probe`.
 

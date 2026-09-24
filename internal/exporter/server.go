@@ -27,10 +27,12 @@ type Server struct {
 	logger          *slog.Logger
 	selfMetricsPath string
 	// staticTargetsPath is where the static targets are served; staticResults
-	// is each target's latest result, by name (statictargetsendpoint.go).
+	// is each target's latest result, by name, and staticFetched when the
+	// data in it came from the target, for its age (statictargetsendpoint.go).
 	staticTargetsPath string
 	staticMu          sync.Mutex
 	staticResults     map[string]model.MetricSet
+	staticFetched     map[string]time.Time
 	staticLastSuccess map[string]time.Time
 	// staticClashes are the targets' metrics the last read of the endpoint
 	// left out for their type (statictargetsendpoint.go).
@@ -39,7 +41,7 @@ type Server struct {
 	// timeoutOffset is how much of Prometheus's scrape timeout a probe leaves
 	// unused (scrapetimeout.go).
 	timeoutOffset time.Duration
-	// defaultProbeTimeout bounds a probe that names no deadline
+	// defaultProbeTimeout bounds a probe without a scrape timeout
 	// (scrapetimeout.go).
 	defaultProbeTimeout time.Duration
 	statsMu             sync.Mutex
@@ -272,7 +274,7 @@ func (s *Server) probeHandler(w http.ResponseWriter, r *http.Request) {
 		// A miss is counted when the trip goes to the target (probeTrip);
 		// a probe that shares another's trip is counted as coalesced.
 	}
-	budget, budgetSource := s.probeDeadline(r.Header, overrides)
+	budget, budgetSource := s.probeDeadline(r.Header)
 	upstream := func(ctx context.Context) *probeResult {
 		return s.probeUpstream(ctx, upstreamProbe{
 			collector: c, target: target, logTarget: logTarget, overrides: overrides,
@@ -375,10 +377,10 @@ func (s *Server) probeTrip(ctx context.Context, p upstreamProbe) *probeResult {
 	// Answered at once when the collector's backend already has all it may
 	// get, rather than queued behind the probes in progress (triplimit.go).
 	limit := maxConcurrentProbes(c)
-	if !s.trips.tryAcquire(name, limit) {
+	if ok, full := s.trips.tryAcquire(name, limit); !ok {
 		rec.update(func(x *serverStats) { x.rejected++ })
-		s.failures.failed(s.logger, slog.LevelWarn, failureKey(name, logTarget, ""), "probe rejected: the collector has too many probes in progress", "concurrency", nil, "collector", name, "target", logTarget, "max_concurrent_probes", limit)
-		http.Error(out, fmt.Sprintf("collector %s already has %d probes to its targets in progress, its max_concurrent_probes; this one was not sent", name, limit), http.StatusServiceUnavailable)
+		s.failures.failed(s.logger, slog.LevelWarn, failureKey(name, logTarget, ""), "probe rejected: too many probes in progress", "concurrency", nil, "collector", name, "target", logTarget, "reason", full)
+		http.Error(out, full+"; this probe was not sent", http.StatusServiceUnavailable)
 		return out.result(false)
 	}
 	defer s.trips.release(name)
@@ -412,6 +414,10 @@ func (s *Server) probeTrip(ctx context.Context, p upstreamProbe) *probeResult {
 			Target:    logTarget,
 			Error:     result.err.Error(),
 		})
+		return out.result(false)
+	case result.refused:
+		// The caller asked for a target the collector may not reach.
+		http.Error(out, fmt.Sprintf("collector %s refused the target: %v", name, result.err), http.StatusForbidden)
 		return out.result(false)
 	case result.failed():
 		http.Error(out, fmt.Sprintf("collector %s %s failed: %v", name, result.stage, result.err), http.StatusBadGateway)

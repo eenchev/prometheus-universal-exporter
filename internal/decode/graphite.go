@@ -275,10 +275,12 @@ func parseCarbonLine(line string, now time.Time) (string, map[string]string, gra
 }
 
 // parseGraphitePath splits a path from its tags, as Graphite writes a tagged
-// series: name;tag=value;tag=value. The tags always hold name. Only a ; outside
-// brackets and quotes separates tags: a function's name for its result, such
-// as movingAverage(cpu.load;env=prod,'5min'), holds its argument's tags,
-// which are not the result's.
+// series: name;tag=value;tag=value. The tags always hold name. The path ends
+// at the first ; outside brackets and quotes: a function's name for its
+// result, such as movingAverage(cpu.load;env=prod,'5min'), holds its
+// argument's tags, which are not the result's. The tags after it are split on
+// every ;, which no tag value may hold, while a value may hold quotes and
+// brackets, as owner=o'neil does.
 func parseGraphitePath(raw string) (string, map[string]string, error) {
 	path, rest, tagged := cutTopLevel(raw)
 	if path == "" {
@@ -287,7 +289,7 @@ func parseGraphitePath(raw string) (string, map[string]string, error) {
 	tags := map[string]string{"name": path}
 	for tagged {
 		var tag string
-		tag, rest, tagged = cutTopLevel(rest)
+		tag, rest, tagged = strings.Cut(rest, ";")
 		name, value, ok := strings.Cut(tag, "=")
 		if !ok || name == "" {
 			return "", nil, fmt.Errorf("the series %q has a tag %q that is not name=value", raw, tag)

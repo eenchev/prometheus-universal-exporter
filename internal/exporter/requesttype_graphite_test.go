@@ -235,7 +235,7 @@ func TestAGraphiteStaticTargetsCacheQuery(t *testing.T) {
 	if q := targetCacheQuery(target); q.Get("from") != "-1h" || q.Get("until") != "-1min" || q.Has("targets") {
 		t.Fatalf("query %v", q)
 	}
-	if own := targetOwnRequest(target); !slices.Equal(own, []string{"targets", "a.b"}) {
+	if own := targetOwnRequest(target); !slices.Equal(own, []string{"targets", "1", "a.b"}) {
 		t.Fatalf("own %q", own)
 	}
 	if own := targetOwnRequest(&model.StaticTarget{Request: model.TargetRequestConfig{From: "-1h"}}); own != nil {

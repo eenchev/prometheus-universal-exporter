@@ -31,7 +31,8 @@ configured:
 | `http_exporter_cache_stale_served_total` | counter | Failed trips answered with the last good result under [`stale_if_error`](CONFIGURATION.md#serving-the-last-good-result-when-the-target-fails), probes and static target scrapes alike. |
 | `http_exporter_probes_coalesced_total` | counter | Probes that [shared a request](#shared-probes). |
 | `http_exporter_probes_in_flight` | gauge | Trips to the collector's targets in progress, which [`max_concurrent_probes`](CONFIGURATION.md#limiting-concurrent-probes) bounds. |
-| `http_exporter_probes_rejected_total` | counter | Probes answered `503` because the collector was at `max_concurrent_probes`. |
+| `http_exporter_probes_rejected_total` | counter | Probes answered `503` because the collector was at `max_concurrent_probes`, or the exporter at `--probe.max-concurrent`. |
+| `http_exporter_targets_refused_total` | counter | Probes and static target scrapes whose target, or a redirect's, `request.allowed_targets` or `denied_targets` refused; a probe is answered `403`. |
 | `http_exporter_collector_config_valid` | gauge | `1` for every loaded collector. |
 | `http_exporter_rule_failures_total` | counter | Labelled `collector` and `metric`: the series a metric rule could not produce and the probe carried on without, under `error_mode` `log` or `ignore`. Every rule has its series from zero. A rule under `fail` fails the probe instead, counted in `http_exporter_transform_errors_total`. |
 
@@ -345,9 +346,12 @@ A worker stops because of a `timeout` (the script overran `limits.script_timeout
 and the worker was killed), a `crash` (the interpreter died), an `output_limit`
 (it answered with more than `limits.max_output_bytes`), `cancelled` (the scrape
 was abandoned mid-run), `retired` (it reached 1,000 runs), `surplus` (more than
-four were idle after a burst), `idle` (unused for five minutes) or `reload` (a
-reload changed or removed its script). The last four are routine; the first four
-each cost the next scrape a fresh interpreter.
+four were idle after a burst), `idle` (unused for five minutes), `reload` (a
+reload changed or removed its script) or `evicted` (it was idle when another
+script needed a worker under `--python.max-workers`). `retired`, `surplus`,
+`idle` and `reload` are routine; the first four each cost the next scrape a
+fresh interpreter, and many `evicted` say the limit is too low for the scripts
+in use.
 
 A run ends `ok`, `script_error` (the script raised or called `fail(...)`; the
 worker carries on), `timeout`, `output_limit` or `failed` (the worker could not

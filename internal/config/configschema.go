@@ -39,6 +39,7 @@ func configSchema() map[string]any {
 	schema := schemaFor(reflect.TypeOf(model.Config{}), "", configSchemaRules())
 	schema["$schema"] = "https://json-schema.org/draft/2020-12/schema"
 	schema["$id"] = configSchemaID
+	allowExtensionKeys(schema)
 	schema["title"] = "prometheus-universal-exporter configuration"
 	return schema
 }
@@ -58,6 +59,7 @@ func collectorFileSchema() map[string]any {
 	schema["description"] = "A collector file of the exporter, listed under collector_files in the configuration. It holds collectors and nothing else. See docs/CONFIGURATION.md#collector-files."
 	schema["$schema"] = "https://json-schema.org/draft/2020-12/schema"
 	schema["$id"] = collectorFileSchemaID
+	allowExtensionKeys(schema)
 	schema["title"] = "prometheus-universal-exporter collector file"
 	return schema
 }
@@ -87,6 +89,7 @@ func staticTargetsSchema() map[string]any {
 	schema := schemaFor(reflect.TypeOf(model.StaticTargetFile{}), "", staticTargetsSchemaRules())
 	schema["$schema"] = "https://json-schema.org/draft/2020-12/schema"
 	schema["$id"] = staticTargetsSchemaID
+	allowExtensionKeys(schema)
 	schema["title"] = "prometheus-universal-exporter static target file"
 	return schema
 }
@@ -94,6 +97,12 @@ func staticTargetsSchema() map[string]any {
 // StaticTargetsSchemaJSON renders the static target file schema the same way.
 func StaticTargetsSchemaJSON() ([]byte, error) {
 	return renderSchema(staticTargetsSchema())
+}
+
+// allowExtensionKeys lets a document's top level hold x- keys of its own, for
+// YAML anchors (yamlerrors.go), whatever they contain.
+func allowExtensionKeys(schema map[string]any) {
+	schema["patternProperties"] = map[string]any{"^x-.+": map[string]any{"description": "The file's own, ignored by the exporter: a place for YAML anchors (&name) the rest of the file reuses with aliases (*name) and merge keys (<<: *name)."}}
 }
 
 func renderSchema(schema map[string]any) ([]byte, error) {
@@ -148,6 +157,8 @@ func schemaFor(t reflect.Type, path string, rules map[string]map[string]any) map
 			schema = map[string]any{"type": "boolean"}
 		case reflect.Int, reflect.Int64:
 			schema = map[string]any{"type": "integer", "minimum": 0}
+		case reflect.Float64:
+			schema = map[string]any{"type": "number"}
 		case reflect.String:
 			// YAML reads an unquoted 1 or true as a number or a boolean, and the
 			// exporter takes it as the string it spells, so a plain string
@@ -269,6 +280,12 @@ func configSchemaRules() map[string]map[string]any {
 		"collectors[].metrics[].labels[].expression": {"minLength": 1, "description": "Reads the label from the response, in the transform's language, like the metric's expression."},
 		"collectors[].metrics[].labels[].truncate":   {"description": "Cut a value longer than limits.max_label_value_length to fit, ending in …, instead of failing the scrape."},
 		"collectors[].metrics[].labels[].required":   {"description": "expression labels only: a series the expression gives no value, or an empty one, fails the metric under its error_mode instead of being exported without the label. Defaults to false."},
+		"collectors[].request.accept_status":         {"items": map[string]any{"type": []string{"integer", "string"}, "minimum": 100, "maximum": 599, "pattern": "^[1-5][xX][xX]$|^[1-5][0-9][0-9]$"}, "description": "The HTTP statuses whose answers are decoded, such as [200, 503] or [\"2xx\", 503]; every 2xx when left out. Any other status fails the scrape in the http_status stage. An accepted status is not retried. http and graphite."},
+		"collectors[].request.allowed_targets":       {"description": "Hosts, globs such as *.example.com, IP addresses and CIDR networks the collector's requests may reach: a target is allowed when its host matches by name, or every address it resolves to is in an allowed network. Checked before the request, on every redirect and on every connection. http, graphite and grpc."},
+		"collectors[].request.denied_targets":        {"description": "Hosts, globs, IP addresses and CIDR networks the collector's requests may not reach: a target matching by name, or resolving to any address in a denied network, is refused with 403. Wins over allowed_targets."},
+		"collectors[].metrics[].value_map":           {"description": "Turns the text the expression gives into the value, such as {up: 1, down: 0}; \"*\" maps any value it does not list, numbers included. Without a match and without \"*\", the value is read as a number. Not for the prometheus and python transforms."},
+		"collectors[].metrics[].scale":               {"description": "Multiplies the value, mapped or read as a number, such as 0.001 for milliseconds to seconds. Finite and not 0. Not for the python transform; for prometheus, plain samples only."},
+		"collectors[].limits.max_script_memory":      {"description": "The most memory, as address space, each of the collector's Python workers may use, the interpreter and its libraries included, such as 256MiB. A script that needs more fails with a MemoryError. At least 32MiB; 0, the default, leaves it unbounded. Enforced on Linux."},
 		"collectors[].limits.script_timeout":         {"description": "How long a Python script may run. Starting the interpreter is not counted. Defaults to 100ms."},
 		"otlp.endpoint":                              {"description": "OTLP/HTTP metrics endpoint, such as http://otel-collector:4318/v1/metrics."},
 		"web.basic_auth.username_file":               {"description": "Read the username from this file instead of username, such as a mounted Secret. Read again when it changes."},

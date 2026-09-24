@@ -676,6 +676,34 @@ func TestGRPCConcurrentMissesAskReflectionOnce(t *testing.T) {
 	}
 }
 
+// A probe whose deadline ends while the shared reflection question is in
+// flight fails alone: the question is not its own, and the probes still
+// waiting get the answer.
+func TestGRPCAShortProbeDoesNotFailTheSharedReflection(t *testing.T) {
+	server := grpctest.Start(t, grpctest.Options{Reflection: "v1", Answer: statsAnswer, ReflectionDelay: 300 * time.Millisecond})
+	c := validGRPC(t, grpcCollector())
+	short, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+	shortDone := make(chan error, 1)
+	go func() {
+		_, err := FetchCollector(short, server.Addr, c, RequestOverrides{}, nil)
+		shortDone <- err
+	}()
+	// The short probe starts the question; the patient one joins it.
+	for deadline := time.Now().Add(5 * time.Second); server.ReflectionStreams.Load() == 0 && time.Now().Before(deadline); {
+		time.Sleep(time.Millisecond)
+	}
+	if _, err := FetchCollector(context.Background(), server.Addr, c, RequestOverrides{}, nil); err != nil {
+		t.Fatalf("the patient probe failed with the short one: %v", err)
+	}
+	if err := <-shortDone; err == nil {
+		t.Fatal("the short probe outlived its deadline")
+	}
+	if n := server.ReflectionStreams.Load(); n != 1 {
+		t.Fatalf("%d reflection streams, want 1", n)
+	}
+}
+
 // A slow read of one descriptor set keeps no other set waiting.
 func TestGRPCDescriptorSetsAreReadApart(t *testing.T) {
 	sets := &fileSets{slots: map[string]*fileSetSlot{}}
@@ -700,4 +728,39 @@ func TestGRPCDescriptorSetsAreReadApart(t *testing.T) {
 		t.Fatal("a second set waited for the first set's read")
 	}
 	close(release)
+}
+
+// A grpc collector's allowed_targets and denied_targets refuse a server
+// before any call, and allow one on the list.
+func TestGRPCTargetPolicy(t *testing.T) {
+	server := grpctest.Start(t, grpctest.Options{Reflection: "v1", Answer: statsAnswer})
+	denied := grpcCollector()
+	denied.Request.DeniedTargets = []string{"127.0.0.0/8"}
+	c := validGRPC(t, denied)
+	if _, err := FetchCollector(context.Background(), server.Addr, c, RequestOverrides{}, nil); !errors.Is(err, ErrTargetRefused) {
+		t.Fatalf("err=%v", err)
+	}
+	if n := server.ReflectionStreams.Load(); n != 0 || len(server.Calls()) != 0 {
+		t.Fatalf("a refused server was called: %d streams, %d calls", n, len(server.Calls()))
+	}
+	allowed := grpcCollector()
+	allowed.Request.AllowedTargets = []string{"127.0.0.1"}
+	if _, err := FetchCollector(context.Background(), server.Addr, validGRPC(t, allowed), RequestOverrides{}, nil); err != nil {
+		t.Fatal(err)
+	}
+	// The connection itself is checked: a policy whose name rule let the
+	// call through still refuses the address the connection was made to.
+	dial := grpcPolicyDialer(mustPolicy(t, []string{"10.0.0.0/8"}, nil), server.Addr)
+	if _, err := dial(context.Background(), server.Addr); !errors.Is(err, ErrTargetRefused) {
+		t.Fatalf("err=%v", err)
+	}
+}
+
+func mustPolicy(t *testing.T, allowed, denied []string) *targetPolicy {
+	t.Helper()
+	p, err := compileTargetPolicy(allowed, denied)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return p
 }

@@ -77,7 +77,7 @@ func ReloadOn(ctx context.Context, hup chan os.Signal, manager *config.Manager, 
 
 // DefaultShutdownTimeout is how long a shutdown waits for the probes in
 // progress when --web.shutdown-timeout is not given.
-const DefaultShutdownTimeout = 5 * time.Second
+const DefaultShutdownTimeout = 15 * time.Second
 
 // ValidateShutdownTimeout refuses a wait that is not positive: zero would cut
 // off every probe in progress, which is what a second signal is for.

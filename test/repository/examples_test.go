@@ -136,11 +136,11 @@ func TestShippedExampleScriptsSatisfyTheContract(t *testing.T) {
 	for _, path := range []string{
 		"configs/config.example.yaml",
 		"configs/config.otlp.example.yaml",
-		"testdata/config.frankfurter.json-test.yaml",
-		"testdata/config.usgs.csv-test.yaml",
-		"testdata/config.k8sguestbook.yaml-test.yaml",
-		"testdata/config.scrapethissite.html-test.yaml",
-		"testdata/config.grafanastatus.json-test.yaml",
+		"examples/config.frankfurter.json-test.yaml",
+		"examples/config.usgs.csv-test.yaml",
+		"examples/config.k8sguestbook.yaml-test.yaml",
+		"examples/config.scrapethissite.html-test.yaml",
+		"examples/config.grafanastatus.json-test.yaml",
 	} {
 		t.Run(path, func(t *testing.T) {
 			cfg, err := config.Load(path)

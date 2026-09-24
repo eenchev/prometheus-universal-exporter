@@ -217,21 +217,28 @@ func run(args []string, stdout, stderr io.Writer) int {
 	defer stop()
 	go manager.ReloadLoop(ctx)
 	go transform.PythonWorkers().ReapLoop(ctx, transform.PythonWorkerReapInterval)
-	go exporter.ReloadOn(ctx, exporter.ReloadSignals(), manager, logger)
+	// SIGHUP is caught until the process exits, not only until the first
+	// SIGTERM: a reload sidecar sending one during the shutdown would
+	// otherwise meet Go's default action and end the process at once,
+	// cutting off the probes in flight and the last OTLP export.
+	reloadCtx, stopReloads := context.WithCancel(context.Background())
+	defer stopReloads()
+	go exporter.ReloadOn(reloadCtx, exporter.ReloadSignals(), manager, logger)
+	// The static targets keep being scraped, and what they and the probes
+	// queue keeps being exported, through --web.shutdown-delay, while the
+	// endpoints are still served, so the two loops have a context of their
+	// own rather than the signal's.
+	loopsCtx, stopLoops := context.WithCancel(context.Background())
+	defer stopLoops()
 	exportLoopDone := make(chan struct{})
 	go func() {
 		defer close(exportLoopDone)
-		server.OTLPExportLoop(ctx)
+		server.OTLPExportLoop(loopsCtx)
 	}()
-	// The static targets keep being scraped through --web.shutdown-delay,
-	// while their endpoint is still served, so they have a context of their
-	// own rather than the signal's.
-	scrapeLoopCtx, stopScrapeLoop := context.WithCancel(context.Background())
-	defer stopScrapeLoop()
 	scrapeLoopDone := make(chan struct{})
 	go func() {
 		defer close(scrapeLoopDone)
-		server.StaticScrapeLoop(scrapeLoopCtx)
+		server.StaticScrapeLoop(loopsCtx)
 	}()
 
 	startup := []any{"version", exporter.BuildVersion().Version, "revision", exporter.BuildVersion().Revision, "address", *listenAddress, "collectors", len(conf.Collectors), "collector_files", len(conf.LoadedCollectorFiles),
@@ -270,11 +277,11 @@ func run(args []string, stdout, stderr io.Writer) int {
 		logger.Info("shutting down: finishing the probes in progress and sending the last OTLP export; a second signal exits at once", "shutdown_timeout", shutdownTimeout.String())
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), *shutdownTimeout)
 		defer cancel()
-		// No static target scrape starts from here; those in flight finish
-		// within --web.shutdown-timeout, or are cut short without
-		// publishing anything, so a target is never reported down only
-		// because the exporter stopped.
-		stopScrapeLoop()
+		// No static target scrape and no periodic export starts from here;
+		// the scrapes in flight finish within --web.shutdown-timeout, or are
+		// cut short without publishing anything, so a target is never
+		// reported down only because the exporter stopped.
+		stopLoops()
 		go func() {
 			<-shutdownCtx.Done()
 			server.AbortStaticScrapes()

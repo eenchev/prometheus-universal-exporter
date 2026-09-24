@@ -33,6 +33,7 @@ func init() {
 			"follow_redirects", "enable_http2", "retry", "headers",
 			"basic_auth", "basic_auth_file", "bearer_token", "bearer_token_file",
 		},
+		URLPath:     true,
 		Validate:    validateHTTPRequest,
 		CheckTarget: checkHTTPTarget,
 		Fetch: func(ctx context.Context, target string, c *model.Collector, overrides RequestOverrides, forwarded http.Header) (*HTTPResponse, error) {

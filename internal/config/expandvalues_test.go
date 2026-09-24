@@ -76,7 +76,7 @@ targets:
 			t.Errorf("%s = %q, want %q", name, check[0], check[1])
 		}
 	}
-	if target.Request.Retry == nil || target.Request.Retry.Attempts != 3 {
+	if target.Request.Retry == nil || target.Request.Retry.Attempts == nil || *target.Request.Retry.Attempts != 3 {
 		t.Errorf("a number stays a number: retry=%+v", target.Request.Retry)
 	}
 

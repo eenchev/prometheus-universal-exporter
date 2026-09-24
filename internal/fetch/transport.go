@@ -174,7 +174,7 @@ func tlsConfig(t model.TLSConfig) (*tls.Config, error) {
 	// matching per-scrape override as a documented, opt-in setting for targets
 	// whose certificate cannot be validated. TLS stays enabled and the minimum
 	// version is pinned.
-	cfg := &tls.Config{InsecureSkipVerify: t.InsecureSkipVerify, MinVersion: tls.VersionTLS12} //nolint:gosec // G402: documented opt-in, defaults to false
+	cfg := &tls.Config{InsecureSkipVerify: t.InsecureSkipVerify, MinVersion: tls.VersionTLS12, ServerName: t.ServerName} //nolint:gosec // G402: documented opt-in, defaults to false
 	if t.CAFile != "" {
 		b, err := os.ReadFile(t.CAFile)
 		if err != nil {

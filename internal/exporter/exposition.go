@@ -36,8 +36,13 @@ func writeProbeError(w http.ResponseWriter, code int, body probeError) {
 	_ = json.NewEncoder(w).Encode(body)
 }
 
+// expositionContentType is the text format's type, with the charset its
+// label values and help are written in, so a browser opening an endpoint
+// shows them as they are.
+const expositionContentType = "text/plain; version=0.0.4; charset=utf-8"
+
 func writeMetricSet(w http.ResponseWriter, s *model.MetricSet) {
-	w.Header().Set("Content-Type", "text/plain; version=0.0.4")
+	w.Header().Set("Content-Type", expositionContentType)
 	var b strings.Builder
 	renderMetricSet(&b, s)
 	_, _ = w.Write([]byte(b.String()))
@@ -63,11 +68,7 @@ func renderMetricSet(b *strings.Builder, s *model.MetricSet) {
 			writeSummary(b, m)
 			continue
 		}
-		fmt.Fprintf(b, "%s%s %s", m.Name, formatLabels(m.Labels), strconv.FormatFloat(m.Value, 'g', -1, 64))
-		if m.Timestamp != nil {
-			fmt.Fprintf(b, " %d", *m.Timestamp)
-		}
-		b.WriteByte('\n')
+		fmt.Fprintf(b, "%s%s %s%s\n", m.Name, formatLabels(m.Labels), strconv.FormatFloat(m.Value, 'g', -1, 64), sampleTimestamp(m))
 	}
 }
 
@@ -106,18 +107,30 @@ func writeHistogram(b *strings.Builder, m model.Metric) {
 		}
 		ls := model.CloneLabels(m.Labels)
 		ls["le"] = strconv.FormatFloat(x.UpperBound, 'g', -1, 64)
-		fmt.Fprintf(b, "%s_bucket%s %d\n", m.Name, formatLabels(ls), x.CumulativeCount)
+		fmt.Fprintf(b, "%s_bucket%s %d%s\n", m.Name, formatLabels(ls), x.CumulativeCount, sampleTimestamp(m))
 	}
 	ls := model.CloneLabels(m.Labels)
 	ls["le"] = "+Inf"
-	fmt.Fprintf(b, "%s_bucket%s %d\n%s_sum%s %s\n%s_count%s %d\n", m.Name, formatLabels(ls), m.Histogram.Count, m.Name, formatLabels(m.Labels), strconv.FormatFloat(m.Histogram.Sum, 'g', -1, 64), m.Name, formatLabels(m.Labels), m.Histogram.Count)
+	at := sampleTimestamp(m)
+	fmt.Fprintf(b, "%s_bucket%s %d%s\n%s_sum%s %s%s\n%s_count%s %d%s\n", m.Name, formatLabels(ls), m.Histogram.Count, at, m.Name, formatLabels(m.Labels), strconv.FormatFloat(m.Histogram.Sum, 'g', -1, 64), at, m.Name, formatLabels(m.Labels), m.Histogram.Count, at)
+}
+
+// sampleTimestamp is the timestamp a sample line of m ends with: its own,
+// in milliseconds after a space, or nothing. Every line of a histogram or a
+// summary carries it, as every line of a plain sample does.
+func sampleTimestamp(m model.Metric) string {
+	if m.Timestamp == nil {
+		return ""
+	}
+	return " " + strconv.FormatInt(*m.Timestamp, 10)
 }
 
 func writeSummary(b *strings.Builder, m model.Metric) {
 	for _, x := range m.Summary.Quantiles {
 		ls := model.CloneLabels(m.Labels)
 		ls["quantile"] = strconv.FormatFloat(x.Quantile, 'g', -1, 64)
-		fmt.Fprintf(b, "%s%s %s\n", m.Name, formatLabels(ls), strconv.FormatFloat(x.Value, 'g', -1, 64))
+		fmt.Fprintf(b, "%s%s %s%s\n", m.Name, formatLabels(ls), strconv.FormatFloat(x.Value, 'g', -1, 64), sampleTimestamp(m))
 	}
-	fmt.Fprintf(b, "%s_sum%s %s\n%s_count%s %d\n", m.Name, formatLabels(m.Labels), strconv.FormatFloat(m.Summary.Sum, 'g', -1, 64), m.Name, formatLabels(m.Labels), m.Summary.Count)
+	at := sampleTimestamp(m)
+	fmt.Fprintf(b, "%s_sum%s %s%s\n%s_count%s %d%s\n", m.Name, formatLabels(m.Labels), strconv.FormatFloat(m.Summary.Sum, 'g', -1, 64), at, m.Name, formatLabels(m.Labels), m.Summary.Count, at)
 }

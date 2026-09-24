@@ -38,7 +38,10 @@ type collectJob struct {
 	// a failure that ran out of it says so, and where it came from.
 	budget       time.Duration
 	budgetSource string
-	log          collectLog
+	// scrape is set for a static target's scrape, whose budget is its
+	// interval, so an error it runs out of says so as a scrape's.
+	scrape bool
+	log    collectLog
 }
 
 // collectLog is how a caller's failures are logged: under which key of the
@@ -96,7 +99,11 @@ func (s *Server) collect(ctx context.Context, j collectJob) collected {
 		if shuttingDown(ctx) {
 			return collected{stage: stage, err: err, aborted: true}
 		}
-		err = explainBudget(ctx, j.budget, j.budgetSource, err)
+		trip := "probe"
+		if j.scrape {
+			trip = "scrape"
+		}
+		err = explainBudget(ctx, trip, j.budget, j.budgetSource, err)
 		attrs := append(append(append([]any{}, j.log.attrs...), "stage", stage), extra...)
 		switch policy {
 		case model.ErrorPolicyLog:

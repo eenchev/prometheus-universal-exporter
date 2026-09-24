@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"math"
 	"regexp"
 	"strconv"
 	"strings"
@@ -34,8 +35,11 @@ func Transform(ctx context.Context, d *decode.Decoded, r *fetch.HTTPResponse, c 
 	if err != nil || set == nil {
 		return set, err
 	}
-	applyCollectorLabels(set, c.Transform)
+	// Truncation first, while the labels still have the names the rules
+	// gave them: rename_labels would otherwise move a label out from under
+	// its truncate: true.
 	truncateLabels(set, c)
+	applyCollectorLabels(set, c.Transform)
 	applyMetricsPrefix(set, c.MetricsPrefix)
 	// After the prefix, so a values-escaped name still starts with U__
 	// (nameescaping.go).
@@ -750,6 +754,9 @@ type xpathNodes[N any] struct {
 	one  func(node N, e *xpath.Expr) (N, bool)
 	attr func(node N, name string) string
 	text func(node N) string
+	// navigate starts an evaluation at node, for an expression whose result
+	// is a number, a string or a boolean rather than nodes.
+	navigate func(node N) xpath.NodeNavigator
 }
 
 var xmlNodes = xpathNodes[*xmlquery.Node]{
@@ -759,8 +766,9 @@ var xmlNodes = xpathNodes[*xmlquery.Node]{
 		found := xmlquery.QuerySelector(node, e)
 		return found, found != nil
 	},
-	attr: func(node *xmlquery.Node, name string) string { return node.SelectAttr(name) },
-	text: func(node *xmlquery.Node) string { return node.InnerText() },
+	attr:     func(node *xmlquery.Node, name string) string { return node.SelectAttr(name) },
+	text:     func(node *xmlquery.Node) string { return node.InnerText() },
+	navigate: func(node *xmlquery.Node) xpath.NodeNavigator { return xmlquery.CreateXPathNavigator(node) },
 }
 
 var htmlNodes = xpathNodes[*html.Node]{
@@ -770,8 +778,9 @@ var htmlNodes = xpathNodes[*html.Node]{
 		found := htmlquery.QuerySelector(node, e)
 		return found, found != nil
 	},
-	attr: htmlquery.SelectAttr,
-	text: htmlquery.InnerText,
+	attr:     htmlquery.SelectAttr,
+	text:     htmlquery.InnerText,
+	navigate: func(node *html.Node) xpath.NodeNavigator { return htmlquery.CreateXPathNavigator(node) },
 }
 
 func transformXPath(ctx context.Context, root *xmlquery.Node, rules []model.MetricRule, c *model.Collector, namespaces map[string]string) (*model.MetricSet, error) {
@@ -786,9 +795,107 @@ func transformHTMLXPath(ctx context.Context, doc *goquery.Document, rules []mode
 }
 
 // transformXPathNodes evaluates each rule's expression against the document
-// and makes a series of every node it selects. A label is a constant, an
-// attribute of the node (@name), or the text of the first node an expression
-// relative to it selects.
+// and makes a series of every node it selects. An expression that computes a
+// value rather than selecting nodes — count(//job), sum(//size),
+// string(/status/@load), a comparison — makes one series of that value, a
+// boolean as 1 or 0. A label is a constant, an attribute of the node (@name),
+// the text of the first node an expression relative to it selects, or the
+// value an expression relative to it computes, as normalize-space(@name).
+// xpathValue evaluates e at node when it computes a value — a number, a
+// string or a boolean — rather than selecting nodes, which computed says.
+func xpathValue[N any](nodes xpathNodes[N], node N, e *xpath.Expr) (value any, computed bool) {
+	switch result := e.Evaluate(nodes.navigate(node)).(type) {
+	case float64, string, bool:
+		return result, true
+	}
+	return nil, false
+}
+
+// xpathLabels are a series' labels, each read relative to node.
+func xpathLabels[N any](nodes xpathNodes[N], node N, rule model.MetricRule, namespaces map[string]string) map[string]string {
+	labels := map[string]string{}
+	for _, label := range rule.Labels {
+		switch {
+		case label.Static():
+			labels[label.Name] = label.Value
+		case strings.HasPrefix(label.Expression, "@"):
+			labels[label.Name] = nodes.attr(node, strings.TrimPrefix(label.Expression, "@"))
+		default:
+			selector, err := expr.CompileXPath(label.Expression, namespaces)
+			if err != nil {
+				continue
+			}
+			if value, computed := xpathValue(nodes, node, selector); computed {
+				if text := xpathText(value); text != "" {
+					labels[label.Name] = text
+				}
+			} else if found, ok := nodes.one(node, selector); ok {
+				labels[label.Name] = nodes.text(found)
+			}
+		}
+	}
+	return labels
+}
+
+// xpathText is a computed value as label text: a number as Go writes it
+// shortest, a boolean as true or false.
+func xpathText(value any) string {
+	switch v := value.(type) {
+	case float64:
+		return strconv.FormatFloat(v, 'g', -1, 64)
+	case bool:
+		return strconv.FormatBool(v)
+	case string:
+		return v
+	}
+	return ""
+}
+
+// addComputedXPathSeries makes the one series of a rule whose expression
+// computes a value. A number that is not one — sum() over text, NaN — and an
+// empty or non-numeric string are the rule's missing value.
+func addComputedXPathSeries[N any](ctx context.Context, out *model.MetricSet, nodes xpathNodes[N], root N, rule model.MetricRule, c *model.Collector, namespaces map[string]string, value any) error {
+	var number float64
+	var problem error
+	switch v := value.(type) {
+	case float64:
+		number = v
+		if math.IsNaN(v) {
+			problem = model.MarkError(fmt.Errorf("%s %q computed NaN, not a number", nodes.kind, rule.Expression), model.ErrMissingValue)
+		}
+	case bool:
+		if v {
+			number = 1
+		}
+	case string:
+		if isBlank(v) {
+			problem = model.MarkError(fmt.Errorf("%s %q computed an empty string", nodes.kind, rule.Expression), model.ErrMissingValue)
+		} else if n, err := decode.TextValue(v); err != nil {
+			problem = fmt.Errorf("metric %q: %w", rule.Name, err)
+		} else {
+			number = n
+		}
+	}
+	if problem != nil {
+		if errors.Is(problem, model.ErrMissingValue) && !requiredRule(rule, c) {
+			return nil
+		}
+		if handleMetricError(ctx, c, rule, problem) {
+			return nil
+		}
+		return ruleFailure(c, rule, problem)
+	}
+	labels := xpathLabels(nodes, root, rule, namespaces)
+	if missing := missingRequiredLabel(rule, labels); missing != nil {
+		if handleMetricError(ctx, c, rule, missing) {
+			return nil
+		}
+		return ruleFailure(c, rule, missing)
+	}
+	out.Metrics = append(out.Metrics, model.Metric{Name: rule.Name, Help: rule.Description, Type: rule.Type, Value: number, Labels: labels})
+	return nil
+}
+
 func transformXPathNodes[N any](ctx context.Context, root N, nodes xpathNodes[N], rules []model.MetricRule, c *model.Collector, namespaces map[string]string) (*model.MetricSet, error) {
 	out := &model.MetricSet{}
 	for _, rule := range rules {
@@ -798,6 +905,12 @@ func transformXPathNodes[N any](ctx context.Context, root N, nodes xpathNodes[N]
 				continue
 			}
 			return nil, ruleFailure(c, rule, fmt.Errorf("%s %q: %w", nodes.kind, rule.Expression, err))
+		}
+		if value, computed := xpathValue(nodes, root, expression); computed {
+			if err := addComputedXPathSeries(ctx, out, nodes, root, rule, c, namespaces, value); err != nil {
+				return nil, err
+			}
+			continue
 		}
 		selected := nodes.all(root, expression)
 		if len(selected) == 0 {
@@ -811,18 +924,7 @@ func transformXPathNodes[N any](ctx context.Context, root N, nodes xpathNodes[N]
 			continue
 		}
 		for _, node := range selected {
-			labels := map[string]string{}
-			for _, label := range rule.Labels {
-				if label.Static() {
-					labels[label.Name] = label.Value
-				} else if strings.HasPrefix(label.Expression, "@") {
-					labels[label.Name] = nodes.attr(node, strings.TrimPrefix(label.Expression, "@"))
-				} else if selector, err := expr.CompileXPath(label.Expression, namespaces); err == nil {
-					if value, ok := nodes.one(node, selector); ok {
-						labels[label.Name] = nodes.text(value)
-					}
-				}
-			}
+			labels := xpathLabels(nodes, node, rule, namespaces)
 			text := nodes.text(node)
 			if isBlank(text) {
 				if requiredRule(rule, c) {
@@ -1025,6 +1127,23 @@ func transformCSSItems(ctx context.Context, doc *goquery.Document, rule model.Me
 	return out, nil
 }
 
+// csvRow is a decoded CSV row as a mapping of column to value: by header
+// name, or, with response.csv.header false, by column number from 1, as the
+// rules name them then.
+func csvRow(raw any) map[string]any {
+	switch row := raw.(type) {
+	case map[string]any:
+		return row
+	case []any:
+		out := make(map[string]any, len(row))
+		for i, value := range row {
+			out[strconv.Itoa(i+1)] = value
+		}
+		return out
+	}
+	return nil
+}
+
 func transformCSV(ctx context.Context, data any, rules []model.MetricRule, c *model.Collector) (*model.MetricSet, error) {
 	rows, ok := data.([]any)
 	if !ok {
@@ -1032,10 +1151,7 @@ func transformCSV(ctx context.Context, data any, rules []model.MetricRule, c *mo
 	}
 	out := &model.MetricSet{}
 	for _, raw := range rows {
-		row, ok := raw.(map[string]any)
-		if !ok {
-			continue
-		}
+		row := csvRow(raw)
 		for _, rule := range rules {
 			value, exists := row[rule.Expression]
 			if !exists || blankValue(value) {
@@ -1112,6 +1228,14 @@ func applyPrometheusTransform(ctx context.Context, in model.MetricSet, c *model.
 						metric.Labels[label.Name] = label.Value
 					} else if value, ok := metric.Labels[label.Expression]; ok {
 						metric.Labels[label.Name] = value
+					}
+					// A rule without a name keeps each series' own, which
+					// truncateLabels cannot look it up by, so its labels are
+					// cut here.
+					if label.Truncate && c.Limits.MaxLabelValueLength > 0 {
+						if value, ok := metric.Labels[label.Name]; ok {
+							metric.Labels[label.Name] = truncateLabelValue(value, c.Limits.MaxLabelValueLength)
+						}
 					}
 				}
 				if missing := missingRequiredLabel(rule, metric.Labels); missing != nil {

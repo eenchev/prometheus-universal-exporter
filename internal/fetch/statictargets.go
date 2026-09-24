@@ -36,13 +36,21 @@ func TargetOverrides(t *model.StaticTarget) RequestOverrides {
 		value := *t.Request.EnableHTTP2
 		out.EnableHTTP2 = &value
 	}
-	if t.Request.Retry != nil {
-		attempts := t.Request.Retry.Attempts
-		backoff := time.Duration(t.Request.Retry.Backoff)
-		nonIdempotent := t.Request.Retry.NonIdempotent
-		out.RetryAttempts = &attempts
-		out.RetryBackoff = &backoff
-		out.RetryNonIdempotent = &nonIdempotent
+	// Each retry key the target sets replaces the collector's; the others
+	// keep it.
+	if retry := t.Request.Retry; retry != nil {
+		if retry.Attempts != nil {
+			attempts := *retry.Attempts
+			out.RetryAttempts = &attempts
+		}
+		if retry.Backoff != nil {
+			backoff := time.Duration(*retry.Backoff)
+			out.RetryBackoff = &backoff
+		}
+		if retry.NonIdempotent != nil {
+			nonIdempotent := *retry.NonIdempotent
+			out.RetryNonIdempotent = &nonIdempotent
+		}
 	}
 	return out
 }

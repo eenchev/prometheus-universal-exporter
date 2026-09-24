@@ -78,12 +78,13 @@ type otlpHistogram struct {
 // count than bounds: the last is everything above the highest bound, which is
 // Prometheus's +Inf bucket.
 type otlpHistogramDataPoint struct {
-	Attributes     []otlpAttribute `json:"attributes,omitempty"`
-	TimeUnixNano   string          `json:"timeUnixNano"`
-	Count          string          `json:"count"`
-	Sum            *otlpDouble     `json:"sum,omitempty"`
-	BucketCounts   []string        `json:"bucketCounts"`
-	ExplicitBounds []otlpDouble    `json:"explicitBounds"`
+	Attributes        []otlpAttribute `json:"attributes,omitempty"`
+	StartTimeUnixNano string          `json:"startTimeUnixNano,omitempty"`
+	TimeUnixNano      string          `json:"timeUnixNano"`
+	Count             string          `json:"count"`
+	Sum               *otlpDouble     `json:"sum,omitempty"`
+	BucketCounts      []string        `json:"bucketCounts"`
+	ExplicitBounds    []otlpDouble    `json:"explicitBounds"`
 }
 
 type otlpSummary struct {
@@ -91,11 +92,12 @@ type otlpSummary struct {
 }
 
 type otlpSummaryDataPoint struct {
-	Attributes     []otlpAttribute     `json:"attributes,omitempty"`
-	TimeUnixNano   string              `json:"timeUnixNano"`
-	Count          string              `json:"count"`
-	Sum            otlpDouble          `json:"sum"`
-	QuantileValues []otlpQuantileValue `json:"quantileValues,omitempty"`
+	Attributes        []otlpAttribute     `json:"attributes,omitempty"`
+	StartTimeUnixNano string              `json:"startTimeUnixNano,omitempty"`
+	TimeUnixNano      string              `json:"timeUnixNano"`
+	Count             string              `json:"count"`
+	Sum               otlpDouble          `json:"sum"`
+	QuantileValues    []otlpQuantileValue `json:"quantileValues,omitempty"`
 }
 
 type otlpQuantileValue struct {
@@ -216,7 +218,7 @@ func (s *Server) pushOTLP(ctx context.Context, cfg model.OTLPConfig, resources [
 		if len(resource.Set.Metrics) == 0 {
 			continue
 		}
-		payload.ResourceMetrics = append(payload.ResourceMetrics, otlpResourceMetrics{Resource: otlpResource{Attributes: resource.Identity.attributes()}, ScopeMetrics: []otlpScopeMetrics{{Scope: otlpScope{Name: "prometheus-universal-exporter"}, Metrics: otlpMetrics(resource.Set, now)}}})
+		payload.ResourceMetrics = append(payload.ResourceMetrics, otlpResourceMetrics{Resource: otlpResource{Attributes: resource.Identity.attributes()}, ScopeMetrics: []otlpScopeMetrics{{Scope: otlpScope{Name: "prometheus-universal-exporter"}, Metrics: otlpMetrics(resource.Set, now, s.otlpStarts.forResource(resource.Identity.key()))}}})
 	}
 	if len(payload.ResourceMetrics) == 0 {
 		return 0, otlpPartialSuccess{}, nil
@@ -421,8 +423,9 @@ func otlpAttributesForLabels(labels map[string]string) []otlpAttribute {
 // otlpMetrics converts a metric set to OTLP metrics. Series of one family
 // become the data points of one metric, in the order the family first
 // appears: a gauge, a monotonic cumulative sum for a counter, a cumulative
-// histogram, or a summary.
-func otlpMetrics(set model.MetricSet, now string) []otlpMetric {
+// histogram, or a summary. start gives a cumulative point its start time;
+// nil leaves it out.
+func otlpMetrics(set model.MetricSet, now string, start func(m model.Metric, at string) string) []otlpMetric {
 	var out []otlpMetric
 	index := map[string]int{}
 	for _, m := range set.Metrics {
@@ -440,15 +443,24 @@ func otlpMetrics(set model.MetricSet, now string) []otlpMetric {
 			out = append(out, newOTLPMetric(m))
 		}
 		metric := &out[i]
+		startAt := ""
+		if start != nil && otlpKind(*metric) != otlpKindGauge {
+			startAt = start(m, at)
+		}
 		switch {
 		case metric.Histogram != nil:
-			metric.Histogram.DataPoints = append(metric.Histogram.DataPoints, otlpHistogramPoint(m, attributes, at))
+			point := otlpHistogramPoint(m, attributes, at)
+			point.StartTimeUnixNano = startAt
+			metric.Histogram.DataPoints = append(metric.Histogram.DataPoints, point)
 		case metric.Summary != nil:
-			metric.Summary.DataPoints = append(metric.Summary.DataPoints, otlpSummaryPoint(m, attributes, at))
+			point := otlpSummaryPoint(m, attributes, at)
+			point.StartTimeUnixNano = startAt
+			metric.Summary.DataPoints = append(metric.Summary.DataPoints, point)
 		default:
 			v := otlpDouble(m.Value)
 			point := otlpNumberDataPoint{Attributes: attributes, TimeUnixNano: at, AsDouble: &v}
 			if metric.Sum != nil {
+				point.StartTimeUnixNano = startAt
 				metric.Sum.DataPoints = append(metric.Sum.DataPoints, point)
 			} else {
 				metric.Gauge.DataPoints = append(metric.Gauge.DataPoints, point)
@@ -670,6 +682,38 @@ func (s *Server) queueOTLP(set model.MetricSet) {
 	s.queueOTLPResource(set, defaultResourceIdentity(s.manager.Get().OTLP))
 }
 
+// Probes of every target and collector are queued under the one exporter-wide
+// resource, where a series is known by its name, type and labels alone. Two
+// probes answering the same series — two targets behind one collector, two
+// collectors naming a metric alike — are then one series, and the later
+// probe's point replaces the earlier's before the export. With
+// otlp.probe_attributes, each probe's points carry collector and target
+// attributes, so they stay apart; a label of the series' own by either name
+// is kept.
+
+// Probe attribute names.
+const (
+	probeCollectorAttribute = "collector"
+	probeTargetAttribute    = "target"
+)
+
+// queueProbeOTLP stages a probe's answer under the exporter-wide resource,
+// with collector and target attributes when otlp.probe_attributes says so.
+func (s *Server) queueProbeOTLP(set model.MetricSet, collector, target string) {
+	cfg := s.manager.Get().OTLP
+	if !cfg.Enabled || len(set.Metrics) == 0 {
+		return
+	}
+	if cfg.ProbeAttributes {
+		attributes := map[string]string{probeCollectorAttribute: collector}
+		if target != "" {
+			attributes[probeTargetAttribute] = target
+		}
+		set = withTargetLabels(set, attributes)
+	}
+	s.queueOTLPResource(set, defaultResourceIdentity(cfg))
+}
+
 // queueOTLPResource stages metrics under a specific resource, so a static
 // target's own service name and resource attributes survive to the exporter.
 func (s *Server) queueOTLPResource(set model.MetricSet, identity otlpResourceIdentity) {
@@ -680,9 +724,17 @@ func (s *Server) queueOTLPResource(set model.MetricSet, identity otlpResourceIde
 	s.otlpMu.Lock()
 	defer s.otlpMu.Unlock()
 	batch := s.pendingBatchLocked(identity)
+	queued := time.Now().UnixMilli()
 	for _, metric := range set.Metrics {
 		s.otlpSeq++
-		s.putPendingLocked(batch, otlpMetricKey(metric), pendingMetric{metric: model.CloneMetric(metric), seq: s.otlpSeq})
+		point := model.CloneMetric(metric)
+		// A point is exported at the time it was scraped, which the queue
+		// keeps through the wait for the next export and any retries, not
+		// at the time the export is sent.
+		if point.Timestamp == nil {
+			point.Timestamp = &queued
+		}
+		s.putPendingLocked(batch, otlpMetricKey(point), pendingMetric{metric: point, seq: s.otlpSeq})
 	}
 	s.capPendingLocked(cfg.MaxPendingPoints)
 }

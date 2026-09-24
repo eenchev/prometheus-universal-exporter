@@ -208,7 +208,7 @@ func configSchemaRules() map[string]map[string]any {
 		"collectors[].request.type":                 {"enum": fetch.BuiltRequestTypes(), "description": "Required. How the collector reaches its data."},
 		"collectors[].request.method":               {"enum": []string{"GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "get", "post", "put", "patch", "delete", "head"}, "description": "HTTP method. Defaults to GET."},
 		"collectors[].request.body":                 {"description": "http: the request body. May contain {{param_name}} placeholders, written as |json, |number, |form, |xml or |raw: {{param_service|json}}. See docs/REQUESTS.md#in-the-body-headers-and-query."},
-		"collectors[].request.path":                 {"description": "http: joined onto the target URL. localfile: the file, relative to request.root and joined after the target. May contain {{param_name}} or {{param_name:default}} path parameters, filled by param_<name> probe parameters."},
+		"collectors[].request.path":                 {"description": "http and graphite: joined onto the target URL; it cannot hold ? or #, and query parameters go under request.query. localfile: the file, relative to request.root and joined after the target. May contain {{param_name}} or {{param_name:default}} path parameters, filled by param_<name> probe parameters."},
 		"collectors[].request.root":                 {"description": "localfile, required: the absolute directory the collector may read files under. No read reaches outside it, through .. or a symbolic link. See docs/LOCALFILE.md."},
 		"collectors[].request.files":                {"description": "localfile: read every file of the directory whose name matches one of these patterns (path.Match syntax, no /), each checked on its own and labelled file. Not with request.path. See docs/LOCALFILE.md#reading-a-directory."},
 		"collectors[].request.max_files":            {"description": "localfile with request.files: the most files one scrape reads, in name order; the rest are skipped and logged. Defaults to 100."},
@@ -269,6 +269,8 @@ func configSchemaRules() map[string]map[string]any {
 		"collectors[].response.charset":              {"description": "The encoding of the response when the target does not declare it or declares it wrongly, and of local files: a WHATWG name such as windows-1252, iso-8859-2, windows-1251 or shift_jis. See docs/CONFIGURATION.md#character-encodings."},
 		"otlp.max_pending_points":                    {"description": "The most data points kept waiting for export while the endpoint fails; past it the oldest are dropped and counted. Defaults to 100000."},
 		"otlp.unready_after_failures":                {"description": "Answer /ready with 503 after this many failed exports in a row, until one gets through. 0, the default, never does: an exporter whose exports fail still answers probes."},
+		"otlp.probe_attributes":                      {"description": "Add collector and target attributes to the points a probe queues, so probes of different targets or collectors answering the same series are exported apart. Off, the default, the later probe's point replaces the earlier's."},
+		"collectors[].request.tls.server_name":       {"description": "The name the target's certificate is checked against, and sent as SNI, when the target is addressed by something else, such as an IP address. Unset, the target's host."},
 		"otlp.compression":                           {"enum": []string{model.OTLPCompressionGzip, model.OTLPCompressionNone}, "description": "Compression of the export requests. Defaults to gzip."},
 		"otlp.timeout":                               {"description": "How long one export attempt may take. Defaults to 5s. Also bounds the last export at shutdown."},
 	}
@@ -325,7 +327,7 @@ func staticTargetsSchemaRules() map[string]map[string]any {
 		"targets[].request.targets":              {"description": "graphite: replaces the collector's request.targets for this target. It cannot hold {{param_...}} placeholders."},
 		"targets[].request.from":                 {"description": "graphite: replaces the collector's request.from for this target."},
 		"targets[].request.until":                {"description": "graphite: replaces the collector's request.until for this target."},
-		"targets[].request.retry":                {"description": "Replaces the collector's request.retry for this target."},
+		"targets[].request.retry":                {"description": "Each key set replaces the collector's request.retry key for this target; each left out keeps the collector's."},
 		"targets[].request.retry.non_idempotent": {"description": "Retry a request whose method is not idempotent, such as POST, which sending again may repeat."},
 		"targets[].otlp":                         {"description": "The OTLP resource this target's metrics are exported under, over the exporter-wide otlp settings. Only with export_via_otlp: true."},
 	}

@@ -145,6 +145,7 @@ func (s *Server) scrapeStaticTarget(ctx context.Context, target model.StaticTarg
 	trip := s.collect(ctx, collectJob{
 		collector: c, target: target.Target, overrides: overrides, headers: headers,
 		rec: rec, display: address, cacheKey: cacheKey, log: log,
+		scrape: true, budget: time.Duration(target.Interval), budgetSource: budgetFromInterval,
 	})
 	if trip.aborted {
 		failedOnPanic = nil
@@ -244,9 +245,18 @@ func targetCacheQuery(t *model.StaticTarget) url.Values {
 	if t.Request.EnableHTTP2 != nil {
 		values.Set("enable_http2", strconv.FormatBool(*t.Request.EnableHTTP2))
 	}
-	if t.Request.Retry != nil {
-		values.Set("retry_attempts", strconv.Itoa(t.Request.Retry.Attempts))
-		values.Set("retry_backoff", time.Duration(t.Request.Retry.Backoff).String())
+	if retry := t.Request.Retry; retry != nil {
+		if retry.Attempts != nil {
+			values.Set("retry_attempts", strconv.Itoa(*retry.Attempts))
+		}
+		if retry.Backoff != nil {
+			values.Set("retry_backoff", time.Duration(*retry.Backoff).String())
+		}
+		if retry.NonIdempotent != nil {
+			// No probe parameter sets it, but it changes the request,
+			// so it is part of the key.
+			values.Set("retry_non_idempotent", strconv.FormatBool(*retry.NonIdempotent))
+		}
 	}
 	if from := strings.TrimSpace(t.Request.From); from != "" {
 		values.Set("from", from)

@@ -31,3 +31,6 @@ func pythonLibraryCollector(libs ...string) model.Collector {
 		Limits:    model.Limits{MaxMetrics: 10},
 	}
 }
+
+// ptrTo is a pointer to a copy of v.
+func ptrTo[T any](v T) *T { return &v }

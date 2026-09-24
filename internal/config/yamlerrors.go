@@ -31,6 +31,7 @@ var yamlPlaces = map[string]string{
 	"Collector":           "a collector",
 	"RequestConfig":       "request",
 	"RetryConfig":         "retry",
+	"TargetRetryConfig":   "retry",
 	"BasicAuth":           "basic_auth",
 	"BasicAuthFile":       "basic_auth_file",
 	"TLSConfig":           "tls",

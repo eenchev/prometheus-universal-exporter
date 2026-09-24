@@ -5,6 +5,7 @@ import (
 	"errors"
 	"hash/fnv"
 	"log/slog"
+	"reflect"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -44,14 +45,17 @@ type targetSchedule struct {
 
 // staticTargetState is one target's place in the schedule.
 type staticTargetState struct {
+	// target is the definition the state was made for; a reload that
+	// changes it starts the target again (plan).
+	target   model.StaticTarget
 	interval time.Duration
 	next     time.Time
 	// cadence is where the target's regular cadence starts, until its first,
 	// earlier scrape has been made; zero after.
 	cadence time.Time
 	// running is set while a scrape of the target is in flight. A target
-	// given a new interval by a reload starts a new state that shares it, so
-	// a scrape begun on the old interval still keeps the next one from
+	// a reload changed starts a new state that shares it, so
+	// a scrape begun on the old definition still keeps the next one from
 	// starting beside it, where the older could publish after the newer.
 	running *atomic.Bool
 }
@@ -68,9 +72,12 @@ func newTargetSchedule() *targetSchedule {
 
 // plan brings the schedule in step with targets, the ones in force, and
 // returns those due at now, those due but still running from their last
-// scrape, and when the next one is due. A target new to the schedule, or whose
-// interval changed, starts a cadence of its own; one no longer in targets is
-// forgotten.
+// scrape, and when the next one is due. A target new to the schedule, or one
+// a reload changed — its interval, its address, its request, its params —
+// starts again: first scraped soon, within firstScrapeWindow, then on a
+// cadence of its own. A fixed address or credential therefore shows within
+// seconds rather than after the old definition's next turn, which for a long
+// interval could be an hour away. One no longer in targets is forgotten.
 func (s *targetSchedule) plan(targets []model.StaticTarget, now time.Time) (due, skipped []dueTarget, next time.Time) {
 	seen := make(map[string]bool, len(targets))
 	for _, target := range targets {
@@ -82,12 +89,13 @@ func (s *targetSchedule) plan(targets []model.StaticTarget, now time.Time) (due,
 		}
 		seen[target.Name] = true
 		state := s.states[target.Name]
-		if state == nil || state.interval != interval {
+		if state == nil || !reflect.DeepEqual(state.target, target) {
 			running := &atomic.Bool{}
 			if state != nil {
 				running = state.running
 			}
 			state = &staticTargetState{
+				target:   target,
 				interval: interval,
 				next:     now.Add(scheduleOffset(target.Name, min(interval, firstScrapeWindow))),
 				cadence:  now.Add(scheduleOffset(target.Name, interval)),

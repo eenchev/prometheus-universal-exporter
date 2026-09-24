@@ -108,7 +108,7 @@ func TestStaticTargetFileValidationRejectsInvalidEntries(t *testing.T) {
 		}}, want: "duplicate target"},
 		{name: "bad method", file: &model.StaticTargetFile{Interval: model.Duration(time.Minute), Targets: []model.StaticTarget{{Collector: "text", Target: "http://a.invalid", Request: model.TargetRequestConfig{Method: "TRACE"}}}}, want: "unsupported method"},
 		{name: "negative timeout", file: &model.StaticTargetFile{Interval: model.Duration(time.Minute), Targets: []model.StaticTarget{{Collector: "text", Target: "http://a.invalid", Request: model.TargetRequestConfig{Timeout: model.Duration(-time.Second)}}}}, want: "timeout must not be negative"},
-		{name: "negative retries", file: &model.StaticTargetFile{Interval: model.Duration(time.Minute), Targets: []model.StaticTarget{{Collector: "text", Target: "http://a.invalid", Request: model.TargetRequestConfig{Retry: &model.RetryConfig{Attempts: -1}}}}}, want: "retry.attempts"},
+		{name: "negative retries", file: &model.StaticTargetFile{Interval: model.Duration(time.Minute), Targets: []model.StaticTarget{{Collector: "text", Target: "http://a.invalid", Request: model.TargetRequestConfig{Retry: &model.TargetRetryConfig{Attempts: ptrTo(-1)}}}}}, want: "retry.attempts"},
 		{name: "two bearer sources", file: &model.StaticTargetFile{Interval: model.Duration(time.Minute), Targets: []model.StaticTarget{{Collector: "text", Target: "http://a.invalid", Request: model.TargetRequestConfig{BearerToken: "t", BearerTokenFile: "/f"}}}}, want: "bearer_token_file"},
 		{name: "basic and bearer", file: &model.StaticTargetFile{Interval: model.Duration(time.Minute), Targets: []model.StaticTarget{{Collector: "text", Target: "http://a.invalid", Request: model.TargetRequestConfig{BasicAuth: &model.BasicAuth{Username: "u", Password: "p"}, BearerToken: "t"}}}}, want: "basic and bearer"},
 		{name: "invalid label", file: &model.StaticTargetFile{Interval: model.Duration(time.Minute), Targets: []model.StaticTarget{{Collector: "text", Target: "http://a.invalid", Labels: map[string]string{"not a label": "x"}}}}, want: "invalid label name"},
@@ -382,7 +382,7 @@ func TestStaticTargetRetriesMustFitTheInterval(t *testing.T) {
 	if err := Validate(cfg); err != nil {
 		t.Fatal(err)
 	}
-	check := func(interval time.Duration, retry *model.RetryConfig) error {
+	check := func(interval time.Duration, retry *model.TargetRetryConfig) error {
 		file := &model.StaticTargetFile{Interval: model.Duration(interval), Targets: []model.StaticTarget{{Name: "one", Collector: "text", Target: "http://a.invalid", Request: model.TargetRequestConfig{Retry: retry}}}}
 		if err := ValidateStaticTargets(file); err != nil {
 			t.Fatal(err)
@@ -395,13 +395,13 @@ func TestStaticTargetRetriesMustFitTheInterval(t *testing.T) {
 	if err := check(2*time.Minute, nil); err != nil {
 		t.Errorf("the collector's retries within the interval: %v", err)
 	}
-	if err := check(time.Minute, &model.RetryConfig{Attempts: 2, Backoff: model.Duration(10 * time.Second)}); err != nil {
+	if err := check(time.Minute, &model.TargetRetryConfig{Attempts: ptrTo(2), Backoff: ptrTo(model.Duration(10 * time.Second))}); err != nil {
 		t.Errorf("the target's own retries within the interval: %v", err)
 	}
-	if err := check(time.Minute, &model.RetryConfig{Attempts: 6, Backoff: model.Duration(10 * time.Second)}); err == nil || !strings.Contains(err.Error(), "retries 6 times, 10s apart") {
+	if err := check(time.Minute, &model.TargetRetryConfig{Attempts: ptrTo(6), Backoff: ptrTo(model.Duration(10 * time.Second))}); err == nil || !strings.Contains(err.Error(), "retries 6 times, 10s apart") {
 		t.Errorf("the target's own retries filling the interval: %v", err)
 	}
-	if err := check(time.Minute, &model.RetryConfig{Attempts: 0}); err != nil {
+	if err := check(time.Minute, &model.TargetRetryConfig{Attempts: ptrTo(0)}); err != nil {
 		t.Errorf("a target turning retries off: %v", err)
 	}
 }

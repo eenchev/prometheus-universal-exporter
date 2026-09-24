@@ -114,13 +114,15 @@ export decide when a target is scraped: the endpoint serves, and the export
 delivers, what the last scrape of each target left.
 
 A target is first scraped within ten seconds of the exporter starting, or of
-the reload that added it or changed its interval, so it is on the endpoint
+the reload that added it or changed it in any way — its address, its request,
+its params, its interval — so it is on the endpoint
 promptly even with an interval of an hour. After that it keeps a cadence at a
 point within its interval set by its name, so targets sharing an interval are
 spread over it rather than all scraped at once: the cadence starts at the first
 such point at least half an interval after the first scrape, and then comes
 every interval, however long a scrape takes. A scrape
-must end within its interval, so `request.timeout` may not be longer, and
+must end within its interval — one that does not fails saying the scrape ran
+out of its interval — so `request.timeout` may not be longer, and
 retries — the target's `request.retry`, else the collector's — whose waits
 alone fill the interval (`attempts` × `backoff`) are refused, since the last of
 them could never be made; retries that fit can still be cut short by slow
@@ -134,9 +136,10 @@ also waits for a slot of its collector's `max_concurrent_probes`, which it
 shares with the probes. A reload that changes `concurrency` applies to the
 scrapes that start after it.
 
-Retries come from the collector's `request.retry`, and a target's own
-`request.retry` replaces them, as the `retry_attempts` and `retry_backoff`
-probe parameters do for a probe. Scrapes go through the same fetch, decode and
+Retries come from the collector's `request.retry`, and each key a target's own
+`request.retry` sets replaces the collector's, as the `retry_attempts` and
+`retry_backoff` probe parameters each replace one: a target setting only
+`attempts: 3` keeps the collector's `backoff` and `non_idempotent`. Scrapes go through the same fetch, decode and
 transform path as `/probe`, so collector limits, the response cache and
 [`error_handling`](CONFIGURATION.md#when-a-stage-of-the-probe-fails) all
 apply. A static target scrape and an identical `/probe` request share cache
@@ -323,8 +326,11 @@ The file is reloaded on the same terms as the exporter configuration — on
 [Watching the configuration](CONFIGURATION.md#watching-the-configuration)). An invalid
 document, or a configuration change that would disable OTLP export while a
 loaded target sets `export_via_otlp`, is rejected, and the last valid pair
-stays active. A target whose interval changes starts a cadence of its own,
-once a scrape begun on the old interval has ended, so two never overlap; a
+stays active. A target the reload changed starts again — first scraped within
+ten seconds, then on a cadence of its own — once a scrape begun on the old
+definition has ended, so two never overlap, and a fixed address or credential
+shows within seconds rather than at the old cadence's next turn; an unchanged
+target keeps its cadence; a
 target removed while its scrape runs publishes nothing.
 
 On `SIGTERM` or `SIGINT` the targets keep being scraped through

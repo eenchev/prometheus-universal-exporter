@@ -203,18 +203,8 @@ func buildRequestURL(target string, c *model.Collector, overrides RequestOverrid
 	if err != nil {
 		return nil, fmt.Errorf("invalid target: %w", err)
 	}
-	allowed := c.Request.AllowedSchemes
-	if len(allowed) == 0 {
-		allowed = []string{"http", "https"}
-	}
-	ok := false
-	for _, s := range allowed {
-		if strings.EqualFold(s, u.Scheme) {
-			ok = true
-		}
-	}
-	if !ok {
-		return nil, fmt.Errorf("target scheme %q is not allowed", u.Scheme)
+	if err := checkScheme(c, u.Scheme); err != nil {
+		return nil, err
 	}
 	if u.Host == "" {
 		return nil, errors.New("target has no host")
@@ -270,6 +260,42 @@ func buildRequestURL(target string, c *model.Collector, overrides RequestOverrid
 	}
 	u.RawQuery = q.Encode()
 	return u, nil
+}
+
+// checkScheme refuses a target scheme request.allowed_schemes does not
+// allow, http and https when it is unset.
+func checkScheme(c *model.Collector, scheme string) error {
+	allowed := c.Request.AllowedSchemes
+	if len(allowed) == 0 {
+		allowed = []string{"http", "https"}
+	}
+	for _, s := range allowed {
+		if strings.EqualFold(s, scheme) {
+			return nil
+		}
+	}
+	return fmt.Errorf("target scheme %q is not allowed; request.allowed_schemes allows %s", scheme, strings.Join(allowed, ", "))
+}
+
+// checkURLPath refuses a URL path that holds a query or a fragment: path.Join
+// would escape the ? and the #, and the target would be asked for a path
+// with %3F in it. Query parameters belong in request.query.
+func checkURLPath(p string) error {
+	if i := strings.IndexAny(p, "?#"); i >= 0 {
+		return fmt.Errorf("%q has a %c in it; a path is joined onto the target as a path, so it would be sent escaped as %s — put query parameters under request.query", p, p[i], url.PathEscape(string(p[i])))
+	}
+	return nil
+}
+
+// checkHeaderValue refuses a header value with a control character other
+// than tab, which Go refuses to send, failing every scrape.
+func checkHeaderValue(value string) error {
+	for _, r := range value {
+		if r < 0x20 && r != '\t' || r == 0x7f {
+			return fmt.Errorf("has the control character %q in its value, which a header may not hold", r)
+		}
+	}
+	return nil
 }
 
 // requestLabelURL renders a resolved URL for a metric label. Credentials in the
@@ -420,7 +446,7 @@ func fetch(ctx context.Context, target string, c *model.Collector, overrides Req
 			req.Header.Set("Content-Type", contentType)
 		}
 		for k, v := range headers {
-			req.Header.Set(k, v)
+			setRequestHeader(req, k, v)
 		}
 		if basicUsername != "" || basicPassword != "" {
 			req.SetBasicAuth(basicUsername, basicPassword)
@@ -430,6 +456,12 @@ func fetch(ctx context.Context, target string, c *model.Collector, overrides Req
 		}
 		if len(forwarded) > 0 {
 			for k, v := range forwarded[0] {
+				if strings.EqualFold(k, "Host") {
+					if len(v) > 0 {
+						req.Host = v[len(v)-1]
+					}
+					continue
+				}
 				req.Header[k] = append([]string(nil), v...)
 			}
 		}
@@ -469,6 +501,18 @@ func fetch(ctx context.Context, target string, c *model.Collector, overrides Req
 		return response, nil
 	}
 	return nil, fmt.Errorf("HTTP request failed after %d attempts", retryAttempts+1)
+}
+
+// setRequestHeader sets a header of a request, Host included: Go sends the
+// request's Host field and ignores a Host header, so a Host a collector or a
+// static target sets — to reach a virtual host by an IP address, or through
+// an ingress — goes there.
+func setRequestHeader(req *http.Request, name, value string) {
+	if strings.EqualFold(name, "Host") {
+		req.Host = value
+		return
+	}
+	req.Header.Set(name, value)
 }
 
 // responseLimit is the most a collector reads from its target: the smaller of

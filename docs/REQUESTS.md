@@ -21,7 +21,8 @@ exception: Prometheus service discovery produces `__address__` as a bare
 A target that needs HTTPS says so, `https://secure.example:8443`, or a
 relabeling rule adds the scheme. `allowed_schemes` applies to the result, so a
 collector that allows only `https` rejects a bare target instead of upgrading
-it.
+it. A static target's scheme is checked when the file loads, so one the
+collector does not allow stops the exporter instead of failing every scrape.
 
 `request.path` is optional. Without it, and without a `path` probe parameter,
 the target is requested exactly as given: `http://legacy.example:8080` requests
@@ -29,6 +30,44 @@ the target is requested exactly as given: `http://legacy.example:8080` requests
 that carries a path keeps it, and `request.path` is appended after it. Nothing
 warns about a missing path — a target that serves nothing at `/` fails the probe
 with its own status, or returns a page the metric rules cannot read.
+
+A path is a path: it is joined onto the target and cleaned (`a//b` and `a/../b`
+become `a/b` and `b`), and it cannot hold a query or a fragment, which would
+be sent escaped as `%3F` and `%23` and ask the target for a path that does not
+exist. `request.path: /status?format=json` is refused at startup, and so is a
+`path` probe parameter or a static target's `request.path` holding `?` or `#`,
+with a `400` or at load. Put query parameters under `request.query`:
+
+```yaml
+request:
+  type: http
+  path: /status
+  query:
+    format: json
+```
+
+### The Host header
+
+A `Host` under `request.headers`, or a static target's, is the host the request
+is sent with, so a virtual host is reached through an IP address or an ingress:
+
+```yaml
+request:
+  type: http
+  headers:
+    Host: status.internal.example
+```
+
+```text
+/probe?target=10.0.0.5:8080&collector=legacy_text
+  -> GET http://10.0.0.5:8080/status   Host: status.internal.example
+```
+
+For HTTPS, the certificate is still checked against the address the target
+names; set [`tls.server_name`](#tls) to the virtual host too. A header value
+holding a control character other than tab — a line break pasted into a
+token — is refused at startup, collector and static target alike, since it
+could never be sent.
 
 ## Path parameters
 
@@ -324,7 +363,13 @@ request:
     cert_file: /etc/prometheus/tls/client.crt
     key_file: /etc/prometheus/tls/client.key
     insecure_skip_verify: false
+    server_name: status.internal.example
 ```
+
+`server_name` is the name the target's certificate is checked against, and
+sent as SNI, when the target is addressed by something the certificate does
+not name — an IP address, a Service's cluster name — as with a
+[`Host` header](#the-host-header). Unset, it is the target's host.
 
 For a one-off scrape, the `insecure_skip_verify` probe parameter overrides the
 collector setting. Set it to `true` only for endpoints where certificate

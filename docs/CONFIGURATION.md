@@ -114,7 +114,11 @@ decode with the offending line number, for example
 All non-Python transforms use the same collector-level metric declaration. Each
 entry has `name`, `description`, `type`, `labels`, and a transform-specific
 `expression`. The only allowed metric types are `gauge`, `counter`,
-`histogram`, `summary`, and `untyped`:
+`histogram`, `summary`, and `untyped`. A rule reads one value per series, so
+it is a `gauge` unless it says otherwise, and `histogram` and `summary` are
+refused at startup for every transform but `prometheus`, where a rule passes
+through a series that has its buckets or quantiles; a `prometheus` rule
+without a `type` keeps each series' own, so a counter stays a counter:
 
 ```yaml
 collectors:
@@ -145,16 +149,25 @@ The expression and label values are interpreted by the selected transform:
   optional group that took no part, or one that matched only blanks — is a
   missing value for that match.
 - `csv`: the expression is the numeric column name and labels map to column
-  names.
+  names. With `response.csv.header: false` there are no names, and columns
+  are named by number, from 1: `expression: "2"` reads the second column. A
+  name there is refused at startup.
 - `css`: the expression selects the HTML element whose text is numeric. Without
   [`items`](#metrics-per-item) a metric is one value, so the expression must
   match at most one element. Several values, and labels read from the page,
   need `items`: select the rows with it, and the value and the labels as cells
   of each row.
 - `xpath`: the expression selects XML/HTML nodes whose text is numeric; labels
-  are relative XPath expressions or `@attribute` selectors.
+  are relative XPath expressions or `@attribute` selectors. An expression that
+  computes a value instead of selecting nodes — `count(//job)`,
+  `sum(//job/@size)`, `string(/status/@load)`, a comparison such as
+  `/status/@state = 'ok'` — is one series of that value, a comparison `1` or
+  `0`; a label may compute its text too, as in `normalize-space(@name)`. A
+  computed value that is not a number, such as `number('n/a')`, is the rule's
+  missing value.
 - `prometheus`: the expression matches source metric names; it can remap the
-  name, description, type, and selected labels.
+  name, description, type, and selected labels. Without `type` a series keeps
+  its own.
 
 CSS remains available specifically for HTML tables and HTML status pages; it is
 not used for CSV.
@@ -406,7 +419,9 @@ labels:
 
 A longer value is then cut to the cap, on a character boundary, and ends in
 `…`, which counts towards the cap. Truncation applies to declared metrics from
-every transform, before any `metrics_prefix` is added.
+every transform, a `prometheus` rule without a `name` included, before any
+`metrics_prefix` is added and before `transform.rename_labels`, so a label
+keeps its `truncate: true` under the name a rename gives it.
 
 ### Turning a status into metrics
 
@@ -1268,7 +1283,9 @@ the exporter is shutting down`), so a load balancer or a Kubernetes Service
 takes it out of rotation before it stops listening. Kubernetes takes a few
 seconds to remove a terminating pod from its Service; without the delay,
 probes that arrive in that gap are refused and Prometheus records failed
-scrapes on every rollout. The Helm chart sets it to 5 seconds.
+scrapes on every rollout. The Helm chart sets it to 5 seconds. Static targets
+keep being scraped, and the [OTLP export](OTLP.md#shutting-down) keeps running,
+through the delay.
 
 Then it stops accepting connections, lets the
 probes in progress finish for up to `--web.shutdown-timeout` (5 seconds by
@@ -1289,6 +1306,8 @@ timeout and the last OTLP export. The Helm chart's `server.shutdownDelay` and
 `server.shutdownTimeout` set the flags and raise the grace period to match. A second `SIGTERM` or `SIGINT` during that time
 ends the process at once — the second Ctrl-C of an impatient operator, or a
 supervisor that signals twice — without waiting for the probes or the export.
+A `SIGHUP` in that time [reloads](#reloading-on-demand) as at any other, and
+does not end the process.
 
 ## Sizes
 

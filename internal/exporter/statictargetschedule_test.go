@@ -245,3 +245,35 @@ func TestStaticTargetConcurrencyDefaultsToEight(t *testing.T) {
 		t.Errorf("without a file: %d", got)
 	}
 }
+
+// A target a reload changed in anything but its interval — its address here —
+// starts again, first scraped within firstScrapeWindow instead of on the old
+// definition's cadence an hour away; an unchanged one keeps its cadence, and
+// a scrape still running on the old definition keeps the new one from
+// starting beside it.
+func TestAChangedTargetStartsAgain(t *testing.T) {
+	schedule := newTargetSchedule()
+	now := time.Unix(1_000_000, 0)
+	target := scheduled("a", time.Hour)
+	_, _, first := schedule.plan([]model.StaticTarget{target}, now)
+	due, _, _ := schedule.plan([]model.StaticTarget{target}, first)
+	if len(due) != 1 {
+		t.Fatalf("due=%d", len(due))
+	}
+	now = first.Add(time.Minute)
+	state := schedule.states["a"]
+	if _, _, next := schedule.plan([]model.StaticTarget{scheduled("a", time.Hour)}, now); schedule.states["a"] != state || next.Sub(now) < 10*time.Minute {
+		t.Fatalf("an unchanged target started again, next in %s", next.Sub(now))
+	}
+	due[0].state.running.Store(true)
+	fixed := target
+	fixed.Target = "http://fixed.invalid"
+	_, _, next := schedule.plan([]model.StaticTarget{fixed}, now)
+	if schedule.states["a"] == state || next.Sub(now) >= firstScrapeWindow {
+		t.Fatalf("a changed target keeps its old cadence: next in %s", next.Sub(now))
+	}
+	due, skipped, _ := schedule.plan([]model.StaticTarget{fixed}, next)
+	if len(due) != 0 || len(skipped) != 1 {
+		t.Fatalf("while the old definition's scrape runs: due=%d skipped=%d", len(due), len(skipped))
+	}
+}

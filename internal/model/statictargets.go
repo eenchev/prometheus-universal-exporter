@@ -61,25 +61,52 @@ type StaticTarget struct {
 // override parameters. Values set here replace the collector's own settings for
 // this target only.
 type TargetRequestConfig struct {
-	Method             string            `yaml:"method"`
-	Path               string            `yaml:"path"`
-	PathSet            bool              `yaml:"-"`
-	Body               string            `yaml:"body"`
-	BodySet            bool              `yaml:"-"`
-	Timeout            Duration          `yaml:"timeout"`
-	InsecureSkipVerify *bool             `yaml:"insecure_skip_verify"`
-	FollowRedirects    *bool             `yaml:"follow_redirects"`
-	EnableHTTP2        *bool             `yaml:"enable_http2"`
-	Retry              *RetryConfig      `yaml:"retry"`
-	Headers            map[string]string `yaml:"headers"`
-	BasicAuth          *BasicAuth        `yaml:"basic_auth"`
-	BasicAuthFile      *BasicAuthFile    `yaml:"basic_auth_file"`
-	BearerToken        string            `yaml:"bearer_token"`
-	BearerTokenFile    string            `yaml:"bearer_token_file"`
+	Method             string             `yaml:"method"`
+	Path               string             `yaml:"path"`
+	PathSet            bool               `yaml:"-"`
+	Body               string             `yaml:"body"`
+	BodySet            bool               `yaml:"-"`
+	Timeout            Duration           `yaml:"timeout"`
+	InsecureSkipVerify *bool              `yaml:"insecure_skip_verify"`
+	FollowRedirects    *bool              `yaml:"follow_redirects"`
+	EnableHTTP2        *bool              `yaml:"enable_http2"`
+	Retry              *TargetRetryConfig `yaml:"retry"`
+	Headers            map[string]string  `yaml:"headers"`
+	BasicAuth          *BasicAuth         `yaml:"basic_auth"`
+	BasicAuthFile      *BasicAuthFile     `yaml:"basic_auth_file"`
+	BearerToken        string             `yaml:"bearer_token"`
+	BearerTokenFile    string             `yaml:"bearer_token_file"`
 	// Targets, From and Until replace a graphite collector's own.
 	Targets []string `yaml:"targets"`
 	From    string   `yaml:"from"`
 	Until   string   `yaml:"until"`
+}
+
+// TargetRetryConfig is a static target's request.retry. Each key it sets
+// replaces the collector's, and each it leaves out keeps the collector's, as
+// the retry_attempts and retry_backoff probe parameters each replace one.
+type TargetRetryConfig struct {
+	Attempts      *int      `yaml:"attempts"`
+	Backoff       *Duration `yaml:"backoff"`
+	NonIdempotent *bool     `yaml:"non_idempotent"`
+}
+
+// Over is the retry a target makes: its own settings over the collector's.
+func (r *TargetRetryConfig) Over(collector RetryConfig) RetryConfig {
+	out := collector
+	if r == nil {
+		return out
+	}
+	if r.Attempts != nil {
+		out.Attempts = *r.Attempts
+	}
+	if r.Backoff != nil {
+		out.Backoff = *r.Backoff
+	}
+	if r.NonIdempotent != nil {
+		out.NonIdempotent = *r.NonIdempotent
+	}
+	return out
 }
 
 // TargetOTLPConfig overrides the exporter-wide OTLP resource identity for one

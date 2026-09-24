@@ -67,6 +67,13 @@ type exporterProcess struct {
 
 func startHeldExporter(t *testing.T, args ...string) *exporterProcess {
 	t.Helper()
+	return startHeldExporterWith(t, "", args...)
+}
+
+// startHeldExporterWith is startHeldExporter with more of the configuration,
+// such as an otlp block, after its collectors.
+func startHeldExporterWith(t *testing.T, config string, args ...string) *exporterProcess {
+	t.Helper()
 	if runtime.GOOS == "windows" {
 		t.Skip("no signals on Windows")
 	}
@@ -84,7 +91,7 @@ func startHeldExporter(t *testing.T, args ...string) *exporterProcess {
 	}
 	address := listener.Addr().String()
 	_ = listener.Close()
-	conf := testutil.WriteIn(t, t.TempDir(), "config.yaml", "collectors:\n  - name: slow\n    request:\n      type: http\n    transform:\n      type: regex\n    metrics:\n      - name: v\n        type: gauge\n        expression: 'v=(\\d+)'\n")
+	conf := testutil.WriteIn(t, t.TempDir(), "config.yaml", "collectors:\n  - name: slow\n    request:\n      type: http\n    transform:\n      type: regex\n    metrics:\n      - name: v\n        type: gauge\n        expression: 'v=(\\d+)'\n"+config)
 	args = append([]string{"--config.file=" + conf, "--web.listen-address=" + address}, args...)
 	p := &exporterProcess{cmd: exec.Command(os.Args[0], "-test.run=^TestRunHelperProcess$"), exited: make(chan error, 1), logs: &syncBuffer{}, address: address}
 	p.cmd.Env = append(os.Environ(), helperArgsEnv+"="+strings.Join(args, "\x1f"))
@@ -287,5 +294,52 @@ func TestStaticTargetsAreScrapedThroughTheShutdownDelay(t *testing.T) {
 	}
 	if strings.Contains(p.logs.String(), "static target scrape failed") || strings.Contains(p.logs.String(), "no scrape slot came free") {
 		t.Errorf("the shutdown reported a static target failing:\n%s", p.logs.String())
+	}
+}
+
+// A SIGHUP during the shutdown reloads, as at any other time, rather than
+// ending the process with Go's default action for a signal nobody catches.
+func TestASIGHUPDuringTheShutdownDoesNotEndIt(t *testing.T) {
+	p := startHeldExporter(t, "--web.shutdown-delay=1500ms", "--web.shutdown-timeout=1s")
+	p.signal(t, syscall.SIGTERM)
+	testutil.WaitFor(t, "the shutdown to begin", func() bool { return strings.Contains(p.logs.String(), "shutting down") })
+	p.signal(t, syscall.SIGHUP)
+	select {
+	case err := <-p.exited:
+		if err != nil {
+			t.Fatalf("exit: %v\n%s", err, p.logs.String())
+		}
+	case <-time.After(8 * time.Second):
+		t.Fatalf("the exporter did not exit\n%s", p.logs.String())
+	}
+	if !strings.Contains(p.logs.String(), "shutting down: finishing the probes in progress") {
+		t.Fatalf("the process ended before the graceful shutdown:\n%s", p.logs.String())
+	}
+}
+
+// The OTLP export keeps running through --web.shutdown-delay, as the static
+// targets whose results it delivers keep being scraped.
+func TestOTLPExportsThroughTheShutdownDelay(t *testing.T) {
+	var exports atomic.Int64
+	collector := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		exports.Add(1)
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer collector.Close()
+	p := startHeldExporterWith(t, "otlp:\n  enabled: true\n  endpoint: "+collector.URL+"/v1/metrics\n  interval: 300ms\n", "--web.shutdown-delay=2s", "--web.shutdown-timeout=1s")
+	testutil.WaitFor(t, "an export", func() bool { return exports.Load() >= 1 })
+	p.signal(t, syscall.SIGTERM)
+	atSignal := exports.Load()
+	time.Sleep(1500 * time.Millisecond)
+	if during := exports.Load() - atSignal; during < 2 {
+		t.Errorf("%d exports in the first 1.5s of a 2s delay at a 300ms interval, want at least 2\n%s", during, p.logs.String())
+	}
+	select {
+	case err := <-p.exited:
+		if err != nil {
+			t.Fatalf("exit: %v\n%s", err, p.logs.String())
+		}
+	case <-time.After(8 * time.Second):
+		t.Fatalf("the exporter did not exit\n%s", p.logs.String())
 	}
 }

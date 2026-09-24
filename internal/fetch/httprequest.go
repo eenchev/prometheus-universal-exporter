@@ -20,14 +20,18 @@ import (
 // checkHTTPTarget checks a static target's address, which must be an
 // absolute URL. A probe's target may be a bare host:port, as Prometheus
 // service discovery hands it over, and is checked when it is fetched.
-func checkHTTPTarget(_ *model.Collector, target string, static bool) error {
+func checkHTTPTarget(c *model.Collector, target string, static bool) error {
 	if !static {
 		return nil
 	}
-	if u, err := url.Parse(target); err != nil || u.Host == "" {
+	u, err := url.Parse(target)
+	if err != nil || u.Host == "" {
 		return errors.New("must have an absolute target URL")
 	}
-	return nil
+	// A probe's target is checked for its scheme when it is fetched; a
+	// static target's is known now, and one that is not allowed would fail
+	// every scrape.
+	return checkScheme(c, u.Scheme)
 }
 
 // validateHTTPRequest holds the http type's rules. Nothing but type is
@@ -55,6 +59,16 @@ func validateHTTPRequest(x *model.Collector) error {
 	if HasPathParams(x.Request.Path) {
 		if _, err := parsePathParams(x.Request.Path); err != nil {
 			return fmt.Errorf("collector %q: %w", x.Name, err)
+		}
+	}
+	if err := checkURLPath(x.Request.Path); err != nil {
+		return fmt.Errorf("collector %q request.path %w", x.Name, err)
+	}
+	for _, name := range model.SortedKeys(x.Request.Headers) {
+		if value := x.Request.Headers[name]; !HasPathParams(value) {
+			if err := checkHeaderValue(value); err != nil {
+				return fmt.Errorf("collector %q request.headers %s %w", x.Name, name, err)
+			}
 		}
 	}
 	if err := validateRequestTemplates(x); err != nil {

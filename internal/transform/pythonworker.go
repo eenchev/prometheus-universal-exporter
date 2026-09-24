@@ -718,8 +718,25 @@ def label_text(name,v):
         return repr(v)
     if isinstance(v,(dict,list,tuple,set)): raise ValueError('label %r is a %s, not a single value; pass one value, or join them with ",".join(...)'%(name,type(v).__name__))
     return str(v)
+def wire(v):
+    # NaN and the infinities have no JSON form: each goes as a marker the
+    # exporter reads back as the float (transform/python.go).
+    if isinstance(v,float) and (v!=v or v in (float('inf'),float('-inf'))):
+        return '\x00pue-nonfinite:'+('NaN' if v!=v else '+Inf' if v>0 else '-Inf')+'\x00'
+    if isinstance(v,dict): return {k:wire(x) for k,x in v.items()}
+    if isinstance(v,(list,tuple)): return [wire(x) for x in v]
+    return v
+def metric_number(name,what,v):
+    # A value or timestamp as a number: a bool as 1 or 0, a numeric string
+    # as the number it reads as, and anything else refused naming the metric.
+    if isinstance(v,bool): return 1.0 if v else 0.0
+    if isinstance(v,(int,float)): return float(v)
+    if isinstance(v,str):
+        try: return float(v.strip())
+        except ValueError: pass
+    raise ValueError('metric %r %s %r is not a number'%(name,what,v))
 def answer(document):
-    answers.write(json.dumps(document)+'\n'); answers.flush()
+    answers.write(json.dumps(wire(document),allow_nan=False)+'\n'); answers.flush()
 answer({'ok': True, 'ready': True})
 while True:
     line=requests.readline()
@@ -732,6 +749,11 @@ while True:
             if labels is None: labels={}
             if not isinstance(labels,dict): raise ValueError('metric labels must be a mapping of label names to values')
             labels={str(k):t for k,t in ((k,label_text(k,v)) for k,v in labels.items()) if t is not None}
+            value=metric_number(name,'value',value)
+            if timestamp is not None:
+                timestamp=metric_number(name,'timestamp',timestamp)
+                if timestamp!=timestamp or timestamp in (float('inf'),float('-inf')): raise ValueError('metric %r timestamp is not a number of milliseconds'%name)
+                timestamp=int(timestamp)
             _metrics.append({'name':name,'type':type,'value':value,'labels':labels,'help':help or '','timestamp':timestamp})
         def fail(message): raise RuntimeError(str(message))
         scope={'__builtins__':builtins,'__name__':'__collector__','sys':sys,'json':json,'builtins':builtins,'contextlib':contextlib,'io':io,'os':os,

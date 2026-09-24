@@ -9,6 +9,7 @@ import (
 	"os"
 	"regexp"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -114,7 +115,40 @@ func validateCollector(c *model.Config, x *model.Collector) error {
 	if err := validateMetricRules(c, x); err != nil {
 		return err
 	}
+	if err := checkCSVColumns(x); err != nil {
+		return err
+	}
 	return transform.CheckTransformSettings(x)
+}
+
+// checkCSVColumns requires a csv transform reading rows without a header row
+// to name its columns by number, from 1: with response.csv.header false
+// there is no name to find a column by, and a rule naming one would find
+// nothing in any row.
+func checkCSVColumns(x *model.Collector) error {
+	if x.Transform.Type != "csv" || x.Response.CSV.Header == nil || *x.Response.CSV.Header {
+		return nil
+	}
+	check := func(what, column string) error {
+		if n, err := strconv.Atoi(column); err != nil || n < 1 || strconv.Itoa(n) != column {
+			return fmt.Errorf("collector %q %s reads column %q, but response.csv.header is false, so columns are named by number, from 1; write the column's number, such as \"2\"", x.Name, what, column)
+		}
+		return nil
+	}
+	for _, rule := range x.Metrics {
+		if err := check(fmt.Sprintf("metric %q", rule.Name), rule.Expression); err != nil {
+			return err
+		}
+		for _, label := range rule.Labels {
+			if label.Static() {
+				continue
+			}
+			if err := check(fmt.Sprintf("metric %q label %q", rule.Name, label.Name), label.Expression); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
 }
 
 // applyLimitDefaults gives every limit left unset its default.
@@ -235,11 +269,23 @@ func validateMetricRules(c *model.Config, x *model.Collector) error {
 		if err := normalizeErrorPolicy(x.Name, fmt.Sprintf("metric %q error_mode", r.Name), &r.ErrorMode); err != nil {
 			return err
 		}
-		if r.Type == "" {
+		// A prometheus transform's rule without a type keeps the type of
+		// the series it passes through: a counter stays a counter, a
+		// histogram a histogram. Every other rule makes its own samples,
+		// gauges unless it says otherwise.
+		if r.Type == "" && x.Transform.Type != "prometheus" {
 			r.Type = model.GaugeMetricType
 		}
 		switch r.Type {
-		case model.GaugeMetricType, model.CounterMetricType, model.HistogramMetricType, model.SummaryMetricType, model.UntypedMetricType:
+		case model.GaugeMetricType, model.CounterMetricType, model.UntypedMetricType:
+		case "":
+		case model.HistogramMetricType, model.SummaryMetricType:
+			// Only a series that is one already has buckets or quantiles to
+			// expose; a rule reading one number would expose a histogram
+			// with a single plain sample, which no parser accepts.
+			if x.Transform.Type != "prometheus" {
+				return fmt.Errorf("collector %q metric %q has type %s, which only a prometheus transform can give, passing through a %s that has its buckets or quantiles; a %s rule reads one value, so use gauge, counter or untyped", x.Name, r.Name, r.Type, r.Type, x.Transform.Type)
+			}
 		default:
 			return fmt.Errorf("collector %q metric %q has invalid type %q", x.Name, r.Name, r.Type)
 		}

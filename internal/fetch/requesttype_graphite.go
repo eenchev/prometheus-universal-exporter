@@ -85,6 +85,7 @@ func init() {
 			"basic_auth", "basic_auth_file", "bearer_token", "bearer_token_file",
 			"targets", "from", "until",
 		},
+		URLPath:            true,
 		Validate:           validateGraphiteRequest,
 		CheckTarget:        checkHTTPTarget,
 		Query:              graphiteQuery,

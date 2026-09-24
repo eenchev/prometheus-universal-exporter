@@ -53,10 +53,13 @@ type Server struct {
 	otlpPoints     int
 	otlpSeq        int64
 	otlpRequeueSeq int64
-	cache          *responseCache
-	requests       *requestTracker
-	flights        *probeFlights
-	durations      *scrapeDurations
+	// otlpStarts remembers when each cumulative series exported over OTLP
+	// started (otlpstart.go).
+	otlpStarts *otlpStartTimes
+	cache      *responseCache
+	requests   *requestTracker
+	flights    *probeFlights
+	durations  *scrapeDurations
 	// trips bounds each collector's trips to its targets (triplimit.go).
 	trips *tripLimiter
 	// lifecycle enables POST /-/reload (lifecycle.go).
@@ -83,7 +86,7 @@ type Server struct {
 // NewServer returns a server using the configuration m holds and running
 // Python scripts with the interpreter at p.
 func NewServer(m *config.Manager, p string, l *slog.Logger) *Server {
-	s := &Server{manager: m, pythonPath: p, logger: l, stats: map[string]*serverStats{}, otlpPending: map[string]*otlpBatch{}, cache: newResponseCache(), requests: newRequestTracker(), flights: newProbeFlights(), durations: newScrapeDurations(), trips: newTripLimiter(), otlp: &otlpStatus{}, failures: newFailureLog(), fingerprints: &fingerprintMemo{}, timeoutOffset: DefaultTimeoutOffset, defaultProbeTimeout: DefaultProbeTimeout}
+	s := &Server{manager: m, pythonPath: p, logger: l, stats: map[string]*serverStats{}, otlpPending: map[string]*otlpBatch{}, cache: newResponseCache(), requests: newRequestTracker(), flights: newProbeFlights(), durations: newScrapeDurations(), trips: newTripLimiter(), otlp: &otlpStatus{}, otlpStarts: newOTLPStartTimes(), failures: newFailureLog(), fingerprints: &fingerprintMemo{}, timeoutOffset: DefaultTimeoutOffset, defaultProbeTimeout: DefaultProbeTimeout}
 	s.seenConfig.Store(m.Get())
 	return s
 }
@@ -263,7 +266,7 @@ func (s *Server) probeHandler(w http.ResponseWriter, r *http.Request) {
 			answer, _ := withFreshness(cached, c, false, fetched, time.Now())
 			finish(true)
 			writeMetricSet(w, &answer)
-			s.queueOTLP(answer)
+			s.queueProbeOTLP(answer, name, logTarget)
 			return
 		}
 		rec.update(func(x *serverStats) { x.cacheMisses++ })
@@ -344,7 +347,7 @@ func (s *Server) probeUpstream(ctx context.Context, p upstreamProbe) *probeResul
 	s.failures.failed(s.logger, slog.LevelWarn, staleKey, "probe failed; answered with the last successful result (cache.stale_if_error)", "stale", nil, "collector", name, "target", p.logTarget, "result_age", now.Sub(fetched).Round(time.Second).String())
 	out := newProbeRecorder()
 	writeMetricSet(out, &answer)
-	s.queueOTLP(answer)
+	s.queueProbeOTLP(answer, name, p.logTarget)
 	// A stale answer is not a success: the trip failed.
 	return out.result(false)
 }
@@ -406,7 +409,7 @@ func (s *Server) probeTrip(ctx context.Context, p upstreamProbe) *probeResult {
 		return out.result(true)
 	}
 	writeMetricSet(out, &result.answer)
-	s.queueOTLP(result.answer)
+	s.queueProbeOTLP(result.answer, name, logTarget)
 	return out.result(true)
 }
 

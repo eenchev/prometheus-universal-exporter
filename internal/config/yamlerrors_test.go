@@ -75,7 +75,7 @@ func TestTargetRequestRefusesUnknownKeys(t *testing.T) {
 	if err != nil {
 		t.Fatalf("a valid request block was refused: %v", err)
 	}
-	if r := file.Targets[0].Request; !r.PathSet || r.Path != "/s" || r.Retry == nil || r.Retry.Attempts != 2 || r.Headers["X-A"] != "b" {
+	if r := file.Targets[0].Request; !r.PathSet || r.Path != "/s" || r.Retry == nil || r.Retry.Attempts == nil || *r.Retry.Attempts != 2 || r.Headers["X-A"] != "b" {
 		t.Fatalf("request decoded as %+v", r)
 	}
 }

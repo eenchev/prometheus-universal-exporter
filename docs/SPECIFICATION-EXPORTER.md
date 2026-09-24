@@ -1098,6 +1098,14 @@ Example:
 
 The implementation MUST document XPath behavior and namespaces.
 
+An XPath expression that computes a value rather than selecting nodes — a
+number, a string or a boolean, as `count(//job)`, `string(/s/@load)` or
+`/s/@state = 'ok'` — MUST make one series of that value, a boolean as 1 or 0,
+with its labels read relative to the document; a NaN, an empty string or a
+string that is not a number MUST be the rule's missing value. A label
+expression that computes a value MUST give its text, a number written
+shortest. This holds for XPath over HTML too.
+
 ---
 
 # 12. HTML decoder
@@ -1423,6 +1431,17 @@ collector
 
 Scripts can operate directly on the raw response or decoded structures.
 
+`data` MUST be the decoded response: the document for JSON, YAML and
+graphite; the rows for CSV, dicts by header or lists without one; the body as
+a string for text, HTML and XML; and, for Prometheus exposition,
+`{"metrics": [...]}` with a dict per series of its `name`, `type`, `help`,
+`labels`, and `value` — or a histogram's `buckets` (`le`, `count`), `sum` and
+`count`, or a summary's `quantiles` (`quantile`, `value`), `sum` and `count` —
+and its `timestamp` in milliseconds when it has one. NaN and the infinities
+MUST reach a script as Python floats, and MUST come back as floats, in a
+pre-script's `data` and in `metric(...)`, although JSON, which the exporter
+and its workers exchange, has no form for them.
+
 ### 16.2 Metric API
 
 Expose a simple Python API such as:
@@ -1444,6 +1463,11 @@ fail(...)
 ```
 
 The Python API MUST ultimately produce the same internal `MetricSet` as every other decoder.
+`metric(...)` MUST take a value as the other transforms do — a number, a
+numeric string, a boolean as 1 or 0 — and refuse anything else naming the
+metric; a timestamp MUST be milliseconds, a float cut to whole milliseconds,
+and a non-finite one refused. A metric a script appends to `metrics` itself
+MUST be read the same way.
 
 ### 16.3 Python library model
 
@@ -1745,7 +1769,10 @@ metrics:
 `name`, `description`, `type`, `labels`, `expression`, and `error_mode` are the
 standard shape. `description` becomes the Prometheus HELP text. `type` MUST be one of
 `gauge`, `counter`, `histogram`, `summary`, or `untyped`; omitted types default
-to `gauge`. Metric declarations MUST be placed on the collector, alongside
+to `gauge`, except on a `prometheus` rule, which MUST keep the type of each
+series it passes through when it sets none. `histogram` and `summary` MUST be
+refused at load on a rule of any other transform, since a rule reading one
+value has no buckets or quantiles to expose. Metric declarations MUST be placed on the collector, alongside
 `transform`, rather than using transform-specific arrays such as `rules` or
 `expressions`.
 
@@ -1845,8 +1872,9 @@ A label MAY set `truncate: true`. A value longer than
 character boundary, ending in `…`, the mark counted within the limit; without
 it, such a value MUST fail the scrape as before (§ 21), since a silently
 shortened value would surprise. Truncation MUST apply to the labels of declared
-metrics from every transform, and MUST happen before `metrics_prefix` (§ 5.0a)
-is added.
+metrics from every transform, a `prometheus` rule without a name included, and
+MUST happen before `transform.rename_labels` and before `metrics_prefix`
+(§ 5.0a) is added, so a renamed label is still cut.
 
 A jq or yq expression label's value MUST be written as text the way JSON
 writes it: a number without an exponent when its magnitude is at least 1e-6
@@ -2144,6 +2172,10 @@ Before exposition, validate:
 - Invalid NaN/Inf behavior according to Prometheus client conventions
 
 Metric names SHOULD be normalized only when explicitly configured; silent surprising renaming is undesirable. A collector's `metrics_prefix` (§ 5.0a) is such explicit configuration, and validation applies to the prefixed names.
+
+The exposition MUST be served as `text/plain; version=0.0.4; charset=utf-8`.
+A series' timestamp MUST end every line of it: a plain sample's, and each
+bucket, quantile, `_sum` and `_count` line of a histogram or a summary.
 
 ### 21.1 UTF-8 names
 
@@ -5343,6 +5375,54 @@ See § 22.0c, § 23, § 42.1a and § 42.15b.
 - With `HTTP_PROXY` set, a probe and an OTLP export go through the proxy, and a
   host in `NO_PROXY` does not.
 
+## 34.61 Review fixes: types, OTLP points, Python values, requests, XPath, CSV and schedule tests
+
+- A `prometheus` rule without a type keeps a counter a counter and a histogram
+  a histogram with its buckets, and one with a type gives it; at load, no type
+  is filled in for it, a jq rule gets `gauge`, and a jq rule of type
+  `histogram` or `summary` is refused.
+- Without `otlp.probe_attributes`, probes of two targets answering one series
+  leave one point, the later's; with it, two, each with its `collector` and
+  `target`, and a label of the series' own named `target` kept.
+- A queued point is exported with its queue time, through a retry.
+- A cumulative point starts at its series' first point, keeps that start as
+  the count grows, starts again after a reset and in another resource, and
+  after an hour unseen; a histogram likewise; a gauge has none.
+- NaN and infinities from a Prometheus source reach a Python transform and
+  come back from `metric(...)` and from a pre-script's `data` as floats.
+- `metric(...)` reads a numeric string, a boolean and a float timestamp, and a
+  metric appended by hand the same way; a non-numeric value, `None`, a NaN
+  timestamp and a hand-appended non-numeric value fail naming the metric.
+- A Python script reading Prometheus exposition gets each series as a mapping:
+  a histogram's buckets with `le` and `count`, `+Inf` as infinity, its count,
+  a summary's quantiles, a gauge's value, labels and timestamp.
+- Without a header row a csv rule reads columns by number; a name, `0` or
+  `02` is refused at load, for a value and for a label.
+- XPath `count()`, `sum()`, a comparison and `string()` make one series each;
+  a computed label gives its text; per-node labels compute relative to each
+  node; `number()` of text fails the rule.
+- A truncated label renamed by `rename_labels` is cut, and so is a label of a
+  `prometheus` rule without a name.
+- A `Host` header, the collector's and a static target's, is the request's
+  host; `tls.server_name` is what the certificate is checked against, the
+  right name succeeding and a wrong one failing naming it.
+- A path with `?` or `#` is refused in a collector, a static target and a
+  `path` probe parameter; a `localfile` path may hold both; a header value with
+  a line break is refused in a collector and a static target, a tab accepted;
+  an `ftp` static target is refused naming the allowed schemes.
+- A static target's `retry: {attempts: 3}` keeps the collector's backoff and
+  `non_idempotent`.
+- A static target changed in its address starts again within the first-scrape
+  window while an unchanged one keeps its cadence, and a scrape still running
+  on the old definition makes the next skipped.
+- A static target scrape that runs out of its interval says the scrape ran
+  out of its interval's budget.
+- Histogram, summary and sample lines all carry the series' timestamp, and the
+  exposition is `text/plain; version=0.0.4; charset=utf-8`.
+- A `SIGHUP` during the shutdown delay does not end the process, which exits
+  cleanly after the graceful shutdown; OTLP exports keep being made through
+  the delay.
+
 # 35. Documentation requirements
 
 The repository MUST include documentation covering:
@@ -5639,6 +5719,23 @@ resource attributes MUST be preserved:
 - NaN and the infinities MUST be encoded as the protobuf JSON mapping writes
   them — `"NaN"`, `"Infinity"`, `"-Infinity"` — since a JSON number cannot
   express them, and one such value MUST NOT fail the encoding of an export.
+- A data point's time MUST be the time it was queued — its scrape — or the
+  timestamp its series carries, never the time of the export that sends it,
+  and MUST survive the wait for the export and any retry.
+- A cumulative point — a counter's sum, a histogram, a summary — MUST carry a
+  start time: the time of its series' first exported point, per resource, and
+  of the first point after a reset, when its count or value went down. A
+  series not exported for an hour MUST be forgotten and start again. A gauge
+  MUST NOT carry one.
+
+Probe results MUST be queued under the exporter-wide resource, a series known
+by its name, type and labels, so a later probe's point for the same series
+replaces an earlier one's. With `otlp.probe_attributes: true`, every point a
+probe queues MUST carry a `collector` attribute and, when the probe named a
+target, a `target` attribute holding the target as logs show it, without
+credentials, so probes of different targets or collectors are exported apart;
+a label of the series' own by either name MUST be kept. Off, the default,
+nothing MUST be added.
 
 ### 42.1a Delivery
 
@@ -5671,13 +5768,15 @@ is still a success. A message with no rejected data points MUST be logged as a
 warning. A response that is empty, not JSON, or has no `partialSuccess` is a
 full success.
 
-On `SIGTERM` or `SIGINT`, the exporter MUST stop accepting requests, let the
-probes in progress finish, stop the export loop, and then make one last
-export, bounded by `otlp.timeout`, of everything pending — including the data
+On `SIGTERM` or `SIGINT`, the export loop MUST keep running through
+`--web.shutdown-delay`, as the static targets keep being scraped, and the
+exporter MUST then stop accepting requests, let the probes in progress finish,
+stop the export loop, and make one last export, bounded by `otlp.timeout`, of everything pending — including the data
 of an export the shutdown cut short — with a last self-metric snapshot, before
 it exits. Static targets MUST NOT be scraped again for it. The shutdown MUST
 be logged, and once it has begun a second `SIGTERM` or `SIGINT` MUST end the
-process at once, without waiting for the probes or the last export.
+process at once, without waiting for the probes or the last export. A
+`SIGHUP` MUST keep reloading until the process exits, and MUST NOT end it.
 
 The data points waiting for export MUST be bounded by `otlp.max_pending_points`,
 100000 by default, a negative value being rejected. Past it, the oldest MUST be
@@ -5706,6 +5805,10 @@ metrics:
 transform:
   type: csv
 ```
+
+With `response.csv.header: false`, a `csv` rule and its labels MUST name
+columns by number, from 1, and a name — or `0`, or a number written with a
+leading zero — MUST be refused at load.
 
 CSS remains a first-class transformation for HTML responses. It MUST NOT be
 required for CSV responses and MUST NOT be used as the CSV transformation
@@ -5868,6 +5971,8 @@ MUST configure an optional client certificate for mutual TLS. Setting
 when explicitly requested. The exporter MUST retain TLS 1.2 or newer and MUST
 not log certificate contents or credentials. The OTLP HTTP client MUST use the
 same configured timeout and best-effort failure behavior as other OTLP exports.
+`tls.server_name`, here and on a collector's request, MUST set the name the
+server's certificate is checked against and sent as SNI.
 
 ## 42.10 Per-scrape request overrides
 
@@ -5887,6 +5992,21 @@ request:
 and the exporter MUST retain TLS 1.2 or newer. This setting SHOULD be avoided
 unless the target's certificate cannot be validated through configured or
 system trust roots.
+
+`request.tls.server_name` MUST set the name the certificate is checked against,
+and the SNI sent, for a target addressed by something its certificate does not
+name. A `Host` in `request.headers`, or in a static target's, MUST be the
+host the request is sent with, as Go sends only the request's own host and
+ignores a `Host` header. A literal header value holding a control character
+other than tab MUST be refused at load, collector and static target alike,
+since it could never be sent.
+
+A `request.path` of an `http` or `graphite` collector MUST NOT hold `?` or `#`:
+it is joined onto the target as a path, so they would be sent escaped. It
+MUST be refused at load naming `request.query`, and so must a static target's
+`request.path`; a `path` probe parameter holding either MUST be answered `400`.
+A `localfile` path names a file and MAY hold both. A static `http` target
+whose scheme `allowed_schemes` does not allow MUST be refused at load.
 
 The collector configuration MUST support a raw `request.body` value for
 requests whose method accepts a body. The value MUST be sent as provided and
@@ -6344,15 +6464,18 @@ Retries whose waits alone — `attempts` × `backoff`, the target's
 `request.retry` or else its collector's — reach the target's interval MUST be
 refused naming the target, since the scrape ends with its interval and the
 last retries could never be made.
-A target new to the schedule — at startup, or added or given a new interval by
-a reload — MUST be first scraped within ten seconds, or within its interval if
+A target new to the schedule — at startup, or added or changed in any way by
+a reload: its address, request, params, labels or interval — MUST be first
+scraped within ten seconds, or within its interval if
 that is shorter, so it does not stay absent from the endpoint for up to an
 interval. Its scrapes MUST then keep a fixed cadence, which SHOULD be offset
 within its interval by a stable hash of its name so targets are spread over
 it, starting no sooner than half an interval after the first scrape. A scrape
 MUST be bounded by its interval, and one still running when the next is due
 MUST make that one skipped, logged, rather than overlapping it — including
-when a reload gave the target a new interval while that scrape runs. A result
+when a reload changed the target while that scrape runs. A scrape that runs out
+of its interval MUST fail saying so: that the scrape ran out of its interval's
+budget, not only that a deadline was exceeded. A result
 of a target a reload removed while its scrape was in flight MUST NOT be
 published or exported. The exporter
 MUST scrape at most the document's `concurrency` targets at once, 8 when it is
@@ -6363,8 +6486,10 @@ start after it. A
 panic during a static target scrape MUST NOT end the process: it MUST be
 logged with its stack and end that scrape as failed, with
 `http_exporter_target_up` 0, leaving the other targets' scrapes unaffected.
-Retries MUST follow the collector's `request.retry`, which a target's
-`request.retry` replaces. Static target scrapes MUST run through the same
+Retries MUST follow the collector's `request.retry`, each key a target's
+`request.retry` sets replacing the collector's and each it leaves out keeping
+it, as the `retry_attempts` and `retry_backoff` probe parameters each replace
+one. Static target scrapes MUST run through the same
 fetch, decode, and transform path as `/probe`, including the collector's
 cache, limits, and validation. A static target scrape and a `/probe` request
 that would produce a byte-for-byte identical request MUST share cache entries,

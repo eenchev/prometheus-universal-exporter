@@ -39,6 +39,28 @@ it into one first, with `",".join(tags)`.
 
 The launcher blocks `socket`, `ssl`, `subprocess`, `ctypes`, `multiprocessing`, `threading`, `mmap`, `pty`, `pathlib`, `shutil`, `tempfile` and `urllib.request`, and the C modules beneath them, such as `_socket` and `_posixsubprocess`; shell execution; opening files, through `open`, `io.FileIO` or `os`; and package installation. A script may not import `posix`, `_io`, `_thread`, `select`, `selectors`, `fcntl`, `termios` or `importlib` itself, though the standard library it imports may, so `dataclasses` and the like still work. The sandbox keeps a script from doing by mistake what it should not; it is not a wall against a script written to get out, which Python cannot offer from inside the interpreter. Treat collector configuration as you treat the exporter's code, and rely on the container — the chart runs it as a non-root user with a read-only root file system — for isolation. Python has no supported network API; `requests` and `httpx` are unnecessary. `script_timeout` and metric/output limits apply. Declared `libraries` are validated against the supported names (`lxml`, `PyYAML`, and `python-dateutil`, or their import names `yaml` and `dateutil`); they are never installed during a scrape, and the image has no pip to install them with.
 
+## What `data` is
+
+`data` is the response as its decoder read it:
+
+| Decoder | `data` |
+| --- | --- |
+| `json`, `yaml` | The document: dicts, lists, strings, numbers, booleans and `None`. |
+| `graphite` | The [series document](GRAPHITE.md#the-series-document), `{"series": [...]}`. |
+| `csv` | A list of rows: a dict per row, by header, or with `response.csv.header: false` a list of the row's fields. |
+| `prometheus` | `{"metrics": [...]}`, a dict per series with `name`, `type`, `help`, `labels` and `value` — or, for a histogram, `buckets` (each `{"le": ..., "count": ...}`, the `+Inf` bucket as `float("inf")`), `sum` and `count`, and for a summary `quantiles` (each `{"quantile": ..., "value": ...}`), `sum` and `count` — and `timestamp`, in milliseconds, when the series has one. |
+| `text`, `html`, `xml` | The body as a string; parse HTML and XML with [lxml](#parsing-html-with-lxml). |
+
+`NaN` and the infinities arrive as the floats `float("nan")` and
+`float("inf")`, and may be given back the same way, in `data` from a
+pre-script and as a `metric(...)` value.
+
+`metric(...)` takes a `value` as the other transforms do: a number, a numeric
+string such as `"12"`, or a boolean, as `1` or `0`; anything else, `None`
+included, fails the script naming the metric. A `timestamp` is milliseconds
+since the Unix epoch, and may be a float, as `time.time() * 1000` is; it is
+cut to whole milliseconds.
+
 ## How scripts run
 
 Scripts run in long-lived Python workers, not in a new interpreter per scrape.

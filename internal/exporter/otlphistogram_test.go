@@ -21,7 +21,7 @@ import (
 
 func roundTripOTLP(t *testing.T, metrics ...model.Metric) []otlpMetric {
 	t.Helper()
-	out := otlpMetrics(model.MetricSet{Metrics: metrics}, "1")
+	out := otlpMetrics(model.MetricSet{Metrics: metrics}, "1", nil)
 	raw, err := json.Marshal(out)
 	if err != nil {
 		t.Fatalf("the export does not encode: %v", err)
@@ -136,7 +136,7 @@ func TestNonFiniteValuesEncode(t *testing.T) {
 	if !math.IsNaN(float64(*out[0].Gauge.DataPoints[0].AsDouble)) || !math.IsInf(float64(*out[1].Gauge.DataPoints[0].AsDouble), 1) || !math.IsInf(float64(*out[2].Gauge.DataPoints[0].AsDouble), -1) {
 		t.Fatalf("non-finite values did not survive: %+v", out)
 	}
-	raw, _ := json.Marshal(otlpMetrics(model.MetricSet{Metrics: []model.Metric{{Name: "n", Type: model.GaugeMetricType, Value: math.NaN()}}}, "1"))
+	raw, _ := json.Marshal(otlpMetrics(model.MetricSet{Metrics: []model.Metric{{Name: "n", Type: model.GaugeMetricType, Value: math.NaN()}}}, "1", nil))
 	if !strings.Contains(string(raw), `"asDouble":"NaN"`) {
 		t.Fatalf("NaN encoded as %s", raw)
 	}

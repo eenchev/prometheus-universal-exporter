@@ -1,6 +1,7 @@
 package exporter
 
 import (
+	"bytes"
 	"context"
 	"log/slog"
 	"net/http"
@@ -231,5 +232,30 @@ func TestAProbeWhoseRetryRunsOutOfTimeReportsTheTargetsAnswer(t *testing.T) {
 	}
 	if got := seriesValue(t, selfMetrics(t, server), `http_exporter_scrape_http_status_code{collector="retrying"}`); got != 503 {
 		t.Fatalf("last status %v, want 503", got)
+	}
+}
+
+// A static target scrape that runs out of its interval says so, rather than
+// only that a context deadline was exceeded.
+func TestAStaticTargetScrapeSaysItsIntervalRanOut(t *testing.T) {
+	release := make(chan struct{})
+	hang := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+		select {
+		case <-release:
+		case <-r.Context().Done():
+		}
+	}))
+	defer hang.Close()
+	defer close(release)
+	cfg := &model.Config{Collectors: []model.Collector{testutil.Collector("text", "text")}}
+	target := model.StaticTarget{Name: "slow", Collector: "text", Target: hang.URL, Interval: model.Duration(time.Second)}
+	server := newStaticServer(t, cfg, &model.StaticTargetFile{Interval: model.Duration(time.Second), Targets: []model.StaticTarget{target}})
+	var logs bytes.Buffer
+	server.logger = slog.New(slog.NewJSONHandler(&logs, nil))
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	server.scrapeTarget(ctx, server.manager.StaticTargets()[0])
+	if !strings.Contains(logs.String(), "the scrape ran out of its 1s budget: the target's interval, which a scrape must end within") {
+		t.Fatalf("%s", logs.String())
 	}
 }

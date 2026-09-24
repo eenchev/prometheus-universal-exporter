@@ -110,11 +110,15 @@ func (s *Server) probeDeadline(h http.Header, overrides fetch.RequestOverrides) 
 	return 0, ""
 }
 
-// explainBudget says so when an error is the probe's budget running out, since
-// "context deadline exceeded" alone does not say whose deadline it was.
-func explainBudget(ctx context.Context, budget time.Duration, source string, err error) error {
+// explainBudget says so when an error is the trip's budget running out, since
+// "context deadline exceeded" alone does not say whose deadline it was. what
+// names the trip: a probe, or a static target's scrape.
+func explainBudget(ctx context.Context, what string, budget time.Duration, source string, err error) error {
 	if budget <= 0 || !errors.Is(ctx.Err(), context.DeadlineExceeded) {
 		return err
 	}
-	return fmt.Errorf("%w (the probe ran out of its %s budget: %s)", err, budget, source)
+	return fmt.Errorf("%w (the %s ran out of its %s budget: %s)", err, what, budget, source)
 }
+
+// budgetFromInterval is where a static target scrape's budget comes from.
+const budgetFromInterval = "the target's interval, which a scrape must end within"

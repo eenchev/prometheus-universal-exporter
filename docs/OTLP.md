@@ -19,8 +19,10 @@ otlp:
   #   cert_file: /etc/prometheus/tls/client.crt
   #   key_file: /etc/prometheus/tls/client.key
   #   insecure_skip_verify: false
+  #   server_name: otel-collector.example
   # resource_attributes:
   #   deployment.environment: production
+  # probe_attributes: false
 ```
 
 OTLP export is best-effort and does not make a Prometheus probe fail. Metric
@@ -31,6 +33,36 @@ from export to export (see [Connections](REQUESTS.md#connections)), and goes
 through the proxy the environment names, if any. Self-health metrics are
 included in every export interval even when no Prometheus self-metrics scrape
 is running.
+
+Each data point carries the time it was scraped, or the timestamp the target
+gave it, not the time of the export that sends it, so a point that waited for
+the next export, or through an outage, is not taken for a newer one. A
+cumulative point — a counter, a histogram, a summary — also carries the time
+its series started: the first export of the series, and again after a reset,
+when its count went down, as the OpenTelemetry Collector's Prometheus receiver
+does. The exporter cannot know when a target began counting, so this is the
+earliest it can vouch for; a series not exported for an hour starts again.
+
+## Probes of several targets
+
+Probe results are exported under the one exporter-wide resource, where a
+series is known by its name and labels. Two probes answering the same series —
+two targets behind one collector, or two collectors that name a metric alike —
+are one series there, and the later probe's point replaces the earlier's
+before the export. That is the default, and right when a probe's own labels
+already tell its series apart. Set `otlp.probe_attributes: true` to keep them
+apart anyway: each point a probe queues then carries a `collector` attribute,
+and a `target` attribute when the probe named one — the target as logs show
+it, without credentials. A label the series has of its own by either name is
+kept. Static targets are unaffected: they have a resource of their own
+([below](#static-targets)).
+
+## Shutting down
+
+The export keeps running through `--web.shutdown-delay`, while the endpoints
+are still served and the static targets still scraped, and stops when the
+graceful shutdown begins; what was queued since goes out in one last export,
+bounded by `otlp.timeout`.
 
 ## Delivery
 

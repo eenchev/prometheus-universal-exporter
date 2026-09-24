@@ -213,7 +213,7 @@
               },
               "retry": {
                 "additionalProperties": false,
-                "description": "Replaces the collector's request.retry for this target.",
+                "description": "Each key set replaces the collector's request.retry key for this target; each left out keeps the collector's.",
                 "properties": {
                   "attempts": {
                     "minimum": 0,

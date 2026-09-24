@@ -15,8 +15,10 @@ import (
 const truncationMark = "…"
 
 // truncateLabels applies truncate: true to the metrics a collector's rules
-// produced. It runs on the transform's output, before the prefix, while the
-// metrics still carry their rules' names.
+// produced. It runs on the transform's output, before rename_labels and the
+// prefix, while the metrics still carry their rules' names and labels. A
+// prometheus rule without a name cuts its labels itself
+// (applyPrometheusTransform).
 func truncateLabels(set *model.MetricSet, c *model.Collector) {
 	limit := c.Limits.MaxLabelValueLength
 	if limit <= 0 {

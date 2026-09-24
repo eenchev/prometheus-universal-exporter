@@ -186,6 +186,10 @@ type TLSConfig struct {
 	CertFile           string `yaml:"cert_file"`
 	KeyFile            string `yaml:"key_file"`
 	InsecureSkipVerify bool   `yaml:"insecure_skip_verify"`
+	// ServerName is the name the server's certificate is checked against,
+	// and sent as SNI, when the target is addressed by something else, such
+	// as an IP address.
+	ServerName string `yaml:"server_name"`
 }
 
 // ResponseConfig is a collector's response block: how to read the body the
@@ -258,6 +262,10 @@ type OTLPConfig struct {
 	InsecureSkipVerify bool              `yaml:"insecure_skip_verify"`
 	ServiceName        string            `yaml:"service_name"`
 	ResourceAttributes map[string]string `yaml:"resource_attributes"`
+	// ProbeAttributes adds collector and target attributes to the points a
+	// probe queues, so probes of different targets or collectors answering
+	// the same series are exported apart (exporter/otlp.go).
+	ProbeAttributes bool `yaml:"probe_attributes"`
 	// Compression of the export requests: gzip, the default, or none.
 	Compression string `yaml:"compression"`
 	// MaxPendingPoints bounds the data points waiting for export while the

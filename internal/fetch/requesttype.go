@@ -88,6 +88,9 @@ type RequestType struct {
 	// block, where CheckOverride sees only its keys. Unset, any value of an
 	// accepted key is accepted.
 	CheckTargetRequest func(c *model.Collector, t *model.StaticTarget) error
+	// URLPath says the type's path is a URL path, joined onto the target,
+	// which can hold no query or fragment; localfile's is a file's.
+	URLPath bool
 }
 
 // RequestTypes is the registry of the types built into this binary. Each type
@@ -192,6 +195,11 @@ func CheckOverrideParams(c *model.Collector, values url.Values) error {
 				return fmt.Errorf("probe parameter %s: %w", key, err)
 			}
 		}
+		if key == "path" && rt.URLPath {
+			if err := checkURLPath(values.Get(key)); err != nil {
+				return fmt.Errorf("probe parameter path %w", err)
+			}
+		}
 	}
 	if len(rejected) == 0 {
 		return nil
@@ -222,6 +230,16 @@ func CheckTargetRequest(t *model.StaticTarget, c *model.Collector) error {
 			if err := rt.CheckOverride(c, key); err != nil {
 				return fmt.Errorf("target %q sets request.%s: %w", t.Name, key, err)
 			}
+		}
+	}
+	if rt.URLPath && t.Request.PathSet {
+		if err := checkURLPath(t.Request.Path); err != nil {
+			return fmt.Errorf("target %q request.path %w", t.Name, err)
+		}
+	}
+	for _, name := range model.SortedKeys(t.Request.Headers) {
+		if err := checkHeaderValue(t.Request.Headers[name]); err != nil {
+			return fmt.Errorf("target %q request.headers %s %w", t.Name, name, err)
 		}
 	}
 	if rt.CheckTargetRequest != nil {

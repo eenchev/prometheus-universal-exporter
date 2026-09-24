@@ -487,7 +487,7 @@
                 "type": "string"
               },
               "path": {
-                "description": "http: joined onto the target URL. localfile: the file, relative to request.root and joined after the target. May contain {{param_name}} or {{param_name:default}} path parameters, filled by param_\u003cname\u003e probe parameters.",
+                "description": "http and graphite: joined onto the target URL; it cannot hold ? or #, and query parameters go under request.query. localfile: the file, relative to request.root and joined after the target. May contain {{param_name}} or {{param_name:default}} path parameters, filled by param_\u003cname\u003e probe parameters.",
                 "type": [
                   "string",
                   "number",
@@ -564,6 +564,14 @@
                     "type": "boolean"
                   },
                   "key_file": {
+                    "type": [
+                      "string",
+                      "number",
+                      "boolean"
+                    ]
+                  },
+                  "server_name": {
+                    "description": "The name the target's certificate is checked against, and sent as SNI, when the target is addressed by something else, such as an IP address. Unset, the target's host.",
                     "type": [
                       "string",
                       "number",

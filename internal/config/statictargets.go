@@ -119,11 +119,11 @@ func ValidateStaticTargets(f *model.StaticTargetFile) error {
 		if t.Request.Timeout > t.Interval {
 			return fmt.Errorf("target %q request.timeout %s is longer than its interval %s; a scrape must end before the next is due", t.Name, time.Duration(t.Request.Timeout), time.Duration(t.Interval))
 		}
-		if t.Request.Retry != nil {
-			if t.Request.Retry.Attempts < 0 {
+		if retry := t.Request.Retry; retry != nil {
+			if retry.Attempts != nil && *retry.Attempts < 0 {
 				return fmt.Errorf("target %q request.retry.attempts must not be negative", t.Name)
 			}
-			if t.Request.Retry.Backoff < 0 {
+			if retry.Backoff != nil && *retry.Backoff < 0 {
 				return fmt.Errorf("target %q request.retry.backoff must not be negative", t.Name)
 			}
 		}
@@ -291,10 +291,8 @@ func checkRetriesFitTheInterval(t *model.StaticTarget, c *model.Collector) error
 	if c == nil {
 		return nil
 	}
-	attempts, backoff := c.Request.Retry.Attempts, time.Duration(c.Request.Retry.Backoff)
-	if t.Request.Retry != nil {
-		attempts, backoff = t.Request.Retry.Attempts, time.Duration(t.Request.Retry.Backoff)
-	}
+	retry := t.Request.Retry.Over(c.Request.Retry)
+	attempts, backoff := retry.Attempts, time.Duration(retry.Backoff)
 	if attempts <= 0 || backoff <= 0 {
 		return nil
 	}

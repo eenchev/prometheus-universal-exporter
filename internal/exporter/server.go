@@ -64,7 +64,7 @@ type Server struct {
 	trips *tripLimiter
 	// lifecycle enables POST /-/reload (lifecycle.go).
 	lifecycle bool
-	// otlp is how exports are going (otlpstatus.go).
+	// otlp is how exports are going (otlp.go).
 	otlp *otlpStatus
 	// failures keeps repeated failures from flooding the log (failurelog.go).
 	failures *failureLog
@@ -161,7 +161,7 @@ func (s *Server) Handler() http.Handler {
 	})
 	mux.HandleFunc("/ready", s.readyHandler)
 	protected := func(handler http.HandlerFunc) http.HandlerFunc { return s.basicAuthMiddleware(handler) }
-	// The answers Prometheus scrapes are gzipped when it asks (compression.go).
+	// The answers Prometheus scrapes are gzipped when it asks (middleware.go).
 	mux.HandleFunc(s.selfMetricsEndpoint(), compressed(protected(s.metricsHandler)))
 	mux.HandleFunc(s.staticTargetsEndpoint(), compressed(protected(s.staticTargetsHandler)))
 	mux.HandleFunc("/probe", compressed(protected(s.probeHandler)))
@@ -269,7 +269,8 @@ func (s *Server) probeHandler(w http.ResponseWriter, r *http.Request) {
 			s.queueProbeOTLP(answer, name, logTarget)
 			return
 		}
-		rec.update(func(x *serverStats) { x.cacheMisses++ })
+		// A miss is counted when the trip goes to the target (probeTrip);
+		// a probe that shares another's trip is counted as coalesced.
 	}
 	budget, budgetSource := s.probeDeadline(r.Header, overrides)
 	upstream := func(ctx context.Context) *probeResult {
@@ -319,11 +320,11 @@ type upstreamProbe struct {
 // can each be given a copy. Its self-metrics, logs, cache entry and OTLP
 // export happen once, however many probes share it. When the trip fails and
 // the collector has cache.stale_if_error, the last good result answers
-// instead of the error (stalecache.go).
+// instead of the error (cache.go).
 func (s *Server) probeUpstream(ctx context.Context, p upstreamProbe) *probeResult {
 	c, name := p.collector, p.collector.Name
 	result := s.probeTrip(ctx, p)
-	if model.StaleIfError(c) <= 0 || p.cacheKey == "" {
+	if result.abandoned || model.StaleIfError(c) <= 0 || p.cacheKey == "" {
 		return result
 	}
 	staleKey := failureKey(name, p.logTarget, "\x00stale")
@@ -361,11 +362,15 @@ func (s *Server) probeTrip(ctx context.Context, p upstreamProbe) *probeResult {
 	// filled the cache.
 	if p.cacheKey != "" && model.CacheTTL(c) > 0 {
 		if cached, fetched, ok := s.cache.Get(p.cacheKey, time.Now()); ok {
-			rec.update(func(x *serverStats) { x.emitted += uint64(len(cached.Metrics)) })
+			rec.update(func(x *serverStats) {
+				x.cacheHits++
+				x.emitted += uint64(len(cached.Metrics))
+			})
 			answer, _ := withFreshness(cached, c, false, fetched, time.Now())
 			writeMetricSet(out, &answer)
 			return out.result(true)
 		}
+		rec.update(func(x *serverStats) { x.cacheMisses++ })
 	}
 	// Answered at once when the collector's backend already has all it may
 	// get, rather than queued behind the probes in progress (triplimit.go).
@@ -392,6 +397,13 @@ func (s *Server) probeTrip(ctx context.Context, p upstreamProbe) *probeResult {
 		},
 	})
 	switch {
+	case result.aborted:
+		// Every probe waiting for it went away: no stale answer, no OTLP
+		// point, no failure logged.
+		http.Error(out, "probe cancelled: the caller went away", http.StatusServiceUnavailable)
+		abandoned := out.result(false)
+		abandoned.abandoned = true
+		return abandoned
 	case result.metric != "":
 		writeProbeError(out, http.StatusBadGateway, probeError{
 			Stage:     result.stage,

@@ -16,7 +16,8 @@ import (
 
 // Every collector declares how it reaches its data with request.type: http
 // asks a URL, localfile reads a file from the exporter's own filesystem,
-// graphite asks a Graphite render API for series. The
+// graphite asks a Graphite render API for series, grpc calls a unary gRPC
+// method. The
 // type is required rather than defaulted so that no configuration means
 // "http" by accident, and so that each type can own its rules:
 //
@@ -39,13 +40,14 @@ const (
 	RequestTypeHTTP      = "http"
 	RequestTypeLocalFile = "localfile"
 	RequestTypeGraphite  = "graphite"
+	RequestTypeGRPC      = "grpc"
 )
 
 // knownRequestTypes is every request type in the source tree, whether or not
 // this binary was built with it, so a configuration that names a type the
 // build left out is told that, rather than that the type does not exist. A
 // test keeps it in step with the requesttype_<name>.go files.
-var knownRequestTypes = []string{RequestTypeHTTP, RequestTypeLocalFile, RequestTypeGraphite}
+var knownRequestTypes = []string{RequestTypeHTTP, RequestTypeLocalFile, RequestTypeGraphite, RequestTypeGRPC}
 
 // RequestType is how one request.type reaches its data. Fields lists the
 // request keys it accepts, Overrides the probe parameters that may change them
@@ -91,6 +93,10 @@ type RequestType struct {
 	// URLPath says the type's path is a URL path, joined onto the target,
 	// which can hold no query or fragment; localfile's is a file's.
 	URLPath bool
+	// StatusCodes says the type retries by gRPC status code: request.retry
+	// takes codes, and not non_idempotent, which is about HTTP methods.
+	// Unset, it is the other way round.
+	StatusCodes bool
 }
 
 // RequestTypes is the registry of the types built into this binary. Each type
@@ -153,7 +159,26 @@ func ValidateRequest(c *model.Collector) error {
 			return fmt.Errorf("collector %q sets request.%s, which does not apply to request.type %q", c.Name, key, rt.Name)
 		}
 	}
+	if err := checkRetryKeys(rt, c.Request.Retry.Codes != nil, c.Request.Retry.NonIdempotent); err != nil {
+		return fmt.Errorf("collector %q %w", c.Name, err)
+	}
+	if c.Request.MaxResponseBytes < 0 {
+		return fmt.Errorf("collector %q request.max_response_bytes must not be negative", c.Name)
+	}
 	return rt.Validate(c)
+}
+
+// checkRetryKeys refuses the retry key that does not apply to the type:
+// codes, the gRPC status codes a grpc request retries, for the others, and
+// non_idempotent, about HTTP methods, for grpc.
+func checkRetryKeys(rt *RequestType, codes, nonIdempotent bool) error {
+	if codes && !rt.StatusCodes {
+		return fmt.Errorf("sets request.retry.codes, which applies only to request.type grpc; a %s request is retried on a failed connection and on 408, 425, 429 and 5xx answers", rt.Name)
+	}
+	if nonIdempotent && rt.StatusCodes {
+		return fmt.Errorf("sets request.retry.non_idempotent, which does not apply to request.type %q; retry.codes says which gRPC status codes are retried", rt.Name)
+	}
+	return nil
 }
 
 // requestTypeOf returns the registered type of a validated collector.
@@ -232,10 +257,18 @@ func CheckTargetRequest(t *model.StaticTarget, c *model.Collector) error {
 			}
 		}
 	}
+	if retry := t.Request.Retry; retry != nil {
+		if err := checkRetryKeys(rt, retry.Codes != nil, retry.NonIdempotent != nil); err != nil {
+			return fmt.Errorf("target %q %w", t.Name, err)
+		}
+	}
 	if rt.URLPath && t.Request.PathSet {
 		if err := checkURLPath(t.Request.Path); err != nil {
 			return fmt.Errorf("target %q request.path %w", t.Name, err)
 		}
+	}
+	if err := checkHeaderNames(t.Request.Headers); err != nil {
+		return fmt.Errorf("target %q request.headers %w", t.Name, err)
 	}
 	for _, name := range model.SortedKeys(t.Request.Headers) {
 		if err := checkHeaderValue(t.Request.Headers[name]); err != nil {

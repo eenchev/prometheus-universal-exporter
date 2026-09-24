@@ -101,7 +101,7 @@ func init() {
 // validateGraphiteRequest holds the graphite type's rules: at least one
 // expression, each well formed; a render window without spaces; no query
 // parameter the type sets itself; and http's rules for the connection. It
-// fills in the defaults: path /render, from -5min, until now. The method is
+// fills in the defaults: path /render, from -15min, until now. The method is
 // always GET, and is left unset, since request.method is not graphite's to
 // set: a configuration validated again must not read as one that sets it.
 func validateGraphiteRequest(x *model.Collector) error {

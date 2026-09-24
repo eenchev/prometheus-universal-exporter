@@ -29,12 +29,13 @@ the ones above them in this list:
 | --- | --- |
 | `internal/model` | The shared data types: the configuration as written, the static target file, and `MetricSet`, what a probe produces. |
 | `internal/expr` | jq, regex, CSS and XPath compilation, with bounded caches. |
-| `internal/fetch` | Request types — `http`, `localfile` and `graphite`, each in its own build-tagged `requesttype_<name>.go` — probe parameters, path parameters, request templates and the HTTP transports. |
+| `internal/fetch` | Request types — `http`, `localfile`, `graphite` and `grpc`, each in its own build-tagged `requesttype_<name>.go`, with `grpc`'s descriptors, connections and calls in `grpc*.go` behind its tag — probe parameters, path parameters, request templates and the HTTP transports. |
 | `internal/decode` | Decoders for every response format, the Prometheus text parser, and charset conversion. |
 | `internal/transform` | The transforms and metric rules, the Python worker pool, and the checks run on rules and scripts at load. |
 | `internal/config` | Loading, validating and reloading the configuration, collector and target files, and their JSON Schemas. |
 | `internal/exporter` | The HTTP server and the one pipeline probes and static targets share (`pipeline.go`): cache, shared probes, limits, self-metrics, readiness, static targets and OTLP export. |
 | `internal/testutil` | Helpers shared by the tests of several packages; imported only by tests. |
+| `internal/grpctest` | An in-process gRPC server for the `grpc` type's tests, with a queue service compiled from `.proto` sources at run time, reflection and TLS; imported only by tests, and behind the type's build tag. |
 
 A package's tests live beside it, unless they need more than it can import: a
 test that validates a whole configuration lives in `internal/config`, and one

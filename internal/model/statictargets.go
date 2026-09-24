@@ -80,6 +80,10 @@ type TargetRequestConfig struct {
 	Targets []string `yaml:"targets"`
 	From    string   `yaml:"from"`
 	Until   string   `yaml:"until"`
+	// Message replaces a grpc collector's request message, and Metadata is
+	// sent besides its metadata, a key of both taking the target's value.
+	Message  string            `yaml:"message"`
+	Metadata map[string]string `yaml:"metadata"`
 }
 
 // TargetRetryConfig is a static target's request.retry. Each key it sets
@@ -89,6 +93,8 @@ type TargetRetryConfig struct {
 	Attempts      *int      `yaml:"attempts"`
 	Backoff       *Duration `yaml:"backoff"`
 	NonIdempotent *bool     `yaml:"non_idempotent"`
+	// Codes replaces a grpc collector's retry.codes.
+	Codes []string `yaml:"codes"`
 }
 
 // Over is the retry a target makes: its own settings over the collector's.
@@ -105,6 +111,9 @@ func (r *TargetRetryConfig) Over(collector RetryConfig) RetryConfig {
 	}
 	if r.NonIdempotent != nil {
 		out.NonIdempotent = *r.NonIdempotent
+	}
+	if r.Codes != nil {
+		out.Codes = r.Codes
 	}
 	return out
 }

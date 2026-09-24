@@ -169,10 +169,13 @@ pattern that cannot match the static target file rendered into the same
 directory, and a test MUST load that example as the exporter would.
 
 The chart MUST NOT depend on the collectors' request types: an `http`,
-`localfile` or `graphite` collector is configured in `config.data` alone, and
-a monitor's `params` reach any of them as `/probe` parameters. The chart
-documentation MUST say how a `graphite` collector is monitored: a monitor
-selecting the Graphite Service, whose address becomes the target.
+`localfile`, `graphite` or `grpc` collector is configured in `config.data`
+alone, and a monitor's `params` reach any of them as `/probe` parameters. The
+chart documentation MUST say how a `graphite` collector is monitored: a
+monitor selecting the Graphite Service, whose address becomes the target; and
+how a `grpc` collector is: a monitor selecting the gRPC server's Service,
+whose `host:port` address becomes the target, with descriptor files, when the
+collector reads any, mounted through `extraVolumes` and `extraVolumeMounts`.
 
 ### 33.3 Configuration reload / rollout
 

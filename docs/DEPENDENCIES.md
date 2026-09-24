@@ -82,4 +82,17 @@ transport rather than once per process; `golang.org/x/net` was already in the
 build for goquery's HTML parser. The Prometheus text format is parsed by
 the exporter itself (`internal/decode/promparse.go`), not by `prometheus/common`: that module
 brought `prometheus/client_model`, the protobuf runtime and `goautoneg` with it
-for one function, and a test fails if `go.mod` requires any of them again.
+for one function, and a test fails if `go.mod` requires `prometheus/common`,
+`client_model` or `goautoneg` again.
+
+The [`grpc`](GRPC.md) request type has three direct dependencies of its own:
+`google.golang.org/grpc`, which also carries the reflection client and the
+health service's types; `google.golang.org/protobuf`, for building messages
+from descriptors (`dynamicpb`, `protodesc`) and the JSON mapping
+(`protojson`); and `github.com/bufbuild/protocompile`, the pure-Go `.proto`
+compiler behind `descriptors: proto`. Only the type's build-tagged files
+import them, so a build without the type does not link them, and a test
+(`TestOnlyTheGRPCRequestTypeLinksGRPC`) keeps it so. Measured with
+`-trimpath -ldflags="-s -w"` as the image builds, they add about 6 MB: 19.7 MB
+for every type against 13.8 MB for `REQUEST_TYPES=http,localfile,graphite`.
+Dependabot's Go group and `govulncheck` cover them with no change.

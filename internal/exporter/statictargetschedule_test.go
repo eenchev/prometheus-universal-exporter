@@ -272,8 +272,16 @@ func TestAChangedTargetStartsAgain(t *testing.T) {
 	if schedule.states["a"] == state || next.Sub(now) >= firstScrapeWindow {
 		t.Fatalf("a changed target keeps its old cadence: next in %s", next.Sub(now))
 	}
-	due, skipped, _ := schedule.plan([]model.StaticTarget{fixed}, next)
-	if len(due) != 0 || len(skipped) != 1 {
-		t.Fatalf("while the old definition's scrape runs: due=%d skipped=%d", len(due), len(skipped))
+	// While the old definition's scrape runs, the new one's first scrape
+	// waits for it, neither made beside it nor put off to its cadence.
+	due, skipped, again := schedule.plan([]model.StaticTarget{fixed}, next)
+	if len(due) != 0 || len(skipped) != 0 || again.Sub(next) != scheduleCheckInterval {
+		t.Fatalf("while the old definition's scrape runs: due=%d skipped=%d, next in %s", len(due), len(skipped), again.Sub(next))
+	}
+	// It ends, and the first scrape is made at the next check.
+	schedule.states["a"].running.Store(false)
+	due, skipped, after := schedule.plan([]model.StaticTarget{fixed}, again)
+	if len(due) != 1 || len(skipped) != 0 || after.Sub(again) < 30*time.Minute {
+		t.Fatalf("after the old scrape ended: due=%d skipped=%d, then next in %s", len(due), len(skipped), after.Sub(again))
 	}
 }

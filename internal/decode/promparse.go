@@ -304,8 +304,10 @@ func (f *promFamily) add(labels []promLabel, role int, value float64, timestamp 
 		return nil
 	}
 	if role == promRoleCount || (hasBound && series.histogram != nil) {
-		if value < 0 || math.IsNaN(value) || math.IsInf(value, 0) {
-			return fmt.Errorf("expected a non-negative count for %q, got %v", f.name, value)
+		// A count is a whole number of observations, which a uint64 holds
+		// up to 2^64-1; past it the conversion gives a meaningless number.
+		if value < 0 || math.IsNaN(value) || math.IsInf(value, 0) || value >= math.MaxUint64 {
+			return fmt.Errorf("expected a count from 0 to 2^64-1 for %q, got %v", f.name, value)
 		}
 	}
 	switch {

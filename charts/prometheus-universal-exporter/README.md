@@ -190,6 +190,7 @@ Supported parameters include:
 * retry settings
 * `param_<name>`, which fills a `{{param_<name>}}` placeholder in the collector's `request.path`
 * `from` and `until`, the render window of a [`graphite`](../../docs/GRAPHITE.md) collector
+* `message`, the request message of a [`grpc`](../../docs/GRPC.md) collector
 
 For example, a collector with `path: /api/{{param_tenant}}/status` scraped by a
 monitor with `params: {param_tenant: [acme]}` requests `/api/acme/status`. A
@@ -202,6 +203,17 @@ monitor selects the Graphite Service, whose address becomes the `target`, and
 its `params` fill the placeholders of the collector's `request.targets`, such
 as `param_env: [staging]`, or set the window, such as `from: [-1h]`. `method`
 and `body` do not apply to it and are answered with `400`.
+
+A [`grpc`](../../docs/GRPC.md) collector is monitored the same way too: a
+monitor selects the Service of the gRPC server, on its gRPC port, whose
+`host:port` address becomes the `target`, called in plaintext unless the
+collector sets `request.tls`. Its `params` fill the placeholders of the
+collector's `request.message` and `metadata`, such as `param_queue: [orders]`,
+or replace the message, such as `message: ['{"queue": "orders"}']`. `method`,
+`path` and `body` do not apply to it and are answered with `400`. A
+`descriptors: protoset` or `proto` collector reads its files from the
+exporter's filesystem: mount them from a ConfigMap with `extraVolumes` and
+`extraVolumeMounts`.
 
 ## Authentication
 

@@ -38,23 +38,17 @@ func checkHTTPTarget(c *model.Collector, target string, static bool) error {
 // required: path may be empty, since the target URL can carry the whole path,
 // and method defaults to GET.
 func validateHTTPRequest(x *model.Collector) error {
-	if x.Request.BearerToken != "" && x.Request.BearerTokenFile != "" {
-		return fmt.Errorf("collector %q cannot set both request.bearer_token and request.bearer_token_file", x.Name)
+	if err := validateCredentials(x); err != nil {
+		return err
 	}
-	if x.Request.BasicAuth != nil && x.Request.BasicAuthFile != nil {
-		return fmt.Errorf("collector %q cannot set both request.basic_auth and request.basic_auth_file", x.Name)
-	}
-	if x.Request.BasicAuthFile != nil && (strings.TrimSpace(x.Request.BasicAuthFile.Username) == "" || strings.TrimSpace(x.Request.BasicAuthFile.Password) == "") {
-		return fmt.Errorf("collector %q basic_auth_file requires username and password paths", x.Name)
+	if err := checkTLSSettings(x.Request.TLS); err != nil {
+		return fmt.Errorf("collector %q %w", x.Name, err)
 	}
 	if x.Request.Retry.Attempts < 0 {
 		return fmt.Errorf("collector %q request.retry.attempts must not be negative", x.Name)
 	}
 	if x.Request.Retry.Backoff < 0 {
 		return fmt.Errorf("collector %q request.retry.backoff must not be negative", x.Name)
-	}
-	if (x.Request.BasicAuth != nil || x.Request.BasicAuthFile != nil) && (x.Request.BearerToken != "" || x.Request.BearerTokenFile != "") {
-		return fmt.Errorf("collector %q cannot configure basic and bearer authentication together", x.Name)
 	}
 	if HasPathParams(x.Request.Path) {
 		if _, err := parsePathParams(x.Request.Path); err != nil {
@@ -63,6 +57,9 @@ func validateHTTPRequest(x *model.Collector) error {
 	}
 	if err := checkURLPath(x.Request.Path); err != nil {
 		return fmt.Errorf("collector %q request.path %w", x.Name, err)
+	}
+	if err := checkHeaderNames(x.Request.Headers); err != nil {
+		return fmt.Errorf("collector %q request.headers %w", x.Name, err)
 	}
 	for _, name := range model.SortedKeys(x.Request.Headers) {
 		if value := x.Request.Headers[name]; !HasPathParams(value) {

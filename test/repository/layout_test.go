@@ -12,13 +12,15 @@ import (
 )
 
 // The decoder no longer pulls in the Prometheus client libraries; this keeps
-// them, and the protobuf runtime they bring, from coming back unnoticed.
+// them from coming back unnoticed. The protobuf runtime they brought is back
+// for the grpc request type alone, which the build tests below keep out of
+// every build without it.
 func TestGoModDoesNotNeedThePrometheusClientLibraries(t *testing.T) {
 	raw, err := os.ReadFile("go.mod")
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, module := range []string{"github.com/prometheus/common", "github.com/prometheus/client_model", "google.golang.org/protobuf", "github.com/munnerz/goautoneg"} {
+	for _, module := range []string{"github.com/prometheus/common", "github.com/prometheus/client_model", "github.com/munnerz/goautoneg"} {
 		if strings.Contains(string(raw), module+" ") {
 			t.Errorf("go.mod requires %s again; the prometheus decoder parses the text format itself (promparse.go)", module)
 		}
@@ -55,7 +57,12 @@ func TestNoTestRunsInParallel(t *testing.T) {
 // the ones before it (docs/SPECIFICATION-EXPORTER.md, section 7.1).
 var internalLayers = []string{"model", "expr", "fetch", "decode", "transform", "config", "exporter"}
 
-// The internal packages stay layered, and testutil stays out of the binary.
+// testOnly are the internal packages only tests import: testutil, and
+// grpctest, the grpc request type's test server.
+var testOnly = map[string]bool{"testutil": true, "grpctest": true}
+
+// The internal packages stay layered, and the test-only ones stay out of the
+// binary.
 func TestInternalPackagesAreLayered(t *testing.T) {
 	const prefix = "github.com/eenchev/prometheus-universal-exporter/internal/"
 	rank := map[string]int{}
@@ -72,7 +79,7 @@ func TestInternalPackagesAreLayered(t *testing.T) {
 		}
 		name := dir.Name()
 		own, layered := rank[name]
-		if !layered && name != "testutil" {
+		if !layered && !testOnly[name] {
 			t.Errorf("internal/%s is not in internalLayers; add it where it belongs", name)
 			continue
 		}
@@ -92,15 +99,15 @@ func TestInternalPackagesAreLayered(t *testing.T) {
 				if !internal {
 					continue
 				}
-				if imported == "testutil" {
+				if testOnly[imported] {
 					if !test {
-						t.Errorf("%s imports internal/testutil, which only tests may", file)
+						t.Errorf("%s imports internal/%s, which only tests may", file, imported)
 					}
 					continue
 				}
-				if name == "testutil" {
+				if testOnly[name] {
 					if imported != "model" {
-						t.Errorf("%s imports internal/%s; testutil may import only internal/model, so every package's tests can use it", file, imported)
+						t.Errorf("%s imports internal/%s; %s may import only internal/model, so every package's tests can use it", file, imported, name)
 					}
 					continue
 				}
@@ -116,8 +123,10 @@ func TestInternalPackagesAreLayered(t *testing.T) {
 			t.Fatal(err)
 		}
 		for _, spec := range parsed.Imports {
-			if strings.HasSuffix(spec.Path.Value, `/internal/testutil"`) {
-				t.Errorf("%s imports internal/testutil, which only tests may", file)
+			for name := range testOnly {
+				if strings.HasSuffix(spec.Path.Value, `/internal/`+name+`"`) {
+					t.Errorf("%s imports internal/%s, which only tests may", file, name)
+				}
 			}
 		}
 	}

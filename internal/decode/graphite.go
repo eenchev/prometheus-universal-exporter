@@ -153,6 +153,11 @@ func parseGraphiteRender(body []byte, report *GraphiteReport) ([]*graphiteSeries
 		s := &graphiteSeries{}
 		var err error
 		s.path, s.tags, err = parseGraphitePath(entry.Target)
+		if err != nil && entry.Tags != nil {
+			// The render API gave the tags itself, so a target that does
+			// not read as a tagged name is the series' name as it is.
+			s.path, s.tags, err = entry.Target, nil, nil
+		}
 		if err != nil {
 			return nil, fmt.Errorf("graphite render JSON: series %d: %w", i, err)
 		}
@@ -270,16 +275,19 @@ func parseCarbonLine(line string, now time.Time) (string, map[string]string, gra
 }
 
 // parseGraphitePath splits a path from its tags, as Graphite writes a tagged
-// series: name;tag=value;tag=value. The tags always hold name.
+// series: name;tag=value;tag=value. The tags always hold name. Only a ; outside
+// brackets and quotes separates tags: a function's name for its result, such
+// as movingAverage(cpu.load;env=prod,'5min'), holds its argument's tags,
+// which are not the result's.
 func parseGraphitePath(raw string) (string, map[string]string, error) {
-	path, rest, tagged := strings.Cut(raw, ";")
+	path, rest, tagged := cutTopLevel(raw)
 	if path == "" {
 		return "", nil, fmt.Errorf("the series %q has no path", raw)
 	}
 	tags := map[string]string{"name": path}
 	for tagged {
 		var tag string
-		tag, rest, tagged = strings.Cut(rest, ";")
+		tag, rest, tagged = cutTopLevel(rest)
 		name, value, ok := strings.Cut(tag, "=")
 		if !ok || name == "" {
 			return "", nil, fmt.Errorf("the series %q has a tag %q that is not name=value", raw, tag)
@@ -287,6 +295,29 @@ func parseGraphitePath(raw string) (string, map[string]string, error) {
 		tags[name] = value
 	}
 	return path, tags, nil
+}
+
+// cutTopLevel cuts s at its first ; outside brackets and quotes.
+func cutTopLevel(s string) (before, after string, found bool) {
+	depth := 0
+	var quote rune
+	for i, r := range s {
+		switch {
+		case quote != 0:
+			if r == quote {
+				quote = 0
+			}
+		case r == '\'' || r == '"':
+			quote = r
+		case r == '(' || r == '[' || r == '{':
+			depth++
+		case (r == ')' || r == ']' || r == '}') && depth > 0:
+			depth--
+		case r == ';' && depth == 0:
+			return s[:i], s[i+1:], true
+		}
+	}
+	return s, "", false
 }
 
 // seriesKey tells series apart by path and tags, whatever order a line

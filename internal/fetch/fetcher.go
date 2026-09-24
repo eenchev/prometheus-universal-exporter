@@ -15,6 +15,7 @@ import (
 	"unicode"
 
 	"github.com/eenchev/prometheus-universal-exporter/internal/model"
+	"golang.org/x/net/http/httpguts"
 )
 
 // HTTPResponse is what a fetch returned, whatever the request type: a
@@ -60,6 +61,13 @@ type RequestOverrides struct {
 	Targets []string
 	From    string
 	Until   string
+	// Message replaces a grpc collector's request.message: the message
+	// probe parameter, or a static target's request.message. Metadata is a
+	// static target's request.metadata, sent besides the collector's, and
+	// RetryCodes its retry.codes; no probe parameter sets them.
+	Message    *string
+	Metadata   map[string]string
+	RetryCodes []string
 	// formPost sends the query as a form body with POST instead of in the
 	// URL, for a graphite request whose expressions are too long for a URL
 	// (requesttype_graphite.go). Only the type's own fetch sets it.
@@ -124,6 +132,13 @@ func ParseRequestOverrides(values url.Values) (RequestOverrides, error) {
 			value = body[0]
 		}
 		overrides.Body = &value
+	}
+	if message, ok := values["message"]; ok {
+		value := ""
+		if len(message) > 0 {
+			value = message[0]
+		}
+		overrides.Message = &value
 	}
 	insecure, err := parseBoolOverride(values, "insecure_skip_verify")
 	if err != nil {
@@ -224,11 +239,23 @@ func buildRequestURL(target string, c *model.Collector, overrides RequestOverrid
 		}
 	}
 	if requestPath != "" {
+		// The target's path is joined in both its forms, so an escape it
+		// was written with, such as %2F inside a segment, is sent as
+		// written rather than decoded into a new segment.
+		rawBase := strings.TrimSuffix(u.EscapedPath(), "/")
 		base := strings.TrimSuffix(u.Path, "/")
 		p := strings.TrimPrefix(requestPath, "/")
 		u.Path = path.Join("/", base, p)
+		u.RawPath = path.Join("/", rawBase, (&url.URL{Path: p}).EscapedPath())
 		if strings.HasSuffix(requestPath, "/") {
 			u.Path += "/"
+			u.RawPath += "/"
+		}
+		// A raw form the default escaping gives anyway is not kept; one
+		// that does not decode to the path is ignored by Go, which then
+		// escapes the path itself.
+		if u.RawPath == (&url.URL{Path: u.Path}).EscapedPath() {
+			u.RawPath = ""
 		}
 	}
 	if len(bound) > 0 {
@@ -283,6 +310,29 @@ func checkScheme(c *model.Collector, scheme string) error {
 func checkURLPath(p string) error {
 	if i := strings.IndexAny(p, "?#"); i >= 0 {
 		return fmt.Errorf("%q has a %c in it; a path is joined onto the target as a path, so it would be sent escaped as %s — put query parameters under request.query", p, p[i], url.PathEscape(string(p[i])))
+	}
+	return nil
+}
+
+// checkHeaderNames refuses a header name Go would refuse to send, failing
+// every scrape, and two names that are one header once canonicalised, such
+// as X-Tenant and x-tenant, of which a scrape would send either, by chance.
+func checkHeaderNames(headers map[string]string) error {
+	seen := map[string]string{}
+	for _, name := range model.SortedKeys(headers) {
+		if strings.Contains(name, "{{") {
+			// A placeholder in a name is refused with its own message
+			// (validateRequestTemplates).
+			continue
+		}
+		if !httpguts.ValidHeaderFieldName(name) {
+			return fmt.Errorf("%q is not a header name; a name is letters, digits and !#$%%&'*+-.^_`|~, without spaces", name)
+		}
+		canonical := http.CanonicalHeaderKey(name)
+		if other, ok := seen[canonical]; ok {
+			return fmt.Errorf("%q and %q are the same header, whose names are not case-sensitive; set it once", other, name)
+		}
+		seen[canonical] = name
 	}
 	return nil
 }
@@ -400,36 +450,9 @@ func fetch(ctx context.Context, target string, c *model.Collector, overrides Req
 		retryBackoff = 0
 	}
 
-	var basicUsername, basicPassword string
-	if c.Request.BasicAuth != nil {
-		basicUsername = c.Request.BasicAuth.Username
-		basicPassword = c.Request.BasicAuth.Password
-	}
-	if c.Request.BasicAuthFile != nil {
-		username, readErr := ReadCredentialFile(c.Request.BasicAuthFile.Username)
-		if readErr != nil {
-			return nil, fmt.Errorf("reading basic auth username file: %w", readErr)
-		}
-		password, readErr := ReadCredentialFile(c.Request.BasicAuthFile.Password)
-		if readErr != nil {
-			return nil, fmt.Errorf("reading basic auth password file: %w", readErr)
-		}
-		if username == "" || password == "" {
-			return nil, errors.New("basic auth credential files must not be empty")
-		}
-		basicUsername = username
-		basicPassword = password
-	}
-	bearerToken := c.Request.BearerToken
-	if c.Request.BearerTokenFile != "" {
-		token, readErr := ReadCredentialFile(c.Request.BearerTokenFile)
-		if readErr != nil {
-			return nil, fmt.Errorf("reading bearer token file: %w", readErr)
-		}
-		bearerToken = token
-		if bearerToken == "" {
-			return nil, fmt.Errorf("bearer token file %s is empty", c.Request.BearerTokenFile)
-		}
+	authorization, err := requestAuthorization(c)
+	if err != nil {
+		return nil, err
 	}
 	start := time.Now()
 	limit := responseLimit(c)
@@ -448,11 +471,8 @@ func fetch(ctx context.Context, target string, c *model.Collector, overrides Req
 		for k, v := range headers {
 			setRequestHeader(req, k, v)
 		}
-		if basicUsername != "" || basicPassword != "" {
-			req.SetBasicAuth(basicUsername, basicPassword)
-		}
-		if bearerToken != "" {
-			req.Header.Set("Authorization", "Bearer "+bearerToken)
+		if authorization != "" {
+			req.Header.Set("Authorization", authorization)
 		}
 		if len(forwarded) > 0 {
 			for k, v := range forwarded[0] {
@@ -500,7 +520,8 @@ func fetch(ctx context.Context, target string, c *model.Collector, overrides Req
 		}
 		return response, nil
 	}
-	return nil, fmt.Errorf("HTTP request failed after %d attempts", retryAttempts+1)
+	// Every attempt returns or continues, and the last cannot continue.
+	panic("unreachable")
 }
 
 // setRequestHeader sets a header of a request, Host included: Go sends the
@@ -515,16 +536,22 @@ func setRequestHeader(req *http.Request, name, value string) {
 	req.Header.Set(name, value)
 }
 
+// defaultResponseLimit is the response limit of a collector that sets neither
+// limits.max_response_bytes nor request.max_response_bytes.
+const defaultResponseLimit = 10 << 20
+
 // responseLimit is the most a collector reads from its target: the smaller of
-// limits.max_response_bytes and request.max_response_bytes, 10 MiB when
-// neither is set. Every request type reads through it.
+// limits.max_response_bytes and request.max_response_bytes when both are set,
+// the one that is set otherwise, and 10 MiB when neither is. Neither is
+// filled in with the default, so either alone may raise the limit past it.
+// Every request type reads through it.
 func responseLimit(c *model.Collector) int64 {
 	limit := c.Limits.MaxResponseBytes
 	if limit <= 0 || c.Request.MaxResponseBytes > 0 && c.Request.MaxResponseBytes < limit {
 		limit = c.Request.MaxResponseBytes
 	}
 	if limit <= 0 {
-		limit = 10 << 20
+		limit = defaultResponseLimit
 	}
 	return int64(limit)
 }

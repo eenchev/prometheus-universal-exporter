@@ -359,6 +359,15 @@ func applyPreScript(ctx context.Context, d *decode.Decoded, r *fetch.HTTPRespons
 	if jqFamily(c.Transform.Type) && structuredValue(data) {
 		return &decode.Decoded{Kind: "json", Data: data, Raw: d.Raw}, nil
 	}
+	if d.Kind == "prometheus" {
+		// The script was given the series as {"metrics": [...]}; what it
+		// left is read back into series for the prometheus transform.
+		set, err := prometheusFromPython(data)
+		if err != nil {
+			return nil, model.MarkError(fmt.Errorf("python pre-script: %w", err), model.ErrScriptFailed)
+		}
+		return &decode.Decoded{Kind: "prometheus", Data: set, Raw: d.Raw}, nil
+	}
 	if d.Kind == "html" {
 		raw := fmt.Append(nil, data)
 		doc, parseErr := goquery.NewDocumentFromReader(bytes.NewReader(raw))
@@ -1172,12 +1181,27 @@ func transformCSV(ctx context.Context, data any, rules []model.MetricRule, c *mo
 				return nil, ruleFailure(c, rule, fmt.Errorf("metric %q: %w", rule.Name, err))
 			}
 			labels := map[string]string{}
+			var labelErr error
 			for _, label := range rule.Labels {
 				if label.Static() {
 					labels[label.Name] = label.Value
-				} else if labelValue, exists := row[label.Expression]; exists {
-					labels[label.Name] = fmt.Sprint(labelValue)
+				} else if labelValue, exists := row[label.Expression]; exists && labelValue != nil {
+					// A pre-script may leave numbers and None in a row:
+					// a number is written as the other transforms write
+					// one, and None leaves the label out.
+					text, err := labelText(labelValue)
+					if err != nil {
+						labelErr = fmt.Errorf("metric %q label %q %w", rule.Name, label.Name, err)
+						break
+					}
+					labels[label.Name] = text
 				}
+			}
+			if labelErr != nil {
+				if handleMetricError(ctx, c, rule, labelErr) {
+					continue
+				}
+				return nil, ruleFailure(c, rule, labelErr)
 			}
 			if missing := missingRequiredLabel(rule, labels); missing != nil {
 				if handleMetricError(ctx, c, rule, missing) {
@@ -1217,7 +1241,16 @@ func applyPrometheusTransform(ctx context.Context, in model.MetricSet, c *model.
 				if rule.Description != "" {
 					metric.Help = rule.Description
 				}
-				if rule.Type != "" {
+				if rule.Type != "" && rule.Type != metric.Type {
+					// A histogram's or summary's type is its shape: it
+					// cannot be exported as another, nor another as one.
+					if metric.Histogram != nil || metric.Summary != nil || rule.Type == model.HistogramMetricType || rule.Type == model.SummaryMetricType {
+						err := fmt.Errorf("metric %q type %s cannot apply to %s, a %s: a histogram or summary keeps its own type, and no other series can become one", rule.Name, rule.Type, source.Name, source.Type)
+						if handleMetricError(ctx, c, rule, err) {
+							continue
+						}
+						return nil, ruleFailure(c, rule, err)
+					}
 					metric.Type = rule.Type
 				}
 				// The series gets labels of its own: rules add and remove

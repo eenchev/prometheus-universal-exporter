@@ -178,13 +178,13 @@ func TestANewIntervalDoesNotOverlapTheScrapeInFlight(t *testing.T) {
 	schedule.plan([]model.StaticTarget{scheduled("a", 30*time.Second)}, now)
 	now = now.Add(firstScrapeWindow)
 	due, skipped, _ := schedule.plan([]model.StaticTarget{scheduled("a", 30*time.Second)}, now)
-	if len(due) != 0 || len(skipped) != 1 {
+	if len(due) != 0 || len(skipped) != 0 {
 		t.Fatalf("while the old scrape runs: due=%d skipped=%d", len(due), len(skipped))
 	}
-	skipped[0].state.running.Store(false)
-	// The skipped scrape handed over to the cadence, due within one and a
-	// half intervals.
-	now = now.Add(45 * time.Second)
+	schedule.states["a"].running.Store(false)
+	// The first scrape on the new interval waited for the old one, and is
+	// made at the next check after it ended.
+	now = now.Add(scheduleCheckInterval)
 	if due, _, _ = schedule.plan([]model.StaticTarget{scheduled("a", 30*time.Second)}, now); len(due) != 1 {
 		t.Fatalf("once it ended: due=%d", len(due))
 	}

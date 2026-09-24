@@ -27,7 +27,8 @@ duplicate collector "app_json": defined in /etc/exporter/config.yaml and in /etc
 defaults to `auto`, where the transform selects a deterministic decoder when it
 can: `regex` uses text, `csv` uses CSV, `css` uses HTML, and `prometheus` uses
 Prometheus exposition. A `graphite` collector reads with the `graphite`
-decoder, whatever its transform. Other transforms — jq, yq, XPath, Python —
+decoder, whatever its transform, and a `grpc` collector with `json`, since a
+call is answered as JSON. Other transforms — jq, yq, XPath, Python —
 decode each response by what it says it is: an `http` response by its
 `Content-Type` header, a `localfile` file by its extension, and by its content
 when neither says: an HTML page by its doctype or `<html>` element, other
@@ -520,9 +521,10 @@ request:
   path: /api/status
 ```
 
-There are three types: `http` asks a URL, `localfile` reads a file from the
-exporter's own filesystem — see [Local files](LOCALFILE.md) — and `graphite`
-asks a Graphite render API for series — see [Graphite](GRAPHITE.md). A collector
+There are four types: `http` asks a URL, `localfile` reads a file from the
+exporter's own filesystem — see [Local files](LOCALFILE.md) — `graphite`
+asks a Graphite render API for series — see [Graphite](GRAPHITE.md) — and
+`grpc` calls a unary gRPC method — see [gRPC](GRPC.md). A collector
 without `type` stops the exporter at startup with a message saying what to add,
 and so does an unknown type.
 
@@ -543,7 +545,7 @@ Each type accepts its own keys. For `http`, `type` is the only required one —
 | `forward_authorization`, `forward_headers` | off | See [Authentication](AUTHENTICATION.md). |
 | `tls` | verify | See [Target requests](REQUESTS.md#tls). |
 | `retry` | none | See [Target requests](REQUESTS.md#retries). |
-| `max_response_bytes` | limit | Response size cap. |
+| `max_response_bytes` | 10 MiB | Response size cap. With `limits.max_response_bytes` set too, the smaller wins; either alone may be above 10 MiB. |
 | `follow_redirects`, `enable_http2` | off | See [Target requests](REQUESTS.md#redirects-and-http2). |
 | `allowed_schemes` | `http`, `https` | Schemes a target may use. |
 
@@ -559,12 +561,22 @@ defaults to `/render`. Every `http` key about the connection applies —
 `follow_redirects`, `enable_http2` and `allowed_schemes` — and `method` and
 `body` do not; its table is in [Graphite](GRAPHITE.md#a-collector).
 
+For `grpc`, `rpc` is required, the method as `package.Service/Method`, and
+so is `descriptors`, where its message types come from — `reflection`,
+`protoset` or `proto` — except for the built-in health service. `message` is
+the request as JSON, `{}` by default, and `metadata` its metadata; the
+credential keys, `tls`, `retry` with its `codes`, `max_response_bytes` and the
+forwarding keys apply as for `http`, and the other `http` keys do not; its
+table is in [gRPC](GRPC.md#a-collector).
+
 A key that belongs to a different type is an error rather than being ignored,
 and the same holds for `/probe` parameters: a parameter that only another type
 accepts gets a `400`. `localfile` accepts only `path`, `timeout` and
 `param_<name>` — only `timeout` when it reads a directory — and its `target`
 is optional. `graphite` accepts what `http` does but `method` and `body`,
-and `from` and `until`, which no other type accepts.
+and `from` and `until`, which no other type accepts. `grpc` accepts
+`timeout`, `insecure_skip_verify`, `retry_attempts`, `retry_backoff`,
+`header_<name>`, `param_<name>` and `message`, which no other type accepts.
 
 #### Choosing request types at build time
 
@@ -588,9 +600,11 @@ A collector whose type the build left out stops the exporter at startup, saying
 the type exists but this build does not include it, and which types it does. The
 startup log line and the [dry run](#dry-run) report list the types the binary
 carries, so a configuration can be checked against the build that will run it.
-An http-only build leaves `localfile` and `graphite` out, and a build with
-`REQUEST_TYPES=localfile` reads files and makes no HTTP requests to targets at
-all.
+An http-only build leaves `localfile`, `graphite` and `grpc` out, and a build
+with `REQUEST_TYPES=localfile` reads files and makes no HTTP requests to
+targets at all. `grpc` is the only type with libraries of its own, gRPC and
+protobuf, which a build without it does not link: about 6 MB of a stripped
+binary.
 
 ### When a metric cannot be extracted
 
@@ -758,7 +772,9 @@ Every transform may define `transform.pre_script`. It runs once per scrape
 after decoding and before metric extraction. The script receives the decoded
 value as `data` and may mutate it or replace it by assigning to `data`.
 HTML/XML pre-scripts receive raw document text, which is parsed again after the
-script. Python transforms emit metrics with the `metric(...)` API.
+script. A `prometheus` transform's pre-script receives the series as
+`{"metrics": [...]}` and must leave them in that shape, read back into series
+for the rules; see [Python](PYTHON.md#reshaping-a-response-instead-of-writing-a-python-transform). Python transforms emit metrics with the `metric(...)` API.
 
 A pre-script **must** leave its result in `data` — that is the variable the
 exporter reads back. A script that computes a value under another name throws it
@@ -1436,6 +1452,7 @@ which is why the Helm chart rejects it in `extraArgs`.
 - [REQUESTS.md](REQUESTS.md) — redirects, HTTP/2, retries, TLS and per-scrape overrides.
 - [LOCALFILE.md](LOCALFILE.md) — the `localfile` request type.
 - [GRAPHITE.md](GRAPHITE.md) — the `graphite` request type and decoder.
+- [GRPC.md](GRPC.md) — the `grpc` request type.
 - [AUTHENTICATION.md](AUTHENTICATION.md) — credentials for the target and for the exporter itself.
 - [SELF-METRICS.md](SELF-METRICS.md) — the exporter's own metrics.
 - [STATIC-TARGETS.md](STATIC-TARGETS.md) — targets the exporter scrapes itself and serves on the static targets endpoint.

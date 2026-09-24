@@ -16,28 +16,6 @@ import (
 	"github.com/eenchev/prometheus-universal-exporter/internal/testutil"
 )
 
-// docBlocks returns the fenced blocks of a page in the given language.
-func docBlocks(t *testing.T, path, language string) []string {
-	t.Helper()
-	var blocks []string
-	for _, part := range strings.Split(read(t, path), "```"+language+"\n")[1:] {
-		block, _, _ := strings.Cut(part, "```")
-		blocks = append(blocks, block)
-	}
-	return blocks
-}
-
-func docBlock(t *testing.T, blocks []string, prefix string) string {
-	t.Helper()
-	for _, block := range blocks {
-		if strings.HasPrefix(block, prefix) {
-			return block
-		}
-	}
-	t.Fatalf("no example starts %q", prefix)
-	return ""
-}
-
 // The examples in docs/GRAPHITE.md load, and the collector example maps a
 // render API's answer as the page says, asking for what the page says it
 // asks for.
@@ -98,14 +76,4 @@ func TestGraphiteDocumentationExamples(t *testing.T) {
 	if _, err := config.Load(testutil.WriteIn(t, t.TempDir(), "config.yaml", window)); err != nil {
 		t.Fatalf("%v\n%s", err, window)
 	}
-}
-
-func indent(block, prefix string) string {
-	var b strings.Builder
-	for _, line := range strings.SplitAfter(block, "\n") {
-		if line != "" {
-			b.WriteString(prefix + line)
-		}
-	}
-	return b.String()
 }

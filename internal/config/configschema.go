@@ -217,7 +217,15 @@ func configSchemaRules() map[string]map[string]any {
 		"collectors[].request.targets":              {"minItems": 1, "description": "graphite, required: the Graphite expressions asked of the render API, each sent as a target parameter, such as app.*.requests.count. May contain {{param_name}} placeholders, filled with letters, digits and _ - . : @ % + ~ only. See docs/GRAPHITE.md."},
 		"collectors[].request.from":                 {"description": "graphite: the start of the render window, as Graphite writes a time: -15min, the default, -1h, or Unix seconds. The from probe parameter overrides it."},
 		"collectors[].request.until":                {"description": "graphite: the end of the render window. Defaults to now. The until probe parameter overrides it."},
-		"collectors[].request.retry.non_idempotent": {"description": "Retry a request whose method is not idempotent, such as POST, which sending again may repeat. Unset, only GET, HEAD, OPTIONS, TRACE, PUT and DELETE requests are retried."},
+		"collectors[].request.retry.non_idempotent": {"description": "http and graphite: retry a request whose method is not idempotent, such as POST, which sending again may repeat. Unset, only GET, HEAD, OPTIONS, TRACE, PUT and DELETE requests are retried."},
+		"collectors[].request.retry.codes":          {"items": map[string]any{"type": "string"}, "description": "grpc: the gRPC status codes that are retried, by name, such as [UNAVAILABLE, ABORTED]. Defaults to [UNAVAILABLE]; OK is refused."},
+		"collectors[].request.rpc":                  {"pattern": `^/?([A-Za-z_][A-Za-z0-9_]*\.)*[A-Za-z_][A-Za-z0-9_]*/[A-Za-z_][A-Za-z0-9_]*$`, "description": "grpc, required: the method called, package.Service/Method, such as grpc.health.v1.Health/Check. See docs/GRPC.md."},
+		"collectors[].request.message":              {"description": "grpc: the request message in the protobuf JSON mapping. Defaults to {}. May contain {{param_name}} placeholders, written as |json for a string, |number for a number, or |raw. The message probe parameter replaces it."},
+		"collectors[].request.metadata":             {"propertyNames": map[string]any{"pattern": "^[0-9a-z_.-]+$"}, "description": "grpc: request metadata. Keys are lower-case; -bin keys and the ones gRPC reserves are refused. Values may contain {{param_name}} placeholders."},
+		"collectors[].request.descriptors":          {"enum": []string{"reflection", "protoset", "proto"}, "description": "grpc, required but for grpc.health.v1.Health: where the message types come from. reflection asks the server's reflection service; protoset reads protoset_file; proto compiles proto_files."},
+		"collectors[].request.protoset_file":        {"description": "grpc with descriptors: protoset: a FileDescriptorSet with its imports, as protoc --descriptor_set_out --include_imports or buf build -o writes it. Read again when it changes."},
+		"collectors[].request.proto_files":          {"description": "grpc with descriptors: proto: the .proto files that define the service, compiled when the configuration loads and again when one changes."},
+		"collectors[].request.proto_import_paths":   {"description": "grpc with descriptors: proto: the directories imports are resolved in, as protoc -I. Defaults to the directory of each file. The well-known types are built in."},
 		"collectors[].response.graphite.value": {
 			"enum":        model.GraphiteValues,
 			"description": "graphite decoder: how a series' points become its value: last, the newest point, by default, or max, min, avg or sum.",
@@ -279,10 +287,10 @@ func configSchemaRules() map[string]map[string]any {
 // requestSchemaRule requires type, and for each built request type with
 // required keys of its own, those keys when the type is chosen.
 func requestSchemaRule() map[string]any {
-	rule := map[string]any{"required": []string{"type"}, "description": "How the collector reaches its data. See docs/REQUESTS.md, docs/LOCALFILE.md for localfile and docs/GRAPHITE.md for graphite."}
+	rule := map[string]any{"required": []string{"type"}, "description": "How the collector reaches its data. See docs/REQUESTS.md, docs/LOCALFILE.md for localfile, docs/GRAPHITE.md for graphite and docs/GRPC.md for grpc."}
 	var conditions []any
 	for _, name := range fetch.BuiltRequestTypes() {
-		required := map[string]string{fetch.RequestTypeLocalFile: "root", fetch.RequestTypeGraphite: "targets"}[name]
+		required := map[string]string{fetch.RequestTypeLocalFile: "root", fetch.RequestTypeGraphite: "targets", fetch.RequestTypeGRPC: "rpc"}[name]
 		if required != "" {
 			conditions = append(conditions, map[string]any{
 				"if":   map[string]any{"properties": map[string]any{"type": map[string]any{"const": name}}, "required": []string{"type"}},
@@ -309,7 +317,7 @@ func staticTargetsSchemaRules() map[string]map[string]any {
 		"targets[]":           {"required": []string{"collector"}, "description": "One target: a collector of the configuration, the address it reads, and what this target overrides."},
 		"targets[].name":      {"pattern": targetNameRE.String(), "description": "Unique name, in logs and the static_target label. Defaults to <collector>_<index>."},
 		"targets[].collector": {"description": "The collector of the configuration that scrapes this target."},
-		"targets[].target":    {"description": "What the collector reads: a URL for an http collector, the Graphite server's URL for a graphite one, a file under request.root for a localfile one."},
+		"targets[].target":    {"description": "What the collector reads: a URL for an http collector, the Graphite server's URL for a graphite one, host:port or a grpc:// or grpcs:// URL of it for a grpc one, a file under request.root for a localfile one."},
 		"targets[].interval":  {"description": "How often this target is scraped, whatever Prometheus scrapes the endpoint on and otlp.interval exports on. At least 1s, and no shorter than request.timeout; defaults to the file's interval."},
 		"targets[].params": {
 			"propertyNames": map[string]any{"pattern": fetch.PathParamName.String()},
@@ -327,6 +335,9 @@ func staticTargetsSchemaRules() map[string]map[string]any {
 		"targets[].request.targets":              {"description": "graphite: replaces the collector's request.targets for this target. It cannot hold {{param_...}} placeholders."},
 		"targets[].request.from":                 {"description": "graphite: replaces the collector's request.from for this target."},
 		"targets[].request.until":                {"description": "graphite: replaces the collector's request.until for this target."},
+		"targets[].request.message":              {"description": "grpc: replaces the collector's request.message for this target. It cannot hold {{param_...}} placeholders."},
+		"targets[].request.metadata":             {"propertyNames": map[string]any{"pattern": "^[0-9a-z_.-]+$"}, "description": "grpc: metadata sent besides the collector's; a key of both takes this value. It cannot hold {{param_...}} placeholders."},
+		"targets[].request.retry.codes":          {"items": map[string]any{"type": "string"}, "description": "grpc: replaces the collector's request.retry.codes for this target."},
 		"targets[].request.retry":                {"description": "Each key set replaces the collector's request.retry key for this target; each left out keeps the collector's."},
 		"targets[].request.retry.non_idempotent": {"description": "Retry a request whose method is not idempotent, such as POST, which sending again may repeat."},
 		"targets[].otlp":                         {"description": "The OTLP resource this target's metrics are exported under, over the exporter-wide otlp settings. Only with export_via_otlp: true."},

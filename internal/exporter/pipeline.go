@@ -73,10 +73,18 @@ type collected struct {
 	stage  string
 	err    error
 	metric string
-	// aborted is set when the trip failed because the exporter is shutting
-	// down (AbortStaticScrapes): nothing about the target is known, and
+	// aborted is set when the trip failed because it was cancelled (cutShort):
+	// the exporter is shutting down (AbortStaticScrapes), or every probe
+	// waiting for the trip went away. Nothing about the target is known, and
 	// nothing was logged.
 	aborted bool
+}
+
+// cutShort reports whether ctx was cancelled rather than run out of time: by
+// a shutdown, or because every probe that waited for the trip went away.
+// Either way nobody waits for its answer, and the target did not fail.
+func cutShort(ctx context.Context) bool {
+	return ctx.Err() != nil && !errors.Is(ctx.Err(), context.DeadlineExceeded)
 }
 
 func (r collected) failed() bool { return r.err != nil }
@@ -96,7 +104,7 @@ func (s *Server) collect(ctx context.Context, j collectJob) collected {
 	// stageFailed applies a stage's error policy.
 	// extra attributes go to the log only, never into the probe's answer.
 	stageFailed := func(stage string, err error, policy string, extra ...any) collected {
-		if shuttingDown(ctx) {
+		if cutShort(ctx) {
 			return collected{stage: stage, err: err, aborted: true}
 		}
 		trip := "probe"
@@ -118,15 +126,31 @@ func (s *Server) collect(ctx context.Context, j collectJob) collected {
 	}
 
 	response, err := fetch.FetchCollector(ctx, j.target, c, j.overrides, j.headers)
+	grpcCode, grpc := fetch.GRPCStatusCode(c, err)
 	if err != nil {
-		if errors.Is(err, model.ErrLimitExceeded) {
-			rec.update(func(x *serverStats) { x.limitErrors++ })
+		rec.update(func(x *serverStats) {
+			// No response arrived.
+			x.lastStatus = 0
+			if errors.Is(err, model.ErrLimitExceeded) {
+				x.limitErrors++
+			}
+			if grpc {
+				x.grpcCode, x.grpcCalled = grpcCode, true
+			}
+		})
+		var extra []any
+		var status *fetch.CallStatusError
+		if errors.As(err, &status) {
+			extra = []any{"grpc_code", status.CodeName}
 		}
-		return stageFailed(fetch.FetchStage(c), err, c.ErrorHandling.OnFetchError)
+		return stageFailed(fetch.FetchErrorStage(c, err), err, c.ErrorHandling.OnFetchError, extra...)
 	}
 	rec.update(func(x *serverStats) {
 		x.lastStatus = response.StatusCode
 		x.lastBytes = int64(len(response.Body))
+		if grpc {
+			x.grpcCode, x.grpcCalled = grpcCode, true
+		}
 	})
 	if response.StatusCode < 200 || response.StatusCode >= 300 {
 		// The target's own explanation is usually in the body; the start of
@@ -143,7 +167,7 @@ func (s *Server) collect(ctx context.Context, j collectJob) collected {
 		// one that fails is left out rather than failing the trip.
 		// A read the shutdown cut short is no result of the target's
 		// (statictargetschedule.go): its files are not reported failed.
-		if response.Directory.CutShort && shuttingDown(ctx) {
+		if response.Directory.CutShort && cutShort(ctx) {
 			return collected{stage: fetch.FetchStage(c), err: context.Cause(ctx), aborted: true}
 		}
 		set = s.collectDirectory(ctx, response.Directory, c, rec, j.display)
@@ -175,7 +199,7 @@ func (s *Server) collect(ctx context.Context, j collectJob) collected {
 			// would have carried on after a failed transform.
 			var failure *transform.MetricFailure
 			if errors.As(err, &failure) {
-				if shuttingDown(ctx) {
+				if cutShort(ctx) {
 					return collected{stage: "metric", err: err, aborted: true}
 				}
 				s.logCollectFailure(j.log, "metric", err, "metric", failure.Metric)

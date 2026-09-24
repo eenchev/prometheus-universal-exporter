@@ -3,6 +3,7 @@ package model
 import (
 	"encoding/json"
 	"fmt"
+	"math/big"
 	"regexp"
 	"sort"
 	"strconv"
@@ -116,6 +117,15 @@ func (s *MetricSet) Validate(l Limits) error {
 		default:
 			return fmt.Errorf("metric %q has invalid type %q", m.Name, m.Type)
 		}
+		// A histogram is its buckets and a summary its quantiles: a series
+		// typed as one without them, or with them and another type, is
+		// exposition no parser reads as intended.
+		switch {
+		case (m.Type == HistogramMetricType) != (m.Histogram != nil):
+			return fmt.Errorf("metric %q has type %s but %s; only a histogram read from Prometheus exposition has buckets, and metric() and the rules make gauges, counters and untyped series", m.Name, m.Type, map[bool]string{true: "buckets", false: "no buckets"}[m.Histogram != nil])
+		case (m.Type == SummaryMetricType) != (m.Summary != nil):
+			return fmt.Errorf("metric %q has type %s but %s; only a summary read from Prometheus exposition has quantiles, and metric() and the rules make gauges, counters and untyped series", m.Name, m.Type, map[bool]string{true: "quantiles", false: "no quantiles"}[m.Summary != nil])
+		}
 		// Prometheus accepts infinities and NaN, so no value check applies here.
 		if len(m.Labels) > l.MaxLabelsPerMetric && l.MaxLabelsPerMetric > 0 {
 			return fmt.Errorf("metric %q has too many labels", m.Name)
@@ -162,6 +172,10 @@ func Number(v any) (float64, error) {
 		return float64(x), nil
 	case json.Number:
 		return x.Float64()
+	case *big.Int:
+		// gojq's integers beyond int64, as tonumber or arithmetic make them.
+		f, _ := new(big.Float).SetInt(x).Float64()
+		return f, nil
 	case string:
 		return strconv.ParseFloat(strings.TrimSpace(x), 64)
 	case bool:

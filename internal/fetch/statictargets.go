@@ -24,6 +24,16 @@ func TargetOverrides(t *model.StaticTarget) RequestOverrides {
 		body := t.Request.Body
 		out.Body = &body
 	}
+	if t.Request.Message != "" {
+		message := t.Request.Message
+		out.Message = &message
+	}
+	if len(t.Request.Metadata) > 0 {
+		out.Metadata = make(map[string]string, len(t.Request.Metadata))
+		for key, value := range t.Request.Metadata {
+			out.Metadata[key] = value
+		}
+	}
 	if t.Request.InsecureSkipVerify != nil {
 		value := *t.Request.InsecureSkipVerify
 		out.InsecureSkipVerify = &value
@@ -50,6 +60,9 @@ func TargetOverrides(t *model.StaticTarget) RequestOverrides {
 		if retry.NonIdempotent != nil {
 			nonIdempotent := *retry.NonIdempotent
 			out.RetryNonIdempotent = &nonIdempotent
+		}
+		if retry.Codes != nil {
+			out.RetryCodes = append([]string{}, retry.Codes...)
 		}
 	}
 	return out

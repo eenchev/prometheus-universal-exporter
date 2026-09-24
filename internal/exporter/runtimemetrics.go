@@ -201,7 +201,11 @@ func parseFloat(s string) float64 {
 }
 
 // processStartSeconds converts the process start time, which /proc reports in
-// clock ticks since boot, into a unix timestamp.
+// clock ticks since boot, into a unix timestamp, from the boot time /proc/stat
+// gives in whole seconds (btime), as client_golang does. The value is the same
+// at every scrape: one worked out from the uptime and the time now would move
+// by a fraction of a second between scrapes, and look like a restart to
+// changes(process_start_time_seconds[1h]).
 func processStartSeconds() (float64, bool) {
 	stat, err := os.ReadFile("/proc/self/stat")
 	if err != nil {
@@ -211,15 +215,26 @@ func processStartSeconds() (float64, bool) {
 	if len(fields) < 22 {
 		return 0, false
 	}
-	uptime, err := os.ReadFile("/proc/uptime")
+	sinceBoot := parseFloat(fields[21]) / float64(clockTicksPerSecond)
+	boot, ok := bootTime()
+	if !ok {
+		return 0, false
+	}
+	return boot + sinceBoot, true
+}
+
+// bootTime is when the system booted, in unix seconds, from /proc/stat.
+func bootTime() (float64, bool) {
+	raw, err := os.ReadFile("/proc/stat")
 	if err != nil {
 		return 0, false
 	}
-	parts := strings.Fields(string(uptime))
-	if len(parts) == 0 {
-		return 0, false
+	for _, line := range strings.Split(string(raw), "\n") {
+		if value, found := strings.CutPrefix(line, "btime "); found {
+			if boot, err := strconv.ParseFloat(strings.TrimSpace(value), 64); err == nil && boot > 0 {
+				return boot, true
+			}
+		}
 	}
-	bootAgo := parseFloat(parts[0])
-	sinceBoot := parseFloat(fields[21]) / float64(clockTicksPerSecond)
-	return float64(time.Now().Unix()) - bootAgo + sinceBoot, true
+	return 0, false
 }

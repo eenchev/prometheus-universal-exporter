@@ -18,7 +18,7 @@ import (
 //
 //	line 3: unknown key "requst" in a collector
 //	line 4: request must be a mapping, not a list
-//	line 7: expected a whole number, not the string "lots"
+//	line 7: expected a whole number, not a string
 
 // yamlPlaces names each type the files decode into by where it appears.
 var yamlPlaces = map[string]string{
@@ -125,7 +125,11 @@ func shortTypeName(goType string) string {
 	return goType[strings.LastIndex(goType, ".")+1:]
 }
 
-// yamlFound describes the value the file has, from its YAML tag and text.
+// yamlFound describes the value the file has, from its YAML tag and text. A
+// string is not quoted back: under --config.expand-env it may be a secret an
+// environment reference put there, such as a password where a mapping
+// belongs, and the error reaches the log and the reload status. The line
+// number says where it is.
 func yamlFound(tag, value string) string {
 	switch tag {
 	case "seq":
@@ -133,7 +137,7 @@ func yamlFound(tag, value string) string {
 	case "map":
 		return "a mapping"
 	case "str":
-		return fmt.Sprintf("the string %q", value)
+		return "a string"
 	case "int", "float":
 		return "the number " + value
 	case "bool":

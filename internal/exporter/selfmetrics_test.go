@@ -79,6 +79,10 @@ func TestSelfMetricsExpositionIsWellFormed(t *testing.T) {
 		}
 	}
 	for _, d := range selfMetricDescriptors {
+		if _, typed := requestTypeFamilies[d.Name]; typed && types[d.Name] == "" {
+			// Only the collectors of its request type have it.
+			continue
+		}
 		if types[d.Name] != string(d.Type) {
 			t.Errorf("%s is exposed as %q, want %q", d.Name, types[d.Name], d.Type)
 		}

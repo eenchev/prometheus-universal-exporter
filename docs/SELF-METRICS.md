@@ -12,7 +12,8 @@ configured:
 | `http_exporter_scrapes_total` | counter | Probes served, cache hits included. |
 | `http_exporter_scrape_success_total` | counter | Probes that completed without a fatal error. |
 | `http_exporter_scrape_duration_seconds` | gauge | Duration of the most recent probe. |
-| `http_exporter_scrape_http_status_code` | gauge | Status of the most recent response; `0` when none arrived, `200` after a file read. |
+| `http_exporter_scrape_http_status_code` | gauge | Status of the most recent response; `0` when none arrived, `200` after a file read or a gRPC call answered `OK`. |
+| `http_exporter_scrape_grpc_status_code` | gauge | [`grpc`](GRPC.md#self-metrics) collectors only: the gRPC status code of the most recent call, `0` for `OK`, `14` for `UNAVAILABLE`; `-1` before the first call, or when a scrape made none, as when the message did not fit. An exporter without `grpc` collectors has no such series. |
 | `http_exporter_scrape_response_bytes` | gauge | Size of the most recent response body. |
 | `http_exporter_decode_success_total` | counter | Responses decoded. |
 | `http_exporter_parse_errors_total` | counter | Responses the decoder could not parse. |
@@ -25,7 +26,7 @@ configured:
 | `http_exporter_decoder_series_left_out_total` | counter | Series the [`graphite` decoder](GRAPHITE.md#the-series-document) left out before the metric rules saw them: with no point that has a value, older than `response.graphite.max_age`, or answered twice. `0` for other decoders. |
 | `http_exporter_decoder_lines_skipped_total` | counter | Carbon lines the `graphite` decoder could not read and skipped, under [`response.graphite.invalid_lines: skip`](GRAPHITE.md#carbon-lines-from-a-file). |
 | `http_exporter_series_limit_exceeded_total` | counter | Scrapes rejected by a size or series limit. |
-| `http_exporter_cache_hits_total`, `http_exporter_cache_misses_total` | counter | [Response cache](CONFIGURATION.md#response-caching) lookups. |
+| `http_exporter_cache_hits_total`, `http_exporter_cache_misses_total` | counter | [Response cache](CONFIGURATION.md#response-caching) lookups: a probe answered from the cache is a hit, including one that found it filled while it waited to start; a probe that went to the target is a miss. A probe that [shared](#shared-probes) another's trip is neither, and is counted in `http_exporter_probes_coalesced_total`. |
 | `http_exporter_cache_entries` | gauge | Entries the collector's cache holds, stale ones kept for `stale_if_error` included. |
 | `http_exporter_cache_stale_served_total` | counter | Failed trips answered with the last good result under [`stale_if_error`](CONFIGURATION.md#serving-the-last-good-result-when-the-target-fails), probes and static target scrapes alike. |
 | `http_exporter_probes_coalesced_total` | counter | Probes that [shared a request](#shared-probes). |
@@ -56,7 +57,7 @@ help and value in both.
 ## Build information
 
 ```text
-http_exporter_build_info{goversion="go1.25.1",request_types="graphite,http,localfile",revision="4c1f2e9…",version="v1.4.0"} 1
+http_exporter_build_info{goversion="go1.25.1",request_types="graphite,grpc,http,localfile",revision="4c1f2e9…",version="v1.4.0"} 1
 ```
 
 As every Prometheus exporter does, one series with value `1` carries the
@@ -273,6 +274,11 @@ query string is dropped, and because one series per tenant would be unbounded.
 A [`localfile`](LOCALFILE.md#errors-and-self-metrics) collector's reads carry
 the file's `file://` URL, placeholders kept the same way, and
 `http_method="READ"`.
+
+A [`grpc`](GRPC.md#self-metrics) collector's calls carry
+`grpc://host:port/package.Service/Method`, `grpcs://` over TLS, and
+`http_method="POST"`, which is what gRPC sends over HTTP/2; the message and
+metadata are left out, as a query string is.
 
 A request URL is an unbounded label value and each combination now carries a
 whole metric family, so tracking is capped at 1000 collector/URL/method

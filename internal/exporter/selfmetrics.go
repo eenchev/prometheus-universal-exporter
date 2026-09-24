@@ -34,8 +34,13 @@ type statsValues struct {
 	// took, in seconds.
 	lastScriptDuration float64
 	lastStatus         int
-	lastBytes          int64
-	lastDuration       float64
+	// grpcCode is the gRPC status code of the last call of a grpc
+	// collector, -1 when it made none; grpcCalled says there was a scrape
+	// at all, before which the code is -1 too.
+	grpcCode     int
+	grpcCalled   bool
+	lastBytes    int64
+	lastDuration float64
 	// lastScrape is only kept per request; the per-collector series has no
 	// timestamp of its own.
 	lastScrape time.Time
@@ -75,6 +80,12 @@ var selfMetricDescriptors = []selfMetricDescriptor{
 	{"http_exporter_scrape_success_total", model.CounterMetricType, "Probes for this collector that completed without a fatal error.", func(v statsValues) float64 { return float64(v.success) }},
 	{"http_exporter_scrape_duration_seconds", model.GaugeMetricType, "Duration of the most recent probe of this collector, in seconds.", func(v statsValues) float64 { return v.lastDuration }},
 	{"http_exporter_scrape_http_status_code", model.GaugeMetricType, "HTTP status the target returned on the most recent scrape, or 0 when the request failed before a response arrived.", func(v statsValues) float64 { return float64(v.lastStatus) }},
+	{"http_exporter_scrape_grpc_status_code", model.GaugeMetricType, "gRPC status code of the most recent call of this grpc collector: 0 for OK, 14 for UNAVAILABLE; -1 before the first call, or when a scrape made none, as when the message did not encode.", func(v statsValues) float64 {
+		if !v.grpcCalled {
+			return -1
+		}
+		return float64(v.grpcCode)
+	}},
 	{"http_exporter_scrape_response_bytes", model.GaugeMetricType, "Size of the most recent response body for this collector, in bytes.", func(v statsValues) float64 { return float64(v.lastBytes) }},
 	{"http_exporter_decode_success_total", model.CounterMetricType, "Responses this collector decoded into its configured format.", func(v statsValues) float64 { return float64(v.decodeOK) }},
 	{"http_exporter_parse_errors_total", model.CounterMetricType, "Responses this collector's decoder could not parse.", func(v statsValues) float64 { return float64(v.parseErrors) }},
@@ -88,7 +99,7 @@ var selfMetricDescriptors = []selfMetricDescriptor{
 	{"http_exporter_decoder_lines_skipped_total", model.CounterMetricType, "Carbon lines the graphite decoder could not read and skipped, under response.graphite.invalid_lines: skip.", func(v statsValues) float64 { return float64(v.linesSkipped) }},
 	{"http_exporter_series_limit_exceeded_total", model.CounterMetricType, "Scrapes rejected for exceeding this collector's response size or series limits.", func(v statsValues) float64 { return float64(v.limitErrors) }},
 	{"http_exporter_cache_hits_total", model.CounterMetricType, "Probes answered from this collector's response cache.", func(v statsValues) float64 { return float64(v.cacheHits) }},
-	{"http_exporter_cache_misses_total", model.CounterMetricType, "Probes that found no usable cache entry and went to the target.", func(v statsValues) float64 { return float64(v.cacheMisses) }},
+	{"http_exporter_cache_misses_total", model.CounterMetricType, "Probes that found no usable cache entry and went to the target; a probe that shared another's trip is counted in http_exporter_probes_coalesced_total instead.", func(v statsValues) float64 { return float64(v.cacheMisses) }},
 	{"http_exporter_cache_stale_served_total", model.CounterMetricType, "Probes and static target scrapes whose trip to the target failed and that were answered with the last successful result instead, under cache.stale_if_error.", func(v statsValues) float64 { return float64(v.staleServed) }},
 	// What a collector's cache holds belongs to the collector, not to any one
 	// request, so it has no per-request value.
@@ -96,6 +107,14 @@ var selfMetricDescriptors = []selfMetricDescriptor{
 	{"http_exporter_probes_in_flight", model.GaugeMetricType, "Trips to this collector's targets in progress, which max_concurrent_probes bounds.", nil},
 	{"http_exporter_probes_rejected_total", model.CounterMetricType, "Probes answered 503 because this collector already had max_concurrent_probes trips to its targets in progress.", func(v statsValues) float64 { return float64(v.rejected) }},
 	{"http_exporter_probes_coalesced_total", model.CounterMetricType, "Probes answered by sharing an identical probe already in flight instead of going to the target.", func(v statsValues) float64 { return float64(v.coalesced) }},
+}
+
+// requestTypeFamilies are the families only the collectors of one request
+// type have, by that type: a collector of another type has no series in
+// them, so an exporter without such collectors, or built without the type,
+// does not show the family at all.
+var requestTypeFamilies = map[string]string{
+	"http_exporter_scrape_grpc_status_code": "grpc",
 }
 
 // selfMetricDescriptor describes one per-collector self-metric family. Value
@@ -192,9 +211,17 @@ func (s *Server) selfMetricSet() model.MetricSet {
 		"http_exporter_cache_entries":    func(name string) float64 { return float64(cacheEntries[name]) },
 		"http_exporter_probes_in_flight": func(name string) float64 { return float64(s.trips.count(name)) },
 	}
+	requestTypes := map[string]string{}
+	for _, c := range s.manager.Get().Collectors {
+		requestTypes[c.Name] = c.Request.Type
+	}
 	var out []model.Metric
 	for _, d := range selfMetricDescriptors {
+		only, typed := requestTypeFamilies[d.Name]
 		for _, name := range names {
+			if typed && requestTypes[name] != only {
+				continue
+			}
 			var value float64
 			if d.Value != nil {
 				value = d.Value(values[name])
@@ -207,6 +234,9 @@ func (s *Server) selfMetricSet() model.MetricSet {
 			continue
 		}
 		for _, sample := range requests {
+			if typed && requestTypes[sample.Key.Collector] != only {
+				continue
+			}
 			out = append(out, model.Metric{Name: d.Name, Help: d.Help, Type: d.Type, Value: d.Value(sample.Values), Labels: requestLabels(sample.Key)})
 		}
 	}

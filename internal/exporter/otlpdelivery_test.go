@@ -24,7 +24,7 @@ import (
 // Delivering OTLP exports: compression, retries, what happens to data that
 // did not get through, the export status self-metrics, the last export at
 // shutdown, readiness and the proxy from the environment (otlp.go,
-// otlpstatus.go, readiness.go, fetch/transport.go).
+// otlp.go, readiness.go, fetch/transport.go).
 
 // readOTLPBody reads an export request, gunzipping it when it says it is
 // gzipped.

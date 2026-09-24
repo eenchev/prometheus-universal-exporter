@@ -88,6 +88,11 @@ func TestSelfMetricDescriptionsMatchTheExposition(t *testing.T) {
 	exposition := selfMetrics(t, server)
 
 	for _, d := range selfMetricDescriptors {
+		if _, typed := requestTypeFamilies[d.Name]; typed {
+			// Only its request type's collectors have it; that type's
+			// tests check its description.
+			continue
+		}
 		if !strings.Contains(exposition, "# HELP "+d.Name+" "+d.Help+"\n") {
 			t.Errorf("%s is not published with its description", d.Name)
 		}
@@ -130,6 +135,9 @@ func TestSelfMetricSetCarriesTheSameDescriptions(t *testing.T) {
 		}
 	}
 	for _, d := range selfMetricDescriptors {
+		if _, typed := requestTypeFamilies[d.Name]; typed {
+			continue
+		}
 		if !found[d.Name] {
 			t.Errorf("%s is missing from the self-metric set", d.Name)
 		}

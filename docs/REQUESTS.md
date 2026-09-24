@@ -4,7 +4,10 @@ Everything on this page describes the request an `http` collector — one with
 `request.type: http`, see [request types](CONFIGURATION.md#request-types) —
 makes to the discovered target, and a `graphite` collector's too, which is the
 same request with a URL built for the Graphite render API
-([Graphite](GRAPHITE.md)), not the scrape Prometheus makes of the exporter. Each setting
+([Graphite](GRAPHITE.md)), not the scrape Prometheus makes of the exporter. A
+`grpc` collector makes a gRPC call instead, with rules of its own, described in
+[gRPC](GRPC.md); its credentials, TLS keys and probe placeholders work as
+they do here. Each setting
 lives on a collector's `request` block, and most can be overridden for a single
 scrape through a `/probe` query parameter — which is what a monitor's `params`
 map renders into.
@@ -27,7 +30,9 @@ collector does not allow stops the exporter instead of failing every scrape.
 `request.path` is optional. Without it, and without a `path` probe parameter,
 the target is requested exactly as given: `http://legacy.example:8080` requests
 `/`, and `http://legacy.example:8080/api/status` requests `/api/status`. A target
-that carries a path keeps it, and `request.path` is appended after it. Nothing
+that carries a path keeps it, and `request.path` is appended after it, the
+target's escapes kept as written: `http://h/a%2Fb` with `path: /x` requests
+`/a%2Fb/x`, not `/a/b/x`. Nothing
 warns about a missing path — a target that serves nothing at `/` fails the probe
 with its own status, or returns a page the metric rules cannot read.
 
@@ -67,7 +72,9 @@ For HTTPS, the certificate is still checked against the address the target
 names; set [`tls.server_name`](#tls) to the virtual host too. A header value
 holding a control character other than tab — a line break pasted into a
 token — is refused at startup, collector and static target alike, since it
-could never be sent.
+could never be sent. So is a header name that is not one, such as one with a
+space, and two names that are the same header in different case, `X-Tenant`
+and `x-tenant`, of which a scrape would otherwise send either.
 
 ## Path parameters
 
@@ -218,6 +225,7 @@ structure:
 | Body, `{{param_x\|form}}` | URL form encoded, for `application/x-www-form-urlencoded` bodies. |
 | Body, `{{param_x\|xml}}` | Escaped XML text, for SOAP and other XML bodies. |
 | Body, `{{param_x}}` or `{{param_x\|raw}}` | Exactly as given. Use it only where the template itself is the structure and the value comes from your own monitors. |
+| gRPC `message`, `metadata` value | The body's filters in the message, which is JSON, so only `\|json`, `\|number` and `\|raw`; a metadata value as a header value. See [gRPC](GRPC.md#placeholders). |
 | Graphite target | As given, and only letters, digits and `_ - . : @ % + ~`; anything else — a quote, a comma, a bracket, a glob — is refused with `400`, since Graphite expressions have no escaping. See [Graphite](GRAPHITE.md#placeholders). |
 
 The filter follows the default, if there is one: `{{param_limit:10|number}}`.
@@ -352,6 +360,10 @@ probe still reports what the target last answered: a `503` stays a failed
 probe ran out of its budget. After a connection that failed, the error is that
 connection error, noting that the wait before retrying was cut short.
 
+A `grpc` collector retries by gRPC status code instead, with `retry.codes`,
+`[UNAVAILABLE]` by default, and has no `non_idempotent`; `retry.codes` is
+refused for every other type. See [gRPC](GRPC.md#errors-and-retries).
+
 ## TLS
 
 The collector can configure target TLS verification and trust material:
@@ -370,6 +382,10 @@ request:
 sent as SNI, when the target is addressed by something the certificate does
 not name — an IP address, a Service's cluster name — as with a
 [`Host` header](#the-host-header). Unset, it is the target's host.
+
+A client certificate needs both `cert_file` and `key_file`; one without the
+other stops the exporter at startup. The files themselves are read at the first
+request, and again when they change, so a Secret mounted later is picked up.
 
 For a one-off scrape, the `insecure_skip_verify` probe parameter overrides the
 collector setting. Set it to `true` only for endpoints where certificate

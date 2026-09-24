@@ -250,7 +250,8 @@ A directory is easy to fill, so reading one is bounded:
   naming how many matched and the first one skipped. They get no series of
   their own, so the `file` label never has more than `max_files` values.
 - **The response limit for each file**, `max_response_bytes` or the
-  collector's `limits.max_response_bytes`, 10 MiB by default. A larger file is
+  collector's `limits.max_response_bytes`, the smaller when both are set, and
+  10 MiB when neither is. A larger file is
   refused from its size, before it is opened, so a 1 GiB file costs a `stat`,
   not a read.
 - **`max_total_bytes`** across the files of one scrape, 64 MiB by default. A

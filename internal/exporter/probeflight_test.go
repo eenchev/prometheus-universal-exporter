@@ -375,7 +375,9 @@ func TestSharedProbesFillTheCacheOnce(t *testing.T) {
 	}
 	exposition := selfMetrics(t, server)
 	for _, want := range []string{
-		`http_exporter_cache_misses_total{collector="cached_shared"} 3`,
+		// One probe went to the target; the two that shared it are
+		// counted as coalesced, not as misses.
+		`http_exporter_cache_misses_total{collector="cached_shared"} 1`,
 		`http_exporter_cache_hits_total{collector="cached_shared"} 1`,
 		`http_exporter_probes_coalesced_total{collector="cached_shared"} 2`,
 	} {

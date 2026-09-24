@@ -302,13 +302,6 @@ func run(args []string, stdout, stderr io.Writer) int {
 	return 0
 }
 
-// newLogger builds the exporter's logger and installs it as the default. Every
-// line the exporter writes has to be JSON, and not all of them come from a
-// logger passed down through the call chain: metric extraction reports a failed
-// rule from deep inside a transform, where threading a logger through seven
-// signatures would buy nothing. Those lines go through slog's default logger,
-// which without this would be the text handler and would emit a differently
-// shaped line into the middle of an otherwise machine-readable stream.
 // parseLogLevel reads --log.level: debug, info, warn or error, in any case.
 func parseLogLevel(level string) (slog.Level, error) {
 	switch strings.ToLower(level) {
@@ -324,8 +317,14 @@ func parseLogLevel(level string) (slog.Level, error) {
 	return slog.LevelInfo, fmt.Errorf("--log.level %q is not a level; use debug, info, warn or error", level)
 }
 
-// newLogger logs JSON lines to out at level, which parseLogLevel has checked,
-// and makes the logger slog's default.
+// newLogger builds the exporter's logger, JSON lines to out at level, which
+// parseLogLevel has checked, and installs it as the default. Every line the
+// exporter writes has to be JSON, and not all of them come from a logger
+// passed down through the call chain: metric extraction reports a failed rule
+// from deep inside a transform, where threading a logger through seven
+// signatures would buy nothing. Those lines go through slog's default logger,
+// which without this would be the text handler and would emit a differently
+// shaped line into the middle of an otherwise machine-readable stream.
 func newLogger(level string, out io.Writer) *slog.Logger {
 	l, _ := parseLogLevel(level)
 	logger := slog.New(slog.NewJSONHandler(out, &slog.HandlerOptions{Level: l}))

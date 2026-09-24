@@ -39,6 +39,9 @@ type probeResult struct {
 	body   []byte
 	// ok is whether the probe counts as a success in the self-metrics.
 	ok bool
+	// abandoned says the trip was cancelled because every probe waiting for
+	// it went away: nobody reads it, and it is not the target's failure.
+	abandoned bool
 }
 
 func (p *probeResult) writeTo(w http.ResponseWriter) {

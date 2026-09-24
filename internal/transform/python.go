@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"math"
 	"strconv"
 	"strings"
@@ -43,15 +44,16 @@ type pythonOutput struct {
 }
 
 // pythonMetric is a metric as a script emitted it. metric(...) makes its
-// value a float and its timestamp whole milliseconds, but a script can also
-// append to metrics itself, so both are read as whatever they are.
+// value a float, its labels text and its timestamp whole milliseconds, but a
+// script can also append to metrics itself, so all three are read as
+// whatever they are, and checked here as metric(...) checks them.
 type pythonMetric struct {
-	Name      string            `json:"name"`
-	Help      string            `json:"help"`
-	Type      model.MetricType  `json:"type"`
-	Value     any               `json:"value"`
-	Labels    map[string]string `json:"labels"`
-	Timestamp any               `json:"timestamp"`
+	Name      string           `json:"name"`
+	Help      string           `json:"help"`
+	Type      model.MetricType `json:"type"`
+	Value     any              `json:"value"`
+	Labels    map[string]any   `json:"labels"`
+	Timestamp any              `json:"timestamp"`
 }
 
 // A float that is NaN or infinite has no JSON form, and the worker and the
@@ -126,28 +128,70 @@ func pythonFloats(data any) any {
 // metric is the emitted metric as the exporter's: its value a float, a
 // numeric string read as one, and its timestamp whole milliseconds.
 func (m pythonMetric) metric() (model.Metric, error) {
-	out := model.Metric{Name: m.Name, Help: m.Help, Type: m.Type, Labels: m.Labels}
+	out := model.Metric{Name: m.Name, Help: m.Help, Type: m.Type}
+	if out.Type == "" {
+		out.Type = model.GaugeMetricType
+	}
+	if len(m.Labels) > 0 {
+		out.Labels = make(map[string]string, len(m.Labels))
+		for name, value := range m.Labels {
+			// None leaves the label out, as metric(...) does.
+			if value == nil {
+				continue
+			}
+			text, err := labelText(pythonFloats(value))
+			if err != nil {
+				return out, fmt.Errorf("metric %q label %q %w", m.Name, name, err)
+			}
+			out.Labels[name] = text
+		}
+	}
 	value, err := pythonNumber(m.Value)
+	if m.Value == nil {
+		return out, fmt.Errorf("metric %q value %w", m.Name, err)
+	}
 	if err != nil {
 		return out, fmt.Errorf("metric %q value %v %w", m.Name, m.Value, err)
 	}
 	out.Value = value
 	if m.Timestamp != nil {
 		at, err := pythonNumber(m.Timestamp)
-		if err != nil || math.IsNaN(at) || math.IsInf(at, 0) {
+		if err != nil {
 			return out, fmt.Errorf("metric %q timestamp %v is not a number of milliseconds", m.Name, m.Timestamp)
 		}
-		ms := int64(at)
+		ms, err := timestampMillis(at)
+		if err != nil {
+			return out, fmt.Errorf("metric %q timestamp %w", m.Name, err)
+		}
 		out.Timestamp = &ms
 	}
 	return out, nil
+}
+
+// timestampMillis is a timestamp in whole milliseconds, refused when it is
+// not finite or is beyond what an int64 of milliseconds holds, where the
+// conversion would give a meaningless number.
+func timestampMillis(at float64) (int64, error) {
+	if math.IsNaN(at) || math.IsInf(at, 0) || at >= math.MaxInt64 || at < math.MinInt64 {
+		return 0, fmt.Errorf("%v is not a number of milliseconds an exposition can carry", at)
+	}
+	return int64(at), nil
+}
+
+// observationCount is a histogram's or summary's count, or a bucket's, which
+// is a whole number of observations from 0 to 2^64-1.
+func observationCount(v float64) (uint64, error) {
+	if math.IsNaN(v) || math.IsInf(v, 0) || v < 0 || v >= math.MaxUint64 {
+		return 0, fmt.Errorf("%v is not a count of observations", v)
+	}
+	return uint64(v), nil
 }
 
 // pythonNumber reads a value a script gave as a number.
 func pythonNumber(v any) (float64, error) {
 	switch n := v.(type) {
 	case nil:
-		return 0, nil
+		return 0, errors.New("is None, not a number")
 	case float64:
 		return n, nil
 	case bool:
@@ -184,6 +228,135 @@ func executePython(ctx context.Context, pythonPath, script string, d *decode.Dec
 	return set, nil
 }
 
+// prometheusFromPython reads back what a pre-script of a prometheus transform
+// left in data: the {"metrics": [...]} document pythonPrometheusData gave it,
+// each series a mapping of name, type, help, labels and timestamp, and value,
+// or buckets, sum and count for a histogram, quantiles, sum and count for a
+// summary.
+func prometheusFromPython(data any) (model.MetricSet, error) {
+	document, ok := data.(map[string]any)
+	list, listed := document["metrics"].([]any)
+	if !ok || !listed {
+		return model.MetricSet{}, errors.New(`a pre-script of a prometheus transform must leave data as {"metrics": [...]}, the series it was given, changed or not`)
+	}
+	set := model.MetricSet{Metrics: make([]model.Metric, 0, len(list))}
+	for i, raw := range list {
+		series, ok := raw.(map[string]any)
+		if !ok {
+			return model.MetricSet{}, fmt.Errorf("data[\"metrics\"][%d] is not a mapping", i)
+		}
+		m, err := prometheusSeries(series)
+		if err != nil {
+			return model.MetricSet{}, fmt.Errorf("data[\"metrics\"][%d]: %w", i, err)
+		}
+		set.Metrics = append(set.Metrics, m)
+	}
+	return set, nil
+}
+
+func prometheusSeries(series map[string]any) (model.Metric, error) {
+	name, _ := series["name"].(string)
+	if name == "" {
+		return model.Metric{}, errors.New("has no name")
+	}
+	m := model.Metric{Name: name, Type: model.UntypedMetricType}
+	if kind, ok := series["type"].(string); ok && kind != "" {
+		m.Type = model.MetricType(kind)
+	}
+	m.Help, _ = series["help"].(string)
+	if labels, ok := series["labels"].(map[string]any); ok && len(labels) > 0 {
+		m.Labels = make(map[string]string, len(labels))
+		for key, value := range labels {
+			if value == nil {
+				continue
+			}
+			text, err := labelText(value)
+			if err != nil {
+				return m, fmt.Errorf("%s label %q %w", name, key, err)
+			}
+			m.Labels[key] = text
+		}
+	}
+	if at, ok := series["timestamp"]; ok && at != nil {
+		value, err := pythonNumber(at)
+		if err != nil {
+			return m, fmt.Errorf("%s timestamp %v is not a number of milliseconds", name, at)
+		}
+		ms, err := timestampMillis(value)
+		if err != nil {
+			return m, fmt.Errorf("%s timestamp %w", name, err)
+		}
+		m.Timestamp = &ms
+	}
+	number := func(key string) (float64, error) {
+		value, err := pythonNumber(series[key])
+		if err != nil || series[key] == nil {
+			return 0, fmt.Errorf("%s %s %v is not a number", name, key, series[key])
+		}
+		return value, nil
+	}
+	count := func() (uint64, float64, error) {
+		sum, err := number("sum")
+		if err != nil {
+			return 0, 0, err
+		}
+		total, err := number("count")
+		if err != nil {
+			return 0, 0, err
+		}
+		n, err := observationCount(total)
+		if err != nil {
+			return 0, 0, fmt.Errorf("%s count %w", name, err)
+		}
+		return n, sum, nil
+	}
+	switch m.Type {
+	case model.HistogramMetricType:
+		buckets, _ := series["buckets"].([]any)
+		n, sum, err := count()
+		if err != nil {
+			return m, err
+		}
+		m.Histogram = &model.Histogram{Sum: sum, Count: n}
+		for _, raw := range buckets {
+			b, _ := raw.(map[string]any)
+			le, errLe := pythonNumber(b["le"])
+			c, errCount := pythonNumber(b["count"])
+			if b == nil || b["le"] == nil || errLe != nil || errCount != nil {
+				return m, fmt.Errorf("%s has a bucket that is not {\"le\": <number>, \"count\": <number>}", name)
+			}
+			cumulative, err := observationCount(c)
+			if err != nil {
+				return m, fmt.Errorf("%s bucket count %w", name, err)
+			}
+			m.Histogram.Buckets = append(m.Histogram.Buckets, model.Bucket{UpperBound: le, CumulativeCount: cumulative})
+		}
+	case model.SummaryMetricType:
+		quantiles, _ := series["quantiles"].([]any)
+		n, sum, err := count()
+		if err != nil {
+			return m, err
+		}
+		m.Summary = &model.Summary{Sum: sum, Count: n}
+		for _, raw := range quantiles {
+			q, _ := raw.(map[string]any)
+			quantile, errQ := pythonNumber(q["quantile"])
+			value, errV := pythonNumber(q["value"])
+			if q == nil || q["quantile"] == nil || errQ != nil || errV != nil {
+				return m, fmt.Errorf("%s has a quantile that is not {\"quantile\": <number>, \"value\": <number>}", name)
+			}
+			m.Summary.Quantiles = append(m.Summary.Quantiles, model.Quantile{Quantile: quantile, Value: value})
+		}
+	default:
+		value, err := number("value")
+		if err != nil {
+			return m, err
+		}
+		m.Value = value
+	}
+	return m, nil
+}
+
 // executePythonPreScript runs a pre-script and returns the data it left.
 func executePythonPreScript(ctx context.Context, pythonPath, script string, d *decode.Decoded, r *fetch.HTTPResponse, c *model.Collector) (any, error) {
 	out, err := runPython(ctx, pythonPath, "data", "pre-script", script, d, r, c)
@@ -212,6 +385,11 @@ func runPython(ctx context.Context, pythonPath, mode, what, script string, d *de
 		timer.add(elapsed)
 	}
 	out, err := pythonResult(c, what, timeout, line, err)
+	if err == nil && out.Log != "" {
+		// What the script printed, its first 4 KiB, for whoever debugs it;
+		// it counts against max_output_bytes only as far as that.
+		slog.Debug("python "+what+" printed", "collector", c.Name, "output", out.Log)
+	}
 	return out, model.MarkError(err, model.ErrScriptFailed)
 }
 

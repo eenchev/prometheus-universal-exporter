@@ -73,6 +73,8 @@ func TestRequestTypeTagsScript(t *testing.T) {
 		"localfile":      "select_request_types,request_type_localfile",
 		"localfile,http": "select_request_types,request_type_localfile,request_type_http",
 		"graphite":       "select_request_types,request_type_graphite",
+		"grpc":           "select_request_types,request_type_grpc",
+		"http,grpc":      "select_request_types,request_type_http,request_type_grpc",
 	} {
 		got, stderr, err := run(list)
 		if err != nil || got != want {

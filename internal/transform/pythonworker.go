@@ -761,7 +761,9 @@ while True:
         sink=io.StringIO()
         with contextlib.redirect_stdout(sink), contextlib.redirect_stderr(sink):
             exec(compile(p['script'],'<collector-python>','exec'),scope,scope)
-        result={'ok':True,'log':sink.getvalue()}
+        log=sink.getvalue()
+        if len(log)>4096: log=log[:4096]+'... (%d more characters)'%(len(log)-4096)
+        result={'ok':True,'log':log}
         if p.get('mode')=='data': result['data']=scope.get('data')
         else: result['metrics']=metrics
         answer(result)

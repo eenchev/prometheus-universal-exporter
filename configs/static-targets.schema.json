@@ -192,6 +192,28 @@
               "insecure_skip_verify": {
                 "type": "boolean"
               },
+              "message": {
+                "description": "grpc: replaces the collector's request.message for this target. It cannot hold {{param_...}} placeholders.",
+                "type": [
+                  "string",
+                  "number",
+                  "boolean"
+                ]
+              },
+              "metadata": {
+                "additionalProperties": {
+                  "type": [
+                    "string",
+                    "number",
+                    "boolean"
+                  ]
+                },
+                "description": "grpc: metadata sent besides the collector's; a key of both takes this value. It cannot hold {{param_...}} placeholders.",
+                "propertyNames": {
+                  "pattern": "^[0-9a-z_.-]+$"
+                },
+                "type": "object"
+              },
               "method": {
                 "enum": [
                   "GET",
@@ -223,6 +245,13 @@
                     "description": "A duration such as 500ms, 30s or 5m.",
                     "pattern": "^[-+]?(0|([0-9]*(\\.[0-9]*)?(ns|us|µs|μs|ms|s|m|h))+)$",
                     "type": "string"
+                  },
+                  "codes": {
+                    "description": "grpc: replaces the collector's request.retry.codes for this target.",
+                    "items": {
+                      "type": "string"
+                    },
+                    "type": "array"
                   },
                   "non_idempotent": {
                     "description": "Retry a request whose method is not idempotent, such as POST, which sending again may repeat.",
@@ -259,7 +288,7 @@
             "type": "object"
           },
           "target": {
-            "description": "What the collector reads: a URL for an http collector, the Graphite server's URL for a graphite one, a file under request.root for a localfile one.",
+            "description": "What the collector reads: a URL for an http collector, the Graphite server's URL for a graphite one, host:port or a grpc:// or grpcs:// URL of it for a grpc one, a file under request.root for a localfile one.",
             "type": [
               "string",
               "number",

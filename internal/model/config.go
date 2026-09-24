@@ -99,7 +99,7 @@ type Collector struct {
 	ErrorHandling ErrorHandling   `yaml:"error_handling"`
 	Limits        Limits          `yaml:"limits"`
 	// Cache answers repeats of a probe from memory, and can stand in for a
-	// trip that fails; see cache.go and exporter/stalecache.go.
+	// trip that fails; see exporter/cache.go.
 	Cache CacheConfig `yaml:"cache"`
 	// Coalesce shares one upstream request among identical probes that arrive
 	// while it is in flight. Unset means true; see exporter/probeflight.go.
@@ -152,6 +152,19 @@ type RequestConfig struct {
 	Targets []string `yaml:"targets"`
 	From    string   `yaml:"from"`
 	Until   string   `yaml:"until"`
+	// RPC, Message, Metadata and the descriptor keys belong to the grpc
+	// type: the method called, package.Service/Method; the request message
+	// in the protobuf JSON mapping; the request metadata; and where the
+	// message types come from — reflection, protoset (ProtosetFile) or
+	// proto (ProtoFiles, compiled with ProtoImportPaths). See
+	// fetch/requesttype_grpc.go.
+	RPC              string            `yaml:"rpc"`
+	Message          string            `yaml:"message"`
+	Metadata         map[string]string `yaml:"metadata"`
+	Descriptors      string            `yaml:"descriptors"`
+	ProtosetFile     string            `yaml:"protoset_file"`
+	ProtoFiles       []string          `yaml:"proto_files"`
+	ProtoImportPaths []string          `yaml:"proto_import_paths"`
 }
 
 // RetryConfig is request.retry: how often a failed request is tried again,
@@ -163,6 +176,9 @@ type RetryConfig struct {
 	// POST, be retried. Unset, only GET, HEAD, OPTIONS, TRACE, PUT and DELETE
 	// are: sending a POST again may repeat what it did.
 	NonIdempotent bool `yaml:"non_idempotent"`
+	// Codes are the gRPC status codes a grpc request retries, by name;
+	// UNAVAILABLE alone when unset. Only for the grpc type.
+	Codes []string `yaml:"codes"`
 }
 
 // BasicAuth is request.basic_auth, credentials written in the configuration.

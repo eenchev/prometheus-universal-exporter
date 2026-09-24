@@ -297,7 +297,7 @@ func TestConfigValidationAppliesDefaults(t *testing.T) {
 	if c.Metrics[0].Type != model.GaugeMetricType || c.Metrics[0].ErrorMode != "log" {
 		t.Fatalf("unexpected metric defaults: %#v", c.Metrics[0])
 	}
-	if c.Limits.MaxResponseBytes <= 0 || c.Limits.MaxMetrics <= 0 || c.Limits.ScriptTimeout <= 0 {
+	if c.Limits.MaxMetrics <= 0 || c.Limits.ScriptTimeout <= 0 {
 		t.Fatalf("limits were not defaulted: %#v", c.Limits)
 	}
 }

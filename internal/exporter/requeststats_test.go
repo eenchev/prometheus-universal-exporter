@@ -95,6 +95,9 @@ func TestVerboseRepublishesEverySelfMetricPerRequest(t *testing.T) {
 	}
 	// Every family except the collector-wide cache size is republished.
 	for _, name := range verboseRequestSeriesNames() {
+		if _, typed := requestTypeFamilies[name]; typed {
+			continue
+		}
 		if !strings.Contains(exposition, name+labels) {
 			t.Fatalf("%s is not published per request:\n%s", name, exposition)
 		}

@@ -204,9 +204,10 @@ func TestPromParseErrors(t *testing.T) {
 		{"1a 1\n", "invalid metric name"},
 		{"# TYPE h histogram\nh_bucket{le=\"x\"} 1\n", `expected float as value for 'le' label, got "x"`},
 		{"# TYPE s summary\ns{quantile=\"x\"} 1\n", `expected float as value for 'quantile' label, got "x"`},
-		{"# TYPE h histogram\nh_count -1\n", `expected a non-negative count for "h", got -1`},
-		{"# TYPE h histogram\nh_bucket{le=\"1\"} NaN\n", `expected a non-negative count for "h", got NaN`},
-		{"# TYPE s summary\ns_count +Inf\n", `expected a non-negative count for "s", got +Inf`},
+		{"# TYPE h histogram\nh_count -1\n", `expected a count from 0 to 2^64-1 for "h", got -1`},
+		{"# TYPE h histogram\nh_bucket{le=\"1\"} NaN\n", `expected a count from 0 to 2^64-1 for "h", got NaN`},
+		{"# TYPE s summary\ns_count +Inf\n", `expected a count from 0 to 2^64-1 for "s", got +Inf`},
+		{"# TYPE s summary\ns_count 1e20\n", `expected a count from 0 to 2^64-1 for "s", got 1e+20`},
 	}
 	for _, test := range tests {
 		_, err := parsePrometheusText([]byte(test.body))

@@ -83,6 +83,8 @@ func targetHint(c *model.Collector, required bool) string {
 		hint = "http://host:port"
 	case fetch.RequestTypeGraphite:
 		hint = "http://graphite:8080"
+	case fetch.RequestTypeGRPC:
+		hint = "host:port"
 	case "localfile":
 		hint = "a file or directory under its root"
 	}

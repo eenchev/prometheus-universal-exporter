@@ -10,6 +10,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -102,11 +103,11 @@ func TestAStaticTargetsRetryOverridesKeyByKey(t *testing.T) {
 		t.Fatalf("%+v", overrides)
 	}
 	collector := model.RetryConfig{Attempts: 1, Backoff: model.Duration(2 * time.Second), NonIdempotent: true}
-	if got := target.Request.Retry.Over(collector); got != (model.RetryConfig{Attempts: 3, Backoff: model.Duration(2 * time.Second), NonIdempotent: true}) {
+	if got := target.Request.Retry.Over(collector); !reflect.DeepEqual(got, model.RetryConfig{Attempts: 3, Backoff: model.Duration(2 * time.Second), NonIdempotent: true}) {
 		t.Fatalf("over the collector's: %+v", got)
 	}
 	var none *model.TargetRetryConfig
-	if got := none.Over(collector); got != collector {
+	if got := none.Over(collector); !reflect.DeepEqual(got, collector) {
 		t.Fatalf("no retry of its own: %+v", got)
 	}
 }

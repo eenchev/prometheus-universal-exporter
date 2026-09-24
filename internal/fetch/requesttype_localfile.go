@@ -111,9 +111,6 @@ func validateLocalFileRequest(x *model.Collector) error {
 	if x.Request.MaxAge < 0 {
 		return fmt.Errorf("collector %q request.max_age must not be negative", x.Name)
 	}
-	if x.Request.MaxResponseBytes < 0 {
-		return fmt.Errorf("collector %q request.max_response_bytes must not be negative", x.Name)
-	}
 	if HasPathParams(x.Request.Path) {
 		if _, err := parsePathParams(x.Request.Path); err != nil {
 			return fmt.Errorf("collector %q: %w", x.Name, err)

@@ -16,7 +16,7 @@ import (
 )
 
 // Script durations, idle worker reaping and reloads (transform/pythonworker.go), and
-// error kinds (model/errkinds.go).
+// error kinds (model/errors.go).
 
 // http_exporter_script_duration_seconds is the time the probe's Python took,
 // on the collector and, in verbose mode, on the request.

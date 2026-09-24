@@ -57,14 +57,17 @@ func detectFormat(r *fetch.HTTPResponse) string {
 		return "graphite"
 	}
 	b := bytes.TrimSpace(r.Body)
-	if bytes.Contains(b, []byte("# TYPE ")) || bytes.Contains(b, []byte("# HELP ")) {
-		return "prometheus"
-	}
+	// JSON first: a JSON document may hold "# HELP " in a string, while
+	// Prometheus exposition, which starts with a comment or a name, never
+	// parses as JSON.
 	if len(b) > 0 && (b[0] == '{' || b[0] == '[') {
 		var x any
 		if json.Unmarshal(b, &x) == nil {
 			return "json"
 		}
+	}
+	if bytes.Contains(b, []byte("# TYPE ")) || bytes.Contains(b, []byte("# HELP ")) {
+		return "prometheus"
 	}
 	// An HTML page is markup too, and rarely well-formed XML, so it is
 	// recognised by its doctype or root element before anything starting

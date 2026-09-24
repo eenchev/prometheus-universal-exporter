@@ -249,8 +249,9 @@ func ValidateStaticTargetsAgainst(f *model.StaticTargetFile, c *model.Config) er
 var paramPlaceholder = regexp.MustCompile(`\{\{\s*` + fetch.PathParamPrefix)
 
 // refuseParamPlaceholders refuses a {{param_...}} placeholder in a value the
-// target writes itself — its target, request.body, header values and a
-// graphite collector's request.targets; its
+// target writes itself — its target, request.body, header values, a
+// graphite collector's request.targets and a grpc collector's
+// request.message and metadata values; its
 // request.path is checked with the collector's stricter rule. Such values are
 // sent as written, with no probe to fill a placeholder; the target's params
 // are what fill the collector's.
@@ -263,6 +264,14 @@ func refuseParamPlaceholders(t *model.StaticTarget) error {
 	}
 	if paramPlaceholder.MatchString(t.Request.Body) {
 		return refuse("request.body")
+	}
+	if paramPlaceholder.MatchString(t.Request.Message) {
+		return refuse("request.message")
+	}
+	for _, name := range model.SortedKeys(t.Request.Metadata) {
+		if paramPlaceholder.MatchString(t.Request.Metadata[name]) {
+			return refuse("request.metadata " + name)
+		}
 	}
 	names := make([]string, 0, len(t.Request.Headers))
 	for name := range t.Request.Headers {

@@ -435,7 +435,7 @@ value. The configuration schema MUST accept both forms for these settings.
 ### 5.1 Request types
 
 Every collector MUST declare `request.type`, which selects how it reaches its
-data. `http`, `localfile` and `graphite` are implemented; gRPC and FTP are
+data. `http`, `localfile`, `graphite` and `grpc` are implemented; FTP is
 anticipated. The
 type MUST be required rather than defaulted, so that no configuration means
 `http` by accident. A missing type
@@ -489,9 +489,14 @@ type.
   `requesttype_<name>_test.go`, the tests that only that type needs, so that
   vetting a single-type selection compiles its tests too.
 - Code that some types share and others do not, such as the rules of a
-  request made over HTTP, which `http` and `graphite` share, MUST live behind
-  a constraint naming each type that uses it, so no selection compiles code
-  it does not use.
+  request made over HTTP, which `http` and `graphite` share, or the credential
+  keys' rules, which `http`, `graphite` and `grpc` share, MUST live behind a
+  constraint naming each type that uses it, so no selection compiles code it
+  does not use.
+- A library only one type uses MUST be imported only by files behind that
+  type's constraint, so a build without the type does not link it; a test
+  MUST list the packages a build of each other type links and find none of
+  it. The gRPC and protobuf modules are `grpc`'s alone.
 - A build with `-tags select_request_types` MUST carry only the types named by
   `request_type_<name>` tags. One that names none MUST fail to compile, which
   `requesttype_none.go` does with the constraint
@@ -528,7 +533,7 @@ type.
 | `forward_headers` | none | Allowlist for `header_<name>` probe parameters (§ 42.4). |
 | `tls` | verify | CA, client certificate and `insecure_skip_verify` (§ 42.9). |
 | `retry` | none | `attempts` and `backoff`, both non-negative. |
-| `max_response_bytes` | limit | Response size cap. |
+| `max_response_bytes` | 10 MiB | Response size cap. |
 | `follow_redirects` | `false` | § 42.15. |
 | `enable_http2` | `false` | § 42.15. |
 | `allowed_schemes` | `http`, `https` | Schemes a target may use. |
@@ -742,6 +747,85 @@ lines: it only pulls. Its keys:
   never reads one.
 - `decoder.type` left unset or `auto` MUST be `graphite` (§ 15a); `json`
   MAY be set to read the answer as Graphite sent it.
+
+#### `grpc`
+
+A `grpc` collector calls one unary gRPC method on the probe's `target`, the
+server, and hands the answer to the transforms as JSON (§ 9a). The call MUST
+be described in configuration alone, with message types built at run time
+from descriptors, so no service needs generated code or a new build. Its
+keys:
+
+| Key | Default | Rule |
+| --- | --- | --- |
+| `rpc` | none | **Required.** `package.Service/Method`; a leading `/` MUST be dropped. MUST match `^([A-Za-z_][A-Za-z0-9_]*\.)*[A-Za-z_][A-Za-z0-9_]*/[A-Za-z_][A-Za-z0-9_]*$` and hold no placeholder. |
+| `message` | `{}` | The request message in the protobuf JSON mapping. MAY hold placeholders (§ 42.10a) with the filters `json`, `number` and `raw`; `form` and `xml` MUST be refused. |
+| `metadata` | none | Keys MUST be `[0-9a-z_.-]+`; `-bin` keys, `grpc-` and `:` keys, `content-type`, `te`, `host`, `connection` and `user-agent` MUST be refused, and `authorization` when a credential key is set. Values MAY hold placeholders, filled with the header rule; a literal value with a control character MUST be refused. |
+| `descriptors` | none | `reflection`, `protoset` or `proto`, case-insensitive. **Required**, but for a method of `grpc.health.v1.Health`, whose types MUST be built in. |
+| `protoset_file` | none | Required with, and only with, `protoset`. |
+| `proto_files` | none | Required with, and only with, `proto`. |
+| `proto_import_paths` | each file's directory | Only with `proto`. |
+| `basic_auth` / `basic_auth_file`, `bearer_token` / `bearer_token_file`, `forward_authorization`, `forward_headers`, `tls`, `max_response_bytes` | as `http` | With `http`'s rules; credentials MUST be sent as the `authorization` metadata, their files read at every call. A `forward_headers` name gRPC reserves MUST be refused. |
+| `retry` | none | `attempts` and `backoff` as `http`'s; `codes`, the gRPC status codes retried by name, case-insensitive, `[UNAVAILABLE]` when left out. An unknown name and `OK` MUST be refused. `non_idempotent` MUST be refused, and `codes` for every other type, in a collector and a static target. |
+
+- A target MUST be `host:port`, `dns:///host:port`, `grpc://host:port` or
+  `grpcs://host:port`, with a port from 1 to 65535; any other scheme, a path,
+  a query or a user MUST be refused, a probe's with `400` before anything is
+  called and a static target's at load. A bare target MUST be plaintext;
+  `grpcs://` or any `tls` key MUST make the call TLS, and `grpc://` with a
+  `tls` key MUST be refused.
+- At load, each placeholder of the message MUST take its default, or a
+  stand-in of its filter's kind when it has none, and the message MUST then be
+  JSON.
+- With `protoset` or `proto`, the service and method MUST be looked up at load
+  and by `--dry-run`: a missing service or method, naming the methods the
+  service has, and a client, server or bidirectional streaming method, naming
+  its kind, MUST be refused; a message whose placeholders all have defaults,
+  and a static target's message, MUST be checked against the input type,
+  unknown fields refused. A descriptor set MUST be read with its imports, an
+  import it lacks taken from the types built into the exporter when they hold
+  it, and refused naming it otherwise. `.proto` files MUST be compiled with the
+  well-known types built in, imports resolved only in the import paths, each
+  file named by its path from the import path it is under, and a compile
+  error MUST name the file and line. Both MUST be read again at a call when a
+  file they were read from changed on disk.
+- With `reflection`, the target's `grpc.reflection.v1` service MUST be asked,
+  and `v1alpha` when the server does not implement v1, for the file defining
+  the service and every file it imports, asking by name for any the answer
+  left out. An answer MUST be kept per connection and service for 10 minutes.
+  A call failing with `UNIMPLEMENTED`, or whose answer does not decode, MUST
+  drop the answer, ask again and call again once, apart from the retries. A
+  server without reflection MUST fail saying so and naming `protoset` and
+  `proto`; a reflection call ending with a status MUST be reported as a call
+  with that status.
+- A message that does not fit the input type MUST fail the probe at the
+  `message` stage before the target is called, naming the field; a call
+  ending with a status other than `OK` MUST fail at the `grpc` stage with the
+  status's name and message, logged with a `grpc_code` attribute. The status
+  codes listed in `retry.codes` MUST be retried up to `attempts` times, after
+  `backoff`, within the probe's budget. The probe's budget or `timeout` MUST
+  be the call's deadline. An answer over the response limit MUST fail with
+  `RESOURCE_EXHAUSTED` and count as a limit.
+- Metadata MUST be the collector's, a static target's own over it, the
+  credentials as `authorization`, and the forwarded headers lower-cased over
+  all of them, a reserved name left out.
+- Connections MUST be kept per target and TLS settings and reused, closed
+  after 5 minutes unused, and made again when a TLS file changes on disk,
+  without cancelling a call still using the old one.
+- It MUST accept the `/probe` parameters `timeout`, `insecure_skip_verify`,
+  `retry_attempts`, `retry_backoff`, `header_<name>`, `param_<name>` and
+  `message`, which replaces `request.message`, placeholders and all; a
+  parameter only another type accepts MUST be answered `400`. A static target
+  MAY set `message`, `metadata`, `timeout`, `insecure_skip_verify`, `retry`
+  and the basic and bearer credential keys; its message and metadata MUST NOT
+  hold placeholders, its message MUST be JSON, and with descriptors read at
+  load fit the input type. Its message MUST enter its cache key as the probe
+  parameter `message`, and its metadata and retry codes a section a probe's
+  key never has.
+- `decoder.type` left unset or `auto` MUST be `json`, and any other decoder
+  MUST be refused; the transform MUST be `jq`, `yq` or `python`.
+- The verbose `url` label MUST be `grpc://host:port/package.Service/Method`,
+  `grpcs://` over TLS, and `http_method` MUST be `POST`.
 
 A collector MAY set `cache`, a mapping of `ttl`, the time to live of a cached
 collector result, and `stale_if_error`, how much longer a result stands in for
@@ -1037,6 +1121,23 @@ Example:
         - name: environment
           expression: '.environment'
 ```
+
+---
+
+# 9a. gRPC answers as JSON
+
+A `grpc` call answered `OK` (§ 5.1) MUST become a fetch result with status
+200, `Content-Type: application/json`, the answer's headers and trailers,
+binary ones aside, as its headers, and as its body the answer in the protobuf
+JSON mapping, compacted so the same answer is always the same bytes, with:
+
+- fields at their zero value written, so a rule never misses a value proto3
+  would leave out;
+- field names as the `.proto` file writes them;
+- 64-bit integers as strings, enums as their names, and `Timestamp` and
+  `Duration` as the mapping writes them.
+
+A numeric string MUST be read by metric values as a number.
 
 ---
 
@@ -1350,7 +1451,11 @@ included, MUST fail the decode saying the Graphite server did not answer with
 render JSON and quoting the start of the answer, never be read as carbon
 lines.
 
-A tagged name, `path;tag=value;...`, MUST be split into its path and tags. The
+A tagged name, `path;tag=value;...`, MUST be split into its path and tags,
+at a `;` outside brackets and quotes only, so a function's result named after
+a tagged argument, `movingAverage(cpu.load;env=prod,'5min')`, keeps that name
+as its path; a render target that does not read as a tagged name but whose
+tags the render API gave MUST be kept as its name. The
 decoder MUST produce one document for every transform:
 
 ```json
@@ -1466,8 +1571,25 @@ The Python API MUST ultimately produce the same internal `MetricSet` as every ot
 `metric(...)` MUST take a value as the other transforms do — a number, a
 numeric string, a boolean as 1 or 0 — and refuse anything else naming the
 metric; a timestamp MUST be milliseconds, a float cut to whole milliseconds,
-and a non-finite one refused. A metric a script appends to `metrics` itself
-MUST be read the same way.
+and a non-finite one, or one beyond an int64 of milliseconds, refused. A
+metric a script appends to `metrics` itself MUST be read the same way: its
+value and timestamp as `metric(...)` reads them, `None` refused, its label
+values written as label text with `None` leaving the label off, and a missing
+type `gauge`.
+
+A series typed `histogram` MUST have buckets and one typed `summary`
+quantiles, and a series with either MUST have that type; a `prometheus` rule
+MUST NOT give a histogram or summary another type, nor another series one of
+theirs. A count of observations MUST be refused outside 0 to 2^64-1.
+
+A pre-script of a `prometheus` transform MUST receive the series as
+`{"metrics": [...]}`, as a Python transform does, and what it leaves MUST be
+read back into series for the rules, anything not of that shape refused naming
+the series. A label value a pre-script left in a CSV row MUST be written as
+label text, `None` leaving the label off.
+
+What a script prints MUST be kept to its first 4 KiB, logged at debug level,
+and counted against `limits.max_output_bytes` only as far as that.
 
 ### 16.3 Python library model
 
@@ -2140,6 +2262,21 @@ limits:
   max_cache_entries: 1000
 ```
 
+The response a collector reads MUST be bounded by `request.max_response_bytes`
+and `limits.max_response_bytes`: the smaller when both are set, the one set
+otherwise, and 10 MiB when neither is. Neither MUST be filled in with the
+default, so that either alone may raise the bound past it; a negative value
+MUST be refused.
+
+A probe's cache and coalescing key MUST write the length of every list before
+it — the query's parameters, each parameter's values, the headers and each
+header's values — so where one list ends and the next begins is part of the
+key, and MUST treat header names without regard to case.
+
+A trip cancelled because every probe waiting for it went away MUST NOT be
+reported as a failure of the target: nothing logged, no stale answer counted
+or queued for OTLP.
+
 `max_cache_entries` bounds the number of live cache entries a single collector
 may hold. It MUST default to a finite value and MUST be enforced by evicting
 expired entries first and then the entries closest to expiry.
@@ -2217,6 +2354,7 @@ http_exporter_scrapes_total
 http_exporter_scrape_success_total
 http_exporter_scrape_duration_seconds
 http_exporter_scrape_http_status_code
+http_exporter_scrape_grpc_status_code
 http_exporter_scrape_response_bytes
 
 http_exporter_decode_success_total
@@ -2262,6 +2400,12 @@ http_exporter_otlp_last_export_success_timestamp_seconds
 ```
 
 Labels should include `collector` and, where appropriate, `target`.
+
+`http_exporter_scrape_http_status_code` MUST be the status of the most recent
+response, and `0` after a fetch that got none. `http_exporter_scrape_grpc_status_code`
+MUST exist only for `grpc` collectors, so an exporter without them has no
+series of it: the status code of the most recent call, `0` for `OK`, and `-1`
+before the first call or after a scrape that made none.
 
 Names MUST follow the Prometheus conventions: a counter's name MUST end in
 `_total`, and nothing else's may. Every family's name, type, help and value
@@ -2380,6 +2524,11 @@ than approximated. `go_gc_duration_seconds` MUST therefore be published as a
 summary with its count and sum only, because the quantiles are not available
 from the runtime statistics the exporter reads; it MUST NOT be published as two
 counters, which would give the family a type client_golang does not give it.
+
+`process_start_time_seconds` MUST be the same at every scrape of one process:
+it MUST be worked out from the boot time the system reports and the process's
+start since boot, not from the uptime and the time now, which would move it by
+a fraction of a second between scrapes and read as a restart.
 
 Publishing these alongside the exporter's own self-metrics MUST NOT declare any
 metric family twice, and turning the setting off through a reload MUST drop the
@@ -2747,8 +2896,11 @@ implementation's: each names its line and says what was wrong there — an
 unknown key and where it was found (`in a collector`, `in retry`, `in a
 static target's request`), a value of the wrong kind with what was
 expected (`a duration such as 30s`, `a whole number`, `a list of values`,
-`true or false`) and what was found (`a list`, `a mapping`, `the string
-"fast"`, `the number 3`). A message MUST NOT name a Go type or package or a
+`true or false`) and what was found (`a list`, `a mapping`, `a string`,
+`the number 3`). A string found MUST NOT be quoted back: under
+`--config.expand-env` it may be a secret an environment reference put where a
+mapping belongs, and the message reaches the log and the reload status; the
+line number says where it is. A message MUST NOT name a Go type or package or a
 YAML tag. Every error in the file MUST be reported at once, joined by `; `,
 rather than only the first. A YAML syntax error is reported as the YAML
 parser words it.
@@ -4648,8 +4800,8 @@ status captured:
 - A collector without `request.type` is rejected, and the message names the
   collector, says the type is required, lists the supported types and shows
   `type: http`; `--dry-run` reports it as a failed configuration.
-- Unknown types — including the anticipated `grpc` and `ftpfile` — are
-  rejected with the supported types listed.
+- Unknown types — including the anticipated `ftpfile` — are rejected with the
+  supported types listed; `grpc` is a known type.
 - The type is matched case-insensitively and stored in lower case.
 - An `http` collector with only `type` is valid and defaults `method` to GET;
   one setting every `http` key together is valid; the `http` cross-key rules
@@ -4670,6 +4822,7 @@ status captured:
   rules, a default build compiles every type and not the guard,
   `select_request_types,request_type_http` compiles http and not the guard,
   `select_request_types,request_type_graphite` compiles graphite alone, and
+  `select_request_types,request_type_grpc` compiles grpc alone, and
   `select_request_types` alone compiles only the guard; CI's loop over
   single-type builds names every type in the tree; a default build
   registers every known type; a known type missing from the build is rejected
@@ -5131,8 +5284,8 @@ See § 23 and § 30.
 See § 7.1.
 
 - Every package under `internal/` imports only the packages before it in the
-  layer order, `internal/testutil` imports only `internal/model`, and no
-  non-test file imports `internal/testutil`.
+  layer order, `internal/testutil` and `internal/grpctest` import only
+  `internal/model`, and no non-test file imports either.
 - Only the shared trip fetches, decodes and transforms, apart from a
   directory's files (§ 5.1), which it decodes and transforms one at a time.
 - A static target's scrape failed by a metric rule with `error_mode: fail`
@@ -5423,6 +5576,119 @@ See § 22.0c, § 23, § 42.1a and § 42.15b.
   cleanly after the graceful shutdown; OTLP exports keep being made through
   the delay.
 
+## 34.62 gRPC tests
+
+See § 5.1 (`grpc`), § 9a and § 22. The tests MUST run against an in-process
+gRPC server on a loopback listener, with its service compiled from `.proto`
+sources at run time, so they need neither the network nor `protoc`.
+
+- Validation: `rpc` required, shaped and free of placeholders; `descriptors`
+  required but for the health service; each source's keys only with it; the
+  metadata key and value rules, `authorization` beside a credential key and a
+  reserved `forward_headers` name; retry codes normalized, an unknown one and
+  `OK` refused, `non_idempotent` refused, `codes` refused for `http`; a
+  message that is not JSON after its defaults, and a `form` filter, refused;
+  an `http` key refused.
+- The health service needs no descriptors, answers `SERVING`, and its `Watch`
+  is refused.
+- A descriptor set loads; a missing service, a missing method naming the
+  methods, each streaming kind, and a message with an unknown or ill-typed
+  field are refused at load; a message with a placeholder without a default
+  is not type-checked; a set without the well-known types loads, and one that
+  is not a set or is missing is refused; a set emptied on disk is read again.
+- `.proto` sources compile with import paths; without them an import by path
+  from the root fails naming it; a file outside the import paths is refused;
+  a syntax error names the file and line.
+- Targets of each form give the right label and display; a host without a
+  port, another scheme, a path, a user and port 0 are refused and displayed
+  as invalid; a `tls` block makes a bare target `grpcs` and contradicts
+  `grpc://`.
+- Probe parameters: `message`, `timeout`, `retry_attempts`, `param_` and
+  `header_` accepted; `method`, `path`, `body` and `from` answered `400`; a
+  `param_` the replaced message no longer uses answered `400`.
+- A static target's message, metadata and retry codes are checked, placeholders
+  refused, and reach the call; they enter its cache key, so targets asking
+  different questions never share a result, while a probe with the same
+  message does.
+- A call sends the filled message, the metadata, the bearer token from its
+  file and the forwarded headers, leaves a reserved forwarded header out, and
+  its deadline reaches the server; the answer has zero values, the `.proto`
+  names, 64-bit strings and enum names, and is compact.
+- A message that does not fit fails at the `message` stage with no call made
+  and the gauge at `-1`; `PERMISSION_DENIED` fails at the `grpc` stage with
+  code 7 in the gauge, the answer and the log; a stopped server is
+  `UNAVAILABLE`.
+- `UNAVAILABLE` is retried by default, `ABORTED` only when listed, a static
+  target's codes replace the collector's, and no attempts means no retry.
+- An answer over the limit is `RESOURCE_EXHAUSTED` and a limit error.
+- Reflection v1, v1alpha alone and both work; a server without reflection
+  fails saying so; an answer is kept, asked again after `UNIMPLEMENTED` with
+  one more call, and forgotten after 10 minutes; an unknown service is named.
+- TLS with the CA, with `server_name`, a wrong `server_name` failing and
+  `insecure_skip_verify` overriding it; plaintext to a TLS server fails.
+- Connections are reused, kept apart per target and forgotten unused; a
+  missing CA makes none.
+- End to end: jq and Python map an answer, the empty shard at `0` and the
+  64-bit total read as a number; the gauge reads `0`, `-1` before the first
+  call and only for `grpc` collectors, and the HTTP status gauge `200` and
+  then `0` after a failure; the verbose labels are the `grpc://` URL and
+  `POST`; the collectors page shows `host:port` and the message's parameters.
+- The configuration loads a `grpc` collector with decoder `json` and no
+  warning, again unchanged; another decoder and a transform that does not
+  read JSON are refused; a descriptor set's mistakes fail the load.
+- A build of every type but `grpc`, and of each alone, links no gRPC or
+  protobuf package, and a `grpc` build alone links them.
+- The examples in `docs/GRPC.md` load and run as written.
+
+## 34.63 Review fixes: limits, headers, caching, schedules, transforms and gRPC tests
+
+- `request.max_response_bytes` alone raises the limit past 10 MiB, the smaller
+  of it and `limits.max_response_bytes` wins when both are set, and a negative
+  one is refused for every type.
+- A header name with a space, and two names that are one header in different
+  case (`Host` and `host` included), are refused at load, in a collector and a
+  static target; a placeholder in a name keeps its own message.
+- A client certificate without its key, and the reverse, are refused at load.
+- A target's escaped path, `%2F` inside a segment, is sent as written with
+  `request.path` joined onto it, with a trailing slash, with path parameters,
+  and without `request.path`.
+- Probes whose parameters differ in where one list ends and the next begins,
+  and headers whose values run into the next header, have different cache
+  keys; a header name's case does not change the key.
+- A probe whose caller went away logs no failure and is not answered stale.
+- `process_start_time_seconds` is the same across scrapes.
+- A static target that scrapes on time again ends its run of skipped scrapes
+  in the failure log, logging that it is on schedule again.
+- A target a reload changed, due while a scrape on its old definition runs, is
+  neither skipped nor scraped beside it, and is scraped at the next check
+  after that scrape ends.
+- Probes answered by sharing a trip count as coalesced, not as misses.
+- A `prometheus` pre-script's series are read back: dropped, changed and
+  labelled series reach the rules, a histogram keeps its buckets; data that is
+  not `{"metrics": [...]}`, a value that is not a number, a malformed bucket,
+  an out-of-range timestamp and a series without a name fail naming it.
+- A rule giving a histogram another type, or a counter the histogram type,
+  fails the rule; a series typed histogram or summary without buckets or
+  quantiles, and a gauge with buckets, fail validation.
+- jq integers beyond int64 are numbers.
+- A script printing 2 MB under a 64 KiB output limit succeeds, its first 4 KiB
+  logged at debug level.
+- CSV labels a pre-script set to a number and to `None` are `1234567` and left
+  off.
+- A dict appended to `metrics` by hand gets `gauge`, number labels written as
+  text and `None` labels left off; a `None` value, a list label and an
+  out-of-range timestamp fail naming the metric, and so does `metric(...)`
+  with a timestamp of `1e22`.
+- A summary count of `1e20` is refused as out of range.
+- A Graphite target splits on `;` only outside brackets and quotes, and a
+  target the render API tagged itself is kept as its name.
+- A JSON body with `# HELP ` in a string is read as JSON, and exposition text
+  still as Prometheus.
+- A gRPC answer within the limit as a message but over it as JSON fails as a
+  limit, the gauge at `0`; concurrent probes of a new target open one
+  reflection stream; a slow descriptor read keeps no other set waiting.
+- A YAML type error does not quote the string it found.
+
 # 35. Documentation requirements
 
 The repository MUST include documentation covering:
@@ -5453,6 +5719,12 @@ The repository MUST include documentation covering:
     `docs/LOCALFILE.md`, covering its keys, which file is read, Prometheus and
     static target setups, formats, the node_exporter practices it follows,
     errors and self-metrics, and mounting files in Kubernetes
+24. `grpc` in `docs/GRPC.md`: its keys, targets, the three descriptor sources
+    with examples that load, the health check, the JSON mapping choices,
+    placeholders, the status table and `retry.codes`, authentication and TLS,
+    probe parameters, static targets, its self-metrics, gRPC-Web and Connect
+    through `http`, and building without it, with the size it adds; its
+    examples MUST be loaded and run by a repository test
 
 The Python documentation MUST explicitly state that networking is owned by the exporter and that `requests`/`httpx` are unnecessary.
 
@@ -5501,7 +5773,7 @@ Do NOT implement these unless required to support the core design:
 - Database connectors
 - SNMP
 - Kafka
-- gRPC/Protobuf decoding
+- Protobuf-encoded HTTP responses (gRPC calls are a request type, § 5.1)
 - GraphQL client logic
 - Long-running background jobs per target
 - Static targets scraped by the exporter itself
@@ -6008,6 +6280,13 @@ MUST be refused at load naming `request.query`, and so must a static target's
 A `localfile` path names a file and MAY hold both. A static `http` target
 whose scheme `allowed_schemes` does not allow MUST be refused at load.
 
+Joining `request.path` onto a target MUST keep the target's own escapes, so a
+`%2F` inside a segment is sent as written rather than decoded into a new
+segment. A header name that is not an HTTP token, and two names equal once
+canonicalised, MUST be refused at load, in a collector and a static target. A
+`tls` block setting only one of `cert_file` and `key_file` MUST be refused at
+load.
+
 The collector configuration MUST support a raw `request.body` value for
 requests whose method accepts a body. The value MUST be sent as provided and
 MUST NOT be restricted to JSON. The collector configuration MUST NOT contain a
@@ -6318,6 +6597,11 @@ http_exporter_cache_entries
 http_exporter_cache_stale_served_total
 ```
 
+A probe answered from the cache, including one that finds it filled while it
+waits to start its trip, MUST count as a hit; a probe whose trip goes to the
+target MUST count as a miss; a probe answered by sharing another's trip MUST
+count as neither, and as coalesced.
+
 A cache hit MUST count as a successful scrape in `http_exporter_scrapes_total`
 and `http_exporter_scrape_success_total`, and the cached metrics MUST still be queued
 for OTLP export. Target-request self-metrics such as
@@ -6472,8 +6756,11 @@ interval. Its scrapes MUST then keep a fixed cadence, which SHOULD be offset
 within its interval by a stable hash of its name so targets are spread over
 it, starting no sooner than half an interval after the first scrape. A scrape
 MUST be bounded by its interval, and one still running when the next is due
-MUST make that one skipped, logged, rather than overlapping it — including
-when a reload changed the target while that scrape runs. A scrape that runs out
+MUST make that one skipped, logged, rather than overlapping it. The first
+scrape of a target a reload changed, due while a scrape begun on its old
+definition runs, MUST instead wait for that scrape, neither skipped nor
+overlapping it, and be made at the first check after it ends. A scrape that
+starts on time after skipped ones MUST end their run in the failure log. A scrape that runs out
 of its interval MUST fail saying so: that the scrape ran out of its interval's
 budget, not only that a deadline was exceeded. A result
 of a target a reload removed while its scrape was in flight MUST NOT be

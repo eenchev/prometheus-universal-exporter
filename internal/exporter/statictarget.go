@@ -233,6 +233,9 @@ func targetCacheQuery(t *model.StaticTarget) url.Values {
 	if t.Request.BodySet {
 		values.Set("body", t.Request.Body)
 	}
+	if t.Request.Message != "" {
+		values.Set("message", t.Request.Message)
+	}
 	if t.Request.Timeout > 0 {
 		values.Set("timeout", time.Duration(t.Request.Timeout).String())
 	}
@@ -268,12 +271,23 @@ func targetCacheQuery(t *model.StaticTarget) url.Values {
 }
 
 // targetOwnRequest is what the target's request sets that no probe can, for
-// its cache key: a graphite collector's targets.
+// its cache key: a graphite collector's targets, a grpc collector's metadata
+// and retry codes.
 func targetOwnRequest(t *model.StaticTarget) []string {
-	if len(t.Request.Targets) == 0 {
-		return nil
+	var own []string
+	if len(t.Request.Targets) > 0 {
+		own = append(append(own, "targets"), t.Request.Targets...)
 	}
-	return append([]string{"targets"}, t.Request.Targets...)
+	if len(t.Request.Metadata) > 0 {
+		own = append(own, "metadata")
+		for _, key := range model.SortedKeys(t.Request.Metadata) {
+			own = append(own, key, t.Request.Metadata[key])
+		}
+	}
+	if retry := t.Request.Retry; retry != nil && retry.Codes != nil {
+		own = append(append(own, "retry_codes"), retry.Codes...)
+	}
+	return own
 }
 
 // targetResource resolves the OTLP resource identity for this target, with the

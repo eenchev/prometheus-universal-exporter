@@ -169,9 +169,6 @@ func checkStartup(in checkInputs) checkReport {
 	return checkReport{Status: status, Checks: results, RequestTypes: fetch.BuiltRequestTypes()}
 }
 
-// checkTargets validates the static target document on its own and then
-// against the configuration. The first half needs no configuration, so a
-// broken target file is still reported when the configuration is broken too.
 // configDetails summarises a configuration that loaded. A deprecated spelling
 // or a warning still passes, so the check stays ok; the report lists them so
 // the operator knows what to change before a deprecated spelling is removed.
@@ -212,6 +209,9 @@ func logNotices(logger *slog.Logger, result checkResult) {
 	}
 }
 
+// checkTargets validates the static target document on its own and then
+// against the configuration. The first half needs no configuration, so a
+// broken target file is still reported when the configuration is broken too.
 func checkTargets(path string, options []config.LoadOption, expandEnv bool, conf *model.Config) checkResult {
 	file, err := config.LoadStaticTargets(path, options...)
 	if err == nil {

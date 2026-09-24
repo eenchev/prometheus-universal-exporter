@@ -205,25 +205,33 @@ func probeCacheKeyWith(fingerprint string, c *model.Collector, target string, qu
 		}
 	}
 	write("collector", c.Name, "definition", fingerprint, "target", target)
-	write("query")
+	// Every list is written with its length first, so where one list ends
+	// and the next begins is part of the key: ?method=GET&path=/admin and
+	// ?method=GET&method=path&method=/admin are different requests.
+	write("query", strconv.Itoa(len(query)))
 	queryKeys := make([]string, 0, len(query))
 	for key := range query {
 		queryKeys = append(queryKeys, key)
 	}
 	sort.Strings(queryKeys)
 	for _, key := range queryKeys {
-		write(key)
+		write(key, strconv.Itoa(len(query[key])))
 		write(query[key]...)
 	}
-	write("headers")
-	headerNames := make([]string, 0, len(forwarded))
-	for name := range forwarded {
-		headerNames = append(headerNames, http.CanonicalHeaderKey(name))
+	headerValues := map[string][]string{}
+	for name, values := range forwarded {
+		canonical := http.CanonicalHeaderKey(name)
+		headerValues[canonical] = append(headerValues[canonical], values...)
+	}
+	write("headers", strconv.Itoa(len(headerValues)))
+	headerNames := make([]string, 0, len(headerValues))
+	for name := range headerValues {
+		headerNames = append(headerNames, name)
 	}
 	sort.Strings(headerNames)
 	for _, name := range headerNames {
-		write(name)
-		write(forwarded[name]...)
+		write(name, strconv.Itoa(len(headerValues[name])))
+		write(headerValues[name]...)
 	}
 	if len(own) > 0 {
 		write("own", strconv.Itoa(len(own)))

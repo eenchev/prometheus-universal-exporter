@@ -59,7 +59,14 @@ pre-script and as a `metric(...)` value.
 string such as `"12"`, or a boolean, as `1` or `0`; anything else, `None`
 included, fails the script naming the metric. A `timestamp` is milliseconds
 since the Unix epoch, and may be a float, as `time.time() * 1000` is; it is
-cut to whole milliseconds.
+cut to whole milliseconds, and one beyond what 64 bits of milliseconds hold
+fails the script.
+
+A dict appended to `metrics` by hand, `{"name": ..., "value": ..., "labels":
+{...}}`, is checked as `metric(...)` checks its arguments: its value and
+timestamp are read the same way, `None` failing, its label values are
+written the same way, `None` leaving the label off, and a missing `type` is
+`gauge`.
 
 ## How scripts run
 
@@ -84,7 +91,10 @@ start once and then serves scrape after scrape.
   scrape with the Python error; the worker carries on. A worker that crashes, or
   answers with more than `limits.max_output_bytes`, is replaced.
 - **Output.** `print` inside a script is captured per run and never mixes with
-  the metrics.
+  the metrics. The first 4 KiB of it is logged at debug level, as `python
+  transform printed` or `python pre-script printed` with the collector, so
+  `--log.level=debug` shows it while a script is being written; the rest is
+  dropped, and counts against `limits.max_output_bytes` no further.
 - **Lifetime.** A worker is reused up to 1,000 times, at most four stay idle per
   collector after a burst of scrapes, and an idle one stops after five minutes
   — checked every minute, so a collector nobody scrapes any more does not keep
@@ -164,6 +174,17 @@ The promotion is deliberately limited to the transforms that read structured
 data. `csv`, `regex`, `css`, `xpath`, and `prometheus` keep receiving their own
 decoded format, and a pre-script that returns a string still leaves the format
 alone, so HTML and XML output is reparsed as before.
+
+A pre-script of a `prometheus` transform gets `{"metrics": [...]}`, [as above](#what-data-is),
+and must leave `data` in the same shape: it may drop series, change their
+values and labels, or add series, which the transform's rules then read as
+they read the exposition. A series without a `type` is `untyped`; a histogram
+needs `buckets`, `sum` and `count`, and a summary `quantiles`, `sum` and
+`count`. Anything else fails the pre-script, naming the series.
+
+A CSV row a pre-script changed may hold numbers and `None`: a label read from
+a number is written as `metric(...)` writes one, `1234567` as `1234567`, and
+`None` leaves the label off.
 
 Errors are classified as HTTP, decode, transform, missing data, validation, or resource-limit failures. `error_handling` accepts `fail`, `log`, and `ignore`; `allow_missing_keys` controls required extraction results. Limits default to conservative values and are enforced immediately before exposition.
 

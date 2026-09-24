@@ -58,15 +58,18 @@ every per-scrape parameter `/probe` accepts — `method`, `path`, `body`,
 Which of these keys a target may set follows its collector's
 [request type](CONFIGURATION.md#request-types); for `http` it is all of them,
 for [`localfile`](LOCALFILE.md#static-targets) only `path` and `timeout`,
-with `target` optional, and for [`graphite`](GRAPHITE.md#static-targets) all
-but `method` and `body`, plus its own `targets`, `from` and `until`. It also takes static `headers` and its own target
+with `target` optional, for [`graphite`](GRAPHITE.md#static-targets) all
+but `method` and `body`, plus its own `targets`, `from` and `until`, and for
+[`grpc`](GRPC.md#static-targets) `timeout`, `insecure_skip_verify`, `retry`,
+with its `codes`, and its own `message` and `metadata`. It also takes static `headers` and its own target
 credentials, inline or file-backed, as basic authentication or a bearer token.
 Because the file is operator configuration rather than caller input, these
 headers are applied directly and are not filtered through the collector's
 `request.forward_headers` allowlist.
 
 A collector's [`{{param_…}}` placeholders](REQUESTS.md#path-parameters) — in
-its path, body, header values, query values and Graphite targets — are filled by the target's
+its path, body, header values, query values, Graphite targets and gRPC
+message and metadata values — are filled by the target's
 `params`, since there is no probe to supply `param_<name>`:
 
 ```yaml

@@ -164,7 +164,7 @@ func TestGraphiteStaticTargets(t *testing.T) {
 		"  - name: t\n    collector: graphite_app\n    target: http://graphite.example:8080\n    request:\n      targets: [\"app.{{param_host}}.x\"]\n": `target "t" request.targets[0] cannot use {{param_...}} placeholders`,
 		"  - name: t\n    collector: graphite_app\n    target: http://graphite.example:8080\n    request:\n      targets: [\"f(a\"]\n":                  `target "t": request.targets[0] "f(a": has a ( that is never closed`,
 		"  - name: t\n    collector: graphite_app\n    target: graphite.example:8080\n":                                                                 `target "t": must have an absolute target URL`,
-		"  - name: t\n    collector: graphite_app\n    target: http://graphite.example:8080\n    request:\n      targets: a.b\n":                        `expected a list of values, not the string "a.b"`,
+		"  - name: t\n    collector: graphite_app\n    target: http://graphite.example:8080\n    request:\n      targets: a.b\n":                        `expected a list of values, not a string`,
 		"  - name: t\n    collector: graphite_app\n    target: http://graphite.example:8080\n    request:\n      method: POST\n":                        `sets request.method, which does not apply to collector "graphite_app"`,
 	} {
 		if err := load(targets); err == nil || !strings.Contains(err.Error(), want) {

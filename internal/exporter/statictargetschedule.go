@@ -103,7 +103,13 @@ func (s *targetSchedule) plan(targets []model.StaticTarget, now time.Time) (due,
 			}
 			s.states[target.Name] = state
 		}
-		if !now.Before(state.next) {
+		if !now.Before(state.next) && state.running.Load() && !state.cadence.IsZero() {
+			// The first scrape of a target a reload changed, due while a
+			// scrape begun on its old definition still runs: it is not
+			// skipped, which would put it off to its cadence, but made as
+			// soon as that scrape ends, looked at again every check.
+			state.next = now.Add(scheduleCheckInterval)
+		} else if !now.Before(state.next) {
 			if state.running.Load() {
 				skipped = append(skipped, dueTarget{target, state})
 			} else {
@@ -230,6 +236,9 @@ func (s *Server) StaticScrapeLoop(ctx context.Context) {
 					return
 				}
 				defer func() { <-slots }()
+				// A scrape that starts ends a run of skipped ones.
+				s.failures.recovered(s.logger, failureKey(d.target.Collector, "static target "+d.target.Name, "schedule"),
+					"static target scrapes on schedule again", "target", d.target.Name, "collector", d.target.Collector)
 				s.scrapeTarget(scrapeCtx, d.target)
 			}()
 		}

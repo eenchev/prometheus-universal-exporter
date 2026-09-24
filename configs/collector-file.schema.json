@@ -304,6 +304,23 @@
                 "if": {
                   "properties": {
                     "type": {
+                      "const": "grpc"
+                    }
+                  },
+                  "required": [
+                    "type"
+                  ]
+                },
+                "then": {
+                  "required": [
+                    "rpc"
+                  ]
+                }
+              },
+              {
+                "if": {
+                  "properties": {
+                    "type": {
                       "const": "localfile"
                     }
                   },
@@ -318,7 +335,7 @@
                 }
               }
             ],
-            "description": "How the collector reaches its data. See docs/REQUESTS.md, docs/LOCALFILE.md for localfile and docs/GRAPHITE.md for graphite.",
+            "description": "How the collector reaches its data. See docs/REQUESTS.md, docs/LOCALFILE.md for localfile, docs/GRAPHITE.md for graphite and docs/GRPC.md for grpc.",
             "properties": {
               "allowed_schemes": {
                 "items": {
@@ -391,6 +408,15 @@
                   "number",
                   "boolean"
                 ]
+              },
+              "descriptors": {
+                "description": "grpc, required but for grpc.health.v1.Health: where the message types come from. reflection asks the server's reflection service; protoset reads protoset_file; proto compiles proto_files.",
+                "enum": [
+                  "reflection",
+                  "protoset",
+                  "proto"
+                ],
+                "type": "string"
               },
               "enable_http2": {
                 "type": "boolean"
@@ -468,6 +494,28 @@
                   "string"
                 ]
               },
+              "message": {
+                "description": "grpc: the request message in the protobuf JSON mapping. Defaults to {}. May contain {{param_name}} placeholders, written as |json for a string, |number for a number, or |raw. The message probe parameter replaces it.",
+                "type": [
+                  "string",
+                  "number",
+                  "boolean"
+                ]
+              },
+              "metadata": {
+                "additionalProperties": {
+                  "type": [
+                    "string",
+                    "number",
+                    "boolean"
+                  ]
+                },
+                "description": "grpc: request metadata. Keys are lower-case; -bin keys and the ones gRPC reserves are refused. Values may contain {{param_name}} placeholders.",
+                "propertyNames": {
+                  "pattern": "^[0-9a-z_.-]+$"
+                },
+                "type": "object"
+              },
               "method": {
                 "description": "HTTP method. Defaults to GET.",
                 "enum": [
@@ -488,6 +536,36 @@
               },
               "path": {
                 "description": "http and graphite: joined onto the target URL; it cannot hold ? or #, and query parameters go under request.query. localfile: the file, relative to request.root and joined after the target. May contain {{param_name}} or {{param_name:default}} path parameters, filled by param_\u003cname\u003e probe parameters.",
+                "type": [
+                  "string",
+                  "number",
+                  "boolean"
+                ]
+              },
+              "proto_files": {
+                "description": "grpc with descriptors: proto: the .proto files that define the service, compiled when the configuration loads and again when one changes.",
+                "items": {
+                  "type": [
+                    "string",
+                    "number",
+                    "boolean"
+                  ]
+                },
+                "type": "array"
+              },
+              "proto_import_paths": {
+                "description": "grpc with descriptors: proto: the directories imports are resolved in, as protoc -I. Defaults to the directory of each file. The well-known types are built in.",
+                "items": {
+                  "type": [
+                    "string",
+                    "number",
+                    "boolean"
+                  ]
+                },
+                "type": "array"
+              },
+              "protoset_file": {
+                "description": "grpc with descriptors: protoset: a FileDescriptorSet with its imports, as protoc --descriptor_set_out --include_imports or buf build -o writes it. Read again when it changes.",
                 "type": [
                   "string",
                   "number",
@@ -516,8 +594,15 @@
                     "pattern": "^[-+]?(0|([0-9]*(\\.[0-9]*)?(ns|us|µs|μs|ms|s|m|h))+)$",
                     "type": "string"
                   },
+                  "codes": {
+                    "description": "grpc: the gRPC status codes that are retried, by name, such as [UNAVAILABLE, ABORTED]. Defaults to [UNAVAILABLE]; OK is refused.",
+                    "items": {
+                      "type": "string"
+                    },
+                    "type": "array"
+                  },
                   "non_idempotent": {
-                    "description": "Retry a request whose method is not idempotent, such as POST, which sending again may repeat. Unset, only GET, HEAD, OPTIONS, TRACE, PUT and DELETE requests are retried.",
+                    "description": "http and graphite: retry a request whose method is not idempotent, such as POST, which sending again may repeat. Unset, only GET, HEAD, OPTIONS, TRACE, PUT and DELETE requests are retried.",
                     "type": "boolean"
                   }
                 },
@@ -530,6 +615,11 @@
                   "number",
                   "boolean"
                 ]
+              },
+              "rpc": {
+                "description": "grpc, required: the method called, package.Service/Method, such as grpc.health.v1.Health/Check. See docs/GRPC.md.",
+                "pattern": "^/?([A-Za-z_][A-Za-z0-9_]*\\.)*[A-Za-z_][A-Za-z0-9_]*/[A-Za-z_][A-Za-z0-9_]*$",
+                "type": "string"
               },
               "targets": {
                 "description": "graphite, required: the Graphite expressions asked of the render API, each sent as a target parameter, such as app.*.requests.count. May contain {{param_name}} placeholders, filled with letters, digits and _ - . : @ % + ~ only. See docs/GRAPHITE.md.",
@@ -585,6 +675,7 @@
                 "description": "Required. How the collector reaches its data.",
                 "enum": [
                   "graphite",
+                  "grpc",
                   "http",
                   "localfile"
                 ],

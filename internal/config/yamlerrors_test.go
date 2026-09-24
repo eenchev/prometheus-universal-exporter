@@ -21,15 +21,15 @@ func TestDecodingErrorsUseTheFilesTerms(t *testing.T) {
 		"unknown label key":    {strings.Replace(collector, "expression: 'v=(\\d+)'}", "expression: 'v=(\\d+)', labels: [{nme: y}]}", 1), `line 5: unknown key "nme" in a label`},
 		"unknown top key":      {collector + "otlpp: {}\n", `line 6: unknown key "otlpp" in the configuration`},
 		"list for a mapping":   {strings.Replace(collector, "request: {type: http}", "request: [http]", 1), "line 3: request must be a mapping, not a list"},
-		"string for a number":  {collector + "    max_concurrent_probes: lots\n", `line 6: expected a whole number, not the string "lots"`},
-		"string for a boolean": {collector + "    coalesce: maybe\n", `line 6: expected true or false, not the string "maybe"`},
+		"string for a number":  {collector + "    max_concurrent_probes: lots\n", `line 6: expected a whole number, not a string`},
+		"string for a boolean": {collector + "    coalesce: maybe\n", `line 6: expected true or false, not a string`},
 		"number for a list":    {"collectors: 5\n", "line 1: expected a list of collectors, not the number 5"},
 		"mapping for a string": {collector + "    name_escaping: {a: 1}\n", "line 6: expected a single value, not a mapping"},
 		"list for a type":      {strings.Replace(collector, "{name: x,", "{name: x, type: [gauge],", 1), "line 5: expected a metric type: gauge, counter, histogram, summary or untyped, not a list"},
 		"bad duration":         {collector + "    limits: {script_timeout: soon}\n", `line 6: "soon" is not a duration; write one such as 500ms, 30s or 1m30s`},
 		"list for a duration":  {collector + "    limits:\n      script_timeout: [1s]\n", "line 7: expected a duration such as 30s, not a list"},
 		"bad size":             {collector + "    limits:\n      max_response_bytes: 10 parsecs\n", `line 7: size "10 parsecs" is not a number of bytes or a number with a unit such as 512KiB, 10MB or 1.5GiB`},
-		"errors of all kinds":  {collector + "    limits: {script_timeout: soon}\n    coalesce: maybe\n", `line 6: "soon" is not a duration; write one such as 500ms, 30s or 1m30s; line 7: expected true or false, not the string "maybe"`},
+		"errors of all kinds":  {collector + "    limits: {script_timeout: soon}\n    coalesce: maybe\n", `line 6: "soon" is not a duration; write one such as 500ms, 30s or 1m30s; line 7: expected true or false, not a string`},
 	} {
 		t.Run(name, func(t *testing.T) {
 			_, err := Load(testutil.WriteFile(t, "config.yaml", test.document))

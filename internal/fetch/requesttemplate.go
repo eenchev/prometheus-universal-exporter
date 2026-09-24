@@ -162,6 +162,16 @@ func requestTemplates(c *model.Collector, overrides RequestOverrides) []template
 			out = append(out, templateField{"request.query." + name, value, "query"})
 		}
 	}
+	// A grpc collector's message takes the body's filters, and its
+	// metadata values the header rule.
+	if overrides.Message == nil && HasPathParams(c.Request.Message) {
+		out = append(out, templateField{"request.message", c.Request.Message, "body"})
+	}
+	for _, name := range model.SortedKeys(c.Request.Metadata) {
+		if value := c.Request.Metadata[name]; HasPathParams(value) {
+			out = append(out, templateField{"request.metadata." + name, value, "header"})
+		}
+	}
 	// A static target's own targets replace the collector's, placeholders
 	// and all.
 	if overrides.Targets == nil {
@@ -176,7 +186,19 @@ func requestTemplates(c *model.Collector, overrides RequestOverrides) []template
 
 // parseField finds the placeholders of a field.
 func (f templateField) parse() ([]pathPlaceholder, error) {
-	return parsePlaceholders(f.where, f.text, false, f.kind == "body")
+	placeholders, err := parsePlaceholders(f.where, f.text, false, f.kind == "body")
+	if err != nil || f.where != "request.message" {
+		return placeholders, err
+	}
+	// A message is JSON, so only the filters that write JSON apply.
+	for _, p := range placeholders {
+		switch p.Filter {
+		case "", "json", "number", "raw":
+		default:
+			return nil, fmt.Errorf("%s placeholder {{%s}} has the filter |%s, which does not write JSON; a message takes |json for a string, |number for a number, or |raw", f.where, p.Name, p.Filter)
+		}
+	}
+	return placeholders, nil
 }
 
 // render fills a field's placeholders in, each value written as its place

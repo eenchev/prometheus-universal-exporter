@@ -139,7 +139,6 @@ func pathToken(i int) string {
 // becomes %2F rather than a new segment — and the URL keeps both forms, so Go
 // sends the escaped one while Path still reads as the value.
 func applyPathParams(u *url.URL, values []string) {
-	u.RawPath = ""
 	decoded := u.Path
 	raw := u.EscapedPath()
 	for i, value := range values {
@@ -166,6 +165,12 @@ func CheckPathParams(c *model.Collector, overrides RequestOverrides) error {
 	}
 	if overrides.PathSet {
 		return fmt.Errorf("probe parameters %s are not used: the path probe parameter replaces request.path, and nothing else in the request names them", strings.Join(unused, ", "))
+	}
+	if c.Request.Type == RequestTypeGRPC {
+		if overrides.Message != nil {
+			return fmt.Errorf("probe parameters %s are not used: the message probe parameter replaces request.message, and nothing else in the request names them", strings.Join(unused, ", "))
+		}
+		return fmt.Errorf("probe parameters %s are not used by collector %q: no placeholder in its request.message or metadata values names them", strings.Join(unused, ", "), c.Name)
 	}
 	return fmt.Errorf("probe parameters %s are not used by collector %q: no placeholder in its request.path (%q), body, header or query values names them", strings.Join(unused, ", "), c.Name, c.Request.Path)
 }

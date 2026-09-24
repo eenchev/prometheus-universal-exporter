@@ -82,6 +82,12 @@ func validateCollector(c *model.Config, x *model.Collector) error {
 	if decoderUnset && x.Decoder.Type == "auto" {
 		c.Warnings = append(c.Warnings, undecidedDecoderWarning(x))
 	}
+	// Retries of a POST or PATCH need retry.non_idempotent, since sending one
+	// again may repeat what it did; without it they are not made, which the
+	// operator who set attempts is told.
+	if x.Request.Retry.Attempts > 0 && !x.Request.Retry.NonIdempotent && !fetch.IdempotentMethod(x.Request.Method) {
+		c.Warnings = append(c.Warnings, fmt.Sprintf("collector %q sets request.retry.attempts, but its method %s is not idempotent, so a failed request is not retried; set request.retry.non_idempotent to retry it anyway", x.Name, strings.ToUpper(x.Request.Method)))
+	}
 	for _, policy := range []struct {
 		key   string
 		value *string

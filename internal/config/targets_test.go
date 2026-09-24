@@ -183,3 +183,92 @@ func TestTargetFileReloadRejectsInvalidDocument(t *testing.T) {
 		t.Fatalf("a valid target reload should take effect, got %+v", targets)
 	}
 }
+
+// Each scheduled target has an interval: its own, else the file's, else
+// Prometheus's default 60s. It is at least a second, and a request timeout may
+// not outlast it.
+func TestScheduledTargetIntervals(t *testing.T) {
+	target := func(name string, interval, timeout time.Duration) model.ScheduledTarget {
+		return model.ScheduledTarget{Name: name, Collector: "text", Target: "http://t.invalid", Interval: model.Duration(interval), Request: model.TargetRequestConfig{Timeout: model.Duration(timeout)}}
+	}
+	file := &model.TargetFile{Targets: []model.ScheduledTarget{target("default", 0, 0), target("own", 15*time.Second, 10*time.Second)}}
+	if err := ValidateTargets(file); err != nil {
+		t.Fatal(err)
+	}
+	if file.Targets[0].Interval != model.DefaultScheduledTargetInterval || file.Targets[1].Interval != model.Duration(15*time.Second) {
+		t.Fatalf("intervals %s, %s", time.Duration(file.Targets[0].Interval), time.Duration(file.Targets[1].Interval))
+	}
+	file = &model.TargetFile{Interval: model.Duration(30 * time.Second), Targets: []model.ScheduledTarget{target("from_file", 0, 0), target("own", 5*time.Second, 0)}}
+	if err := ValidateTargets(file); err != nil {
+		t.Fatal(err)
+	}
+	if file.Targets[0].Interval != model.Duration(30*time.Second) || file.Targets[1].Interval != model.Duration(5*time.Second) {
+		t.Fatalf("intervals %s, %s", time.Duration(file.Targets[0].Interval), time.Duration(file.Targets[1].Interval))
+	}
+	for name, test := range map[string]struct {
+		file *model.TargetFile
+		want string
+	}{
+		"too short":        {&model.TargetFile{Targets: []model.ScheduledTarget{target("quick", 500*time.Millisecond, 0)}}, `target "quick" interval 500ms is under the least, 1s`},
+		"negative":         {&model.TargetFile{Targets: []model.ScheduledTarget{target("back", -time.Second, 0)}}, `target "back" interval must not be negative`},
+		"negative file":    {&model.TargetFile{Interval: model.Duration(-time.Second), Targets: []model.ScheduledTarget{target("t", 0, 0)}}, "interval must not be negative"},
+		"timeout too long": {&model.TargetFile{Targets: []model.ScheduledTarget{target("slow", 10*time.Second, 20*time.Second)}}, `target "slow" request.timeout 20s is longer than its interval 10s`},
+	} {
+		if err := ValidateTargets(test.file); err == nil || !strings.Contains(err.Error(), test.want) {
+			t.Errorf("%s: err=%v, want %q", name, err, test.want)
+		}
+	}
+	// The file's interval and a target's are read from the document.
+	path := testutil.WriteIn(t, t.TempDir(), "targets.yaml", "interval: 2m\ntargets:\n  - name: a\n    collector: text\n    target: http://a.invalid\n  - name: b\n    collector: text\n    target: http://b.invalid\n    interval: 15s\n")
+	loaded, err := LoadTargets(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := ValidateTargets(loaded); err != nil {
+		t.Fatal(err)
+	}
+	if loaded.Targets[0].Interval != model.Duration(2*time.Minute) || loaded.Targets[1].Interval != model.Duration(15*time.Second) {
+		t.Fatalf("intervals %s, %s", time.Duration(loaded.Targets[0].Interval), time.Duration(loaded.Targets[1].Interval))
+	}
+}
+
+// A target missing a parameter is told how to supply it; setting request.path
+// is offered only when the placeholder is in the path, the one a target can
+// replace.
+func TestAMissingTargetParameterSaysHowToSupplyIt(t *testing.T) {
+	collector := func(request model.RequestConfig) *model.Config {
+		c := testutil.Collector("templated", "text")
+		request.Type = "http"
+		c.Request = request
+		cfg := &model.Config{Collectors: []model.Collector{c}, OTLP: model.OTLPConfig{Enabled: true, Endpoint: "http://otel.invalid/v1/metrics"}}
+		if err := Validate(cfg); err != nil {
+			t.Fatal(err)
+		}
+		return cfg
+	}
+	targets := func() *model.TargetFile {
+		f := &model.TargetFile{Targets: []model.ScheduledTarget{{Name: "acme", Collector: "templated", Target: "http://orders.invalid"}}}
+		if err := ValidateTargets(f); err != nil {
+			t.Fatal(err)
+		}
+		return f
+	}
+	for name, test := range map[string]struct {
+		request     model.RequestConfig
+		where       string
+		offersPaths bool
+	}{
+		"path":   {model.RequestConfig{Path: "/tenants/{{param_tenant}}"}, "request.path", true},
+		"query":  {model.RequestConfig{Query: map[string]string{"tenant": "{{param_tenant}}"}}, "request.query.tenant", false},
+		"header": {model.RequestConfig{Headers: map[string]string{"X-Tenant": "{{param_tenant}}"}}, "request.headers.X-Tenant", false},
+	} {
+		err := ValidateTargetsAgainst(targets(), collector(test.request))
+		if err == nil || !strings.Contains(err.Error(), "whose "+test.where+" needs param_tenant") || !strings.Contains(err.Error(), "set it under the target's params") {
+			t.Errorf("%s: err=%v", name, err)
+			continue
+		}
+		if got := strings.Contains(err.Error(), "set request.path on the target"); got != test.offersPaths {
+			t.Errorf("%s: offers request.path %v, want %v: %v", name, got, test.offersPaths, err)
+		}
+	}
+}

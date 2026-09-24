@@ -2,9 +2,10 @@ package exporter
 
 import (
 	"context"
+	"fmt"
 	"net/url"
+	"runtime/debug"
 	"strconv"
-	"sync"
 	"time"
 
 	"github.com/eenchev/prometheus-universal-exporter/internal/fetch"
@@ -15,39 +16,15 @@ import (
 // once, so a large target file cannot open an unbounded number of connections.
 const scheduledTargetConcurrency = 8
 
-// scrapeScheduledTargets runs every configured target once. It is called from
-// the OTLP export loop, so the scrape period is the OTLP interval and every
-// export carries a freshly collected set. The whole pass is bounded by the
-// interval, so a slow target cannot delay the next export indefinitely.
-func (s *Server) scrapeScheduledTargets(ctx context.Context, budget time.Duration) {
-	targets := s.manager.Targets()
-	if len(targets) == 0 {
+// scrapeTarget scrapes one scheduled target with the configuration in force.
+func (s *Server) scrapeTarget(ctx context.Context, target model.ScheduledTarget) {
+	cfg := s.manager.Get()
+	collector := model.CollectorByName(cfg, target.Collector)
+	if collector == nil {
+		s.logger.Error("scheduled target references unknown collector", "target", target.Name, "collector", target.Collector)
 		return
 	}
-	cfg := s.manager.Get()
-	if budget <= 0 {
-		budget = 30 * time.Second
-	}
-	scrapeCtx, cancel := context.WithTimeout(ctx, budget)
-	defer cancel()
-	slots := make(chan struct{}, scheduledTargetConcurrency)
-	var wg sync.WaitGroup
-	for i := range targets {
-		target := targets[i]
-		collector := model.CollectorByName(cfg, target.Collector)
-		if collector == nil {
-			s.logger.Error("scheduled target references unknown collector", "target", target.Name, "collector", target.Collector)
-			continue
-		}
-		wg.Add(1)
-		slots <- struct{}{}
-		go func() {
-			defer wg.Done()
-			defer func() { <-slots }()
-			s.scrapeScheduledTarget(scrapeCtx, target, cfg, collector)
-		}()
-	}
-	wg.Wait()
+	s.scrapeScheduledTarget(ctx, target, cfg, collector)
 }
 
 // scrapeScheduledTarget collects one target through the same fetch, decode, and
@@ -55,6 +32,19 @@ func (s *Server) scrapeScheduledTargets(ctx context.Context, budget time.Duratio
 // the result under the target's own OTLP resource.
 func (s *Server) scrapeScheduledTarget(ctx context.Context, target model.ScheduledTarget, cfg *model.Config, c *model.Collector) {
 	start := time.Now()
+	// A scheduled scrape runs on a goroutine of the scrape loop, where a panic
+	// would take the whole exporter down rather than one scrape, as a probe's
+	// does (probeflight.go). It is logged and the scrape ends as failed, once
+	// the scrape has got far enough to be counted.
+	var failedOnPanic func()
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			s.logger.Error("scheduled target scrape panicked", "target", target.Name, "collector", c.Name, "panic", fmt.Sprint(recovered), "stack", string(debug.Stack()))
+			if failedOnPanic != nil {
+				failedOnPanic()
+			}
+		}
+	}()
 	identity := targetResource(&target, cfg.OTLP)
 	address := fetch.DisplayTarget(c, target.Target)
 	overrides := fetch.TargetOverrides(&target)
@@ -77,6 +67,8 @@ func (s *Server) scrapeScheduledTarget(ctx context.Context, target model.Schedul
 		attrs: []any{"target", target.Name, "collector", c.Name, "address", address},
 	}
 	finish := func(up float64) {
+		// The scrape is counted once, even when what follows panics.
+		failedOnPanic = nil
 		elapsed := time.Since(start)
 		count(func(st *serverStats) { st.lastDuration = elapsed.Seconds() })
 		s.queueOTLPResource(scheduledHealthMetrics(target, c, up, elapsed.Seconds()), identity)
@@ -103,6 +95,7 @@ func (s *Server) scrapeScheduledTarget(ctx context.Context, target model.Schedul
 		}
 		finish(0)
 	}
+	failedOnPanic = failed
 
 	headers, err := fetch.TargetHeaders(&target)
 	if err != nil {

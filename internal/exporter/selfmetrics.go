@@ -41,6 +41,17 @@ type statsValues struct {
 type serverStats struct {
 	mu sync.Mutex
 	statsValues
+	// ruleFailures counts, per metric name, the series the collector's rules
+	// could not produce and carried on without, under error_mode log or
+	// ignore. Only the per-collector statistics keep it.
+	ruleFailures map[string]uint64
+}
+
+// ruleFailureCount returns how many series of metric have failed.
+func (s *serverStats) ruleFailureCount(metric string) uint64 {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.ruleFailures[metric]
 }
 
 func (s *serverStats) snapshot() statsValues {
@@ -65,7 +76,7 @@ var selfMetricDescriptors = []selfMetricDescriptor{
 	{"http_exporter_decode_success_total", model.CounterMetricType, "Responses this collector decoded into its configured format.", func(v statsValues) float64 { return float64(v.decodeOK) }},
 	{"http_exporter_parse_errors_total", model.CounterMetricType, "Responses this collector's decoder could not parse.", func(v statsValues) float64 { return float64(v.parseErrors) }},
 	{"http_exporter_transform_errors_total", model.CounterMetricType, "Transforms that failed for this collector.", func(v statsValues) float64 { return float64(v.transformErrors) }},
-	{"http_exporter_missing_keys_total", model.CounterMetricType, "Transform failures caused by a key or field the response did not contain.", func(v statsValues) float64 { return float64(v.missing) }},
+	{"http_exporter_missing_keys_total", model.CounterMetricType, "Values the response did not contain: a failed transform's, and each series a metric rule carried on without.", func(v statsValues) float64 { return float64(v.missing) }},
 	{"http_exporter_script_errors_total", model.CounterMetricType, "Python script failures during this collector's transform.", func(v statsValues) float64 { return float64(v.scriptErrors) }},
 	{"http_exporter_script_duration_seconds", model.GaugeMetricType, "Duration of the most recent Python script run for this collector, in seconds.", func(v statsValues) float64 { return v.lastScriptDuration }},
 	{"http_exporter_metrics_emitted_total", model.CounterMetricType, "Metrics this collector has produced across its scrapes.", func(v statsValues) float64 { return float64(v.emitted) }},
@@ -96,6 +107,7 @@ type selfMetricDescriptor struct {
 var exporterMetricHelp = map[string]string{
 	"http_exporter_build_info":                                 "1, with the exporter's version, revision, Go version and built request types as labels.",
 	"http_exporter_collector_config_valid":                     "Whether the collector configuration is valid.",
+	"http_exporter_rule_failures_total":                        "Series a metric rule could not produce and the probe carried on without, under error_mode log or ignore.",
 	"http_exporter_scheduled_targets":                          "Scheduled targets configured for OTLP delivery.",
 	"http_exporter_otlp_exports_total":                         "OTLP exports, each a delivery of everything pending with its retries, by result: success or failure.",
 	"http_exporter_otlp_export_retries_total":                  "OTLP export attempts repeated after a network error, 429, 502, 503 or 504.",
@@ -196,6 +208,7 @@ func (s *Server) selfMetricSet() model.MetricSet {
 	for _, c := range s.manager.Get().Collectors {
 		out = append(out, model.Metric{Name: "http_exporter_collector_config_valid", Help: exporterMetricHelp["http_exporter_collector_config_valid"], Type: model.GaugeMetricType, Value: 1, Labels: map[string]string{"collector": c.Name}})
 	}
+	out = append(out, s.ruleFailureMetrics()...)
 	out = append(out, model.Metric{Name: "http_exporter_scheduled_targets", Help: exporterMetricHelp["http_exporter_scheduled_targets"], Type: model.GaugeMetricType, Value: float64(len(s.manager.Targets()))})
 	out = append(out, s.manager.ReloadMetrics()...)
 	out = append(out, s.otlpStatusMetrics()...)
@@ -211,4 +224,27 @@ func recordScriptDuration(rec statsRecorder, timer *transform.ScriptTimer) {
 	if seconds, ran := timer.Seconds(); ran {
 		rec.update(func(x *serverStats) { x.lastScriptDuration = seconds })
 	}
+}
+
+// ruleFailureMetrics is http_exporter_rule_failures_total: a series for every
+// metric rule of every collector, from zero, so a rate works from the start
+// and a rule that never fails still has its series. Two rules exporting one
+// metric name share it.
+func (s *Server) ruleFailureMetrics() []model.Metric {
+	var out []model.Metric
+	for _, c := range s.manager.Get().Collectors {
+		stats := s.statsFor(c.Name)
+		seen := map[string]bool{}
+		for _, rule := range c.Metrics {
+			if rule.Name == "" || seen[rule.Name] {
+				continue
+			}
+			seen[rule.Name] = true
+			out = append(out, model.Metric{
+				Name: "http_exporter_rule_failures_total", Help: exporterMetricHelp["http_exporter_rule_failures_total"], Type: model.CounterMetricType,
+				Value: float64(stats.ruleFailureCount(rule.Name)), Labels: map[string]string{"collector": c.Name, "metric": rule.Name},
+			})
+		}
+	}
+	return out
 }

@@ -10,8 +10,12 @@ import (
 	"github.com/eenchev/prometheus-universal-exporter/internal/transform"
 )
 
-// configSchemaID is where the published schema lives, for editors to fetch.
-const configSchemaID = "https://raw.githubusercontent.com/eenchev/prometheus-universal-exporter/main/config.schema.json"
+// schemaBaseURL is where the published schemas live, for editors to fetch:
+// the configs directory of the repository's main branch.
+const schemaBaseURL = "https://raw.githubusercontent.com/eenchev/prometheus-universal-exporter/main/configs/"
+
+// configSchemaID is where the published configuration schema lives.
+const configSchemaID = schemaBaseURL + "config.schema.json"
 
 // configSchema describes the configuration file as JSON Schema (draft
 // 2020-12), for editors: with the yaml-language-server modeline at the top of
@@ -21,9 +25,10 @@ const configSchemaID = "https://raw.githubusercontent.com/eenchev/prometheus-uni
 // It is generated from the Config struct by reflection, so a key added to the
 // configuration is in the schema without anyone remembering to add it, and
 // configSchemaRules adds what the struct cannot say: allowed values,
-// patterns, required keys and descriptions. config.schema.json in the
+// patterns, required keys and descriptions. configs/config.schema.json in the
 // repository is this function's output for a default build, printed by
-// --config.schema; a test fails when the two differ.
+// --config.schema and written by make schemas; a test fails when the two
+// differ.
 //
 // The schema describes the canonical spelling. The exporter is more lenient
 // in places — it accepts request.type and error policies in any case — and
@@ -31,7 +36,7 @@ const configSchemaID = "https://raw.githubusercontent.com/eenchev/prometheus-uni
 // valid: it also checks what a schema cannot, such as that expressions
 // compile. The request types listed are the ones this binary was built with.
 func configSchema() map[string]any {
-	schema := schemaFor(reflect.TypeOf(model.Config{}), "")
+	schema := schemaFor(reflect.TypeOf(model.Config{}), "", configSchemaRules())
 	schema["$schema"] = "https://json-schema.org/draft/2020-12/schema"
 	schema["$id"] = configSchemaID
 	schema["title"] = "prometheus-universal-exporter configuration"
@@ -39,13 +44,13 @@ func configSchema() map[string]any {
 }
 
 // collectorFileSchemaID is where the published collector file schema lives.
-const collectorFileSchemaID = "https://raw.githubusercontent.com/eenchev/prometheus-universal-exporter/main/collector-file.schema.json"
+const collectorFileSchemaID = schemaBaseURL + "collector-file.schema.json"
 
 // collectorFileSchema describes a collector file (collectorfiles.go): a
 // collectors list, required and non-empty, and no other key. The collectors
 // are described exactly as in the configuration schema, from the same rules.
 func collectorFileSchema() map[string]any {
-	schema := schemaFor(reflect.TypeOf(collectorFile{}), "")
+	schema := schemaFor(reflect.TypeOf(collectorFile{}), "", configSchemaRules())
 	delete(schema, "anyOf")
 	schema["required"] = []string{collectorFileKey}
 	collectors := schema["properties"].(map[string]any)[collectorFileKey].(map[string]any)
@@ -68,6 +73,29 @@ func CollectorFileSchemaJSON() ([]byte, error) {
 	return renderSchema(collectorFileSchema())
 }
 
+// targetsSchemaID is where the published scheduled target file schema lives.
+const targetsSchemaID = schemaBaseURL + "targets.schema.json"
+
+// targetsSchema describes the scheduled target file (--otlp.targets-file),
+// generated from the TargetFile struct as configSchema is from Config, with
+// targetsSchemaRules adding what the struct cannot say.
+// configs/targets.schema.json is its output, printed by
+// --otlp.targets-file-schema; a test fails when the two differ. As for the
+// configuration, startup validation remains the authority: it also checks the
+// targets against the collectors they name.
+func targetsSchema() map[string]any {
+	schema := schemaFor(reflect.TypeOf(model.TargetFile{}), "", targetsSchemaRules())
+	schema["$schema"] = "https://json-schema.org/draft/2020-12/schema"
+	schema["$id"] = targetsSchemaID
+	schema["title"] = "prometheus-universal-exporter scheduled target file"
+	return schema
+}
+
+// TargetsSchemaJSON renders the scheduled target file schema the same way.
+func TargetsSchemaJSON() ([]byte, error) {
+	return renderSchema(targetsSchema())
+}
+
 func renderSchema(schema map[string]any) ([]byte, error) {
 	out, err := json.MarshalIndent(schema, "", "  ")
 	if err != nil {
@@ -86,7 +114,9 @@ var (
 // numbers with units, optionally signed, or a bare 0.
 const durationPattern = `^[-+]?(0|([0-9]*(\.[0-9]*)?(ns|us|µs|μs|ms|s|m|h))+)$`
 
-func schemaFor(t reflect.Type, path string) map[string]any {
+// schemaFor describes t, found at path, with rules adding what the type
+// cannot say (configSchemaRules, targetsSchemaRules).
+func schemaFor(t reflect.Type, path string, rules map[string]map[string]any) map[string]any {
 	var schema map[string]any
 	switch t {
 	case durationType:
@@ -98,7 +128,7 @@ func schemaFor(t reflect.Type, path string) map[string]any {
 	default:
 		switch t.Kind() {
 		case reflect.Pointer:
-			return schemaFor(t.Elem(), path)
+			return schemaFor(t.Elem(), path, rules)
 		case reflect.Struct:
 			properties := map[string]any{}
 			for i := 0; i < t.NumField(); i++ {
@@ -107,13 +137,13 @@ func schemaFor(t reflect.Type, path string) map[string]any {
 				if key == "" || key == "-" || !field.IsExported() {
 					continue
 				}
-				properties[key] = schemaFor(field.Type, joinSchemaPath(path, key))
+				properties[key] = schemaFor(field.Type, joinSchemaPath(path, key), rules)
 			}
 			schema = map[string]any{"type": "object", "additionalProperties": false, "properties": properties}
 		case reflect.Slice:
-			schema = map[string]any{"type": "array", "items": schemaFor(t.Elem(), path+"[]")}
+			schema = map[string]any{"type": "array", "items": schemaFor(t.Elem(), path+"[]", rules)}
 		case reflect.Map:
-			schema = map[string]any{"type": "object", "additionalProperties": schemaFor(t.Elem(), path+".*")}
+			schema = map[string]any{"type": "object", "additionalProperties": schemaFor(t.Elem(), path+".*", rules)}
 		case reflect.Bool:
 			schema = map[string]any{"type": "boolean"}
 		case reflect.Int, reflect.Int64:
@@ -126,7 +156,7 @@ func schemaFor(t reflect.Type, path string) map[string]any {
 			schema = map[string]any{"type": []string{"string", "number", "boolean"}}
 		}
 	}
-	if rule, ok := configSchemaRules()[path]; ok {
+	if rule, ok := rules[path]; ok {
 		for key, value := range rule {
 			schema[key] = value
 		}
@@ -167,23 +197,24 @@ func configSchemaRules() map[string]map[string]any {
 			"required":    []string{"name", "request", "transform"},
 			"description": "How to reach a kind of target and turn its response into metrics.",
 		},
-		"collectors[].name":                    {"pattern": `^[a-zA-Z_][a-zA-Z0-9_]*$`, "description": "Unique name, used as the collector parameter of /probe."},
-		"collectors[].metrics_prefix":          {"pattern": transform.MetricsPrefixRE.String(), "description": "Joined with _ to the front of every metric the collector exports, such as grafana for grafana_statuspage_status. Letters and digits, in parts joined by single underscores."},
-		"collectors[].cache":                   {"description": "The collector's response cache. See docs/CONFIGURATION.md#response-caching."},
-		"collectors[].cache.ttl":               {"description": "Answer a repeat of the same probe from memory for this long. Omit or 0s to always go to the target."},
-		"collectors[].cache.stale_if_error":    {"description": "After ttl, keep a result this much longer to answer a probe whose trip to the target fails, marked by http_exporter_result_stale 1. Omit or 0s to answer the failure."},
-		"collectors[].max_concurrent_probes":   {"description": "How many trips to its targets the collector makes at once; a probe over the limit is answered 503 at once, a scheduled target waits. Omit or 0 for the default, 32."},
-		"collectors[].coalesce":                {"description": "Share one request to the target among identical probes that arrive while it is in flight. Defaults to true."},
-		"collectors[].request":                 requestSchemaRule(),
-		"collectors[].request.type":            {"enum": fetch.BuiltRequestTypes(), "description": "Required. How the collector reaches its data."},
-		"collectors[].request.method":          {"enum": []string{"GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "get", "post", "put", "patch", "delete", "head"}, "description": "HTTP method. Defaults to GET."},
-		"collectors[].request.body":            {"description": "http: the request body. May contain {{param_name}} placeholders, written as |json, |number, |form, |xml or |raw: {{param_service|json}}. See docs/REQUESTS.md#in-the-body-headers-and-query."},
-		"collectors[].request.path":            {"description": "http: joined onto the target URL. localfile: the file, relative to request.root and joined after the target. May contain {{param_name}} or {{param_name:default}} path parameters, filled by param_<name> probe parameters."},
-		"collectors[].request.root":            {"description": "localfile, required: the absolute directory the collector may read files under. No read reaches outside it, through .. or a symbolic link. See docs/LOCALFILE.md."},
-		"collectors[].request.files":           {"description": "localfile: read every file of the directory whose name matches one of these patterns (path.Match syntax, no /), each checked on its own and labelled file. Not with request.path. See docs/LOCALFILE.md#reading-a-directory."},
-		"collectors[].request.max_files":       {"description": "localfile with request.files: the most files one scrape reads, in name order; the rest are skipped and logged. Defaults to 100."},
-		"collectors[].request.max_total_bytes": {"description": "localfile with request.files: the most one scrape reads across every file; a file that would go past it is refused. Defaults to 64 MiB."},
-		"collectors[].request.max_age":         {"description": "localfile: refuse a file last modified longer ago than this, so a writer that has stopped fails the scrape instead of exporting its last values forever."},
+		"collectors[].name":                         {"pattern": `^[a-zA-Z_][a-zA-Z0-9_]*$`, "description": "Unique name, used as the collector parameter of /probe."},
+		"collectors[].metrics_prefix":               {"pattern": transform.MetricsPrefixRE.String(), "description": "Joined with _ to the front of every metric the collector exports, such as grafana for grafana_statuspage_status. Letters and digits, in parts joined by single underscores."},
+		"collectors[].cache":                        {"description": "The collector's response cache. See docs/CONFIGURATION.md#response-caching."},
+		"collectors[].cache.ttl":                    {"description": "Answer a repeat of the same probe from memory for this long. Omit or 0s to always go to the target."},
+		"collectors[].cache.stale_if_error":         {"description": "After ttl, keep a result this much longer to answer a probe whose trip to the target fails, marked by http_exporter_result_stale 1. Omit or 0s to answer the failure."},
+		"collectors[].max_concurrent_probes":        {"description": "How many trips to its targets the collector makes at once; a probe over the limit is answered 503 at once, a scheduled target waits. Omit or 0 for the default, 32."},
+		"collectors[].coalesce":                     {"description": "Share one request to the target among identical probes that arrive while it is in flight. Defaults to true."},
+		"collectors[].request":                      requestSchemaRule(),
+		"collectors[].request.type":                 {"enum": fetch.BuiltRequestTypes(), "description": "Required. How the collector reaches its data."},
+		"collectors[].request.method":               {"enum": []string{"GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "get", "post", "put", "patch", "delete", "head"}, "description": "HTTP method. Defaults to GET."},
+		"collectors[].request.body":                 {"description": "http: the request body. May contain {{param_name}} placeholders, written as |json, |number, |form, |xml or |raw: {{param_service|json}}. See docs/REQUESTS.md#in-the-body-headers-and-query."},
+		"collectors[].request.path":                 {"description": "http: joined onto the target URL. localfile: the file, relative to request.root and joined after the target. May contain {{param_name}} or {{param_name:default}} path parameters, filled by param_<name> probe parameters."},
+		"collectors[].request.root":                 {"description": "localfile, required: the absolute directory the collector may read files under. No read reaches outside it, through .. or a symbolic link. See docs/LOCALFILE.md."},
+		"collectors[].request.files":                {"description": "localfile: read every file of the directory whose name matches one of these patterns (path.Match syntax, no /), each checked on its own and labelled file. Not with request.path. See docs/LOCALFILE.md#reading-a-directory."},
+		"collectors[].request.max_files":            {"description": "localfile with request.files: the most files one scrape reads, in name order; the rest are skipped and logged. Defaults to 100."},
+		"collectors[].request.max_total_bytes":      {"description": "localfile with request.files: the most one scrape reads across every file; a file that would go past it is refused. Defaults to 64 MiB."},
+		"collectors[].request.max_age":              {"description": "localfile: refuse a file last modified longer ago than this, so a writer that has stopped fails the scrape instead of exporting its last values forever."},
+		"collectors[].request.retry.non_idempotent": {"description": "Retry a request whose method is not idempotent, such as POST, which sending again may repeat. Unset, only GET, HEAD, OPTIONS, TRACE, PUT and DELETE requests are retried."},
 		"collectors[].decoder.type": {
 			"enum":        model.DecoderTypes,
 			"description": "How to decode the response. Defaults to auto, which the transform or the Content-Type decides.",
@@ -248,4 +279,33 @@ func requestSchemaRule() map[string]any {
 		rule["allOf"] = conditions
 	}
 	return rule
+}
+
+// targetsSchemaRules adds, by path, what the TargetFile struct cannot say.
+func targetsSchemaRules() map[string]map[string]any {
+	return map[string]map[string]any{
+		"": {
+			"required":    []string{"targets"},
+			"description": "Scheduled targets of the exporter, scraped by the exporter itself and delivered over OTLP. Passed with --otlp.targets-file. See docs/OTLP.md#scheduled-targets.",
+		},
+		"interval":            {"description": "How often a target that sets no interval is scraped. At least 1s; defaults to 1m."},
+		"targets":             {"minItems": 1, "description": "The targets. Each is scraped on its own interval with one collector of the configuration."},
+		"targets[]":           {"required": []string{"collector"}, "description": "One target: a collector of the configuration, the address it reads, and what this target overrides."},
+		"targets[].name":      {"pattern": targetNameRE.String(), "description": "Unique name, in logs and the scheduled_target label. Defaults to <collector>_<index>."},
+		"targets[].collector": {"description": "The collector of the configuration that scrapes this target."},
+		"targets[].target":    {"description": "What the collector reads: a URL for an http collector, a file under request.root for a localfile one."},
+		"targets[].interval":  {"description": "How often this target is scraped, whatever otlp.interval exports on. At least 1s, and no shorter than request.timeout; defaults to the file's interval."},
+		"targets[].params": {
+			"propertyNames": map[string]any{"pattern": fetch.PathParamName.String()},
+			"description":   "Values of the collector's {{param_<name>}} placeholders, as a probe's param_<name> parameters give them. Each must be used by a placeholder.",
+		},
+		"targets[].labels":                       {"description": "Added to every metric the target produces, without overwriting a label the collector extracted."},
+		"targets[].request":                      {"description": "Overrides of the collector's request for this target, as the /probe parameters override it for a probe."},
+		"targets[].request.method":               {"enum": []string{"GET", "POST", "PUT", "PATCH", "DELETE", "HEAD"}},
+		"targets[].request.path":                 {"description": "Replaces the collector's request.path. It cannot hold {{param_...}} placeholders."},
+		"targets[].request.timeout":              {"description": "How long a scrape of this target may take. At most the target's interval."},
+		"targets[].request.retry":                {"description": "Replaces the collector's request.retry for this target."},
+		"targets[].request.retry.non_idempotent": {"description": "Retry a request whose method is not idempotent, such as POST, which sending again may repeat."},
+		"targets[].otlp":                         {"description": "The OTLP resource this target's metrics are exported under, over the exporter-wide otlp settings."},
+	}
 }

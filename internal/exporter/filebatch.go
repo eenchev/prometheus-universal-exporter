@@ -131,7 +131,7 @@ func (s *Server) collectFile(ctx context.Context, file fetch.FileRead, c *model.
 		return nil, &fileFailure{"decode", err}
 	}
 	rec.update(func(x *serverStats) { x.decodeOK++ })
-	set, err := transform.Transform(ctx, d, file.Response, c, s.pythonPath)
+	set, err := s.transformRecorded(ctx, d, file.Response, c, rec)
 	if err != nil {
 		rec.update(func(x *serverStats) {
 			if errors.Is(err, model.ErrMissingValue) {

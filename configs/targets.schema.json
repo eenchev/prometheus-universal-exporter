@@ -1,0 +1,239 @@
+{
+  "$id": "https://raw.githubusercontent.com/eenchev/prometheus-universal-exporter/main/configs/targets.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "Scheduled targets of the exporter, scraped by the exporter itself and delivered over OTLP. Passed with --otlp.targets-file. See docs/OTLP.md#scheduled-targets.",
+  "properties": {
+    "interval": {
+      "description": "How often a target that sets no interval is scraped. At least 1s; defaults to 1m.",
+      "pattern": "^[-+]?(0|([0-9]*(\\.[0-9]*)?(ns|us|µs|μs|ms|s|m|h))+)$",
+      "type": "string"
+    },
+    "targets": {
+      "description": "The targets. Each is scraped on its own interval with one collector of the configuration.",
+      "items": {
+        "additionalProperties": false,
+        "description": "One target: a collector of the configuration, the address it reads, and what this target overrides.",
+        "properties": {
+          "collector": {
+            "description": "The collector of the configuration that scrapes this target.",
+            "type": [
+              "string",
+              "number",
+              "boolean"
+            ]
+          },
+          "interval": {
+            "description": "How often this target is scraped, whatever otlp.interval exports on. At least 1s, and no shorter than request.timeout; defaults to the file's interval.",
+            "pattern": "^[-+]?(0|([0-9]*(\\.[0-9]*)?(ns|us|µs|μs|ms|s|m|h))+)$",
+            "type": "string"
+          },
+          "labels": {
+            "additionalProperties": {
+              "type": [
+                "string",
+                "number",
+                "boolean"
+              ]
+            },
+            "description": "Added to every metric the target produces, without overwriting a label the collector extracted.",
+            "type": "object"
+          },
+          "name": {
+            "description": "Unique name, in logs and the scheduled_target label. Defaults to \u003ccollector\u003e_\u003cindex\u003e.",
+            "pattern": "^[a-zA-Z_][a-zA-Z0-9_]*$",
+            "type": "string"
+          },
+          "otlp": {
+            "additionalProperties": false,
+            "description": "The OTLP resource this target's metrics are exported under, over the exporter-wide otlp settings.",
+            "properties": {
+              "resource_attributes": {
+                "additionalProperties": {
+                  "type": [
+                    "string",
+                    "number",
+                    "boolean"
+                  ]
+                },
+                "type": "object"
+              },
+              "service_name": {
+                "type": [
+                  "string",
+                  "number",
+                  "boolean"
+                ]
+              }
+            },
+            "type": "object"
+          },
+          "params": {
+            "additionalProperties": {
+              "type": [
+                "string",
+                "number",
+                "boolean"
+              ]
+            },
+            "description": "Values of the collector's {{param_\u003cname\u003e}} placeholders, as a probe's param_\u003cname\u003e parameters give them. Each must be used by a placeholder.",
+            "propertyNames": {
+              "pattern": "^param_[A-Za-z0-9_]+$"
+            },
+            "type": "object"
+          },
+          "request": {
+            "additionalProperties": false,
+            "description": "Overrides of the collector's request for this target, as the /probe parameters override it for a probe.",
+            "properties": {
+              "basic_auth": {
+                "additionalProperties": false,
+                "properties": {
+                  "password": {
+                    "type": [
+                      "string",
+                      "number",
+                      "boolean"
+                    ]
+                  },
+                  "username": {
+                    "type": [
+                      "string",
+                      "number",
+                      "boolean"
+                    ]
+                  }
+                },
+                "type": "object"
+              },
+              "basic_auth_file": {
+                "additionalProperties": false,
+                "properties": {
+                  "password": {
+                    "type": [
+                      "string",
+                      "number",
+                      "boolean"
+                    ]
+                  },
+                  "username": {
+                    "type": [
+                      "string",
+                      "number",
+                      "boolean"
+                    ]
+                  }
+                },
+                "type": "object"
+              },
+              "bearer_token": {
+                "type": [
+                  "string",
+                  "number",
+                  "boolean"
+                ]
+              },
+              "bearer_token_file": {
+                "type": [
+                  "string",
+                  "number",
+                  "boolean"
+                ]
+              },
+              "body": {
+                "type": [
+                  "string",
+                  "number",
+                  "boolean"
+                ]
+              },
+              "enable_http2": {
+                "type": "boolean"
+              },
+              "follow_redirects": {
+                "type": "boolean"
+              },
+              "headers": {
+                "additionalProperties": {
+                  "type": [
+                    "string",
+                    "number",
+                    "boolean"
+                  ]
+                },
+                "type": "object"
+              },
+              "insecure_skip_verify": {
+                "type": "boolean"
+              },
+              "method": {
+                "enum": [
+                  "GET",
+                  "POST",
+                  "PUT",
+                  "PATCH",
+                  "DELETE",
+                  "HEAD"
+                ],
+                "type": "string"
+              },
+              "path": {
+                "description": "Replaces the collector's request.path. It cannot hold {{param_...}} placeholders.",
+                "type": [
+                  "string",
+                  "number",
+                  "boolean"
+                ]
+              },
+              "retry": {
+                "additionalProperties": false,
+                "description": "Replaces the collector's request.retry for this target.",
+                "properties": {
+                  "attempts": {
+                    "minimum": 0,
+                    "type": "integer"
+                  },
+                  "backoff": {
+                    "description": "A duration such as 500ms, 30s or 5m.",
+                    "pattern": "^[-+]?(0|([0-9]*(\\.[0-9]*)?(ns|us|µs|μs|ms|s|m|h))+)$",
+                    "type": "string"
+                  },
+                  "non_idempotent": {
+                    "description": "Retry a request whose method is not idempotent, such as POST, which sending again may repeat.",
+                    "type": "boolean"
+                  }
+                },
+                "type": "object"
+              },
+              "timeout": {
+                "description": "How long a scrape of this target may take. At most the target's interval.",
+                "pattern": "^[-+]?(0|([0-9]*(\\.[0-9]*)?(ns|us|µs|μs|ms|s|m|h))+)$",
+                "type": "string"
+              }
+            },
+            "type": "object"
+          },
+          "target": {
+            "description": "What the collector reads: a URL for an http collector, a file under request.root for a localfile one.",
+            "type": [
+              "string",
+              "number",
+              "boolean"
+            ]
+          }
+        },
+        "required": [
+          "collector"
+        ],
+        "type": "object"
+      },
+      "minItems": 1,
+      "type": "array"
+    }
+  },
+  "required": [
+    "targets"
+  ],
+  "title": "prometheus-universal-exporter scheduled target file",
+  "type": "object"
+}

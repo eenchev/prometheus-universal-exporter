@@ -7,7 +7,7 @@ metrics to publish — and, optionally, the exporter's own settings under `web`
 and `otlp`. Target URLs are deliberately not part of it: Prometheus supplies
 each one per scrape.
 
-`config.example.yaml` in the repository root is a complete working document to
+`configs/config.example.yaml` is a complete working document to
 start from. This page is the reference for what it may contain.
 
 ## Collectors
@@ -136,12 +136,17 @@ The expression and label values are interpreted by the selected transform:
 
 - `jq`/`yq`: jq expressions evaluated against decoded data.
 - `regex`: a RE2 expression; the first capture group is the numeric value and
-  labels map to capture-group numbers or names.
+  labels map to capture-group numbers or names. A regex without a capture group
+  is refused at startup. A match whose first group captured nothing — an
+  optional group that took no part, or one that matched only blanks — is a
+  missing value for that match.
 - `csv`: the expression is the numeric column name and labels map to column
   names.
-- `css`: the expression selects HTML elements whose text is numeric. Labels
-  read from the page need [`items`](#metrics-per-item): select the rows with it,
-  and the value and the labels as cells of each row.
+- `css`: the expression selects the HTML element whose text is numeric. Without
+  [`items`](#metrics-per-item) a metric is one value, so the expression must
+  match at most one element. Several values, and labels read from the page,
+  need `items`: select the rows with it, and the value and the labels as cells
+  of each row.
 - `xpath`: the expression selects XML/HTML nodes whose text is numeric; labels
   are relative XPath expressions or `@attribute` selectors.
 - `prometheus`: the expression matches source metric names; it can remap the
@@ -184,8 +189,9 @@ labels:
 A series missing a required label is a missing value of its metric, handled by
 the metric's [`error_mode`](#when-a-metric-cannot-be-extracted): `ignore` and
 `log` drop that one series and keep the rest, `fail` fails the probe with an
-error naming the label. It is counted in `http_exporter_missing_keys_total`,
-and applies whatever `required` and `error_handling.allow_missing_keys` say
+error naming the label. It is counted in `http_exporter_missing_keys_total`
+and, under `ignore` and `log`, in `http_exporter_rule_failures_total`, and it
+applies whatever `required` and `error_handling.allow_missing_keys` say
 about the value. `required` applies to `expression` labels, and not to
 the python transform, whose labels come from its script.
 
@@ -349,9 +355,11 @@ too, where it is the same document as `.`.
 
 The `css` transform takes `items` too, for HTML tables and lists: `items`
 selects the rows, and the expression and each label are selectors within one
-row. Without it, the value is the whole text of each element the expression
-selects, so its labels can only be static `value` labels: a label reading the
-page needs `items`, and is refused at startup without it.
+row. Without it, the metric is one series: the value is the whole text of the
+one element the expression selects, and an expression matching several is a
+failure of the rule, handled by its `error_mode`, with an error pointing at
+`items`. Its labels can only be static `value` labels: a label reading the page
+needs `items`, and is refused at startup without it.
 
 ```yaml
 transform:
@@ -575,7 +583,9 @@ essential: one missing value does not cost you the others. When nothing at all
 can be extracted, the probe still succeeds with an empty body. `log` writes one
 line per failing rule per scrape, however many series failed: a rule over a
 thousand-row table that misses its value on every row logs its first error
-with `"failures":1000`, not a thousand lines.
+with `"failures":1000`, not a thousand lines. Either way the series a rule carried on
+without are counted per rule in `http_exporter_rule_failures_total{collector,
+metric}`, so a rule that keeps failing can be graphed and alerted on.
 
 `fail` is for a metric the scrape is meaningless without. A single failing rule
 with `fail` fails the whole probe, even when every other metric was extracted
@@ -604,6 +614,12 @@ back into a partial success.
 A metric that is optional — `required: false`, or a collector with
 `error_handling.allow_missing_keys: true` — is not failing when its value is
 absent, so no mode applies to it, `fail` included: it is simply left out.
+
+A value is absent the same way in every transform: nothing matched, a null, or
+text that is empty or only whitespace — an empty CSV cell, an empty JSON
+string, an empty XML element or HTML cell, a regex group that captured
+nothing. Text that is there but is not a number, such as `"up"`, is not absent:
+it is a failure to read the value, which `required: false` does not excuse.
 
 ### When a stage of the probe fails
 
@@ -669,17 +685,24 @@ included, since a misspelt key would otherwise be ignored without a word.
 
 ### Editor support
 
-[`config.schema.json`](../config.schema.json) is a JSON Schema of this file.
+[`configs/config.schema.json`](../configs/config.schema.json) is a JSON Schema of this file.
 With the YAML extension for VS Code, or any editor that uses the YAML language
 server, start a configuration with
 
 ```yaml
-# yaml-language-server: $schema=https://raw.githubusercontent.com/eenchev/prometheus-universal-exporter/main/config.schema.json
+# yaml-language-server: $schema=https://raw.githubusercontent.com/eenchev/prometheus-universal-exporter/main/configs/config.schema.json
 ```
 
 and the editor completes keys, shows what each one does, and flags unknown keys
 and values that are not allowed as you type. The example configurations start
 with it.
+
+The [scheduled target file](OTLP.md#scheduled-targets) has a schema of its own,
+[`configs/targets.schema.json`](../configs/targets.schema.json), which
+`configs/targets.example.yaml` points editors at the same way. All three
+schemas — this one, the [collector file](#collector-files) one and the target
+file one — are in `configs/` with the examples, and are regenerated with
+`make schemas` (see [Development](DEVELOPMENT.md#the-configuration-schema)).
 
 `prometheus-universal-exporter --config.schema` prints the schema of the binary
 you are running; its `request.type` values are the request types that binary
@@ -809,11 +832,11 @@ collectors:
 
 `prometheus-universal-exporter --config.collector-file-schema` prints the JSON
 Schema of a collector file, published as
-[`collector-file.schema.json`](../collector-file.schema.json). Start a collector
+[`configs/collector-file.schema.json`](../configs/collector-file.schema.json). Start a collector
 file with
 
 ```yaml
-# yaml-language-server: $schema=https://raw.githubusercontent.com/eenchev/prometheus-universal-exporter/main/collector-file.schema.json
+# yaml-language-server: $schema=https://raw.githubusercontent.com/eenchev/prometheus-universal-exporter/main/configs/collector-file.schema.json
 ```
 
 and the editor checks it the way it checks the configuration, including that it
@@ -1085,8 +1108,8 @@ collector legacy_text http failed: HTTP request failed: ... context deadline exc
   and Prometheus. Raise it if Prometheus still times out first; `0` uses the
   whole scrape timeout. A negative value is a command-line error.
 
-Scheduled targets are unaffected: their scrapes are bounded by `otlp.interval`
-(see [OTLP](OTLP.md#scheduled-targets)).
+Scheduled targets are unaffected: their scrapes are bounded by their own
+`interval` (see [OTLP](OTLP.md#scheduled-targets)).
 
 ## Watching the configuration
 

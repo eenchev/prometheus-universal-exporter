@@ -71,7 +71,7 @@ every protected request with `500` and logs why, rather than letting requests
 in. The chart mounts the Secret with `webAuth` — see the
 [chart README](../charts/prometheus-universal-exporter/README.md#exporter-authentication).
 
-When enabled, Basic Auth is required for `/probe`, `/metrics`, and the configured self-metrics endpoint. `/health` and `/ready` remain unauthenticated for Kubernetes probes. Exporter-side Basic Auth is mutually exclusive with `request.forward_authorization`; enable one model or the other so the incoming Authorization header cannot be confused with the exporter credential.
+When enabled, Basic Auth is required for `/probe`, `/metrics`, the configured self-metrics endpoint and the landing page at `/`, which lists the collectors. `/health` and `/ready` remain unauthenticated for Kubernetes probes. Exporter-side Basic Auth is mutually exclusive with `request.forward_authorization`; enable one model or the other so the incoming Authorization header cannot be confused with the exporter credential.
 
 This conflict is rejected during startup: the exporter logs `invalid startup configuration; exiting` and terminates with a non-zero exit code. Invalid configurations detected during file reload are rejected while the last valid configuration remains active.
 

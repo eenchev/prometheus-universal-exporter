@@ -196,6 +196,14 @@ request:
 retry transport failures and transient HTTP statuses `408`, `425`, `429`, and
 `500` through `599`. Other HTTP statuses MUST be returned without retrying.
 The retry loop MUST share the incoming scrape or explicit target timeout.
+Only a request whose method is idempotent — `GET`, `HEAD`, `OPTIONS`, `TRACE`,
+`PUT` or `DELETE` — MUST be retried, unless `retry.non_idempotent` is set, since
+sending a `POST` or `PATCH` again may repeat what it did; this holds for a
+method a probe parameter chooses too. A collector with `retry.attempts` and a
+non-idempotent method, without `retry.non_idempotent`, MUST be reported as a
+configuration warning. When a target answers with a status outside `2xx`, the
+logged failure SHOULD carry the start of the body, at most 256 bytes on one
+line, and the probe's answer MUST NOT.
 
 The exporter MUST validate and normalize the target according to collector request configuration.
 
@@ -1576,7 +1584,10 @@ value is not a number:
   rule, and otherwise behave exactly as `ignore`. A rule that fails for several
   series in one scrape — rows of a table, items — MUST be recorded once for that
   scrape, with its first error and the number of series that failed, not once
-  per series.
+  per series. Every series a rule carries on without, under `ignore` or `log`,
+  MUST be counted in `http_exporter_rule_failures_total{collector, metric}`, a
+  series present from zero for every rule, and in
+  `http_exporter_missing_keys_total` when the value was missing.
 - `fail` MUST record the error as `log` does and MUST then fail the whole scrape
   at that metric. No metric from that scrape MUST be served, including metrics
   that were extracted successfully, so a response is either complete or an
@@ -1590,6 +1601,14 @@ A metric that is not required — `required: false`, or a collector with
 `allow_missing_keys` — is not failing when its value is absent, and no mode
 applies to it; it MUST be omitted without logging, under `fail` as under the
 others.
+
+A value MUST be treated as absent in the same way by every transform when
+nothing matched, when it is null, and when it is text that is empty or only
+whitespace: an empty CSV cell, an empty JSON or YAML string, an XML or HTML
+node without text, a regex whose first capture group took no part in the match
+or captured only whitespace. Text that is present and is not a number MUST
+NOT be treated as absent: it is a failure of the rule, whatever `required`
+says.
 
 A probe failed by `fail` MUST respond `502 Bad Gateway` with
 `Content-Type: application/json` and a body of the form:
@@ -1625,9 +1644,9 @@ label MUST be interpreted by the same transform as the metric expression:
 | Transform | `expression` | `labels` |
 | --- | --- | --- |
 | `jq`, `yq` | jq-compatible expression evaluated against decoded data | jq-compatible expressions evaluated against the same data |
-| `regex` | RE2 expression; capture group 1 is the numeric value | capture-group number or named capture group |
+| `regex` | RE2 expression with at least one capture group; capture group 1 is the numeric value | capture-group number or named capture group |
 | `csv` | numeric column name | column names |
-| `css` | CSS selector for numeric text | selectors relative to the selected element |
+| `css` | CSS selector for numeric text; without `items`, matching at most one element | selectors relative to the selected element |
 | `xpath` | XPath selecting numeric text | relative XPath or `@attribute` |
 | `prometheus` | regular expression matching source metric names | destination label name to source label name |
 
@@ -1704,11 +1723,14 @@ about, typically table rows, and the value expression and every label
 expression MUST be CSS selectors matched within one item at a time. Within an
 item each MUST match at most one element, the rest of this section applying as
 for jq: a value selector matching nothing is that item's missing metric, and a
-label selector matching nothing leaves the label off. Without `items`, the
-value is the text of each element the expression selects, so a label selector
-could only read text that is part of the number: a css metric with an
-`expression` label and no `items` MUST be rejected at startup, and its static
-`value` labels are unaffected. `items` on any other transform MUST be rejected
+label selector matching nothing leaves the label off. Without `items`, a
+css metric is one series, whose value is the text of the element the
+expression selects; an expression matching more than one element MUST be a
+failure of the rule, handled by its `error_mode`, and the error SHOULD point
+to `items`. No series of the rule may be exported when it fails that way. A
+label selector could only read text that is part of the number: a css metric
+with an `expression` label and no `items` MUST be rejected at startup, and its
+static `value` labels are unaffected. `items` on any other transform MUST be rejected
 at startup.
 
 Every transform MAY define one `transform.pre_script`. The exporter MUST run
@@ -2004,6 +2026,8 @@ http_exporter_config_last_reload_successful
 http_exporter_config_last_reload_success_timestamp_seconds
 http_exporter_config_reloads_total
 
+http_exporter_rule_failures_total
+
 http_exporter_otlp_exports_total
 http_exporter_otlp_export_retries_total
 http_exporter_otlp_points_dropped_total
@@ -2298,6 +2322,7 @@ delivered over OTLP like the rest of the self-metrics.
 Implement:
 
 ```text
+/
 /health
 /ready
 /metrics
@@ -2305,6 +2330,15 @@ Implement:
 ```
 
 Recommended behavior:
+
+- `/`: an HTML landing page, as Prometheus exporters usually serve, naming the
+  build and linking the endpoints, and listing the collectors in force with a
+  form per collector that probes a target through it. Only `/` itself MUST be
+  the page, for `GET` and `HEAD`; another unknown path MUST still answer `404`,
+  and another method `405`. It MUST be protected like `/probe` when the
+  exporter's Basic Authentication is on (§ 42.5), since it lists the
+  collectors, and MUST escape what it shows. It MUST lay out at phone width
+  and follow the browser's light or dark preference.
 
 - `/health`: process is alive. MUST answer `200` for as long as the process
   serves requests.
@@ -2443,6 +2477,8 @@ label:
   goquery would otherwise silently treat as matching nothing; XPath expressions
   and relative label expressions, with the collector's namespaces; and a
   prometheus transform's patterns, `include` and `exclude`.
+- A regex metric's expression MUST have at least one capture group, the first
+  being the value.
 - A regex label MUST name a capture group the regex has, by number or name.
 - A prometheus transform's `rename` targets MUST be valid metric names.
   `include`, `exclude` and `rename` MUST be rejected on any collector other
@@ -2471,7 +2507,7 @@ would otherwise be ignored without a word.
 ### 24.3 Configuration schema
 
 The repository MUST publish a JSON Schema (draft 2020-12) of the configuration
-file, `config.schema.json`, so editors can complete keys, show descriptions and
+file, `configs/config.schema.json`, so editors can complete keys, show descriptions and
 flag unknown keys and invalid values. It MUST be generated from the Go
 configuration structs, with the allowed values, patterns, required keys and
 descriptions the structs cannot express added by path, so a key added to the
@@ -2489,11 +2525,23 @@ pointing at the published schema.
 
 The configuration schema MUST require `collectors` or `collector_files`, each
 non-empty when it is the one present. The repository MUST also publish
-`collector-file.schema.json`, the schema of a collector file (§ 5.0): a required,
+`configs/collector-file.schema.json`, the schema of a collector file (§ 5.0): a required,
 non-empty `collectors` list and no other key, its collectors described by the
 same rules as the configuration's, which a test MUST check.
 `--config.collector-file-schema` MUST print it and exit 0; a test MUST fail when
 the committed file differs from what the code generates.
+
+The repository MUST likewise publish `configs/targets.schema.json`, the schema
+of the scheduled target file (§ 42.14), generated from the Go target structs
+with its own rules by path, and `--otlp.targets-file-schema` MUST print it and
+exit 0. A test MUST fail when the committed file differs from what the code
+generates, when the example target file does not validate against it, and when
+it accepts any of a set of invalid target files; the example target file MUST
+begin with the modeline pointing at it.
+
+The schemas and the example configurations MUST live together in `configs/`,
+not at the repository root, and the schemas' published addresses MUST be under
+it. `make schemas` MUST regenerate all three.
 
 The schema describes the canonical spelling, and MUST allow an unquoted number
 or boolean where the exporter reads a string, since YAML reads `expression: 1`
@@ -4312,7 +4360,7 @@ status captured:
   prefixed name over the limit fails validation at scrape time.
 - `--dry-run` reports an invalid prefix as a failed `config` check.
 - Changing the prefix changes the cache key.
-- `config.example.yaml` demonstrates the key.
+- `configs/config.example.yaml` demonstrates the key.
 
 ## 34.43 Metric rule validation tests
 
@@ -4425,6 +4473,8 @@ the exporter has.
 - With a cache, concurrent probes make one request and fill the cache, and the
   next probe is a cache hit.
 - A panic in the shared work answers with `500` and leaves nothing in flight.
+- A panic in a scheduled scrape is logged and exports that target as down,
+  and the other targets are scraped as usual.
 
 ## 34.51 Verbose collector metric tests
 
@@ -4481,7 +4531,7 @@ See § 5.0.
 - The watch reloads when a collector file is edited, added or removed, does not
   reload when nothing changed, and rejects a reload that adds a duplicate,
   keeping the configuration in force.
-- `collector-file.schema.json` is current, printed by its flag, describes
+- `configs/collector-file.schema.json` is current, printed by its flag, describes
   collectors as the configuration schema does, accepts a collectors list and
   rejects any other key, an empty list and an invalid collector; the
   configuration schema accepts a configuration of collector files alone and
@@ -4832,7 +4882,12 @@ See § 22.0c, § 23, § 42.1a and § 42.15b.
   kept, the self-metric snapshot is not, a newer value queued meanwhile wins,
   and the kept metrics are sent once the endpoint recovers. An unreachable
   endpoint is retried and its data kept.
-- A `400` is tried once, its data points dropped and counted.
+- A `400` is tried once, its data points dropped and counted, and its body
+  quoted in the warning.
+- A partial success counts its rejected data points as dropped, with the
+  count written as a string or a number, and logs the endpoint's message; a
+  message alone is logged and drops nothing; an empty answer, `{}`, a
+  protobuf answer and one that is not JSON are full successes.
 - The status families exist only with OTLP enabled, and the timestamp is 0
   before the first success.
 - The export loop stops when its context ends; an export it cut short is not
@@ -5154,8 +5209,17 @@ export, except where a newer value of the same series has been queued since;
 the self-metric snapshot MUST NOT be kept, since the next export takes a new
 one. Any other non-2xx response MUST NOT be retried, and the export's data
 points MUST be dropped rather than kept, since the endpoint would refuse them
-again. Every failed export MUST be logged as a warning with the retries made,
-and counted (§ 22.0c).
+again; its warning MUST include the start of the response body, where the
+endpoint says why. Every failed export MUST be logged as a warning with the
+retries made, and counted (§ 22.0c).
+
+A 2xx JSON response MAY carry a `partialSuccess` with `rejectedDataPoints`,
+written as a string or a number, and an `errorMessage`. Rejected data points
+MUST be counted in `http_exporter_otlp_points_dropped_total` and logged as a
+warning with the count and the message, and MUST NOT be sent again; the export
+is still a success. A message with no rejected data points MUST be logged as a
+warning. A response that is empty, not JSON, or has no `partialSuccess` is a
+full success.
 
 On `SIGTERM` or `SIGINT`, the exporter MUST stop accepting requests, let the
 probes in progress finish, stop the export loop, and then make one last
@@ -5266,7 +5330,8 @@ password MUST both be compared in constant time whatever the first
 comparison found.
 
 When enabled, the exporter MUST require valid Basic Authentication for
-`/probe`, `/metrics`, and the configured self-health metrics endpoint. The
+`/probe`, `/metrics`, the configured self-health metrics endpoint and the
+landing page at `/`. The
 `/health` and `/ready` endpoints SHOULD remain unauthenticated so Kubernetes
 liveness and readiness probes can operate without credentials.
 
@@ -5813,9 +5878,20 @@ replacing them. The exporter MUST emit one `resourceMetrics` entry per distinct
 resource in an export, so metrics from targets with different identities are not
 conflated.
 
-The scrape period MUST be the OTLP export interval, so every export carries a
-freshly collected set. The exporter MUST bound one scrape pass by that interval
-and SHOULD limit how many targets it scrapes concurrently. Scheduled scrapes MUST
+Each target MUST be scraped on its own `interval`, independent of the OTLP
+export interval, which MUST only decide when queued results are delivered. A
+target's `interval` MUST default to the file's top-level `interval`, and that to
+60 seconds, MUST be at least one second, and MUST NOT be shorter than the
+target's `request.timeout`. Scrapes of a target MUST keep a fixed cadence from
+its first, which SHOULD be offset within its interval by a stable hash of its
+name so targets are spread over it. A scrape MUST be bounded by its interval,
+and one still running when the next is due MUST make that one skipped, logged,
+rather than overlapping it. The exporter SHOULD limit how many targets it
+scrapes concurrently. A panic during a scheduled scrape MUST NOT end the
+process: it MUST be logged with its stack and end that scrape as failed, with
+`http_exporter_target_up` 0, leaving the other targets' scrapes unaffected.
+Retries MUST follow the collector's `request.retry`, which
+a target's `request.retry` replaces. Scheduled scrapes MUST
 run through the same fetch, decode, and transform path as `/probe`, including the
 collector's cache, limits, and validation. A scheduled scrape and a `/probe`
 request that would produce a byte-for-byte identical request MUST share cache

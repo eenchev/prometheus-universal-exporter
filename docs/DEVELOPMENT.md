@@ -8,6 +8,7 @@ make test       # go test ./..., then with -race, twice, in a random order
 make vet
 make build      # every request type; REQUEST_TYPES=http builds only those listed
 make helm-test  # helm lint and the template scenarios CI renders
+make vulncheck  # govulncheck, for reference; not part of make ci
 make ci         # everything above, in CI order
 
 make test-external  # opt-in; probes real third-party endpoints
@@ -55,18 +56,21 @@ therefore must not use `t.Parallel`, which the swap assumes.
 
 ## The configuration schema
 
-`config.schema.json`, and `collector-file.schema.json` for
-[collector files](CONFIGURATION.md#collector-files), are generated from the
-configuration structs. After adding or changing a configuration key, regenerate
-both, or the test suite fails:
+`configs/config.schema.json`, `configs/collector-file.schema.json` for
+[collector files](CONFIGURATION.md#collector-files) and
+`configs/targets.schema.json` for the
+[scheduled target file](OTLP.md#scheduled-targets) are generated from the
+configuration structs. After adding or changing a key, regenerate all three, or
+the test suite fails:
 
 ```sh
-go run . --config.schema > config.schema.json
-go run . --config.collector-file-schema > collector-file.schema.json
+make schemas
 ```
 
 Allowed values, patterns and descriptions that a struct cannot express are added
-by path in `configSchemaRules` in `internal/config/configschema.go`.
+by path, in `configSchemaRules` for the configuration and collector files and
+in `targetsSchemaRules` for the target file, both in
+`internal/config/configschema.go`.
 
 ## Tests that reach the internet
 
@@ -120,6 +124,16 @@ bumping with it. Beyond the standard linters it enables `bodyclose`, `errorlint`
 `gocritic`, `gosec`, `misspell`, `nilerr`, `noctx`, `perfsprint`, `revive`,
 `unconvert` and `usestdlibvars`. The repository is gofmt-clean and CI fails on
 unformatted sources rather than rewriting them.
+
+Known vulnerabilities are reported by `.github/workflows/govulncheck.yml`, on
+every push and pull request and weekly on Mondays, since an advisory is
+published against code that has not changed. It is for reference only: the job
+never fails, so a new advisory cannot block a merge. Findings are written to
+the run's summary page and raise a warning on the run; a govulncheck that could
+not complete (the vulnerability database unreachable, say) warns too. Keep it
+out of the branch protection's required checks. `make vulncheck` runs the same
+pinned version locally, and a test keeps the Makefile and the workflow in step
+and checks that the step cannot fail the job.
 
 `make test` also validates the GitHub Actions workflows: `test/repository/workflows_test.go`
 decodes every file under `.github/workflows` with a parser that rejects

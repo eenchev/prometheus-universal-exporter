@@ -1,0 +1,56 @@
+# Reports known vulnerabilities in the code the exporter calls, for reference
+# only: the job never fails, so a newly published advisory cannot block a merge.
+# Findings go to the run's summary page and show as a warning on the run.
+#
+# It is a workflow of its own rather than a job in ci.yml so that it can also
+# run on a schedule: an advisory is published against code that has not
+# changed, and a run on every push alone would see it only at the next push.
+# The schedule is in UTC: Mondays at 07:00.
+name: govulncheck
+on:
+  push:
+  pull_request:
+  schedule:
+    - cron: '0 7 * * 1'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  govulncheck:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version: 'stable'
+      # The Makefile pins the same version and a test keeps the two in step.
+      - name: Install govulncheck
+        run: go install golang.org/x/vuln/cmd/govulncheck@v1.8.0
+      # govulncheck exits 3 when it finds a vulnerability the code reaches, and
+      # 1 when it could not run at all. Neither fails the job; both are
+      # reported as a warning, so the run's page says which it was.
+      - name: Check for known vulnerabilities
+        run: |
+          set +e
+          govulncheck ./... > "$RUNNER_TEMP/govulncheck.txt" 2>&1
+          status=$?
+          set -e
+          cat "$RUNNER_TEMP/govulncheck.txt"
+          {
+            echo '## govulncheck'
+            echo
+            case "$status" in
+              0) echo 'No known vulnerabilities reach the code.' ;;
+              3) echo 'Known vulnerabilities reach the code. This check is for reference and does not block merging.' ;;
+              *) echo "govulncheck could not complete (it returned $status)." ;;
+            esac
+            echo
+            echo '```'
+            cat "$RUNNER_TEMP/govulncheck.txt"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          case "$status" in
+            0) ;;
+            3) echo '::warning title=govulncheck::Known vulnerabilities reach the code; see the run summary' ;;
+            *) echo "::warning title=govulncheck::govulncheck could not complete (it returned $status); see the log" ;;
+          esac

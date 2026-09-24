@@ -69,6 +69,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 	expandEnv := flags.Bool("config.export-env", false, "Expand ${NAME} environment variable references in the configuration, collector and scheduled target files")
 	printSchema := flags.Bool("config.schema", false, "Print the JSON Schema of the configuration file, for editors, and exit")
 	printCollectorFileSchema := flags.Bool("config.collector-file-schema", false, "Print the JSON Schema of a collector file listed under collector_files, for editors, and exit")
+	printTargetsSchema := flags.Bool("otlp.targets-file-schema", false, "Print the JSON Schema of the scheduled target file, for editors, and exit")
 	showVersion := flags.Bool("version", false, "Print the version, revision, Go version and request types of this build, and exit")
 	check := flags.Bool("dry-run", false, "Validate the configuration and scheduled target files as startup would, print a JSON report to stdout, and exit 0 if they are valid or 1 if not, without starting the exporter")
 	if err := flags.Parse(args); err != nil {
@@ -102,10 +103,13 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return 0
 	}
 
-	if *printSchema || *printCollectorFileSchema {
+	if *printSchema || *printCollectorFileSchema || *printTargetsSchema {
 		render := config.SchemaJSON
-		if *printCollectorFileSchema {
+		switch {
+		case *printCollectorFileSchema:
 			render = config.CollectorFileSchemaJSON
+		case *printTargetsSchema:
+			render = config.TargetsSchemaJSON
 		}
 		schema, err := render()
 		if err != nil {
@@ -187,6 +191,11 @@ func run(args []string, stdout, stderr io.Writer) int {
 		defer close(exportLoopDone)
 		server.OTLPExportLoop(ctx)
 	}()
+	scrapeLoopDone := make(chan struct{})
+	go func() {
+		defer close(scrapeLoopDone)
+		server.ScheduledScrapeLoop(ctx)
+	}()
 
 	startup := []any{"version", exporter.BuildVersion().Version, "revision", exporter.BuildVersion().Revision, "address", *listenAddress, "collectors", len(conf.Collectors), "collector_files", len(conf.LoadedCollectorFiles),
 		"scheduled_targets", len(manager.Targets()), "config_watch", manager.WatchEnabled(),
@@ -230,9 +239,11 @@ func run(args []string, stdout, stderr io.Writer) int {
 			logger.Error("probes were still in progress when --web.shutdown-timeout ran out; their connections are closed", "shutdown_timeout", shutdownTimeout.String(), "error", err)
 			_ = httpServer.Close()
 		}
-		// The probes have finished, and the export loop has stopped, so what
-		// they queued goes out in one last export, bounded by otlp.timeout.
+		// The probes have finished, and the export and scheduled scrape loops
+		// have stopped, so what they queued goes out in one last export,
+		// bounded by otlp.timeout.
 		<-exportLoopDone
+		<-scrapeLoopDone
 		server.FlushOTLP()
 	}
 	return 0

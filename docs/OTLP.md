@@ -51,7 +51,13 @@ down to nine tenths of the limit, counted in
 `http_exporter_otlp_points_dropped_total` and logged as a warning. Any other
 answer, such as `400` or `401`,
 would be given again: the data points are dropped and counted rather than sent
-again forever. Each failure is logged as a warning, and the export status is in
+again forever, and the warning quotes the start of the endpoint's explanation
+as `response_body`. An endpoint can also accept an export but reject some of
+its data points, saying so in the answer's `partialSuccess`: those points are
+counted in `http_exporter_otlp_points_dropped_total` too, and the warning
+carries `rejected_points` and the endpoint's `error_message`. The export itself
+still counts as a success. A `partialSuccess` with a message and nothing
+rejected is logged as a warning only. Each failure is logged as a warning, and the export status is in
 the [self-metrics](SELF-METRICS.md#otlp-export-status):
 
 ```promql
@@ -94,9 +100,17 @@ the export.
 
 The exporter can also scrape a fixed list of targets itself and deliver only
 those metrics over OTLP, with no Prometheus involved. Pass the list with
-`--otlp.targets-file`; `targets.example.yaml` is a complete example, and
-`config.otlp.example.yaml` is the matching exporter configuration with OTLP
-export enabled:
+`--otlp.targets-file`; `configs/targets.example.yaml` is a complete example, and
+`configs/config.otlp.example.yaml` is the matching exporter configuration with OTLP
+export enabled. `configs/targets.schema.json`, printed by
+`--otlp.targets-file-schema`, is the file's JSON Schema, for editors; start a
+target file with
+
+```yaml
+# yaml-language-server: $schema=https://raw.githubusercontent.com/eenchev/prometheus-universal-exporter/main/configs/targets.schema.json
+```
+
+A target file looks like this:
 
 ```yaml
 targets:
@@ -166,7 +180,38 @@ attributes are merged over the exporter-wide ones. Targets with different
 identities are exported as separate `resourceMetrics` entries rather than
 being conflated.
 
-Targets are scraped once per `otlp.interval`, through the same fetch, decode and
+Each target is scraped on its own `interval`, as Prometheus scrapes a probe on
+its `scrape_interval`, not on the export's `otlp.interval`: the export only
+delivers what the scrapes queued since the last one, the latest value of each
+series.
+
+```yaml
+interval: 1m            # for every target that sets none; 1m when unset
+targets:
+  - name: payments
+    collector: app_json
+    target: http://payments:8080
+    interval: 15s       # this target's own
+    request:
+      timeout: 10s      # at most the interval
+      retry:
+        attempts: 2
+        backoff: 1s
+```
+
+A target's first scrape comes at a point within its interval set by its name,
+so targets sharing an interval are spread over it rather than all scraped at
+once, and then every interval from there, however long a scrape takes. A scrape
+must end within its interval, so `request.timeout` may not be longer; one still
+running when the next is due makes that one skipped, with a
+`scheduled target scrape skipped` warning, rather than overlapping it. The
+interval is at least `1s`. A target scraped more often than `otlp.interval`
+exports only its latest values; one scraped less often exports its last
+result again only when scraped again.
+
+Retries come from the collector's `request.retry`, and a target's own
+`request.retry` replaces them, as the `retry_attempts` and `retry_backoff`
+probe parameters do for a probe. Scrapes go through the same fetch, decode and
 transform path as `/probe`, so collector limits, the response cache and
 [`error_handling`](CONFIGURATION.md#when-a-stage-of-the-probe-fails) all
 apply. A scheduled scrape and an identical `/probe` request share cache

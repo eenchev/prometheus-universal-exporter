@@ -153,6 +153,10 @@ type RequestConfig struct {
 type RetryConfig struct {
 	Attempts int      `yaml:"attempts"`
 	Backoff  Duration `yaml:"backoff"`
+	// NonIdempotent lets a request whose method is not idempotent, such as
+	// POST, be retried. Unset, only GET, HEAD, OPTIONS, TRACE, PUT and DELETE
+	// are: sending a POST again may repeat what it did.
+	NonIdempotent bool `yaml:"non_idempotent"`
 }
 
 // BasicAuth is request.basic_auth, credentials written in the configuration.

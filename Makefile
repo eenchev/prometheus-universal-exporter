@@ -4,8 +4,10 @@ APP := prometheus-universal-exporter
 # panics on standard-library sources from a newer toolchain. Kept in step with
 # .github/workflows/ci.yml by a test.
 GOLANGCI_LINT_VERSION := v2.13.2
+# Kept in step with .github/workflows/govulncheck.yml by a test.
+GOVULNCHECK_VERSION := v1.8.0
 
-.PHONY: build test test-external vet fmt fmt-check lint lint-install helm-test
+.PHONY: build test test-external vet fmt fmt-check lint lint-install vulncheck helm-test schemas
 # REQUEST_TYPES builds only the listed request types, comma-separated, for
 # example `make build REQUEST_TYPES=http`. Empty, the default, builds every type.
 # See "Choosing request types at build time" in docs/CONFIGURATION.md.
@@ -24,6 +26,13 @@ test:
 # `make ci`. See docs/DEVELOPMENT.md.
 test-external:
 	EXTERNAL_E2E=1 go test -run TestExternal -v ./...
+
+# The committed JSON Schemas are generated from the configuration structs; a
+# test fails when one is out of date. Run this after changing a key.
+schemas:
+	go run . --config.schema > configs/config.schema.json
+	go run . --config.collector-file-schema > configs/collector-file.schema.json
+	go run . --otlp.targets-file-schema > configs/targets.schema.json
 
 vet:
 	go vet ./...
@@ -46,6 +55,11 @@ lint:
 lint-install:
 	go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@$(GOLANGCI_LINT_VERSION)
 
+# Known vulnerabilities the code reaches. For reference, like the CI workflow,
+# and not part of `make ci`.
+vulncheck:
+	go run golang.org/x/vuln/cmd/govulncheck@$(GOVULNCHECK_VERSION) ./...
+
 helm-test:
 	helm lint charts/prometheus-universal-exporter
 	helm template test charts/prometheus-universal-exporter
@@ -53,7 +67,7 @@ helm-test:
 	helm template test charts/prometheus-universal-exporter --set-json 'monitors=[{"name":"pod-targets","enabled":true,"type":"pod","collector":"example","interval":"30s","scrapeTimeout":"10s"}]'
 	helm template test charts/prometheus-universal-exporter --set server.listenAddress=0.0.0.0:9115 --set server.pythonPath=/usr/bin/python3.11
 	helm template test charts/prometheus-universal-exporter --set server.expandEnv=true --set-json 'env=[{"name":"DEMO_TARGET","value":"http://api.internal:8080"}]' --set-json 'envFrom=[{"secretRef":{"name":"exporter-secrets"}}]'
-	helm template test charts/prometheus-universal-exporter --set otlpTargets.enabled=true --set-file otlpTargets.data=targets.example.yaml --set-file 'config.data.config\.yaml=config.otlp.example.yaml'
+	helm template test charts/prometheus-universal-exporter --set otlpTargets.enabled=true --set-file otlpTargets.data=configs/targets.example.yaml --set-file 'config.data.config\.yaml=configs/config.otlp.example.yaml'
 	helm template test charts/prometheus-universal-exporter --set-json 'monitors=[{"name":"a","enabled":true,"type":"service","collector":"example","interval":"30s","scrapeTimeout":"10s"},{"name":"b","enabled":true,"type":"pod","collector":"example","interval":"30s","scrapeTimeout":"10s"}]' | python3 tools/check-manifests.py
 	helm template test charts/prometheus-universal-exporter --set server.logLevel=debug --set server.probeTimeoutOffset=1s
 	helm template test charts/prometheus-universal-exporter --set-json 'extraArgs=["--some.new-flag=value"]' --set-json 'extraVolumes=[{"name":"extra-collectors","configMap":{"name":"my-collectors"}}]' --set-json 'extraVolumeMounts=[{"name":"extra-collectors","mountPath":"/etc/collectors","readOnly":true}]'
@@ -72,7 +86,7 @@ helm-test:
 			exit 1; \
 		fi; \
 	done
-	@if helm template test charts/prometheus-universal-exporter --set otlpTargets.enabled=true --set-file otlpTargets.data=targets.example.yaml --set-file 'config.data.config\.yaml=config.example.yaml' >/dev/null 2>&1; then \
+	@if helm template test charts/prometheus-universal-exporter --set otlpTargets.enabled=true --set-file otlpTargets.data=configs/targets.example.yaml --set-file 'config.data.config\.yaml=configs/config.example.yaml' >/dev/null 2>&1; then \
 		echo "helm template accepted scheduled targets while OTLP export is disabled" >&2; \
 		exit 1; \
 	fi
@@ -90,7 +104,7 @@ helm-test:
 		echo "helm template accepted --log.level in extraArgs, which server.logLevel manages" >&2; \
 		exit 1; \
 	fi
-	@for oneshot in --dry-run --config.schema --config.collector-file-schema --help; do \
+	@for oneshot in --dry-run --config.schema --config.collector-file-schema --otlp.targets-file-schema --version --help; do \
 		if helm template test charts/prometheus-universal-exporter --set-json "extraArgs=[\"$$oneshot\"]" >/dev/null 2>&1; then \
 			echo "helm template accepted $$oneshot in extraArgs, which would make the pod exit instead of serving" >&2; \
 			exit 1; \

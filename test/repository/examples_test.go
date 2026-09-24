@@ -65,7 +65,7 @@ func TestChartSuppliesCollectorFilesAsConfigMapKeys(t *testing.T) {
 
 // The shipped configurations document the key; the reference example uses it.
 func TestTheExampleConfigurationShowsMetricsPrefix(t *testing.T) {
-	cfg, err := config.Load("config.example.yaml")
+	cfg, err := config.Load("configs/config.example.yaml")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -75,7 +75,7 @@ func TestTheExampleConfigurationShowsMetricsPrefix(t *testing.T) {
 		}
 	}
 	raw, _ := yaml.Marshal(cfg.Collectors[0])
-	t.Fatalf("config.example.yaml has no collector with metrics_prefix; first collector:\n%s", raw)
+	t.Fatalf("configs/config.example.yaml has no collector with metrics_prefix; first collector:\n%s", raw)
 }
 
 // The configuration the chart ships by default has to start, so it declares
@@ -101,14 +101,14 @@ func TestTheChartsDefaultConfigurationIsValid(t *testing.T) {
 
 // The shipped examples must stay loadable and consistent with each other.
 func TestShippedExampleFilesLoadTogether(t *testing.T) {
-	cfg, err := config.Load("config.otlp.example.yaml")
+	cfg, err := config.Load("configs/config.otlp.example.yaml")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if !cfg.OTLP.Enabled {
-		t.Fatal("config.otlp.example.yaml must enable OTLP export")
+		t.Fatal("configs/config.otlp.example.yaml must enable OTLP export")
 	}
-	file, err := config.LoadTargets("targets.example.yaml")
+	file, err := config.LoadTargets("configs/targets.example.yaml")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -116,15 +116,15 @@ func TestShippedExampleFilesLoadTogether(t *testing.T) {
 		t.Fatal(err)
 	}
 	if err := config.ValidateTargetsAgainst(file, cfg); err != nil {
-		t.Fatalf("targets.example.yaml does not match config.otlp.example.yaml: %v", err)
+		t.Fatalf("configs/targets.example.yaml does not match configs/config.otlp.example.yaml: %v", err)
 	}
 
-	plain, err := config.Load("config.example.yaml")
+	plain, err := config.Load("configs/config.example.yaml")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if err := config.ValidateTargetsAgainst(file, plain); err == nil {
-		t.Fatal("config.example.yaml leaves OTLP disabled, so the target file must be rejected against it")
+		t.Fatal("configs/config.example.yaml leaves OTLP disabled, so the target file must be rejected against it")
 	}
 }
 
@@ -134,8 +134,8 @@ func TestShippedExampleFilesLoadTogether(t *testing.T) {
 // pre-script.
 func TestShippedExampleScriptsSatisfyTheContract(t *testing.T) {
 	for _, path := range []string{
-		"config.example.yaml",
-		"config.otlp.example.yaml",
+		"configs/config.example.yaml",
+		"configs/config.otlp.example.yaml",
 		"testdata/config.frankfurter.json-test.yaml",
 		"testdata/config.usgs.csv-test.yaml",
 		"testdata/config.k8sguestbook.yaml-test.yaml",

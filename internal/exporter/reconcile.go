@@ -69,9 +69,9 @@ func (c *responseCache) dropCollectors(names map[string]bool) int {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	dropped := 0
-	for key, entry := range c.entries {
-		if names[entry.collector] {
-			delete(c.entries, key)
+	for name := range names {
+		for key := range c.byCollector[name] {
+			c.removeLocked(key)
 			dropped++
 		}
 	}

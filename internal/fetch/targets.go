@@ -36,8 +36,10 @@ func TargetOverrides(t *model.ScheduledTarget) RequestOverrides {
 	if t.Request.Retry != nil {
 		attempts := t.Request.Retry.Attempts
 		backoff := time.Duration(t.Request.Retry.Backoff)
+		nonIdempotent := t.Request.Retry.NonIdempotent
 		out.RetryAttempts = &attempts
 		out.RetryBackoff = &backoff
+		out.RetryNonIdempotent = &nonIdempotent
 	}
 	return out
 }

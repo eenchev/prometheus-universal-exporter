@@ -119,7 +119,7 @@ func (r checkRun) has(check string) bool {
 }
 
 func TestCheckPassesTheShippedExamples(t *testing.T) {
-	plain := runCheckCLI(t, "--config.file=config.example.yaml")
+	plain := runCheckCLI(t, "--config.file=configs/config.example.yaml")
 	if plain.code != 0 || plain.report.Status != checkOK {
 		t.Fatalf("exit=%d status=%s\n%s", plain.code, plain.report.Status, plain.stdout)
 	}
@@ -130,7 +130,7 @@ func TestCheckPassesTheShippedExamples(t *testing.T) {
 		t.Fatal("the example's Python scripts should pass")
 	}
 
-	withTargets := runCheckCLI(t, "--config.file=config.otlp.example.yaml", "--otlp.targets-file=targets.example.yaml")
+	withTargets := runCheckCLI(t, "--config.file=configs/config.otlp.example.yaml", "--otlp.targets-file=configs/targets.example.yaml")
 	if withTargets.code != 0 || withTargets.result(t, "targets").Status != checkOK {
 		t.Fatalf("exit=%d\n%s", withTargets.code, withTargets.stdout)
 	}
@@ -218,7 +218,7 @@ func TestCheckListsEveryPythonFault(t *testing.T) {
 // never needs one.
 func TestCheckNeedsAnInterpreterOnlyForScripts(t *testing.T) {
 	missing := "--python.path=/nonexistent/python"
-	withScripts := runCheckCLI(t, "--config.file=config.example.yaml", missing)
+	withScripts := runCheckCLI(t, "--config.file=configs/config.example.yaml", missing)
 	if withScripts.code != 1 || !strings.Contains(withScripts.result(t, "python_scripts").Errors[0], "interpreter") {
 		t.Fatalf("exit=%d\n%s", withScripts.code, withScripts.stdout)
 	}
@@ -231,15 +231,15 @@ func TestCheckNeedsAnInterpreterOnlyForScripts(t *testing.T) {
 func TestCheckValidatesTheTargetsFile(t *testing.T) {
 	t.Run("invalid on its own", func(t *testing.T) {
 		targets := testutil.WriteFile(t, "targets.yaml", "targets:\n  - name: bad-name\n    collector: legacy_text\n    target: http://a.example\n")
-		out := runCheckCLI(t, "--config.file=config.otlp.example.yaml", "--otlp.targets-file="+targets)
+		out := runCheckCLI(t, "--config.file=configs/config.otlp.example.yaml", "--otlp.targets-file="+targets)
 		if out.code != 1 || out.result(t, "targets").Status != checkFailed || !strings.Contains(out.result(t, "targets").Errors[0], "invalid name") {
 			t.Fatalf("exit=%d\n%s", out.code, out.stdout)
 		}
 	})
 	t.Run("valid, but not against this configuration", func(t *testing.T) {
-		// config.example.yaml leaves OTLP disabled, and scheduled targets
+		// configs/config.example.yaml leaves OTLP disabled, and scheduled targets
 		// need it.
-		out := runCheckCLI(t, "--config.file=config.example.yaml", "--otlp.targets-file=targets.example.yaml")
+		out := runCheckCLI(t, "--config.file=configs/config.example.yaml", "--otlp.targets-file=configs/targets.example.yaml")
 		targets := out.result(t, "targets")
 		if out.code != 1 || targets.Status != checkFailed || !strings.Contains(targets.Errors[0], "otlp.enabled") {
 			t.Fatalf("exit=%d targets=%+v", out.code, targets)
@@ -249,7 +249,7 @@ func TestCheckValidatesTheTargetsFile(t *testing.T) {
 		}
 	})
 	t.Run("valid, with the configuration broken", func(t *testing.T) {
-		out := runCheckCLI(t, "--config.file="+t.TempDir()+"/absent.yaml", "--otlp.targets-file=targets.example.yaml")
+		out := runCheckCLI(t, "--config.file="+t.TempDir()+"/absent.yaml", "--otlp.targets-file=configs/targets.example.yaml")
 		targets := out.result(t, "targets")
 		if out.code != 1 || targets.Status != checkSkipped || targets.Details["targets"] == nil {
 			t.Fatalf("targets=%+v, want skipped, still listing what it loaded", targets)
@@ -299,10 +299,10 @@ func TestCheckAgreesWithStartup(t *testing.T) {
 	for name, args := range map[string][]string{
 		"invalid configuration":     {"--config.file=" + testutil.WriteFile(t, "config.yaml", broken)},
 		"missing configuration":     {"--config.file=" + t.TempDir() + "/absent.yaml"},
-		"no interpreter":            {"--config.file=config.example.yaml", "--python.path=/nonexistent/python"},
-		"invalid targets file":      {"--config.file=config.otlp.example.yaml", "--otlp.targets-file=" + badTargets},
-		"targets without OTLP":      {"--config.file=config.example.yaml", "--otlp.targets-file=targets.example.yaml"},
-		"non-positive watch period": {"--config.file=config.example.yaml", "--config.watch", "--config.watch-interval=0s"},
+		"no interpreter":            {"--config.file=configs/config.example.yaml", "--python.path=/nonexistent/python"},
+		"invalid targets file":      {"--config.file=configs/config.otlp.example.yaml", "--otlp.targets-file=" + badTargets},
+		"targets without OTLP":      {"--config.file=configs/config.example.yaml", "--otlp.targets-file=configs/targets.example.yaml"},
+		"non-positive watch period": {"--config.file=configs/config.example.yaml", "--config.watch", "--config.watch-interval=0s"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			if check := runCheckCLI(t, args...); check.code != 1 {
@@ -336,7 +336,7 @@ func TestCheckLogsEachStepAsJSON(t *testing.T) {
 	}
 
 	// --log.level quietens the log, never the report.
-	quiet := runCheckCLI(t, "--config.file=config.example.yaml", "--log.level=error")
+	quiet := runCheckCLI(t, "--config.file=configs/config.example.yaml", "--log.level=error")
 	if quiet.code != 0 || len(quiet.logs) != 0 || quiet.report.Status != checkOK {
 		t.Fatalf("exit=%d logs=%d status=%s", quiet.code, len(quiet.logs), quiet.report.Status)
 	}
@@ -345,7 +345,7 @@ func TestCheckLogsEachStepAsJSON(t *testing.T) {
 // The check never serves: a listen address that could not be bound does not
 // matter to it.
 func TestCheckDoesNotStartTheServer(t *testing.T) {
-	out := runCheckCLI(t, "--config.file=config.example.yaml", "--web.listen-address=256.0.0.1:99999")
+	out := runCheckCLI(t, "--config.file=configs/config.example.yaml", "--web.listen-address=256.0.0.1:99999")
 	if out.code != 0 {
 		t.Fatalf("exit=%d\n%s", out.code, out.stdout)
 	}
@@ -546,11 +546,19 @@ func TestDryRunReportsDeprecations(t *testing.T) {
 func TestANegativeTimeoutOffsetIsACommandLineError(t *testing.T) {
 	for _, args := range [][]string{
 		{"--probe.timeout-offset=-1s"},
-		{"--dry-run", "--config.file=config.example.yaml", "--probe.timeout-offset=-1s"},
+		{"--dry-run", "--config.file=configs/config.example.yaml", "--probe.timeout-offset=-1s"},
 	} {
 		out := runCLI(t, args...)
 		if out.code != 2 || !strings.Contains(out.stderr, "--probe.timeout-offset must not be negative") || out.stdout != "" {
 			t.Fatalf("%v: exit=%d stderr=%s stdout=%s", args, out.code, out.stderr, out.stdout)
 		}
+	}
+}
+
+func TestTargetsFileSchemaFlagPrintsTheSchema(t *testing.T) {
+	out := runCLI(t, "--otlp.targets-file-schema")
+	generated, _ := config.TargetsSchemaJSON()
+	if out.code != 0 || out.stdout != string(generated) || out.stderr != "" {
+		t.Fatalf("exit=%d stderr=%q stdout starts %q", out.code, out.stderr, testutil.FirstLines(out.stdout, 3))
 	}
 }

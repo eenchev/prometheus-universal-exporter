@@ -42,6 +42,9 @@ type RequestOverrides struct {
 	Body               *string
 	InsecureSkipVerify *bool
 	RetryAttempts      *int
+	// RetryNonIdempotent is a scheduled target's retry.non_idempotent; no
+	// probe parameter sets it.
+	RetryNonIdempotent *bool
 	RetryBackoff       *time.Duration
 	FollowRedirects    *bool
 	EnableHTTP2        *bool
@@ -307,6 +310,13 @@ func fetch(ctx context.Context, target string, c *model.Collector, overrides Req
 	if retryAttempts < 0 {
 		retryAttempts = 0
 	}
+	retryAnyMethod := c.Request.Retry.NonIdempotent
+	if overrides.RetryNonIdempotent != nil {
+		retryAnyMethod = *overrides.RetryNonIdempotent
+	}
+	if !retryAnyMethod && !IdempotentMethod(method) {
+		retryAttempts = 0
+	}
 	if retryBackoff < 0 {
 		retryBackoff = 0
 	}
@@ -333,11 +343,11 @@ func fetch(ctx context.Context, target string, c *model.Collector, overrides Req
 	}
 	bearerToken := c.Request.BearerToken
 	if c.Request.BearerTokenFile != "" {
-		token, readErr := os.ReadFile(c.Request.BearerTokenFile)
+		token, readErr := ReadCredentialFile(c.Request.BearerTokenFile)
 		if readErr != nil {
 			return nil, fmt.Errorf("reading bearer token file: %w", readErr)
 		}
-		bearerToken = strings.TrimSpace(string(token))
+		bearerToken = token
 		if bearerToken == "" {
 			return nil, fmt.Errorf("bearer token file %s is empty", c.Request.BearerTokenFile)
 		}
@@ -412,6 +422,18 @@ func responseLimit(c *model.Collector) int64 {
 		limit = 10 << 20
 	}
 	return int64(limit)
+}
+
+// IdempotentMethod reports whether sending a request with method twice has the
+// effect of sending it once, so a failed one may be retried without asking:
+// GET, HEAD, OPTIONS, TRACE, PUT and DELETE (RFC 9110). An empty method is
+// GET.
+func IdempotentMethod(method string) bool {
+	switch strings.ToUpper(method) {
+	case "", http.MethodGet, http.MethodHead, http.MethodOptions, http.MethodTrace, http.MethodPut, http.MethodDelete:
+		return true
+	}
+	return false
 }
 
 func retryableStatus(status int) bool {

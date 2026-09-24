@@ -46,6 +46,11 @@ func CheckMetricRule(x *model.Collector, r *model.MetricRule) error {
 		if err != nil {
 			return fmt.Errorf("%s regex: %w", where, err)
 		}
+		// The first capture group is the value. Without one there is nothing
+		// to say which part of the match is the number.
+		if re.NumSubexp() == 0 {
+			return fmt.Errorf("%s regex %q has no capture group; the first capture group is the value, so wrap the number in one, such as 'requests=(\\d+)'", where, r.Expression)
+		}
 		names := re.SubexpNames()
 		for _, label := range expressionLabels(r) {
 			if index := captureIndex(label.Expression, names); index < 0 || index >= len(names) {

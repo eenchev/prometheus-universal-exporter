@@ -26,6 +26,7 @@
   "--dry-run" "would make the exporter validate its configuration and exit, so the pod would never serve; run --dry-run as a separate command, a Job or an init container instead"
   "--config.schema" "would make the exporter print the configuration schema and exit, so the pod would never serve; run it as a separate command instead"
   "--config.collector-file-schema" "would make the exporter print the collector file schema and exit, so the pod would never serve; run it as a separate command instead"
+  "--otlp.targets-file-schema" "would make the exporter print the scheduled target file schema and exit, so the pod would never serve; run it as a separate command instead"
   "--version" "would make the exporter print its version and exit, so the pod would never serve; the version is in the http_exporter_build_info self-metric"
   "--help" "would make the exporter print its usage and exit, so the pod would never serve"
   "--h" "would make the exporter print its usage and exit, so the pod would never serve" -}}

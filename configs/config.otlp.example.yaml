@@ -1,6 +1,7 @@
 # yaml-language-server: $schema=https://raw.githubusercontent.com/eenchev/prometheus-universal-exporter/main/configs/config.schema.json
-# Companion to configs/config.example.yaml with OTLP export enabled. Scheduled targets
-# (configs/targets.example.yaml, passed with --otlp.targets-file) require this.
+# Companion to configs/config.example.yaml with OTLP export enabled. The static
+# targets example (configs/static-targets.example.yaml, passed with
+# --static-targets-file) exports a target with export_via_otlp, which needs it.
 otlp:
   enabled: true
   endpoint: http://otel-collector:4318/v1/metrics

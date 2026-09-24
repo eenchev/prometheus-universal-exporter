@@ -41,8 +41,17 @@ type collectorEntry struct {
 
 type collectorsPage struct {
 	Collectors []collectorEntry
-	Docs       string
+	// ProbeTimeoutSeconds is the timeout a form starts with, sent as the
+	// scrape timeout Prometheus would send.
+	ProbeTimeoutSeconds int
+	Docs                string
 }
+
+// pageProbeTimeoutSeconds is the timeout the collectors page's forms start
+// with: as long as a typical scrape timeout, and far shorter than
+// --probe.default-timeout, which bounds a probe sent without the page's
+// script.
+const pageProbeTimeoutSeconds = 10
 
 // configuredCredentials names the credentials c's configuration sends its
 // target.
@@ -73,7 +82,7 @@ func targetHint(c *model.Collector, required bool) string {
 	case fetch.RequestTypeHTTP:
 		hint = "http://host:port"
 	case "localfile":
-		hint = "a file under its root"
+		hint = "a file or directory under its root"
 	}
 	if !required {
 		hint += " (optional)"
@@ -83,7 +92,7 @@ func targetHint(c *model.Collector, required bool) string {
 
 func (s *Server) collectorsHandler(w http.ResponseWriter, _ *http.Request) {
 	cfg := s.manager.Get()
-	page := collectorsPage{Docs: landingDocs}
+	page := collectorsPage{ProbeTimeoutSeconds: pageProbeTimeoutSeconds, Docs: landingDocs}
 	for i := range cfg.Collectors {
 		c := &cfg.Collectors[i]
 		required := errors.Is(fetch.CheckTarget(c, "", false), fetch.ErrMissingTarget)
@@ -119,6 +128,7 @@ label { display: block; font-size: 13px; margin: 6px 0 2px; }
 input, select { width: 100%; padding: 6px 8px; border: 1px solid var(--line); border-radius: 6px; background: var(--bg); color: var(--fg); font: inherit; font-size: 14px; }
 .row { display: flex; gap: 8px; flex-wrap: wrap; }
 .row > div { flex: 1 1 200px; min-width: 0; }
+.row > div.narrow { flex: 0 1 130px; }
 button { margin-top: 14px; padding: 7px 16px; border: 1px solid var(--accent); border-radius: 6px; background: var(--accent); color: var(--on-accent); font: inherit; font-size: 14px; cursor: pointer; }
 button:disabled { opacity: .6; cursor: wait; }
 [hidden] { display: none !important; }
@@ -142,8 +152,12 @@ pre { margin: 0; padding: 10px; max-height: 360px; overflow: auto; background: v
 <p class="kind">{{.RequestType}} · {{.Transform}}</p>
 <form class="probe" action="/probe" method="get" autocomplete="off">
 <input type="hidden" name="collector" value="{{.Name}}">
-<label for="{{.Name}}-target">Target</label>
-<input id="{{.Name}}-target" type="text" name="target" placeholder="{{.TargetHint}}"{{if .TargetRequired}} required{{end}}>
+<div class="row">
+<div><label for="{{.Name}}-target">Target</label>
+<input id="{{.Name}}-target" type="text" name="target" placeholder="{{.TargetHint}}"{{if .TargetRequired}} required{{end}}></div>
+<div class="narrow"><label for="{{.Name}}-timeout">Timeout, seconds</label>
+<input id="{{.Name}}-timeout" type="number" data-timeout min="1" max="600" step="any" value="{{$.ProbeTimeoutSeconds}}" required></div>
+</div>
 {{- if .Params}}
 <fieldset>
 <legend>Request parameters</legend>
@@ -224,10 +238,15 @@ for (const form of document.querySelectorAll("form.probe")) {
     for (const [key, value] of new FormData(form)) {
       if (value !== "") params.append(key, value);
     }
-    const headers = {};
+    // The timeout travels as Prometheus sends a scrape's, so the probe
+    // answers with its own error, less --probe.timeout-offset, before the
+    // page stops waiting a few seconds after it.
+    const timeout = Number(form.querySelector("[data-timeout]").value);
+    const headers = { "X-Prometheus-Scrape-Timeout-Seconds": String(timeout) };
+    // A credential left blank is none, not an empty one.
     if (scheme && scheme.value === "bearer" && field("token").value !== "") {
       headers.Authorization = "Bearer " + field("token").value;
-    } else if (scheme && scheme.value === "basic") {
+    } else if (scheme && scheme.value === "basic" && (field("username").value !== "" || field("password").value !== "")) {
       const pair = new TextEncoder().encode(field("username").value + ":" + field("password").value);
       headers.Authorization = "Basic " + btoa(String.fromCharCode(...pair));
     }
@@ -241,11 +260,11 @@ for (const form of document.querySelectorAll("form.probe")) {
     result.hidden = false;
     status.className = "status";
     status.textContent = "Probing…";
-    sent.textContent = "GET " + url + (headers.Authorization ? ", with an Authorization header" : "");
+    sent.textContent = "GET " + url + ", with a " + timeout + " s timeout" + (headers.Authorization ? " and an Authorization header" : "");
     body.textContent = "";
     const started = performance.now();
     try {
-      const response = await fetch(url, { headers, cache: "no-store", credentials: "same-origin" });
+      const response = await fetch(url, { headers, cache: "no-store", credentials: "same-origin", signal: AbortSignal.timeout((timeout + 5) * 1000) });
       const text = await response.text();
       const took = Math.round(performance.now() - started);
       status.className = "status " + (response.ok ? "ok" : "failed");
@@ -253,7 +272,9 @@ for (const form of document.querySelectorAll("form.probe")) {
       body.textContent = text === "" ? "(an empty answer: nothing was extracted)" : text;
     } catch (error) {
       status.className = "status failed";
-      status.textContent = "The probe could not be sent: " + error.message;
+      status.textContent = error.name === "TimeoutError"
+        ? "No answer within " + (timeout + 5) + " s; the page stopped waiting"
+        : "The probe could not be sent: " + error.message;
     } finally {
       button.disabled = false;
     }

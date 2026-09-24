@@ -1,0 +1,51 @@
+{{- /* The monitor that scrapes the static targets endpoint: the latest result of
+       every static target, which the exporter scrapes on the document's own
+       intervals. A ServiceMonitor for type service, a PodMonitor for type pod. */ -}}
+{{- $monitor := .Values.staticTargets.monitor }}
+{{- if and .Values.staticTargets.enabled $monitor.enabled }}
+{{- if not (has $monitor.type (list "service" "pod")) }}
+{{- fail (printf "staticTargets.monitor.type %q must be service or pod" (toString $monitor.type)) }}
+{{- end }}
+---
+apiVersion: monitoring.coreos.com/v1
+kind: {{ if eq $monitor.type "pod" }}PodMonitor{{ else }}ServiceMonitor{{ end }}
+metadata:
+  name: {{ include "prometheus-universal-exporter.fullname" . }}-static-targets
+  {{ with .Values.namespaceOverride }}namespace: {{ . }}{{ end }}
+  labels:
+    {{- include "prometheus-universal-exporter.metadataLabels" (list . $monitor.labels) | nindent 4 }}
+  annotations:
+    {{- include "prometheus-universal-exporter.metadataAnnotations" (list . $monitor.annotations) | nindent 4 }}
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: {{ include "prometheus-universal-exporter.name" . }}
+      app.kubernetes.io/instance: {{ .Release.Name }}
+  {{ if eq $monitor.type "pod" }}podMetricsEndpoints{{ else }}endpoints{{ end }}:
+    - port: http
+      path: {{ include "prometheus-universal-exporter.staticTargetsPath" . | quote }}
+      interval: {{ $monitor.interval }}
+      scrapeTimeout: {{ $monitor.scrapeTimeout }}
+      {{- /* The series carry their own static_target and target labels, which
+             Prometheus keeps as they are rather than overwriting them with its
+             own target's. */}}
+      honorLabels: true
+      {{- if and .Values.webAuth .Values.webAuth.enabled }}
+      {{- /* The exporter's own Basic Auth protects this endpoint too. */}}
+      basicAuth:
+        username:
+          name: {{ .Values.webAuth.secretName | quote }}
+          key: {{ .Values.webAuth.usernameKey | quote }}
+        password:
+          name: {{ .Values.webAuth.secretName | quote }}
+          key: {{ .Values.webAuth.passwordKey | quote }}
+      {{- end }}
+      {{- with $monitor.relabelings }}
+      relabelings:
+        {{ toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with $monitor.metricRelabelings }}
+      metricRelabelings:
+        {{ toYaml . | nindent 8 }}
+      {{- end }}
+{{- end }}

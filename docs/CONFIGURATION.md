@@ -174,6 +174,14 @@ Label expressions use the same transform-specific language as the metric
 expression. For CSV, each row produces a metric and `expression: server`
 selects that row's `server` column.
 
+A jq or yq label is the text of the value its expression gives. A number reads
+as it is written, without an exponent from a millionth up to 1e21, so an ID of
+`1234567` is the label `1234567` and a ratio of `0.5` is `0.5`; booleans are
+`true` and `false`. A label is one value, so an object or an array fails the
+metric, handled by its [`error_mode`](#when-a-metric-cannot-be-extracted):
+select one of its fields, or make one value of an array with
+`.tags | join(",")`.
+
 A label expression that gives a series no value — a selector or path that
 matches nothing, a missing attribute, column or capture group, a null — leaves
 the label off that series, as does an empty value, which Prometheus treats the
@@ -285,10 +293,10 @@ The prefix applies to every metric the collector produces, whatever the
 transform: declared metrics, the names a Python script passes to `metric(...)`,
 and the source names a `prometheus` transform passes through or renames. A
 histogram or summary keeps its family, so `_bucket`, `_sum` and `_count` follow
-the prefixed name. /probe, OTLP export and scheduled targets all see the same
+the prefixed name. /probe, OTLP export and static targets all see the same
 prefixed names, and the response cache is keyed by the collector's definition,
 so a changed prefix never serves metrics cached under the old names. The
-exporter's own `http_exporter_*` metrics, including a scheduled target's health
+exporter's own `http_exporter_*` metrics, including a static target's health
 metrics, describe the exporter rather than the target and are never prefixed.
 
 A prefix must match `^[a-zA-Z][a-zA-Z0-9]*(_[a-zA-Z0-9]+)*$`: a letter first,
@@ -641,14 +649,14 @@ error_handling:
 | `log` | carries on without that stage's output | yes, at warning level |
 | `ignore` | carries on without that stage's output | only at debug level |
 
-A [scheduled target](OTLP.md#scheduled-targets) follows the same policies.
+A [static target](STATIC-TARGETS.md) follows the same policies.
 Under `fail` its scrape fails: `http_exporter_target_up` is `0` and, with
 [`cache.stale_if_error`](#serving-the-last-good-result-when-the-target-fails),
 the last good result is exported in its place. Under `log` and `ignore` the
 scrape carries on as a probe does: the target is up, with nothing of the
 collector's to export, and the scrape counts as a success. A metric rule with
 `error_mode: fail` fails the scrape whatever `on_transform_error` says, on a
-probe and a scheduled target alike.
+probe and a static target alike.
 
 ### Checked when the configuration loads
 
@@ -680,7 +688,7 @@ each error names the line and what was expected there, as in
 line 3: unknown key "requst" in a collector; line 7: "fast" is not a duration; write one such as 500ms, 30s or 1m30s
 ```
 
-Every unknown key is refused, a scheduled target's `request` block
+Every unknown key is refused, a static target's `request` block
 included, since a misspelt key would otherwise be ignored without a word.
 
 ### Editor support
@@ -697,11 +705,11 @@ and the editor completes keys, shows what each one does, and flags unknown keys
 and values that are not allowed as you type. The example configurations start
 with it.
 
-The [scheduled target file](OTLP.md#scheduled-targets) has a schema of its own,
-[`configs/targets.schema.json`](../configs/targets.schema.json), which
-`configs/targets.example.yaml` points editors at the same way. All three
-schemas — this one, the [collector file](#collector-files) one and the target
-file one — are in `configs/` with the examples, and are regenerated with
+The [static target file](STATIC-TARGETS.md) has a schema of its own,
+[`configs/static-targets.schema.json`](../configs/static-targets.schema.json), which
+`configs/static-targets.example.yaml` points editors at the same way. All three
+schemas — this one, the [collector file](#collector-files) one and the static
+target file one — are in `configs/` with the examples, and are regenerated with
 `make schemas` (see [Development](DEVELOPMENT.md#the-configuration-schema)).
 
 `prometheus-universal-exporter --config.schema` prints the schema of the binary
@@ -710,9 +718,9 @@ was built with. The schema describes the canonical spelling and is not the last
 word: startup validation also checks what a schema cannot, such as that an
 expression compiles.
 
-On a scheduled target there is no HTTP response to carry an error. `fail` there
-means the scrape exports nothing except `http_exporter_target_up` at 0, and
-`log` and `ignore` export what could be extracted.
+On a static target there is no HTTP response to carry an error. `fail` there
+means the scrape serves nothing except `http_exporter_target_up` at 0, and
+`log` and `ignore` serve what could be extracted.
 
 Every transform may define `transform.pre_script`. It runs once per scrape
 after decoding and before metric extraction. The script receives the decoded
@@ -803,7 +811,7 @@ collectors:
   is not a file: write `collectors.d/*.yaml`. A file matched by two entries is
   read once, and the configuration file itself is never read as a collector
   file, so `*.yaml` next to it is safe — although another YAML file in the same
-  directory, such as a scheduled target file, would be read and refused, so a
+  directory, such as a static target file, would be read and refused, so a
   subdirectory or a naming pattern such as `collectors-*.yaml` is the better
   habit.
 - **Only collectors.** Any other key in a collector file — `web`, `otlp`, a
@@ -893,7 +901,7 @@ can supply any part of the document, not only a scalar. For the same reason a
 value containing a line break is refused: it would end the line and turn the
 rest into YAML rather than setting a long string.
 
-The scheduled target document is read the same way — it carries the addresses
+The static target document is read the same way — it carries the addresses
 and credentials of the things being scraped, which is exactly the material worth
 keeping out of a committed file — and `--config.watch` re-expands on every
 reload, so a reload cannot quietly replace a working configuration with literal
@@ -998,8 +1006,8 @@ Samples are served without timestamps, so Prometheus stores the old values at
 the time of each scrape: a counter stays flat and a gauge repeats its last
 value. Keep `stale_if_error` to the outages you would rather bridge than see —
 minutes, not hours. A changed collector definition never serves a result stored
-under the old one. A [scheduled target](OTLP.md#scheduled-targets) whose scrape
-fails exports the last good result the same way, marked stale, while its
+under the old one. A [static target](STATIC-TARGETS.md) whose scrape
+fails serves the last good result the same way, marked stale, while its
 `http_exporter_target_up` stays `0`.
 
 Cache activity is visible per collector in the self-metrics as
@@ -1070,7 +1078,7 @@ as a timeout.
 Probes that make no trip take no slot: one answered from the
 [response cache](#response-caching), and one that
 [shares a request](#identical-probes-share-one-request) already in flight. A
-[scheduled target](OTLP.md#scheduled-targets) shares its collector's limit, but
+[static target](STATIC-TARGETS.md) shares its collector's limit, but
 waits for a free slot within its scrape budget instead of failing at once,
 since nothing is waiting on its answer; if none frees up in time, the scrape
 fails in the `concurrency` stage. The default, 32, is well above what one
@@ -1099,8 +1107,14 @@ collector legacy_text http failed: HTTP request failed: ... context deadline exc
   request alone; whichever ends first stops the probe.
 - An offset of half the scrape timeout or more would leave too little, so a
   probe always keeps at least half.
-- Without the header — a probe from `curl`, or from anything other than
-  Prometheus — nothing changes.
+- Without the header and without a `timeout` parameter — a probe from `curl`,
+  a script, or anything other than Prometheus — the probe gets
+  `--probe.default-timeout`, 30s by default, so a target that accepts the
+  connection and never answers cannot hold it, and its collector's
+  `max_concurrent_probes` slot, for ever. Its error names that flag instead.
+  `0` leaves such a probe unbounded; a negative value is a command-line
+  error. A `timeout` parameter bounds the request itself, so a probe that
+  sets one gets no default.
 - A probe answered from the [response cache](#response-caching) needs no budget.
   Identical probes that [share one request](#identical-probes-share-one-request)
   share the budget of the probe that started it.
@@ -1108,15 +1122,15 @@ collector legacy_text http failed: HTTP request failed: ... context deadline exc
   and Prometheus. Raise it if Prometheus still times out first; `0` uses the
   whole scrape timeout. A negative value is a command-line error.
 
-Scheduled targets are unaffected: their scrapes are bounded by their own
-`interval` (see [OTLP](OTLP.md#scheduled-targets)).
+Static targets are unaffected: their scrapes are bounded by their own
+`interval` (see [Static targets](STATIC-TARGETS.md#scraping)).
 
 ## Watching the configuration
 
 The exporter reads its configuration once at startup, and again when asked —
 see [Reloading on demand](#reloading-on-demand). Pass `--config.watch` to
 have it re-read the configuration file and, when one is configured, the
-scheduled target file whenever either changes on disk:
+static target file whenever either changes on disk:
 
 ```sh
 prometheus-universal-exporter \
@@ -1139,8 +1153,9 @@ The watch follows the [collector files](#collector-files) too: a collector file
 edited, a new file matching a pattern, or a file removed triggers a reload.
 
 The watch does not relax any reload rule. An invalid configuration, one that
-would disable OTLP while scheduled targets are loaded, a collector name defined
-twice, and a pre-script that stops producing `data` are all still rejected, with the last valid configuration
+would disable OTLP while a loaded static target sets `export_via_otlp`, a
+collector name defined twice, and a pre-script that stops producing `data` are
+all still rejected, with the last valid configuration
 left active and the reason logged. `http_exporter_config_last_reload_successful`
 then reads `0` until a reload succeeds, so a change that did not take can be
 alerted on — see [Configuration reloads](SELF-METRICS.md#configuration-reloads).
@@ -1157,7 +1172,7 @@ kill -HUP "$(pidof prometheus-universal-exporter)"   # always available
 curl -X POST http://exporter:8080/-/reload            # with --web.enable-lifecycle
 ```
 
-Both reload the configuration, with its collector files, and the scheduled
+Both reload the configuration, with its collector files, and the static
 target file, whether or not they changed, under exactly the rules the watch
 follows. `POST` (or `PUT`) `/-/reload` answers:
 
@@ -1186,7 +1201,7 @@ are dropped.
 when the exporter is doing what it was configured to do, and `503` when it is
 not, with one `not ready:` line per reason:
 
-- The last reload of the configuration, or of the scheduled target file, was
+- The last reload of the configuration, or of the static target file, was
   rejected. The previous configuration is still in force and still answers
   probes, but it is not the one that was deployed. Ready again once a reload
   is accepted.
@@ -1274,7 +1289,7 @@ same validation startup runs, prints a JSON report on stdout, and exits:
 ```sh
 prometheus-universal-exporter --dry-run --config.file=config.yaml
 prometheus-universal-exporter --dry-run \
-  --config.file=config.otlp.yaml --otlp.targets-file=targets.yaml
+  --config.file=config.yaml --static-targets-file=static-targets.yaml
 ```
 
 It checks everything startup checks, including that every expression compiles
@@ -1285,7 +1300,7 @@ A deprecated spelling does not fail the check; it is listed under
 `details.collector_files`, and a collector name defined twice fails the check.
 
 It takes the same flags a real start does, and they matter: `--config.file` and
-`--otlp.targets-file` choose what is checked, `--config.export-env` decides
+`--static-targets-file` choose what is checked, `--config.export-env` decides
 whether `${NAME}` references are expanded — so a check run where a referenced
 variable is not set fails, exactly as startup would — `--python.path` is the
 interpreter the Python scripts are compiled with, and `--config.watch` with
@@ -1312,10 +1327,10 @@ The report lists one entry per startup step, in the order startup runs them:
       "errors": ["collector app_json pre_script must produce its result in a variable named 'data'; assign to data or mutate it in place. ..."]
     },
     {
-      "check": "targets",
-      "file": "targets.yaml",
+      "check": "static_targets",
+      "file": "static-targets.yaml",
       "status": "failed",
-      "errors": ["scheduled targets require OTLP export; set otlp.enabled: true or remove the target file"],
+      "errors": ["target \"legacy_eu\" sets export_via_otlp, which needs OTLP export; set otlp.enabled: true and otlp.endpoint, or leave the target to the static targets endpoint"],
       "details": {"targets": ["legacy_eu", "legacy_us"]}
     }
   ]
@@ -1327,7 +1342,7 @@ The report lists one entry per startup step, in the order startup runs them:
 | `config` | always | The configuration file and its collector files load and are valid, and no collector name is defined twice. |
 | `python_scripts` | always | Every pre-script and `python` transform compiles, and every pre-script produces `data`. Each faulty script is its own entry in `errors`. A configuration without Python needs no interpreter and passes with `"scripts": 0`. |
 | `config_watch` | with `--config.watch` | `--config.watch-interval` is positive. |
-| `targets` | with `--otlp.targets-file` | The target file is valid on its own, and against the configuration: every collector exists and OTLP export is enabled. |
+| `static_targets` | with `--static-targets-file` | The [static target file](STATIC-TARGETS.md) is valid on its own, and against the configuration: every collector exists, and a target with `export_via_otlp` has OTLP export enabled. |
 
 Each entry's `status` is `ok`, `failed` with `errors`, or `skipped` with a
 `reason` when it depends on a step that failed: the Python scripts cannot be read
@@ -1367,4 +1382,5 @@ which is why the Helm chart rejects it in `extraArgs`.
 - [REQUESTS.md](REQUESTS.md) — redirects, HTTP/2, retries, TLS and per-scrape overrides.
 - [AUTHENTICATION.md](AUTHENTICATION.md) — credentials for the target and for the exporter itself.
 - [SELF-METRICS.md](SELF-METRICS.md) — the exporter's own metrics.
-- [OTLP.md](OTLP.md) — OTLP export and scheduled targets.
+- [STATIC-TARGETS.md](STATIC-TARGETS.md) — targets the exporter scrapes itself and serves on the static targets endpoint.
+- [OTLP.md](OTLP.md) — OTLP export.

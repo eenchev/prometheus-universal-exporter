@@ -1,15 +1,17 @@
-# yaml-language-server: $schema=https://raw.githubusercontent.com/eenchev/prometheus-universal-exporter/main/configs/targets.schema.json
-# Scheduled targets scraped by the exporter itself and delivered over OTLP.
+# yaml-language-server: $schema=https://raw.githubusercontent.com/eenchev/prometheus-universal-exporter/main/configs/static-targets.schema.json
+# Static targets, scraped by the exporter itself on their own intervals.
 #
-# Pass this file with --otlp.targets-file. It is only accepted when OTLP export
-# is enabled in the exporter configuration; starting with targets while
-# otlp.enabled is false is a startup error. Each target is scraped on its own
-# interval, like a Prometheus scrape_interval, and the results are delivered on
-# the OTLP export interval (otlp.interval). Targets are never exposed on
-# /metrics or /probe. The selected collector's cache, retries, limits, and
-# error handling all still apply.
+# Pass this file with --static-targets-file. The latest result of every target
+# is served together at --web.static-targets-path (/static-targets by default)
+# for Prometheus to scrape, each series labelled static_target with the
+# target's name, alongside http_exporter_target_up and
+# http_exporter_target_scrape_duration_seconds. A target with
+# export_via_otlp: true is also delivered over OTLP on otlp.interval, which
+# needs otlp.enabled in the exporter configuration. Static targets are not
+# reachable through /probe. The selected collector's cache, retries, limits
+# and error handling all still apply.
 
-# How often a target that sets no interval is scraped; 1m when unset.
+# How often a target that sets no interval is scraped. Required.
 interval: 1m
 targets:
   - name: legacy_eu
@@ -50,14 +52,19 @@ targets:
       #   password: /var/run/prometheus-universal-exporter/target-auth/password
 
     # Added to every metric this target produces. A label the collector already
-    # extracted is never overwritten.
+    # extracted is never overwritten. static_target is set by the endpoint.
     labels:
       region: eu
       environment: production
 
-    # OTLP resource identity for this target. Both fall back to the exporter's
-    # otlp.service_name and otlp.resource_attributes; resource_attributes set
-    # here are merged over the exporter-wide ones.
+    # Also deliver this target's results over OTLP, on otlp.interval, besides
+    # serving them on the static targets endpoint. Off by default; needs
+    # otlp.enabled in the exporter configuration.
+    export_via_otlp: true
+    # OTLP resource identity for this target, only with export_via_otlp. Both
+    # fall back to the exporter's otlp.service_name and
+    # otlp.resource_attributes; resource_attributes set here are merged over
+    # the exporter-wide ones.
     otlp:
       service_name: legacy-app
       resource_attributes:
@@ -71,10 +78,7 @@ targets:
       path: /status
     labels:
       region: us
-    otlp:
-      service_name: legacy-app
-      resource_attributes:
-        deployment.environment: production
+    # Served on the static targets endpoint only.
 
   # A localfile collector reads a file under its request.root. The target names
   # a file or directory under that root, or is left out when the collector's

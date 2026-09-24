@@ -19,7 +19,7 @@ import (
 //	http_exporter_config_reloads_total{file, result}
 //
 // file is "config" for the configuration file, with its collector files, and
-// "targets" for the scheduled target file, which is only reported when one is
+// "static_targets" for the static target file, which is only reported when one is
 // configured. Loading at startup counts as a successful load; the counter
 // counts only reloads after it.
 
@@ -31,10 +31,10 @@ var ReloadMetricHelp = map[string]string{
 }
 
 // The files a reload status is kept for: the configuration file, with its
-// collector files, and the scheduled target file.
+// collector files, and the static target file.
 const (
-	reloadFileConfig  = "config"
-	ReloadFileTargets = "targets"
+	reloadFileConfig        = "config"
+	ReloadFileStaticTargets = "static_targets"
 )
 
 type reloadFileStatus struct {
@@ -85,7 +85,7 @@ func (m *Manager) ReloadMetrics() []model.Metric {
 	m.Reloads.mu.Lock()
 	defer m.Reloads.mu.Unlock()
 	var files []string
-	for _, file := range []string{reloadFileConfig, ReloadFileTargets} {
+	for _, file := range []string{reloadFileConfig, ReloadFileStaticTargets} {
 		if m.Reloads.files[file] != nil {
 			files = append(files, file)
 		}
@@ -114,7 +114,7 @@ func (r *reloadStatus) Rejected() []string {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	var out []string
-	for _, file := range []string{reloadFileConfig, ReloadFileTargets} {
+	for _, file := range []string{reloadFileConfig, ReloadFileStaticTargets} {
 		if st := r.files[file]; st != nil && !st.successful {
 			out = append(out, file)
 		}

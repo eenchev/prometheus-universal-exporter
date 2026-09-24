@@ -55,7 +55,7 @@ server:
   # How often to re-check the files when watchConfig is true. Must be positive.
   watchConfigInterval: 60s
   # Expand ${NAME} environment variable references in the configuration and in
-  # the scheduled target document, so a value can come from a Secret rather than
+  # the static target document, so a value can come from a Secret rather than
   # from the committed file. Off by default, because a configuration is full of
   # dollar signs that are not references — a regex, a jq expression, a Python
   # pre-script — and only ${NAME} is substituted. A reference whose variable is
@@ -72,6 +72,12 @@ server:
   # out, so the chart also works with exporter images that predate it. Raise it
   # if Prometheus still times out first.
   probeTimeoutOffset: ""
+  # How long a probe may take when it names no deadline: no scrape timeout
+  # header and no timeout parameter, as from curl or a script. Prometheus
+  # always sends one, so this does not change its scrapes. A Go duration of
+  # zero or more, 0 leaving such a probe unbounded; empty keeps the exporter's
+  # default, 30s, and leaves the flag out.
+  probeDefaultTimeout: ""
   # Enable POST /-/reload, which reloads the configuration at once and answers
   # whether it was accepted, for tools that update the configuration without
   # a rollout. Off by default; with a chart-managed ConfigMap a change rolls
@@ -118,7 +124,7 @@ envFrom: []
 
 # Extra command-line flags for the exporter, on top of the ones the chart
 # renders from the values above. Every flag the exporter has today is a value
-# under server (or selfMetrics.path, otlpTargets), so this is for a flag an
+# under server (or selfMetrics.path, staticTargets), so this is for a flag an
 # exporter image has that this chart version does not know yet. Each entry is a
 # whole argument:
 #
@@ -158,18 +164,24 @@ extraArgs: []
 extraVolumes: []
 extraVolumeMounts: []
 
-# Scheduled targets scraped by the exporter itself and delivered over OTLP.
-# The exporter refuses to start with these while OTLP export is disabled, so
-# when the chart manages the configuration `helm template` fails early instead.
-otlpTargets:
+# Static targets, scraped by the exporter itself on their own intervals and
+# served together at path for Prometheus to scrape, through the monitor below.
+# A target with export_via_otlp: true is also delivered over OTLP, which needs
+# otlp.enabled in the configuration; when the chart manages the configuration,
+# rendering fails early rather than the pod.
+staticTargets:
   enabled: false
   # File name inside the mounted configuration directory.
-  fileName: targets.yaml
-  # The scheduled target document. Rendered into the exporter ConfigMap, so a
+  fileName: static-targets.yaml
+  # Rendered as --web.static-targets-path: where the targets' latest results
+  # are served. A path of plain segments that is not selfMetrics.path.
+  path: /static-targets
+  # The static target document. Rendered into the exporter ConfigMap, so a
   # change to it rolls the Deployment through the existing checksum annotation.
   data: ""
   # Example:
   # data: |
+  #   interval: 1m
   #   targets:
   #     - name: legacy_eu
   #       collector: legacy_text
@@ -177,6 +189,20 @@ otlpTargets:
   #       request:
   #         path: /status
   #         timeout: 5s
+  # The ServiceMonitor (type: service) or PodMonitor (type: pod) that scrapes
+  # the static targets endpoint, rendered when staticTargets.enabled is. It
+  # needs the Prometheus Operator's CRDs; set enabled: false without them.
+  # interval is how often Prometheus reads the targets' latest results, not
+  # how often the exporter scrapes them, which the document's intervals say.
+  monitor:
+    enabled: true
+    type: service
+    interval: 30s
+    scrapeTimeout: 10s
+    labels: {}
+    annotations: {}
+    relabelings: []
+    metricRelabelings: []
   #       labels:
   #         region: eu
   #       otlp:

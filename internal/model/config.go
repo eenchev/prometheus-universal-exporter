@@ -217,8 +217,8 @@ type ErrorHandling struct {
 	AllowMissingKeys bool   `yaml:"allow_missing_keys"`
 }
 
-// OTLPConfig is the otlp block: where and how often the scheduled targets'
-// metrics are pushed.
+// OTLPConfig is the otlp block: where and how often probe results, the
+// self-metrics and the static targets with export_via_otlp are pushed.
 type OTLPConfig struct {
 	Enabled            bool              `yaml:"enabled"`
 	Endpoint           string            `yaml:"endpoint"`

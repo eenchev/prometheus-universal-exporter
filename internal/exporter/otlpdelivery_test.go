@@ -107,7 +107,7 @@ func (e *otlpEndpoint) received(name string) bool {
 func otlpServer(t *testing.T, endpoint string) *Server {
 	t.Helper()
 	cfg := &model.Config{Collectors: []model.Collector{testutil.Collector("text", "text")}, OTLP: otlpConfig(endpoint + "/v1/metrics")}
-	server := newScheduledServer(t, cfg, nil)
+	server := newStaticServer(t, cfg, nil)
 	server.logger = testutil.QuietLogger(t)
 	return server
 }

@@ -32,6 +32,11 @@ picks which server-side configuration reads it:
 One exporter therefore serves many services and many response shapes, and a
 collector is reusable across every target that answers the same way.
 
+For a fixed list of targets there is a second way in: list them as
+[static targets](docs/STATIC-TARGETS.md), which the exporter scrapes itself on
+their own intervals and serves together on one endpoint, `/static-targets`, for
+Prometheus to scrape like any other exporter, and, one by one, over OTLP.
+
 ## Quick start
 
 Describe a collector:
@@ -123,12 +128,12 @@ pattern needs. See the
 | `/` | A landing page: the build and links to the endpoints. |
 | `/collectors` | Each collector with a form that probes a target through it, taking its request parameters, forwarded headers and, when it forwards `Authorization`, a target credential. See [Probing from the browser](docs/AUTHENTICATION.md#probing-from-the-browser). |
 | `/probe` | Scrape a target through a collector. Takes `target` and `collector`, with `GET` or `HEAD`; any other method is answered `405`. |
-| `/metrics` | The exporter's own metrics. |
-| `/self-metrics` | The same self-metrics on a dedicated path, so a monitor can scrape them separately. |
+| `/self-metrics` | The exporter's own metrics, at `--web.self-metrics-path`. See [Self-metrics](docs/SELF-METRICS.md). |
+| `/static-targets` | The latest results of the [static targets](docs/STATIC-TARGETS.md), at `--web.static-targets-path`. |
 | `/-/reload` | `POST` reloads the configuration, with `--web.enable-lifecycle`. |
 | `/health`, `/ready` | Kubernetes probes. `/ready` is `503` while a reload is rejected, OTLP exports keep failing or the exporter is shutting down; see [Readiness](docs/CONFIGURATION.md#readiness). Never authenticated. |
 
-`/probe`, `/metrics` and `/self-metrics` answer gzip-compressed when the client accepts it, as Prometheus does on every scrape.
+`/probe`, the self-metrics path and the static targets path answer gzip-compressed when the client accepts it, as Prometheus does on every scrape.
 
 ## Command-line flags
 
@@ -136,17 +141,19 @@ pattern needs. See the
 | --- | --- | --- |
 | `--config.file` | `/etc/prometheus-universal-exporter/config.yaml` | The configuration document. |
 | `--web.listen-address` | `:8080` | Address the HTTP endpoints listen on. |
-| `--web.self-metrics-path` | `/self-metrics` | Path for the dedicated self-metrics endpoint. |
+| `--web.self-metrics-path` | `/self-metrics` | Path of the exporter's own metrics, served there and nowhere else; `/metrics` for the conventional path. A path another endpoint uses is refused. |
+| `--web.static-targets-path` | `/static-targets` | Path the static targets' latest results are served at, for Prometheus to scrape. A path another endpoint uses is refused. |
 | `--python.path` | `python3` | Interpreter used by the `python` transform. |
 | `--log.level` | `info` | `debug`, `info`, `warn` or `error`. |
 | `--config.watch` | off | Re-read the configuration when it changes on disk. |
 | `--config.watch-interval` | `60s` | How often to check, with `--config.watch`. |
 | `--config.export-env` | off | Expand `${NAME}` references in the configuration. |
-| `--otlp.targets-file` | none | Scheduled targets the exporter scrapes itself. |
+| `--static-targets-file` | none | Static targets the exporter scrapes itself, on their own intervals. See [Static targets](docs/STATIC-TARGETS.md). |
 | `--config.schema` | off | Print the JSON Schema of the configuration file, for editors, and exit. See [Editor support](docs/CONFIGURATION.md#editor-support). |
 | `--config.collector-file-schema` | off | Print the JSON Schema of a collector file, for editors, and exit. See [Collector files](docs/CONFIGURATION.md#collector-files). |
-| `--otlp.targets-file-schema` | off | Print the JSON Schema of the scheduled target file, for editors, and exit. See [Scheduled targets](docs/OTLP.md#scheduled-targets). |
+| `--static-targets-file-schema` | off | Print the JSON Schema of the static target file, for editors, and exit. See [Static targets](docs/STATIC-TARGETS.md). |
 | `--probe.timeout-offset` | `500ms` | How much of Prometheus's scrape timeout a probe leaves unused, so it answers with its own error first. See [Probe deadlines](docs/CONFIGURATION.md#probe-deadlines). |
+| `--probe.default-timeout` | `30s` | How long a probe may take when it names no deadline: no `X-Prometheus-Scrape-Timeout-Seconds` header and no `timeout` parameter, as from curl or a script. `0` leaves such a probe unbounded. See [Probe deadlines](docs/CONFIGURATION.md#probe-deadlines). |
 | `--web.shutdown-delay` | `0s` | How long a shutdown keeps serving, with `/ready` answering `503`, before it begins, so a load balancer stops sending probes first. The Helm chart sets `5s`. See [Shutting down](docs/CONFIGURATION.md#shutting-down). |
 | `--web.shutdown-timeout` | `5s` | How long a shutdown waits for the probes in progress. Keep it at least as long as Prometheus's scrape timeout. See [Shutting down](docs/CONFIGURATION.md#shutting-down). |
 | `--web.enable-lifecycle` | off | Enable `POST /-/reload`, which reloads the configuration and reports whether it was accepted. `SIGHUP` reloads either way. See [Reloading on demand](docs/CONFIGURATION.md#reloading-on-demand). |
@@ -163,7 +170,8 @@ pattern needs. See the
 - [Helm chart](charts/prometheus-universal-exporter/README.md) — every chart value.
 - [Python](docs/PYTHON.md) — the transform and pre-script API.
 - [Self-metrics](docs/SELF-METRICS.md) — what the exporter reports about itself.
-- [OTLP](docs/OTLP.md) — OTLP export, its retries and compression, and scheduled targets.
+- [Static targets](docs/STATIC-TARGETS.md) — targets the exporter scrapes itself on their own intervals and serves on one endpoint.
+- [OTLP](docs/OTLP.md) — OTLP export, its retries and compression.
 - [Logging](docs/LOGGING.md) — the log format.
 - [Exporter specification](docs/SPECIFICATION-EXPORTER.md) — the implementation specification for the exporter.
 - [Chart specification](docs/SPECIFICATION-CHART.md) — the implementation specification for the Helm chart.

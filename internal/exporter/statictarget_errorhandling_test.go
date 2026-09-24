@@ -58,10 +58,10 @@ func errorStageTarget(t *testing.T, tc errorStageCase) *httptest.Server {
 	return target
 }
 
-// A scheduled target follows the collector's error_handling as a probe does:
+// A static target follows the collector's error_handling as a probe does:
 // under log or ignore the failed stage is passed over, the target is up and
 // nothing of the collector's is exported; under fail the scrape fails.
-func TestScheduledTargetsFollowErrorHandling(t *testing.T) {
+func TestStaticTargetsFollowErrorHandling(t *testing.T) {
 	for _, tc := range errorStageCases {
 		for _, policy := range []string{model.ErrorPolicyFail, model.ErrorPolicyLog, model.ErrorPolicyIgnore} {
 			t.Run(tc.name+"/"+policy, func(t *testing.T) {
@@ -70,10 +70,10 @@ func TestScheduledTargetsFollowErrorHandling(t *testing.T) {
 				collector := testutil.Collector("demo", "text")
 				tc.setup(&collector, policy)
 				cfg := &model.Config{Collectors: []model.Collector{collector}, OTLP: otlpConfig("http://collector.invalid/v1/metrics")}
-				file := &model.TargetFile{Targets: []model.ScheduledTarget{{Name: "flaky", Collector: "demo", Target: target.URL}}}
-				server := newScheduledServer(t, cfg, file)
+				file := &model.StaticTargetFile{Interval: model.Duration(time.Minute), Targets: []model.StaticTarget{{ExportViaOTLP: true, Name: "flaky", Collector: "demo", Target: target.URL}}}
+				server := newStaticServer(t, cfg, file)
 
-				server.scrapeScheduledTargets(context.Background(), 10*time.Second)
+				server.scrapeStaticTargets(context.Background(), 10*time.Second)
 				resources := server.drainOTLP()
 				if len(resources) != 1 {
 					t.Fatalf("resources=%d", len(resources))
@@ -91,8 +91,8 @@ func TestScheduledTargetsFollowErrorHandling(t *testing.T) {
 				}
 
 				output := logs.String()
-				carriedOn := strings.Count(output, "scheduled target stage failed; continuing")
-				failed := strings.Count(output, "scheduled target scrape failed")
+				carriedOn := strings.Count(output, "static target stage failed; continuing")
+				failed := strings.Count(output, "static target scrape failed")
 				switch policy {
 				case model.ErrorPolicyFail:
 					if failed != 1 || carriedOn != 0 {
@@ -121,9 +121,9 @@ func TestScheduledTargetsFollowErrorHandling(t *testing.T) {
 	}
 }
 
-// A probe and a scheduled scrape of the same failing target agree on whether
+// A probe and a static target scrape of the same failing target agree on whether
 // it is up, whatever the policy.
-func TestScheduledTargetsAndProbesAgreeOnErrorHandling(t *testing.T) {
+func TestStaticTargetsAndProbesAgreeOnErrorHandling(t *testing.T) {
 	for _, tc := range errorStageCases {
 		for _, policy := range []string{model.ErrorPolicyFail, model.ErrorPolicyLog, model.ErrorPolicyIgnore} {
 			t.Run(tc.name+"/"+policy, func(t *testing.T) {
@@ -132,24 +132,24 @@ func TestScheduledTargetsAndProbesAgreeOnErrorHandling(t *testing.T) {
 				collector := testutil.Collector("demo", "text")
 				tc.setup(&collector, policy)
 				cfg := &model.Config{Collectors: []model.Collector{collector}, OTLP: otlpConfig("http://collector.invalid/v1/metrics")}
-				file := &model.TargetFile{Targets: []model.ScheduledTarget{{Name: "flaky", Collector: "demo", Target: target.URL}}}
-				server := newScheduledServer(t, cfg, file)
+				file := &model.StaticTargetFile{Interval: model.Duration(time.Minute), Targets: []model.StaticTarget{{ExportViaOTLP: true, Name: "flaky", Collector: "demo", Target: target.URL}}}
+				server := newStaticServer(t, cfg, file)
 
 				probe := probeOnce(t, server, "/probe?collector=demo&target="+target.URL, nil)
 				probeUp := probe.Code == http.StatusOK
-				server.scrapeScheduledTargets(context.Background(), 10*time.Second)
+				server.scrapeStaticTargets(context.Background(), 10*time.Second)
 				up := metricByName(server.drainOTLP()[0].Set, "http_exporter_target_up")
-				if scheduledUp := up != nil && up.Value == 1; scheduledUp != probeUp {
-					t.Fatalf("probe answered %d but the scheduled target is up=%v", probe.Code, scheduledUp)
+				if staticUp := up != nil && up.Value == 1; staticUp != probeUp {
+					t.Fatalf("probe answered %d but the static target is up=%v", probe.Code, staticUp)
 				}
 			})
 		}
 	}
 }
 
-// A metric rule with error_mode fail fails the scheduled scrape even when the
+// A metric rule with error_mode fail fails the static target scrape even when the
 // collector would carry on past transform errors, as it fails a probe.
-func TestScheduledMetricFailureFailsDespiteTransformPolicy(t *testing.T) {
+func TestStaticMetricFailureFailsDespiteTransformPolicy(t *testing.T) {
 	logs := testutil.CaptureLogs(t)
 	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "text/plain")
@@ -160,15 +160,15 @@ func TestScheduledMetricFailureFailsDespiteTransformPolicy(t *testing.T) {
 	collector.ErrorHandling.OnTransformError = model.ErrorPolicyLog
 	collector.Metrics[0].ErrorMode = "fail"
 	cfg := &model.Config{Collectors: []model.Collector{collector}, OTLP: otlpConfig("http://collector.invalid/v1/metrics")}
-	file := &model.TargetFile{Targets: []model.ScheduledTarget{{Name: "strict", Collector: "demo", Target: target.URL}}}
-	server := newScheduledServer(t, cfg, file)
+	file := &model.StaticTargetFile{Interval: model.Duration(time.Minute), Targets: []model.StaticTarget{{ExportViaOTLP: true, Name: "strict", Collector: "demo", Target: target.URL}}}
+	server := newStaticServer(t, cfg, file)
 
-	server.scrapeScheduledTargets(context.Background(), 10*time.Second)
+	server.scrapeStaticTargets(context.Background(), 10*time.Second)
 	up := metricByName(server.drainOTLP()[0].Set, "http_exporter_target_up")
 	if up == nil || up.Value != 0 {
 		t.Fatalf("a metric rule with error_mode fail should fail the scrape: %+v", up)
 	}
-	if !strings.Contains(logs.String(), `"msg":"scheduled target scrape failed"`) || !strings.Contains(logs.String(), `"stage":"metric","metric":"demo_value"`) {
+	if !strings.Contains(logs.String(), `"msg":"static target scrape failed"`) || !strings.Contains(logs.String(), `"stage":"metric","metric":"demo_value"`) {
 		t.Fatalf("the failure should name the metric, as a probe's does:\n%s", logs.String())
 	}
 	if probe := probeOnce(t, server, "/probe?collector=demo&target="+target.URL, nil); probe.Code == http.StatusOK {
@@ -178,21 +178,21 @@ func TestScheduledMetricFailureFailsDespiteTransformPolicy(t *testing.T) {
 
 // A target that carries on past a failed stage is not "recovered" in the
 // logs: only a scrape that went through whole ends a run of failures.
-func TestScheduledCarryOnDoesNotLogRecovery(t *testing.T) {
+func TestStaticCarryOnDoesNotLogRecovery(t *testing.T) {
 	logs := testutil.CaptureLogs(t)
 	tc := errorStageCases[0]
 	target := errorStageTarget(t, tc)
 	collector := testutil.Collector("demo", "text")
 	tc.setup(&collector, model.ErrorPolicyLog)
 	cfg := &model.Config{Collectors: []model.Collector{collector}, OTLP: otlpConfig("http://collector.invalid/v1/metrics")}
-	file := &model.TargetFile{Targets: []model.ScheduledTarget{{Name: "flaky", Collector: "demo", Target: target.URL}}}
-	server := newScheduledServer(t, cfg, file)
+	file := &model.StaticTargetFile{Interval: model.Duration(time.Minute), Targets: []model.StaticTarget{{ExportViaOTLP: true, Name: "flaky", Collector: "demo", Target: target.URL}}}
+	server := newStaticServer(t, cfg, file)
 
 	for range 3 {
-		server.scrapeScheduledTargets(context.Background(), 10*time.Second)
+		server.scrapeStaticTargets(context.Background(), 10*time.Second)
 		_ = server.drainOTLP()
 	}
-	if strings.Contains(logs.String(), "scheduled target recovered") {
+	if strings.Contains(logs.String(), "static target recovered") {
 		t.Fatalf("carrying on past a failed stage is not a recovery:\n%s", logs.String())
 	}
 }

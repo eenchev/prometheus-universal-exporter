@@ -26,7 +26,7 @@ import (
 //     reread its files unless the operator asked for it. It sits behind
 //     web.basic_auth like the other endpoints.
 //
-// Both reload the configuration, with its collector files, and the scheduled
+// Both reload the configuration, with its collector files, and the static
 // target file whether or not they changed, through the same path the watch
 // uses.
 

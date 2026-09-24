@@ -52,7 +52,7 @@ func TestHTTPSProbesReuseTheirConnection(t *testing.T) {
 func TestOTLPExportsReuseTheirConnection(t *testing.T) {
 	endpoint, conns := countingServer(t, false)
 	cfg := &model.Config{Collectors: []model.Collector{testutil.Collector("text", "text")}, OTLP: otlpConfig(endpoint.URL + "/v1/metrics")}
-	server := newScheduledServer(t, cfg, nil)
+	server := newStaticServer(t, cfg, nil)
 	for i := 0; i < 3; i++ {
 		server.exportOTLP(context.Background(), 5*time.Second)
 	}

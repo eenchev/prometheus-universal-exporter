@@ -27,13 +27,13 @@ the ones above them in this list:
 
 | Package | What it holds |
 | --- | --- |
-| `internal/model` | The shared data types: the configuration as written, the scheduled target file, and `MetricSet`, what a probe produces. |
+| `internal/model` | The shared data types: the configuration as written, the static target file, and `MetricSet`, what a probe produces. |
 | `internal/expr` | jq, regex, CSS and XPath compilation, with bounded caches. |
 | `internal/fetch` | Request types — `http` and `localfile`, each in its own build-tagged `requesttype_<name>.go` — probe parameters, path parameters, request templates and the HTTP transports. |
 | `internal/decode` | Decoders for every response format, the Prometheus text parser, and charset conversion. |
 | `internal/transform` | The transforms and metric rules, the Python worker pool, and the checks run on rules and scripts at load. |
 | `internal/config` | Loading, validating and reloading the configuration, collector and target files, and their JSON Schemas. |
-| `internal/exporter` | The HTTP server and the one pipeline probes and scheduled targets share (`pipeline.go`): cache, shared probes, limits, self-metrics, readiness, scheduled targets and OTLP export. |
+| `internal/exporter` | The HTTP server and the one pipeline probes and static targets share (`pipeline.go`): cache, shared probes, limits, self-metrics, readiness, static targets and OTLP export. |
 | `internal/testutil` | Helpers shared by the tests of several packages; imported only by tests. |
 
 A package's tests live beside it, unless they need more than it can import: a
@@ -58,8 +58,8 @@ therefore must not use `t.Parallel`, which the swap assumes.
 
 `configs/config.schema.json`, `configs/collector-file.schema.json` for
 [collector files](CONFIGURATION.md#collector-files) and
-`configs/targets.schema.json` for the
-[scheduled target file](OTLP.md#scheduled-targets) are generated from the
+`configs/static-targets.schema.json` for the
+[static target file](STATIC-TARGETS.md) are generated from the
 configuration structs. After adding or changing a key, regenerate all three, or
 the test suite fails:
 

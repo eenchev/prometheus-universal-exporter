@@ -17,7 +17,7 @@ The chart creates the exporter Deployment, Service, ServiceAccount, and ConfigMa
 * Per-scrape overrides through `/probe` parameters, which monitors render as `params`
 * `ServiceMonitor` and `PodMonitor` resources, including a separate monitor for the exporter's own metrics
 * Exporter Basic Auth, Secret-backed monitor authentication, and Secret-backed target credentials
-* Scheduled targets the exporter scrapes itself and delivers over OTLP
+* Static targets the exporter scrapes itself and delivers over OTLP
 * Response caching per collector
 * Configuration watching and in-place reload, and `${NAME}` expansion from the environment
 * Self-metrics, optionally including per-request series and the standard `go_` and `process_` series
@@ -226,7 +226,7 @@ Bearer authentication is also supported.
 
 ### Exporter authentication
 
-To protect the exporter's `/probe`, `/metrics`, and self-metrics endpoints:
+To protect the exporter's `/probe` and self-metrics endpoints:
 
 ```yaml
 config:
@@ -281,17 +281,20 @@ The exporter's own flags are chart values rather than something to assemble by h
 | `server.pythonPath` | `--python.path` | `/usr/local/bin/python3` |
 | `server.logLevel` | `--log.level` | `info` |
 | `server.probeTimeoutOffset` | `--probe.timeout-offset` | unset: the exporter's `500ms` |
+| `server.probeDefaultTimeout` | `--probe.default-timeout` | unset: the exporter's `30s` |
 | `server.shutdownTimeout` | `--web.shutdown-timeout` | unset: the exporter's `5s` |
 | `server.shutdownDelay` | `--web.shutdown-delay` | `5s` |
 | `server.watchConfig` / `server.watchConfigInterval` | `--config.watch` / `--config.watch-interval` | off / `60s` |
 | `server.expandEnv` | `--config.export-env` | off |
 | `server.enableLifecycle` | `--web.enable-lifecycle` | off |
-| `otlpTargets.enabled` | `--otlp.targets-file` | off |
+| `staticTargets.enabled` | `--static-targets-file` | off |
 | `config` | `--config.file` | the chart's ConfigMap |
 
 `server.listenAddress` sets the container port too, so the listener and the probes cannot drift apart. `server.pythonPath` is the interpreter used by the `python` transform; its default is where the exporter image's `python:3.12-slim` base installs Python, and it is worth overriding only for a custom image. `server.logLevel` is one of `debug`, `info`, `warn` and `error`, and anything else fails rendering.
 
 `server.probeTimeoutOffset` is how much of Prometheus's scrape timeout — a monitor's `scrapeTimeout` — a probe leaves unused, so a slow target or a hung file read is answered with the exporter's own error before Prometheus gives up (see [Probe deadlines](../../docs/CONFIGURATION.md#probe-deadlines)). It takes a Go duration of zero or more. Left empty, the flag is not rendered at all, so the exporter's default applies and an image older than the flag still starts; set it only with an image that has it.
+
+`server.probeDefaultTimeout` bounds a probe that names no deadline — no scrape timeout header and no `timeout` parameter, as from curl, a script or the exporter's collectors page with JavaScript off. Prometheus always sends a scrape timeout, so its scrapes are unaffected. It takes a Go duration of zero or more, `0` leaving such a probe unbounded, and like `probeTimeoutOffset` it is rendered only when set.
 
 ```sh
 helm install exporter charts/prometheus-universal-exporter \
@@ -361,7 +364,7 @@ config:
               expression: 'up=(\d+)'
 ```
 
-A collector file holds `collectors` and nothing else, and a collector name must be unique across `config.yaml` and every file, or the pod refuses to start. Name the keys so a pattern matches them and nothing else: `*.yaml` would also match the scheduled target file the chart puts in the same directory. A file changes the ConfigMap checksum like `config.yaml` does, so it rolls the Deployment, or, with `server.watchConfig`, is reloaded in place. Collector files kept in a ConfigMap of their own can be mounted with `extraVolumes` and `extraVolumeMounts` at their own path, such as `/etc/collectors`, and listed by absolute path: `/etc/collectors/*.yaml`.
+A collector file holds `collectors` and nothing else, and a collector name must be unique across `config.yaml` and every file, or the pod refuses to start. Name the keys so a pattern matches them and nothing else: `*.yaml` would also match the static target file the chart puts in the same directory. A file changes the ConfigMap checksum like `config.yaml` does, so it rolls the Deployment, or, with `server.watchConfig`, is reloaded in place. Collector files kept in a ConfigMap of their own can be mounted with `extraVolumes` and `extraVolumeMounts` at their own path, such as `/etc/collectors`, and listed by absolute path: `/etc/collectors/*.yaml`.
 
 ### Default labels and annotations
 
@@ -453,7 +456,7 @@ This allows the exporter to reload the configuration when the mounted ConfigMap 
 
 ### Environment variables in the configuration
 
-`server.expandEnv` adds `--config.export-env`, which substitutes `${NAME}` references in the configuration and in the scheduled target document from the container's environment before either is parsed. That lets a hostname, tenant or token come from a Secret rather than from the ConfigMap the chart renders:
+`server.expandEnv` adds `--config.export-env`, which substitutes `${NAME}` references in the configuration and in the static target document from the container's environment before either is parsed. That lets a hostname, tenant or token come from a Secret rather than from the ConfigMap the chart renders:
 
 ```yaml
 server:
@@ -551,16 +554,18 @@ A [`localfile`](../../docs/LOCALFILE.md) collector reads files the same way: mou
 
 An entry that does not begin with `--` is rejected too, since `some.new-flag=value` as an argument is read as a positional value and ignored.
 
-## Scheduled OTLP targets
+## Static targets
 
-The exporter can optionally scrape targets itself and send the metrics directly over OTLP.
-
-Enable scheduled targets:
+The exporter can scrape a fixed list of targets itself, each on its own
+interval, and serve their latest results together on one endpoint for
+Prometheus to scrape; a target with `export_via_otlp: true` is also delivered
+over OTLP. See [Static targets](../../docs/STATIC-TARGETS.md) for the document.
 
 ```yaml
-otlpTargets:
+staticTargets:
   enabled: true
   data: |
+    interval: 1m
     targets:
       - name: legacy_eu
         collector: legacy_text
@@ -571,9 +576,26 @@ otlpTargets:
           region: eu
 ```
 
-OTLP export must also be enabled in the exporter configuration.
+| Value | Default | Purpose |
+| --- | --- | --- |
+| `staticTargets.enabled` | `false` | Render `data` into the ConfigMap and pass it with `--static-targets-file`. |
+| `staticTargets.fileName` | `static-targets.yaml` | Its file name in the mounted configuration directory. |
+| `staticTargets.path` | `/static-targets` | Rendered as `--web.static-targets-path`, always: where the targets' latest results are served. It may not be `selfMetrics.path` or another endpoint's. |
+| `staticTargets.data` | `""` | The static target document. A change rolls the Deployment. |
+| `staticTargets.monitor.enabled` | `true` | Render the monitor that scrapes the endpoint, when `staticTargets.enabled` is. It needs the Prometheus Operator's CRDs. |
+| `staticTargets.monitor.type` | `service` | `service` for a ServiceMonitor, `pod` for a PodMonitor. |
+| `staticTargets.monitor.interval` / `scrapeTimeout` | `30s` / `10s` | How often Prometheus reads the endpoint. The exporter scrapes the targets on the document's own intervals whatever this is. |
+| `staticTargets.monitor.labels` / `annotations` | `{}` | Added to the monitor. |
+| `staticTargets.monitor.relabelings` / `metricRelabelings` | `[]` | Passed to the monitor's endpoint. |
 
-See `docs/OTLP.md` for the scheduled-target configuration format.
+The monitor sets `honorLabels: true`, so the series keep their own
+`static_target` and `target` labels, and the targets' labels, rather than
+Prometheus's. With `webAuth.enabled` it presents the exporter's credential, as
+the self-metrics monitor does.
+
+A target with `export_via_otlp` needs `otlp.enabled: true` in the exporter
+configuration. When the chart manages the configuration, rendering fails if a
+target sets it while OTLP export is off, rather than the pod failing to start.
 
 ## Values
 
@@ -590,13 +612,13 @@ Every value has a default, and `values.yaml` documents each one in place. `value
 | `service` | object | enabled, ClusterIP, 8080 | The exporter Service. |
 | `neg` | object | disabled | GKE Network Endpoint Group annotations on the Service. |
 | `ingress` | object | disabled | Class, hosts, paths, TLS and annotations. |
-| `server` | object | see [Exporter flags](#exporter-flags) | Exporter flags: `listenAddress`, `pythonPath`, `logLevel`, `probeTimeoutOffset`, `shutdownTimeout`, `shutdownDelay`, `enableLifecycle`, `watchConfig`, `watchConfigInterval`, `expandEnv`. |
+| `server` | object | see [Exporter flags](#exporter-flags) | Exporter flags: `listenAddress`, `pythonPath`, `logLevel`, `probeTimeoutOffset`, `probeDefaultTimeout`, `shutdownTimeout`, `shutdownDelay`, `enableLifecycle`, `watchConfig`, `watchConfigInterval`, `expandEnv`. |
 | `terminationGracePeriodSeconds` | integer | unset | The pod's grace period; see [Shutting down](#shutting-down). |
 | `env` / `envFrom` | array | `[]` | Container environment, in the Kubernetes shapes. |
 | `extraArgs` | array | `[]` | Extra command-line flags. |
 | `extraVolumes` / `extraVolumeMounts` | array | `[]` | Volumes and mounts beyond the chart's own. |
 | `config` | object | enabled | `enabled`, and `data` holding `config.yaml` and any [collector files](#collector-files). |
-| `otlpTargets` | object | disabled | Scheduled targets rendered into the ConfigMap. |
+| `staticTargets` | object | disabled | Static targets rendered into the ConfigMap. |
 | `monitors` | array | `[]` | `ServiceMonitor` and `PodMonitor` resources. |
 | `selfMetrics` | object | enabled | The monitor for the exporter's own endpoint, and its path. |
 | `resources` | object | 100m/128Mi, 500m/512Mi | Requests and limits. |

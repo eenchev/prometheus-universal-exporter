@@ -220,7 +220,7 @@ func TestPromParseErrors(t *testing.T) {
 }
 
 // expfmt panicked on these, so a target that served one took the exporter down
-// from a scheduled scrape, where no HTTP handler recovers the panic.
+// from a static target scrape, where no HTTP handler recovers the panic.
 func TestPromParseSurvivesInputThatCrashedExpfmt(t *testing.T) {
 	for _, body := range []string{"{b=\"c\",} 1\n", "{} 1\n", "{}\"x\",\"y\"} 1\n", "{b=\"c\",} 1l\n"} {
 		func() {

@@ -12,10 +12,11 @@ import (
 	"github.com/eenchev/prometheus-universal-exporter/internal/model"
 )
 
-// Scheduled targets are scraped on their own intervals, set in the targets
-// file, as Prometheus scrapes a probe on its scrape_interval: the exporter's
-// OTLP export only delivers what the scrapes queued, on otlp.interval, and
-// does not decide when a target is scraped. Each target runs on a fixed
+// Static targets are scraped on their own intervals, set in the static targets
+// file, as Prometheus scrapes a probe on its scrape_interval. Neither
+// Prometheus's scrapes of the static targets endpoint nor the OTLP export,
+// which delivers on otlp.interval what the scrapes queued, decides when a
+// target is scraped. Each target runs on a fixed
 // cadence measured from its first scrape, so a slow scrape does not push the
 // next one later; its first scrape is offset within its interval by a hash of
 // its name, so targets sharing an interval are spread over it rather than all
@@ -26,13 +27,13 @@ import (
 // target file takes effect within it.
 const scheduleCheckInterval = time.Second
 
-// targetSchedule is when each scheduled target is next due.
+// targetSchedule is when each static target is next due.
 type targetSchedule struct {
-	states map[string]*scheduledState
+	states map[string]*staticTargetState
 }
 
-// scheduledState is one target's place in the schedule.
-type scheduledState struct {
+// staticTargetState is one target's place in the schedule.
+type staticTargetState struct {
 	interval time.Duration
 	next     time.Time
 	// running is set while a scrape of the target is in flight.
@@ -41,12 +42,12 @@ type scheduledState struct {
 
 // dueTarget is a target to scrape now, with its state.
 type dueTarget struct {
-	target model.ScheduledTarget
-	state  *scheduledState
+	target model.StaticTarget
+	state  *staticTargetState
 }
 
 func newTargetSchedule() *targetSchedule {
-	return &targetSchedule{states: map[string]*scheduledState{}}
+	return &targetSchedule{states: map[string]*staticTargetState{}}
 }
 
 // plan brings the schedule in step with targets, the ones in force, and
@@ -54,17 +55,19 @@ func newTargetSchedule() *targetSchedule {
 // scrape, and when the next one is due. A target new to the schedule, or whose
 // interval changed, starts a cadence of its own; one no longer in targets is
 // forgotten.
-func (s *targetSchedule) plan(targets []model.ScheduledTarget, now time.Time) (due, skipped []dueTarget, next time.Time) {
+func (s *targetSchedule) plan(targets []model.StaticTarget, now time.Time) (due, skipped []dueTarget, next time.Time) {
 	seen := make(map[string]bool, len(targets))
 	for _, target := range targets {
 		interval := time.Duration(target.Interval)
 		if interval <= 0 {
-			interval = time.Duration(model.DefaultScheduledTargetInterval)
+			// Validation sets every loaded target's interval; this only
+			// keeps a target built some other way from spinning.
+			interval = time.Minute
 		}
 		seen[target.Name] = true
 		state := s.states[target.Name]
 		if state == nil || state.interval != interval {
-			state = &scheduledState{interval: interval, next: now.Add(scheduleOffset(target.Name, interval))}
+			state = &staticTargetState{interval: interval, next: now.Add(scheduleOffset(target.Name, interval))}
 			s.states[target.Name] = state
 		}
 		if !now.Before(state.next) {
@@ -99,24 +102,24 @@ func scheduleOffset(name string, interval time.Duration) time.Duration {
 
 var (
 	errStillRunning = errors.New("the previous scrape is still running")
-	errNoSlot       = errors.New("no scrape slot came free within the interval; other scheduled scrapes held them all")
+	errNoSlot       = errors.New("no scrape slot came free within the interval; other static target scrapes held them all")
 )
 
-// ScheduledScrapeLoop scrapes every scheduled target on its interval until
+// StaticScrapeLoop scrapes every static target on its interval until
 // ctx ends, and then waits for the scrapes in flight. The results are queued
 // for the OTLP export loop, which delivers them on otlp.interval.
-func (s *Server) ScheduledScrapeLoop(ctx context.Context) {
+func (s *Server) StaticScrapeLoop(ctx context.Context) {
 	schedule := newTargetSchedule()
-	slots := make(chan struct{}, scheduledTargetConcurrency)
+	slots := make(chan struct{}, staticTargetConcurrency)
 	var wg sync.WaitGroup
 	defer wg.Wait()
 	for {
 		now := time.Now()
-		due, skipped, next := schedule.plan(s.manager.Targets(), now)
+		due, skipped, next := schedule.plan(s.manager.StaticTargets(), now)
 		for _, d := range skipped {
 			// Repeats are logged sparingly, as failed scrapes are.
-			s.failures.failed(s.logger, slog.LevelWarn, failureKey(d.target.Collector, "scheduled target "+d.target.Name, "schedule"),
-				"scheduled target scrape skipped", "schedule", errStillRunning, "target", d.target.Name, "collector", d.target.Collector, "interval", d.state.interval.String())
+			s.failures.failed(s.logger, slog.LevelWarn, failureKey(d.target.Collector, "static target "+d.target.Name, "schedule"),
+				"static target scrape skipped", "schedule", errStillRunning, "target", d.target.Name, "collector", d.target.Collector, "interval", d.state.interval.String())
 		}
 		for _, d := range due {
 			d.state.running.Store(true)
@@ -130,8 +133,8 @@ func (s *Server) ScheduledScrapeLoop(ctx context.Context) {
 				select {
 				case slots <- struct{}{}:
 				case <-scrapeCtx.Done():
-					s.failures.failed(s.logger, slog.LevelWarn, failureKey(d.target.Collector, "scheduled target "+d.target.Name, "schedule"),
-						"scheduled target scrape skipped", "schedule", errNoSlot, "target", d.target.Name, "collector", d.target.Collector, "interval", d.state.interval.String())
+					s.failures.failed(s.logger, slog.LevelWarn, failureKey(d.target.Collector, "static target "+d.target.Name, "schedule"),
+						"static target scrape skipped", "schedule", errNoSlot, "target", d.target.Name, "collector", d.target.Collector, "interval", d.state.interval.String())
 					return
 				}
 				defer func() { <-slots }()

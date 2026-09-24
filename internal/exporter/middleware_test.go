@@ -72,7 +72,7 @@ func TestProbeMetricsAndSelfMetricsAreGzippedWhenAccepted(t *testing.T) {
 	defer target.Close()
 	server, _ := newCacheTestServer(t, testutil.Collector("app", "text"))
 	probe := "/probe?collector=app&target=" + url.QueryEscape(target.URL)
-	for _, path := range []string{probe, "/metrics", "/self-metrics"} {
+	for _, path := range []string{probe, "/self-metrics"} {
 		plain := get(server, http.MethodGet, path, "")
 		if plain.Code != http.StatusOK || plain.Header().Get("Content-Encoding") != "" {
 			t.Fatalf("%s without Accept-Encoding: %d, Content-Encoding %q", path, plain.Code, plain.Header().Get("Content-Encoding"))

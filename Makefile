@@ -32,7 +32,7 @@ test-external:
 schemas:
 	go run . --config.schema > configs/config.schema.json
 	go run . --config.collector-file-schema > configs/collector-file.schema.json
-	go run . --otlp.targets-file-schema > configs/targets.schema.json
+	go run . --static-targets-file-schema > configs/static-targets.schema.json
 
 vet:
 	go vet ./...
@@ -67,9 +67,10 @@ helm-test:
 	helm template test charts/prometheus-universal-exporter --set-json 'monitors=[{"name":"pod-targets","enabled":true,"type":"pod","collector":"example","interval":"30s","scrapeTimeout":"10s"}]'
 	helm template test charts/prometheus-universal-exporter --set server.listenAddress=0.0.0.0:9115 --set server.pythonPath=/usr/bin/python3.11
 	helm template test charts/prometheus-universal-exporter --set server.expandEnv=true --set-json 'env=[{"name":"DEMO_TARGET","value":"http://api.internal:8080"}]' --set-json 'envFrom=[{"secretRef":{"name":"exporter-secrets"}}]'
-	helm template test charts/prometheus-universal-exporter --set otlpTargets.enabled=true --set-file otlpTargets.data=configs/targets.example.yaml --set-file 'config.data.config\.yaml=configs/config.otlp.example.yaml'
+	helm template test charts/prometheus-universal-exporter --set staticTargets.enabled=true --set-file staticTargets.data=configs/static-targets.example.yaml --set-file 'config.data.config\.yaml=configs/config.otlp.example.yaml'
+	helm template test charts/prometheus-universal-exporter --set staticTargets.enabled=true --set-file staticTargets.data=testdata/chart/static-targets-endpoint-only.yaml
 	helm template test charts/prometheus-universal-exporter --set-json 'monitors=[{"name":"a","enabled":true,"type":"service","collector":"example","interval":"30s","scrapeTimeout":"10s"},{"name":"b","enabled":true,"type":"pod","collector":"example","interval":"30s","scrapeTimeout":"10s"}]' | python3 tools/check-manifests.py
-	helm template test charts/prometheus-universal-exporter --set server.logLevel=debug --set server.probeTimeoutOffset=1s
+	helm template test charts/prometheus-universal-exporter --set server.logLevel=debug --set server.probeTimeoutOffset=1s --set server.probeDefaultTimeout=45s
 	helm template test charts/prometheus-universal-exporter --set-json 'extraArgs=["--some.new-flag=value"]' --set-json 'extraVolumes=[{"name":"extra-collectors","configMap":{"name":"my-collectors"}}]' --set-json 'extraVolumeMounts=[{"name":"extra-collectors","mountPath":"/etc/collectors","readOnly":true}]'
 	@# Packaged into a temporary directory: a .tgz in the worktree is build
 	@# output, and the release workflow is what publishes one.
@@ -86,8 +87,8 @@ helm-test:
 			exit 1; \
 		fi; \
 	done
-	@if helm template test charts/prometheus-universal-exporter --set otlpTargets.enabled=true --set-file otlpTargets.data=configs/targets.example.yaml --set-file 'config.data.config\.yaml=configs/config.example.yaml' >/dev/null 2>&1; then \
-		echo "helm template accepted scheduled targets while OTLP export is disabled" >&2; \
+	@if helm template test charts/prometheus-universal-exporter --set staticTargets.enabled=true --set-file staticTargets.data=configs/static-targets.example.yaml --set-file 'config.data.config\.yaml=configs/config.example.yaml' >/dev/null 2>&1; then \
+		echo "helm template accepted a static target with export_via_otlp while OTLP export is disabled" >&2; \
 		exit 1; \
 	fi
 	@for bad in 'replicaCount=many' 'image.pullPolicy=always' 'replicaCounts=2'; do \
@@ -104,13 +105,13 @@ helm-test:
 		echo "helm template accepted --log.level in extraArgs, which server.logLevel manages" >&2; \
 		exit 1; \
 	fi
-	@for oneshot in --dry-run --config.schema --config.collector-file-schema --otlp.targets-file-schema --version --help; do \
+	@for oneshot in --dry-run --config.schema --config.collector-file-schema --static-targets-file-schema --version --help; do \
 		if helm template test charts/prometheus-universal-exporter --set-json "extraArgs=[\"$$oneshot\"]" >/dev/null 2>&1; then \
 			echo "helm template accepted $$oneshot in extraArgs, which would make the pod exit instead of serving" >&2; \
 			exit 1; \
 		fi; \
 	done
-	@for bad in server.logLevel=verbose server.probeTimeoutOffset=-1s; do \
+	@for bad in server.logLevel=verbose server.probeTimeoutOffset=-1s server.probeDefaultTimeout=-1s selfMetrics.path=/probe selfMetrics.path=/stats/ staticTargets.path=/self-metrics staticTargets.path=/probe staticTargets.monitor.type=node; do \
 		if helm template test charts/prometheus-universal-exporter --set "$$bad" >/dev/null 2>&1; then \
 			echo "helm template accepted $$bad" >&2; \
 			exit 1; \

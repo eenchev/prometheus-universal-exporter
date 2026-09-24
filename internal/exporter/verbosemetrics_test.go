@@ -91,7 +91,7 @@ func TestTargetScrapeHistogramIsPublishedWhenVerbose(t *testing.T) {
 }
 
 // Only trips to the target are observed: not cache hits, not probes that
-// shared another's request; scheduled target scrapes are.
+// shared another's request; static target scrapes are.
 func TestOnlyTripsToTheTargetAreObserved(t *testing.T) {
 	testutil.CaptureLogs(t)
 	target := textTarget(t, "value=42\n")
@@ -120,12 +120,12 @@ func TestOnlyTripsToTheTargetAreObserved(t *testing.T) {
 		t.Fatalf("observed %d trips for three probes sharing one", n)
 	}
 
-	scheduled := testutil.Collector("scheduled_timed", "text")
+	scheduled := testutil.Collector("static_timed", "text")
 	cfg := &model.Config{Collectors: []model.Collector{scheduled}, OTLP: otlpConfig("http://collector.invalid/v1/metrics"), Web: model.WebConfig{SelfMetrics: model.SelfMetricsConfig{Verbose: true}}}
-	server = newScheduledServer(t, cfg, &model.TargetFile{Targets: []model.ScheduledTarget{{Name: "eu", Collector: "scheduled_timed", Target: target.URL}}})
-	server.scrapeScheduledTargets(context.Background(), 10*time.Second)
-	if n := server.durations.histogram("scheduled_timed").Count; n != 1 {
-		t.Fatalf("observed %d trips for one scheduled scrape", n)
+	server = newStaticServer(t, cfg, &model.StaticTargetFile{Interval: model.Duration(time.Minute), Targets: []model.StaticTarget{{Name: "eu", Collector: "static_timed", Target: target.URL}}})
+	server.scrapeStaticTargets(context.Background(), 10*time.Second)
+	if n := server.durations.histogram("static_timed").Count; n != 1 {
+		t.Fatalf("observed %d trips for one static target scrape", n)
 	}
 }
 
@@ -325,19 +325,19 @@ func TestPythonPoolMetricsSumTheCollectors(t *testing.T) {
 // A family name means one thing everywhere it is delivered. The scheduled
 // target health series go over OTLP beside the self-metrics, so none of the
 // verbose families may reuse one of their names with another type.
-func TestVerboseFamiliesDoNotReuseScheduledHealthNames(t *testing.T) {
+func TestVerboseFamiliesDoNotReuseStaticHealthNames(t *testing.T) {
 	server := verboseServer(t, true, pythonCollector("names_python", `metric(name="v", value=1)`))
 	types := map[string]model.MetricType{}
 	for _, m := range server.verboseCollectorMetrics() {
 		types[m.Name] = m.Type
 	}
 	c := testutil.Collector("names_text", "text")
-	for _, m := range scheduledHealthMetrics(model.ScheduledTarget{Name: "t", Target: "http://a.example"}, &c, 1, 0.1).Metrics {
+	for _, m := range staticTargetHealthMetrics(model.StaticTarget{Name: "t", Target: "http://a.example"}, &c, 1, 0.1).Metrics {
 		if other, clash := types[m.Name]; clash && other != m.Type {
-			t.Errorf("%s is a %s in the verbose self-metrics and a %s in the scheduled target health series", m.Name, other, m.Type)
+			t.Errorf("%s is a %s in the verbose self-metrics and a %s in the static target health series", m.Name, other, m.Type)
 		}
 		if _, clash := types[m.Name]; clash {
-			t.Errorf("%s is both a verbose self-metric and a scheduled target health series", m.Name)
+			t.Errorf("%s is both a verbose self-metric and a static target health series", m.Name)
 		}
 	}
 }

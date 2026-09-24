@@ -288,8 +288,8 @@ func TestAFailingTargetLogsOnceAndItsRecovery(t *testing.T) {
 	}
 }
 
-// A scheduled target that keeps failing logs once, and its recovery.
-func TestAFailingScheduledTargetLogsOnce(t *testing.T) {
+// A static target that keeps failing logs once, and its recovery.
+func TestAFailingStaticTargetLogsOnce(t *testing.T) {
 	var up atomic.Bool
 	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		if !up.Load() {
@@ -300,18 +300,18 @@ func TestAFailingScheduledTargetLogsOnce(t *testing.T) {
 	}))
 	defer target.Close()
 	cfg := &model.Config{Collectors: []model.Collector{testutil.Collector("text", "text")}, OTLP: otlpConfig("http://collector.invalid/v1/metrics")}
-	server := newScheduledServer(t, cfg, &model.TargetFile{Targets: []model.ScheduledTarget{{Name: "api", Collector: "text", Target: target.URL}}})
+	server := newStaticServer(t, cfg, &model.StaticTargetFile{Interval: model.Duration(time.Minute), Targets: []model.StaticTarget{{Name: "api", Collector: "text", Target: target.URL}}})
 	logs := testutil.CaptureLogs(t)
 	server.logger = slog.Default()
 	for i := 0; i < 3; i++ {
-		server.scrapeScheduledTargets(t.Context(), 5*time.Second)
+		server.scrapeStaticTargets(t.Context(), 5*time.Second)
 	}
-	if got := strings.Count(logs.String(), `"msg":"scheduled target scrape failed"`); got != 1 {
+	if got := strings.Count(logs.String(), `"msg":"static target scrape failed"`); got != 1 {
 		t.Fatalf("3 identical failures logged %d lines:\n%s", got, logs.String())
 	}
 	up.Store(true)
-	server.scrapeScheduledTargets(t.Context(), 5*time.Second)
-	if !strings.Contains(logs.String(), `"msg":"scheduled target recovered","target":"api"`) || !strings.Contains(logs.String(), `"failures":3`) {
+	server.scrapeStaticTargets(t.Context(), 5*time.Second)
+	if !strings.Contains(logs.String(), `"msg":"static target recovered","target":"api"`) || !strings.Contains(logs.String(), `"failures":3`) {
 		t.Fatalf("recovery not logged:\n%s", logs.String())
 	}
 }

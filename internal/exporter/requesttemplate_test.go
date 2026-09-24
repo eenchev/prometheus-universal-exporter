@@ -145,16 +145,16 @@ func TestTemplatedProbesAreCachedApart(t *testing.T) {
 	}
 }
 
-// A scheduled target fills the collector's placeholders from its params.
-func TestScheduledTargetParams(t *testing.T) {
+// A static target fills the collector's placeholders from its params.
+func TestStaticTargetParams(t *testing.T) {
 	target := newEchoTarget(t)
 	cfg := &model.Config{Collectors: []model.Collector{templatedCollector()}, OTLP: otlpConfig("http://collector.invalid/v1/metrics")}
-	file := &model.TargetFile{Targets: []model.ScheduledTarget{
+	file := &model.StaticTargetFile{Interval: model.Duration(time.Minute), Targets: []model.StaticTarget{
 		{Name: "acme", Collector: "graphql", Target: target.server.URL, Params: map[string]string{"param_tenant": "acme", "param_service": "checkout"}},
 	}}
-	server := newScheduledServer(t, cfg, file)
+	server := newStaticServer(t, cfg, file)
 	server.logger = testutil.QuietLogger(t)
-	server.scrapeScheduledTargets(context.Background(), 5*time.Second)
+	server.scrapeStaticTargets(context.Background(), 5*time.Second)
 	got := target.last(t)
 	if got.path != "/api/acme" || got.header.Get("X-Tenant") != "acme" || got.body != `{"service": "checkout", "limit": 10}` {
 		t.Fatalf("request %+v", got)
@@ -164,16 +164,16 @@ func TestScheduledTargetParams(t *testing.T) {
 		params map[string]string
 		want   string
 	}{
-		"a missing parameter": {map[string]string{"param_tenant": "acme"}, `whose request.body needs param_service, a parameter without a default; a scheduled target has no probe to supply it, so set it under the target's params`},
+		"a missing parameter": {map[string]string{"param_tenant": "acme"}, `whose request.body needs param_service, a parameter without a default; a static target has no probe to supply it, so set it under the target's params`},
 		"an unused parameter": {map[string]string{"param_tenant": "acme", "param_service": "x", "param_tenat": "y"}, `target "t" params param_tenat are not used by collector "graphql"`},
 		"an unfit value":      {map[string]string{"param_tenant": "acme", "param_service": "x", "param_limit": "many"}, "must be a number"},
 		"a bad name":          {map[string]string{"tenant": "acme"}, `params has "tenant", which is not a parameter name`},
 	} {
 		t.Run(name, func(t *testing.T) {
-			f := &model.TargetFile{Targets: []model.ScheduledTarget{{Name: "t", Collector: "graphql", Target: target.server.URL, Params: tc.params}}}
-			err := config.ValidateTargets(f)
+			f := &model.StaticTargetFile{Interval: model.Duration(time.Minute), Targets: []model.StaticTarget{{Name: "t", Collector: "graphql", Target: target.server.URL, Params: tc.params}}}
+			err := config.ValidateStaticTargets(f)
 			if err == nil {
-				err = config.ValidateTargetsAgainst(f, cfg)
+				err = config.ValidateStaticTargetsAgainst(f, cfg)
 			}
 			if err == nil || !strings.Contains(err.Error(), tc.want) {
 				t.Fatalf("err=%v, want %q", err, tc.want)
@@ -183,8 +183,8 @@ func TestScheduledTargetParams(t *testing.T) {
 
 	// Params are part of the cache key, so two targets differing only in them
 	// do not share a result.
-	a := model.ScheduledTarget{Name: "a", Collector: "graphql", Target: "http://x", Params: map[string]string{"param_tenant": "a"}}
-	b := model.ScheduledTarget{Name: "b", Collector: "graphql", Target: "http://x", Params: map[string]string{"param_tenant": "b"}}
+	a := model.StaticTarget{Name: "a", Collector: "graphql", Target: "http://x", Params: map[string]string{"param_tenant": "a"}}
+	b := model.StaticTarget{Name: "b", Collector: "graphql", Target: "http://x", Params: map[string]string{"param_tenant": "b"}}
 	if targetCacheQuery(&a).Encode() == targetCacheQuery(&b).Encode() {
 		t.Fatal("targets with different params share a cache key")
 	}

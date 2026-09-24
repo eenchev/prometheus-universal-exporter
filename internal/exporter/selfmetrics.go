@@ -84,7 +84,7 @@ var selfMetricDescriptors = []selfMetricDescriptor{
 	{"http_exporter_series_limit_exceeded_total", model.CounterMetricType, "Scrapes rejected for exceeding this collector's response size or series limits.", func(v statsValues) float64 { return float64(v.limitErrors) }},
 	{"http_exporter_cache_hits_total", model.CounterMetricType, "Probes answered from this collector's response cache.", func(v statsValues) float64 { return float64(v.cacheHits) }},
 	{"http_exporter_cache_misses_total", model.CounterMetricType, "Probes that found no usable cache entry and went to the target.", func(v statsValues) float64 { return float64(v.cacheMisses) }},
-	{"http_exporter_cache_stale_served_total", model.CounterMetricType, "Probes and scheduled scrapes whose trip to the target failed and that were answered with the last successful result instead, under cache.stale_if_error.", func(v statsValues) float64 { return float64(v.staleServed) }},
+	{"http_exporter_cache_stale_served_total", model.CounterMetricType, "Probes and static target scrapes whose trip to the target failed and that were answered with the last successful result instead, under cache.stale_if_error.", func(v statsValues) float64 { return float64(v.staleServed) }},
 	// What a collector's cache holds belongs to the collector, not to any one
 	// request, so it has no per-request value.
 	{"http_exporter_cache_entries", model.GaugeMetricType, "Entries currently held in this collector's response cache, including stale ones kept for cache.stale_if_error.", nil},
@@ -108,7 +108,8 @@ var exporterMetricHelp = map[string]string{
 	"http_exporter_build_info":                                 "1, with the exporter's version, revision, Go version and built request types as labels.",
 	"http_exporter_collector_config_valid":                     "Whether the collector configuration is valid.",
 	"http_exporter_rule_failures_total":                        "Series a metric rule could not produce and the probe carried on without, under error_mode log or ignore.",
-	"http_exporter_scheduled_targets":                          "Scheduled targets configured for OTLP delivery.",
+	"http_exporter_static_targets":                             "Static targets configured in the static target file, served on the static targets endpoint.",
+	"http_exporter_static_targets_exported_via_otlp":           "Static targets with export_via_otlp, also delivered over OTLP.",
 	"http_exporter_otlp_exports_total":                         "OTLP exports, each a delivery of everything pending with its retries, by result: success or failure.",
 	"http_exporter_otlp_export_retries_total":                  "OTLP export attempts repeated after a network error, 429, 502, 503 or 504.",
 	"http_exporter_otlp_points_dropped_total":                  "Data points given up on: refused by the OTLP endpoint with a status that is not retried, or the oldest waiting past otlp.max_pending_points.",
@@ -209,7 +210,7 @@ func (s *Server) selfMetricSet() model.MetricSet {
 		out = append(out, model.Metric{Name: "http_exporter_collector_config_valid", Help: exporterMetricHelp["http_exporter_collector_config_valid"], Type: model.GaugeMetricType, Value: 1, Labels: map[string]string{"collector": c.Name}})
 	}
 	out = append(out, s.ruleFailureMetrics()...)
-	out = append(out, model.Metric{Name: "http_exporter_scheduled_targets", Help: exporterMetricHelp["http_exporter_scheduled_targets"], Type: model.GaugeMetricType, Value: float64(len(s.manager.Targets()))})
+	out = append(out, s.staticTargetCountMetrics()...)
 	out = append(out, s.manager.ReloadMetrics()...)
 	out = append(out, s.otlpStatusMetrics()...)
 	out = append(out, requestFamilies...)

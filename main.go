@@ -56,22 +56,24 @@ func run(args []string, stdout, stderr io.Writer) int {
 	flags.SetOutput(io.Discard)
 	configFile := flags.String("config.file", "/etc/prometheus-universal-exporter/config.yaml", "Path to the exporter configuration")
 	listenAddress := flags.String("web.listen-address", ":8080", "Address on which to expose HTTP endpoints")
-	selfMetricsPath := flags.String("web.self-metrics-path", "/self-metrics", "Dedicated endpoint for exporter self-health metrics")
-	enableLifecycle := flags.Bool("web.enable-lifecycle", false, "Enable POST /-/reload, which reloads the configuration and scheduled target files and reports whether they were accepted. SIGHUP reloads either way")
+	selfMetricsPath := flags.String("web.self-metrics-path", exporter.DefaultSelfMetricsPath, "Path of the exporter's own metrics, such as /metrics; it is served there and nowhere else")
+	staticTargetsPath := flags.String("web.static-targets-path", exporter.DefaultStaticTargetsPath, "Path the static targets' latest results are served at, for Prometheus to scrape")
+	enableLifecycle := flags.Bool("web.enable-lifecycle", false, "Enable POST /-/reload, which reloads the configuration and static target files and reports whether they were accepted. SIGHUP reloads either way")
 	shutdownDelay := flags.Duration("web.shutdown-delay", 0, "How long a SIGTERM or SIGINT keeps serving, with /ready answering 503, before the graceful shutdown begins, so a load balancer or Kubernetes stops sending probes first. 0, the default, begins at once")
 	shutdownTimeout := flags.Duration("web.shutdown-timeout", exporter.DefaultShutdownTimeout, "How long a SIGTERM or SIGINT waits for the probes in progress to finish before closing their connections. Keep it at least as long as Prometheus's scrape timeout")
 	timeoutOffset := flags.Duration("probe.timeout-offset", exporter.DefaultTimeoutOffset, "How much of Prometheus's scrape timeout (X-Prometheus-Scrape-Timeout-Seconds) a probe leaves unused, so it answers with its own error before Prometheus gives up")
+	defaultProbeTimeout := flags.Duration("probe.default-timeout", exporter.DefaultProbeTimeout, "How long a probe may take when it names no deadline: no X-Prometheus-Scrape-Timeout-Seconds header and no timeout parameter, as from curl or a script. 0 leaves such a probe unbounded")
 	pythonPath := flags.String("python.path", "python3", "Python interpreter used by the python transform")
-	targetFile := flags.String("otlp.targets-file", "", "Optional file of scheduled targets scraped by the exporter and delivered over OTLP")
-	watchConfig := flags.Bool("config.watch", false, "Reload the configuration, collector and scheduled target files when they change on disk")
+	targetFile := flags.String("static-targets-file", "", "Optional file of static targets, scraped by the exporter on their intervals and served at --web.static-targets-path; a target with export_via_otlp is also delivered over OTLP")
+	watchConfig := flags.Bool("config.watch", false, "Reload the configuration, collector and static target files when they change on disk")
 	watchInterval := flags.Duration("config.watch-interval", config.DefaultWatchInterval, "How often to check the configuration files for changes when config.watch is set")
 	logLevel := flags.String("log.level", "info", "Log level: debug, info, warn, or error")
-	expandEnv := flags.Bool("config.export-env", false, "Expand ${NAME} environment variable references in the configuration, collector and scheduled target files")
+	expandEnv := flags.Bool("config.export-env", false, "Expand ${NAME} environment variable references in the configuration, collector and static target files")
 	printSchema := flags.Bool("config.schema", false, "Print the JSON Schema of the configuration file, for editors, and exit")
 	printCollectorFileSchema := flags.Bool("config.collector-file-schema", false, "Print the JSON Schema of a collector file listed under collector_files, for editors, and exit")
-	printTargetsSchema := flags.Bool("otlp.targets-file-schema", false, "Print the JSON Schema of the scheduled target file, for editors, and exit")
+	printStaticTargetsSchema := flags.Bool("static-targets-file-schema", false, "Print the JSON Schema of the static target file, for editors, and exit")
 	showVersion := flags.Bool("version", false, "Print the version, revision, Go version and request types of this build, and exit")
-	check := flags.Bool("dry-run", false, "Validate the configuration and scheduled target files as startup would, print a JSON report to stdout, and exit 0 if they are valid or 1 if not, without starting the exporter")
+	check := flags.Bool("dry-run", false, "Validate the configuration and static target files as startup would, print a JSON report to stdout, and exit 0 if they are valid or 1 if not, without starting the exporter")
 	if err := flags.Parse(args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
 			// Asked for, so it goes to stdout, where help text belongs.
@@ -97,19 +99,33 @@ func run(args []string, stdout, stderr io.Writer) int {
 		newLogger("info", stderr).Error("invalid command line; exiting", "error", err.Error())
 		return 2
 	}
+	if err := exporter.ValidateDefaultProbeTimeout(*defaultProbeTimeout); err != nil {
+		newLogger("info", stderr).Error("invalid command line; exiting", "error", err.Error())
+		return 2
+	}
+	selfMetricsEndpoint, err := exporter.SelfMetricsPath(*selfMetricsPath)
+	if err != nil {
+		newLogger("info", stderr).Error("invalid command line; exiting", "error", err.Error())
+		return 2
+	}
+	staticTargetsEndpoint, err := exporter.StaticTargetsPath(*staticTargetsPath, selfMetricsEndpoint)
+	if err != nil {
+		newLogger("info", stderr).Error("invalid command line; exiting", "error", err.Error())
+		return 2
+	}
 
 	if *showVersion {
 		_, _ = io.WriteString(stdout, exporter.VersionString()+"\n")
 		return 0
 	}
 
-	if *printSchema || *printCollectorFileSchema || *printTargetsSchema {
+	if *printSchema || *printCollectorFileSchema || *printStaticTargetsSchema {
 		render := config.SchemaJSON
 		switch {
 		case *printCollectorFileSchema:
 			render = config.CollectorFileSchemaJSON
-		case *printTargetsSchema:
-			render = config.TargetsSchemaJSON
+		case *printStaticTargetsSchema:
+			render = config.StaticTargetsSchemaJSON
 		}
 		schema, err := render()
 		if err != nil {
@@ -130,12 +146,12 @@ func run(args []string, stdout, stderr io.Writer) int {
 	logger := newLogger(*logLevel, stderr)
 	if *check {
 		return runCheck(checkInputs{
-			ConfigFile:    *configFile,
-			TargetFile:    *targetFile,
-			PythonPath:    *pythonPath,
-			ExpandEnv:     *expandEnv,
-			Watch:         *watchConfig,
-			WatchInterval: *watchInterval,
+			ConfigFile:       *configFile,
+			StaticTargetFile: *targetFile,
+			PythonPath:       *pythonPath,
+			ExpandEnv:        *expandEnv,
+			Watch:            *watchConfig,
+			WatchInterval:    *watchInterval,
 		}, stdout, logger)
 	}
 	conf, err := config.Load(*configFile, loadOptions...)
@@ -162,23 +178,25 @@ func run(args []string, stdout, stderr io.Writer) int {
 		manager.SetWatchInterval(*watchInterval)
 	}
 	if *targetFile != "" {
-		targets, err := config.LoadTargets(*targetFile, loadOptions...)
+		targets, err := config.LoadStaticTargets(*targetFile, loadOptions...)
 		if err == nil {
-			err = config.ValidateTargets(targets)
+			err = config.ValidateStaticTargets(targets)
 		}
 		if err == nil {
-			err = config.ValidateTargetsAgainst(targets, conf)
+			err = config.ValidateStaticTargetsAgainst(targets, conf)
 		}
 		if err != nil {
-			logger.Error("invalid scheduled target configuration; exiting", "file", *targetFile, "error", err)
+			logger.Error("invalid static target configuration; exiting", "file", *targetFile, "error", err)
 			return 1
 		}
 		manager.SetTargets(*targetFile, targets)
-		logger.Info("scheduled targets loaded", "file", *targetFile, "targets", len(targets.Targets))
+		logger.Info("static targets loaded", "file", *targetFile, "targets", len(targets.Targets))
 	}
 	server := exporter.NewServer(manager, *pythonPath, logger)
-	server.SetSelfMetricsPath(*selfMetricsPath)
+	server.SetSelfMetricsPath(selfMetricsEndpoint)
+	server.SetStaticTargetsPath(staticTargetsEndpoint)
 	server.SetTimeoutOffset(*timeoutOffset)
+	server.SetDefaultProbeTimeout(*defaultProbeTimeout)
 	server.SetLifecycle(*enableLifecycle)
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGTERM, syscall.SIGINT)
@@ -194,11 +212,11 @@ func run(args []string, stdout, stderr io.Writer) int {
 	scrapeLoopDone := make(chan struct{})
 	go func() {
 		defer close(scrapeLoopDone)
-		server.ScheduledScrapeLoop(ctx)
+		server.StaticScrapeLoop(ctx)
 	}()
 
 	startup := []any{"version", exporter.BuildVersion().Version, "revision", exporter.BuildVersion().Revision, "address", *listenAddress, "collectors", len(conf.Collectors), "collector_files", len(conf.LoadedCollectorFiles),
-		"scheduled_targets", len(manager.Targets()), "config_watch", manager.WatchEnabled(),
+		"static_targets", len(manager.StaticTargets()), "config_watch", manager.WatchEnabled(),
 		"config_export_env", *expandEnv, "request_types", fetch.BuiltRequestTypes()}
 	// The interval is only meaningful when the watch is on, and its absence
 	// would otherwise leave the operator guessing how stale a running
@@ -239,7 +257,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 			logger.Error("probes were still in progress when --web.shutdown-timeout ran out; their connections are closed", "shutdown_timeout", shutdownTimeout.String(), "error", err)
 			_ = httpServer.Close()
 		}
-		// The probes have finished, and the export and scheduled scrape loops
+		// The probes have finished, and the export and static target scrape loops
 		// have stopped, so what they queued goes out in one last export,
 		// bounded by otlp.timeout.
 		<-exportLoopDone

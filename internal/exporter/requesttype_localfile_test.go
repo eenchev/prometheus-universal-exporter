@@ -203,9 +203,9 @@ func TestLocalFileVerboseLabels(t *testing.T) {
 	}
 }
 
-// A scheduled target of a localfile collector may leave target out, or name a
+// A static target of a localfile collector may leave target out, or name a
 // file under root, and is scraped like any other.
-func TestLocalFileScheduledTargets(t *testing.T) {
+func TestLocalFileStaticTargets(t *testing.T) {
 	root := t.TempDir()
 	testutil.WriteIn(t, root, "app.prom", promFile)
 	testutil.WriteIn(t, root, "batch/app.prom", strings.Replace(promFile, "7", "3", 1))
@@ -213,18 +213,18 @@ func TestLocalFileScheduledTargets(t *testing.T) {
 	if err := config.Validate(cfg); err != nil {
 		t.Fatal(err)
 	}
-	file := &model.TargetFile{Targets: []model.ScheduledTarget{
-		{Name: "main", Collector: "files", Labels: map[string]string{"source": "main"}},
-		{Name: "batch", Collector: "files", Target: "batch", Labels: map[string]string{"source": "batch"}, Request: model.TargetRequestConfig{Timeout: model.Duration(time.Second)}},
+	file := &model.StaticTargetFile{Interval: model.Duration(time.Minute), Targets: []model.StaticTarget{
+		{ExportViaOTLP: true, Name: "main", Collector: "files", Labels: map[string]string{"source": "main"}},
+		{ExportViaOTLP: true, Name: "batch", Collector: "files", Target: "batch", Labels: map[string]string{"source": "batch"}, Request: model.TargetRequestConfig{Timeout: model.Duration(time.Second)}},
 	}}
-	if err := config.ValidateTargets(file); err != nil {
+	if err := config.ValidateStaticTargets(file); err != nil {
 		t.Fatal(err)
 	}
-	if err := config.ValidateTargetsAgainst(file, cfg); err != nil {
+	if err := config.ValidateStaticTargetsAgainst(file, cfg); err != nil {
 		t.Fatal(err)
 	}
-	server := newScheduledServer(t, cfg, file)
-	server.scrapeScheduledTargets(context.Background(), 10*time.Second)
+	server := newStaticServer(t, cfg, file)
+	server.scrapeStaticTargets(context.Background(), 10*time.Second)
 	values := map[string]float64{}
 	for _, resource := range server.drainOTLP() {
 		for _, m := range resource.Set.Metrics {
@@ -232,7 +232,7 @@ func TestLocalFileScheduledTargets(t *testing.T) {
 				values[m.Labels["source"]] = m.Value
 			}
 			if m.Name == "http_exporter_target_up" && m.Value != 1 {
-				t.Errorf("target %s is down", m.Labels["scheduled_target"])
+				t.Errorf("target %s is down", m.Labels["static_target"])
 			}
 		}
 	}
@@ -241,19 +241,19 @@ func TestLocalFileScheduledTargets(t *testing.T) {
 	}
 
 	for name, tc := range map[string]struct {
-		target model.ScheduledTarget
+		target model.StaticTarget
 		want   string
 	}{
-		"outside root":  {model.ScheduledTarget{Name: "bad", Collector: "files", Target: "/etc"}, `target "bad": target "/etc" is outside request.root`},
-		"an http key":   {model.ScheduledTarget{Name: "bad", Collector: "files", Request: model.TargetRequestConfig{Method: "POST"}}, `sets request.method, which does not apply`},
-		"a credential":  {model.ScheduledTarget{Name: "bad", Collector: "files", Request: model.TargetRequestConfig{BearerToken: "t"}}, `sets request.bearer_token`},
-		"a placeholder": {model.ScheduledTarget{Name: "bad", Collector: "files", Request: model.TargetRequestConfig{Path: "{{param_x}}", PathSet: true}}, "placeholders"},
+		"outside root":  {model.StaticTarget{ExportViaOTLP: true, Name: "bad", Collector: "files", Target: "/etc"}, `target "bad": target "/etc" is outside request.root`},
+		"an http key":   {model.StaticTarget{ExportViaOTLP: true, Name: "bad", Collector: "files", Request: model.TargetRequestConfig{Method: "POST"}}, `sets request.method, which does not apply`},
+		"a credential":  {model.StaticTarget{ExportViaOTLP: true, Name: "bad", Collector: "files", Request: model.TargetRequestConfig{BearerToken: "t"}}, `sets request.bearer_token`},
+		"a placeholder": {model.StaticTarget{ExportViaOTLP: true, Name: "bad", Collector: "files", Request: model.TargetRequestConfig{Path: "{{param_x}}", PathSet: true}}, "placeholders"},
 	} {
 		t.Run(name, func(t *testing.T) {
-			f := &model.TargetFile{Targets: []model.ScheduledTarget{tc.target}}
-			err := config.ValidateTargets(f)
+			f := &model.StaticTargetFile{Interval: model.Duration(time.Minute), Targets: []model.StaticTarget{tc.target}}
+			err := config.ValidateStaticTargets(f)
 			if err == nil {
-				err = config.ValidateTargetsAgainst(f, cfg)
+				err = config.ValidateStaticTargetsAgainst(f, cfg)
 			}
 			if err == nil || !strings.Contains(err.Error(), tc.want) {
 				t.Fatalf("err=%v, want %q", err, tc.want)

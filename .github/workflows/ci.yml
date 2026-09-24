@@ -82,9 +82,9 @@ jobs:
         if: steps.changes.outputs.chart == 'true'
       - run: helm template test charts/prometheus-universal-exporter --set server.expandEnv=true --set-json 'env=[{"name":"DEMO_TARGET","value":"http://api.internal:8080"}]' --set-json 'envFrom=[{"secretRef":{"name":"exporter-secrets"}}]'
         if: steps.changes.outputs.chart == 'true'
-      - run: helm template test charts/prometheus-universal-exporter --set otlpTargets.enabled=true --set-file otlpTargets.data=configs/targets.example.yaml --set-file 'config.data.config\.yaml=configs/config.otlp.example.yaml'
+      - run: helm template test charts/prometheus-universal-exporter --set staticTargets.enabled=true --set-file staticTargets.data=configs/static-targets.example.yaml --set-file 'config.data.config\.yaml=configs/config.otlp.example.yaml'
         if: steps.changes.outputs.chart == 'true'
-      - run: helm template test charts/prometheus-universal-exporter --set server.logLevel=debug --set server.probeTimeoutOffset=1s
+      - run: helm template test charts/prometheus-universal-exporter --set server.logLevel=debug --set server.probeTimeoutOffset=1s --set server.probeDefaultTimeout=45s
         if: steps.changes.outputs.chart == 'true'
       - name: Render the shutdown delay and timeout, their grace period and the exporter credential Secret
         if: steps.changes.outputs.chart == 'true'
@@ -128,10 +128,30 @@ jobs:
             --set-json 'monitors=[{"name":"a","enabled":true,"type":"service","collector":"example","interval":"30s","scrapeTimeout":"10s"},{"name":"b","enabled":true,"type":"pod","collector":"example","interval":"30s","scrapeTimeout":"10s"}]' \
             | python3 tools/check-manifests.py
         if: steps.changes.outputs.chart == 'true'
-      - name: Reject scheduled targets without OTLP export
+      - name: Render static targets without OTLP, and the monitor of their endpoint
+        if: steps.changes.outputs.chart == 'true'
         run: |
-          if helm template test charts/prometheus-universal-exporter --set otlpTargets.enabled=true --set-file otlpTargets.data=configs/targets.example.yaml --set-file 'config.data.config\.yaml=configs/config.example.yaml' >/dev/null 2>&1; then
-            echo "helm template accepted scheduled targets while OTLP export is disabled" >&2
+          set -eu
+          out="$(helm template test charts/prometheus-universal-exporter --set staticTargets.enabled=true --set-file staticTargets.data=testdata/chart/static-targets-endpoint-only.yaml)"
+          echo "$out" | grep -q -- '--static-targets-file=/etc/prometheus-universal-exporter/static-targets.yaml'
+          echo "$out" | grep -q -- '--web.static-targets-path=/static-targets'
+          echo "$out" | grep -q 'name: .*-static-targets$'
+          echo "$out" | grep -q 'path: "/static-targets"'
+          out="$(helm template test charts/prometheus-universal-exporter --set staticTargets.enabled=true --set-file staticTargets.data=testdata/chart/static-targets-endpoint-only.yaml --set staticTargets.path=/targets --set staticTargets.monitor.type=pod)"
+          echo "$out" | grep -q -- '--web.static-targets-path=/targets'
+          echo "$out" | grep -q 'kind: PodMonitor'
+          if helm template test charts/prometheus-universal-exporter --set staticTargets.enabled=true --set-file staticTargets.data=testdata/chart/static-targets-endpoint-only.yaml --set staticTargets.monitor.enabled=false | grep -q -- '-static-targets$'; then
+            echo "the static targets monitor rendered with staticTargets.monitor.enabled false" >&2
+            exit 1
+          fi
+          if helm template test charts/prometheus-universal-exporter | grep -q -- '--static-targets-file'; then
+            echo "--static-targets-file rendered without staticTargets.enabled" >&2
+            exit 1
+          fi
+      - name: Reject static targets exported over OTLP without OTLP export
+        run: |
+          if helm template test charts/prometheus-universal-exporter --set staticTargets.enabled=true --set-file staticTargets.data=configs/static-targets.example.yaml --set-file 'config.data.config\.yaml=configs/config.example.yaml' >/dev/null 2>&1; then
+            echo "helm template accepted a static target with export_via_otlp while OTLP export is disabled" >&2
             exit 1
           fi
         if: steps.changes.outputs.chart == 'true'
@@ -148,13 +168,13 @@ jobs:
             echo "helm template accepted --log.level in extraArgs, which server.logLevel manages" >&2
             exit 1
           fi
-          for oneshot in --dry-run --config.schema --config.collector-file-schema --otlp.targets-file-schema --version --help; do
+          for oneshot in --dry-run --config.schema --config.collector-file-schema --static-targets-file-schema --version --help; do
             if helm template test charts/prometheus-universal-exporter --set-json "extraArgs=[\"$oneshot\"]" >/dev/null 2>&1; then
               echo "helm template accepted $oneshot in extraArgs, which would make the pod exit instead of serving" >&2
               exit 1
             fi
           done
-          for bad in server.logLevel=verbose server.probeTimeoutOffset=-1s server.shutdownTimeout=500ms server.shutdownTimeout=0s server.shutdownDelay=500ms server.shutdownDelay=-1s terminationGracePeriodSeconds=10 webAuth.enabled=true; do
+          for bad in server.logLevel=verbose server.probeTimeoutOffset=-1s server.probeDefaultTimeout=-1s selfMetrics.path=/probe selfMetrics.path=/stats/ staticTargets.path=/self-metrics staticTargets.path=/probe staticTargets.monitor.type=node server.shutdownTimeout=500ms server.shutdownTimeout=0s server.shutdownDelay=500ms server.shutdownDelay=-1s terminationGracePeriodSeconds=10 webAuth.enabled=true; do
             if helm template test charts/prometheus-universal-exporter --set "$bad" >/dev/null 2>&1; then
               echo "helm template accepted $bad" >&2
               exit 1

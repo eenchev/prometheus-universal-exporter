@@ -92,7 +92,7 @@ func TestSelfMetricsExpositionIsWellFormed(t *testing.T) {
 
 // The reload status reads successful from startup, turns and stays
 // unsuccessful while a reload is rejected, and counts reloads by result. The
-// scheduled target file is reported only when there is one.
+// static target file is reported only when there is one.
 func TestReloadStatusMetrics(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config.yaml")
@@ -116,7 +116,7 @@ func TestReloadStatusMetrics(t *testing.T) {
 				t.Errorf("%s: %s = %v, want %v", when, series, got, value)
 			}
 		}
-		if strings.Contains(exposition, `file="targets"`) {
+		if strings.Contains(exposition, `file="static_targets"`) {
 			t.Errorf("%s: a target file is reported though none is configured", when)
 		}
 		return seriesValue(t, exposition, `http_exporter_config_last_reload_success_timestamp_seconds{file="config"}`)
@@ -156,20 +156,20 @@ func TestReloadStatusMetrics(t *testing.T) {
 	}
 }
 
-// With a scheduled target file, its reloads are reported under file="targets".
+// With a static target file, its reloads are reported under file="static_targets".
 func TestReloadStatusCoversTheTargetFile(t *testing.T) {
 	conf := strings.Replace(testutil.CollectorsDocument("text"), "collectors:", "otlp:\n  enabled: true\n  endpoint: http://collector.invalid/v1/metrics\ncollectors:", 1)
-	r := newReloadable(t, conf, "targets:\n  - name: one\n    collector: text\n    target: http://a.example\n")
-	if got := seriesValue(t, selfMetrics(t, r.server), `http_exporter_config_last_reload_successful{file="targets"}`); got != 1 {
+	r := newReloadable(t, conf, "interval: 1m\ntargets:\n  - name: one\n    collector: text\n    target: http://a.example\n")
+	if got := seriesValue(t, selfMetrics(t, r.server), `http_exporter_config_last_reload_successful{file="static_targets"}`); got != 1 {
 		t.Fatalf("targets at startup = %v", got)
 	}
-	r.write(r.targets, "targets:\n  - name: one\n    collector: missing\n    target: http://a.example\n")
+	r.write(r.targets, "interval: 1m\ntargets:\n  - name: one\n    collector: missing\n    target: http://a.example\n")
 	_ = r.manager.Reload(config.ReloadTriggerSignal)
 	exposition := selfMetrics(t, r.server)
-	if got := seriesValue(t, exposition, `http_exporter_config_last_reload_successful{file="targets"}`); got != 0 {
+	if got := seriesValue(t, exposition, `http_exporter_config_last_reload_successful{file="static_targets"}`); got != 0 {
 		t.Errorf("after a rejected target reload = %v", got)
 	}
-	if got := seriesValue(t, exposition, `http_exporter_config_reloads_total{file="targets",result="failure"}`); got != 1 {
+	if got := seriesValue(t, exposition, `http_exporter_config_reloads_total{file="static_targets",result="failure"}`); got != 1 {
 		t.Errorf("target reload failures = %v", got)
 	}
 	// The configuration itself is unaffected.

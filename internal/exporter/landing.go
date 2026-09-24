@@ -32,6 +32,9 @@ code { background: var(--code); padding: 1px 5px; border-radius: 4px; font-size:
 ul.links { padding-left: 20px; }
 `
 
+// pagePolicy is the pages' Content-Security-Policy.
+const pagePolicy = "default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; connect-src 'self'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'"
+
 // renderPage executes t with data and writes it as HTML. The page is rendered
 // whole before anything is written, so a failure is a clean 500 rather than
 // half a page.
@@ -45,6 +48,12 @@ func (s *Server) renderPage(w http.ResponseWriter, t *template.Template, data an
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	// The pages list the configuration in force; a cached copy would not.
 	w.Header().Set("Cache-Control", "no-store")
+	// The collectors page takes target credentials, so no other site may
+	// frame the pages and steer what is typed into them. The policy also
+	// keeps the pages to what they are: their own inline style and script,
+	// requests to the exporter itself, and forms sent nowhere else.
+	w.Header().Set("X-Frame-Options", "DENY")
+	w.Header().Set("Content-Security-Policy", pagePolicy)
 	_, _ = w.Write(body.Bytes())
 }
 
@@ -53,8 +62,9 @@ type landingPage struct {
 	SelfMetricsPath              string
 	Lifecycle                    bool
 	Collectors                   int
-	ScheduledTargets             int
-	OTLPEnabled                  bool
+	StaticTargetsPath            string
+	StaticTargets                int
+	StaticTargetsViaOTLP         int
 	Docs                         string
 }
 
@@ -73,18 +83,18 @@ var landingTemplate = template.Must(template.New("landing").Parse(`<!DOCTYPE htm
 
 <h2>Collectors</h2>
 <p>{{.Collectors}} collector{{if ne .Collectors 1}}s{{end}} loaded. <a href="/collectors">Probe a target through one</a>, with the parameters and credentials it takes.</p>
-{{- if .OTLPEnabled}}
-<p class="meta">{{.ScheduledTargets}} scheduled target{{if ne .ScheduledTargets 1}}s{{end}} exported over OTLP.</p>
+{{- if .StaticTargets}}
+
+<h2>Static targets</h2>
+<p>{{.StaticTargets}} static target{{if ne .StaticTargets 1}}s{{end}}, scraped by the exporter on their own intervals and served at <a href="{{.StaticTargetsPath}}">{{.StaticTargetsPath}}</a>{{if .StaticTargetsViaOTLP}}; {{.StaticTargetsViaOTLP}} also exported over OTLP{{end}}.</p>
 {{- end}}
 
 <h2>Endpoints</h2>
 <ul class="links">
 <li><a href="/collectors">/collectors</a> — the collectors, and a form to probe through each</li>
 <li><code>/probe?collector=&lt;name&gt;&amp;target=&lt;target&gt;</code> — scrape a target through a collector</li>
-<li><a href="/metrics">/metrics</a> — the exporter's own metrics</li>
-{{- if ne .SelfMetricsPath "/metrics"}}
-<li><a href="{{.SelfMetricsPath}}">{{.SelfMetricsPath}}</a> — the same self-metrics on their dedicated path</li>
-{{- end}}
+<li><a href="{{.StaticTargetsPath}}">{{.StaticTargetsPath}}</a> — the static targets' latest results</li>
+<li><a href="{{.SelfMetricsPath}}">{{.SelfMetricsPath}}</a> — the exporter's own metrics</li>
 <li><a href="/health">/health</a> and <a href="/ready">/ready</a> — liveness and readiness</li>
 {{- if .Lifecycle}}
 <li><code>POST /-/reload</code> — reload the configuration</li>
@@ -103,15 +113,17 @@ func (s *Server) landingHandler(w http.ResponseWriter, _ *http.Request) {
 	build := BuildVersion()
 	page := landingPage{
 		Version: build.Version, Revision: build.Revision, GoVersion: build.GoVersion,
-		SelfMetricsPath:  s.selfMetricsPath,
-		Lifecycle:        s.lifecycle,
-		Collectors:       len(cfg.Collectors),
-		ScheduledTargets: len(s.manager.Targets()),
-		OTLPEnabled:      cfg.OTLP.Enabled,
-		Docs:             landingDocs,
+		SelfMetricsPath:   s.selfMetricsEndpoint(),
+		Lifecycle:         s.lifecycle,
+		Collectors:        len(cfg.Collectors),
+		StaticTargetsPath: s.staticTargetsEndpoint(),
+		Docs:              landingDocs,
 	}
-	if page.SelfMetricsPath == "" {
-		page.SelfMetricsPath = "/self-metrics"
+	for _, target := range s.manager.StaticTargets() {
+		page.StaticTargets++
+		if target.ExportViaOTLP {
+			page.StaticTargetsViaOTLP++
+		}
 	}
 	s.renderPage(w, landingTemplate, page)
 }

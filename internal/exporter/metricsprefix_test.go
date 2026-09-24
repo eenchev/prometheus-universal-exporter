@@ -62,8 +62,8 @@ func TestMetricsPrefixOnTheProbeResponse(t *testing.T) {
 	}
 }
 
-// OTLP export sees the same names as /probe, for probes and scheduled targets
-// alike; a scheduled target's health metrics are the exporter's and stay
+// OTLP export sees the same names as /probe, for probes and static targets
+// alike; a static target's health metrics are the exporter's and stay
 // unprefixed.
 func TestMetricsPrefixOnOTLPExport(t *testing.T) {
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
@@ -75,10 +75,10 @@ func TestMetricsPrefixOnOTLPExport(t *testing.T) {
 	c := testutil.Collector("text", "text")
 	c.MetricsPrefix = "acme"
 	cfg := &model.Config{Collectors: []model.Collector{c}, OTLP: otlpConfig("http://collector.invalid/v1/metrics")}
-	file := &model.TargetFile{Targets: []model.ScheduledTarget{{Name: "eu", Collector: "text", Target: upstream.URL}}}
-	server := newScheduledServer(t, cfg, file)
+	file := &model.StaticTargetFile{Interval: model.Duration(time.Minute), Targets: []model.StaticTarget{{ExportViaOTLP: true, Name: "eu", Collector: "text", Target: upstream.URL}}}
+	server := newStaticServer(t, cfg, file)
 
-	server.scrapeScheduledTargets(context.Background(), 10*time.Second)
+	server.scrapeStaticTargets(context.Background(), 10*time.Second)
 	resources := server.drainOTLP()
 	if len(resources) != 1 {
 		t.Fatalf("resources=%+v", resources)

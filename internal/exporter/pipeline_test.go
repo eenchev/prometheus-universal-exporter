@@ -13,11 +13,11 @@ import (
 	"github.com/eenchev/prometheus-universal-exporter/internal/testutil"
 )
 
-// A probe and a scheduled target's scrape make their trip through collect
+// A probe and a static target's scrape make their trip through collect
 // alone (pipeline.go), so the two cannot drift apart again. Only a
 // directory's files are decoded and transformed elsewhere (filebatch.go),
 // one at a time, from inside collect.
-func TestProbesAndScheduledTargetsShareOnePipeline(t *testing.T) {
+func TestProbesAndStaticTargetsShareOnePipeline(t *testing.T) {
 	allowed := map[string]map[string]bool{
 		"fetch.FetchCollector(": {"pipeline.go": true},
 		"decode.Decode(":        {"pipeline.go": true, "filebatch.go": true},

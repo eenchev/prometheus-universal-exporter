@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"regexp"
 	"sort"
 	"strings"
 	"sync"
@@ -25,13 +26,21 @@ type Server struct {
 	pythonPath      string
 	logger          *slog.Logger
 	selfMetricsPath string
+	// staticTargetsPath is where the static targets are served; staticResults
+	// is each target's latest result, by name (statictargetsendpoint.go).
+	staticTargetsPath string
+	staticMu          sync.Mutex
+	staticResults     map[string]model.MetricSet
 	// timeoutOffset is how much of Prometheus's scrape timeout a probe leaves
 	// unused (scrapetimeout.go).
 	timeoutOffset time.Duration
-	statsMu       sync.Mutex
-	stats         map[string]*serverStats
-	otlpMu        sync.Mutex
-	otlpPending   map[string]*otlpBatch
+	// defaultProbeTimeout bounds a probe that names no deadline
+	// (scrapetimeout.go).
+	defaultProbeTimeout time.Duration
+	statsMu             sync.Mutex
+	stats               map[string]*serverStats
+	otlpMu              sync.Mutex
+	otlpPending         map[string]*otlpBatch
 	// otlpPoints counts the pending data points, and otlpSeq and
 	// otlpRequeueSeq order them by age for otlp.max_pending_points: queued
 	// points count up from 1, points queued again after a failed export count
@@ -64,22 +73,54 @@ type Server struct {
 // NewServer returns a server using the configuration m holds and running
 // Python scripts with the interpreter at p.
 func NewServer(m *config.Manager, p string, l *slog.Logger) *Server {
-	s := &Server{manager: m, pythonPath: p, logger: l, stats: map[string]*serverStats{}, otlpPending: map[string]*otlpBatch{}, cache: newResponseCache(), requests: newRequestTracker(), flights: newProbeFlights(), durations: newScrapeDurations(), trips: newTripLimiter(), otlp: &otlpStatus{}, failures: newFailureLog(), fingerprints: &fingerprintMemo{}, timeoutOffset: DefaultTimeoutOffset}
+	s := &Server{manager: m, pythonPath: p, logger: l, stats: map[string]*serverStats{}, otlpPending: map[string]*otlpBatch{}, cache: newResponseCache(), requests: newRequestTracker(), flights: newProbeFlights(), durations: newScrapeDurations(), trips: newTripLimiter(), otlp: &otlpStatus{}, failures: newFailureLog(), fingerprints: &fingerprintMemo{}, timeoutOffset: DefaultTimeoutOffset, defaultProbeTimeout: DefaultProbeTimeout}
 	s.seenConfig.Store(m.Get())
 	return s
 }
 
-// SetSelfMetricsPath serves the exporter's own metrics at path as well as at
-// /metrics. A path an endpoint already uses falls back to /self-metrics.
-func (s *Server) SetSelfMetricsPath(path string) {
-	if path == "" || path[0] != '/' {
+// DefaultSelfMetricsPath is where the exporter serves its own metrics unless
+// --web.self-metrics-path says otherwise.
+const DefaultSelfMetricsPath = "/self-metrics"
+
+// endpointPathRE, for the self-metrics and static targets paths, is a path of
+// plain segments: no query, fragment, trailing
+// slash or ServeMux wildcard, any of which would make the endpoint something
+// other than one fixed path.
+var endpointPathRE = regexp.MustCompile(`^(/[A-Za-z0-9._~-]+)+$`)
+
+// SelfMetricsPath checks --web.self-metrics-path and returns it with its
+// leading slash. The exporter serves its own metrics there and nowhere else,
+// so a path another endpoint uses is refused rather than moved aside.
+func SelfMetricsPath(path string) (string, error) {
+	return endpointPath("--web.self-metrics-path", path, "/self-metrics or /metrics")
+}
+
+// endpointPath checks the path flag gives an endpoint: one fixed path, and not
+// one of the exporter's fixed endpoints. example is suggested in the error.
+func endpointPath(flag, path, example string) (string, error) {
+	if path != "" && path[0] != '/' {
 		path = "/" + path
 	}
-	switch path {
-	case "/probe", "/health", "/ready":
-		path = "/self-metrics"
+	if !endpointPathRE.MatchString(path) {
+		return "", fmt.Errorf("%s %q must be a path of letters, digits and . _ ~ - segments, such as %s", flag, path, example)
 	}
-	s.selfMetricsPath = path
+	switch path {
+	case "/probe", "/health", "/ready", "/collectors", "/-/reload":
+		return "", fmt.Errorf("%s %q is the exporter's %s endpoint; choose another path, such as %s", flag, path, path, example)
+	}
+	return path, nil
+}
+
+// SetSelfMetricsPath serves the exporter's own metrics at path, which
+// SelfMetricsPath has checked.
+func (s *Server) SetSelfMetricsPath(path string) { s.selfMetricsPath = path }
+
+// selfMetricsEndpoint is the path the exporter's own metrics are served at.
+func (s *Server) selfMetricsEndpoint() string {
+	if s.selfMetricsPath == "" {
+		return DefaultSelfMetricsPath
+	}
+	return s.selfMetricsPath
 }
 
 func (s *Server) statsFor(name string) *serverStats {
@@ -94,7 +135,8 @@ func (s *Server) statsFor(name string) *serverStats {
 }
 
 // Handler routes the exporter's endpoints: the landing page at /, the
-// collectors page at /collectors, /probe, /metrics and the self-metrics path,
+// collectors page at /collectors, /probe, the self-metrics path, the static
+// targets path,
 // /health, /ready and /-/reload.
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
@@ -103,16 +145,10 @@ func (s *Server) Handler() http.Handler {
 		_, _ = w.Write([]byte("ok\n"))
 	})
 	mux.HandleFunc("/ready", s.readyHandler)
-	path := s.selfMetricsPath
-	if path == "" {
-		path = "/self-metrics"
-	}
 	protected := func(handler http.HandlerFunc) http.HandlerFunc { return s.basicAuthMiddleware(handler) }
 	// The answers Prometheus scrapes are gzipped when it asks (compression.go).
-	if path != "/metrics" {
-		mux.HandleFunc(path, compressed(protected(s.metricsHandler)))
-	}
-	mux.HandleFunc("/metrics", compressed(protected(s.metricsHandler)))
+	mux.HandleFunc(s.selfMetricsEndpoint(), compressed(protected(s.metricsHandler)))
+	mux.HandleFunc(s.staticTargetsEndpoint(), compressed(protected(s.staticTargetsHandler)))
 	mux.HandleFunc("/probe", compressed(protected(s.probeHandler)))
 	mux.HandleFunc("/-/reload", protected(s.reloadHandler))
 	// Only / itself: any other unknown path is still a 404.
@@ -220,11 +256,12 @@ func (s *Server) probeHandler(w http.ResponseWriter, r *http.Request) {
 		}
 		rec.update(func(x *serverStats) { x.cacheMisses++ })
 	}
+	budget, budgetSource := s.probeDeadline(r.Header, overrides)
 	upstream := func(ctx context.Context) *probeResult {
 		return s.probeUpstream(ctx, upstreamProbe{
 			collector: c, target: target, logTarget: logTarget, overrides: overrides,
 			forwarded: forwarded, rec: rec, cacheKey: cacheKey,
-			budget: probeBudget(r.Header, s.timeoutOffset),
+			budget: budget, budgetSource: budgetSource,
 		})
 	}
 	if !coalesceProbes(c) {
@@ -256,8 +293,10 @@ type upstreamProbe struct {
 	forwarded http.Header
 	rec       statsRecorder
 	cacheKey  string
-	// budget bounds the trip when Prometheus said how long it will wait.
-	budget time.Duration
+	// budget bounds the trip (scrapetimeout.go); budgetSource says where it
+	// came from.
+	budget       time.Duration
+	budgetSource string
 }
 
 // probeUpstream goes to the target, decodes, transforms and validates, and
@@ -330,7 +369,7 @@ func (s *Server) probeTrip(ctx context.Context, p upstreamProbe) *probeResult {
 	}
 	result := s.collect(ctx, collectJob{
 		collector: c, target: p.target, overrides: p.overrides, headers: p.forwarded,
-		rec: rec, display: logTarget, cacheKey: p.cacheKey, budget: p.budget,
+		rec: rec, display: logTarget, cacheKey: p.cacheKey, budget: p.budget, budgetSource: p.budgetSource,
 		log: collectLog{
 			key:    failureKey(name, logTarget, ""),
 			failed: "probe failed", continuing: "probe stage failed; continuing", recovery: "probe recovered",
@@ -420,8 +459,12 @@ func forwardedHeaders(r *http.Request, request model.RequestConfig) http.Header 
 		if name == "" || !allowed[name] {
 			continue
 		}
+		// An empty value is left out, as an empty param_ value is: a form
+		// field left blank is a header not given, not one sent empty.
 		for _, value := range values {
-			out.Add(name, value)
+			if value != "" {
+				out.Add(name, value)
+			}
 		}
 	}
 	return out

@@ -279,7 +279,7 @@ func TestEveryExporterFlagIsHandledByTheChart(t *testing.T) {
 // does without them.
 func TestServerFlagValuesDefaults(t *testing.T) {
 	values := readChartFile(t, "values.yaml")
-	for _, line := range []string{"\n  logLevel: info\n", "\n  probeTimeoutOffset: \"\"\n"} {
+	for _, line := range []string{"\n  logLevel: info\n", "\n  probeTimeoutOffset: \"\"\n", "\n  probeDefaultTimeout: \"\"\n"} {
 		if !strings.Contains(values, line) {
 			t.Errorf("values.yaml lacks %q", strings.TrimSpace(line))
 		}
@@ -289,5 +289,8 @@ func TestServerFlagValuesDefaults(t *testing.T) {
 	// flag still starts.
 	if !strings.Contains(deployment, `{{- with (include "prometheus-universal-exporter.probeTimeoutOffset" .) }}`) {
 		t.Error("--probe.timeout-offset must only be rendered when server.probeTimeoutOffset is set")
+	}
+	if !strings.Contains(deployment, `{{- with (include "prometheus-universal-exporter.probeDefaultTimeout" .) }}`) {
+		t.Error("--probe.default-timeout must only be rendered when server.probeDefaultTimeout is set")
 	}
 }

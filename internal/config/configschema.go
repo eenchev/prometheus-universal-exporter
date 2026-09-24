@@ -73,27 +73,27 @@ func CollectorFileSchemaJSON() ([]byte, error) {
 	return renderSchema(collectorFileSchema())
 }
 
-// targetsSchemaID is where the published scheduled target file schema lives.
-const targetsSchemaID = schemaBaseURL + "targets.schema.json"
+// staticTargetsSchemaID is where the published static target file schema lives.
+const staticTargetsSchemaID = schemaBaseURL + "static-targets.schema.json"
 
-// targetsSchema describes the scheduled target file (--otlp.targets-file),
-// generated from the TargetFile struct as configSchema is from Config, with
-// targetsSchemaRules adding what the struct cannot say.
-// configs/targets.schema.json is its output, printed by
-// --otlp.targets-file-schema; a test fails when the two differ. As for the
+// staticTargetsSchema describes the static target file (--static-targets-file),
+// generated from the StaticTargetFile struct as configSchema is from Config, with
+// staticTargetsSchemaRules adding what the struct cannot say.
+// configs/static-targets.schema.json is its output, printed by
+// --static-targets-file-schema; a test fails when the two differ. As for the
 // configuration, startup validation remains the authority: it also checks the
 // targets against the collectors they name.
-func targetsSchema() map[string]any {
-	schema := schemaFor(reflect.TypeOf(model.TargetFile{}), "", targetsSchemaRules())
+func staticTargetsSchema() map[string]any {
+	schema := schemaFor(reflect.TypeOf(model.StaticTargetFile{}), "", staticTargetsSchemaRules())
 	schema["$schema"] = "https://json-schema.org/draft/2020-12/schema"
-	schema["$id"] = targetsSchemaID
-	schema["title"] = "prometheus-universal-exporter scheduled target file"
+	schema["$id"] = staticTargetsSchemaID
+	schema["title"] = "prometheus-universal-exporter static target file"
 	return schema
 }
 
-// TargetsSchemaJSON renders the scheduled target file schema the same way.
-func TargetsSchemaJSON() ([]byte, error) {
-	return renderSchema(targetsSchema())
+// StaticTargetsSchemaJSON renders the static target file schema the same way.
+func StaticTargetsSchemaJSON() ([]byte, error) {
+	return renderSchema(staticTargetsSchema())
 }
 
 func renderSchema(schema map[string]any) ([]byte, error) {
@@ -115,7 +115,7 @@ var (
 const durationPattern = `^[-+]?(0|([0-9]*(\.[0-9]*)?(ns|us|µs|μs|ms|s|m|h))+)$`
 
 // schemaFor describes t, found at path, with rules adding what the type
-// cannot say (configSchemaRules, targetsSchemaRules).
+// cannot say (configSchemaRules, staticTargetsSchemaRules).
 func schemaFor(t reflect.Type, path string, rules map[string]map[string]any) map[string]any {
 	var schema map[string]any
 	switch t {
@@ -202,7 +202,7 @@ func configSchemaRules() map[string]map[string]any {
 		"collectors[].cache":                        {"description": "The collector's response cache. See docs/CONFIGURATION.md#response-caching."},
 		"collectors[].cache.ttl":                    {"description": "Answer a repeat of the same probe from memory for this long. Omit or 0s to always go to the target."},
 		"collectors[].cache.stale_if_error":         {"description": "After ttl, keep a result this much longer to answer a probe whose trip to the target fails, marked by http_exporter_result_stale 1. Omit or 0s to answer the failure."},
-		"collectors[].max_concurrent_probes":        {"description": "How many trips to its targets the collector makes at once; a probe over the limit is answered 503 at once, a scheduled target waits. Omit or 0 for the default, 32."},
+		"collectors[].max_concurrent_probes":        {"description": "How many trips to its targets the collector makes at once; a probe over the limit is answered 503 at once, a static target waits. Omit or 0 for the default, 32."},
 		"collectors[].coalesce":                     {"description": "Share one request to the target among identical probes that arrive while it is in flight. Defaults to true."},
 		"collectors[].request":                      requestSchemaRule(),
 		"collectors[].request.type":                 {"enum": fetch.BuiltRequestTypes(), "description": "Required. How the collector reaches its data."},
@@ -281,31 +281,32 @@ func requestSchemaRule() map[string]any {
 	return rule
 }
 
-// targetsSchemaRules adds, by path, what the TargetFile struct cannot say.
-func targetsSchemaRules() map[string]map[string]any {
+// staticTargetsSchemaRules adds, by path, what the StaticTargetFile struct cannot say.
+func staticTargetsSchemaRules() map[string]map[string]any {
 	return map[string]map[string]any{
 		"": {
-			"required":    []string{"targets"},
-			"description": "Scheduled targets of the exporter, scraped by the exporter itself and delivered over OTLP. Passed with --otlp.targets-file. See docs/OTLP.md#scheduled-targets.",
+			"required":    []string{"interval", "targets"},
+			"description": "Static targets of the exporter, scraped by the exporter itself on their intervals and served together on the static targets endpoint (--web.static-targets-path); a target with export_via_otlp is also delivered over OTLP. Passed with --static-targets-file. See docs/STATIC-TARGETS.md.",
 		},
-		"interval":            {"description": "How often a target that sets no interval is scraped. At least 1s; defaults to 1m."},
+		"interval":            {"description": "How often a target that sets no interval is scraped, such as 1m. Required; at least 1s."},
 		"targets":             {"minItems": 1, "description": "The targets. Each is scraped on its own interval with one collector of the configuration."},
 		"targets[]":           {"required": []string{"collector"}, "description": "One target: a collector of the configuration, the address it reads, and what this target overrides."},
-		"targets[].name":      {"pattern": targetNameRE.String(), "description": "Unique name, in logs and the scheduled_target label. Defaults to <collector>_<index>."},
+		"targets[].name":      {"pattern": targetNameRE.String(), "description": "Unique name, in logs and the static_target label. Defaults to <collector>_<index>."},
 		"targets[].collector": {"description": "The collector of the configuration that scrapes this target."},
 		"targets[].target":    {"description": "What the collector reads: a URL for an http collector, a file under request.root for a localfile one."},
-		"targets[].interval":  {"description": "How often this target is scraped, whatever otlp.interval exports on. At least 1s, and no shorter than request.timeout; defaults to the file's interval."},
+		"targets[].interval":  {"description": "How often this target is scraped, whatever Prometheus scrapes the endpoint on and otlp.interval exports on. At least 1s, and no shorter than request.timeout; defaults to the file's interval."},
 		"targets[].params": {
 			"propertyNames": map[string]any{"pattern": fetch.PathParamName.String()},
 			"description":   "Values of the collector's {{param_<name>}} placeholders, as a probe's param_<name> parameters give them. Each must be used by a placeholder.",
 		},
-		"targets[].labels":                       {"description": "Added to every metric the target produces, without overwriting a label the collector extracted."},
+		"targets[].labels":                       {"description": "Added to every metric the target produces, without overwriting a label the collector extracted. static_target is set by the endpoint and cannot be used."},
+		"targets[].export_via_otlp":              {"description": "Also deliver this target's results over OTLP, on otlp.interval, besides serving them on the static targets endpoint. Needs otlp.enabled. Defaults to false."},
 		"targets[].request":                      {"description": "Overrides of the collector's request for this target, as the /probe parameters override it for a probe."},
 		"targets[].request.method":               {"enum": []string{"GET", "POST", "PUT", "PATCH", "DELETE", "HEAD"}},
 		"targets[].request.path":                 {"description": "Replaces the collector's request.path. It cannot hold {{param_...}} placeholders."},
 		"targets[].request.timeout":              {"description": "How long a scrape of this target may take. At most the target's interval."},
 		"targets[].request.retry":                {"description": "Replaces the collector's request.retry for this target."},
 		"targets[].request.retry.non_idempotent": {"description": "Retry a request whose method is not idempotent, such as POST, which sending again may repeat."},
-		"targets[].otlp":                         {"description": "The OTLP resource this target's metrics are exported under, over the exporter-wide otlp settings."},
+		"targets[].otlp":                         {"description": "The OTLP resource this target's metrics are exported under, over the exporter-wide otlp settings. Only with export_via_otlp: true."},
 	}
 }

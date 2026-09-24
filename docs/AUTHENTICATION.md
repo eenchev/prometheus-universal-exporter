@@ -71,7 +71,7 @@ every protected request with `500` and logs why, rather than letting requests
 in. The chart mounts the Secret with `webAuth` — see the
 [chart README](../charts/prometheus-universal-exporter/README.md#exporter-authentication).
 
-When enabled, Basic Auth is required for `/probe`, `/metrics`, the configured self-metrics endpoint, the landing page at `/` and the collectors page at `/collectors`, which list the collectors. `/health` and `/ready` remain unauthenticated for Kubernetes probes. Exporter-side Basic Auth is mutually exclusive with `request.forward_authorization`; enable one model or the other so the incoming Authorization header cannot be confused with the exporter credential.
+When enabled, Basic Auth is required for `/probe`, the self-metrics path, the static targets path, the landing page at `/` and the collectors page at `/collectors`, which list the collectors. `/health` and `/ready` remain unauthenticated for Kubernetes probes. Exporter-side Basic Auth is mutually exclusive with `request.forward_authorization`; enable one model or the other so the incoming Authorization header cannot be confused with the exporter credential.
 
 This conflict is rejected during startup: the exporter logs `invalid startup configuration; exiting` and terminates with a non-zero exit code. Invalid configurations detected during file reload are rejected while the last valid configuration remains active.
 
@@ -97,6 +97,11 @@ collector:
 - **Request parameters** — the `{{param_<name>}}` placeholders of the path,
   body, headers and query — get a field each, required unless the placeholder
   has a default, which is shown.
+
+Each form also has a timeout, 10 seconds to start with, sent as the
+scrape timeout Prometheus would send, so a target that never answers ends
+in the exporter's own error after it rather than a page waiting for ever.
+A credential left blank is not sent at all.
 
 The page itself is behind the exporter's Basic Auth when that is on, and the
 browser sends the same credential with each probe. Since exporter Basic Auth

@@ -4,7 +4,7 @@ Every line the exporter writes is a JSON object, at the level set by
 `--log.level` (`debug`, `info`, `warn` or `error`):
 
 ```json
-{"time":"2026-09-18T21:49:52+03:00","level":"INFO","msg":"starting exporter","address":":8080","collectors":1,"scheduled_targets":0,"config_watch":true,"config_watch_interval":"1m30s"}
+{"time":"2026-09-18T21:49:52+03:00","level":"INFO","msg":"starting exporter","address":":8080","collectors":1,"static_targets":0,"config_watch":true,"config_watch_interval":"1m30s"}
 {"time":"2026-09-18T21:49:54+03:00","level":"ERROR","msg":"metric extraction failed","collector":"exchange_rates","metric":"exchange_rate_observation_timestamp_seconds","error_mode":"log","error":"metric \"exchange_rate_observation_timestamp_seconds\" value is missing"}
 ```
 
@@ -60,9 +60,9 @@ the line for a `http_status` failure adds `response_body`: the start of the
 body, at most 256 bytes, on one line. It is logged only, never put in the
 probe's answer.
 
-The same applies to scheduled targets (`scheduled target scrape failed`, then
-`scheduled target recovered`; a stage passed over under `error_handling` `log`
-is `scheduled target stage failed; continuing`, at warning level, as a probe's
+The same applies to static targets (`static target scrape failed`, then
+`static target recovered`; a stage passed over under `error_handling` `log`
+is `static target stage failed; continuing`, at warning level, as a probe's
 is `probe stage failed; continuing`), to a file of a directory that fails, to a
 directory over `max_files` or its listing bound, to probes rejected by
 `max_concurrent_probes`, to output repaired for invalid UTF-8, and to probes

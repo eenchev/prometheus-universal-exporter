@@ -87,7 +87,7 @@ func TestCollectorFileSchemaAcceptsCollectorsOnly(t *testing.T) {
 const (
 	configSchemaFile        = "configs/config.schema.json"
 	collectorFileSchemaFile = "configs/collector-file.schema.json"
-	targetsSchemaFile       = "configs/targets.schema.json"
+	staticTargetsSchemaFile = "configs/static-targets.schema.json"
 )
 
 // The committed schema is exactly what the code generates, so it cannot drift
@@ -216,9 +216,9 @@ func TestConfigSchemaRejectsInvalidConfigurations(t *testing.T) {
 // the configuration's, the target file at the target file's.
 func TestExamplesReferenceTheSchema(t *testing.T) {
 	for file, render := range map[string]func() ([]byte, error){
-		"configs/config.example.yaml":      config.SchemaJSON,
-		"configs/config.otlp.example.yaml": config.SchemaJSON,
-		"configs/targets.example.yaml":     config.TargetsSchemaJSON,
+		"configs/config.example.yaml":         config.SchemaJSON,
+		"configs/config.otlp.example.yaml":    config.SchemaJSON,
+		"configs/static-targets.example.yaml": config.StaticTargetsSchemaJSON,
 	} {
 		modeline := "# yaml-language-server: $schema=" + parsedSchema(t, render)["$id"].(string)
 		raw, err := os.ReadFile(file)
@@ -231,31 +231,32 @@ func TestExamplesReferenceTheSchema(t *testing.T) {
 	}
 }
 
-// configs/targets.schema.json is the JSON Schema of the scheduled target
-// file, generated from the TargetFile struct and printed by
-// --otlp.targets-file-schema. The committed file is exactly what the code
+// configs/static-targets.schema.json is the JSON Schema of the static target
+// file, generated from the StaticTargetFile struct and printed by
+// --static-targets-file-schema. The committed file is exactly what the code
 // generates, and the shipped example matches it.
-func TestCommittedTargetsSchemaIsCurrent(t *testing.T) {
-	committed, err := os.ReadFile(targetsSchemaFile)
+func TestCommittedStaticTargetsSchemaIsCurrent(t *testing.T) {
+	committed, err := os.ReadFile(staticTargetsSchemaFile)
 	if err != nil {
 		t.Fatal(err)
 	}
-	generated, err := config.TargetsSchemaJSON()
+	generated, err := config.StaticTargetsSchemaJSON()
 	if err != nil {
 		t.Fatal(err)
 	}
 	if !bytes.Equal(committed, generated) {
-		t.Fatalf("%s is out of date; regenerate the schemas with: make schemas", targetsSchemaFile)
+		t.Fatalf("%s is out of date; regenerate the schemas with: make schemas", staticTargetsSchemaFile)
 	}
-	if errs := validateAgainstSchema(loadSchemaFile(t, targetsSchemaFile), readYAMLDocument(t, "configs/targets.example.yaml")); len(errs) > 0 {
-		t.Fatalf("configs/targets.example.yaml does not match the schema:\n%s", strings.Join(errs, "\n"))
+	if errs := validateAgainstSchema(loadSchemaFile(t, staticTargetsSchemaFile), readYAMLDocument(t, "configs/static-targets.example.yaml")); len(errs) > 0 {
+		t.Fatalf("configs/static-targets.example.yaml does not match the schema:\n%s", strings.Join(errs, "\n"))
 	}
 }
 
-// The target file schema refuses what startup refuses and a schema can see.
-func TestTargetsSchemaRejectsInvalidFiles(t *testing.T) {
-	schema := loadSchemaFile(t, targetsSchemaFile)
-	base := "targets:\n  - name: a\n    collector: app\n    target: http://a.example\n"
+// The static target file schema refuses what startup refuses and a schema can
+// see.
+func TestStaticTargetsSchemaRejectsInvalidFiles(t *testing.T) {
+	schema := loadSchemaFile(t, staticTargetsSchemaFile)
+	base := "interval: 1m\ntargets:\n  - name: a\n    collector: app\n    target: http://a.example\n"
 	var doc any
 	if err := yaml.Unmarshal([]byte(base), &doc); err != nil {
 		t.Fatal(err)
@@ -265,8 +266,10 @@ func TestTargetsSchemaRejectsInvalidFiles(t *testing.T) {
 	}
 	for name, document := range map[string]string{
 		"no targets":      "interval: 1m\n",
-		"empty targets":   "targets: []\n",
-		"no collector":    "targets:\n  - name: a\n    target: http://a.example\n",
+		"empty targets":   "interval: 1m\ntargets: []\n",
+		"no interval":     strings.Replace(base, "interval: 1m\n", "", 1),
+		"bad export flag": base + "    export_via_otlp: sometimes\n",
+		"no collector":    "interval: 1m\ntargets:\n  - name: a\n    target: http://a.example\n",
 		"unknown key":     base + "    scrape_interval: 1m\n",
 		"bad interval":    base + "    interval: a minute\n",
 		"bad name":        strings.Replace(base, "name: a", "name: bad-name", 1),

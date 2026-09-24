@@ -32,7 +32,7 @@ func TestEveryRequestKeyBelongsToAType(t *testing.T) {
 	}
 	for _, key := range yamlKeys(reflect.TypeOf(model.TargetRequestConfig{})) {
 		if !targetClaimed[key] {
-			t.Errorf("a scheduled target's request.%s is accepted by no request type", key)
+			t.Errorf("a static target's request.%s is accepted by no request type", key)
 		}
 	}
 }

@@ -176,7 +176,7 @@ func applyCollectorLabels(set *model.MetricSet, t model.TransformConfig) {
 // across collectors, and without it a logged failure does not say which
 // collector to go and look at. The line reads the same for log and fail, so a
 // failing rule reads the same in the log whichever mode it has and whether it
-// failed on a probe or on a scheduled target.
+// failed on a probe or on a static target.
 //
 // Under log, a rule can fail once per series — every row of a table, every item
 // — so within a Transform its failures are gathered (withRuleFailures) and the
@@ -511,7 +511,12 @@ func transformJQItems(ctx context.Context, data any, rule model.MetricRule, c *m
 				break
 			}
 			if labelValue != nil {
-				labels[label.Name] = fmt.Sprint(labelValue)
+				text, err := labelText(labelValue)
+				if err != nil {
+					labelErr = fmt.Errorf("metric %q item %d label %q %w", rule.Name, index, label.Name, err)
+					break
+				}
+				labels[label.Name] = text
 			}
 		}
 		if labelErr == nil {
@@ -595,15 +600,23 @@ func evaluateLabels(ctx context.Context, data any, expressions []model.LabelRule
 		}
 		if len(values) == 1 {
 			if values[0] != nil {
+				text, err := labelText(values[0])
+				if err != nil {
+					return nil, fmt.Errorf("label %q %w", label.Name, err)
+				}
 				for index := range labels {
-					labels[index][label.Name] = fmt.Sprint(values[0])
+					labels[index][label.Name] = text
 				}
 			}
 			continue
 		}
 		for index := 0; index < len(labels) && index < len(values); index++ {
 			if values[index] != nil {
-				labels[index][label.Name] = fmt.Sprint(values[index])
+				text, err := labelText(values[index])
+				if err != nil {
+					return nil, fmt.Errorf("label %q value %d %w", label.Name, index, err)
+				}
+				labels[index][label.Name] = text
 			}
 		}
 	}

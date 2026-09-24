@@ -79,13 +79,13 @@ func TestLocalFileDocumentationExamples(t *testing.T) {
 	} {
 		probeFile(t, server, query).must(t, http.StatusOK, want)
 	}
-	targets := testutil.WriteIn(t, t.TempDir(), "targets.yaml", find("targets:\n"))
-	file, err := config.LoadTargets(targets)
+	targets := testutil.WriteIn(t, t.TempDir(), "targets.yaml", find("interval: 1m\ntargets:\n"))
+	file, err := config.LoadStaticTargets(targets)
 	if err == nil {
-		err = config.ValidateTargets(file)
+		err = config.ValidateStaticTargets(file)
 	}
 	if err == nil {
-		err = config.ValidateTargetsAgainst(file, cfg)
+		err = config.ValidateStaticTargetsAgainst(file, cfg)
 	}
 	if err != nil {
 		t.Fatal(err)

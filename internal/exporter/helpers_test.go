@@ -167,18 +167,18 @@ func parseExposition(body []byte) error {
 	return err
 }
 
-// scrapeScheduledTargets scrapes every scheduled target once, now, within
-// budget, as ScheduledScrapeLoop would when each came due: the tests drive
+// scrapeStaticTargets scrapes every static target once, now, within
+// budget, as StaticScrapeLoop would when each came due: the tests drive
 // scrapes directly rather than wait for the schedule.
-func (s *Server) scrapeScheduledTargets(ctx context.Context, budget time.Duration) {
+func (s *Server) scrapeStaticTargets(ctx context.Context, budget time.Duration) {
 	if budget <= 0 {
 		budget = 30 * time.Second
 	}
 	scrapeCtx, cancel := context.WithTimeout(ctx, budget)
 	defer cancel()
 	var wg sync.WaitGroup
-	slots := make(chan struct{}, scheduledTargetConcurrency)
-	for _, target := range s.manager.Targets() {
+	slots := make(chan struct{}, staticTargetConcurrency)
+	for _, target := range s.manager.StaticTargets() {
 		wg.Add(1)
 		slots <- struct{}{}
 		go func() {

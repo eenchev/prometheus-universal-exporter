@@ -92,7 +92,7 @@ func TestProbeAnswersBeforePrometheusGivesUp(t *testing.T) {
 }
 
 // The budget bounds the whole trip whatever the request type, and a probe
-// without the header is unaffected. That a localfile read which has not
+// without the header that answers in time is unaffected. That a localfile read which has not
 // returned is abandoned at the deadline is pinned in
 // fetch/localfile_reads_test.go.
 func TestTheBudgetBoundsEveryRequestTypeAndIsOptional(t *testing.T) {
@@ -130,5 +130,74 @@ func TestTheBudgetBoundsEveryRequestTypeAndIsOptional(t *testing.T) {
 	}
 	if recorder := probeWithScrapeTimeout(t, server, "collector=stalled&target=somewhere", "10"); recorder.Code != http.StatusOK {
 		t.Fatalf("with a generous timeout: status=%d body=%s", recorder.Code, recorder.Body)
+	}
+}
+
+// A probe that names no deadline gets --probe.default-timeout, so a target
+// that never answers cannot hold it for ever, and the error says whose
+// deadline it was.
+func TestAProbeWithoutADeadlineGetsTheDefaultTimeout(t *testing.T) {
+	fetch.RequestTypes["hanging"] = &fetch.RequestType{
+		Name:     "hanging",
+		Validate: func(*model.Collector) error { return nil },
+		Fetch: func(ctx context.Context, _ string, _ *model.Collector, _ fetch.RequestOverrides, _ http.Header) (*fetch.HTTPResponse, error) {
+			<-ctx.Done()
+			return nil, ctx.Err()
+		},
+	}
+	t.Cleanup(func() { delete(fetch.RequestTypes, "hanging") })
+	c := testutil.Collector("hung", "text")
+	c.Request = model.RequestConfig{Type: "hanging"}
+	cfg := &model.Config{Collectors: []model.Collector{c}}
+	if err := config.Validate(cfg); err != nil {
+		t.Fatal(err)
+	}
+	server := NewServer(config.NewManager(cfg, "", testutil.QuietLogger(t)), "python3", testutil.QuietLogger(t))
+	server.SetDefaultProbeTimeout(200 * time.Millisecond)
+
+	start := time.Now()
+	recorder := probeOnce(t, server, "/probe?collector=hung&target=somewhere", nil)
+	elapsed := time.Since(start)
+	if recorder.Code != http.StatusBadGateway {
+		t.Fatalf("status=%d body=%s", recorder.Code, recorder.Body)
+	}
+	for _, want := range []string{"ran out of its 200ms budget", "--probe.default-timeout"} {
+		if !strings.Contains(recorder.Body.String(), want) {
+			t.Fatalf("body %q lacks %q", recorder.Body, want)
+		}
+	}
+	if elapsed > 2*time.Second {
+		t.Fatalf("answered after %s, want about the 200ms default", elapsed)
+	}
+}
+
+// Which deadline a probe gets: Prometheus's when it sent one, else the
+// default, unless the probe bounded its request with a timeout parameter or
+// the default is 0.
+func TestWhichDeadlineAProbeGets(t *testing.T) {
+	withHeader := http.Header{scrapeTimeoutHeader: {"10"}}
+	for name, tc := range map[string]struct {
+		header     http.Header
+		overrides  fetch.RequestOverrides
+		noDefault  bool
+		wantBudget time.Duration
+		wantSource string
+	}{
+		"Prometheus's scrape timeout":             {header: withHeader, wantBudget: 9500 * time.Millisecond, wantSource: budgetFromScrapeTimeout},
+		"the header wins over a timeout":          {header: withHeader, overrides: fetch.RequestOverrides{Timeout: time.Second}, wantBudget: 9500 * time.Millisecond, wantSource: budgetFromScrapeTimeout},
+		"no deadline named":                       {wantBudget: 30 * time.Second, wantSource: budgetFromDefault},
+		"a timeout parameter bounds the request":  {overrides: fetch.RequestOverrides{Timeout: time.Second}},
+		"a default of 0 leaves the probe unbound": {noDefault: true},
+	} {
+		t.Run(name, func(t *testing.T) {
+			s := &Server{timeoutOffset: 500 * time.Millisecond, defaultProbeTimeout: 30 * time.Second}
+			if tc.noDefault {
+				s.defaultProbeTimeout = 0
+			}
+			budget, source := s.probeDeadline(tc.header, tc.overrides)
+			if budget != tc.wantBudget || source != tc.wantSource {
+				t.Fatalf("got %s from %q, want %s from %q", budget, source, tc.wantBudget, tc.wantSource)
+			}
+		})
 	}
 }

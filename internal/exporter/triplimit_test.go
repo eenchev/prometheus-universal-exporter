@@ -163,16 +163,16 @@ func TestSharedAndCachedProbesTakeNoSlot(t *testing.T) {
 	<-busy
 }
 
-// A scheduled target waits for a slot within its budget, and fails in the
+// A static target waits for a slot within its budget, and fails in the
 // concurrency stage when none frees up in time.
-func TestScheduledTargetsWaitForASlot(t *testing.T) {
+func TestStaticTargetsWaitForASlot(t *testing.T) {
 	target := newHeldTarget(t)
 	scheduled := textTarget(t, "value=42\n")
 	c := testutil.Collector("shared_limit", "text")
 	c.MaxConcurrentProbes = 1
 	cfg := &model.Config{Collectors: []model.Collector{c}, OTLP: otlpConfig("http://collector.invalid/v1/metrics")}
-	file := &model.TargetFile{Targets: []model.ScheduledTarget{{Name: "scheduled", Collector: "shared_limit", Target: scheduled.URL}}}
-	server := newScheduledServer(t, cfg, file)
+	file := &model.StaticTargetFile{Interval: model.Duration(time.Minute), Targets: []model.StaticTarget{{ExportViaOTLP: true, Name: "scheduled", Collector: "shared_limit", Target: scheduled.URL}}}
+	server := newStaticServer(t, cfg, file)
 
 	busy := make(chan int, 1)
 	go func() {
@@ -189,7 +189,7 @@ func TestScheduledTargetsWaitForASlot(t *testing.T) {
 		return -1
 	}
 	// No slot frees within the budget.
-	server.scrapeScheduledTargets(context.Background(), 50*time.Millisecond)
+	server.scrapeStaticTargets(context.Background(), 50*time.Millisecond)
 	if got := up(); got != 0 {
 		t.Fatalf("up=%v while the only slot was held", got)
 	}
@@ -197,12 +197,12 @@ func TestScheduledTargetsWaitForASlot(t *testing.T) {
 		t.Fatalf("rejected=%v", got)
 	}
 
-	// The slot frees while the scheduled scrape waits.
+	// The slot frees while the static target scrape waits.
 	go func() {
 		time.Sleep(50 * time.Millisecond)
 		target.open()
 	}()
-	server.scrapeScheduledTargets(context.Background(), 5*time.Second)
+	server.scrapeStaticTargets(context.Background(), 5*time.Second)
 	if got := up(); got != 1 {
 		t.Fatalf("up=%v after the slot was freed", got)
 	}

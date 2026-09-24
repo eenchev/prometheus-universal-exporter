@@ -1,11 +1,11 @@
 {
-  "$id": "https://raw.githubusercontent.com/eenchev/prometheus-universal-exporter/main/configs/targets.schema.json",
+  "$id": "https://raw.githubusercontent.com/eenchev/prometheus-universal-exporter/main/configs/static-targets.schema.json",
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "additionalProperties": false,
-  "description": "Scheduled targets of the exporter, scraped by the exporter itself and delivered over OTLP. Passed with --otlp.targets-file. See docs/OTLP.md#scheduled-targets.",
+  "description": "Static targets of the exporter, scraped by the exporter itself on their intervals and served together on the static targets endpoint (--web.static-targets-path); a target with export_via_otlp is also delivered over OTLP. Passed with --static-targets-file. See docs/STATIC-TARGETS.md.",
   "properties": {
     "interval": {
-      "description": "How often a target that sets no interval is scraped. At least 1s; defaults to 1m.",
+      "description": "How often a target that sets no interval is scraped, such as 1m. Required; at least 1s.",
       "pattern": "^[-+]?(0|([0-9]*(\\.[0-9]*)?(ns|us|µs|μs|ms|s|m|h))+)$",
       "type": "string"
     },
@@ -23,8 +23,12 @@
               "boolean"
             ]
           },
+          "export_via_otlp": {
+            "description": "Also deliver this target's results over OTLP, on otlp.interval, besides serving them on the static targets endpoint. Needs otlp.enabled. Defaults to false.",
+            "type": "boolean"
+          },
           "interval": {
-            "description": "How often this target is scraped, whatever otlp.interval exports on. At least 1s, and no shorter than request.timeout; defaults to the file's interval.",
+            "description": "How often this target is scraped, whatever Prometheus scrapes the endpoint on and otlp.interval exports on. At least 1s, and no shorter than request.timeout; defaults to the file's interval.",
             "pattern": "^[-+]?(0|([0-9]*(\\.[0-9]*)?(ns|us|µs|μs|ms|s|m|h))+)$",
             "type": "string"
           },
@@ -36,17 +40,17 @@
                 "boolean"
               ]
             },
-            "description": "Added to every metric the target produces, without overwriting a label the collector extracted.",
+            "description": "Added to every metric the target produces, without overwriting a label the collector extracted. static_target is set by the endpoint and cannot be used.",
             "type": "object"
           },
           "name": {
-            "description": "Unique name, in logs and the scheduled_target label. Defaults to \u003ccollector\u003e_\u003cindex\u003e.",
+            "description": "Unique name, in logs and the static_target label. Defaults to \u003ccollector\u003e_\u003cindex\u003e.",
             "pattern": "^[a-zA-Z_][a-zA-Z0-9_]*$",
             "type": "string"
           },
           "otlp": {
             "additionalProperties": false,
-            "description": "The OTLP resource this target's metrics are exported under, over the exporter-wide otlp settings.",
+            "description": "The OTLP resource this target's metrics are exported under, over the exporter-wide otlp settings. Only with export_via_otlp: true.",
             "properties": {
               "resource_attributes": {
                 "additionalProperties": {
@@ -232,8 +236,9 @@
     }
   },
   "required": [
+    "interval",
     "targets"
   ],
-  "title": "prometheus-universal-exporter scheduled target file",
+  "title": "prometheus-universal-exporter static target file",
   "type": "object"
 }

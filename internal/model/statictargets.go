@@ -2,39 +2,39 @@ package model
 
 import (
 	"reflect"
-	"time"
 
 	"gopkg.in/yaml.v3"
 )
 
-// TargetFile is the optional scheduled-target document. Its targets are
-// scraped by the exporter itself, each on its own interval, and are only
-// delivered over OTLP, so the file is rejected unless OTLP export is enabled.
-type TargetFile struct {
-	// Interval is how often a target that sets none is scraped;
-	// DefaultScheduledTargetInterval when unset.
-	Interval Duration          `yaml:"interval"`
-	Targets  []ScheduledTarget `yaml:"targets"`
+// StaticTargetFile is the optional static target document, loaded with
+// --static-targets-file. Its targets are scraped by the exporter itself, each
+// on its own interval, and their latest results are served together on the
+// static targets endpoint (--web.static-targets-path) for Prometheus to scrape.
+// A target with export_via_otlp is also delivered over OTLP.
+type StaticTargetFile struct {
+	// Interval is how often a target that sets none is scraped. Required.
+	Interval Duration       `yaml:"interval"`
+	Targets  []StaticTarget `yaml:"targets"`
 }
 
-// DefaultScheduledTargetInterval is how often a scheduled target is scraped
-// when neither it nor its file says: Prometheus's own default scrape interval.
-const DefaultScheduledTargetInterval = Duration(60 * time.Second)
-
-// ScheduledTarget describes one fully specified request. Every per-scrape
+// StaticTarget describes one fully specified request. Every per-scrape
 // parameter the /probe endpoint accepts is available here, alongside the labels
-// and OTLP resource identity the exported metrics carry.
-type ScheduledTarget struct {
+// and, for a target exported over OTLP, the resource identity it carries.
+type StaticTarget struct {
 	Name      string `yaml:"name"`
 	Collector string `yaml:"collector"`
 	Target    string `yaml:"target"`
-	// Interval is how often the target is scraped, whatever otlp.interval
-	// exports on. Validation fills it from the file's interval or the
-	// default, so it is always set on a loaded target.
+	// Interval is how often the target is scraped, whatever Prometheus scrapes
+	// the endpoint on and otlp.interval exports on. Validation fills it from
+	// the file's interval, so it is always set on a loaded target.
 	Interval Duration            `yaml:"interval"`
 	Request  TargetRequestConfig `yaml:"request"`
 	Labels   map[string]string   `yaml:"labels"`
-	OTLP     TargetOTLPConfig    `yaml:"otlp"`
+	// ExportViaOTLP delivers the target's results over OTLP as well, on
+	// otlp.interval, besides serving them on the static targets endpoint.
+	ExportViaOTLP bool `yaml:"export_via_otlp"`
+	// OTLP is the target's OTLP resource identity; only with ExportViaOTLP.
+	OTLP TargetOTLPConfig `yaml:"otlp"`
 	// Params fills the collector's {{param_<name>}} placeholders, as the
 	// param_<name> probe parameters fill them for a probe
 	// (fetch/requesttemplate.go).

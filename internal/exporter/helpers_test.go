@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/eenchev/prometheus-universal-exporter/internal/config"
+	"github.com/eenchev/prometheus-universal-exporter/internal/decode"
 	"github.com/eenchev/prometheus-universal-exporter/internal/fetch"
 	"github.com/eenchev/prometheus-universal-exporter/internal/model"
 	"github.com/eenchev/prometheus-universal-exporter/internal/testutil"
@@ -46,27 +47,12 @@ func requirePython(t *testing.T) {
 }
 
 // usePythonPool runs the test against a fresh worker pool and restores the
-// previous one afterwards, stopping the fresh pool's workers. Every count a
-// test reads from the pool is then its own, so the tests pass under
-// -count=N and -shuffle=on. Tests do not run in parallel, so swapping the
-// package's pool is safe.
-func usePythonPool(t *testing.T) *transform.PythonPool {
+// previous one afterwards (transform.IsolatePythonWorkers). Every count a test reads
+// from the pool is then its own, so the tests pass under -count=N and
+// -shuffle=on. Tests do not run in parallel, so swapping the pool is safe.
+func usePythonPool(t *testing.T) {
 	t.Helper()
-	pool := transform.NewPythonPool()
-	previous := transform.PythonPoolRef.Swap(pool)
-	t.Cleanup(func() {
-		transform.PythonPoolRef.Store(previous)
-		pool.Close()
-	})
-	return pool
-}
-
-func workerCollector(name, script string) *model.Collector {
-	return &model.Collector{
-		Name: name, Request: model.RequestConfig{Type: fetch.RequestTypeHTTP},
-		Transform: model.TransformConfig{Type: "python", Script: script},
-		Limits:    model.Limits{ScriptTimeout: model.Duration(2 * time.Second), MaxOutputBytes: 1 << 20},
-	}
+	t.Cleanup(transform.IsolatePythonWorkers())
 }
 
 // fixtureType is a second request type registered only for these tests, so
@@ -164,3 +150,18 @@ func watchedManager(t *testing.T) (*config.Manager, string) {
 
 // idleWorkers counts a collector's idle workers.
 func idleWorkers(collector string) int { return transform.PythonWorkers().Snapshot(collector).Idle }
+
+// installConfig puts an already validated cfg in force on server, as an
+// accepted reload would. The server reads its configuration from its manager
+// on every use, so a manager holding cfg stands in for one that reloaded it.
+func installConfig(server *Server, cfg *model.Config) {
+	server.manager = config.NewManager(cfg, "", server.logger)
+}
+
+// parseExposition reads body as the Prometheus text format, the way a
+// collector passing Prometheus text through reads a target.
+func parseExposition(body []byte) error {
+	r := &fetch.HTTPResponse{Body: body, Headers: http.Header{"Content-Type": {"text/plain; version=0.0.4"}}}
+	_, err := decode.Decode(r, &model.Collector{Decoder: model.DecoderConfig{Type: "prometheus"}})
+	return err
+}

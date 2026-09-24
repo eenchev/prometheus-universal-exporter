@@ -40,7 +40,7 @@ func countingServer(t *testing.T, tlsServer bool) (*httptest.Server, *atomic.Int
 }
 
 func TestTransportsAreSharedBySettings(t *testing.T) {
-	cache := NewTransportCache()
+	cache := newTransportCache()
 	now := time.Now()
 	get := func(settings TransportSettings) *http.Transport {
 		t.Helper()
@@ -78,7 +78,7 @@ func TestARotatedCertificateGetsANewTransport(t *testing.T) {
 		}
 	}
 	write(time.Now().Add(-time.Hour))
-	cache := NewTransportCache()
+	cache := newTransportCache()
 	settings := TransportSettings{TLS: model.TLSConfig{CAFile: ca}}
 	first, err := cache.get(settings, time.Now())
 	if err != nil {
@@ -100,7 +100,7 @@ func TestARotatedCertificateGetsANewTransport(t *testing.T) {
 
 // A pool nothing uses is closed and forgotten.
 func TestUnusedTransportsAreForgotten(t *testing.T) {
-	cache := NewTransportCache()
+	cache := newTransportCache()
 	start := time.Now()
 	if _, err := cache.get(TransportSettings{}, start); err != nil {
 		t.Fatal(err)

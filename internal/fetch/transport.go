@@ -64,9 +64,9 @@ type transportCache struct {
 	entries map[TransportSettings]*cachedTransport
 }
 
-var Transports = NewTransportCache()
+var transports = newTransportCache()
 
-func NewTransportCache() *transportCache {
+func newTransportCache() *transportCache {
 	return &transportCache{entries: map[TransportSettings]*cachedTransport{}}
 }
 
@@ -154,7 +154,7 @@ func tlsFilesStamp(t model.TLSConfig) string {
 // HTTPClient is a client on the cached transport for settings. The client
 // itself is cheap and carries the per-request redirect policy and timeout.
 func HTTPClient(settings TransportSettings, followRedirects bool, timeout time.Duration) (*http.Client, error) {
-	transport, err := Transports.get(settings, time.Now())
+	transport, err := transports.get(settings, time.Now())
 	if err != nil {
 		return nil, err
 	}

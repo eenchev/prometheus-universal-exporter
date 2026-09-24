@@ -335,16 +335,16 @@ func Load(path string, opts ...LoadOption) (*model.Config, error) {
 }
 
 type Manager struct {
-	Current atomic.Value
+	current atomic.Value
 	path    string
 	logger  *slog.Logger
-	LastMod time.Time
+	lastMod time.Time
 	// collectorFiles is the stamp of the collector files the configuration
 	// read when last loaded (collectorFilesStamp).
 	collectorFiles string
 	targetPath     string
 	targetFile     atomic.Pointer[model.TargetFile]
-	TargetsLastMod time.Time
+	targetsLastMod time.Time
 	pythonPath     string
 	watchInterval  time.Duration
 	expandEnv      bool
@@ -363,7 +363,7 @@ const DefaultWatchInterval = 60 * time.Second
 
 func NewManager(c *model.Config, path string, l *slog.Logger) *Manager {
 	m := &Manager{path: path, logger: l, Reloads: newReloadStatus()}
-	m.Current.Store(c)
+	m.current.Store(c)
 	if c != nil {
 		m.Reloads.loaded(reloadFileConfig)
 	}
@@ -373,7 +373,7 @@ func NewManager(c *model.Config, path string, l *slog.Logger) *Manager {
 	return m
 }
 
-func (m *Manager) Get() *model.Config { return m.Current.Load().(*model.Config) }
+func (m *Manager) Get() *model.Config { return m.current.Load().(*model.Config) }
 
 // SetWatchInterval enables the configuration watch and sets how often the
 // files are re-stated. A non-positive interval leaves the watch disabled, which
@@ -418,7 +418,7 @@ func (m *Manager) SetTargets(path string, f *model.TargetFile) {
 	}
 	if path != "" {
 		if st, err := os.Stat(path); err == nil {
-			m.TargetsLastMod = st.ModTime()
+			m.targetsLastMod = st.ModTime()
 		}
 	}
 }
@@ -445,14 +445,14 @@ func (m *Manager) ReloadLoop(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			m.ReloadConfig()
-			m.ReloadTargets()
+			m.reloadConfig()
+			m.reloadTargets()
 		}
 	}
 }
 
 // The configuration is reloaded when the watch sees a file change
-// (ReloadConfig, ReloadTargets), on SIGHUP, and on POST /-/reload when the
+// (reloadConfig, reloadTargets), on SIGHUP, and on POST /-/reload when the
 // lifecycle API is enabled (Reload). Every reload goes through applyConfig and
 // applyTargets under reloadMu, so two triggers at once never interleave, and
 // each is logged with what triggered it.
@@ -462,9 +462,9 @@ const (
 	ReloadTriggerHTTP   = "http"
 )
 
-// ReloadConfig reloads the configuration when the watch finds the file, or
+// reloadConfig reloads the configuration when the watch finds the file, or
 // one of its collector files, changed.
-func (m *Manager) ReloadConfig() {
+func (m *Manager) reloadConfig() {
 	m.reloadMu.Lock()
 	defer m.reloadMu.Unlock()
 	st, err := os.Stat(m.path)
@@ -474,22 +474,22 @@ func (m *Manager) ReloadConfig() {
 	// A collector file edited, added or removed is a change too, although the
 	// configuration file itself is untouched.
 	stamp := collectorFilesStamp(m.path, m.Get().CollectorFiles)
-	if !st.ModTime().After(m.LastMod) && stamp == m.collectorFiles {
+	if !st.ModTime().After(m.lastMod) && stamp == m.collectorFiles {
 		return
 	}
 	_ = m.applyConfig(reloadTriggerWatch)
 }
 
-// ReloadTargets reloads the scheduled target file when the watch finds it
+// reloadTargets reloads the scheduled target file when the watch finds it
 // changed.
-func (m *Manager) ReloadTargets() {
+func (m *Manager) reloadTargets() {
 	m.reloadMu.Lock()
 	defer m.reloadMu.Unlock()
 	if m.targetPath == "" {
 		return
 	}
 	st, err := os.Stat(m.targetPath)
-	if err != nil || !st.ModTime().After(m.TargetsLastMod) {
+	if err != nil || !st.ModTime().After(m.targetsLastMod) {
 		return
 	}
 	_ = m.applyTargets(reloadTriggerWatch)
@@ -511,7 +511,7 @@ func (m *Manager) Reload(trigger string) error {
 // applyConfig loads, checks and installs the configuration. reloadMu is held.
 func (m *Manager) applyConfig(trigger string) error {
 	if st, err := os.Stat(m.path); err == nil {
-		m.LastMod = st.ModTime()
+		m.lastMod = st.ModTime()
 	}
 	m.collectorFiles = collectorFilesStamp(m.path, m.Get().CollectorFiles)
 	reject := func(err error) error {
@@ -534,7 +534,7 @@ func (m *Manager) applyConfig(trigger string) error {
 			return reject(err)
 		}
 	}
-	m.Current.Store(c)
+	m.current.Store(c)
 	m.Reloads.record(reloadFileConfig, true)
 	// Interpreters of scripts this reload removed or changed are stopped now
 	// rather than after the idle timeout.
@@ -550,7 +550,7 @@ func (m *Manager) applyConfig(trigger string) error {
 // is held.
 func (m *Manager) applyTargets(trigger string) error {
 	if st, err := os.Stat(m.targetPath); err == nil {
-		m.TargetsLastMod = st.ModTime()
+		m.targetsLastMod = st.ModTime()
 	}
 	f, err := LoadTargets(m.targetPath, m.loadOptions()...)
 	if err == nil {

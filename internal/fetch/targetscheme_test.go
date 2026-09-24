@@ -28,7 +28,7 @@ func TestATargetWithoutASchemeMeansHTTP(t *testing.T) {
 	c := pathCollector("/status")
 	for _, test := range tests {
 		t.Run(test.target, func(t *testing.T) {
-			u, err := ResolveRequestURL(test.target, &c, RequestOverrides{})
+			u, err := resolveRequestURL(test.target, &c, RequestOverrides{})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -43,7 +43,7 @@ func TestATargetWithoutASchemeMeansHTTP(t *testing.T) {
 // redacted wherever the target is shown.
 func TestCredentialsInASchemeLessTarget(t *testing.T) {
 	c := pathCollector("/status")
-	u, err := ResolveRequestURL("operator:s3cret@10.0.0.5:8080", &c, RequestOverrides{})
+	u, err := resolveRequestURL("operator:s3cret@10.0.0.5:8080", &c, RequestOverrides{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -78,10 +78,10 @@ func TestSafeTargetNeverPanics(t *testing.T) {
 func TestABareTargetIsSubjectToAllowedSchemes(t *testing.T) {
 	c := pathCollector("/status")
 	c.Request.AllowedSchemes = []string{"https"}
-	if _, err := ResolveRequestURL("10.0.0.5:8080", &c, RequestOverrides{}); err == nil || !strings.Contains(err.Error(), `scheme "http" is not allowed`) {
+	if _, err := resolveRequestURL("10.0.0.5:8080", &c, RequestOverrides{}); err == nil || !strings.Contains(err.Error(), `scheme "http" is not allowed`) {
 		t.Fatalf("err=%v", err)
 	}
-	if _, err := ResolveRequestURL("https://10.0.0.5:8443", &c, RequestOverrides{}); err != nil {
+	if _, err := resolveRequestURL("https://10.0.0.5:8443", &c, RequestOverrides{}); err != nil {
 		t.Fatal(err)
 	}
 }

@@ -83,10 +83,10 @@ func declaredCharset(contentType string) string {
 	return params["charset"]
 }
 
-// ConvertToUTF8 converts r's body to UTF-8 by its byte order mark, the
+// convertToUTF8 converts r's body to UTF-8 by its byte order mark, the
 // collector's response.charset or the Content-Type charset, before the format
 // is detected. It reports whether one of them named the encoding.
-func ConvertToUTF8(r *fetch.HTTPResponse, c *model.Collector) (bool, error) {
+func convertToUTF8(r *fetch.HTTPResponse, c *model.Collector) (bool, error) {
 	for _, bom := range boms {
 		if bytes.HasPrefix(r.Body, bom.mark) {
 			body := r.Body[len(bom.mark):]

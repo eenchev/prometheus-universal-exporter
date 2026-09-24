@@ -205,7 +205,7 @@ func TestConcurrentReloadsAreSerialized(t *testing.T) {
 		}()
 		go func() {
 			defer wg.Done()
-			r.manager.ReloadConfig()
+			_ = r.manager.Reload(config.ReloadTriggerSignal)
 		}()
 	}
 	wg.Wait()

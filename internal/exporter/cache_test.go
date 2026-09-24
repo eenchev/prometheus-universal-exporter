@@ -303,7 +303,7 @@ func TestCollectorCacheIsNotSharedAcrossCredentials(t *testing.T) {
 func TestCollectorCacheIsInvalidatedByConfigurationReload(t *testing.T) {
 	target, requests := countingTarget(func(*http.Request) string { return "value=42\n" })
 	defer target.Close()
-	server, manager := newCacheTestServer(t, cachingCollector("reloaded", time.Minute))
+	server, _ := newCacheTestServer(t, cachingCollector("reloaded", time.Minute))
 	probe := "/probe?target=" + target.URL + "&collector=reloaded"
 
 	if response := probeOnce(t, server, probe, nil); !strings.Contains(response.Body.String(), "demo_value 42") {
@@ -315,7 +315,7 @@ func TestCollectorCacheIsInvalidatedByConfigurationReload(t *testing.T) {
 	if err := config.Validate(reloaded); err != nil {
 		t.Fatal(err)
 	}
-	manager.Current.Store(reloaded)
+	installConfig(server, reloaded)
 
 	response := probeOnce(t, server, probe, nil)
 	if !strings.Contains(response.Body.String(), "renamed_value 42") {

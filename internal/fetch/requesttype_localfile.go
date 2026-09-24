@@ -86,10 +86,10 @@ func init() {
 // series are told apart from the per-collector ones, which carry none.
 const localFileMethod = "READ"
 
-// AfterLocalFileRead, when set, runs between reading a file and checking
+// afterLocalFileRead, when set, runs between reading a file and checking
 // whether it changed meanwhile. Only tests set it, to change a file under a
 // read or to hold one up.
-var AfterLocalFileRead atomic.Pointer[func(string)]
+var afterLocalFileRead atomic.Pointer[func(string)]
 
 // localFileAttempts is how often a file that keeps changing under the read is
 // tried before the scrape gives up on it.
@@ -231,11 +231,11 @@ func localFileLabel(target string, c *model.Collector, overrides RequestOverride
 	return "file://" + filepath.ToSlash(filepath.Join(c.Request.Root, file)), nil
 }
 
-// LocalFileMaxPendingReads is how many reads of one collector may be in
+// localFileMaxPendingReads is how many reads of one collector may be in
 // progress at once, including reads whose probe has already given up on them.
 // Identical probes share a read (exporter/probeflight.go), so reaching it takes
 // different files on a filesystem that has stopped answering.
-const LocalFileMaxPendingReads = 4
+const localFileMaxPendingReads = 4
 
 // pendingReads counts the reads in progress per collector.
 type pendingReads struct {
@@ -243,7 +243,7 @@ type pendingReads struct {
 	count map[string]int
 }
 
-var LocalFileReads = &pendingReads{count: map[string]int{}}
+var localFileReads = &pendingReads{count: map[string]int{}}
 
 // acquire takes a read slot for a collector, or refuses at once when every
 // slot is held by a read that has not returned. release frees it, and is
@@ -251,8 +251,8 @@ var LocalFileReads = &pendingReads{count: map[string]int{}}
 func (p *pendingReads) acquire(collector string) (release func(), err error) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	if p.count[collector] >= LocalFileMaxPendingReads {
-		return nil, fmt.Errorf("collector %q already has %d file reads that have not returned; the filesystem under request.root is not answering, so no further read is started until one does", collector, LocalFileMaxPendingReads)
+	if p.count[collector] >= localFileMaxPendingReads {
+		return nil, fmt.Errorf("collector %q already has %d file reads that have not returned; the filesystem under request.root is not answering, so no further read is started until one does", collector, localFileMaxPendingReads)
 	}
 	p.count[collector]++
 	var once sync.Once
@@ -268,8 +268,8 @@ func (p *pendingReads) acquire(collector string) (release func(), err error) {
 	}, nil
 }
 
-// Pending reports how many reads of a collector are in progress, for tests.
-func (p *pendingReads) Pending(collector string) int {
+// pending reports how many reads of a collector are in progress, for tests.
+func (p *pendingReads) pending(collector string) int {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	return p.count[collector]
@@ -300,14 +300,14 @@ func fetchLocalFile(ctx context.Context, target string, c *model.Collector, over
 	// for good; the scrape stops waiting when its context ends, but the read
 	// goes on. The reads still going on are capped per collector, so a stuck
 	// filesystem costs a few goroutines rather than one per scrape.
-	release, err := LocalFileReads.acquire(c.Name)
+	release, err := localFileReads.acquire(c.Name)
 	if err != nil {
 		return nil, err
 	}
 	done := make(chan localFileRead, 1)
 	go func() {
 		defer release()
-		body, info, err := readLocalFile(c.Request.Root, file, ResponseLimit(c))
+		body, info, err := readLocalFile(c.Request.Root, file, responseLimit(c))
 		done <- localFileRead{body: body, info: info, err: err}
 	}()
 	var read localFileRead
@@ -406,7 +406,7 @@ func readOpenedFile(root *os.Root, name, full string, limit int64) ([]byte, fs.F
 	if int64(len(body)) > limit {
 		return nil, nil, model.MarkError(fmt.Errorf("file %s: response size exceeds limit %d", full, limit), model.ErrLimitExceeded)
 	}
-	if hook := AfterLocalFileRead.Load(); hook != nil {
+	if hook := afterLocalFileRead.Load(); hook != nil {
 		(*hook)(full)
 	}
 	after, err := f.Stat()

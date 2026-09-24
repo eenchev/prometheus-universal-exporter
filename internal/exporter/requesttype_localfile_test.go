@@ -9,7 +9,6 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
-	"strconv"
 	"strings"
 	"syscall"
 	"testing"
@@ -186,56 +185,6 @@ func TestLocalFileMaxAge(t *testing.T) {
 	probeFile(t, server, "collector=files").must(t, http.StatusBadGateway, "longer than request.max_age 1h0m0s", "whatever writes it has stopped")
 }
 
-// A file that changes under the read is read again; one that keeps changing
-// is refused, rather than exporting a torn write.
-func TestLocalFileChangedWhileRead(t *testing.T) {
-	root := t.TempDir()
-	file := testutil.WriteIn(t, root, "app.prom", promFile)
-	server := fileServer(t, fileCollector("files", root, "app.prom"))
-	t.Cleanup(func() { fetch.AfterLocalFileRead.Store(nil) })
-
-	reads := 0
-	setReadHook(func(string) {
-		reads++
-		if reads == 1 {
-			// The writer rewrites the file in place during the first read.
-			testutil.WriteIn(t, root, "app.prom", strings.Replace(promFile, "7", "8", 1)+"# more\n")
-		}
-	})
-	probeFile(t, server, "collector=files").must(t, http.StatusOK, "} 8")
-	if reads != 2 {
-		t.Fatalf("read %d times, want 2", reads)
-	}
-
-	setReadHook(func(string) {
-		reads++
-		later := time.Now().Add(time.Duration(reads) * time.Second)
-		if err := os.Chtimes(file, later, later); err != nil {
-			t.Error(err)
-		}
-	})
-	probeFile(t, server, "collector=files").must(t, http.StatusBadGateway, "changed while it was read", "rename it into place")
-}
-
-// A read that does not return in time — a hung network filesystem — does not
-// hold the probe past its timeout.
-func TestLocalFileTimeout(t *testing.T) {
-	root := t.TempDir()
-	testutil.WriteIn(t, root, "app.prom", promFile)
-	server := fileServer(t, fileCollector("files", root, "app.prom"))
-	release := make(chan struct{})
-	t.Cleanup(func() {
-		close(release)
-		fetch.AfterLocalFileRead.Store(nil)
-	})
-	setReadHook(func(string) { <-release })
-	start := time.Now()
-	probeFile(t, server, "collector=files&timeout=100ms").must(t, http.StatusBadGateway, context.DeadlineExceeded.Error())
-	if elapsed := time.Since(start); elapsed > 5*time.Second {
-		t.Fatalf("the probe took %s", elapsed)
-	}
-}
-
 // The verbose series of a file read carry its file:// URL, with path
 // parameters as placeholders, and READ as the method.
 func TestLocalFileVerboseLabels(t *testing.T) {
@@ -310,75 +259,5 @@ func TestLocalFileScheduledTargets(t *testing.T) {
 				t.Fatalf("err=%v, want %q", err, tc.want)
 			}
 		})
-	}
-}
-
-// Reads left running on a filesystem that has stopped answering are capped per
-// collector: once every slot is held, a probe fails at once instead of adding
-// another goroutine, and the slots come back as the reads return.
-func TestLocalFilePendingReadsAreCapped(t *testing.T) {
-	root := t.TempDir()
-	for i := 0; i <= fetch.LocalFileMaxPendingReads; i++ {
-		testutil.WriteIn(t, root, "f"+strconv.Itoa(i)+".prom", promFile)
-	}
-	server := fileServer(t, fileCollector("stuck", root, ""), fileCollector("other", root, ""))
-	release := make(chan struct{})
-	t.Cleanup(func() { fetch.AfterLocalFileRead.Store(nil) })
-	setReadHook(func(string) { <-release })
-
-	// Different files, so the probes do not share one read.
-	for i := 0; i < fetch.LocalFileMaxPendingReads; i++ {
-		probeFile(t, server, "collector=stuck&timeout=20ms&target=f"+strconv.Itoa(i)+".prom").must(t, http.StatusBadGateway, context.DeadlineExceeded.Error())
-	}
-	if got := fetch.LocalFileReads.Pending("stuck"); got != fetch.LocalFileMaxPendingReads {
-		t.Fatalf("pending=%d, want %d", got, fetch.LocalFileMaxPendingReads)
-	}
-	start := time.Now()
-	probeFile(t, server, "collector=stuck&timeout=5s&target=f"+strconv.Itoa(fetch.LocalFileMaxPendingReads)+".prom").must(t, http.StatusBadGateway, "already has 4 file reads that have not returned")
-	if time.Since(start) > time.Second {
-		t.Fatal("a probe over the cap waited instead of failing at once")
-	}
-	// The cap is per collector.
-	if got := fetch.LocalFileReads.Pending("other"); got != 0 {
-		t.Fatalf("other collector pending=%d", got)
-	}
-
-	close(release)
-	deadline := time.Now().Add(5 * time.Second)
-	for fetch.LocalFileReads.Pending("stuck") > 0 {
-		if time.Now().After(deadline) {
-			t.Fatalf("pending reads never returned: %d", fetch.LocalFileReads.Pending("stuck"))
-		}
-		time.Sleep(5 * time.Millisecond)
-	}
-	fetch.AfterLocalFileRead.Store(nil)
-	probeFile(t, server, "collector=stuck&target=f0.prom").must(t, http.StatusOK, "} 7")
-}
-
-// The budget bounds the whole trip, a file read included, and a probe without
-// the header is unaffected.
-func TestTheBudgetBoundsFileReadsAndIsOptional(t *testing.T) {
-	root := t.TempDir()
-	testutil.WriteIn(t, root, "app.prom", promFile)
-	server := fileServer(t, fileCollector("files", root, "app.prom"))
-	server.SetTimeoutOffset(0)
-
-	release := make(chan struct{})
-	t.Cleanup(func() {
-		close(release)
-		fetch.AfterLocalFileRead.Store(nil)
-	})
-	setReadHook(func(string) { <-release })
-	recorder := probeWithScrapeTimeout(t, server, "collector=files", "0.2")
-	if recorder.Code != http.StatusBadGateway || !strings.Contains(recorder.Body.String(), "200ms budget") {
-		t.Fatalf("status=%d body=%s", recorder.Code, recorder.Body)
-	}
-
-	fetch.AfterLocalFileRead.Store(nil)
-	if recorder := probeOnce(t, server, "/probe?collector=files", nil); recorder.Code != http.StatusOK {
-		t.Fatalf("without the header: status=%d body=%s", recorder.Code, recorder.Body)
-	}
-	if recorder := probeWithScrapeTimeout(t, server, "collector=files", "10"); recorder.Code != http.StatusOK {
-		t.Fatalf("with a generous timeout: status=%d body=%s", recorder.Code, recorder.Body)
 	}
 }

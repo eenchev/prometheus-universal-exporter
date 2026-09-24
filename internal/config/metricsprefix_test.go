@@ -197,7 +197,8 @@ func TestMetricsPrefixAppliesToPythonMetrics(t *testing.T) {
 }
 
 // A declared name that would be too long once prefixed is refused at startup;
-// a name produced at scrape time is checked when the scrape happens.
+// a name produced at scrape time is checked when the scrape happens
+// (transform/metricsprefix_test.go).
 func TestMetricsPrefixRespectsTheNameLengthLimit(t *testing.T) {
 	c := testutil.Collector("prefixed", "text")
 	c.MetricsPrefix = "acme"
@@ -220,13 +221,5 @@ func TestMetricsPrefixRespectsTheNameLengthLimit(t *testing.T) {
 	c.Limits.MaxMetricNameLength = len("acme_demo_value")
 	if err := Validate(&model.Config{Collectors: []model.Collector{c}}); err != nil {
 		t.Fatal(err)
-	}
-
-	// At scrape time, the prefixed name goes through the same limit check as
-	// every exported name.
-	set := &model.MetricSet{Metrics: []model.Metric{{Name: "script_value", Type: model.GaugeMetricType, Value: 1}}}
-	transform.ApplyMetricsPrefix(set, "acme")
-	if err := set.Validate(model.Limits{MaxMetricNameLength: len("acme_script_value") - 1}); err == nil {
-		t.Fatal("a prefixed name over the limit passed validation")
 	}
 }

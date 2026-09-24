@@ -61,8 +61,8 @@ func prefixedMetricName(prefix, name string) string {
 	return prefix + "_" + name
 }
 
-// ApplyMetricsPrefix renames every metric in the set.
-func ApplyMetricsPrefix(set *model.MetricSet, prefix string) {
+// applyMetricsPrefix renames every metric in the set.
+func applyMetricsPrefix(set *model.MetricSet, prefix string) {
 	if prefix == "" {
 		return
 	}

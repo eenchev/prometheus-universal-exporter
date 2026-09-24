@@ -54,12 +54,12 @@ func TestConfigSchemaCoversEveryKey(t *testing.T) {
 			t.Errorf("%s allows unknown keys, but the configuration rejects them", path)
 		}
 	}
-	walk(reflect.TypeOf(model.Config{}), Schema(), "")
+	walk(reflect.TypeOf(model.Config{}), configSchema(), "")
 }
 
 // The request types offered are the ones this build carries.
 func TestConfigSchemaListsTheBuiltRequestTypes(t *testing.T) {
-	collector := Schema()["properties"].(map[string]any)["collectors"].(map[string]any)["items"].(map[string]any)
+	collector := configSchema()["properties"].(map[string]any)["collectors"].(map[string]any)["items"].(map[string]any)
 	requestType := collector["properties"].(map[string]any)["request"].(map[string]any)["properties"].(map[string]any)["type"].(map[string]any)
 	if !reflect.DeepEqual(requestType["enum"], fetch.BuiltRequestTypes()) {
 		t.Fatalf("enum=%v, built=%v", requestType["enum"], fetch.BuiltRequestTypes())

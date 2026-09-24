@@ -243,12 +243,12 @@ func TestResourceMetricsFollowTheConfiguration(t *testing.T) {
 	if err := config.Validate(loud); err != nil {
 		t.Fatal(err)
 	}
-	manager.Current.Store(loud)
+	installConfig(server, loud)
 	if !strings.Contains(selfMetrics(t, server), "go_goroutines") {
 		t.Fatal("resource metrics did not appear after the configuration enabled them")
 	}
 
-	manager.Current.Store(quiet)
+	installConfig(server, quiet)
 	if strings.Contains(selfMetrics(t, server), "go_goroutines") {
 		t.Fatal("turning them off must drop them rather than leave them exposed")
 	}

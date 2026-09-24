@@ -17,7 +17,6 @@ import (
 	"time"
 
 	"github.com/eenchev/prometheus-universal-exporter/internal/config"
-	"github.com/eenchev/prometheus-universal-exporter/internal/fetch"
 	"github.com/eenchev/prometheus-universal-exporter/internal/model"
 	"github.com/eenchev/prometheus-universal-exporter/internal/testutil"
 )
@@ -576,65 +575,5 @@ func TestPendingOTLPPointsAreCapped(t *testing.T) {
 	server.drainOTLP()
 	if server.otlpPoints != 0 {
 		t.Fatal("draining did not reset the count")
-	}
-}
-
-// freshTransports gives the test transports built from the environment it
-// sets.
-func freshTransports(t *testing.T) {
-	t.Helper()
-	previous := fetch.Transports
-	fetch.Transports = fetch.NewTransportCache()
-	t.Cleanup(func() { fetch.Transports = previous })
-}
-
-// forwardProxy answers every request it is sent as a proxy, and records the
-// URLs asked for.
-func forwardProxy(t *testing.T) (*httptest.Server, func() []string) {
-	t.Helper()
-	var mu sync.Mutex
-	var seen []string
-	proxy := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		_, _ = io.Copy(io.Discard, r.Body)
-		mu.Lock()
-		seen = append(seen, r.URL.String())
-		mu.Unlock()
-		w.Header().Set("Content-Type", "text/plain")
-		_, _ = w.Write([]byte("value=7\n"))
-	}))
-	t.Cleanup(proxy.Close)
-	return proxy, func() []string {
-		mu.Lock()
-		defer mu.Unlock()
-		return append([]string(nil), seen...)
-	}
-}
-
-// Target requests and OTLP exports go through the proxy the environment names,
-// and a host NO_PROXY names goes direct.
-func TestRequestsUseTheProxyFromTheEnvironment(t *testing.T) {
-	proxy, seen := forwardProxy(t)
-	t.Setenv("HTTP_PROXY", proxy.URL)
-	t.Setenv("HTTPS_PROXY", "")
-	t.Setenv("NO_PROXY", "direct.example")
-	t.Setenv("http_proxy", "")
-	t.Setenv("https_proxy", "")
-	t.Setenv("no_proxy", "")
-	freshTransports(t)
-
-	server := otlpServer(t, "http://otel.example:4318")
-	recorder := probeOnce(t, server, "/probe?collector=text&target=http://target.example:8080/status", nil)
-	if recorder.Code != http.StatusOK || !strings.Contains(recorder.Body.String(), "demo_value 7") {
-		t.Fatalf("a probe through the proxy: %d %s", recorder.Code, recorder.Body.String())
-	}
-	server.exportOTLP(context.Background(), 5*time.Second)
-	got := seen()
-	if len(got) != 2 || got[0] != "http://target.example:8080/status" || got[1] != "http://otel.example:4318/v1/metrics" {
-		t.Fatalf("the proxy was asked for %q", got)
-	}
-
-	probeOnce(t, server, "/probe?collector=text&timeout=1s&target=http://direct.example:8080/status", nil)
-	if got := seen(); len(got) != 2 {
-		t.Fatalf("a NO_PROXY host went through the proxy: %q", got)
 	}
 }

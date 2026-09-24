@@ -143,14 +143,14 @@ func ParseRequestOverrides(values url.Values) (RequestOverrides, error) {
 	return overrides, nil
 }
 
-// ResolveRequestURL builds the URL a scrape actually requests. Both fetch and
+// resolveRequestURL builds the URL a scrape actually requests. Both fetch and
 // the verbose self-metric label go through it, so a label can never describe a
 // different URL than the one that was fetched.
-func ResolveRequestURL(target string, c *model.Collector, overrides RequestOverrides) (*url.URL, error) {
+func resolveRequestURL(target string, c *model.Collector, overrides RequestOverrides) (*url.URL, error) {
 	return buildRequestURL(target, c, overrides, true)
 }
 
-// buildRequestURL is ResolveRequestURL with the choice of whether to bind path
+// buildRequestURL is resolveRequestURL with the choice of whether to bind path
 // parameters. The self-metric label is built with bind false, so it shows the
 // placeholder rather than the value; everything else is identical, which keeps
 // the label describing the URL that was fetched.
@@ -217,11 +217,11 @@ func buildRequestURL(target string, c *model.Collector, overrides RequestOverrid
 	return u, nil
 }
 
-// RequestLabelURL renders a resolved URL for a metric label. Credentials in the
+// requestLabelURL renders a resolved URL for a metric label. Credentials in the
 // userinfo and the whole query string are dropped: a collector's request.query
 // or a probe parameter can carry a token or a tenant identifier, and a metric
 // label is persisted by Prometheus and passed on to anything federating from it.
-func RequestLabelURL(u *url.URL) string {
+func requestLabelURL(u *url.URL) string {
 	labelled := *u
 	labelled.User = nil
 	labelled.RawQuery = ""
@@ -240,7 +240,7 @@ func requestMethod(c *model.Collector, overrides RequestOverrides) string {
 }
 
 func fetch(ctx context.Context, target string, c *model.Collector, overrides RequestOverrides, forwarded ...http.Header) (*HTTPResponse, error) {
-	u, err := ResolveRequestURL(target, c, overrides)
+	u, err := resolveRequestURL(target, c, overrides)
 	if err != nil {
 		return nil, err
 	}
@@ -335,7 +335,7 @@ func fetch(ctx context.Context, target string, c *model.Collector, overrides Req
 		}
 	}
 	start := time.Now()
-	limit := ResponseLimit(c)
+	limit := responseLimit(c)
 	for attempt := 0; attempt <= retryAttempts; attempt++ {
 		var reqBody io.Reader
 		if requestBody != "" {
@@ -392,10 +392,10 @@ func fetch(ctx context.Context, target string, c *model.Collector, overrides Req
 	return nil, fmt.Errorf("HTTP request failed after %d attempts", retryAttempts+1)
 }
 
-// ResponseLimit is the most a collector reads from its target: the smaller of
+// responseLimit is the most a collector reads from its target: the smaller of
 // limits.max_response_bytes and request.max_response_bytes, 10 MiB when
 // neither is set. Every request type reads through it.
-func ResponseLimit(c *model.Collector) int64 {
+func responseLimit(c *model.Collector) int64 {
 	limit := c.Limits.MaxResponseBytes
 	if limit <= 0 || c.Request.MaxResponseBytes > 0 && c.Request.MaxResponseBytes < limit {
 		limit = c.Request.MaxResponseBytes

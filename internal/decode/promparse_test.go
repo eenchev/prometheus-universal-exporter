@@ -17,7 +17,7 @@ import (
 
 func parseOK(t *testing.T, body string) []model.Metric {
 	t.Helper()
-	metrics, err := ParsePrometheusText([]byte(body))
+	metrics, err := parsePrometheusText([]byte(body))
 	if err != nil {
 		t.Fatalf("parse %q: %v", body, err)
 	}
@@ -209,7 +209,7 @@ func TestPromParseErrors(t *testing.T) {
 		{"# TYPE s summary\ns_count +Inf\n", `expected a non-negative count for "s", got +Inf`},
 	}
 	for _, test := range tests {
-		_, err := ParsePrometheusText([]byte(test.body))
+		_, err := parsePrometheusText([]byte(test.body))
 		if err == nil || !strings.Contains(err.Error(), test.want) {
 			t.Errorf("%q: err=%v, want it to contain %q", test.body, err, test.want)
 		}
@@ -229,7 +229,7 @@ func TestPromParseSurvivesInputThatCrashedExpfmt(t *testing.T) {
 					t.Fatalf("%q panicked: %v", body, r)
 				}
 			}()
-			if _, err := ParsePrometheusText([]byte(body)); err == nil {
+			if _, err := parsePrometheusText([]byte(body)); err == nil {
 				t.Errorf("%q parsed without a metric name", body)
 			}
 		}()
@@ -256,7 +256,7 @@ func FuzzParsePrometheusText(f *testing.F) {
 		f.Add(seed)
 	}
 	f.Fuzz(func(t *testing.T, body string) {
-		metrics, err := ParsePrometheusText([]byte(body))
+		metrics, err := parsePrometheusText([]byte(body))
 		if err != nil {
 			return
 		}

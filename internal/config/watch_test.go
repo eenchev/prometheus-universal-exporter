@@ -5,8 +5,11 @@ import (
 	"log/slog"
 	"os"
 	"strings"
+	"sync"
 	"testing"
 	"time"
+
+	"github.com/eenchev/prometheus-universal-exporter/internal/testutil"
 )
 
 const watchConfigTemplate = "collectors:\n  - name: watched\n    request:\n      type: http\n    transform:\n      type: regex\n" +
@@ -199,5 +202,37 @@ func TestWatchIntervalIsHonoured(t *testing.T) {
 	}
 	if DefaultWatchInterval != 60*time.Second {
 		t.Fatalf("DefaultWatchInterval=%s, want the documented 60s", DefaultWatchInterval)
+	}
+}
+
+// A watch reload and a triggered one at once do not interleave: each loads
+// and installs the whole configuration under reloadMu.
+func TestWatchAndTriggeredReloadsAreSerialized(t *testing.T) {
+	path := testutil.WriteIn(t, t.TempDir(), "config.yaml", testutil.CollectorsDocument("first"))
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	manager := NewManager(cfg, path, testutil.QuietLogger(t))
+	var wg sync.WaitGroup
+	for i := range 8 {
+		wg.Add(2)
+		go func() {
+			defer wg.Done()
+			_ = manager.Reload(ReloadTriggerHTTP)
+		}()
+		go func() {
+			defer wg.Done()
+			// A newer modification time is a change for the watch to find.
+			later := time.Now().Add(time.Duration(i+1) * time.Minute)
+			if err := os.Chtimes(path, later, later); err != nil {
+				t.Error(err)
+			}
+			manager.reloadConfig()
+		}()
+	}
+	wg.Wait()
+	if st := manager.Reloads.files[reloadFileConfig]; st.failures != 0 || st.successes == 0 {
+		t.Fatalf("status=%+v", st)
 	}
 }

@@ -21,13 +21,13 @@ import (
 // Per-collector state after a reload (reconcile.go), the probe's missing
 // parameters, and the exporter's own HTTP server timeouts (lifecycle.go).
 
-func reloadTo(t *testing.T, manager *config.Manager, collectors ...model.Collector) {
+func reloadTo(t *testing.T, server *Server, collectors ...model.Collector) {
 	t.Helper()
-	cfg := &model.Config{Collectors: collectors, Web: manager.Get().Web}
+	cfg := &model.Config{Collectors: collectors, Web: server.manager.Get().Web}
 	if err := config.Validate(cfg); err != nil {
 		t.Fatal(err)
 	}
-	manager.Current.Store(cfg)
+	installConfig(server, cfg)
 }
 
 // A removed collector's series stop, with everything kept about it; one added
@@ -52,7 +52,7 @@ func TestRemovedCollectorsStopBeingExposed(t *testing.T) {
 		}
 	}
 
-	reloadTo(t, manager, kept)
+	reloadTo(t, server, kept)
 	after := selfMetrics(t, server)
 	if strings.Contains(after, `collector="gone"`) {
 		t.Fatalf("a removed collector is still exposed:\n%s", after)
@@ -64,7 +64,7 @@ func TestRemovedCollectorsStopBeingExposed(t *testing.T) {
 		t.Fatalf("%d cached results of the removed collector are kept", n)
 	}
 
-	reloadTo(t, manager, kept, gone)
+	reloadTo(t, server, kept, gone)
 	again := selfMetrics(t, server)
 	if got := seriesValue(t, again, `http_exporter_scrapes_total{collector="gone"}`); got != 0 {
 		t.Fatalf("a collector added again starts at %v, want 0", got)
@@ -76,7 +76,7 @@ func TestRemovedCollectorsStopBeingExposed(t *testing.T) {
 func TestChangedCollectorsDropTheirCache(t *testing.T) {
 	target, requests := countingTarget(func(*http.Request) string { return "value=42\n" })
 	defer target.Close()
-	server, manager := newCacheTestServer(t, cachingCollector("changing", time.Minute))
+	server, _ := newCacheTestServer(t, cachingCollector("changing", time.Minute))
 	server.logger = testutil.QuietLogger(t)
 	probeOnce(t, server, "/probe?collector=changing&target="+target.URL, nil)
 	if got := seriesValue(t, selfMetrics(t, server), `http_exporter_cache_entries{collector="changing"}`); got != 1 {
@@ -84,7 +84,7 @@ func TestChangedCollectorsDropTheirCache(t *testing.T) {
 	}
 	changed := cachingCollector("changing", time.Minute)
 	changed.Metrics[0].Name = "renamed_value"
-	reloadTo(t, manager, changed)
+	reloadTo(t, server, changed)
 	exposition := selfMetrics(t, server)
 	if got := seriesValue(t, exposition, `http_exporter_cache_entries{collector="changing"}`); got != 0 {
 		t.Fatalf("a changed collector still counts %v cache entries of its old definition", got)
@@ -102,10 +102,10 @@ func TestChangedCollectorsDropTheirCache(t *testing.T) {
 func TestAnUnchangedReloadKeepsTheCache(t *testing.T) {
 	target, requests := countingTarget(func(*http.Request) string { return "value=42\n" })
 	defer target.Close()
-	server, manager := newCacheTestServer(t, cachingCollector("same", time.Minute))
+	server, _ := newCacheTestServer(t, cachingCollector("same", time.Minute))
 	server.logger = testutil.QuietLogger(t)
 	probeOnce(t, server, "/probe?collector=same&target="+target.URL, nil)
-	reloadTo(t, manager, cachingCollector("same", time.Minute))
+	reloadTo(t, server, cachingCollector("same", time.Minute))
 	probeOnce(t, server, "/probe?collector=same&target="+target.URL, nil)
 	if requests.Load() != 1 {
 		t.Fatalf("an unchanged reload dropped the cache: %d requests", requests.Load())

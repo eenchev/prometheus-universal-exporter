@@ -46,7 +46,7 @@ for row in doc.xpath('//table[@id="servers"]//tr[td]'):
 <tr><td>web01</td><td>72</td></tr><tr><td>web02</td><td>18.5</td></tr></table></body></html>`
 	r := &fetch.HTTPResponse{Body: []byte(body), Headers: http.Header{}}
 	d := &decode.Decoded{Kind: "text", Data: body, Raw: r.Body}
-	set, err := ExecutePython(context.Background(), "python3", c.Transform.Script, d, r, &c)
+	set, err := executePython(context.Background(), "python3", c.Transform.Script, d, r, &c)
 	if err != nil {
 		t.Fatal(err)
 	}

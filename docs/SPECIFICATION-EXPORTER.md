@@ -1678,6 +1678,15 @@ shortened value would surprise. Truncation MUST apply to the labels of declared
 metrics from every transform, and MUST happen before `metrics_prefix` (§ 5.0a)
 is added.
 
+A jq or yq expression label's value MUST be written as text the way JSON
+writes it: a number without an exponent when its magnitude is at least 1e-6
+and below 1e21, so integers such as IDs keep every digit, and in shortest
+exponent form otherwise; `NaN`, `+Inf` and `-Inf` for non-finite numbers;
+`true` and `false` for booleans; a string as it is. An object or an array MUST
+be a failure of the metric rule, handled by its `error_mode`, with an error
+saying to select a field or join the array, rather than a label in any
+language's syntax for it.
+
 An expression label that gives a series no value — a selector or path matching
 nothing, a missing attribute, column, capture group or source label, a null —
 or an empty value MUST be left off that series, in every transform, so the

@@ -511,7 +511,12 @@ func transformJQItems(ctx context.Context, data any, rule model.MetricRule, c *m
 				break
 			}
 			if labelValue != nil {
-				labels[label.Name] = fmt.Sprint(labelValue)
+				text, err := labelText(labelValue)
+				if err != nil {
+					labelErr = fmt.Errorf("metric %q item %d label %q %w", rule.Name, index, label.Name, err)
+					break
+				}
+				labels[label.Name] = text
 			}
 		}
 		if labelErr == nil {
@@ -595,15 +600,23 @@ func evaluateLabels(ctx context.Context, data any, expressions []model.LabelRule
 		}
 		if len(values) == 1 {
 			if values[0] != nil {
+				text, err := labelText(values[0])
+				if err != nil {
+					return nil, fmt.Errorf("label %q %w", label.Name, err)
+				}
 				for index := range labels {
-					labels[index][label.Name] = fmt.Sprint(values[0])
+					labels[index][label.Name] = text
 				}
 			}
 			continue
 		}
 		for index := 0; index < len(labels) && index < len(values); index++ {
 			if values[index] != nil {
-				labels[index][label.Name] = fmt.Sprint(values[index])
+				text, err := labelText(values[index])
+				if err != nil {
+					return nil, fmt.Errorf("label %q value %d %w", label.Name, index, err)
+				}
+				labels[index][label.Name] = text
 			}
 		}
 	}

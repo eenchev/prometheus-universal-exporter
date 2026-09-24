@@ -174,6 +174,14 @@ Label expressions use the same transform-specific language as the metric
 expression. For CSV, each row produces a metric and `expression: server`
 selects that row's `server` column.
 
+A jq or yq label is the text of the value its expression gives. A number reads
+as it is written, without an exponent from a millionth up to 1e21, so an ID of
+`1234567` is the label `1234567` and a ratio of `0.5` is `0.5`; booleans are
+`true` and `false`. A label is one value, so an object or an array fails the
+metric, handled by its [`error_mode`](#when-a-metric-cannot-be-extracted):
+select one of its fields, or make one value of an array with
+`.tags | join(",")`.
+
 A label expression that gives a series no value — a selector or path that
 matches nothing, a missing attribute, column or capture group, a null — leaves
 the label off that series, as does an empty value, which Prometheus treats the

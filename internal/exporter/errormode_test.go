@@ -280,7 +280,7 @@ func TestAnOptionalRuleIsNeverAFailure(t *testing.T) {
 // probe to fail is more specific, so a lenient collector policy does not turn
 // its failure back into a quiet, partial success.
 func TestFailTakesPrecedenceOverALenientTransformPolicy(t *testing.T) {
-	for _, policy := range []string{"ignore", "log", "warn"} {
+	for _, policy := range []string{"ignore", "log"} {
 		t.Run(policy, func(t *testing.T) {
 			testutil.CaptureLogs(t)
 			target := jsonTarget(t, nil)

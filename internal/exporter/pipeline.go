@@ -87,7 +87,7 @@ func (s *Server) collect(ctx context.Context, j collectJob) collected {
 		err = explainBudget(ctx, j.budget, err)
 		attrs := append(append([]any{}, j.log.attrs...), "stage", stage)
 		switch policy {
-		case model.ErrorPolicyLog, model.ErrorPolicyWarn:
+		case model.ErrorPolicyLog:
 			s.failures.failed(s.logger, slog.LevelWarn, j.log.key, j.log.continuing, stage, err, attrs...)
 			return collected{carriedOn: true}
 		case model.ErrorPolicyIgnore:

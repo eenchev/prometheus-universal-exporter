@@ -137,7 +137,7 @@ data. `csv`, `regex`, `css`, `xpath`, and `prometheus` keep receiving their own
 decoded format, and a pre-script that returns a string still leaves the format
 alone, so HTML and XML output is reparsed as before.
 
-Errors are classified as HTTP, decode, transform, missing data, validation, or resource-limit failures. `error_handling` accepts `fail`, `log`, and `ignore` (`warn` is a deprecated spelling of `log`); `allow_missing_keys` controls required extraction results. Limits default to conservative values and are enforced immediately before exposition.
+Errors are classified as HTTP, decode, transform, missing data, validation, or resource-limit failures. `error_handling` accepts `fail`, `log`, and `ignore`; `allow_missing_keys` controls required extraction results. Limits default to conservative values and are enforced immediately before exposition.
 
 CSV responses can use a native CSV transform without CSS or Python:
 

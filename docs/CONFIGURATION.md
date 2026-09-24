@@ -602,10 +602,6 @@ collector's to export, and the scrape counts as a success. A metric rule with
 `error_mode: fail` fails the scrape whatever `on_transform_error` says, on a
 probe and a scheduled target alike.
 
-`warn` is the older spelling of `log` here. It still works, but each use is
-logged as deprecated at startup and on every reload, and listed by `--dry-run`;
-change it to `log`.
-
 ### Checked when the configuration loads
 
 Everything about a metric that can be known before a scrape is checked at

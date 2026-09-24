@@ -325,12 +325,19 @@ func TestAnUnsetDecoderIsWarnedAbout(t *testing.T) {
 	}
 }
 
-// Warnings are logged with the deprecations on every start and reload.
-func TestWarningsAreLogged(t *testing.T) {
+// Deprecations and warnings are logged on every start and reload. None is
+// deprecated at present, but a deprecation Validate records is logged.
+func TestDeprecationsAndWarningsAreLogged(t *testing.T) {
 	out := testutil.CaptureLogs(t)
-	LogDeprecations(slog.Default(), "config.yaml", &model.Config{Warnings: []string{"collector \"x\" sets no decoder.type"}})
-	records := testutil.AssertJSONLines(t, out, 1)
-	if records[0]["msg"] != "configuration warning" || records[0]["level"] != "WARN" || records[0]["warning"] != "collector \"x\" sets no decoder.type" || records[0]["file"] != "config.yaml" {
-		t.Fatalf("record=%v", records[0])
+	LogDeprecations(slog.Default(), "config.yaml", &model.Config{
+		Deprecations: []string{"collector \"x\" old_key is deprecated"},
+		Warnings:     []string{"collector \"x\" sets no decoder.type"},
+	})
+	records := testutil.AssertJSONLines(t, out, 2)
+	if records[0]["msg"] != "deprecated configuration" || records[0]["level"] != "WARN" || records[0]["deprecation"] != "collector \"x\" old_key is deprecated" || records[0]["file"] != "config.yaml" {
+		t.Fatalf("deprecation record=%v", records[0])
+	}
+	if records[1]["msg"] != "configuration warning" || records[1]["level"] != "WARN" || records[1]["warning"] != "collector \"x\" sets no decoder.type" || records[1]["file"] != "config.yaml" {
+		t.Fatalf("warning record=%v", records[1])
 	}
 }

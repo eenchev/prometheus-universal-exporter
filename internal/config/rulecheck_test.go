@@ -116,27 +116,24 @@ func TestPrometheusTransformSettingsAreChecked(t *testing.T) {
 	}
 }
 
-// error_handling and error_mode share one vocabulary, fail, log and ignore.
-// warn, the older spelling of log in error_handling, still works, is reported
-// as deprecated, and means log.
+// error_handling and error_mode share one vocabulary, fail, log and ignore,
+// matched in any case.
 func TestErrorPolicyVocabulary(t *testing.T) {
 	c := testutil.Collector("policies", "text")
-	c.ErrorHandling = model.ErrorHandling{OnFetchError: "warn", OnDecodeError: "LOG", OnTransformError: "ignore"}
-	c.Metrics[0].ErrorMode = "warn"
+	c.ErrorHandling = model.ErrorHandling{OnFetchError: "Fail", OnDecodeError: "LOG", OnTransformError: "ignore"}
+	c.Metrics[0].ErrorMode = "Log"
 	cfg := &model.Config{Collectors: []model.Collector{c}}
 	if err := Validate(cfg); err != nil {
 		t.Fatal(err)
 	}
 	got := cfg.Collectors[0]
-	if got.ErrorHandling.OnFetchError != "log" || got.ErrorHandling.OnDecodeError != "log" || got.ErrorHandling.OnTransformError != "ignore" || got.Metrics[0].ErrorMode != "log" {
+	if got.ErrorHandling.OnFetchError != "fail" || got.ErrorHandling.OnDecodeError != "log" || got.ErrorHandling.OnTransformError != "ignore" || got.Metrics[0].ErrorMode != "log" {
 		t.Fatalf("normalised to %+v, error_mode %q", got.ErrorHandling, got.Metrics[0].ErrorMode)
 	}
-	if len(cfg.Deprecations) != 2 ||
-		!strings.Contains(cfg.Deprecations[0]+cfg.Deprecations[1], `collector "policies" error_handling.on_fetch_error: "warn" is deprecated; use "log"`) ||
-		!strings.Contains(cfg.Deprecations[0]+cfg.Deprecations[1], `metric "demo_value" error_mode: "warn" is deprecated`) {
+	if len(cfg.Deprecations) != 0 {
 		t.Fatalf("deprecations=%q", cfg.Deprecations)
 	}
-	for _, bad := range []string{"panic", "warning", "skip"} {
+	for _, bad := range []string{"warn", "panic", "warning", "skip"} {
 		c := testutil.Collector("policies", "text")
 		c.ErrorHandling.OnDecodeError = bad
 		err := Validate(&model.Config{Collectors: []model.Collector{c}})

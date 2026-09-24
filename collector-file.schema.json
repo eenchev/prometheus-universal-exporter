@@ -58,32 +58,29 @@
                 "type": "boolean"
               },
               "on_decode_error": {
-                "description": "fail stops the probe, log carries on and logs why, ignore carries on quietly. Defaults to fail. warn is a deprecated spelling of log.",
+                "description": "fail stops the probe, log carries on and logs why, ignore carries on quietly. Defaults to fail.",
                 "enum": [
                   "fail",
                   "log",
-                  "ignore",
-                  "warn"
+                  "ignore"
                 ],
                 "type": "string"
               },
               "on_fetch_error": {
-                "description": "fail stops the probe, log carries on and logs why, ignore carries on quietly. Defaults to fail. warn is a deprecated spelling of log.",
+                "description": "fail stops the probe, log carries on and logs why, ignore carries on quietly. Defaults to fail.",
                 "enum": [
                   "fail",
                   "log",
-                  "ignore",
-                  "warn"
+                  "ignore"
                 ],
                 "type": "string"
               },
               "on_transform_error": {
-                "description": "fail stops the probe, log carries on and logs why, ignore carries on quietly. Defaults to fail. warn is a deprecated spelling of log.",
+                "description": "fail stops the probe, log carries on and logs why, ignore carries on quietly. Defaults to fail.",
                 "enum": [
                   "fail",
                   "log",
-                  "ignore",
-                  "warn"
+                  "ignore"
                 ],
                 "type": "string"
               }
@@ -160,12 +157,11 @@
                   ]
                 },
                 "error_mode": {
-                  "description": "What happens when this metric cannot be extracted. Defaults to log. warn is a deprecated spelling of log.",
+                  "description": "What happens when this metric cannot be extracted. Defaults to log.",
                   "enum": [
                     "fail",
                     "log",
-                    "ignore",
-                    "warn"
+                    "ignore"
                   ],
                   "type": "string"
                 },

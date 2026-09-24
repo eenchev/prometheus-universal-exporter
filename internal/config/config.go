@@ -92,7 +92,7 @@ func validateCollector(c *model.Config, x *model.Collector) error {
 		if *policy.value == "" {
 			*policy.value = model.ErrorPolicyFail
 		}
-		if err := normalizeErrorPolicy(c, x.Name, "error_handling."+policy.key, policy.value); err != nil {
+		if err := normalizeErrorPolicy(x.Name, "error_handling."+policy.key, policy.value); err != nil {
 			return err
 		}
 	}
@@ -185,7 +185,7 @@ func validateMetricRules(c *model.Config, x *model.Collector) error {
 		if r.ErrorMode == "" {
 			r.ErrorMode = model.ErrorModeLog
 		}
-		if err := normalizeErrorPolicy(c, x.Name, fmt.Sprintf("metric %q error_mode", r.Name), &r.ErrorMode); err != nil {
+		if err := normalizeErrorPolicy(x.Name, fmt.Sprintf("metric %q error_mode", r.Name), &r.ErrorMode); err != nil {
 			return err
 		}
 		if r.Type == "" {
@@ -610,15 +610,12 @@ func undecidedDecoderWarning(x *model.Collector) string {
 	return fmt.Sprintf("collector %q sets no decoder.type, so it decodes %s, and by the content when that does not say; set decoder.type to fix the decoder", x.Name, how)
 }
 
-// normalizeErrorPolicy lower-cases a policy, maps the deprecated "warn" to
-// "log" and records that it did, and rejects anything else.
-func normalizeErrorPolicy(c *model.Config, collector, key string, value *string) error {
+// normalizeErrorPolicy lower-cases a policy and rejects anything but fail,
+// log and ignore.
+func normalizeErrorPolicy(collector, key string, value *string) error {
 	policy := strings.ToLower(strings.TrimSpace(*value))
 	switch policy {
 	case model.ErrorPolicyFail, model.ErrorPolicyLog, model.ErrorPolicyIgnore:
-	case model.ErrorPolicyWarn:
-		policy = model.ErrorPolicyLog
-		c.Deprecations = append(c.Deprecations, fmt.Sprintf("collector %q %s: %q is deprecated; use %q, which means the same", collector, key, model.ErrorPolicyWarn, model.ErrorPolicyLog))
 	default:
 		return fmt.Errorf("collector %q %s has invalid value %q; want fail, log or ignore", collector, key, *value)
 	}

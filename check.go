@@ -79,16 +79,7 @@ func runCheck(in checkInputs, stdout io.Writer, logger *slog.Logger) int {
 		if result.File != "" {
 			attrs = append(attrs, "file", result.File)
 		}
-		if deprecations, ok := result.Details["deprecations"].([]string); ok {
-			for _, message := range deprecations {
-				logger.Warn("deprecated configuration", "file", result.File, "deprecation", message)
-			}
-		}
-		if warnings, ok := result.Details["warnings"].([]string); ok {
-			for _, message := range warnings {
-				logger.Warn("configuration warning", "file", result.File, "warning", message)
-			}
-		}
+		logNotices(logger, result)
 		switch result.Status {
 		case checkOK:
 			logger.Info("configuration check passed", attrs...)
@@ -128,27 +119,7 @@ func checkStartup(in checkInputs) checkReport {
 	if err != nil {
 		results = append(results, failedCheck("config", in.ConfigFile, err))
 	} else {
-		names := make([]string, 0, len(conf.Collectors))
-		for _, c := range conf.Collectors {
-			names = append(names, c.Name)
-		}
-		details := map[string]any{
-			"collectors":        names,
-			"otlp_enabled":      conf.OTLP.Enabled,
-			"config_export_env": in.ExpandEnv,
-		}
-		// A deprecated spelling still passes, so the check stays ok; the
-		// report says what to change before the spelling is removed.
-		if len(conf.LoadedCollectorFiles) > 0 {
-			details["collector_files"] = conf.LoadedCollectorFiles
-		}
-		if len(conf.Deprecations) > 0 {
-			details["deprecations"] = conf.Deprecations
-		}
-		if len(conf.Warnings) > 0 {
-			details["warnings"] = conf.Warnings
-		}
-		results = append(results, checkResult{Check: "config", File: in.ConfigFile, Status: checkOK, Details: details})
+		results = append(results, checkResult{Check: "config", File: in.ConfigFile, Status: checkOK, Details: configDetails(conf, in.ExpandEnv)})
 	}
 
 	if conf == nil {
@@ -196,6 +167,46 @@ func checkStartup(in checkInputs) checkReport {
 // checkTargets validates the scheduled target document on its own and then
 // against the configuration. The first half needs no configuration, so a
 // broken target file is still reported when the configuration is broken too.
+// configDetails summarises a configuration that loaded. A deprecated spelling
+// or a warning still passes, so the check stays ok; the report lists them so
+// the operator knows what to change before a deprecated spelling is removed.
+func configDetails(conf *model.Config, expandEnv bool) map[string]any {
+	names := make([]string, 0, len(conf.Collectors))
+	for _, c := range conf.Collectors {
+		names = append(names, c.Name)
+	}
+	details := map[string]any{
+		"collectors":        names,
+		"otlp_enabled":      conf.OTLP.Enabled,
+		"config_export_env": expandEnv,
+	}
+	if len(conf.LoadedCollectorFiles) > 0 {
+		details["collector_files"] = conf.LoadedCollectorFiles
+	}
+	if len(conf.Deprecations) > 0 {
+		details["deprecations"] = conf.Deprecations
+	}
+	if len(conf.Warnings) > 0 {
+		details["warnings"] = conf.Warnings
+	}
+	return details
+}
+
+// logNotices logs the deprecations and warnings a check's details list, as
+// startup logs them.
+func logNotices(logger *slog.Logger, result checkResult) {
+	if deprecations, ok := result.Details["deprecations"].([]string); ok {
+		for _, message := range deprecations {
+			logger.Warn("deprecated configuration", "file", result.File, "deprecation", message)
+		}
+	}
+	if warnings, ok := result.Details["warnings"].([]string); ok {
+		for _, message := range warnings {
+			logger.Warn("configuration warning", "file", result.File, "warning", message)
+		}
+	}
+}
+
 func checkTargets(path string, options []config.LoadOption, conf *model.Config) checkResult {
 	file, err := config.LoadTargets(path, options...)
 	if err == nil {

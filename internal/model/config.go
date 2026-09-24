@@ -43,7 +43,9 @@ type Config struct {
 	LoadedCollectorFiles []string          `yaml:"-"`
 	// Deprecations lists the deprecated spellings Validate accepted and
 	// normalised, one message each, for startup, reload and --dry-run to
-	// report. It is not read from the document.
+	// report. None is accepted at present; a spelling kept for a while after
+	// it is replaced appends its message here. It is not read from the
+	// document.
 	Deprecations []string `yaml:"-"`
 	// Warnings lists what Validate accepted but the operator should know
 	// about, such as a collector that leaves its decoder to each response, one
@@ -338,9 +340,6 @@ const (
 	ErrorPolicyFail   = ErrorModeFail
 	ErrorPolicyLog    = ErrorModeLog
 	ErrorPolicyIgnore = ErrorModeIgnore
-	// ErrorPolicyWarn is the older spelling of log in error_handling. It is
-	// still accepted, and reported as deprecated.
-	ErrorPolicyWarn = "warn"
 )
 
 // CollectorByName returns the collector of cfg with the given name, or nil.

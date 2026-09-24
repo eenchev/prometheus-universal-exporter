@@ -1548,10 +1548,8 @@ to `gauge`. Metric declarations MUST be placed on the collector, alongside
 `expressions`.
 
 `error_mode` MUST be `ignore`, `log` or `fail` and defaults to `log`; the same
-vocabulary as `error_handling` (§ 19). `warn`, the older spelling of `log` in
-`error_handling`, MUST be accepted as meaning `log` and reported as deprecated
-(§ 19). Any other value MUST be rejected at startup and on reload, and the
-message MUST list the accepted values. It governs what happens when an individual metric cannot be
+vocabulary as `error_handling` (§ 19). Any other value MUST be rejected at
+startup and on reload, and the message MUST list the accepted values. It governs what happens when an individual metric cannot be
 extracted — its expression or a label expression errors, its value is absent
 while the metric is required, a required label is absent (§ 18.1), or its
 value is not a number:
@@ -1788,13 +1786,16 @@ request type (§ 5.1): for `http` a transport failure or a non-success status,
 for `localfile` a file that cannot be read. It is named for the stage rather
 than for one type, so it reads the same on every collector.
 
-This is the vocabulary `error_mode` uses (§ 18.1). `warn`, this setting's
-original spelling of `log`, MUST still be accepted and treated as `log`, and each
-use MUST be reported as deprecated: logged at warning level on startup and on
-every reload, naming the collector, the key and the replacement, and listed
+This is the vocabulary `error_mode` uses (§ 18.1). The value MUST be matched
+case-insensitively; anything else MUST be rejected naming the collector, the
+key and the accepted values.
+
+No configuration spelling is deprecated at present. When one is replaced and
+the old spelling kept for a while, each use of it MUST be accepted with the
+new meaning and reported as deprecated: logged at warning level on startup and
+on every reload, naming the collector, the key and the replacement, and listed
 under `deprecations` in the `config` check of `--dry-run` (§ 30.1), which still
-passes. The value MUST be matched case-insensitively; anything else MUST be
-rejected naming the collector, the key and the accepted values.
+passes.
 
 ### 19.1 Distinguish failure types
 
@@ -3559,7 +3560,7 @@ succeeds beside one that fails:
 - An optional rule (`required: false`, or `allow_missing_keys`) with an absent
   value is not a failure under `fail`, and is not logged.
 - `fail` still answers 502 when the collector sets `on_transform_error` to
-  `ignore` or `warn`.
+  `ignore` or `log`.
 - A `fail` response is not cached: two probes contact the target twice.
 - The self-metrics count a `fail` as a failed probe, a transform error and, for
   an absent value, a missing key.
@@ -3676,7 +3677,7 @@ For each relevant failure type test:
 
 ```text
 fail
-warn
+log
 ignore
 ```
 
@@ -4309,15 +4310,13 @@ status captured:
 
 ## 34.44 Error policy vocabulary tests
 
-- `warn` in `error_handling` and in `error_mode` is normalised to `log`, each
-  use is recorded as a deprecation naming the collector, the key and the
-  replacement, and values are matched case-insensitively.
-- Anything else is rejected naming the collector, the key and the accepted
-  values.
-- `--dry-run` passes with a deprecated spelling, lists it under
-  `details.deprecations`, and logs it.
-- A rule's `fail` still takes precedence over `on_transform_error` of `ignore`,
-  `log` and `warn`.
+- Values in `error_handling` and in `error_mode` are matched
+  case-insensitively; anything else, `warn` included, is rejected naming the
+  collector, the key and the accepted values.
+- A recorded deprecation is logged at startup and reload, and `--dry-run`
+  passes with it, lists it under `details.deprecations`, and logs it.
+- A rule's `fail` still takes precedence over `on_transform_error` of `ignore`
+  and `log`.
 
 ## 34.45 Items tests
 

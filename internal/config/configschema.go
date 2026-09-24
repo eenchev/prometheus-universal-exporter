@@ -26,8 +26,8 @@ const configSchemaID = "https://raw.githubusercontent.com/eenchev/prometheus-uni
 // --config.schema; a test fails when the two differ.
 //
 // The schema describes the canonical spelling. The exporter is more lenient
-// in places — it accepts request.type in any case, and the deprecated "warn"
-// error policy — and startup validation remains the authority on what is
+// in places — it accepts request.type and error policies in any case — and
+// startup validation remains the authority on what is
 // valid: it also checks what a schema cannot, such as that expressions
 // compile. The request types listed are the ones this binary was built with.
 func configSchema() map[string]any {
@@ -150,7 +150,7 @@ func joinSchemaPath(path, key string) string {
 // configSchemaRules adds, by path, what the struct cannot say. A path is the
 // chain of keys, with [] for a list item and .* for any map value.
 func configSchemaRules() map[string]map[string]any {
-	errorPolicy := map[string]any{"enum": []string{model.ErrorPolicyFail, model.ErrorPolicyLog, model.ErrorPolicyIgnore, model.ErrorPolicyWarn}, "description": "fail stops the probe, log carries on and logs why, ignore carries on quietly. Defaults to fail. warn is a deprecated spelling of log."}
+	errorPolicy := map[string]any{"enum": []string{model.ErrorPolicyFail, model.ErrorPolicyLog, model.ErrorPolicyIgnore}, "description": "fail stops the probe, log carries on and logs why, ignore carries on quietly. Defaults to fail."}
 	libraries := map[string]any{"enum": model.SortedKeys(transform.PythonLibraries), "description": "A bundled Python library the script uses. Declared libraries are imported when the interpreter starts."}
 	return map[string]map[string]any{
 		"": {
@@ -203,8 +203,8 @@ func configSchemaRules() map[string]map[string]any {
 		"collectors[].metrics[].items":                   {"description": "jq, yq and css only: selects the things the metric is about, such as table rows. The expression and labels are then evaluated once per item: for jq and yq with the item as . and the whole document as $root, for css as selectors within the item."},
 		"collectors[].metrics[].expression":              {"description": "Where the value comes from, in the transform's language: jq, a regex, a CSS selector, an XPath expression, a CSV column or a source metric pattern."},
 		"collectors[].metrics[].error_mode": {
-			"enum":        []string{model.ErrorModeFail, model.ErrorModeLog, model.ErrorModeIgnore, model.ErrorPolicyWarn},
-			"description": "What happens when this metric cannot be extracted. Defaults to log. warn is a deprecated spelling of log.",
+			"enum":        []string{model.ErrorModeFail, model.ErrorModeLog, model.ErrorModeIgnore},
+			"description": "What happens when this metric cannot be extracted. Defaults to log.",
 		},
 		"collectors[].metrics[].required":      {"description": "When false, a missing value is skipped without an error. Defaults to true."},
 		"collectors[].metrics[].labels[].name": {"pattern": `^[a-zA-Z_][a-zA-Z0-9_]*$`},

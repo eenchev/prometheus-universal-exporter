@@ -1602,6 +1602,14 @@ A metric that is not required — `required: false`, or a collector with
 applies to it; it MUST be omitted without logging, under `fail` as under the
 others.
 
+A value MUST be treated as absent in the same way by every transform when
+nothing matched, when it is null, and when it is text that is empty or only
+whitespace: an empty CSV cell, an empty JSON or YAML string, an XML or HTML
+node without text, a regex whose first capture group took no part in the match
+or captured only whitespace. Text that is present and is not a number MUST
+NOT be treated as absent: it is a failure of the rule, whatever `required`
+says.
+
 A probe failed by `fail` MUST respond `502 Bad Gateway` with
 `Content-Type: application/json` and a body of the form:
 
@@ -1636,9 +1644,9 @@ label MUST be interpreted by the same transform as the metric expression:
 | Transform | `expression` | `labels` |
 | --- | --- | --- |
 | `jq`, `yq` | jq-compatible expression evaluated against decoded data | jq-compatible expressions evaluated against the same data |
-| `regex` | RE2 expression; capture group 1 is the numeric value | capture-group number or named capture group |
+| `regex` | RE2 expression with at least one capture group; capture group 1 is the numeric value | capture-group number or named capture group |
 | `csv` | numeric column name | column names |
-| `css` | CSS selector for numeric text | selectors relative to the selected element |
+| `css` | CSS selector for numeric text; without `items`, matching at most one element | selectors relative to the selected element |
 | `xpath` | XPath selecting numeric text | relative XPath or `@attribute` |
 | `prometheus` | regular expression matching source metric names | destination label name to source label name |
 
@@ -1715,11 +1723,14 @@ about, typically table rows, and the value expression and every label
 expression MUST be CSS selectors matched within one item at a time. Within an
 item each MUST match at most one element, the rest of this section applying as
 for jq: a value selector matching nothing is that item's missing metric, and a
-label selector matching nothing leaves the label off. Without `items`, the
-value is the text of each element the expression selects, so a label selector
-could only read text that is part of the number: a css metric with an
-`expression` label and no `items` MUST be rejected at startup, and its static
-`value` labels are unaffected. `items` on any other transform MUST be rejected
+label selector matching nothing leaves the label off. Without `items`, a
+css metric is one series, whose value is the text of the element the
+expression selects; an expression matching more than one element MUST be a
+failure of the rule, handled by its `error_mode`, and the error SHOULD point
+to `items`. No series of the rule may be exported when it fails that way. A
+label selector could only read text that is part of the number: a css metric
+with an `expression` label and no `items` MUST be rejected at startup, and its
+static `value` labels are unaffected. `items` on any other transform MUST be rejected
 at startup.
 
 Every transform MAY define one `transform.pre_script`. The exporter MUST run
@@ -2456,6 +2467,8 @@ label:
   goquery would otherwise silently treat as matching nothing; XPath expressions
   and relative label expressions, with the collector's namespaces; and a
   prometheus transform's patterns, `include` and `exclude`.
+- A regex metric's expression MUST have at least one capture group, the first
+  being the value.
 - A regex label MUST name a capture group the regex has, by number or name.
 - A prometheus transform's `rename` targets MUST be valid metric names.
   `include`, `exclude` and `rename` MUST be rejected on any collector other
@@ -4450,6 +4463,8 @@ the exporter has.
 - With a cache, concurrent probes make one request and fill the cache, and the
   next probe is a cache hit.
 - A panic in the shared work answers with `500` and leaves nothing in flight.
+- A panic in a scheduled scrape is logged and exports that target as down,
+  and the other targets are scraped as usual.
 
 ## 34.51 Verbose collector metric tests
 
@@ -5847,7 +5862,10 @@ its first, which SHOULD be offset within its interval by a stable hash of its
 name so targets are spread over it. A scrape MUST be bounded by its interval,
 and one still running when the next is due MUST make that one skipped, logged,
 rather than overlapping it. The exporter SHOULD limit how many targets it
-scrapes concurrently. Retries MUST follow the collector's `request.retry`, which
+scrapes concurrently. A panic during a scheduled scrape MUST NOT end the
+process: it MUST be logged with its stack and end that scrape as failed, with
+`http_exporter_target_up` 0, leaving the other targets' scrapes unaffected.
+Retries MUST follow the collector's `request.retry`, which
 a target's `request.retry` replaces. Scheduled scrapes MUST
 run through the same fetch, decode, and transform path as `/probe`, including the
 collector's cache, limits, and validation. A scheduled scrape and a `/probe`

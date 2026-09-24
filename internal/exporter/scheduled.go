@@ -2,7 +2,9 @@ package exporter
 
 import (
 	"context"
+	"fmt"
 	"net/url"
+	"runtime/debug"
 	"strconv"
 	"time"
 
@@ -30,6 +32,19 @@ func (s *Server) scrapeTarget(ctx context.Context, target model.ScheduledTarget)
 // the result under the target's own OTLP resource.
 func (s *Server) scrapeScheduledTarget(ctx context.Context, target model.ScheduledTarget, cfg *model.Config, c *model.Collector) {
 	start := time.Now()
+	// A scheduled scrape runs on a goroutine of the scrape loop, where a panic
+	// would take the whole exporter down rather than one scrape, as a probe's
+	// does (probeflight.go). It is logged and the scrape ends as failed, once
+	// the scrape has got far enough to be counted.
+	var failedOnPanic func()
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			s.logger.Error("scheduled target scrape panicked", "target", target.Name, "collector", c.Name, "panic", fmt.Sprint(recovered), "stack", string(debug.Stack()))
+			if failedOnPanic != nil {
+				failedOnPanic()
+			}
+		}
+	}()
 	identity := targetResource(&target, cfg.OTLP)
 	address := fetch.DisplayTarget(c, target.Target)
 	overrides := fetch.TargetOverrides(&target)
@@ -52,6 +67,8 @@ func (s *Server) scrapeScheduledTarget(ctx context.Context, target model.Schedul
 		attrs: []any{"target", target.Name, "collector", c.Name, "address", address},
 	}
 	finish := func(up float64) {
+		// The scrape is counted once, even when what follows panics.
+		failedOnPanic = nil
 		elapsed := time.Since(start)
 		count(func(st *serverStats) { st.lastDuration = elapsed.Seconds() })
 		s.queueOTLPResource(scheduledHealthMetrics(target, c, up, elapsed.Seconds()), identity)
@@ -78,6 +95,7 @@ func (s *Server) scrapeScheduledTarget(ctx context.Context, target model.Schedul
 		}
 		finish(0)
 	}
+	failedOnPanic = failed
 
 	headers, err := fetch.TargetHeaders(&target)
 	if err != nil {

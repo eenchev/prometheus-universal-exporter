@@ -136,12 +136,17 @@ The expression and label values are interpreted by the selected transform:
 
 - `jq`/`yq`: jq expressions evaluated against decoded data.
 - `regex`: a RE2 expression; the first capture group is the numeric value and
-  labels map to capture-group numbers or names.
+  labels map to capture-group numbers or names. A regex without a capture group
+  is refused at startup. A match whose first group captured nothing — an
+  optional group that took no part, or one that matched only blanks — is a
+  missing value for that match.
 - `csv`: the expression is the numeric column name and labels map to column
   names.
-- `css`: the expression selects HTML elements whose text is numeric. Labels
-  read from the page need [`items`](#metrics-per-item): select the rows with it,
-  and the value and the labels as cells of each row.
+- `css`: the expression selects the HTML element whose text is numeric. Without
+  [`items`](#metrics-per-item) a metric is one value, so the expression must
+  match at most one element. Several values, and labels read from the page,
+  need `items`: select the rows with it, and the value and the labels as cells
+  of each row.
 - `xpath`: the expression selects XML/HTML nodes whose text is numeric; labels
   are relative XPath expressions or `@attribute` selectors.
 - `prometheus`: the expression matches source metric names; it can remap the
@@ -350,9 +355,11 @@ too, where it is the same document as `.`.
 
 The `css` transform takes `items` too, for HTML tables and lists: `items`
 selects the rows, and the expression and each label are selectors within one
-row. Without it, the value is the whole text of each element the expression
-selects, so its labels can only be static `value` labels: a label reading the
-page needs `items`, and is refused at startup without it.
+row. Without it, the metric is one series: the value is the whole text of the
+one element the expression selects, and an expression matching several is a
+failure of the rule, handled by its `error_mode`, with an error pointing at
+`items`. Its labels can only be static `value` labels: a label reading the page
+needs `items`, and is refused at startup without it.
 
 ```yaml
 transform:
@@ -607,6 +614,12 @@ back into a partial success.
 A metric that is optional — `required: false`, or a collector with
 `error_handling.allow_missing_keys: true` — is not failing when its value is
 absent, so no mode applies to it, `fail` included: it is simply left out.
+
+A value is absent the same way in every transform: nothing matched, a null, or
+text that is empty or only whitespace — an empty CSV cell, an empty JSON
+string, an empty XML element or HTML cell, a regex group that captured
+nothing. Text that is there but is not a number, such as `"up"`, is not absent:
+it is a failure to read the value, which `required: false` does not excuse.
 
 ### When a stage of the probe fails
 

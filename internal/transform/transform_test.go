@@ -52,7 +52,7 @@ func TestHTMLCSSTableValues(t *testing.T) {
 		Name:      "html_css",
 		Decoder:   model.DecoderConfig{Type: "html"},
 		Transform: model.TransformConfig{Type: "css"},
-		Metrics:   []model.MetricRule{{Name: "server_cpu", Type: model.GaugeMetricType, Expression: "#servers td:nth-child(2)", Labels: []model.LabelRule{{Name: "environment", Value: "production"}}}},
+		Metrics:   []model.MetricRule{{Name: "server_cpu", Type: model.GaugeMetricType, Expression: "#servers tr:nth-child(2) td:nth-child(2)", Labels: []model.LabelRule{{Name: "environment", Value: "production"}}}},
 		Limits:    model.Limits{MaxMetrics: 10},
 	}
 	r := &fetch.HTTPResponse{Body: body, Headers: http.Header{"Content-Type": []string{"text/html"}}}
@@ -64,7 +64,7 @@ func TestHTMLCSSTableValues(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(m.Metrics) != 2 || m.Metrics[0].Value != 72 || m.Metrics[1].Value != 31 || m.Metrics[0].Labels["environment"] != "production" {
+	if len(m.Metrics) != 1 || m.Metrics[0].Value != 72 || m.Metrics[0].Labels["environment"] != "production" {
 		t.Fatalf("unexpected HTML CSS metrics: %#v", m.Metrics)
 	}
 }

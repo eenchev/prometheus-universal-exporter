@@ -6,6 +6,7 @@ import (
 	"regexp"
 	"slices"
 	"sort"
+	"strings"
 	"testing"
 
 	"gopkg.in/yaml.v3"
@@ -278,5 +279,46 @@ func TestChartVersionIsReleasable(t *testing.T) {
 	tag := "chart/" + chart.Name + "-" + chart.Version
 	if pattern := validationPattern(t, ".github/workflows/release-chart.yml"); !pattern.MatchString(tag) {
 		t.Errorf("the tag %q implied by Chart.yaml would be rejected by the chart release workflow", tag)
+	}
+}
+
+// The vulnerability check is for reference: a newly published advisory must
+// not turn a pull request red. The step that runs govulncheck therefore reads
+// its exit status instead of letting `bash -e` act on it, and nothing in the
+// step exits non-zero on its own.
+func TestTheVulnerabilityCheckNeverFails(t *testing.T) {
+	raw, err := os.ReadFile(".github/workflows/govulncheck.yml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var document struct {
+		Jobs map[string]struct {
+			Steps []struct {
+				Run string `yaml:"run"`
+			} `yaml:"steps"`
+		} `yaml:"jobs"`
+	}
+	if err := yaml.Unmarshal(raw, &document); err != nil {
+		t.Fatal(err)
+	}
+	var check string
+	for _, job := range document.Jobs {
+		for _, step := range job.Steps {
+			if regexp.MustCompile(`(?m)^\s*govulncheck `).MatchString(step.Run) {
+				check = step.Run
+			}
+		}
+	}
+	if check == "" {
+		t.Fatal("govulncheck.yml no longer has a step that runs govulncheck")
+	}
+	if !regexp.MustCompile(`(?m)^\s*set \+e\s*$`).MatchString(check) {
+		t.Error("the govulncheck step does not turn off exit-on-error before running it, so a finding would fail the job")
+	}
+	if regexp.MustCompile(`\bexit\b`).MatchString(check) {
+		t.Error("the govulncheck step calls exit, which could fail the job")
+	}
+	if !strings.Contains(check, "GITHUB_STEP_SUMMARY") {
+		t.Error("the govulncheck step does not write its findings to the run summary, where they are meant to be read")
 	}
 }

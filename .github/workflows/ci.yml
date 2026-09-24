@@ -148,7 +148,7 @@ jobs:
             echo "helm template accepted --log.level in extraArgs, which server.logLevel manages" >&2
             exit 1
           fi
-          for oneshot in --dry-run --config.schema --config.collector-file-schema --version --help; do
+          for oneshot in --dry-run --config.schema --config.collector-file-schema --otlp.targets-file-schema --version --help; do
             if helm template test charts/prometheus-universal-exporter --set-json "extraArgs=[\"$oneshot\"]" >/dev/null 2>&1; then
               echo "helm template accepted $oneshot in extraArgs, which would make the pod exit instead of serving" >&2
               exit 1

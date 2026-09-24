@@ -4,8 +4,10 @@ APP := prometheus-universal-exporter
 # panics on standard-library sources from a newer toolchain. Kept in step with
 # .github/workflows/ci.yml by a test.
 GOLANGCI_LINT_VERSION := v2.13.2
+# Kept in step with .github/workflows/govulncheck.yml by a test.
+GOVULNCHECK_VERSION := v1.8.0
 
-.PHONY: build test test-external vet fmt fmt-check lint lint-install helm-test schemas
+.PHONY: build test test-external vet fmt fmt-check lint lint-install vulncheck helm-test schemas
 # REQUEST_TYPES builds only the listed request types, comma-separated, for
 # example `make build REQUEST_TYPES=http`. Empty, the default, builds every type.
 # See "Choosing request types at build time" in docs/CONFIGURATION.md.
@@ -53,6 +55,11 @@ lint:
 lint-install:
 	go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@$(GOLANGCI_LINT_VERSION)
 
+# Known vulnerabilities the code reaches. For reference, like the CI workflow,
+# and not part of `make ci`.
+vulncheck:
+	go run golang.org/x/vuln/cmd/govulncheck@$(GOVULNCHECK_VERSION) ./...
+
 helm-test:
 	helm lint charts/prometheus-universal-exporter
 	helm template test charts/prometheus-universal-exporter
@@ -97,7 +104,7 @@ helm-test:
 		echo "helm template accepted --log.level in extraArgs, which server.logLevel manages" >&2; \
 		exit 1; \
 	fi
-	@for oneshot in --dry-run --config.schema --config.collector-file-schema --help; do \
+	@for oneshot in --dry-run --config.schema --config.collector-file-schema --otlp.targets-file-schema --version --help; do \
 		if helm template test charts/prometheus-universal-exporter --set-json "extraArgs=[\"$$oneshot\"]" >/dev/null 2>&1; then \
 			echo "helm template accepted $$oneshot in extraArgs, which would make the pod exit instead of serving" >&2; \
 			exit 1; \

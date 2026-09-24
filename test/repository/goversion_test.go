@@ -199,3 +199,31 @@ func TestTheLinterVersionIsPinnedConsistently(t *testing.T) {
 		t.Fatalf("ci.yml lints with %s but the Makefile installs %s; a clean `make lint` would not mean a clean CI run", got, pinned)
 	}
 }
+
+// govulncheck is pinned twice too: in the Makefile for `make vulncheck` and in
+// its workflow. A local run should report what CI reports.
+func TestTheVulnerabilityCheckerVersionIsPinnedConsistently(t *testing.T) {
+	makefile, err := os.ReadFile("Makefile")
+	if err != nil {
+		t.Fatal(err)
+	}
+	match := regexp.MustCompile(`(?m)^GOVULNCHECK_VERSION[ \t]*:?=[ \t]*(\S+)`).FindSubmatch(makefile)
+	if match == nil {
+		t.Fatal("the Makefile no longer pins GOVULNCHECK_VERSION")
+	}
+	pinned := string(match[1])
+
+	workflow, err := os.ReadFile(".github/workflows/govulncheck.yml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	installs := regexp.MustCompile(`golang\.org/x/vuln/cmd/govulncheck@(\S+)`).FindAllSubmatch(workflow, -1)
+	if len(installs) == 0 {
+		t.Fatal("govulncheck.yml no longer installs a pinned govulncheck")
+	}
+	for _, install := range installs {
+		if got := string(install[1]); got != pinned {
+			t.Fatalf("govulncheck.yml installs govulncheck %s but the Makefile runs %s", got, pinned)
+		}
+	}
+}

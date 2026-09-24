@@ -1,0 +1,29 @@
+# The exporter scrapes these itself, every 10 minutes, and serves them
+# together on /static-targets. Each target is a place; its params fill the
+# collector's placeholders, and its labels name it.
+interval: 10m
+targets:
+  - name: sofia
+    collector: open_meteo_current
+    target: https://api.open-meteo.com
+    params:
+      param_latitude: "42.6977"
+      param_longitude: "23.3219"
+    labels:
+      city: Sofia
+  - name: plovdiv
+    collector: open_meteo_current
+    target: https://api.open-meteo.com
+    params:
+      param_latitude: "42.1354"
+      param_longitude: "24.7453"
+    labels:
+      city: Plovdiv
+  - name: varna
+    collector: open_meteo_current
+    target: https://api.open-meteo.com
+    params:
+      param_latitude: "43.2141"
+      param_longitude: "27.9147"
+    labels:
+      city: Varna

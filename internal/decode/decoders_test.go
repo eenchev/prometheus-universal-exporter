@@ -28,7 +28,7 @@ func TestDecodeJSONAutoDetectionAndMalformedInput(t *testing.T) {
 		t.Fatalf("decoded JSON row=%#v", values[0])
 	}
 
-	c.Response.Format = "json"
+	c.Decoder.Type = "json"
 	r.Body = []byte(`{"value":`)
 	if _, err := Decode(r, &c); err == nil || !strings.Contains(err.Error(), "JSON decode") {
 		t.Fatalf("malformed JSON error=%v", err)
@@ -36,7 +36,7 @@ func TestDecodeJSONAutoDetectionAndMalformedInput(t *testing.T) {
 }
 
 func TestDecodeCSVQuotedFieldsAndRowsWithoutHeader(t *testing.T) {
-	c := model.Collector{Request: model.RequestConfig{Type: fetch.RequestTypeHTTP}, Response: model.ResponseConfig{Format: "csv", CSV: model.CSVConfig{Header: boolPtr(true), Delimiter: ";", TrimSpace: true}}}
+	c := model.Collector{Request: model.RequestConfig{Type: fetch.RequestTypeHTTP}, Decoder: model.DecoderConfig{Type: "csv"}, Response: model.ResponseConfig{CSV: model.CSVConfig{Header: boolPtr(true), Delimiter: ";", TrimSpace: true}}}
 	r := &fetch.HTTPResponse{Body: []byte("server;note;cpu\n\"web;01\";\"up;ok\"; 72 \n"), Headers: make(http.Header)}
 	d, err := Decode(r, &c)
 	if err != nil {
@@ -62,7 +62,7 @@ func TestDecodeCSVQuotedFieldsAndRowsWithoutHeader(t *testing.T) {
 }
 
 func TestDecodePrometheusPreservesTimestamp(t *testing.T) {
-	c := model.Collector{Request: model.RequestConfig{Type: fetch.RequestTypeHTTP}, Response: model.ResponseConfig{Format: "prometheus"}}
+	c := model.Collector{Request: model.RequestConfig{Type: fetch.RequestTypeHTTP}, Decoder: model.DecoderConfig{Type: "prometheus"}}
 	r := &fetch.HTTPResponse{Body: []byte("# TYPE vendor_value gauge\nvendor_value 42 1700000000000\n"), Headers: make(http.Header)}
 	d, err := Decode(r, &c)
 	if err != nil {

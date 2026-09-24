@@ -8,6 +8,7 @@ import (
 	"net/url"
 	"os"
 	"regexp"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -70,8 +71,16 @@ func validateCollector(c *model.Config, x *model.Collector) error {
 	if x.MaxConcurrentProbes < 0 {
 		return fmt.Errorf("collector %q max_concurrent_probes must not be negative", x.Name)
 	}
+	decoderUnset := strings.TrimSpace(x.Decoder.Type) == ""
 	if err := normalizeFormats(x); err != nil {
 		return err
+	}
+	// Left unset, and not implied by the transform, the decoder is chosen
+	// for each response. That works, but a response that changes its
+	// Content-Type, or a file its extension, silently changes how it is
+	// read, so the operator is told once on every start and reload.
+	if decoderUnset && x.Decoder.Type == "auto" {
+		c.Warnings = append(c.Warnings, undecidedDecoderWarning(x))
 	}
 	for _, policy := range []struct {
 		key   string
@@ -84,7 +93,7 @@ func validateCollector(c *model.Config, x *model.Collector) error {
 		if *policy.value == "" {
 			*policy.value = model.ErrorPolicyFail
 		}
-		if err := normalizeErrorPolicy(c, x.Name, "error_handling."+policy.key, policy.value); err != nil {
+		if err := normalizeErrorPolicy(x.Name, "error_handling."+policy.key, policy.value); err != nil {
 			return err
 		}
 	}
@@ -99,7 +108,7 @@ func validateCollector(c *model.Config, x *model.Collector) error {
 	if err := validateMetricRules(c, x); err != nil {
 		return err
 	}
-	return transform.CheckPrometheusTransform(x)
+	return transform.CheckTransformSettings(x)
 }
 
 // applyLimitDefaults gives every limit left unset its default.
@@ -133,24 +142,29 @@ func applyLimitDefaults(l *model.Limits) {
 	}
 }
 
-// normalizeFormats lower-cases the response format, decoder and transform,
-// infers the decoder a transform implies, and refuses what is not known.
+// normalizeFormats lower-cases the transform and decoder, refuses a missing or
+// unknown transform and an unknown decoder, and infers the decoder a transform
+// implies.
 func normalizeFormats(x *model.Collector) error {
-	if x.Response.Format == "" {
-		x.Response.Format = "auto"
-	}
-	x.Response.Format = strings.ToLower(x.Response.Format)
 	if err := decode.CheckCharset(x.Response.Charset); err != nil {
 		return fmt.Errorf("collector %q response.charset: %w", x.Name, err)
 	}
-	if x.Decoder.Type == "" {
-		x.Decoder.Type = x.Response.Format
+	x.Transform.Type = strings.ToLower(strings.TrimSpace(x.Transform.Type))
+	switch {
+	case x.Transform.Type == "":
+		return fmt.Errorf("collector %q has no transform.type; it is required: %s", x.Name, strings.Join(model.TransformTypes, ", "))
+	case !slices.Contains(model.TransformTypes, x.Transform.Type):
+		return fmt.Errorf("collector %q has unknown transform %q; want one of %s", x.Name, x.Transform.Type, strings.Join(model.TransformTypes, ", "))
 	}
+	x.Decoder.Type = strings.ToLower(strings.TrimSpace(x.Decoder.Type))
 	if x.Decoder.Type == "" {
 		x.Decoder.Type = "auto"
 	}
-	if x.Response.Format == "auto" && x.Decoder.Type == "auto" {
-		switch strings.ToLower(x.Transform.Type) {
+	if !slices.Contains(model.DecoderTypes, x.Decoder.Type) {
+		return fmt.Errorf("collector %q has unknown decoder %q; want one of %s", x.Name, x.Decoder.Type, strings.Join(model.DecoderTypes, ", "))
+	}
+	if x.Decoder.Type == "auto" {
+		switch x.Transform.Type {
 		case "regex":
 			x.Decoder.Type = "text"
 		case "csv":
@@ -159,16 +173,6 @@ func normalizeFormats(x *model.Collector) error {
 			x.Decoder.Type = "html"
 		case "prometheus":
 			x.Decoder.Type = "prometheus"
-		}
-	}
-	x.Decoder.Type = strings.ToLower(x.Decoder.Type)
-	if !map[string]bool{"json": true, "yaml": true, "xml": true, "csv": true, "html": true, "prometheus": true, "text": true, "auto": true}[x.Decoder.Type] {
-		return fmt.Errorf("collector %q has unknown decoder %q", x.Name, x.Decoder.Type)
-	}
-	if x.Transform.Type != "" {
-		x.Transform.Type = strings.ToLower(x.Transform.Type)
-		if !map[string]bool{"none": true, "jq": true, "yq": true, "xpath": true, "css": true, "csv": true, "regex": true, "python": true, "prometheus": true}[x.Transform.Type] {
-			return fmt.Errorf("collector %q has unknown transform %q", x.Name, x.Transform.Type)
 		}
 	}
 	if x.Transform.Type == "python" && strings.TrimSpace(x.Transform.Script) == "" {
@@ -184,7 +188,7 @@ func validateMetricRules(c *model.Config, x *model.Collector) error {
 		if r.ErrorMode == "" {
 			r.ErrorMode = model.ErrorModeLog
 		}
-		if err := normalizeErrorPolicy(c, x.Name, fmt.Sprintf("metric %q error_mode", r.Name), &r.ErrorMode); err != nil {
+		if err := normalizeErrorPolicy(x.Name, fmt.Sprintf("metric %q error_mode", r.Name), &r.ErrorMode); err != nil {
 			return err
 		}
 		if r.Type == "" {
@@ -208,26 +212,16 @@ func validateMetricRules(c *model.Config, x *model.Collector) error {
 			if !namePattern.MatchString(label.Name) {
 				return fmt.Errorf("collector %q metric %q has invalid label name %q", x.Name, r.Name, label.Name)
 			}
-			switch label.Type {
-			case "string":
-				if label.Expression != "" {
-					return fmt.Errorf("collector %q metric %q label %q of type string cannot set expression", x.Name, r.Name, label.Name)
-				}
-				if label.Required {
-					return fmt.Errorf("collector %q metric %q label %q of type string cannot be required; its value is always there", x.Name, r.Name, label.Name)
-				}
-			case "expression":
-				if strings.TrimSpace(label.Expression) == "" {
-					return fmt.Errorf("collector %q metric %q label %q of type expression requires expression", x.Name, r.Name, label.Name)
-				}
-				if label.Value != "" {
-					return fmt.Errorf("collector %q metric %q label %q of type expression cannot set value", x.Name, r.Name, label.Name)
-				}
-				if label.Required && x.Transform.Type == "python" {
-					return fmt.Errorf("collector %q metric %q label %q cannot be required: a python transform's labels come from its script, not from label expressions", x.Name, r.Name, label.Name)
-				}
-			default:
-				return fmt.Errorf("collector %q metric %q label %q has invalid type %q; want string or expression", x.Name, r.Name, label.Name, label.Type)
+			hasValue, hasExpression := label.Value != "", strings.TrimSpace(label.Expression) != ""
+			switch {
+			case hasValue && hasExpression:
+				return fmt.Errorf("collector %q metric %q label %q sets both value and expression; set value for a static label, or expression to read it from the response", x.Name, r.Name, label.Name)
+			case !hasValue && !hasExpression:
+				return fmt.Errorf("collector %q metric %q label %q needs a value, for a static label, or an expression, to read it from the response", x.Name, r.Name, label.Name)
+			case hasValue && label.Required:
+				return fmt.Errorf("collector %q metric %q label %q has a static value, so it cannot be required; its value is always there", x.Name, r.Name, label.Name)
+			case label.Required && x.Transform.Type == "python":
+				return fmt.Errorf("collector %q metric %q label %q cannot be required: a python transform's labels come from its script, not from label expressions", x.Name, r.Name, label.Name)
 			}
 		}
 		if err := transform.CheckMetricRule(x, r); err != nil {
@@ -555,7 +549,7 @@ func (m *Manager) applyConfig(trigger string) error {
 	transform.PythonWorkers().Retain(transform.PythonWorkerKeys(m.pythonPath, c))
 	// The new configuration may list other collector files.
 	m.collectorFiles = collectorFilesStamp(m.path, c.CollectorFiles)
-	LogDeprecations(m.logger, m.path, c)
+	LogNotices(m.logger, m.path, c)
 	m.logger.Info("configuration reloaded", "trigger", trigger, "collectors", len(c.Collectors), "collector_files", len(c.LoadedCollectorFiles))
 	return nil
 }
@@ -597,24 +591,35 @@ func checkPythonLibrary(collector, lib string) error {
 	return fmt.Errorf("collector %q declares unsupported Python library %q; the supported libraries are lxml, PyYAML and python-dateutil", collector, lib)
 }
 
-// LogDeprecations warns once per deprecated spelling a loaded configuration
-// used, so the operator hears about it on every start and reload until it is
-// changed.
-func LogDeprecations(logger *slog.Logger, path string, c *model.Config) {
+// LogNotices logs what Validate recorded about a loaded configuration
+// without refusing it: once per deprecated spelling it used and once per
+// warning, so the operator hears about each on every start and reload until it
+// is changed.
+func LogNotices(logger *slog.Logger, path string, c *model.Config) {
 	for _, message := range c.Deprecations {
 		logger.Warn("deprecated configuration", "file", path, "deprecation", message)
 	}
+	for _, message := range c.Warnings {
+		logger.Warn("configuration warning", "file", path, "warning", message)
+	}
 }
 
-// normalizeErrorPolicy lower-cases a policy, maps the deprecated "warn" to
-// "log" and records that it did, and rejects anything else.
-func normalizeErrorPolicy(c *model.Config, collector, key string, value *string) error {
+// undecidedDecoderWarning says how a collector without a decoder.type, whose
+// transform implies none, decodes what it reads.
+func undecidedDecoderWarning(x *model.Collector) string {
+	how := "by the Content-Type header of each response"
+	if x.Request.Type == fetch.RequestTypeLocalFile {
+		how = "by the extension of each file"
+	}
+	return fmt.Sprintf("collector %q sets no decoder.type, so it decodes %s, and by the content when that does not say; set decoder.type to fix the decoder", x.Name, how)
+}
+
+// normalizeErrorPolicy lower-cases a policy and rejects anything but fail,
+// log and ignore.
+func normalizeErrorPolicy(collector, key string, value *string) error {
 	policy := strings.ToLower(strings.TrimSpace(*value))
 	switch policy {
 	case model.ErrorPolicyFail, model.ErrorPolicyLog, model.ErrorPolicyIgnore:
-	case model.ErrorPolicyWarn:
-		policy = model.ErrorPolicyLog
-		c.Deprecations = append(c.Deprecations, fmt.Sprintf("collector %q %s: %q is deprecated; use %q, which means the same", collector, key, model.ErrorPolicyWarn, model.ErrorPolicyLog))
 	default:
 		return fmt.Errorf("collector %q %s has invalid value %q; want fail, log or ignore", collector, key, *value)
 	}

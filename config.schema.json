@@ -65,6 +65,7 @@
             "additionalProperties": false,
             "properties": {
               "type": {
+                "description": "How to decode the response. Defaults to auto, which the transform or the Content-Type decides.",
                 "enum": [
                   "auto",
                   "json",
@@ -87,32 +88,29 @@
                 "type": "boolean"
               },
               "on_decode_error": {
-                "description": "fail stops the probe, log carries on and logs why, ignore carries on quietly. Defaults to fail. warn is a deprecated spelling of log.",
+                "description": "fail stops the probe, log carries on and logs why, ignore carries on quietly. Defaults to fail.",
                 "enum": [
                   "fail",
                   "log",
-                  "ignore",
-                  "warn"
+                  "ignore"
                 ],
                 "type": "string"
               },
               "on_fetch_error": {
-                "description": "fail stops the probe, log carries on and logs why, ignore carries on quietly. Defaults to fail. warn is a deprecated spelling of log.",
+                "description": "fail stops the probe, log carries on and logs why, ignore carries on quietly. Defaults to fail.",
                 "enum": [
                   "fail",
                   "log",
-                  "ignore",
-                  "warn"
+                  "ignore"
                 ],
                 "type": "string"
               },
               "on_transform_error": {
-                "description": "fail stops the probe, log carries on and logs why, ignore carries on quietly. Defaults to fail. warn is a deprecated spelling of log.",
+                "description": "fail stops the probe, log carries on and logs why, ignore carries on quietly. Defaults to fail.",
                 "enum": [
                   "fail",
                   "log",
-                  "ignore",
-                  "warn"
+                  "ignore"
                 ],
                 "type": "string"
               }
@@ -189,12 +187,11 @@
                   ]
                 },
                 "error_mode": {
-                  "description": "What happens when this metric cannot be extracted. Defaults to log. warn is a deprecated spelling of log.",
+                  "description": "What happens when this metric cannot be extracted. Defaults to log.",
                   "enum": [
                     "fail",
                     "log",
-                    "ignore",
-                    "warn"
+                    "ignore"
                   ],
                   "type": "string"
                 },
@@ -217,8 +214,23 @@
                 "labels": {
                   "items": {
                     "additionalProperties": false,
+                    "description": "Set value for a static label, or expression to read it from the response.",
+                    "oneOf": [
+                      {
+                        "required": [
+                          "value"
+                        ]
+                      },
+                      {
+                        "required": [
+                          "expression"
+                        ]
+                      }
+                    ],
                     "properties": {
                       "expression": {
+                        "description": "Reads the label from the response, in the transform's language, like the metric's expression.",
+                        "minLength": 1,
                         "type": [
                           "string",
                           "number",
@@ -237,15 +249,9 @@
                         "description": "Cut a value longer than limits.max_label_value_length to fit, ending in …, instead of failing the scrape.",
                         "type": "boolean"
                       },
-                      "type": {
-                        "description": "string for a literal value, expression for a value from the response.",
-                        "enum": [
-                          "string",
-                          "expression"
-                        ],
-                        "type": "string"
-                      },
                       "value": {
+                        "description": "A static label value, exported as written.",
+                        "minLength": 1,
                         "type": [
                           "string",
                           "number",
@@ -253,6 +259,9 @@
                         ]
                       }
                     },
+                    "required": [
+                      "name"
+                    ],
                     "type": "object"
                   },
                   "type": "array"
@@ -596,20 +605,6 @@
                 },
                 "type": "object"
               },
-              "format": {
-                "description": "How to decode the response. Defaults to auto, which the transform or the Content-Type decides.",
-                "enum": [
-                  "auto",
-                  "json",
-                  "yaml",
-                  "xml",
-                  "csv",
-                  "html",
-                  "prometheus",
-                  "text"
-                ],
-                "type": "string"
-              },
               "namespaces": {
                 "additionalProperties": {
                   "type": [
@@ -731,9 +726,8 @@
                 ]
               },
               "type": {
-                "description": "How metrics are extracted from the decoded response.",
+                "description": "How metrics are extracted from the decoded response. Required.",
                 "enum": [
-                  "none",
                   "jq",
                   "yq",
                   "xpath",
@@ -746,12 +740,16 @@
                 "type": "string"
               }
             },
+            "required": [
+              "type"
+            ],
             "type": "object"
           }
         },
         "required": [
           "name",
-          "request"
+          "request",
+          "transform"
         ],
         "type": "object"
       },

@@ -565,7 +565,7 @@ when its probe does.
 A successful read MUST be presented to the shared pipeline as a response with
 status `200` and the headers `Content-Type`, chosen from the extension
 (`.prom` as Prometheus text version 0.0.4, `.json`, `.yaml`/`.yml`, `.xml`,
-`.csv`, `.html`/`.htm`) so `response.format: auto` picks the decoder,
+`.csv`, `.html`/`.htm`) so `decoder.type: auto` picks the decoder,
 `Content-Length`, and `Last-Modified`, the file's modification time. A failed
 read MUST be reported in the `file` stage and follow `on_fetch_error`. A file
 that does not exist, and one the exporter may not read, MUST each be named as
@@ -629,7 +629,7 @@ file MUST be started. Only a directory not listed in time MUST fail the probe.
 
 Each file read MUST then be decoded, transformed and validated on its own, as a
 response of its own with the headers a single file gets, so its decoder follows
-its extension under `response.format: auto`. Its series MUST be given a label
+its extension under `decoder.type: auto`. Its series MUST be given a label
 `file` with its name. A file MUST be left out, alone, when it could not be read
 or was refused, when decoding, the transform or validation fails — including a
 metric rule with `error_mode: fail` — when a series of it already has a `file`
@@ -697,15 +697,39 @@ auto
 
 Python is a transform, not a decoder. Supported transform types MUST include
 `jq`, `yq`, `xpath`, `css`, `csv`, `regex`, `prometheus`, and `python`.
+`transform.type` MUST be set on every collector: a collector without it, or
+with any other value, MUST be rejected at startup naming the accepted types.
+The decoder and transform types MUST each be listed once in the code, the list
+validation and the JSON Schema both read.
 
-`response.format` is optional and defaults to `auto`. When it is omitted, the
-implementation MUST infer a deterministic response decoder from the transform
+`transform.labels`, `transform.remove_labels` and `transform.rename_labels`
+MUST apply to every metric a collector produces, whatever its transform, after
+its metric rules and in that order: add, remove, rename. The renames MUST be
+made at once from the labels as they were before any of them, so they never
+chain and the result does not depend on the order they are listed or walked in.
+`transform.include`, `transform.exclude` and `transform.rename` pick and rename
+the metrics a `prometheus` transform passes through, and apply only to one
+without `metrics` rules.
+
+The decoder MUST be chosen by `decoder.type`, the one key for it; `response`
+MUST NOT take a format. `decoder.type` is optional and defaults to `auto`. When
+it is omitted, the implementation MUST infer a deterministic response decoder from the transform
 where possible: `regex` to text, `csv` to CSV, `css` to HTML, and `prometheus`
 to Prometheus exposition. jq/yq, XPath, and Python MAY use content detection
 because they can operate on more than one response representation. If the
 decoded response cannot be mapped to the selected transform, the exporter MUST
-return a clear transform error. An explicit response format remains available
-for ambiguous or incorrectly labeled endpoints.
+return a clear transform error. An explicit decoder remains available for
+ambiguous or incorrectly labeled endpoints.
+
+Where the transform implies no decoder and `decoder.type` is left unset, each
+response MUST be decoded by its `Content-Type` header for `http`, by its file
+extension for `localfile`, and by its content when those do not say, where an
+HTML doctype or `<html>` root element MUST be recognised as HTML before other
+markup is taken for XML. Such a
+collector MUST be reported as a configuration warning, naming it and how it
+decodes, at startup, on every reload and in the `--dry-run` report; it MUST NOT
+fail the load. An explicit `decoder.type`, `auto` included, MUST NOT be
+warned about.
 
 The entire `response` block is optional. CSV decoding MUST use a header row by
 default when `response.csv.header` is omitted. The `response.csv` block is only
@@ -901,8 +925,8 @@ Example:
 
 ```yaml
 - name: application_json
-  response:
-    format: json
+  decoder:
+    type: json
 
   transform:
     type: jq
@@ -914,7 +938,6 @@ Example:
       expression: '.requests'
       labels:
         - name: environment
-          type: expression
           expression: '.environment'
 ```
 
@@ -933,8 +956,8 @@ Example:
 
 ```yaml
 - name: application_yaml
-  response:
-    format: yaml
+  decoder:
+    type: yaml
 
   transform:
     type: yq
@@ -962,8 +985,8 @@ Example:
 
 ```yaml
 - name: application_xml
-  response:
-    format: xml
+  decoder:
+    type: xml
 
   transform:
     type: xpath
@@ -1004,8 +1027,8 @@ Example conceptual configuration:
 
 ```yaml
 - name: application_html
-  response:
-    format: html
+  decoder:
+    type: html
 
   transform:
     type: css
@@ -1017,7 +1040,6 @@ Example conceptual configuration:
       expression: '#servers td:nth-child(2)'
       labels:
         - name: environment
-          type: string
           value: production
 ```
 
@@ -1529,7 +1551,6 @@ metrics:
     error_mode: log
     labels:
       - name: environment
-        type: expression
         expression: .environment
     expression: .requests
 ```
@@ -1542,10 +1563,8 @@ to `gauge`. Metric declarations MUST be placed on the collector, alongside
 `expressions`.
 
 `error_mode` MUST be `ignore`, `log` or `fail` and defaults to `log`; the same
-vocabulary as `error_handling` (§ 19). `warn`, the older spelling of `log` in
-`error_handling`, MUST be accepted as meaning `log` and reported as deprecated
-(§ 19). Any other value MUST be rejected at startup and on reload, and the
-message MUST list the accepted values. It governs what happens when an individual metric cannot be
+vocabulary as `error_handling` (§ 19). Any other value MUST be rejected at
+startup and on reload, and the message MUST list the accepted values. It governs what happens when an individual metric cannot be
 extracted — its expression or a label expression errors, its value is absent
 while the metric is required, a required label is absent (§ 18.1), or its
 value is not a number:
@@ -1554,7 +1573,10 @@ value is not a number:
   serve every metric that could be extracted; when none could, it MUST succeed
   with an empty body rather than fail.
 - `log` MUST record the metric-specific error, naming the collector and the
-  rule, and otherwise behave exactly as `ignore`.
+  rule, and otherwise behave exactly as `ignore`. A rule that fails for several
+  series in one scrape — rows of a table, items — MUST be recorded once for that
+  scrape, with its first error and the number of series that failed, not once
+  per series.
 - `fail` MUST record the error as `log` does and MUST then fail the whole scrape
   at that metric. No metric from that scrape MUST be served, including metrics
   that were extracted successfully, so a response is either complete or an
@@ -1595,10 +1617,10 @@ A scheduled target (§ 42.14) has no HTTP response to carry the error. Under
 as for any other failed scheduled scrape; under `ignore` and `log` it MUST export
 what could be extracted.
 
-Each label entry MUST have `name` and `type`. `type` MUST be either `string` or
-`expression`. A `string` label MUST use `value` as its literal value. An
-`expression` label MUST provide `expression`, interpreted by the same transform
-as the metric expression:
+Each label entry MUST have `name` and exactly one of `value` and `expression`;
+setting both or neither MUST be rejected at startup. A `value` label is static:
+its value MUST be exported as written and never evaluated. An `expression`
+label MUST be interpreted by the same transform as the metric expression:
 
 | Transform | `expression` | `labels` |
 | --- | --- | --- |
@@ -1615,10 +1637,8 @@ constant:
 ```yaml
 labels:
   - name: server
-    type: expression
     expression: server       # current CSV row's server column
   - name: environment
-    type: string
     value: production
 ```
 
@@ -1633,15 +1653,13 @@ is added.
 An expression label that gives a series no value — a selector or path matching
 nothing, a missing attribute, column, capture group or source label, a null —
 or an empty value MUST be left off that series, in every transform, so the
-text exposition and OTLP agree. A label of `type: expression` MAY set
+text exposition and OTLP agree. An `expression` label MAY set
 `required: true`. A series missing a required label MUST then be a missing
 value of its metric: handled by the metric's `error_mode`, where `ignore` and
 `log` drop that series alone and `fail` fails the scrape with an error naming
 the label, counted as a missing key, and regardless of the metric's `required`
-and `error_handling.allow_missing_keys`. For jq without `items`, where label
-values pair with series by position, a required label giving neither one value
-nor one per series MUST fail the metric. `required` on a `type: string` label,
-or on a label of the python transform, MUST be rejected at startup.
+and `error_handling.allow_missing_keys`. `required` on a `value` label, or on a
+label of the python transform, MUST be rejected at startup.
 
 Python transforms are the exception: their script emits the common metric
 objects through `metric(...)`, so a `metrics` array is optional for them.
@@ -1653,9 +1671,12 @@ For the `jq`, `yq` and `css` transforms a metric MAY set `items`. For `jq` and
 selecting the things the metric is about. The value expression and every label
 expression MUST then be evaluated once per item, with the item as `.` and the
 whole document as `$root`, instead of as parallel streams over the whole
-document paired by position. Parallel streams drift silently: a label
-expression that yields nothing for one element shifts every later value onto
-the wrong series, and one that yields a single value is applied to all.
+document paired by position. Parallel streams drift: a label expression that
+yields nothing for one element shifts every later value onto the wrong series.
+Without `items`, a label expression yielding no value MUST leave the label off
+every series, one value MUST apply to every series, and one per series MUST
+pair by position; any other count MUST fail the metric under its `error_mode`,
+naming the label and the counts, rather than export mislabelled series.
 
 ```yaml
 metrics:
@@ -1664,10 +1685,8 @@ metrics:
     expression: .cpu
     labels:
       - name: server
-        type: expression
         expression: .name
       - name: site
-        type: expression
         expression: $root.site
 ```
 
@@ -1686,9 +1705,11 @@ expression MUST be CSS selectors matched within one item at a time. Within an
 item each MUST match at most one element, the rest of this section applying as
 for jq: a value selector matching nothing is that item's missing metric, and a
 label selector matching nothing leaves the label off. Without `items`, the
-value is the text of each element the expression selects and label selectors
-are matched within that element. `items` on any other transform MUST be
-rejected at startup.
+value is the text of each element the expression selects, so a label selector
+could only read text that is part of the number: a css metric with an
+`expression` label and no `items` MUST be rejected at startup, and its static
+`value` labels are unaffected. `items` on any other transform MUST be rejected
+at startup.
 
 Every transform MAY define one `transform.pre_script`. The exporter MUST run
 it exactly once per scrape, after decoding and before evaluating the metric
@@ -1732,8 +1753,8 @@ when that interpreter is unusable. A configuration containing no Python MUST NOT
 invoke an interpreter at all, so a deployment that uses none is unaffected.
 
 A pre-script that returns a mapping or a sequence produces structured data. When
-the collector's transform reads structured data — `jq`, `yq`, `none`, or an
-unset transform — the exporter MUST treat that result as the decoded response
+the collector's transform reads structured data — `jq` or `yq` — the exporter
+MUST treat that result as the decoded response
 and MUST NOT reject the collector because of the response's original format. The
 decoded format becomes JSON for the rest of the scrape, whatever the response
 originally was. This lets an unstructured response be reshaped once in Python
@@ -1786,13 +1807,16 @@ request type (§ 5.1): for `http` a transport failure or a non-success status,
 for `localfile` a file that cannot be read. It is named for the stage rather
 than for one type, so it reads the same on every collector.
 
-This is the vocabulary `error_mode` uses (§ 18.1). `warn`, this setting's
-original spelling of `log`, MUST still be accepted and treated as `log`, and each
-use MUST be reported as deprecated: logged at warning level on startup and on
-every reload, naming the collector, the key and the replacement, and listed
+This is the vocabulary `error_mode` uses (§ 18.1). The value MUST be matched
+case-insensitively; anything else MUST be rejected naming the collector, the
+key and the accepted values.
+
+No configuration spelling is deprecated at present. When one is replaced and
+the old spelling kept for a while, each use of it MUST be accepted with the
+new meaning and reported as deprecated: logged at warning level on startup and
+on every reload, naming the collector, the key and the replacement, and listed
 under `deprecations` in the `config` check of `--dry-run` (§ 30.1), which still
-passes. The value MUST be matched case-insensitively; anything else MUST be
-rejected naming the collector, the key and the accepted values.
+passes.
 
 ### 19.1 Distinguish failure types
 
@@ -2420,8 +2444,11 @@ label:
   and relative label expressions, with the collector's namespaces; and a
   prometheus transform's patterns, `include` and `exclude`.
 - A regex label MUST name a capture group the regex has, by number or name.
-- A prometheus transform's `rename` targets MUST be valid metric names, and its
-  `labels` keys and `rename_labels` targets valid label names.
+- A prometheus transform's `rename` targets MUST be valid metric names.
+  `include`, `exclude` and `rename` MUST be rejected on any collector other
+  than a prometheus transform without `metrics` rules, rather than ignored.
+- `transform.labels` keys and `rename_labels` targets MUST be valid label
+  names, and two `rename_labels` entries with one target MUST be rejected.
 
 ### 24.2a Decoding errors
 
@@ -2597,8 +2624,8 @@ collectors:
       method: GET
       path: /api/status
 
-    response:
-      format: json
+    decoder:
+      type: json
 
     transform:
       type: jq
@@ -2620,8 +2647,8 @@ collectors:
       type: http
       path: /status.yaml
 
-    response:
-      format: yaml
+    decoder:
+      type: yaml
 
     transform:
       type: yq
@@ -2643,8 +2670,8 @@ collectors:
       type: http
       path: /status.xml
 
-    response:
-      format: xml
+    decoder:
+      type: xml
 
     transform:
       type: xpath
@@ -2676,7 +2703,6 @@ collectors:
         expression: cpu
         labels:
           - name: server
-            type: expression
             expression: server
 ```
 
@@ -2689,8 +2715,8 @@ collectors:
       type: http
       path: /status
 
-    response:
-      format: html
+    decoder:
+      type: html
 
     transform:
       type: css
@@ -2703,7 +2729,6 @@ collectors:
         expression: 'td:nth-child(2)'
         labels:
           - name: server
-            type: expression
             expression: 'td:nth-child(1)'
 ```
 
@@ -2783,7 +2808,6 @@ collectors:
         expression: .workers[].cpu
         labels:
           - name: worker
-            type: expression
             expression: .workers[].name
 ```
 
@@ -2798,9 +2822,6 @@ collectors:
     request:
       type: http
       path: /status
-
-    response:
-      format: auto
 
     transform:
       type: python
@@ -3197,7 +3218,8 @@ Test:
 - Missing `error_mode` defaults to `log`.
 - `error_mode: fail` is accepted.
 - Transform-specific response format incompatibility.
-- Response format inference when `response.format` is omitted.
+- Decoder inference when `decoder.type` is omitted, and a leftover
+  `response.format` rejected with a pointer to `decoder.type`.
 - Invalid error policy values.
 - Missing required configuration fields.
 - Unknown configuration fields according to the chosen strictness policy.
@@ -3534,7 +3556,7 @@ Test structured pre-script results:
 - A text response reshaped into a mapping is extracted by ordinary `jq` metric
   rules, including label expressions, and produces the declared name, help, and
   type.
-- Promotion applies to `jq`, `yq`, `none`, and an unset transform, for any
+- Promotion applies to `jq` and `yq`, for any
   original response format, and to both mapping and sequence results.
 - Promotion does not apply to `csv`, `regex`, `css`, `xpath`, or `python`, which
   keep receiving their decoded format.
@@ -3562,7 +3584,7 @@ succeeds beside one that fails:
 - An optional rule (`required: false`, or `allow_missing_keys`) with an absent
   value is not a failure under `fail`, and is not logged.
 - `fail` still answers 502 when the collector sets `on_transform_error` to
-  `ignore` or `warn`.
+  `ignore` or `log`.
 - A `fail` response is not cached: two probes contact the target twice.
 - The self-metrics count a `fail` as a failed probe, a transform error and, for
   an absent value, a missing key.
@@ -3679,7 +3701,7 @@ For each relevant failure type test:
 
 ```text
 fail
-warn
+log
 ignore
 ```
 
@@ -4306,21 +4328,24 @@ status captured:
   rule and the label. Named and numbered captures, `@attribute` labels,
   namespaced XPath and `$root` pass.
 - A prometheus transform's invalid `include` and `exclude` patterns, `rename`
-  targets, `labels` keys and `rename_labels` targets are rejected.
+  targets, `labels` keys and `rename_labels` targets are rejected; so are
+  `include`, `exclude` and `rename` outside a passthrough, and two renames to
+  one label.
+- `transform.labels`, `remove_labels` and `rename_labels` apply to the metrics
+  of every transform, and renames give the same result however they are
+  ordered, never chaining.
 - `--dry-run` reports an expression that does not compile as a failed `config`
   check.
 
 ## 34.44 Error policy vocabulary tests
 
-- `warn` in `error_handling` and in `error_mode` is normalised to `log`, each
-  use is recorded as a deprecation naming the collector, the key and the
-  replacement, and values are matched case-insensitively.
-- Anything else is rejected naming the collector, the key and the accepted
-  values.
-- `--dry-run` passes with a deprecated spelling, lists it under
-  `details.deprecations`, and logs it.
-- A rule's `fail` still takes precedence over `on_transform_error` of `ignore`,
-  `log` and `warn`.
+- Values in `error_handling` and in `error_mode` are matched
+  case-insensitively; anything else, `warn` included, is rejected naming the
+  collector, the key and the accepted values.
+- A recorded deprecation is logged at startup and reload, and `--dry-run`
+  passes with it, lists it under `details.deprecations`, and logs it.
+- A rule's `fail` still takes precedence over `on_transform_error` of `ignore`
+  and `log`.
 
 ## 34.45 Items tests
 
@@ -5163,7 +5188,6 @@ metrics:
     expression: cpu
     labels:
       - name: server
-        type: expression
         expression: server
 transform:
   type: csv

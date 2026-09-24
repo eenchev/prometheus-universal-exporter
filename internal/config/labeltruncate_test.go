@@ -17,8 +17,8 @@ func truncateCollector(truncate bool) model.Collector {
 		Name: "truncate", Request: model.RequestConfig{Type: fetch.RequestTypeHTTP}, Transform: model.TransformConfig{Type: "jq"},
 		Limits: model.Limits{MaxLabelValueLength: 20},
 		Metrics: []model.MetricRule{{Name: "status", Type: model.GaugeMetricType, Expression: "1", Labels: []model.LabelRule{
-			{Name: "message", Type: "expression", Expression: ".message", Truncate: truncate},
-			{Name: "other", Type: "expression", Expression: ".message"},
+			{Name: "message", Expression: ".message", Truncate: truncate},
+			{Name: "other", Expression: ".message"},
 		}}},
 	}
 }
@@ -83,10 +83,10 @@ func TestTruncateWorksWithAMetricsPrefix(t *testing.T) {
 // transform's output.
 func TestTruncateWithRegex(t *testing.T) {
 	c := model.Collector{
-		Name: "truncate", Request: model.RequestConfig{Type: fetch.RequestTypeHTTP}, Response: model.ResponseConfig{Format: "text"}, Transform: model.TransformConfig{Type: "regex"},
+		Name: "truncate", Request: model.RequestConfig{Type: fetch.RequestTypeHTTP}, Decoder: model.DecoderConfig{Type: "text"}, Transform: model.TransformConfig{Type: "regex"},
 		Limits: model.Limits{MaxLabelValueLength: 10},
 		Metrics: []model.MetricRule{{Name: "status", Type: model.GaugeMetricType, Expression: `(?P<value>\d+) (?P<text>.*)`, Labels: []model.LabelRule{
-			{Name: "text", Type: "expression", Expression: "text", Truncate: true},
+			{Name: "text", Expression: "text", Truncate: true},
 		}}},
 	}
 	if err := Validate(&model.Config{Collectors: []model.Collector{c}}); err != nil {

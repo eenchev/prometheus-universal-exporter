@@ -34,7 +34,7 @@ func itemsSet(t *testing.T, transformType, contentType, body string, rules ...mo
 }
 
 func exprLabel(name, expression string) model.LabelRule {
-	return model.LabelRule{Name: name, Type: "expression", Expression: expression}
+	return model.LabelRule{Name: name, Expression: expression}
 }
 
 const itemsDocument = `{
@@ -57,7 +57,7 @@ func TestItemsEvaluatesEachItemOnItsOwn(t *testing.T) {
 			// it is simply absent on web02.
 			exprLabel("group", `.group as $id | first($root.groups[] | select(.id == $id)) | .name`),
 			exprLabel("site", "$root.site"),
-			{Name: "source", Type: "string", Value: "demo"},
+			{Name: "source", Value: "demo"},
 		},
 	})
 	if err != nil {

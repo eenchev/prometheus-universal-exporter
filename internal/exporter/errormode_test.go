@@ -50,7 +50,7 @@ func modeCollector(name, mode string) model.Collector {
 	return model.Collector{
 		Name:          name,
 		Request:       model.RequestConfig{Type: fetch.RequestTypeHTTP, Method: "GET"},
-		Response:      model.ResponseConfig{Format: "json"},
+		Decoder:       model.DecoderConfig{Type: "json"},
 		Transform:     model.TransformConfig{Type: "jq"},
 		ErrorHandling: model.ErrorHandling{OnFetchError: "fail", OnDecodeError: "fail", OnTransformError: "fail"},
 		Limits:        model.Limits{MaxResponseBytes: 4096, MaxMetrics: 10},
@@ -280,7 +280,7 @@ func TestAnOptionalRuleIsNeverAFailure(t *testing.T) {
 // probe to fail is more specific, so a lenient collector policy does not turn
 // its failure back into a quiet, partial success.
 func TestFailTakesPrecedenceOverALenientTransformPolicy(t *testing.T) {
-	for _, policy := range []string{"ignore", "log", "warn"} {
+	for _, policy := range []string{"ignore", "log"} {
 		t.Run(policy, func(t *testing.T) {
 			testutil.CaptureLogs(t)
 			target := jsonTarget(t, nil)

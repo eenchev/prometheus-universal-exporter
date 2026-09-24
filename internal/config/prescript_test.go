@@ -53,7 +53,7 @@ func TestPreScriptScalarResultKeepsDecodedFormat(t *testing.T) {
 func TestPreScriptStillReparsesHTML(t *testing.T) {
 	c := validated(t, model.Collector{Request: model.RequestConfig{Type: fetch.RequestTypeHTTP},
 		Name:      "html_prescript",
-		Response:  model.ResponseConfig{Format: "html"},
+		Decoder:   model.DecoderConfig{Type: "html"},
 		Transform: model.TransformConfig{Type: "css", PreScript: `data = data.replace("42", "7")`},
 		Limits:    scriptLimits(),
 		Metrics:   []model.MetricRule{{Name: "page_value", Type: model.GaugeMetricType, Expression: "#value"}},
@@ -76,7 +76,7 @@ func TestPreScriptDoesNotPromoteForTheCSVTransform(t *testing.T) {
 			Name:       "server_cpu",
 			Type:       model.GaugeMetricType,
 			Expression: "cpu",
-			Labels:     []model.LabelRule{{Name: "server", Type: "expression", Expression: "server"}},
+			Labels:     []model.LabelRule{{Name: "server", Expression: "server"}},
 		}},
 	})
 	set, err := transformResponse(t, c, "server,cpu\nalpha,42\n", "text/csv")
@@ -115,7 +115,7 @@ func TestPreScriptPromotionSupportsArrayResults(t *testing.T) {
 			Name:       "zone_cpu",
 			Type:       model.GaugeMetricType,
 			Expression: ".[].cpu",
-			Labels:     []model.LabelRule{{Name: "zone", Type: "expression", Expression: ".[].zone"}},
+			Labels:     []model.LabelRule{{Name: "zone", Expression: ".[].zone"}},
 		}},
 	})
 	set, err := transformResponse(t, c, "ignored\n", "text/plain")

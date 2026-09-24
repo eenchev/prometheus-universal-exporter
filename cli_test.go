@@ -15,6 +15,7 @@ import (
 	"github.com/eenchev/prometheus-universal-exporter/internal/config"
 	"github.com/eenchev/prometheus-universal-exporter/internal/exporter"
 	"github.com/eenchev/prometheus-universal-exporter/internal/fetch"
+	"github.com/eenchev/prometheus-universal-exporter/internal/model"
 	"github.com/eenchev/prometheus-universal-exporter/internal/testutil"
 )
 
@@ -492,35 +493,53 @@ func TestDryRunReportsAnExpressionThatDoesNotCompile(t *testing.T) {
 
 // The dry-run report and the log carry the deprecations, and the check still
 // passes: a deprecated spelling works until it is removed.
-func TestDryRunReportsDeprecations(t *testing.T) {
+// A collector leaving its decoder to each response still passes, and is
+// reported and logged so the operator can pin it.
+func TestDryRunWarnsOfAnUnsetDecoder(t *testing.T) {
 	path := testutil.WriteFile(t, "config.yaml", `collectors:
-  - name: legacy
+  - name: undecided
     request:
       type: http
-    error_handling:
-      on_fetch_error: warn
     transform:
-      type: regex
+      type: jq
     metrics:
       - name: value
-        description: A value
-        type: gauge
-        expression: 'value=(\d+)'
+        expression: .value
 `)
 	out := runCheckCLI(t, "--config.file="+path)
 	result := out.result(t, "config")
-	deprecations, _ := result.Details["deprecations"].([]any)
-	if out.code != 0 || result.Status != checkOK || len(deprecations) != 1 || !strings.Contains(deprecations[0].(string), `"warn" is deprecated`) {
+	warnings, _ := result.Details["warnings"].([]any)
+	if out.code != 0 || result.Status != checkOK || len(warnings) != 1 || !strings.Contains(warnings[0].(string), `collector "undecided" sets no decoder.type`) {
 		t.Fatalf("exit=%d config=%+v", out.code, result)
 	}
 	logged := false
 	for _, record := range out.logs {
-		if record["msg"] == "deprecated configuration" && strings.Contains(record["deprecation"].(string), "on_fetch_error") {
+		if record["msg"] == "configuration warning" && strings.Contains(record["warning"].(string), "undecided") {
 			logged = true
 		}
 	}
 	if !logged {
-		t.Fatalf("no deprecation in the log:\n%s", out.stderr)
+		t.Fatalf("no warning in the log:\n%s", out.stderr)
+	}
+}
+
+// None is accepted at present, but the plumbing stays: a deprecation Validate
+// records is listed in the report, and logged as startup logs it, and the
+// check still passes.
+func TestDryRunReportsDeprecations(t *testing.T) {
+	conf := &model.Config{Collectors: []model.Collector{{Name: "legacy"}}, Deprecations: []string{`collector "legacy" old_key: "x" is deprecated; use "y", which means the same`}}
+	details := configDetails(conf, false)
+	if deprecations, _ := details["deprecations"].([]string); len(deprecations) != 1 || deprecations[0] != conf.Deprecations[0] {
+		t.Fatalf("details=%v", details)
+	}
+	if _, listed := configDetails(&model.Config{}, false)["deprecations"]; listed {
+		t.Fatal("a configuration without deprecations lists them")
+	}
+	var out bytes.Buffer
+	logNotices(newLogger("info", &out), checkResult{Check: "config", File: "config.yaml", Status: checkOK, Details: details})
+	records := testutil.AssertJSONLines(t, &out, 1)
+	if records[0]["msg"] != "deprecated configuration" || records[0]["level"] != "WARN" || records[0]["deprecation"] != conf.Deprecations[0] || records[0]["file"] != "config.yaml" {
+		t.Fatalf("record=%v", records[0])
 	}
 }
 

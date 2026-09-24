@@ -56,7 +56,7 @@ func WriteFile(t *testing.T, name, body string) string {
 // demo_value with a regex, fails on every error, and accepts responses of up to
 // 1 KiB.
 func Collector(name, format string) model.Collector {
-	return model.Collector{Name: name, Request: model.RequestConfig{Type: "http", Method: "GET"}, Response: model.ResponseConfig{Format: format}, Transform: model.TransformConfig{Type: "regex"}, Metrics: []model.MetricRule{{Name: "demo_value", Type: model.GaugeMetricType, Expression: `value=(\d+)`}}, ErrorHandling: model.ErrorHandling{OnFetchError: "fail", OnDecodeError: "fail", OnTransformError: "fail"}, Limits: model.Limits{MaxResponseBytes: 1024}}
+	return model.Collector{Name: name, Request: model.RequestConfig{Type: "http", Method: "GET"}, Decoder: model.DecoderConfig{Type: format}, Transform: model.TransformConfig{Type: "regex"}, Metrics: []model.MetricRule{{Name: "demo_value", Type: model.GaugeMetricType, Expression: `value=(\d+)`}}, ErrorHandling: model.ErrorHandling{OnFetchError: "fail", OnDecodeError: "fail", OnTransformError: "fail"}, Limits: model.Limits{MaxResponseBytes: 1024}}
 }
 
 // CollectorYAML is one regex collector named name, indented as an item of a

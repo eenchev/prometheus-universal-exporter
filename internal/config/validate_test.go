@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/eenchev/prometheus-universal-exporter/internal/fetch"
 	"github.com/eenchev/prometheus-universal-exporter/internal/model"
 	"github.com/eenchev/prometheus-universal-exporter/internal/testutil"
 	"github.com/eenchev/prometheus-universal-exporter/internal/transform"
@@ -261,22 +262,82 @@ func TestConfigReloadRejectsAPreScriptThatDoesNotProduceData(t *testing.T) {
 // and a python transform's labels come from its script.
 func TestRequiredLabelsNeedAnExpression(t *testing.T) {
 	fixed := testutil.Collector("fixed", "text")
-	fixed.Metrics[0].Labels = []model.LabelRule{{Name: "env", Type: "string", Value: "prod", Required: true}}
-	if err := Validate(&model.Config{Collectors: []model.Collector{fixed}}); err == nil || !strings.Contains(err.Error(), `label "env" of type string cannot be required`) {
+	fixed.Metrics[0].Labels = []model.LabelRule{{Name: "env", Value: "prod", Required: true}}
+	if err := Validate(&model.Config{Collectors: []model.Collector{fixed}}); err == nil || !strings.Contains(err.Error(), `label "env" has a static value, so it cannot be required`) {
 		t.Fatalf("err=%v", err)
 	}
 
 	script := testutil.Collector("script", "text")
 	script.Transform = model.TransformConfig{Type: "python", Script: `metric(name="v", value=1)`}
-	script.Metrics = []model.MetricRule{{Name: "v", Type: model.GaugeMetricType, Labels: []model.LabelRule{{Name: "who", Type: "expression", Expression: "who", Required: true}}}}
+	script.Metrics = []model.MetricRule{{Name: "v", Type: model.GaugeMetricType, Labels: []model.LabelRule{{Name: "who", Expression: "who", Required: true}}}}
 	if err := Validate(&model.Config{Collectors: []model.Collector{script}}); err == nil || !strings.Contains(err.Error(), "a python transform's labels come from its script") {
 		t.Fatalf("err=%v", err)
 	}
 
 	expression := testutil.Collector("expression", "text")
 	expression.Metrics[0].Expression = `v=(\d+) (?P<who>\S+)`
-	expression.Metrics[0].Labels = []model.LabelRule{{Name: "who", Type: "expression", Expression: "who", Required: true}}
+	expression.Metrics[0].Labels = []model.LabelRule{{Name: "who", Expression: "who", Required: true}}
 	if err := Validate(&model.Config{Collectors: []model.Collector{expression}}); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// A collector that sets no decoder, and whose transform implies none, decodes
+// each response by what it says it is: warned about at load, with how.
+func TestAnUnsetDecoderIsWarnedAbout(t *testing.T) {
+	collector := func(name, request, transformType string) model.Collector {
+		c := testutil.Collector(name, "text")
+		c.Decoder = model.DecoderConfig{}
+		c.Request = model.RequestConfig{Type: request}
+		if request == fetch.RequestTypeLocalFile {
+			c.Request.Root = t.TempDir()
+			c.Request.Path = "status.json"
+		}
+		c.Transform = model.TransformConfig{Type: transformType}
+		c.Metrics[0].Expression = ".value"
+		return c
+	}
+	pinned := collector("pinned", fetch.RequestTypeHTTP, "jq")
+	pinned.Decoder.Type = "json"
+	explicit := collector("explicit", fetch.RequestTypeHTTP, "jq")
+	explicit.Decoder.Type = "auto"
+	implied := testutil.Collector("implied", "text") // regex, which implies text
+	implied.Decoder = model.DecoderConfig{}
+	cfg := &model.Config{Collectors: []model.Collector{
+		collector("by_header", fetch.RequestTypeHTTP, "jq"),
+		collector("by_extension", fetch.RequestTypeLocalFile, "jq"),
+		pinned, explicit, implied,
+	}}
+	if err := Validate(cfg); err != nil {
+		t.Fatal(err)
+	}
+	want := []string{
+		`collector "by_header" sets no decoder.type, so it decodes by the Content-Type header of each response`,
+		`collector "by_extension" sets no decoder.type, so it decodes by the extension of each file`,
+	}
+	if len(cfg.Warnings) != len(want) {
+		t.Fatalf("warnings=%q", cfg.Warnings)
+	}
+	for i, prefix := range want {
+		if !strings.HasPrefix(cfg.Warnings[i], prefix) {
+			t.Errorf("warning %d = %q, want it to start %q", i, cfg.Warnings[i], prefix)
+		}
+	}
+}
+
+// Deprecations and warnings are logged on every start and reload. None is
+// deprecated at present, but a deprecation Validate records is logged.
+func TestDeprecationsAndWarningsAreLogged(t *testing.T) {
+	out := testutil.CaptureLogs(t)
+	LogNotices(slog.Default(), "config.yaml", &model.Config{
+		Deprecations: []string{"collector \"x\" old_key is deprecated"},
+		Warnings:     []string{"collector \"x\" sets no decoder.type"},
+	})
+	records := testutil.AssertJSONLines(t, out, 2)
+	if records[0]["msg"] != "deprecated configuration" || records[0]["level"] != "WARN" || records[0]["deprecation"] != "collector \"x\" old_key is deprecated" || records[0]["file"] != "config.yaml" {
+		t.Fatalf("deprecation record=%v", records[0])
+	}
+	if records[1]["msg"] != "configuration warning" || records[1]["level"] != "WARN" || records[1]["warning"] != "collector \"x\" sets no decoder.type" || records[1]["file"] != "config.yaml" {
+		t.Fatalf("warning record=%v", records[1])
 	}
 }

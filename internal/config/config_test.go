@@ -2,6 +2,7 @@ package config
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"os"
 	"strings"
@@ -16,7 +17,7 @@ import (
 )
 
 func TestStandardJSONMetricAndPreScript(t *testing.T) {
-	c := model.Collector{Request: model.RequestConfig{Type: fetch.RequestTypeHTTP}, Name: "json", Response: model.ResponseConfig{Format: "json"}, Transform: model.TransformConfig{Type: "jq", PreScript: `data["requests"] = 42`}, Metrics: []model.MetricRule{{Name: "application_requests_total", Description: "Total application requests", Type: model.CounterMetricType, Expression: ".requests", Labels: []model.LabelRule{{Name: "environment", Type: "expression", Expression: ".environment"}}}}, Limits: model.Limits{MaxMetrics: 10}}
+	c := model.Collector{Request: model.RequestConfig{Type: fetch.RequestTypeHTTP}, Name: "json", Decoder: model.DecoderConfig{Type: "json"}, Transform: model.TransformConfig{Type: "jq", PreScript: `data["requests"] = 42`}, Metrics: []model.MetricRule{{Name: "application_requests_total", Description: "Total application requests", Type: model.CounterMetricType, Expression: ".requests", Labels: []model.LabelRule{{Name: "environment", Expression: ".environment"}}}}, Limits: model.Limits{MaxMetrics: 10}}
 	r := &fetch.HTTPResponse{Body: []byte(`{"environment":"test"}`), Headers: make(http.Header)}
 	if err := Validate(&model.Config{Collectors: []model.Collector{c}}); err != nil {
 		t.Fatal(err)
@@ -37,7 +38,7 @@ func TestStandardJSONMetricAndPreScript(t *testing.T) {
 func TestJSONArrayMetricsPairLabelsByIndex(t *testing.T) {
 	c := model.Collector{Request: model.RequestConfig{Type: fetch.RequestTypeHTTP},
 		Name:      "json_array",
-		Response:  model.ResponseConfig{Format: "json"},
+		Decoder:   model.DecoderConfig{Type: "json"},
 		Transform: model.TransformConfig{Type: "jq"},
 		Metrics: []model.MetricRule{{
 			Name:        "server_cpu",
@@ -46,7 +47,6 @@ func TestJSONArrayMetricsPairLabelsByIndex(t *testing.T) {
 			Expression:  ".servers[] | .cpu",
 			Labels: []model.LabelRule{{
 				Name:       "server",
-				Type:       "expression",
 				Expression: ".servers[] | .name",
 			}},
 		}},
@@ -77,14 +77,14 @@ func TestJSONArrayMissingValuesRespectMetricErrorMode(t *testing.T) {
 		t.Run(errorMode, func(t *testing.T) {
 			c := model.Collector{Request: model.RequestConfig{Type: fetch.RequestTypeHTTP},
 				Name:      "json_array_missing",
-				Response:  model.ResponseConfig{Format: "json"},
+				Decoder:   model.DecoderConfig{Type: "json"},
 				Transform: model.TransformConfig{Type: "jq"},
 				Metrics: []model.MetricRule{{
 					Name:       "server_cpu",
 					Type:       model.GaugeMetricType,
 					ErrorMode:  errorMode,
 					Expression: ".servers[] | .cpu",
-					Labels:     []model.LabelRule{{Name: "server", Type: "expression", Expression: ".servers[] | .name"}},
+					Labels:     []model.LabelRule{{Name: "server", Expression: ".servers[] | .name"}},
 				}},
 				Limits: model.Limits{MaxMetrics: 10},
 			}
@@ -108,7 +108,7 @@ func TestJSONArrayMissingValuesRespectMetricErrorMode(t *testing.T) {
 }
 
 func TestStandardCSVMetricLabelsUseRowExpressions(t *testing.T) {
-	c := model.Collector{Request: model.RequestConfig{Type: fetch.RequestTypeHTTP}, Name: "csv", Response: model.ResponseConfig{Format: "csv", CSV: model.CSVConfig{Header: boolPtr(true)}}, Transform: model.TransformConfig{Type: "csv"}, Metrics: []model.MetricRule{{Name: "server_cpu", Description: "Server CPU utilization", Type: model.GaugeMetricType, Expression: "cpu", Labels: []model.LabelRule{{Name: "server", Type: "expression", Expression: "server"}, {Name: "environment", Type: "string", Value: "production"}}}}, Limits: model.Limits{MaxMetrics: 10}}
+	c := model.Collector{Request: model.RequestConfig{Type: fetch.RequestTypeHTTP}, Name: "csv", Decoder: model.DecoderConfig{Type: "csv"}, Response: model.ResponseConfig{CSV: model.CSVConfig{Header: boolPtr(true)}}, Transform: model.TransformConfig{Type: "csv"}, Metrics: []model.MetricRule{{Name: "server_cpu", Description: "Server CPU utilization", Type: model.GaugeMetricType, Expression: "cpu", Labels: []model.LabelRule{{Name: "server", Expression: "server"}, {Name: "environment", Value: "production"}}}}, Limits: model.Limits{MaxMetrics: 10}}
 	if err := Validate(&model.Config{Collectors: []model.Collector{c}}); err != nil {
 		t.Fatal(err)
 	}
@@ -133,7 +133,7 @@ func TestCSVFormatIsInferredAndMissingRowsRespectMetricErrorMode(t *testing.T) {
 				Name:      "csv_missing",
 				Response:  model.ResponseConfig{CSV: model.CSVConfig{Header: boolPtr(true)}},
 				Transform: model.TransformConfig{Type: "csv"},
-				Metrics:   []model.MetricRule{{Name: "server_cpu", Type: model.GaugeMetricType, ErrorMode: errorMode, Expression: "cpu", Labels: []model.LabelRule{{Name: "server", Type: "expression", Expression: "server"}}}},
+				Metrics:   []model.MetricRule{{Name: "server_cpu", Type: model.GaugeMetricType, ErrorMode: errorMode, Expression: "cpu", Labels: []model.LabelRule{{Name: "server", Expression: "server"}}}},
 				Limits:    model.Limits{MaxMetrics: 10},
 			}
 			cfg := &model.Config{Collectors: []model.Collector{c}}
@@ -168,15 +168,15 @@ func TestCSVTransformDefaultsWithoutResponseConfiguration(t *testing.T) {
 			Name:       "server_cpu",
 			Type:       model.GaugeMetricType,
 			Expression: "cpu",
-			Labels:     []model.LabelRule{{Name: "server", Type: "expression", Expression: "server"}},
+			Labels:     []model.LabelRule{{Name: "server", Expression: "server"}},
 		}},
 	}}}
 	if err := Validate(cfg); err != nil {
 		t.Fatal(err)
 	}
 	c := &cfg.Collectors[0]
-	if c.Response.Format != "auto" || c.Decoder.Type != "csv" || c.Response.CSV.Header != nil {
-		t.Fatalf("unexpected CSV defaults: format=%q decoder=%q header=%v", c.Response.Format, c.Decoder.Type, c.Response.CSV.Header)
+	if c.Decoder.Type != "csv" || c.Response.CSV.Header != nil {
+		t.Fatalf("unexpected CSV defaults: decoder=%q header=%v", c.Decoder.Type, c.Response.CSV.Header)
 	}
 	r := &fetch.HTTPResponse{Body: []byte("server,cpu\nweb01,72\nweb02,31\n"), Headers: make(http.Header)}
 	d, err := decode.Decode(r, c)
@@ -193,7 +193,7 @@ func TestCSVTransformDefaultsWithoutResponseConfiguration(t *testing.T) {
 }
 
 func TestPythonIsConfiguredAsTransform(t *testing.T) {
-	c := model.Collector{Request: model.RequestConfig{Type: fetch.RequestTypeHTTP}, Name: "python", Response: model.ResponseConfig{Format: "text"}, Transform: model.TransformConfig{Type: "python", Script: `metric(name="python_value", type="gauge", value=7)`, Libraries: []string{"lxml"}}, Metrics: []model.MetricRule{}, Limits: model.Limits{MaxMetrics: 10}}
+	c := model.Collector{Request: model.RequestConfig{Type: fetch.RequestTypeHTTP}, Name: "python", Decoder: model.DecoderConfig{Type: "text"}, Transform: model.TransformConfig{Type: "python", Script: `metric(name="python_value", type="gauge", value=7)`, Libraries: []string{"lxml"}}, Metrics: []model.MetricRule{}, Limits: model.Limits{MaxMetrics: 10}}
 	if err := Validate(&model.Config{Collectors: []model.Collector{c}}); err != nil {
 		t.Fatal(err)
 	}
@@ -235,7 +235,7 @@ func TestTransformInfersResponseFormatAndMetricErrorMode(t *testing.T) {
 }
 
 func TestTransformRejectsIncompatibleResponseFormat(t *testing.T) {
-	cfg := &model.Config{Collectors: []model.Collector{{Request: model.RequestConfig{Type: fetch.RequestTypeHTTP}, Name: "invalid", Response: model.ResponseConfig{Format: "json"}, Transform: model.TransformConfig{Type: "regex"}, Metrics: []model.MetricRule{{Name: "value", Type: model.GaugeMetricType, Expression: `value=(\d+)`}}}}}
+	cfg := &model.Config{Collectors: []model.Collector{{Request: model.RequestConfig{Type: fetch.RequestTypeHTTP}, Name: "invalid", Decoder: model.DecoderConfig{Type: "json"}, Transform: model.TransformConfig{Type: "regex"}, Metrics: []model.MetricRule{{Name: "value", Type: model.GaugeMetricType, Expression: `value=(\d+)`}}}}}
 	if err := Validate(cfg); err != nil {
 		t.Fatal(err)
 	}
@@ -288,8 +288,8 @@ func TestConfigValidationAppliesDefaults(t *testing.T) {
 		t.Fatal(err)
 	}
 	c := cfg.Collectors[0]
-	if c.Request.Method != http.MethodGet || c.Response.Format != "auto" || c.Decoder.Type != "text" {
-		t.Fatalf("unexpected inferred defaults: method=%q format=%q decoder=%q", c.Request.Method, c.Response.Format, c.Decoder.Type)
+	if c.Request.Method != http.MethodGet || c.Decoder.Type != "text" {
+		t.Fatalf("unexpected inferred defaults: method=%q decoder=%q", c.Request.Method, c.Decoder.Type)
 	}
 	if c.ErrorHandling.OnFetchError != "fail" || c.ErrorHandling.OnDecodeError != "fail" || c.ErrorHandling.OnTransformError != "fail" {
 		t.Fatalf("unexpected error policy defaults: %#v", c.ErrorHandling)
@@ -340,18 +340,38 @@ func TestConfigValidationRejectsInvalidSettings(t *testing.T) {
 		},
 		{
 			name: "invalid metric type",
-			cfg:  &model.Config{Collectors: []model.Collector{{Request: model.RequestConfig{Type: fetch.RequestTypeHTTP}, Name: "invalid_metric_type", Metrics: []model.MetricRule{{Name: "value", Type: "rate", Expression: ".value"}}}}},
+			cfg:  &model.Config{Collectors: []model.Collector{{Request: model.RequestConfig{Type: fetch.RequestTypeHTTP}, Name: "invalid_metric_type", Transform: model.TransformConfig{Type: "jq"}, Metrics: []model.MetricRule{{Name: "value", Type: "rate", Expression: ".value"}}}}},
 			want: "invalid type",
 		},
 		{
 			name: "invalid metric error mode",
-			cfg:  &model.Config{Collectors: []model.Collector{{Request: model.RequestConfig{Type: fetch.RequestTypeHTTP}, Name: "invalid_error_mode", Metrics: []model.MetricRule{{Name: "value", ErrorMode: "panic", Expression: ".value"}}}}},
+			cfg:  &model.Config{Collectors: []model.Collector{{Request: model.RequestConfig{Type: fetch.RequestTypeHTTP}, Name: "invalid_error_mode", Transform: model.TransformConfig{Type: "jq"}, Metrics: []model.MetricRule{{Name: "value", ErrorMode: "panic", Expression: ".value"}}}}},
 			want: "want fail, log or ignore",
 		},
 		{
-			name: "invalid label type",
-			cfg:  &model.Config{Collectors: []model.Collector{{Request: model.RequestConfig{Type: fetch.RequestTypeHTTP}, Name: "invalid_label", Transform: model.TransformConfig{Type: "jq"}, Metrics: []model.MetricRule{{Name: "value", Expression: ".value", Labels: []model.LabelRule{{Name: "source", Type: "xpath", Expression: ".source"}}}}}}},
-			want: "invalid type",
+			name: "missing transform type",
+			cfg:  &model.Config{Collectors: []model.Collector{{Request: model.RequestConfig{Type: fetch.RequestTypeHTTP}, Name: "untransformed", Metrics: []model.MetricRule{{Name: "value", Expression: ".value"}}}}},
+			want: `collector "untransformed" has no transform.type; it is required: jq, yq, xpath, css, csv, regex, python, prometheus`,
+		},
+		{
+			name: "none transform",
+			cfg:  &model.Config{Collectors: []model.Collector{{Request: model.RequestConfig{Type: fetch.RequestTypeHTTP}, Name: "none", Transform: model.TransformConfig{Type: "none"}, Metrics: []model.MetricRule{{Name: "value", Expression: ".value"}}}}},
+			want: `collector "none" has unknown transform "none"; want one of jq, yq`,
+		},
+		{
+			name: "unknown decoder",
+			cfg:  &model.Config{Collectors: []model.Collector{{Request: model.RequestConfig{Type: fetch.RequestTypeHTTP}, Name: "gopher", Decoder: model.DecoderConfig{Type: "gopher"}, Transform: model.TransformConfig{Type: "jq"}, Metrics: []model.MetricRule{{Name: "value", Expression: ".value"}}}}},
+			want: `collector "gopher" has unknown decoder "gopher"; want one of auto, json`,
+		},
+		{
+			name: "label with a value and an expression",
+			cfg:  &model.Config{Collectors: []model.Collector{{Request: model.RequestConfig{Type: fetch.RequestTypeHTTP}, Name: "invalid_label", Transform: model.TransformConfig{Type: "jq"}, Metrics: []model.MetricRule{{Name: "value", Expression: ".value", Labels: []model.LabelRule{{Name: "source", Value: "api", Expression: ".source"}}}}}}},
+			want: `label "source" sets both value and expression`,
+		},
+		{
+			name: "label with neither a value nor an expression",
+			cfg:  &model.Config{Collectors: []model.Collector{{Request: model.RequestConfig{Type: fetch.RequestTypeHTTP}, Name: "invalid_label", Transform: model.TransformConfig{Type: "jq"}, Metrics: []model.MetricRule{{Name: "value", Expression: ".value", Labels: []model.LabelRule{{Name: "source"}}}}}}},
+			want: `label "source" needs a value, for a static label, or an expression`,
 		},
 	}
 	for _, test := range tests {
@@ -371,5 +391,54 @@ func TestLoadConfigRejectsUnknownFields(t *testing.T) {
 	}
 	if _, err := Load(path); err == nil || !strings.Contains(err.Error(), "unknown") {
 		t.Fatalf("Load() error=%v, want unknown-field error", err)
+	}
+}
+
+// A label is static with value and read from the response with expression;
+// no type says which.
+func TestLabelsAreStaticOrReadByTheirKeys(t *testing.T) {
+	path := testutil.WriteIn(t, t.TempDir(), "config.yaml", `collectors:
+  - name: servers
+    request:
+      type: http
+    decoder:
+      type: html
+    transform:
+      type: css
+    metrics:
+      - name: server_cpu
+        items: '#servers tr:has(td)'
+        expression: td:nth-child(2)
+        labels:
+          - name: environment
+            value: production
+          - name: server
+            expression: td:nth-child(1)
+            required: true
+`)
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, err := os.ReadFile("../../testdata/html/status.html")
+	if err != nil {
+		t.Fatal(err)
+	}
+	r := &fetch.HTTPResponse{Body: body, Headers: http.Header{"Content-Type": {"text/html"}}}
+	c := &cfg.Collectors[0]
+	d, err := decode.Decode(r, c)
+	if err != nil {
+		t.Fatal(err)
+	}
+	set, err := transform.Transform(context.Background(), d, r, c, "python3")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got []string
+	for _, m := range set.Metrics {
+		got = append(got, fmt.Sprintf("%s{%s,%s} %g", m.Name, m.Labels["environment"], m.Labels["server"], m.Value))
+	}
+	if want := "server_cpu{production,web01} 72 server_cpu{production,web02} 31"; strings.Join(got, " ") != want {
+		t.Fatalf("got %v, want %s", got, want)
 	}
 }

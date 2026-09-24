@@ -36,7 +36,7 @@ func TestPreScriptReshapesTextForOrdinaryMetricRules(t *testing.T) {
 			Type:        model.GaugeMetricType,
 			ErrorMode:   "log",
 			Expression:  ".workers[].cpu",
-			Labels:      []model.LabelRule{{Name: "worker", Type: "expression", Expression: ".workers[].name"}},
+			Labels:      []model.LabelRule{{Name: "worker", Expression: ".workers[].name"}},
 		}},
 	}}}
 	if err := config.Validate(cfg); err != nil {

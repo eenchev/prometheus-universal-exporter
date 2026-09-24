@@ -36,8 +36,8 @@ func TestFailIsReportedByEveryTransform(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			testutil.CaptureLogs(t)
 			c := model.Collector{Request: model.RequestConfig{Type: fetch.RequestTypeHTTP},
-				Name:      "every",
-				Response:  model.ResponseConfig{Format: test.format, CSV: model.CSVConfig{Header: boolPtr(true)}},
+				Name:    "every",
+				Decoder: model.DecoderConfig{Type: test.format}, Response: model.ResponseConfig{CSV: model.CSVConfig{Header: boolPtr(true)}},
 				Transform: model.TransformConfig{Type: test.transform},
 				Metrics:   []model.MetricRule{{Name: "demo_absent", Type: model.GaugeMetricType, Expression: test.expression, ErrorMode: model.ErrorModeFail}},
 				Limits:    model.Limits{MaxMetrics: 10},

@@ -44,6 +44,8 @@ collectors:
         symbols: CHF,GBP,USD
       headers:
         Accept: application/json
+    decoder:
+      type: json
     transform:
       type: jq
       # A pre-script receives the decoded response as `data` (plus `response`,
@@ -85,10 +87,8 @@ collectors:
         expression: .rates[] | .rate
         labels:
           - name: currency
-            type: expression
             expression: .rates[] | .currency
           - name: base
-            type: expression
             expression: .base
 
       - name: exchange_rate_inverse
@@ -98,10 +98,8 @@ collectors:
         expression: .rates[] | .inverse
         labels:
           - name: currency
-            type: expression
             expression: .rates[] | .currency
           - name: base
-            type: expression
             expression: .base
 
       - name: exchange_rate_observation_timestamp_seconds
@@ -112,5 +110,4 @@ collectors:
         expression: .observed_at
         labels:
           - name: base
-            type: expression
             expression: .base

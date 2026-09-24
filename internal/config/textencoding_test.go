@@ -65,7 +65,7 @@ func regexCollector(name string) model.Collector {
 		Name:      name,
 		Request:   model.RequestConfig{Type: fetch.RequestTypeHTTP},
 		Transform: model.TransformConfig{Type: "regex"},
-		Metrics:   []model.MetricRule{{Name: "v", Type: model.GaugeMetricType, Expression: `v=(\d+) (?P<who>\S+)`, Labels: []model.LabelRule{{Name: "who", Type: "expression", Expression: "who"}}}},
+		Metrics:   []model.MetricRule{{Name: "v", Type: model.GaugeMetricType, Expression: `v=(\d+) (?P<who>\S+)`, Labels: []model.LabelRule{{Name: "who", Expression: "who"}}}},
 	}
 }
 
@@ -111,7 +111,7 @@ func TestResponseCharsetOverridesTheTarget(t *testing.T) {
 
 // A byte order mark wins, and is removed.
 func TestByteOrderMarks(t *testing.T) {
-	c := model.Collector{Name: "json", Request: model.RequestConfig{Type: fetch.RequestTypeHTTP}, Transform: model.TransformConfig{Type: "jq"}, Metrics: []model.MetricRule{{Name: "v", Type: model.GaugeMetricType, Expression: ".v", Labels: []model.LabelRule{{Name: "who", Type: "expression", Expression: ".who"}}}}}
+	c := model.Collector{Name: "json", Request: model.RequestConfig{Type: fetch.RequestTypeHTTP}, Transform: model.TransformConfig{Type: "jq"}, Metrics: []model.MetricRule{{Name: "v", Type: model.GaugeMetricType, Expression: ".v", Labels: []model.LabelRule{{Name: "who", Expression: ".who"}}}}}
 	doc := `{"v": 2, "who": "Zoë"}`
 	utf16le, err := unicode.UTF16(unicode.LittleEndian, unicode.UseBOM).NewEncoder().Bytes([]byte(doc))
 	if err != nil {
@@ -151,7 +151,7 @@ func decodeBody(t *testing.T, c model.Collector, body []byte, contentType string
 
 // HTML declares its encoding in a meta element, XML in its declaration.
 func TestDocumentsDeclareTheirEncoding(t *testing.T) {
-	html := model.Collector{Name: "css", Request: model.RequestConfig{Type: fetch.RequestTypeHTTP}, Response: model.ResponseConfig{Format: "html"}, Transform: model.TransformConfig{Type: "css"}, Metrics: []model.MetricRule{{Name: "v", Type: model.GaugeMetricType, Expression: "td"}}}
+	html := model.Collector{Name: "css", Request: model.RequestConfig{Type: fetch.RequestTypeHTTP}, Decoder: model.DecoderConfig{Type: "html"}, Transform: model.TransformConfig{Type: "css"}, Metrics: []model.MetricRule{{Name: "v", Type: model.GaugeMetricType, Expression: "td"}}}
 	for _, meta := range []string{`<meta charset="windows-1252">`, `<meta http-equiv="Content-Type" content="text/html; charset=ISO-8859-1">`} {
 		page := latin1(t, "<html><head>"+meta+"</head><body><table><tr><td class=\"who\">café</td></tr></table></body></html>")
 		d := decodeBody(t, html, page, "text/html")
@@ -159,7 +159,7 @@ func TestDocumentsDeclareTheirEncoding(t *testing.T) {
 			t.Errorf("%s: %q", meta, got)
 		}
 	}
-	xml := model.Collector{Name: "xpath", Request: model.RequestConfig{Type: fetch.RequestTypeHTTP}, Response: model.ResponseConfig{Format: "xml"}, Transform: model.TransformConfig{Type: "xpath"}, Metrics: []model.MetricRule{{Name: "v", Type: model.GaugeMetricType, Expression: "/status/v"}}}
+	xml := model.Collector{Name: "xpath", Request: model.RequestConfig{Type: fetch.RequestTypeHTTP}, Decoder: model.DecoderConfig{Type: "xml"}, Transform: model.TransformConfig{Type: "xpath"}, Metrics: []model.MetricRule{{Name: "v", Type: model.GaugeMetricType, Expression: "/status/v"}}}
 	doc := latin1(t, `<?xml version="1.0" encoding="ISO-8859-1"?><status><who>café</who><v>4</v></status>`)
 	// From the declaration, and from a header saying the same: converted once.
 	for _, contentType := range []string{"application/xml", "application/xml; charset=iso-8859-1"} {

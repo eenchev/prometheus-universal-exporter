@@ -8,12 +8,11 @@ import (
 	"github.com/eenchev/prometheus-universal-exporter/internal/model"
 )
 
+// jqFamily reports whether a transform evaluates jq expressions against
+// decoded structured data: jq and yq. Only these support items, and only these
+// accept a pre-script result in place of the decoded response.
 func jqFamily(transformType string) bool {
-	switch transformType {
-	case "", "none", "jq", "yq":
-		return true
-	}
-	return false
+	return transformType == "jq" || transformType == "yq"
 }
 
 // CheckMetricRule validates one rule's name and compiles its expressions.
@@ -66,6 +65,12 @@ func CheckMetricRule(x *model.Collector, r *model.MetricRule) error {
 			if _, err := expr.CompileCSS(label.Expression); err != nil {
 				return fmt.Errorf("%s label %q CSS selector %q: %w", where, label.Name, label.Expression, err)
 			}
+			// Without items a label selector could only match inside the
+			// element whose whole text is the value, so it could only read
+			// text that is part of the number.
+			if r.Items == "" {
+				return fmt.Errorf("%s label %q reads the response, which a css metric can do only with items: set items to the rows, such as '#servers tr:has(td)', and select the value and each label within a row", where, label.Name)
+			}
 		}
 	case x.Transform.Type == "xpath":
 		if _, err := expr.CompileXPath(r.Expression, x.Response.Namespaces); err != nil {
@@ -91,12 +96,23 @@ func CheckMetricRule(x *model.Collector, r *model.MetricRule) error {
 	return nil
 }
 
-// CheckPrometheusTransform compiles the passthrough filters and checks the
-// names the transform would give metrics and labels.
-func CheckPrometheusTransform(x *model.Collector) error {
+// CheckTransformSettings checks the collector-wide transform settings.
+// include, exclude and rename pick and rename the metrics a prometheus
+// transform passes through, so they apply only to one without metrics rules,
+// where the rules would do both; anywhere else they are refused rather than
+// ignored. The label settings apply to every transform: their label names are
+// checked, and two renames to one label are refused, since which value it
+// would get has no right answer.
+func CheckTransformSettings(x *model.Collector) error {
 	t := x.Transform
-	if t.Type != "prometheus" {
-		return nil
+	passthrough := t.Type == "prometheus" && len(x.Metrics) == 0
+	for _, setting := range []struct {
+		key string
+		set bool
+	}{{"include", len(t.Include) > 0}, {"exclude", len(t.Exclude) > 0}, {"rename", len(t.Rename) > 0}} {
+		if setting.set && !passthrough {
+			return fmt.Errorf("collector %q sets transform.%s, which picks or renames the metrics a prometheus transform passes through, so it applies only to a prometheus transform without metrics rules", x.Name, setting.key)
+		}
 	}
 	for key, expressions := range map[string][]string{"include": t.Include, "exclude": t.Exclude} {
 		for _, expression := range expressions {
@@ -115,10 +131,16 @@ func CheckPrometheusTransform(x *model.Collector) error {
 			return fmt.Errorf("collector %q transform.labels has invalid label name %q", x.Name, name)
 		}
 	}
-	for from, to := range t.RenameLabels {
+	targets := map[string]string{}
+	for _, from := range model.SortedKeys(t.RenameLabels) {
+		to := t.RenameLabels[from]
 		if !model.LabelNameRE.MatchString(to) {
 			return fmt.Errorf("collector %q transform.rename_labels %q to invalid label name %q", x.Name, from, to)
 		}
+		if other, taken := targets[to]; taken {
+			return fmt.Errorf("collector %q transform.rename_labels renames both %q and %q to %q; a label can be the target of one rename", x.Name, other, from, to)
+		}
+		targets[to] = from
 	}
 	return nil
 }
@@ -139,7 +161,7 @@ func checkMetricName(name string) error {
 func expressionLabels(r *model.MetricRule) []model.LabelRule {
 	var out []model.LabelRule
 	for _, label := range r.Labels {
-		if label.Type == "expression" {
+		if !label.Static() {
 			out = append(out, label)
 		}
 	}

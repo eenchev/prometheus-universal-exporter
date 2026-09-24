@@ -102,6 +102,8 @@ collectors:
     # limits:
     #   # Maximum live cache entries for this collector. Defaults to 1000.
     #   max_cache_entries: 1000
+    decoder:
+      type: json
     transform:
       type: jq
       # Optional: runs once after decoding and before all metric expressions.
@@ -121,7 +123,6 @@ collectors:
         expression: .requests
         labels:
           - name: environment
-            type: expression
             expression: .environment
 
   # Set targetAuth.enabled=true in the Helm chart and store the token in the
@@ -162,7 +163,6 @@ collectors:
         expression: cpu
         labels:
           - name: server
-            type: expression
             expression: server
 
   - name: vendor_prometheus
@@ -192,6 +192,8 @@ collectors:
     request:
       type: http
       path: /status
+    decoder:
+      type: text
     transform:
       type: jq
       pre_script: |
@@ -206,7 +208,6 @@ collectors:
         expression: .workers[].cpu
         labels:
           - name: worker
-            type: expression
             expression: .workers[].name
 
   # Reserve the Python transform for collectors whose metric names are not known
@@ -217,6 +218,8 @@ collectors:
     request:
       type: http
       path: /status
+    decoder:
+      type: text
     transform:
       type: python
       script: |

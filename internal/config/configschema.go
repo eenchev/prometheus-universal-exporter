@@ -26,8 +26,8 @@ const configSchemaID = "https://raw.githubusercontent.com/eenchev/prometheus-uni
 // --config.schema; a test fails when the two differ.
 //
 // The schema describes the canonical spelling. The exporter is more lenient
-// in places — it accepts request.type in any case, and the deprecated "warn"
-// error policy — and startup validation remains the authority on what is
+// in places — it accepts request.type and error policies in any case — and
+// startup validation remains the authority on what is
 // valid: it also checks what a schema cannot, such as that expressions
 // compile. The request types listed are the ones this binary was built with.
 func configSchema() map[string]any {
@@ -150,7 +150,7 @@ func joinSchemaPath(path, key string) string {
 // configSchemaRules adds, by path, what the struct cannot say. A path is the
 // chain of keys, with [] for a list item and .* for any map value.
 func configSchemaRules() map[string]map[string]any {
-	errorPolicy := map[string]any{"enum": []string{model.ErrorPolicyFail, model.ErrorPolicyLog, model.ErrorPolicyIgnore, model.ErrorPolicyWarn}, "description": "fail stops the probe, log carries on and logs why, ignore carries on quietly. Defaults to fail. warn is a deprecated spelling of log."}
+	errorPolicy := map[string]any{"enum": []string{model.ErrorPolicyFail, model.ErrorPolicyLog, model.ErrorPolicyIgnore}, "description": "fail stops the probe, log carries on and logs why, ignore carries on quietly. Defaults to fail."}
 	libraries := map[string]any{"enum": model.SortedKeys(transform.PythonLibraries), "description": "A bundled Python library the script uses. Declared libraries are imported when the interpreter starts."}
 	return map[string]map[string]any{
 		"": {
@@ -164,7 +164,7 @@ func configSchemaRules() map[string]map[string]any {
 		"collector_files":   {"description": "Further files of collectors, as paths or glob patterns such as collectors.d/*.yaml, relative to this file. A collector file holds a collectors list and nothing else. See docs/CONFIGURATION.md#collector-files."},
 		"collector_files[]": {"type": "string", "minLength": 1},
 		"collectors[]": {
-			"required":    []string{"name", "request"},
+			"required":    []string{"name", "request", "transform"},
 			"description": "How to reach a kind of target and turn its response into metrics.",
 		},
 		"collectors[].name":                    {"pattern": `^[a-zA-Z_][a-zA-Z0-9_]*$`, "description": "Unique name, used as the collector parameter of /probe."},
@@ -184,15 +184,15 @@ func configSchemaRules() map[string]map[string]any {
 		"collectors[].request.max_files":       {"description": "localfile with request.files: the most files one scrape reads, in name order; the rest are skipped and logged. Defaults to 100."},
 		"collectors[].request.max_total_bytes": {"description": "localfile with request.files: the most one scrape reads across every file; a file that would go past it is refused. Defaults to 64 MiB."},
 		"collectors[].request.max_age":         {"description": "localfile: refuse a file last modified longer ago than this, so a writer that has stopped fails the scrape instead of exporting its last values forever."},
-		"collectors[].response.format": {
-			"enum":        []string{"auto", "json", "yaml", "xml", "csv", "html", "prometheus", "text"},
+		"collectors[].decoder.type": {
+			"enum":        model.DecoderTypes,
 			"description": "How to decode the response. Defaults to auto, which the transform or the Content-Type decides.",
 		},
-		"collectors[].decoder.type": {"enum": []string{"auto", "json", "yaml", "xml", "csv", "html", "prometheus", "text"}},
 		"collectors[].transform.type": {
-			"enum":        []string{"none", "jq", "yq", "xpath", "css", "csv", "regex", "python", "prometheus"},
-			"description": "How metrics are extracted from the decoded response.",
+			"enum":        model.TransformTypes,
+			"description": "How metrics are extracted from the decoded response. Required.",
 		},
+		"collectors[].transform":                         {"required": []string{"type"}},
 		"collectors[].transform.libraries[]":             libraries,
 		"collectors[].transform.required_libs[]":         libraries,
 		"collectors[].transform.pre_script":              {"description": "Python run before the transform. It receives data and must leave its result in data."},
@@ -204,24 +204,30 @@ func configSchemaRules() map[string]map[string]any {
 		"collectors[].metrics[].items":                   {"description": "jq, yq and css only: selects the things the metric is about, such as table rows. The expression and labels are then evaluated once per item: for jq and yq with the item as . and the whole document as $root, for css as selectors within the item."},
 		"collectors[].metrics[].expression":              {"description": "Where the value comes from, in the transform's language: jq, a regex, a CSS selector, an XPath expression, a CSV column or a source metric pattern."},
 		"collectors[].metrics[].error_mode": {
-			"enum":        []string{model.ErrorModeFail, model.ErrorModeLog, model.ErrorModeIgnore, model.ErrorPolicyWarn},
-			"description": "What happens when this metric cannot be extracted. Defaults to log. warn is a deprecated spelling of log.",
+			"enum":        []string{model.ErrorModeFail, model.ErrorModeLog, model.ErrorModeIgnore},
+			"description": "What happens when this metric cannot be extracted. Defaults to log.",
 		},
-		"collectors[].metrics[].required":          {"description": "When false, a missing value is skipped without an error. Defaults to true."},
-		"collectors[].metrics[].labels[].name":     {"pattern": `^[a-zA-Z_][a-zA-Z0-9_]*$`},
-		"collectors[].metrics[].labels[].type":     {"enum": []string{"string", "expression"}, "description": "string for a literal value, expression for a value from the response."},
-		"collectors[].metrics[].labels[].truncate": {"description": "Cut a value longer than limits.max_label_value_length to fit, ending in …, instead of failing the scrape."},
-		"collectors[].metrics[].labels[].required": {"description": "expression labels only: a series the expression gives no value, or an empty one, fails the metric under its error_mode instead of being exported without the label. Defaults to false."},
-		"collectors[].limits.script_timeout":       {"description": "How long a Python script may run. Starting the interpreter is not counted. Defaults to 100ms."},
-		"otlp.endpoint":                            {"description": "OTLP/HTTP metrics endpoint, such as http://otel-collector:4318/v1/metrics."},
-		"web.basic_auth.username_file":             {"description": "Read the username from this file instead of username, such as a mounted Secret. Read again when it changes."},
-		"web.basic_auth.password_file":             {"description": "Read the password from this file instead of password, such as a mounted Secret. Read again when it changes."},
-		"collectors[].name_escaping":               {"enum": []string{transform.NameEscapingFail, transform.NameEscapingUnderscores, transform.NameEscapingValues}, "description": "What to do with a metric or label name that is not a classic Prometheus name, such as http.server.duration: fail the scrape (the default), replace what a classic name may not have with underscores, or use Prometheus's reversible values encoding (U__…). See docs/CONFIGURATION.md#utf-8-names."},
-		"collectors[].response.charset":            {"description": "The encoding of the response when the target does not declare it or declares it wrongly, and of local files: a WHATWG name such as windows-1252, iso-8859-2, windows-1251 or shift_jis. See docs/CONFIGURATION.md#character-encodings."},
-		"otlp.max_pending_points":                  {"description": "The most data points kept waiting for export while the endpoint fails; past it the oldest are dropped and counted. Defaults to 100000."},
-		"otlp.unready_after_failures":              {"description": "Answer /ready with 503 after this many failed exports in a row, until one gets through. 0, the default, never does: an exporter whose exports fail still answers probes."},
-		"otlp.compression":                         {"enum": []string{model.OTLPCompressionGzip, model.OTLPCompressionNone}, "description": "Compression of the export requests. Defaults to gzip."},
-		"otlp.timeout":                             {"description": "How long one export attempt may take. Defaults to 5s. Also bounds the last export at shutdown."},
+		"collectors[].metrics[].required":      {"description": "When false, a missing value is skipped without an error. Defaults to true."},
+		"collectors[].metrics[].labels[].name": {"pattern": `^[a-zA-Z_][a-zA-Z0-9_]*$`},
+		"collectors[].metrics[].labels[]": {
+			"required":    []string{"name"},
+			"oneOf":       []any{map[string]any{"required": []string{"value"}}, map[string]any{"required": []string{"expression"}}},
+			"description": "Set value for a static label, or expression to read it from the response.",
+		},
+		"collectors[].metrics[].labels[].value":      {"minLength": 1, "description": "A static label value, exported as written."},
+		"collectors[].metrics[].labels[].expression": {"minLength": 1, "description": "Reads the label from the response, in the transform's language, like the metric's expression."},
+		"collectors[].metrics[].labels[].truncate":   {"description": "Cut a value longer than limits.max_label_value_length to fit, ending in …, instead of failing the scrape."},
+		"collectors[].metrics[].labels[].required":   {"description": "expression labels only: a series the expression gives no value, or an empty one, fails the metric under its error_mode instead of being exported without the label. Defaults to false."},
+		"collectors[].limits.script_timeout":         {"description": "How long a Python script may run. Starting the interpreter is not counted. Defaults to 100ms."},
+		"otlp.endpoint":                              {"description": "OTLP/HTTP metrics endpoint, such as http://otel-collector:4318/v1/metrics."},
+		"web.basic_auth.username_file":               {"description": "Read the username from this file instead of username, such as a mounted Secret. Read again when it changes."},
+		"web.basic_auth.password_file":               {"description": "Read the password from this file instead of password, such as a mounted Secret. Read again when it changes."},
+		"collectors[].name_escaping":                 {"enum": []string{transform.NameEscapingFail, transform.NameEscapingUnderscores, transform.NameEscapingValues}, "description": "What to do with a metric or label name that is not a classic Prometheus name, such as http.server.duration: fail the scrape (the default), replace what a classic name may not have with underscores, or use Prometheus's reversible values encoding (U__…). See docs/CONFIGURATION.md#utf-8-names."},
+		"collectors[].response.charset":              {"description": "The encoding of the response when the target does not declare it or declares it wrongly, and of local files: a WHATWG name such as windows-1252, iso-8859-2, windows-1251 or shift_jis. See docs/CONFIGURATION.md#character-encodings."},
+		"otlp.max_pending_points":                    {"description": "The most data points kept waiting for export while the endpoint fails; past it the oldest are dropped and counted. Defaults to 100000."},
+		"otlp.unready_after_failures":                {"description": "Answer /ready with 503 after this many failed exports in a row, until one gets through. 0, the default, never does: an exporter whose exports fail still answers probes."},
+		"otlp.compression":                           {"enum": []string{model.OTLPCompressionGzip, model.OTLPCompressionNone}, "description": "Compression of the export requests. Defaults to gzip."},
+		"otlp.timeout":                               {"description": "How long one export attempt may take. Defaults to 5s. Also bounds the last export at shutdown."},
 	}
 }
 

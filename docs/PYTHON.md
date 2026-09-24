@@ -103,7 +103,7 @@ declares `beautifulsoup4` or `bs4` fails validation with a pointer to
 
 When a response only needs parsing, prefer a pre-script that returns a mapping
 or a sequence over `transform.type: python`. A structured pre-script result
-becomes the decoded response for the `jq`, `yq`, and `none` transforms whatever
+becomes the decoded response for the `jq` and `yq` transforms whatever
 the endpoint actually returned, so the metrics are declared exactly like any
 other collector's:
 
@@ -122,7 +122,6 @@ metrics:
     expression: .workers[].cpu
     labels:
       - name: worker
-        type: expression
         expression: .workers[].name
 ```
 
@@ -138,7 +137,7 @@ data. `csv`, `regex`, `css`, `xpath`, and `prometheus` keep receiving their own
 decoded format, and a pre-script that returns a string still leaves the format
 alone, so HTML and XML output is reparsed as before.
 
-Errors are classified as HTTP, decode, transform, missing data, validation, or resource-limit failures. `error_handling` accepts `fail`, `log`, and `ignore` (`warn` is a deprecated spelling of `log`); `allow_missing_keys` controls required extraction results. Limits default to conservative values and are enforced immediately before exposition.
+Errors are classified as HTTP, decode, transform, missing data, validation, or resource-limit failures. `error_handling` accepts `fail`, `log`, and `ignore`; `allow_missing_keys` controls required extraction results. Limits default to conservative values and are enforced immediately before exposition.
 
 CSV responses can use a native CSV transform without CSS or Python:
 
@@ -151,7 +150,6 @@ metrics:
     expression: cpu
     labels:
       - name: server
-        type: expression
         expression: server
 transform:
   type: csv
@@ -160,7 +158,7 @@ transform:
 The entire `response` block may be omitted. The exporter infers CSV for the
 `csv` transform, and header-based CSV parsing is enabled by default. Use
 `response.csv` only when changing CSV behavior, such as selecting a custom
-delimiter or disabling the header row. Likewise, `response.format: text` is
+delimiter or disabling the header row. Likewise, `decoder.type: text` is
 unnecessary for a regex or Python transform unless an explicit decoder is
 needed for an ambiguous endpoint.
 

@@ -219,8 +219,7 @@ probe parameters, and `request.path` in a scheduled target, are refused.
 
 Any file a collector can decode can be read this way, not only `.prom`. Each
 file's decoder is chosen as for one file: from its extension with
-`response.format: auto`, or the collector's `response.format` or
-`decoder.type`. The collector's one transform applies to every file, so a
+`decoder.type: auto`, or the collector's `decoder.type`. The collector's one transform applies to every file, so a
 directory read by one collector should hold files of one shape — `*.prom`
 passed through, `*.json` status files with `jq`, `*.txt` or `*.log` lines with
 `regex`:
@@ -281,8 +280,11 @@ Only a directory that could not even be listed in time fails the probe.
 
 ## Formats
 
-With `response.format` left at `auto`, the file's extension chooses the
-decoder, and anything else is recognised from its content:
+With `decoder.type` unset or `auto`, the file's extension chooses the
+decoder, and anything else is recognised from its content. Unset, and not
+implied by the transform, it is logged as a configuration warning at startup:
+set it to the decoder the files need, or to `auto` to keep choosing by
+extension.
 
 | Extension | Decoded as |
 | --- | --- |
@@ -293,12 +295,13 @@ decoder, and anything else is recognised from its content:
 | `.csv` | CSV |
 | `.html`, `.htm` | HTML |
 
-`response.format` or `decoder.type` overrides the choice, as for `http`. A file
+`decoder.type` overrides the choice, as for `http`. A file
 declares no encoding: one in anything but UTF-8 needs `response.charset`, such
 as `windows-1252`, unless it starts with a byte order mark (see
 [Character encodings](CONFIGURATION.md#character-encodings)). A
 `.prom` file with `transform.type: prometheus` is passed through, and
-`include`, `exclude`, `rename` and `labels` of that transform apply as usual.
+`include`, `exclude`, `rename` and the
+[collector-wide labels](CONFIGURATION.md#collector-wide-labels) apply as usual.
 
 Transforms and Python scripts see the file as a response with status `200` and
 three headers: `Content-Type` from the extension, `Content-Length`, and

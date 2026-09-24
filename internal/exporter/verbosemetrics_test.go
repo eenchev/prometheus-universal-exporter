@@ -147,7 +147,7 @@ func TestTheHistogramIsNotRecordedWhenNotVerbose(t *testing.T) {
 
 func pythonCollector(name, script string) model.Collector {
 	return model.Collector{
-		Name: name, Request: model.RequestConfig{Type: fetch.RequestTypeHTTP}, Response: model.ResponseConfig{Format: "text"},
+		Name: name, Request: model.RequestConfig{Type: fetch.RequestTypeHTTP}, Decoder: model.DecoderConfig{Type: "text"},
 		Transform: model.TransformConfig{Type: "python", Script: script},
 		Limits:    model.Limits{ScriptTimeout: model.Duration(2 * time.Second)},
 	}

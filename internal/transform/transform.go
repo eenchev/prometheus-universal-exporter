@@ -26,10 +26,13 @@ import (
 // collector's metrics_prefix is applied in exactly one place, before the limits
 // are checked, the set is cached, or it is written to /probe or OTLP.
 func Transform(ctx context.Context, d *decode.Decoded, r *fetch.HTTPResponse, c *model.Collector, pythonPath string) (*model.MetricSet, error) {
+	ctx, failures := withRuleFailures(ctx)
+	defer failures.log(c)
 	set, err := transformMetrics(ctx, d, r, c, pythonPath)
 	if err != nil || set == nil {
 		return set, err
 	}
+	applyCollectorLabels(set, c.Transform)
 	truncateLabels(set, c)
 	applyMetricsPrefix(set, c.MetricsPrefix)
 	// After the prefix, so a values-escaped name still starts with U__
@@ -58,37 +61,37 @@ func transformMetrics(ctx context.Context, d *decode.Decoded, r *fetch.HTTPRespo
 		return nil, err
 	}
 	if ms, ok := d.Data.(model.MetricSet); ok {
-		if c.Transform.Type == "" || c.Transform.Type == "prometheus" {
-			return applyPrometheusTransform(ms, c, c.Transform, c.Metrics)
+		if c.Transform.Type == "prometheus" {
+			return applyPrometheusTransform(ctx, ms, c, c.Transform, c.Metrics)
 		}
 		return nil, fmt.Errorf("unsupported transformation %q for Prometheus", c.Transform.Type)
 	}
 	switch c.Transform.Type {
-	case "", "none", "jq", "yq":
+	case "jq", "yq":
 		return transformJQ(ctx, d.Data, c.Metrics, c)
 	case "regex":
 		text, ok := d.Data.(string)
 		if !ok {
 			return nil, errors.New("regex transformation requires text data")
 		}
-		return transformRegex(text, c.Metrics, c)
+		return transformRegex(ctx, text, c.Metrics, c)
 	case "css":
 		h, ok := d.Data.(*decode.HTMLDecoded)
 		if !ok {
 			return nil, errors.New("CSS transformation requires HTML data")
 		}
-		return transformCSS(h.Document, c.Metrics, c)
+		return transformCSS(ctx, h.Document, c.Metrics, c)
 	case "csv":
-		return transformCSV(d.Data, c.Metrics, c)
+		return transformCSV(ctx, d.Data, c.Metrics, c)
 	case "xpath":
 		if h, ok := d.Data.(*decode.HTMLDecoded); ok {
-			return transformHTMLXPath(h.Raw, c.Metrics, c)
+			return transformHTMLXPath(ctx, h.Document, c.Metrics, c)
 		}
 		n, ok := d.Data.(*xmlquery.Node)
 		if !ok {
 			return nil, errors.New("XPath transformation requires XML or HTML data")
 		}
-		return transformXPath(n, c.Metrics, c, c.Response.Namespaces)
+		return transformXPath(ctx, n, c.Metrics, c, c.Response.Namespaces)
 	default:
 		return nil, fmt.Errorf("unsupported transformation %q", c.Transform.Type)
 	}
@@ -96,20 +99,6 @@ func transformMetrics(ctx context.Context, d *decode.Decoded, r *fetch.HTTPRespo
 
 func validateTransformInput(d *decode.Decoded, transformType string) error {
 	switch transformType {
-	case "":
-		if d.Kind == "prometheus" {
-			return nil
-		}
-		if d.Kind == "text" || d.Kind == "html" || d.Kind == "xml" || d.Kind == "csv" {
-			return fmt.Errorf("transform %q cannot map response format %q; configure a compatible transform", transformType, d.Kind)
-		}
-	case "none":
-		if d.Kind == "prometheus" {
-			return nil
-		}
-		if d.Kind == "text" || d.Kind == "html" || d.Kind == "xml" || d.Kind == "csv" || d.Kind == "prometheus" {
-			return fmt.Errorf("transform %q cannot map response format %q; use a structured JSON/YAML response or a compatible transform", transformType, d.Kind)
-		}
 	case "jq", "yq":
 		if d.Kind == "text" || d.Kind == "html" || d.Kind == "xml" || d.Kind == "csv" || d.Kind == "prometheus" {
 			return fmt.Errorf("transform %q cannot map response format %q; use a structured JSON/YAML response or a compatible transform", transformType, d.Kind)
@@ -138,6 +127,43 @@ func validateTransformInput(d *decode.Decoded, transformType string) error {
 	return nil
 }
 
+// applyCollectorLabels applies the collector-wide label settings to every
+// metric, whatever the transform: transform.labels adds static labels,
+// remove_labels drops labels, and rename_labels renames them, in that order.
+//
+// The renames are made at once, from the labels as they were before any of
+// them, so they never chain: with a to b and b to c, b gets a's value and c
+// gets b's, whatever order the map is walked in. Two renames to one label are
+// refused at load (CheckTransformSettings). Each metric gets a label map of
+// its own, so a transform's output never shares one with its input.
+func applyCollectorLabels(set *model.MetricSet, t model.TransformConfig) {
+	if len(t.Labels) == 0 && len(t.RemoveLabels) == 0 && len(t.RenameLabels) == 0 {
+		return
+	}
+	for i := range set.Metrics {
+		labels := model.CloneLabels(set.Metrics[i].Labels)
+		for name, value := range t.Labels {
+			labels[name] = value
+		}
+		for _, name := range t.RemoveLabels {
+			delete(labels, name)
+		}
+		renamed := map[string]string{}
+		for from, to := range t.RenameLabels {
+			if value, ok := labels[from]; ok {
+				renamed[to] = value
+			}
+		}
+		for from := range t.RenameLabels {
+			delete(labels, from)
+		}
+		for name, value := range renamed {
+			labels[name] = value
+		}
+		set.Metrics[i].Labels = labels
+	}
+}
+
 // handleMetricError applies a rule's error mode and reports whether the scrape
 // should carry on without the metric. ignore carries on silently, log carries
 // on and says why, and fail says why and stops: the caller then returns the
@@ -146,25 +172,81 @@ func validateTransformInput(d *decode.Decoded, transformType string) error {
 //
 // The collector is named alongside the rule because a metric name is not unique
 // across collectors, and without it a logged failure does not say which
-// collector to go and look at. The line is written here, once, for both log and
-// fail, so a failing rule reads the same in the log whichever mode it has and
-// whether it failed on a probe or on a scheduled target.
+// collector to go and look at. The line reads the same for log and fail, so a
+// failing rule reads the same in the log whichever mode it has and whether it
+// failed on a probe or on a scheduled target.
+//
+// Under log, a rule can fail once per series — every row of a table, every item
+// — so within a Transform its failures are gathered (withRuleFailures) and the
+// rule is logged once when the scrape's transform ends, with the first error and
+// how many series failed. Without that gathering, as when called directly, the
+// line is written at once.
 //
 // This logs through slog's default logger rather than one passed down: it is
 // called from inside the transforms, several frames below anything holding a
 // logger. The exporter installs its JSON logger as the process default at
 // startup so these lines match every other line it writes.
-func handleMetricError(c *model.Collector, rule model.MetricRule, err error) bool {
+func handleMetricError(ctx context.Context, c *model.Collector, rule model.MetricRule, err error) bool {
 	switch rule.ErrorMode {
 	case model.ErrorModeIgnore:
 		return true
 	case model.ErrorModeLog:
-		slog.Default().Error("metric extraction failed", "collector", collectorName(c), "metric", rule.Name, "error_mode", rule.ErrorMode, "error", err)
+		if failures, ok := ctx.Value(ruleFailuresKey{}).(*ruleFailures); ok {
+			failures.add(rule, err)
+		} else {
+			logRuleFailure(c, rule, err, 1)
+		}
 		return true
 	case model.ErrorModeFail:
-		slog.Default().Error("metric extraction failed", "collector", collectorName(c), "metric", rule.Name, "error_mode", rule.ErrorMode, "error", err)
+		logRuleFailure(c, rule, err, 1)
 	}
 	return false
+}
+
+func logRuleFailure(c *model.Collector, rule model.MetricRule, err error, failures int) {
+	slog.Default().Error("metric extraction failed", "collector", collectorName(c), "metric", rule.Name, "error_mode", rule.ErrorMode, "error", err, "failures", failures)
+}
+
+// ruleFailures gathers the failures of log-mode rules during one Transform, so
+// each rule is logged once per scrape however many of its series failed.
+type ruleFailures struct {
+	rules []*failedRule
+}
+
+// failedRule is one rule's failures in a scrape: the first, which the log
+// line shows, and how many there were.
+type failedRule struct {
+	rule  model.MetricRule
+	first error
+	count int
+}
+
+type ruleFailuresKey struct{}
+
+// withRuleFailures returns a context gathering log-mode rule failures, and
+// what gathers them.
+func withRuleFailures(ctx context.Context) (context.Context, *ruleFailures) {
+	failures := &ruleFailures{}
+	return context.WithValue(ctx, ruleFailuresKey{}, failures), failures
+}
+
+// add counts a failure of rule. Rules are told apart by name and expression,
+// since two rules may export the same metric name.
+func (f *ruleFailures) add(rule model.MetricRule, err error) {
+	for _, known := range f.rules {
+		if known.rule.Name == rule.Name && known.rule.Expression == rule.Expression && known.rule.Items == rule.Items {
+			known.count++
+			return
+		}
+	}
+	f.rules = append(f.rules, &failedRule{rule: rule, first: err, count: 1})
+}
+
+// log writes one line per rule that failed, in the order they first failed.
+func (f *ruleFailures) log(c *model.Collector) {
+	for _, failed := range f.rules {
+		logRuleFailure(c, failed.rule, failed.first, failed.count)
+	}
 }
 
 // MetricFailure is a metric rule that could not produce its value and whose
@@ -203,7 +285,7 @@ func applyPreScript(ctx context.Context, d *decode.Decoded, r *fetch.HTTPRespons
 	if err != nil {
 		return nil, err
 	}
-	if structuredTransform(c.Transform.Type) && structuredValue(data) {
+	if jqFamily(c.Transform.Type) && structuredValue(data) {
 		return &decode.Decoded{Kind: "json", Data: data, Raw: d.Raw}, nil
 	}
 	if d.Kind == "html" {
@@ -223,17 +305,6 @@ func applyPreScript(ctx context.Context, d *decode.Decoded, r *fetch.HTTPRespons
 		return &decode.Decoded{Kind: "xml", Data: node, Raw: raw}, nil
 	}
 	return &decode.Decoded{Kind: d.Kind, Data: data, Raw: d.Raw}, nil
-}
-
-// structuredTransform reports whether a transform reads decoded structured
-// data rather than the original response format. Only these transforms accept
-// a pre-script result in place of the decoded response.
-func structuredTransform(transformType string) bool {
-	switch transformType {
-	case "", "none", "jq", "yq":
-		return true
-	}
-	return false
 }
 
 // structuredValue reports whether a pre-script returned an object or an array.
@@ -260,21 +331,21 @@ func transformJQ(ctx context.Context, data any, rules []model.MetricRule, c *mod
 		}
 		values, err := evaluateJQ(ctx, data, data, rule.Expression)
 		if err != nil {
-			if handleMetricError(c, rule, err) {
+			if handleMetricError(ctx, c, rule, err) {
 				continue
 			}
 			return nil, ruleFailure(c, rule, fmt.Errorf("metric %q expression: %w", rule.Name, err))
 		}
 		labels, err := evaluateLabels(ctx, data, rule.Labels, len(values))
 		if err != nil {
-			if handleMetricError(c, rule, err) {
+			if handleMetricError(ctx, c, rule, err) {
 				continue
 			}
 			return nil, ruleFailure(c, rule, fmt.Errorf("metric %q labels: %w", rule.Name, err))
 		}
 		if len(values) == 0 && requiredRule(rule, c) {
 			missing := model.MarkError(fmt.Errorf("metric %q value is missing", rule.Name), model.ErrMissingValue)
-			if handleMetricError(c, rule, missing) {
+			if handleMetricError(ctx, c, rule, missing) {
 				continue
 			}
 			return nil, ruleFailure(c, rule, missing)
@@ -283,7 +354,7 @@ func transformJQ(ctx context.Context, data any, rules []model.MetricRule, c *mod
 			if value == nil {
 				if requiredRule(rule, c) {
 					missing := model.MarkError(fmt.Errorf("metric %q value is missing", rule.Name), model.ErrMissingValue)
-					if handleMetricError(c, rule, missing) {
+					if handleMetricError(ctx, c, rule, missing) {
 						continue
 					}
 					return nil, ruleFailure(c, rule, missing)
@@ -292,13 +363,13 @@ func transformJQ(ctx context.Context, data any, rules []model.MetricRule, c *mod
 			}
 			n, err := model.Number(value)
 			if err != nil {
-				if handleMetricError(c, rule, err) {
+				if handleMetricError(ctx, c, rule, err) {
 					continue
 				}
 				return nil, ruleFailure(c, rule, fmt.Errorf("metric %q: %w", rule.Name, err))
 			}
 			if missing := missingRequiredLabel(rule, labels[index]); missing != nil {
-				if handleMetricError(c, rule, missing) {
+				if handleMetricError(ctx, c, rule, missing) {
 					continue
 				}
 				return nil, ruleFailure(c, rule, missing)
@@ -322,7 +393,7 @@ func transformJQ(ctx context.Context, data any, rules []model.MetricRule, c *mod
 // missing or null label leaves the label off.
 func transformJQItems(ctx context.Context, data any, rule model.MetricRule, c *model.Collector) ([]model.Metric, error) {
 	fail := func(err error) ([]model.Metric, bool, error) {
-		if handleMetricError(c, rule, err) {
+		if handleMetricError(ctx, c, rule, err) {
 			return nil, true, nil
 		}
 		return nil, false, ruleFailure(c, rule, err)
@@ -363,7 +434,7 @@ func transformJQItems(ctx context.Context, data any, rule model.MetricRule, c *m
 		labels := map[string]string{}
 		var labelErr error
 		for _, label := range rule.Labels {
-			if label.Type == "string" {
+			if label.Static() {
 				labels[label.Name] = label.Value
 				continue
 			}
@@ -437,7 +508,7 @@ func evaluateLabels(ctx context.Context, data any, expressions []model.LabelRule
 		labels[index] = map[string]string{}
 	}
 	for _, label := range expressions {
-		if label.Type == "string" {
+		if label.Static() {
 			for index := range labels {
 				labels[index][label.Name] = label.Value
 			}
@@ -447,11 +518,13 @@ func evaluateLabels(ctx context.Context, data any, expressions []model.LabelRule
 		if err != nil {
 			return nil, fmt.Errorf("label %q: %w", label.Name, err)
 		}
-		// Values are paired with series by position, so a required label
-		// giving a different number of values than there are series would
-		// land on the wrong ones.
-		if label.Required && len(values) != 1 && len(values) != metricCount {
-			return nil, fmt.Errorf("label %q gave %d values for %d series; a required label must give one value, or one per series", label.Name, len(values), metricCount)
+		// Values are paired with series by position. None leaves the label
+		// off every series, and one applies to all of them; any other count
+		// than one per series means some values landed on the wrong series,
+		// so the metric fails rather than be exported mislabelled. items
+		// evaluates labels per element, which cannot drift.
+		if len(values) > 1 && len(values) != metricCount && metricCount > 0 {
+			return nil, fmt.Errorf("label %q gave %d values for %d series, so they cannot be paired; give one value, or one per series, or set items to evaluate labels per element", label.Name, len(values), metricCount)
 		}
 		if len(values) == 1 {
 			if values[0] != nil {
@@ -478,7 +551,7 @@ func evaluateLabels(ctx context.Context, data any, expressions []model.LabelRule
 // one and the rule's error_mode decides what happens to the series.
 func missingRequiredLabel(rule model.MetricRule, labels map[string]string) error {
 	for _, label := range rule.Labels {
-		if label.Type != "string" && labels[label.Name] == "" {
+		if !label.Static() && labels[label.Name] == "" {
 			delete(labels, label.Name)
 		}
 	}
@@ -496,12 +569,12 @@ func requiredRule(rule model.MetricRule, c *model.Collector) bool {
 	return (rule.Required == nil || *rule.Required) && !c.ErrorHandling.AllowMissingKeys
 }
 
-func transformRegex(text string, rules []model.MetricRule, c *model.Collector) (*model.MetricSet, error) {
+func transformRegex(ctx context.Context, text string, rules []model.MetricRule, c *model.Collector) (*model.MetricSet, error) {
 	out := &model.MetricSet{}
 	for _, rule := range rules {
 		re, err := expr.CompileRegex(rule.Expression)
 		if err != nil {
-			if handleMetricError(c, rule, err) {
+			if handleMetricError(ctx, c, rule, err) {
 				continue
 			}
 			return nil, ruleFailure(c, rule, fmt.Errorf("metric %q regex: %w", rule.Name, err))
@@ -510,7 +583,7 @@ func transformRegex(text string, rules []model.MetricRule, c *model.Collector) (
 		if len(matches) == 0 {
 			if requiredRule(rule, c) {
 				missing := model.MarkError(fmt.Errorf("regex for metric %q matched no text", rule.Name), model.ErrMissingValue)
-				if handleMetricError(c, rule, missing) {
+				if handleMetricError(ctx, c, rule, missing) {
 					continue
 				}
 				return nil, ruleFailure(c, rule, missing)
@@ -524,21 +597,21 @@ func transformRegex(text string, rules []model.MetricRule, c *model.Collector) (
 				capture = 0
 			}
 			if 2*capture+1 >= len(match) {
-				if handleMetricError(c, rule, fmt.Errorf("metric %q regex has no capture group", rule.Name)) {
+				if handleMetricError(ctx, c, rule, fmt.Errorf("metric %q regex has no capture group", rule.Name)) {
 					break
 				}
 				return nil, ruleFailure(c, rule, fmt.Errorf("metric %q regex has no capture group", rule.Name))
 			}
 			n, err := strconv.ParseFloat(text[match[2*capture]:match[2*capture+1]], 64)
 			if err != nil {
-				if handleMetricError(c, rule, err) {
+				if handleMetricError(ctx, c, rule, err) {
 					continue
 				}
 				return nil, ruleFailure(c, rule, fmt.Errorf("metric %q: %w", rule.Name, err))
 			}
 			labels := map[string]string{}
 			for _, label := range rule.Labels {
-				if label.Type == "string" {
+				if label.Static() {
 					labels[label.Name] = label.Value
 					continue
 				}
@@ -548,7 +621,7 @@ func transformRegex(text string, rules []model.MetricRule, c *model.Collector) (
 				}
 			}
 			if missing := missingRequiredLabel(rule, labels); missing != nil {
-				if handleMetricError(c, rule, missing) {
+				if handleMetricError(ctx, c, rule, missing) {
 					continue
 				}
 				return nil, ruleFailure(c, rule, missing)
@@ -604,28 +677,27 @@ var htmlNodes = xpathNodes[*html.Node]{
 	text: htmlquery.InnerText,
 }
 
-func transformXPath(root *xmlquery.Node, rules []model.MetricRule, c *model.Collector, namespaces map[string]string) (*model.MetricSet, error) {
-	return transformXPathNodes(root, xmlNodes, rules, c, namespaces)
+func transformXPath(ctx context.Context, root *xmlquery.Node, rules []model.MetricRule, c *model.Collector, namespaces map[string]string) (*model.MetricSet, error) {
+	return transformXPathNodes(ctx, root, xmlNodes, rules, c, namespaces)
 }
 
-func transformHTMLXPath(raw []byte, rules []model.MetricRule, c *model.Collector) (*model.MetricSet, error) {
-	root, err := htmlquery.Parse(strings.NewReader(string(raw)))
-	if err != nil {
-		return nil, fmt.Errorf("HTML XPath parse: %w", err)
-	}
-	return transformXPathNodes(root, htmlNodes, rules, c, nil)
+// transformHTMLXPath runs XPath over the document the html decoder already
+// parsed: goquery and htmlquery both build it with html.Parse, so the
+// document's root node is what htmlquery would have parsed from the body.
+func transformHTMLXPath(ctx context.Context, doc *goquery.Document, rules []model.MetricRule, c *model.Collector) (*model.MetricSet, error) {
+	return transformXPathNodes(ctx, doc.Nodes[0], htmlNodes, rules, c, nil)
 }
 
 // transformXPathNodes evaluates each rule's expression against the document
 // and makes a series of every node it selects. A label is a constant, an
 // attribute of the node (@name), or the text of the first node an expression
 // relative to it selects.
-func transformXPathNodes[N any](root N, nodes xpathNodes[N], rules []model.MetricRule, c *model.Collector, namespaces map[string]string) (*model.MetricSet, error) {
+func transformXPathNodes[N any](ctx context.Context, root N, nodes xpathNodes[N], rules []model.MetricRule, c *model.Collector, namespaces map[string]string) (*model.MetricSet, error) {
 	out := &model.MetricSet{}
 	for _, rule := range rules {
 		expression, err := expr.CompileXPath(rule.Expression, namespaces)
 		if err != nil {
-			if handleMetricError(c, rule, err) {
+			if handleMetricError(ctx, c, rule, err) {
 				continue
 			}
 			return nil, ruleFailure(c, rule, fmt.Errorf("%s %q: %w", nodes.kind, rule.Expression, err))
@@ -634,7 +706,7 @@ func transformXPathNodes[N any](root N, nodes xpathNodes[N], rules []model.Metri
 		if len(selected) == 0 {
 			if requiredRule(rule, c) {
 				missing := model.MarkError(fmt.Errorf("%s %q matched no nodes", nodes.kind, rule.Expression), model.ErrMissingValue)
-				if handleMetricError(c, rule, missing) {
+				if handleMetricError(ctx, c, rule, missing) {
 					continue
 				}
 				return nil, ruleFailure(c, rule, missing)
@@ -644,7 +716,7 @@ func transformXPathNodes[N any](root N, nodes xpathNodes[N], rules []model.Metri
 		for _, node := range selected {
 			labels := map[string]string{}
 			for _, label := range rule.Labels {
-				if label.Type == "string" {
+				if label.Static() {
 					labels[label.Name] = label.Value
 				} else if strings.HasPrefix(label.Expression, "@") {
 					labels[label.Name] = nodes.attr(node, strings.TrimPrefix(label.Expression, "@"))
@@ -656,13 +728,13 @@ func transformXPathNodes[N any](root N, nodes xpathNodes[N], rules []model.Metri
 			}
 			value, err := decode.TextValue(nodes.text(node))
 			if err != nil {
-				if handleMetricError(c, rule, err) {
+				if handleMetricError(ctx, c, rule, err) {
 					continue
 				}
 				return nil, ruleFailure(c, rule, fmt.Errorf("metric %q: %w", rule.Name, err))
 			}
 			if missing := missingRequiredLabel(rule, labels); missing != nil {
-				if handleMetricError(c, rule, missing) {
+				if handleMetricError(ctx, c, rule, missing) {
 					continue
 				}
 				return nil, ruleFailure(c, rule, missing)
@@ -673,11 +745,11 @@ func transformXPathNodes[N any](root N, nodes xpathNodes[N], rules []model.Metri
 	return out, nil
 }
 
-func transformCSS(doc *goquery.Document, rules []model.MetricRule, c *model.Collector) (*model.MetricSet, error) {
+func transformCSS(ctx context.Context, doc *goquery.Document, rules []model.MetricRule, c *model.Collector) (*model.MetricSet, error) {
 	out := &model.MetricSet{}
 	for _, rule := range rules {
 		if rule.Items != "" {
-			metrics, err := transformCSSItems(doc, rule, c)
+			metrics, err := transformCSSItems(ctx, doc, rule, c)
 			if err != nil {
 				return nil, err
 			}
@@ -686,7 +758,7 @@ func transformCSS(doc *goquery.Document, rules []model.MetricRule, c *model.Coll
 		}
 		matcher, err := expr.CompileCSS(rule.Expression)
 		if err != nil {
-			if handleMetricError(c, rule, err) {
+			if handleMetricError(ctx, c, rule, err) {
 				continue
 			}
 			return nil, ruleFailure(c, rule, fmt.Errorf("CSS selector %q: %w", rule.Expression, err))
@@ -695,16 +767,16 @@ func transformCSS(doc *goquery.Document, rules []model.MetricRule, c *model.Coll
 		if selection.Length() == 0 {
 			if requiredRule(rule, c) {
 				missing := model.MarkError(fmt.Errorf("CSS selector %q matched no nodes", rule.Expression), model.ErrMissingValue)
-				if handleMetricError(c, rule, missing) {
+				if handleMetricError(ctx, c, rule, missing) {
 					continue
 				}
 				return nil, ruleFailure(c, rule, missing)
 			}
 			continue
 		}
-		var transformErr, failure error
+		var transformErr error
 		selection.Each(func(_ int, node *goquery.Selection) {
-			if transformErr != nil || failure != nil {
+			if transformErr != nil {
 				return
 			}
 			value, err := decode.TextValue(strings.TrimSpace(node.Text()))
@@ -712,29 +784,18 @@ func transformCSS(doc *goquery.Document, rules []model.MetricRule, c *model.Coll
 				transformErr = fmt.Errorf("metric %q: %w", rule.Name, err)
 				return
 			}
+			// Without items a rule's labels are static: validation
+			// refuses expression labels, which need items.
 			labels := map[string]string{}
 			for _, label := range rule.Labels {
-				if label.Type == "string" {
+				if label.Static() {
 					labels[label.Name] = label.Value
-				} else if selector, err := expr.CompileCSS(label.Expression); err == nil {
-					labels[label.Name] = strings.TrimSpace(node.FindMatcher(selector).First().Text())
 				}
-			}
-			// A series without a required label is dropped alone, or fails
-			// the rule, by its error_mode.
-			if missing := missingRequiredLabel(rule, labels); missing != nil {
-				if !handleMetricError(c, rule, missing) {
-					failure = ruleFailure(c, rule, missing)
-				}
-				return
 			}
 			out.Metrics = append(out.Metrics, model.Metric{Name: rule.Name, Help: rule.Description, Type: rule.Type, Value: value, Labels: labels})
 		})
-		if failure != nil {
-			return nil, failure
-		}
 		if transformErr != nil {
-			if handleMetricError(c, rule, transformErr) {
+			if handleMetricError(ctx, c, rule, transformErr) {
 				continue
 			}
 			return nil, ruleFailure(c, rule, transformErr)
@@ -755,9 +816,9 @@ func transformCSS(doc *goquery.Document, rules []model.MetricRule, c *model.Coll
 // belongs to the series. A value selector matching nothing is a missing
 // metric for that item, handled by required and error_mode like any other; a
 // label selector matching nothing leaves the label off.
-func transformCSSItems(doc *goquery.Document, rule model.MetricRule, c *model.Collector) ([]model.Metric, error) {
+func transformCSSItems(ctx context.Context, doc *goquery.Document, rule model.MetricRule, c *model.Collector) ([]model.Metric, error) {
 	fail := func(err error) (bool, error) {
-		if handleMetricError(c, rule, err) {
+		if handleMetricError(ctx, c, rule, err) {
 			return true, nil
 		}
 		return false, ruleFailure(c, rule, err)
@@ -812,7 +873,7 @@ func transformCSSItems(doc *goquery.Document, rule model.MetricRule, c *model.Co
 			if err != nil {
 				break
 			}
-			if label.Type == "string" {
+			if label.Static() {
 				labels[label.Name] = label.Value
 				continue
 			}
@@ -842,7 +903,7 @@ func transformCSSItems(doc *goquery.Document, rule model.MetricRule, c *model.Co
 	return out, nil
 }
 
-func transformCSV(data any, rules []model.MetricRule, c *model.Collector) (*model.MetricSet, error) {
+func transformCSV(ctx context.Context, data any, rules []model.MetricRule, c *model.Collector) (*model.MetricSet, error) {
 	rows, ok := data.([]any)
 	if !ok {
 		return nil, errors.New("CSV transform requires a header-based CSV response")
@@ -858,7 +919,7 @@ func transformCSV(data any, rules []model.MetricRule, c *model.Collector) (*mode
 			if !exists || strings.TrimSpace(fmt.Sprint(value)) == "" {
 				if requiredRule(rule, c) {
 					missing := model.MarkError(fmt.Errorf("CSV column %q is missing", rule.Expression), model.ErrMissingValue)
-					if handleMetricError(c, rule, missing) {
+					if handleMetricError(ctx, c, rule, missing) {
 						continue
 					}
 					return nil, ruleFailure(c, rule, missing)
@@ -867,21 +928,21 @@ func transformCSV(data any, rules []model.MetricRule, c *model.Collector) (*mode
 			}
 			n, err := model.Number(value)
 			if err != nil {
-				if handleMetricError(c, rule, err) {
+				if handleMetricError(ctx, c, rule, err) {
 					continue
 				}
 				return nil, ruleFailure(c, rule, fmt.Errorf("metric %q: %w", rule.Name, err))
 			}
 			labels := map[string]string{}
 			for _, label := range rule.Labels {
-				if label.Type == "string" {
+				if label.Static() {
 					labels[label.Name] = label.Value
 				} else if labelValue, exists := row[label.Expression]; exists {
 					labels[label.Name] = fmt.Sprint(labelValue)
 				}
 			}
 			if missing := missingRequiredLabel(rule, labels); missing != nil {
-				if handleMetricError(c, rule, missing) {
+				if handleMetricError(ctx, c, rule, missing) {
 					continue
 				}
 				return nil, ruleFailure(c, rule, missing)
@@ -892,7 +953,7 @@ func transformCSV(data any, rules []model.MetricRule, c *model.Collector) (*mode
 	return out, nil
 }
 
-func applyPrometheusTransform(in model.MetricSet, c *model.Collector, t model.TransformConfig, rules []model.MetricRule) (*model.MetricSet, error) {
+func applyPrometheusTransform(ctx context.Context, in model.MetricSet, c *model.Collector, t model.TransformConfig, rules []model.MetricRule) (*model.MetricSet, error) {
 	if len(rules) > 0 {
 		out := model.MetricSet{}
 		for _, source := range in.Metrics {
@@ -903,7 +964,7 @@ func applyPrometheusTransform(in model.MetricSet, c *model.Collector, t model.Tr
 				}
 				re, err := expr.CompileRegex(pattern)
 				if err != nil {
-					if handleMetricError(c, rule, err) {
+					if handleMetricError(ctx, c, rule, err) {
 						continue
 					}
 					return nil, ruleFailure(c, rule, fmt.Errorf("metric %q expression: %w", rule.Name, err))
@@ -925,14 +986,14 @@ func applyPrometheusTransform(in model.MetricSet, c *model.Collector, t model.Tr
 				// them, and another rule may match the same source metric.
 				metric.Labels = model.CloneLabels(source.Labels)
 				for _, label := range rule.Labels {
-					if label.Type == "string" {
+					if label.Static() {
 						metric.Labels[label.Name] = label.Value
 					} else if value, ok := metric.Labels[label.Expression]; ok {
 						metric.Labels[label.Name] = value
 					}
 				}
 				if missing := missingRequiredLabel(rule, metric.Labels); missing != nil {
-					if handleMetricError(c, rule, missing) {
+					if handleMetricError(ctx, c, rule, missing) {
 						continue
 					}
 					return nil, ruleFailure(c, rule, missing)
@@ -976,21 +1037,6 @@ func applyPrometheusTransform(in model.MetricSet, c *model.Collector, t model.Tr
 		}
 		if name, ok := t.Rename[metric.Name]; ok {
 			metric.Name = name
-		}
-		if metric.Labels == nil {
-			metric.Labels = map[string]string{}
-		}
-		for name, value := range t.Labels {
-			metric.Labels[name] = value
-		}
-		for _, name := range t.RemoveLabels {
-			delete(metric.Labels, name)
-		}
-		for old, name := range t.RenameLabels {
-			if value, ok := metric.Labels[old]; ok {
-				delete(metric.Labels, old)
-				metric.Labels[name] = value
-			}
 		}
 		out.Metrics = append(out.Metrics, metric)
 	}

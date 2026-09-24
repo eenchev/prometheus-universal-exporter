@@ -23,16 +23,39 @@ reload, with an error naming both places it was defined:
 duplicate collector "app_json": defined in /etc/exporter/config.yaml and in /etc/exporter/collectors.d/payments.yaml
 ```
 
-`response.format` is optional and defaults to `auto`. When omitted, the
-transform selects a deterministic decoder where possible: `regex` uses text,
-`csv` uses CSV, `css` uses HTML, and `prometheus` uses Prometheus exposition.
-JSON/YAML transforms use content detection. If the decoded response cannot be
-used by the selected transform, the probe fails with a clear mapping error.
-An explicit format remains useful for ambiguous or mislabeled endpoints.
+`decoder.type` chooses how the response is decoded. It is optional and
+defaults to `auto`, where the transform selects a deterministic decoder when it
+can: `regex` uses text, `csv` uses CSV, `css` uses HTML, and `prometheus` uses
+Prometheus exposition. Other transforms — jq, yq, XPath, Python — decode each
+response by what it says it is: an `http` response by its `Content-Type`
+header, a `localfile` file by its extension, and by its content when neither
+says: an HTML page by its doctype or `<html>` element, other markup as XML,
+JSON by its opening bracket, Prometheus text by its `# TYPE` or `# HELP`
+lines, and anything else as text. If the decoded response cannot be used by the selected transform, the
+probe fails with a clear mapping error.
 
-Supported response formats are `json`, `yaml`, `xml`, `csv`, `html`,
-`prometheus`, `text`, and `auto`. Supported transforms include jq/yq, XPath,
-CSS, CSV, regex, Prometheus filtering, and Python. JSON and YAML expressions
+That fallback means a target that changes its `Content-Type`, or a file renamed
+to another extension, is quietly read another way. So a collector that leaves
+`decoder.type` unset where the transform implies none is logged at startup and
+on every reload, and listed in the [dry run](#dry-run) report:
+
+```text
+{"level":"WARN","msg":"configuration warning","file":"config.yaml","warning":"collector \"app_json\" sets no decoder.type, so it decodes by the Content-Type header of each response, and by the content when that does not say; set decoder.type to fix the decoder"}
+```
+
+Setting `decoder.type` — to `auto` too, when choosing per response is what you
+want — silences it. An explicit decoder is also what reads an ambiguous or
+mislabeled endpoint:
+
+```yaml
+decoder:
+  type: json   # the endpoint says text/plain, but sends JSON
+```
+
+Supported decoders are `json`, `yaml`, `xml`, `csv`, `html`,
+`prometheus`, `text`, and `auto`. Every collector sets `transform.type`, one of
+`jq`, `yq`, `xpath`, `css`, `csv`, `regex`, `prometheus` and `python`; there is
+no default, and a collector without one is refused at startup. JSON and YAML expressions
 use the embedded jq-compatible engine (the expression language is also used
 for yq-compatible transformations). XML supports XPath, HTML supports CSS
 selectors and XPath (including bare element selectors such as `h1`), text
@@ -106,7 +129,6 @@ collectors:
         expression: .requests
         labels:
           - name: environment
-            type: expression
             expression: .environment
 ```
 
@@ -117,9 +139,9 @@ The expression and label values are interpreted by the selected transform:
   labels map to capture-group numbers or names.
 - `csv`: the expression is the numeric column name and labels map to column
   names.
-- `css`: the expression selects HTML elements whose text is numeric; labels are
-  selectors within each selected element. For tables, select the rows with
-  [`items`](#metrics-per-item) and the value and the labels as cells of each row.
+- `css`: the expression selects HTML elements whose text is numeric. Labels
+  read from the page need [`items`](#metrics-per-item): select the rows with it,
+  and the value and the labels as cells of each row.
 - `xpath`: the expression selects XML/HTML nodes whose text is numeric; labels
   are relative XPath expressions or `@attribute` selectors.
 - `prometheus`: the expression matches source metric names; it can remap the
@@ -128,18 +150,20 @@ The expression and label values are interpreted by the selected transform:
 CSS remains available specifically for HTML tables and HTML status pages; it is
 not used for CSV.
 
-Metric labels are explicit typed entries. Use `type: expression` when the
-value comes from the response, or `type: string` with `value` for a literal:
+Each label sets one of two keys. `expression` reads the label from the
+response, and `value` gives a static label, exported exactly as written:
 
 ```yaml
 labels:
   - name: server
-    type: expression
     expression: server       # CSV column for the current row
   - name: environment
-    type: string
-    value: production
+    value: production        # static, on this metric only
 ```
+
+A label setting both, or neither, is refused at startup. For a static label on
+every metric of a collector, use [`transform.labels`](#collector-wide-labels)
+instead.
 
 Label expressions use the same transform-specific language as the metric
 expression. For CSV, each row produces a metric and `expression: server`
@@ -153,7 +177,6 @@ same way. When a series is wrong without the label, mark it `required`:
 ```yaml
 labels:
   - name: server
-    type: expression
     expression: td.name
     required: true    # a row without a name is an error, not an unlabelled series
 ```
@@ -163,11 +186,35 @@ the metric's [`error_mode`](#when-a-metric-cannot-be-extracted): `ignore` and
 `log` drop that one series and keep the rest, `fail` fails the probe with an
 error naming the label. It is counted in `http_exporter_missing_keys_total`,
 and applies whatever `required` and `error_handling.allow_missing_keys` say
-about the value. Without `items`, jq pairs label values with series by
-position, so a required label must give one value, applied to every series, or
-exactly one per series; any other count fails the metric rather than put labels
-on the wrong series. `required` applies to `type: expression` labels, and not
-to the python transform, whose labels come from its script.
+about the value. `required` applies to `expression` labels, and not to
+the python transform, whose labels come from its script.
+
+### Collector-wide labels
+
+Three `transform` settings change the labels of every metric a collector
+exports, whatever its transform — jq, CSS, XPath, CSV, regex, Python or a
+Prometheus passthrough — after its metric rules, in this order:
+
+```yaml
+transform:
+  type: jq
+  labels:            # added to every metric
+    environment: production
+  remove_labels:     # dropped from every metric
+    - internal_id
+  rename_labels:     # renamed on every metric
+    host: instance
+```
+
+Renames are made at once, from the labels as they were before any of them, so
+they never chain: with `a: b` and `b: c`, `b` gets the value `a` had and `c`
+the value `b` had. Two renames to the same label are refused at startup.
+
+A `prometheus` transform passing metrics through without `metrics` rules can
+also pick and rename them: `include` and `exclude` are patterns a metric name
+must, or must not, match, and `rename` maps source names to new ones. With
+`metrics` rules, the rules choose and name the metrics, so these three are
+refused at startup there, as on any other transform, rather than ignored.
 
 ### Prefixing a collector's metrics
 
@@ -277,21 +324,20 @@ metrics:
     expression: .cpu
     labels:
       - name: server
-        type: expression
         expression: .name
       - name: site
-        type: expression
         expression: $root.site
 ```
 
 Without `items`, the value expression and each label expression run over the
 whole document and are paired by position: the third value gets the third
-label value. That works while every expression yields exactly one value per
-element, and goes quietly wrong when one does not — a label that yields nothing
-for one server shifts every later label onto the wrong series, and a label that
-yields a single value is applied to all of them. With `items` there is nothing
-to pair: a label that yields nothing for an item is simply absent on that
-series.
+label value. A label that yields one value applies it to every series, and one
+that yields none leaves the label off. Any other count than one per series
+means values would land on the wrong series — a label that yields nothing for
+one server would shift every later label along — so the metric fails under its
+`error_mode` instead, the error saying how many values the label gave for how
+many series. With `items` there is nothing to pair: a label that yields nothing
+for an item is simply absent on that series.
 
 Per item, the value and each label must yield at most one value; two is an
 error, since there is no telling which belongs to the series. A value that is
@@ -304,8 +350,8 @@ too, where it is the same document as `.`.
 The `css` transform takes `items` too, for HTML tables and lists: `items`
 selects the rows, and the expression and each label are selectors within one
 row. Without it, the value is the whole text of each element the expression
-selects, and a label selector looks inside that element, so a label could only
-read text that is part of the number.
+selects, so its labels can only be static `value` labels: a label reading the
+page needs `items`, and is refused at startup without it.
 
 ```yaml
 transform:
@@ -316,7 +362,6 @@ metrics:
     expression: td:nth-child(2)
     labels:
       - name: server
-        type: expression
         expression: td:nth-child(1)
 ```
 
@@ -335,7 +380,6 @@ can ask to be cut instead:
 ```yaml
 labels:
   - name: message
-    type: expression
     expression: .latest_update
     truncate: true
 ```
@@ -358,10 +402,8 @@ has a status:
   expression: 1
   labels:
     - name: component
-      type: expression
       expression: .name
     - name: status
-      type: expression
       expression: .status
 ```
 
@@ -406,7 +448,6 @@ series distinct. The group is found through `$root`:
 
 ```yaml
 - name: group
-  type: expression
   expression: '.group_id as $id | first($root.components[] | select(.id == $id)) | .name'
 ```
 
@@ -416,7 +457,6 @@ jq's `capture`:
 
 ```yaml
 - name: cloud_zone
-  type: expression
   expression: 'first(.name | capture("^(?<provider>AWS|Azure|GCP|GCS) (?<location>.+?)(?: - | )(?<zone>[a-z][a-z0-9-]*[0-9])(?::|$)")) | .zone'
 ```
 
@@ -532,7 +572,10 @@ metrics:
 `ignore` and `log` keep the scrape going, so a response carries whatever could
 be extracted. That is the right choice for a metric that is useful but not
 essential: one missing value does not cost you the others. When nothing at all
-can be extracted, the probe still succeeds with an empty body.
+can be extracted, the probe still succeeds with an empty body. `log` writes one
+line per failing rule per scrape, however many series failed: a rule over a
+thousand-row table that misses its value on every row logs its first error
+with `"failures":1000`, not a thousand lines.
 
 `fail` is for a metric the scrape is meaningless without. A single failing rule
 with `fail` fails the whole probe, even when every other metric was extracted
@@ -591,10 +634,6 @@ collector's to export, and the scrape counts as a success. A metric rule with
 `error_mode: fail` fails the scrape whatever `on_transform_error` says, on a
 probe and a scheduled target alike.
 
-`warn` is the older spelling of `log` here. It still works, but each use is
-logged as deprecated at startup and on every reload, and listed by `--dry-run`;
-change it to `log`.
-
 ### Checked when the configuration loads
 
 Everything about a metric that can be known before a scrape is checked at
@@ -608,8 +647,11 @@ metric and the label:
   expressions, CSS selectors, XPath with the collector's namespaces, and a
   `prometheus` transform's patterns, `include` and `exclude`;
 - a `regex` label must name a capture group the regex has;
-- a `prometheus` transform's `rename` targets must be metric names, and its
-  `labels` and `rename_labels` label names.
+- a `prometheus` transform's `rename` targets must be metric names;
+  `include`, `exclude` and `rename` apply only to a `prometheus` transform
+  without `metrics` rules;
+- `transform.labels` and `rename_labels` must give label names, and two renames
+  may not target the same label.
 
 A CSS selector that does not compile used to match nothing, on every scrape,
 without saying why; it is now refused when the configuration loads. The

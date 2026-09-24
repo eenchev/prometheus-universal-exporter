@@ -78,3 +78,22 @@ func TestTargetRequestRefusesUnknownKeys(t *testing.T) {
 		t.Fatalf("request decoded as %+v", r)
 	}
 }
+
+// A label's kind follows from its keys, so a leftover type says what to write
+// instead.
+func TestALabelTypeSaysWhatReplacedIt(t *testing.T) {
+	path := testutil.WriteIn(t, t.TempDir(), "config.yaml", testutil.MinimalConfig+"        labels:\n          - name: env\n            type: string\n            value: prod\n")
+	_, err := Load(path)
+	if err == nil || !strings.Contains(err.Error(), `unknown key "type" in a label; a label has no type: set value for a static label, or expression to read it from the response`) {
+		t.Fatalf("err=%v", err)
+	}
+}
+
+// response.format is gone; decoder.type chooses the decoder.
+func TestAResponseFormatSaysWhatReplacedIt(t *testing.T) {
+	path := testutil.WriteIn(t, t.TempDir(), "config.yaml", strings.Replace(testutil.MinimalConfig, "    transform:\n", "    response:\n      format: text\n    transform:\n", 1))
+	_, err := Load(path)
+	if err == nil || !strings.Contains(err.Error(), `unknown key "format" in response; the decoder is chosen by decoder.type`) {
+		t.Fatalf("err=%v", err)
+	}
+}

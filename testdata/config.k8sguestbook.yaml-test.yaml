@@ -38,7 +38,6 @@ collectors:
         expression: '.spec.template.spec.containers[0].ports[0].containerPort'
         labels:
           - name: container
-            type: expression
             expression: '.spec.template.spec.containers[0].name'
 
       - name: kubernetes_deployment_info
@@ -48,8 +47,6 @@ collectors:
         expression: '1'
         labels:
           - name: name
-            type: expression
             expression: '.metadata.name'
           - name: namespace
-            type: expression
             expression: '.metadata.namespace'

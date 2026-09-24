@@ -69,16 +69,12 @@ collectors:
         expression: mag
         labels:
           - name: id
-            type: expression
             expression: id
           - name: network
-            type: expression
             expression: net
           - name: magnitude_type
-            type: expression
             expression: magType
           - name: review_status
-            type: expression
             expression: status
 
       - name: earthquake_depth_kilometers
@@ -88,8 +84,6 @@ collectors:
         expression: depth
         labels:
           - name: id
-            type: expression
             expression: id
           - name: network
-            type: expression
             expression: net

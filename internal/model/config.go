@@ -43,8 +43,14 @@ type Config struct {
 	LoadedCollectorFiles []string          `yaml:"-"`
 	// Deprecations lists the deprecated spellings Validate accepted and
 	// normalised, one message each, for startup, reload and --dry-run to
-	// report. It is not read from the document.
+	// report. None is accepted at present; a spelling kept for a while after
+	// it is replaced appends its message here. It is not read from the
+	// document.
 	Deprecations []string `yaml:"-"`
+	// Warnings lists what Validate accepted but the operator should know
+	// about, such as a collector that leaves its decoder to each response, one
+	// message each, reported like Deprecations.
+	Warnings []string `yaml:"-"`
 }
 
 // WebConfig is the web block: the exporter's own HTTP endpoints.
@@ -173,9 +179,8 @@ type TLSConfig struct {
 }
 
 // ResponseConfig is a collector's response block: how to read the body the
-// target returns.
+// target returns. Which decoder reads it is decoder.type.
 type ResponseConfig struct {
-	Format string `yaml:"format"`
 	// Charset names the encoding of the response when the target does not
 	// declare it, or declares it wrongly (decode/textencoding.go).
 	Charset    string            `yaml:"charset"`
@@ -190,8 +195,10 @@ type CSVConfig struct {
 	TrimSpace bool   `yaml:"trim_space"`
 }
 
-// DecoderConfig is a collector's decoder block. Type overrides the decoder
-// the response's content type and the transform would pick.
+// DecoderConfig is a collector's decoder block. Type names the decoder that
+// reads the response: json, yaml, xml, csv, html, prometheus or text. Unset or
+// auto, the transform's type picks it when it implies one, and otherwise the
+// response's content type or its content.
 type DecoderConfig struct {
 	Type string `yaml:"type"`
 }
@@ -280,11 +287,11 @@ const (
 	ErrorModeFail = "fail"
 )
 
-// LabelRule is one label of a metric rule: a fixed value, or one an
-// expression produces.
+// LabelRule is one label of a metric rule. It sets exactly one of Value, a
+// static value exported as written, and Expression, evaluated against the
+// response in the collector's transform language.
 type LabelRule struct {
 	Name       string `yaml:"name"`
-	Type       string `yaml:"type"`
 	Value      string `yaml:"value"`
 	Expression string `yaml:"expression"`
 	// Truncate cuts a value longer than limits.max_label_value_length to fit,
@@ -295,6 +302,20 @@ type LabelRule struct {
 	// Unset, such a series is exported without the label.
 	Required bool `yaml:"required"`
 }
+
+// Static reports whether the label has a static value rather than an
+// expression.
+func (l LabelRule) Static() bool { return l.Expression == "" }
+
+// DecoderTypes are the values of decoder.type: auto, which chooses a decoder
+// for each response, and the decoders. Validation and the JSON Schema both
+// read this list, and a test keeps decode.Decode handling every decoder in it.
+var DecoderTypes = []string{"auto", "json", "yaml", "xml", "csv", "html", "prometheus", "text"}
+
+// TransformTypes are the values of transform.type, which a collector must set.
+// Validation and the JSON Schema both read this list, and a test keeps the
+// transform package handling every type in it.
+var TransformTypes = []string{"jq", "yq", "xpath", "css", "csv", "regex", "python", "prometheus"}
 
 // TransformConfig is a collector's transform block: the language its
 // expressions are written in, the scripts, and the renaming and filtering
@@ -329,9 +350,6 @@ const (
 	ErrorPolicyFail   = ErrorModeFail
 	ErrorPolicyLog    = ErrorModeLog
 	ErrorPolicyIgnore = ErrorModeIgnore
-	// ErrorPolicyWarn is the older spelling of log in error_handling. It is
-	// still accepted, and reported as deprecated.
-	ErrorPolicyWarn = "warn"
 )
 
 // CollectorByName returns the collector of cfg with the given name, or nil.

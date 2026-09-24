@@ -442,7 +442,7 @@ func fileKind(mode fs.FileMode) string {
 	return "not a regular file"
 }
 
-// localFileContentType lets response.format auto pick the decoder a file's
+// localFileContentType lets decoder.type auto pick the decoder a file's
 // extension implies. .prom is the textfile collector's Prometheus text
 // format. Anything else is detected from its content.
 func localFileContentType(name string) string {

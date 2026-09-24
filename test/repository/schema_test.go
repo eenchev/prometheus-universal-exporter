@@ -174,11 +174,17 @@ func TestConfigSchemaRejectsInvalidConfigurations(t *testing.T) {
 		"missing request.type":    strings.Replace(base, "      type: http\n", "      path: /x\n", 1),
 		"unknown request.type":    strings.Replace(base, "type: http", "type: gopher", 1),
 		"unknown transform":       strings.Replace(base, "type: jq", "type: jsonpath", 1),
+		"none transform":          strings.Replace(base, "type: jq", "type: none", 1),
+		"no transform":            strings.Replace(base, "    transform:\n      type: jq\n", "", 1),
+		"transform without type":  strings.Replace(base, "      type: jq\n", "      pre_script: data = data\n", 1),
 		"bad metric name":         strings.Replace(base, "name: value", "name: bad-name", 1),
 		"bad metrics_prefix":      strings.Replace(base, "  - name: demo\n", "  - name: demo\n    metrics_prefix: grafana_\n", 1),
 		"bad duration":            strings.Replace(base, "  - name: demo\n", "  - name: demo\n    cache:\n      ttl: five minutes\n", 1),
 		"bad error policy":        strings.Replace(base, "  - name: demo\n", "  - name: demo\n    error_handling:\n      on_fetch_error: panic\n", 1),
-		"bad label type":          base + "        labels:\n          - name: l\n            type: literal\n",
+		"label with a type":       base + "        labels:\n          - name: l\n            type: string\n            value: x\n",
+		"label value and expr":    base + "        labels:\n          - name: l\n            value: x\n            expression: .l\n",
+		"label without either":    base + "        labels:\n          - name: l\n",
+		"label without a name":    base + "        labels:\n          - value: x\n",
 		"negative limit":          strings.Replace(base, "  - name: demo\n", "  - name: demo\n    limits:\n      max_metrics: -1\n", 1),
 		"unsupported library":     strings.Replace(base, "      type: jq\n", "      type: jq\n      libraries: [requests]\n", 1),
 		"string for a list":       strings.Replace(base, "  - name: demo\n", "  - name: demo\n    request_list: x\n", 1),
@@ -328,6 +334,17 @@ func validateAgainstSchema(schema map[string]any, value any) []string {
 			}
 			if !matched {
 				errs = append(errs, path+": matches none of anyOf")
+			}
+		}
+		if oneOf, ok := schema["oneOf"].([]any); ok {
+			matched := 0
+			for _, alternative := range oneOf {
+				if len(validateAgainstSchema(alternative.(map[string]any), value)) == 0 {
+					matched++
+				}
+			}
+			if matched != 1 {
+				errs = append(errs, fmt.Sprintf("%s: matches %d of oneOf, want exactly one", path, matched))
 			}
 		}
 		if minimum, ok := schema["minimum"].(float64); ok {

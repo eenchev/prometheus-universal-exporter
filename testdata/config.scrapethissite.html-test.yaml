@@ -28,7 +28,6 @@ collectors:
         expression: "(//span[contains(@class, 'country-population')])[1]"
         labels:
           - name: country
-            type: string
             value: Andorra
 
       - name: country_area
@@ -38,5 +37,4 @@ collectors:
         expression: "(//span[contains(@class, 'country-area')])[1]"
         labels:
           - name: country
-            type: string
             value: Andorra

@@ -40,7 +40,7 @@ func quote(s string) string { return `"` + strings.ReplaceAll(s, `"`, `\"`) + `"
 // names the collector, the metric and, for a label, the label.
 func TestExpressionsAreCompiledAtLoad(t *testing.T) {
 	label := func(expression string) []model.LabelRule {
-		return []model.LabelRule{{Name: "l", Type: "expression", Expression: expression}}
+		return []model.LabelRule{{Name: "l", Expression: expression}}
 	}
 	tests := []struct {
 		name      string
@@ -58,7 +58,8 @@ func TestExpressionsAreCompiledAtLoad(t *testing.T) {
 		{"regex label index", "regex", model.MetricRule{Name: "m", Expression: `(\d+)`, Labels: label("2")}, `refers to capture group "2"`},
 		{"css", "css", model.MetricRule{Name: "m", Expression: "td:nth-child("}, `metric "m" CSS selector "td:nth-child("`},
 		{"css items", "css", model.MetricRule{Name: "m", Items: "tr:has(", Expression: "td"}, `metric "m" items CSS selector "tr:has("`},
-		{"css label", "css", model.MetricRule{Name: "m", Expression: "td", Labels: label("[[")}, `label "l" CSS selector "[["`},
+		{"css label", "css", model.MetricRule{Name: "m", Items: "tr", Expression: "td", Labels: label("[[")}, `label "l" CSS selector "[["`},
+		{"css label without items", "css", model.MetricRule{Name: "m", Expression: "td", Labels: label("th")}, `label "l" reads the response, which a css metric can do only with items`},
 		{"xpath", "xpath", model.MetricRule{Name: "m", Expression: "//item["}, `metric "m" XPath "//item["`},
 		{"xpath label", "xpath", model.MetricRule{Name: "m", Expression: "//item", Labels: label("name[")}, `label "l" XPath "name["`},
 		{"prometheus pattern", "prometheus", model.MetricRule{Name: "m", Expression: "^vendor_(.*"}, `metric "m" expression`},
@@ -79,11 +80,12 @@ func TestExpressionsAreCompiledAtLoad(t *testing.T) {
 // labels, and XPath with namespaces.
 func TestValidExpressionsPass(t *testing.T) {
 	for name, c := range map[string]model.Collector{
-		"regex named":     ruleCollector("regex", model.MetricRule{Name: "m", Type: model.GaugeMetricType, Expression: `(?P<server>\w+)=(\d+)`, Labels: []model.LabelRule{{Name: "s", Type: "expression", Expression: "server"}}}),
-		"regex numbered":  ruleCollector("regex", model.MetricRule{Name: "m", Type: model.GaugeMetricType, Expression: `(\w+)=(\d+)`, Labels: []model.LabelRule{{Name: "s", Type: "expression", Expression: "1"}}}),
-		"xpath attribute": ruleCollector("xpath", model.MetricRule{Name: "m", Type: model.GaugeMetricType, Expression: "//item", Labels: []model.LabelRule{{Name: "s", Type: "expression", Expression: "@name"}}}),
-		"css":             ruleCollector("css", model.MetricRule{Name: "m", Type: model.GaugeMetricType, Expression: "table#servers td.cpu", Labels: []model.LabelRule{{Name: "s", Type: "expression", Expression: "td:first-child"}}}),
-		"jq with $root":   ruleCollector("jq", model.MetricRule{Name: "m", Type: model.GaugeMetricType, Items: ".rows[]", Expression: ".v", Labels: []model.LabelRule{{Name: "s", Type: "expression", Expression: "$root.site"}}}),
+		"regex named":      ruleCollector("regex", model.MetricRule{Name: "m", Type: model.GaugeMetricType, Expression: `(?P<server>\w+)=(\d+)`, Labels: []model.LabelRule{{Name: "s", Expression: "server"}}}),
+		"regex numbered":   ruleCollector("regex", model.MetricRule{Name: "m", Type: model.GaugeMetricType, Expression: `(\w+)=(\d+)`, Labels: []model.LabelRule{{Name: "s", Expression: "1"}}}),
+		"xpath attribute":  ruleCollector("xpath", model.MetricRule{Name: "m", Type: model.GaugeMetricType, Expression: "//item", Labels: []model.LabelRule{{Name: "s", Expression: "@name"}}}),
+		"css":              ruleCollector("css", model.MetricRule{Name: "m", Type: model.GaugeMetricType, Items: "table#servers tr:has(td)", Expression: "td.cpu", Labels: []model.LabelRule{{Name: "s", Expression: "td:first-child"}}}),
+		"css static label": ruleCollector("css", model.MetricRule{Name: "m", Type: model.GaugeMetricType, Expression: "td.cpu", Labels: []model.LabelRule{{Name: "env", Value: "prod"}}}),
+		"jq with $root":    ruleCollector("jq", model.MetricRule{Name: "m", Type: model.GaugeMetricType, Items: ".rows[]", Expression: ".v", Labels: []model.LabelRule{{Name: "s", Expression: "$root.site"}}}),
 	} {
 		if err := validateOne(c); err != nil {
 			t.Errorf("%s: %v", name, err)
@@ -116,32 +118,78 @@ func TestPrometheusTransformSettingsAreChecked(t *testing.T) {
 	}
 }
 
-// error_handling and error_mode share one vocabulary, fail, log and ignore.
-// warn, the older spelling of log in error_handling, still works, is reported
-// as deprecated, and means log.
+// error_handling and error_mode share one vocabulary, fail, log and ignore,
+// matched in any case.
 func TestErrorPolicyVocabulary(t *testing.T) {
 	c := testutil.Collector("policies", "text")
-	c.ErrorHandling = model.ErrorHandling{OnFetchError: "warn", OnDecodeError: "LOG", OnTransformError: "ignore"}
-	c.Metrics[0].ErrorMode = "warn"
+	c.ErrorHandling = model.ErrorHandling{OnFetchError: "Fail", OnDecodeError: "LOG", OnTransformError: "ignore"}
+	c.Metrics[0].ErrorMode = "Log"
 	cfg := &model.Config{Collectors: []model.Collector{c}}
 	if err := Validate(cfg); err != nil {
 		t.Fatal(err)
 	}
 	got := cfg.Collectors[0]
-	if got.ErrorHandling.OnFetchError != "log" || got.ErrorHandling.OnDecodeError != "log" || got.ErrorHandling.OnTransformError != "ignore" || got.Metrics[0].ErrorMode != "log" {
+	if got.ErrorHandling.OnFetchError != "fail" || got.ErrorHandling.OnDecodeError != "log" || got.ErrorHandling.OnTransformError != "ignore" || got.Metrics[0].ErrorMode != "log" {
 		t.Fatalf("normalised to %+v, error_mode %q", got.ErrorHandling, got.Metrics[0].ErrorMode)
 	}
-	if len(cfg.Deprecations) != 2 ||
-		!strings.Contains(cfg.Deprecations[0]+cfg.Deprecations[1], `collector "policies" error_handling.on_fetch_error: "warn" is deprecated; use "log"`) ||
-		!strings.Contains(cfg.Deprecations[0]+cfg.Deprecations[1], `metric "demo_value" error_mode: "warn" is deprecated`) {
+	if len(cfg.Deprecations) != 0 {
 		t.Fatalf("deprecations=%q", cfg.Deprecations)
 	}
-	for _, bad := range []string{"panic", "warning", "skip"} {
+	for _, bad := range []string{"warn", "panic", "warning", "skip"} {
 		c := testutil.Collector("policies", "text")
 		c.ErrorHandling.OnDecodeError = bad
 		err := Validate(&model.Config{Collectors: []model.Collector{c}})
 		if err == nil || !strings.Contains(err.Error(), `collector "policies" error_handling.on_decode_error has invalid value "`+bad+`"; want fail, log or ignore`) {
 			t.Errorf("%q: err=%v", bad, err)
+		}
+	}
+}
+
+// include, exclude and rename apply only to a prometheus transform passing
+// metrics through, and are refused anywhere else rather than ignored; the
+// label settings apply to every transform, but two renames to one label are
+// refused.
+func TestTransformSettingsWhereTheyApply(t *testing.T) {
+	passthrough := func(t model.TransformConfig) model.Collector {
+		t.Type = "prometheus"
+		return model.Collector{Name: "checked", Request: model.RequestConfig{Type: fetch.RequestTypeHTTP}, Transform: t}
+	}
+	withRules := func(t model.TransformConfig) model.Collector {
+		c := passthrough(t)
+		c.Metrics = []model.MetricRule{{Name: "v", Type: model.GaugeMetricType, Expression: "^v$"}}
+		return c
+	}
+	jq := func(t model.TransformConfig) model.Collector {
+		c := testutil.Collector("checked", "text")
+		t.Type = "jq"
+		c.Transform = t
+		c.Metrics[0].Expression = ".v"
+		return c
+	}
+	for name, test := range map[string]struct {
+		collector model.Collector
+		want      string
+	}{
+		"include on jq":            {jq(model.TransformConfig{Include: []string{"^v$"}}), "sets transform.include, which picks or renames the metrics a prometheus transform passes through"},
+		"rename on jq":             {jq(model.TransformConfig{Rename: map[string]string{"a": "b"}}), "sets transform.rename"},
+		"exclude with rules":       {withRules(model.TransformConfig{Exclude: []string{"^x$"}}), "sets transform.exclude"},
+		"two renames to one label": {jq(model.TransformConfig{RenameLabels: map[string]string{"a": "c", "b": "c"}}), `renames both "a" and "b" to "c"`},
+		"bad collector label name": {jq(model.TransformConfig{Labels: map[string]string{"bad-name": "x"}}), `transform.labels has invalid label name "bad-name"`},
+	} {
+		t.Run(name, func(t *testing.T) {
+			err := Validate(&model.Config{Collectors: []model.Collector{test.collector}})
+			if err == nil || !strings.Contains(err.Error(), test.want) {
+				t.Fatalf("err=%v, want %q", err, test.want)
+			}
+		})
+	}
+	for name, c := range map[string]model.Collector{
+		"passthrough filters": passthrough(model.TransformConfig{Include: []string{"^v"}, Exclude: []string{"^v_x$"}, Rename: map[string]string{"v": "w"}}),
+		"labels on jq":        jq(model.TransformConfig{Labels: map[string]string{"env": "prod"}, RemoveLabels: []string{"x"}, RenameLabels: map[string]string{"a": "b", "b": "c"}}),
+		"labels with rules":   withRules(model.TransformConfig{Labels: map[string]string{"env": "prod"}}),
+	} {
+		if err := Validate(&model.Config{Collectors: []model.Collector{c}}); err != nil {
+			t.Errorf("%s: %v", name, err)
 		}
 	}
 }

@@ -23,7 +23,10 @@ jobs:
       - uses: actions/setup-go@v7
         with:
           go-version: 'stable'
+      # The helm the Makefile pins (HELM_VERSION); a test keeps them equal.
       - uses: azure/setup-helm@v5
+        with:
+          version: v4.3.0
       - name: Resolve newer pinned versions
         run: go run ./tools/depupdate --dockerfile Dockerfile --summary "$RUNNER_TEMP/depupdate.md"
       - name: Record whether anything moved

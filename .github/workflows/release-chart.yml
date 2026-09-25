@@ -33,7 +33,10 @@ jobs:
 
       - uses: actions/checkout@v7
 
+      # The helm the Makefile pins (HELM_VERSION); a test keeps them equal.
       - uses: azure/setup-helm@v5
+        with:
+          version: v4.3.0
 
       # Chart.yaml is the source of truth for the chart version. Releasing a tag
       # that disagrees with it would publish an artifact whose committed

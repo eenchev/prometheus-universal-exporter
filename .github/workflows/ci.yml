@@ -44,7 +44,10 @@ jobs:
         if: steps.changes.outputs.go == 'true'
         with:
           go-version: 'stable'
+      # The helm the Makefile pins (HELM_VERSION); a test keeps them equal.
       - uses: azure/setup-helm@v5
+        with:
+          version: v4.3.0
         if: steps.changes.outputs.chart == 'true'
       # The Python tests run against the Python the image ships, the
       # Dockerfile's PYTHON_VERSION, not whichever one the runner happens to

@@ -10,10 +10,14 @@ GOLANGCI_LINT_VERSION := v2.13.2
 # pre-commit hook and CI run `gopls check` at this version. Needs a Go at least
 # as new as the release requires to install.
 GOPLS_VERSION := v0.23.0
+# helm renders and lints the chart; releases word errors and render details
+# differently, so `make helm-test` and CI use this one. Kept in step with every
+# workflow that installs helm by a test.
+HELM_VERSION := v4.3.0
 # Kept in step with .github/workflows/govulncheck.yml by a test.
 GOVULNCHECK_VERSION := v1.8.0
 
-.PHONY: build test test-external vet fmt fmt-check lint lint-version lint-install gopls-check gopls-version gopls-install hooks precommit vulncheck helm-test schemas
+.PHONY: build test test-external vet fmt fmt-check lint lint-version lint-install gopls-check gopls-version gopls-install helm-version helm-install hooks precommit vulncheck helm-test schemas
 # REQUEST_TYPES builds only the listed request types, comma-separated, for
 # example `make build REQUEST_TYPES=http`. Empty, the default, builds every type.
 # See "Choosing request types at build time" in docs/CONFIGURATION.md.
@@ -111,7 +115,19 @@ precommit: fmt-check lint gopls-check vet
 vulncheck:
 	go run golang.org/x/vuln/cmd/govulncheck@$(GOVULNCHECK_VERSION) ./...
 
-helm-test:
+helm-version:
+	@command -v helm >/dev/null 2>&1 || { \
+		echo "helm is not installed; run: make helm-install" >&2; exit 1; }
+	@have=$$(helm version --short | sed 's/+.*//'); \
+	if [ "$$have" != '$(HELM_VERSION)' ]; then \
+		echo "helm is $$have but CI runs $(HELM_VERSION); run: make helm-install" >&2; \
+		exit 1; \
+	fi
+
+helm-install:
+	go install helm.sh/helm/v4/cmd/helm@$(HELM_VERSION)
+
+helm-test: helm-version
 	helm lint charts/prometheus-universal-exporter
 	helm template test charts/prometheus-universal-exporter
 	helm template test charts/prometheus-universal-exporter --set-json 'monitors=[{"name":"service-targets","enabled":true,"type":"service","collector":"example","interval":"30s","scrapeTimeout":"10s"}]'

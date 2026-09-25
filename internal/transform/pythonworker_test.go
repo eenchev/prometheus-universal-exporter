@@ -2,8 +2,11 @@ package transform
 
 import (
 	"context"
+	"fmt"
 	"net/http"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"runtime"
 	"strings"
 	"testing"
@@ -284,6 +287,39 @@ metric(name="v", value=Point(statistics.mean([1, 3])).x)
 	}
 	if workerMetricValue(t, set, "v") != 2 {
 		t.Fatalf("metrics=%+v", set.Metrics)
+	}
+}
+
+// Where a module has no bytecode cache, or a stale one, and its directory is
+// writable, the importer compiles it and writes a cache. The sandbox refuses
+// the write with an error the importer does not expect, so the import failed:
+// a runner-owned Python whose caches look stale after extraction broke every
+// stdlib import. The worker runs with -B, never writing caches.
+func TestPythonWorkerImportsModulesWithoutABytecodeCache(t *testing.T) {
+	requirePython(t)
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "uncached_helper.py"), []byte("VALUE = 5\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	c := workerCollector("uncached", fmt.Sprintf(`
+import sys
+sys.path.insert(0, %q)
+import uncached_helper
+metric(name="v", value=uncached_helper.VALUE)
+metric(name="dont_write_bytecode", value=1 if sys.dont_write_bytecode else 0)
+`, dir))
+	set, err := runWorkerScript(t, c)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := workerMetricValue(t, set, "v"); got != 5 {
+		t.Fatalf("v = %v, want 5", got)
+	}
+	if got := workerMetricValue(t, set, "dont_write_bytecode"); got != 1 {
+		t.Fatal("the worker would write bytecode caches")
+	}
+	if _, err := os.Stat(filepath.Join(dir, "__pycache__")); !os.IsNotExist(err) {
+		t.Fatalf("the worker wrote a bytecode cache: %v", err)
 	}
 }
 

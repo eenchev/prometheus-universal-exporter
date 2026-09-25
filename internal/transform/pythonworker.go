@@ -653,9 +653,13 @@ func startPythonWorker(ctx context.Context, spec pythonSpec) (*pythonWorker, err
 		return nil, err
 	}
 	// The worker outlives the scrape that starts it, so it must not be tied to
-	// that scrape's context; stop() ends it.
-	cmd := exec.CommandContext(context.WithoutCancel(ctx), spec.Path, "-I", "-c", pythonWorkerLauncher, string(modules), strconv.FormatInt(spec.MaxMemory, 10)) // #nosec G204 -- the interpreter is the operator's --python.path
-	cmd.ExtraFiles = []*os.File{requestRead, answerWrite}                                                                                                       // descriptors 3 and 4
+	// that scrape's context; stop() ends it. -B: the importer never writes
+	// bytecode caches. Where a module's cache is missing or stale and its
+	// directory writable, it would otherwise try to write one through the
+	// sandboxed _io.FileIO, whose refusal it does not expect, and the import
+	// would fail.
+	cmd := exec.CommandContext(context.WithoutCancel(ctx), spec.Path, "-I", "-B", "-c", pythonWorkerLauncher, string(modules), strconv.FormatInt(spec.MaxMemory, 10)) // #nosec G204 -- the interpreter is the operator's --python.path
+	cmd.ExtraFiles = []*os.File{requestRead, answerWrite}                                                                                                             // descriptors 3 and 4
 	stderr := &tailBuffer{max: pythonStderrTail}
 	cmd.Stderr = stderr
 	if err := cmd.Start(); err != nil {

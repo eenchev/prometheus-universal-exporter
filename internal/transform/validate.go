@@ -136,7 +136,8 @@ func CheckPythonScripts(pythonPath string, c *model.Config) ([]string, error) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, pythonPath, "-I", "-c", pythonScriptValidator)
+	// -B, as the worker runs: the check leaves no bytecode caches behind.
+	cmd := exec.CommandContext(ctx, pythonPath, "-I", "-B", "-c", pythonScriptValidator)
 	cmd.Stdin = bytes.NewReader(input)
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout

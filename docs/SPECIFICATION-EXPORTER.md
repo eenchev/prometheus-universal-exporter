@@ -1742,6 +1742,11 @@ The exact sandboxing mechanism is an implementation decision. Trusted collector 
 
 The worker's sandbox:
 
+- MUST start the interpreter without writing bytecode caches (`-B`), as the
+  script check does. Where a module's cache is missing or stale and its
+  directory writable, the importer would otherwise write one through the
+  replaced `_io.FileIO` below, whose refusal it does not expect, and the
+  import would fail.
 - MUST refuse importing, from anywhere, `socket`, `ssl`, `subprocess`,
   `ctypes`, `multiprocessing`, `threading`, `mmap`, `pty`, `pathlib`, `shutil`,
   `tempfile`, `urllib.request`, `urllib.error` and `urllib.robotparser`, and
@@ -6189,6 +6194,8 @@ Tests MUST show:
   is still refused `/etc/passwd`, directly or through the zone directory by
   `..`; on Python 3.12 and later too, where `zoneinfo` loads `sysconfig`,
   which then no longer carries `threading`.
+- A script imports a module that has no bytecode cache from a writable
+  directory, and the worker leaves no cache behind.
 - A gauge `foo_count` next to a histogram `foo`, and a counter `bar_sum` next
   to a summary `bar`, fail validation naming both.
 - A CSV header naming a column twice fails the decode naming it; repeated

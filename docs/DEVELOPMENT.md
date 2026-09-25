@@ -58,8 +58,10 @@ that uses the pool without an interpreter calls `usePythonPool(t)`. Tests
 therefore must not use `t.Parallel`, which the swap assumes.
 
 The Python tests run `python3` from `PATH`. CI installs the Python the image
-ships, the Dockerfile's `PYTHON_VERSION`, and a test keeps the workflow reading
-it. Run them with that version locally too: the sandbox depends on what the
+ships, the Dockerfile's `PYTHON_VERSION`, with the libraries the image ships at
+the Dockerfile's versions (`lxml`, `PyYAML`, `python-dateutil`; PyYAML is also
+what `tools/check-manifests.py` reads with), and a test keeps the workflow
+reading them. Run them with that version locally too: the sandbox depends on what the
 standard library imports, and that changes between releases — from 3.12,
 `zoneinfo` loads `sysconfig`, which imports the blocked `threading`, so a
 sandbox change can pass on 3.11 and fail in the image.

@@ -222,6 +222,11 @@ func TestCITestsThePythonTheImageShips(t *testing.T) {
 		"sed -n 's/^ARG PYTHON_VERSION=//p' Dockerfile",
 		"actions/setup-python@",
 		"python-version: ${{ steps.python.outputs.version }}",
+		// A setup-python Python has no PyYAML, which check-manifests.py
+		// needs, nor the libraries the Python tests use.
+		`"lxml==$(arg LXML_VERSION)"`,
+		`"PyYAML==$(arg PYYAML_VERSION)"`,
+		`"python-dateutil==$(arg PYTHON_DATEUTIL_VERSION)"`,
 	} {
 		if !strings.Contains(ci, want) {
 			t.Errorf("ci.yml no longer contains %q", want)

@@ -65,6 +65,18 @@ jobs:
         if: steps.changes.outputs.go == 'true'
         with:
           python-version: ${{ steps.python.outputs.version }}
+      # That Python comes bare, without the runner's system packages. Install
+      # the libraries the image ships, at its versions: the Python tests use
+      # them as the image does, and tools/check-manifests.py reads YAML.
+      - name: Install the Python libraries the image ships
+        if: steps.changes.outputs.go == 'true'
+        run: |
+          set -eu
+          arg() { sed -n "s/^ARG $1=//p" Dockerfile; }
+          python3 -m pip install --disable-pip-version-check \
+            "lxml==$(arg LXML_VERSION)" \
+            "PyYAML==$(arg PYYAML_VERSION)" \
+            "python-dateutil==$(arg PYTHON_DATEUTIL_VERSION)"
       - run: go mod download
         if: steps.changes.outputs.go == 'true'
       - name: Check formatting

@@ -114,7 +114,7 @@
         },
         "pythonPath": {"type": "string", "minLength": 1},
         "watchConfig": {"type": "boolean"},
-        "watchConfigInterval": {"$ref": "#/$defs/duration"},
+        "watchConfigInterval": {"allOf": [{"$ref": "#/$defs/duration"}, {"pattern": "[1-9]"}], "description": "Rendered as --config.watch-interval: a positive Go duration, such as 60s or 1m30s."},
         "expandEnv": {"type": "boolean"},
         "logLevel": {"type": "string", "enum": ["debug", "info", "warn", "error"], "description": "Rendered as --log.level."},
         "enableLifecycle": {"type": "boolean", "description": "Rendered as --web.enable-lifecycle when true: enables POST /-/reload."},
@@ -283,6 +283,7 @@
           "not": {"enum": ["/probe", "/health", "/ready", "/collectors", "/-/reload"]}
         },
         "enabled": {"type": "boolean"},
+        "type": {"enum": ["service", "pod"], "description": "A ServiceMonitor, the default, or a PodMonitor."},
         "interval": {"$ref": "#/$defs/duration"},
         "scrapeTimeout": {"$ref": "#/$defs/duration"},
         "labels": {"$ref": "#/$defs/stringMap"},
@@ -365,7 +366,8 @@
       "properties": {
         "enabled": {"type": "boolean"},
         "ingress": {"type": "array", "items": {"type": "object"}},
-        "egress": {"type": "array", "items": {"type": "object"}}
+        "egress": {"type": "array", "items": {"type": "object"}},
+        "allowDNS": {"type": "boolean", "description": "With egress rules, also allow DNS, port 53 over UDP and TCP, to anywhere."}
       }
     },
 

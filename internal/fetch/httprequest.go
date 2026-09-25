@@ -44,8 +44,8 @@ func validateHTTPRequest(x *model.Collector) error {
 	if err := checkTLSSettings(x.Request.TLS); err != nil {
 		return fmt.Errorf("collector %q %w", x.Name, err)
 	}
-	if x.Request.Retry.Attempts < 0 {
-		return fmt.Errorf("collector %q request.retry.attempts must not be negative", x.Name)
+	if x.Request.Retry.Attempts < 0 || x.Request.Retry.Attempts > MaxRetryAttempts {
+		return fmt.Errorf("collector %q request.retry.attempts must be from 0 to %d", x.Name, MaxRetryAttempts)
 	}
 	if x.Request.Retry.Backoff < 0 {
 		return fmt.Errorf("collector %q request.retry.backoff must not be negative", x.Name)

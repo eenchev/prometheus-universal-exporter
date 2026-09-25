@@ -125,8 +125,15 @@ func (c *grpcConnCache) size() int {
 // refusal in refused for the call to report as one.
 func grpcPolicyDialer(policy *targetPolicy, hostPort string, refused *atomic.Pointer[TargetRefusedError]) func(context.Context, string) (net.Conn, error) {
 	host, _, _ := net.SplitHostPort(hostPort)
-	host = strings.ToLower(strings.TrimSuffix(host, "."))
+	host, hostErr := canonicalHost(host)
 	return func(ctx context.Context, address string) (net.Conn, error) {
+		if hostErr != nil {
+			var refusal *TargetRefusedError
+			if errors.As(hostErr, &refusal) {
+				refused.Store(refusal)
+			}
+			return nil, hostErr
+		}
 		conn, err := (&net.Dialer{Timeout: 30 * time.Second, KeepAlive: 30 * time.Second}).DialContext(ctx, "tcp", address)
 		if err != nil {
 			return nil, err

@@ -155,9 +155,13 @@ monitors:
     collector: example
 ```
 
-The chart creates the required monitor and routes Prometheus requests through the exporter.
+The chart creates the required monitor and routes Prometheus requests through the exporter, at the Service's full name, `<release>-prometheus-universal-exporter.<namespace>.svc:8080`, so a Prometheus in another namespace reaches it.
 
-> Keep `service.enabled: true` when using chart-generated `ServiceMonitor` or `PodMonitor` resources.
+A monitor must name a `collector`, and, when the chart holds the configuration, one that `config.data` defines, in `config.yaml` or a collector file among its keys: otherwise every probe it sends would be answered `400`, so rendering fails first. When `config.yaml` lists collector files by absolute path, which may lie outside the chart's ConfigMap, a collector not found in `config.data` is left to the exporter to check.
+
+> Probe monitors, of either type, send Prometheus to the exporter's Service, so they need `service.enabled: true`; with it off, rendering fails.
+
+The exporter's own metrics get a monitor too, `<release>-prometheus-universal-exporter-self`, while `selfMetrics.enabled` is on: a `ServiceMonitor`, or a `PodMonitor` with `selfMetrics.type: pod`. It is rendered when the chart renders any other monitor — a probe monitor or the [static targets](#static-targets) monitor — or when the cluster serves that kind, so an install without the Prometheus Operator does not fail on it.
 
 ## Configure the target request
 
@@ -305,7 +309,7 @@ The exporter's own flags are chart values rather than something to assemble by h
 | `server.pythonMaxWorkers` | `--python.max-workers` | unset: no limit across scripts |
 | `server.shutdownTimeout` | `--web.shutdown-timeout` | unset: the exporter's `15s` |
 | `server.shutdownDelay` | `--web.shutdown-delay` | `5s` |
-| `server.watchConfig` / `server.watchConfigInterval` | `--config.watch` / `--config.watch-interval` | off / `60s` |
+| `server.watchConfig` / `server.watchConfigInterval` | `--config.watch` / `--config.watch-interval`, a positive Go duration such as `60s` or `1m30s` | off / `60s` |
 | `server.expandEnv` | `--config.expand-env` | off |
 | `server.enableLifecycle` | `--web.enable-lifecycle` | off |
 | `server.probeDebug` | `--web.enable-probe-debug` | off |
@@ -346,7 +350,7 @@ Raise `terminationGracePeriodSeconds` further if `otlp.timeout` is longer than i
 
 `server.enableLifecycle` enables `POST /-/reload`, which reloads the configuration at once and answers `200` when it was accepted or `500` with the reason when it was not — see [Reloading on demand](../../docs/CONFIGURATION.md#reloading-on-demand). A chart-managed ConfigMap does not need it, since a change rolls the Deployment; it is for a ConfigMap updated in place with `config.enabled: false`. Like `probeTimeoutOffset`, the flag is only rendered when set, so older images still start.
 
-`server.probeDebug` enables `/probe?debug=true`, which answers a probe with a plain-text report of its trip instead of its metrics, and a *Debug report* switch on each form of `/collectors` — see [Debugging a probe](../../docs/CONFIGURATION.md#debugging-a-probe). The report shows what the target answered, so it is off by default; turn it on while a collector is being written or fixed, and off again. Rendered only when `true`.
+`server.probeDebug` enables `/probe?debug=true`, which answers a probe with a plain-text report of its trip instead of its metrics, a *Debug report* switch on each form of `/collectors`, and `/static-targets?debug=<name>` for one static target — see [Debugging a probe](../../docs/CONFIGURATION.md#debugging-a-probe). The report shows what the target answered, so it is off by default; turn it on while a collector is being written or fixed, and off again. Rendered only when `true`.
 
 The one-shot flags — `--dry-run`, `--config.schema`, `--config.collector-file-schema`, `--version` — print something and exit, so they have no values: run them as a separate command. A flag an exporter image has that this chart version does not know yet goes in `extraArgs`, described under [Extra volumes and arguments](#extra-volumes-and-arguments).
 
@@ -467,7 +471,7 @@ Each replica keeps its own [response cache](../../docs/CONFIGURATION.md#response
 
 Autoscaling suits a release that serves probes. It does not suit [static targets](#static-targets): every replica scrapes every static target, so each replica the autoscaler adds is another full set of requests to every target — the load it was scaling out from grows with it — and each replica serves its own results. A target with `export_via_otlp` is exported over OTLP by every replica, so the OTLP backend receives duplicate series under the same resource. The chart's notes warn when static targets are rendered with autoscaling, naming the targets exported over OTLP. Put static targets in a release of their own, with `replicaCount: 1` and autoscaling off.
 
-`podDisruptionBudget` renders a PodDisruptionBudget, so a node drain does not take every replica down at once. Set one of `minAvailable` or `maxUnavailable`, a count or a percentage; both fail rendering, and neither gives `maxUnavailable: 1`. With one replica, `minAvailable: 1` would block a drain until the pod is deleted by hand.
+`podDisruptionBudget` renders a PodDisruptionBudget, so a node drain does not take every replica down at once. Set one of `minAvailable` or `maxUnavailable`, a count or a percentage; both fail rendering, and neither gives `maxUnavailable: 1`. With one replica, `minAvailable: 1` would block a drain until the pod is deleted by hand. `maxUnavailable: 0` is valid Kubernetes and is rendered as set, but it allows no voluntary eviction at all, so a drain of a node running the exporter waits for ever; the chart's notes warn about it.
 
 ```yaml
 replicaCount: 3
@@ -504,11 +508,29 @@ ingress:
 
 ### NetworkPolicy
 
-Enable and configure a NetworkPolicy when you need to restrict which workloads can access the exporter or which targets it can reach:
+Enable a NetworkPolicy to restrict which workloads can reach the exporter, and, with egress rules, which targets it can reach:
 
 ```yaml
 networkPolicy:
   enabled: true
+```
+
+On its own this limits ingress to the `http` port, from anywhere, which Prometheus scrapes, and leaves egress open, since the targets a probe names are not known to the chart. `ingress` rules replace that default. `egress` rules limit egress to what they allow, plus DNS, port 53 over UDP and TCP, unless `allowDNS: false`:
+
+```yaml
+networkPolicy:
+  enabled: true
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: monitoring
+      ports:
+        - port: http
+  egress:
+    - to:
+        - ipBlock:
+            cidr: 10.0.0.0/8
 ```
 
 ## Using an external ConfigMap
@@ -717,7 +739,7 @@ Every value has a default, and `values.yaml` documents each one in place. `value
 | `replicaCount` | integer | `1` | Deployment replicas. |
 | `image.repository` / `image.tag` / `image.pullPolicy` | string | GHCR, `latest`, `IfNotPresent` | The exporter image. Pin `tag` in production. |
 | `imagePullSecrets` | array | `[]` | Secrets for a private registry. |
-| `nameOverride` / `fullnameOverride` / `namespaceOverride` | string | `""` | Naming and namespace of the created objects. |
+| `nameOverride` / `fullnameOverride` / `namespaceOverride` | string | `""` | Naming and namespace of the created objects. Objects are named `<release>-prometheus-universal-exporter`, or after the release alone when its name holds the chart's, so two releases in one namespace do not collide; `fullnameOverride` names them outright. |
 | `defaultLabels` / `defaultAnnotations` | map | `{}` | Metadata applied to every object the chart creates. |
 | `serviceAccount` | object | created | `create`, `automount`, `name`, `annotations`. |
 | `service` | object | enabled, ClusterIP, 8080 | The exporter Service: `enabled`, `type`, `port`, `sessionAffinity`, `annotations`. |
@@ -731,7 +753,7 @@ Every value has a default, and `values.yaml` documents each one in place. `value
 | `config` | object | enabled | `enabled`, and `data` holding `config.yaml` and any [collector files](#collector-files). |
 | `staticTargets` | object | disabled | Static targets rendered into the ConfigMap. |
 | `monitors` | array | `[]` | `ServiceMonitor` and `PodMonitor` resources. |
-| `selfMetrics` | object | enabled | The monitor for the exporter's own endpoint, and its path. |
+| `selfMetrics` | object | enabled | The monitor for the exporter's own endpoint, `type` `service` or `pod`, and its path; see [Configure Prometheus](#4-configure-prometheus). |
 | `resources` | object | 100m/128Mi, 500m/512Mi | Requests and limits. |
 | `goMemLimit` | object | enabled, `0.8` | `--runtime.memory-limit-ratio`: the Go memory limit as a share of the container's; see [Resources](#resources). |
 | `livenessProbe` / `readinessProbe` | object | see [Probes](#probes) | The probes' timings. |
@@ -743,7 +765,7 @@ Every value has a default, and `values.yaml` documents each one in place. `value
 | `priorityClassName` | string | `""` | The pods' PriorityClass. |
 | `nodeSelector` / `tolerations` / `affinity` | map/array/object | empty | Scheduling. |
 | `topologySpreadConstraints` | array | `[]` | Pod topology spread constraints; one without a `labelSelector` spreads this release's pods. See [Replicas](#replicas). |
-| `networkPolicy` | object | disabled | `ingress` and `egress` rules. |
+| `networkPolicy` | object | disabled | `ingress` and `egress` rules, and `allowDNS` with egress rules; see [NetworkPolicy](#networkpolicy). |
 | `targetAuth` | object | disabled | Secret-backed credentials mounted for the exporter to send to the target. |
 | `webAuth` | object | disabled | A Secret's username and password mounted as files for the exporter's own Basic Auth; see [Exporter authentication](#exporter-authentication). |
 
@@ -780,7 +802,7 @@ The chart runs the exporter with security-focused defaults:
 * Read-only root filesystem
 * All Linux capabilities dropped
 * Privilege escalation disabled
-* No Kubernetes API permissions
+* No Kubernetes API permissions, and no service account token mounted, whichever account the pod runs as
 
 ## Uninstall
 

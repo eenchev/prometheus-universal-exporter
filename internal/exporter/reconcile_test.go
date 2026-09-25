@@ -315,3 +315,35 @@ func TestAFailingStaticTargetLogsOnce(t *testing.T) {
 		t.Fatalf("recovery not logged:\n%s", logs.String())
 	}
 }
+
+// A failure not reported for an hour is forgotten, whether or not the log is
+// full: the same failure days later is logged as new, not as a repeat
+// failing since then, and its recovery after the silence is not logged.
+func TestAFailureSilentForAnHourIsForgotten(t *testing.T) {
+	f, now := failureLogFor(t)
+	logs := testutil.CaptureLogs(t)
+	logger := slog.Default()
+	key := failureKey("web", "http://a", "")
+	boom := errors.New("connection refused")
+	f.failed(logger, slog.LevelError, key, "probe failed", "http", boom)
+	*now = now.Add(72 * time.Hour)
+	f.failed(logger, slog.LevelError, key, "probe failed", "http", boom)
+	if strings.Contains(logs.String(), `"repeated"`) || strings.Count(logs.String(), `"msg":"probe failed"`) != 2 {
+		t.Fatalf("the failure days later was a repeat:\n%s", logs)
+	}
+	*now = now.Add(2 * time.Hour)
+	f.recovered(logger, key, "probe recovered")
+	if strings.Contains(logs.String(), "probe recovered") {
+		t.Fatalf("a recovery after hours of silence was logged:\n%s", logs)
+	}
+	// Swept on the next failure of anything, below the limit.
+	f.failed(logger, slog.LevelError, failureKey("web", "http://b", ""), "probe failed", "http", boom)
+	*now = now.Add(2 * time.Hour)
+	f.failed(logger, slog.LevelError, failureKey("web", "http://c", ""), "probe failed", "http", boom)
+	f.mu.Lock()
+	remembered := len(f.entries)
+	f.mu.Unlock()
+	if remembered != 1 {
+		t.Fatalf("%d failures remembered, want the one just reported", remembered)
+	}
+}

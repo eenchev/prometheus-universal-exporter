@@ -35,10 +35,15 @@ import (
 // the commit Go stamps, when it built from a git checkout.
 var version string
 
+// revision is the commit, set at build time with -X main.revision where Go
+// cannot stamp it: the image's build stage, which has the sources but not
+// git. The commit Go stamps wins when there is one.
+var revision string
+
 func init() { applyVersion() }
 
 // applyVersion hands the version set at build time to the build information.
-func applyVersion() { exporter.Version = version }
+func applyVersion() { exporter.Version, exporter.Revision = version, revision }
 
 func main() { os.Exit(run(os.Args[1:], os.Stdout, os.Stderr)) }
 
@@ -61,7 +66,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 	selfMetricsPath := flags.String("web.self-metrics-path", exporter.DefaultSelfMetricsPath, "Path of the exporter's own metrics, such as /metrics; it is served there and nowhere else")
 	staticTargetsPath := flags.String("web.static-targets-path", exporter.DefaultStaticTargetsPath, "Path the static targets' latest results are served at, for Prometheus to scrape")
 	enableLifecycle := flags.Bool("web.enable-lifecycle", false, "Enable POST /-/reload, which reloads the configuration and static target files and reports whether they were accepted. SIGHUP reloads either way")
-	enableProbeDebug := flags.Bool("web.enable-probe-debug", false, "Enable /probe?debug=true, which makes one trip and answers with a plain-text report of it: the requests, the response, each stage, what was logged and what the probe would have answered. The report shows the target's response")
+	enableProbeDebug := flags.Bool("web.enable-probe-debug", false, "Enable /probe?debug=true, which makes one trip and answers with a plain-text report of it: the requests, the response, each stage, what was logged and what the probe would have answered, and /static-targets?debug=<name>, the same for one static target's scrape. The report shows the target's response")
 	shutdownDelay := flags.Duration("web.shutdown-delay", 0, "How long a SIGTERM or SIGINT keeps serving, with /ready answering 503, before the graceful shutdown begins, so a load balancer or Kubernetes stops sending probes first. 0, the default, begins at once")
 	shutdownTimeout := flags.Duration("web.shutdown-timeout", exporter.DefaultShutdownTimeout, "How long a SIGTERM or SIGINT waits for the probes in progress to finish before closing their connections. Keep it at least as long as Prometheus's scrape timeout")
 	timeoutOffset := flags.Duration("probe.timeout-offset", exporter.DefaultTimeoutOffset, "How much of Prometheus's scrape timeout (X-Prometheus-Scrape-Timeout-Seconds) a probe leaves unused, so it answers with its own error before Prometheus gives up")
@@ -94,6 +99,10 @@ func run(args []string, stdout, stderr io.Writer) int {
 	}
 	// A negative offset is a malformed flag rather than a configuration
 	// problem, so it is refused like one, before --dry-run or startup.
+	if err := exporter.ValidateListenAddress(*listenAddress); err != nil {
+		newLogger("info", stderr).Error("invalid command line; exiting", "error", err.Error())
+		return 2
+	}
 	if err := exporter.ValidateShutdownDelay(*shutdownDelay); err != nil {
 		newLogger("info", stderr).Error("invalid command line; exiting", "error", err.Error())
 		return 2
@@ -183,6 +192,10 @@ func run(args []string, stdout, stderr io.Writer) int {
 			WatchInterval:    *watchInterval,
 		}, stdout, logger)
 	}
+	// Stamped before they are read, so an edit made while they are is seen
+	// by the first watch tick.
+	configStamp := config.TakeStamp(*configFile, true, loadOptions...)
+	targetsStamp := config.TakeStamp(*targetFile, false)
 	conf, err := config.Load(*configFile, loadOptions...)
 	if err != nil {
 		logger.Error("invalid startup configuration; exiting", "error", err)
@@ -201,6 +214,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 	}
 
 	manager := config.NewManager(conf, *configFile, logger)
+	manager.UseStamp(configStamp)
 	manager.SetPythonPath(*pythonPath)
 	manager.SetEnvExpansion(*expandEnv)
 	manager.SetStaticTargetsEnvExpansion(*expandStaticTargetsEnv)
@@ -220,6 +234,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 			return 1
 		}
 		manager.SetTargets(*targetFile, targets)
+		manager.UseTargetsStamp(targetsStamp)
 		logger.Info("static targets loaded", "file", *targetFile, "targets", len(targets.Targets))
 	}
 	server := exporter.NewServer(manager, *pythonPath, logger)

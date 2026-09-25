@@ -106,11 +106,13 @@ func TestPrometheusTransformSettingsAreChecked(t *testing.T) {
 		return c
 	}
 	for want, c := range map[string]model.Collector{
-		`transform.include "(unclosed"`:                     base(func(t *model.TransformConfig) { t.Include = []string{"(unclosed"} }),
-		`transform.exclude "[z-a]"`:                         base(func(t *model.TransformConfig) { t.Exclude = []string{"[z-a]"} }),
-		`transform.rename "a" to "bad-name"`:                base(func(t *model.TransformConfig) { t.Rename = map[string]string{"a": "bad-name"} }),
-		`transform.labels has invalid label name "a-b"`:     base(func(t *model.TransformConfig) { t.Labels = map[string]string{"a-b": "x"} }),
-		`transform.rename_labels "a" to invalid label name`: base(func(t *model.TransformConfig) { t.RenameLabels = map[string]string{"a": "1b"} }),
+		`transform.include "(unclosed"`:                                base(func(t *model.TransformConfig) { t.Include = []string{"(unclosed"} }),
+		`transform.exclude "[z-a]"`:                                    base(func(t *model.TransformConfig) { t.Exclude = []string{"[z-a]"} }),
+		`transform.rename "a" to "bad-name"`:                           base(func(t *model.TransformConfig) { t.Rename = map[string]string{"a": "bad-name"} }),
+		`transform.labels has invalid label name "a-b"`:                base(func(t *model.TransformConfig) { t.Labels = map[string]string{"a-b": "x"} }),
+		`transform.rename_labels "a" to invalid label name`:            base(func(t *model.TransformConfig) { t.RenameLabels = map[string]string{"a": "1b"} }),
+		`transform.labels: label name "__name__" starts with __`:       base(func(t *model.TransformConfig) { t.Labels = map[string]string{"__name__": "x"} }),
+		`transform.rename_labels "a": label name "__x" starts with __`: base(func(t *model.TransformConfig) { t.RenameLabels = map[string]string{"a": "__x"} }),
 	} {
 		if err := validateOne(c); err == nil || !strings.Contains(err.Error(), want) {
 			t.Errorf("err=%v, want %q", err, want)

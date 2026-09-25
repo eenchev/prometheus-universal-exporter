@@ -7,7 +7,7 @@ GOLANGCI_LINT_VERSION := v2.13.2
 # Kept in step with .github/workflows/govulncheck.yml by a test.
 GOVULNCHECK_VERSION := v1.8.0
 
-.PHONY: build test test-external vet fmt fmt-check lint lint-install vulncheck helm-test schemas
+.PHONY: build test test-external vet fmt fmt-check lint lint-version lint-install hooks precommit vulncheck helm-test schemas
 # REQUEST_TYPES builds only the listed request types, comma-separated, for
 # example `make build REQUEST_TYPES=http`. Empty, the default, builds every type.
 # See "Choosing request types at build time" in docs/CONFIGURATION.md.
@@ -49,11 +49,33 @@ fmt-check:
 		exit 1; \
 	fi
 
-lint:
+# A different golangci-lint release enables different checks: an older one
+# passes locally what CI then fails (gosec G705 arrived after v2.5), so lint
+# refuses to run with anything but the pinned version.
+lint: lint-version
 	golangci-lint run
+
+lint-version:
+	@command -v golangci-lint >/dev/null 2>&1 || { \
+		echo "golangci-lint is not installed; run: make lint-install" >&2; exit 1; }
+	@have=$$(golangci-lint version --short); \
+	want='$(GOLANGCI_LINT_VERSION)'; \
+	if [ "v$${have#v}" != "$$want" ]; then \
+		echo "golangci-lint is $$have but CI runs $$want; run: make lint-install" >&2; \
+		exit 1; \
+	fi
 
 lint-install:
 	go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@$(GOLANGCI_LINT_VERSION)
+
+# Points git at .githooks, whose pre-commit hook runs `make precommit`, so a
+# commit that CI's lint or vet would fail is refused before it is made.
+hooks:
+	git config core.hooksPath .githooks
+
+# What the pre-commit hook runs: the fast checks CI fails on, with the pinned
+# linter. `make ci` remains the full run.
+precommit: fmt-check lint vet
 
 # Known vulnerabilities the code reaches. For reference, like the CI workflow,
 # and not part of `make ci`.

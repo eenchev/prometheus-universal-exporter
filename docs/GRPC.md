@@ -112,7 +112,9 @@ the same time share one question to the server. A call that fails with
 `UNIMPLEMENTED`, or whose answer does not decode, asks again and calls again,
 once, which covers a server upgraded to a new schema; this is not one of the
 retries. A target without reflection fails saying so, and to register it on
-the server or use `protoset` or `proto`.
+the server or use `protoset` or `proto`. The reflection question carries the
+call's `metadata` and credentials, so a server that authenticates every RPC,
+reflection included, answers it.
 
 Only unary methods are called. A streaming method is refused when the
 configuration loads with `protoset` and `proto`, and at the first call with

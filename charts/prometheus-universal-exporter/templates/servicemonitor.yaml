@@ -1,4 +1,5 @@
 {{- $root := . }}
+{{- include "prometheus-universal-exporter.requireServiceForProbes" . }}
 {{- range $index, $monitor := .Values.monitors }}
 {{- if and $monitor.enabled (eq $monitor.type "service") }}
 ---
@@ -53,7 +54,7 @@ spec:
         - sourceLabels: [__param_target]
           targetLabel: instance
         - targetLabel: __address__
-          replacement: {{ include "prometheus-universal-exporter.fullname" $root }}:{{ $root.Values.service.port }}
+          replacement: {{ include "prometheus-universal-exporter.serviceAddress" $root }}
       {{- with $monitor.relabelings }}
       {{ toYaml . | nindent 8 }}
       {{- end }}
@@ -63,9 +64,10 @@ spec:
       {{- end }}
 {{- end }}
 {{- end }}
-{{- $hasServiceMonitor := false }}
-{{- range .Values.monitors }}{{- if and .enabled (eq .type "service") }}{{- $hasServiceMonitor = true }}{{- end }}{{- end }}
-{{- if and .Values.selfMetrics.enabled $hasServiceMonitor }}
+{{- if eq (include "prometheus-universal-exporter.selfMonitor" .) "ServiceMonitor" }}
+{{- if not .Values.service.enabled }}
+{{- fail "selfMetrics.type service scrapes the exporter's Service, which service.enabled=false leaves out; enable the Service or set selfMetrics.type: pod" }}
+{{- end }}
 ---
 apiVersion: monitoring.coreos.com/v1
 kind: ServiceMonitor

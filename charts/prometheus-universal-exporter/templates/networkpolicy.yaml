@@ -13,11 +13,33 @@ spec:
     matchLabels:
       app.kubernetes.io/name: {{ include "prometheus-universal-exporter.name" . }}
       app.kubernetes.io/instance: {{ .Release.Name }}
-  policyTypes: [Ingress, Egress]
-  {{- with .Values.networkPolicy.ingress }}
-  ingress: {{- toYaml . | nindent 4 }}
-  {{- end }}
-  {{- with .Values.networkPolicy.egress }}
-  egress: {{- toYaml . | nindent 4 }}
+  {{- /* Ingress is always limited: to the rules given, or else to the http
+         port, which Prometheus scrapes, from anywhere. Egress is limited
+         only when rules are given, since the targets a probe names are not
+         known here; DNS is then allowed too, unless allowDNS is false, or
+         no target could be looked up. */}}
+  policyTypes:
+    - Ingress
+    {{- if .Values.networkPolicy.egress }}
+    - Egress
+    {{- end }}
+  ingress:
+    {{- if .Values.networkPolicy.ingress }}
+    {{- toYaml .Values.networkPolicy.ingress | nindent 4 }}
+    {{- else }}
+    - ports:
+        - port: http
+          protocol: TCP
+    {{- end }}
+  {{- if .Values.networkPolicy.egress }}
+  egress:
+    {{- toYaml .Values.networkPolicy.egress | nindent 4 }}
+    {{- if .Values.networkPolicy.allowDNS }}
+    - ports:
+        - port: 53
+          protocol: UDP
+        - port: 53
+          protocol: TCP
+    {{- end }}
   {{- end }}
 {{- end }}

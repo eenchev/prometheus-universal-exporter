@@ -44,7 +44,7 @@ import (
 //
 // Credentials are kept out of the report: request and response header values
 // under a name that reads as a credential, every query value, a URL's
-// userinfo, and request bodies are never shown (redactHeader, redactURL).
+// userinfo, and request bodies are never shown (fetch/redact.go).
 
 // probeDebugParam turns a probe into a debug probe.
 const probeDebugParam = "debug"
@@ -186,6 +186,17 @@ type debugProbe struct {
 	// staleKey is the key a probe's stale answer would come from, empty when
 	// the collector has none.
 	staleKey string
+	// static is the static target a debug scrape is of, nil for a probe
+	// (serveStaticTargetDebug).
+	static *model.StaticTarget
+}
+
+// whose is what a report is of, in its first line.
+func (p debugProbe) whose() string {
+	if p.static != nil {
+		return fmt.Sprintf("Debug scrape of static target %q, collector %q, target %s", p.static.Name, p.collector.Name, orNone(p.logTarget))
+	}
+	return fmt.Sprintf("Debug probe of collector %q, target %s", p.collector.Name, orNone(p.logTarget))
 }
 
 // serveDebugProbe makes the trip and answers with its report.
@@ -195,26 +206,49 @@ func (s *Server) serveDebugProbe(w http.ResponseWriter, r *http.Request, p debug
 	ctx, trace := newProbeTrace(r.Context())
 	var verdict string
 	var answer *model.MetricSet
-	if full := s.trips.tryAcquire(name, maxConcurrentProbes(c)); full != nil {
-		verdict = "503: " + full.message + "; this probe was not sent"
+	if p.budget > 0 {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, p.budget)
+		defer cancel()
+	}
+	// A probe is answered at once when its collector is at its limit; a
+	// static target's scrape waits for a slot within its interval, as the
+	// scrape itself would.
+	var full error
+	if p.static != nil {
+		full = s.trips.acquire(ctx, name, maxConcurrentProbes(c))
+	} else if limited := s.trips.tryAcquire(name, maxConcurrentProbes(c)); limited != nil {
+		full = errors.New(limited.message)
+	}
+	if full != nil {
+		verdict = "503: " + full.Error() + "; this probe was not sent"
+		if p.static != nil {
+			verdict = "target up 0: " + full.Error() + "; the scrape was not sent"
+		}
 	} else {
-		if p.budget > 0 {
-			var cancel context.CancelFunc
-			ctx, cancel = context.WithTimeout(ctx, p.budget)
-			defer cancel()
+		log := collectLog{
+			failed: "probe failed", continuing: "probe stage failed; continuing", recovery: "probe recovered",
+			attrs: []any{"collector", name, "target", p.logTarget},
+		}
+		if p.static != nil {
+			log = collectLog{
+				failed: "static target scrape failed", continuing: "static target stage failed; continuing", recovery: "static target recovered",
+				attrs: []any{"target", p.static.Name, "collector", name, "address", p.logTarget},
+			}
 		}
 		result := s.collect(ctx, collectJob{
 			collector: c, target: p.target, overrides: p.overrides, headers: p.forwarded,
 			display: p.logTarget, budget: p.budget, budgetSource: p.budgetSource,
-			log: collectLog{
-				failed: "probe failed", continuing: "probe stage failed; continuing", recovery: "probe recovered",
-				attrs: []any{"collector", name, "target", p.logTarget},
-			},
+			scrape: p.static != nil, log: log,
 		})
 		s.trips.release(name)
 		verdict, answer = s.debugVerdict(result, p)
 	}
-	s.logger.Info("probe debug report served", "collector", name, "target", p.logTarget)
+	if p.static != nil {
+		s.logger.Info("static target debug report served", "static_target", p.static.Name, "collector", name)
+	} else {
+		s.logger.Info("probe debug report served", "collector", name, "target", p.logTarget)
+	}
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-store")
 	_, _ = w.Write(trace.report(p, verdict, answer, time.Since(start)))
@@ -224,6 +258,9 @@ func (s *Server) serveDebugProbe(w http.ResponseWriter, r *http.Request, p debug
 // probeUpstream would answer it, and the series it would have served.
 func (s *Server) debugVerdict(result collected, p debugProbe) (string, *model.MetricSet) {
 	name := p.collector.Name
+	if p.static != nil {
+		return s.staticDebugVerdict(result, p)
+	}
 	var verdict string
 	switch {
 	case result.aborted:
@@ -240,6 +277,9 @@ func (s *Server) debugVerdict(result collected, p debugProbe) (string, *model.Me
 		answer := result.answer
 		return fmt.Sprintf("200 with %d series", len(answer.Metrics)), &answer
 	}
+	if result.unauthorized {
+		return verdict + " (no stale result: the target refused the credential)", nil
+	}
 	if model.StaleIfError(p.collector) > 0 && p.staleKey != "" {
 		now := time.Now()
 		if cached, fetched, found := s.cache.GetStale(p.staleKey, now); found {
@@ -252,15 +292,104 @@ func (s *Server) debugVerdict(result collected, p debugProbe) (string, *model.Me
 	return verdict, nil
 }
 
+// staticDebugVerdict is what a static target's scrape would have published,
+// as scrapeStaticTarget would publish it, and its series with the target's
+// labels, as the endpoint serves them.
+func (s *Server) staticDebugVerdict(result collected, p debugProbe) (string, *model.MetricSet) {
+	labelled := func(set model.MetricSet) *model.MetricSet {
+		out := withStaticTargetLabel(withTargetLabels(set, p.static.Labels), p.static.Name)
+		return &out
+	}
+	var reason string
+	switch {
+	case result.aborted:
+		return "nothing: the scrape was cancelled", nil
+	case result.metric != "":
+		reason = fmt.Sprintf("metric %s failed: %v", result.metric, result.err)
+	case result.refused:
+		reason = fmt.Sprintf("collector %s refused the target: %v", p.collector.Name, result.err)
+	case result.failed():
+		reason = fmt.Sprintf("%s failed: %v", result.stage, result.err)
+	case result.carriedOn:
+		return "target up 1 with no series: a stage failed and error_handling carried on", nil
+	default:
+		return fmt.Sprintf("target up 1 with %d series", len(result.answer.Metrics)), labelled(result.answer)
+	}
+	if result.unauthorized {
+		return "target up 0: " + reason + " (no stale result: the target refused the credential)", nil
+	}
+	if model.StaleIfError(p.collector) > 0 && p.staleKey != "" {
+		now := time.Now()
+		if cached, fetched, found := s.cache.GetStale(p.staleKey, now); found {
+			if answer, err := withFreshness(cached, p.collector, true, fetched, now); err == nil {
+				return fmt.Sprintf("target up 0 with the last good result, %s old, marked stale (cache.stale_if_error): %s",
+					now.Sub(fetched).Round(time.Second), reason), labelled(answer)
+			}
+		}
+	}
+	return "target up 0: " + reason, nil
+}
+
+// serveStaticTargetDebug answers /static-targets?debug=<name>: one scrape of
+// the static target of that name, as its schedule would make it, reported as
+// a debug probe is. It publishes nothing: the endpoint keeps serving the
+// target's last scheduled result.
+func (s *Server) serveStaticTargetDebug(w http.ResponseWriter, r *http.Request, name string) {
+	var target *model.StaticTarget
+	for _, t := range s.manager.StaticTargets() {
+		if t.Name == name {
+			target = &t
+			break
+		}
+	}
+	if target == nil {
+		http.Error(w, fmt.Sprintf("no static target is named %q", name), http.StatusNotFound)
+		return
+	}
+	cfg := s.manager.Get()
+	c := model.CollectorByName(cfg, target.Collector)
+	if c == nil {
+		http.Error(w, fmt.Sprintf("static target %q references unknown collector %q", target.Name, target.Collector), http.StatusNotFound)
+		return
+	}
+	headers, err := fetch.TargetHeaders(target)
+	if err != nil {
+		http.Error(w, fmt.Sprintf("static target %q: %v", target.Name, err), http.StatusInternalServerError)
+		return
+	}
+	overrides := fetch.TargetOverrides(target)
+	p := debugProbe{
+		upstreamProbe: upstreamProbe{
+			collector: c, target: target.Target, logTarget: fetch.DisplayTarget(c, target.Target),
+			overrides: overrides, forwarded: headers,
+			budget: time.Duration(target.Interval), budgetSource: budgetFromInterval,
+		},
+		method: fetch.RequestMethodFor(c, overrides),
+		static: target,
+	}
+	if label, err := fetch.RequestLabelFor(target.Target, c, overrides); err == nil {
+		p.requestURL = label
+	}
+	if model.UsesCache(c) {
+		p.staleKey = s.probeCacheKey(cfg, c, target.Target, targetCacheQuery(target), headers, targetOwnRequest(target)...)
+	}
+	s.serveDebugProbe(w, r, p)
+}
+
 // report renders the trace.
 func (t *probeTrace) report(p debugProbe, verdict string, answer *model.MetricSet, took time.Duration) []byte {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	var b bytes.Buffer
 	c := p.collector
-	fmt.Fprintf(&b, "Debug probe of collector %q, target %s\n", c.Name, orNone(p.logTarget))
-	fmt.Fprintf(&b, "Took %s. A probe would have answered %s.\n", took.Round(time.Millisecond), verdict)
-	b.WriteString("A debug probe skips the response cache, shares no trip, records no self-metric and exports nothing over OTLP.\n")
+	b.WriteString(p.whose() + "\n")
+	if p.static != nil {
+		fmt.Fprintf(&b, "Took %s. The scrape would have published %s.\n", took.Round(time.Millisecond), verdict)
+		b.WriteString("A debug scrape skips the response cache, publishes nothing on the endpoint, records no self-metric and exports nothing over OTLP.\n")
+	} else {
+		fmt.Fprintf(&b, "Took %s. A probe would have answered %s.\n", took.Round(time.Millisecond), verdict)
+		b.WriteString("A debug probe skips the response cache, shares no trip, records no self-metric and exports nothing over OTLP.\n")
+	}
 
 	b.WriteString("\nRequests\n")
 	requests := t.requests.Requests()
@@ -282,7 +411,7 @@ func (t *probeTrace) report(p debugProbe, verdict string, answer *model.MetricSe
 		} else {
 			outcome += " in " + req.Duration.Round(time.Millisecond).String()
 		}
-		fmt.Fprintf(&b, "  %d. %s %s%s -> %s\n", i+1, req.Method, redactURL(req.URL), via, outcome)
+		fmt.Fprintf(&b, "  %d. %s %s%s -> %s\n", i+1, req.Method, fetch.RedactURLString(req.URL, fetch.MaskQueryValues), via, outcome)
 		writeHeaders(&b, req.Header, "     ")
 	}
 
@@ -317,7 +446,11 @@ func (t *probeTrace) report(p debugProbe, verdict string, answer *model.MetricSe
 		}
 	}
 
-	b.WriteString("\nMetrics a probe would have served\n")
+	if p.static != nil {
+		b.WriteString("\nMetrics the scrape would have published, without its health series\n")
+	} else {
+		b.WriteString("\nMetrics a probe would have served\n")
+	}
 	if answer == nil || len(answer.Metrics) == 0 {
 		b.WriteString("  none\n")
 	} else {
@@ -446,59 +579,9 @@ func writeHeaders(b *bytes.Buffer, h http.Header, indent string) {
 	sort.Strings(names)
 	for _, name := range names {
 		for _, value := range h[name] {
-			fmt.Fprintf(b, "%s%s: %s\n", indent, name, redactHeader(name, value))
+			fmt.Fprintf(b, "%s%s: %s\n", indent, name, fetch.RedactHeaderValue(name, value))
 		}
 	}
-}
-
-// redacted stands in for what a report does not show.
-const redacted = "<redacted>"
-
-// credentialWords are what a header name holding a credential reads like.
-var credentialWords = []string{"auth", "cookie", "token", "secret", "password", "passwd", "key", "session", "signature", "credential"}
-
-// redactHeader is a header value as a report shows it: redacted when the
-// name reads as a credential's.
-func redactHeader(name, value string) string {
-	lower := strings.ToLower(name)
-	for _, word := range credentialWords {
-		if strings.Contains(lower, word) {
-			return redacted
-		}
-	}
-	return value
-}
-
-// redactURL is a URL as a report shows it: without its userinfo's
-// password, and with every query value redacted, since request.query may
-// carry a token under any name.
-func redactURL(raw string) string {
-	u, err := url.Parse(raw)
-	if err != nil {
-		return redacted
-	}
-	if u.User != nil {
-		u.User = url.User(redacted)
-	}
-	if u.RawQuery != "" {
-		query := u.Query()
-		names := make([]string, 0, len(query))
-		for name := range query {
-			names = append(names, name)
-		}
-		sort.Strings(names)
-		parts := make([]string, 0, len(names))
-		for _, name := range names {
-			for range query[name] {
-				parts = append(parts, url.QueryEscape(name)+"="+redacted)
-			}
-		}
-		u.RawQuery = strings.Join(parts, "&")
-	}
-	out := u.String()
-	// url.URL escapes the placeholder's angle brackets; they read better as
-	// they are.
-	return strings.NewReplacer("%3Credacted%3E", redacted).Replace(out)
 }
 
 // orNone is s, or "(none)" when it is empty.
@@ -510,4 +593,4 @@ func orNone(s string) string {
 }
 
 // errProbeDebugDisabled answers a debug probe without --web.enable-probe-debug.
-var errProbeDebugDisabled = errors.New("debug probes are not enabled; start the exporter with --web.enable-probe-debug to allow /probe?debug=true (the chart's server.probeDebug)")
+var errProbeDebugDisabled = errors.New("debug reports are not enabled; start the exporter with --web.enable-probe-debug to allow /probe?debug=true and /static-targets?debug=<name> (the chart's server.probeDebug)")

@@ -88,7 +88,7 @@ func TestGRPCValidation(t *testing.T) {
 		{"unknown code", func(c *model.Collector) { c.Request.Retry.Codes = []string{"UNAVAILABLE", "BUSY"} }, `"BUSY", which is not a gRPC status code`},
 		{"OK retried", func(c *model.Collector) { c.Request.Retry.Codes = []string{"OK"} }, "lists OK"},
 		{"non_idempotent", func(c *model.Collector) { c.Request.Retry.NonIdempotent = true }, "retry.non_idempotent, which does not apply"},
-		{"negative attempts", func(c *model.Collector) { c.Request.Retry.Attempts = -1 }, "must not be negative"},
+		{"negative attempts", func(c *model.Collector) { c.Request.Retry.Attempts = -1 }, "must be from 0 to 10"},
 		{"not JSON", func(c *model.Collector) { c.Request.Message = `{"queue": }` }, "is not JSON"},
 		{"unquoted string placeholder", func(c *model.Collector) { c.Request.Message = `{"queue": {{param_q:orders}}}` }, "is not JSON"},
 		{"form filter", func(c *model.Collector) { c.Request.Message = `{"queue": "{{param_q|form}}"}` }, "does not write JSON"},
@@ -854,5 +854,25 @@ func TestGRPCARefusedConnectionIsARefusal(t *testing.T) {
 	}
 	if n := server.ReflectionStreams.Load(); n != 0 {
 		t.Fatalf("the refused server was called: %d streams", n)
+	}
+}
+
+// The reflection question carries the call's metadata and credentials, so a
+// server that authenticates every RPC answers it.
+func TestGRPCReflectionCarriesTheCallsCredentials(t *testing.T) {
+	server := grpctest.Start(t, grpctest.Options{Reflection: "v1", Answer: statsAnswer})
+	c := grpcCollector()
+	c.Request.BearerToken = "s3cret"
+	c.Request.Metadata = map[string]string{"x-tenant": "a"}
+	checked := validGRPC(t, c)
+	if _, err := FetchCollector(context.Background(), server.Addr, checked, RequestOverrides{}, nil); err != nil {
+		t.Fatal(err)
+	}
+	md := server.ReflectionMetadata()
+	if got := md.Get("authorization"); len(got) != 1 || got[0] != "Bearer s3cret" {
+		t.Fatalf("the reflection stream carried authorization %v", got)
+	}
+	if got := md.Get("x-tenant"); len(got) != 1 || got[0] != "a" {
+		t.Fatalf("the reflection stream carried x-tenant %v", got)
 	}
 }

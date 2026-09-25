@@ -68,9 +68,16 @@ func (f *failureLog) failed(logger *slog.Logger, level slog.Level, key, msg, sta
 	}
 	now := f.now()
 	f.mu.Lock()
+	f.sweepLocked(now)
 	st := f.entries[key]
+	// A failure not reported for failureLogForget is forgotten: the same
+	// failure again, days later, is a new one, not a repeat failing since.
+	if st != nil && now.Sub(st.seen) > failureLogForget {
+		delete(f.entries, key)
+		st = nil
+	}
 	if st == nil || st.stage != stage || st.err != errText {
-		if st != nil || f.rememberLocked(now) {
+		if st != nil || f.rememberLocked() {
 			f.entries[key] = &failureState{stage: stage, err: errText, first: now, logged: now, seen: now, failures: 1}
 		}
 		f.mu.Unlock()
@@ -91,25 +98,29 @@ func (f *failureLog) failed(logger *slog.Logger, level slog.Level, key, msg, sta
 	logger.Log(context.Background(), level, msg, append(attrs, "repeated", repeated, "failing_since", since.UTC().Format(time.RFC3339))...)
 }
 
-// rememberLocked makes room for a new entry, reporting whether there is.
-// When full, failures not seen for failureLogForget — a target no longer
-// probed — are forgotten, at most once a minute.
-func (f *failureLog) rememberLocked(now time.Time) bool {
-	if len(f.entries) < failureLogMaxEntries {
-		return true
-	}
-	if now.Sub(f.lastSweep) >= time.Minute {
-		f.lastSweep = now
-		for k, st := range f.entries {
-			if now.Sub(st.seen) > failureLogForget {
-				delete(f.entries, k)
-			}
-		}
-	}
+// rememberLocked reports whether there is room for a new entry.
+func (f *failureLog) rememberLocked() bool {
 	return len(f.entries) < failureLogMaxEntries
 }
 
+// sweepLocked forgets the failures not reported for failureLogForget — a
+// target no longer probed — at most once a minute, whether or not the log is
+// full.
+func (f *failureLog) sweepLocked(now time.Time) {
+	if now.Sub(f.lastSweep) < time.Minute {
+		return
+	}
+	f.lastSweep = now
+	for k, st := range f.entries {
+		if now.Sub(st.seen) > failureLogForget {
+			delete(f.entries, k)
+		}
+	}
+}
+
 // recovered logs the first success after a failure, and forgets the failure.
+// One forgotten already, not reported for failureLogForget, is not logged
+// as recovering.
 func (f *failureLog) recovered(logger *slog.Logger, key, msg string, attrs ...any) {
 	f.mu.Lock()
 	st := f.entries[key]
@@ -118,7 +129,11 @@ func (f *failureLog) recovered(logger *slog.Logger, key, msg string, attrs ...an
 		return
 	}
 	delete(f.entries, key)
+	stale := f.now().Sub(st.seen) > failureLogForget
 	f.mu.Unlock()
+	if stale {
+		return
+	}
 	logger.Info(msg, append(attrs, "stage", st.stage, "failed_for", f.now().Sub(st.first).Round(time.Second).String(), "failures", st.failures)...)
 }
 

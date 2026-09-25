@@ -255,6 +255,9 @@ http_exporter_target_up{collector="legacy_text",region="us",static_target="legac
 
 - Every series carries `static_target`, the target's name: the targets share
   one endpoint, and the same metric from two targets stays two series.
+- The `target` label is the target as logs show it: a password in it, and the
+  value of a query parameter named like a credential (`token`, `api_key`, …),
+  are withheld, and the rest is as written.
 - `http_exporter_target_up` and `http_exporter_target_scrape_duration_seconds`
   report each target's last scrape, so a failing target is visible rather
   than simply absent.
@@ -324,6 +327,28 @@ the same name. Prometheus still adds `job` and `instance` for the endpoint,
 which is why a target may not set either. With the Helm chart, `staticTargets.monitor` renders the
 ServiceMonitor or PodMonitor that does this — see the
 [chart README](../charts/prometheus-universal-exporter/README.md#static-targets).
+
+## Debugging a static target
+
+With `--web.enable-probe-debug` (the chart's `server.probeDebug`),
+`/static-targets?debug=<name>` scrapes the target of that name once, as its
+schedule would — with its own request settings and credential, within its
+interval — and answers with the same plain-text report as a
+[debug probe](CONFIGURATION.md#debugging-a-probe): the requests, the response,
+each stage, the logs, and the series the scrape would have published, with
+the target's labels and `static_target`, and whether `http_exporter_target_up`
+would have been `1` or `0`.
+
+```sh
+curl 'http://exporter:8080/static-targets?debug=legacy_eu'
+```
+
+A debug scrape publishes nothing: the endpoint keeps serving the target's
+last scheduled result, and nothing is counted in the self-metrics or exported
+over OTLP. It skips the response cache like a debug probe, but waits for a
+slot of the collector's `max_concurrent_probes` as the scrape would. A name no
+target in force has is answered `404`; `debug` takes one name and cannot be
+combined with `targets` (`400`); without the flag it is `403`.
 
 ## Exporting over OTLP
 

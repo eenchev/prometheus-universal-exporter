@@ -139,8 +139,8 @@ func validateGRPCRequest(x *model.Collector) error {
 			return fmt.Errorf("collector %q request.forward_headers %q: %w", x.Name, name, err)
 		}
 	}
-	if r.Retry.Attempts < 0 {
-		return fmt.Errorf("collector %q request.retry.attempts must not be negative", x.Name)
+	if r.Retry.Attempts < 0 || r.Retry.Attempts > MaxRetryAttempts {
+		return fmt.Errorf("collector %q request.retry.attempts must be from 0 to %d", x.Name, MaxRetryAttempts)
 	}
 	if r.Retry.Backoff < 0 {
 		return fmt.Errorf("collector %q request.retry.backoff must not be negative", x.Name)

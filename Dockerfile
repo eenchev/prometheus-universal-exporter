@@ -14,6 +14,10 @@ ARG REQUEST_TYPES
 # VERSION is the release this image is, reported by --version and the
 # http_exporter_build_info self-metric. Empty, the version Go stamps is used.
 ARG VERSION
+# REVISION is the commit the image is built from, reported the same way. The
+# build stage has no git, and the build context no .git (.dockerignore), so Go
+# cannot stamp it itself; the release workflow passes the tag's commit.
+ARG REVISION
 
 WORKDIR /src
 
@@ -26,7 +30,7 @@ RUN tags="$(sh tools/request-type-tags.sh "${REQUEST_TYPES}")" || exit 1; \
     CGO_ENABLED=0 \
     GOOS=${TARGETOS} \
     GOARCH=${TARGETARCH} \
-    go build -trimpath -ldflags="-s -w -X main.version=${VERSION}" -tags "${tags}" \
+    go build -trimpath -ldflags="-s -w -X main.version=${VERSION} -X main.revision=${REVISION}" -tags "${tags}" \
     -o /out/prometheus-universal-exporter .
 
 FROM python:${PYTHON_VERSION}-slim
@@ -44,8 +48,11 @@ ARG PYTHON_DATEUTIL_VERSION
 # pip is removed once the libraries are in: the exporter never installs a
 # package at runtime, so pip would only be attack surface, and its CVEs would
 # be reported against the image.
+# tzdata gives Python scripts the named time zones zoneinfo and dateutil.tz
+# read, the one kind of file the Python sandbox lets a script open.
 RUN apt-get update \
     && DEBIAN_FRONTEND=noninteractive apt-get upgrade -y --no-install-recommends \
+    && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends tzdata \
     && pip install --no-cache-dir \
     lxml==${LXML_VERSION} \
     PyYAML==${PYYAML_VERSION} \

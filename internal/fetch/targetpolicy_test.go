@@ -193,6 +193,12 @@ func TestEveryConnectionIsChecked(t *testing.T) {
 	if _, err := dial(ctx, "tcp", "localhost:"+port); !errors.Is(err, ErrTargetRefused) {
 		t.Fatalf("a connection to a refused address was kept: %v", err)
 	}
+	// A host the request did not check is refused, unless something the
+	// request checked goes through a proxy, which it then is.
+	if _, err := dial(ctx, "tcp", "127.0.0.1:"+port); !errors.Is(err, ErrTargetRefused) {
+		t.Fatalf("a connection to an unchecked host without a proxy was kept: %v", err)
+	}
+	guard.proxied = true
 	conn, err := dial(ctx, "tcp", "127.0.0.1:"+port)
 	if err != nil {
 		t.Fatalf("a connection to an unchecked host, a proxy, was refused: %v", err)

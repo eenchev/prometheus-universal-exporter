@@ -236,3 +236,54 @@ func TestWatchAndTriggeredReloadsAreSerialized(t *testing.T) {
 		t.Fatalf("status=%+v", st)
 	}
 }
+
+// A file replaced by one with an older modification time, as cp -p, rsync -t
+// or a mv of a prepared file leave it, is a change.
+func TestTheWatchSeesAFileWithAnOlderTime(t *testing.T) {
+	manager, path := watchedManager(t)
+	st, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeWatchedConfig(t, path, "older_value")
+	older := st.ModTime().Add(-time.Hour)
+	if err := os.Chtimes(path, older, older); err != nil {
+		t.Fatal(err)
+	}
+	manager.reloadChanged()
+	if got := activeMetric(manager); got != "older_value" {
+		t.Fatalf("the older file was not read: %q", got)
+	}
+}
+
+// A change written while the configuration was being read is seen by the
+// next tick: the stamp is taken before the file is read, not after, which
+// would make the change part of what was read.
+func TestAChangeDuringTheStartupReadIsSeen(t *testing.T) {
+	path := t.TempDir() + "/config.yaml"
+	writeWatchedConfig(t, path, "first_value")
+	stamp := TakeStamp(path, true)
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Written after the read, before the manager takes over.
+	writeWatchedConfig(t, path, "other_value")
+	later := time.Now().Add(time.Second)
+	if err := os.Chtimes(path, later, later); err != nil {
+		t.Fatal(err)
+	}
+	unstamped := NewManager(cfg, path, slog.Default())
+	unstamped.SetPythonPath("python3")
+	unstamped.reloadChanged()
+	if got := activeMetric(unstamped); got != "first_value" {
+		t.Fatalf("stamped after the read, the change is taken as read: %q", got)
+	}
+	manager := NewManager(cfg, path, slog.Default())
+	manager.SetPythonPath("python3")
+	manager.UseStamp(stamp)
+	manager.reloadChanged()
+	if got := activeMetric(manager); got != "other_value" {
+		t.Fatalf("the change during the read was not seen: %q", got)
+	}
+}

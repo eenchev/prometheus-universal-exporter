@@ -112,6 +112,7 @@ func TestStaticTargetFileValidationRejectsInvalidEntries(t *testing.T) {
 		{name: "two bearer sources", file: &model.StaticTargetFile{Interval: model.Duration(time.Minute), Targets: []model.StaticTarget{{Collector: "text", Target: "http://a.invalid", Request: model.TargetRequestConfig{BearerToken: "t", BearerTokenFile: "/f"}}}}, want: "bearer_token_file"},
 		{name: "basic and bearer", file: &model.StaticTargetFile{Interval: model.Duration(time.Minute), Targets: []model.StaticTarget{{Collector: "text", Target: "http://a.invalid", Request: model.TargetRequestConfig{BasicAuth: &model.BasicAuth{Username: "u", Password: "p"}, BearerToken: "t"}}}}, want: "basic and bearer"},
 		{name: "invalid label", file: &model.StaticTargetFile{Interval: model.Duration(time.Minute), Targets: []model.StaticTarget{{Collector: "text", Target: "http://a.invalid", Labels: map[string]string{"not a label": "x"}}}}, want: "invalid label name"},
+		{name: "reserved label", file: &model.StaticTargetFile{Interval: model.Duration(time.Minute), Targets: []model.StaticTarget{{Collector: "text", Target: "http://a.invalid", Labels: map[string]string{"__meta_x": "x"}}}}, want: `label name "__meta_x" starts with __`},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {

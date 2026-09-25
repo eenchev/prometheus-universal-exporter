@@ -15,6 +15,10 @@ import (
 // main sets it from version, which -X main.version sets at build time.
 var Version string
 
+// Revision is the commit set at build time, -X main.revision, for a build
+// without VCS information of Go's own, as the image's is.
+var Revision string
+
 type buildInformation struct {
 	Version, Revision, GoVersion string
 	RequestTypes                 []string
@@ -44,6 +48,9 @@ func computeBuildVersion() buildInformation {
 	}
 	if out.Version == "" {
 		out.Version = "(devel)"
+	}
+	if out.Revision == "unknown" && Revision != "" {
+		out.Revision = Revision
 	}
 	return out
 }

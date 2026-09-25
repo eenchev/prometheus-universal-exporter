@@ -23,14 +23,18 @@ import (
 
 func TestProbeBudget(t *testing.T) {
 	for header, want := range map[string]time.Duration{
-		"":     0,
-		"abc":  0,
-		"0":    0,
-		"-3":   0,
-		"NaN":  0,
-		"+Inf": 0,
-		"10":   9500 * time.Millisecond,
-		"2.5":  2 * time.Second,
+		"":    0,
+		"abc": 0,
+		"0":   0,
+		"-3":  0,
+		"NaN": 0,
+		"10":  9500 * time.Millisecond,
+		// A timeout past an hour counts as an hour, and never overflows.
+		"3600":  time.Hour - 500*time.Millisecond,
+		"1e9":   time.Hour - 500*time.Millisecond,
+		"1e300": time.Hour - 500*time.Millisecond,
+		"+Inf":  time.Hour - 500*time.Millisecond,
+		"2.5":   2 * time.Second,
 		// An offset larger than half the timeout would leave too little.
 		"0.6": 300 * time.Millisecond,
 		"1":   500 * time.Millisecond,

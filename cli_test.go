@@ -374,10 +374,11 @@ func TestCheckLogsEachStepAsJSON(t *testing.T) {
 	}
 }
 
-// The check never serves: a listen address that could not be bound does not
-// matter to it.
+// The check never serves: a well-formed listen address that could not be
+// bound here, one of another machine, does not matter to it. One that is not
+// host:port at all is a command-line error (TestOutOfRangeLimits…).
 func TestCheckDoesNotStartTheServer(t *testing.T) {
-	out := runCheckCLI(t, "--config.file=configs/config.example.yaml", "--web.listen-address=256.0.0.1:99999")
+	out := runCheckCLI(t, "--config.file=configs/config.example.yaml", "--web.listen-address=192.0.2.1:9115")
 	if out.code != 0 {
 		t.Fatalf("exit=%d\n%s", out.code, out.stdout)
 	}
@@ -604,6 +605,10 @@ func TestOutOfRangeLimitsAreCommandLineErrors(t *testing.T) {
 		"--probe.max-concurrent=-1":        "--probe.max-concurrent must not be negative",
 		"--python.max-workers=-1":          "--python.max-workers must not be negative",
 		"--runtime.memory-limit-ratio=1.5": "--runtime.memory-limit-ratio must be from 0",
+		// A bare port would stop the start with "missing port in address";
+		// --dry-run says so, rather than ok.
+		"--web.listen-address=9115":    "must be host:port, such as :8080",
+		"--web.listen-address=:999999": "which is not a TCP port",
 	} {
 		for _, args := range [][]string{{flag}, {"--dry-run", "--config.file=configs/config.example.yaml", flag}} {
 			out := runCLI(t, args...)

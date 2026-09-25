@@ -16,7 +16,9 @@ spec:
   {{- if not (kindIs "invalid" $pdb.minAvailable) }}
   minAvailable: {{ $pdb.minAvailable }}
   {{- else }}
-  maxUnavailable: {{ $pdb.maxUnavailable | default 1 }}
+  {{- /* 0 is kept: Kubernetes takes it, though it blocks every voluntary
+         eviction (the notes warn). Unset is 1. */}}
+  maxUnavailable: {{ if kindIs "invalid" $pdb.maxUnavailable }}1{{ else }}{{ $pdb.maxUnavailable }}{{ end }}
   {{- end }}
   {{- with $pdb.unhealthyPodEvictionPolicy }}
   unhealthyPodEvictionPolicy: {{ . }}

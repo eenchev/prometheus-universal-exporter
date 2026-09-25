@@ -72,8 +72,50 @@
 {{- define "prometheus-universal-exporter.name" -}}
 {{- default .Chart.Name .Values.nameOverride | trunc 63 | trimSuffix "-" }}
 {{- end }}
+{{- /* The release's objects are named after the release, so two releases in
+       one namespace do not claim the same names: <release>-<chart>, or the
+       release name alone when it already holds the chart's name, as helm
+       create's chart does. fullnameOverride names them outright. */ -}}
 {{- define "prometheus-universal-exporter.fullname" -}}
-{{- if .Values.fullnameOverride }}{{ .Values.fullnameOverride | trunc 63 | trimSuffix "-" }}{{ else }}{{ include "prometheus-universal-exporter.name" . }}{{ end }}
+{{- if .Values.fullnameOverride }}
+{{- .Values.fullnameOverride | trunc 63 | trimSuffix "-" }}
+{{- else }}
+{{- $name := include "prometheus-universal-exporter.name" . }}
+{{- if contains $name .Release.Name }}
+{{- .Release.Name | trunc 63 | trimSuffix "-" }}
+{{- else }}
+{{- printf "%s-%s" .Release.Name $name | trunc 63 | trimSuffix "-" }}
+{{- end }}
+{{- end }}
+{{- end }}
+{{- define "prometheus-universal-exporter.namespace" -}}
+{{- .Values.namespaceOverride | default .Release.Namespace -}}
+{{- end }}
+{{- /* The exporter's Service as Prometheus reaches it from any namespace. */ -}}
+{{- define "prometheus-universal-exporter.serviceAddress" -}}
+{{- printf "%s.%s.svc:%v" (include "prometheus-universal-exporter.fullname" .) (include "prometheus-universal-exporter.namespace" .) .Values.service.port -}}
+{{- end }}
+{{- /* Probe monitors send Prometheus to the exporter's Service, whatever
+       their type, so they need it. */ -}}
+{{- define "prometheus-universal-exporter.requireServiceForProbes" -}}
+{{- range .Values.monitors }}
+{{- if and .enabled (not $.Values.service.enabled) }}
+{{- fail (printf "monitors entry %q probes through the exporter's Service, which service.enabled=false leaves out; enable the Service" (toString (.name | default "unnamed"))) }}
+{{- end }}
+{{- end }}
+{{- end }}
+{{- /* Whether the chart renders the self-metrics monitor: with
+       selfMetrics.enabled, when the chart renders another monitor, which
+       says the Prometheus Operator's resources exist, or the cluster
+       serves that monitor's kind. */ -}}
+{{- define "prometheus-universal-exporter.selfMonitor" -}}
+{{- if .Values.selfMetrics.enabled }}
+{{- $kind := ternary "PodMonitor" "ServiceMonitor" (eq (.Values.selfMetrics.type | default "service") "pod") }}
+{{- $other := false }}
+{{- range .Values.monitors }}{{- if .enabled }}{{- $other = true }}{{- end }}{{- end }}
+{{- if and .Values.staticTargets.enabled .Values.staticTargets.monitor.enabled }}{{- $other = true }}{{- end }}
+{{- if or $other (.Capabilities.APIVersions.Has (printf "monitoring.coreos.com/v1/%s" $kind)) }}{{ $kind }}{{- end }}
+{{- end }}
 {{- end }}
 {{- define "prometheus-universal-exporter.labels" -}}
 helm.sh/chart: {{ .Chart.Name }}-{{ .Chart.Version | replace "+" "_" }}
@@ -119,8 +161,10 @@ app.kubernetes.io/managed-by: {{ .Release.Service }}
 {{- end }}
 {{- define "prometheus-universal-exporter.watchConfigInterval" -}}
 {{- $interval := default "60s" .Values.server.watchConfigInterval -}}
-{{- if not (regexMatch "^[0-9]+(\\.[0-9]+)?(ns|us|ms|s|m|h)$" $interval) -}}
-{{- fail (printf "server.watchConfigInterval %q must be a positive Go duration, for example \"60s\"" $interval) -}}
+{{- /* A Go duration, compound ones such as 1m30s included, and more than
+       zero: the exporter refuses 0s, and the pod would never start. */ -}}
+{{- if not (and (regexMatch "^([0-9]+(\\.[0-9]+)?(ns|us|ms|s|m|h))+$" $interval) (regexMatch "[1-9]" $interval)) -}}
+{{- fail (printf "server.watchConfigInterval %q must be a positive Go duration, for example \"60s\" or \"1m30s\"" $interval) -}}
 {{- end -}}
 {{- $interval -}}
 {{- end }}
@@ -287,6 +331,43 @@ app.kubernetes.io/managed-by: {{ .Release.Service }}
 {{- fail (printf "static target %v sets export_via_otlp, which needs otlp.enabled: true in config.data.config.yaml; the exporter refuses to start without it" (get . "name" | default "(unnamed)")) -}}
 {{- end -}}
 {{- end -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
+{{- end }}
+{{- /* Every probe monitor names a collector, and, when the chart holds the
+       configuration, one it defines: a probe of none is answered 400 on
+       every scrape. The collectors are those of config.yaml and of the
+       collector files among config.data's keys; when config.yaml also lists
+       collector files by absolute path, which may lie outside the
+       ConfigMap, a name not found here is left to the exporter. */ -}}
+{{- define "prometheus-universal-exporter.validateMonitors" -}}
+{{- $names := dict -}}
+{{- $complete := false -}}
+{{- if .Values.config.enabled -}}
+{{- $complete = true -}}
+{{- range $key, $raw := .Values.config.data -}}
+{{- $doc := fromYaml (toString $raw) -}}
+{{- if kindIs "map" $doc -}}
+{{- range (get $doc "collectors" | default list) -}}
+{{- if kindIs "map" . }}{{- $_ := set $names (toString (get . "name")) true }}{{- end -}}
+{{- end -}}
+{{- if eq $key "config.yaml" -}}
+{{- range (get $doc "collector_files" | default list) -}}
+{{- if hasPrefix "/" (toString .) }}{{- $complete = false }}{{- end -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
+{{- range $index, $monitor := .Values.monitors -}}
+{{- if $monitor.enabled -}}
+{{- $label := $monitor.name | default (printf "#%d" $index) -}}
+{{- if not $monitor.collector -}}
+{{- fail (printf "monitors entry %s names no collector; every probe it sends would be answered 400" $label) -}}
+{{- end -}}
+{{- if and $complete (not (hasKey $names $monitor.collector)) (not (contains "${" $monitor.collector)) -}}
+{{- fail (printf "monitors entry %s names collector %q, which config.data does not define; every probe it sends would be answered 400" $label $monitor.collector) -}}
 {{- end -}}
 {{- end -}}
 {{- end -}}

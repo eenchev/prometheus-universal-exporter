@@ -6,6 +6,9 @@
 {{- if not (has $monitor.type (list "service" "pod")) }}
 {{- fail (printf "staticTargets.monitor.type %q must be service or pod" (toString $monitor.type)) }}
 {{- end }}
+{{- if and (eq $monitor.type "service") (not .Values.service.enabled) }}
+{{- fail "staticTargets.monitor.type service scrapes the exporter's Service, which service.enabled=false leaves out; enable the Service or set staticTargets.monitor.type: pod" }}
+{{- end }}
 ---
 apiVersion: monitoring.coreos.com/v1
 kind: {{ if eq $monitor.type "pod" }}PodMonitor{{ else }}ServiceMonitor{{ end }}

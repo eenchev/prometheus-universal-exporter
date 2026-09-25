@@ -1,4 +1,5 @@
 {{- include "prometheus-universal-exporter.validateTargets" . }}
+{{- include "prometheus-universal-exporter.validateMonitors" . }}
 {{- include "prometheus-universal-exporter.validateProbe" (list "livenessProbe" .Values.livenessProbe) }}
 {{- include "prometheus-universal-exporter.validateProbe" (list "readinessProbe" .Values.readinessProbe) }}
 apiVersion: apps/v1
@@ -42,6 +43,10 @@ spec:
         {{- include "prometheus-universal-exporter.metadataAnnotations" (list . $podAnnotations) | nindent 8 }}
     spec:
       serviceAccountName: {{ include "prometheus-universal-exporter.serviceAccountName" . }}
+      {{- /* The exporter never calls the Kubernetes API, so no token is
+             mounted, whichever account the pod runs as: the default one
+             included, with serviceAccount.create=false. */}}
+      automountServiceAccountToken: {{ .Values.serviceAccount.automount }}
       {{- with .Values.priorityClassName }}
       priorityClassName: {{ . | quote }}
       {{- end }}

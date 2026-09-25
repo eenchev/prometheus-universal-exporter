@@ -3,6 +3,7 @@ package config
 import (
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"regexp"
 	"sort"
@@ -31,6 +32,9 @@ func LoadStaticTargets(path string, opts ...LoadOption) (*model.StaticTargetFile
 	dec := yaml.NewDecoder(strings.NewReader(string(b)))
 	dec.KnownFields(true)
 	if err = withoutExtensionKeys(dec.Decode(&f)); err != nil {
+		if errors.Is(err, io.EOF) {
+			return nil, fmt.Errorf("static target file %s is empty; it must define targets", path)
+		}
 		return nil, yamlError(err)
 	}
 	if err = oneDocument(dec); err != nil {
@@ -120,8 +124,8 @@ func ValidateStaticTargets(f *model.StaticTargetFile) error {
 			return fmt.Errorf("target %q request.timeout %s is longer than its interval %s; a scrape must end before the next is due", t.Name, time.Duration(t.Request.Timeout), time.Duration(t.Interval))
 		}
 		if retry := t.Request.Retry; retry != nil {
-			if retry.Attempts != nil && *retry.Attempts < 0 {
-				return fmt.Errorf("target %q request.retry.attempts must not be negative", t.Name)
+			if retry.Attempts != nil && (*retry.Attempts < 0 || *retry.Attempts > fetch.MaxRetryAttempts) {
+				return fmt.Errorf("target %q request.retry.attempts must be from 0 to %d", t.Name, fetch.MaxRetryAttempts)
 			}
 			if retry.Backoff != nil && *retry.Backoff < 0 {
 				return fmt.Errorf("target %q request.retry.backoff must not be negative", t.Name)
@@ -147,6 +151,9 @@ func ValidateStaticTargets(f *model.StaticTargetFile) error {
 		for name := range t.Labels {
 			if !model.LabelNameRE.MatchString(name) {
 				return fmt.Errorf("target %q has invalid label name %q", t.Name, name)
+			}
+			if err := model.CheckLabelName(name); err != nil {
+				return fmt.Errorf("target %q: %w", t.Name, err)
 			}
 			// static_target names the target on the endpoint, so the
 			// target's series cannot claim it for something else.

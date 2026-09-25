@@ -141,12 +141,18 @@ func CheckTransformSettings(x *model.Collector) error {
 		if !model.LabelNameRE.MatchString(name) {
 			return fmt.Errorf("collector %q transform.labels has invalid label name %q", x.Name, name)
 		}
+		if err := model.CheckLabelName(name); err != nil {
+			return fmt.Errorf("collector %q transform.labels: %w", x.Name, err)
+		}
 	}
 	targets := map[string]string{}
 	for _, from := range model.SortedKeys(t.RenameLabels) {
 		to := t.RenameLabels[from]
 		if !model.LabelNameRE.MatchString(to) {
 			return fmt.Errorf("collector %q transform.rename_labels %q to invalid label name %q", x.Name, from, to)
+		}
+		if err := model.CheckLabelName(to); err != nil {
+			return fmt.Errorf("collector %q transform.rename_labels %q: %w", x.Name, from, err)
 		}
 		if other, taken := targets[to]; taken {
 			return fmt.Errorf("collector %q transform.rename_labels renames both %q and %q to %q; a label can be the target of one rename", x.Name, other, from, to)

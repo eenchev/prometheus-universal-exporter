@@ -499,3 +499,29 @@ func TestTheStaticTargetsEndpointKeepsItsMergeBetweenScrapes(t *testing.T) {
 		t.Fatalf("a removed target is still served:\n%s", body)
 	}
 }
+
+// Reading the results against a file a reload has since replaced does not
+// forget the result of a target the new file added.
+func TestAReadAgainstAReplacedFileForgetsNothing(t *testing.T) {
+	target := textTarget(t, "value=1\n")
+	cfg := &model.Config{Collectors: []model.Collector{testutil.Collector("text", "text")}}
+	old := &model.StaticTargetFile{Interval: model.Duration(time.Minute), Targets: []model.StaticTarget{{Name: "eu", Collector: "text", Target: target.URL}}}
+	server := newStaticServer(t, cfg, old)
+	added := &model.StaticTargetFile{Interval: old.Interval, Targets: append(append([]model.StaticTarget{}, old.Targets...), model.StaticTarget{Name: "us", Collector: "text", Target: target.URL})}
+	server.manager.SetTargets("", added)
+	server.scrapeStaticTargets(context.Background(), 10*time.Second)
+	// A read that started before the reload.
+	server.storedStaticResults(old, time.Time{})
+	if body := getStaticTargets(t, server, "/static-targets"); !strings.Contains(body, `static_target="us"`) {
+		t.Fatalf("the added target's result was forgotten:\n%s", body)
+	}
+	// Against the file in force, a removed target is forgotten.
+	server.manager.SetTargets("", old)
+	server.storedStaticResults(old, time.Time{})
+	server.staticMu.Lock()
+	_, kept := server.staticResults["us"]
+	server.staticMu.Unlock()
+	if kept {
+		t.Fatal("a removed target's result was kept")
+	}
+}

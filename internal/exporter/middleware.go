@@ -20,8 +20,11 @@ import (
 // that do not ask.
 
 // acceptsGzip reports whether an Accept-Encoding header allows gzip: named,
-// or covered by *, with a quality above zero.
+// or covered by *, with a quality above zero. gzip or x-gzip named decides,
+// whatever * says, as RFC 9110 has a coding named override *: gzip;q=0, *
+// refuses gzip.
 func acceptsGzip(header string) bool {
+	named, wildcard := -1.0, -1.0
 	for _, part := range strings.Split(header, ",") {
 		coding, params, _ := strings.Cut(strings.TrimSpace(part), ";")
 		coding = strings.ToLower(strings.TrimSpace(coding))
@@ -37,11 +40,16 @@ func acceptsGzip(header string) bool {
 				}
 			}
 		}
-		if quality > 0 {
-			return true
+		if coding == "*" {
+			wildcard = max(wildcard, quality)
+		} else {
+			named = max(named, quality)
 		}
 	}
-	return false
+	if named >= 0 {
+		return named > 0
+	}
+	return wildcard > 0
 }
 
 var gzipWriters = sync.Pool{New: func() any { return gzip.NewWriter(nil) }}

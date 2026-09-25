@@ -14,6 +14,7 @@ import (
 	"sync"
 
 	"github.com/eenchev/prometheus-universal-exporter/internal/model"
+	"golang.org/x/net/idna"
 )
 
 // A collector's request.allowed_targets and request.denied_targets say which
@@ -201,7 +202,10 @@ func (p *targetPolicy) needsAddrs(nameAllowed bool) bool {
 // allowed it. Without resolve the addresses are left to the connection
 // (checkConnection).
 func (p *targetPolicy) check(ctx context.Context, host string, resolve bool) (bool, error) {
-	host = strings.ToLower(strings.TrimSuffix(host, "."))
+	host, err := canonicalHost(host)
+	if err != nil {
+		return false, err
+	}
 	nameAllowed, err := p.checkName(host)
 	if err != nil || !p.needsAddrs(nameAllowed) {
 		return nameAllowed, err
@@ -248,6 +252,9 @@ type policyGuard struct {
 	proxy func(*http.Request) (*url.URL, error)
 	mu    sync.Mutex
 	hosts map[string]bool
+	// proxied is set once a host the request checked goes through a proxy,
+	// whose own address a connection is then made to.
+	proxied bool
 }
 
 type policyGuardKey struct{}
@@ -272,15 +279,38 @@ func withTargetPolicy(ctx context.Context, c *model.Collector, u *url.URL, proxy
 // connections. Its addresses are resolved here only when a proxy stands in
 // between; otherwise the connection checks the one it is made to.
 func (g *policyGuard) check(ctx context.Context, u *url.URL) error {
-	host := strings.ToLower(strings.TrimSuffix(u.Hostname(), "."))
-	nameAllowed, err := g.policy.check(ctx, host, viaProxy(g.proxy, u))
+	host, err := canonicalHost(u.Hostname())
+	if err != nil {
+		return err
+	}
+	proxied := viaProxy(g.proxy, u)
+	nameAllowed, err := g.policy.check(ctx, host, proxied)
 	if err != nil {
 		return err
 	}
 	g.mu.Lock()
 	g.hosts[host] = nameAllowed
+	g.proxied = g.proxied || proxied
 	g.mu.Unlock()
 	return nil
+}
+
+// canonicalHost is host as the transport dials it and the policy matches
+// it: in ASCII, as Go's HTTP transport converts an internationalised name
+// or one written in full-width characters before it dials (so
+// "１２７.０.０.１" is 127.0.0.1 and "bücher.example" xn--bcher-kva.example),
+// lower case, without a trailing dot. A host that does not convert is
+// refused, since what it would reach cannot be told.
+func canonicalHost(host string) (string, error) {
+	host = strings.TrimSuffix(strings.TrimPrefix(host, "["), "]")
+	if _, err := netip.ParseAddr(host); err == nil {
+		return strings.ToLower(host), nil
+	}
+	ascii, err := idna.Lookup.ToASCII(host)
+	if err != nil {
+		return "", &TargetRefusedError{Host: host, Reason: "it is not a host name or address the policy can check: " + err.Error()}
+	}
+	return strings.ToLower(strings.TrimSuffix(ascii, ".")), nil
 }
 
 // checkRedirect applies a request's policy to the URL a redirect leads to.
@@ -310,7 +340,8 @@ var proxyOverride func(*url.URL) bool
 // checkConnection applies a request's policy to the address a connection to
 // dialed, host:port, was made to. A dial to a host the request did not
 // check is a dial to a proxy, whose target was checked by name and resolved
-// address already.
+// address already; one when nothing the request checked goes through a
+// proxy is refused, since what it reaches was never checked.
 func checkConnection(ctx context.Context, dialed string, conn net.Conn) error {
 	guard, ok := ctx.Value(policyGuardKey{}).(*policyGuard)
 	if !ok {
@@ -320,12 +351,19 @@ func checkConnection(ctx context.Context, dialed string, conn net.Conn) error {
 	if err != nil {
 		host = dialed
 	}
-	host = strings.ToLower(strings.TrimSuffix(host, "."))
+	host, err = canonicalHost(host)
+	if err != nil {
+		return err
+	}
 	guard.mu.Lock()
 	nameAllowed, checked := guard.hosts[host]
+	proxied := guard.proxied
 	guard.mu.Unlock()
 	if !checked {
-		return nil
+		if proxied {
+			return nil
+		}
+		return &TargetRefusedError{Host: host, Reason: "the connection is to a host the request did not check"}
 	}
 	remote, ok := conn.RemoteAddr().(*net.TCPAddr)
 	if !ok {

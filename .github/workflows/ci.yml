@@ -21,8 +21,25 @@ jobs:
               # So is chart manifest separation, and that guard is worth least
               # on exactly the changes that would break it.
               - 'charts/**'
+              # The repository tests read these: the schemas are checked
+              # against what the code generates, the examples and configs
+              # must load, the README's flag table must match the flags, and
+              # the Dockerfile, Makefile and tools are checked too.
+              - 'configs/**'
+              - 'examples/**'
+              - 'testdata/**'
+              - 'docs/**'
+              - '*.md'
+              - 'Dockerfile'
+              - '.dockerignore'
+              - 'Makefile'
+              - 'tools/**'
+              - '.golangci.yml'
             chart:
               - 'charts/**'
+              # The chart steps render configs and testdata files.
+              - 'configs/**'
+              - 'testdata/chart/**'
       - uses: actions/setup-go@v7
         if: steps.changes.outputs.go == 'true'
         with:

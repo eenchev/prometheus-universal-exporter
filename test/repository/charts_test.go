@@ -105,8 +105,8 @@ func TestChartTemplatesSeparateEveryManifest(t *testing.T) {
 }
 
 // The self-metrics monitor is appended after the loop over `monitors`, and it
-// only renders when a monitor of the same kind was already rendered — so
-// without a separator of its own it always collided with one. Pinning it here
+// usually renders after a monitor of the same kind — so without a separator
+// of its own it would collide with one. Pinning it here
 // keeps the fix from being undone by an edit to the surrounding block.
 func TestSelfMetricsMonitorStartsItsOwnDocument(t *testing.T) {
 	for _, name := range []string{"servicemonitor.yaml", "podmonitor.yaml"} {
@@ -116,7 +116,7 @@ func TestSelfMetricsMonitorStartsItsOwnDocument(t *testing.T) {
 				t.Fatal(err)
 			}
 			document := string(raw)
-			guard := "{{- if and .Values.selfMetrics.enabled $has"
+			guard := `{{- if eq (include "prometheus-universal-exporter.selfMonitor" .)`
 			index := strings.Index(document, guard)
 			if index < 0 {
 				t.Fatalf("%s no longer guards the self-metrics monitor as expected", name)
@@ -344,7 +344,7 @@ func TestThePodDisruptionBudget(t *testing.T) {
 		"{{- if .Values.podDisruptionBudget.enabled }}",
 		"apiVersion: policy/v1\nkind: PodDisruptionBudget",
 		"sets both minAvailable and maxUnavailable",
-		"maxUnavailable: {{ $pdb.maxUnavailable | default 1 }}",
+		`maxUnavailable: {{ if kindIs "invalid" $pdb.maxUnavailable }}1{{ else }}{{ $pdb.maxUnavailable }}{{ end }}`,
 		"app.kubernetes.io/name: {{ include \"prometheus-universal-exporter.name\" . }}\n      app.kubernetes.io/instance: {{ .Release.Name }}",
 	} {
 		if !strings.Contains(pdb, want) {

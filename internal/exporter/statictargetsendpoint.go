@@ -165,15 +165,20 @@ func (s *Server) storedStaticResults(file *model.StaticTargetFile, now time.Time
 			out = append(out, namedSet{name: target.Name, set: set, labelled: true})
 		}
 	}
-	for name := range s.staticResults {
-		if !current[name] {
-			delete(s.staticResults, name)
-			delete(s.staticFetched, name)
+	// Only the file in force says which targets are gone: one a reload has
+	// just replaced would forget the result of a target it added, published
+	// since.
+	if file == s.manager.StaticTargetFile() {
+		for name := range s.staticResults {
+			if !current[name] {
+				delete(s.staticResults, name)
+				delete(s.staticFetched, name)
+			}
 		}
-	}
-	for name := range s.staticLastSuccess {
-		if !current[name] {
-			delete(s.staticLastSuccess, name)
+		for name := range s.staticLastSuccess {
+			if !current[name] {
+				delete(s.staticLastSuccess, name)
+			}
 		}
 	}
 	s.staticMu.Unlock()
@@ -205,12 +210,14 @@ type agedSeries struct {
 // again only when they changed since the last one. Reads wait for a merge in
 // progress rather than merging too, so a clash is logged once per change.
 func (s *Server) currentStaticView() *staticTargetsView {
+	// The file is read once the view is this read's to build, so a read
+	// that waited for another's does not build from a file replaced since.
+	s.staticViewMu.Lock()
+	defer s.staticViewMu.Unlock()
 	file := s.manager.StaticTargetFile()
 	s.staticMu.Lock()
 	generation := s.staticGeneration
 	s.staticMu.Unlock()
-	s.staticViewMu.Lock()
-	defer s.staticViewMu.Unlock()
 	if v := s.staticView; v != nil && v.generation == generation && v.file == file {
 		return v
 	}
@@ -276,6 +283,21 @@ func (s *Server) staticTargetsHandler(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet && r.Method != http.MethodHead {
 		w.Header().Set("Allow", "GET, HEAD")
 		http.Error(w, "use GET or HEAD to read the static targets", http.StatusMethodNotAllowed)
+		return
+	}
+	// ?debug=<name> scrapes one target and reports the trip, as a debug
+	// probe does (probedebug.go).
+	if values, debug := r.URL.Query()[probeDebugParam]; debug {
+		if !s.probeDebug {
+			http.Error(w, errProbeDebugDisabled.Error(), http.StatusForbidden)
+			return
+		}
+		name := strings.TrimSpace(values[len(values)-1])
+		if len(values) != 1 || name == "" || r.URL.Query().Has(staticTargetsParam) {
+			http.Error(w, "the debug parameter takes the name of one static target, and no targets parameter", http.StatusBadRequest)
+			return
+		}
+		s.serveStaticTargetDebug(w, r, name)
 		return
 	}
 	names, err := s.requestedStaticTargets(r.URL.Query())

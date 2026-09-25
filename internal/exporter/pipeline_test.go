@@ -78,3 +78,18 @@ func TestBodyExcerpt(t *testing.T) {
 		}
 	}
 }
+
+// An error page that echoes a credential does not put it in the log, even
+// where the excerpt's cut runs through it.
+func TestBodyExcerptMasksCredentials(t *testing.T) {
+	for body, secret := range map[string]string{
+		`{"error":"invalid_grant","refresh_token":"s3cretAAAA"}`: "s3cretAAAA",
+		`<p>Bearer s3cretBBBBBBBB was revoked</p>`:               "s3cretBBBBBBBB",
+		strings.Repeat("x", 245) + " token=s3cretCCCCCCCCCCCC":   "s3cret",
+	} {
+		got := bodyExcerpt([]byte(body))
+		if strings.Contains(got, secret) || !strings.Contains(got, "<red") {
+			t.Errorf("%q: %q", body, got)
+		}
+	}
+}

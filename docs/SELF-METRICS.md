@@ -66,7 +66,10 @@ http_exporter_build_info{goversion="go1.25.1",request_types="graphite,grpc,http,
 
 As every Prometheus exporter does, one series with value `1` carries the
 build as labels: the version, the git revision (`-modified` when built from a
-changed checkout, `unknown` when not built from git), the Go version and the
+changed checkout; for a build without git, such as the image's, the one
+`-ldflags "-X main.revision=<commit>"` sets, which the image's `REVISION`
+build argument passes and the release workflow sets to the tag's commit;
+`unknown` otherwise), the Go version and the
 [request types](CONFIGURATION.md#request-types) built in. `--version` prints the
 same. The version is the one a release build sets with
 `-ldflags "-X main.version=1.4.0"`, otherwise the module version Go stamps,
@@ -306,11 +309,13 @@ Verbose mode also publishes how much is waiting for a slot, without a
 
 | Metric | Meaning |
 |---|---|
-| `http_exporter_trips_waiting` | Trips to targets, probes and static target scrapes, waiting for a slot under `--probe.max-concurrent`. |
-| `http_exporter_python_pool_runs_waiting` | Script runs waiting for a Python worker under `--python.max-workers`. |
+| `http_exporter_trips_waiting` | Static target scrapes waiting for a trip slot, because their collector is at `max_concurrent_probes` or the exporter at `--probe.max-concurrent`. A probe never waits: at either limit it is answered `503` at once and counted in `http_exporter_probes_rejected_total`. |
+| `http_exporter_python_pool_runs_waiting` | Script runs waiting for a Python worker under `--python.max-workers`; `0` without the limit. |
 
-Both read `0` without a limit. A queue that stays above zero says the limit is
-lower than the load, before probes start failing for it:
+Every collector has a `max_concurrent_probes`, 32 unless it sets another, so
+static target scrapes can wait even without `--probe.max-concurrent`. A queue
+that stays above zero says a limit is lower than the load, before scrapes
+start being skipped for it:
 
 ```promql
 min_over_time(http_exporter_trips_waiting[10m]) > 0

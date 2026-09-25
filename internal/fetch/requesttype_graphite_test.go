@@ -128,7 +128,7 @@ func TestGraphiteRequestValidation(t *testing.T) {
 			c.Request.BearerToken = "t"
 			c.Request.BasicAuth = &model.BasicAuth{Username: "u"}
 		}, "cannot configure basic and bearer authentication together"},
-		"a negative retry":   {func(c *model.Collector) { c.Request.Retry.Attempts = -1 }, "retry.attempts must not be negative"},
+		"a negative retry":   {func(c *model.Collector) { c.Request.Retry.Attempts = -1 }, "retry.attempts must be from 0 to 10"},
 		"a bad header param": {func(c *model.Collector) { c.Request.Headers = map[string]string{"X": "{{param_}}"} }, "is not a path parameter"},
 	} {
 		t.Run(name, func(t *testing.T) {

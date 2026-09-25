@@ -4,9 +4,11 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
+	"strconv"
 	"syscall"
 	"time"
 
@@ -101,6 +103,24 @@ var (
 	httpReadTimeout       = 30 * time.Second
 	httpIdleTimeout       = 2 * time.Minute
 )
+
+// ValidateListenAddress refuses a --web.listen-address the server could not
+// listen on: it must be host:port, the host empty, a name or an address,
+// and the port a number from 0 to 65535. --dry-run checks it, so an address
+// such as a bare "9115", which would stop the exporter at once with "missing
+// port in address", fails the check rather than the start.
+func ValidateListenAddress(address string) error {
+	_, port, err := net.SplitHostPort(address)
+	if err != nil {
+		return fmt.Errorf("--web.listen-address %q must be host:port, such as :8080 or 0.0.0.0:8080: %w", address, err)
+	}
+	if n, err := strconv.Atoi(port); err != nil || n < 0 || n > 65535 {
+		if _, lookupErr := net.DefaultResolver.LookupPort(context.Background(), "tcp", port); lookupErr != nil {
+			return fmt.Errorf("--web.listen-address %q has the port %q, which is not a TCP port", address, port)
+		}
+	}
+	return nil
+}
 
 // NewHTTPServer returns the exporter's HTTP server on address, with the read
 // and idle timeouts above.

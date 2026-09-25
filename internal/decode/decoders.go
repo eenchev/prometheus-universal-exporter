@@ -110,8 +110,8 @@ func Decode(r *fetch.HTTPResponse, c *model.Collector) (*Decoded, error) {
 		}
 		return &Decoded{Kind: kind, Data: model.Normalize(v), Raw: r.Body}, nil
 	case "yaml":
-		var v any
-		if err := yaml.Unmarshal(r.Body, &v); err != nil {
+		v, err := decodeYAML(r.Body)
+		if err != nil {
 			return nil, fmt.Errorf("YAML decode: %w", err)
 		}
 		return &Decoded{Kind: kind, Data: model.Normalize(v), Raw: r.Body}, nil
@@ -168,10 +168,20 @@ func decodeCSV(r *fetch.HTTPResponse, c *model.Collector) (*Decoded, error) {
 	out := []any{}
 	if header {
 		heads := rows[0]
+		// A header naming one column twice would have the later column
+		// overwrite the earlier in every row, without a word.
+		column := map[string]int{}
 		for i := range heads {
 			if cfg.TrimSpace {
 				heads[i] = strings.TrimSpace(heads[i])
 			}
+			if heads[i] == "" {
+				continue
+			}
+			if first, seen := column[heads[i]]; seen {
+				return nil, fmt.Errorf("CSV header names column %q twice, as columns %d and %d; rename one, or set response.csv.header: false and read the columns by number", heads[i], first+1, i+1)
+			}
+			column[heads[i]] = i
 		}
 		for _, row := range rows[1:] {
 			m := map[string]any{}
@@ -206,4 +216,40 @@ func decodePrometheus(r *fetch.HTTPResponse) (*Decoded, error) {
 		return nil, fmt.Errorf("decoding Prometheus exposition: %w", err)
 	}
 	return &Decoded{Kind: "prometheus", Data: model.MetricSet{Metrics: metrics}, Raw: r.Body}, nil
+}
+
+// decodeYAML decodes a YAML document as the transforms read it. A scalar
+// that YAML reads as a timestamp, such as updated: 2024-06-01, is kept as the
+// text it was written as: decoded, it would be a time.Time, which neither jq
+// nor a label can use as written.
+func decodeYAML(body []byte) (any, error) {
+	var root yaml.Node
+	if err := yaml.Unmarshal(body, &root); err != nil {
+		return nil, err
+	}
+	if root.Kind == 0 {
+		// An empty document.
+		return nil, nil
+	}
+	timestampsAsText(&root, map[*yaml.Node]bool{})
+	var v any
+	if err := root.Decode(&v); err != nil {
+		return nil, err
+	}
+	return v, nil
+}
+
+// timestampsAsText retags every timestamp scalar under n as a string.
+func timestampsAsText(n *yaml.Node, seen map[*yaml.Node]bool) {
+	if n == nil || seen[n] {
+		return
+	}
+	seen[n] = true
+	if n.Kind == yaml.ScalarNode && n.ShortTag() == "!!timestamp" {
+		n.Tag = "!!str"
+	}
+	for _, child := range n.Content {
+		timestampsAsText(child, seen)
+	}
+	timestampsAsText(n.Alias, seen)
 }

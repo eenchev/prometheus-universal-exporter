@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"net/url"
 	"os"
@@ -325,6 +326,9 @@ func validateMetricRules(c *model.Config, x *model.Collector) error {
 			if !namePattern.MatchString(label.Name) {
 				return fmt.Errorf("collector %q metric %q has invalid label name %q", x.Name, r.Name, label.Name)
 			}
+			if err := model.CheckLabelName(label.Name); err != nil {
+				return fmt.Errorf("collector %q metric %q: %w", x.Name, r.Name, err)
+			}
 			hasValue, hasExpression := label.Value != "", strings.TrimSpace(label.Expression) != ""
 			switch {
 			case hasValue && hasExpression:
@@ -463,6 +467,9 @@ func Load(path string, opts ...LoadOption) (*model.Config, error) {
 	dec := yaml.NewDecoder(strings.NewReader(string(b)))
 	dec.KnownFields(true)
 	if err = withoutExtensionKeys(dec.Decode(&c)); err != nil {
+		if errors.Is(err, io.EOF) {
+			return nil, fmt.Errorf("configuration file %s is empty; it must define collectors", path)
+		}
 		return nil, yamlError(err)
 	}
 	if err = oneDocument(dec); err != nil {
@@ -485,7 +492,12 @@ type Manager struct {
 	current atomic.Value
 	path    string
 	logger  *slog.Logger
-	lastMod time.Time
+	// lastMod and lastSize are the configuration file's modification time
+	// and size when it was last read: a change to either is a change, so a
+	// file replaced by one with an older time, as cp -p and rsync -t leave
+	// it, is read too.
+	lastMod  time.Time
+	lastSize int64
 	// collectorFiles is the stamp of the collector files the configuration
 	// read when last loaded (collectorFilesStamp), and watchedFiles the
 	// collector_files entries it was taken from: those of the file last
@@ -496,9 +508,11 @@ type Manager struct {
 	targetPath     string
 	targetFile     atomic.Pointer[model.StaticTargetFile]
 	targetsLastMod time.Time
-	pythonPath     string
-	watchInterval  time.Duration
-	expandEnv      bool
+	// targetsLastSize is lastSize for the static target file.
+	targetsLastSize int64
+	pythonPath      string
+	watchInterval   time.Duration
+	expandEnv       bool
 	// expandStaticTargetsEnv is expandEnv for the static target file.
 	expandStaticTargetsEnv bool
 	// configWaits and targetsWaits say that file's last reload was refused
@@ -530,9 +544,56 @@ func NewManager(c *model.Config, path string, l *slog.Logger) *Manager {
 	}
 	// The file as read at startup is not a change for the first watch tick.
 	if st, err := os.Stat(path); err == nil && c != nil {
-		m.lastMod = st.ModTime()
+		m.lastMod, m.lastSize = st.ModTime(), st.Size()
 	}
 	return m
+}
+
+// Stamp is what the watch compares files against to see a change: their
+// modification times and sizes, and the collector files a configuration
+// lists. Taken before the files are read, it makes a change written while
+// they were being read a change the next watch tick sees, rather than part of
+// what was read.
+type Stamp struct {
+	mod            time.Time
+	size           int64
+	found          bool
+	entries        []string
+	collectorFiles string
+}
+
+// TakeStamp stamps the file at path as it is now. For a configuration file,
+// listsCollectorFiles, it stamps the collector files it lists too.
+func TakeStamp(path string, listsCollectorFiles bool, opts ...LoadOption) Stamp {
+	var s Stamp
+	if st, err := os.Stat(path); err == nil {
+		s.mod, s.size, s.found = st.ModTime(), st.Size(), true
+	}
+	if listsCollectorFiles {
+		if listed, ok := listedCollectorFiles(path, opts); ok {
+			s.entries = listed
+			s.collectorFiles = collectorFilesStamp(path, listed)
+		}
+	}
+	return s
+}
+
+// UseStamp makes s, taken before the configuration in force was read, what
+// the watch compares the configuration and its collector files against.
+func (m *Manager) UseStamp(s Stamp) {
+	if s.found {
+		m.lastMod, m.lastSize = s.mod, s.size
+	}
+	if s.entries != nil {
+		m.watchedFiles, m.collectorFiles = s.entries, s.collectorFiles
+	}
+}
+
+// UseTargetsStamp is UseStamp for the static target file.
+func (m *Manager) UseTargetsStamp(s Stamp) {
+	if s.found {
+		m.targetsLastMod, m.targetsLastSize = s.mod, s.size
+	}
 }
 
 // Get returns the configuration in force.
@@ -594,7 +655,7 @@ func (m *Manager) SetTargets(path string, f *model.StaticTargetFile) {
 	}
 	if path != "" {
 		if st, err := os.Stat(path); err == nil {
-			m.targetsLastMod = st.ModTime()
+			m.targetsLastMod, m.targetsLastSize = st.ModTime(), st.Size()
 		}
 	}
 }
@@ -683,7 +744,7 @@ func (m *Manager) configChanged() bool {
 	}
 	// A collector file edited, added or removed is a change too, although the
 	// configuration file itself is untouched.
-	return st.ModTime().After(m.lastMod) || collectorFilesStamp(m.path, m.watchedFiles) != m.collectorFiles
+	return !st.ModTime().Equal(m.lastMod) || st.Size() != m.lastSize || collectorFilesStamp(m.path, m.watchedFiles) != m.collectorFiles
 }
 
 // targetsChanged reports whether the static target file changed since it was
@@ -693,7 +754,7 @@ func (m *Manager) targetsChanged() bool {
 		return false
 	}
 	st, err := os.Stat(m.targetPath)
-	return err == nil && st.ModTime().After(m.targetsLastMod)
+	return err == nil && (!st.ModTime().Equal(m.targetsLastMod) || st.Size() != m.targetsLastSize)
 }
 
 // Reload reloads the configuration, and the static target file when there
@@ -798,7 +859,7 @@ func listedCollectorFiles(path string, opts []LoadOption) ([]string, bool) {
 // loadConfig reads and checks the configuration on its own. reloadMu is held.
 func (m *Manager) loadConfig() (*model.Config, error) {
 	if st, err := os.Stat(m.path); err == nil {
-		m.lastMod = st.ModTime()
+		m.lastMod, m.lastSize = st.ModTime(), st.Size()
 	}
 	// The collector files watched from now are the ones this file lists,
 	// read on its own, so a refused file that added one is read again
@@ -822,7 +883,7 @@ func (m *Manager) loadConfig() (*model.Config, error) {
 // held.
 func (m *Manager) loadTargets() (*model.StaticTargetFile, error) {
 	if st, err := os.Stat(m.targetPath); err == nil {
-		m.targetsLastMod = st.ModTime()
+		m.targetsLastMod, m.targetsLastSize = st.ModTime(), st.Size()
 	}
 	f, err := LoadStaticTargets(m.targetPath, m.staticTargetsLoadOptions()...)
 	if err == nil {
@@ -842,8 +903,12 @@ func (m *Manager) installConfig(trigger string, c *model.Config) {
 	// Interpreters of scripts this reload removed or changed are stopped now
 	// rather than after the idle timeout.
 	transform.PythonWorkers().Retain(transform.PythonWorkerKeys(m.pythonPath, c))
-	// The new configuration may list other collector files.
-	m.watchCollectorFiles(c.CollectorFiles)
+	// The new configuration may list other collector files than loadConfig
+	// took them to be; only then are they stamped again, since stamping them
+	// now would make a change written while they were read part of what was.
+	if !slices.Equal(m.watchedFiles, c.CollectorFiles) {
+		m.watchCollectorFiles(c.CollectorFiles)
+	}
 	LogNotices(m.logger, m.path, c)
 	m.logger.Info("configuration reloaded", "trigger", trigger, "collectors", len(c.Collectors), "collector_files", len(c.LoadedCollectorFiles))
 }

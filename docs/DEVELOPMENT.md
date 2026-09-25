@@ -3,7 +3,9 @@
 ```sh
 make fmt        # rewrite the whole tree with gofmt, tools/ included
 make fmt-check  # fail if any source needs gofmt
-make lint       # golangci-lint, same configuration as CI
+make lint       # golangci-lint, same configuration and version as CI
+make hooks      # once per clone: a pre-commit hook runs make precommit
+make precommit  # fmt-check, lint and vet: what the hook runs
 make test       # go test ./..., then with -race, twice, in a random order
 make vet
 make build      # every request type; REQUEST_TYPES=http builds only those listed
@@ -112,7 +114,19 @@ does run by default, fails when either is missing.
 Static analysis is configured in `.golangci.yml`, so a local `make lint` and the
 CI run check exactly the same rules. Install the pinned version with `make
 lint-install`; the Makefile and the CI workflow pin the same version, and a test
-keeps them in step.
+keeps them in step. `make lint` refuses to run with any other installed
+release: a different release enables different checks, so an older one passes
+locally what CI then fails (gosec's G705 taint check, for one, is newer than
+v2.5). `make lint-install` builds the linter with `go install`, which needs a Go
+at least as new as the one that release requires; Homebrew's `golangci-lint` or
+the release binary from GitHub work as well, as long as the version matches.
+
+Run `make hooks` once in a clone. It points git at `.githooks`, whose
+`pre-commit` hook runs `make precommit` — `gofmt`, `golangci-lint` at the pinned
+version and `go vet` — and refuses the commit when any of them fails, so a
+commit CI would fail on those never gets made. `git commit --no-verify` skips
+it once. The tests are left to `make test` and CI, since the race run takes
+minutes.
 
 That pin is coupled to the Go toolchain in a way worth knowing about.
 golangci-lint ships as a binary built with a particular Go release, and its type

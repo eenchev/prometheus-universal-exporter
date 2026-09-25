@@ -263,6 +263,8 @@
                 "description": "Each key set replaces the collector's request.retry key for this target; each left out keeps the collector's.",
                 "properties": {
                   "attempts": {
+                    "description": "Replaces the collector's request.retry.attempts for this target: from 0 to 10.",
+                    "maximum": 10,
                     "minimum": 0,
                     "type": "integer"
                   },

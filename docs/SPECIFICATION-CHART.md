@@ -152,7 +152,9 @@ more than 0 and at most 1, or fail rendering.
 The chart MUST offer an optional PodDisruptionBudget, `podDisruptionBudget`,
 disabled by default, selecting the Deployment's pods with `minAvailable` or
 `maxUnavailable`, `maxUnavailable: 1` when neither is set; setting both MUST
-fail rendering.
+fail rendering. A value MUST be rendered as set, `maxUnavailable: 0`
+included, which Kubernetes accepts though it allows no voluntary eviction;
+the notes MUST warn about `0` and `0%`.
 
 `service.sessionAffinity`, empty by default, MUST be rendered on the Service
 when set, `None` or `ClientIP`, and the chart MUST document that each replica
@@ -321,7 +323,9 @@ The chart SHOULD support:
 - `allowPrivilegeEscalation: false`
 - NetworkPolicy as an optional feature
 
-If a NetworkPolicy is provided, it MUST account for the exporter needing to reach configured target endpoints.
+If a NetworkPolicy is provided, it MUST account for the exporter needing to reach configured target endpoints. `networkPolicy.enabled` alone MUST limit ingress to the `http` port, from anywhere, and MUST NOT limit egress, since the targets probes name are not known to the chart; `ingress` rules MUST replace that ingress default; `egress` rules MUST limit egress to them, and add DNS, port 53 over UDP and TCP, unless `networkPolicy.allowDNS` is false.
+
+Objects MUST be named `<release>-<chart>`, or after the release alone when its name contains the chart's, so two releases in one namespace do not collide; `fullnameOverride` MUST name them outright. The pod MUST set `automountServiceAccountToken` from `serviceAccount.automount`, off by default, whichever account it runs as.
 
 ### 33.10 Helm values
 
@@ -699,6 +703,19 @@ are skipped and the text checks of the templates still run:
 19. Debug probes: `server.probeDebug: true` MUST render
    `--web.enable-probe-debug`, the default MUST NOT, and the flag in
    `extraArgs` MUST fail rendering, naming `server.probeDebug`.
+20. Names, network policy, monitors and scheduling: releases `blue` and
+   `green` MUST get objects of their own names, a release named after the
+   chart the chart's name, and `fullnameOverride` its own; the network policy
+   alone MUST allow the `http` port in and leave egress open, and with egress
+   rules add DNS unless `allowDNS` is false; a probe monitor MUST point at the
+   Service's full name in the release's namespace or `namespaceOverride`, and
+   MUST fail rendering without the Service, without a collector, or with a
+   collector `config.data` does not define; the self monitor MUST render once,
+   of `selfMetrics.type`, with another monitor or with the cluster serving the
+   kind, and for a static-targets-only release; `watchConfigInterval: 1m30s`
+   MUST render and `0s` and `0m0s` fail; `maxUnavailable: 0` MUST render as
+   `0` with a warning in the notes; the pod MUST not mount a token on the
+   default account.
 
 12. `extraArgs`, `extraVolumes` and `extraVolumeMounts` set together, which MUST
    append the argument, the volume and the mount to the ones the chart renders
@@ -835,8 +852,20 @@ monitors:
 
 Each enabled entry MUST render exactly one corresponding PodMonitor or
 ServiceMonitor. The chart MUST support multiple enabled entries and produce
-unique resource names. A self-health monitor MUST be rendered once per
-monitor type used by the array when self-health monitoring is enabled.
+unique resource names. Every enabled entry MUST name a `collector`, and, with
+`config.enabled`, one `config.data` defines in `config.yaml` or a collector
+file among its keys, unless `config.yaml` lists collector files by absolute
+path; otherwise rendering MUST fail. A probe monitor MUST send Prometheus to
+the Service's full name, `<fullname>.<namespace>.svc:<port>`, so a Prometheus
+in another namespace reaches it, and MUST fail rendering with
+`service.enabled: false`.
+
+With `selfMetrics.enabled`, exactly one self-health monitor MUST be rendered,
+a ServiceMonitor or, with `selfMetrics.type: pod`, a PodMonitor, when the
+chart renders any other monitor (a probe monitor or the static targets
+monitor) or the cluster serves that kind; a ServiceMonitor with
+`service.enabled: false` MUST fail rendering, and so MUST a static targets
+monitor of type `service`.
 
 Monitor authentication MUST be explicitly opt-in and disabled by default for
 each array entry:
@@ -922,6 +951,15 @@ The chart release workflow MUST be triggered by tags under `chart` and MUST:
   published artifact carries exactly what the committed `Chart.yaml` declares;
 - publish the chart as an OCI artifact; and
 - create a GitHub Release containing the chart archive.
+
+The CI workflow MUST run the Go suite for changes to anything the repository
+tests read — Go sources, workflows, the chart, `configs`, `examples`,
+`testdata`, the docs and READMEs, the Dockerfile, `.dockerignore`, the
+Makefile, `tools` and the lint configuration — and the chart steps for
+changes to the chart and the files they render with. The image MUST report
+the commit it was built from: the release workflow passes it as the
+`REVISION` build argument, and `.dockerignore` keeps `.git` out of the build
+context.
 
 `Chart.yaml` MUST be the source of truth for the chart version. `appVersion`
 records the exporter release a chart version was validated against and MUST be

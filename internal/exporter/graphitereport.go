@@ -20,8 +20,9 @@ import (
 // read skips none.
 
 // noteGraphite counts and logs what the graphite decoder left out of d. file
-// is the directory's file d was read from, or empty.
-func (s *Server) noteGraphite(ctx context.Context, d *decode.Decoded, c *model.Collector, rec statsRecorder, target, file string) {
+// is the directory's file d was read from, or empty; target is the target as
+// logs show it, keyTarget as the failure log tells targets apart.
+func (s *Server) noteGraphite(ctx context.Context, d *decode.Decoded, c *model.Collector, rec statsRecorder, target, keyTarget, file string) {
 	report := d.Graphite
 	if report == nil {
 		return
@@ -37,7 +38,7 @@ func (s *Server) noteGraphite(ctx context.Context, d *decode.Decoded, c *model.C
 	if report.LeftOut() > 0 {
 		s.tripDebug(ctx, "graphite series left out", append(attrs, "no_points", report.NoPoints, "older_than_max_age", report.Stale, "duplicates", report.Duplicates)...)
 	}
-	key := failureKey(c.Name, target, file) + "\x00carbon lines"
+	key := failureKey(c.Name, keyTarget, file) + "\x00carbon lines"
 	if report.SkippedLines > 0 {
 		s.tripFailed(ctx, slog.LevelWarn, key, "carbon lines skipped", "decode", errors.New(report.FirstSkipped), append(attrs, "skipped", report.SkippedLines)...)
 		return

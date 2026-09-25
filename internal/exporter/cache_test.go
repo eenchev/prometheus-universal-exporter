@@ -580,7 +580,8 @@ func TestStaleIfErrorConfiguration(t *testing.T) {
 }
 
 // flakyTarget answers value=<n> while healthy, and fails with its mode
-// otherwise: "status" answers 503, "garbage" answers 200 without a value.
+// otherwise: "status" answers 503, "unauthorized" 401, "forbidden" 403, and
+// "garbage" answers 200 without a value.
 type flakyTarget struct {
 	value atomic.Int64
 	mode  atomic.Value
@@ -595,6 +596,12 @@ func newFlakyTarget(t *testing.T) (*flakyTarget, *httptest.Server) {
 		switch f.mode.Load().(string) {
 		case "status":
 			http.Error(w, "down", http.StatusServiceUnavailable)
+			return
+		case "unauthorized":
+			http.Error(w, "bad token", http.StatusUnauthorized)
+			return
+		case "forbidden":
+			http.Error(w, "revoked", http.StatusForbidden)
 			return
 		case "garbage":
 			_, _ = w.Write([]byte("<html>maintenance</html>"))

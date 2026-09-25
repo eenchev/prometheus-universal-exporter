@@ -187,8 +187,8 @@ func ParseRequestOverrides(values url.Values) (RequestOverrides, error) {
 			raw = strings.TrimSpace(value[0])
 		}
 		parsed, err := strconv.Atoi(raw)
-		if err != nil || parsed < 0 {
-			return overrides, fmt.Errorf("invalid retry_attempts override %q; want a non-negative integer", raw)
+		if err != nil || parsed < 0 || parsed > MaxRetryAttempts {
+			return overrides, fmt.Errorf("invalid retry_attempts override %q; want a whole number from 0 to %d", raw, MaxRetryAttempts)
 		}
 		overrides.RetryAttempts = &parsed
 	}
@@ -374,18 +374,19 @@ func checkHeaderValue(value string) error {
 	return nil
 }
 
+// MaxRetryAttempts is the most retries one trip may make, however the
+// collector, a static target or a probe parameter asks: whoever can reach
+// /probe chooses retry_attempts and retry_backoff, and without a bound one
+// probe of a failing target could send it requests in a tight loop until its
+// deadline.
+const MaxRetryAttempts = 10
+
 // requestLabelURL renders a resolved URL for a metric label. Credentials in the
 // userinfo and the whole query string are dropped: a collector's request.query
 // or a probe parameter can carry a token or a tenant identifier, and a metric
 // label is persisted by Prometheus and passed on to anything federating from it.
 func requestLabelURL(u *url.URL) string {
-	labelled := *u
-	labelled.User = nil
-	labelled.RawQuery = ""
-	labelled.ForceQuery = false
-	labelled.Fragment = ""
-	labelled.RawFragment = ""
-	return labelled.String()
+	return RedactURL(u, DropQuery)
 }
 
 // requestMethod reports the method a scrape will use.
@@ -418,7 +419,7 @@ func fetch(ctx context.Context, target string, c *model.Collector, overrides Req
 	}
 	// The connection pool is shared with every request made with the same
 	// TLS and HTTP/2 settings (transport.go).
-	client, err := HTTPClient(TransportSettings{TLS: tlsSettings, EnableHTTP2: enableHTTP2}, followRedirects, 0)
+	client, err := HTTPClient(TransportSettings{TLS: tlsSettings, EnableHTTP2: enableHTTP2, policy: policyOf(c)}, followRedirects, 0)
 	if err != nil {
 		return nil, err
 	}
@@ -526,6 +527,8 @@ func fetch(ctx context.Context, target string, c *model.Collector, overrides Req
 		traceRequest(requestContext, req.Method, req.URL.String(), req.Header, req.Host, false)
 		resp, err := client.Do(req)
 		if err != nil {
+			// Go's error quotes the whole URL, request.query included.
+			err = RedactURLErrors(err)
 			traceOutcome(requestContext, "error: "+err.Error())
 			// A refused target is refused again on every attempt.
 			if attempt < retryAttempts && requestContext.Err() == nil && !errors.Is(err, ErrTargetRefused) {
@@ -680,8 +683,9 @@ type FileRead struct {
 	Err      error
 }
 
-// safeTarget renders a target for logs and error bodies with any credentials
-// redacted. It must never fail: it runs on the error paths, including for a
+// safeTarget renders a target for logs, labels and error bodies with its
+// credentials withheld: its userinfo, and the values of query parameters
+// whose names read as credentials (MaskCredentialQueryValues). It must never fail: it runs on the error paths, including for a
 // target that is not a URL at all.
 func safeTarget(raw string) string {
 	u, err := url.Parse(normalizeTarget(raw))
@@ -690,10 +694,7 @@ func safeTarget(raw string) string {
 		// the raw text is withheld rather than risk echoing a password.
 		return "<invalid target>"
 	}
-	if u.User != nil {
-		u.User = url.UserPassword("redacted", "redacted")
-	}
-	return u.String()
+	return RedactURL(u, MaskCredentialQueryValues)
 }
 
 // normalizeTarget gives a target without a scheme the default http:// one.

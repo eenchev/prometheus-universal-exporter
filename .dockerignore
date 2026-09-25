@@ -1,0 +1,20 @@
+# The image builds the binary from the Go sources alone; everything else
+# only slows the build context down, and .git would hand the build stage the
+# repository's history. The revision comes in as the REVISION build argument.
+.git
+.github
+.DS_Store
+.idea/
+.vscode/
+bin/
+dist/
+*.tgz
+*.test
+*.out
+*.log
+coverage.*
+.env
+.env.*
+*.pem
+*.key
+*.crt

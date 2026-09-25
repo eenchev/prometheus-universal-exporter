@@ -10,6 +10,28 @@ import (
 	"github.com/eenchev/prometheus-universal-exporter/internal/model"
 )
 
+// Label values and help come from scraped targets, so a target can put markup
+// in them. The answer is text/plain with nosniff, so a browser opening the
+// endpoint shows that markup as text instead of rendering it.
+func TestExpositionIsNeverSniffedAsHTML(t *testing.T) {
+	set := &model.MetricSet{Metrics: []model.Metric{{
+		Name: "g", Type: model.GaugeMetricType, Value: 1,
+		Help:   "<script>alert(1)</script>",
+		Labels: map[string]string{"v": "<img src=x onerror=alert(1)>"},
+	}}}
+	recorder := httptest.NewRecorder()
+	writeMetricSet(recorder, set)
+	if got := recorder.Header().Get("X-Content-Type-Options"); got != "nosniff" {
+		t.Fatalf("X-Content-Type-Options %q, want nosniff", got)
+	}
+	if got := recorder.Header().Get("Content-Type"); !strings.HasPrefix(got, "text/plain;") {
+		t.Fatalf("Content-Type %q, want text/plain", got)
+	}
+	if !strings.Contains(recorder.Body.String(), "<script>") {
+		t.Fatalf("the help text was not written as given:\n%s", recorder.Body.String())
+	}
+}
+
 // Every line of a histogram and a summary carries the series' timestamp, as
 // a plain sample's line does, and the exposition says it is UTF-8.
 func TestExpositionTimestampsAndCharset(t *testing.T) {

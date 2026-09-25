@@ -42,6 +42,9 @@ type probeResult struct {
 	// abandoned says the trip was cancelled because every probe waiting for
 	// it went away: nobody reads it, and it is not the target's failure.
 	abandoned bool
+	// unauthorized says the target refused the trip's credential
+	// (collected.unauthorized): no stale result answers it.
+	unauthorized bool
 }
 
 func (p *probeResult) writeTo(w http.ResponseWriter) {

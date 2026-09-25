@@ -10,16 +10,25 @@ import (
 	"testing"
 )
 
-// The released image carries its version.
+// The released image carries its version and revision: the build stage has
+// no git, and .dockerignore keeps .git out, so the revision is passed in.
 func TestDockerfileSetsTheVersion(t *testing.T) {
 	raw, err := os.ReadFile("Dockerfile")
 	if err != nil {
 		t.Skipf("no Dockerfile to check: %v", err)
 	}
-	for _, want := range []string{"ARG VERSION\n", "-X main.version=${VERSION}"} {
+	for _, want := range []string{"ARG VERSION\n", "-X main.version=${VERSION}", "ARG REVISION\n", "-X main.revision=${REVISION}"} {
 		if !strings.Contains(string(raw), want) {
 			t.Errorf("the Dockerfile is missing %q", want)
 		}
+	}
+	release, err := os.ReadFile(".github/workflows/release.yml")
+	if err == nil && !strings.Contains(string(release), "REVISION=${{ github.sha }}") {
+		t.Error("the release workflow does not pass the image its revision")
+	}
+	ignore, err := os.ReadFile(".dockerignore")
+	if err != nil || !strings.Contains(string(ignore), "\n.git\n") {
+		t.Errorf(".dockerignore does not keep .git out of the build context: %v", err)
 	}
 }
 

@@ -298,7 +298,10 @@ func FetchCollector(ctx context.Context, target string, c *model.Collector, over
 	if rt == nil {
 		return nil, fmt.Errorf("collector %q has no registered request type", c.Name)
 	}
-	return rt.Fetch(ctx, target, c, overrides, forwarded)
+	response, err := rt.Fetch(ctx, target, c, overrides, forwarded)
+	// However a type's fetch failed, the error goes to logs, probe answers
+	// and debug reports without the credentials a URL in it carries.
+	return response, RedactURLErrors(err)
 }
 
 // ErrMissingTarget is CheckTarget's answer to a target left out by a type

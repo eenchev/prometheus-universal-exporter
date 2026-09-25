@@ -48,11 +48,16 @@ var expositionBuffers = sync.Pool{New: func() any { b := make([]byte, 0, 16<<10)
 
 const maxPooledExposition = 4 << 20
 
+// writeMetricSet answers with the exposition text of s. Label values and help
+// come from scraped targets, so the answer carries text a target chose; it is
+// served as text/plain with nosniff, so a browser shows it as text and never
+// renders it as HTML.
 func writeMetricSet(w http.ResponseWriter, s *model.MetricSet) {
 	w.Header().Set("Content-Type", expositionContentType)
+	w.Header().Set("X-Content-Type-Options", "nosniff")
 	pooled := expositionBuffers.Get().(*[]byte)
 	b := appendMetricSet((*pooled)[:0], s)
-	_, _ = w.Write(b)
+	_, _ = w.Write(b) //nolint:gosec // G705: text/plain with nosniff, never rendered as HTML
 	if cap(b) <= maxPooledExposition {
 		*pooled = b[:0]
 		expositionBuffers.Put(pooled)

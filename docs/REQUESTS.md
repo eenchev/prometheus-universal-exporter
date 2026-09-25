@@ -321,7 +321,12 @@ compared without case; `*.example.com` matches `a.b.example.com`, not
 
 Names are checked before the request and again for every redirect followed,
 and so is a target written as an address, which needs no lookup, so it is
-refused before anything is sent.
+refused before anything is sent. A host is checked as it will be dialed: an
+internationalised name as its ASCII form (`bücher.example` as
+`xn--bcher-kva.example`), and one written in full-width characters as the
+characters they stand for (`１２７.０.０.１` is `127.0.0.1`); one that has no
+such form is refused. A connection to a host the request did not check, when
+no proxy is in between, is refused too.
 Addresses are checked against the one each connection is actually made to, so
 the name is looked up once, by the connection, and a name that resolves
 somewhere else from one lookup to the next cannot slip through. Behind a
@@ -345,8 +350,11 @@ request.denied_targets` — without the target being contacted, whatever
 Connections to targets are kept and reused, so an HTTPS target pays for one TLS
 handshake rather than one per scrape. Every collector and scrape with the same
 TLS settings — `tls.ca_file`, `cert_file`, `key_file` and
-`insecure_skip_verify` — and the same `enable_http2` shares one connection pool;
-a scrape overriding either of the last two uses the pool of its own settings.
+`insecure_skip_verify` — the same `enable_http2` and the same
+`allowed_targets` and `denied_targets` shares one connection pool; a scrape
+overriding `insecure_skip_verify` or `enable_http2` uses the pool of its own
+settings. Collectors with different target lists never share a connection,
+since a connection is checked against the lists once, when it is made.
 A certificate or key replaced on disk is picked up by the next request. An idle
 connection is closed after 90 seconds, and a pool nothing has used for five
 minutes, such as one a reload left behind, is closed with it. OTLP exports keep
@@ -409,6 +417,10 @@ configuration warning at startup, and its failed requests are not retried. The
 retry count and fixed delay can be overridden for one scrape with the
 `retry_attempts` and `retry_backoff` probe parameters. Retries share the scrape/target
 timeout, so the retry loop cannot extend the configured deadline indefinitely.
+`attempts` is at most 10, in the configuration, a static target and the
+`retry_attempts` parameter alike: whoever can reach `/probe` chooses the
+parameter, and without a bound one probe of a failing target could send it
+requests in a tight loop until its deadline.
 
 When the deadline, or a shutdown, cuts short the wait before a retry, the
 probe still reports what the target last answered: a `503` stays a failed

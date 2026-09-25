@@ -1,6 +1,6 @@
 {{- if .Values.service.enabled }}
 Exporter is available at:
-  http://{{ include "prometheus-universal-exporter.fullname" . }}:{{ .Values.service.port }}
+  http://{{ include "prometheus-universal-exporter.serviceAddress" . }}
 {{- else }}
 The exporter Service was disabled with service.enabled=false.
 {{- end }}
@@ -31,4 +31,12 @@ OTLP once per replica, as duplicate series.
 Run static targets with replicaCount: 1 and autoscaling off, or split them
 into a release of their own.
 {{- end }}
+{{- end }}
+{{- $pdb := .Values.podDisruptionBudget }}
+{{- if and $pdb.enabled (not (kindIs "invalid" $pdb.maxUnavailable)) (has (toString $pdb.maxUnavailable) (list "0" "0%")) }}
+
+WARNING: podDisruptionBudget.maxUnavailable is {{ $pdb.maxUnavailable }}. Kubernetes accepts it,
+but it allows no voluntary eviction at all: draining a node that runs the
+exporter waits for ever, until the budget is changed or the pod is deleted.
+Use maxUnavailable: 1, or minAvailable below the replica count.
 {{- end }}

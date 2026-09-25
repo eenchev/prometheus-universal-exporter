@@ -217,6 +217,15 @@ type Server struct {
 
 	mu    sync.Mutex
 	calls []Call
+	// reflectionMetadata is the metadata of the last reflection stream.
+	reflectionMetadata metadata.MD
+}
+
+// ReflectionMetadata returns the metadata the last reflection stream carried.
+func (s *Server) ReflectionMetadata() metadata.MD {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.reflectionMetadata
 }
 
 // Calls returns the calls answered so far.
@@ -247,6 +256,10 @@ func Start(t testing.TB, opts Options) *Server {
 	serverOpts = append(serverOpts, grpc.StreamInterceptor(func(srv any, stream grpc.ServerStream, info *grpc.StreamServerInfo, handler grpc.StreamHandler) error {
 		if strings.HasSuffix(info.FullMethod, "/ServerReflectionInfo") {
 			s.ReflectionStreams.Add(1)
+			md, _ := metadata.FromIncomingContext(stream.Context())
+			s.mu.Lock()
+			s.reflectionMetadata = md
+			s.mu.Unlock()
 			if opts.ReflectionDelay > 0 {
 				select {
 				case <-time.After(opts.ReflectionDelay):

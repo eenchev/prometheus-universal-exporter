@@ -152,7 +152,9 @@ The expression and label values are interpreted by the selected transform:
 - `csv`: the expression is the numeric column name and labels map to column
   names. With `response.csv.header: false` there are no names, and columns
   are named by number, from 1: `expression: "2"` reads the second column. A
-  name there is refused at startup.
+  name there is refused at startup. A header naming one column twice fails
+  the scrape, naming the column, rather than one silently hiding the other;
+  rename one, or read the columns by number with `header: false`.
 - `css`: the expression selects the HTML element whose text is numeric. Without
   [`items`](#metrics-per-item) a metric is one value, so the expression must
   match at most one element. Several values, and labels read from the page,
@@ -311,7 +313,10 @@ The prefix applies to every metric the collector produces, whatever the
 transform: declared metrics, the names a Python script passes to `metric(...)`,
 and the source names a `prometheus` transform passes through or renames. A
 histogram or summary keeps its family, so `_bucket`, `_sum` and `_count` follow
-the prefixed name. /probe, OTLP export and static targets all see the same
+the prefixed name. Those names are the family's: a metric of its own named
+`foo_count` next to a histogram or summary `foo`, as a `rename` can make,
+fails the scrape naming both, since the exposition would hold two families
+of that name. /probe, OTLP export and static targets all see the same
 prefixed names, and the response cache is keyed by the collector's definition,
 so a changed prefix never serves metrics cached under the old names. The
 exporter's own `http_exporter_*` metrics, including a static target's health
@@ -425,7 +430,9 @@ A longer value is then cut to the cap, on a character boundary, and ends in
 `…`, which counts towards the cap. Truncation applies to declared metrics from
 every transform, a `prometheus` rule without a `name` included, before any
 `metrics_prefix` is added and before `transform.rename_labels`, so a label
-keeps its `truncate: true` under the name a rename gives it.
+keeps its `truncate: true` under the name a rename gives it. Text that is not
+the UTF-8 it claims is [repaired](#character-encodings) first, so a value cut
+to the cap stays within it.
 
 ### Turning a status into metrics
 
@@ -866,7 +873,12 @@ metric and the label:
   `include`, `exclude` and `rename` apply only to a `prometheus` transform
   without `metrics` rules;
 - `transform.labels` and `rename_labels` must give label names, and two renames
-  may not target the same label.
+  may not target the same label;
+- no label name, of a rule, `transform.labels`, `rename_labels` or a static
+  target, may start with `__`, which Prometheus keeps for its own labels: it
+  refuses `__name__` in what it scrapes and drops the others. A series whose
+  labels still get such a name, from a Python script or a passthrough, fails
+  validation.
 
 A CSS selector that does not compile used to match nothing, on every scrape,
 without saying why; it is now refused when the configuration loads. The
@@ -1253,6 +1265,15 @@ probe is less than 5m30s old, that result is answered with `200`. Past that,
 the failure is answered as usual. `ttl` may be `0s`: every probe then goes to
 the target, and the last good result is kept only as a fallback.
 
+One failure is never answered stale: the target refusing the credential it
+was sent, HTTP `401` or `403`, or gRPC `UNAUTHENTICATED` or
+`PERMISSION_DENIED`. A credential forwarded with `forward_authorization` is
+part of the cache key, but a token that has just been revoked would otherwise
+still be answered with what it was given before, for as long as
+`stale_if_error` lasts. Such a probe fails as usual, and a static target's
+scrape publishes no stale result. A fresh result within `ttl` is still
+answered from the cache without asking the target, as any cached result is.
+
 A stale answer must never pass for a fresh one, so while `stale_if_error` is
 set every answer of the collector carries two series of the exporter's own:
 
@@ -1428,6 +1449,9 @@ answers with the reason while Prometheus is still waiting:
 collector legacy_text http failed: HTTP request failed: ... context deadline exceeded (the probe ran out of its 9.5s budget: Prometheus's scrape timeout less --probe.timeout-offset)
 ```
 
+- A scrape timeout above an hour counts as an hour: whoever reaches `/probe`
+  sends the header, and a timeout of years would hold a slot of
+  `max_concurrent_probes` for as long as a target hangs.
 - The budget bounds the whole trip: the request or file read, decoding,
   transforms and Python scripts. The `timeout` probe parameter still bounds the
   request alone; whichever ends first stops the probe.
@@ -1469,7 +1493,11 @@ negative duration alongside `--config.watch` is a startup error rather than a
 silently disabled watch. Without `--config.watch` no polling loop runs at all,
 and configuration changes take effect on restart.
 
-Changes are detected by modification time rather than filesystem events. That is
+Changes are detected by modification time and size rather than filesystem
+events: any other time than the one last read is a change, an older one
+included, as `cp -p`, `rsync -t` or a `mv` of a prepared file leave it. The
+files are stamped before they are read, so an edit made while they are is
+read by the next tick. That is
 deliberate: Kubernetes republishes a mounted ConfigMap by atomically swapping
 the `..data` symlink, which replaces the inode a file-level event watch is
 attached to, so such a watch would stop firing after the first change.
@@ -1581,7 +1609,9 @@ The report lists:
 
 The [collectors page](AUTHENTICATION.md#probing-from-the-browser) at
 `/collectors` offers the same report with a *Debug report* switch on each
-form, shown only when debug probes are enabled.
+form, shown only when debug probes are enabled. A
+[static target](STATIC-TARGETS.md#debugging-a-static-target) is debugged at
+`/static-targets?debug=<name>`.
 
 The report always answers `200` with `text/plain`, whatever the probe would
 have answered. It takes the same parameters as the probe. For debug, `true`,
@@ -1603,7 +1633,8 @@ exporter runs with `--web.enable-probe-debug` (the Helm chart's
 `web.basic_auth` is configured, a debug probe needs the same credentials as a
 probe. The report redacts:
 
-- every query value;
+- every query value, in the requests listed and in the errors that quote a
+  URL alike;
 - a URL's userinfo;
 - the values of request and response headers whose names read as
   credentials: any name containing `auth`, `cookie`, `token`, `secret`,
@@ -1706,7 +1737,7 @@ same validation startup runs, prints a JSON report on stdout, and exits:
 | --- | --- |
 | `0` | Every check passed; the exporter would start with these files and flags. |
 | `1` | At least one check failed; the report says which, and why. |
-| `2` | The command line itself could not be parsed, so nothing was checked. |
+| `2` | The command line itself could not be parsed, or a flag is invalid — a `--web.listen-address` that is not `host:port`, such as a bare `9115`, a negative duration or limit — so nothing was checked. |
 
 ```sh
 prometheus-universal-exporter --dry-run --config.file=config.yaml

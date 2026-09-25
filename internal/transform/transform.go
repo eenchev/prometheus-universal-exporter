@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log/slog"
 	"math"
+	"math/big"
 	"regexp"
 	"strconv"
 	"strings"
@@ -35,6 +36,13 @@ func Transform(ctx context.Context, d *decode.Decoded, r *fetch.HTTPResponse, c 
 	set, err := transformMetrics(ctx, d, r, c, pythonPath)
 	if err != nil || set == nil {
 		return set, err
+	}
+	// Invalid UTF-8 is repaired before anything measures or maps the text:
+	// a truncated label repaired afterwards would grow past the limit it was
+	// cut to, as each invalid byte becomes a three-byte U+FFFD.
+	changed, first := model.SanitizeUTF8(set)
+	if report != nil {
+		report.addUTF8(changed, first)
 	}
 	// Label value maps and truncation first, while the labels still have
 	// the names the rules gave them: rename_labels would otherwise move a
@@ -304,6 +312,27 @@ func ruleLogger(ctx context.Context) *slog.Logger {
 type RuleReport struct {
 	mu       sync.Mutex
 	failures []RuleFailure
+	// utf8Repaired counts the label values and help texts repaired for
+	// invalid UTF-8, and utf8First names the first metric repaired.
+	utf8Repaired uint64
+	utf8First    string
+}
+
+func (r *RuleReport) addUTF8(changed uint64, first string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.utf8Repaired += changed
+	if r.utf8First == "" {
+		r.utf8First = first
+	}
+}
+
+// UTF8Repairs returns how many label values and help texts the Transforms
+// repaired for invalid UTF-8, and the first metric repaired.
+func (r *RuleReport) UTF8Repairs() (uint64, string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.utf8Repaired, r.utf8First
 }
 
 // RuleFailure is how many series of one metric failed, and how many of those
@@ -431,7 +460,7 @@ func pythonTypeName(v any) string {
 		return "None"
 	case bool:
 		return "a bool"
-	case float64:
+	case float64, int, *big.Int:
 		return "a number"
 	}
 	return fmt.Sprintf("%T", v)

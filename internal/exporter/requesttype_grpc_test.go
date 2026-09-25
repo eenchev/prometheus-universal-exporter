@@ -292,3 +292,35 @@ func TestADebugProbeOfAGRPCCollector(t *testing.T) {
 		}
 	}
 }
+
+// A call refused as UNAUTHENTICATED or PERMISSION_DENIED gets no stale
+// result, as an HTTP 401 or 403 does not; UNAVAILABLE still does.
+func TestAGRPCCallRefusedOnItsCredentialGetsNoStaleResult(t *testing.T) {
+	for code, stale := range map[codes.Code]bool{codes.Unauthenticated: false, codes.PermissionDenied: false, codes.Unavailable: true} {
+		t.Run(code.String(), func(t *testing.T) {
+			var fail atomic.Bool
+			upstream := grpctest.Start(t, grpctest.Options{Reflection: "v1", Answer: func(ctx context.Context, method, request string) (string, error) {
+				if fail.Load() {
+					return "", status.Error(code, "no")
+				}
+				return queueAnswer(ctx, method, request)
+			}})
+			yaml := strings.Replace(strings.NewReplacer("VERBOSE", "false", "CACHE", "1ms").Replace(grpcExporterConfig), "      ttl: 1ms\n", "      ttl: 1ms\n      stale_if_error: 1h\n", 1)
+			cfg, err := config.Load(testutil.WriteIn(t, t.TempDir(), "config.yaml", yaml))
+			if err != nil {
+				t.Fatal(err)
+			}
+			server := NewServer(config.NewManager(cfg, "", testutil.QuietLogger(t)), "python3", testutil.QuietLogger(t))
+			path := "/probe?collector=queue_stats&param_queue=orders&target=" + url.QueryEscape(upstream.Addr)
+			if r := probeOnce(t, server, path, nil); r.Code != http.StatusOK {
+				t.Fatalf("%d %s", r.Code, r.Body)
+			}
+			time.Sleep(5 * time.Millisecond)
+			fail.Store(true)
+			r := probeOnce(t, server, path, nil)
+			if served := r.Code == http.StatusOK && strings.Contains(r.Body.String(), "queue_total"); served != stale {
+				t.Fatalf("%s: stale served %v, want %v: %d %s", code, served, stale, r.Code, r.Body)
+			}
+		})
+	}
+}

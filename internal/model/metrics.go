@@ -2,7 +2,9 @@ package model
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
+	"math"
 	"math/big"
 	"regexp"
 	"sort"
@@ -75,10 +77,47 @@ var MetricNameRE = regexp.MustCompile(`^[a-zA-Z_:][a-zA-Z0-9_:]*$`)
 // LabelNameRE matches a classic Prometheus label name.
 var LabelNameRE = regexp.MustCompile(`^[a-zA-Z_][a-zA-Z0-9_]*$`)
 
+// ReservedLabelName reports whether name is one Prometheus keeps for itself:
+// __name__, which holds the metric's name and which its parser refuses in
+// exposition, and every other name starting with __, which Prometheus drops
+// from a scraped series after relabelling.
+func ReservedLabelName(name string) bool { return strings.HasPrefix(name, "__") }
+
+// reservedLabelError says why a label name is refused.
+func reservedLabelError(name string) string {
+	return fmt.Sprintf("label name %q starts with __, which Prometheus reserves for its own labels", name)
+}
+
+// CheckLabelName refuses a label name that is not a classic Prometheus name
+// or is reserved (ReservedLabelName).
+func CheckLabelName(name string) error {
+	if !LabelNameRE.MatchString(name) {
+		return fmt.Errorf("invalid label name %q", name)
+	}
+	if ReservedLabelName(name) {
+		return errors.New(reservedLabelError(name))
+	}
+	return nil
+}
+
+// hasEmptyLabel reports whether a label of labels has an empty value.
+func hasEmptyLabel(labels map[string]string) bool {
+	for _, v := range labels {
+		if v == "" {
+			return true
+		}
+	}
+	return false
+}
+
+// seriesKey identifies the series m is to Prometheus, which reads a label
+// with an empty value as no label at all: m{a=""} and m are one series.
 func (m Metric) seriesKey() string {
 	keys := make([]string, 0, len(m.Labels))
-	for k := range m.Labels {
-		keys = append(keys, k)
+	for k, v := range m.Labels {
+		if v != "" {
+			keys = append(keys, k)
+		}
 	}
 	sort.Strings(keys)
 	var b strings.Builder
@@ -96,7 +135,8 @@ func (m Metric) seriesKey() string {
 // the exposition format: valid names and types, no duplicate series, one type
 // per family. It stops at the first problem, which the error describes.
 func (s *MetricSet) Validate(l Limits) error {
-	seen := map[string]struct{}{}
+	// seen is each series so far, and whether it had an empty label.
+	seen := map[string]bool{}
 	types := map[string]MetricType{}
 	if l.MaxMetrics > 0 && len(s.Metrics) > l.MaxMetrics {
 		return fmt.Errorf("metric count %d exceeds limit %d", len(s.Metrics), l.MaxMetrics)
@@ -137,6 +177,9 @@ func (s *MetricSet) Validate(l Limits) error {
 				}
 				return fmt.Errorf("metric %q has invalid label name %q", m.Name, k)
 			}
+			if ReservedLabelName(k) {
+				return fmt.Errorf("metric %q has %s", m.Name, reservedLabelError(k))
+			}
 			if l.MaxLabelValueLength > 0 && len(v) > l.MaxLabelValueLength {
 				return fmt.Errorf("metric %q label %q is too long", m.Name, k)
 			}
@@ -148,10 +191,42 @@ func (s *MetricSet) Validate(l Limits) error {
 			return fmt.Errorf("metric %q has inconsistent types", m.Name)
 		}
 		types[m.Name] = m.Type
-		if _, ok := seen[m.seriesKey()]; ok {
+		key, empty := m.seriesKey(), hasEmptyLabel(m.Labels)
+		if earlierEmpty, ok := seen[key]; ok {
+			if empty || earlierEmpty {
+				return fmt.Errorf("duplicate metric series %q: Prometheus reads a label with an empty value as no label, so series that differ only in one are the same series", m.Name)
+			}
 			return fmt.Errorf("duplicate metric series %q", m.Name)
 		}
-		seen[m.seriesKey()] = struct{}{}
+		seen[key] = empty
+	}
+	return checkDerivedNames(types)
+}
+
+// checkDerivedNames refuses a family named like a series of a histogram or a
+// summary: a histogram foo is written as foo_bucket, foo_sum and foo_count,
+// and a summary foo as foo, foo_sum and foo_count, so a gauge foo_count next
+// to either would be written as a second family of that name, of another
+// type, which Prometheus refuses.
+func checkDerivedNames(types map[string]MetricType) error {
+	names := make([]string, 0, len(types))
+	for name := range types {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	for _, name := range names {
+		var suffixes []string
+		switch types[name] {
+		case HistogramMetricType:
+			suffixes = []string{"_bucket", "_sum", "_count"}
+		case SummaryMetricType:
+			suffixes = []string{"_sum", "_count"}
+		}
+		for _, suffix := range suffixes {
+			if other, clash := types[name+suffix]; clash {
+				return fmt.Errorf("metric %q (%s) clashes with the %s %q, which is written as series of that name; rename one", name+suffix, other, types[name], name)
+			}
+		}
 	}
 	return nil
 }
@@ -189,8 +264,11 @@ func Number(v any) (float64, error) {
 }
 
 // Normalize rewrites decoded JSON or YAML in place into the shapes the
-// transforms expect: maps keyed by string, and a json.Number as a float64,
-// or as its text when it is not one.
+// transforms expect, all of which gojq, the jq and yq engine, handles: maps
+// keyed by string; a whole number as an int, or a *big.Int beyond int64, so
+// an ID of any length keeps every digit; any other json.Number as a float64,
+// or as its text when it is not one; and a time.Time, which YAML makes of
+// what reads as a timestamp and gojq cannot handle, as RFC 3339 text.
 func Normalize(v any) any {
 	switch x := v.(type) {
 	case map[any]any:
@@ -210,10 +288,27 @@ func Normalize(v any) any {
 		}
 		return x
 	case json.Number:
+		if i, err := x.Int64(); err == nil {
+			return int(i)
+		}
+		if i, ok := new(big.Int).SetString(string(x), 10); ok {
+			return i
+		}
 		if n, err := x.Float64(); err == nil {
 			return n
 		}
 		return string(x)
+	case uint64:
+		if x <= math.MaxInt64 {
+			return int(x)
+		}
+		return new(big.Int).SetUint64(x)
+	case uint:
+		return Normalize(uint64(x))
+	case int64:
+		return int(x)
+	case time.Time:
+		return x.Format(time.RFC3339Nano)
 	default:
 		return x
 	}

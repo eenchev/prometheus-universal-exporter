@@ -60,7 +60,27 @@ marked `"repeat":true`, so `--log.level=debug` shows every one.
 A target that answers with an error status usually says why in the body, so
 the line for a `http_status` failure adds `response_body`: the start of the
 body, at most 256 bytes, on one line. It is logged only, never put in the
-probe's answer.
+probe's answer. An error page can echo what it was sent, so what reads as a
+credential in it is masked as `<redacted>` first: a `Bearer` or `Basic`
+credential, the value of a field or parameter whose name contains `token`,
+`secret`, `password`, `passwd`, `pwd`, `api_key`, `access_key`,
+`private_key`, `session`, `signature`, `credential` or `auth`, and a JSON Web
+Token. The masking errs towards hiding: an ordinary word after such a name
+may be masked too.
+
+A request that fails quotes the URL it was sending, as Go reports it:
+`Get "https://api.example.com/v1/status?api_key=<redacted>": dial tcp ...`.
+Every query value is masked and a password in the URL is shown as
+`redacted:redacted`, so a token in `request.query` or in the target's query
+reaches neither the log, nor the probe's answer, nor a debug report.
+
+Wherever a line names the target itself, a password in it is shown as
+`redacted:redacted`, and the value of a query parameter whose name reads as a
+credential — containing `auth`, `cookie`, `token`, `secret`, `password`,
+`passwd`, `key`, `session`, `signature` or `credential` — as `<redacted>`:
+`http://host:9100/metrics?token=<redacted>&tenant=a`. Other parameters are
+shown as given. The static targets endpoint's `target` label and the OTLP
+`target` attribute show a target the same way.
 
 The same applies to static targets (`static target scrape failed`, then
 `static target recovered`; a stage passed over under `error_handling` `log`
@@ -72,5 +92,13 @@ answered with the last good result under `cache.stale_if_error` (`probe
 failed; answered with the last successful result`, with its `result_age`,
 then `probe answered with a fresh result again`). Up to 10,000
 failing things are remembered at a time, and one not reported for an hour is
-forgotten; past that bound, a new failure is simply logged every time.
+forgotten: the same failure later is logged as new, and its recovery after
+the silence is not logged; past that bound, a new failure is simply logged
+every time.
+
+A probe is one failing thing with everything that makes it the probe it is:
+its target, and its parameters and forwarded headers. Probes of one target
+that differ in `path`, a `param_` or a `header_` — tenants of one service,
+say — fail and recover apart, and each line carries the probe's `url`, as
+the self-metrics label it, so it says which one failed.
 

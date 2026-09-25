@@ -16,7 +16,9 @@ git push origin exporter/prometheus-universal-exporter-v1.0.0
 ```
 
 The image is published as `ghcr.io/eenchev/prometheus-universal-exporter:1.0.0`,
-also tagged `1.0` and `latest`.
+also tagged `1.0` when it is the newest release of 1.0, and `latest` when it
+is the newest release of all. A patch to an older line, say 1.0.1 after
+1.1.0, is published as `1.0.1` and `1.0`, and leaves `latest` on 1.1.0.
 
 ## Helm chart
 

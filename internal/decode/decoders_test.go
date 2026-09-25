@@ -24,7 +24,7 @@ func TestDecodeJSONAutoDetectionAndMalformedInput(t *testing.T) {
 		t.Fatalf("decoded JSON array=%#v", d.Data)
 	}
 	row, ok := values[0].(map[string]any)
-	if !ok || row["value"] != float64(7) {
+	if !ok || row["value"] != 7 {
 		t.Fatalf("decoded JSON row=%#v", values[0])
 	}
 
@@ -71,5 +71,24 @@ func TestDecodePrometheusPreservesTimestamp(t *testing.T) {
 	set := d.Data.(model.MetricSet)
 	if len(set.Metrics) != 1 || set.Metrics[0].Timestamp == nil || *set.Metrics[0].Timestamp != 1700000000000 {
 		t.Fatalf("decoded Prometheus timestamp=%#v", set.Metrics)
+	}
+}
+
+// A header naming one column twice fails the decode, naming it, rather than
+// the later column overwriting the earlier; empty names may repeat.
+func TestCSVHeadersNamingAColumnTwiceAreRefused(t *testing.T) {
+	c := model.Collector{Request: model.RequestConfig{Type: fetch.RequestTypeHTTP}, Decoder: model.DecoderConfig{Type: "csv"}, Response: model.ResponseConfig{CSV: model.CSVConfig{TrimSpace: true}}}
+	r := &fetch.HTTPResponse{Body: []byte("server,cpu, cpu\nweb01,72,9\n"), Headers: make(http.Header)}
+	if _, err := Decode(r, &c); err == nil || !strings.Contains(err.Error(), `names column "cpu" twice, as columns 2 and 3`) {
+		t.Fatalf("%v", err)
+	}
+	r.Body = []byte("server,cpu,,\nweb01,72,,\n")
+	if _, err := Decode(r, &c); err != nil {
+		t.Fatalf("repeated empty names: %v", err)
+	}
+	c.Response.CSV.Header = boolPtr(false)
+	r.Body = []byte("server,cpu,cpu\nweb01,72,9\n")
+	if _, err := Decode(r, &c); err != nil {
+		t.Fatalf("without a header: %v", err)
 	}
 }

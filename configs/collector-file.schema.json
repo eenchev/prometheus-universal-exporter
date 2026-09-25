@@ -664,6 +664,8 @@
                 "additionalProperties": false,
                 "properties": {
                   "attempts": {
+                    "description": "How many times a failed request is retried, from 0, the default, to 10.",
+                    "maximum": 10,
                     "minimum": 0,
                     "type": "integer"
                   },

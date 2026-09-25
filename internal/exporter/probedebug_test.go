@@ -242,23 +242,6 @@ func TestADebugProbeListsRedirectsAndTheStaleAnswer(t *testing.T) {
 	assertContains(t, body, "A probe would have answered 200 with the last good result", "marked stale", "instead of 502")
 }
 
-func TestRedactURL(t *testing.T) {
-	for raw, want := range map[string]string{
-		"https://user:pass@host/p?a=1&b=2&a=3": "https://<redacted>@host/p?a=<redacted>&a=<redacted>&b=<redacted>",
-		"https://host/p":                       "https://host/p",
-		"grpc://host:443/pkg.Svc/Method":       "grpc://host:443/pkg.Svc/Method",
-	} {
-		if got := redactURL(raw); got != want {
-			t.Errorf("redactURL(%q) = %q, want %q", raw, got, want)
-		}
-	}
-	for name, want := range map[string]bool{"Authorization": true, "X-Api-Key": true, "Cookie": true, "X-Auth-Token": true, "Accept": false, "Content-Type": false} {
-		if got := redactHeader(name, "v") == redacted; got != want {
-			t.Errorf("header %s redacted: %v", name, got)
-		}
-	}
-}
-
 // The requests a trip sent are recorded only for a trip with a trace.
 func TestRequestTraceIsOnlyKeptWhenAsked(t *testing.T) {
 	target := textTarget(t, "value=1\n")
@@ -273,4 +256,84 @@ func TestRequestTraceIsOnlyKeptWhenAsked(t *testing.T) {
 	if requests := trace.Requests(); len(requests) != 1 || requests[0].Outcome != "200 OK" {
 		t.Fatalf("recorded %+v", requests)
 	}
+}
+
+// /static-targets?debug=<name> scrapes that one target as its schedule
+// would, with its own credential, and reports the trip; it publishes
+// nothing, counts nothing, and is refused without the flag.
+func TestADebugScrapeOfAStaticTarget(t *testing.T) {
+	testutil.CaptureLogs(t)
+	var authorization atomic.Value
+	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		authorization.Store(r.Header.Get("Authorization"))
+		_, _ = w.Write([]byte("value=42\n"))
+	}))
+	t.Cleanup(target.Close)
+	cfg := &model.Config{Collectors: []model.Collector{testutil.Collector("text", "text")}}
+	file := &model.StaticTargetFile{Interval: model.Duration(time.Minute), Targets: []model.StaticTarget{
+		{Name: "eu", Collector: "text", Target: target.URL, Labels: map[string]string{"region": "eu"},
+			Request: model.TargetRequestConfig{BearerToken: "s3cret-target-token"}},
+		{Name: "us", Collector: "text", Target: target.URL},
+	}}
+	server := newStaticServer(t, cfg, file)
+	get := func(query string) *httptest.ResponseRecorder {
+		recorder := httptest.NewRecorder()
+		server.Handler().ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/static-targets?"+query, nil))
+		return recorder
+	}
+	if r := get("debug=eu"); r.Code != http.StatusForbidden || !strings.Contains(r.Body.String(), "--web.enable-probe-debug") {
+		t.Fatalf("without the flag: %d %s", r.Code, r.Body)
+	}
+	server.SetProbeDebug(true)
+	for query, code := range map[string]int{"debug=nobody": http.StatusNotFound, "debug=": http.StatusBadRequest, "debug=eu&targets=us": http.StatusBadRequest, "debug=eu&debug=us": http.StatusBadRequest} {
+		if r := get(query); r.Code != code {
+			t.Errorf("%s answered %d, want %d: %s", query, r.Code, code, r.Body)
+		}
+	}
+	r := get("debug=eu")
+	body := r.Body.String()
+	if r.Code != http.StatusOK || authorization.Load() != "Bearer s3cret-target-token" {
+		t.Fatalf("answered %d, the target got %v:\n%s", r.Code, authorization.Load(), body)
+	}
+	if strings.Contains(body, "s3cret") {
+		t.Fatalf("the target's credential is in the report:\n%s", body)
+	}
+	assertContains(t, body,
+		`Debug scrape of static target "eu", collector "text", target `+target.URL,
+		"The scrape would have published target up 1 with 1 series",
+		"Authorization: <redacted>",
+		"Metrics the scrape would have published, without its health series",
+		`demo_value{region="eu",static_target="eu"} 42`,
+	)
+	// Nothing published, nothing counted.
+	if published := getStaticTargets(t, server, "/static-targets"); published != "" {
+		t.Fatalf("a debug scrape published:\n%s", published)
+	}
+	stats := server.statsFor("text")
+	stats.mu.Lock()
+	probes := stats.probes
+	stats.mu.Unlock()
+	if probes != 0 {
+		t.Fatalf("a debug scrape was counted: %d", probes)
+	}
+}
+
+// A request that fails does not put request.query's values or the target's
+// password in the probe's answer, the log or a debug report, where Go's
+// error would quote the whole URL.
+func TestAFailedRequestKeepsItsQueryOutOfEveryAnswer(t *testing.T) {
+	logs := testutil.CaptureLogs(t)
+	c := debugCollector("dbg")
+	server := modeServer(t, c)
+	server.SetProbeDebug(true)
+	target := url.QueryEscape("http://user:s3cret-password@127.0.0.1:1/x")
+	answer := debugProbeGet(t, server, "collector=dbg&target="+target)
+	report := debugProbeGet(t, server, "collector=dbg&debug=true&target="+target)
+	for what, text := range map[string]string{"answer": answer.Body.String(), "report": report.Body.String(), "log": logs.String()} {
+		if strings.Contains(text, "s3cret") {
+			t.Errorf("the %s holds a credential:\n%s", what, text)
+		}
+	}
+	assertContains(t, answer.Body.String(), "token=<redacted>", "view=<redacted>")
+	assertContains(t, report.Body.String(), "failed", "token=<redacted>")
 }

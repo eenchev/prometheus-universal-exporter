@@ -321,6 +321,9 @@ func (s *Server) probeHandler(w http.ResponseWriter, r *http.Request) {
 			collector: c, target: target, logTarget: logTarget, overrides: overrides,
 			forwarded: forwarded, rec: rec, cacheKey: cacheKey,
 			budget: budget, budgetSource: budgetSource,
+			// Probes of one target differing in their parameters or
+			// forwarded headers — tenants, paths — fail apart in the log.
+			failureTarget: target + "\x00" + key, requestURL: requestURL,
 		})
 	}
 	if !coalesceProbes(c) {
@@ -356,6 +359,29 @@ type upstreamProbe struct {
 	// came from.
 	budget       time.Duration
 	budgetSource string
+	// failureTarget tells the probe apart in the failure log
+	// (failurelog.go): its target with everything else that makes it the
+	// probe it is, parameters and forwarded headers; the target alone when
+	// empty. requestURL is its url label, which logs show.
+	failureTarget string
+	requestURL    string
+}
+
+// failureKeyTarget is what the failure log tells p apart by.
+func (p upstreamProbe) failureKeyTarget() string {
+	if p.failureTarget != "" {
+		return p.failureTarget
+	}
+	return p.target
+}
+
+// logAttrs are the attributes p's log lines carry.
+func (p upstreamProbe) logAttrs() []any {
+	attrs := []any{"collector", p.collector.Name, "target", p.logTarget}
+	if p.requestURL != "" {
+		attrs = append(attrs, "url", p.requestURL)
+	}
+	return attrs
 }
 
 // probeUpstream goes to the target, decodes, transforms and validates, and
@@ -370,9 +396,15 @@ func (s *Server) probeUpstream(ctx context.Context, p upstreamProbe) *probeResul
 	if result.abandoned || model.StaleIfError(c) <= 0 || p.cacheKey == "" {
 		return result
 	}
-	staleKey := failureKey(name, p.logTarget, "\x00stale")
+	// A target that refused the credential is not answered for with what an
+	// earlier credential, perhaps since revoked, was given.
+	if result.unauthorized {
+		s.logger.Debug("probe failed on its credential; no stale result served", p.logAttrs()...)
+		return result
+	}
+	staleKey := failureKey(name, p.failureKeyTarget(), "\x00stale")
 	if result.ok {
-		s.failures.recovered(s.logger, staleKey, "probe answered with a fresh result again", "collector", name, "target", p.logTarget)
+		s.failures.recovered(s.logger, staleKey, "probe answered with a fresh result again", p.logAttrs()...)
 		return result
 	}
 	now := time.Now()
@@ -388,7 +420,7 @@ func (s *Server) probeUpstream(ctx context.Context, p upstreamProbe) *probeResul
 		x.staleServed++
 		x.emitted += uint64(len(cached.Metrics))
 	})
-	s.failures.failed(s.logger, slog.LevelWarn, staleKey, "probe failed; answered with the last successful result (cache.stale_if_error)", "stale", nil, "collector", name, "target", p.logTarget, "result_age", now.Sub(fetched).Round(time.Second).String())
+	s.failures.failed(s.logger, slog.LevelWarn, staleKey, "probe failed; answered with the last successful result (cache.stale_if_error)", "stale", nil, append(p.logAttrs(), "result_age", now.Sub(fetched).Round(time.Second).String())...)
 	out := newProbeRecorder()
 	writeMetricSet(out, &answer)
 	s.queueProbeOTLP(answer, name, p.logTarget)
@@ -420,7 +452,7 @@ func (s *Server) probeTrip(ctx context.Context, p upstreamProbe) *probeResult {
 	limit := maxConcurrentProbes(c)
 	if full := s.trips.tryAcquire(name, limit); full != nil {
 		rec.update(func(x *serverStats) { countRejection(x, full) })
-		s.failures.failed(s.logger, slog.LevelWarn, failureKey(name, logTarget, ""), "probe rejected: too many probes in progress", "concurrency", nil, "collector", name, "target", logTarget, "reason", full.message)
+		s.failures.failed(s.logger, slog.LevelWarn, failureKey(name, p.failureKeyTarget(), ""), "probe rejected: too many probes in progress", "concurrency", nil, append(p.logAttrs(), "reason", full.message)...)
 		http.Error(out, full.message+"; this probe was not sent", http.StatusServiceUnavailable)
 		return out.result(false)
 	}
@@ -434,9 +466,9 @@ func (s *Server) probeTrip(ctx context.Context, p upstreamProbe) *probeResult {
 		collector: c, target: p.target, overrides: p.overrides, headers: p.forwarded,
 		rec: rec, display: logTarget, cacheKey: p.cacheKey, budget: p.budget, budgetSource: p.budgetSource,
 		log: collectLog{
-			key:    failureKey(name, logTarget, ""),
+			key:    failureKey(name, p.failureKeyTarget(), ""),
 			failed: "probe failed", continuing: "probe stage failed; continuing", recovery: "probe recovered",
-			attrs: []any{"collector", name, "target", logTarget},
+			attrs: p.logAttrs(),
 		},
 	})
 	switch {
@@ -462,7 +494,9 @@ func (s *Server) probeTrip(ctx context.Context, p upstreamProbe) *probeResult {
 		return out.result(false)
 	case result.failed():
 		http.Error(out, fmt.Sprintf("collector %s %s failed: %v", name, result.stage, result.err), http.StatusBadGateway)
-		return out.result(false)
+		failure := out.result(false)
+		failure.unauthorized = result.unauthorized
+		return failure
 	case result.carriedOn:
 		// Answered 200 with nothing: the stage's policy said to carry on.
 		return out.result(true)
@@ -475,6 +509,7 @@ func (s *Server) probeTrip(ctx context.Context, p upstreamProbe) *probeResult {
 // unforwardableHeaders are never forwarded, whatever request.forward_headers
 // lists: Authorization has request.forward_authorization of its own, and the
 // rest describe the connection to the exporter, not the request to the target.
+// Neither is any Proxy- header (unforwardable), whatever follows the dash.
 var unforwardableHeaders = map[string]bool{
 	"Authorization":       true,
 	"Connection":          true,
@@ -488,6 +523,11 @@ var unforwardableHeaders = map[string]bool{
 	"Upgrade":             true,
 }
 
+// unforwardable reports whether name, canonical, is never forwarded.
+func unforwardable(name string) bool {
+	return unforwardableHeaders[name] || strings.HasPrefix(name, "Proxy-")
+}
+
 // forwardableHeaders is request.forward_headers as they are forwarded:
 // canonical, without the ones never forwarded, each once, sorted.
 func forwardableHeaders(request model.RequestConfig) []string {
@@ -495,7 +535,7 @@ func forwardableHeaders(request model.RequestConfig) []string {
 	var out []string
 	for _, name := range request.ForwardHeaders {
 		name = http.CanonicalHeaderKey(strings.TrimSpace(name))
-		if name != "" && !unforwardableHeaders[name] && !seen[name] {
+		if name != "" && !unforwardable(name) && !seen[name] {
 			seen[name] = true
 			out = append(out, name)
 		}
@@ -544,12 +584,20 @@ func forwardedHeaders(r *http.Request, request model.RequestConfig) http.Header 
 	return out
 }
 
-// sanitizeUTF8 repairs a transform's output, counting and logging what it
-// changed, so the one scrape still reaches Prometheus and the problem is still
-// seen.
-func (s *Server) sanitizeUTF8(ctx context.Context, set *model.MetricSet, rec statsRecorder, c *model.Collector, target string) {
-	key := failureKey(c.Name, target, "\x00utf8")
-	changed, first := model.SanitizeUTF8(set)
+// utf8Repairs is what a transform repaired for invalid UTF-8: how many label
+// values and help texts, and the first metric.
+type utf8Repairs struct {
+	count uint64
+	first string
+}
+
+// noteUTF8Repairs counts and logs what the transform repaired for invalid
+// UTF-8 (transform.Transform repairs it before labels are mapped and
+// truncated), so the one scrape still reaches Prometheus and the problem is
+// still seen.
+func (s *Server) noteUTF8Repairs(ctx context.Context, repaired utf8Repairs, rec statsRecorder, c *model.Collector, target, keyTarget string) {
+	key := failureKey(c.Name, keyTarget, "\x00utf8")
+	changed, first := repaired.count, repaired.first
 	if changed == 0 {
 		s.tripRecovered(ctx, key, "output is valid UTF-8 again", "collector", c.Name, "target", target)
 		return

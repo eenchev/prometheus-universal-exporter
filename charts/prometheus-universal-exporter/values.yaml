@@ -93,7 +93,8 @@ server:
   # probe with a plain-text report of its trip: the requests, the response
   # body, each stage, the logs and what the probe would have answered. The
   # report shows what the target answered, so it is off by default; it is
-  # behind web.basic_auth when that is configured.
+  # behind web.basic_auth when that is configured. Also enables
+  # /static-targets?debug=<name>, the same report for one static target.
   probeDebug: false
   # How many trips to targets, probes and static target scrapes of every
   # collector together, may be in progress at once (--probe.max-concurrent),
@@ -330,9 +331,15 @@ monitors: []
 # scrape-time histograms and the Python worker metrics, and
 # web.self_metrics.resource_metrics_enabled for the go_ and process_ series
 # describing the exporter's own CPU and memory.
+# The monitor for the exporter's own metrics: one ServiceMonitor, or a
+# PodMonitor with type pod. It is rendered with enabled when the chart renders
+# another monitor (a probe monitor or the static targets monitor), or when the
+# cluster serves the kind, so an install without the Prometheus Operator does
+# not fail on it.
 selfMetrics:
   path: /self-metrics
   enabled: true
+  type: service
   interval: 30s
   scrapeTimeout: 10s
   labels: {}
@@ -443,10 +450,16 @@ affinity: {}
 #     topologyKey: topology.kubernetes.io/zone
 #     whenUnsatisfiable: ScheduleAnyway
 topologySpreadConstraints: []
+# A NetworkPolicy for the exporter's pods. Ingress is limited to the rules
+# given, or else to the http port from anywhere, which Prometheus scrapes.
+# Egress is limited only when egress rules are given, since the targets a
+# probe names are not known to the chart; DNS is then allowed as well, unless
+# allowDNS is false.
 networkPolicy:
   enabled: false
   ingress: []
   egress: []
+  allowDNS: true
 targetAuth:
   enabled: false
   type: bearer # bearer or basic

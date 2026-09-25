@@ -829,14 +829,44 @@ for _name in [n for n in sys.modules if n.split('.')[0] in blocked or n in {'pos
 def denied(*a,**kw): raise RuntimeError('operation disabled by exporter')
 for _name in ('system','popen','spawnl','spawnle','spawnlp','spawnlpe','spawnv','spawnve','spawnvp','spawnvpe','posix_spawn','posix_spawnp','execl','execle','execlp','execlpe','execv','execve','execvp','execvpe','fork','forkpty','openpty','pipe','pipe2','open','listdir','scandir','walk','fwalk','remove','unlink','rename','replace','mkdir','makedirs','rmdir','removedirs','link','symlink','truncate','ftruncate','chmod','chown','lchown','mkfifo','mknod','fdopen','read','readv','pread','write','writev','pwrite','sendfile','dup','dup2','close','closerange','kill','killpg'):
     if hasattr(os,_name): setattr(os,_name,denied)
+def tz_roots():
+    # Time zone data may be read, and nothing else: the system's (zoneinfo's
+    # TZPATH, where dateutil.tz looks too), dateutil's bundled copy and the
+    # tzdata package's, when they are there. Resolved now, before the
+    # sandbox, so a symlink out of them leads nowhere.
+    roots=['/usr/share/zoneinfo','/usr/lib/zoneinfo','/usr/share/lib/zoneinfo','/etc/zoneinfo']
+    try:
+        import zoneinfo
+        roots+=list(zoneinfo.TZPATH)
+    except Exception: pass
+    for package in ('dateutil.zoneinfo','tzdata'):
+        try: roots.append(os.path.dirname(__import__(package,fromlist=['_']).__file__))
+        except Exception: pass
+    return tuple(sorted({os.path.realpath(r).rstrip(os.sep)+os.sep for r in roots if r}))
+tz_readable_roots=tz_roots()
+tz_readable_files={os.path.realpath('/etc/localtime')}
+def tz_readable(file,mode):
+    if mode not in ('r','rb','rt','br','tr') or not isinstance(file,(str,bytes,os.PathLike)): return False
+    try:
+        path=os.fsdecode(os.fspath(file))
+        real=os.path.realpath(path)
+    except Exception: return False
+    return real in tz_readable_files or real.startswith(tz_readable_roots)
+def tz_only(real):
+    # open(), io.open() and io.FileIO read time zone data and nothing else.
+    def opened(file,mode='r',*a,**kw):
+        if tz_readable(file,mode): return real(file,mode,*a,**kw)
+        raise RuntimeError('operation disabled by exporter')
+    return opened
 def code_only(open_code):
     # The importer reads a module's source and bytecode through _io.open.
     def opened(file,mode='r',*a,**kw):
         if mode=='rb' and isinstance(file,str) and file.endswith(('.py','.pyc')): return open_code(file,mode,*a,**kw)
+        if tz_readable(file,mode): return open_code(file,mode,*a,**kw)
         raise RuntimeError('operation disabled by exporter')
     return opened
-builtins.open=denied; io.open=denied; _io.open=code_only(_io.open); io.FileIO=denied; _io.FileIO=denied
-del _io, _name, code_only
+builtins.open=tz_only(io.open); io.FileIO=tz_only(_io.FileIO); _io.open=code_only(_io.open); io.open=builtins.open; _io.FileIO=io.FileIO
+del _io, _name, code_only, tz_only, tz_roots
 class Response:
     def __init__(self,x): self.status_code=x['status_code']; self.headers=x['headers']; self.body=x['body']; self.text=x['text']
     def header(self,name,default=None):

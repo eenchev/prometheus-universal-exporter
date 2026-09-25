@@ -88,6 +88,11 @@ type collected struct {
 	// denied_targets refused the target: whatever error_handling says, the
 	// trip fails, and a probe is answered 403.
 	refused bool
+	// unauthorized is set when the target refused the credential the trip
+	// sent: HTTP 401 or 403, or gRPC UNAUTHENTICATED or PERMISSION_DENIED.
+	// Such a failure is never answered with a stale result
+	// (unauthorizedFailure).
+	unauthorized bool
 }
 
 // cutShort reports whether ctx was cancelled rather than run out of time: by
@@ -178,7 +183,9 @@ func (s *Server) collect(ctx context.Context, j collectJob) collected {
 		if errors.As(err, &status) {
 			extra = []any{"grpc_code", status.CodeName}
 		}
-		return stageFailed(fetch.FetchErrorStage(c, err), err, c.ErrorHandling.OnFetchError, extra...)
+		failure := stageFailed(fetch.FetchErrorStage(c, err), err, c.ErrorHandling.OnFetchError, extra...)
+		failure.unauthorized = status != nil && (status.CodeName == "UNAUTHENTICATED" || status.CodeName == "PERMISSION_DENIED")
+		return failure
 	}
 	if response.GRPCCode != nil {
 		grpcCode = *response.GRPCCode
@@ -199,7 +206,9 @@ func (s *Server) collect(ctx context.Context, j collectJob) collected {
 			excerpt = []any{"response_body", body}
 		}
 		mark = time.Now()
-		return stageFailed("http_status", fmt.Errorf("received HTTP status %d", response.StatusCode), c.ErrorHandling.OnFetchError, excerpt...)
+		failure := stageFailed("http_status", fmt.Errorf("received HTTP status %d", response.StatusCode), c.ErrorHandling.OnFetchError, excerpt...)
+		failure.unauthorized = response.StatusCode == http.StatusUnauthorized || response.StatusCode == http.StatusForbidden
+		return failure
 	}
 	var set *model.MetricSet
 	if response.Directory != nil {
@@ -211,7 +220,7 @@ func (s *Server) collect(ctx context.Context, j collectJob) collected {
 			return collected{stage: fetch.FetchStage(c), err: context.Cause(ctx), aborted: true}
 		}
 		mark = time.Now()
-		set = s.collectDirectory(ctx, response.Directory, c, rec, j.display)
+		set = s.collectDirectory(ctx, response.Directory, c, rec, j.display, j.target)
 		trace.step("files", "ok", time.Since(mark), fmt.Sprintf("%d files, %d series", len(response.Directory.Files), len(set.Metrics)))
 		trace.record(func(t *probeTrace) { t.transform = set })
 	} else {
@@ -224,10 +233,11 @@ func (s *Server) collect(ctx context.Context, j collectJob) collected {
 		trace.step("decode", "ok", time.Since(mark), decoded.Kind)
 		trace.record(func(t *probeTrace) { t.decoded = decoded.Kind })
 		rec.update(func(x *serverStats) { x.decodeOK++ })
-		s.noteGraphite(ctx, decoded, c, rec, j.display, "")
+		s.noteGraphite(ctx, decoded, c, rec, j.display, j.target, "")
 		mark = time.Now()
 		scriptCtx, timer := transform.WithScriptTimer(ctx)
-		set, err = s.transformRecorded(scriptCtx, decoded, response, c, rec)
+		var repaired utf8Repairs
+		set, repaired, err = s.transformRecorded(scriptCtx, decoded, response, c, rec)
 		recordScriptDuration(rec, timer)
 		if err != nil {
 			rec.update(func(x *serverStats) {
@@ -257,7 +267,7 @@ func (s *Server) collect(ctx context.Context, j collectJob) collected {
 		}
 		trace.step("transform", "ok", time.Since(mark), fmt.Sprintf("%d series", len(set.Metrics)))
 		trace.record(func(t *probeTrace) { t.transform = set })
-		s.sanitizeUTF8(ctx, set, rec, c, j.display)
+		s.noteUTF8Repairs(ctx, repaired, rec, c, j.display, j.target)
 	}
 	mark = time.Now()
 	if err := set.Validate(c.Limits); err != nil {
@@ -286,13 +296,18 @@ func (s *Server) collect(ctx context.Context, j collectJob) collected {
 // collector's self-metrics the series its rules carried on without: each in
 // http_exporter_rule_failures_total, and those whose value the response did
 // not contain in http_exporter_missing_keys_total too.
-func (s *Server) transformRecorded(ctx context.Context, d *decode.Decoded, r *fetch.HTTPResponse, c *model.Collector, rec statsRecorder) (*model.MetricSet, error) {
+//
+// It also returns what the transform repaired for invalid UTF-8, for
+// noteUTF8Repairs.
+func (s *Server) transformRecorded(ctx context.Context, d *decode.Decoded, r *fetch.HTTPResponse, c *model.Collector, rec statsRecorder) (*model.MetricSet, utf8Repairs, error) {
 	ctx, report := transform.WithRuleReport(ctx)
 	set, err := transform.Transform(ctx, d, r, c, s.pythonPath)
+	var repaired utf8Repairs
+	repaired.count, repaired.first = report.UTF8Repairs()
 	failures := report.Failures()
 	probeTraceFrom(ctx).record(func(t *probeTrace) { t.failures = append(t.failures, failures...) })
 	if len(failures) == 0 {
-		return set, err
+		return set, repaired, err
 	}
 	rec.update(func(x *serverStats) {
 		for _, f := range failures {
@@ -309,7 +324,7 @@ func (s *Server) transformRecorded(ctx context.Context, d *decode.Decoded, r *fe
 		}
 		rec.collector.mu.Unlock()
 	}
-	return set, err
+	return set, repaired, err
 }
 
 // fetchedNote is a response as a debug probe's stages show it.
@@ -328,15 +343,21 @@ func fetchedNote(r *fetch.HTTPResponse) string {
 // bodyExcerptBytes is how much of an error response's body the log shows.
 const bodyExcerptBytes = 256
 
+// bodyRedactBytes is how much of the body is read for the excerpt, so a
+// credential the excerpt's end runs through is masked whole.
+const bodyRedactBytes = 4 * bodyExcerptBytes
+
 // bodyExcerpt is the start of a response body for a log line: at most
 // bodyExcerptBytes, with invalid UTF-8 and
-// control characters replaced and runs of whitespace collapsed, so an HTML
-// error page or a binary body reads as one tidy line. It ends in … when cut.
+// control characters replaced, runs of whitespace collapsed, and what reads
+// as a credential masked (fetch.RedactText), so an HTML error page or a
+// binary body reads as one tidy line, and an error page that echoes a token
+// does not put it in the log. It ends in … when cut.
 func bodyExcerpt(body []byte) string {
-	cut := len(body) > bodyExcerptBytes
-	if cut {
-		// A character cut in two is replaced below like any invalid UTF-8.
-		body = body[:bodyExcerptBytes]
+	// Credentials are masked in more than is shown, so one the cut runs
+	// through is found whole.
+	if len(body) > bodyRedactBytes {
+		body = body[:bodyRedactBytes]
 	}
 	text := strings.Map(func(r rune) rune {
 		if r == utf8.RuneError || unicode.IsControl(r) {
@@ -344,9 +365,10 @@ func bodyExcerpt(body []byte) string {
 		}
 		return r
 	}, strings.ToValidUTF8(string(body), " "))
-	text = strings.Join(strings.Fields(text), " ")
-	if cut && text != "" {
-		text += "…"
+	text = fetch.RedactText(strings.Join(strings.Fields(text), " "))
+	if len(text) > bodyExcerptBytes {
+		// A character cut in two at the limit is dropped.
+		text = strings.ToValidUTF8(text[:bodyExcerptBytes], "") + "…"
 	}
 	return text
 }

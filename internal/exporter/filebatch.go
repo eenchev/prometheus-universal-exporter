@@ -47,11 +47,14 @@ type fileFailure struct {
 }
 
 // collectDirectory turns a directory read into one metric set.
-func (s *Server) collectDirectory(ctx context.Context, read *fetch.DirectoryRead, c *model.Collector, rec statsRecorder, logTarget string) *model.MetricSet {
+//
+// logTarget is the target as logs show it, keyTarget as the failure log
+// tells targets apart (failureKey).
+func (s *Server) collectDirectory(ctx context.Context, read *fetch.DirectoryRead, c *model.Collector, rec statsRecorder, logTarget, keyTarget string) *model.MetricSet {
 	rec.update(func(x *serverStats) { x.lastBytes = read.Bytes })
 	// These hold for as long as the directory stays as it is, so they are
 	// logged like repeated failures (failurelog.go).
-	listingKey, skippedKey := failureKey(c.Name, logTarget, "\x00listing"), failureKey(c.Name, logTarget, "\x00skipped")
+	listingKey, skippedKey := failureKey(c.Name, keyTarget, "\x00listing"), failureKey(c.Name, keyTarget, "\x00skipped")
 	if read.Truncated {
 		s.tripFailed(ctx, slog.LevelWarn, listingKey, "directory has more entries than one scrape lists; only the first were considered", "listing", nil, "collector", c.Name, "target", logTarget, "directory", read.Path, "listed", read.Listed, "max_files", c.Request.MaxFiles)
 	} else {
@@ -72,11 +75,11 @@ func (s *Server) collectDirectory(ctx context.Context, read *fetch.DirectoryRead
 	typeFrom := map[string]string{}
 	failed := map[string]bool{}
 	for _, file := range read.Files {
-		set, failure := s.collectFile(scriptCtx, file, c, rec, logTarget)
+		set, failure := s.collectFile(scriptCtx, file, c, rec, logTarget, keyTarget)
 		if failure == nil {
 			failure = checkFileFamilies(set, families, typeFrom)
 		}
-		fileKey := failureKey(c.Name, logTarget, file.Name)
+		fileKey := failureKey(c.Name, keyTarget, file.Name)
 		if failure != nil {
 			failed[file.Name] = true
 			s.tripFailed(ctx, slog.LevelWarn, fileKey, "file of a directory failed; its series are left out and the other files' are answered", failure.stage, failure.err, "collector", c.Name, "target", logTarget, "file", file.Name, "stage", failure.stage)
@@ -118,7 +121,7 @@ func (s *Server) collectDirectory(ctx context.Context, read *fetch.DirectoryRead
 
 // collectFile decodes, transforms and validates one file, counting each stage
 // in the collector's self-metrics as a probe of one file would.
-func (s *Server) collectFile(ctx context.Context, file fetch.FileRead, c *model.Collector, rec statsRecorder, logTarget string) (*model.MetricSet, *fileFailure) {
+func (s *Server) collectFile(ctx context.Context, file fetch.FileRead, c *model.Collector, rec statsRecorder, logTarget, keyTarget string) (*model.MetricSet, *fileFailure) {
 	if file.Err != nil {
 		if errors.Is(file.Err, model.ErrLimitExceeded) {
 			rec.update(func(x *serverStats) { x.limitErrors++ })
@@ -131,8 +134,8 @@ func (s *Server) collectFile(ctx context.Context, file fetch.FileRead, c *model.
 		return nil, &fileFailure{"decode", err}
 	}
 	rec.update(func(x *serverStats) { x.decodeOK++ })
-	s.noteGraphite(ctx, d, c, rec, logTarget, file.Name)
-	set, err := s.transformRecorded(ctx, d, file.Response, c, rec)
+	s.noteGraphite(ctx, d, c, rec, logTarget, keyTarget, file.Name)
+	set, repaired, err := s.transformRecorded(ctx, d, file.Response, c, rec)
 	if err != nil {
 		rec.update(func(x *serverStats) {
 			if errors.Is(err, model.ErrMissingValue) {
@@ -148,7 +151,7 @@ func (s *Server) collectFile(ctx context.Context, file fetch.FileRead, c *model.
 	if set == nil {
 		set = &model.MetricSet{}
 	}
-	s.sanitizeUTF8(ctx, set, rec, c, file.Name)
+	s.noteUTF8Repairs(ctx, repaired, rec, c, file.Name, keyTarget+"\x00"+file.Name)
 	if err := set.Validate(c.Limits); err != nil {
 		rec.update(func(x *serverStats) { x.limitErrors++ })
 		return nil, &fileFailure{"validation", err}

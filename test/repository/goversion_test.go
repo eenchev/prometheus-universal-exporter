@@ -200,6 +200,44 @@ func TestTheLinterVersionIsPinnedConsistently(t *testing.T) {
 	}
 }
 
+// Pinning the version is only half of it: `make lint` has to refuse a
+// different installed release, since another release enables different checks
+// and passes locally what CI fails. And the pre-commit hook has to run it, so
+// such a commit is refused before it is made.
+func TestLocalLintRunsOnlyWithThePinnedVersion(t *testing.T) {
+	makefile, err := os.ReadFile("Makefile")
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(makefile)
+	for _, want := range []string{
+		"\nlint: lint-version\n",
+		"golangci-lint version --short",
+		"want='$(GOLANGCI_LINT_VERSION)'",
+		"\nprecommit: fmt-check lint vet\n",
+		"git config core.hooksPath .githooks",
+	} {
+		if !strings.Contains(text, want) {
+			t.Errorf("the Makefile no longer contains %q", want)
+		}
+	}
+
+	info, err := os.Stat(".githooks/pre-commit")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Mode().Perm()&0o111 == 0 {
+		t.Error(".githooks/pre-commit is not executable, so git would skip it")
+	}
+	hook, err := os.ReadFile(".githooks/pre-commit")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.HasPrefix(string(hook), "#!/bin/sh\n") || !strings.Contains(string(hook), "make --no-print-directory precommit") {
+		t.Errorf(".githooks/pre-commit no longer runs make precommit:\n%s", hook)
+	}
+}
+
 // govulncheck is pinned twice too: in the Makefile for `make vulncheck` and in
 // its workflow. A local run should report what CI reports.
 func TestTheVulnerabilityCheckerVersionIsPinnedConsistently(t *testing.T) {

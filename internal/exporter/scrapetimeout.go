@@ -50,20 +50,31 @@ const (
 	budgetFromDefault       = "--probe.default-timeout, as the probe named no scrape timeout"
 )
 
+// maxScrapeTimeout is the longest scrape timeout a probe is given, however
+// long the header says: Prometheus's own timeout cannot exceed its scrape
+// interval, which is rarely more than minutes.
+const maxScrapeTimeout = time.Hour
+
 // probeBudget reads the scrape timeout Prometheus sent and returns how long the
 // probe may take. A missing, unparseable or non-positive header gives no
 // budget, so a probe from something other than Prometheus behaves as before.
 // An offset larger than the timeout would leave nothing; the probe then keeps
-// half the timeout rather than failing at once.
+// half the timeout rather than failing at once. A timeout above
+// maxScrapeTimeout counts as that.
 func probeBudget(h http.Header, offset time.Duration) time.Duration {
 	raw := strings.TrimSpace(h.Get(scrapeTimeoutHeader))
 	if raw == "" {
 		return 0
 	}
 	seconds, err := strconv.ParseFloat(raw, 64)
-	if err != nil || seconds <= 0 || math.IsNaN(seconds) || math.IsInf(seconds, 0) {
+	if err != nil || seconds <= 0 || math.IsNaN(seconds) {
 		return 0
 	}
+	// Whoever reaches /probe sends the header, so it is bounded: a scrape
+	// timeout of years would hold a slot of max_concurrent_probes for as
+	// long as the target hangs, and one past what time.Duration holds would
+	// overflow.
+	seconds = min(seconds, maxScrapeTimeout.Seconds())
 	timeout := time.Duration(seconds * float64(time.Second))
 	budget := timeout - offset
 	if budget < timeout/2 {

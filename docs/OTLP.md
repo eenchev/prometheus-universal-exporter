@@ -53,7 +53,10 @@ before the export. That is the default, and right when a probe's own labels
 already tell its series apart. Set `otlp.probe_attributes: true` to keep them
 apart anyway: each point a probe queues then carries a `collector` attribute,
 and a `target` attribute when the probe named one — the target as logs show
-it, without credentials. A label the series has of its own by either name is
+it, without credentials: its password is withheld, as are the values of query
+parameters named like credentials (`token`, `api_key`, `secret`, …), while
+other parameters, such as `tenant`, are kept, so targets that differ in them
+stay apart. A label the series has of its own by either name is
 kept. Static targets are unaffected: they have a resource of their own
 ([below](#static-targets)).
 

@@ -100,6 +100,10 @@ func TestForwardedHeadersAreExplicitAndAllowlisted(t *testing.T) {
 	if got := forwarded.Get("Host"); got != "" {
 		t.Fatalf("hop-by-hop/transport header was forwarded: %q", got)
 	}
+	// No Proxy- header is forwarded, even listed.
+	if got := forwardableHeaders(model.RequestConfig{ForwardHeaders: []string{"Proxy-Connection", "proxy-x", "X-Tenant", "Proxy-Authorization"}}); len(got) != 1 || got[0] != "X-Tenant" {
+		t.Fatalf("forwardable: %v", got)
+	}
 }
 
 // A header_ parameter left empty, as a blank field of the collectors page's

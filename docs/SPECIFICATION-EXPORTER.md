@@ -133,8 +133,10 @@ Parameters:
 - `insecure_skip_verify`: optional boolean override for the collector's target
   TLS setting. When `true`, the target request MUST disable server certificate
   verification for this scrape only.
-- `retry_attempts`: optional non-negative integer overriding the configured
-  number of retries after the initial target request.
+- `retry_attempts`: optional integer from 0 to 10 overriding the configured
+  number of retries after the initial target request. `retry.attempts` in the
+  configuration and a static target MUST be at most 10 too, so no caller can
+  make one probe send a failing target requests in a tight loop.
 - `retry_backoff`: optional non-negative Go duration overriding the fixed delay
   between retry attempts.
 - `follow_redirects`: optional boolean overriding whether the target request
@@ -166,6 +168,7 @@ on every scrape, the exporter MUST bound the trip to the target — the request 
 file read, decoding, transforms and scripts — by that timeout less
 `--probe.timeout-offset`, which MUST default to 500ms and MUST reject a
 negative value as a command-line error (exit 2, before `--dry-run` or startup).
+A timeout above one hour MUST count as one hour, never overflowing.
 When the offset would leave less than half the timeout, the probe MUST keep
 half. When the budget runs out the probe MUST fail in the stage that was
 running, and the error MUST say that the probe's budget, with its length, ran
@@ -218,7 +221,12 @@ method a probe parameter chooses too. A collector with `retry.attempts` and a
 non-idempotent method, without `retry.non_idempotent`, MUST be reported as a
 configuration warning. When a target answers with a status outside `2xx`, the
 logged failure SHOULD carry the start of the body, at most 256 bytes on one
-line, and the probe's answer MUST NOT.
+line, and the probe's answer MUST NOT. What in it reads as a credential — a
+`Bearer` or `Basic` credential, the value of a field or parameter whose name
+contains `token`, `secret`, `password`, `passwd`, `pwd`, `api_key`,
+`access_key`, `private_key`, `session`, `signature`, `credential` or `auth`,
+and a JSON Web Token — MUST be masked before it is logged, including one the
+256-byte cut runs through.
 
 The exporter MUST validate and normalize the target according to collector request configuration.
 
@@ -801,6 +809,7 @@ keys:
   run with its own timeout, detached from the deadline and cancellation of the
   probe that started it, so that probe ending does not fail the others; each
   probe MUST wait for the answer only as long as its own deadline allows.
+  The question MUST carry the call's metadata and credentials.
   A call failing with `UNIMPLEMENTED`, or whose answer does not decode, MUST
   drop the answer, ask again and call again once, apart from the retries. A
   server without reflection MUST fail saying so and naming `protoset` and
@@ -1155,6 +1164,9 @@ The YAML decoder MUST:
 
 - Parse YAML safely.
 - Support YAML documents commonly returned by HTTP APIs.
+- Keep a scalar YAML reads as a timestamp, such as `2024-06-01`, as the text
+  it was written as, and an integer beyond int64 as an integer, so jq and
+  labels can use both.
 - Support yq transformations.
 - Handle missing keys according to collector error policy.
 
@@ -1251,16 +1263,23 @@ Example conceptual configuration:
       description: Server CPU utilization
       type: gauge
       error_mode: log
-      expression: '#servers td:nth-child(2)'
+      items: '#servers tr:has(td)'
+      expression: td:nth-child(2)
       labels:
+        - name: server
+          expression: td:nth-child(1)
         - name: environment
           value: production
 ```
 
 For CSS transforms, the metric expression selects the element whose text is
-converted to a number. Expression labels are evaluated against that selected
-element; use XPath when labels need to be read from a sibling or ancestor
-element.
+converted to a number. Without `items` a metric is one value: the expression
+MUST match at most one element, a match of several failing the rule under its
+`error_mode` with an error pointing at `items`, and only static `value` labels
+are allowed, an expression label being refused at load. With `items`, the
+expression and each expression label are selectors within one selected
+element, such as a table row. Use XPath when a label must be read from a
+sibling or an ancestor of that element.
 
 XPath equivalent SHOULD be supported.
 
@@ -1297,7 +1316,12 @@ Normalized conceptual object:
 ]
 ```
 
-The normalized representation MUST be available to jq/Python transformations where practical.
+The normalized representation MUST be available to Python transforms and
+pre-scripts as `data`. A `jq` or `yq` transform MUST refuse a CSV response
+unless a pre-script turns it into structured data first; the `csv` transform
+reads the rows directly. A header naming one column twice MUST fail the
+decode naming the column, rather than one column silently overwriting the
+other; an empty header name repeated is not a name and MAY repeat.
 
 ---
 
@@ -1547,6 +1571,10 @@ collector
 
 Scripts can operate directly on the raw response or decoded structures.
 
+`target` MUST be the target as given, credentials included; the
+documentation MUST say so, and that a script printing it or labelling with it
+exposes them.
+
 `response.headers` MUST be each header's values as a list, by canonical name.
 `response.header(name)` MUST return the values of the header of that name, in
 any case, joined by `, `, as jq's `$headers` has them, and `default` when the
@@ -1729,7 +1757,12 @@ The worker's sandbox:
   functions that start processes, open, list, change or remove files, or read,
   write, duplicate or close descriptors. `_io.open`, which the importer reads
   module source and bytecode with, MUST only open `.py` and `.pyc` files, for
-  reading.
+  reading. All of them MUST still open time zone data for reading: files
+  whose resolved path is under a directory of `zoneinfo.TZPATH` or the usual
+  system zone directories, `python-dateutil`'s bundled zoneinfo or the
+  `tzdata` package, and `/etc/localtime`, so named zones work; any other
+  file, a path leaving those directories by `..` or a symlink included, MUST
+  be refused. The image MUST ship the system's zone data.
 
 A sandbox inside the interpreter guards against a script doing by mistake what
 it should not; it is not a boundary against a script written to escape it,
@@ -2070,11 +2103,13 @@ it, such a value MUST fail the scrape as before (§ 21), since a silently
 shortened value would surprise. Truncation MUST apply to the labels of declared
 metrics from every transform, a `prometheus` rule without a name included, and
 MUST happen before `transform.rename_labels` and before `metrics_prefix`
-(§ 5.0a) is added, so a renamed label is still cut.
+(§ 5.0a) is added, so a renamed label is still cut, and after invalid UTF-8
+is repaired, so the repair cannot grow a cut value past the limit.
 
 A jq or yq expression label's value MUST be written as text the way JSON
 writes it: a number without an exponent when its magnitude is at least 1e-6
-and below 1e21, so integers such as IDs keep every digit, and in shortest
+and below 1e21, so integers such as IDs keep every digit (JSON integers MUST
+reach jq as integers, of any length), and in shortest
 exponent form otherwise; `NaN`, `+Inf` and `-Inf` for non-finite numbers;
 `true` and `false` for booleans; a string as it is. An object or an array MUST
 be a failure of the metric rule, handled by its `error_mode`, with an error
@@ -2382,9 +2417,24 @@ Before exposition, validate:
 - Numeric values
 - Invalid NaN/Inf behavior according to Prometheus client conventions
 
+A label name starting with `__` MUST fail validation, and MUST be refused at
+load wherever the configuration names one (a rule's labels,
+`transform.labels`, `rename_labels`, a static target's labels): Prometheus
+refuses `__name__` in what it scrapes and drops the rest. Series that differ
+only in a label with an empty value MUST be duplicates, since Prometheus reads
+such a label as absent, and the error MUST say so.
+
+A family named like a series of a histogram or a summary — `foo_bucket`,
+`foo_sum` or `foo_count` next to a histogram `foo`, `foo_sum` or `foo_count`
+next to a summary `foo` — MUST fail validation naming both, since the
+exposition would hold two families of one name.
+
 Metric names SHOULD be normalized only when explicitly configured; silent surprising renaming is undesirable. A collector's `metrics_prefix` (§ 5.0a) is such explicit configuration, and validation applies to the prefixed names.
 
-The exposition MUST be served as `text/plain; version=0.0.4; charset=utf-8`.
+The exposition MUST be served as `text/plain; version=0.0.4; charset=utf-8`,
+with `X-Content-Type-Options: nosniff`: label values and help come from
+scraped targets, and a browser MUST show any markup in them as text rather
+than render it.
 A series' timestamp MUST end every line of it: a plain sample's, and each
 bucket, quantile, `_sum` and `_count` line of a histogram or a summary.
 
@@ -2734,10 +2784,12 @@ http_exporter_python_pool_runs_waiting                gauge
 http_exporter_trips_waiting                           gauge
 ```
 
-`http_exporter_trips_waiting` MUST be the trips waiting for a slot under
-`--probe.max-concurrent`, and `http_exporter_python_pool_runs_waiting` the
-script runs waiting for a worker under `--python.max-workers`, each `0`
-without its limit; neither carries a `collector` label.
+`http_exporter_trips_waiting` MUST be the static target scrapes waiting for a
+trip slot, because their collector is at `max_concurrent_probes` or the
+exporter at `--probe.max-concurrent` (a probe never waits, § 42.13b), and
+`http_exporter_python_pool_runs_waiting` the script runs waiting for a worker
+under `--python.max-workers`, `0` without that limit; neither carries a
+`collector` label.
 
 `http_exporter_collector_scrape_duration_seconds` MUST observe the duration of
 every trip to the target, from sending the request to having validated metrics,
@@ -2853,7 +2905,7 @@ Recommended behavior:
 
 `/probe`, the self-metrics path and the static targets path MUST compress
 their answer with gzip when the request's `Accept-Encoding` accepts `gzip` (or
-`x-gzip`, or `*`) with a non-zero quality — Prometheus asks for it on every scrape — and answer
+`x-gzip`, or `*`, which `gzip` or `x-gzip` named overrides) with a non-zero quality — Prometheus asks for it on every scrape — and answer
 uncompressed otherwise, and for `HEAD`. A compressed answer MUST carry
 `Content-Encoding: gzip` and no `Content-Length`; each of these answers, compressed or
 not, MUST carry `Vary: Accept-Encoding`. Errors are compressed like any other
@@ -2901,8 +2953,11 @@ non-positive interval MUST be rejected at startup rather than silently disabling
 the watch that was explicitly requested. The exporter SHOULD report whether the
 watch is active in its startup log.
 
-Changes MUST be detected by file modification time rather than by filesystem
-event notification. Kubernetes republishes a mounted ConfigMap by atomically
+Changes MUST be detected by file modification time and size rather than by
+filesystem event notification: any time other than the one last read is a
+change, an older one included, and the files MUST be stamped before they are
+read, at startup and on reload, so an edit made while they are is seen by the
+next tick. Kubernetes republishes a mounted ConfigMap by atomically
 swapping a `..data` symlink, which replaces the inode a file-level event watch
 is attached to; such a watch stops firing after the first change unless it
 watches the directory and re-arms. Polling is unaffected by this.
@@ -3140,6 +3195,14 @@ error="invalid JSON at position 381"
 
 Do not log credentials, authorization headers, or sensitive request bodies by default.
 
+The failure log MUST tell targets apart by the target as given, not as it is
+shown: two targets shown alike because a credential in their query is
+masked are two targets, each with failures of its own. A probe MUST be told
+apart by its parameters and forwarded headers too, and its lines MUST carry
+its `url` label. A failure not reported for an hour MUST be forgotten, whether
+or not the log is full: its return is a new failure, and its recovery after
+the silence is not logged.
+
 ---
 
 # 26. Security
@@ -3168,7 +3231,11 @@ and `request.denied_targets`, lists of host names, globs of host names
 entry that is none of these, such as one with a scheme, a port or a path,
 MUST be refused at load; another request type setting either MUST be refused
 as any key of another type is. Names MUST be compared without case and
-without a final dot, and an IPv4-mapped IPv6 address as its IPv4 address.
+without a final dot, and an IPv4-mapped IPv6 address as its IPv4 address. A
+host MUST be checked as it is dialed: an internationalised name, or one
+written in full-width characters, in the ASCII form the transport converts
+it to before dialing (`１２７.０.０.１` is `127.0.0.1`), and a host with no
+such form MUST be refused.
 
 - Every such collector MUST refuse the cloud metadata addresses,
   `169.254.169.254` and `fd00:ec2::254`, even with neither list set, unless
@@ -3197,7 +3264,12 @@ without a final dot, and an IPv4-mapped IPv6 address as its IPv4 address.
   connection the policy refuses MUST be reported as the refusal, not as the
   `UNAVAILABLE` grpc-go makes of a dialer's error, whether the call or the
   reflection question before it made it. A refused request MUST NOT be
-  retried.
+  retried. A connection to a host the request did not check, when nothing it
+  checked goes through a proxy, MUST be refused.
+- An idle connection MUST NOT carry a request of a collector whose lists
+  differ from those of the collector that opened it: connections are checked
+  once, when made, so collectors with different lists MUST NOT share a
+  connection pool.
 - A refused probe MUST be answered `403 Forbidden` naming the rule, whatever
   `error_handling.on_fetch_error` says, without contacting the target, and
   MUST be counted in `http_exporter_targets_refused_total`; a refused static
@@ -3618,7 +3690,9 @@ The check MUST run the same validation functions startup runs, in startup's
 order, and MUST honour the flags that change what startup loads:
 `--config.file`, `--static-targets-file`, `--config.expand-env`,
 `--static-targets.expand-env`, `--python.path`,
-and `--config.watch` with `--config.watch-interval`. A configuration that
+and `--config.watch` with `--config.watch-interval`. A malformed flag, such as
+a `--web.listen-address` that is not `host:port` with a TCP port, MUST be a
+command-line error (exit 2) before the check. A configuration that
 `--dry-run` passes MUST start with the same files and flags, and one it fails MUST
 be refused by startup; a test MUST pin this agreement for every failure the
 check can report.
@@ -5745,7 +5819,8 @@ See § 22.0c, § 23, § 42.1a and § 42.15b.
 - A static target scrape that runs out of its interval says the scrape ran
   out of its interval's budget.
 - Histogram, summary and sample lines all carry the series' timestamp, and the
-  exposition is `text/plain; version=0.0.4; charset=utf-8`.
+  exposition is `text/plain; version=0.0.4; charset=utf-8` with `nosniff`, so
+  markup a target puts in help or a label value is never rendered as HTML.
 - A `SIGHUP` during the shutdown delay does not end the process, which exits
   cleanly after the graceful shutdown; OTLP exports keep being made through
   the delay.
@@ -6035,6 +6110,81 @@ Tests MUST show:
   refuses it in `extraArgs`.
 - The collectors page has a *Debug report* switch, sending `debug=true`, on
   each form with the flag, and none without it.
+
+## 34.70 Review fixes: stale answers, logged bodies, redaction and static target debug tests
+
+Tests MUST show:
+
+- A probe refused `401` or `403` is not answered stale and the entry stays
+  for a later `503`, which is; a static target's scrape refused `401`
+  publishes no stale result; a gRPC call refused `UNAUTHENTICATED` or
+  `PERMISSION_DENIED` is not answered stale, and one refused `UNAVAILABLE`
+  is.
+- A logged body excerpt masks a bearer credential, a field named like a
+  token and one the excerpt's cut runs through; ordinary text is left alone.
+- One set of redaction rules gives a displayed target, a metric label's URL
+  and a debug report's URL, and a header value is withheld by its name.
+- A failed request's error, in a probe's answer, the log and a debug report,
+  quotes its URL with the query values masked and the password withheld,
+  and still unwraps to its cause; an unparseable target is withheld whole.
+- A target shown in the log, the static targets endpoint's `target` label and
+  the OTLP `target` attribute masks the value of a credential-named query
+  parameter and keeps the rest, so two probes differing in another
+  parameter stay two OTLP series; two targets differing only in a
+  credential's value, shown alike, are still two in the failure log, each
+  first failure logged.
+- `/static-targets?debug=<name>` is `403` without the flag, `404` for an
+  unknown name and `400` for an empty, repeated or combined parameter; it
+  scrapes with the target's own credential, which the report withholds,
+  shows the labelled series, and publishes and counts nothing.
+
+## 34.71 Review fixes: policy bypasses, retries, decoded values, labels, failure log and watch tests
+
+Tests MUST show:
+
+- A target written in full-width characters (`１２７.０.０.１`,
+  `ｌｏｃａｌｈｏｓｔ`) and an internationalised name resolving into a denied
+  network are refused as the host they are dialed as; a connection to a host
+  the request did not check, without a proxy, is refused.
+- An idle connection an open collector left does not carry a strict
+  collector's request to an address its lists refuse.
+- `retry_attempts` above 10 is refused, as a collector's `retry.attempts`
+  above 10 is; a scrape timeout header of `1e9`, `1e300` or `+Inf` gives an
+  hour's budget, without overflowing.
+- A gRPC reflection question carries the call's credentials and metadata.
+- JSON integers of any length keep every digit in labels; a YAML timestamp
+  stays its text and compares as text in jq; an integer past int64 is
+  written and compared as a number.
+- Series differing only in a label with an empty value are duplicates, said
+  to be; a label name starting with `__` is refused in validation, in
+  `transform.labels`, `rename_labels` and a static target's labels.
+- A label cut by `truncate: true` from text that is not valid UTF-8 stays
+  within the limit, and the repair is counted.
+- Probes of one target differing in `path` fail and recover apart, their
+  lines carrying `url`; a failure silent for an hour is logged as new, its
+  late recovery is not, and it is swept though the log is not full.
+- Reading the static targets against a file a reload replaced forgets no
+  result of a target the new file added.
+- The watch reads a file replaced by one with an older modification time,
+  and a change written while the startup configuration was read.
+- `--web.listen-address=9115` and a port past 65535 are command-line errors,
+  with `--dry-run` too.
+
+## 34.72 Review fixes: headers, compression, empty files, time zones, derived names and CSV headers tests
+
+Tests MUST show:
+
+- No `Proxy-` header is forwarded, listed in `forward_headers` or not.
+- `gzip;q=0, *` and `*, gzip;q=0` are not compressed; `*;q=0, gzip` is.
+- An empty configuration or static target file, or one of comments only, is
+  refused naming the file and saying it is empty.
+- A Python script reads named zones with `zoneinfo` and `dateutil.tz`, and
+  is still refused `/etc/passwd`, directly or through the zone directory by
+  `..`.
+- A gauge `foo_count` next to a histogram `foo`, and a counter `bar_sum` next
+  to a summary `bar`, fail validation naming both.
+- A CSV header naming a column twice fails the decode naming it; repeated
+  empty names, and a file read without a header, do not.
 
 # 35. Documentation requirements
 
@@ -6803,7 +6953,9 @@ MUST:
 - resolve the release version from the tag, which carries a prefix and
   therefore cannot be parsed as a bare semantic version, and fail when the tag
   does not end in `MAJOR.MINOR.PATCH`;
-- publish versioned and `latest` container tags to GHCR;
+- publish versioned and `latest` container tags to GHCR, moving `latest` only
+  to the newest release of all and the `MAJOR.MINOR` tag only to the newest
+  release of that line, so a patch to an older line never takes them back;
 - build release binaries for the documented target platforms; and
 - create a GitHub Release containing the software archives.
 
@@ -6907,6 +7059,12 @@ carries on (`log`, `ignore`) is not a failure. `ttl` MAY be `0s` with
 `stale_if_error` set: every probe then goes to the target, and the last good
 result is kept only to stand in for a failure. A collector whose definition
 changes MUST NOT serve a result stored under the previous one.
+
+A trip that failed because the target refused its credential — HTTP `401` or
+`403`, or gRPC `UNAUTHENTICATED` or `PERMISSION_DENIED` — MUST NOT be answered
+with a stale result, by a probe or a static target's scrape: the credential
+may have been revoked, and the stored result was given to another. The entry
+MUST stay stored, to stand in for a later failure of another kind.
 
 So that a stale answer never passes for a fresh one, while `stale_if_error` is
 set every answer of the collector MUST carry two gauges of the exporter's own,
@@ -7507,3 +7665,29 @@ The report MUST NOT show query values, a URL's userinfo, request bodies, or
 the values of request or response headers whose names contain `auth`,
 `cookie`, `token`, `secret`, `password`, `passwd`, `key`, `session`,
 `signature` or `credential`, in any case.
+
+With the same flag, `/static-targets?debug=<name>` MUST scrape the static
+target of that name once, as its schedule would — with its own request
+settings, headers and credentials, its interval as the budget, and waiting for
+a slot of the collector's `max_concurrent_probes` — and answer the same
+report, saying what the scrape would have published: `http_exporter_target_up`
+`1` or `0`, why, whether a stale result would stand in, and the series with the
+target's labels and `static_target`. It MUST NOT publish anything on the
+endpoint, count in a self-metric or be exported over OTLP, and MUST skip the
+response cache. Without the flag it MUST be answered `403`; a name no target
+in force has `404`; more than one `debug` value, an empty one, or `debug`
+together with `targets`, `400`.
+
+Every place a URL, a header or text from a target is shown — a displayed
+target, a metric label, a debug report, a logged body excerpt — MUST withhold
+credentials by the same rules, kept in one place: userinfo is never shown; a
+metric label drops the query, a debug report masks its values, and a
+displayed target — in a log line, the static targets endpoint's `target`
+label and the OTLP `target` attribute — masks the values of the parameters
+whose names read as credentials, with the header rule's words, and keeps the
+rest, in order, so targets that differ in anything else stay apart; a header value is withheld when its name
+reads as a credential's. An error that quotes a URL, as Go's HTTP client
+quotes the one a failed request was sending or `url.Parse` the text it could
+not parse, MUST quote it with its userinfo withheld and every query value
+masked, wherever the error is shown: a log line, a probe's answer or a debug
+report. The error MUST still unwrap to what it was.

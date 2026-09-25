@@ -53,6 +53,13 @@ const (
 type TransportSettings struct {
 	TLS         model.TLSConfig
 	EnableHTTP2 bool
+	// policy is the collector's allowed_targets and denied_targets
+	// (targetpolicy.go). A connection is checked against them once, when it
+	// is made, so collectors with different policies must not share one: an
+	// idle connection another collector opened would otherwise take a
+	// request to an address its own policy refuses. Policies are interned,
+	// so collectors with the same lists still share a pool.
+	policy *targetPolicy
 }
 
 type cachedTransport struct {

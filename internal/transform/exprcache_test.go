@@ -34,7 +34,7 @@ func TestCompiledJQIsSafeConcurrently(t *testing.T) {
 
 func BenchmarkJQCompiledOnce(b *testing.B) {
 	data := map[string]any{"servers": []any{map[string]any{"cpu": 1}, map[string]any{"cpu": 2}}}
-	for i := 0; i < b.N; i++ {
+	for b.Loop() {
 		if _, err := evaluateJQ(context.Background(), data, data, `[.servers[].cpu] | add`); err != nil {
 			b.Fatal(err)
 		}

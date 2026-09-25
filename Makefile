@@ -4,10 +4,16 @@ APP := prometheus-universal-exporter
 # panics on standard-library sources from a newer toolchain. Kept in step with
 # .github/workflows/ci.yml by a test.
 GOLANGCI_LINT_VERSION := v2.13.2
+# gopls is the Go language server: what VS Code and other editors show as
+# problems comes from it. Some of its analyzers exist nowhere else (writestring,
+# for one), so golangci-lint cannot stand in for it, and `make gopls-check`, the
+# pre-commit hook and CI run `gopls check` at this version. Needs a Go at least
+# as new as the release requires to install.
+GOPLS_VERSION := v0.23.0
 # Kept in step with .github/workflows/govulncheck.yml by a test.
 GOVULNCHECK_VERSION := v1.8.0
 
-.PHONY: build test test-external vet fmt fmt-check lint lint-version lint-install hooks precommit vulncheck helm-test schemas
+.PHONY: build test test-external vet fmt fmt-check lint lint-version lint-install gopls-check gopls-version gopls-install hooks precommit vulncheck helm-test schemas
 # REQUEST_TYPES builds only the listed request types, comma-separated, for
 # example `make build REQUEST_TYPES=http`. Empty, the default, builds every type.
 # See "Choosing request types at build time" in docs/CONFIGURATION.md.
@@ -68,14 +74,37 @@ lint-version:
 lint-install:
 	go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@$(GOLANGCI_LINT_VERSION)
 
+# Every Go file, as an editor would check it; gopls check exits 0 even when it
+# reports, so any output fails the target.
+gopls-check: gopls-version
+	@out=$$(gopls check $$(git ls-files '*.go') 2>&1); \
+	if [ -n "$$out" ]; then \
+		echo "$$out"; \
+		echo "gopls reports the findings above, as an editor shows them" >&2; \
+		exit 1; \
+	fi
+
+gopls-version:
+	@command -v gopls >/dev/null 2>&1 || { \
+		echo "gopls is not installed; run: make gopls-install" >&2; exit 1; }
+	@have=$$(gopls version | head -n 1 | awk '{print $$2}'); \
+	have=$${have%%+*}; \
+	if [ "$$have" != '$(GOPLS_VERSION)' ]; then \
+		echo "gopls is $$have but CI runs $(GOPLS_VERSION); run: make gopls-install" >&2; \
+		exit 1; \
+	fi
+
+gopls-install:
+	go install golang.org/x/tools/gopls@$(GOPLS_VERSION)
+
 # Points git at .githooks, whose pre-commit hook runs `make precommit`, so a
 # commit that CI's lint or vet would fail is refused before it is made.
 hooks:
 	git config core.hooksPath .githooks
 
 # What the pre-commit hook runs: the fast checks CI fails on, with the pinned
-# linter. `make ci` remains the full run.
-precommit: fmt-check lint vet
+# linter and gopls. `make ci` remains the full run.
+precommit: fmt-check lint gopls-check vet
 
 # Known vulnerabilities the code reaches. For reference, like the CI workflow,
 # and not part of `make ci`.
@@ -148,4 +177,4 @@ helm-test:
 		exit 1; \
 	fi
 
-ci: fmt-check lint test vet build helm-test
+ci: fmt-check lint gopls-check test vet build helm-test

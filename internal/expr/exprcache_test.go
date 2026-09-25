@@ -40,7 +40,7 @@ func TestXPathCacheKeyIncludesNamespaces(t *testing.T) {
 // BenchmarkJQCompiledPerEvaluation is what every evaluation used to cost.
 func BenchmarkJQCompiledPerEvaluation(b *testing.B) {
 	data := map[string]any{"servers": []any{map[string]any{"cpu": 1}, map[string]any{"cpu": 2}}}
-	for i := 0; i < b.N; i++ {
+	for b.Loop() {
 		query, err := gojq.Parse(`[.servers[].cpu] | add`)
 		if err != nil {
 			b.Fatal(err)

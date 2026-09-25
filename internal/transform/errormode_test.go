@@ -100,7 +100,9 @@ func TestALogRuleIsLoggedOncePerScrape(t *testing.T) {
 		if i > 0 {
 			rows.WriteString(",")
 		}
-		rows.WriteString(`{"name":"n` + strconv.Itoa(i) + `"}`)
+		rows.WriteString(`{"name":"n`)
+		rows.WriteString(strconv.Itoa(i))
+		rows.WriteString(`"}`)
 	}
 	rows.WriteString("]")
 	c := model.Collector{Name: "table", Request: model.RequestConfig{Type: fetch.RequestTypeHTTP}, Decoder: model.DecoderConfig{Type: "json"}, Transform: model.TransformConfig{Type: "jq"}, Metrics: []model.MetricRule{

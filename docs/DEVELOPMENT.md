@@ -4,8 +4,9 @@
 make fmt        # rewrite the whole tree with gofmt, tools/ included
 make fmt-check  # fail if any source needs gofmt
 make lint       # golangci-lint, same configuration and version as CI
+make gopls-check  # gopls check, what VS Code shows, at CI's version
 make hooks      # once per clone: a pre-commit hook runs make precommit
-make precommit  # fmt-check, lint and vet: what the hook runs
+make precommit  # fmt-check, lint, gopls-check and vet: what the hook runs
 make test       # go test ./..., then with -race, twice, in a random order
 make vet
 make build      # every request type; REQUEST_TYPES=http builds only those listed
@@ -130,9 +131,19 @@ v2.5). `make lint-install` builds the linter with `go install`, which needs a Go
 at least as new as the one that release requires; Homebrew's `golangci-lint` or
 the release binary from GitHub work as well, as long as the version matches.
 
+What VS Code and other editors underline comes from gopls, the Go language
+server, not from golangci-lint, and some of its analyzers exist only in gopls
+(`writestring`, which flags `b.WriteString(a + b)`, for one). `make
+gopls-check` runs `gopls check` over every Go file and fails on any finding,
+and CI runs it too. Like the linter it is pinned (`GOPLS_VERSION`) and refuses
+another installed version; `make gopls-install` installs it, into the same
+`GOPATH/bin` the VS Code Go extension uses, so the editor then shows exactly
+what CI checks. Let the extension auto-update gopls and the editor may show
+findings of a newer release before CI has them; bump the pin to follow.
+
 Run `make hooks` once in a clone. It points git at `.githooks`, whose
-`pre-commit` hook runs `make precommit` — `gofmt`, `golangci-lint` at the pinned
-version and `go vet` — and refuses the commit when any of them fails, so a
+`pre-commit` hook runs `make precommit` — `gofmt`, `golangci-lint` and `gopls
+check` at the pinned versions, and `go vet` — and refuses the commit when any of them fails, so a
 commit CI would fail on those never gets made. `git commit --no-verify` skips
 it once. The tests are left to `make test` and CI, since the race run takes
 minutes.

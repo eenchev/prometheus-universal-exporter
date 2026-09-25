@@ -382,7 +382,8 @@ func (t *probeTrace) report(p debugProbe, verdict string, answer *model.MetricSe
 	defer t.mu.Unlock()
 	var b bytes.Buffer
 	c := p.collector
-	b.WriteString(p.whose() + "\n")
+	b.WriteString(p.whose())
+	b.WriteString("\n")
 	if p.static != nil {
 		fmt.Fprintf(&b, "Took %s. The scrape would have published %s.\n", took.Round(time.Millisecond), verdict)
 		b.WriteString("A debug scrape skips the response cache, publishes nothing on the endpoint, records no self-metric and exports nothing over OTLP.\n")
@@ -428,7 +429,8 @@ func (t *probeTrace) report(p debugProbe, verdict string, answer *model.MetricSe
 		if s.note != "" {
 			line += "  " + s.note
 		}
-		b.WriteString(strings.TrimRight(line, " ") + "\n")
+		b.WriteString(strings.TrimRight(line, " "))
+		b.WriteString("\n")
 	}
 
 	if t.transform != nil || len(t.failures) > 0 {
@@ -442,7 +444,9 @@ func (t *probeTrace) report(p debugProbe, verdict string, answer *model.MetricSe
 	}
 	for _, line := range strings.Split(strings.TrimRight(t.logs.String(), "\n"), "\n") {
 		if line != "" {
-			b.WriteString("  " + line + "\n")
+			b.WriteString("  ")
+			b.WriteString(line)
+			b.WriteString("\n")
 		}
 	}
 
@@ -511,7 +515,9 @@ func writeBody(b *bytes.Buffer, body []byte) {
 	}
 	fmt.Fprintf(b, "  Body: %d bytes\n", len(body))
 	for _, line := range strings.Split(strings.TrimRight(string(shown), "\n"), "\n") {
-		b.WriteString("    " + line + "\n")
+		b.WriteString("    ")
+		b.WriteString(line)
+		b.WriteString("\n")
 	}
 	if cut {
 		fmt.Fprintf(b, "    ... cut at %d bytes\n", debugBodyLimit)
@@ -553,7 +559,9 @@ func writeTransform(b *bytes.Buffer, c *model.Collector, set *model.MetricSet, f
 		empty = append(empty, name)
 	}
 	if len(empty) > 0 && c.Transform.Type != "prometheus" {
-		b.WriteString("  Rules that gave no series: " + strings.Join(empty, ", ") + "\n")
+		b.WriteString("  Rules that gave no series: ")
+		b.WriteString(strings.Join(empty, ", "))
+		b.WriteString("\n")
 	}
 	if len(failures) > 0 {
 		b.WriteString("  Rules that carried on without some series\n")
@@ -565,7 +573,8 @@ func writeTransform(b *bytes.Buffer, c *model.Collector, set *model.MetricSet, f
 			if f.First != nil {
 				line += "; first: " + f.First.Error()
 			}
-			b.WriteString(line + "\n")
+			b.WriteString(line)
+			b.WriteString("\n")
 		}
 	}
 }

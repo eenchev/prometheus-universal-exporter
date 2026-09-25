@@ -156,7 +156,8 @@ func quoteBareReferences(text string) (string, map[int]bool) {
 			out.WriteString(quoted)
 			body = body[match[7]:]
 		}
-		out.WriteString(body + rest)
+		out.WriteString(body)
+		out.WriteString(rest)
 	}
 	return out.String(), wrapped
 }

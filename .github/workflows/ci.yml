@@ -98,6 +98,11 @@ jobs:
         with:
           version: v2.13.2
         if: steps.changes.outputs.go == 'true'
+      # What an editor shows comes from gopls, some of whose analyzers
+      # golangci-lint does not have. The Makefile pins its version.
+      - name: gopls check
+        run: make gopls-install gopls-check
+        if: steps.changes.outputs.go == 'true'
       - run: go test ./...
         if: steps.changes.outputs.go == 'true'
       # Twice, in a random order, so a test that depends on the order tests

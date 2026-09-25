@@ -284,7 +284,9 @@ func TestLocalLintRunsOnlyWithThePinnedVersion(t *testing.T) {
 		"\nlint: lint-version\n",
 		"golangci-lint version --short",
 		"want='$(GOLANGCI_LINT_VERSION)'",
-		"\nprecommit: fmt-check lint vet\n",
+		"\nprecommit: fmt-check lint gopls-check vet\n",
+		"\ngopls-check: gopls-version\n",
+		"go install golang.org/x/tools/gopls@$(GOPLS_VERSION)",
 		"git config core.hooksPath .githooks",
 	} {
 		if !strings.Contains(text, want) {
@@ -305,6 +307,25 @@ func TestLocalLintRunsOnlyWithThePinnedVersion(t *testing.T) {
 	}
 	if !strings.HasPrefix(string(hook), "#!/bin/sh\n") || !strings.Contains(string(hook), "make --no-print-directory precommit") {
 		t.Errorf(".githooks/pre-commit no longer runs make precommit:\n%s", hook)
+	}
+}
+
+// What an editor shows comes from gopls, and some of its analyzers exist
+// nowhere else, so CI runs gopls check at the Makefile's pinned version.
+func TestCIRunsGoplsCheck(t *testing.T) {
+	makefile, err := os.ReadFile("Makefile")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !regexp.MustCompile(`(?m)^GOPLS_VERSION[ \t]*:?=[ \t]*v[0-9]+\.[0-9]+\.[0-9]+$`).Match(makefile) {
+		t.Error("the Makefile no longer pins GOPLS_VERSION")
+	}
+	workflow, err := os.ReadFile(".github/workflows/ci.yml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(workflow), "run: make gopls-install gopls-check") {
+		t.Error("ci.yml no longer runs gopls check")
 	}
 }
 

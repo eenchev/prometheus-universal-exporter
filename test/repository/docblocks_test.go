@@ -36,7 +36,8 @@ func indent(block, prefix string) string {
 	var b strings.Builder
 	for _, line := range strings.SplitAfter(block, "\n") {
 		if line != "" {
-			b.WriteString(prefix + line)
+			b.WriteString(prefix)
+			b.WriteString(line)
 		}
 	}
 	return b.String()

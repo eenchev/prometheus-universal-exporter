@@ -1,6 +1,7 @@
 package exporter
 
 import (
+	"context"
 	"errors"
 	"log/slog"
 
@@ -20,7 +21,7 @@ import (
 
 // noteGraphite counts and logs what the graphite decoder left out of d. file
 // is the directory's file d was read from, or empty.
-func (s *Server) noteGraphite(d *decode.Decoded, c *model.Collector, rec statsRecorder, target, file string) {
+func (s *Server) noteGraphite(ctx context.Context, d *decode.Decoded, c *model.Collector, rec statsRecorder, target, file string) {
 	report := d.Graphite
 	if report == nil {
 		return
@@ -34,12 +35,12 @@ func (s *Server) noteGraphite(d *decode.Decoded, c *model.Collector, rec statsRe
 		attrs = append(attrs, "file", file)
 	}
 	if report.LeftOut() > 0 {
-		s.logger.Debug("graphite series left out", append(attrs, "no_points", report.NoPoints, "older_than_max_age", report.Stale, "duplicates", report.Duplicates)...)
+		s.tripDebug(ctx, "graphite series left out", append(attrs, "no_points", report.NoPoints, "older_than_max_age", report.Stale, "duplicates", report.Duplicates)...)
 	}
 	key := failureKey(c.Name, target, file) + "\x00carbon lines"
 	if report.SkippedLines > 0 {
-		s.failures.failed(s.logger, slog.LevelWarn, key, "carbon lines skipped", "decode", errors.New(report.FirstSkipped), append(attrs, "skipped", report.SkippedLines)...)
+		s.tripFailed(ctx, slog.LevelWarn, key, "carbon lines skipped", "decode", errors.New(report.FirstSkipped), append(attrs, "skipped", report.SkippedLines)...)
 		return
 	}
-	s.failures.recovered(s.logger, key, "carbon lines read whole again", attrs...)
+	s.tripRecovered(ctx, key, "carbon lines read whole again", attrs...)
 }

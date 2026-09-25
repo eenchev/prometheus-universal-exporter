@@ -1,9 +1,13 @@
 package transform
 
 import (
+	"net/http"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/eenchev/prometheus-universal-exporter/internal/decode"
+	"github.com/eenchev/prometheus-universal-exporter/internal/fetch"
 	"github.com/eenchev/prometheus-universal-exporter/internal/model"
 )
 
@@ -126,5 +130,118 @@ func TestValueRulesPerTransform(t *testing.T) {
 	blank := model.Collector{Name: "c", Transform: model.TransformConfig{Type: "jq"}}
 	if err := CheckMetricRule(&blank, &model.MetricRule{Name: "x", Expression: ".x", ValueMap: map[string]float64{" up": 1}}); err == nil {
 		t.Error("a key with blanks was accepted")
+	}
+}
+
+// $status is the HTTP status, a grpc call's status code, or null for an
+// answer without one, such as a local file's; Python's
+// response.status_code is the same.
+func TestTheStatusRulesRead(t *testing.T) {
+	grpcNotFound := 5
+	for name, tc := range map[string]struct {
+		response *fetch.HTTPResponse
+		want     string
+	}{
+		"http":      {&fetch.HTTPResponse{StatusCode: 503}, "503"},
+		"grpc":      {&fetch.HTTPResponse{StatusCode: 200, GRPCCode: &grpcNotFound}, "5"},
+		"localfile": {&fetch.HTTPResponse{StatusCode: 200, NoStatus: true}, "none"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			c := model.Collector{Name: "s", Decoder: model.DecoderConfig{Type: "json"}, Transform: model.TransformConfig{Type: "jq"},
+				Metrics: []model.MetricRule{{Name: "up", Type: model.GaugeMetricType, Expression: "1", Labels: []model.LabelRule{{Name: "status", Expression: `$status // "none" | tostring`}}}}}
+			r := tc.response
+			r.Body, r.Headers = []byte("{}"), http.Header{"Content-Type": {"application/json"}}
+			d, err := decode.Decode(r, &c)
+			if err != nil {
+				t.Fatal(err)
+			}
+			set, err := Transform(t.Context(), d, r, &c, "python3")
+			if err != nil || set.Metrics[0].Labels["status"] != tc.want {
+				t.Fatalf("%v %+v", err, set)
+			}
+			requirePython(t)
+			py := model.Collector{Name: "py", Request: model.RequestConfig{Type: fetch.RequestTypeHTTP}, Transform: model.TransformConfig{Type: "python", Script: `metric(name="up", value=1, labels={"status": "none" if response.status_code is None else response.status_code})`},
+				Limits: model.Limits{ScriptTimeout: model.Duration(2 * time.Second), MaxOutputBytes: 1 << 20}}
+			set, err = executePython(t.Context(), "python3", py.Transform.Script, d, r, &py)
+			if err != nil || set.Metrics[0].Labels["status"] != tc.want {
+				t.Fatalf("python: %v %+v", err, set)
+			}
+		})
+	}
+}
+
+// A label's value_map turns the value its expression gives into another,
+// "*" catches the rest, and a value mapped to "" leaves the label off.
+func TestLabelValueMaps(t *testing.T) {
+	states := map[string]string{"1": "running", "2": "stopped", "0": "", "*": "unknown"}
+	c := model.Collector{Name: "l", Decoder: model.DecoderConfig{Type: "json"}, Transform: model.TransformConfig{Type: "jq"},
+		Metrics: []model.MetricRule{{Name: "worker_up", Type: model.GaugeMetricType, Items: ".workers[]", Expression: "1", Labels: []model.LabelRule{
+			{Name: "name", Expression: ".name"},
+			{Name: "state", Expression: ".state", ValueMap: states},
+		}}}}
+	for i := range c.Metrics {
+		if err := CheckMetricRule(&c, &c.Metrics[i]); err != nil {
+			t.Fatal(err)
+		}
+	}
+	set, err := runBody(t, c, "application/json", `{"workers": [{"name": "a", "state": 1}, {"name": "b", "state": "2"}, {"name": "c", "state": 9}, {"name": "d", "state": 0}]}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := map[string]string{}
+	for _, m := range set.Metrics {
+		state, ok := m.Labels["state"]
+		if !ok {
+			state = "(none)"
+		}
+		got[m.Labels["name"]] = state
+	}
+	want := map[string]string{"a": "running", "b": "stopped", "c": "unknown", "d": "(none)"}
+	for name, state := range want {
+		if got[name] != state {
+			t.Errorf("%s: state %q, want %q", name, got[name], state)
+		}
+	}
+	regex := model.Collector{Name: "r", Decoder: model.DecoderConfig{Type: "text"}, Transform: model.TransformConfig{Type: "regex"},
+		Metrics: []model.MetricRule{{Name: "disk", Type: model.GaugeMetricType, Expression: `(\d+) (\w+)`, Labels: []model.LabelRule{{Name: "mount", Expression: "2", ValueMap: map[string]string{"root": "/"}}}}}}
+	set, err = runBody(t, regex, "text/plain", "5 root\n7 data\n")
+	if err != nil || set.Metrics[0].Labels["mount"] != "/" || set.Metrics[1].Labels["mount"] != "data" {
+		t.Fatalf("%v %+v", err, set)
+	}
+	for name, rule := range map[string]model.MetricRule{
+		"static":            {Name: "x", Expression: ".x", Labels: []model.LabelRule{{Name: "l", Value: "v", ValueMap: map[string]string{"v": "w"}}}},
+		"required to empty": {Name: "x", Expression: ".x", Labels: []model.LabelRule{{Name: "l", Expression: ".l", Required: true, ValueMap: map[string]string{"a": ""}}}},
+		"blank key":         {Name: "x", Expression: ".x", Labels: []model.LabelRule{{Name: "l", Expression: ".l", ValueMap: map[string]string{" a": "b"}}}},
+		"rule without name": {Expression: "^x$", Labels: []model.LabelRule{{Name: "l", Expression: "l", ValueMap: map[string]string{"a": "b"}}}},
+	} {
+		transformType := "jq"
+		if name == "rule without name" {
+			transformType = "prometheus"
+		}
+		x := model.Collector{Name: "c", Transform: model.TransformConfig{Type: transformType}}
+		if err := CheckMetricRule(&x, &rule); err == nil || !strings.Contains(err.Error(), "value_map") {
+			t.Errorf("%s: %v", name, err)
+		}
+	}
+}
+
+// Two rules of one name may map a label only alike: its series are shared.
+func TestLabelValueMapsOfOneNameMustAgree(t *testing.T) {
+	rule := func(values map[string]string) model.MetricRule {
+		return model.MetricRule{Name: "worker_up", Expression: "1", Labels: []model.LabelRule{{Name: "state", Expression: ".state", ValueMap: values}}}
+	}
+	differ := model.Collector{Name: "c", Metrics: []model.MetricRule{rule(map[string]string{"1": "running"}), rule(map[string]string{"1": "up"})}}
+	if err := CheckLabelValueMapsAgree(&differ); err == nil || !strings.Contains(err.Error(), "rule 1 and another in rule 2") {
+		t.Fatalf("err=%v", err)
+	}
+	alike := model.Collector{Name: "c", Metrics: []model.MetricRule{rule(map[string]string{"1": "running"}), rule(map[string]string{"1": "running"})}}
+	if err := CheckLabelValueMapsAgree(&alike); err != nil {
+		t.Fatal(err)
+	}
+	named := differ
+	named.Metrics = []model.MetricRule{rule(map[string]string{"1": "running"}), rule(map[string]string{"1": "up"})}
+	named.Metrics[1].Name = "worker_other"
+	if err := CheckLabelValueMapsAgree(&named); err != nil {
+		t.Fatal(err)
 	}
 }

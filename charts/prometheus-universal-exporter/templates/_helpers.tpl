@@ -22,7 +22,9 @@
   "--probe.default-timeout" "set server.probeDefaultTimeout instead"
   "--probe.max-concurrent" "set server.probeMaxConcurrent instead"
   "--python.max-workers" "set server.pythonMaxWorkers instead"
+  "--runtime.memory-limit-ratio" "set goMemLimit.ratio instead"
   "--web.enable-lifecycle" "set server.enableLifecycle instead"
+  "--web.enable-probe-debug" "set server.probeDebug instead"
   "--web.shutdown-timeout" "set server.shutdownTimeout instead"
   "--web.shutdown-delay" "set server.shutdownDelay instead" -}}
 {{- /* These flags make the exporter print something and exit instead of
@@ -293,11 +295,17 @@ app.kubernetes.io/managed-by: {{ .Release.Service }}
 {{- if .Values.serviceAccount.create }}{{ default (include "prometheus-universal-exporter.fullname" .) .Values.serviceAccount.name }}{{ else }}{{ default "default" .Values.serviceAccount.name }}{{ end }}
 {{- end }}
 
-{{- define "prometheus-universal-exporter.envSets" -}}
-{{- /* "true" when the env list, (list env name), sets the variable name. */ -}}
-{{- $name := index . 1 -}}
-{{- range (index . 0 | default list) -}}
-{{- if eq (toString .name) $name }}true{{ end -}}
+{{- define "prometheus-universal-exporter.memoryLimitRatio" -}}
+{{- /* --runtime.memory-limit-ratio from goMemLimit: empty, leaving the flag
+       out, when it is off. The exporter reads the container's memory limit
+       from its cgroup, so no limit is needed here; without one it keeps the
+       Go default. */ -}}
+{{- if .Values.goMemLimit.enabled -}}
+{{- $ratio := .Values.goMemLimit.ratio | toString -}}
+{{- if not (regexMatch "^(0?\\.[0-9]*[1-9][0-9]*|1(\\.0*)?)$" $ratio) -}}
+{{- fail (printf "goMemLimit.ratio %s must be more than 0 and at most 1, such as 0.8" $ratio) -}}
+{{- end -}}
+{{- $ratio -}}
 {{- end -}}
 {{- end }}
 {{- define "prometheus-universal-exporter.validateProbe" -}}

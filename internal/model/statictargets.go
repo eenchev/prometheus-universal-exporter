@@ -84,6 +84,10 @@ type TargetRequestConfig struct {
 	// sent besides its metadata, a key of both taking the target's value.
 	Message  string            `yaml:"message"`
 	Metadata map[string]string `yaml:"metadata"`
+	// AcceptStatus and AcceptCodes replace the collector's
+	// request.accept_status and accept_codes for this target.
+	AcceptStatus []string `yaml:"accept_status"`
+	AcceptCodes  []string `yaml:"accept_codes"`
 }
 
 // TargetRetryConfig is a static target's request.retry. Each key it sets

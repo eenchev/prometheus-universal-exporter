@@ -53,14 +53,14 @@ func (s *Server) collectDirectory(ctx context.Context, read *fetch.DirectoryRead
 	// logged like repeated failures (failurelog.go).
 	listingKey, skippedKey := failureKey(c.Name, logTarget, "\x00listing"), failureKey(c.Name, logTarget, "\x00skipped")
 	if read.Truncated {
-		s.failures.failed(s.logger, slog.LevelWarn, listingKey, "directory has more entries than one scrape lists; only the first were considered", "listing", nil, "collector", c.Name, "target", logTarget, "directory", read.Path, "listed", read.Listed, "max_files", c.Request.MaxFiles)
+		s.tripFailed(ctx, slog.LevelWarn, listingKey, "directory has more entries than one scrape lists; only the first were considered", "listing", nil, "collector", c.Name, "target", logTarget, "directory", read.Path, "listed", read.Listed, "max_files", c.Request.MaxFiles)
 	} else {
-		s.failures.recovered(s.logger, listingKey, "directory is listed whole again", "collector", c.Name, "target", logTarget, "directory", read.Path)
+		s.tripRecovered(ctx, listingKey, "directory is listed whole again", "collector", c.Name, "target", logTarget, "directory", read.Path)
 	}
 	if len(read.Skipped) > 0 {
-		s.failures.failed(s.logger, slog.LevelWarn, skippedKey, "directory has more matching files than request.max_files; the rest were skipped", "max_files", nil, "collector", c.Name, "target", logTarget, "directory", read.Path, "matched", read.Matched, "max_files", c.Request.MaxFiles, "skipped", len(read.Skipped), "first_skipped", read.Skipped[0])
+		s.tripFailed(ctx, slog.LevelWarn, skippedKey, "directory has more matching files than request.max_files; the rest were skipped", "max_files", nil, "collector", c.Name, "target", logTarget, "directory", read.Path, "matched", read.Matched, "max_files", c.Request.MaxFiles, "skipped", len(read.Skipped), "first_skipped", read.Skipped[0])
 	} else {
-		s.failures.recovered(s.logger, skippedKey, "directory is within request.max_files again", "collector", c.Name, "target", logTarget, "directory", read.Path)
+		s.tripRecovered(ctx, skippedKey, "directory is within request.max_files again", "collector", c.Name, "target", logTarget, "directory", read.Path)
 	}
 	// One script timer covers every file: the gauge is the Python this probe
 	// ran, whichever files ran it.
@@ -79,10 +79,10 @@ func (s *Server) collectDirectory(ctx context.Context, read *fetch.DirectoryRead
 		fileKey := failureKey(c.Name, logTarget, file.Name)
 		if failure != nil {
 			failed[file.Name] = true
-			s.failures.failed(s.logger, slog.LevelWarn, fileKey, "file of a directory failed; its series are left out and the other files' are answered", failure.stage, failure.err, "collector", c.Name, "target", logTarget, "file", file.Name, "stage", failure.stage)
+			s.tripFailed(ctx, slog.LevelWarn, fileKey, "file of a directory failed; its series are left out and the other files' are answered", failure.stage, failure.err, "collector", c.Name, "target", logTarget, "file", file.Name, "stage", failure.stage)
 			continue
 		}
-		s.failures.recovered(s.logger, fileKey, "file of a directory recovered", "collector", c.Name, "target", logTarget, "file", file.Name)
+		s.tripRecovered(ctx, fileKey, "file of a directory recovered", "collector", c.Name, "target", logTarget, "file", file.Name)
 		for _, m := range set.Metrics {
 			if _, seen := families[m.Name]; !seen {
 				order = append(order, m.Name)
@@ -131,7 +131,7 @@ func (s *Server) collectFile(ctx context.Context, file fetch.FileRead, c *model.
 		return nil, &fileFailure{"decode", err}
 	}
 	rec.update(func(x *serverStats) { x.decodeOK++ })
-	s.noteGraphite(d, c, rec, logTarget, file.Name)
+	s.noteGraphite(ctx, d, c, rec, logTarget, file.Name)
 	set, err := s.transformRecorded(ctx, d, file.Response, c, rec)
 	if err != nil {
 		rec.update(func(x *serverStats) {
@@ -148,7 +148,7 @@ func (s *Server) collectFile(ctx context.Context, file fetch.FileRead, c *model.
 	if set == nil {
 		set = &model.MetricSet{}
 	}
-	s.sanitizeUTF8(set, rec, c, file.Name)
+	s.sanitizeUTF8(ctx, set, rec, c, file.Name)
 	if err := set.Validate(c.Limits); err != nil {
 		rec.update(func(x *serverStats) { x.limitErrors++ })
 		return nil, &fileFailure{"validation", err}

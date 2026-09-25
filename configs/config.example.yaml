@@ -44,6 +44,21 @@ otlp:
 #     # query string are never put in a label.
 #     verbose: false
 
+# A top-level key starting with x- is this file's own: the exporter ignores
+# it. It is the place for settings several collectors share, written once as
+# a YAML anchor (&name) and merged into each with <<: *name. A key set next to
+# the merge replaces that key of the anchor whole.
+x-guarded-request: &guarded_request
+  type: http
+  # Hosts, globs, addresses and CIDR networks a collector's requests may not
+  # reach, whoever names the target: here the exporter's own host. A refused
+  # probe is answered 403. allowed_targets, when set, is the only place
+  # requests may go. The cloud metadata service, 169.254.169.254 and
+  # fd00:ec2::254, is refused by every collector unless allowed_targets
+  # lists it.
+  denied_targets: [127.0.0.0/8, "::1"]
+  # allowed_targets: ["*.internal.example", 10.0.0.0/8]
+
 # Further collectors can live in files of their own, each holding a collectors
 # list and nothing else. Entries are paths or glob patterns relative to this
 # file. A collector name must be unique across this file and all of them.
@@ -99,9 +114,16 @@ collectors:
       # retry:
       #   attempts: 2
       #   backoff: 2s
+      # Statuses whose answers are decoded, every 2xx by default: a health
+      # endpoint that reports its checks with 503 can be read too. Rules
+      # read the status as $status and the headers as $headers.
+      # accept_status: ["2xx", 503]
     # limits:
     #   # Maximum live cache entries for this collector. Defaults to 1000.
     #   max_cache_entries: 1000
+    #   # The most memory each of this collector's Python workers, which run
+    #   # the pre_script below, may use; at least 32MiB, unbounded by default.
+    #   max_script_memory: 256MiB
     decoder:
       type: json
     transform:
@@ -124,6 +146,17 @@ collectors:
         labels:
           - name: environment
             expression: .environment
+            # Turns a value into another; "*" catches the rest, and "" leaves
+            # the label off.
+            # value_map: {prod: production, stg: staging}
+      # Text to a number with value_map ("*" for anything else), and a unit
+      # change with scale:
+      # - name: application_state
+      #   expression: .state
+      #   value_map: {up: 1, degraded: 0.5, down: 0, "*": -1}
+      # - name: application_latency_seconds
+      #   expression: .latency_ms
+      #   scale: 0.001
 
   # Set targetAuth.enabled=true in the Helm chart and store the token in the
   # configured Secret key when using this file-based target credential.
@@ -134,7 +167,7 @@ collectors:
 
   - name: legacy_text
     request:
-      type: http
+      <<: *guarded_request
       path: /status
       # Monitor credentials and selected headers can be propagated explicitly.
       # forward_authorization: true
@@ -151,7 +184,7 @@ collectors:
 
   - name: app_csv
     request:
-      type: http
+      <<: *guarded_request
       path: /status.csv
     transform:
       type: csv

@@ -9,6 +9,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/eenchev/prometheus-universal-exporter/internal/fetch"
 )
 
 // Prometheus tells a target how long it will wait for a scrape in the
@@ -98,13 +100,19 @@ func (s *Server) SetDefaultProbeTimeout(timeout time.Duration) { s.defaultProbeT
 // probeDeadline is the budget of a probe: Prometheus's scrape timeout less the
 // offset when it sent one, else the default timeout, whatever timeout
 // parameter the probe gave, unless the default is 0. source says where it
-// came from.
-func (s *Server) probeDeadline(h http.Header) (budget time.Duration, source string) {
+// came from, and that the timeout parameter was capped when it asked for
+// more, so an error at the default's end does not read as the parameter
+// having been ignored.
+func (s *Server) probeDeadline(h http.Header, overrides fetch.RequestOverrides) (budget time.Duration, source string) {
 	if budget := probeBudget(h, s.timeoutOffset); budget > 0 {
 		return budget, budgetFromScrapeTimeout
 	}
 	if s.defaultProbeTimeout > 0 {
-		return s.defaultProbeTimeout, budgetFromDefault
+		source := budgetFromDefault
+		if overrides.Timeout > s.defaultProbeTimeout {
+			source += fmt.Sprintf("; its timeout parameter, %s, is capped to it", overrides.Timeout)
+		}
+		return s.defaultProbeTimeout, source
 	}
 	return 0, ""
 }

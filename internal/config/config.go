@@ -341,7 +341,7 @@ func validateMetricRules(c *model.Config, x *model.Collector) error {
 			return err
 		}
 	}
-	return nil
+	return transform.CheckLabelValueMapsAgree(x)
 }
 
 // validateWebAuthSettings checks the exporter's own basic authentication,
@@ -607,6 +607,11 @@ func (m *Manager) StaticTargets() []model.StaticTarget {
 	}
 	return f.Targets
 }
+
+// StaticTargetFile returns the static target file in force, nil without one.
+// A reload that changes the targets stores a new file, so the pointer tells a
+// reader whether the targets changed since it last looked.
+func (m *Manager) StaticTargetFile() *model.StaticTargetFile { return m.targetFile.Load() }
 
 // StaticTargetConcurrency is how many static targets are scraped at once, as
 // the file in force says.

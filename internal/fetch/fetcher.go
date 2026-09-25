@@ -24,14 +24,35 @@ import (
 // Duration how long it took.
 type HTTPResponse struct {
 	StatusCode int
-	Headers    http.Header
-	Body       []byte
-	Target     string
-	Collector  string
-	Duration   time.Duration
+	// NoStatus says the answer has no status of its own, as a local file's
+	// has not: StatusCode is only what lets it through the status check.
+	NoStatus bool
+	// GRPCCode is a grpc call's status code: 0 for OK, or a code the
+	// collector accepts (request.accept_codes).
+	GRPCCode  *int
+	Headers   http.Header
+	Body      []byte
+	Target    string
+	Collector string
+	Duration  time.Duration
 	// Directory is set instead of Body by a localfile collector reading a
 	// directory: every file it read, each to be decoded on its own.
 	Directory *DirectoryRead
+}
+
+// Status is the answer's status as rules read it, $status in jq and yq and
+// response.status_code in Python: the HTTP status, a grpc call's status code,
+// or nil for an answer without one, such as a local file's.
+func (r *HTTPResponse) Status() any {
+	switch {
+	case r == nil || r.NoStatus:
+		return nil
+	case r.GRPCCode != nil:
+		return *r.GRPCCode
+	case r.StatusCode != 0:
+		return r.StatusCode
+	}
+	return nil
 }
 
 // GraphiteContentType is the Content-Type a local file of carbon plaintext
@@ -68,6 +89,11 @@ type RequestOverrides struct {
 	Message    *string
 	Metadata   map[string]string
 	RetryCodes []string
+	// AcceptStatus and AcceptCodes are a static target's request.accept_status
+	// and accept_codes, replacing the collector's when not nil; no probe
+	// parameter sets them.
+	AcceptStatus []string
+	AcceptCodes  []string
 	// formPost sends the query as a form body with POST instead of in the
 	// URL, for a graphite request whose expressions are too long for a URL
 	// (requesttype_graphite.go). Only the type's own fetch sets it.
@@ -397,8 +423,13 @@ func fetch(ctx context.Context, target string, c *model.Collector, overrides Req
 		return nil, err
 	}
 	// The collector's allowed_targets and denied_targets, checked here, on
-	// every redirect and on every connection the request makes.
-	ctx, err = withTargetPolicy(ctx, c, u.Hostname())
+	// every redirect and on every connection the request makes, with the
+	// transport's own idea of what goes through a proxy.
+	var proxy func(*http.Request) (*url.URL, error)
+	if transport, ok := client.Transport.(*http.Transport); ok {
+		proxy = transport.Proxy
+	}
+	ctx, err = withTargetPolicy(ctx, c, u, proxy)
 	if err != nil {
 		return nil, err
 	}
@@ -492,9 +523,12 @@ func fetch(ctx context.Context, target string, c *model.Collector, overrides Req
 			}
 		}
 
+		traceRequest(requestContext, req.Method, req.URL.String(), req.Header, req.Host, false)
 		resp, err := client.Do(req)
 		if err != nil {
-			if attempt < retryAttempts && requestContext.Err() == nil {
+			traceOutcome(requestContext, "error: "+err.Error())
+			// A refused target is refused again on every attempt.
+			if attempt < retryAttempts && requestContext.Err() == nil && !errors.Is(err, ErrTargetRefused) {
 				if waitErr := waitRetry(requestContext, retryBackoff); waitErr != nil {
 					return nil, fmt.Errorf("HTTP request failed: %w (the wait before retrying was cut short: %w)", err, waitErr)
 				}
@@ -502,6 +536,7 @@ func fetch(ctx context.Context, target string, c *model.Collector, overrides Req
 			}
 			return nil, fmt.Errorf("HTTP request failed: %w", err)
 		}
+		traceOutcome(requestContext, resp.Status)
 		body, readErr := io.ReadAll(io.LimitReader(resp.Body, limit+1))
 		closeErr := resp.Body.Close()
 		if readErr != nil {
@@ -516,7 +551,7 @@ func fetch(ctx context.Context, target string, c *model.Collector, overrides Req
 		response := &HTTPResponse{StatusCode: resp.StatusCode, Headers: resp.Header.Clone(), Body: body, Target: target, Collector: c.Name, Duration: time.Since(start)}
 		// An answer the collector accepts is its answer, not a failure to
 		// retry, even a 503 it asked to read.
-		if retryableStatus(resp.StatusCode) && !AcceptedStatus(c, resp.StatusCode) && attempt < retryAttempts {
+		if retryableStatus(resp.StatusCode) && !AcceptedStatus(c, overrides, resp.StatusCode) && attempt < retryAttempts {
 			// A wait the deadline, a shutdown or the caller cut short keeps
 			// what the target answered: the status and body say why the
 			// scrape failed, where the bare context error would only say
@@ -678,31 +713,44 @@ func normalizeTarget(raw string) string {
 	return "http://" + raw
 }
 
-// validateAcceptStatus checks request.accept_status at load: each entry a
-// status from 100 to 599, or a class such as 2xx, written in lower case.
+// validateAcceptStatus checks request.accept_status at load.
 func validateAcceptStatus(c *model.Collector) error {
-	for i, raw := range c.Request.AcceptStatus {
+	if err := normalizeAcceptStatus(c.Request.AcceptStatus); err != nil {
+		return fmt.Errorf("collector %q request.accept_status %w", c.Name, err)
+	}
+	return nil
+}
+
+// normalizeAcceptStatus writes each entry in lower case, in place, and
+// refuses one that is not a status from 100 to 599 or a class such as 2xx.
+func normalizeAcceptStatus(entries []string) error {
+	for i, raw := range entries {
 		entry := strings.ToLower(strings.TrimSpace(raw))
-		c.Request.AcceptStatus[i] = entry
+		entries[i] = entry
 		if len(entry) == 3 && entry[1:] == "xx" && entry[0] >= '1' && entry[0] <= '5' {
 			continue
 		}
 		if code, err := strconv.Atoi(entry); err == nil && code >= 100 && code <= 599 {
 			continue
 		}
-		return fmt.Errorf("collector %q request.accept_status entry %q is not an HTTP status from 100 to 599 or a class such as 2xx", c.Name, raw)
+		return fmt.Errorf("entry %q is not an HTTP status from 100 to 599 or a class such as 2xx", raw)
 	}
 	return nil
 }
 
 // AcceptedStatus says whether a response with status is decoded: one of
-// request.accept_status, or any 2xx when it is empty.
-func AcceptedStatus(c *model.Collector, status int) bool {
-	if len(c.Request.AcceptStatus) == 0 {
+// request.accept_status, a static target's replacing the collector's, or any
+// 2xx when there is none.
+func AcceptedStatus(c *model.Collector, overrides RequestOverrides, status int) bool {
+	accepted := c.Request.AcceptStatus
+	if overrides.AcceptStatus != nil {
+		accepted = overrides.AcceptStatus
+	}
+	if len(accepted) == 0 {
 		return status >= 200 && status < 300
 	}
 	code := strconv.Itoa(status)
-	for _, entry := range c.Request.AcceptStatus {
+	for _, entry := range accepted {
 		if entry == code || (len(code) == 3 && entry[0] == code[0] && entry[1:] == "xx") {
 			return true
 		}

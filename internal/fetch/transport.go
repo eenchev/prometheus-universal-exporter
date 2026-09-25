@@ -167,10 +167,15 @@ func HTTPClient(settings TransportSettings, followRedirects bool, timeout time.D
 		// Go's own limit, and the collector's allowed_targets and
 		// denied_targets for the host each redirect leads to.
 		client.CheckRedirect = func(req *http.Request, via []*http.Request) error {
+			ctx := req.Context()
+			if req.Response != nil {
+				traceOutcome(ctx, req.Response.Status)
+			}
+			traceRequest(ctx, req.Method, req.URL.String(), req.Header, req.Host, true)
 			if len(via) >= 10 {
 				return errors.New("stopped after 10 redirects")
 			}
-			return checkRedirect(req.Context(), req.URL.Hostname())
+			return checkRedirect(ctx, req.URL)
 		}
 	} else {
 		// The response of the redirect itself is returned, so a collector sees

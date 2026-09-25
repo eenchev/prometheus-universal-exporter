@@ -6,7 +6,9 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"net"
 	"net/http"
+	"net/netip"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -526,7 +528,7 @@ func TestGRPCReflection(t *testing.T) {
 		}
 		return statsAnswer(ctx, m, r)
 	}})
-	key := reflectedKey{conn: grpcConnKey{dial: server.Addr}, service: grpctest.Service}
+	key := reflectedKey{conn: grpcConnKey{dial: server.Addr, policy: policyOf(c)}, service: grpctest.Service}
 	if _, err := FetchCollector(context.Background(), server.Addr, c, RequestOverrides{}, nil); err != nil {
 		t.Fatal(err)
 	}
@@ -598,28 +600,28 @@ func TestGRPCConnectionsAreReused(t *testing.T) {
 	cache := &grpcConnCache{entries: map[grpcConnKey]*grpcConnEntry{}}
 	start := time.Now()
 	a := grpcConnKey{dial: "127.0.0.1:1"}
-	first, err := cache.get(a, start)
+	first, _, err := cache.get(a, start)
 	if err != nil {
 		t.Fatal(err)
 	}
-	again, _ := cache.get(a, start.Add(time.Minute))
+	again, _, _ := cache.get(a, start.Add(time.Minute))
 	if first != again {
 		t.Fatal("a second call made a new connection")
 	}
-	if _, err := cache.get(grpcConnKey{dial: "127.0.0.1:2"}, start.Add(time.Minute+transportIdleTTL/2)); err != nil {
+	if _, _, err := cache.get(grpcConnKey{dial: "127.0.0.1:2"}, start.Add(time.Minute+transportIdleTTL/2)); err != nil {
 		t.Fatal(err)
 	}
 	if cache.size() != 2 {
 		t.Fatalf("%d connections", cache.size())
 	}
-	if _, err := cache.get(grpcConnKey{dial: "127.0.0.1:2"}, start.Add(time.Minute+transportIdleTTL+time.Second)); err != nil {
+	if _, _, err := cache.get(grpcConnKey{dial: "127.0.0.1:2"}, start.Add(time.Minute+transportIdleTTL+time.Second)); err != nil {
 		t.Fatal(err)
 	}
 	if cache.size() != 1 {
 		t.Fatalf("%d connections after the first went unused", cache.size())
 	}
 	// A missing CA is an error, not a connection.
-	if _, err := cache.get(grpcConnKey{dial: "127.0.0.1:3", tls: true, settings: model.TLSConfig{CAFile: "/nonexistent"}}, start); err == nil {
+	if _, _, err := cache.get(grpcConnKey{dial: "127.0.0.1:3", tls: true, settings: model.TLSConfig{CAFile: "/nonexistent"}}, start); err == nil {
 		t.Fatal("a missing CA file made a connection")
 	}
 }
@@ -750,7 +752,7 @@ func TestGRPCTargetPolicy(t *testing.T) {
 	}
 	// The connection itself is checked: a policy whose name rule let the
 	// call through still refuses the address the connection was made to.
-	dial := grpcPolicyDialer(mustPolicy(t, []string{"10.0.0.0/8"}, nil), server.Addr)
+	dial := grpcPolicyDialer(mustPolicy(t, []string{"10.0.0.0/8"}, nil), server.Addr, &atomic.Pointer[TargetRefusedError]{})
 	if _, err := dial(context.Background(), server.Addr); !errors.Is(err, ErrTargetRefused) {
 		t.Fatalf("err=%v", err)
 	}
@@ -763,4 +765,94 @@ func mustPolicy(t *testing.T, allowed, denied []string) *targetPolicy {
 		t.Fatal(err)
 	}
 	return p
+}
+
+// A status the collector accepts is an answer: an empty object, the code as
+// the answer's status and its message in the headers, not retried; another
+// status is still a failure.
+func TestGRPCAcceptedCodes(t *testing.T) {
+	var calls atomic.Int64
+	server := grpctest.Start(t, grpctest.Options{Reflection: "v1", Answer: func(context.Context, string, string) (string, error) {
+		calls.Add(1)
+		return "", status.Error(codes.NotFound, "no such queue")
+	}})
+	c := grpcCollector()
+	c.Request.AcceptCodes = []string{"not_found"}
+	c.Request.Retry.Attempts = 2
+	checked := validGRPC(t, c)
+	response, err := FetchCollector(context.Background(), server.Addr, checked, RequestOverrides{}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if response.Status() != 5 || string(response.Body) != "{}" || response.Headers.Get("grpc-message") != "no such queue" || response.Headers.Get("grpc-status") != "5" {
+		t.Fatalf("status %v body %s headers %v", response.Status(), response.Body, response.Headers)
+	}
+	if n := calls.Load(); n != 1 {
+		t.Fatalf("an accepted status was retried: %d calls", n)
+	}
+	if code, ok := GRPCStatusCode(checked, nil); !ok || code != 0 {
+		t.Fatalf("%d %v", code, ok)
+	}
+	other := grpcCollector()
+	other.Request.AcceptCodes = []string{"UNAVAILABLE"}
+	if _, err := FetchCollector(context.Background(), server.Addr, validGRPC(t, other), RequestOverrides{}, nil); err == nil {
+		t.Fatal("a status the collector does not accept was an answer")
+	}
+	// A static target's accept_codes replace the collector's.
+	target := &model.StaticTarget{Name: "t", Request: model.TargetRequestConfig{AcceptCodes: []string{"not_found"}}}
+	if err := CheckTargetRequest(target, validGRPC(t, other)); err != nil {
+		t.Fatal(err)
+	}
+	if response, err := FetchCollector(context.Background(), server.Addr, validGRPC(t, other), TargetOverrides(target), nil); err != nil || response.Status() != 5 {
+		t.Fatalf("a target's accept_codes: %v", err)
+	}
+	okTarget := &model.StaticTarget{Name: "ok", Request: model.TargetRequestConfig{AcceptCodes: []string{"OK"}}}
+	if err := CheckTargetRequest(okTarget, validGRPC(t, other)); err == nil || !strings.Contains(err.Error(), "accept_codes") {
+		t.Fatalf("%v", err)
+	}
+	for _, bad := range []string{"OK", "NOPE"} {
+		refused := grpcCollector()
+		refused.Request.AcceptCodes = []string{bad}
+		wantRefused(t, refused, "request.accept_codes")
+	}
+	http := model.Collector{Name: "h", Request: model.RequestConfig{Type: RequestTypeHTTP, AcceptCodes: []string{"NOT_FOUND"}}}
+	if err := ValidateRequest(&http); err == nil || !strings.Contains(err.Error(), "does not apply") {
+		t.Fatalf("%v", err)
+	}
+}
+
+// An OK call's status is 0.
+func TestGRPCStatusOfAnAnswerIsZero(t *testing.T) {
+	server := grpctest.Start(t, grpctest.Options{Reflection: "v1", Answer: statsAnswer})
+	response, err := FetchCollector(context.Background(), server.Addr, validGRPC(t, grpcCollector()), RequestOverrides{}, nil)
+	if err != nil || response.Status() != 0 {
+		t.Fatalf("%v %v", err, response.Status())
+	}
+}
+
+// A connection the policy refuses after the check before the call passed —
+// a name that resolved elsewhere by the time grpc-go dialed it — is reported
+// as the refusal, not as UNAVAILABLE, and not retried.
+func TestGRPCARefusedConnectionIsARefusal(t *testing.T) {
+	server := grpctest.Start(t, grpctest.Options{Reflection: "v1", Answer: statsAnswer})
+	_, port, _ := net.SplitHostPort(server.Addr)
+	restore := resolveHost
+	t.Cleanup(func() { resolveHost = restore })
+	resolveHost = func(ctx context.Context, host string) ([]netip.Addr, error) {
+		if host == "localhost" {
+			return []netip.Addr{netip.MustParseAddr("203.0.113.1")}, nil
+		}
+		return restore(ctx, host)
+	}
+	c := grpcCollector()
+	c.Request.DeniedTargets = []string{"127.0.0.0/8", "::1"}
+	c.Request.Retry.Attempts = 2
+	checked := validGRPC(t, c)
+	_, err := FetchCollector(context.Background(), "localhost:"+port, checked, RequestOverrides{}, nil)
+	if !errors.Is(err, ErrTargetRefused) {
+		t.Fatalf("err=%v", err)
+	}
+	if n := server.ReflectionStreams.Load(); n != 0 {
+		t.Fatalf("the refused server was called: %d streams", n)
+	}
 }

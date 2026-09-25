@@ -298,11 +298,18 @@ request:
     - api.partner.net      # a host name
     - 203.0.113.0/24       # a network: every address the target resolves to must be in one
   denied_targets:
-    - 169.254.169.254      # an address: the cloud metadata service
+    - 192.0.2.10           # an address
     - 10.0.0.0/8
     - 127.0.0.0/8
     - "::1"
 ```
+
+Every `http`, `graphite` and `grpc` collector refuses the cloud metadata
+service — `169.254.169.254`, where AWS, GCP, Azure and most others answer,
+and AWS's `fd00:ec2::254` — even with neither list set: it hands out the
+credentials of the machine the exporter runs on, to whoever can name it as a
+probe's target. A collector that must reach it lists its address, or a network
+holding it, in `allowed_targets`; a name that resolves to it is not enough.
 
 Each entry is a host name, a glob of one, an IP address or a CIDR network,
 without a scheme, port or path. A target is refused when its host is denied
@@ -312,11 +319,19 @@ it resolves to is in an allowed network. `denied_targets` wins. Names are
 compared without case; `*.example.com` matches `a.b.example.com`, not
 `example.com` itself.
 
-The check runs before the request, again for every redirect followed, and
-against the address each connection is actually made to, so a name that
-resolves somewhere else between the check and the connection is still
-refused. Behind a [proxy](#proxies) the exporter connects to the proxy, and the
-target's addresses are those it resolves the name to itself.
+Names are checked before the request and again for every redirect followed,
+and so is a target written as an address, which needs no lookup, so it is
+refused before anything is sent.
+Addresses are checked against the one each connection is actually made to, so
+the name is looked up once, by the connection, and a name that resolves
+somewhere else from one lookup to the next cannot slip through. Behind a
+[proxy](#proxies) the exporter connects to the proxy, so it looks the target's
+name up itself before the request and checks those addresses. Whether a
+request goes through a proxy is decided as the connection pool sending it
+decides, from the environment as it read it. A `grpc` collector does the same:
+its connections are checked as they are made, and one refused is reported as
+the refusal, answered `403`, as for `http`, rather than as the `UNAVAILABLE`
+gRPC makes of it. A refused request is not retried.
 
 A refused probe is answered `403 Forbidden` — `collector web refused the
 target: target 10.1.2.3 refused: its address 10.1.2.3 is in 10.0.0.0/8 in
@@ -440,7 +455,11 @@ ones. An accepted status is not [retried](#retries). jq and yq rules read the
 status as `$status` and the headers as `$headers`, an object of lower-case
 header names, each with its values joined by `, `:
 `$headers["retry-after"]`. A Python script has them as `response.status_code`
-and `response.headers`.
+and `response.headers`, which keeps each header's values as a list under its
+canonical name (`response.headers["Retry-After"]`); `response.header("retry-after")`
+joins them with `, ` as `$headers` does. For a `grpc` collector `$status` is the call's status
+code, `0` for `OK` (see [`accept_codes`](GRPC.md#errors-and-retries)); for a
+`localfile` collector, which has no status, it is `null`.
 
 ## TLS
 

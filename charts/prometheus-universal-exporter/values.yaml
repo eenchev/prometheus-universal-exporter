@@ -18,6 +18,10 @@ service:
   enabled: true
   type: ClusterIP
   port: 8080
+  # ClientIP sends every probe from one Prometheus to one pod, so with several
+  # replicas its probes keep finding that pod's cache. Empty leaves
+  # Kubernetes' default, None.
+  sessionAffinity: ""
   annotations: {}
 neg:
   enabled: false
@@ -85,6 +89,12 @@ server:
   # the Deployment anyway. The endpoint is behind web.basic_auth when that is
   # configured. SIGHUP reloads whether or not this is set.
   enableLifecycle: false
+  # Enable /probe?debug=true (--web.enable-probe-debug), which answers one
+  # probe with a plain-text report of its trip: the requests, the response
+  # body, each stage, the logs and what the probe would have answered. The
+  # report shows what the target answered, so it is off by default; it is
+  # behind web.basic_auth when that is configured.
+  probeDebug: false
   # How many trips to targets, probes and static target scrapes of every
   # collector together, may be in progress at once (--probe.max-concurrent),
   # on top of each collector's max_concurrent_probes. Each holds a response
@@ -336,14 +346,18 @@ resources:
   limits:
     cpu: 500m
     memory: 512Mi
-# Set GOMEMLIMIT to the container's memory limit, resources.limits.memory,
-# through the downward API, so the Go runtime collects harder as its heap
-# nears the limit instead of growing past it into an OOM kill. Rendered only
-# when a memory limit is set and env does not set GOMEMLIMIT itself. Python
-# workers use memory of their own outside it: bound them with
-# server.pythonMaxWorkers and limits.max_script_memory.
+# Set the Go memory limit to ratio of the container's memory limit
+# (--runtime.memory-limit-ratio), which the exporter reads from its cgroup,
+# so the Go runtime collects harder as its heap nears it instead of growing
+# past the container's limit into an OOM kill. The rest is left to what the
+# Go heap does not count: the Python workers, which are processes of their
+# own — bound them with server.pythonMaxWorkers and limits.max_script_memory
+# — and the runtime's overhead. More than 0 and at most 1. Without a memory
+# limit in resources, the exporter keeps the Go default. GOMEMLIMIT set in
+# env wins.
 goMemLimit:
   enabled: true
+  ratio: 0.8
 # Timings of the container's probes. The chart sets what they check, /health
 # for liveness and /ready for readiness on the http port; these add to it.
 # /health only says the process answers, so a liveness probe is given some
@@ -413,9 +427,22 @@ securityContext:
   allowPrivilegeEscalation: false
   readOnlyRootFilesystem: true
   capabilities: {drop: [ALL]}
+# Labels and annotations of the pods only, over defaultLabels and
+# defaultAnnotations. podLabels may not set a label the chart sets itself;
+# podAnnotations may not replace checksum/config, which rolls the pods when
+# the configuration changes.
+podLabels: {}
+podAnnotations: {}
+priorityClassName: ""
 nodeSelector: {}
 tolerations: []
 affinity: {}
+# Pod topology spread constraints. One without a labelSelector spreads this
+# release's pods, e.g.:
+#   - maxSkew: 1
+#     topologyKey: topology.kubernetes.io/zone
+#     whenUnsatisfiable: ScheduleAnyway
+topologySpreadConstraints: []
 networkPolicy:
   enabled: false
   ingress: []

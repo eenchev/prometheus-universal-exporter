@@ -86,7 +86,7 @@ func init() {
 			"basic_auth", "basic_auth_file", "bearer_token", "bearer_token_file",
 			"forward_authorization", "forward_headers",
 			"tls", "retry", "max_response_bytes",
-			"allowed_targets", "denied_targets",
+			"allowed_targets", "denied_targets", "accept_codes",
 		},
 		Overrides: []string{
 			"timeout", "insecure_skip_verify", "retry_attempts", "retry_backoff",
@@ -95,6 +95,7 @@ func init() {
 		TargetFields: []string{
 			"message", "metadata", "timeout", "insecure_skip_verify", "retry",
 			"basic_auth", "basic_auth_file", "bearer_token", "bearer_token_file",
+			"accept_codes",
 		},
 		StatusCodes:        true,
 		Validate:           validateGRPCRequest,
@@ -146,6 +147,9 @@ func validateGRPCRequest(x *model.Collector) error {
 	}
 	if err := normalizeRetryCodes(r.Retry.Codes); err != nil {
 		return fmt.Errorf("collector %q request.retry.codes %w", x.Name, err)
+	}
+	if err := normalizeRetryCodes(r.AcceptCodes); err != nil {
+		return fmt.Errorf("collector %q request.accept_codes %s", x.Name, strings.Replace(err.Error(), "never retried", "always accepted", 1))
 	}
 	// The placeholders of the message and the metadata values.
 	for _, f := range requestTemplates(x, RequestOverrides{}) {
@@ -330,6 +334,9 @@ func checkGRPCTargetRequest(c *model.Collector, t *model.StaticTarget) error {
 		if err := normalizeRetryCodes(retry.Codes); err != nil {
 			return fmt.Errorf("request.retry.codes %w", err)
 		}
+	}
+	if err := normalizeRetryCodes(t.Request.AcceptCodes); err != nil {
+		return fmt.Errorf("request.accept_codes %s", strings.Replace(err.Error(), "never retried", "always accepted", 1))
 	}
 	if t.Request.Message == "" {
 		return nil

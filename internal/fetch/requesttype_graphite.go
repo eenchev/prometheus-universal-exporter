@@ -85,6 +85,7 @@ func init() {
 			"follow_redirects", "enable_http2", "retry", "headers",
 			"basic_auth", "basic_auth_file", "bearer_token", "bearer_token_file",
 			"targets", "from", "until",
+			"accept_status",
 		},
 		URLPath:            true,
 		Validate:           validateGraphiteRequest,

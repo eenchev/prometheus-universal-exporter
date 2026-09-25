@@ -495,3 +495,115 @@ func TestPythonWorkerMemoryLimit(t *testing.T) {
 		t.Fatal("a memory limit does not change the worker a script runs in")
 	}
 }
+
+// A worker that dies mid-run under a memory limit says the limit may be
+// why, since a C library out of memory can end the interpreter instead of
+// raising MemoryError; without a limit it says nothing of memory.
+func TestPythonWorkerDeathUnderAMemoryLimitNamesIt(t *testing.T) {
+	requirePython(t)
+	die := "import signal\nsignal.raise_signal(signal.SIGKILL)"
+	limited := workerCollector("dies_limited", die)
+	limited.Limits.MaxScriptMemory = 256 << 20
+	if _, err := runWorkerScript(t, limited); err == nil || !strings.Contains(err.Error(), "limits.max_script_memory, 268435456 bytes") {
+		t.Fatalf("err=%v", err)
+	}
+	if _, err := runWorkerScript(t, workerCollector("dies", die)); err == nil || strings.Contains(err.Error(), "max_script_memory") {
+		t.Fatalf("err=%v", err)
+	}
+}
+
+// Runs waiting for a worker under --python.max-workers are served in line,
+// one per worker that frees, and one giving up passes its turn on.
+func TestPythonWorkerWaitersAreServedInLine(t *testing.T) {
+	requirePython(t)
+	pool := PythonWorkers()
+	pool.SetMaxWorkers(1)
+	slow := workerCollector("line_busy", "import time\ntime.sleep(0.3)\nmetric(name=\"v\", value=1)")
+	busy := make(chan error, 1)
+	go func() {
+		_, err := runWorkerScript(t, slow)
+		busy <- err
+	}()
+	waitFor := func(n int) {
+		for deadline := time.Now().Add(5 * time.Second); time.Now().Before(deadline); time.Sleep(time.Millisecond) {
+			pool.mu.Lock()
+			queued, live := len(pool.waiting), pool.live
+			pool.mu.Unlock()
+			if queued == n && live == 1 {
+				return
+			}
+		}
+		t.Fatalf("%d waiters never queued", n)
+	}
+	waitFor(0)
+	served := make(chan string, 3)
+	run := func(name string, ctx context.Context) {
+		c := workerCollector(name, `metric(name="v", value=1)`)
+		go func() {
+			if _, _, err := pool.run(ctx, pythonWorkerSpec("python3", c), []byte(`{"mode":"metrics","script":"metric(name='v', value=1)","data":null,"response":{"status_code":200,"headers":{},"body":"","text":""},"target":"","collector":"`+name+`"}`), 2*time.Second); err == nil {
+				served <- name
+			}
+		}()
+	}
+	quitter, quit := context.WithCancel(context.Background())
+	run("line_first", context.Background())
+	waitFor(1)
+	run("line_quitter", quitter)
+	waitFor(2)
+	run("line_third", context.Background())
+	waitFor(3)
+	if waiting := pool.PoolSnapshot().Waiting; waiting != 3 {
+		t.Fatalf("the pool reports %d waiting runs, want 3", waiting)
+	}
+	quit()
+	waitFor(2)
+	if err := <-busy; err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"line_first", "line_third"} {
+		select {
+		case got := <-served:
+			if got != want {
+				t.Fatalf("%s was served, want %s", got, want)
+			}
+		case <-time.After(5 * time.Second):
+			t.Fatalf("%s was never served", want)
+		}
+	}
+}
+
+// response.header(name) is a header's values joined by ", ", as jq's
+// $headers has them, whatever the name's case, or the default without one;
+// response.headers keeps each header's list.
+func TestPythonResponseHeaderJoinsTheValues(t *testing.T) {
+	requirePython(t)
+	usePythonPool(t)
+	c := workerCollector("headers", `
+metric(name="joined", value=1, labels={"v": response.header("x-mode")})
+metric(name="missing", value=1, labels={"v": response.header("X-None", "none")})
+metric(name="listed", value=len(response.headers["X-Mode"]))`)
+	r := &fetch.HTTPResponse{StatusCode: 200, Body: []byte("x"), Headers: http.Header{"X-Mode": {"a", "b"}}}
+	set, err := executePython(context.Background(), "python3", c.Transform.Script, &decode.Decoded{Kind: "text", Data: "x", Raw: r.Body}, r, c)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, m := range set.Metrics {
+		switch m.Name {
+		case "joined":
+			if m.Labels["v"] != "a, b" {
+				t.Errorf("header joined as %q", m.Labels["v"])
+			}
+		case "missing":
+			if m.Labels["v"] != "none" {
+				t.Errorf("a missing header gave %q", m.Labels["v"])
+			}
+		case "listed":
+			if m.Value != 2 {
+				t.Errorf("response.headers has %v values", m.Value)
+			}
+		}
+	}
+	if len(set.Metrics) != 3 {
+		t.Fatalf("metrics: %+v", set.Metrics)
+	}
+}

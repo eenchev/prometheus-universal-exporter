@@ -63,6 +63,11 @@ but `method` and `body`, plus its own `targets`, `from` and `until`, and for
 [`grpc`](GRPC.md#static-targets) `timeout`, `insecure_skip_verify`, `retry`,
 with its `codes`, and its own `message` and `metadata`. It also takes static `headers` and its own target
 credentials, inline or file-backed, as basic authentication or a bearer token.
+An `http` or `graphite` target may set its own
+[`accept_status`](REQUESTS.md#accepting-other-statuses), and a `grpc` target
+its own [`accept_codes`](GRPC.md#errors-and-retries), replacing the
+collector's for that target, which no probe parameter can: a health endpoint
+that answers `503` with a useful body on one host only takes it there.
 Because the file is operator configuration rather than caller input, these
 headers are applied directly and are not filtered through the collector's
 `request.forward_headers` allowlist.
@@ -184,6 +189,11 @@ a failed scrape serves the target's last good result, marked by
 Its `http_exporter_result_age_seconds` is how old the data is when the
 endpoint is read, worked out at every read: it grows between scrapes, and
 starts again from `0` at a scrape that goes to the target.
+
+A read of the endpoint does not merge the targets' results each time: the
+merge is kept until a scrape publishes a result or a reload changes the
+targets, so reads between two scrapes, as from several Prometheus replicas,
+only write what the last one merged. Ages are still worked out at each read.
 
 Static targets are not reachable through `/probe`.
 

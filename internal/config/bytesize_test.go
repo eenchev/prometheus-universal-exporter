@@ -180,3 +180,34 @@ targets:
 		t.Fatalf("%v", err)
 	}
 }
+
+// With expansion on, a reference in an x- block nothing uses is left alone,
+// so its variable need not be set; one in a block an alias uses is expanded.
+func TestExpansionSkipsUnusedExtensionBlocks(t *testing.T) {
+	t.Setenv("PUE_USED_PATH", "/used")
+	path := testutil.WriteIn(t, t.TempDir(), "config.yaml", `x-unused:
+  token: ${PUE_SURELY_NOT_SET}
+x-request: &request
+  type: http
+  path: ${PUE_USED_PATH}
+collectors:
+  - name: c
+    request: *request
+    transform:
+      type: regex
+    metrics:
+      - name: v
+        expression: 'v=(\d+)'
+`)
+	cfg, err := Load(path, WithEnvExpansion())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := cfg.Collectors[0].Request.Path; got != "/used" {
+		t.Fatalf("path %q", got)
+	}
+	used := testutil.WriteIn(t, t.TempDir(), "config.yaml", "x-request: &request\n  type: http\n  path: ${PUE_SURELY_NOT_SET}\ncollectors:\n  - name: c\n    request: *request\n    transform: {type: regex}\n    metrics: [{name: v, expression: 'v=(\\d+)'}]\n")
+	if _, err := Load(used, WithEnvExpansion()); err == nil || !strings.Contains(err.Error(), "PUE_SURELY_NOT_SET") {
+		t.Fatalf("an unset variable in a used block: %v", err)
+	}
+}

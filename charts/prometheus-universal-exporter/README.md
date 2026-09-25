@@ -308,6 +308,7 @@ The exporter's own flags are chart values rather than something to assemble by h
 | `server.watchConfig` / `server.watchConfigInterval` | `--config.watch` / `--config.watch-interval` | off / `60s` |
 | `server.expandEnv` | `--config.expand-env` | off |
 | `server.enableLifecycle` | `--web.enable-lifecycle` | off |
+| `server.probeDebug` | `--web.enable-probe-debug` | off |
 | `staticTargets.enabled` | `--static-targets-file` | off |
 | `staticTargets.expandEnv` | `--static-targets.expand-env`, with `staticTargets.enabled` | off |
 | `config` | `--config.file` | the chart's ConfigMap |
@@ -344,6 +345,8 @@ helm install exporter charts/prometheus-universal-exporter \
 Raise `terminationGracePeriodSeconds` further if `otlp.timeout` is longer than its default of 5 seconds.
 
 `server.enableLifecycle` enables `POST /-/reload`, which reloads the configuration at once and answers `200` when it was accepted or `500` with the reason when it was not — see [Reloading on demand](../../docs/CONFIGURATION.md#reloading-on-demand). A chart-managed ConfigMap does not need it, since a change rolls the Deployment; it is for a ConfigMap updated in place with `config.enabled: false`. Like `probeTimeoutOffset`, the flag is only rendered when set, so older images still start.
+
+`server.probeDebug` enables `/probe?debug=true`, which answers a probe with a plain-text report of its trip instead of its metrics, and a *Debug report* switch on each form of `/collectors` — see [Debugging a probe](../../docs/CONFIGURATION.md#debugging-a-probe). The report shows what the target answered, so it is off by default; turn it on while a collector is being written or fixed, and off again. Rendered only when `true`.
 
 The one-shot flags — `--dry-run`, `--config.schema`, `--config.collector-file-schema`, `--version` — print something and exit, so they have no values: run them as a separate command. A flag an exporter image has that this chart version does not know yet goes in `extraArgs`, described under [Extra volumes and arguments](#extra-volumes-and-arguments).
 
@@ -413,7 +416,7 @@ resources:
     memory: 512Mi
 ```
 
-`goMemLimit.enabled`, on by default, sets `GOMEMLIMIT` to `resources.limits.memory` through the downward API, so the Go runtime collects harder as its heap nears the limit instead of growing past it into an OOM kill. It is rendered only when a memory limit is set, and not when `env` sets `GOMEMLIMIT` itself, for a lower value. Python workers use memory outside it; bound them with `server.pythonMaxWorkers` and `limits.max_script_memory`.
+`goMemLimit`, on by default, renders `--runtime.memory-limit-ratio` with `goMemLimit.ratio`, `0.8`: the exporter reads the container's memory limit from its cgroup and sets the Go memory limit to that share of it, so the Go runtime collects harder as its heap nears it instead of growing past the container's limit into an OOM kill. The rest is left to what the Go heap does not count — the Python workers, which are processes of their own, and the runtime's overhead; lower the ratio for a configuration with many Python workers, and bound those with `server.pythonMaxWorkers` and `limits.max_script_memory`. Without a memory limit in `resources`, the exporter keeps the Go default, and `GOMEMLIMIT` set in `env` wins over the ratio.
 
 ### Probes
 
@@ -438,6 +441,16 @@ replicaCount: 2
 
 Probes scale with replicas, since Prometheus sends each to one pod through the Service. Static targets do not: every replica scrapes every static target on its own schedule and serves its own results, so run [static targets](#static-targets) with `replicaCount: 1` (the chart's notes warn otherwise), or split them over releases.
 
+To keep replicas apart, spread them over zones or nodes. A constraint without a `labelSelector` gets one selecting this release's pods:
+
+```yaml
+topologySpreadConstraints:
+  - maxSkew: 1
+    topologyKey: topology.kubernetes.io/zone
+    whenUnsatisfiable: ScheduleAnyway
+priorityClassName: monitoring
+```
+
 ### Autoscaling
 
 `autoscaling` renders an `autoscaling/v2` HorizontalPodAutoscaler, which then sets the Deployment's replica count itself; `replicaCount` is left out of the Deployment so an upgrade does not put it back. It scales on CPU utilization by default, measured against `resources.requests`; `targetMemoryUtilizationPercentage` and further `metrics` can be added, and `behavior` takes the scale-up and scale-down policies. `maxReplicas` below `minReplicas`, or nothing to scale on, fails rendering.
@@ -449,6 +462,8 @@ autoscaling:
   maxReplicas: 6
   targetCPUUtilizationPercentage: 75
 ```
+
+Each replica keeps its own [response cache](../../docs/CONFIGURATION.md#response-caching) and shares only its own identical probes in flight, and the Service spreads probes across replicas. So as replicas are added, the cache answers a smaller share of probes and more of them reach the targets: with a 30s `ttl` and four replicas, a target probed every 15s may be asked up to four times per `ttl` instead of once, and a result kept for `stale_if_error` is only served by the replica that stored it. Where the cache is what spares a target, keep the replica count low, or give Prometheus's scrapes of one target a stable replica — a Service with `sessionAffinity: ClientIP` sends every probe from one Prometheus to one pod.
 
 Autoscaling suits a release that serves probes. It does not suit [static targets](#static-targets): every replica scrapes every static target, so each replica the autoscaler adds is another full set of requests to every target — the load it was scaling out from grows with it — and each replica serves its own results. A target with `export_via_otlp` is exported over OTLP by every replica, so the OTLP backend receives duplicate series under the same resource. The chart's notes warn when static targets are rendered with autoscaling, naming the targets exported over OTLP. Put static targets in a release of their own, with `replicaCount: 1` and autoscaling off.
 
@@ -471,6 +486,8 @@ service:
   type: ClusterIP
   port: 8080
 ```
+
+`service.sessionAffinity: ClientIP` sends every probe from one Prometheus to one pod, so with several replicas its probes keep finding that pod's [cache](#autoscaling); empty, the default, leaves Kubernetes' `None`.
 
 ### Ingress
 
@@ -703,10 +720,10 @@ Every value has a default, and `values.yaml` documents each one in place. `value
 | `nameOverride` / `fullnameOverride` / `namespaceOverride` | string | `""` | Naming and namespace of the created objects. |
 | `defaultLabels` / `defaultAnnotations` | map | `{}` | Metadata applied to every object the chart creates. |
 | `serviceAccount` | object | created | `create`, `automount`, `name`, `annotations`. |
-| `service` | object | enabled, ClusterIP, 8080 | The exporter Service. |
+| `service` | object | enabled, ClusterIP, 8080 | The exporter Service: `enabled`, `type`, `port`, `sessionAffinity`, `annotations`. |
 | `neg` | object | disabled | GKE Network Endpoint Group annotations on the Service. |
 | `ingress` | object | disabled | Class, hosts, paths, TLS and annotations. |
-| `server` | object | see [Exporter flags](#exporter-flags) | Exporter flags: `listenAddress`, `pythonPath`, `logLevel`, `probeTimeoutOffset`, `probeDefaultTimeout`, `probeMaxConcurrent`, `pythonMaxWorkers`, `shutdownTimeout`, `shutdownDelay`, `enableLifecycle`, `watchConfig`, `watchConfigInterval`, `expandEnv`. |
+| `server` | object | see [Exporter flags](#exporter-flags) | Exporter flags: `listenAddress`, `pythonPath`, `logLevel`, `probeTimeoutOffset`, `probeDefaultTimeout`, `probeMaxConcurrent`, `pythonMaxWorkers`, `shutdownTimeout`, `shutdownDelay`, `enableLifecycle`, `probeDebug`, `watchConfig`, `watchConfigInterval`, `expandEnv`. |
 | `terminationGracePeriodSeconds` | integer | unset | The pod's grace period; see [Shutting down](#shutting-down). |
 | `env` / `envFrom` | array | `[]` | Container environment, in the Kubernetes shapes. |
 | `extraArgs` | array | `[]` | Extra command-line flags. |
@@ -716,13 +733,16 @@ Every value has a default, and `values.yaml` documents each one in place. `value
 | `monitors` | array | `[]` | `ServiceMonitor` and `PodMonitor` resources. |
 | `selfMetrics` | object | enabled | The monitor for the exporter's own endpoint, and its path. |
 | `resources` | object | 100m/128Mi, 500m/512Mi | Requests and limits. |
-| `goMemLimit` | object | enabled | `GOMEMLIMIT` from `resources.limits.memory`; see [Resources](#resources). |
+| `goMemLimit` | object | enabled, `0.8` | `--runtime.memory-limit-ratio`: the Go memory limit as a share of the container's; see [Resources](#resources). |
 | `livenessProbe` / `readinessProbe` | object | see [Probes](#probes) | The probes' timings. |
 | `autoscaling` | object | disabled | `enabled`, `minReplicas`, `maxReplicas`, `targetCPUUtilizationPercentage`, `targetMemoryUtilizationPercentage`, `metrics`, `behavior`; see [Autoscaling](#autoscaling). |
 | `podDisruptionBudget` | object | disabled | `enabled`, `minAvailable` or `maxUnavailable`, `unhealthyPodEvictionPolicy`; see [Replicas](#replicas). |
 | `strategy` | object | RollingUpdate | Deployment strategy and its `rollingUpdate` settings. |
 | `podSecurityContext` / `securityContext` | object | hardened | Pod and container security context; the pod runs as user, group and `fsGroup` 65532. |
+| `podLabels` / `podAnnotations` | map | `{}` | Labels and annotations of the pods only, over `defaultLabels` and `defaultAnnotations`. A label the chart sets itself, such as `app.kubernetes.io/name`, fails rendering; `checksum/config` stays the chart's. |
+| `priorityClassName` | string | `""` | The pods' PriorityClass. |
 | `nodeSelector` / `tolerations` / `affinity` | map/array/object | empty | Scheduling. |
+| `topologySpreadConstraints` | array | `[]` | Pod topology spread constraints; one without a `labelSelector` spreads this release's pods. See [Replicas](#replicas). |
 | `networkPolicy` | object | disabled | `ingress` and `egress` rules. |
 | `targetAuth` | object | disabled | Secret-backed credentials mounted for the exporter to send to the target. |
 | `webAuth` | object | disabled | A Secret's username and password mounted as files for the exporter's own Basic Auth; see [Exporter authentication](#exporter-authentication). |
@@ -736,7 +756,7 @@ The chart also supports:
 * Monitor authentication
 * Custom headers
 * Custom labels and annotations
-* Pod affinity and tolerations
+* Pod affinity, tolerations, topology spread and priority
 * RollingUpdate or Recreate deployment strategies
 * GKE Network Endpoint Groups
 * Custom exporter listen address

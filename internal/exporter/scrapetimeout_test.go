@@ -175,7 +175,7 @@ func TestAProbeWithoutADeadlineGetsTheDefaultTimeout(t *testing.T) {
 	// A timeout parameter cannot lift the default.
 	start = time.Now()
 	recorder = probeOnce(t, server, "/probe?collector=hung&target=somewhere&timeout=1h", nil)
-	if elapsed := time.Since(start); elapsed > 2*time.Second || !strings.Contains(recorder.Body.String(), "--probe.default-timeout") {
+	if elapsed := time.Since(start); elapsed > 2*time.Second || !strings.Contains(recorder.Body.String(), "--probe.default-timeout") || !strings.Contains(recorder.Body.String(), "its timeout parameter, 1h0m0s, is capped to it") {
 		t.Fatalf("timeout=1h ran %s: %d %s", elapsed, recorder.Code, recorder.Body)
 	}
 }
@@ -195,7 +195,7 @@ func TestWhichDeadlineAProbeGets(t *testing.T) {
 		"the header wins over a timeout":           {header: withHeader, overrides: fetch.RequestOverrides{Timeout: time.Second}, wantBudget: 9500 * time.Millisecond, wantSource: budgetFromScrapeTimeout},
 		"no deadline named":                        {wantBudget: 30 * time.Second, wantSource: budgetFromDefault},
 		"a short timeout keeps the default budget": {overrides: fetch.RequestOverrides{Timeout: time.Second}, wantBudget: 30 * time.Second, wantSource: budgetFromDefault},
-		"a long timeout cannot lift the default":   {overrides: fetch.RequestOverrides{Timeout: 24 * time.Hour}, wantBudget: 30 * time.Second, wantSource: budgetFromDefault},
+		"a long timeout cannot lift the default":   {overrides: fetch.RequestOverrides{Timeout: 24 * time.Hour}, wantBudget: 30 * time.Second, wantSource: budgetFromDefault + "; its timeout parameter, 24h0m0s, is capped to it"},
 		"a default of 0 leaves the probe unbound":  {noDefault: true},
 	} {
 		t.Run(name, func(t *testing.T) {
@@ -203,7 +203,7 @@ func TestWhichDeadlineAProbeGets(t *testing.T) {
 			if tc.noDefault {
 				s.defaultProbeTimeout = 0
 			}
-			budget, source := s.probeDeadline(tc.header)
+			budget, source := s.probeDeadline(tc.header, tc.overrides)
 			if budget != tc.wantBudget || source != tc.wantSource {
 				t.Fatalf("got %s from %q, want %s from %q", budget, source, tc.wantBudget, tc.wantSource)
 			}

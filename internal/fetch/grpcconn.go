@@ -4,11 +4,12 @@ package fetch
 
 import (
 	"context"
+	"errors"
 	"net"
 	"net/netip"
-	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/eenchev/prometheus-universal-exporter/internal/model"
@@ -33,14 +34,20 @@ type grpcConnKey struct {
 	tls      bool
 	settings model.TLSConfig
 	// policy is the collector's allowed_targets and denied_targets, which
-	// every connection is checked against; nil for none.
-	policy *targetPolicy
+	// every connection is checked against; nil for none. proxied says the
+	// connection goes through a proxy, whose address is not the server's.
+	policy  *targetPolicy
+	proxied bool
 }
 
 type grpcConnEntry struct {
 	stamp    string
 	conn     *grpc.ClientConn
 	lastUsed time.Time
+	// refusal is the last connection the policy refused, nil once one is
+	// made; grpc-go reports a dialer's error to the call only as
+	// UNAVAILABLE, with the reason as text.
+	refusal *atomic.Pointer[TargetRefusedError]
 }
 
 type grpcConnCache struct {
@@ -53,7 +60,7 @@ var grpcConns = &grpcConnCache{entries: map[grpcConnKey]*grpcConnEntry{}}
 // get returns the connection for key, making it when there is none or when
 // a TLS file changed since it was made. grpc.NewClient does not dial: the
 // connection is made at the first call, and made again after it breaks.
-func (c *grpcConnCache) get(key grpcConnKey, now time.Time) (*grpc.ClientConn, error) {
+func (c *grpcConnCache) get(key grpcConnKey, now time.Time) (*grpc.ClientConn, *atomic.Pointer[TargetRefusedError], error) {
 	stamp := ""
 	if key.tls {
 		stamp = tlsFilesStamp(key.settings)
@@ -64,7 +71,7 @@ func (c *grpcConnCache) get(key grpcConnKey, now time.Time) (*grpc.ClientConn, e
 	if entry := c.entries[key]; entry != nil {
 		if entry.stamp == stamp {
 			entry.lastUsed = now
-			return entry.conn, nil
+			return entry.conn, entry.refusal, nil
 		}
 		// A call may still be using the old connection, which Close would
 		// cancel; it is closed once any call has long ended.
@@ -76,20 +83,24 @@ func (c *grpcConnCache) get(key grpcConnKey, now time.Time) (*grpc.ClientConn, e
 	if key.tls {
 		cfg, err := tlsConfig(key.settings)
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 		creds = credentials.NewTLS(cfg)
 	}
 	options := []grpc.DialOption{grpc.WithTransportCredentials(creds)}
-	if key.policy != nil {
-		options = append(options, grpc.WithContextDialer(grpcPolicyDialer(key.policy, strings.TrimPrefix(key.dial, "dns:///"))))
+	// Behind a proxy grpc-go's own dialer connects through it, which a
+	// dialer of the exporter's would bypass; the call resolved and checked
+	// the server's addresses instead.
+	refusal := &atomic.Pointer[TargetRefusedError]{}
+	if key.policy != nil && !key.proxied {
+		options = append(options, grpc.WithContextDialer(grpcPolicyDialer(key.policy, strings.TrimPrefix(key.dial, "dns:///"), refusal)))
 	}
 	conn, err := grpc.NewClient(key.dial, options...)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	c.entries[key] = &grpcConnEntry{stamp: stamp, conn: conn, lastUsed: now}
-	return conn, nil
+	c.entries[key] = &grpcConnEntry{stamp: stamp, conn: conn, lastUsed: now, refusal: refusal}
+	return conn, refusal, nil
 }
 
 // sweepLocked closes the connections nothing has used for transportIdleTTL.
@@ -109,10 +120,10 @@ func (c *grpcConnCache) size() int {
 	return len(c.entries)
 }
 
-// grpcPolicyDialer connects to address and checks the address it connected
-// to against policy, for the server hostPort. An address the server's name
-// does not resolve to is a proxy's, whose target the call checked already.
-func grpcPolicyDialer(policy *targetPolicy, hostPort string) func(context.Context, string) (net.Conn, error) {
+// grpcPolicyDialer connects to address, one the server's name resolved
+// to, and checks the address it connected to against policy, recording a
+// refusal in refused for the call to report as one.
+func grpcPolicyDialer(policy *targetPolicy, hostPort string, refused *atomic.Pointer[TargetRefusedError]) func(context.Context, string) (net.Conn, error) {
 	host, _, _ := net.SplitHostPort(hostPort)
 	host = strings.ToLower(strings.TrimSuffix(host, "."))
 	return func(ctx context.Context, address string) (net.Conn, error) {
@@ -128,17 +139,19 @@ func grpcPolicyDialer(policy *targetPolicy, hostPort string) func(context.Contex
 		if !ok {
 			return conn, nil
 		}
-		connected = connected.Unmap()
 		nameAllowed, err := policy.checkName(host)
 		if err == nil {
-			if addrs, resolveErr := resolveHost(ctx, host); resolveErr != nil || slices.ContainsFunc(addrs, func(a netip.Addr) bool { return a.Unmap() == connected }) {
-				err = policy.checkAddr(host, connected, nameAllowed)
-			}
+			err = policy.checkAddr(host, connected, nameAllowed)
 		}
 		if err != nil {
 			_ = conn.Close()
+			var refusal *TargetRefusedError
+			if errors.As(err, &refusal) {
+				refused.Store(refusal)
+			}
 			return nil, err
 		}
+		refused.Store(nil)
 		return conn, nil
 	}
 }

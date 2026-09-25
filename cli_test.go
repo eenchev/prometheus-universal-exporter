@@ -599,10 +599,11 @@ func TestANegativeDefaultProbeTimeoutIsACommandLineError(t *testing.T) {
 	}
 }
 
-func TestNegativeConcurrencyLimitsAreCommandLineErrors(t *testing.T) {
+func TestOutOfRangeLimitsAreCommandLineErrors(t *testing.T) {
 	for flag, message := range map[string]string{
-		"--probe.max-concurrent=-1": "--probe.max-concurrent must not be negative",
-		"--python.max-workers=-1":   "--python.max-workers must not be negative",
+		"--probe.max-concurrent=-1":        "--probe.max-concurrent must not be negative",
+		"--python.max-workers=-1":          "--python.max-workers must not be negative",
+		"--runtime.memory-limit-ratio=1.5": "--runtime.memory-limit-ratio must be from 0",
 	} {
 		for _, args := range [][]string{{flag}, {"--dry-run", "--config.file=configs/config.example.yaml", flag}} {
 			out := runCLI(t, args...)
@@ -703,5 +704,30 @@ func TestTheLogLevelIsChecked(t *testing.T) {
 	quiet := runCheckCLI(t, conf, "--log.level=WARN")
 	if strings.Contains(quiet.stderr, `"level":"INFO"`) {
 		t.Errorf("--log.level=WARN logged at info:\n%s", quiet.stderr)
+	}
+}
+
+// --dry-run lists what each collector's request lets through, as it will be
+// applied: its target lists and the statuses it decodes, normalised.
+func TestDryRunReportsRequestPolicies(t *testing.T) {
+	config := testutil.WriteIn(t, t.TempDir(), "config.yaml", `collectors:
+  - name: guarded
+    request:
+      type: http
+      allowed_targets: ["*.example.com"]
+      denied_targets: [169.254.169.254]
+      accept_status: ["2XX", 503]
+    transform: {type: regex}
+    metrics: [{name: v, expression: 'v=(\d+)'}]
+  - name: open
+    request: {type: http}
+    transform: {type: regex}
+    metrics: [{name: w, expression: 'w=(\d+)'}]
+`)
+	check := runCheckCLI(t, "--config.file="+config)
+	policies, _ := check.result(t, "config").Details["request_policies"].(map[string]any)
+	guarded, _ := policies["guarded"].(map[string]any)
+	if check.code != 0 || len(policies) != 1 || !reflect.DeepEqual(guarded["accept_status"], []any{"2xx", "503"}) || !reflect.DeepEqual(guarded["denied_targets"], []any{"169.254.169.254"}) {
+		t.Fatalf("exit=%d\n%s", check.code, check.stdout)
 	}
 }

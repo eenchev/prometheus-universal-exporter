@@ -48,6 +48,7 @@
         "enabled": {"type": "boolean"},
         "type": {"enum": ["ClusterIP", "NodePort", "LoadBalancer", "ExternalName"]},
         "port": {"$ref": "#/$defs/port"},
+        "sessionAffinity": {"enum": ["", "None", "ClientIP"]},
         "annotations": {"$ref": "#/$defs/stringMap"}
       }
     },
@@ -117,6 +118,7 @@
         "expandEnv": {"type": "boolean"},
         "logLevel": {"type": "string", "enum": ["debug", "info", "warn", "error"], "description": "Rendered as --log.level."},
         "enableLifecycle": {"type": "boolean", "description": "Rendered as --web.enable-lifecycle when true: enables POST /-/reload."},
+        "probeDebug": {"type": "boolean", "description": "Rendered as --web.enable-probe-debug when true: enables /probe?debug=true."},
         "probeTimeoutOffset": {
           "type": "string",
           "description": "Rendered as --probe.timeout-offset when set: how much of Prometheus's scrape timeout a probe leaves unused. Empty keeps the exporter's default, 500ms.",
@@ -300,8 +302,8 @@
     "goMemLimit": {
       "type": "object",
       "additionalProperties": false,
-      "description": "Set GOMEMLIMIT from resources.limits.memory through the downward API, when a memory limit is set and env does not set GOMEMLIMIT.",
-      "properties": {"enabled": {"type": "boolean"}}
+      "description": "Rendered as --runtime.memory-limit-ratio when enabled: the Go memory limit as a share of the container's memory limit, which the exporter reads from its cgroup. GOMEMLIMIT set in env wins.",
+      "properties": {"enabled": {"type": "boolean"}, "ratio": {"type": ["number", "string"], "exclusiveMinimum": 0, "maximum": 1, "pattern": "^(0?\\.[0-9]*[1-9][0-9]*|1(\\.0*)?)$"}}
     },
     "livenessProbe": {"$ref": "#/$defs/probeTimings", "description": "Timings of the liveness probe, which checks /health on the http port."},
     "readinessProbe": {"$ref": "#/$defs/probeTimings", "description": "Timings of the readiness probe, which checks /ready on the http port."},
@@ -349,6 +351,10 @@
 
     "podSecurityContext": {"type": "object"},
     "securityContext": {"type": "object"},
+    "podLabels": {"$ref": "#/$defs/stringMap"},
+    "podAnnotations": {"$ref": "#/$defs/stringMap"},
+    "priorityClassName": {"type": "string"},
+    "topologySpreadConstraints": {"type": "array", "items": {"type": "object", "required": ["maxSkew", "topologyKey", "whenUnsatisfiable"]}},
     "nodeSelector": {"$ref": "#/$defs/stringMap"},
     "tolerations": {"type": "array", "items": {"type": "object"}},
     "affinity": {"type": "object"},

@@ -30,10 +30,19 @@ type Server struct {
 	// is each target's latest result, by name, and staticFetched when the
 	// data in it came from the target, for its age (statictargetsendpoint.go).
 	staticTargetsPath string
+	// probeDebug allows debug probes, --web.enable-probe-debug
+	// (probedebug.go).
+	probeDebug        bool
 	staticMu          sync.Mutex
 	staticResults     map[string]model.MetricSet
 	staticFetched     map[string]time.Time
 	staticLastSuccess map[string]time.Time
+	// staticGeneration counts the results published, under staticMu, and
+	// staticView is the endpoint's merge of them, rebuilt when a result is
+	// published or the targets change (statictargetsendpoint.go).
+	staticGeneration uint64
+	staticViewMu     sync.Mutex
+	staticView       *staticTargetsView
 	// staticClashes are the targets' metrics the last read of the endpoint
 	// left out for their type (statictargetsendpoint.go).
 	staticClashMu sync.Mutex
@@ -184,6 +193,17 @@ func (s *Server) probeHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	start := time.Now()
+	// A debug probe is refused before anything else when it is not enabled,
+	// so the refusal does not depend on the rest of the probe being right.
+	debug, err := probeDebugRequested(r.URL.Query())
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	if debug && !s.probeDebug {
+		http.Error(w, errProbeDebugDisabled.Error(), http.StatusForbidden)
+		return
+	}
 	target := r.URL.Query().Get("target")
 	name := r.URL.Query().Get("collector")
 	if name == "" {
@@ -240,6 +260,27 @@ func (s *Server) probeHandler(w http.ResponseWriter, r *http.Request) {
 	if label, labelErr := fetch.RequestLabelFor(target, c, overrides); labelErr == nil {
 		requestURL = label
 	}
+	if debug {
+		// Counted nowhere, cached nowhere, shared with nobody
+		// (probedebug.go).
+		forwarded := forwardedHeaders(r, c.Request)
+		budget, budgetSource := s.probeDeadline(r.Header, overrides)
+		p := debugProbe{
+			upstreamProbe: upstreamProbe{
+				collector: c, target: target, logTarget: logTarget, overrides: overrides,
+				forwarded: forwarded, budget: budget, budgetSource: budgetSource,
+			},
+			requestURL: requestURL, method: method,
+		}
+		if model.UsesCache(c) {
+			// The key the same probe without debug has.
+			query := r.URL.Query()
+			query.Del(probeDebugParam)
+			p.staleKey = s.probeCacheKey(cfg, c, target, query, forwarded)
+		}
+		s.serveDebugProbe(w, r, p)
+		return
+	}
 	st := s.statsFor(name)
 	rec := s.recorderFor(st, name, requestURL, method)
 	rec.update(func(x *serverStats) { x.probes++ })
@@ -274,7 +315,7 @@ func (s *Server) probeHandler(w http.ResponseWriter, r *http.Request) {
 		// A miss is counted when the trip goes to the target (probeTrip);
 		// a probe that shares another's trip is counted as coalesced.
 	}
-	budget, budgetSource := s.probeDeadline(r.Header)
+	budget, budgetSource := s.probeDeadline(r.Header, overrides)
 	upstream := func(ctx context.Context) *probeResult {
 		return s.probeUpstream(ctx, upstreamProbe{
 			collector: c, target: target, logTarget: logTarget, overrides: overrides,
@@ -377,10 +418,10 @@ func (s *Server) probeTrip(ctx context.Context, p upstreamProbe) *probeResult {
 	// Answered at once when the collector's backend already has all it may
 	// get, rather than queued behind the probes in progress (triplimit.go).
 	limit := maxConcurrentProbes(c)
-	if ok, full := s.trips.tryAcquire(name, limit); !ok {
-		rec.update(func(x *serverStats) { x.rejected++ })
-		s.failures.failed(s.logger, slog.LevelWarn, failureKey(name, logTarget, ""), "probe rejected: too many probes in progress", "concurrency", nil, "collector", name, "target", logTarget, "reason", full)
-		http.Error(out, full+"; this probe was not sent", http.StatusServiceUnavailable)
+	if full := s.trips.tryAcquire(name, limit); full != nil {
+		rec.update(func(x *serverStats) { countRejection(x, full) })
+		s.failures.failed(s.logger, slog.LevelWarn, failureKey(name, logTarget, ""), "probe rejected: too many probes in progress", "concurrency", nil, "collector", name, "target", logTarget, "reason", full.message)
+		http.Error(out, full.message+"; this probe was not sent", http.StatusServiceUnavailable)
 		return out.result(false)
 	}
 	defer s.trips.release(name)
@@ -506,13 +547,13 @@ func forwardedHeaders(r *http.Request, request model.RequestConfig) http.Header 
 // sanitizeUTF8 repairs a transform's output, counting and logging what it
 // changed, so the one scrape still reaches Prometheus and the problem is still
 // seen.
-func (s *Server) sanitizeUTF8(set *model.MetricSet, rec statsRecorder, c *model.Collector, target string) {
+func (s *Server) sanitizeUTF8(ctx context.Context, set *model.MetricSet, rec statsRecorder, c *model.Collector, target string) {
 	key := failureKey(c.Name, target, "\x00utf8")
 	changed, first := model.SanitizeUTF8(set)
 	if changed == 0 {
-		s.failures.recovered(s.logger, key, "output is valid UTF-8 again", "collector", c.Name, "target", target)
+		s.tripRecovered(ctx, key, "output is valid UTF-8 again", "collector", c.Name, "target", target)
 		return
 	}
 	rec.update(func(x *serverStats) { x.invalidUTF8 += changed })
-	s.failures.failed(s.logger, slog.LevelWarn, key, "label values or help text were not valid UTF-8; the invalid bytes were replaced with U+FFFD. If the target uses another encoding without declaring it, set response.charset", "utf8", nil, "collector", c.Name, "target", target, "values", changed, "first_metric", first)
+	s.tripFailed(ctx, slog.LevelWarn, key, "label values or help text were not valid UTF-8; the invalid bytes were replaced with U+FFFD. If the target uses another encoding without declaring it, set response.charset", "utf8", nil, "collector", c.Name, "target", target, "values", changed, "first_metric", first)
 }

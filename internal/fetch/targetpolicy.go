@@ -5,7 +5,9 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"net/http"
 	"net/netip"
+	"net/url"
 	"path"
 	"regexp"
 	"strings"
@@ -23,12 +25,13 @@ import (
 // A request is refused when its host, or an address it resolves to, is
 // denied, or when allowed_targets is set and neither its host nor every
 // address it resolves to is allowed. Names are checked against the host as
-// written, addresses against what it resolves to: before the request, again
-// on every redirect, and once more against the address each connection is
-// actually made to, so a name that resolves elsewhere between the check and
-// the connection is caught too. Behind a proxy the exporter connects to the
-// proxy rather than the target, and the addresses checked are those the
-// exporter resolves the target's name to itself.
+// written, before the request and again on every redirect. Addresses are
+// checked where they are known without a second lookup: a connection made
+// straight to the target is checked against the address it was made to, the
+// one address that matters, which also catches a name that resolves
+// elsewhere from one lookup to the next. Behind a proxy the exporter connects
+// to the proxy rather than the target, so it resolves the target's name
+// itself, before the request, and checks those addresses instead.
 
 // TargetRefusedError is a request refused by the collector's
 // allowed_targets or denied_targets. The exporter answers it 403.
@@ -47,19 +50,32 @@ var ErrTargetRefused = errors.New("target refused")
 // Is makes every TargetRefusedError match ErrTargetRefused.
 func (e *TargetRefusedError) Is(target error) bool { return target == ErrTargetRefused }
 
-// targetPolicy is a compiled pair of lists.
+// targetPolicy is a compiled pair of lists, and the addresses refused by
+// default.
 type targetPolicy struct {
 	allowNames, denyNames []string
 	allowNets, denyNets   []netip.Prefix
+	// implicitDeny is the cloud metadata addresses the allowed networks do
+	// not list: refused whatever the lists say otherwise.
+	implicitDeny []netip.Prefix
+}
+
+// metadataAddrs are the cloud metadata services, which hand out the
+// credentials of the machine the exporter runs on: AWS, GCP, Azure,
+// OpenStack and most others answer at 169.254.169.254, and AWS also at
+// fd00:ec2::254 over IPv6. Every collector refuses them unless its
+// allowed_targets lists them by address or network, since a probe's target
+// is chosen by whoever can reach /probe.
+var metadataAddrs = []netip.Prefix{
+	netip.MustParsePrefix("169.254.169.254/32"),
+	netip.MustParsePrefix("fd00:ec2::254/128"),
 }
 
 var hostGlob = regexp.MustCompile(`^[a-z0-9*?_]([a-z0-9*?_.-]*[a-z0-9*?_])?$`)
 
-// compileTargetPolicy reads the two lists, nil when both are empty.
+// compileTargetPolicy reads the two lists. With both empty the policy still
+// refuses the cloud metadata addresses.
 func compileTargetPolicy(allowed, denied []string) (*targetPolicy, error) {
-	if len(allowed) == 0 && len(denied) == 0 {
-		return nil, nil
-	}
 	p := &targetPolicy{}
 	for _, list := range []struct {
 		key   string
@@ -95,23 +111,26 @@ func compileTargetPolicy(allowed, denied []string) (*targetPolicy, error) {
 			}
 		}
 	}
+	for _, metadata := range metadataAddrs {
+		if _, listed := matchesAddr(p.allowNets, metadata.Addr()); !listed {
+			p.implicitDeny = append(p.implicitDeny, metadata)
+		}
+	}
 	return p, nil
 }
 
 var targetPolicies sync.Map // "allowed\x00denied" -> *targetPolicy
 
-// policyOf is the collector's compiled policy, nil when it sets none. The
-// lists were checked at load, so an error here cannot happen.
+// policyOf is the collector's compiled policy: every collector has one,
+// since the cloud metadata addresses are refused by default. The lists were
+// checked at load, so an error here cannot happen.
 func policyOf(c *model.Collector) *targetPolicy {
-	if len(c.Request.AllowedTargets) == 0 && len(c.Request.DeniedTargets) == 0 {
-		return nil
-	}
 	key := strings.Join(c.Request.AllowedTargets, "\x01") + "\x00" + strings.Join(c.Request.DeniedTargets, "\x01")
 	if p, ok := targetPolicies.Load(key); ok {
 		return p.(*targetPolicy)
 	}
 	p, err := compileTargetPolicy(c.Request.AllowedTargets, c.Request.DeniedTargets)
-	if err != nil || p == nil {
+	if err != nil {
 		return nil
 	}
 	targetPolicies.Store(key, p)
@@ -160,6 +179,9 @@ func (p *targetPolicy) checkAddr(host string, addr netip.Addr, nameAllowed bool)
 	if prefix, denied := matchesAddr(p.denyNets, addr); denied {
 		return &TargetRefusedError{Host: host, Reason: fmt.Sprintf("its address %s is in %s in request.denied_targets", addr.Unmap(), prefix)}
 	}
+	if _, metadata := matchesAddr(p.implicitDeny, addr); metadata {
+		return &TargetRefusedError{Host: host, Reason: fmt.Sprintf("its address %s is a cloud metadata service's, refused unless request.allowed_targets lists it", addr.Unmap())}
+	}
 	if nameAllowed || len(p.allowNames)+len(p.allowNets) == 0 {
 		return nil
 	}
@@ -171,16 +193,26 @@ func (p *targetPolicy) checkAddr(host string, addr netip.Addr, nameAllowed bool)
 
 // needsAddrs says whether host's addresses have to be looked at.
 func (p *targetPolicy) needsAddrs(nameAllowed bool) bool {
-	return len(p.denyNets) > 0 || (!nameAllowed && len(p.allowNames)+len(p.allowNets) > 0)
+	return len(p.denyNets)+len(p.implicitDeny) > 0 || (!nameAllowed && len(p.allowNames)+len(p.allowNets) > 0)
 }
 
-// check applies the policy to host before a request: its name, then every
-// address it resolves to. It returns whether the name alone allowed it.
-func (p *targetPolicy) check(ctx context.Context, host string) (bool, error) {
+// check applies the policy to host before a request: its name, then, with
+// resolve, every address it resolves to. It returns whether the name alone
+// allowed it. Without resolve the addresses are left to the connection
+// (checkConnection).
+func (p *targetPolicy) check(ctx context.Context, host string, resolve bool) (bool, error) {
 	host = strings.ToLower(strings.TrimSuffix(host, "."))
 	nameAllowed, err := p.checkName(host)
 	if err != nil || !p.needsAddrs(nameAllowed) {
 		return nameAllowed, err
+	}
+	// An address written as the target needs no lookup, so it is checked
+	// before anything is sent, proxy or not.
+	if addr, literal := netip.ParseAddr(strings.TrimSuffix(strings.TrimPrefix(host, "["), "]")); literal == nil {
+		return nameAllowed, p.checkAddr(host, addr, nameAllowed)
+	}
+	if !resolve {
+		return nameAllowed, nil
 	}
 	addrs, err := resolveHost(ctx, host)
 	if err != nil {
@@ -210,32 +242,38 @@ var resolveHost = func(ctx context.Context, host string) ([]netip.Addr, error) {
 // hosts it checked, and whether each one's name allowed it.
 type policyGuard struct {
 	policy *targetPolicy
-	mu     sync.Mutex
-	hosts  map[string]bool
+	// proxy is the proxy function of the transport sending the request, so
+	// the guard decides what goes through a proxy exactly as the transport
+	// does, from the environment as the transport read it.
+	proxy func(*http.Request) (*url.URL, error)
+	mu    sync.Mutex
+	hosts map[string]bool
 }
 
 type policyGuardKey struct{}
 
-// withTargetPolicy checks host against the collector's policy and returns a
-// context whose connections are checked too; ctx itself when the collector
-// sets no policy.
-func withTargetPolicy(ctx context.Context, c *model.Collector, host string) (context.Context, error) {
+// withTargetPolicy checks the host of u against the collector's policy and
+// returns a context whose connections are checked too; ctx itself when the
+// collector sets no policy.
+func withTargetPolicy(ctx context.Context, c *model.Collector, u *url.URL, proxy func(*http.Request) (*url.URL, error)) (context.Context, error) {
 	policy := policyOf(c)
 	if policy == nil {
 		return ctx, nil
 	}
-	guard := &policyGuard{policy: policy, hosts: map[string]bool{}}
-	if err := guard.check(ctx, host); err != nil {
+	guard := &policyGuard{policy: policy, proxy: proxy, hosts: map[string]bool{}}
+	if err := guard.check(ctx, u); err != nil {
 		return ctx, err
 	}
 	return context.WithValue(ctx, policyGuardKey{}, guard), nil
 }
 
-// check applies the policy to a host the request is about to reach, the
-// first or one a redirect names, and remembers it for the connections.
-func (g *policyGuard) check(ctx context.Context, host string) error {
-	host = strings.ToLower(strings.TrimSuffix(host, "."))
-	nameAllowed, err := g.policy.check(ctx, host)
+// check applies the policy to the host of u, which the request is about to
+// reach, the first or one a redirect names, and remembers it for the
+// connections. Its addresses are resolved here only when a proxy stands in
+// between; otherwise the connection checks the one it is made to.
+func (g *policyGuard) check(ctx context.Context, u *url.URL) error {
+	host := strings.ToLower(strings.TrimSuffix(u.Hostname(), "."))
+	nameAllowed, err := g.policy.check(ctx, host, viaProxy(g.proxy, u))
 	if err != nil {
 		return err
 	}
@@ -245,13 +283,29 @@ func (g *policyGuard) check(ctx context.Context, host string) error {
 	return nil
 }
 
-// checkRedirect applies a request's policy to the host a redirect leads to.
-func checkRedirect(ctx context.Context, host string) error {
+// checkRedirect applies a request's policy to the URL a redirect leads to.
+func checkRedirect(ctx context.Context, u *url.URL) error {
 	if guard, ok := ctx.Value(policyGuardKey{}).(*policyGuard); ok {
-		return guard.check(ctx, host)
+		return guard.check(ctx, u)
 	}
 	return nil
 }
+
+// viaProxy says whether proxy, a transport's proxy function, sends a
+// request to u through a proxy.
+func viaProxy(proxy func(*http.Request) (*url.URL, error), u *url.URL) bool {
+	if proxyOverride != nil {
+		return proxyOverride(u)
+	}
+	if proxy == nil {
+		return false
+	}
+	through, err := proxy(&http.Request{URL: u, Header: http.Header{}})
+	return err == nil && through != nil
+}
+
+// proxyOverride, set by tests, decides what goes through a proxy instead.
+var proxyOverride func(*url.URL) bool
 
 // checkConnection applies a request's policy to the address a connection to
 // dialed, host:port, was made to. A dial to a host the request did not

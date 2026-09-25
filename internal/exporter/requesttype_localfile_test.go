@@ -7,6 +7,7 @@ import (
 	"context"
 	"log/slog"
 	"net/http"
+	"net/http/httptest"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -336,5 +337,22 @@ func TestLocalFileCarbonLinesSkipped(t *testing.T) {
 	probeFile(t, server, "collector=carbon").must(t, http.StatusOK, `jobs_done{job="a"} 2`)
 	if !strings.Contains(logs.String(), `"msg":"carbon lines read whole again"`) {
 		t.Fatalf("no recovery:\n%s", logs.String())
+	}
+}
+
+// A debug probe of a localfile collector shows the read, which sends no
+// request, and the file.
+func TestADebugProbeOfALocalFileCollector(t *testing.T) {
+	root := t.TempDir()
+	testutil.WriteIn(t, root, "app.prom", promFile)
+	server := fileServer(t, fileCollector("files", root, "app.prom"))
+	server.SetProbeDebug(true)
+	recorder := httptest.NewRecorder()
+	server.Handler().ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/probe?collector=files&debug=true", nil))
+	body := recorder.Body.String()
+	for _, want := range []string{"READ file://", "app.prom", `app_jobs_total{queue="default"} 7`, "A probe would have answered 200"} {
+		if !strings.Contains(body, want) {
+			t.Errorf("no %q in the report:\n%s", want, body)
+		}
 	}
 }

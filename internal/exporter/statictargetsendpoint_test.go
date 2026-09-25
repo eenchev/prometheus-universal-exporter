@@ -455,3 +455,47 @@ func TestStaticTargetsSharingAResourceStayApartOverOTLP(t *testing.T) {
 		t.Fatalf("a read changed the stored series: %v -> %v", before, after)
 	}
 }
+
+// The endpoint keeps its merge of the results between scrapes: a second read
+// neither merges nor renders again, a published result or a change of the
+// targets makes the next read merge again, and a filtered read of the kept
+// merge serves only the targets it names, leaving the merge whole.
+func TestTheStaticTargetsEndpointKeepsItsMergeBetweenScrapes(t *testing.T) {
+	target := textTarget(t, "value=42\n")
+	cfg := &model.Config{Collectors: []model.Collector{testutil.Collector("text", "text")}}
+	file := &model.StaticTargetFile{Interval: model.Duration(time.Minute), Targets: []model.StaticTarget{
+		{Name: "eu", Collector: "text", Target: target.URL},
+		{Name: "us", Collector: "text", Target: target.URL},
+	}}
+	server := newStaticServer(t, cfg, file)
+	server.scrapeStaticTargets(context.Background(), 10*time.Second)
+
+	first := getStaticTargets(t, server, "/static-targets")
+	view := server.staticView
+	if view == nil || view.rendered == nil {
+		t.Fatal("the read kept no rendered merge")
+	}
+	if again := getStaticTargets(t, server, "/static-targets"); again != first || server.staticView != view {
+		t.Fatal("a second read with nothing published merged again")
+	}
+	filtered := getStaticTargets(t, server, "/static-targets?targets=eu")
+	if strings.Contains(filtered, `static_target="us"`) || !strings.Contains(filtered, `static_target="eu"`) {
+		t.Fatalf("the filtered read served:\n%s", filtered)
+	}
+	if server.staticView != view || getStaticTargets(t, server, "/static-targets") != first {
+		t.Fatal("the filtered read changed the kept merge")
+	}
+
+	server.publishStaticTarget(file.Targets[0], otlpResourceIdentity{}, model.MetricSet{Metrics: []model.Metric{
+		{Name: "demo_value", Type: model.GaugeMetricType, Value: 7},
+	}})
+	if body := getStaticTargets(t, server, "/static-targets"); !strings.Contains(body, `demo_value{static_target="eu"} 7`) || server.staticView == view {
+		t.Fatalf("a published result is not served:\n%s", body)
+	}
+	view = server.staticView
+
+	server.manager.SetTargets("", &model.StaticTargetFile{Interval: file.Interval, Targets: file.Targets[1:]})
+	if body := getStaticTargets(t, server, "/static-targets"); strings.Contains(body, `static_target="eu"`) || server.staticView == view {
+		t.Fatalf("a removed target is still served:\n%s", body)
+	}
+}

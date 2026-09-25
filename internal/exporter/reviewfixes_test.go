@@ -7,11 +7,13 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"reflect"
 	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/eenchev/prometheus-universal-exporter/internal/config"
 	"github.com/eenchev/prometheus-universal-exporter/internal/model"
 	"github.com/eenchev/prometheus-universal-exporter/internal/testutil"
 )
@@ -273,5 +275,150 @@ func TestAnAcceptedStatusIsDecoded(t *testing.T) {
 	status = http.StatusInternalServerError
 	if got := probeOnce(t, server, probePath("accepting", target.URL, "&x=1"), nil); got.Code != http.StatusBadGateway || !strings.Contains(got.Body.String(), "received HTTP status 500") {
 		t.Fatalf("%d %s", got.Code, got.Body)
+	}
+}
+
+// http_exporter_targets_refused_total belongs to the request types with
+// targets to refuse: a localfile collector has no series in it.
+func TestRefusedTargetsAreCountedOnlyWhereThereAreTargets(t *testing.T) {
+	files := model.Collector{Name: "files", Request: model.RequestConfig{Type: "localfile", Root: t.TempDir(), Path: "m.prom"}, Transform: model.TransformConfig{Type: "prometheus"}}
+	server := flightServer(t, testutil.Collector("web", "text"), files)
+	metrics := selfMetrics(t, server)
+	if !strings.Contains(metrics, `http_exporter_targets_refused_total{collector="web"} 0`) {
+		t.Fatalf("no series for the http collector:\n%s", metrics)
+	}
+	if strings.Contains(metrics, `http_exporter_targets_refused_total{collector="files"}`) {
+		t.Fatal("a localfile collector has a refused-targets series")
+	}
+}
+
+// Every setting of a collector is part of its cache key: the key is built
+// from the whole definition, and this keeps it so for a setting added later,
+// such as one kept out of the encoding. Each settable leaf of the collector,
+// set on its own, changes the key; lists and mappings are set as a whole.
+func TestEverySettingChangesTheCacheKey(t *testing.T) {
+	type leaf struct {
+		name  string
+		index []int
+	}
+	var leaves func(typ reflect.Type, prefix string, index []int) []leaf
+	leaves = func(typ reflect.Type, prefix string, index []int) []leaf {
+		var out []leaf
+		for i := 0; i < typ.NumField(); i++ {
+			field := typ.Field(i)
+			key, _, _ := strings.Cut(field.Tag.Get("yaml"), ",")
+			if !field.IsExported() || key == "" {
+				continue
+			}
+			if key == "-" {
+				t.Errorf("%s%s is kept out of the collector's encoding, so out of its cache key", prefix, field.Name)
+				continue
+			}
+			at := append(append([]int(nil), index...), i)
+			inner := field.Type
+			if inner.Kind() == reflect.Pointer {
+				inner = inner.Elem()
+			}
+			if inner.Kind() == reflect.Struct {
+				out = append(out, leaves(inner, prefix+key+".", at)...)
+				continue
+			}
+			out = append(out, leaf{prefix + key, at})
+		}
+		return out
+	}
+	fieldAt := func(v reflect.Value, index []int) reflect.Value {
+		for _, i := range index {
+			if v.Kind() == reflect.Pointer {
+				if v.IsNil() {
+					v.Set(reflect.New(v.Type().Elem()))
+				}
+				v = v.Elem()
+			}
+			v = v.Field(i)
+		}
+		return v
+	}
+	var sample func(typ reflect.Type) reflect.Value
+	sample = func(typ reflect.Type) reflect.Value {
+		v := reflect.New(typ).Elem()
+		switch typ.Kind() {
+		case reflect.String:
+			v.SetString("x")
+		case reflect.Bool:
+			v.SetBool(true)
+		case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
+			v.SetInt(7)
+		case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
+			v.SetUint(7)
+		case reflect.Float32, reflect.Float64:
+			v.SetFloat(1.5)
+		case reflect.Slice:
+			v = reflect.MakeSlice(typ, 0, 1)
+			v = reflect.Append(v, sample(typ.Elem()))
+		case reflect.Map:
+			v = reflect.MakeMap(typ)
+			v.SetMapIndex(sample(typ.Key()), sample(typ.Elem()))
+		case reflect.Pointer:
+			v = reflect.New(typ.Elem())
+			v.Elem().Set(sample(typ.Elem()))
+		case reflect.Interface:
+			v.Set(reflect.ValueOf("x"))
+		}
+		return v
+	}
+	base := collectorFingerprint(&model.Collector{})
+	all := leaves(reflect.TypeOf(model.Collector{}), "", nil)
+	if len(all) < 50 {
+		t.Fatalf("only %d settings found; the walk is broken", len(all))
+	}
+	for _, l := range all {
+		var c model.Collector
+		target := fieldAt(reflect.ValueOf(&c).Elem(), l.index)
+		target.Set(sample(target.Type()))
+		if collectorFingerprint(&c) == base {
+			t.Errorf("%s does not change the cache key", l.name)
+		}
+	}
+}
+
+// A static target's request.accept_status replaces its collector's for that
+// target alone, and is part of its cache key.
+func TestAStaticTargetAcceptsItsOwnStatuses(t *testing.T) {
+	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusServiceUnavailable)
+		_, _ = fmt.Fprint(w, "value=4\n")
+	}))
+	defer target.Close()
+	cfg := &model.Config{Collectors: []model.Collector{testutil.Collector("text", "text")}}
+	file := &model.StaticTargetFile{Interval: model.Duration(time.Minute), Targets: []model.StaticTarget{
+		{Name: "tolerant", Collector: "text", Target: target.URL, Request: model.TargetRequestConfig{AcceptStatus: []string{"2XX", "503"}}},
+		{Name: "strict", Collector: "text", Target: target.URL},
+	}}
+	server := newStaticServer(t, cfg, file)
+	server.logger = testutil.QuietLogger(t)
+	server.scrapeStaticTargets(t.Context(), 10*time.Second)
+	body := getStaticTargets(t, server, "/static-targets")
+	if !strings.Contains(body, `demo_value{static_target="tolerant"} 4`) {
+		t.Fatalf("the tolerant target's 503 was not decoded:\n%s", body)
+	}
+	if strings.Contains(body, `demo_value{static_target="strict"}`) {
+		t.Fatalf("the strict target's 503 was decoded:\n%s", body)
+	}
+	tolerant := targetOwnRequest(&file.Targets[0])
+	if !strings.Contains(strings.Join(tolerant, " "), "accept_status 2 2xx 503") {
+		t.Fatalf("own sections %q", tolerant)
+	}
+	bad := &model.StaticTargetFile{Interval: model.Duration(time.Minute), Targets: []model.StaticTarget{{Name: "bad", Collector: "text", Target: target.URL, Request: model.TargetRequestConfig{AcceptStatus: []string{"6xx"}}}}}
+	err := config.ValidateStaticTargets(bad)
+	if err == nil {
+		err = config.ValidateStaticTargetsAgainst(bad, cfg)
+	}
+	if err == nil || !strings.Contains(err.Error(), "request.accept_status") {
+		t.Fatalf("err=%v", err)
+	}
+	codes := &model.StaticTargetFile{Interval: model.Duration(time.Minute), Targets: []model.StaticTarget{{Name: "codes", Collector: "text", Target: target.URL, Request: model.TargetRequestConfig{AcceptCodes: []string{"NOT_FOUND"}}}}}
+	if err := config.ValidateStaticTargetsAgainst(codes, cfg); err == nil || !strings.Contains(err.Error(), "accept_codes") {
+		t.Fatalf("accept_codes on an http collector's target: %v", err)
 	}
 }

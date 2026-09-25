@@ -341,3 +341,15 @@ func TestVerboseFamiliesDoNotReuseStaticHealthNames(t *testing.T) {
 		}
 	}
 }
+
+// With verbose self-metrics, the queues behind --probe.max-concurrent and
+// --python.max-workers are published, empty while nothing waits.
+func TestVerboseMetricsPublishTheQueues(t *testing.T) {
+	server := verboseServer(t, true, testutil.Collector("queued", "text"))
+	metrics := selfMetrics(t, server)
+	for _, want := range []string{"http_exporter_trips_waiting 0\n", "http_exporter_python_pool_runs_waiting 0\n"} {
+		if !strings.Contains(metrics, want) {
+			t.Errorf("no %q in:\n%s", want, metrics)
+		}
+	}
+}

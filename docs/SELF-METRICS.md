@@ -31,9 +31,12 @@ configured:
 | `http_exporter_cache_stale_served_total` | counter | Failed trips answered with the last good result under [`stale_if_error`](CONFIGURATION.md#serving-the-last-good-result-when-the-target-fails), probes and static target scrapes alike. |
 | `http_exporter_probes_coalesced_total` | counter | Probes that [shared a request](#shared-probes). |
 | `http_exporter_probes_in_flight` | gauge | Trips to the collector's targets in progress, which [`max_concurrent_probes`](CONFIGURATION.md#limiting-concurrent-probes) bounds. |
-| `http_exporter_probes_rejected_total` | counter | Probes answered `503` because the collector was at `max_concurrent_probes`, or the exporter at `--probe.max-concurrent`. |
-| `http_exporter_targets_refused_total` | counter | Probes and static target scrapes whose target, or a redirect's, `request.allowed_targets` or `denied_targets` refused; a probe is answered `403`. |
+| `http_exporter_probes_rejected_total` | counter | Probes answered `503`, and static target scrapes that found no slot in time, because the collector was at [`max_concurrent_probes`](CONFIGURATION.md#limiting-concurrent-probes). |
+| `http_exporter_probes_rejected_exporter_limit_total` | counter | The same, because the exporter as a whole was at [`--probe.max-concurrent`](CONFIGURATION.md#limiting-concurrent-probes): the collector had room, the process did not. |
+| `http_exporter_targets_refused_total` | counter | `http`, `graphite` and `grpc` collectors only: probes and static target scrapes whose target, or a redirect's, [`allowed_targets` or `denied_targets`](REQUESTS.md#restricting-targets) refused; a probe is answered `403`. A `localfile` collector, with no target to refuse, has no series. |
 | `http_exporter_collector_config_valid` | gauge | `1` for every loaded collector. |
+| `http_exporter_trips_in_flight` | gauge | Without a `collector` label: trips to targets in progress, probes and static target scrapes of every collector together, which `--probe.max-concurrent` bounds. A fair signal for scaling out on. |
+| `http_exporter_trips_max_concurrent` | gauge | Without a `collector` label: `--probe.max-concurrent`, `0` for no limit. |
 | `http_exporter_rule_failures_total` | counter | Labelled `collector` and `metric`: the series a metric rule could not produce and the probe carried on without, under `error_mode` `log` or `ignore`. Every rule has its series from zero. A rule under `fail` fails the probe instead, counted in `http_exporter_transform_errors_total`. |
 
 A failure rate, for example:
@@ -295,6 +298,23 @@ series, and `http_exporter_request_series_tracked` reports how many combinations
 are in use against that limit. Because verbosity is configuration rather than a
 flag, a reload turns it on and off; turning it off drops the labelled series
 instead of leaving stale ones exposed.
+
+### Queues
+
+Verbose mode also publishes how much is waiting for a slot, without a
+`collector` label:
+
+| Metric | Meaning |
+|---|---|
+| `http_exporter_trips_waiting` | Trips to targets, probes and static target scrapes, waiting for a slot under `--probe.max-concurrent`. |
+| `http_exporter_python_pool_runs_waiting` | Script runs waiting for a Python worker under `--python.max-workers`. |
+
+Both read `0` without a limit. A queue that stays above zero says the limit is
+lower than the load, before probes start failing for it:
+
+```promql
+min_over_time(http_exporter_trips_waiting[10m]) > 0
+```
 
 ### Scrape-time histograms
 

@@ -109,6 +109,26 @@
             "additionalProperties": false,
             "description": "Overrides of the collector's request for this target, as the /probe parameters override it for a probe.",
             "properties": {
+              "accept_codes": {
+                "description": "grpc: replaces the collector's request.accept_codes for this target.",
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "accept_status": {
+                "description": "http and graphite: replaces the collector's request.accept_status for this target.",
+                "items": {
+                  "maximum": 599,
+                  "minimum": 100,
+                  "pattern": "^[1-5][xX][xX]$|^[1-5][0-9][0-9]$",
+                  "type": [
+                    "integer",
+                    "string"
+                  ]
+                },
+                "type": "array"
+              },
               "basic_auth": {
                 "additionalProperties": false,
                 "properties": {

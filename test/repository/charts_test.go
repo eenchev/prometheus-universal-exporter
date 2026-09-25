@@ -295,22 +295,18 @@ func TestServerFlagValuesDefaults(t *testing.T) {
 	}
 }
 
-// GOMEMLIMIT follows the container's memory limit through the downward API,
-// and only when there is one and env does not set it.
-func TestTheChartSetsGOMEMLIMITFromTheMemoryLimit(t *testing.T) {
+// The Go memory limit is a share of the container's, which the exporter
+// reads itself: the chart renders the ratio as a flag, on by default.
+func TestTheChartSetsTheGoMemoryLimitRatio(t *testing.T) {
 	deployment := readChartFile(t, "templates/deployment.yaml")
-	for _, want := range []string{
-		`.Values.goMemLimit.enabled`,
-		`dig "limits" "memory" ""`,
-		`"prometheus-universal-exporter.envSets" (list .Values.env "GOMEMLIMIT")`,
-		"- name: GOMEMLIMIT\n              valueFrom:\n                resourceFieldRef:\n                  containerName: exporter\n                  resource: limits.memory",
-	} {
-		if !strings.Contains(deployment, want) {
-			t.Errorf("the Deployment lacks %q", want)
-		}
+	if !strings.Contains(deployment, `{{- with (include "prometheus-universal-exporter.memoryLimitRatio" .) }}`) {
+		t.Error("the Deployment does not render --runtime.memory-limit-ratio from goMemLimit")
 	}
-	if !strings.Contains(readChartFile(t, "values.yaml"), "\ngoMemLimit:\n  enabled: true\n") {
-		t.Error("goMemLimit.enabled must default to true")
+	if strings.Contains(deployment, "GOMEMLIMIT") {
+		t.Error("the Deployment still sets GOMEMLIMIT to the whole memory limit")
+	}
+	if !strings.Contains(readChartFile(t, "values.yaml"), "\ngoMemLimit:\n  enabled: true\n  ratio: 0.8\n") {
+		t.Error("goMemLimit must default to enabled with ratio 0.8")
 	}
 }
 

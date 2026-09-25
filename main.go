@@ -61,11 +61,13 @@ func run(args []string, stdout, stderr io.Writer) int {
 	selfMetricsPath := flags.String("web.self-metrics-path", exporter.DefaultSelfMetricsPath, "Path of the exporter's own metrics, such as /metrics; it is served there and nowhere else")
 	staticTargetsPath := flags.String("web.static-targets-path", exporter.DefaultStaticTargetsPath, "Path the static targets' latest results are served at, for Prometheus to scrape")
 	enableLifecycle := flags.Bool("web.enable-lifecycle", false, "Enable POST /-/reload, which reloads the configuration and static target files and reports whether they were accepted. SIGHUP reloads either way")
+	enableProbeDebug := flags.Bool("web.enable-probe-debug", false, "Enable /probe?debug=true, which makes one trip and answers with a plain-text report of it: the requests, the response, each stage, what was logged and what the probe would have answered. The report shows the target's response")
 	shutdownDelay := flags.Duration("web.shutdown-delay", 0, "How long a SIGTERM or SIGINT keeps serving, with /ready answering 503, before the graceful shutdown begins, so a load balancer or Kubernetes stops sending probes first. 0, the default, begins at once")
 	shutdownTimeout := flags.Duration("web.shutdown-timeout", exporter.DefaultShutdownTimeout, "How long a SIGTERM or SIGINT waits for the probes in progress to finish before closing their connections. Keep it at least as long as Prometheus's scrape timeout")
 	timeoutOffset := flags.Duration("probe.timeout-offset", exporter.DefaultTimeoutOffset, "How much of Prometheus's scrape timeout (X-Prometheus-Scrape-Timeout-Seconds) a probe leaves unused, so it answers with its own error before Prometheus gives up")
 	defaultProbeTimeout := flags.Duration("probe.default-timeout", exporter.DefaultProbeTimeout, "How long a probe may take without an X-Prometheus-Scrape-Timeout-Seconds header, as from curl or a script. A timeout parameter bounds the request within it and cannot lift it. 0 leaves such a probe unbounded")
 	maxConcurrent := flags.Int("probe.max-concurrent", 0, "How many trips to targets, probes and static target scrapes of every collector together, may be in progress at once, each on top of its collector's max_concurrent_probes. A probe over it is answered 503; a static target scrape waits. 0, the default, leaves them bounded only per collector")
+	memoryLimitRatio := flags.Float64("runtime.memory-limit-ratio", 0, "Set the Go memory limit to this share of the container's memory limit, read from its cgroup at startup, so the Go runtime collects harder as its heap nears it and leaves the rest to the Python workers. From 0 to 1; 0, the default, leaves the Go runtime's own default. GOMEMLIMIT in the environment wins")
 	pythonPath := flags.String("python.path", "python3", "Python interpreter used by the python transform")
 	pythonMaxWorkers := flags.Int("python.max-workers", 0, "How many Python workers, of every collector together, may be alive at once, starting, running a script or idle. A run that finds none free takes the place of the idle worker unused for longest, or waits within its probe's deadline. 0, the default, leaves them bounded only per script")
 	targetFile := flags.String("static-targets-file", "", "Optional file of static targets, scraped by the exporter on their intervals and served at --web.static-targets-path; a target with export_via_otlp is also delivered over OTLP")
@@ -109,6 +111,10 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return 2
 	}
 	if err := exporter.ValidateMaxConcurrent(*maxConcurrent); err != nil {
+		newLogger("info", stderr).Error("invalid command line; exiting", "error", err.Error())
+		return 2
+	}
+	if err := exporter.ValidateMemoryLimitRatio(*memoryLimitRatio); err != nil {
 		newLogger("info", stderr).Error("invalid command line; exiting", "error", err.Error())
 		return 2
 	}
@@ -223,10 +229,12 @@ func run(args []string, stdout, stderr io.Writer) int {
 	server.SetDefaultProbeTimeout(*defaultProbeTimeout)
 	server.SetMaxConcurrent(*maxConcurrent)
 	server.SetLifecycle(*enableLifecycle)
+	server.SetProbeDebug(*enableProbeDebug)
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGTERM, syscall.SIGINT)
 	defer stop()
 	go manager.ReloadLoop(ctx)
+	exporter.ApplyMemoryLimitRatio(*memoryLimitRatio, logger)
 	transform.PythonWorkers().SetMaxWorkers(*pythonMaxWorkers)
 	go transform.PythonWorkers().ReapLoop(ctx, transform.PythonWorkerReapInterval)
 	// SIGHUP is caught until the process exits, not only until the first

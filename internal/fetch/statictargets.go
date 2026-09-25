@@ -34,6 +34,12 @@ func TargetOverrides(t *model.StaticTarget) RequestOverrides {
 			out.Metadata[key] = value
 		}
 	}
+	if t.Request.AcceptStatus != nil {
+		out.AcceptStatus = append([]string{}, t.Request.AcceptStatus...)
+	}
+	if t.Request.AcceptCodes != nil {
+		out.AcceptCodes = append([]string{}, t.Request.AcceptCodes...)
+	}
 	if t.Request.InsecureSkipVerify != nil {
 		value := *t.Request.InsecureSkipVerify
 		out.InsecureSkipVerify = &value

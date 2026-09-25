@@ -2,6 +2,7 @@ package exporter
 
 import (
 	"net/http"
+	"slices"
 	"sort"
 	"sync"
 	"time"
@@ -19,8 +20,9 @@ type statsValues struct {
 	probes, success, decodeOK, parseErrors, transformErrors, missing, scriptErrors, limitErrors, emitted, cacheHits, cacheMisses uint64
 	// coalesced counts probes answered by sharing another probe's request.
 	coalesced uint64
-	// rejected counts probes turned away by max_concurrent_probes.
-	rejected uint64
+	// rejected counts probes turned away by max_concurrent_probes, and
+	// rejectedByExporter those turned away by --probe.max-concurrent.
+	rejected, rejectedByExporter uint64
 	// refused counts trips request.allowed_targets or denied_targets
 	// refused.
 	refused uint64
@@ -108,17 +110,20 @@ var selfMetricDescriptors = []selfMetricDescriptor{
 	// request, so it has no per-request value.
 	{"http_exporter_cache_entries", model.GaugeMetricType, "Entries currently held in this collector's response cache, including stale ones kept for cache.stale_if_error.", nil},
 	{"http_exporter_probes_in_flight", model.GaugeMetricType, "Trips to this collector's targets in progress, which max_concurrent_probes bounds.", nil},
-	{"http_exporter_probes_rejected_total", model.CounterMetricType, "Probes answered 503 because this collector already had max_concurrent_probes trips to its targets in progress.", func(v statsValues) float64 { return float64(v.rejected) }},
+	{"http_exporter_probes_rejected_total", model.CounterMetricType, "Probes answered 503, and static target scrapes that found no slot in time, because this collector already had max_concurrent_probes trips to its targets in progress.", func(v statsValues) float64 { return float64(v.rejected) }},
+	{"http_exporter_probes_rejected_exporter_limit_total", model.CounterMetricType, "Probes of this collector answered 503, and static target scrapes that found no slot in time, because the exporter already had --probe.max-concurrent trips to targets in progress.", func(v statsValues) float64 { return float64(v.rejectedByExporter) }},
 	{"http_exporter_targets_refused_total", model.CounterMetricType, "Probes and static target scrapes whose target, or a redirect's, this collector's request.allowed_targets or denied_targets refused; a probe is answered 403.", func(v statsValues) float64 { return float64(v.refused) }},
 	{"http_exporter_probes_coalesced_total", model.CounterMetricType, "Probes answered by sharing an identical probe already in flight instead of going to the target.", func(v statsValues) float64 { return float64(v.coalesced) }},
 }
 
-// requestTypeFamilies are the families only the collectors of one request
-// type have, by that type: a collector of another type has no series in
-// them, so an exporter without such collectors, or built without the type,
+// requestTypeFamilies are the families only the collectors of some request
+// types have, by those types: a collector of another type has no series in
+// them, so an exporter without such collectors, or built without the types,
 // does not show the family at all.
-var requestTypeFamilies = map[string]string{
-	"http_exporter_scrape_grpc_status_code": "grpc",
+var requestTypeFamilies = map[string][]string{
+	"http_exporter_scrape_grpc_status_code": {"grpc"},
+	// A localfile collector reads files, and has no target to refuse.
+	"http_exporter_targets_refused_total": {"http", "graphite", "grpc"},
 }
 
 // selfMetricDescriptor describes one per-collector self-metric family. Value
@@ -136,6 +141,8 @@ var exporterMetricHelp = map[string]string{
 	"http_exporter_build_info":                                 "1, with the exporter's version, revision, Go version and built request types as labels.",
 	"http_exporter_collector_config_valid":                     "Whether the collector configuration is valid.",
 	"http_exporter_rule_failures_total":                        "Series a metric rule could not produce and the probe carried on without, under error_mode log or ignore.",
+	"http_exporter_trips_in_flight":                            "Trips to targets in progress, probes and static target scrapes of every collector together, which --probe.max-concurrent bounds.",
+	"http_exporter_trips_max_concurrent":                       "--probe.max-concurrent: how many trips to targets may be in progress at once; 0 for no limit across collectors.",
 	"http_exporter_static_targets":                             "Static targets configured in the static target file, served on the static targets endpoint.",
 	"http_exporter_static_targets_exported_via_otlp":           "Static targets with export_via_otlp, also delivered over OTLP.",
 	"http_exporter_otlp_exports_total":                         "OTLP exports, each a delivery of everything pending with its retries, by result: success or failure.",
@@ -223,7 +230,7 @@ func (s *Server) selfMetricSet() model.MetricSet {
 	for _, d := range selfMetricDescriptors {
 		only, typed := requestTypeFamilies[d.Name]
 		for _, name := range names {
-			if typed && requestTypes[name] != only {
+			if typed && !slices.Contains(only, requestTypes[name]) {
 				continue
 			}
 			var value float64
@@ -238,7 +245,7 @@ func (s *Server) selfMetricSet() model.MetricSet {
 			continue
 		}
 		for _, sample := range requests {
-			if typed && requestTypes[sample.Key.Collector] != only {
+			if typed && !slices.Contains(only, requestTypes[sample.Key.Collector]) {
 				continue
 			}
 			out = append(out, model.Metric{Name: d.Name, Help: d.Help, Type: d.Type, Value: d.Value(sample.Values), Labels: requestLabels(sample.Key)})
@@ -250,6 +257,7 @@ func (s *Server) selfMetricSet() model.MetricSet {
 	}
 	out = append(out, s.ruleFailureMetrics()...)
 	out = append(out, s.staticTargetCountMetrics()...)
+	out = append(out, s.tripTotalMetrics()...)
 	out = append(out, s.manager.ReloadMetrics()...)
 	out = append(out, s.otlpStatusMetrics()...)
 	out = append(out, requestFamilies...)

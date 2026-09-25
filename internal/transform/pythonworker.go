@@ -11,6 +11,7 @@ import (
 	"math"
 	"os"
 	"os/exec"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -146,11 +147,14 @@ type PythonPool struct {
 	closed bool
 	// maxWorkers, when positive, bounds the workers alive at once, starting,
 	// busy or idle, of every collector together (--python.max-workers).
-	// live counts them, and changed is closed, and replaced, whenever one
-	// stops or goes idle, which is what a run waiting for a worker waits on.
+	// live counts them. waiting is the runs waiting for a worker, in
+	// line: a worker going idle or stopping wakes the first of them only,
+	// which any such change lets through — it takes the idle worker, or
+	// evicts it, or starts one in the stopped worker's place — rather than
+	// every waiter racing for it.
 	maxWorkers int
 	live       int
-	changed    chan struct{}
+	waiting    []chan struct{}
 }
 
 // Why a worker stopped, and how a run ended: bounded sets, so they can be
@@ -213,7 +217,7 @@ func IsolatePythonWorkers() (restore func()) {
 }
 
 func newPythonPool() *PythonPool {
-	return &PythonPool{idle: map[string][]*pythonWorker{}, stats: map[string]*pythonCollectorStats{}, busy: map[string]int{}, obsolete: map[string]bool{}, changed: make(chan struct{})}
+	return &PythonPool{idle: map[string][]*pythonWorker{}, stats: map[string]*pythonCollectorStats{}, busy: map[string]int{}, obsolete: map[string]bool{}}
 }
 
 // SetMaxWorkers bounds the workers alive at once, of every collector
@@ -222,7 +226,10 @@ func (p *PythonPool) SetMaxWorkers(limit int) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	p.maxWorkers = limit
-	p.notifyLocked()
+	// A higher limit may let every waiter through.
+	for len(p.waiting) > 0 {
+		p.notifyLocked()
+	}
 }
 
 // ValidateMaxWorkers refuses a negative --python.max-workers.
@@ -233,10 +240,14 @@ func ValidateMaxWorkers(limit int) error {
 	return nil
 }
 
-// notifyLocked wakes the runs waiting for a worker; mu is held.
+// notifyLocked wakes the first run waiting for a worker; mu is held.
 func (p *PythonPool) notifyLocked() {
-	close(p.changed)
-	p.changed = make(chan struct{})
+	if len(p.waiting) == 0 {
+		return
+	}
+	first := p.waiting[0]
+	p.waiting = p.waiting[1:]
+	close(first)
 }
 
 // stopLocked stops a worker that is no longer counted as busy or idle, and
@@ -323,6 +334,7 @@ func (p *PythonPool) acquire(ctx context.Context, spec pythonSpec) (*pythonWorke
 	key := spec.key()
 	p.mu.Lock()
 	p.reapLocked(time.Now())
+	woken := false
 	for {
 		var worker *pythonWorker
 		if idle := p.idle[key]; len(idle) > 0 {
@@ -338,14 +350,32 @@ func (p *PythonPool) acquire(ctx context.Context, spec pythonSpec) (*pythonWorke
 		if p.maxWorkers <= 0 || p.live < p.maxWorkers || p.evictIdleLocked() {
 			break
 		}
-		// Every worker the limit allows is starting or busy: wait for one
-		// to finish, within the run's own deadline.
-		changed := p.changed
+		// Every worker the limit allows is starting or busy: wait in line
+		// for one to finish, within the run's own deadline. A waiter woken
+		// that still finds none, because a run that never waited took it
+		// first, keeps its place at the head of the line.
+		wake := make(chan struct{})
+		if woken {
+			p.waiting = append([]chan struct{}{wake}, p.waiting...)
+		} else {
+			p.waiting = append(p.waiting, wake)
+		}
 		p.mu.Unlock()
 		select {
-		case <-changed:
+		case <-wake:
+			woken = true
 		case <-ctx.Done():
-			return nil, fmt.Errorf("the exporter already runs %d Python workers, its --python.max-workers, and none was free in time: %w", p.maxWorkersNow(), ctx.Err())
+			p.mu.Lock()
+			select {
+			case <-wake:
+				// Woken as it gave up: the wake goes to the next in line.
+				p.notifyLocked()
+			default:
+				p.waiting = slices.DeleteFunc(p.waiting, func(c chan struct{}) bool { return c == wake })
+			}
+			limit := p.maxWorkers
+			p.mu.Unlock()
+			return nil, fmt.Errorf("the exporter already runs %d Python workers, its --python.max-workers, and none was free in time: %w", limit, ctx.Err())
 		}
 		p.mu.Lock()
 	}
@@ -370,12 +400,6 @@ func (p *PythonPool) acquire(ctx context.Context, spec pythonSpec) (*pythonWorke
 	st.busy++
 	p.busy[key]++
 	return worker, nil
-}
-
-func (p *PythonPool) maxWorkersNow() int {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	return p.maxWorkers
 }
 
 // evictIdleLocked stops the idle worker unused for longest, of whatever
@@ -540,7 +564,9 @@ func PythonWorkerKeys(pythonPath string, c *model.Config) map[string]bool {
 
 // pythonWorkerSnapshot is one collector's worker statistics at a moment.
 type pythonWorkerSnapshot struct {
-	Starting, Idle, Busy  int
+	Starting, Idle, Busy int
+	// Waiting is the runs waiting for a worker, pool-wide only.
+	Waiting               int
 	Starts, StartFailures uint64
 	Stops, Runs           map[string]uint64
 }
@@ -574,6 +600,7 @@ func (p *PythonPool) PoolSnapshot() pythonWorkerSnapshot {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	out := pythonWorkerSnapshot{Stops: map[string]uint64{}, Runs: map[string]uint64{}}
+	out.Waiting = len(p.waiting)
 	for _, st := range p.stats {
 		out.Starting += st.starting
 		out.Busy += st.busy
@@ -607,6 +634,8 @@ type pythonWorker struct {
 	runs      int
 	idleSince time.Time
 	stopOnce  sync.Once
+	// maxMemory is the worker's limits.max_script_memory, 0 for none.
+	maxMemory int64
 }
 
 func startPythonWorker(ctx context.Context, spec pythonSpec) (*pythonWorker, error) {
@@ -636,7 +665,7 @@ func startPythonWorker(ctx context.Context, spec pythonSpec) (*pythonWorker, err
 	// The child holds its own copies of these ends.
 	closeFiles(requestRead, answerWrite)
 
-	worker := &pythonWorker{collector: spec.Collector, key: spec.key(), cmd: cmd, requests: requestWrite, lines: make(chan pythonLine, 1), stderr: stderr}
+	worker := &pythonWorker{collector: spec.Collector, key: spec.key(), cmd: cmd, requests: requestWrite, lines: make(chan pythonLine, 1), stderr: stderr, maxMemory: spec.MaxMemory}
 	go worker.readAnswers(answerRead, spec.MaxOutput)
 	go func() { _ = cmd.Wait() }()
 
@@ -687,7 +716,7 @@ func (w *pythonWorker) call(ctx context.Context, payload []byte, timeout time.Du
 	select {
 	case line, ok := <-w.lines:
 		if !ok {
-			return nil, errors.New(w.describe(nil))
+			return nil, errors.New(w.describe(nil) + w.memoryHint())
 		}
 		if line.err != nil {
 			return nil, line.err
@@ -714,6 +743,17 @@ func (w *pythonWorker) describe(err error) string {
 		message += ": " + tail
 	}
 	return message
+}
+
+// memoryHint says, of a worker that died mid-run under a memory limit, that
+// the limit may be why: a C library such as lxml that cannot allocate may
+// end the interpreter instead of raising a MemoryError the script would
+// report.
+func (w *pythonWorker) memoryHint() string {
+	if w.maxMemory <= 0 {
+		return ""
+	}
+	return fmt.Sprintf(" (the worker runs under limits.max_script_memory, %d bytes; a library that runs out of memory can end the interpreter rather than raise MemoryError, so raise the limit if the script needs more)", w.maxMemory)
 }
 
 func (w *pythonWorker) stop() {
@@ -799,6 +839,11 @@ builtins.open=denied; io.open=denied; _io.open=code_only(_io.open); io.FileIO=de
 del _io, _name, code_only
 class Response:
     def __init__(self,x): self.status_code=x['status_code']; self.headers=x['headers']; self.body=x['body']; self.text=x['text']
+    def header(self,name,default=None):
+        # One header's values joined by ", ", as jq's $headers has them, the
+        # name in any case; default when the response has none.
+        values=[v for k,vs in (self.headers or {}).items() if k.lower()==name.lower() for v in vs]
+        return ', '.join(values) if values else default
     def json(self): return json.loads(self.text)
     def yaml(self):
         try:

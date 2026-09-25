@@ -538,7 +538,7 @@ type.
 | `follow_redirects` | `false` | § 42.15. |
 | `enable_http2` | `false` | § 42.15. |
 | `allowed_schemes` | `http`, `https` | Schemes a target may use. |
-| `accept_status` | every 2xx | Statuses whose answers are decoded: numbers from 100 to 599 and classes such as `2xx`, written as YAML numbers or strings; any other entry MUST be refused at load. A response with another status MUST fail in the `http_status` stage, and an accepted status MUST NOT be retried. |
+| `accept_status` | every 2xx | A static target MAY set its own, replacing the collector's for it, checked at load and part of its cache key; so MAY a `grpc` target for `accept_codes`. Statuses whose answers are decoded: numbers from 100 to 599 and classes such as `2xx`, written as YAML numbers or strings; any other entry MUST be refused at load. A response with another status MUST fail in the `http_status` stage, and an accepted status MUST NOT be retried. |
 | `allowed_targets`, `denied_targets` | none | Hosts, globs, addresses and networks its requests may and may not reach (§ 26.1). |
 
 It MUST accept these `/probe` parameters: `method`, `path`, `timeout`, `body`,
@@ -770,6 +770,7 @@ keys:
 | `proto_import_paths` | each file's directory | Only with `proto`. |
 | `basic_auth` / `basic_auth_file`, `bearer_token` / `bearer_token_file`, `forward_authorization`, `forward_headers`, `tls`, `max_response_bytes` | as `http` | With `http`'s rules; credentials MUST be sent as the `authorization` metadata, their files read at every call. A `forward_headers` name gRPC reserves MUST be refused. |
 | `retry` | none | `attempts` and `backoff` as `http`'s; `codes`, the gRPC status codes retried by name, case-insensitive, `[UNAVAILABLE]` when left out. An unknown name and `OK` MUST be refused. `non_idempotent` MUST be refused, and `codes` for every other type, in a collector and a static target. |
+| `accept_codes` | none | Status codes other than `OK`, by name as `retry.codes`, whose calls are answers: such a call MUST NOT be retried, and MUST be answered as an empty JSON object with the code as its status (`$status`, `response.status_code`, `http_exporter_scrape_grpc_status_code`) and the status message as the `grpc-message` header, `grpc-status` holding the code. An unknown name and `OK` MUST be refused, and the key for every other type. |
 
 - A target MUST be `host:port`, `dns:///host:port`, `grpc://host:port` or
   `grpcs://host:port`, with a port from 1 to 65535; any other scheme, a path,
@@ -1530,6 +1531,7 @@ Expose a clean response context, preferably:
 ```python
 response.status_code
 response.headers
+response.header(name, default=None)
 response.body
 response.text
 response.json()
@@ -1544,6 +1546,11 @@ collector
 ```
 
 Scripts can operate directly on the raw response or decoded structures.
+
+`response.headers` MUST be each header's values as a list, by canonical name.
+`response.header(name)` MUST return the values of the header of that name, in
+any case, joined by `, `, as jq's `$headers` has them, and `default` when the
+response has none.
 
 `data` MUST be the decoded response: the document for JSON, YAML and
 graphite; the rows for CSV, dicts by header or lists without one; the body as
@@ -1779,8 +1786,12 @@ typical script.
   or idle, of every collector together. A run that finds no idle worker for its
   script while the limit is reached MUST stop the idle worker unused for
   longest, of any script, counting it with the reason `evicted`, and start its
-  own; when every worker is busy it MUST wait for one within its own deadline
-  and otherwise fail naming the flag. `0`, the default, MUST leave the workers
+  own; when every worker is busy it MUST wait in line for one within its own
+  deadline and otherwise fail naming the flag, each worker that frees letting
+  the first waiter through, and a waiter giving up passing its turn on. A
+  worker that dies mid-run under `limits.max_script_memory` MUST say so in
+  its error, since a C library out of memory can end the interpreter rather
+  than raise `MemoryError`. `0`, the default, MUST leave the workers
   bounded only per pool; a negative value MUST be a command-line error.
 - A healthy worker MUST be reused at most 1000 times; at most four idle workers
   MUST be kept per pool, and an idle worker MUST be stopped after five minutes.
@@ -1852,9 +1863,11 @@ and bounded in number, so repeated reloads cannot grow the cache without limit.
 
 Every jq program MUST have `$root` bound to the whole decoded document, so an
 expression evaluated against one item (§ 18.2) can reach the rest of it,
-`$status` bound to the response's HTTP status, and `$headers` to its headers,
-an object of lower-case names, each with its values joined by `, `; both
-MUST be `null` for a response without them.
+`$status` bound to the response's status, and `$headers` to its headers,
+an object of lower-case names, each with its values joined by `, `. The
+status MUST be the HTTP status for `http` and `graphite`, the call's status
+code for `grpc`, `0` for `OK`, and `null` for `localfile`, which has none;
+Python's `response.status_code` MUST be the same, `None` for `null`.
 
 ---
 
@@ -1936,13 +1949,28 @@ writes it and a boolean as `true` or `false`, case-sensitively. A value it
 lists MUST take the mapped number; any other MUST take the number mapped to
 `"*"` when there is one, numbers included, and otherwise be read as a number
 as without the map, failing the rule, naming `value_map`, when it is not one.
-`scale` MUST then multiply the value, mapped or read. Both MUST apply the same
+`scale` MUST then multiply the value, mapped or read. A label MAY set
+`value_map` too, text to text, applied to the value its expression gives, as
+text without surrounding blanks, with `"*"` for any other value; without a
+match and without `"*"` the value MUST be kept, and a value mapped to `""`
+MUST leave the label off. It MUST be applied to the series of its rule, by the
+rule's name, before labels are truncated or renamed, and refused at load on a
+static label, a `python` rule, a rule without a name, and, mapping to `""`, a
+`required` label. Both MUST apply the same
 way in the `regex`, `css`, `xpath`, `csv`, `jq` and `yq` transforms; on a
 `prometheus` rule `scale` MUST multiply plain samples and fail the rule for a
 histogram or summary, and `value_map` MUST be refused at load; a `python`
 rule MUST refuse both at load. A `scale` of 0 or one that is not finite, and a
 `value_map` key that is empty or has surrounding blanks, MUST be refused at
 load.
+
+A rule MUST NOT take a condition of its own (a `when` key): which values
+become series is said in each transform's language — jq and yq `select` and
+`empty`, XPath predicates, CSS selectors in `items`, the regex pattern, and a
+pre-script for CSV rows — and a label with no value, or one `value_map` maps to
+`""`, is left off. CONFIGURATION.md MUST show how for each transform, and say
+that a conditional series goes stale when its condition stops holding, so a
+series whose absence means something is better exported as `0` and `1`.
 
 `error_mode` MUST be `ignore`, `log` or `fail` and defaults to `log`; the same
 vocabulary as `error_handling` (§ 19). Any other value MUST be rejected at
@@ -2426,7 +2454,10 @@ http_exporter_cache_stale_served_total
 http_exporter_probes_coalesced_total
 http_exporter_probes_in_flight
 http_exporter_probes_rejected_total
+http_exporter_probes_rejected_exporter_limit_total
 http_exporter_targets_refused_total
+http_exporter_trips_in_flight
+http_exporter_trips_max_concurrent
 
 http_exporter_build_info
 http_exporter_collector_config_valid
@@ -2699,7 +2730,14 @@ http_exporter_python_pool_worker_starts_total         counter
 http_exporter_python_pool_worker_start_failures_total counter
 http_exporter_python_pool_worker_stops_total          counter   {reason}
 http_exporter_python_pool_runs_total                  counter   {outcome}
+http_exporter_python_pool_runs_waiting                gauge
+http_exporter_trips_waiting                           gauge
 ```
+
+`http_exporter_trips_waiting` MUST be the trips waiting for a slot under
+`--probe.max-concurrent`, and `http_exporter_python_pool_runs_waiting` the
+script runs waiting for a worker under `--python.max-workers`, each `0`
+without its limit; neither carries a `collector` label.
 
 `http_exporter_collector_scrape_duration_seconds` MUST observe the duration of
 every trip to the target, from sending the request to having validated metrics,
@@ -2773,7 +2811,12 @@ Recommended behavior:
   `Authorization` header and never in the URL, and not at all when left
   blank. Credential fields MUST NOT be named form fields, so a submission
   without the page's script leaves them out. A credential the collector's configuration holds MUST be named by kind
-  and its value MUST NOT appear on the page.
+  and its value MUST NOT appear on the page. With `--web.enable-probe-debug`,
+  and only then, each form MUST offer a *Debug report* switch, a checkbox
+  named `debug` with the value `true`, so the form asks for a debug report
+  (§ 42.17) with or without the page's script; the page MUST then show the
+  status the probe would have answered, from the report, rather than the
+  report's own `200`.
 - Both pages MUST be protected like `/probe` when the exporter's Basic
   Authentication is on (§ 42.5), since they list the collectors, MUST escape
   what they show, MUST NOT be cached, MUST NOT be framed by another site
@@ -2805,7 +2848,8 @@ Recommended behavior:
 - `/probe`: execute a collector against a supplied target. A request without
   `collector` MUST answer `400` saying the collector parameter is required,
   with the URL's shape, and one without a target its collector's request type
-  requires MUST answer `400` naming the collector and the request type.
+  requires MUST answer `400` naming the collector and the request type. With
+  `debug=true` it MUST answer a report of the trip instead (§ 42.17).
 
 `/probe`, the self-metrics path and the static targets path MUST compress
 their answer with gzip when the request's `Accept-Encoding` accepts `gzip` (or
@@ -2962,7 +3006,11 @@ YAML anchors (`&name`) there for the rest of it to reuse with aliases
 (`*name`) and merge keys (`<<: *name`), such as the request and transform
 several collectors share. An `x-` key anywhere below the top level, and a bare
 `x-`, MUST be refused as unknown keys. The published schemas MUST accept such
-top-level keys through `patternProperties`. Aliases and merge keys MUST work
+top-level keys through `patternProperties`. With environment expansion on, a reference inside a
+top-level `x-` block MUST be expanded only when an alias outside the `x-`
+blocks uses what the block defines, directly or through other aliases; an
+unused block's references MUST be left alone, their variables not required.
+Aliases and merge keys MUST work
 in all three files as YAML defines them: a key set beside a merge replaces the
 merged value of that key whole.
 
@@ -3122,16 +3170,34 @@ MUST be refused at load; another request type setting either MUST be refused
 as any key of another type is. Names MUST be compared without case and
 without a final dot, and an IPv4-mapped IPv6 address as its IPv4 address.
 
+- Every such collector MUST refuse the cloud metadata addresses,
+  `169.254.169.254` and `fd00:ec2::254`, even with neither list set, unless
+  `allowed_targets` lists the address or a network holding it; a name
+  allowed by name that resolves to one MUST still be refused, and the
+  refusal MUST say it is a cloud metadata service.
 - A target MUST be refused when its host matches `denied_targets` by name, or
   any address it resolves to is in a denied network.
 - With `allowed_targets` set, a target MUST be refused unless its host
   matches it by name, or every address it resolves to is in an allowed
   network. `denied_targets` MUST win over `allowed_targets`.
-- The check MUST run before the request, again for the host of every
-  redirect followed, and against the address each connection is actually
-  made to, so a name that resolves elsewhere between the check and the
-  connection is still refused. A connection to a proxy MUST NOT be checked
-  as the target; the target's own addresses are those the exporter resolves.
+- Names MUST be checked before the request and again for the host of every
+  redirect followed, and so MUST a host written as an address, needing no
+  lookup, before anything is sent. For a target reached directly, addresses MUST be checked
+  against the address each connection is made to, without a lookup of the
+  exporter's own before it, so a name is resolved once per connection and one
+  that resolves elsewhere between lookups is still refused. For a target
+  reached through a proxy, the connection is the proxy's and MUST NOT be
+  checked as the target's; the exporter MUST resolve the target's name itself
+  before the request and check those addresses. Whether a request goes
+  through a proxy MUST be decided by the proxy function of the transport that
+  sends it, and for `grpc` as grpc-go decides, so the check and the
+  connection never disagree. A `grpc` call MUST check its connections as
+  they are made, looking the server up before the call only behind a proxy,
+  and a connection through a proxy MUST keep grpc-go's own proxy dialing. A
+  connection the policy refuses MUST be reported as the refusal, not as the
+  `UNAVAILABLE` grpc-go makes of a dialer's error, whether the call or the
+  reflection question before it made it. A refused request MUST NOT be
+  retried.
 - A refused probe MUST be answered `403 Forbidden` naming the rule, whatever
   `error_handling.on_fetch_error` says, without contacting the target, and
   MUST be counted in `http_exporter_targets_refused_total`; a refused static
@@ -3469,11 +3535,27 @@ Provide clear CLI flags, for example:
 --config.collector-file-schema
 --probe.timeout-offset=500ms
 --probe.default-timeout=30s
+--probe.max-concurrent=0
+--python.max-workers=0
+--runtime.memory-limit-ratio=0
 --web.enable-lifecycle
+--web.enable-probe-debug
 --web.shutdown-timeout=15s
 --web.shutdown-delay=0s
 --version
 ```
+
+`--runtime.memory-limit-ratio`, from 0 to 1 and 0 by default, MUST set the Go
+memory limit at startup to that share of the container's memory limit, and
+log both. The limit MUST be read along the process's own cgroup, as
+`/proc/self/cgroup` names it — v2 `memory.max`, and v1
+`memory.limit_in_bytes` under the memory controller — from that cgroup up to
+the root, the smallest found being the one in force, so it is found with a
+cgroup namespace, where the path is `/`, and without one, where the root holds
+the host's `max`. Without a container limit, at 0, or with `GOMEMLIMIT` set in the
+environment, it MUST leave the limit alone, logging why for the first and
+last. A value outside 0 to 1 MUST be a command-line error, also with
+`--dry-run`.
 
 `--web.shutdown-timeout` bounds how long a `SIGTERM` or `SIGINT` waits for the
 probes in progress, 15 seconds by default, longer than a typical scrape timeout; a value that is not positive MUST be
@@ -3546,6 +3628,9 @@ The steps MUST be:
 - `config` — the configuration file and its collector files (§ 5.0) load and
   validate, including the rule checks of § 24.2 and the uniqueness of collector
   names; the collector files read are listed under `details.collector_files`;
+  each collector that sets `allowed_targets`, `denied_targets`,
+  `accept_status` or `accept_codes` is listed under
+  `details.request_policies` with those lists as normalised for use;
   deprecated spellings accepted during validation are listed under
   `details.deprecations` and logged, and do not fail the check;
 - `python_scripts` — every Python script compiles and every pre-script produces
@@ -5841,6 +5926,116 @@ Tests MUST show:
   `scale` multiplies a `prometheus` sample and fails for a histogram; the
   combinations refused at load are refused.
 
+## 34.65 Review fixes: statuses, limits, waiting, lookups and label maps tests
+
+Tests MUST show:
+
+- `$status` and Python's `response.status_code` are the HTTP status, a gRPC
+  call's code and `null` or `None` for a local file; a gRPC call ending with
+  an accepted code is answered with an empty object, the code as its status,
+  `grpc-message` and `grpc-status` headers, without a retry; an unaccepted
+  code still fails; `OK`, an unknown code and `accept_codes` on `http` are
+  refused.
+- A worker killed mid-run under `limits.max_script_memory` names the limit in
+  its error; without a limit it does not.
+- A probe refused by `--probe.max-concurrent` is counted in
+  `http_exporter_probes_rejected_exporter_limit_total`, not in
+  `http_exporter_probes_rejected_total`, and the trips in flight and the
+  limit are published.
+- A `localfile` collector has no `http_exporter_targets_refused_total`
+  series; an `http` collector has one from zero.
+- Trip waiters: a freed slot goes to the first waiter it can serve, past one
+  whose collector is still full; a waiter that gave up leaves the line. Python
+  waiters are served in line, and one that gave up passes its turn on.
+- With expansion on, an unset variable in an unused `x-` block is not
+  required, and one in a used block is.
+- `--runtime.memory-limit-ratio` takes its share of a cgroup v2 or v1 limit,
+  sets nothing without a limit, at 0 or with `GOMEMLIMIT` set, and refuses a
+  value outside 0 to 1 on the command line.
+- A label `value_map` maps values, `"*"` catches the rest, `""` leaves the
+  label off, an unmatched value is kept, and the combinations refused at load
+  are refused.
+- A target reached directly is not looked up before connecting, and its
+  refused connection is not retried; one behind a proxy is looked up once,
+  before the request, and not connected to.
+- A `timeout` parameter capped by `--probe.default-timeout` is named in the
+  error.
+- `--dry-run` lists each collector's target lists and accepted statuses under
+  `details.request_policies`, normalised.
+- Every settable field of a collector, set on its own, changes its cache key.
+
+## 34.66 Review fixes: cgroups, gRPC refusals, proxies, target statuses and the example
+
+Tests MUST show:
+
+- The memory limit is found along the process's cgroup under v2 with and
+  without a namespace and under v1 without one, a pod's smaller limit
+  winning, and `max` or the v1 unlimited value counting as none.
+- A gRPC connection refused after the check before the call passed is
+  reported as a refusal, with no call reaching the server.
+- A target reached directly is looked up only by the connection; one the
+  transport sends through a proxy is looked up once before the request.
+- A static target's `accept_status` decodes its own `503` while another
+  target of the collector fails on it, is part of its cache key, and is
+  checked at load; a `grpc` target's `accept_codes` replace the collector's,
+  and `accept_codes` on an `http` collector's target is refused.
+- `configs/config.example.yaml`, with its `x-` anchor block merged into two
+  collectors, loads, passes the dry run and matches the schema.
+
+## 34.67 Conditional metrics tests
+
+Tests MUST show that the conditional metrics and labels CONFIGURATION.md
+documents give the series it says: jq `select` in `items` and
+`if ... else empty end` on `$status`, a label left off by a `null`, a `0`/`1`
+series, an XPath predicate, a CSS `:has()` in `items`, a regex whose pattern is
+the condition, and CSV rows a pre-script keeps.
+
+## 34.68 Review fixes: label maps, queues, cloud metadata, the static targets view and headers
+
+Tests MUST show:
+
+- Two rules of one name giving one label different `value_map`s are refused
+  at load, naming both rules; the same map, or different names, load.
+- `http_exporter_trips_waiting` and `http_exporter_python_pool_runs_waiting`
+  count what waits for a slot, and appear in verbose mode only.
+- `169.254.169.254` and `fd00:ec2::254` are refused without an
+  `allowed_targets` entry covering them, by address and before connecting,
+  and allowed with one; a literal address is checked without a lookup.
+- A second read of the static targets endpoint with nothing published serves
+  the kept merge; a published result or a changed target file makes the next
+  read merge again; a filtered read leaves the kept merge whole; and a kept
+  merge still serves each `http_exporter_result_age_seconds` as of the read.
+- A Python script's `response.header(name)` joins a header's values with
+  `, ` in any case of the name, returns the default without the header, and
+  `response.headers` keeps each header's list.
+
+## 34.69 Debug probe tests
+
+Tests MUST show:
+
+- Without `--web.enable-probe-debug`, `debug=true` is answered `403` naming
+  the flag, and the target is not contacted; a `debug` value that is not a
+  boolean is `400`; `debug=false` is a probe.
+- A report lists the request with its credentials, query values and
+  credential-named response headers redacted, the response body, each stage,
+  the series by metric, the rules that gave none and the rule that carried
+  on with its first error, the rule's log line, which the exporter's log
+  does not get, and the exposition a probe would have served.
+- Two debug probes make two trips, count nothing in the self-metrics, queue
+  nothing for OTLP and neither fill nor read the response cache.
+- A failed trip's report gives the status a probe would have answered and
+  the target's body, and leaves the failure log as it was, so the next
+  probe's failure is logged as the first.
+- A refused target is reported as refused and not contacted.
+- A followed redirect is listed as a second request, and a stale answer a
+  probe would have served is named.
+- A `grpc` collector's call is listed with its method and code and its
+  answer as JSON; a `localfile` collector's read is listed as the file.
+- The chart renders the flag with `server.probeDebug`, not by default, and
+  refuses it in `extraArgs`.
+- The collectors page has a *Debug report* switch, sending `debug=true`, on
+  each form with the flag, and none without it.
+
 # 35. Documentation requirements
 
 The repository MUST include documentation covering:
@@ -6830,9 +7025,16 @@ many targets of one backend would reach it with no bound.
 - `--probe.max-concurrent` MUST bound the trips of every collector together,
   on top of each collector's limit, since each trip holds a response and its
   series in memory. A probe over it MUST be answered `503` naming the flag and
-  counted as rejected; a static target MUST wait for a slot as for its
-  collector's. `0`, the default, MUST leave only the per-collector limits; a
-  negative value MUST be a command-line error, also with `--dry-run`.
+  counted in `http_exporter_probes_rejected_exporter_limit_total`, apart from
+  `http_exporter_probes_rejected_total`, which counts the collector's own
+  limit; a static target MUST wait for a slot as for its collector's. `0`,
+  the default, MUST leave only the per-collector limits; a negative value
+  MUST be a command-line error, also with `--dry-run`.
+  `http_exporter_trips_in_flight` MUST report the trips of every collector
+  together, and `http_exporter_trips_max_concurrent` the limit.
+- Static target scrapes waiting for a slot MUST wait in line, and a slot
+  that frees MUST be handed to the first waiter it can serve under both its
+  collector's limit and the exporter's, not broadcast to every waiter.
 
 ## 42.14 Static targets
 
@@ -6993,8 +7195,15 @@ metrics with its labels, or its stale result, and its health result — at
   document MUST leave the endpoint with the reload.
 - Serving the endpoint MUST NOT contact a target: it reads what the targets'
   last scrapes left. A target's result SHOULD be stored already labelled with
-  `static_target` when its scrape publishes it, so a read only merges and
-  writes, and a read MUST NOT change what is stored.
+  `static_target` when its scrape publishes it, and a read MUST NOT change
+  what is stored.
+- The merge of the results SHOULD be kept between reads, and MUST be made
+  again once a scrape publishes a result or a reload changes the targets, so a
+  read between two scrapes only writes the kept merge: an unfiltered read of
+  targets without `http_exporter_result_age_seconds` SHOULD write the kept
+  rendering as it is. A kept merge MUST still serve each
+  `http_exporter_result_age_seconds` as of the read. A type clash is then
+  logged when the merge is made, not at every read.
 - An optional `targets` query parameter MUST narrow a read to the targets it
   names, given separated by commas, as the parameter repeated (as Prometheus
   renders a scrape config's `params`), or both; spaces around a name and empty
@@ -7257,3 +7466,44 @@ Dependabot MUST use an explicit `Europe/Sofia` timezone so the run does not
 drift when daylight saving changes. The workflow's cron is evaluated in UTC,
 which has no daylight saving, so its hour MUST be chosen to fall mid-morning in
 Sofia in both halves of the year.
+
+## 42.17 Debug probes
+
+`/probe` MUST accept `debug`: `true`, `1` or empty turn a probe into a debug
+probe, `false` or `0` leave it a probe, and any other value MUST be answered
+`400`. A debug probe MUST be answered `403` naming `--web.enable-probe-debug`
+unless the exporter was started with that flag, off by default, before
+anything else about the probe is checked and without contacting the target.
+It MUST be authenticated like a probe (§ 42.5).
+
+A debug probe MUST make one trip exactly as a probe would, through the
+target policy (§ 26.1), the trip limits (§ 42.13b) and the probe's deadline,
+and MUST answer `200` with a `text/plain` report of it:
+
+- the status and reason a probe would have answered, and where
+  `cache.stale_if_error` would have answered with the last good result, that
+  it would have, and its age;
+- every request sent, with retries and redirects, its method, URL, headers
+  and outcome; a `grpc` call with its method, metadata and code; a
+  `localfile` read as its file;
+- the response's status, headers and body, the body up to 64 KiB and shown
+  only when it is valid UTF-8, or a directory's files;
+- each stage, its duration and outcome, saying when `error_handling` carried
+  on;
+- the series by metric name, the rules that gave none, and the rules that
+  carried on without some series, with how many and the first error;
+- every line the trip logged, at every level whatever `--log.level` is,
+  including rule failures and what a Python script printed;
+- the exposition a probe would have served.
+
+A debug probe MUST NOT read or fill the response cache, share a trip with a
+probe in flight (§ 42.13a), be counted in any self-metric, or be queued for
+OTLP. Its failures and recoveries MUST NOT reach the exporter's log or the
+failure log's state (§ 25): the next probe's failure is logged as the first.
+The exporter MUST log one `info` line per debug probe served, naming the
+collector and the target.
+
+The report MUST NOT show query values, a URL's userinfo, request bodies, or
+the values of request or response headers whose names contain `auth`,
+`cookie`, `token`, `secret`, `password`, `passwd`, `key`, `session`,
+`signature` or `credential`, in any case.

@@ -343,7 +343,7 @@ func localFileResponse(name string, body []byte, info fs.FileInfo, c *model.Coll
 	}
 	headers.Set("Content-Length", strconv.Itoa(len(body)))
 	headers.Set("Last-Modified", info.ModTime().UTC().Format(http.TimeFormat))
-	return &HTTPResponse{StatusCode: http.StatusOK, Headers: headers, Body: body, Collector: c.Name}
+	return &HTTPResponse{StatusCode: http.StatusOK, NoStatus: true, Headers: headers, Body: body, Collector: c.Name}
 }
 
 // readLocalFile reads root/name, confined to root, and only a regular file. A

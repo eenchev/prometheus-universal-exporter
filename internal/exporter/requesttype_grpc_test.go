@@ -273,3 +273,22 @@ func TestTheCollectorsPageShowsAGRPCTarget(t *testing.T) {
 		t.Fatalf("%s", body)
 	}
 }
+
+// A debug probe of a grpc collector lists the call, its code and the answer
+// as JSON.
+func TestADebugProbeOfAGRPCCollector(t *testing.T) {
+	upstream := grpctest.Start(t, grpctest.Options{Reflection: "v1", Answer: queueAnswer})
+	server := grpcExporter(t, false, "0s")
+	server.SetProbeDebug(true)
+	recorder := probeOnce(t, server, "/probe?debug=true&collector=queue_stats&param_queue=orders&target="+url.QueryEscape(upstream.Addr), nil)
+	body := recorder.Body.String()
+	for _, want := range []string{
+		"1. POST grpc://" + upstream.Addr + "/acme.queue.v1.QueueService/GetStats -> grpc OK",
+		"gRPC status 0", `"total":"9007199254740993"`, "grpc         ok", "queue_depth: 2",
+		"A probe would have answered 200 with 4 series",
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("no %q in the report:\n%s", want, body)
+		}
+	}
+}

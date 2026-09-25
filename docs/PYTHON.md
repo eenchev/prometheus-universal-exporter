@@ -4,8 +4,17 @@ Python is a transform, not a decoder. Configure it under the same
 `transform` block as every other collector; the selected response decoder
 first parses the response when applicable, then the Python script receives
 `response.status_code`, `response.headers`, `response.body`, `response.text`,
-`target`, `collector`, and decoded `data`. Scripts emit metrics with
+`target`, `collector`, and decoded `data`. `response.status_code` is the HTTP
+status, a `grpc` call's status code — `0` for `OK`, or one of its
+`accept_codes` — or `None` for a local file, which has no status. Scripts emit metrics with
 `metric(...)` and may call `fail(...)`.
+
+`response.headers` is a dict of each header's values as a list, by the
+header's canonical name (`Content-Type`, `X-Mode`), as the response carried
+them: `response.headers["X-Mode"]` is `["a", "b"]` for a header sent twice.
+`response.header("x-mode")` is the form jq and yq rules read as `$headers`:
+the values joined by `, `, `"a, b"`, whatever the name's case, or `None`
+without the header, or a default, `response.header("x-mode", "")`.
 
 For example:
 
@@ -99,7 +108,10 @@ start once and then serves scrape after scrape.
   space of each of the collector's workers — the interpreter and its libraries
   included — through `RLIMIT_AS`, set after the libraries are loaded. A script
   that needs more fails the scrape with `MemoryError: the script ran out of
-  memory under limits.max_script_memory`, and the worker carries on. It is at
+  memory under limits.max_script_memory`, and the worker carries on. A
+  library written in C, such as lxml, that cannot allocate may end the
+  interpreter instead; the error then says the worker died and that it ran
+  under the limit, so raise it if the script needs more. It is at
   least 32MiB; `0`, the default, leaves it unbounded. It is enforced on Linux,
   where the exporter's image runs.
 - **Workers across collectors.** Each script has workers of its own, so many
@@ -107,8 +119,9 @@ start once and then serves scrape after scrape.
   workers alive at once, starting, busy or idle, of every collector together. A
   run that finds none free for its script stops the idle worker unused for
   longest, of any script, and starts its own in its place, or, when every
-  worker is busy, waits for one within its probe's deadline and otherwise fails
-  saying so. A worker stopped this way is counted with the reason `evicted`.
+  worker is busy, waits in line for one within its probe's deadline and
+  otherwise fails saying so. Each worker that frees lets the first run in line
+  through, rather than every waiting run racing for it. A worker stopped this way is counted with the reason `evicted`.
   `0`, the default, leaves the workers bounded only per script.
 - **Lifetime.** A worker is reused up to 1,000 times, at most four stay idle per
   collector after a burst of scrapes, and an idle one stops after five minutes

@@ -546,10 +546,115 @@ milliseconds to seconds, `100` for a fraction to a percentage:
 ```
 
 Both work in every transform with rules: `regex`, `css`, `xpath`, `csv`, `jq`
-and `yq`. A `prometheus` rule takes `scale`, for plain samples only — a
+and `yq`.
+
+A label takes a `value_map` too, from text to text — a code to its name — with
+`"*"` for any other value; without a match and without `"*"`, the value is kept
+as it is, and a value mapped to `""` leaves the label off:
+
+```yaml
+- name: worker_up
+  items: .workers[]
+  expression: 1
+  labels:
+    - name: state
+      expression: .state
+      value_map: {"1": running, "2": stopped, "0": "", "*": unknown}
+```
+
+A label's `value_map` needs a rule with a `name`, and an expression to map;
+it is refused on a static label, on a `python` rule, and, mapping a value to
+`""`, on a `required` label. A `prometheus` rule takes `scale`, for plain samples only — a
 histogram's or summary's bounds are values too — and not `value_map`, since its
 values are numbers already; a `python` script sets its values itself, and
 takes neither. `scale` must be a finite number other than 0.
+
+Rules of one `name` make one metric, so a label they share must map alike:
+two such rules giving one label different `value_map`s are refused at load,
+since the same value would read as two names in one series. Give them one
+`value_map`, or different names.
+
+### Conditional metrics and labels
+
+There is no `when` key: each transform already says in its own language which
+values become series, and a second, shared condition language would repeat it.
+The condition goes where the transform reads the value.
+
+**jq and yq.** `select(...)` keeps the items that match, and
+`if ... then ... else empty end` gives a value only when a condition holds;
+`$status` and `$headers` are there for conditions on the answer itself. A rule
+whose condition can leave it without a value needs `required: false`, or no
+value is a missing value, logged under `error_mode`:
+
+```yaml
+- name: queue_depth
+  items: '.queues[] | select(.state == "active")'
+  expression: .depth
+  labels:
+    - name: queue
+      expression: .name
+- name: queue_depth_total
+  expression: 'if $status == 200 then .total else empty end'
+  required: false
+```
+
+**XPath.** A predicate selects the nodes: `//queue[@state='active']/depth`,
+with labels read relative to each node, such as `../@name`.
+
+**CSS.** `items` takes any selector, `:has()` included, so the rows kept are
+those that hold what the condition looks for:
+
+```yaml
+- name: queue_depth
+  items: 'tr:has(td.state.active)'
+  expression: td.depth
+  labels:
+    - name: queue
+      expression: td.name
+```
+
+**Regex.** The pattern is the condition: only text it matches becomes a
+series. `(?m)^(\d+) (\w+) up$` reads the lines of services that are up, the
+first group the value and the second the `service` label (`expression: "2"`).
+
+**CSV.** A rule reads every row. To keep only some, filter them in a
+[pre-script](PYTHON.md), which leaves the rows it keeps in `data`:
+
+```yaml
+transform:
+  type: csv
+  pre_script: |
+    data = [row for row in data if row["state"] == "active"]
+```
+
+**Python.** The script calls `metric(...)` for what it wants exported, under
+any condition it likes.
+
+**Labels.** A label whose expression gives no value, or `null`, is left off
+the series — `if .shared then .owner else null end` in jq — and so is one whose
+[`value_map`](#mapping-text-to-values-and-scaling-them) maps its value to `""`.
+A `required` label turns its absence into a failure of the rule instead.
+
+**Series that come and go.** A conditional series exists only while its
+condition holds. When it stops, Prometheus marks the series stale: `rate()`
+and `increase()` have gaps across it, an alert on its value stops firing
+rather than resolving, and `absent()` is the only way to see it gone. When the
+absence itself means something — a queue that is not active — prefer one series
+that is always there, with `1` and `0`:
+
+```yaml
+- name: queue_active
+  items: .queues[]
+  expression: 'if .state == "active" then 1 else 0 end'
+  labels:
+    - name: queue
+      expression: .name
+```
+
+`value_map` does the same for text in every transform: `{active: 1, "*": 0}`.
+Keep conditions for series whose absence means nothing, such as the depth of a
+queue that does not exist yet. The examples here are pinned by a test, so they
+stay true.
 
 ### Request types
 
@@ -915,7 +1020,10 @@ files and the [static target file](STATIC-TARGETS.md#the-target-file) too,
 each file on its own: an anchor in one file cannot be used in another.
 
 An `x-` key is only ignored at the top level; anywhere else it is an unknown
-key like any other, and so is a bare `x-`. The published
+key like any other, and so is a bare `x-`. With
+[environment expansion](#environment-variables) on, a `${NAME}` in an `x-`
+block nothing uses is left alone, so its variable need not be set; one in a
+block an alias uses is expanded where the block is. The published
 [schemas](#editor-support) accept top-level `x-` keys too.
 
 ## Collector files
@@ -1265,11 +1373,44 @@ prometheus-universal-exporter --probe.max-concurrent=64
 
 A probe over it is answered `503` in the same way, naming the flag — `the
 exporter already has 64 trips to targets in progress, its
---probe.max-concurrent; this probe was not sent` — and counted as rejected; a
-static target scrape waits for a slot. `0`, the default, leaves only the
+--probe.max-concurrent; this probe was not sent` — and counted in
+`http_exporter_probes_rejected_exporter_limit_total`, apart from those its
+collector's own limit turned away; a static target scrape waits for a slot.
+`http_exporter_trips_in_flight` shows how close to the limit the exporter
+runs.
+
+Static target scrapes waiting for a slot wait in line: a slot that frees goes
+to the first of them it can serve — its collector under its own limit and the
+exporter under `--probe.max-concurrent` — so one waiting behind its own full
+collector never holds up another collector's. `0`, the default, leaves only the
 per-collector limits; a negative value is a command-line error. Size it to the
 memory the exporter has, together with `--python.max-workers` (see
 [Python](PYTHON.md#how-scripts-run)).
+
+## Memory
+
+The exporter's memory is the Go heap — responses, decoded documents and
+series while trips are in progress, and the response cache — and the Python
+workers, each a process of its own. `--probe.max-concurrent` bounds the
+first, `--python.max-workers` and
+[`limits.max_script_memory`](PYTHON.md#how-scripts-run) the second.
+
+In a container with a memory limit, `--runtime.memory-limit-ratio` sets the Go
+memory limit to a share of it, read at startup from the container's own
+cgroup, as `/proc/self/cgroup` names it — under cgroup v2 or v1, with or
+without a cgroup namespace, and the smallest limit on the way up to the root,
+so a pod-level limit counts too:
+
+```sh
+prometheus-universal-exporter --runtime.memory-limit-ratio=0.8
+```
+
+The Go runtime then collects harder as its heap nears 80% of the container's
+limit, instead of growing past it into an OOM kill, and the rest is left to
+the Python workers and the runtime's own overhead. The startup log says what
+was set. Without a container limit the Go default stays, and `GOMEMLIMIT` in
+the environment wins over the ratio. `0`, the default, leaves it off; the Helm
+chart sets `0.8`.
 
 ## Probe deadlines
 
@@ -1297,7 +1438,7 @@ collector legacy_text http failed: HTTP request failed: ... context deadline exc
   target that accepts the connection and never answers cannot hold it, and
   its collector's `max_concurrent_probes` slot, for ever. Its error names
   that flag instead. A `timeout` parameter bounds the request within that
-  budget and cannot lift it: `timeout=1h` still ends after 30s. `0` leaves
+  budget and cannot lift it: `timeout=1h` still ends after 30s, and the error says the parameter was capped. `0` leaves
   such a probe unbounded; a negative value is a command-line error.
 - A probe answered from the [response cache](#response-caching) needs no budget.
   Identical probes that [share one request](#identical-probes-share-one-request)
@@ -1378,6 +1519,99 @@ Whatever the trigger, the exporter's state follows the new configuration: a
 removed collector's [self-metrics](SELF-METRICS.md#collector-metrics) stop,
 and what was kept about it is dropped, and a changed collector's cached results
 are dropped.
+
+## Debugging a probe
+
+When a collector does not give what it should, add `&debug=true` to the probe
+and read what happened, step by step, in a browser or with curl:
+
+```sh
+curl 'http://exporter:8080/probe?collector=app_json&target=https://api.example.com&debug=true'
+```
+
+```text
+Debug probe of collector "app_json", target https://api.example.com
+Took 184ms. A probe would have answered 502: metric queue_len failed: ...
+A debug probe skips the response cache, shares no trip, records no self-metric and exports nothing over OTLP.
+
+Requests
+  1. GET https://api.example.com/v1/status?tenant=<redacted> -> 200 OK in 162ms
+     Accept: application/json
+     Authorization: <redacted>
+
+Response
+  Status 200 OK
+  Headers
+    Content-Type: application/json
+  Body: 3174 bytes
+    {"workers":[{"name":"a","state":"1"}, ...
+
+Stages
+  http         ok            162ms  status 200, 3174 bytes
+  decode       ok              3ms  json
+  transform    failed         10ms  metric queue_len: metric "queue_len" value is missing
+
+Transform
+  ...
+
+Logs
+  level=ERROR msg="probe failed" collector=app_json ...
+
+Metrics a probe would have served
+  none
+```
+
+The report lists:
+
+- **Requests:** every request the trip sent, retries and redirects included,
+  with its headers and how it ended. A `grpc` call is listed with its method,
+  metadata and status code. A `localfile` read, which sends nothing, is
+  listed as the file it reads.
+- **Response:** the status, the headers and the body, up to 64 KiB. A body
+  that is not text is shown only by its length, and a directory as its files.
+- **Stages:** each stage with how long it took and how it ended. A stage whose
+  `error_handling` carried on says so.
+- **Transform:** the series each metric got, the rules that got none, and the
+  rules that carried on without some of their series, with the first error.
+- **Logs:** everything the trip logged at any level, whatever `--log.level`
+  is, including what a Python script printed.
+- **Metrics:** the exposition a probe would have served, and before the
+  report, the status a probe would have answered. Where `cache.stale_if_error`
+  would have answered with the last good result, the report says so.
+
+The [collectors page](AUTHENTICATION.md#probing-from-the-browser) at
+`/collectors` offers the same report with a *Debug report* switch on each
+form, shown only when debug probes are enabled.
+
+The report always answers `200` with `text/plain`, whatever the probe would
+have answered. It takes the same parameters as the probe. For debug, `true`,
+`1` or an empty value turn it on and `false` or `0` leave the probe as it is;
+any other value is answered `400`.
+
+A debug probe always goes to the target, and leaves nothing behind. It does
+not read or fill the response cache, it does not share an identical probe in
+flight, and it is not counted in the self-metrics or exported over OTLP. Its
+failures go to its report, not to the exporter's log, which records only one
+`probe debug report served` line at `info`. The target's
+[`allowed_targets` and `denied_targets`](REQUESTS.md#restricting-targets),
+[`max_concurrent_probes` and `--probe.max-concurrent`](#limiting-concurrent-probes)
+and [the probe's deadline](#probe-deadlines) apply as they do to any probe.
+
+The report shows what the target answered, so debug probes are off unless the
+exporter runs with `--web.enable-probe-debug` (the Helm chart's
+`server.probeDebug`). Without the flag `debug=true` is answered `403`. When
+`web.basic_auth` is configured, a debug probe needs the same credentials as a
+probe. The report redacts:
+
+- every query value;
+- a URL's userinfo;
+- the values of request and response headers whose names read as
+  credentials: any name containing `auth`, `cookie`, `token`, `secret`,
+  `password`, `passwd`, `key`, `session`, `signature` or `credential`.
+
+Request bodies are not shown. A secret under any other header name, or in
+the response itself, is shown as the target sent it, so turn the flag on
+while a collector is being written or fixed, not for good.
 
 ## Readiness
 
@@ -1486,6 +1720,11 @@ A deprecated spelling does not fail the check; it is listed under
 `details.deprecations` of the `config` entry and logged. The
 [collector files](#collector-files) the configuration read are listed under
 `details.collector_files`, and a collector name defined twice fails the check.
+Each collector that sets `allowed_targets`, `denied_targets`, `accept_status`
+or `accept_codes` is listed under `details.request_policies`, by name, with
+those lists as they will be applied — `2XX` as `2xx`, `not_found` as
+`NOT_FOUND` — so a list that lets through more or less than meant shows before
+it is deployed.
 
 It takes the same flags a real start does, and they matter: `--config.file` and
 `--static-targets-file` choose what is checked, `--config.expand-env` and

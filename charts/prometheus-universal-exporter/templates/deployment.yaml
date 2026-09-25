@@ -24,12 +24,27 @@ spec:
   template:
     metadata:
       labels:
-        {{- include "prometheus-universal-exporter.metadataLabels" (list .) | nindent 8 }}
+        {{- /* podLabels may not set a label the chart sets: the selector's
+               two would be put back silently, and the Deployment would not
+               find its pods if they were not. */}}
+        {{- $chartLabels := include "prometheus-universal-exporter.labels" . | fromYaml }}
+        {{- range $key, $_ := .Values.podLabels }}
+        {{- if hasKey $chartLabels $key }}
+        {{- fail (printf "podLabels sets %s, which the chart sets itself on every pod (the Deployment finds its pods by app.kubernetes.io/name and app.kubernetes.io/instance); use another label name" $key) }}
+        {{- end }}
+        {{- end }}
+        {{- include "prometheus-universal-exporter.metadataLabels" (list . .Values.podLabels) | nindent 8 }}
       annotations:
-        {{- $podAnnotations := dict "checksum/config" (include (print $.Template.BasePath "/configmap.yaml") . | sha256sum) -}}
+        {{- /* checksum/config rolls the pods when the configuration changes,
+               so podAnnotations cannot replace it. */}}
+        {{- $podAnnotations := deepCopy (.Values.podAnnotations | default dict) -}}
+        {{- $_ := set $podAnnotations "checksum/config" (include (print $.Template.BasePath "/configmap.yaml") . | sha256sum) -}}
         {{- include "prometheus-universal-exporter.metadataAnnotations" (list . $podAnnotations) | nindent 8 }}
     spec:
       serviceAccountName: {{ include "prometheus-universal-exporter.serviceAccountName" . }}
+      {{- with .Values.priorityClassName }}
+      priorityClassName: {{ . | quote }}
+      {{- end }}
       {{- with (include "prometheus-universal-exporter.terminationGracePeriodSeconds" .) }}
       terminationGracePeriodSeconds: {{ . }}
       {{- end }}
@@ -42,6 +57,19 @@ spec:
       {{- end }}
       {{- with .Values.affinity }}
       affinity: {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.topologySpreadConstraints }}
+      {{- /* A constraint without a labelSelector spreads this release's
+             pods, as the Deployment selects them. */}}
+      {{- $constraints := list }}
+      {{- range . }}
+      {{- $constraint := deepCopy . }}
+      {{- if not (hasKey $constraint "labelSelector") }}
+      {{- $_ := set $constraint "labelSelector" (dict "matchLabels" (dict "app.kubernetes.io/name" (include "prometheus-universal-exporter.name" $) "app.kubernetes.io/instance" $.Release.Name)) }}
+      {{- end }}
+      {{- $constraints = append $constraints $constraint }}
+      {{- end }}
+      topologySpreadConstraints: {{- toYaml $constraints | nindent 8 }}
       {{- end }}
       {{- with .Values.imagePullSecrets }}
       imagePullSecrets: {{- toYaml . | nindent 8 }}
@@ -74,6 +102,9 @@ spec:
             {{- if .Values.server.enableLifecycle }}
             - --web.enable-lifecycle
             {{- end }}
+            {{- if .Values.server.probeDebug }}
+            - --web.enable-probe-debug
+            {{- end }}
             {{- with (include "prometheus-universal-exporter.probeTimeoutOffset" .) }}
             - {{ printf "--probe.timeout-offset=%s" . | quote }}
             {{- end }}
@@ -86,6 +117,9 @@ spec:
             {{- with (include "prometheus-universal-exporter.countFlag" (list "server.pythonMaxWorkers" .Values.server.pythonMaxWorkers)) }}
             - {{ printf "--python.max-workers=%s" . | quote }}
             {{- end }}
+            {{- with (include "prometheus-universal-exporter.memoryLimitRatio" .) }}
+            - {{ printf "--runtime.memory-limit-ratio=%s" . | quote }}
+            {{- end }}
             {{- with (include "prometheus-universal-exporter.shutdownTimeout" .) }}
             - {{ printf "--web.shutdown-timeout=%s" . | quote }}
             {{- end }}
@@ -96,21 +130,8 @@ spec:
             {{- range .Values.extraArgs }}
             - {{ . | quote }}
             {{- end }}
-          {{- $goMemLimit := and .Values.goMemLimit.enabled (dig "limits" "memory" "" (.Values.resources | default dict)) (not (include "prometheus-universal-exporter.envSets" (list .Values.env "GOMEMLIMIT"))) }}
-          {{- if or .Values.env $goMemLimit }}
-          env:
-            {{- if $goMemLimit }}
-            # The Go runtime collects harder as its heap nears the container's
-            # memory limit, instead of growing past it into an OOM kill.
-            - name: GOMEMLIMIT
-              valueFrom:
-                resourceFieldRef:
-                  containerName: exporter
-                  resource: limits.memory
-            {{- end }}
-            {{- with .Values.env }}
-            {{- toYaml . | nindent 12 }}
-            {{- end }}
+          {{- with .Values.env }}
+          env: {{- toYaml . | nindent 12 }}
           {{- end }}
           {{- with .Values.envFrom }}
           envFrom: {{- toYaml . | nindent 12 }}

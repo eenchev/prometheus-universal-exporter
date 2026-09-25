@@ -144,7 +144,7 @@ func (s *Server) scrapeStaticTarget(ctx context.Context, target model.StaticTarg
 			s.abortedByShutdown(target, c)
 			return
 		}
-		count(func(st *serverStats) { st.rejected++ })
+		count(func(st *serverStats) { countRejection(st, err) })
 		s.logCollectFailure(log, "concurrency", err)
 		failed()
 		return
@@ -297,6 +297,12 @@ func targetOwnRequest(t *model.StaticTarget) []string {
 	}
 	if retry := t.Request.Retry; retry != nil && retry.Codes != nil {
 		own = append(append(own, "retry_codes", strconv.Itoa(len(retry.Codes))), retry.Codes...)
+	}
+	if t.Request.AcceptStatus != nil {
+		own = append(append(own, "accept_status", strconv.Itoa(len(t.Request.AcceptStatus))), t.Request.AcceptStatus...)
+	}
+	if t.Request.AcceptCodes != nil {
+		own = append(append(own, "accept_codes", strconv.Itoa(len(t.Request.AcceptCodes))), t.Request.AcceptCodes...)
 	}
 	return own
 }

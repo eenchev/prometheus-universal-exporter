@@ -6,11 +6,14 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"math"
 	"net"
 	"net/http"
+	"net/url"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -54,20 +57,26 @@ func callGRPC(ctx context.Context, target string, c *model.Collector, overrides 
 	// The collector's allowed_targets and denied_targets: the server's name
 	// and addresses now, and each connection's address when it is made.
 	policy := policyOf(c)
+	proxied := false
 	if policy != nil {
+		// grpc-go goes through HTTPS_PROXY as an https request would. As
+		// for http, the server's name is looked up here only behind a
+		// proxy; otherwise its connections are checked as they are made,
+		// and a refused one is reported as the refusal (refusal below).
+		proxied = viaProxy(http.ProxyFromEnvironment, &url.URL{Scheme: "https", Host: address.hostPort})
 		host, _, _ := net.SplitHostPort(address.hostPort)
-		if _, err := policy.check(ctx, host); err != nil {
+		if _, err := policy.check(ctx, host, proxied); err != nil {
 			return nil, err
 		}
 	}
-	key := grpcConnKey{dial: address.dial, tls: secure, policy: policy}
+	key := grpcConnKey{dial: address.dial, tls: secure, policy: policy, proxied: proxied}
 	if secure {
 		key.settings = c.Request.TLS
 		if overrides.InsecureSkipVerify != nil {
 			key.settings.InsecureSkipVerify = *overrides.InsecureSkipVerify
 		}
 	}
-	conn, err := grpcConns.get(key, time.Now())
+	conn, refusal, err := grpcConns.get(key, time.Now())
 	if err != nil {
 		return nil, err
 	}
@@ -99,6 +108,10 @@ func callGRPC(ctx context.Context, target string, c *model.Collector, overrides 
 	if retried == nil {
 		retried = grpcDefaultRetryCodes
 	}
+	accepted := c.Request.AcceptCodes
+	if overrides.AcceptCodes != nil {
+		accepted = overrides.AcceptCodes
+	}
 	limit := responseLimit(c)
 
 	reflection := reflectedKey{conn: key, service: strings.SplitN(c.Request.RPC, "/", 2)[0]}
@@ -123,9 +136,18 @@ func callGRPC(ctx context.Context, target string, c *model.Collector, overrides 
 		}
 		return m, in, nil
 	}
+	// A connection the policy refused reaches the call, or the reflection
+	// question before it, as UNAVAILABLE; it is the refusal, and not
+	// retried.
+	refused := func(err error) error {
+		if r := refusal.Load(); r != nil && unavailable(err) {
+			return r
+		}
+		return err
+	}
 	m, in, err := encode()
 	if err != nil {
-		return nil, err
+		return nil, refused(err)
 	}
 	callCtx := metadata.NewOutgoingContext(ctx, md)
 	start := time.Now()
@@ -133,9 +155,11 @@ func callGRPC(ctx context.Context, target string, c *model.Collector, overrides 
 	for attempt := 0; ; attempt++ {
 		out := dynamicpb.NewMessage(m.desc.Output())
 		var header, trailer metadata.MD
+		traceRequest(ctx, "POST", grpcTraceScheme(secure)+address.hostPort+m.path(), grpcTraceHeader(md), "", false)
 		err := conn.Invoke(callCtx, m.path(), in, out,
 			grpc.MaxCallRecvMsgSize(int(min(limit, math.MaxInt32))),
 			grpc.Header(&header), grpc.Trailer(&trailer))
+		traceOutcome(ctx, "grpc "+grpcCodeName(status.Code(err)))
 		if err == nil {
 			body, err := renderAnswer(out)
 			if err != nil {
@@ -146,9 +170,25 @@ func callGRPC(ctx context.Context, target string, c *model.Collector, overrides 
 			if int64(len(body)) > limit {
 				return nil, &CallAnswerError{Err: model.MarkError(fmt.Errorf("the answer is %d bytes as JSON, over the response limit of %d; raise request.max_response_bytes or limits.max_response_bytes", len(body), limit), model.ErrLimitExceeded)}
 			}
-			return &HTTPResponse{StatusCode: http.StatusOK, Headers: grpcHeaders(header, trailer), Body: body, Target: target, Collector: c.Name, Duration: time.Since(start)}, nil
+			ok := 0
+			return &HTTPResponse{StatusCode: http.StatusOK, GRPCCode: &ok, Headers: grpcHeaders(header, trailer), Body: body, Target: target, Collector: c.Name, Duration: time.Since(start)}, nil
 		}
 		st := status.Convert(err)
+		if st.Code() == codes.Unavailable {
+			if r := refusal.Load(); r != nil {
+				return nil, r
+			}
+		}
+		// A status the collector accepts is its answer, with no message:
+		// the rules read it as $status, and its message as
+		// $headers["grpc-message"], against an empty object.
+		if slices.Contains(accepted, grpcCodeName(st.Code())) {
+			code := int(st.Code())
+			headers := grpcHeaders(header, trailer)
+			headers.Set("grpc-status", strconv.Itoa(code))
+			headers.Set("grpc-message", st.Message())
+			return &HTTPResponse{StatusCode: http.StatusOK, GRPCCode: &code, Headers: headers, Body: []byte("{}"), Target: target, Collector: c.Name, Duration: time.Since(start)}, nil
+		}
 		// With reflection, a method the server does not know, or an answer
 		// that does not decode, may be the server's schema having changed
 		// since it was asked: it is asked again, once, and the call made
@@ -157,7 +197,7 @@ func callGRPC(ctx context.Context, target string, c *model.Collector, overrides 
 			refreshed = true
 			reflectionAnswers.forget(reflection)
 			if m, in, err = encode(); err != nil {
-				return nil, err
+				return nil, refused(err)
 			}
 			attempt--
 			continue
@@ -170,6 +210,24 @@ func callGRPC(ctx context.Context, target string, c *model.Collector, overrides 
 		}
 		return nil, callStatusError(ctx, st)
 	}
+}
+
+// grpcTraceScheme is how a debug probe shows a call's scheme, as the url
+// label does.
+func grpcTraceScheme(secure bool) string {
+	if secure {
+		return "grpcs://"
+	}
+	return "grpc://"
+}
+
+// grpcTraceHeader is outgoing metadata as a debug probe shows it.
+func grpcTraceHeader(md metadata.MD) http.Header {
+	out := http.Header{}
+	for key, values := range md {
+		out[key] = append([]string(nil), values...)
+	}
+	return out
 }
 
 // renderAnswer renders an answer as compact JSON. The protobuf runtime
@@ -294,4 +352,14 @@ func reflectionError(ctx context.Context, err error) error {
 	}
 	e := &CallStatusError{Code: int(st.Code()), CodeName: grpcCodeName(st.Code()), Message: "asking the reflection service: " + st.Message(), Err: ctx.Err()}
 	return e
+}
+
+// unavailable says whether err is a gRPC UNAVAILABLE, as a call or a
+// reflection question reports a connection that could not be made.
+func unavailable(err error) bool {
+	var call *CallStatusError
+	if errors.As(err, &call) {
+		return call.Code == int(codes.Unavailable)
+	}
+	return status.Code(err) == codes.Unavailable
 }

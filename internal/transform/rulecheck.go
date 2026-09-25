@@ -29,6 +29,9 @@ func CheckMetricRule(x *model.Collector, r *model.MetricRule) error {
 	if err := checkValueRules(x, r, where); err != nil {
 		return err
 	}
+	if err := checkLabelValueMaps(x, r, where); err != nil {
+		return err
+	}
 	switch {
 	case jqFamily(x.Transform.Type):
 		if r.Items != "" {

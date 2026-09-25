@@ -66,8 +66,7 @@ func expandEnvironment(path string, raw []byte, flag string) ([]byte, error) {
 		// file's own terms, so the file is handed to it as it is.
 		return raw, nil
 	}
-	var scalars []scalarRef
-	collectReferences(doc, scalarContext{}, &scalars)
+	scalars := documentReferences(doc)
 	if len(scalars) == 0 {
 		return raw, nil
 	}
@@ -186,6 +185,51 @@ func collectReferences(n *yaml.Node, where scalarContext, out *[]scalarRef) {
 			collectReferences(child, scalarContext{key: n.Kind == yaml.MappingNode && i%2 == 0, flow: flow}, out)
 		}
 	}
+}
+
+// documentReferences gathers the references the document uses: those of
+// every scalar, keys included, except within a top-level x- entry, which the
+// exporter ignores (yamlerrors.go), unless an alias elsewhere uses what an
+// anchor there defines. A reference in an x- block nothing uses is left as it
+// is, so a variable only such a block names need not be set.
+func documentReferences(doc *yaml.Node) []scalarRef {
+	var all []scalarRef
+	collectReferences(doc, scalarContext{}, &all)
+	where := make(map[*yaml.Node]scalarContext, len(all))
+	for _, ref := range all {
+		where[ref.node] = ref.scalarContext
+	}
+	var root *yaml.Node
+	if doc.Kind == yaml.DocumentNode && len(doc.Content) == 1 && doc.Content[0].Kind == yaml.MappingNode {
+		root = doc.Content[0]
+	}
+	var out []scalarRef
+	seen := map[*yaml.Node]bool{}
+	var visit func(n *yaml.Node)
+	visit = func(n *yaml.Node) {
+		if n == nil || seen[n] {
+			return
+		}
+		seen[n] = true
+		switch n.Kind {
+		case yaml.ScalarNode:
+			if ctx, ok := where[n]; ok {
+				out = append(out, scalarRef{n, ctx})
+			}
+		case yaml.AliasNode:
+			visit(n.Alias)
+		default:
+			for i := 0; i < len(n.Content); i++ {
+				if n == root && i%2 == 0 && isExtensionKey(n.Content[i].Value) {
+					i++
+					continue
+				}
+				visit(n.Content[i])
+			}
+		}
+	}
+	visit(doc)
+	return out
 }
 
 // textEdit replaces text[start:end].

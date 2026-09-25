@@ -268,6 +268,9 @@ func CheckTargetRequest(t *model.StaticTarget, c *model.Collector) error {
 			return fmt.Errorf("target %q %w", t.Name, err)
 		}
 	}
+	if err := normalizeAcceptStatus(t.Request.AcceptStatus); err != nil {
+		return fmt.Errorf("target %q request.accept_status %w", t.Name, err)
+	}
 	if rt.URLPath && t.Request.PathSet {
 		if err := checkURLPath(t.Request.Path); err != nil {
 			return fmt.Errorf("target %q request.path %w", t.Name, err)

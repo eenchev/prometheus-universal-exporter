@@ -286,3 +286,21 @@ func TestThePagesWorkUnderAPathPrefix(t *testing.T) {
 		}
 	}
 }
+
+// With --web.enable-probe-debug each form has a Debug report switch, a
+// checkbox named as the probe parameter, so the form sends debug=true when
+// it is on, with or without the page's script; without the flag there is
+// none.
+func TestTheCollectorsPageOffersADebugSwitchWhenDebugIsOn(t *testing.T) {
+	server := landingServer(t, weatherConfig())
+	if page := getPage(t, server, "/collectors"); strings.Contains(page, `name="debug"`) || strings.Contains(page, "Debug probes are on") {
+		t.Fatal("the page offers a debug switch without --web.enable-probe-debug")
+	}
+	server.SetProbeDebug(true)
+	page := getPage(t, server, "/collectors")
+	requireContains(t, page,
+		`<label class="switch"><input type="checkbox" name="debug" value="true" role="switch"> Debug report</label>`,
+		"Debug probes are on",
+		`params.get("debug") === "true"`,
+	)
+}

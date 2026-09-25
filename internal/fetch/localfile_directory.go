@@ -186,7 +186,7 @@ func fetchLocalDirectory(ctx context.Context, target string, c *model.Collector,
 			f.Target = target
 		}
 	}
-	return &HTTPResponse{StatusCode: 200, Target: target, Collector: c.Name, Duration: time.Since(start), Directory: read}, nil
+	return &HTTPResponse{StatusCode: 200, NoStatus: true, Target: target, Collector: c.Name, Duration: time.Since(start), Directory: read}, nil
 }
 
 // directoryProgress is a directory read as far as it has got, so a probe that

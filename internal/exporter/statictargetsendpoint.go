@@ -30,7 +30,9 @@ import (
 // share one endpoint and the same metric from two targets must stay two
 // series. A target that has not been scraped yet is absent, and one removed
 // from the file is dropped with the reload. ?targets= narrows a read to the
-// targets it names (requestedStaticTargets).
+// targets it names (requestedStaticTargets). The merge of the results is kept
+// until a scrape publishes a result or a reload changes the targets
+// (currentStaticView), so reads between two scrapes only write it.
 
 // DefaultStaticTargetsPath is where the static targets are served unless
 // --web.static-targets-path says otherwise.
@@ -94,6 +96,7 @@ func (s *Server) publishStaticResult(target model.StaticTarget, identity otlpRes
 		s.staticFetched = map[string]time.Time{}
 	}
 	s.staticResults[target.Name] = labelled
+	s.staticGeneration++
 	if fetched.IsZero() {
 		delete(s.staticFetched, target.Name)
 	} else {
@@ -135,15 +138,28 @@ func withStaticTargetLabel(set model.MetricSet, name string) model.MetricSet {
 // name, its data's age as of now, and forgets the results of targets no
 // longer in force.
 func (s *Server) staticTargetResults() []namedSet {
-	targets := s.manager.StaticTargets()
+	out, _ := s.storedStaticResults(s.manager.StaticTargetFile(), time.Now())
+	return out
+}
+
+// storedStaticResults returns the latest result of each target of file, by
+// name, with the generation of results they are, and forgets the results of
+// targets no longer in force. Each result's data is aged as of now; with a
+// zero now it is left as stored, for the endpoint's view, which ages it at
+// every read.
+func (s *Server) storedStaticResults(file *model.StaticTargetFile, now time.Time) ([]namedSet, uint64) {
+	var targets []model.StaticTarget
+	if file != nil {
+		targets = file.Targets
+	}
 	current := make(map[string]bool, len(targets))
 	var out []namedSet
-	now := time.Now()
 	s.staticMu.Lock()
+	generation := s.staticGeneration
 	for _, target := range targets {
 		current[target.Name] = true
 		if set, ok := s.staticResults[target.Name]; ok {
-			if fetched, aged := s.staticFetched[target.Name]; aged {
+			if fetched, aged := s.staticFetched[target.Name]; aged && !now.IsZero() {
 				set = withResultAge(set, now.Sub(fetched))
 			}
 			out = append(out, namedSet{name: target.Name, set: set, labelled: true})
@@ -162,6 +178,72 @@ func (s *Server) staticTargetResults() []namedSet {
 	}
 	s.staticMu.Unlock()
 	sort.Slice(out, func(i, j int) bool { return out[i].name < out[j].name })
+	return out, generation
+}
+
+// staticTargetsView is the endpoint's merge of the targets' results, kept
+// until a scrape publishes a result or a reload changes the targets, so a
+// read of the endpoint between two scrapes neither merges nor, mostly,
+// renders again. merged holds the series as stored; aged are those whose
+// value is the data's age, set at each read; rendered is the exposition of
+// merged when it has no such series, served as it is to unfiltered reads.
+type staticTargetsView struct {
+	generation uint64
+	file       *model.StaticTargetFile
+	merged     model.MetricSet
+	aged       []agedSeries
+	rendered   []byte
+}
+
+// agedSeries is a series of the view whose value is its target's data's age.
+type agedSeries struct {
+	index  int
+	target string
+}
+
+// currentStaticView returns the view of the results in force, merging them
+// again only when they changed since the last one. Reads wait for a merge in
+// progress rather than merging too, so a clash is logged once per change.
+func (s *Server) currentStaticView() *staticTargetsView {
+	file := s.manager.StaticTargetFile()
+	s.staticMu.Lock()
+	generation := s.staticGeneration
+	s.staticMu.Unlock()
+	s.staticViewMu.Lock()
+	defer s.staticViewMu.Unlock()
+	if v := s.staticView; v != nil && v.generation == generation && v.file == file {
+		return v
+	}
+	results, generation := s.storedStaticResults(file, time.Time{})
+	v := &staticTargetsView{generation: generation, file: file, merged: s.mergeStaticTargets(results)}
+	for i, m := range v.merged.Metrics {
+		if m.Name == resultAgeMetric {
+			v.aged = append(v.aged, agedSeries{index: i, target: m.Labels[config.StaticTargetLabel]})
+		}
+	}
+	if len(v.aged) == 0 {
+		v.rendered = appendMetricSet(nil, &v.merged)
+	}
+	s.staticView = v
+	return v
+}
+
+// read is the view's series for one read: the view's own when none is
+// aged, else a copy with each age as of now. The view's series are shared
+// between reads and never changed.
+func (v *staticTargetsView) read(s *Server, now time.Time) model.MetricSet {
+	if len(v.aged) == 0 {
+		return v.merged
+	}
+	out := model.MetricSet{Metrics: make([]model.Metric, len(v.merged.Metrics))}
+	copy(out.Metrics, v.merged.Metrics)
+	s.staticMu.Lock()
+	for _, a := range v.aged {
+		if fetched, ok := s.staticFetched[a.target]; ok {
+			out.Metrics[a.index].Value = max(now.Sub(fetched).Seconds(), 0)
+		}
+	}
+	s.staticMu.Unlock()
 	return out
 }
 
@@ -204,10 +286,17 @@ func (s *Server) staticTargetsHandler(w http.ResponseWriter, r *http.Request) {
 	// Every target is merged, filtered or not, so which family keeps its type
 	// in a clash — and what is logged about it — does not depend on which
 	// targets a read asked for: a filtered read serves exactly the named
-	// targets' part of what an unfiltered one would.
-	merged := s.mergeStaticTargets(s.staticTargetResults())
+	// targets' part of what an unfiltered one would. The merge is kept
+	// between scrapes (currentStaticView), so most reads only write it.
+	view := s.currentStaticView()
+	if names == nil && view.rendered != nil {
+		w.Header().Set("Content-Type", expositionContentType)
+		_, _ = w.Write(view.rendered)
+		return
+	}
+	merged := view.read(s, time.Now())
 	if names != nil {
-		kept := merged.Metrics[:0]
+		kept := make([]model.Metric, 0, len(merged.Metrics))
 		for _, m := range merged.Metrics {
 			if names[m.Labels[config.StaticTargetLabel]] {
 				kept = append(kept, m)

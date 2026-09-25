@@ -103,14 +103,16 @@ const (
 	pythonWorkersHelp        = "Python workers of this collector, by state: starting, idle or busy."
 	pythonWorkerStartsHelp   = "Python workers this collector started."
 	pythonStartFailuresHelp  = "Python workers of this collector that failed to start."
-	pythonWorkerStopsHelp    = "Python workers of this collector that stopped, by reason: timeout, crash, output_limit, cancelled, retired, surplus, idle or reload."
+	pythonWorkerStopsHelp    = "Python workers of this collector that stopped, by reason: timeout, crash, output_limit, cancelled, retired, surplus, idle, reload or evicted."
 	pythonRunsHelp           = "Python script runs of this collector, by outcome: ok, script_error, timeout, output_limit or failed."
 
 	pythonPoolWorkersHelp       = "Python workers in the execution pool, across all collectors, by state: starting, idle or busy."
 	pythonPoolStartsHelp        = "Python workers the execution pool started, across all collectors."
 	pythonPoolStartFailuresHelp = "Python workers the execution pool failed to start, across all collectors."
-	pythonPoolStopsHelp         = "Python workers the execution pool stopped, across all collectors, by reason: timeout, crash, output_limit, cancelled, retired, surplus, idle or reload."
+	pythonPoolStopsHelp         = "Python workers the execution pool stopped, across all collectors, by reason: timeout, crash, output_limit, cancelled, retired, surplus, idle, reload or evicted."
 	pythonPoolRunsHelp          = "Python script runs in the execution pool, across all collectors, by outcome: ok, script_error, timeout, output_limit or failed."
+	pythonPoolWaitingHelp       = "Python script runs waiting for a worker, because --python.max-workers workers are busy or starting."
+	tripsWaitingHelp            = "Static target scrapes waiting in line for a trip slot, because their collector is at max_concurrent_probes or the exporter at --probe.max-concurrent."
 )
 
 // pythonPoolMetrics builds the pool-wide Python families.
@@ -126,6 +128,7 @@ func pythonPoolMetrics() []model.Metric {
 	out = append(out,
 		model.Metric{Name: "http_exporter_python_pool_worker_starts_total", Help: pythonPoolStartsHelp, Type: model.CounterMetricType, Labels: map[string]string{}, Value: float64(snap.Starts)},
 		model.Metric{Name: "http_exporter_python_pool_worker_start_failures_total", Help: pythonPoolStartFailuresHelp, Type: model.CounterMetricType, Labels: map[string]string{}, Value: float64(snap.StartFailures)},
+		model.Metric{Name: "http_exporter_python_pool_runs_waiting", Help: pythonPoolWaitingHelp, Type: model.GaugeMetricType, Labels: map[string]string{}, Value: float64(snap.Waiting)},
 	)
 	for _, reason := range transform.PythonStopReasons {
 		out = append(out, model.Metric{Name: "http_exporter_python_pool_worker_stops_total", Help: pythonPoolStopsHelp, Type: model.CounterMetricType, Labels: map[string]string{"reason": reason}, Value: float64(snap.Stops[reason])})
@@ -192,5 +195,6 @@ func (s *Server) verboseCollectorMetrics() []model.Metric {
 	for _, family := range [][]model.Metric{workers, starts, failures, stops, runs} {
 		out = append(out, family...)
 	}
-	return append(out, pythonPoolMetrics()...)
+	out = append(out, pythonPoolMetrics()...)
+	return append(out, model.Metric{Name: "http_exporter_trips_waiting", Help: tripsWaitingHelp, Type: model.GaugeMetricType, Labels: map[string]string{}, Value: float64(s.trips.waitingCount())})
 }

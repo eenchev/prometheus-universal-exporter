@@ -143,6 +143,9 @@ type RequestConfig struct {
 	// AcceptStatus is the HTTP statuses whose answers are decoded, such as
 	// [200, 503] or ["2xx", 503]; every 2xx when empty.
 	AcceptStatus []string `yaml:"accept_status"`
+	// AcceptCodes is the gRPC status codes, other than OK, whose calls are
+	// answers rather than failures, such as [NOT_FOUND].
+	AcceptCodes []string `yaml:"accept_codes"`
 	// Root and MaxAge belong to the localfile type: the directory it may read
 	// under, and how old a file may be before a scrape refuses it as stale.
 	Root   string   `yaml:"root"`
@@ -374,6 +377,10 @@ type LabelRule struct {
 	// an empty one, a failure of the metric rule, handled by its error_mode.
 	// Unset, such a series is exported without the label.
 	Required bool `yaml:"required"`
+	// ValueMap turns the value the expression gives into another, such as
+	// {"1": running, "2": stopped}, with "*" for any other value; a value it
+	// maps to "" leaves the label off.
+	ValueMap map[string]string `yaml:"value_map"`
 }
 
 // Static reports whether the label has a static value rather than an

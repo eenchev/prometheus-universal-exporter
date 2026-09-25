@@ -36,9 +36,10 @@ func Transform(ctx context.Context, d *decode.Decoded, r *fetch.HTTPResponse, c 
 	if err != nil || set == nil {
 		return set, err
 	}
-	// Truncation first, while the labels still have the names the rules
-	// gave them: rename_labels would otherwise move a label out from under
-	// its truncate: true.
+	// Label value maps and truncation first, while the labels still have
+	// the names the rules gave them: rename_labels would otherwise move a
+	// label out from under its value_map or truncate: true.
+	mapLabelValues(set, c)
 	truncateLabels(set, c)
 	applyCollectorLabels(set, c.Transform)
 	applyMetricsPrefix(set, c.MetricsPrefix)
@@ -193,7 +194,8 @@ func applyCollectorLabels(set *model.MetricSet, t model.TransformConfig) {
 // This logs through slog's default logger rather than one passed down: it is
 // called from inside the transforms, several frames below anything holding a
 // logger. The exporter installs its JSON logger as the process default at
-// startup so these lines match every other line it writes.
+// startup so these lines match every other line it writes. A debug probe's
+// context carries its report's logger instead (WithRuleLogger).
 func handleMetricError(ctx context.Context, c *model.Collector, rule model.MetricRule, err error) bool {
 	failures, gathering := ctx.Value(ruleFailuresKey{}).(*ruleFailures)
 	switch rule.ErrorMode {
@@ -206,17 +208,17 @@ func handleMetricError(ctx context.Context, c *model.Collector, rule model.Metri
 		if gathering {
 			failures.add(rule, err, true)
 		} else {
-			logRuleFailure(c, rule, err, 1)
+			logRuleFailure(ctx, c, rule, err, 1)
 		}
 		return true
 	case model.ErrorModeFail:
-		logRuleFailure(c, rule, err, 1)
+		logRuleFailure(ctx, c, rule, err, 1)
 	}
 	return false
 }
 
-func logRuleFailure(c *model.Collector, rule model.MetricRule, err error, failures uint64) {
-	slog.Default().Error("metric extraction failed", "collector", collectorName(c), "metric", rule.Name, "error_mode", rule.ErrorMode, "error", err, "failures", failures)
+func logRuleFailure(ctx context.Context, c *model.Collector, rule model.MetricRule, err error, failures uint64) {
+	ruleLogger(ctx).Error("metric extraction failed", "collector", collectorName(c), "metric", rule.Name, "error_mode", rule.ErrorMode, "error", err, "failures", failures)
 }
 
 // ruleFailures gathers the failures of rules that carried on, under log or
@@ -224,6 +226,8 @@ func logRuleFailure(c *model.Collector, rule model.MetricRule, err error, failur
 // however many of its series failed, and the caller can count them all.
 type ruleFailures struct {
 	rules []*failedRule
+	// ctx is the Transform's, for its logger.
+	ctx context.Context
 }
 
 // failedRule is one rule's failures in a scrape: the first, which the log
@@ -242,7 +246,7 @@ type ruleFailuresKey struct{}
 // withRuleFailures returns a context gathering log-mode rule failures, and
 // what gathers them.
 func withRuleFailures(ctx context.Context) (context.Context, *ruleFailures) {
-	failures := &ruleFailures{}
+	failures := &ruleFailures{ctx: ctx}
 	return context.WithValue(ctx, ruleFailuresKey{}, failures), failures
 }
 
@@ -268,12 +272,29 @@ func (f *ruleFailures) add(rule model.MetricRule, err error, logged bool) {
 func (f *ruleFailures) finish(c *model.Collector, report *RuleReport) {
 	for _, failed := range f.rules {
 		if failed.logged {
-			logRuleFailure(c, failed.rule, failed.first, failed.count)
+			logRuleFailure(f.ctx, c, failed.rule, failed.first, failed.count)
 		}
 		if report != nil {
-			report.add(failed.rule.Name, failed.count, failed.missing)
+			report.add(failed.rule.Name, failed.count, failed.missing, failed.first)
 		}
 	}
+}
+
+type ruleLoggerKey struct{}
+
+// WithRuleLogger returns a context whose Transforms log their rules'
+// failures to logger rather than slog's default logger, as a debug probe's
+// report takes them.
+func WithRuleLogger(ctx context.Context, logger *slog.Logger) context.Context {
+	return context.WithValue(ctx, ruleLoggerKey{}, logger)
+}
+
+// ruleLogger is the logger rule failures go to.
+func ruleLogger(ctx context.Context) *slog.Logger {
+	if logger, ok := ctx.Value(ruleLoggerKey{}).(*slog.Logger); ok {
+		return logger
+	}
+	return slog.Default()
 }
 
 // RuleReport counts, for its caller, the series metric rules could not
@@ -290,6 +311,8 @@ type RuleReport struct {
 type RuleFailure struct {
 	Metric            string
 	Failures, Missing uint64
+	// First is the first of the failures, as a debug probe shows it.
+	First error
 }
 
 type ruleReportKey struct{}
@@ -301,7 +324,7 @@ func WithRuleReport(ctx context.Context) (context.Context, *RuleReport) {
 	return context.WithValue(ctx, ruleReportKey{}, report), report
 }
 
-func (r *RuleReport) add(metric string, failures, missing uint64) {
+func (r *RuleReport) add(metric string, failures, missing uint64, first error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	for i := range r.failures {
@@ -311,7 +334,7 @@ func (r *RuleReport) add(metric string, failures, missing uint64) {
 			return
 		}
 	}
-	r.failures = append(r.failures, RuleFailure{Metric: metric, Failures: failures, Missing: missing})
+	r.failures = append(r.failures, RuleFailure{Metric: metric, Failures: failures, Missing: missing, First: first})
 }
 
 // Failures returns the failures reported, one entry per metric name.
@@ -614,10 +637,7 @@ func withResponseVariables(ctx context.Context, r *fetch.HTTPResponse) context.C
 	if r == nil {
 		return ctx
 	}
-	vars := responseVariables{}
-	if r.StatusCode != 0 {
-		vars.status = r.StatusCode
-	}
+	vars := responseVariables{status: r.Status()}
 	if r.Headers != nil {
 		headers := make(map[string]any, len(r.Headers))
 		for name, values := range r.Headers {

@@ -15,6 +15,9 @@ metadata:
     {{- include "prometheus-universal-exporter.metadataAnnotations" (list . $annotations) | nindent 4 }}
 spec:
   type: {{ .Values.service.type }}
+  {{- with .Values.service.sessionAffinity }}
+  sessionAffinity: {{ . }}
+  {{- end }}
   selector:
     app.kubernetes.io/name: {{ include "prometheus-universal-exporter.name" . }}
     app.kubernetes.io/instance: {{ .Release.Name }}

@@ -293,6 +293,28 @@ budget and a static target's interval put on retries, work as for `http`.
 `retry.non_idempotent` is `http`'s, and refused here; `retry.codes` is
 refused for every other type.
 
+A status that says something rather than that the call failed — `NOT_FOUND`
+for a queue not created yet — can be made an answer with `accept_codes`:
+
+```yaml
+request:
+  type: grpc
+  rpc: acme.queue.v1.QueueService/GetStats
+  accept_codes: [NOT_FOUND]
+metrics:
+  - name: queue_exists
+    expression: 'if $status == 0 then 1 else 0 end'
+  - name: queue_depth
+    expression: .depth
+    required: false
+```
+
+Such a call is not retried, and its rules see an empty object, the status
+code as `$status` — `5` here, `0` for `OK` — and the status message as
+`$headers["grpc-message"]`; `http_exporter_scrape_grpc_status_code` reads the
+code. Codes are named as for `retry.codes`, and `OK` is refused. A status not
+listed still fails the call.
+
 The probe's error answer and the log line carry the status and the server's
 message, and the log line has a `grpc_code` attribute. The probe's budget, or
 its `timeout`, is the call's deadline, which gRPC sends to the server, so the

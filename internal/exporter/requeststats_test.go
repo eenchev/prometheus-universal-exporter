@@ -42,6 +42,8 @@ var verboseOnlyNames = []string{
 	"http_exporter_python_pool_worker_start_failures_total",
 	"http_exporter_python_pool_worker_stops_total",
 	"http_exporter_python_pool_runs_total",
+	"http_exporter_python_pool_runs_waiting",
+	"http_exporter_trips_waiting",
 }
 
 func TestVerboseRequestMetricsAreAbsentByDefault(t *testing.T) {

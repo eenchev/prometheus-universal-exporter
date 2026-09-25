@@ -108,6 +108,12 @@ scrape timeout Prometheus would send, so a target that never answers ends
 in the exporter's own error after it rather than a page waiting for ever.
 A credential left blank is not sent at all.
 
+When the exporter runs with `--web.enable-probe-debug`, each form also has a
+*Debug report* switch. Switched on, the form sends `debug=true` and shows the
+[debug report](CONFIGURATION.md#debugging-a-probe) of the trip in place of the
+metrics, with the status a probe would have answered above it, green or red
+as the probe would have been. Without the flag there is no switch.
+
 The page itself is behind the exporter's Basic Auth when that is on, and the
 browser sends the same credential with each probe. Since exporter Basic Auth
 and `forward_authorization` cannot be combined, the `Authorization` header is

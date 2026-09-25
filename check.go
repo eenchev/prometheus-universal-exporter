@@ -169,6 +169,29 @@ func checkStartup(in checkInputs) checkReport {
 	return checkReport{Status: status, Checks: results, RequestTypes: fetch.BuiltRequestTypes()}
 }
 
+// requestPolicy is what a collector's request lets through: the targets it
+// may and may not reach and the statuses it decodes, as they will be
+// applied, so a list that says less or more than meant shows before it is
+// deployed.
+type requestPolicy struct {
+	AllowedTargets []string `json:"allowed_targets,omitempty"`
+	DeniedTargets  []string `json:"denied_targets,omitempty"`
+	AcceptStatus   []string `json:"accept_status,omitempty"`
+	AcceptCodes    []string `json:"accept_codes,omitempty"`
+}
+
+// requestPolicies are the policies of the collectors that set one, by name.
+func requestPolicies(conf *model.Config) map[string]requestPolicy {
+	out := map[string]requestPolicy{}
+	for _, c := range conf.Collectors {
+		p := requestPolicy{AllowedTargets: c.Request.AllowedTargets, DeniedTargets: c.Request.DeniedTargets, AcceptStatus: c.Request.AcceptStatus, AcceptCodes: c.Request.AcceptCodes}
+		if len(p.AllowedTargets)+len(p.DeniedTargets)+len(p.AcceptStatus)+len(p.AcceptCodes) > 0 {
+			out[c.Name] = p
+		}
+	}
+	return out
+}
+
 // configDetails summarises a configuration that loaded. A deprecated spelling
 // or a warning still passes, so the check stays ok; the report lists them so
 // the operator knows what to change before a deprecated spelling is removed.
@@ -184,6 +207,9 @@ func configDetails(conf *model.Config, expandEnv bool) map[string]any {
 	}
 	if len(conf.LoadedCollectorFiles) > 0 {
 		details["collector_files"] = conf.LoadedCollectorFiles
+	}
+	if policies := requestPolicies(conf); len(policies) > 0 {
+		details["request_policies"] = policies
 	}
 	if len(conf.Deprecations) > 0 {
 		details["deprecations"] = conf.Deprecations

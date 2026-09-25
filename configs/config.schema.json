@@ -272,6 +272,17 @@
                           "number",
                           "boolean"
                         ]
+                      },
+                      "value_map": {
+                        "additionalProperties": {
+                          "type": [
+                            "string",
+                            "number",
+                            "boolean"
+                          ]
+                        },
+                        "description": "Turns the value the label's expression gives into another, such as {\"1\": running}; \"*\" maps any value it does not list, and a value mapped to \"\" leaves the label off. Without a match and without \"*\", the value is kept.",
+                        "type": "object"
                       }
                     },
                     "required": [
@@ -392,6 +403,13 @@
             ],
             "description": "How the collector reaches its data. See docs/REQUESTS.md, docs/LOCALFILE.md for localfile, docs/GRAPHITE.md for graphite and docs/GRPC.md for grpc.",
             "properties": {
+              "accept_codes": {
+                "description": "grpc: the gRPC status codes other than OK whose calls are answers rather than failures, by name, such as [NOT_FOUND]. Such a call is not retried; its rules see an empty object, the code as $status and the status message as $headers[\"grpc-message\"].",
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
               "accept_status": {
                 "description": "The HTTP statuses whose answers are decoded, such as [200, 503] or [\"2xx\", 503]; every 2xx when left out. Any other status fails the scrape in the http_status stage. An accepted status is not retried. http and graphite.",
                 "items": {

@@ -33,6 +33,7 @@ func init() {
 			"method", "path", "body", "timeout", "insecure_skip_verify",
 			"follow_redirects", "enable_http2", "retry", "headers",
 			"basic_auth", "basic_auth_file", "bearer_token", "bearer_token_file",
+			"accept_status",
 		},
 		URLPath:     true,
 		Validate:    validateHTTPRequest,

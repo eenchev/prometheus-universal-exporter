@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"log/slog"
 	"math"
 	"strconv"
 	"strings"
@@ -27,7 +26,7 @@ type pythonInput struct {
 }
 
 type pythonResponse struct {
-	StatusCode int                 `json:"status_code"`
+	StatusCode any                 `json:"status_code"`
 	Headers    map[string][]string `json:"headers"`
 	Body       string              `json:"body"`
 	Text       string              `json:"text"`
@@ -374,7 +373,7 @@ func runPython(ctx context.Context, pythonPath, mode, what, script string, d *de
 	if timeout <= 0 {
 		timeout = 100 * time.Millisecond
 	}
-	input := pythonInput{Mode: mode, Script: script, Data: withNonFiniteMarkers(pythonScriptData(d)), Target: r.Target, Collector: c.Name, Response: pythonResponse{StatusCode: r.StatusCode, Headers: r.Headers, Body: string(r.Body), Text: string(r.Body)}}
+	input := pythonInput{Mode: mode, Script: script, Data: withNonFiniteMarkers(pythonScriptData(d)), Target: r.Target, Collector: c.Name, Response: pythonResponse{StatusCode: r.Status(), Headers: r.Headers, Body: string(r.Body), Text: string(r.Body)}}
 	payload, err := json.Marshal(input)
 	if err != nil {
 		return nil, model.MarkError(err, model.ErrScriptFailed)
@@ -387,8 +386,9 @@ func runPython(ctx context.Context, pythonPath, mode, what, script string, d *de
 	out, err := pythonResult(c, what, timeout, line, err)
 	if err == nil && out.Log != "" {
 		// What the script printed, its first 4 KiB, for whoever debugs it;
-		// it counts against max_output_bytes only as far as that.
-		slog.Debug("python "+what+" printed", "collector", c.Name, "output", out.Log)
+		// it counts against max_output_bytes only as far as that. A debug
+		// probe's report shows it (WithRuleLogger).
+		ruleLogger(ctx).Debug("python "+what+" printed", "collector", c.Name, "output", out.Log)
 	}
 	return out, model.MarkError(err, model.ErrScriptFailed)
 }

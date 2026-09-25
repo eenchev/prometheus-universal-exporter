@@ -44,7 +44,10 @@ type collectorsPage struct {
 	// ProbeTimeoutSeconds is the timeout a form starts with, sent as the
 	// scrape timeout Prometheus would send.
 	ProbeTimeoutSeconds int
-	Docs                string
+	// ProbeDebug adds a switch to each form that asks for a debug report,
+	// --web.enable-probe-debug (probedebug.go).
+	ProbeDebug bool
+	Docs       string
 }
 
 // pageProbeTimeoutSeconds is the timeout the collectors page's forms start
@@ -96,7 +99,7 @@ func targetHint(c *model.Collector, required bool) string {
 
 func (s *Server) collectorsHandler(w http.ResponseWriter, _ *http.Request) {
 	cfg := s.manager.Get()
-	page := collectorsPage{ProbeTimeoutSeconds: pageProbeTimeoutSeconds, Docs: landingDocs}
+	page := collectorsPage{ProbeTimeoutSeconds: pageProbeTimeoutSeconds, ProbeDebug: s.probeDebug, Docs: landingDocs}
 	for i := range cfg.Collectors {
 		c := &cfg.Collectors[i]
 		required := errors.Is(fetch.CheckTarget(c, "", false), fetch.ErrMissingTarget)
@@ -133,14 +136,22 @@ input, select { width: 100%; padding: 6px 8px; border: 1px solid var(--line); bo
 .row { display: flex; gap: 8px; flex-wrap: wrap; }
 .row > div { flex: 1 1 200px; min-width: 0; }
 .row > div.narrow { flex: 0 1 130px; }
-button { margin-top: 14px; padding: 7px 16px; border: 1px solid var(--accent); border-radius: 6px; background: var(--accent); color: var(--on-accent); font: inherit; font-size: 14px; cursor: pointer; }
+.actions { display: flex; align-items: center; gap: 16px; flex-wrap: wrap; margin-top: 14px; }
+button { padding: 7px 16px; border: 1px solid var(--accent); border-radius: 6px; background: var(--accent); color: var(--on-accent); font: inherit; font-size: 14px; cursor: pointer; }
 button:disabled { opacity: .6; cursor: wait; }
 [hidden] { display: none !important; }
+.switch { display: inline-flex; align-items: center; gap: 8px; margin: 0; font-size: 14px; cursor: pointer; }
+.switch input { appearance: none; -webkit-appearance: none; position: relative; width: 36px; height: 20px; flex: none; margin: 0; padding: 0; border-radius: 10px; border: 1px solid var(--muted); background: transparent; cursor: pointer; transition: background .15s; }
+.switch input::before { content: ""; position: absolute; top: 2px; left: 2px; width: 14px; height: 14px; border-radius: 50%; background: var(--muted); transition: transform .15s; }
+.switch input:checked { background: var(--accent); border-color: var(--accent); }
+.switch input:checked::before { transform: translateX(16px); background: var(--on-accent); }
+.switch input:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .result { margin-top: 12px; }
 .status { font-size: 13px; font-weight: 600; }
 .status.ok { color: var(--good); }
 .status.failed { color: var(--bad); }
 .sent { font-size: 12px; color: var(--muted); margin: 2px 0 6px; }
+pre.report { max-height: 640px; }
 pre { margin: 0; padding: 10px; max-height: 360px; overflow: auto; background: var(--bg); border: 1px solid var(--line); border-radius: 6px; font-size: 12px; white-space: pre-wrap; overflow-wrap: anywhere; }
 </style>
 </head>
@@ -149,6 +160,9 @@ pre { margin: 0; padding: 10px; max-height: 360px; overflow: auto; background: v
 <nav><a href="./">← Prometheus Universal Exporter</a></nav>
 <h1>Collectors</h1>
 <p class="meta">Probe a target through a collector, as Prometheus would. The answer is what Prometheus would scrape.</p>
+{{- if .ProbeDebug}}
+<p class="note">Debug probes are on: switch on <em>Debug report</em> in a form to see the whole trip — the requests, the target's response, each stage and what was logged — instead of the metrics. The report shows what the target answered.</p>
+{{- end}}
 <noscript><p class="note">Without JavaScript the forms open <code>/probe</code> directly, and a target credential entered here is not sent.</p></noscript>
 {{- range .Collectors}}
 <section class="collector" id="collector-{{.Name}}">
@@ -208,7 +222,12 @@ pre { margin: 0; padding: 10px; max-height: 360px; overflow: auto; background: v
 {{- if .Credentials}}
 <p class="note">The exporter sends the target {{range $i, $c := .Credentials}}{{if $i}}, {{end}}{{$c}}{{end}}{{if not .ForwardAuthorization}}; nothing to enter here{{end}}.</p>
 {{- end}}
+<div class="actions">
 <button type="submit">Probe</button>
+{{- if $.ProbeDebug}}
+<label class="switch"><input type="checkbox" name="debug" value="true" role="switch"> Debug report</label>
+{{- end}}
+</div>
 </form>
 <div class="result" hidden aria-live="polite">
 <div class="status"></div>
@@ -262,6 +281,10 @@ for (const form of document.querySelectorAll("form.probe")) {
     // Relative, as the form's action is, so the page works under a proxy's
     // path prefix; shown as the absolute path it resolves to.
     const url = new URL("probe?" + params.toString(), document.baseURI);
+    // A debug report always answers 200; what a probe would have answered
+    // is its second line.
+    const debug = params.get("debug") === "true";
+    body.classList.toggle("report", debug);
     button.disabled = true;
     result.hidden = false;
     status.className = "status";
@@ -273,8 +296,15 @@ for (const form of document.querySelectorAll("form.probe")) {
       const response = await fetch(url, { headers, cache: "no-store", credentials: "same-origin", signal: AbortSignal.timeout((timeout + 5) * 1000) });
       const text = await response.text();
       const took = Math.round(performance.now() - started);
-      status.className = "status " + (response.ok ? "ok" : "failed");
-      status.textContent = response.status + " " + response.statusText + " in " + took + " ms";
+      if (debug && response.ok) {
+        const would = /would have answered (\d{3})/.exec(text);
+        const code = would ? Number(would[1]) : 200;
+        status.className = "status " + (code < 400 ? "ok" : "failed");
+        status.textContent = "Debug report in " + took + " ms: a probe would have answered " + code;
+      } else {
+        status.className = "status " + (response.ok ? "ok" : "failed");
+        status.textContent = response.status + " " + response.statusText + " in " + took + " ms";
+      }
       body.textContent = text === "" ? "(an empty answer: nothing was extracted)" : text;
     } catch (error) {
       status.className = "status failed";

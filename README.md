@@ -121,8 +121,8 @@ pattern needs. See the
 | Path | Purpose |
 | --- | --- |
 | `/` | A landing page: the build and links to the endpoints. |
-| `/collectors` | Each collector with a form that probes a target through it, taking its request parameters, forwarded headers and, when it forwards `Authorization`, a target credential. See [Probing from the browser](docs/AUTHENTICATION.md#probing-from-the-browser). |
-| `/probe` | Scrape a target through a collector. Takes `target` and `collector`, with `GET` or `HEAD`; any other method is answered `405`. |
+| `/collectors` | Each collector with a form that probes a target through it, taking its request parameters, forwarded headers and, when it forwards `Authorization`, a target credential; with `--web.enable-probe-debug`, a switch for the [debug report](docs/CONFIGURATION.md#debugging-a-probe). See [Probing from the browser](docs/AUTHENTICATION.md#probing-from-the-browser). |
+| `/probe` | Scrape a target through a collector. Takes `target` and `collector`, with `GET` or `HEAD`; any other method is answered `405`. With `--web.enable-probe-debug`, `&debug=true` answers with a report of the trip instead; see [Debugging a probe](docs/CONFIGURATION.md#debugging-a-probe). |
 | `/self-metrics` | The exporter's own metrics, at `--web.self-metrics-path`. See [Self-metrics](docs/SELF-METRICS.md). |
 | `/static-targets` | The latest results of the [static targets](docs/STATIC-TARGETS.md), at `--web.static-targets-path`. `?targets=a,b` serves only the targets named. |
 | `/-/reload` | `POST` reloads the configuration, with `--web.enable-lifecycle`. |
@@ -152,9 +152,11 @@ pattern needs. See the
 | `--probe.default-timeout` | `30s` | How long a probe may take without an `X-Prometheus-Scrape-Timeout-Seconds` header, as from curl or a script; a `timeout` parameter bounds the request within it and cannot lift it. `0` leaves such a probe unbounded. See [Probe deadlines](docs/CONFIGURATION.md#probe-deadlines). |
 | `--probe.max-concurrent` | `0` | How many trips to targets, probes and static target scrapes of every collector together, may be in progress at once, on top of each collector's `max_concurrent_probes`. `0` leaves only the per-collector limits. See [Limiting concurrent probes](docs/CONFIGURATION.md#limiting-concurrent-probes). |
 | `--python.max-workers` | `0` | How many Python workers, of every collector together, may be alive at once. `0` leaves them bounded only per script. See [How scripts run](docs/PYTHON.md#how-scripts-run). |
+| `--runtime.memory-limit-ratio` | `0` | Set the Go memory limit to this share of the container's memory limit, read from its cgroup at startup, leaving the rest to the Python workers; from 0, off, to 1. `GOMEMLIMIT` in the environment wins. The Helm chart sets `0.8`. |
 | `--web.shutdown-delay` | `0s` | How long a shutdown keeps serving, with `/ready` answering `503`, before it begins, so a load balancer stops sending probes first. The Helm chart sets `5s`. See [Shutting down](docs/CONFIGURATION.md#shutting-down). |
 | `--web.shutdown-timeout` | `15s` | How long a shutdown waits for the probes in progress. Keep it at least as long as Prometheus's scrape timeout. See [Shutting down](docs/CONFIGURATION.md#shutting-down). |
 | `--web.enable-lifecycle` | off | Enable `POST /-/reload`, which reloads the configuration and reports whether it was accepted. `SIGHUP` reloads either way. See [Reloading on demand](docs/CONFIGURATION.md#reloading-on-demand). |
+| `--web.enable-probe-debug` | off | Enable `/probe?...&debug=true`, which makes one trip and answers with a plain-text report of it: the requests, the response, each stage, the logs and what the probe would have answered. The report shows what the target answered. See [Debugging a probe](docs/CONFIGURATION.md#debugging-a-probe). |
 | `--version` | off | Print the version, git revision, Go version and request types of the build, and exit. The same is in the `http_exporter_build_info` self-metric. |
 | `--dry-run` | off | Validate the files and flags above, print a JSON report and exit `0` or `1`, without starting. See [Dry run](docs/CONFIGURATION.md#dry-run). |
 

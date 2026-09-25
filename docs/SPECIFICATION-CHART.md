@@ -124,9 +124,13 @@ service:
 
 podSecurityContext: {}
 securityContext: {}
+podLabels: {}
+podAnnotations: {}
+priorityClassName: ""
 nodeSelector: {}
 tolerations: []
 affinity: {}
+topologySpreadConstraints: []
 ```
 
 The deployment MUST run as a non-root user: `podSecurityContext` MUST set
@@ -141,15 +145,19 @@ of 5 for liveness and 3 for readiness, so a pod busy with a burst of probes is
 not restarted as dead. The check itself is the chart's: a value setting
 `httpGet`, `exec`, `tcpSocket` or `grpc` MUST fail rendering.
 
-With `goMemLimit.enabled`, the default, and a `resources.limits.memory`, the
-container MUST get `GOMEMLIMIT` from `limits.memory` through a
-`resourceFieldRef`, unless `env` sets `GOMEMLIMIT` itself; without a memory
-limit it MUST NOT be rendered.
+With `goMemLimit.enabled`, the default, the chart MUST render
+`--runtime.memory-limit-ratio` with `goMemLimit.ratio`, `0.8` by default,
+more than 0 and at most 1, or fail rendering.
 
 The chart MUST offer an optional PodDisruptionBudget, `podDisruptionBudget`,
 disabled by default, selecting the Deployment's pods with `minAvailable` or
 `maxUnavailable`, `maxUnavailable: 1` when neither is set; setting both MUST
 fail rendering.
+
+`service.sessionAffinity`, empty by default, MUST be rendered on the Service
+when set, `None` or `ClientIP`, and the chart MUST document that each replica
+keeps its own response cache, so a probe's cache hits fall as replicas are
+added unless one Prometheus's probes reach one pod.
 
 The chart MUST offer an optional `autoscaling/v2` HorizontalPodAutoscaler,
 `autoscaling`, disabled by default, scaling the Deployment on CPU utilization
@@ -332,9 +340,13 @@ staticTargets: {}
 serviceAccount: {}
 securityContext: {}
 podSecurityContext: {}
+podLabels: {}
+podAnnotations: {}
+priorityClassName: ""
 nodeSelector: {}
 tolerations: []
 affinity: {}
+topologySpreadConstraints: []
 monitors: []
 networkPolicy: {}
 ```
@@ -358,6 +370,7 @@ values schema:
 | `server.shutdownTimeout` | `--web.shutdown-timeout`, whole hours, minutes and seconds such as `30s` or `1m30s`, positive |
 | `server.shutdownDelay` | `--web.shutdown-delay`, whole hours, minutes and seconds such as `5s`, `0s` allowed; default `5s`, and empty renders no flag |
 | `server.enableLifecycle` | `--web.enable-lifecycle`, rendered only when `true`; default `false` |
+| `server.probeDebug` | `--web.enable-probe-debug`, rendered only when `true`; default `false` |
 | `server.watchConfig`, `server.watchConfigInterval` | `--config.watch`, `--config.watch-interval` |
 | `server.expandEnv` | `--config.expand-env` |
 | `staticTargets.expandEnv` | `--static-targets.expand-env`, rendered only when `true` and `staticTargets.enabled` |
@@ -589,7 +602,10 @@ helm lint
 helm template
 ```
 
-with at least these values combinations:
+with at least these values combinations. The Go tests MUST render them with
+helm, and check what each renders or the error it fails with, whenever helm is
+on the PATH, as CI installs it for any change to the chart; without helm they
+are skipped and the text checks of the templates still run:
 
 1. Default configuration.
 2. Monitor disabled.
@@ -662,9 +678,9 @@ with at least these values combinations:
 16. The documented install: a version pinned in a documented `helm install`
    command MUST equal the version `Chart.yaml` declares, so a chart bump cannot
    leave a reader with a command that installs something else.
-17. Resources and availability: the default MUST render `GOMEMLIMIT` from
-   `limits.memory`, and none without a memory limit or with `GOMEMLIMIT` in
-   `env`; `server.probeMaxConcurrent` and `server.pythonMaxWorkers` set MUST
+17. Resources and availability: the default MUST render
+   `--runtime.memory-limit-ratio=0.8`, none with `goMemLimit.enabled: false`,
+   and a ratio of 0 or above 1 MUST fail rendering; `server.probeMaxConcurrent` and `server.pythonMaxWorkers` set MUST
    render their flags, and a negative or fractional one MUST fail rendering;
    the probes' timings MUST follow their values, and a probe value setting
    `httpGet` MUST fail rendering; `podDisruptionBudget.enabled` MUST render a
@@ -673,6 +689,16 @@ with at least these values combinations:
    rendering; `autoscaling.enabled` MUST render a HorizontalPodAutoscaler for
    the Deployment and leave `replicas` out of it, and `maxReplicas` below
    `minReplicas` MUST fail rendering.
+18. Pod scheduling and metadata: `priorityClassName` MUST render on the pod;
+   a `topologySpreadConstraints` entry without a `labelSelector` MUST render
+   with one matching the Deployment's selector, and one with its own MUST
+   keep it; `podLabels` and `podAnnotations` MUST render on the pod only, over
+   `defaultLabels` and `defaultAnnotations`; a `podLabels` key the chart sets
+   itself MUST fail rendering, and a `podAnnotations` `checksum/config` MUST
+   be replaced by the chart's.
+19. Debug probes: `server.probeDebug: true` MUST render
+   `--web.enable-probe-debug`, the default MUST NOT, and the flag in
+   `extraArgs` MUST fail rendering, naming `server.probeDebug`.
 
 12. `extraArgs`, `extraVolumes` and `extraVolumeMounts` set together, which MUST
    append the argument, the volume and the mount to the ones the chart renders
@@ -721,7 +747,13 @@ The Helm chart MUST support:
 - configurable Deployment strategy, including RollingUpdate settings;
 - CPU and memory requests and limits through `resources.requests` and
   `resources.limits`;
-- `tolerations` and `affinity`;
+- `tolerations`, `affinity`, `nodeSelector`, `topologySpreadConstraints`
+  (one without a `labelSelector` selecting the release's pods) and
+  `priorityClassName`;
+- `podLabels` and `podAnnotations` for the pods only, applied after
+  `defaultLabels` and `defaultAnnotations`; the chart's identity labels and
+  `checksum/config` MUST stay the chart's, a `podLabels` key among them
+  failing rendering;
 - an optional Ingress resource with class, host, path, TLS, and annotations;
 - optional NEG integration, implemented by a configurable Service annotation
   such as the GKE `cloud.google.com/neg` annotation.

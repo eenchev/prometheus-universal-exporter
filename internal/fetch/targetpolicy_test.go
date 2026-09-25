@@ -11,7 +11,9 @@ import (
 	"net/netip"
 	"net/url"
 	"strings"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/eenchev/prometheus-universal-exporter/internal/model"
 )
@@ -100,7 +102,7 @@ func TestTargetPolicyDecisions(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			_, err = policy.check(context.Background(), tc.host)
+			_, err = policy.check(context.Background(), tc.host, true)
 			if refused := errors.Is(err, ErrTargetRefused); refused != tc.refused || (err != nil && !refused) {
 				t.Fatalf("err=%v, want refused=%v", err, tc.refused)
 			}
@@ -212,11 +214,11 @@ func TestAcceptStatus(t *testing.T) {
 		c.Request.Retry.Attempts = 3
 	})
 	for status, want := range map[int]bool{200: true, 204: true, 503: true, 500: false, 404: false, 301: false} {
-		if got := AcceptedStatus(c, status); got != want {
+		if got := AcceptedStatus(c, RequestOverrides{}, status); got != want {
 			t.Errorf("%d: %v", status, got)
 		}
 	}
-	if plain := httpCollector(t, nil); !AcceptedStatus(plain, 299) || AcceptedStatus(plain, 503) {
+	if plain := httpCollector(t, nil); !AcceptedStatus(plain, RequestOverrides{}, 299) || AcceptedStatus(plain, RequestOverrides{}, 503) {
 		t.Error("without accept_status every 2xx, and only those, is accepted")
 	}
 	var hits int
@@ -229,5 +231,110 @@ func TestAcceptStatus(t *testing.T) {
 	response, err := FetchCollector(context.Background(), server.URL, c, RequestOverrides{}, nil)
 	if err != nil || response.StatusCode != http.StatusServiceUnavailable || hits != 1 {
 		t.Fatalf("err=%v status=%v hits=%d: an accepted 503 was retried", err, response, hits)
+	}
+}
+
+// A target reached directly is resolved once, by the connection, whose
+// address is what is checked; one reached through a proxy is resolved
+// before the request, since the connection is the proxy's. A refused
+// connection is not retried.
+func TestAddressesAreCheckedWithoutASecondLookup(t *testing.T) {
+	var lookups atomic.Int64
+	restoreResolve := resolveHost
+	t.Cleanup(func() { resolveHost, proxyOverride = restoreResolve, nil })
+	resolveHost = func(ctx context.Context, host string) ([]netip.Addr, error) {
+		lookups.Add(1)
+		return restoreResolve(ctx, host)
+	}
+	var connections atomic.Int64
+	server := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write([]byte("ok")) }))
+	server.Config.ConnState = func(_ net.Conn, state http.ConnState) {
+		if state == http.StateNew {
+			connections.Add(1)
+		}
+	}
+	server.Start()
+	defer server.Close()
+	// By name, so the address is only known once looked up.
+	byName := strings.Replace(server.URL, "127.0.0.1", "localhost", 1)
+	c := httpCollector(t, func(c *model.Collector) {
+		c.Request.DeniedTargets = []string{"127.0.0.0/8"}
+		c.Request.Retry.Attempts = 3
+	})
+	if err := fetchRefused(t, byName, c); !errors.Is(err, ErrTargetRefused) {
+		t.Fatalf("err=%v", err)
+	}
+	if n := lookups.Load(); n != 0 {
+		t.Fatalf("a direct target was looked up %d times before connecting", n)
+	}
+	// The server sees a connection after the client has closed it.
+	for deadline := time.Now().Add(2 * time.Second); connections.Load() == 0 && time.Now().Before(deadline); {
+		time.Sleep(time.Millisecond)
+	}
+	time.Sleep(50 * time.Millisecond)
+	if n := connections.Load(); n != 1 {
+		t.Fatalf("%d connections for a refused target, want the one refused, not retried", n)
+	}
+	proxyOverride = func(*url.URL) bool { return true }
+	if err := fetchRefused(t, byName, c); !errors.Is(err, ErrTargetRefused) {
+		t.Fatalf("err=%v", err)
+	}
+	if n := lookups.Load(); n != 1 {
+		t.Fatalf("a target behind a proxy was looked up %d times, want once, before the request", n)
+	}
+	if n := connections.Load(); n != 1 {
+		t.Fatal("a target refused before the request was connected to")
+	}
+}
+
+// Every collector refuses the cloud metadata addresses, written as the target
+// or resolved from a name, unless its allowed_targets lists them by address
+// or network; an address target is refused before anything is sent.
+func TestCloudMetadataIsRefusedByDefault(t *testing.T) {
+	restore := resolveHost
+	t.Cleanup(func() { resolveHost = restore })
+	resolveHost = func(_ context.Context, host string) ([]netip.Addr, error) {
+		if host == "metadata.google.internal" {
+			return []netip.Addr{netip.MustParseAddr("169.254.169.254")}, nil
+		}
+		return fakeResolve(host)
+	}
+	for name, tc := range map[string]struct {
+		allowed, denied []string
+		host            string
+		resolve         bool
+		refused         bool
+	}{
+		"the address, with no lists":           {host: "169.254.169.254", refused: true},
+		"the IPv6 address":                     {host: "fd00:ec2::254", refused: true},
+		"an IPv4-mapped address":               {host: "::ffff:169.254.169.254", refused: true},
+		"a name for it, looked up":             {host: "metadata.google.internal", resolve: true, refused: true},
+		"with other denied targets":            {denied: []string{"10.0.0.0/8"}, host: "169.254.169.254", refused: true},
+		"allowed by name only":                 {allowed: []string{"metadata.google.internal"}, host: "metadata.google.internal", resolve: true, refused: true},
+		"allowed by its address":               {allowed: []string{"169.254.169.254"}, host: "169.254.169.254"},
+		"allowed by a network":                 {allowed: []string{"169.254.0.0/16"}, host: "169.254.169.254"},
+		"the IPv4 allowed leaves IPv6 refused": {allowed: []string{"169.254.169.254"}, host: "fd00:ec2::254", refused: true},
+		"another link-local address":           {host: "169.254.1.1"},
+		"an ordinary target":                   {host: "public.example", resolve: true},
+	} {
+		t.Run(name, func(t *testing.T) {
+			policy, err := compileTargetPolicy(tc.allowed, tc.denied)
+			if err != nil {
+				t.Fatal(err)
+			}
+			_, err = policy.check(context.Background(), tc.host, tc.resolve)
+			if refused := errors.Is(err, ErrTargetRefused); refused != tc.refused || (err != nil && !refused) {
+				t.Fatalf("err=%v, want refused=%v", err, tc.refused)
+			}
+			if tc.refused && len(tc.allowed) == 0 && len(tc.denied) == 0 && !strings.Contains(err.Error(), "cloud metadata") {
+				t.Fatalf("the refusal does not say why: %v", err)
+			}
+		})
+	}
+	// A probe of the address is refused at once, without a connection.
+	start := time.Now()
+	err := fetchRefused(t, "http://169.254.169.254/latest/meta-data/", httpCollector(t, nil))
+	if !errors.Is(err, ErrTargetRefused) || time.Since(start) > time.Second {
+		t.Fatalf("err=%v after %s", err, time.Since(start))
 	}
 }

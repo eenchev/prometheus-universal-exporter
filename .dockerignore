@@ -6,6 +6,7 @@
 .DS_Store
 .idea/
 .vscode/
+Claude outputs/
 bin/
 dist/
 *.tgz

@@ -553,13 +553,12 @@ The chart MUST carry the metadata a package index displays and searches:
 
 Ownership of the published repository is claimed through an
 `.artifacthub-repo.yml` at the repository root, naming the repository ID and the
-owners. The ID does not exist until the repository is registered, and a chart
-must be published before it can be registered, so the file MUST be allowed to
-carry a clearly marked placeholder: a release MUST NOT be blocked by it. The
-release workflow MUST nevertheless verify that the file parses and names its
-owners, and MUST warn when the placeholder is still in place, so a release does
-not quietly publish a chart that nothing will index. The registration steps and
-the replacement of the placeholder MUST be documented as manual work.
+owners. The repository is registered, so the file MUST carry the repository ID
+Artifact Hub generated, a UUID; a placeholder or any other value MUST be
+refused, since Artifact Hub would stop verifying ownership and stop indexing
+new versions. The release workflow MUST verify that the file parses and names
+its owners. How the repository was registered, and what re-registering takes,
+MUST be documented, since it is manual work nothing in the repository can do.
 
 The documentation MUST NOT state that the chart is available on a package index
 before it has actually been registered and indexed there.
@@ -676,9 +675,8 @@ are skipped and the text checks of the templates still run:
 15. The index metadata: `Chart.yaml` MUST carry a SemVer `version` and
    `appVersion`, a description, `home`, `sources`, a maintainer with a name and
    an email address, and every advertised keyword; annotations carrying YAML
-   MUST parse. `.artifacthub-repo.yml` MUST parse and name owners, accepting
-   either the placeholder or a real repository ID, since it has to pass both
-   before and after registration.
+   MUST parse. `.artifacthub-repo.yml` MUST parse, name owners with a name and
+   an email address, and carry a UUID repository ID.
 16. The documented install: a version pinned in a documented `helm install`
    command MUST equal the version `Chart.yaml` declares, so a chart bump cannot
    leave a reader with a command that installs something else.

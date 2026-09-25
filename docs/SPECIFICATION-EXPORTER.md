@@ -1762,7 +1762,12 @@ The worker's sandbox:
   system zone directories, `python-dateutil`'s bundled zoneinfo or the
   `tzdata` package, and `/etc/localtime`, so named zones work; any other
   file, a path leaving those directories by `..` or a symlink included, MUST
-  be refused. The image MUST ship the system's zone data.
+  be refused. The image MUST ship the system's zone data. `zoneinfo` MUST
+  be importable by a script on every supported Python: from 3.12 it loads
+  `sysconfig`, which imports the blocked `threading`, so the worker MUST
+  import `zoneinfo` before installing the sandbox and MUST then drop
+  `sysconfig`'s reference to `threading`, so the blocked module is not left
+  reachable through it.
 
 A sandbox inside the interpreter guards against a script doing by mistake what
 it should not; it is not a boundary against a script written to escape it,
@@ -4968,6 +4973,8 @@ Test environment variable expansion:
 - Every Go version the workflows request satisfies the go directive in
   `go.mod`, as does the version the Dockerfile pins, and the comparison itself
   is covered for versions of differing granularity.
+- No workflow installs Go with `go-version-file`, and the release builds its
+  binaries with the Dockerfile's `GO_VERSION` at its newest patch release.
 - The golangci-lint version pinned in the Makefile and the one pinned in CI are
   the same.
 
@@ -6180,7 +6187,8 @@ Tests MUST show:
   refused naming the file and saying it is empty.
 - A Python script reads named zones with `zoneinfo` and `dateutil.tz`, and
   is still refused `/etc/passwd`, directly or through the zone directory by
-  `..`.
+  `..`; on Python 3.12 and later too, where `zoneinfo` loads `sysconfig`,
+  which then no longer carries `threading`.
 - A gauge `foo_count` next to a histogram `foo`, and a counter `bar_sum` next
   to a summary `bar`, fail validation naming both.
 - A CSV header naming a column twice fails the decode naming it; repeated
@@ -7594,9 +7602,13 @@ its rules are covered by the same test suite as the exporter, and MUST:
 The pin table and the Dockerfile MUST be kept in agreement by a test, so a
 renamed or removed build argument cannot leave a dependency unwatched.
 
-The CI and release workflows MUST build with the current stable Go release
-rather than a pinned version, so the build follows Go's releases without anyone
-editing a workflow. The pinned golangci-lint version MUST be a release built
+The CI workflows MUST build with the current stable Go release rather than a
+pinned version, so the build follows Go's releases without anyone editing a
+workflow. The release workflow MUST build its binaries with the Go version the
+Dockerfile pins, resolved to that minor's newest patch release, so a release's
+archives and image carry the same Go. A workflow MUST NOT install Go from the `go`
+directive (`go-version-file`), since that installs exactly the minimum the
+module declares, which may be a patch release missing security fixes. The pinned golangci-lint version MUST be a release built
 with at least that Go: golangci-lint ships as a binary carrying its own type
 checker, which cannot read standard-library sources from a newer toolchain and
 panics rather than reporting a lint failure. The linter version MUST be pinned

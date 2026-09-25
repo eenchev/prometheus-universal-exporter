@@ -148,9 +148,12 @@ func TestArtifactHubAnnotationsAreWellFormed(t *testing.T) {
 	}
 }
 
-// Artifact Hub verifies ownership through this file. It is allowed to carry the
-// placeholder before registration — a chart has to be published before Artifact
-// Hub can be pointed at it — but it must always parse and name its owners.
+// Artifact Hub verifies ownership through this file. The repository is
+// registered, so it carries the ID Artifact Hub generated: a placeholder, or an
+// ID mangled in an edit, would stop new versions being indexed without anything
+// else failing.
+var artifactHubRepositoryID = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`)
+
 func TestArtifactHubRepositoryFileIsUsable(t *testing.T) {
 	raw, err := os.ReadFile(".artifacthub-repo.yml")
 	if err != nil {
@@ -166,8 +169,8 @@ func TestArtifactHubRepositoryFileIsUsable(t *testing.T) {
 	if err := yaml.Unmarshal(raw, &repo); err != nil {
 		t.Fatal(err)
 	}
-	if repo.RepositoryID == "" {
-		t.Error("repositoryID must be present, as the placeholder or as the real ID")
+	if !artifactHubRepositoryID.MatchString(repo.RepositoryID) {
+		t.Errorf("repositoryID %q is not the UUID Artifact Hub generates", repo.RepositoryID)
 	}
 	if len(repo.Owners) == 0 {
 		t.Fatal("owners is what Artifact Hub checks the claim against")

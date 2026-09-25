@@ -815,6 +815,12 @@ if max_memory>0:
     # loaded so a limit too small for them fails a run, not the start.
     import resource
     resource.setrlimit(resource.RLIMIT_AS,(max_memory,max_memory))
+# zoneinfo reads its search path through sysconfig, which imports threading
+# from Python 3.12 on. threading is blocked, so a script's import zoneinfo
+# would fail; it is imported here, before the sandbox, and sysconfig's
+# reference to threading is dropped below once the sandbox is in place.
+try: import zoneinfo
+except Exception: pass
 blocked={'socket','_socket','ssl','_ssl','subprocess','_posixsubprocess','ctypes','_ctypes','multiprocessing','_multiprocessing','threading','mmap','pty','pathlib','shutil','tempfile'}
 script_blocked={'importlib','posix','nt','_io','_thread','select','selectors','fcntl','termios'}
 import _io
@@ -826,6 +832,9 @@ def guarded_import(name,globals=None,*a,**kw):
     return real_import(name,globals,*a,**kw)
 builtins.__import__=guarded_import
 for _name in [n for n in sys.modules if n.split('.')[0] in blocked or n in {'posix','nt'}]: del sys.modules[_name]
+# sysconfig needs threading only for the lock it made when it loaded; left
+# as its attribute, the blocked module would be one attribute away.
+if 'threading' in vars(sys.modules.get('sysconfig',sys)): del sys.modules['sysconfig'].threading
 def denied(*a,**kw): raise RuntimeError('operation disabled by exporter')
 for _name in ('system','popen','spawnl','spawnle','spawnlp','spawnlpe','spawnv','spawnve','spawnvp','spawnvpe','posix_spawn','posix_spawnp','execl','execle','execlp','execlpe','execv','execve','execvp','execvpe','fork','forkpty','openpty','pipe','pipe2','open','listdir','scandir','walk','fwalk','remove','unlink','rename','replace','mkdir','makedirs','rmdir','removedirs','link','symlink','truncate','ftruncate','chmod','chown','lchown','mkfifo','mknod','fdopen','read','readv','pread','write','writev','pwrite','sendfile','dup','dup2','close','closerange','kill','killpg'):
     if hasattr(os,_name): setattr(os,_name,denied)

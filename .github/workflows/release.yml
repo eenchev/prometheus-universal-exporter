@@ -39,9 +39,25 @@ jobs:
         with:
           fetch-depth: 0
 
+      # The binaries are built with the Go the image is built with: the
+      # Dockerfile's GO_VERSION, a minor that setup-go resolves to its newest
+      # patch release, as the golang:<minor>-alpine tag does. go.mod's go
+      # directive is only the minimum the code needs; building with it would
+      # ship an old patch release without its security fixes.
+      - name: Read the Go version the image builds with
+        id: go
+        run: |
+          set -eu
+          version="$(sed -n 's/^ARG GO_VERSION=//p' Dockerfile)"
+          if [ -z "$version" ]; then
+            echo "the Dockerfile declares no GO_VERSION" >&2
+            exit 1
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
       - uses: actions/setup-go@v7
         with:
-          go-version-file: go.mod
+          go-version: ${{ steps.go.outputs.version }}
+          check-latest: true
       - run: go mod download
       - run: go test ./...
       - run: go build ./...

@@ -27,6 +27,9 @@ config.*.local.yaml
 .idea/
 .vscode/
 
+# Files Claude (Cowork) leaves in the working copy for review
+/Claude outputs/
+
 # Packaged Helm charts are build output; the release workflow packages the
 # chart from source and pushes it to GHCR.
 *.tgz

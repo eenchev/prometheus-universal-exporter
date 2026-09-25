@@ -610,7 +610,9 @@ metric(name="listed", value=len(response.headers["X-Mode"]))`)
 
 // A script may read time zone data — zoneinfo and dateutil.tz find named
 // zones — and nothing else: another file, or one reached through the zone
-// directory by .., is still refused.
+// directory by .., is still refused. From Python 3.12 zoneinfo loads
+// sysconfig, which imports the blocked threading; zoneinfo still works, and
+// threading is not left reachable through sysconfig.
 func TestPythonScriptsReadTimeZoneDataOnly(t *testing.T) {
 	requirePython(t)
 	usePythonPool(t)
@@ -630,7 +632,9 @@ for path in ("/etc/passwd", "/usr/share/zoneinfo/../../../etc/passwd"):
         open(path).read()
     except RuntimeError:
         refused += 1
-metric(name="refused", value=refused)`)
+metric(name="refused", value=refused)
+import sysconfig
+metric(name="threading_reachable", value=1 if hasattr(sysconfig, "threading") else 0)`)
 	c.Limits.ScriptTimeout = model.Duration(10 * time.Second)
 	c.Transform.Libraries = []string{"python-dateutil"}
 	set, err := runWorkerScript(t, c)
@@ -640,7 +644,7 @@ metric(name="refused", value=refused)`)
 		}
 		t.Fatal(err)
 	}
-	for name, want := range map[string]float64{"zoneinfo_offset_seconds": 3600, "dateutil_offset_seconds": 7200, "refused": 2} {
+	for name, want := range map[string]float64{"zoneinfo_offset_seconds": 3600, "dateutil_offset_seconds": 7200, "refused": 2, "threading_reachable": 0} {
 		if got := workerMetricValue(t, set, name); got != want {
 			t.Errorf("%s = %v, want %v", name, got, want)
 		}

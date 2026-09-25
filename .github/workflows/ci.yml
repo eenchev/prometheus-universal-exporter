@@ -46,6 +46,25 @@ jobs:
           go-version: 'stable'
       - uses: azure/setup-helm@v5
         if: steps.changes.outputs.chart == 'true'
+      # The Python tests run against the Python the image ships, the
+      # Dockerfile's PYTHON_VERSION, not whichever one the runner happens to
+      # have: the sandbox depends on what the standard library imports, which
+      # changes between releases (zoneinfo needs threading from 3.12 on).
+      - name: Read the Python version the image ships
+        id: python
+        if: steps.changes.outputs.go == 'true'
+        run: |
+          set -eu
+          version="$(sed -n 's/^ARG PYTHON_VERSION=//p' Dockerfile)"
+          if [ -z "$version" ]; then
+            echo "the Dockerfile declares no PYTHON_VERSION" >&2
+            exit 1
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+      - uses: actions/setup-python@v7
+        if: steps.changes.outputs.go == 'true'
+        with:
+          python-version: ${{ steps.python.outputs.version }}
       - run: go mod download
         if: steps.changes.outputs.go == 'true'
       - name: Check formatting

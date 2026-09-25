@@ -69,7 +69,7 @@ jobs:
         run: |
           set -eu
           python3 - <<'PY'
-          import sys, yaml
+          import re, sys, yaml
 
           with open(".artifacthub-repo.yml") as handle:
               data = yaml.safe_load(handle)
@@ -84,12 +84,11 @@ jobs:
           for owner in owners:
               if not isinstance(owner, dict) or not owner.get("name") or not owner.get("email"):
                   sys.exit("every .artifacthub-repo.yml owner needs a name and an email")
-          # The placeholder is expected until the repository is registered: a
-          # chart has to be published before Artifact Hub can be pointed at it.
-          if str(data["repositoryID"]).startswith("<"):
-              print("::warning::.artifacthub-repo.yml still carries the repositoryID placeholder; "
-                    "Artifact Hub will not index this repository until it is replaced "
-                    "(see docs/RELEASING.md)")
+          # The repository is registered; anything but the UUID Artifact Hub
+          # generated breaks the ownership claim and new versions stop being
+          # indexed (see docs/RELEASING.md).
+          if not re.fullmatch(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}", str(data["repositoryID"])):
+              sys.exit(".artifacthub-repo.yml repositoryID is not the UUID Artifact Hub generated")
           PY
 
       - name: Install ORAS

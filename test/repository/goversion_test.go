@@ -94,6 +94,12 @@ func TestWorkflowsInstallAGoThatSatisfiesTheModule(t *testing.T) {
 			if requested == "stable" {
 				continue
 			}
+			// The release reads the Dockerfile's GO_VERSION, which
+			// TestDockerfileGoVersionSatisfiesTheModule checks, and
+			// TestReleaseBinariesBuildWithTheImagesGo checks the wiring.
+			if requested == "${{" && filepath.Base(path) == "release.yml" {
+				continue
+			}
 			version, ok := parseGoVersion(requested)
 			if !ok {
 				t.Errorf("%s: go-version %q is neither `stable` nor a version number", filepath.Base(path), requested)
@@ -168,6 +174,65 @@ func TestDockerfileGoVersionSatisfiesTheModule(t *testing.T) {
 	required, declared := moduleGoVersion(t)
 	if !atLeast(pinned, required) {
 		t.Fatalf("the image builds with Go %s but go.mod requires go %s", match[1], declared)
+	}
+}
+
+// go-version-file installs exactly the version go.mod names, and go.mod's go
+// directive is the minimum the code needs, not a release anyone should ship:
+// 1.25.0 lacks every standard-library security fix since. So no workflow may
+// build from it, and the release builds its binaries with the Go the image is
+// built with, read from the Dockerfile, at its newest patch release.
+func TestReleaseBinariesBuildWithTheImagesGo(t *testing.T) {
+	for _, path := range workflowPaths(t) {
+		raw, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if strings.Contains(string(raw), "go-version-file:") {
+			t.Errorf("%s installs Go from go-version-file, which pins go.mod's minimum rather than a current release", filepath.Base(path))
+		}
+	}
+	raw, err := os.ReadFile(".github/workflows/release.yml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	release := string(raw)
+	for _, want := range []string{
+		"sed -n 's/^ARG GO_VERSION=//p' Dockerfile",
+		"go-version: ${{ steps.go.outputs.version }}",
+		"check-latest: true",
+	} {
+		if !strings.Contains(release, want) {
+			t.Errorf("release.yml no longer contains %q", want)
+		}
+	}
+}
+
+// The Python worker's sandbox depends on what the standard library imports,
+// which changes between releases: from 3.12 zoneinfo needs threading. CI tests
+// the Python the image ships, read from the Dockerfile, so a test that passes
+// in CI passes in the image.
+func TestCITestsThePythonTheImageShips(t *testing.T) {
+	raw, err := os.ReadFile(".github/workflows/ci.yml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ci := string(raw)
+	for _, want := range []string{
+		"sed -n 's/^ARG PYTHON_VERSION=//p' Dockerfile",
+		"actions/setup-python@",
+		"python-version: ${{ steps.python.outputs.version }}",
+	} {
+		if !strings.Contains(ci, want) {
+			t.Errorf("ci.yml no longer contains %q", want)
+		}
+	}
+	dockerfile, err := os.ReadFile("Dockerfile")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !regexp.MustCompile(`(?m)^ARG PYTHON_VERSION=3\.[0-9]+$`).Match(dockerfile) {
+		t.Error("the Dockerfile no longer pins PYTHON_VERSION as 3.MINOR, which CI reads")
 	}
 }
 

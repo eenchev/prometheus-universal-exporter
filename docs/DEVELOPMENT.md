@@ -57,6 +57,13 @@ gives it a pool of its own and stops that pool's workers when it ends; a test
 that uses the pool without an interpreter calls `usePythonPool(t)`. Tests
 therefore must not use `t.Parallel`, which the swap assumes.
 
+The Python tests run `python3` from `PATH`. CI installs the Python the image
+ships, the Dockerfile's `PYTHON_VERSION`, and a test keeps the workflow reading
+it. Run them with that version locally too: the sandbox depends on what the
+standard library imports, and that changes between releases — from 3.12,
+`zoneinfo` loads `sysconfig`, which imports the blocked `threading`, so a
+sandbox change can pass on 3.11 and fail in the image.
+
 ## The configuration schema
 
 `configs/config.schema.json`, `configs/collector-file.schema.json` for
@@ -188,9 +195,14 @@ developer tool with no untrusted caller, so it is excluded under `tools/`.
 
 ## The Go toolchain
 
-CI and the release workflows ask setup-go for `stable`, so the build always uses
-the current stable Go release and no workflow needs editing when Go ships a new
-one. The `go` directive in `go.mod` is something different: it is the *minimum*
+CI asks setup-go for `stable`, so the build always uses the current stable Go
+release and no workflow needs editing when Go ships a new one. The release
+builds its binaries with the Go the image is built with: it reads `GO_VERSION`
+from the Dockerfile and has setup-go resolve that minor to its newest patch
+release, so the archives and the image of one release carry the same Go. No
+workflow installs Go with `go-version-file`, which would pin the `go`
+directive's exact version, an old patch release without its security fixes;
+a test fails if one does. The `go` directive in `go.mod` is something different: it is the *minimum*
 the module requires, raised by dependency updates rather than by whichever
 toolchain builds it, so it stays where the dependencies put it. The Dockerfile
 pins `GO_VERSION` to a released minor, which `tools/depupdate` keeps moving

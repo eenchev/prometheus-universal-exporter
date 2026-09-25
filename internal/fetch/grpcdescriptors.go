@@ -170,7 +170,10 @@ func filesStamp(paths []string) string {
 	for _, path := range paths {
 		b.WriteString(path)
 		if st, err := os.Stat(path); err == nil {
-			b.WriteString(":" + strconv.FormatInt(st.ModTime().UnixNano(), 10) + ":" + strconv.FormatInt(st.Size(), 10))
+			b.WriteString(":")
+			b.WriteString(strconv.FormatInt(st.ModTime().UnixNano(), 10))
+			b.WriteString(":")
+			b.WriteString(strconv.FormatInt(st.Size(), 10))
 		} else {
 			b.WriteString(":missing")
 		}

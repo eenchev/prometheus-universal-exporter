@@ -142,7 +142,7 @@ jobs:
           fi
           out="$(helm template test charts/prometheus-universal-exporter --set server.shutdownDelay=20s)"
           echo "$out" | grep -q -- '--web.shutdown-delay=20s'
-          echo "$out" | grep -q 'terminationGracePeriodSeconds: 35'
+          echo "$out" | grep -q 'terminationGracePeriodSeconds: 45'
           helm template test charts/prometheus-universal-exporter --set server.shutdownDelay=0s | grep -q -- '--web.shutdown-delay=0s'
           if helm template test charts/prometheus-universal-exporter --set server.shutdownDelay= | grep -q -- '--web.shutdown-delay'; then
             echo "an empty server.shutdownDelay rendered the flag" >&2

@@ -175,6 +175,11 @@ func TestChartRendersItsOptions(t *testing.T) {
 			args: []string{"--set", "server.shutdownTimeout=1m"},
 			want: []string{"terminationGracePeriodSeconds: 75"},
 		},
+		// The delay counts too: 20s, the default 15s timeout and 10s more.
+		"a longer shutdown delay raises the grace period": {
+			args: []string{"--set", "server.shutdownDelay=20s"},
+			want: []string{`"--web.shutdown-delay=20s"`, "terminationGracePeriodSeconds: 45"},
+		},
 	} {
 		t.Run(name, func(t *testing.T) {
 			out, ok := helmTemplate(t, helm, chartDir, tc.args...)

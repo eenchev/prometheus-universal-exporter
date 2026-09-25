@@ -37,10 +37,22 @@ exactly as `Chart.yaml` declares it, pushes it to
 `oci://ghcr.io/eenchev/charts/prometheus-universal-exporter`, and creates a
 GitHub Release with the archive.
 
-`appVersion` in `Chart.yaml` records the exporter release a chart version was
-validated against and is maintained by hand. It does not drive deployments:
-`image.tag` defaults to `latest`, so pin it in your values if you want a
-deployment tied to a specific exporter version.
+`appVersion` in `Chart.yaml` is the exporter release a chart version deploys:
+`image.tag` is empty by default, which renders `appVersion`, so installing a
+chart version always runs the exporter release it was validated against. It is
+maintained by hand, and the Artifact Hub `artifacthub.io/images` annotation
+names the same tag; a test fails when they disagree. Release the exporter
+first, so the image the chart points at exists when the chart is published.
+
+A release of both, say 1.1.0:
+
+1. Tag and push `exporter/prometheus-universal-exporter-v1.1.0`, and wait for
+   `release.yml` to publish the image.
+2. In `Chart.yaml`, set `version` (the chart's own version) and `appVersion:
+   "1.1.0"`, and the `artifacthub.io/images` tag to `1.1.0`. Update the
+   `--version` in the `helm install` examples of `README.md` and the chart
+   README. Commit, push, and wait for CI.
+3. Tag and push `chart/prometheus-universal-exporter-<version>`.
 
 Both workflows trigger on every tag in their namespace, not only well-formed
 ones, and fail fast on a tag that does not match the required format — a tag

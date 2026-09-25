@@ -73,7 +73,7 @@ The chart is published to GitHub Container Registry as an OCI artifact:
 ```bash
 helm install prometheus-universal-exporter \
   oci://ghcr.io/eenchev/charts/prometheus-universal-exporter \
-  --version 0.2.1 \
+  --version 1.0.0 \
   --namespace monitoring \
   --create-namespace \
   -f values.yaml
@@ -108,7 +108,7 @@ helm install prometheus-universal-exporter \
 ```bash
 helm upgrade prometheus-universal-exporter \
   oci://ghcr.io/eenchev/charts/prometheus-universal-exporter \
-  --version 0.2.1 \
+  --version 1.0.0 \
   --namespace monitoring \
   -f values.yaml
 ```
@@ -737,7 +737,7 @@ Every value has a default, and `values.yaml` documents each one in place. `value
 | Value | Type | Default | What it sets |
 | --- | --- | --- | --- |
 | `replicaCount` | integer | `1` | Deployment replicas. |
-| `image.repository` / `image.tag` / `image.pullPolicy` | string | GHCR, `latest`, `IfNotPresent` | The exporter image. Pin `tag` in production. |
+| `image.repository` / `image.tag` / `image.pullPolicy` | string | GHCR, `""`, `IfNotPresent` | The exporter image. An empty `tag` deploys the chart's `appVersion`, the exporter release the chart version was validated against; set it to run another. |
 | `imagePullSecrets` | array | `[]` | Secrets for a private registry. |
 | `nameOverride` / `fullnameOverride` / `namespaceOverride` | string | `""` | Naming and namespace of the created objects. Objects are named `<release>-prometheus-universal-exporter`, or after the release alone when its name holds the chart's, so two releases in one namespace do not collide; `fullnameOverride` names them outright. |
 | `defaultLabels` / `defaultAnnotations` | map | `{}` | Metadata applied to every object the chart creates. |

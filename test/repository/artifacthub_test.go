@@ -148,6 +148,25 @@ func TestArtifactHubAnnotationsAreWellFormed(t *testing.T) {
 	}
 }
 
+// The images annotation is what Artifact Hub lists and scans. It names the
+// image the chart deploys by default, the appVersion, not a moving tag.
+func TestArtifactHubImagesNameTheAppVersion(t *testing.T) {
+	chart := readChartMetadata(t)
+	var images []struct {
+		Name  string `yaml:"name"`
+		Image string `yaml:"image"`
+	}
+	if err := yaml.Unmarshal([]byte(chart.Annotations["artifacthub.io/images"]), &images); err != nil {
+		t.Fatal(err)
+	}
+	if len(images) != 1 {
+		t.Fatalf("artifacthub.io/images lists %d images, want the exporter's", len(images))
+	}
+	if want := "ghcr.io/eenchev/prometheus-universal-exporter:" + chart.AppVersion; images[0].Image != want {
+		t.Errorf("artifacthub.io/images names %s, but the chart deploys %s", images[0].Image, want)
+	}
+}
+
 // Artifact Hub verifies ownership through this file. The repository is
 // registered, so it carries the ID Artifact Hub generated: a placeholder, or an
 // ID mangled in an edit, would stop new versions being indexed without anything

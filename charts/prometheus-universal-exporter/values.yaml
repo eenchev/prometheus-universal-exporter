@@ -6,7 +6,9 @@ defaultLabels: {}
 defaultAnnotations: {}
 image:
   repository: ghcr.io/eenchev/prometheus-universal-exporter
-  tag: "latest"
+  # Empty deploys the chart's appVersion, the exporter release this chart
+  # version was validated against. Set it to run another release.
+  tag: ""
   pullPolicy: IfNotPresent
 imagePullSecrets: []
 serviceAccount:

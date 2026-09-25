@@ -960,8 +960,12 @@ the commit it was built from: the release workflow passes it as the
 context.
 
 `Chart.yaml` MUST be the source of truth for the chart version. `appVersion`
-records the exporter release a chart version was validated against and MUST be
-maintained by hand rather than derived from a release tag.
+is the exporter release a chart version was validated against and MUST be
+maintained by hand rather than derived from a release tag. `image.tag` MUST
+default to empty, which MUST render `appVersion`, so a chart version deploys
+the exporter release it was validated against and never a moving tag such as
+`latest`; a non-empty `image.tag` MUST be rendered as given. The
+`artifacthub.io/images` annotation MUST name the image at `appVersion`.
 
 ## 42.15a Environment variable expansion in configuration
 

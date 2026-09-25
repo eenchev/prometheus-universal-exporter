@@ -309,6 +309,26 @@ func TestChartNamesFollowTheRelease(t *testing.T) {
 }
 
 // The notes warn about a disruption budget that allows no eviction.
+// A chart version deploys the exporter release it was validated against:
+// image.tag defaults to empty, which renders Chart.yaml's appVersion, never a
+// moving tag such as latest. A tag set in the values wins.
+func TestChartImageDefaultsToTheAppVersion(t *testing.T) {
+	helm := requireHelm(t)
+	chart := readChartMetadata(t)
+	dir := chartDir
+	out, ok := helmTemplate(t, helm, dir)
+	if !ok {
+		t.Fatalf("render failed:\n%s", out)
+	}
+	if want := `image: "ghcr.io/eenchev/prometheus-universal-exporter:` + chart.AppVersion + `"`; !strings.Contains(out, want) {
+		t.Errorf("the default image is not the appVersion; want %s", want)
+	}
+	out, ok = helmTemplate(t, helm, dir, "--set", "image.tag=9.9.9")
+	if !ok || !strings.Contains(out, `image: "ghcr.io/eenchev/prometheus-universal-exporter:9.9.9"`) {
+		t.Errorf("image.tag=9.9.9 was not rendered as given:\n%s", out)
+	}
+}
+
 func TestChartNotesWarnAboutABudgetOfNoEviction(t *testing.T) {
 	helm := requireHelm(t)
 	dir := filepath.Join(t.TempDir(), "chart")

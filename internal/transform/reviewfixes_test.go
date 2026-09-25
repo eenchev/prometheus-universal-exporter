@@ -37,7 +37,7 @@ for s in data["metrics"]:
 	}
 	for script, want := range map[string]string{
 		`data = [1, 2]`:                                         `must leave data as {"metrics": [...]}`,
-		`data["metrics"][0]["value"] = "many"`:                  `req_total value many is not a number`,
+		`data["metrics"][0]["value"] = "many"`:                  `req_total value "many" is not a number`,
 		`data["metrics"][1]["buckets"] = [{"le": "x"}]`:         `has a bucket that is not`,
 		`data["metrics"][0]["timestamp"] = 1e30`:                `timestamp 1e+30 is not a number of milliseconds`,
 		`data["metrics"].append({"type": "gauge", "value": 1})`: `has no name`,

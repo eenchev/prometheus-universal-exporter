@@ -145,6 +145,15 @@ func TestReloadStatusMetrics(t *testing.T) {
 	}); got != loadedAt {
 		t.Errorf("a rejected reload moved the success timestamp from %v to %v", loadedAt, got)
 	}
+	// The collectors of the configuration still in force stay valid, and the
+	// help says the value is not the verdict on the rejected change.
+	exposition := selfMetrics(t, server)
+	if got := seriesValue(t, exposition, `http_exporter_collector_config_valid{collector="reloaded"}`); got != 1 {
+		t.Errorf("after a rejected reload, collector_config_valid = %v, want 1", got)
+	}
+	if want := "# HELP http_exporter_collector_config_valid 1 for every collector of the configuration in force;"; !strings.Contains(exposition, want) {
+		t.Errorf("the help of http_exporter_collector_config_valid does not say it is 1 for every loaded collector:\n%s", exposition)
+	}
 
 	time.Sleep(10 * time.Millisecond)
 	if err := os.WriteFile(path, []byte(good), 0o600); err != nil {

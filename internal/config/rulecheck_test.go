@@ -1,6 +1,8 @@
 package config
 
 import (
+	"errors"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -192,6 +194,84 @@ func TestTransformSettingsWhereTheyApply(t *testing.T) {
 	} {
 		if err := Validate(&model.Config{Collectors: []model.Collector{c}}); err != nil {
 			t.Errorf("%s: %v", name, err)
+		}
+	}
+}
+
+// Every mistake is reported in one run, one per line, in the order of the
+// collectors and their rules: bad expressions and names in several rules of
+// several collectors, and each jq expression quoted in its error.
+func TestEveryRuleMistakeIsReportedAtOnce(t *testing.T) {
+	a := ruleCollector("jq", model.MetricRule{Name: "x", Expression: ".foo["})
+	a.Name = "a"
+	a.Metrics = append(a.Metrics,
+		model.MetricRule{Name: "bad-name", Expression: ".ok"},
+		model.MetricRule{Name: "y", Expression: ".v", Labels: []model.LabelRule{{Name: "l", Expression: ".a | ["}}},
+		model.MetricRule{Name: "fine", Expression: ".v"})
+	b := ruleCollector("regex", model.MetricRule{Name: "z", Expression: `value=\d+`})
+	b.Name = "b"
+	err := Validate(&model.Config{Collectors: []model.Collector{a, b}})
+	if err == nil {
+		t.Fatal("the configuration was accepted")
+	}
+	lines := strings.Split(err.Error(), "\n")
+	want := []string{
+		`collector "a" metric "x" expression ".foo[": unexpected EOF`,
+		`collector "a" metric "bad-name": "bad-name" is not a valid Prometheus metric name`,
+		`collector "a" metric "y" label "l" expression ".a | [": unexpected EOF`,
+		`collector "b" metric "z" regex "value=\\d+" has no capture group`,
+	}
+	if len(lines) != len(want) {
+		t.Fatalf("%d problems, want %d:\n%s", len(lines), len(want), err)
+	}
+	for i, fragment := range want {
+		if !strings.HasPrefix(lines[i], fragment) {
+			t.Errorf("problem %d is %q, want it to start %q", i+1, lines[i], fragment)
+		}
+	}
+	var problems model.Problems
+	if !errors.As(err, &problems) || len(problems) != len(want) {
+		t.Fatalf("the problems are not each an error: %#v", err)
+	}
+}
+
+// Past twenty problems the rest are counted rather than listed.
+func TestManyMistakesAreCapped(t *testing.T) {
+	c := ruleCollector("jq", model.MetricRule{})
+	c.Metrics = nil
+	for i := 0; i < 25; i++ {
+		c.Metrics = append(c.Metrics, model.MetricRule{Name: fmt.Sprintf("m%d", i), Expression: ".["})
+	}
+	err := validateOne(c)
+	if err == nil {
+		t.Fatal("the configuration was accepted")
+	}
+	lines := strings.Split(err.Error(), "\n")
+	if len(lines) != 21 || lines[20] != "and 5 more problems" || !strings.Contains(lines[19], `metric "m19"`) {
+		t.Fatalf("%d lines, the last %q:\n%s", len(lines), lines[len(lines)-1], err)
+	}
+	var problems model.Problems
+	if !errors.As(err, &problems) || len(problems) != 25 {
+		t.Fatalf("the error does not keep every problem: %d", len(problems))
+	}
+}
+
+// Three broken collector files are reported in one run, and the collectors
+// that were read are checked too.
+func TestEveryCollectorFileMistakeIsReportedAtOnce(t *testing.T) {
+	dir := t.TempDir()
+	testutil.WriteIn(t, dir, "d/1.yaml", "collectors: [\n")
+	testutil.WriteIn(t, dir, "d/2.yaml", "web: {}\n")
+	testutil.WriteIn(t, dir, "d/3.yaml", "collectors: []\n")
+	testutil.WriteIn(t, dir, "d/4.yaml", strings.Replace(testutil.CollectorsDocument("broken"), "expression: 'value=(\\d+)'", "expression: 'value=\\d+'", 1))
+	_, err := Load(testutil.WriteIn(t, dir, "config.yaml", "collector_files: ['d/*.yaml']\n"))
+	if err == nil {
+		t.Fatal("the configuration was accepted")
+	}
+	lines := strings.Split(err.Error(), "\n")
+	for i, fragment := range []string{"d/1.yaml", `d/2.yaml: line 1: "web" is not allowed`, "d/3.yaml defines no collectors", `collector "broken" metric "broken_value" regex`} {
+		if i >= len(lines) || !strings.Contains(lines[i], fragment) {
+			t.Fatalf("problem %d does not mention %q:\n%s", i+1, fragment, err)
 		}
 	}
 }

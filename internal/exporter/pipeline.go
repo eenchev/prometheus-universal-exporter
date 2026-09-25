@@ -244,7 +244,7 @@ func (s *Server) collect(ctx context.Context, j collectJob) collected {
 		mark = time.Now()
 		scriptCtx, timer := transform.WithScriptTimer(ctx)
 		var repaired utf8Repairs
-		set, repaired, err = s.transformRecorded(scriptCtx, decoded, response, c, rec)
+		set, repaired, err = s.transformRecorded(scriptCtx, decoded, response, c, rec, j.log)
 		recordScriptDuration(rec, timer)
 		if errors.Is(err, model.ErrLimitExceeded) {
 			// A transform stops at the first series past
@@ -313,13 +313,18 @@ func (s *Server) collect(ctx context.Context, j collectJob) collected {
 //
 // It also returns what the transform repaired for invalid UTF-8, for
 // noteUTF8Repairs.
-func (s *Server) transformRecorded(ctx context.Context, d *decode.Decoded, r *fetch.HTTPResponse, c *model.Collector, rec statsRecorder) (*model.MetricSet, utf8Repairs, error) {
+//
+// The failures of rules under error_mode log are logged here rather than by
+// the transform, through the failure log under l's key and with its
+// attributes (logRuleFailures).
+func (s *Server) transformRecorded(ctx context.Context, d *decode.Decoded, r *fetch.HTTPResponse, c *model.Collector, rec statsRecorder, l collectLog) (*model.MetricSet, utf8Repairs, error) {
 	ctx, report := transform.WithRuleReport(ctx)
-	set, err := transform.Transform(ctx, d, r, c, s.pythonPath)
+	set, err := transform.Transform(transform.LeaveRuleLoggingToCaller(ctx), d, r, c, s.pythonPath)
 	var repaired utf8Repairs
 	repaired.count, repaired.first = report.UTF8Repairs()
 	failures := report.Failures()
 	probeTraceFrom(ctx).record(func(t *probeTrace) { t.failures = append(t.failures, failures...) })
+	s.logRuleFailures(ctx, c, failures, l, err == nil)
 	if len(failures) == 0 {
 		return set, repaired, err
 	}
@@ -339,6 +344,41 @@ func (s *Server) transformRecorded(ctx context.Context, d *decode.Decoded, r *fe
 		rec.collector.mu.Unlock()
 	}
 	return set, repaired, err
+}
+
+// logRuleFailures logs the rules under error_mode log that carried on without
+// some series, at warning level since the scrape was answered. A rule failing
+// on every scrape of a target is one failing thing (failurelog.go), told
+// apart by collector, target and metric, so it is logged once and then only
+// as a repeat or when it changes, and its recovery is logged when a complete
+// transform produces its series again; one that failed as a whole may not
+// have reached the rule. The rules of fail need nothing here: they fail the
+// scrape, whose failure names the metric.
+func (s *Server) logRuleFailures(ctx context.Context, c *model.Collector, failures []transform.RuleFailure, l collectLog, complete bool) {
+	failing := map[string]bool{}
+	for _, f := range failures {
+		if !f.Logged {
+			continue
+		}
+		failing[f.Metric] = true
+		attrs := append(append([]any{}, l.attrs...), "metric", f.Metric, "error_mode", model.ErrorModeLog, "failures", f.Failures)
+		s.tripFailed(ctx, slog.LevelWarn, ruleFailureKey(l.key, f.Metric), "metric extraction failed", "metric", f.First, attrs...)
+	}
+	if !complete {
+		return
+	}
+	for _, rule := range c.Metrics {
+		if rule.ErrorMode == model.ErrorModeLog && !failing[rule.Name] {
+			attrs := append(append([]any{}, l.attrs...), "metric", rule.Name)
+			s.tripRecovered(ctx, ruleFailureKey(l.key, rule.Name), "metric extraction recovered", attrs...)
+		}
+	}
+}
+
+// ruleFailureKey is the failure log's key for a metric's rules on the trip or
+// file key is for.
+func ruleFailureKey(key, metric string) string {
+	return key + "\x00rule\x00" + metric
 }
 
 // fetchedNote is a response as a debug probe's stages show it.

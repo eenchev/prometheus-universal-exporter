@@ -36,12 +36,15 @@ otlp:
 #     # they change: username_file and password_file.
 #     # password_file: /var/run/prometheus-universal-exporter/web-auth/password
 #   self_metrics:
-#     # Adds a series per collector, request URL and method with the last
-#     # scrape's status, timestamp and duration. A request URL is an unbounded
-#     # label value, so tracking is capped at 1000 combinations and
-#     # http_exporter_request_series_capped reports when the cap is reached.
-#     # The url label carries scheme, host and path only; credentials and the
-#     # query string are never put in a label.
+#     # Adds, per collector, request URL and method, a copy of every
+#     # per-collector self-metric (about two dozen series: counters, last
+#     # status, size and duration) plus the last scrape's timestamp. A request
+#     # URL is an unbounded label value, so tracking is capped at 1000
+#     # combinations, and http_exporter_request_series_capped reports when the
+#     # cap is reached. Only a probe the target policy did not refuse takes a
+#     # slot, and a URL not probed for an hour is dropped. The url label carries
+#     # scheme, host and path only; credentials and the query string are never
+#     # put in a label.
 #     verbose: false
 
 # A top-level key starting with x- is this file's own: the exporter ignores
@@ -83,8 +86,9 @@ collectors:
     # (underscores) or U__http_2e_server_2e_duration (values).
     # name_escaping: underscores
     request:
-      # Required. How this collector reaches its data; http is the only type
-      # today, and each type accepts its own request keys and probe parameters.
+      # Required. How this collector reaches its data: http, graphite,
+      # grpc or localfile (a build may leave some out), and each type accepts
+      # its own request keys and probe parameters.
       type: http
       method: GET
       path: /api/status

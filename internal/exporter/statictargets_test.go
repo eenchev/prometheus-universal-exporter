@@ -253,6 +253,47 @@ func TestStaticScrapeUsesTheCollectorCache(t *testing.T) {
 	}
 }
 
+// A static target's own request parameters are part of its cache key: two
+// targets of one collector at one address that differ only in the values of
+// one, here request.accept_status, each make their own trip, and the one
+// that refuses the status fails rather than being answered with the other's
+// result.
+func TestStaticTargetsOwnRequestKeepsTheirCacheEntriesApart(t *testing.T) {
+	var requests atomic.Int64
+	unavailable := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		requests.Add(1)
+		w.Header().Set("Content-Type", "text/plain")
+		w.WriteHeader(http.StatusServiceUnavailable)
+		_, _ = w.Write([]byte("value=42\n"))
+	}))
+	defer unavailable.Close()
+	collector := testutil.Collector("text", "text")
+	collector.Cache.TTL = model.Duration(time.Minute)
+	cfg := &model.Config{Collectors: []model.Collector{collector}, OTLP: otlpConfig("http://collector.invalid/v1/metrics")}
+	accepting := model.StaticTarget{ExportViaOTLP: true, Name: "accepting", Collector: "text", Target: unavailable.URL, Request: model.TargetRequestConfig{AcceptStatus: []string{"503"}}}
+	plain := model.StaticTarget{ExportViaOTLP: true, Name: "plain", Collector: "text", Target: unavailable.URL, Request: model.TargetRequestConfig{AcceptStatus: []string{"2xx"}}}
+	server := newStaticServer(t, cfg, &model.StaticTargetFile{Interval: model.Duration(time.Minute), Targets: []model.StaticTarget{accepting, plain}})
+	// One at a time, the accepting target first, so its result is cached
+	// before the other looks.
+	up := map[string]float64{}
+	for _, static := range []model.StaticTarget{accepting, plain} {
+		server.scrapeTarget(context.Background(), static)
+		for _, resource := range server.drainOTLP() {
+			for _, metric := range resource.Set.Metrics {
+				if metric.Name == "http_exporter_target_up" {
+					up[metric.Labels["static_target"]] = metric.Value
+				}
+			}
+		}
+	}
+	if got := requests.Load(); got != 2 {
+		t.Fatalf("target requests=%d, want one for each static target", got)
+	}
+	if up["accepting"] != 1 || up["plain"] != 0 {
+		t.Fatalf("up=%v, want the target accepting 503 up and the one accepting only 2xx down", up)
+	}
+}
+
 func TestStaticTargetLabelsDoNotOverrideMetricLabels(t *testing.T) {
 	set := model.MetricSet{Metrics: []model.Metric{{Name: "demo", Labels: map[string]string{"region": "from-metric"}}}}
 	out := withTargetLabels(set, map[string]string{"region": "from-target", "environment": "production"})

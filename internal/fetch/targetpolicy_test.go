@@ -163,6 +163,36 @@ func TestARedirectIsCheckedToo(t *testing.T) {
 	}
 }
 
+// Behind a proxy the connection is the proxy's, so the check at dial time
+// cannot catch a redirect: the redirect's host is refused by the redirect
+// check itself, before anything is sent to it. proxyOverride stands in for
+// the proxy, which the environment's proxy settings would never use for
+// the loopback addresses a test can serve on.
+func TestARedirectBehindAProxyIsChecked(t *testing.T) {
+	t.Cleanup(func() { proxyOverride = nil })
+	proxyOverride = func(*url.URL) bool { return true }
+	var reached atomic.Bool
+	forbidden := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		reached.Store(true)
+		_, _ = w.Write([]byte("secret"))
+	}))
+	defer forbidden.Close()
+	forbiddenURL, _ := url.Parse(forbidden.URL)
+	allowed := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, "http://127.0.0.1:"+forbiddenURL.Port()+"/", http.StatusFound)
+	}))
+	defer allowed.Close()
+	allowedURL, _ := url.Parse(allowed.URL)
+	c := policyCollector(t, []string{"localhost"}, nil, true)
+	err := fetchRefused(t, "http://localhost:"+allowedURL.Port()+"/", c)
+	if !errors.Is(err, ErrTargetRefused) || !strings.Contains(err.Error(), "127.0.0.1") || !strings.Contains(err.Error(), "allowed_targets") {
+		t.Fatalf("err=%v, want the redirect refused by request.allowed_targets", err)
+	}
+	if reached.Load() {
+		t.Fatal("the redirect's host was contacted")
+	}
+}
+
 // Each connection is checked against the address it was made to, so a name
 // that resolves elsewhere after the check is still caught; a connection to
 // a host the request did not check, a proxy, is not.

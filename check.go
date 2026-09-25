@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -264,8 +265,19 @@ func checkTargets(path string, options []config.LoadOption, expandEnv bool, conf
 	return checkResult{Check: "static_targets", File: path, Status: checkOK, Details: details}
 }
 
+// failedCheck lists each problem of err (model.Problems) as an error of its
+// own, all of them, where the error's text counts those past the first 20.
 func failedCheck(check, file string, err error) checkResult {
-	return checkResult{Check: check, File: file, Status: checkFailed, Errors: []string{err.Error()}}
+	var errs []string
+	var problems model.Problems
+	if errors.As(err, &problems) {
+		for _, problem := range problems {
+			errs = append(errs, problem.Error())
+		}
+	} else {
+		errs = []string{err.Error()}
+	}
+	return checkResult{Check: check, File: file, Status: checkFailed, Errors: errs}
 }
 
 func skippedCheck(check, file, reason string) checkResult {

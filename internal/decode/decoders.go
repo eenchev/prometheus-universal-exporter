@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"regexp"
 	"strings"
 
@@ -73,7 +74,7 @@ func detectFormat(r *fetch.HTTPResponse) string {
 	// An HTML page is markup too, and rarely well-formed XML, so it is
 	// recognised by its doctype or root element before anything starting
 	// with < is taken for XML.
-	if head := bytes.ToLower(b[:min(len(b), 16)]); bytes.HasPrefix(head, []byte("<!doctype html")) || bytes.HasPrefix(head, []byte("<html")) {
+	if looksLikeHTML(b) {
 		return "html"
 	}
 	if bytes.HasPrefix(b, []byte("<")) {
@@ -83,6 +84,39 @@ func detectFormat(r *fetch.HTTPResponse) string {
 		return "graphite"
 	}
 	return "text"
+}
+
+// looksLikeHTML reports whether markup starts with an HTML doctype or an
+// <html> element, in any case, within its first KiB, once comments, an XML
+// declaration (XHTML has one) and the whitespace between them are passed
+// over. A byte order mark is gone by now (textencoding.go).
+func looksLikeHTML(b []byte) bool {
+	head := bytes.ToLower(b[:min(len(b), 1024)])
+	for {
+		head = bytes.TrimLeft(head, " \t\r\n\f")
+		switch {
+		case bytes.HasPrefix(head, []byte("<!--")):
+			end := bytes.Index(head, []byte("-->"))
+			if end < 0 {
+				return false
+			}
+			head = head[end+3:]
+		case bytes.HasPrefix(head, []byte("<?xml")):
+			end := bytes.Index(head, []byte("?>"))
+			if end < 0 {
+				return false
+			}
+			head = head[end+2:]
+		default:
+			return bytes.HasPrefix(head, []byte("<!doctype html")) || bytes.HasPrefix(head, []byte("<html")) && (len(head) == 5 || !isNameByte(head[5]))
+		}
+	}
+}
+
+// isNameByte reports whether c continues an element name, so <htmlfoo> is
+// not taken for <html>.
+func isNameByte(c byte) bool {
+	return c >= 'a' && c <= 'z' || c >= '0' && c <= '9' || c == '-' || c == '_' || c == '.' || c == ':'
 }
 
 // Decode converts r's body to UTF-8 and decodes it with the decoder c's
@@ -109,6 +143,12 @@ func Decode(r *fetch.HTTPResponse, c *model.Collector) (*Decoded, error) {
 		d.UseNumber()
 		if err := d.Decode(&v); err != nil {
 			return nil, fmt.Errorf("JSON decode: %w", err)
+		}
+		// Only whitespace may follow the value: a second record, as in
+		// NDJSON, or anything else would otherwise be dropped unseen, and
+		// the collector would report the first record as the whole answer.
+		if _, err := d.Token(); !errors.Is(err, io.EOF) {
+			return nil, errors.New("JSON decode: trailing data after the JSON value (NDJSON, one value per line, is not supported)")
 		}
 		return &Decoded{Kind: kind, Data: model.Normalize(v), Raw: r.Body}, nil
 	case "yaml":
@@ -152,11 +192,23 @@ func decodeCSV(r *fetch.HTTPResponse, c *model.Collector) (*Decoded, error) {
 		}
 		delim = rr[0]
 	}
-	cr := csv.NewReader(bytes.NewReader(r.Body))
-	cr.Comma = delim
-	cr.FieldsPerRecord = -1
-	cr.TrimLeadingSpace = cfg.TrimSpace
-	rows, err := cr.ReadAll()
+	read := func(lazyQuotes bool) ([][]string, error) {
+		cr := csv.NewReader(bytes.NewReader(r.Body))
+		cr.Comma = delim
+		cr.FieldsPerRecord = -1
+		cr.TrimLeadingSpace = cfg.TrimSpace
+		cr.LazyQuotes = lazyQuotes
+		return cr.ReadAll()
+	}
+	// A quote inside a field that does not start with one, as in
+	// `5" disk`, is taken as written rather than failing the whole file,
+	// so a file refused for that alone is read again with lazy quotes. A
+	// quoted field left open, or with a stray quote, still fails, since
+	// read lazily it would swallow the rows after it.
+	rows, err := read(false)
+	if errors.Is(err, csv.ErrBareQuote) {
+		rows, err = read(true)
+	}
 	if err != nil {
 		return nil, fmt.Errorf("CSV decode: %w", err)
 	}
@@ -170,15 +222,20 @@ func decodeCSV(r *fetch.HTTPResponse, c *model.Collector) (*Decoded, error) {
 	out := []any{}
 	if header {
 		heads := rows[0]
-		// A header naming one column twice would have the later column
-		// overwrite the earlier in every row, without a word.
+		// A header naming one column twice, or leaving two unnamed, would
+		// have the later column overwrite the earlier in every row, without
+		// a word. An unnamed column empty in every row, as a delimiter
+		// ending each line leaves, holds nothing to lose and is left out.
 		column := map[string]int{}
 		for i := range heads {
 			if cfg.TrimSpace {
 				heads[i] = strings.TrimSpace(heads[i])
 			}
 			if heads[i] == "" {
-				continue
+				if columnIsEmpty(rows[1:], i, cfg.TrimSpace) {
+					continue
+				}
+				return nil, fmt.Errorf("CSV header leaves column %d unnamed, and it holds values; name it, or set response.csv.header: false and read the columns by number", i+1)
 			}
 			if first, seen := column[heads[i]]; seen {
 				return nil, fmt.Errorf("CSV header names column %q twice, as columns %d and %d; rename one, or set response.csv.header: false and read the columns by number", heads[i], first+1, i+1)
@@ -188,6 +245,9 @@ func decodeCSV(r *fetch.HTTPResponse, c *model.Collector) (*Decoded, error) {
 		for _, row := range rows[1:] {
 			m := map[string]any{}
 			for i, k := range heads {
+				if k == "" {
+					continue
+				}
 				if i < len(row) {
 					v := row[i]
 					if cfg.TrimSpace {
@@ -210,6 +270,23 @@ func decodeCSV(r *fetch.HTTPResponse, c *model.Collector) (*Decoded, error) {
 		}
 	}
 	return &Decoded{Kind: "csv", Data: out, Raw: r.Body}, nil
+}
+
+// columnIsEmpty reports whether column i holds nothing in any of rows.
+func columnIsEmpty(rows [][]string, i int, trim bool) bool {
+	for _, row := range rows {
+		if i >= len(row) {
+			continue
+		}
+		v := row[i]
+		if trim {
+			v = strings.TrimSpace(v)
+		}
+		if v != "" {
+			return false
+		}
+	}
+	return true
 }
 
 func decodePrometheus(r *fetch.HTTPResponse, c *model.Collector) (*Decoded, error) {
@@ -297,14 +374,32 @@ func prometheusKeeps(c *model.Collector) func(string) bool {
 // that YAML reads as a timestamp, such as updated: 2024-06-01, is kept as the
 // text it was written as: decoded, it would be a time.Time, which neither jq
 // nor a label can use as written.
+//
+// The body must be one document: a stream of several is refused, as JSON
+// with trailing data is, rather than every document after the first being
+// dropped unseen. A leading --- and an empty document after the first, as a
+// trailing --- makes, are not a second document.
 func decodeYAML(body []byte) (any, error) {
+	decoder := yaml.NewDecoder(bytes.NewReader(body))
 	var root yaml.Node
-	if err := yaml.Unmarshal(body, &root); err != nil {
-		return nil, err
-	}
-	if root.Kind == 0 {
+	if err := decoder.Decode(&root); errors.Is(err, io.EOF) {
 		// An empty document.
 		return nil, nil
+	} else if err != nil {
+		return nil, err
+	}
+	for {
+		var next yaml.Node
+		err := decoder.Decode(&next)
+		if errors.Is(err, io.EOF) {
+			break
+		}
+		if err != nil {
+			return nil, err
+		}
+		if !emptyYAMLDocument(&next) {
+			return nil, errors.New("the body holds more than one YAML document (separated by ---); multi-document YAML is not supported")
+		}
 	}
 	timestampsAsText(&root, map[*yaml.Node]bool{})
 	var v any
@@ -312,6 +407,16 @@ func decodeYAML(body []byte) (any, error) {
 		return nil, err
 	}
 	return v, nil
+}
+
+// emptyYAMLDocument reports whether a document holds nothing, not even an
+// explicit null.
+func emptyYAMLDocument(document *yaml.Node) bool {
+	if len(document.Content) == 0 {
+		return true
+	}
+	content := document.Content[0]
+	return len(document.Content) == 1 && content.Kind == yaml.ScalarNode && content.ShortTag() == "!!null" && content.Value == "" && content.Style == 0
 }
 
 // timestampsAsText retags every timestamp scalar under n as a string.

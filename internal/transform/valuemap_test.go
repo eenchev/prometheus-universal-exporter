@@ -245,3 +245,24 @@ func TestLabelValueMapsOfOneNameMustAgree(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+// A rule whose expression gives text or an object says what it got in the
+// scrape's error, the object by its kind and size rather than its content.
+func TestValueErrorsNameTheValue(t *testing.T) {
+	c := model.Collector{Name: "v", Decoder: model.DecoderConfig{Type: "json"}, Transform: model.TransformConfig{Type: "jq"},
+		Metrics: []model.MetricRule{{Name: "state", Type: model.GaugeMetricType, Expression: ".state", ErrorMode: model.ErrorModeFail}}}
+	for body, want := range map[string]string{
+		`{"state": "n/a"}`: `metric "state": value "n/a" is not a number; map text to numbers with value_map`,
+		`{"state": {"a": [1, 2, {"b": "x"}], "c": 1}}`: `metric "state": value is an object with 2 keys, not a number`,
+		`{"state": [1, 2, 3]}`:                         `metric "state": value is an array of 3 items, not a number`,
+	} {
+		_, err := runBody(t, c, "application/json", body)
+		if err == nil || !strings.Contains(err.Error(), want) || strings.Contains(err.Error(), "map[") || strings.Contains(err.Error(), "strconv") {
+			t.Errorf("%s: err=%v, want %q", body, err, want)
+		}
+	}
+	c.Metrics[0].ValueMap = map[string]float64{"up": 1}
+	if _, err := runBody(t, c, "application/json", `{"state": {"a": 1}}`); err == nil || !strings.Contains(err.Error(), "value is an object with 1 key, which is neither text value_map can look up nor a number") {
+		t.Errorf("err=%v", err)
+	}
+}

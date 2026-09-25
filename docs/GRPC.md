@@ -86,7 +86,10 @@ malformed.
 
 Calls to one target, with one set of TLS settings, share one connection,
 kept between probes and closed after 5 minutes unused, and made again with a
-new certificate when a TLS file changes on disk. It is made through the proxy
+new certificate when a TLS file changes on disk. When the server goes away,
+the connection tries to reconnect at most every 5 seconds, and a probe that
+finds it waiting tries at once, so a server that comes back is answered at
+the next probe rather than after a growing wait. It is made through the proxy
 the environment names, `HTTPS_PROXY` and `NO_PROXY`, as the other types'
 requests are. A name that resolves to several addresses is called on the
 first that answers; a probe asks one target, and balancing across the
@@ -225,6 +228,11 @@ matter for metrics:
   large number does. Enums are their names, which suits labels;
   `google.protobuf.Timestamp` and `Duration` are RFC 3339 and `"1.5s"`
   strings.
+- A `google.protobuf.Any` is written as the message it carries, with its
+  `@type`: `{"@type": "type.googleapis.com/acme.queue.v1.Detail", "reason":
+  "slow consumer"}`. Its type is found among the service's own types, from
+  whichever descriptors described the method, or among the well-known types
+  built into the exporter; one in neither fails the answer, naming it.
 
 A Python transform reads the same JSON from `data`:
 

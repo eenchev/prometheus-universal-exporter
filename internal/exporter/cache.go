@@ -1,6 +1,7 @@
 package exporter
 
 import (
+	"container/heap"
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
@@ -24,11 +25,14 @@ import (
 // target, and then stale until expires, kept only to stand in for a trip that
 // fails (cache.stale_if_error).
 type cacheEntry struct {
+	key        string
 	collector  string
 	fetched    time.Time
 	freshUntil time.Time
 	expires    time.Time
 	set        model.MetricSet
+	// index is the entry's place in its collector's expiryHeap.
+	index int
 }
 
 // responseCache is the process-local, in-memory probe cache. Entries are keyed
@@ -39,27 +43,62 @@ type cacheEntry struct {
 type responseCache struct {
 	mu      sync.Mutex
 	entries map[string]*cacheEntry
-	// byCollector indexes the keys of entries by collector, so keeping one
-	// collector within its max_cache_entries looks at its entries alone.
-	// Every change to entries goes through putLocked or removeLocked, which
-	// keep the two in step.
-	byCollector map[string]map[string]struct{}
+	// byCollector holds each collector's entries in the order they are
+	// evicted in, so keeping one collector within its max_cache_entries
+	// looks at its entries alone, and at the few it removes rather than at
+	// every one. Every change to entries goes through putLocked,
+	// removeLocked or dropCollectorLocked, which keep the two in step.
+	byCollector map[string]*expiryHeap
 }
 
 func newResponseCache() *responseCache {
-	return &responseCache{entries: map[string]*cacheEntry{}, byCollector: map[string]map[string]struct{}{}}
+	return &responseCache{entries: map[string]*cacheEntry{}, byCollector: map[string]*expiryHeap{}}
+}
+
+// expiryHeap is a collector's entries as a min-heap in eviction order: the
+// entry that expires soonest first, and of two expiring together the one with
+// the smaller key. It implements heap.Interface.
+type expiryHeap []*cacheEntry
+
+func (h expiryHeap) Len() int { return len(h) }
+
+func (h expiryHeap) Less(i, j int) bool {
+	if h[i].expires.Equal(h[j].expires) {
+		return h[i].key < h[j].key
+	}
+	return h[i].expires.Before(h[j].expires)
+}
+
+func (h expiryHeap) Swap(i, j int) {
+	h[i], h[j] = h[j], h[i]
+	h[i].index, h[j].index = i, j
+}
+
+func (h *expiryHeap) Push(x any) {
+	entry := x.(*cacheEntry)
+	entry.index = len(*h)
+	*h = append(*h, entry)
+}
+
+func (h *expiryHeap) Pop() any {
+	old := *h
+	entry := old[len(old)-1]
+	old[len(old)-1] = nil
+	*h = old[:len(old)-1]
+	return entry
 }
 
 // putLocked stores entry under key, replacing any entry there.
 func (c *responseCache) putLocked(key string, entry *cacheEntry) {
 	c.removeLocked(key)
+	entry.key = key
 	c.entries[key] = entry
-	keys := c.byCollector[entry.collector]
-	if keys == nil {
-		keys = map[string]struct{}{}
-		c.byCollector[entry.collector] = keys
+	entries := c.byCollector[entry.collector]
+	if entries == nil {
+		entries = &expiryHeap{}
+		c.byCollector[entry.collector] = entries
 	}
-	keys[key] = struct{}{}
+	heap.Push(entries, entry)
 }
 
 // removeLocked removes the entry under key, if there is one.
@@ -69,11 +108,25 @@ func (c *responseCache) removeLocked(key string) {
 		return
 	}
 	delete(c.entries, key)
-	keys := c.byCollector[entry.collector]
-	delete(keys, key)
-	if len(keys) == 0 {
+	entries := c.byCollector[entry.collector]
+	heap.Remove(entries, entry.index)
+	if entries.Len() == 0 {
 		delete(c.byCollector, entry.collector)
 	}
+}
+
+// dropCollectorLocked removes every entry of collector, and reports how
+// many there were.
+func (c *responseCache) dropCollectorLocked(collector string) int {
+	entries := c.byCollector[collector]
+	if entries == nil {
+		return 0
+	}
+	for _, entry := range *entries {
+		delete(c.entries, entry.key)
+	}
+	delete(c.byCollector, collector)
+	return entries.Len()
 }
 
 // Get returns a private copy of the cached metric set, and when it was
@@ -131,31 +184,23 @@ func (c *responseCache) Put(key, collector string, set model.MetricSet, ttl, sta
 
 // evictLocked keeps a collector within its configured entry budget. Expired
 // entries are dropped first; if the collector is still over budget the entries
-// closest to expiry are removed.
+// closest to expiry are removed, the smaller key first among entries expiring
+// together. The collector's heap has them in that order, so this only looks
+// at the entries it removes, and at one more: it runs on every Put, under the
+// one cache lock.
 func (c *responseCache) evictLocked(collector string, maxEntries int, now time.Time) {
 	if maxEntries <= 0 {
 		return
 	}
-	var live []string
-	for key := range c.byCollector[collector] {
-		if !c.entries[key].expires.After(now) {
-			c.removeLocked(key)
-			continue
+	entries := c.byCollector[collector]
+	for entries != nil && entries.Len() > 0 {
+		first := (*entries)[0]
+		if first.expires.After(now) && entries.Len() <= maxEntries {
+			return
 		}
-		live = append(live, key)
-	}
-	if len(live) <= maxEntries {
-		return
-	}
-	sort.Slice(live, func(i, j int) bool {
-		first, second := c.entries[live[i]], c.entries[live[j]]
-		if first.expires.Equal(second.expires) {
-			return live[i] < live[j]
-		}
-		return first.expires.Before(second.expires)
-	})
-	for _, key := range live[:len(live)-maxEntries] {
-		c.removeLocked(key)
+		// Removing the collector's last entry drops its heap.
+		c.removeLocked(first.key)
+		entries = c.byCollector[collector]
 	}
 }
 

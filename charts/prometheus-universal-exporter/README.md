@@ -253,7 +253,7 @@ Bearer authentication is also supported.
 
 ### Exporter authentication
 
-To protect the exporter's `/probe` and self-metrics endpoints:
+To protect the exporter's `/probe` and self-metrics endpoints, add `web.basic_auth` to the configuration. `config.data."config.yaml"` is the whole configuration file, so it keeps its collectors beside `web`; the chart's default collector stands for yours here:
 
 ```yaml
 config:
@@ -264,6 +264,16 @@ config:
           enabled: true
           username: exporter
           password: change-me
+      collectors:
+        - name: example
+          request:
+            type: http
+            path: /status
+          transform:
+            type: regex
+          metrics:
+            - name: example_status
+              expression: 'status:\s+(\d+(?:\.\d+)?)'
 ```
 
 A password written there ends up in the chart's ConfigMap, and the monitors need the credential too. Mount it from a Secret with `webAuth` instead and point the configuration at the files; every monitor the chart renders then presents it:
@@ -280,6 +290,16 @@ config:
           enabled: true
           username_file: /var/run/prometheus-universal-exporter/web-auth/username
           password_file: /var/run/prometheus-universal-exporter/web-auth/password
+      collectors:
+        - name: example
+          request:
+            type: http
+            path: /status
+          transform:
+            type: regex
+          metrics:
+            - name: example_status
+              expression: 'status:\s+(\d+(?:\.\d+)?)'
 monitors:
   - name: targets
     enabled: true

@@ -390,6 +390,44 @@ func TestCIRunsGoplsCheck(t *testing.T) {
 	}
 }
 
+// helm is pinned in the Makefile for `make helm-test`, and every workflow that
+// installs it installs that version: releases word errors and render
+// details differently, so a chart check that passes with one can fail with
+// another, as helm 3.16 and 3.22 did on the schema's messages.
+func TestTheHelmVersionIsPinnedConsistently(t *testing.T) {
+	makefile, err := os.ReadFile("Makefile")
+	if err != nil {
+		t.Fatal(err)
+	}
+	match := regexp.MustCompile(`(?m)^HELM_VERSION[ \t]*:?=[ \t]*(v[0-9]+\.[0-9]+\.[0-9]+)$`).FindSubmatch(makefile)
+	if match == nil {
+		t.Fatal("the Makefile no longer pins HELM_VERSION")
+	}
+	pinned := string(match[1])
+	for _, want := range []string{"\nhelm-test: helm-version\n", "go install helm.sh/helm/v4/cmd/helm@$(HELM_VERSION)"} {
+		if !strings.Contains(string(makefile), want) {
+			t.Errorf("the Makefile no longer contains %q", want)
+		}
+	}
+	setup := regexp.MustCompile(`azure/setup-helm@[^\s]+(?:\s+with:\s+version:[ \t]*(\S+))?`)
+	found := 0
+	for _, path := range workflowPaths(t) {
+		raw, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, m := range setup.FindAllSubmatch(raw, -1) {
+			found++
+			if got := string(m[1]); got != pinned {
+				t.Errorf("%s installs helm %q, but the Makefile pins %s", filepath.Base(path), got, pinned)
+			}
+		}
+	}
+	if found == 0 {
+		t.Fatal("no workflow installs helm; this test must not pass by finding nothing")
+	}
+}
+
 // govulncheck is pinned twice too: in the Makefile for `make vulncheck` and in
 // its workflow. A local run should report what CI reports.
 func TestTheVulnerabilityCheckerVersionIsPinnedConsistently(t *testing.T) {

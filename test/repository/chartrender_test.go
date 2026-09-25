@@ -260,7 +260,7 @@ func TestChartRefusesInvalidOptions(t *testing.T) {
 		// A Service of type ExternalName has no endpoints to probe through.
 		"an ExternalName Service": {[]string{"--set", "service.type=ExternalName"}, "service.type"},
 		// Kubernetes refuses terminationGracePeriodSeconds on a readiness probe.
-		"a readiness probe's grace period": {[]string{"--set", "readinessProbe.terminationGracePeriodSeconds=10"}, "terminationGracePeriodSeconds is not allowed"},
+		"a readiness probe's grace period": {[]string{"--set", "readinessProbe.terminationGracePeriodSeconds=10"}, "terminationGracePeriodSeconds"},
 		// The Prometheus Operator takes Prometheus durations: whole numbers,
 		// down to milliseconds.
 		"a fractional monitor interval":              {[]string{"--set-json", `monitors=[{"name":"apps","enabled":true,"type":"service","collector":"example","interval":"1.5m"}]`}, "monitors.0.interval"},
@@ -270,10 +270,41 @@ func TestChartRefusesInvalidOptions(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			out, ok := helmTemplate(t, helm, chartDir, tc.args...)
-			if ok || !strings.Contains(out, tc.want) {
+			if ok || !namesInHelmError(out, tc.want) {
 				t.Fatalf("ok=%v, want an error naming %q:\n%s", ok, tc.want, out)
 			}
 		})
+	}
+}
+
+// namesInHelmError reports whether helm's error out names want. Helm writes
+// the path of a value the schema refuses as monitors.0.name up to 3.16 and as
+// '/monitors/0/name' since, so a dotted path is also looked for in that form.
+func namesInHelmError(out, want string) bool {
+	if strings.Contains(out, want) {
+		return true
+	}
+	return !strings.ContainsAny(want, " /") && strings.Contains(out, "'/"+strings.ReplaceAll(want, ".", "/")+"'")
+}
+
+// Both ways helm has reported a value the schema refuses: up to 3.16, and
+// since (these lines are from helm 3.22 in CI).
+func TestNamesInHelmError(t *testing.T) {
+	for _, tc := range []struct {
+		out, want string
+		named     bool
+	}{
+		{"- monitors.0.name: Does not match pattern", "monitors.0.name", true},
+		{"- at '/monitors/0/name': 'Apps' does not match pattern", "monitors.0.name", true},
+		{"- at '/staticTargets/monitor/scrapeTimeout': '0.5s' does not match pattern", "staticTargets.monitor.scrapeTimeout", true},
+		{"- at '/service/type': value must be one of 'ClusterIP', 'NodePort', 'LoadBalancer'", "service.type", true},
+		{"- at '/readinessProbe': additional properties 'terminationGracePeriodSeconds' not allowed", "terminationGracePeriodSeconds", true},
+		{"- at '/monitors/0/interval': '1.5m' does not match pattern", "monitors.0.name", false},
+		{"- at '/monitors/0/nameX': ...", "monitors.0.name", false},
+	} {
+		if got := namesInHelmError(tc.out, tc.want); got != tc.named {
+			t.Errorf("namesInHelmError(%q, %q) = %v, want %v", tc.out, tc.want, got, tc.named)
+		}
 	}
 }
 

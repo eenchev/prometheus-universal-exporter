@@ -130,7 +130,8 @@ Whatever Graphite answers is decoded into one document:
 | `points` | Every point with a value, `[value, time]`, oldest first, for a rule that wants more than `value`. |
 
 A point without a value — `null`, which Graphite writes for an interval
-nothing was written in — is left out, and a series left with no point at all
+nothing was written in — is left out, and so is an infinite one, which
+graphite-web writes as `1e9999` or `-1e9999`; and a series left with no point at all
 is left out of the document, rather than failing a rule on every scrape as a
 series without a value. So is a series older than
 [`max_age`](#which-value), and a series answered twice — the same path, tags

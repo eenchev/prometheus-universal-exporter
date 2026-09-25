@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/eenchev/prometheus-universal-exporter/internal/decode"
+	"github.com/eenchev/prometheus-universal-exporter/internal/expr"
 	"github.com/eenchev/prometheus-universal-exporter/internal/fetch"
 	"github.com/eenchev/prometheus-universal-exporter/internal/model"
 	"github.com/eenchev/prometheus-universal-exporter/internal/transform"
@@ -26,8 +27,12 @@ import (
 // namePattern is what a collector's and a label's name may look like.
 var namePattern = regexp.MustCompile(`^[a-zA-Z_][a-zA-Z0-9_]*$`)
 
-// Validate checks a configuration and fills in its defaults. It stops at the
-// first problem, which the error describes.
+// Validate checks a configuration and fills in its defaults. It reports
+// every mistake it finds, one per line and in the order of the collectors and
+// their rules (model.Problems), so a configuration with several is fixed in
+// one pass. Within one collector the checks that the later ones build on —
+// the request, limits, formats and error policies — stop that collector at
+// the first mistake; its metric rules are then each checked in full.
 func Validate(c *model.Config) error {
 	if len(c.Collectors) == 0 {
 		if len(c.CollectorFiles) > 0 {
@@ -35,24 +40,41 @@ func Validate(c *model.Config) error {
 		}
 		return errors.New("collectors must not be empty")
 	}
+	var errs []error
 	seen := map[string]bool{}
 	for i := range c.Collectors {
 		x := &c.Collectors[i]
 		if !namePattern.MatchString(x.Name) {
-			return fmt.Errorf("collector %q has invalid name", x.Name)
+			errs = append(errs, fmt.Errorf("collector %q has invalid name", x.Name))
 		}
 		if seen[x.Name] {
-			return fmt.Errorf("duplicate collector %q", x.Name)
+			errs = append(errs, fmt.Errorf("duplicate collector %q", x.Name))
+			continue
 		}
 		seen[x.Name] = true
-		if err := validateCollector(c, x); err != nil {
-			return err
-		}
+		errs = append(errs, validateCollector(c, x))
 	}
-	if err := validateWebAuthSettings(c); err != nil {
+	errs = append(errs, validateWebAuthSettings(c), validateOTLP(&c.OTLP))
+	if err := model.JoinProblems(errs...); err != nil {
 		return err
 	}
-	return validateOTLP(&c.OTLP)
+	// Every expression compiled once, and each stays compiled as long as the
+	// configuration is in force, however many it has.
+	expr.ReserveExpressions(expressionCount(c))
+	return nil
+}
+
+// expressionCount is how many expressions the configuration's rules and
+// transforms hold, which bounds how many compiled programs it needs.
+func expressionCount(c *model.Config) int {
+	n := 0
+	for _, x := range c.Collectors {
+		n += len(x.Transform.Include) + len(x.Transform.Exclude)
+		for _, rule := range x.Metrics {
+			n += 2 + len(rule.Labels)
+		}
+	}
+	return n
 }
 
 // validateCollector checks one collector and fills in its defaults, in the
@@ -119,13 +141,11 @@ func validateCollector(c *model.Config, x *model.Collector) error {
 			return err
 		}
 	}
-	if err := validateMetricRules(c, x); err != nil {
-		return err
-	}
-	if err := checkCSVColumns(x); err != nil {
-		return err
-	}
-	if err := transform.CheckTransformSettings(x); err != nil {
+	// The rules and the transform settings are checked apart from each
+	// other, and all their mistakes reported; the metric families are
+	// checked only when the rules they are made of are sound.
+	err := model.JoinProblems(validateMetricRules(c, x), checkCSVColumns(x), transform.CheckTransformSettings(x))
+	if err != nil {
 		return err
 	}
 	return checkMetricFamilies(x)
@@ -139,26 +159,21 @@ func checkCSVColumns(x *model.Collector) error {
 	if x.Transform.Type != "csv" || x.Response.CSV.Header == nil || *x.Response.CSV.Header {
 		return nil
 	}
-	check := func(what, column string) error {
+	var errs []error
+	check := func(what, column string) {
 		if n, err := strconv.Atoi(column); err != nil || n < 1 || strconv.Itoa(n) != column {
-			return fmt.Errorf("collector %q %s reads column %q, but response.csv.header is false, so columns are named by number, from 1; write the column's number, such as \"2\"", x.Name, what, column)
+			errs = append(errs, fmt.Errorf("collector %q %s reads column %q, but response.csv.header is false, so columns are named by number, from 1; write the column's number, such as \"2\"", x.Name, what, column))
 		}
-		return nil
 	}
 	for _, rule := range x.Metrics {
-		if err := check(fmt.Sprintf("metric %q", rule.Name), rule.Expression); err != nil {
-			return err
-		}
+		check(fmt.Sprintf("metric %q", rule.Name), rule.Expression)
 		for _, label := range rule.Labels {
-			if label.Static() {
-				continue
-			}
-			if err := check(fmt.Sprintf("metric %q label %q", rule.Name, label.Name), label.Expression); err != nil {
-				return err
+			if !label.Static() {
+				check(fmt.Sprintf("metric %q label %q", rule.Name, label.Name), label.Expression)
 			}
 		}
 	}
-	return nil
+	return model.JoinProblems(errs...)
 }
 
 // applyLimitDefaults gives every limit left unset its default.
@@ -286,69 +301,75 @@ func checkGraphiteResponse(x *model.Collector) error {
 	return nil
 }
 
-// validateMetricRules checks each metric rule and fills in its defaults.
+// validateMetricRules checks each metric rule and fills in its defaults. It
+// reports the mistakes of every rule: a rule's own settings stop that rule at
+// the first, and its expressions are then all checked (CheckMetricRule).
 func validateMetricRules(c *model.Config, x *model.Collector) error {
+	var errs []error
 	for i := range x.Metrics {
-		r := &x.Metrics[i]
-		if r.ErrorMode == "" {
-			r.ErrorMode = model.ErrorModeLog
+		errs = append(errs, validateMetricRule(x, &x.Metrics[i]))
+	}
+	errs = append(errs, transform.CheckLabelValueMapsAgree(x))
+	return model.JoinProblems(errs...)
+}
+
+// validateMetricRule checks one metric rule and fills in its defaults.
+func validateMetricRule(x *model.Collector, r *model.MetricRule) error {
+	if r.ErrorMode == "" {
+		r.ErrorMode = model.ErrorModeLog
+	}
+	if err := normalizeErrorPolicy(x.Name, fmt.Sprintf("metric %q error_mode", r.Name), &r.ErrorMode); err != nil {
+		return err
+	}
+	// A prometheus transform's rule without a type keeps the type of
+	// the series it passes through: a counter stays a counter, a
+	// histogram a histogram. Every other rule makes its own samples,
+	// gauges unless it says otherwise.
+	if r.Type == "" && x.Transform.Type != "prometheus" {
+		r.Type = model.GaugeMetricType
+	}
+	switch r.Type {
+	case model.GaugeMetricType, model.CounterMetricType, model.UntypedMetricType:
+	case "":
+	case model.HistogramMetricType, model.SummaryMetricType:
+		// Only a series that is one already has buckets or quantiles to
+		// expose; a rule reading one number would expose a histogram
+		// with a single plain sample, which no parser accepts.
+		if x.Transform.Type != "prometheus" {
+			return fmt.Errorf("collector %q metric %q has type %s, which only a prometheus transform can give, passing through a %s that has its buckets or quantiles; a %s rule reads one value, so use gauge, counter or untyped", x.Name, r.Name, r.Type, r.Type, x.Transform.Type)
 		}
-		if err := normalizeErrorPolicy(x.Name, fmt.Sprintf("metric %q error_mode", r.Name), &r.ErrorMode); err != nil {
-			return err
+	default:
+		return fmt.Errorf("collector %q metric %q has invalid type %q", x.Name, r.Name, r.Type)
+	}
+	if strings.TrimSpace(r.Name) == "" && x.Transform.Type != "prometheus" && x.Transform.Type != "python" {
+		return fmt.Errorf("collector %q has a metric without a name", x.Name)
+	}
+	if strings.TrimSpace(r.Expression) == "" && x.Transform.Type != "python" && x.Transform.Type != "prometheus" {
+		return fmt.Errorf("collector %q metric %q has no expression", x.Name, r.Name)
+	}
+	for _, label := range r.Labels {
+		if strings.TrimSpace(label.Name) == "" {
+			return fmt.Errorf("collector %q metric %q has a label without a name", x.Name, r.Name)
 		}
-		// A prometheus transform's rule without a type keeps the type of
-		// the series it passes through: a counter stays a counter, a
-		// histogram a histogram. Every other rule makes its own samples,
-		// gauges unless it says otherwise.
-		if r.Type == "" && x.Transform.Type != "prometheus" {
-			r.Type = model.GaugeMetricType
+		if !namePattern.MatchString(label.Name) {
+			return fmt.Errorf("collector %q metric %q has invalid label name %q", x.Name, r.Name, label.Name)
 		}
-		switch r.Type {
-		case model.GaugeMetricType, model.CounterMetricType, model.UntypedMetricType:
-		case "":
-		case model.HistogramMetricType, model.SummaryMetricType:
-			// Only a series that is one already has buckets or quantiles to
-			// expose; a rule reading one number would expose a histogram
-			// with a single plain sample, which no parser accepts.
-			if x.Transform.Type != "prometheus" {
-				return fmt.Errorf("collector %q metric %q has type %s, which only a prometheus transform can give, passing through a %s that has its buckets or quantiles; a %s rule reads one value, so use gauge, counter or untyped", x.Name, r.Name, r.Type, r.Type, x.Transform.Type)
-			}
-		default:
-			return fmt.Errorf("collector %q metric %q has invalid type %q", x.Name, r.Name, r.Type)
+		if err := model.CheckLabelName(label.Name); err != nil {
+			return fmt.Errorf("collector %q metric %q: %w", x.Name, r.Name, err)
 		}
-		if strings.TrimSpace(r.Name) == "" && x.Transform.Type != "prometheus" && x.Transform.Type != "python" {
-			return fmt.Errorf("collector %q has a metric without a name", x.Name)
-		}
-		if strings.TrimSpace(r.Expression) == "" && x.Transform.Type != "python" && x.Transform.Type != "prometheus" {
-			return fmt.Errorf("collector %q metric %q has no expression", x.Name, r.Name)
-		}
-		for _, label := range r.Labels {
-			if strings.TrimSpace(label.Name) == "" {
-				return fmt.Errorf("collector %q metric %q has a label without a name", x.Name, r.Name)
-			}
-			if !namePattern.MatchString(label.Name) {
-				return fmt.Errorf("collector %q metric %q has invalid label name %q", x.Name, r.Name, label.Name)
-			}
-			if err := model.CheckLabelName(label.Name); err != nil {
-				return fmt.Errorf("collector %q metric %q: %w", x.Name, r.Name, err)
-			}
-			hasValue, hasExpression := label.Value != "", strings.TrimSpace(label.Expression) != ""
-			switch {
-			case hasValue && hasExpression:
-				return fmt.Errorf("collector %q metric %q label %q sets both value and expression; set value for a static label, or expression to read it from the response", x.Name, r.Name, label.Name)
-			case !hasValue && !hasExpression:
-				return fmt.Errorf("collector %q metric %q label %q needs a value, for a static label, or an expression, to read it from the response", x.Name, r.Name, label.Name)
-			case hasValue && label.Required:
-				return fmt.Errorf("collector %q metric %q label %q has a static value, so it cannot be required; its value is always there", x.Name, r.Name, label.Name)
-			case label.Required && x.Transform.Type == "python":
-				return fmt.Errorf("collector %q metric %q label %q cannot be required: a python transform's labels come from its script, not from label expressions", x.Name, r.Name, label.Name)
-			}
-		}
-		if err := transform.CheckMetricRule(x, r); err != nil {
-			return err
+		hasValue, hasExpression := label.Value != "", strings.TrimSpace(label.Expression) != ""
+		switch {
+		case hasValue && hasExpression:
+			return fmt.Errorf("collector %q metric %q label %q sets both value and expression; set value for a static label, or expression to read it from the response", x.Name, r.Name, label.Name)
+		case !hasValue && !hasExpression:
+			return fmt.Errorf("collector %q metric %q label %q needs a value, for a static label, or an expression, to read it from the response", x.Name, r.Name, label.Name)
+		case hasValue && label.Required:
+			return fmt.Errorf("collector %q metric %q label %q has a static value, so it cannot be required; its value is always there", x.Name, r.Name, label.Name)
+		case label.Required && x.Transform.Type == "python":
+			return fmt.Errorf("collector %q metric %q label %q cannot be required: a python transform's labels come from its script, not from label expressions", x.Name, r.Name, label.Name)
 		}
 	}
-	return transform.CheckLabelValueMapsAgree(x)
+	return transform.CheckMetricRule(x, r)
 }
 
 // validateWebAuthSettings checks the exporter's own basic authentication,
@@ -478,7 +499,12 @@ func Load(path string, opts ...LoadOption) (*model.Config, error) {
 	if err = oneDocument(dec); err != nil {
 		return nil, err
 	}
+	// The collectors that were read are checked even when a collector file
+	// could not be, so one run reports the mistakes of every file.
 	if err = mergeCollectorFiles(&c, path, opts); err != nil {
+		if len(c.Collectors) > 0 {
+			err = model.JoinProblems(err, Validate(&c))
+		}
 		return nil, err
 	}
 	if err = Validate(&c); err != nil {
@@ -929,7 +955,9 @@ func (m *Manager) installTargets(trigger string, f *model.StaticTargetFile) {
 // that changes. reloadMu is held.
 func (m *Manager) rejectConfig(trigger string, err error, waits bool) error {
 	m.configWaits = waits
-	attrs := []any{"trigger", trigger, "error", err}
+	// The file is named, as a collector file's error names its own: a YAML
+	// error's line number means nothing without it.
+	attrs := []any{"trigger", trigger, "file", m.path, "error", err}
 	if waits {
 		attrs = append(attrs, "retried_when", "the static target file changes")
 	}
@@ -941,7 +969,7 @@ func (m *Manager) rejectConfig(trigger string, err error, waits bool) error {
 // rejectTargets is rejectConfig for the static target file.
 func (m *Manager) rejectTargets(trigger string, err error, waits bool) error {
 	m.targetsWaits = waits
-	attrs := []any{"trigger", trigger, "error", err}
+	attrs := []any{"trigger", trigger, "file", m.targetPath, "error", err}
 	if waits {
 		attrs = append(attrs, "retried_when", "the configuration changes")
 	}

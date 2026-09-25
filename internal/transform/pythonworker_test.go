@@ -246,6 +246,10 @@ func TestPythonWorkerSandbox(t *testing.T) {
 		{`import os; os.system("true")`, "operation disabled by exporter"},
 		{`import os; os.read(3, 10)`, "operation disabled by exporter"},
 		{`import os; os.write(4, b"x")`, "operation disabled by exporter"},
+		{`import os; os.fork()`, "operation disabled by exporter"},
+		{`import os; os.kill(os.getpid(), 0)`, "operation disabled by exporter"},
+		{`import os; os.remove("/nonexistent/sandbox-test")`, "operation disabled by exporter"},
+		{`import os; os.listdir("/")`, "operation disabled by exporter"},
 		// The modules beneath the blocked ones, and the ways around the
 		// import guard and the replaced functions.
 		{`import _socket`, "module disabled by exporter"},
@@ -258,6 +262,9 @@ func TestPythonWorkerSandbox(t *testing.T) {
 		{`import io; io.FileIO("/etc/passwd")`, "operation disabled by exporter"},
 		{`sys.modules["_io"].FileIO("/etc/passwd")`, "operation disabled by exporter"},
 		{`sys.modules["_io"].open("/etc/passwd")`, "operation disabled by exporter"},
+		// The importer's own open reads source and bytecode in binary, and
+		// nothing else in binary either.
+		{`sys.modules["_io"].open("/etc/passwd", "rb")`, "operation disabled by exporter"},
 		{`sys.modules["socket"]`, "KeyError"},
 	} {
 		c := workerCollector("sandbox", test.script)
@@ -684,5 +691,54 @@ metric(name="threading_reachable", value=1 if hasattr(sysconfig, "threading") el
 		if got := workerMetricValue(t, set, name); got != want {
 			t.Errorf("%s = %v, want %v", name, got, want)
 		}
+	}
+}
+
+// A script's error shows the script's own innermost frames, the failing line
+// among them with its source, and none of the worker's frames: five nested
+// calls fail on the innermost one's line, which a traceback of the outermost
+// frames would cut off.
+func TestPythonWorkerTracebackShowsTheFailingLine(t *testing.T) {
+	requirePython(t)
+	c := workerCollector("traceback", `def f1():
+    return f2()
+def f2():
+    return f3()
+def f3():
+    return f4()
+def f4():
+    return f5()
+def f5():
+    return {}["missing_key"]
+f1()
+`)
+	_, err := runWorkerScript(t, c)
+	if err == nil {
+		t.Fatal("the script did not fail")
+	}
+	text := err.Error()
+	for _, want := range []string{
+		"Traceback (most recent call last):",
+		`File "<collector-python>", line 10, in f5`,
+		`return {}["missing_key"]`,
+		"KeyError: 'missing_key'",
+	} {
+		if !strings.Contains(text, want) {
+			t.Errorf("the error lacks %q:\n%s", want, text)
+		}
+	}
+	if strings.Contains(text, `File "<string>"`) || strings.Contains(text, "<module>") {
+		t.Errorf("the error keeps the worker's or the outermost frames:\n%s", text)
+	}
+	if n := strings.Count(text, `File "`); n != 5 {
+		t.Errorf("the error shows %d frames, want the 5 innermost:\n%s", n, text)
+	}
+
+	// An error raised by the exporter's own functions (metric, fail) points at
+	// the script's call, not into the worker.
+	c = workerCollector("traceback_metric", "x = 1\nmetric(name='v', value='n/a')\n")
+	_, err = runWorkerScript(t, c)
+	if err == nil || !strings.Contains(err.Error(), `File "<collector-python>", line 2, in <module>`) || strings.Contains(err.Error(), `File "<string>"`) {
+		t.Fatalf("err=%v", err)
 	}
 }

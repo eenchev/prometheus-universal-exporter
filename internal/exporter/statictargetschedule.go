@@ -188,6 +188,10 @@ func shuttingDown(ctx context.Context) bool {
 	return errors.Is(context.Cause(ctx), errShuttingDown)
 }
 
+// slotWaitHook, set by tests, is called with a target's name as its scrape
+// begins to wait for a slot, so a test can stop the loop while one waits.
+var slotWaitHook atomic.Pointer[func(string)]
+
 // StaticScrapeLoop scrapes every static target on its interval until ctx
 // ends, and then waits for the scrapes in flight, which run until they end or
 // AbortStaticScrapes cancels them. The results are published for the static
@@ -220,6 +224,9 @@ func (s *Server) StaticScrapeLoop(ctx context.Context) {
 				defer d.state.running.Store(false)
 				scrapeCtx, cancel := context.WithTimeout(s.staticScrapes(), d.state.interval)
 				defer cancel()
+				if hook := slotWaitHook.Load(); hook != nil {
+					(*hook)(d.target.Name)
+				}
 				// Waiting for a slot counts against the scrape's interval.
 				select {
 				case slots <- struct{}{}:

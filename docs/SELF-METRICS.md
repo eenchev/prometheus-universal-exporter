@@ -34,7 +34,7 @@ configured:
 | `http_exporter_probes_rejected_total` | counter | Probes answered `503`, and static target scrapes that found no slot in time, because the collector was at [`max_concurrent_probes`](CONFIGURATION.md#limiting-concurrent-probes). |
 | `http_exporter_probes_rejected_exporter_limit_total` | counter | The same, because the exporter as a whole was at [`--probe.max-concurrent`](CONFIGURATION.md#limiting-concurrent-probes): the collector had room, the process did not. |
 | `http_exporter_targets_refused_total` | counter | `http`, `graphite` and `grpc` collectors only: probes and static target scrapes whose target, or a redirect's, [`allowed_targets` or `denied_targets`](REQUESTS.md#restricting-targets) refused; a probe is answered `403`. A `localfile` collector, with no target to refuse, has no series. |
-| `http_exporter_collector_config_valid` | gauge | `1` for every loaded collector. |
+| `http_exporter_collector_config_valid` | gauge | `1` for every loaded collector. A rejected reload keeps the previous collectors at `1`; it shows in `http_exporter_config_last_reload_successful`. |
 | `http_exporter_trips_in_flight` | gauge | Without a `collector` label: trips to targets in progress, probes and static target scrapes of every collector together, which `--probe.max-concurrent` bounds. A fair signal for scaling out on. |
 | `http_exporter_trips_max_concurrent` | gauge | Without a `collector` label: `--probe.max-concurrent`, `0` for no limit. |
 | `http_exporter_rule_failures_total` | counter | Labelled `collector` and `metric`: the series a metric rule could not produce and the probe carried on without, under `error_mode` `log` or `ignore`. Every rule has its series from zero. A rule under `fail` fails the probe instead, counted in `http_exporter_transform_errors_total`. |
@@ -290,7 +290,12 @@ metadata are left out, as a query string is.
 A request URL is an unbounded label value and each combination now carries a
 whole metric family, so tracking is capped at 1000 collector/URL/method
 combinations. Requests already tracked keep updating past the limit; only new
-combinations are refused. The truncation is visible rather than silent:
+combinations are refused. A probe refused by the collector's `allowed_targets`
+or `denied_targets` does not take a slot, so probing forbidden targets cannot
+crowd out legitimate ones. A combination nothing has probed or scraped for an
+hour is dropped and its slot freed; the configured static targets' stay, and
+leave when a reload removes the target or changes its URL. The truncation is
+visible rather than silent:
 
 ```text
 http_exporter_request_series_capped 1

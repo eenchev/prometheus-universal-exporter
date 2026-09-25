@@ -40,6 +40,8 @@ import (
 	"google.golang.org/protobuf/reflect/protoregistry"
 	"google.golang.org/protobuf/types/descriptorpb"
 	"google.golang.org/protobuf/types/dynamicpb"
+	// The built-in Duration an answer's google.protobuf.Any may carry.
+	_ "google.golang.org/protobuf/types/known/durationpb"
 )
 
 // Service is the queue service's full name, and the files that define it.
@@ -58,6 +60,7 @@ var Sources = map[string]string{
 
 package acme.queue.v1;
 
+import "google/protobuf/any.proto";
 import "google/protobuf/timestamp.proto";
 import "acme/queue/v1/shard.proto";
 
@@ -66,6 +69,18 @@ service QueueService {
   rpc Watch(GetStatsRequest) returns (stream GetStatsResponse);
   rpc Push(stream GetStatsRequest) returns (GetStatsResponse);
   rpc Sync(stream GetStatsRequest) returns (stream GetStatsResponse);
+  // Explain answers with google.protobuf.Any values of the service's own
+  // Detail type, which only the service's descriptors describe.
+  rpc Explain(GetStatsRequest) returns (Explanation);
+}
+
+message Detail {
+  string reason = 1;
+  int64 waiting = 2;
+}
+
+message Explanation {
+  repeated google.protobuf.Any details = 1;
 }
 
 enum State {
@@ -202,6 +217,9 @@ type Options struct {
 	// ReflectionDelay holds each reflection stream this long before it is
 	// served.
 	ReflectionDelay time.Duration
+	// Addr is the host:port to listen on; empty takes a free port. A test
+	// restarting a server on the address a stopped one had sets it.
+	Addr string
 }
 
 // Server is a running test server.
@@ -242,7 +260,11 @@ func (s *Server) Stop() { s.grpc.Stop() }
 func Start(t testing.TB, opts Options) *Server {
 	t.Helper()
 	files := Files(t)
-	listener, err := (&net.ListenConfig{}).Listen(context.Background(), "tcp", "127.0.0.1:0")
+	addr := opts.Addr
+	if addr == "" {
+		addr = "127.0.0.1:0"
+	}
+	listener, err := (&net.ListenConfig{}).Listen(context.Background(), "tcp", addr)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -340,7 +362,7 @@ func queueService(t testing.TB, files *protoregistry.Files, s *Server, answer An
 					}
 				}
 				out := dynamicpb.NewMessage(method.Output())
-				if err := (protojson.UnmarshalOptions{Resolver: types}).Unmarshal([]byte(text), out); err != nil {
+				if err := (protojson.UnmarshalOptions{Resolver: withBuiltIn{types}}).Unmarshal([]byte(text), out); err != nil {
 					return nil, err
 				}
 				return out, nil
@@ -379,4 +401,32 @@ func certificate(t testing.TB) (tls.Certificate, string) {
 		t.Fatal(err)
 	}
 	return tls.Certificate{Certificate: [][]byte{der}, PrivateKey: key}, caFile
+}
+
+// withBuiltIn resolves the service's own types, then the ones compiled into
+// the binary, so an answer can carry a google.protobuf.Any of either.
+type withBuiltIn struct {
+	own *dynamicpb.Types
+}
+
+func (r withBuiltIn) FindMessageByName(name protoreflect.FullName) (protoreflect.MessageType, error) {
+	if t, err := r.own.FindMessageByName(name); err == nil {
+		return t, nil
+	}
+	return protoregistry.GlobalTypes.FindMessageByName(name)
+}
+
+func (r withBuiltIn) FindMessageByURL(url string) (protoreflect.MessageType, error) {
+	if t, err := r.own.FindMessageByURL(url); err == nil {
+		return t, nil
+	}
+	return protoregistry.GlobalTypes.FindMessageByURL(url)
+}
+
+func (r withBuiltIn) FindExtensionByName(name protoreflect.FullName) (protoreflect.ExtensionType, error) {
+	return r.own.FindExtensionByName(name)
+}
+
+func (r withBuiltIn) FindExtensionByNumber(message protoreflect.FullName, field protoreflect.FieldNumber) (protoreflect.ExtensionType, error) {
+	return r.own.FindExtensionByNumber(message, field)
 }

@@ -286,3 +286,21 @@ func TestGraphiteSkipsInvalidCarbonLines(t *testing.T) {
 		t.Fatalf("err=%v", err)
 	}
 }
+
+// graphite-web writes an infinite value as 1e9999 or -1e9999; such a point is
+// left out like a null, and the other points and series are kept, rather
+// than the whole answer failing.
+func TestGraphiteRenderJSONInfinities(t *testing.T) {
+	graphiteNowIs(t, time.Unix(1727000100, 0))
+	series := decodeGraphiteBody(t, `[
+	  {"target": "a.b", "tags": {"name": "a.b"}, "datapoints": [[1, 1727000000], [1e9999, 1727000060], [-1e9999, 1727000070]]},
+	  {"target": "c.d", "tags": {"name": "c.d"}, "datapoints": [[5, 1727000000]]},
+	  {"target": "e.f", "tags": {"name": "e.f"}, "datapoints": [[1e9999, 1727000000]]}
+	]`, model.GraphiteConfig{})
+	want := `[` +
+		`{"path":"a.b","points":[[1,1727000000]],"segments":["a","b"],"tags":{"name":"a.b"},"time":1727000000,"value":1},` +
+		`{"path":"c.d","points":[[5,1727000000]],"segments":["c","d"],"tags":{"name":"c.d"},"time":1727000000,"value":5}]`
+	if got := asJSON(t, series); got != want {
+		t.Fatalf("got  %s\nwant %s", got, want)
+	}
+}

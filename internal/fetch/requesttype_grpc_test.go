@@ -157,7 +157,7 @@ func TestGRPCProtoset(t *testing.T) {
 
 	for _, tc := range []struct{ rpc, message, fragment string }{
 		{"acme.queue.v1.Missing/Get", "", "the service acme.queue.v1.Missing is not in protoset_file"},
-		{grpctest.Service + "/Get", "", "has no method Get; it has GetStats, Watch, Push, Sync"},
+		{grpctest.Service + "/Get", "", "has no method Get; it has GetStats, Watch, Push, Sync, Explain"},
 		{grpctest.Service + "/Watch", "", "is a server streaming method"},
 		{grpctest.Service + "/Push", "", "is a client streaming method"},
 		{grpctest.Service + "/Sync", "", "is a bidirectional streaming method"},
@@ -400,6 +400,80 @@ func TestGRPCCall(t *testing.T) {
 	}
 	if got := server.Calls()[1].Request; got != `{"queue":"direct"}` {
 		t.Fatalf("request %s", got)
+	}
+}
+
+// An answer holding google.protobuf.Any values of the service's own types is
+// rendered with each as the message it carries, whether the method's types
+// came from reflection, a protoset or .proto files: the exporter's built-in
+// types know nothing of acme.queue.v1.Detail. A built-in type the service's
+// descriptors do not describe, google.protobuf.Duration, is rendered too.
+func TestGRPCAnAnswerWithAnyOfTheServicesOwnTypes(t *testing.T) {
+	answer := func(context.Context, string, string) (string, error) {
+		return `{"details": [{"@type": "type.googleapis.com/acme.queue.v1.Detail", "reason": "slow consumer", "waiting": 7}, {"@type": "type.googleapis.com/google.protobuf.Duration", "value": "1.500s"}]}`, nil
+	}
+	server := grpctest.Start(t, grpctest.Options{Reflection: "v1", Answer: answer})
+	dir := t.TempDir()
+	queue := grpctest.WriteSources(t, dir)
+	set := grpctest.WriteProtoset(t, filepath.Join(dir, "queue.pb"), false)
+	want := `{"details":[{"@type":"type.googleapis.com/acme.queue.v1.Detail","reason":"slow consumer","waiting":"7"},{"@type":"type.googleapis.com/google.protobuf.Duration","value":"1.500s"}]}`
+	for name, configure := range map[string]func(*model.Collector){
+		"reflection": func(*model.Collector) {},
+		"protoset":   func(c *model.Collector) { c.Request.Descriptors, c.Request.ProtosetFile = "protoset", set },
+		"proto": func(c *model.Collector) {
+			c.Request.Descriptors, c.Request.ProtoFiles, c.Request.ProtoImportPaths = "proto", []string{queue}, []string{dir}
+		},
+	} {
+		c := grpcCollector()
+		c.Request.RPC = grpctest.Service + "/Explain"
+		configure(&c)
+		checked := validGRPC(t, c)
+		resp, err := FetchCollector(context.Background(), server.Addr, checked, RequestOverrides{}, nil)
+		if err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		if string(resp.Body) != want {
+			t.Fatalf("%s: body\n%s\nwant\n%s", name, resp.Body, want)
+		}
+	}
+}
+
+// A server that comes back is answered at the next probe. While the server
+// is down, probes leave the cached connection backing off before it tries
+// again, and grpc-go fails every call at once while it waits: without a
+// probe ending the wait, the first probe after the server returned would
+// fail too.
+func TestGRPCAServerThatComesBackIsReachedAtTheNextProbe(t *testing.T) {
+	server := grpctest.Start(t, grpctest.Options{Answer: statsAnswer})
+	addr := server.Addr
+	dir := t.TempDir()
+	c := grpcCollector()
+	c.Request.Descriptors, c.Request.ProtosetFile = "protoset", grpctest.WriteProtoset(t, filepath.Join(dir, "queue.pb"), false)
+	checked := validGRPC(t, c)
+	probe := func() error {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_, err := FetchCollector(ctx, addr, checked, RequestOverrides{}, nil)
+		return err
+	}
+	if err := probe(); err != nil {
+		t.Fatal(err)
+	}
+	server.Stop()
+	// Down for three seconds, probed all along: grpc-go's attempts to
+	// reconnect fail, and each waits longer before the next.
+	for deadline := time.Now().Add(3 * time.Second); time.Now().Before(deadline); time.Sleep(200 * time.Millisecond) {
+		if err := probe(); err == nil {
+			t.Fatal("a probe of a stopped server succeeded")
+		}
+	}
+	grpctest.Start(t, grpctest.Options{Answer: statsAnswer, Addr: addr})
+	start := time.Now()
+	if err := probe(); err != nil {
+		t.Fatalf("the first probe after the server came back failed: %v", err)
+	}
+	if took := time.Since(start); took > 2*time.Second {
+		t.Fatalf("the first probe after the server came back took %s", took)
 	}
 }
 

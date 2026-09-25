@@ -1,12 +1,14 @@
 package model
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"hash/maphash"
 	"math"
 	"math/big"
-	"regexp"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -71,11 +73,32 @@ type Quantile struct {
 // MetricSet is the metrics one scrape of a collector produced.
 type MetricSet struct{ Metrics []Metric }
 
-// MetricNameRE matches a classic Prometheus metric name.
-var MetricNameRE = regexp.MustCompile(`^[a-zA-Z_:][a-zA-Z0-9_:]*$`)
+// ValidMetricName reports whether name is a classic Prometheus metric name,
+// matching [a-zA-Z_:][a-zA-Z0-9_:]*. It is checked for every series of every
+// scrape, so it is a loop over the bytes rather than a regular expression,
+// which cost a quarter of a large scrape's time.
+func ValidMetricName(name string) bool { return classicName(name, true) }
 
-// LabelNameRE matches a classic Prometheus label name.
-var LabelNameRE = regexp.MustCompile(`^[a-zA-Z_][a-zA-Z0-9_]*$`)
+// ValidLabelName reports whether name is a classic Prometheus label name,
+// matching [a-zA-Z_][a-zA-Z0-9_]*.
+func ValidLabelName(name string) bool { return classicName(name, false) }
+
+// classicName is ValidMetricName, with colon, or ValidLabelName.
+func classicName(name string, colon bool) bool {
+	if name == "" {
+		return false
+	}
+	for i := 0; i < len(name); i++ {
+		switch c := name[i]; {
+		case 'a' <= c && c <= 'z', 'A' <= c && c <= 'Z', c == '_':
+		case c == ':' && colon:
+		case '0' <= c && c <= '9' && i > 0:
+		default:
+			return false
+		}
+	}
+	return true
+}
 
 // ReservedLabelName reports whether name is one Prometheus keeps for itself:
 // __name__, which holds the metric's name and which its parser refuses in
@@ -91,7 +114,7 @@ func reservedLabelError(name string) string {
 // CheckLabelName refuses a label name that is not a classic Prometheus name
 // or is reserved (ReservedLabelName).
 func CheckLabelName(name string) error {
-	if !LabelNameRE.MatchString(name) {
+	if !ValidLabelName(name) {
 		return fmt.Errorf("invalid label name %q", name)
 	}
 	if ReservedLabelName(name) {
@@ -100,35 +123,80 @@ func CheckLabelName(name string) error {
 	return nil
 }
 
-// hasEmptyLabel reports whether a label of labels has an empty value.
-func hasEmptyLabel(labels map[string]string) bool {
-	for _, v := range labels {
+// appendSeriesKey appends the key identifying the series m is to Prometheus
+// to key, and reports whether m has a label with an empty value. Prometheus
+// reads such a label as no label at all, so m{a=""} and m are one series and
+// have one key. names is scratch space for the label names, returned for the
+// next call to reuse.
+func (m *Metric) appendSeriesKey(key []byte, names []string) ([]byte, []string, bool) {
+	names = names[:0]
+	empty := false
+	for k, v := range m.Labels {
 		if v == "" {
-			return true
+			empty = true
+			continue
 		}
+		names = append(names, k)
 	}
-	return false
+	slices.Sort(names)
+	key = append(key, m.Name...)
+	for _, k := range names {
+		key = append(key, '\xff')
+		key = append(key, k...)
+		key = append(key, '=')
+		key = append(key, m.Labels[k]...)
+	}
+	return key, names, empty
 }
 
-// seriesKey identifies the series m is to Prometheus, which reads a label
-// with an empty value as no label at all: m{a=""} and m are one series.
-func (m Metric) seriesKey() string {
-	keys := make([]string, 0, len(m.Labels))
-	for k, v := range m.Labels {
-		if v != "" {
-			keys = append(keys, k)
-		}
+// seriesSet is the series of a set Validate has seen so far. It keeps each
+// series by a hash of its key, the first series with that hash standing for
+// it, so seeing a series allocates nothing: a series whose hash is taken is
+// told apart from the one holding it by building that one's key again, and
+// only a series that really differs from it goes by its key in full.
+type seriesSet struct {
+	metrics []Metric
+	hash    func([]byte) uint64
+	byHash  map[uint64]int
+	// others holds series whose hash a different series took first, and
+	// whether each has a label with an empty value.
+	others     map[string]bool
+	key, other []byte
+	names      []string
+}
+
+func newSeriesSet(metrics []Metric) *seriesSet {
+	seed := maphash.MakeSeed()
+	return &seriesSet{
+		metrics: metrics,
+		hash:    func(key []byte) uint64 { return maphash.Bytes(seed, key) },
+		byHash:  make(map[uint64]int, len(metrics)),
 	}
-	sort.Strings(keys)
-	var b strings.Builder
-	b.WriteString(m.Name)
-	for _, k := range keys {
-		b.WriteByte('\xff')
-		b.WriteString(k)
-		b.WriteByte('=')
-		b.WriteString(m.Labels[k])
+}
+
+// add adds metrics[i]. When the series was seen already, it reports so, and
+// whether either of the two has a label with an empty value.
+func (s *seriesSet) add(i int) (duplicate, empty bool) {
+	s.key, s.names, empty = s.metrics[i].appendSeriesKey(s.key[:0], s.names)
+	h := s.hash(s.key)
+	first, taken := s.byHash[h]
+	if !taken {
+		s.byHash[h] = i
+		return false, false
 	}
-	return b.String()
+	var firstEmpty bool
+	s.other, s.names, firstEmpty = s.metrics[first].appendSeriesKey(s.other[:0], s.names)
+	if bytes.Equal(s.key, s.other) {
+		return true, empty || firstEmpty
+	}
+	if earlierEmpty, seen := s.others[string(s.key)]; seen {
+		return true, empty || earlierEmpty
+	}
+	if s.others == nil {
+		s.others = map[string]bool{}
+	}
+	s.others[string(s.key)] = empty
+	return false, false
 }
 
 // MetricCountError is the error of a scrape with more series than
@@ -144,15 +212,14 @@ func MetricCountError(count, limit int) error {
 // the exposition format: valid names and types, no duplicate series, one type
 // per family. It stops at the first problem, which the error describes.
 func (s *MetricSet) Validate(l Limits) error {
-	// seen is each series so far, and whether it had an empty label.
-	seen := map[string]bool{}
-	types := map[string]MetricType{}
 	if l.MaxMetrics > 0 && len(s.Metrics) > l.MaxMetrics {
 		return MetricCountError(len(s.Metrics), l.MaxMetrics)
 	}
+	seen := newSeriesSet(s.Metrics)
+	types := map[string]MetricType{}
 	for i := range s.Metrics {
 		m := &s.Metrics[i]
-		if !MetricNameRE.MatchString(m.Name) {
+		if !ValidMetricName(m.Name) {
 			if m.Name != "" && utf8.ValidString(m.Name) {
 				return fmt.Errorf("metric name %q is not a classic Prometheus name; set the collector's name_escaping to underscores or values to export it escaped", m.Name)
 			}
@@ -180,7 +247,7 @@ func (s *MetricSet) Validate(l Limits) error {
 			return fmt.Errorf("metric %q has too many labels", m.Name)
 		}
 		for k, v := range m.Labels {
-			if !LabelNameRE.MatchString(k) {
+			if !ValidLabelName(k) {
 				if k != "" && utf8.ValidString(k) {
 					return fmt.Errorf("metric %q has label %q, which is not a classic Prometheus label name; set the collector's name_escaping to underscores or values to export it escaped", m.Name, k)
 				}
@@ -200,14 +267,12 @@ func (s *MetricSet) Validate(l Limits) error {
 			return fmt.Errorf("metric %q has inconsistent types", m.Name)
 		}
 		types[m.Name] = m.Type
-		key, empty := m.seriesKey(), hasEmptyLabel(m.Labels)
-		if earlierEmpty, ok := seen[key]; ok {
-			if empty || earlierEmpty {
+		if duplicate, empty := seen.add(i); duplicate {
+			if empty {
 				return fmt.Errorf("duplicate metric series %q: Prometheus reads a label with an empty value as no label, so series that differ only in one are the same series", m.Name)
 			}
 			return fmt.Errorf("duplicate metric series %q", m.Name)
 		}
-		seen[key] = empty
 	}
 	return checkDerivedNames(types)
 }
@@ -241,7 +306,9 @@ func checkDerivedNames(types map[string]MetricType) error {
 }
 
 // Number reads a decoded value as a number: any numeric type, a string
-// holding one, or a boolean as 1 or 0.
+// holding one, or a boolean as 1 or 0. Its error names the value as a person
+// reads it (ShowValue), never in Go's syntax, which printed an object in full,
+// as map[a:[1 2]], into the logs and the scrape's error.
 func Number(v any) (float64, error) {
 	switch x := v.(type) {
 	case float64:
@@ -255,21 +322,86 @@ func Number(v any) (float64, error) {
 	case uint64:
 		return float64(x), nil
 	case json.Number:
-		return x.Float64()
+		return parseNumber(string(x))
 	case *big.Int:
 		// gojq's integers beyond int64, as tonumber or arithmetic make them.
 		f, _ := new(big.Float).SetInt(x).Float64()
 		return f, nil
 	case string:
-		return strconv.ParseFloat(strings.TrimSpace(x), 64)
+		return parseNumber(strings.TrimSpace(x))
 	case bool:
 		if x {
 			return 1, nil
 		}
 		return 0, nil
+	case nil:
+		return 0, errors.New("value is null, not a number")
 	default:
-		return 0, fmt.Errorf("%v is not numeric", v)
+		return 0, fmt.Errorf("value is %s, not a number; select a number inside it", ShowValue(v))
 	}
+}
+
+// parseNumber reads text as a number.
+func parseNumber(text string) (float64, error) {
+	f, err := strconv.ParseFloat(text, 64)
+	switch {
+	case err == nil:
+		return f, nil
+	case errors.Is(err, strconv.ErrRange):
+		return 0, fmt.Errorf("value %s is beyond the range of a 64-bit float", QuoteValue(text))
+	default:
+		return 0, fmt.Errorf("value %s is not a number; map text to numbers with value_map", QuoteValue(text))
+	}
+}
+
+// maxQuotedValue is how much of a value an error quotes.
+const maxQuotedValue = 64
+
+// QuoteValue quotes text for an error message, cut to its first 64 bytes, at
+// a character boundary, when it is longer, with its full length after it. A
+// response that is not what a rule expected can be a whole page, which an
+// error, logged and returned to the scraper, should not carry.
+func QuoteValue(text string) string {
+	if len(text) <= maxQuotedValue {
+		return strconv.Quote(text)
+	}
+	cut := maxQuotedValue
+	for cut > 0 && !utf8.RuneStart(text[cut]) {
+		cut--
+	}
+	return fmt.Sprintf("%s... (%d bytes)", strconv.Quote(text[:cut]), len(text))
+}
+
+// ShowValue names a decoded value for an error message: text quoted
+// (QuoteValue), a number or a boolean as written, null as null, and an object
+// or an array by its kind and size rather than its content, such as "an
+// object with 2 keys" or "an array of 3 items".
+func ShowValue(v any) string {
+	switch x := v.(type) {
+	case nil:
+		return "null"
+	case string:
+		return QuoteValue(x)
+	case json.Number:
+		return QuoteValue(string(x))
+	case bool, float64, float32, int, int64, uint64, *big.Int:
+		return fmt.Sprint(x)
+	case map[string]any:
+		return counted("an object with", len(x), "key")
+	case map[any]any:
+		return counted("an object with", len(x), "key")
+	case []any:
+		return counted("an array of", len(x), "item")
+	default:
+		return fmt.Sprintf("a value of type %T", x)
+	}
+}
+
+func counted(what string, n int, noun string) string {
+	if n != 1 {
+		noun += "s"
+	}
+	return fmt.Sprintf("%s %d %s", what, n, noun)
 }
 
 // Normalize rewrites decoded JSON or YAML in place into the shapes the

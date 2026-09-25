@@ -3,6 +3,7 @@ package decode
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"math"
 	"slices"
@@ -200,12 +201,19 @@ func parseGraphiteRender(body []byte, report *GraphiteReport) ([]*graphiteSeries
 	return out, nil
 }
 
+// jsonFloat reads a render JSON number. graphite-web writes an infinite
+// value as 1e9999 or -1e9999, which parses to an infinity with ErrRange; it
+// is taken as the infinity, which the series document then leaves out like
+// a null, rather than failing every series of the answer.
 func jsonFloat(v any) (float64, bool) {
 	n, ok := v.(json.Number)
 	if !ok {
 		return 0, false
 	}
 	f, err := n.Float64()
+	if err != nil && errors.Is(err, strconv.ErrRange) && math.IsInf(f, 0) {
+		return f, true
+	}
 	return f, err == nil
 }
 

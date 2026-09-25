@@ -10,7 +10,7 @@ make precommit  # fmt-check, lint, gopls-check and vet: what the hook runs
 make test       # go test ./..., then with -race, twice, in a random order
 make vet
 make build      # every request type; REQUEST_TYPES=http builds only those listed
-make helm-test  # helm lint and the template scenarios CI renders
+make helm-test  # helm lint and the template scenarios CI renders, with the pinned helm
 make vulncheck  # govulncheck, for reference; not part of make ci
 make ci         # everything above, in CI order
 
@@ -141,6 +141,14 @@ another installed version; `make gopls-install` installs it, into the same
 `GOPATH/bin` the VS Code Go extension uses, so the editor then shows exactly
 what CI checks. Let the extension auto-update gopls and the editor may show
 findings of a newer release before CI has them; bump the pin to follow.
+
+helm is pinned the same way: `HELM_VERSION` in the Makefile, which every
+workflow that installs helm installs too, and a test keeps them equal. `make
+helm-test` refuses another installed release, since helm releases word the
+schema's errors and render details differently — a chart test that passes
+with one can fail with another. `make helm-install` installs it with `go
+install` (Homebrew's `helm` works too when its version matches). To move to a
+newer helm, change `HELM_VERSION` and the workflows' `version:` together.
 
 Run `make hooks` once in a clone. It points git at `.githooks`, whose
 `pre-commit` hook runs `make precommit` — `gofmt`, `golangci-lint` and `gopls

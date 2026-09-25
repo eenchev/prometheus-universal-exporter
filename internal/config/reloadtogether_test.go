@@ -1,6 +1,7 @@
 package config
 
 import (
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
@@ -231,5 +232,31 @@ func TestFixingAnAddedCollectorFileReloads(t *testing.T) {
 	p.manager.reloadChanged()
 	if c, _ := p.state(); c != 3 {
 		t.Fatalf("after the fix: %d collectors, want 3", c)
+	}
+}
+
+// A rejected reload names the file it rejected, so an error such as a YAML
+// line number can be found; each file's rejection names its own.
+func TestARejectedReloadNamesTheFile(t *testing.T) {
+	p := newPair(t, twoCollectors, twoTargets)
+	out := testutil.CaptureLogs(t)
+	p.manager.logger = slog.Default()
+	p.write(t, p.configPath, "collectors: [\n")
+	_ = p.manager.Reload(ReloadTriggerSignal)
+	p.write(t, p.configPath, twoCollectors)
+	p.write(t, p.targetsAt, "targets: [\n")
+	_ = p.manager.Reload(ReloadTriggerSignal)
+	rejected := map[string]string{}
+	for _, record := range testutil.AssertJSONLines(t, out, len(strings.Split(strings.TrimSpace(out.String()), "\n"))) {
+		if msg, _ := record["msg"].(string); strings.HasSuffix(msg, "reload rejected") {
+			file, _ := record["file"].(string)
+			rejected[msg] = file
+		}
+	}
+	if got := rejected["configuration reload rejected"]; got != p.configPath {
+		t.Errorf("the configuration's rejection names file %q, want %q", got, p.configPath)
+	}
+	if got := rejected["static target reload rejected"]; got != p.targetsAt {
+		t.Errorf("the static target file's rejection names file %q, want %q", got, p.targetsAt)
 	}
 }

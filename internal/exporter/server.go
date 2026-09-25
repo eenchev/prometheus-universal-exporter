@@ -280,9 +280,11 @@ func (s *Server) probeHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	st := s.statsFor(name)
-	rec := s.recorderFor(st, name, requestURL, method)
+	rec := s.probeRecorderFor(st, name, requestURL, method)
 	rec.update(func(x *serverStats) { x.probes++ })
-	finish := func(ok bool) {
+	// finish counts the probe's outcome and ends its per-request record: a
+	// probe the target policy refused leaves no new request tracked.
+	finish := func(ok, refused bool) {
 		duration := time.Since(start)
 		rec.update(func(x *serverStats) {
 			if ok {
@@ -290,6 +292,7 @@ func (s *Server) probeHandler(w http.ResponseWriter, r *http.Request) {
 			}
 			x.lastDuration = duration.Seconds()
 		})
+		rec.commit(refused)
 	}
 	forwarded := forwardedHeaders(r, c.Request)
 	key := s.probeCacheKey(cfg, c, target, probeKeyQuery(c, r.URL.Query()), forwarded)
@@ -305,7 +308,7 @@ func (s *Server) probeHandler(w http.ResponseWriter, r *http.Request) {
 			})
 			// The names were checked before the result was stored.
 			answer, _ := withFreshness(cached, c, false, fetched, time.Now())
-			finish(true)
+			finish(true, false)
 			writeMetricSet(w, r, &answer)
 			s.queueProbeOTLP(answer, name, logTarget)
 			return
@@ -328,21 +331,22 @@ func (s *Server) probeHandler(w http.ResponseWriter, r *http.Request) {
 	// is no identity to share a trip by: every such probe would share one.
 	if !coalesceProbes(c) || key == "" {
 		result := upstream(r.Context())
-		finish(result.ok)
+		finish(result.ok, result.refused)
 		result.writeTo(w, r)
 		return
 	}
 	result, shared, err := s.flights.do(r.Context(), key, upstream)
 	if err != nil {
-		// This caller went away while it waited; there is nobody to answer.
-		finish(false)
+		// This caller went away while it waited; there is nobody to answer,
+		// and no verdict of the target policy to go by.
+		finish(false, true)
 		return
 	}
 	if shared {
 		rec.update(func(x *serverStats) { x.coalesced++ })
 		s.logger.Debug("probe shared an identical probe in flight", "collector", name, "target", logTarget)
 	}
-	finish(result.ok)
+	finish(result.ok, result.refused)
 	result.writeTo(w, r)
 }
 

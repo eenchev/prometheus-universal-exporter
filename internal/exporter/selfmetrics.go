@@ -139,7 +139,7 @@ type selfMetricDescriptor struct {
 // collector's counters.
 var exporterMetricHelp = map[string]string{
 	"http_exporter_build_info":                                 "1, with the exporter's version, revision, Go version and built request types as labels.",
-	"http_exporter_collector_config_valid":                     "Whether the collector configuration is valid.",
+	"http_exporter_collector_config_valid":                     "1 for every collector of the configuration in force; a rejected reload shows in http_exporter_config_last_reload_successful, not here.",
 	"http_exporter_rule_failures_total":                        "Series a metric rule could not produce and the probe carried on without, under error_mode log or ignore.",
 	"http_exporter_trips_in_flight":                            "Trips to targets in progress, probes and static target scrapes of every collector together, which --probe.max-concurrent bounds.",
 	"http_exporter_trips_max_concurrent":                       "--probe.max-concurrent: how many trips to targets may be in progress at once; 0 for no limit across collectors.",

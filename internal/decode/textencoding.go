@@ -24,7 +24,9 @@ import (
 //     declares the wrong one, and for local files, which declare none;
 //  3. the charset parameter of the Content-Type header;
 //  4. for HTML, a <meta charset> or <meta http-equiv="Content-Type"> in the
-//     first 1024 bytes; for XML, the encoding of the XML declaration.
+//     first 1024 bytes, where, as browsers read it, a UTF-16 name means
+//     UTF-8 and x-user-defined windows-1252; for XML, the encoding of the
+//     XML declaration.
 //
 // Names are the WHATWG Encoding Standard's, which browsers use: utf-8,
 // iso-8859-1 (read, as browsers do, as windows-1252), windows-1251, koi8-r,
@@ -122,7 +124,7 @@ func convertFromDocument(r *fetch.HTTPResponse, kind string) error {
 	switch kind {
 	case "html":
 		if m := metaCharsetRE.FindSubmatch(head); m != nil {
-			return convertFrom(r, string(m[1]))
+			return convertFrom(r, metaCharset(string(m[1])))
 		}
 	case "xml":
 		if m := xmlEncodingRE.FindSubmatch(head); m != nil {
@@ -130,6 +132,26 @@ func convertFromDocument(r *fetch.HTTPResponse, kind string) error {
 		}
 	}
 	return nil
+}
+
+// metaCharset is the encoding a <meta> charset names, as the WHATWG HTML
+// standard's prescan takes it: a page whose <meta> could be read as ASCII is
+// not UTF-16, whatever it says, so a UTF-16 name means UTF-8; and
+// x-user-defined means windows-1252. A byte order mark, response.charset and
+// the Content-Type header are taken as they say.
+func metaCharset(name string) string {
+	enc, err := htmlindex.Get(strings.TrimSpace(name))
+	if err != nil {
+		// convertFrom reports the unknown name.
+		return name
+	}
+	switch canonical, _ := htmlindex.Name(enc); canonical {
+	case "utf-16le", "utf-16be":
+		return "utf-8"
+	case "x-user-defined":
+		return "windows-1252"
+	}
+	return name
 }
 
 // convertFrom converts r's body from the named encoding.

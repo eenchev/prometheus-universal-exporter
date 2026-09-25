@@ -204,7 +204,9 @@ func applyCollectorLabels(set *model.MetricSet, t model.TransformConfig) {
 // called from inside the transforms, several frames below anything holding a
 // logger. The exporter installs its JSON logger as the process default at
 // startup so these lines match every other line it writes. A debug probe's
-// context carries its report's logger instead (WithRuleLogger).
+// context carries its report's logger instead (WithRuleLogger). When the caller
+// logs the failures itself (LeaveRuleLoggingToCaller), as the exporter does,
+// nothing here does.
 func handleMetricError(ctx context.Context, c *model.Collector, rule model.MetricRule, err error) bool {
 	failures, gathering := ctx.Value(ruleFailuresKey{}).(*ruleFailures)
 	switch rule.ErrorMode {
@@ -227,6 +229,9 @@ func handleMetricError(ctx context.Context, c *model.Collector, rule model.Metri
 }
 
 func logRuleFailure(ctx context.Context, c *model.Collector, rule model.MetricRule, err error, failures uint64) {
+	if ctx.Value(callerLogsRulesKey{}) != nil {
+		return
+	}
 	ruleLogger(ctx).Error("metric extraction failed", "collector", collectorName(c), "metric", rule.Name, "error_mode", rule.ErrorMode, "error", err, "failures", failures)
 }
 
@@ -284,9 +289,20 @@ func (f *ruleFailures) finish(c *model.Collector, report *RuleReport) {
 			logRuleFailure(f.ctx, c, failed.rule, failed.first, failed.count)
 		}
 		if report != nil {
-			report.add(failed.rule.Name, failed.count, failed.missing, failed.first)
+			report.add(failed.rule.Name, failed.count, failed.missing, failed.first, failed.logged)
 		}
 	}
+}
+
+type callerLogsRulesKey struct{}
+
+// LeaveRuleLoggingToCaller returns a context whose Transforms log none of
+// their rules' failures: the caller logs those that carried on from its
+// RuleReport, where it knows the target and can tell a repeat from a new
+// failure, and a rule under fail fails the Transform with an error that
+// names it, which the caller logs as the scrape's failure.
+func LeaveRuleLoggingToCaller(ctx context.Context) context.Context {
+	return context.WithValue(ctx, callerLogsRulesKey{}, true)
 }
 
 type ruleLoggerKey struct{}
@@ -343,6 +359,9 @@ type RuleFailure struct {
 	Failures, Missing uint64
 	// First is the first of the failures, as a debug probe shows it.
 	First error
+	// Logged says a rule of the metric has error_mode log, so its failures
+	// are to be logged, First being the first of those.
+	Logged bool
 }
 
 type ruleReportKey struct{}
@@ -354,17 +373,20 @@ func WithRuleReport(ctx context.Context) (context.Context, *RuleReport) {
 	return context.WithValue(ctx, ruleReportKey{}, report), report
 }
 
-func (r *RuleReport) add(metric string, failures, missing uint64, first error) {
+func (r *RuleReport) add(metric string, failures, missing uint64, first error, logged bool) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	for i := range r.failures {
 		if r.failures[i].Metric == metric {
 			r.failures[i].Failures += failures
 			r.failures[i].Missing += missing
+			if logged && !r.failures[i].Logged {
+				r.failures[i].Logged, r.failures[i].First = true, first
+			}
 			return
 		}
 	}
-	r.failures = append(r.failures, RuleFailure{Metric: metric, Failures: failures, Missing: missing, First: first})
+	r.failures = append(r.failures, RuleFailure{Metric: metric, Failures: failures, Missing: missing, First: first, Logged: logged})
 }
 
 // Failures returns the failures reported, one entry per metric name.
@@ -651,14 +673,20 @@ func transformJQItems(ctx context.Context, data any, rule model.MetricRule, c *m
 }
 
 // evaluateJQ runs a compiled program with input as its input and root bound
-// to $root, collecting every value it produces.
+// to $root, collecting every value it produces. A field path, such as .id,
+// is looked up without running the program when it can be, with the value
+// gojq would give (expr.JQProgram.Lookup): it is what most expressions
+// evaluated per item are.
 func evaluateJQ(ctx context.Context, input, root any, expression string) ([]any, error) {
-	code, err := expr.CompileJQ(expression)
+	program, err := expr.CompileJQProgram(expression)
 	if err != nil {
 		return nil, err
 	}
+	if value, ok := program.Lookup(input); ok {
+		return []any{value}, nil
+	}
 	vars, _ := ctx.Value(responseVariablesKey{}).(responseVariables)
-	iterator := code.RunWithContext(ctx, input, root, vars.status, vars.headers)
+	iterator := program.Code.RunWithContext(ctx, input, root, vars.status, vars.headers)
 	values := []any{}
 	for {
 		value, ok := iterator.Next()

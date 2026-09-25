@@ -6,6 +6,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 
 	"github.com/andybalholm/cascadia"
 	"github.com/antchfx/xpath"
@@ -21,49 +22,99 @@ import (
 //
 // The caches are keyed by the expression text (and, for XPath, the namespace
 // bindings), so two collectors sharing an expression share its program. Each
-// is bounded: a configuration reloaded many times with changing expressions
-// cannot grow it forever. When a cache reaches its bound it is emptied and
-// refilled on demand, which costs one compile per expression and keeps the
-// code free of eviction bookkeeping for a situation that is rare in practice.
+// is bounded, so a configuration reloaded many times with changing
+// expressions cannot grow it forever, and keeps the expressions in use
+// compiled: it holds two generations, the recent one and the one before.
+// A lookup finds an expression in either; one found only in the older is
+// moved to the recent one. When the recent generation reaches the bound it
+// becomes the older one, and what the older one held and nobody asked for
+// since is dropped. An expression asked for at least once per generation is
+// therefore never compiled again, however many others come and go, and the
+// cache never holds more than twice its bound. A cache that was simply
+// emptied at its bound instead recompiled almost every lookup once a
+// configuration had more distinct expressions than that.
 
-// exprCacheMaxEntries bounds each cache. A configuration with more distinct
-// expressions still works; it just compiles some of them more than once.
-const exprCacheMaxEntries = 4096
+// DefaultCacheEntries is each cache's bound per generation unless the
+// configuration asks for more (ReserveExpressions).
+const DefaultCacheEntries = 4096
+
+// cacheBound is the bound per generation in force: DefaultCacheEntries, or
+// the number of expressions of the configuration last loaded, when that is
+// more, so its expressions all stay compiled.
+var cacheBound atomic.Int64
+
+func init() { cacheBound.Store(DefaultCacheEntries) }
+
+// ReserveExpressions sizes the caches for a configuration holding n
+// expressions: each generation holds at least n, and at least
+// DefaultCacheEntries. The configuration's validation calls it with its
+// expression count, so a configuration with more expressions than the
+// default bound still compiles each of them once.
+func ReserveExpressions(n int) {
+	cacheBound.Store(int64(max(n, DefaultCacheEntries)))
+}
 
 type exprCache[T any] struct {
-	mu      sync.RWMutex
-	entries map[string]T
-	compile func(string) (T, error)
+	mu sync.RWMutex
+	// recent and older are the two generations.
+	recent, older map[string]T
+	compile       func(string) (T, error)
 }
 
 func newExprCache[T any](compile func(string) (T, error)) *exprCache[T] {
-	return &exprCache[T]{entries: map[string]T{}, compile: compile}
+	return &exprCache[T]{recent: map[string]T{}, compile: compile}
 }
 
 func (c *exprCache[T]) get(key string) (T, error) {
 	c.mu.RLock()
-	value, ok := c.entries[key]
+	value, ok := c.recent[key]
 	c.mu.RUnlock()
 	if ok {
 		return value, nil
 	}
+	c.mu.Lock()
+	if value, ok = c.recent[key]; !ok {
+		if value, ok = c.older[key]; ok {
+			c.add(key, value)
+		}
+	}
+	c.mu.Unlock()
+	if ok {
+		return value, nil
+	}
+	// Compiled outside the lock: two goroutines missing the same expression
+	// at once both compile it, and the second program replaces the first,
+	// which is equivalent.
 	value, err := c.compile(key)
 	if err != nil {
 		return value, err
 	}
 	c.mu.Lock()
-	if len(c.entries) >= exprCacheMaxEntries {
-		c.entries = map[string]T{}
-	}
-	c.entries[key] = value
+	c.add(key, value)
 	c.mu.Unlock()
 	return value, nil
 }
 
+// add puts an entry in the recent generation, which first becomes the older
+// one when it is full. c.mu is held.
+func (c *exprCache[T]) add(key string, value T) {
+	if int64(len(c.recent)) >= cacheBound.Load() {
+		c.older, c.recent = c.recent, make(map[string]T, len(c.recent))
+	}
+	c.recent[key] = value
+}
+
+// len is how many distinct expressions the cache holds.
 func (c *exprCache[T]) len() int {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
-	return len(c.entries)
+	n := len(c.recent)
+	for key := range c.older {
+		if _, ok := c.recent[key]; !ok {
+			n++
+		}
+	}
+	return n
 }
 
 // JQVariables are bound in every jq program, in this order: $root, the whole
@@ -74,16 +125,121 @@ func (c *exprCache[T]) len() int {
 var JQVariables = []string{"$root", "$status", "$headers"}
 
 // A compiled program is safe to run from many goroutines at once.
-var jqPrograms = newExprCache(func(expression string) (*gojq.Code, error) {
+var jqPrograms = newExprCache(func(expression string) (*JQProgram, error) {
 	query, err := gojq.Parse(expression)
 	if err != nil {
 		return nil, err
 	}
-	return gojq.Compile(query, gojq.WithVariables(JQVariables))
+	code, err := gojq.Compile(query, gojq.WithVariables(JQVariables))
+	if err != nil {
+		return nil, err
+	}
+	path, isPath := fieldPath(query)
+	return &JQProgram{Code: code, path: path, isPath: isPath}, nil
 })
 
 // CompileJQ compiles a jq expression, once per distinct expression.
-func CompileJQ(expression string) (*gojq.Code, error) { return jqPrograms.get(expression) }
+func CompileJQ(expression string) (*gojq.Code, error) {
+	program, err := jqPrograms.get(expression)
+	if err != nil {
+		return nil, err
+	}
+	return program.Code, nil
+}
+
+// CompileJQProgram is CompileJQ with the program's field path, for Lookup.
+func CompileJQProgram(expression string) (*JQProgram, error) { return jqPrograms.get(expression) }
+
+// JQProgram is a compiled jq expression. Most expressions of a metric rule,
+// and nearly all of those evaluated once per item, only read a field, such
+// as .id or .status.code, and running a gojq program for that costs over
+// twenty times what looking the field up does, most of it in the evaluation
+// environment gojq sets up for every run. So an expression that is a field
+// path alone is recognised when it compiles, from gojq's own parse of it, and
+// Lookup reads it directly.
+type JQProgram struct {
+	Code *gojq.Code
+	// path is the field names in order, when isPath: none for ".".
+	path   []string
+	isPath bool
+}
+
+// Lookup evaluates the program directly when it is a field path and every
+// step of it is an object or null, as gojq does: a field of an object is its
+// value, null when it has none, and a field of null is null. Otherwise ok is
+// false, and the program is run: a field of anything else is gojq's error to
+// report, and whatever is not a field path is gojq's to evaluate.
+func (p *JQProgram) Lookup(input any) (value any, ok bool) {
+	if !p.isPath {
+		return nil, false
+	}
+	value = input
+	for _, name := range p.path {
+		switch v := value.(type) {
+		case nil:
+			return nil, true
+		case map[string]any:
+			value = v[name]
+		default:
+			return nil, false
+		}
+	}
+	return value, true
+}
+
+// fieldPath reports whether a parsed query is "." or a field path such as
+// .a, .a.b or ."a key".b, and gives its field names. An index with brackets,
+// an optional one (.a?), an iteration, a string with interpolation and
+// anything beyond a single term are not.
+func fieldPath(query *gojq.Query) ([]string, bool) {
+	if query.Meta != nil || len(query.Imports) > 0 || len(query.FuncDefs) > 0 || query.Left != nil || query.Right != nil || len(query.Patterns) > 0 || query.Op != 0 || query.Term == nil {
+		return nil, false
+	}
+	term := query.Term
+	path := []string{}
+	switch term.Type {
+	case gojq.TermTypeIdentity:
+		if len(term.SuffixList) > 0 {
+			return nil, false
+		}
+		return path, true
+	case gojq.TermTypeIndex:
+		name, ok := fieldName(term.Index)
+		if !ok {
+			return nil, false
+		}
+		path = append(path, name)
+	default:
+		return nil, false
+	}
+	for _, suffix := range term.SuffixList {
+		if suffix.Iter || suffix.Optional {
+			return nil, false
+		}
+		name, ok := fieldName(suffix.Index)
+		if !ok {
+			return nil, false
+		}
+		path = append(path, name)
+	}
+	return path, true
+}
+
+// fieldName is the name an index reads, when it reads one field by name.
+func fieldName(index *gojq.Index) (string, bool) {
+	switch {
+	case index == nil || index.Start != nil || index.End != nil || index.IsSlice:
+		return "", false
+	case index.Str != nil:
+		if len(index.Str.Queries) > 0 {
+			return "", false
+		}
+		return index.Str.Str, true
+	case index.Name != "":
+		return index.Name, true
+	}
+	return "", false
+}
 
 var regexPrograms = newExprCache(regexp.Compile)
 

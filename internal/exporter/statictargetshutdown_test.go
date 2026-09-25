@@ -135,25 +135,40 @@ func TestAbortedScrapesPublishNothing(t *testing.T) {
 }
 
 // A scrape still waiting for a slot when the loop stops is not begun, and no
-// advice to raise the file's concurrency is logged for it.
+// advice to raise the file's concurrency is logged for it. The interval is
+// long, so neither scrape can time out while the test runs, and the names
+// are ones whose first scrapes are due early, held50 at 5ms and queued3 at
+// 106ms (scheduleOffset), so the test does not wait out firstScrapeWindow.
 func TestAStoppingLoopDropsScrapesWaitingForASlot(t *testing.T) {
 	logs := testutil.CaptureLogs(t)
+	waiting := make(chan string, 4)
+	hook := func(name string) { waiting <- name }
+	slotWaitHook.Store(&hook)
+	t.Cleanup(func() { slotWaitHook.Store(nil) })
 	held, heldHits, release := holdingTarget(t, 0)
-	waiting, waitingHits, _ := holdingTarget(t, 1)
+	queued, queuedHits := countingTarget(func(*http.Request) string { return "value=1\n" })
+	defer queued.Close()
 	_, stop, done := loopServer(t, 1,
-		model.StaticTarget{Name: "held", Collector: "text", Target: held.URL, Interval: model.Duration(2 * time.Second)},
-		model.StaticTarget{Name: "waiting", Collector: "text", Target: waiting.URL, Interval: model.Duration(2 * time.Second)},
+		model.StaticTarget{Name: "held50", Collector: "text", Target: held.URL, Interval: model.Duration(time.Minute)},
+		model.StaticTarget{Name: "queued3", Collector: "text", Target: queued.URL, Interval: model.Duration(time.Minute)},
 	)
 	testutil.WaitFor(t, "the held scrape to take the only slot", func() bool { return heldHits.Load() >= 1 })
-	// Both are first due within their interval; give the other time to come
-	// due and wait for the slot, which the held scrape keeps.
-	time.Sleep(2500 * time.Millisecond)
+	for name := ""; name != "queued3"; {
+		select {
+		case name = <-waiting:
+		case <-time.After(15 * time.Second):
+			t.Fatal("the second scrape never waited for the slot")
+		}
+	}
 	stop()
-	before := waitingHits.Load()
 	close(release)
-	<-done
-	if waitingHits.Load() != before {
-		t.Fatalf("a scrape waiting for a slot was begun after the loop stopped")
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the loop did not return")
+	}
+	if n := queuedHits.Load(); n != 0 {
+		t.Fatalf("a scrape waiting for a slot was begun after the loop stopped: %d requests", n)
 	}
 	if strings.Contains(logs.String(), "no scrape slot came free") {
 		t.Fatalf("stopping was logged as a lack of slots:\n%s", logs)

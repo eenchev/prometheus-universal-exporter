@@ -25,6 +25,11 @@ collectors:
       path: /status
       forward_authorization: true
       forward_headers: [X-Tenant]
+    transform:
+      type: jq
+    metrics:
+      - name: tenant_up
+        expression: .up
 ```
 
 ```yaml
@@ -44,9 +49,11 @@ monitors:
 
 Header values in monitor parameters are not suitable for secrets. Monitor authentication is disabled by default; set an entry's `auth.enabled: true` and use its `auth` block with a Kubernetes Secret for bearer/basic authentication. Explicitly opt in per collector before forwarding the incoming Authorization header.
 
-The exporter endpoints can also be protected with exporter-side Basic Auth:
+The exporter endpoints can also be protected with exporter-side Basic Auth,
+added to the configuration beside its collectors:
 
 ```yaml
+# part of the exporter config
 web:
   basic_auth:
     enabled: true
@@ -59,6 +66,7 @@ configuration — with the Helm chart the configuration is a ConfigMap, which is
 no place for a password:
 
 ```yaml
+# part of the exporter config
 web:
   basic_auth:
     enabled: true
@@ -140,6 +148,11 @@ collectors:
       basic_auth_file:
         username: /var/run/prometheus-universal-exporter/target-auth/username
         password: /var/run/prometheus-universal-exporter/target-auth/password
+    transform:
+      type: jq
+    metrics:
+      - name: protected_up
+        expression: .up
 ```
 
 For the Helm chart, set `targetAuth.enabled: true`, `targetAuth.type: basic`, `targetAuth.secretName`, `usernameKey`, and `passwordKey`. The mounted Secret is read by the exporter and sent as HTTP Basic Auth to the underlying endpoint. For bearer auth, use `type: bearer`, `secretKey`, `fileName`, and `request.bearer_token_file`. The selected monitor can independently use its `auth.type: basic` to authenticate its scrape of the exporter; `request.forward_authorization` must remain `false`.

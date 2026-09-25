@@ -149,7 +149,7 @@ func ValidateStaticTargets(f *model.StaticTargetFile) error {
 			}
 		}
 		for name := range t.Labels {
-			if !model.LabelNameRE.MatchString(name) {
+			if !model.ValidLabelName(name) {
 				return fmt.Errorf("target %q has invalid label name %q", t.Name, name)
 			}
 			if err := model.CheckLabelName(name); err != nil {

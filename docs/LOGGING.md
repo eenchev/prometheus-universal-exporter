@@ -7,23 +7,26 @@ word):
 
 ```json
 {"time":"2026-09-18T21:49:52+03:00","level":"INFO","msg":"starting exporter","address":":8080","collectors":1,"static_targets":0,"config_watch":true,"config_watch_interval":"1m30s"}
-{"time":"2026-09-18T21:49:54+03:00","level":"ERROR","msg":"metric extraction failed","collector":"exchange_rates","metric":"exchange_rate_observation_timestamp_seconds","error_mode":"log","error":"metric \"exchange_rate_observation_timestamp_seconds\" value is missing"}
+{"time":"2026-09-18T21:49:54+03:00","level":"WARN","msg":"metric extraction failed","collector":"exchange_rates","target":"https://api.frankfurter.dev/v1/latest","url":"https://api.frankfurter.dev/v1/latest","metric":"exchange_rate_observation_timestamp_seconds","error_mode":"log","failures":1,"error":"metric \"exchange_rate_observation_timestamp_seconds\" value is missing"}
 ```
 
-There is no second format. That is worth stating because it is easy to lose: a
-metric rule failing under `error_mode: log` reports from inside a transform,
-several calls below anything holding a logger, so it goes through Go's default
-logger rather than the exporter's. The exporter installs its JSON logger as the
-process default at startup so those lines are JSON too, instead of arriving as
-`2026/09/18 21:43:35 ERROR metric extraction failed metric=...` in the middle of
-a stream your collector is parsing.
+There is no second format. That is worth stating because it is easy to lose:
+code deep inside a transform, several calls below anything holding a logger,
+can still reach Go's default logger. The exporter installs its JSON logger as
+the process default at startup so such lines are JSON too, instead of arriving
+as `2026/09/18 21:43:35 ERROR ...` in the middle of a stream your collector is
+parsing.
 
-A failing rule is reported with its collector as well as its name, because the
-same metric name is often declared by several collectors and the rule name alone
-would not say which one to go and look at. The line is the same under
-`error_mode: log` and `error_mode: fail`, with `error_mode` saying which applied;
-under `fail` it is followed by a `probe failed` line with `"stage":"metric"` and
-the target, as for any other failed probe. `ignore` writes nothing.
+A rule failing under `error_mode: log` is reported with its collector and
+target as well as its name, because the same metric name is often declared by
+several collectors and the rule name alone would not say which one to go and
+look at. It is a warning, since the scrape was still answered, and it is a
+[repeated failure](#repeated-failures) like any other: a rule that fails on
+every scrape of a target is logged once, then as a repeat, and
+`metric extraction recovered` once it produces its series again. Under
+`error_mode: fail` the failure is the probe's: one `probe failed` line with
+`"stage":"metric"`, the `metric` and the target, as for any other failed
+probe. `ignore` writes nothing.
 
 `config_watch_interval` appears only when `--config.watch` is on, since that is
 what bounds how stale a running configuration can be; with the watch off there
@@ -92,7 +95,8 @@ The same applies to static targets (`static target scrape failed`, then
 is `static target stage failed; continuing`, at warning level, as a probe's
 is `probe stage failed; continuing`), to a file of a directory that fails, to a
 directory over `max_files` or its listing bound, to probes rejected by
-`max_concurrent_probes`, to output repaired for invalid UTF-8, and to probes
+`max_concurrent_probes`, to rules failing under `error_mode: log`, to output
+repaired for invalid UTF-8, and to probes
 answered with the last good result under `cache.stale_if_error` (`probe
 failed; answered with the last successful result`, with its `result_age`,
 then `probe answered with a fresh result again`). Up to 10,000

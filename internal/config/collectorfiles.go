@@ -138,33 +138,44 @@ func loadCollectorFile(path string, opts []LoadOption) ([]model.Collector, error
 // mergeCollectorFiles appends the collectors of every collector file to the
 // configuration's own and records where each collector came from. A name
 // defined twice, in one file or across files, is an error naming both places.
+// A file that cannot be read does not stop the others: the mistakes of every
+// file are reported together, so several broken files are fixed in one pass.
 func mergeCollectorFiles(c *model.Config, configPath string, opts []LoadOption) error {
+	// A collector whose name was taken is reported here and left out, so the
+	// check of the rest does not report it a second time.
+	var errs []error
 	c.CollectorSources = map[string]string{}
+	own := c.Collectors[:0:0]
 	for _, x := range c.Collectors {
 		if first, dup := c.CollectorSources[x.Name]; dup {
-			return duplicateCollectorError(x.Name, first, configPath)
+			errs = append(errs, duplicateCollectorError(x.Name, first, configPath))
+			continue
 		}
 		c.CollectorSources[x.Name] = configPath
+		own = append(own, x)
 	}
+	c.Collectors = own
 	files, err := resolveCollectorFiles(configPath, c.CollectorFiles)
 	if err != nil {
-		return err
+		return model.JoinProblems(append(errs, err)...)
 	}
 	c.LoadedCollectorFiles = files
 	for _, file := range files {
 		collectors, err := loadCollectorFile(file, opts)
 		if err != nil {
-			return err
+			errs = append(errs, err)
+			continue
 		}
 		for _, x := range collectors {
 			if first, dup := c.CollectorSources[x.Name]; dup {
-				return duplicateCollectorError(x.Name, first, file)
+				errs = append(errs, duplicateCollectorError(x.Name, first, file))
+				continue
 			}
 			c.CollectorSources[x.Name] = file
+			c.Collectors = append(c.Collectors, x)
 		}
-		c.Collectors = append(c.Collectors, collectors...)
 	}
-	return nil
+	return model.JoinProblems(errs...)
 }
 
 func duplicateCollectorError(name, first, second string) error {

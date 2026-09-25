@@ -171,6 +171,16 @@ func TestCheckFailsAnInvalidConfiguration(t *testing.T) {
 	}
 }
 
+// --dry-run lists every mistake of a configuration as an error of its own.
+func TestCheckListsEveryConfigurationMistake(t *testing.T) {
+	broken := strings.Replace(testutil.MinimalConfig, "expression: 'value=(\\d+)'", "expression: 'value=\\d+'\n      - name: bad-name\n        expression: 'x=(\\d+)'", 1)
+	out := runCheckCLI(t, "--config.file="+testutil.WriteFile(t, "config.yaml", broken))
+	conf := out.result(t, "config")
+	if out.code != 1 || len(conf.Errors) != 2 || !strings.Contains(conf.Errors[0], "has no capture group") || !strings.Contains(conf.Errors[1], `metric "bad-name"`) {
+		t.Fatalf("exit=%d config=%+v", out.code, conf)
+	}
+}
+
 func TestCheckFailsAMissingConfigurationFile(t *testing.T) {
 	out := runCheckCLI(t, "--config.file="+t.TempDir()+"/absent.yaml")
 	if out.code != 1 || !strings.Contains(out.result(t, "config").Errors[0], "no such file") {

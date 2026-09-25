@@ -103,7 +103,7 @@ metrics.append({"name": "raw", "type": "gauge", "value": "7", "labels": {}, "hel
 		`metric(name="x", value="twelve")`:                              "metric 'x' value 'twelve' is not a number",
 		`metric(name="x", value=None)`:                                  "metric 'x' value None is not a number",
 		`metric(name="x", value=1, timestamp=float("nan"))`:             "metric 'x' timestamp is not a number of milliseconds",
-		`metrics.append({"name": "x", "type": "gauge", "value": "no"})`: `metric "x" value no is not a number`,
+		`metrics.append({"name": "x", "type": "gauge", "value": "no"})`: `metric "x" value "no" is not a number`,
 	} {
 		if _, err := runWorkerScript(t, workerCollector("bad", script)); err == nil || !strings.Contains(err.Error(), want) {
 			t.Errorf("%s: err=%v, want %q", script, err, want)

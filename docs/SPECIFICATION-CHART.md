@@ -776,6 +776,11 @@ are skipped and the text checks of the templates still run:
    example; `service.type: ExternalName` and a `readinessProbe`
    `terminationGracePeriodSeconds` MUST fail rendering, while a
    `livenessProbe` one MUST render.
+25. The README's Exporter authentication examples: each values block of the
+   section MUST render as written, and the `config.yaml` it renders MUST load
+   as the exporter loads it, the `webAuth` files standing in a directory of
+   the test's own; an example that replaces `config.yaml` MUST therefore keep
+   collectors in it, and one whose monitors name a collector MUST define it.
 
 12. `extraArgs`, `extraVolumes` and `extraVolumeMounts` set together, which MUST
    append the argument, the volume and the mount to the ones the chart renders

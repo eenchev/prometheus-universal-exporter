@@ -18,6 +18,16 @@ import (
 // silent.
 const VerboseRequestSeriesLimit = 1000
 
+// VerboseRequestIdleExpiry is how long a tracked request is kept after the
+// last probe or scrape that asked for it. A probe's URL is whatever its caller
+// named, so without an expiry a target probed once, or renamed at the scraping
+// Prometheus, would hold one of the VerboseRequestSeriesLimit slots, and publish
+// a frozen timestamp, until the exporter restarts. An hour is well beyond any
+// scrape interval Prometheus allows a target to be considered live at, while
+// still freeing a slot the same day. The requests of configured static targets
+// do not expire: they are dropped when a reload removes their target instead.
+const VerboseRequestIdleExpiry = time.Hour
+
 // requestKey identifies one tracked request. The URL carries no credentials and
 // no query string: fetch leaves both out of the request label.
 type requestKey struct {
@@ -26,18 +36,31 @@ type requestKey struct {
 	Method    string
 }
 
+// trackedRequest is one request's statistics and when a probe or scrape last
+// asked for them, which is what VerboseRequestIdleExpiry measures from.
+type trackedRequest struct {
+	stats *serverStats
+	used  time.Time
+}
+
 // requestTracker holds the statistics of individual requests, which the verbose
 // self-metrics publish beside the per-collector totals. It is only written to
 // while verbose self-metrics are configured, so switching verbose off stops the
 // growth and switching it on starts from what happens next.
 type requestTracker struct {
-	mu         sync.Mutex
-	stats      map[requestKey]*serverStats
+	mu    sync.Mutex
+	stats map[requestKey]*trackedRequest
+	// static are the requests of the configured static targets, as last
+	// seeded (setStatic): they never expire, and leave when their target
+	// leaves the configuration.
+	static     map[requestKey]bool
 	capReached bool
+	// now is the clock expiry reads; tests replace it.
+	now func() time.Time
 }
 
 func newRequestTracker() *requestTracker {
-	return &requestTracker{stats: map[requestKey]*serverStats{}}
+	return &requestTracker{stats: map[requestKey]*trackedRequest{}, static: map[requestKey]bool{}, now: time.Now}
 }
 
 // statsFor returns the statistics of one request, creating them on first use.
@@ -46,16 +69,103 @@ func newRequestTracker() *requestTracker {
 func (t *requestTracker) statsFor(key requestKey) *serverStats {
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	if existing := t.stats[key]; existing != nil {
-		return existing
+	return t.adoptLocked(key, &serverStats{})
+}
+
+// existing returns the statistics of a request already tracked, marking it
+// used, or nil when the request is not tracked.
+func (t *requestTracker) existing(key requestKey) *serverStats {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	tracked := t.stats[key]
+	if tracked == nil {
+		return nil
+	}
+	tracked.used = t.now()
+	return tracked.stats
+}
+
+// adopt starts tracking a request with the statistics a probe gathered for it
+// while it was not yet known whether the target policy would refuse it. When a
+// concurrent probe of the same request got there first, the two are merged.
+// Past the limit nothing is adopted, and the limit is reported as reached.
+func (t *requestTracker) adopt(key requestKey, staged *serverStats) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if kept := t.adoptLocked(key, staged); kept != nil && kept != staged {
+		staged.mu.Lock()
+		values := staged.statsValues
+		staged.mu.Unlock()
+		kept.mu.Lock()
+		kept.absorb(values)
+		kept.mu.Unlock()
+	}
+}
+
+// adoptLocked returns the statistics of key, tracking created for it when it
+// is not tracked yet, or nil past the limit.
+func (t *requestTracker) adoptLocked(key requestKey, created *serverStats) *serverStats {
+	now := t.now()
+	if tracked := t.stats[key]; tracked != nil {
+		tracked.used = now
+		return tracked.stats
+	}
+	if len(t.stats) >= VerboseRequestSeriesLimit {
+		// Idle requests make room before a new one is turned away.
+		t.expireLocked(now)
 	}
 	if len(t.stats) >= VerboseRequestSeriesLimit {
 		t.capReached = true
 		return nil
 	}
-	created := &serverStats{}
-	t.stats[key] = created
+	t.stats[key] = &trackedRequest{stats: created, used: now}
 	return created
+}
+
+// setStatic makes the configured static targets' requests exist, and drops the
+// requests of static targets the configuration no longer has: after a reload
+// changed a target's URL, the old URL's series would otherwise stay, with a
+// timestamp that never moves again.
+func (t *requestTracker) setStatic(keys map[requestKey]bool) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	for key := range t.static {
+		if !keys[key] {
+			delete(t.stats, key)
+		}
+	}
+	t.static = keys
+	for key := range keys {
+		if t.stats[key] == nil {
+			t.adoptLocked(key, &serverStats{})
+		}
+	}
+	t.settleCapLocked()
+}
+
+// expire drops the requests no probe or scrape has asked for within
+// VerboseRequestIdleExpiry, other than the static targets'.
+func (t *requestTracker) expire() {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.expireLocked(t.now())
+}
+
+func (t *requestTracker) expireLocked(now time.Time) {
+	for key, tracked := range t.stats {
+		if !t.static[key] && now.Sub(tracked.used) > VerboseRequestIdleExpiry {
+			delete(t.stats, key)
+		}
+	}
+	t.settleCapLocked()
+}
+
+// settleCapLocked clears the limit indicator once requests have left and
+// there is room again.
+func (t *requestTracker) settleCapLocked() {
+	if len(t.stats) < VerboseRequestSeriesLimit {
+		t.capReached = false
+	}
 }
 
 // Snapshot returns a value copy of every tracked request in a stable order, and
@@ -64,9 +174,9 @@ func (t *requestTracker) Snapshot() ([]requestSample, bool) {
 	t.mu.Lock()
 	keys := make([]requestKey, 0, len(t.stats))
 	byKey := make(map[requestKey]*serverStats, len(t.stats))
-	for key, stats := range t.stats {
+	for key, tracked := range t.stats {
 		keys = append(keys, key)
-		byKey[key] = stats
+		byKey[key] = tracked.stats
 	}
 	capReached := t.capReached
 	t.mu.Unlock()
@@ -97,7 +207,8 @@ type requestSample struct {
 func (t *requestTracker) Reset() {
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	t.stats = map[requestKey]*serverStats{}
+	t.stats = map[requestKey]*trackedRequest{}
+	t.static = map[requestKey]bool{}
 	t.capReached = false
 }
 
@@ -114,11 +225,22 @@ func (s *Server) verboseSelfMetrics() bool {
 type statsRecorder struct {
 	collector *serverStats
 	request   *serverStats
+	// pending is set while request is a probe's statistics for a request
+	// not tracked yet, which commit adopts once the probe is known not to
+	// have been refused by the target policy.
+	pending *pendingRequest
+}
+
+type pendingRequest struct {
+	tracker *requestTracker
+	key     requestKey
 }
 
 // recorderFor pairs a collector's statistics with those of one request. The
 // request side is absent while verbose self-metrics are off, when the URL could
-// not be resolved, and once the series limit has been reached.
+// not be resolved, and once the series limit has been reached. It is for the
+// requests the configuration names, static targets: they take their slot at
+// once.
 func (s *Server) recorderFor(collector *serverStats, name, labelURL, method string) statsRecorder {
 	if labelURL == "" || !s.verboseSelfMetrics() {
 		return statsRecorder{collector: collector}
@@ -127,6 +249,33 @@ func (s *Server) recorderFor(collector *serverStats, name, labelURL, method stri
 		collector: collector,
 		request:   s.requests.statsFor(requestKey{Collector: name, URL: labelURL, Method: method}),
 	}
+}
+
+// probeRecorderFor is recorderFor for a probe, whose URL is whatever its
+// caller named. A request already tracked is updated as it goes; a new one is
+// gathered aside and only takes one of the VerboseRequestSeriesLimit slots when
+// commit finds its target was not refused by allowed_targets or
+// denied_targets, so probes of targets the collector may not reach cannot fill
+// the slots and keep a legitimate target from being tracked.
+func (s *Server) probeRecorderFor(collector *serverStats, name, labelURL, method string) statsRecorder {
+	if labelURL == "" || !s.verboseSelfMetrics() {
+		return statsRecorder{collector: collector}
+	}
+	key := requestKey{Collector: name, URL: labelURL, Method: method}
+	if existing := s.requests.existing(key); existing != nil {
+		return statsRecorder{collector: collector, request: existing}
+	}
+	return statsRecorder{collector: collector, request: &serverStats{}, pending: &pendingRequest{tracker: s.requests, key: key}}
+}
+
+// commit ends a probe: a new request whose target was not refused starts
+// being tracked with what the probe recorded; a refused one is forgotten.
+// Updates made after commit are not guaranteed to reach the request.
+func (r statsRecorder) commit(refused bool) {
+	if r.pending == nil || refused {
+		return
+	}
+	r.pending.tracker.adopt(r.pending.key, r.request)
 }
 
 // update applies the same change to both sets of statistics.
@@ -153,22 +302,40 @@ func (r statsRecorder) scraped(at time.Time) {
 	r.request.mu.Unlock()
 }
 
-// registerRequest makes a request's series exist without claiming a scrape, so
-// a configured target is visible before it has been collected once.
-func (s *Server) registerRequest(collector, labelURL, method string) {
-	if labelURL == "" || !s.verboseSelfMetrics() {
-		return
+// absorb adds what another probe of the same request recorded: its counters
+// are added, and its latest values, of a trip that reached the target, replace
+// these. It is only needed when two probes of a request not tracked yet ran at
+// once (requestTracker.adopt).
+func (v *statsValues) absorb(o statsValues) {
+	for _, pair := range [][2]*uint64{
+		{&v.probes, &o.probes}, {&v.success, &o.success}, {&v.decodeOK, &o.decodeOK},
+		{&v.parseErrors, &o.parseErrors}, {&v.transformErrors, &o.transformErrors},
+		{&v.missing, &o.missing}, {&v.scriptErrors, &o.scriptErrors}, {&v.limitErrors, &o.limitErrors},
+		{&v.emitted, &o.emitted}, {&v.cacheHits, &o.cacheHits}, {&v.cacheMisses, &o.cacheMisses},
+		{&v.coalesced, &o.coalesced}, {&v.rejected, &o.rejected}, {&v.rejectedByExporter, &o.rejectedByExporter},
+		{&v.refused, &o.refused}, {&v.staleServed, &o.staleServed}, {&v.invalidUTF8, &o.invalidUTF8},
+		{&v.seriesLeftOut, &o.seriesLeftOut}, {&v.linesSkipped, &o.linesSkipped},
+	} {
+		*pair[0] += *pair[1]
 	}
-	s.requests.statsFor(requestKey{Collector: collector, URL: labelURL, Method: method})
+	v.lastDuration = o.lastDuration
+	if o.lastScrape.After(v.lastScrape) {
+		v.lastScrape = o.lastScrape
+		v.lastStatus, v.lastBytes, v.lastScriptDuration = o.lastStatus, o.lastBytes, o.lastScriptDuration
+		v.grpcCode, v.grpcCalled = o.grpcCode, o.grpcCalled
+	}
 }
 
 // seedStaticRequests registers every static target, so the targets the
 // configuration names are visible before their first collection and remain
-// visible across a reload that adds one. A request driven by /probe cannot be
+// visible across a reload that adds one, and drops those of static targets a
+// reload removed or pointed elsewhere. A request driven by /probe cannot be
 // seeded this way: its URL comes from the probe's own target parameter, so it
-// appears the first time it is asked for.
+// appears the first time it is asked for, and expires when it is no longer
+// asked for (VerboseRequestIdleExpiry).
 func (s *Server) seedStaticRequests() {
 	cfg := s.manager.Get()
+	keys := map[requestKey]bool{}
 	for _, target := range s.manager.StaticTargets() {
 		c := model.CollectorByName(cfg, target.Collector)
 		if c == nil {
@@ -179,8 +346,9 @@ func (s *Server) seedStaticRequests() {
 		if err != nil {
 			continue
 		}
-		s.registerRequest(c.Name, label, fetch.RequestMethodFor(c, overrides))
+		keys[requestKey{Collector: c.Name, URL: label, Method: fetch.RequestMethodFor(c, overrides)}] = true
 	}
+	s.requests.setStatic(keys)
 }
 
 // verboseRequestSeriesNames are the self-metric families the verbose mode
@@ -213,6 +381,7 @@ func (s *Server) verboseRequests() ([]requestSample, []model.Metric) {
 		return nil, nil
 	}
 	s.seedStaticRequests()
+	s.requests.expire()
 	samples, capped := s.requests.Snapshot()
 	cappedValue := 0.0
 	if capped {

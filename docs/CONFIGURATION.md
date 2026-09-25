@@ -31,8 +31,9 @@ decoder, whatever its transform, and a `grpc` collector with `json`, since a
 call is answered as JSON. Other transforms — jq, yq, XPath, Python —
 decode each response by what it says it is: an `http` response by its
 `Content-Type` header, a `localfile` file by its extension, and by its content
-when neither says: an HTML page by its doctype or `<html>` element, other
-markup as XML, JSON by its opening bracket, Prometheus text by its `# TYPE` or
+when neither says: an HTML page by its doctype or `<html>` element, in any
+case, within the first KiB and after any whitespace, comments and XML
+declaration, other markup as XML, JSON by its opening bracket, Prometheus text by its `# TYPE` or
 `# HELP` lines, carbon lines (`<path> <value> <timestamp>`, some path with a
 dot) as Graphite series, and anything else as text. If the decoded response cannot be used by the selected transform, the
 probe fails with a clear mapping error.
@@ -62,7 +63,11 @@ see [Graphite](GRAPHITE.md). Every collector sets `transform.type`, one of
 `jq`, `yq`, `xpath`, `css`, `csv`, `regex`, `prometheus` and `python`; there is
 no default, and a collector without one is refused at startup. JSON and YAML expressions
 use the embedded jq-compatible engine (the expression language is also used
-for yq-compatible transformations). XML supports XPath, HTML supports CSS
+for yq-compatible transformations). A JSON body is one value and a YAML body
+one document: NDJSON, or anything else after the JSON value but whitespace,
+fails the scrape saying so, and so does a second YAML document after `---`
+(a leading `---`, and a trailing one with nothing after it, are fine), rather
+than everything after the first being dropped unseen. XML supports XPath, HTML supports CSS
 selectors and XPath (including bare element selectors such as `h1`), text
 supports regular expressions, and Prometheus input is parsed before
 filtering/renaming.
@@ -75,7 +80,10 @@ encoding is converted before it is decoded. The encoding comes from, in this
 order: a byte order mark (UTF-8, UTF-16LE or UTF-16BE); the collector's
 `response.charset`; the `charset` of the `Content-Type` header; and, for HTML,
 a `<meta charset>` near the top of the page or, for XML, the encoding of the
-XML declaration.
+XML declaration. As in a browser, a `<meta charset>` naming UTF-16 is read as
+UTF-8, since a page whose `<meta>` could be read is not UTF-16, and
+`x-user-defined` as `windows-1252`; a byte order mark or header naming UTF-16
+is taken as it says.
 
 ```yaml
   - name: legacy_status
@@ -176,9 +184,13 @@ The expression and label values are interpreted by the selected transform:
 - `csv`: the expression is the numeric column name and labels map to column
   names. With `response.csv.header: false` there are no names, and columns
   are named by number, from 1: `expression: "2"` reads the second column. A
-  name there is refused at startup. A header naming one column twice fails
-  the scrape, naming the column, rather than one silently hiding the other;
-  rename one, or read the columns by number with `header: false`.
+  name there is refused at startup. A header naming one column twice, or
+  leaving a column that holds values unnamed, fails the scrape, naming the
+  column, rather than one silently hiding the other; rename one, or read the
+  columns by number with `header: false`. An unnamed column empty in every
+  row, as a delimiter ending each line leaves, is left out. A quote inside a
+  field that does not start with one, as in `5" disk`, is read as written; a
+  quoted field left open still fails the scrape.
 - `css`: the expression selects the HTML element whose text is numeric. Without
   [`items`](#metrics-per-item) a metric is one value, so the expression must
   match at most one element. Several values, and labels read from the page,
@@ -570,6 +582,13 @@ JSON writes it (`7`, `0.5`) and a boolean as `true` or `false`. Case matters.
 `"*"` catches numbers too; without it, a value the map does not list is read as
 a number, and one that is not a number fails the rule, saying so.
 
+The error names the value as you would read it: text quoted, cut to its
+first 64 bytes when it is longer — `metric "state": value "n/a" is not a
+number; map text to numbers with value_map` — and an object or an array by
+what it is rather than its whole content — `value is an object with 2 keys,
+not a number`, `an array of 3 items`, `null` — which usually means the
+expression stops one field short. `true` and `false` are read as `1` and `0`.
+
 `scale` multiplies the value, mapped or read as a number — `0.001` for
 milliseconds to seconds, `100` for a fraction to a percentage:
 
@@ -814,9 +833,12 @@ metrics:
 be extracted. That is the right choice for a metric that is useful but not
 essential: one missing value does not cost you the others. When nothing at all
 can be extracted, the probe still succeeds with an empty body. `log` writes one
-line per failing rule per scrape, however many series failed: a rule over a
+warning per failing rule, however many series failed: a rule over a
 thousand-row table that misses its value on every row logs its first error
-with `"failures":1000`, not a thousand lines. Either way the series a rule carried on
+with `"failures":1000`, not a thousand lines. A rule that fails the same way on
+every scrape of a target is logged once and then only as a
+[repeat](LOGGING.md#repeated-failures), with its recovery logged when it works
+again. Either way the series a rule carried on
 without are counted per rule in `http_exporter_rule_failures_total{collector,
 metric}`, so a rule that keeps failing can be graphed and alerted on.
 
@@ -920,6 +942,21 @@ metric and the label:
 
 Each of these would otherwise load and then fail every scrape's validation,
 whatever the target answered.
+
+Every mistake is reported at once, not one per run: the mistakes of every
+collector and every rule, and of every [collector file](#collector-files), in
+order, one per line, each quoting the expression it is about:
+
+```text
+collector "a" metric "x" expression ".foo[": unexpected EOF
+collector "a" metric "bad-name": "bad-name" is not a valid Prometheus metric name; use letters, digits, underscores and colons, not starting with a digit
+collector "b" metric "z" regex "value=\\d+" has no capture group; the first capture group is the value, so wrap the number in one, such as 'requests=(\d+)'
+```
+
+Past 20, the rest are counted (`and 5 more problems`); `--dry-run` lists
+every one as an error of its own. A collector whose request, limits or
+formats are wrong stops at its first such mistake, since the rest of its
+checks read them.
 
 A CSS selector that does not compile used to match nothing, on every scrape,
 without saying why; it is now refused when the configuration loads. The
@@ -1088,9 +1125,6 @@ application, or per ConfigMap key. List them under `collector_files`:
 collector_files:
   - shared.yaml             # one file
   - collectors.d/*.yaml     # every file the pattern matches
-web:
-  self_metrics:
-    verbose: true
 collectors:                 # optional when collector_files supplies them
   - name: local_status
     ...
@@ -1623,7 +1657,8 @@ The watch does not relax any reload rule. An invalid configuration, one that
 would disable OTLP while a loaded static target sets `export_via_otlp`, a
 collector name defined twice, and a pre-script that stops producing `data` are
 all still rejected, with the last valid configuration
-left active and the reason logged. `http_exporter_config_last_reload_successful`
+left active and the reason logged, with the rejected file's path as `file`
+(`configuration reload rejected` or `static target reload rejected`). `http_exporter_config_last_reload_successful`
 then reads `0` until a reload succeeds, so a change that did not take can be
 alerted on — see [Configuration reloads](SELF-METRICS.md#configuration-reloads).
 

@@ -141,7 +141,8 @@ func (s *Server) collectFile(ctx context.Context, file fetch.FileRead, c *model.
 	}
 	rec.update(func(x *serverStats) { x.decodeOK++ })
 	s.noteGraphite(ctx, d, c, rec, logTarget, keyTarget, file.Name)
-	set, repaired, err := s.transformRecorded(ctx, d, file.Response, c, rec)
+	ruleLog := collectLog{key: failureKey(c.Name, keyTarget, file.Name), attrs: []any{"collector", c.Name, "target", logTarget, "file", file.Name}}
+	set, repaired, err := s.transformRecorded(ctx, d, file.Response, c, rec, ruleLog)
 	if errors.Is(err, model.ErrLimitExceeded) {
 		rec.update(func(x *serverStats) { x.limitErrors++ })
 		return nil, &fileFailure{"validation", err}

@@ -109,7 +109,22 @@ start once and then serves scrape after scrape.
   as `threading`, still loads.
 - **Errors.** A script that raises, calls `fail(...)` or `sys.exit()` fails that
   scrape with the Python error; the worker carries on. A worker that crashes, or
-  answers with more than `limits.max_output_bytes`, is replaced.
+  answers with more than `limits.max_output_bytes`, is replaced. The error is
+  the traceback of your script alone — its five innermost frames, so the
+  failing line is always there, each with the line of the script it ran,
+  then the exception; the worker's own frames, `metric(...)`'s and
+  `fail(...)`'s included, are left out:
+
+  ```text
+  python transform failed: Traceback (most recent call last):
+    File "<collector-python>", line 5, in <module>
+      metric(name="rate", value=rate(row))
+                                ^^^^^^^^^
+    File "<collector-python>", line 2, in rate
+      return row["requests"] / row["seconds"]
+             ~~~~~~~~~~~~~~~~^~~~~~~~~~~~~~~~
+  ZeroDivisionError: division by zero
+  ```
 - **Output.** `print` inside a script is captured per run and never mixes with
   the metrics. The first 4 KiB of it is logged at debug level, as `python
   transform printed` or `python pre-script printed` with the collector, so

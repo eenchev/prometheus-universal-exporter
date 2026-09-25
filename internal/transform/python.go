@@ -152,13 +152,13 @@ func (m pythonMetric) metric() (model.Metric, error) {
 		return out, fmt.Errorf("metric %q value %w", m.Name, err)
 	}
 	if err != nil {
-		return out, fmt.Errorf("metric %q value %v %w", m.Name, m.Value, err)
+		return out, fmt.Errorf("metric %q value %s %w", m.Name, model.ShowValue(m.Value), err)
 	}
 	out.Value = value
 	if m.Timestamp != nil {
 		at, err := pythonNumber(m.Timestamp)
 		if err != nil {
-			return out, fmt.Errorf("metric %q timestamp %v is not a number of milliseconds", m.Name, m.Timestamp)
+			return out, fmt.Errorf("metric %q timestamp %s is not a number of milliseconds", m.Name, model.ShowValue(m.Timestamp))
 		}
 		ms, err := timestampMillis(at)
 		if err != nil {
@@ -291,7 +291,7 @@ func prometheusSeries(series map[string]any) (model.Metric, error) {
 	if at, ok := series["timestamp"]; ok && at != nil {
 		value, err := pythonNumber(at)
 		if err != nil {
-			return m, fmt.Errorf("%s timestamp %v is not a number of milliseconds", name, at)
+			return m, fmt.Errorf("%s timestamp %s is not a number of milliseconds", name, model.ShowValue(at))
 		}
 		ms, err := timestampMillis(value)
 		if err != nil {
@@ -302,7 +302,7 @@ func prometheusSeries(series map[string]any) (model.Metric, error) {
 	number := func(key string) (float64, error) {
 		value, err := pythonNumber(series[key])
 		if err != nil || series[key] == nil {
-			return 0, fmt.Errorf("%s %s %v is not a number", name, key, series[key])
+			return 0, fmt.Errorf("%s %s %s is not a number", name, key, model.ShowValue(series[key]))
 		}
 		return value, nil
 	}

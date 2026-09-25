@@ -16,12 +16,15 @@
 # this response is a reasonable thing to reshape.
 web:
   self_metrics:
-    # Adds a series per collector, request URL and method with the last
-    # scrape's status, timestamp and duration. A request URL is an unbounded
-    # label value, so tracking is capped at 1000 combinations and
-    # http_exporter_request_series_capped reports when the cap is reached.
-    # The url label carries scheme, host and path only; credentials and the
-    # query string are never put in a label.
+    # Adds, per collector, request URL and method, a copy of every
+    # per-collector self-metric (about two dozen series: counters, last
+    # status, size and duration) plus the last scrape's timestamp. A request
+    # URL is an unbounded label value, so tracking is capped at 1000
+    # combinations, and http_exporter_request_series_capped reports when the
+    # cap is reached. Only a probe the target policy did not refuse takes a
+    # slot, and a URL not probed for an hour is dropped. The url label carries
+    # scheme, host and path only; credentials and the query string are never
+    # put in a label.
     verbose: true
 
 

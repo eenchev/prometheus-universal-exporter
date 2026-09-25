@@ -20,9 +20,12 @@ import (
 	"github.com/eenchev/prometheus-universal-exporter/internal/model"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/connectivity"
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/encoding/protojson"
+	"google.golang.org/protobuf/reflect/protoreflect"
+	"google.golang.org/protobuf/reflect/protoregistry"
 	"google.golang.org/protobuf/types/dynamicpb"
 )
 
@@ -85,6 +88,7 @@ func callGRPC(ctx context.Context, target string, c *model.Collector, overrides 
 		ctx, cancel = context.WithTimeout(ctx, overrides.Timeout)
 		defer cancel()
 	}
+	reconnectNow(ctx, conn)
 	message, err := grpcMessage(c, overrides)
 	if err != nil {
 		return nil, err
@@ -164,7 +168,7 @@ func callGRPC(ctx context.Context, target string, c *model.Collector, overrides 
 			grpc.Header(&header), grpc.Trailer(&trailer))
 		traceOutcome(ctx, "grpc "+grpcCodeName(status.Code(err)))
 		if err == nil {
-			body, err := renderAnswer(out)
+			body, err := renderAnswer(out, m.types)
 			if err != nil {
 				return nil, &CallAnswerError{Err: err}
 			}
@@ -235,9 +239,16 @@ func grpcTraceHeader(md metadata.MD) http.Header {
 
 // renderAnswer renders an answer as compact JSON. The protobuf runtime
 // varies the spaces it writes from build to build, so its output is
-// compacted to be the same for the same answer.
-func renderAnswer(out *dynamicpb.Message) ([]byte, error) {
-	raw, err := grpcJSON.Marshal(out)
+// compacted to be the same for the same answer. A google.protobuf.Any in the
+// answer is rendered as the message it carries, which is looked up among the
+// method's own types, from its descriptors, and then the types built into
+// the exporter; one found in neither fails the answer, naming its type.
+func renderAnswer(out *dynamicpb.Message, types *dynamicpb.Types) ([]byte, error) {
+	options := grpcJSON
+	if types != nil {
+		options.Resolver = answerTypes{types}
+	}
+	raw, err := options.Marshal(out)
 	if err != nil {
 		return nil, fmt.Errorf("rendering the answer as JSON: %w", err)
 	}
@@ -365,4 +376,53 @@ func unavailable(err error) bool {
 		return call.Code == int(codes.Unavailable)
 	}
 	return status.Code(err) == codes.Unavailable
+}
+
+// answerTypes resolves the types an answer's google.protobuf.Any values name:
+// the method's own, then the ones built into the exporter.
+type answerTypes struct {
+	own *dynamicpb.Types
+}
+
+func (r answerTypes) FindMessageByName(name protoreflect.FullName) (protoreflect.MessageType, error) {
+	if t, err := r.own.FindMessageByName(name); err == nil {
+		return t, nil
+	}
+	return protoregistry.GlobalTypes.FindMessageByName(name)
+}
+
+func (r answerTypes) FindMessageByURL(url string) (protoreflect.MessageType, error) {
+	if t, err := r.own.FindMessageByURL(url); err == nil {
+		return t, nil
+	}
+	return protoregistry.GlobalTypes.FindMessageByURL(url)
+}
+
+func (r answerTypes) FindExtensionByName(name protoreflect.FullName) (protoreflect.ExtensionType, error) {
+	if t, err := r.own.FindExtensionByName(name); err == nil {
+		return t, nil
+	}
+	return protoregistry.GlobalTypes.FindExtensionByName(name)
+}
+
+func (r answerTypes) FindExtensionByNumber(message protoreflect.FullName, field protoreflect.FieldNumber) (protoreflect.ExtensionType, error) {
+	if t, err := r.own.FindExtensionByNumber(message, field); err == nil {
+		return t, nil
+	}
+	return protoregistry.GlobalTypes.FindExtensionByNumber(message, field)
+}
+
+// reconnectNow ends the wait of a connection that is backing off after
+// failing to connect. grpc-go fails every call at once while it waits, so a
+// server that came back would be reported down until the wait ended; a
+// probe is the moment to try again, once. The call then waits for that
+// attempt, within its deadline, rather than failing at the old state.
+func reconnectNow(ctx context.Context, conn *grpc.ClientConn) {
+	if conn.GetState() != connectivity.TransientFailure {
+		return
+	}
+	conn.ResetConnectBackoff()
+	wait, cancel := context.WithTimeout(ctx, time.Second)
+	defer cancel()
+	conn.WaitForStateChange(wait, connectivity.TransientFailure)
 }

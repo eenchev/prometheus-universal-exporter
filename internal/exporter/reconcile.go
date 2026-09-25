@@ -70,10 +70,7 @@ func (c *responseCache) dropCollectors(names map[string]bool) int {
 	defer c.mu.Unlock()
 	dropped := 0
 	for name := range names {
-		for key := range c.byCollector[name] {
-			c.removeLocked(key)
-			dropped++
-		}
+		dropped += c.dropCollectorLocked(name)
 	}
 	return dropped
 }

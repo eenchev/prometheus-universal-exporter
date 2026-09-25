@@ -806,7 +806,7 @@ func (b *tailBuffer) String() string {
 // only then answers that it is ready. Each request runs the script in fresh
 // globals holding the same names scripts have always had, with stdout and
 // stderr captured, and answers with the metrics, the data or the error.
-const pythonWorkerLauncher = `import sys,json,builtins,contextlib,io,os,traceback,decimal
+const pythonWorkerLauncher = `import sys,json,builtins,contextlib,io,os,traceback,decimal,linecache
 requests=os.fdopen(3,'r',encoding='utf-8')
 answers=os.fdopen(4,'w',encoding='utf-8')
 for _module in json.loads(sys.argv[1]) or []:
@@ -926,6 +926,18 @@ def metric_number(name,what,v):
         try: return float(v.strip())
         except ValueError: pass
     raise ValueError('metric %r %s %r is not a number'%(name,what,v))
+def script_error(e):
+    # The error as a traceback of the script's own frames, innermost last:
+    # the worker's frames (this launcher, run as "<string>") are dropped, and
+    # of the rest the five innermost are kept, the failing line among them.
+    # Chained exceptions ("During handling of ...") are trimmed alike.
+    shown=traceback.TracebackException.from_exception(e)
+    te,seen=shown,set()
+    while te is not None and id(te) not in seen:
+        seen.add(id(te))
+        te.stack=traceback.StackSummary.from_list([f for f in te.stack if f.filename!='<string>'][-5:])
+        te=te.__cause__ or te.__context__
+    return ''.join(shown.format())
 def answer(document):
     answers.write(json.dumps(wire(document),allow_nan=False)+'\n'); answers.flush()
 answer({'ok': True, 'ready': True})
@@ -950,6 +962,8 @@ while True:
         scope={'__builtins__':builtins,'__name__':'__collector__','sys':sys,'json':json,'builtins':builtins,'contextlib':contextlib,'io':io,'os':os,
                'metric':metric,'fail':fail,'Response':Response,'response':Response(p['response']),'target':p['target'],'collector':p['collector'],'data':p['data'],'metrics':metrics}
         sink=io.StringIO()
+        # The script's source, for its lines in a traceback.
+        linecache.cache['<collector-python>']=(len(p['script']),None,p['script'].splitlines(True),'<collector-python>')
         with contextlib.redirect_stdout(sink), contextlib.redirect_stderr(sink):
             exec(compile(p['script'],'<collector-python>','exec'),scope,scope)
         log=sink.getvalue()
@@ -958,7 +972,7 @@ while True:
         if p.get('mode')=='data': result['data']=scope.get('data')
         else: result['metrics']=metrics
         answer(result)
-    except MemoryError:
-        answer({'ok': False, 'error': 'MemoryError: the script ran out of memory under limits.max_script_memory (%d bytes)'%max_memory if max_memory>0 else traceback.format_exc(limit=5)})
-    except BaseException:
-        answer({'ok': False, 'error': traceback.format_exc(limit=5)})`
+    except MemoryError as e:
+        answer({'ok': False, 'error': 'MemoryError: the script ran out of memory under limits.max_script_memory (%d bytes)'%max_memory if max_memory>0 else script_error(e)})
+    except BaseException as e:
+        answer({'ok': False, 'error': script_error(e)})`

@@ -14,6 +14,7 @@ import (
 
 	"github.com/eenchev/prometheus-universal-exporter/internal/model"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/backoff"
 	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/credentials/insecure"
 )
@@ -87,7 +88,7 @@ func (c *grpcConnCache) get(key grpcConnKey, now time.Time) (*grpc.ClientConn, *
 		}
 		creds = credentials.NewTLS(cfg)
 	}
-	options := []grpc.DialOption{grpc.WithTransportCredentials(creds)}
+	options := []grpc.DialOption{grpc.WithTransportCredentials(creds), grpcReconnect}
 	// Behind a proxy grpc-go's own dialer connects through it, which a
 	// dialer of the exporter's would bypass; the call resolved and checked
 	// the server's addresses instead.
@@ -162,3 +163,14 @@ func grpcPolicyDialer(policy *targetPolicy, hostPort string, refused *atomic.Poi
 		return conn, nil
 	}
 }
+
+// grpcReconnect keeps the wait between attempts to reconnect short. grpc-go's
+// default grows to two minutes, and a connection that is waiting fails every
+// call at once, so after a long outage a server that is back would go on
+// being reported down for up to two minutes. Five seconds at most is as
+// often as a probe could matter; a probe that finds the connection waiting
+// also ends the wait (reconnectNow).
+var grpcReconnect = grpc.WithConnectParams(grpc.ConnectParams{
+	Backoff:           backoff.Config{BaseDelay: time.Second, Multiplier: 1.6, Jitter: 0.2, MaxDelay: 5 * time.Second},
+	MinConnectTimeout: 20 * time.Second,
+})

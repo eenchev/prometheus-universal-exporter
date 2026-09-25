@@ -145,7 +145,12 @@ func CheckPythonScripts(pythonPath string, c *model.Config) ([]string, error) {
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
 	if err := cmd.Run(); err != nil {
-		return nil, fmt.Errorf("checking collector Python scripts needs a working interpreter at %q: %w: %s", pythonPath, err, strings.TrimSpace(stderr.String()))
+		// An interpreter that is not there says nothing on stderr: the
+		// error alone is the message then, not one ending in ": ".
+		if detail := strings.TrimSpace(stderr.String()); detail != "" {
+			return nil, fmt.Errorf("checking collector Python scripts needs a working interpreter at %q: %w: %s", pythonPath, err, detail)
+		}
+		return nil, fmt.Errorf("checking collector Python scripts needs a working interpreter at %q: %w", pythonPath, err)
 	}
 	var result struct {
 		Problems []string `json:"problems"`

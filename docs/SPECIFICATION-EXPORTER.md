@@ -833,7 +833,10 @@ keys:
   all of them, a reserved name left out.
 - Connections MUST be kept per target and TLS settings and reused, closed
   after 5 minutes unused, and made again when a TLS file changes on disk,
-  without cancelling a call still using the old one.
+  without cancelling a call still using the old one. A connection that failed
+  to connect MUST wait at most 5 seconds before trying again, and a call that
+  finds it waiting MUST end the wait and try at once, within its deadline, so
+  a server that came back is reached at the next probe.
 - It MUST accept the `/probe` parameters `timeout`, `insecure_skip_verify`,
   `retry_attempts`, `retry_backoff`, `header_<name>`, `param_<name>` and
   `message`, which replaces `request.message`, placeholders and all; a
@@ -922,8 +925,9 @@ ambiguous or incorrectly labeled endpoints.
 Where the transform implies no decoder and `decoder.type` is left unset, each
 response MUST be decoded by its `Content-Type` header for `http`, by its file
 extension for `localfile`, and by its content when those do not say, where an
-HTML doctype or `<html>` root element MUST be recognised as HTML before other
-markup is taken for XML, and a body whose every line other than blank and `#`
+HTML doctype or `<html>` root element, in any case, within the first KiB after
+whitespace, comments and an XML declaration, MUST be recognised as HTML before
+other markup is taken for XML, and a body whose every line other than blank and `#`
 lines is `<path> <number> <number>`, with some path holding a dot or a `;`
 and none a brace or quote, MUST be recognised as carbon lines, after JSON,
 HTML and XML and before text. A local file ending in `.graphite` or `.carbon`
@@ -975,7 +979,10 @@ which MUST be removed; the collector's `response.charset`; the `charset`
 parameter of `Content-Type`; and, only when none of those named one, a
 `<meta charset>` or `<meta http-equiv="Content-Type">` in the first 1024 bytes
 of HTML, or the encoding of an XML declaration. Encoding names MUST be looked
-up as the WHATWG Encoding Standard defines them. An unknown
+up as the WHATWG Encoding Standard defines them. As the WHATWG HTML prescan
+does, a `<meta>` naming UTF-16 (`utf-16`, `utf-16le`, `utf-16be`) MUST be read
+as UTF-8 and one naming `x-user-defined` as `windows-1252`; a byte order mark,
+`response.charset` and the `Content-Type` header MUST be taken as they say. An unknown
 `response.charset` MUST fail to load; an unknown declared name MUST fail the
 `decode` stage naming it. The converted body MUST be what decoders, transforms
 and Python scripts see, with `charset=utf-8` in its `Content-Type`, and an XML
@@ -1115,6 +1122,8 @@ The JSON decoder MUST:
 
 - Parse JSON safely.
 - Detect malformed JSON.
+- Refuse anything but whitespace after the value, such as NDJSON's second
+  record, saying NDJSON is not supported, rather than dropping it.
 - Provide decoded data to the transformation layer.
 - Support jq transformations.
 - Support simple metric extraction without jq if practical.
@@ -1158,7 +1167,11 @@ JSON mapping, compacted so the same answer is always the same bytes, with:
   would leave out;
 - field names as the `.proto` file writes them;
 - 64-bit integers as strings, enums as their names, and `Timestamp` and
-  `Duration` as the mapping writes them.
+  `Duration` as the mapping writes them;
+- a `google.protobuf.Any` as the message it carries, with its `@type`, its
+  type looked up among the method's own types, from whichever descriptors
+  described it, and then the types built into the exporter; a type in
+  neither MUST fail the answer, naming it.
 
 A numeric string MUST be read by metric values as a number.
 
@@ -1170,6 +1183,10 @@ The YAML decoder MUST:
 
 - Parse YAML safely.
 - Support YAML documents commonly returned by HTTP APIs.
+- Refuse a stream of more than one document, saying multi-document YAML is
+  not supported, rather than dropping all but the first; a leading `---`, and
+  an empty document after the first, as a trailing `---` makes, are not a
+  second document.
 - Keep a scalar YAML reads as a timestamp, such as `2024-06-01`, as the text
   it was written as, and an integer beyond int64 as an integer, so jq and
   labels can use both.
@@ -1337,7 +1354,11 @@ pre-scripts as `data`. A `jq` or `yq` transform MUST refuse a CSV response
 unless a pre-script turns it into structured data first; the `csv` transform
 reads the rows directly. A header naming one column twice MUST fail the
 decode naming the column, rather than one column silently overwriting the
-other; an empty header name repeated is not a name and MAY repeat.
+other. A column with an empty header name that holds a value in any row MUST
+fail the decode naming its number; one empty in every row, as a trailing
+delimiter leaves, MUST be left out of the rows. A quote inside a field that
+does not start with one MUST be read as written rather than failing the
+decode; a quoted field left open MUST still fail it.
 
 ---
 
@@ -1553,7 +1574,8 @@ decoder MUST produce one document for every transform:
   name, always holding `name`, the path when the render API's tags lack it.
 - `points` MUST be every point with a finite value and time, oldest first,
   points for one time kept in the order read. A `null`, NaN or infinite value
-  MUST be left out, and a series left with no point MUST be left out of the
+  MUST be left out, graphite-web's `1e9999` and `-1e9999`, out of the float
+  range, read as infinities rather than failing the decode, and a series left with no point MUST be left out of the
   document.
 - `value` MUST be the points reduced by `response.graphite.value`: `last`, the
   default, the newest point, the last read among points for one time; or
@@ -1870,7 +1892,12 @@ typical script.
   MUST fail the run with a timeout error naming the limit, and its worker MUST be
   killed.
 - A script error, including `SystemExit`, MUST fail that run with the Python
-  error and leave the worker in service. A worker that exits, crashes, or writes
+  error and leave the worker in service. The error MUST be the traceback of
+  the script's own frames, the five innermost, so the failing line is always
+  among them, each with its line of the script (`File "<collector-python>",
+  line N, in f`), then the exception; the worker's own frames, those of the
+  exporter's `metric` and `fail` included, MUST NOT appear, and a chained
+  exception MUST be trimmed alike. A worker that exits, crashes, or writes
   an answer longer than `limits.max_output_bytes` MUST be discarded, and the next
   scrape MUST start another.
 - `limits.max_script_memory`, a size, MUST bound each of the collector's
@@ -1957,6 +1984,18 @@ expression, CSS selector and XPath expression a configuration holds (§ 24.2),
 and scrapes run those programs. The compiled programs MUST be safe for
 concurrent use, cached by expression text (and namespace bindings for XPath),
 and bounded in number, so repeated reloads cannot grow the cache without limit.
+The bound MUST keep the expressions in use compiled rather than empty the
+cache when it is reached: each cache MUST keep two generations of at most
+4096 expressions, or of as many as the configuration in force holds when that
+is more, an expression found in the older moving to the recent one, so an
+expression evaluated at least once per generation is never compiled again.
+
+A jq or yq expression that is `.` or a field path alone — `.a`, `.a.b`,
+`."a key".b`, as gojq parses it, without brackets, `?`, iteration or
+interpolation — MAY be evaluated by looking the fields up directly, but MUST
+give exactly what gojq gives: a field of an object its value, or `null`, and a
+field of `null` `null`. Where a step is anything else, the program MUST run, so
+the error is gojq's.
 
 Every jq program MUST have `$root` bound to the whole decoded document, so an
 expression evaluated against one item (§ 18.2) can reach the rest of it,
@@ -2074,7 +2113,15 @@ vocabulary as `error_handling` (§ 19). Any other value MUST be rejected at
 startup and on reload, and the message MUST list the accepted values. It governs what happens when an individual metric cannot be
 extracted — its expression or a label expression errors, its value is absent
 while the metric is required, a required label is absent (§ 18.1), or its
-value is not a number:
+value is not a number.
+
+An error saying a value is not a number MUST name the value as a person reads
+it, never in Go's syntax or with Go's parser's wording: text quoted, cut to its
+first 64 bytes with its full length when it is longer (`value "n/a" is not a
+number; map text to numbers with value_map`), a number too large for a float
+as beyond its range, and an object or an array by its kind and size, not its
+content (`value is an object with 2 keys, not a number`, `an array of 3
+items`, `null`). A boolean MUST be read as `1` or `0`. What it does:
 
 - `ignore` MUST skip that metric without logging and carry on. The probe MUST
   serve every metric that could be extracted; when none could, it MUST succeed
@@ -2286,7 +2333,8 @@ before the exporter serves traffic. A `python` transform emits through
 
 Enforcing this requires parsing the script, so a configuration that contains any
 Python MUST be checked with the configured interpreter and MUST fail to start
-when that interpreter is unusable. A configuration containing no Python MUST NOT
+when that interpreter is unusable, with an error naming its path and why it
+failed, followed by what it wrote to stderr only when it wrote anything. A configuration containing no Python MUST NOT
 invoke an interpreter at all, so a deployment that uses none is unaffected.
 
 A pre-script that returns a mapping or a sequence produces structured data. When
@@ -2695,6 +2743,12 @@ A rejected reload MUST set `http_exporter_config_last_reload_successful` to 0
 and leave the timestamp at the last success, and a reload of one file MUST NOT
 change the other's series.
 
+`http_exporter_collector_config_valid` MUST read 1 for every collector of the
+configuration in force: a configuration that fails validation is never loaded,
+so it has no collectors to read 0 for, and a rejected reload leaves the previous
+collectors at 1. Its `HELP` MUST say so rather than suggest the value can report
+an invalid collector; the reload status above is where a rejected change shows.
+
 ### 22.0c OTLP export status
 
 OTLP export is best-effort (§ 42.1), which MUST NOT mean silent. While OTLP
@@ -2865,6 +2919,18 @@ http_exporter_request_series_tracked
 the number of combinations currently tracked, so a verbose exporter that has not
 been asked for anything yet reports an empty set rather than leaving the cap
 indicator alone with nothing to explain it.
+
+The slots MUST NOT be taken by requests the exporter never made: a probe whose
+target the collector's `request.allowed_targets` or `denied_targets` refused
+(§ 26.1) MUST NOT start a tracked combination, though it MUST keep updating one
+already tracked, and it is counted on the collector as always. A combination no
+probe or static target scrape has asked for in the last hour MUST be dropped,
+so a target probed once, or no longer probed, gives its slot back and does not
+leave a series with a timestamp that never moves; the combinations of the
+configured static targets MUST NOT expire, and MUST be dropped as soon as a
+reload removes their target or changes its URL or method. Dropping
+combinations MUST clear `http_exporter_request_series_capped` once there is
+room again.
 
 A metric family may be described only once in an exposition. The labelled series
 MUST therefore join the family the per-collector block has already declared,
@@ -3134,8 +3200,10 @@ Both MUST reload the configuration, with its collector files, and the
 static target file when there is one, whether or not they changed, under the
 same rules as the watch (§ 24.1), and record the result in the reload
 self-metrics (§ 22.0b). Every reload, whatever its trigger, MUST be logged with
-the trigger — `watch`, `sighup` or `http` — and reloads MUST be serialized, so
-two triggers at once never interleave. The Helm chart MUST expose the flag as a
+the trigger — `watch`, `sighup` or `http` — and a rejected reload's line MUST
+carry `file`, the path of the configuration or static target file rejected, so
+an error that gives only a line number can be placed. Reloads MUST be
+serialized, so two triggers at once never interleave. The Helm chart MUST expose the flag as a
 value (SPECIFICATION-CHART.md § 33.10).
 
 ### 24.2 Validation of metric rules
@@ -3161,6 +3229,20 @@ label:
   than a prometheus transform without `metrics` rules, rather than ignored.
 - `transform.labels` keys and `rename_labels` targets MUST be valid label
   names, and two `rename_labels` entries with one target MUST be rejected.
+
+An error about an expression MUST quote it: `collector "a" metric "x"
+expression ".foo[": unexpected EOF`, as a CSS selector's and an XPath's do.
+
+Every mistake found MUST be reported in one run, not only the first: the
+mistakes of every collector, and of every rule of a collector, and of every
+collector file, in the order of the files, collectors and rules, one per line.
+A collector file that cannot be read MUST NOT keep the collectors of the
+others from being checked. Within a collector the settings the rest depend
+on — the request, limits, cache, formats and error policies — MAY stop that
+collector at its first mistake, and within a rule its own settings — type,
+name, labels — at its first; the rule's expressions MUST then each be checked.
+Past 20 mistakes the rest MUST be counted (`and 5 more problems`) rather than
+listed; `--dry-run` MUST list every one as an error of its own.
 
 ### 24.2a Decoding errors
 
@@ -3276,7 +3358,16 @@ before `--dry-run` or startup, rather than falling back to `info`.
 A logged metric extraction failure MUST name the collector as well as the rule.
 A metric name is not unique across collectors — the same rule is often copied
 between them — so the rule name alone does not say which collector to go and
-look at. A logging path MUST NOT be what fails a scrape, so an absent collector
+look at. On a probe or static target scrape it MUST also carry the target, as
+that scrape's failure lines do (`target` and `url` for a probe, `target` and
+`address` for a static target, and `file` for a file of a directory). A rule
+under `error_mode: log` MUST be logged at warning level, since the scrape was
+answered, as `metric extraction failed`, and MUST go through the failure log
+(§ 25.1), keyed by collector, target and metric, so a rule failing on every
+scrape is logged once and then as a repeat, and `metric extraction recovered`
+is logged once it produces its series again. A rule under `error_mode: fail`
+MUST NOT have a line of its own: the scrape's failure, which carries `metric`,
+is its one line. A logging path MUST NOT be what fails a scrape, so an absent collector
 MUST degrade to an empty name rather than panicking.
 
 The startup line MUST report the listen address, the number of collectors, the
@@ -3296,7 +3387,8 @@ with `repeated`, the occurrences since that line, and `failing_since`, when the
 failure began. A different stage or error MUST be logged at once as a new
 failure. The first success after a failure MUST be logged at info level with
 the stage, `failed_for` and `failures`. This MUST apply to failed probes and
-stages continuing under `log`, a rule failing under `error_mode: fail`, probes
+stages continuing under `log`, a rule failing under `error_mode: fail` or
+`log`, probes
 rejected by `max_concurrent_probes`, failed static target scrapes, failed files of a
 directory, a directory over `max_files` or its listing bound, and repaired
 invalid UTF-8. At most 10,000 failures MUST be remembered; when full, those not
@@ -4090,6 +4182,12 @@ Test:
 - A second document refused, naming its line, in the configuration, a
   collector file and the static targets file; a leading `---`, a final `---`,
   a final `...`, and a final `---` followed by a comment accepted.
+- Several mistakes — bad jq expressions and a bad metric name in rules of one
+  collector, a regex without a capture group in another — reported in one
+  run, one per line, in order, each jq error quoting its expression; three
+  broken collector files and a bad collector in a fourth reported together;
+  25 mistakes shown as 20 and `and 5 more problems`; and `--dry-run` listing
+  each mistake as an error of its own (§ 24.2).
 
 Configuration validation MUST identify the collector and relevant field in the error message.
 
@@ -4136,6 +4234,12 @@ Test:
 - Zero and negative gauge values.
 - Counter constraints/validation as applicable.
 - Collision handling when two extraction rules create the same series.
+- Series told apart by their keys even when every hash of them is the same.
+- The metric and label name checks agree with the patterns
+  `[a-zA-Z_:][a-zA-Z0-9_:]*` and `[a-zA-Z_][a-zA-Z0-9_]*` on every byte, and
+  under fuzzing.
+- A value that is not a number named as § 18.1 says: text quoted and cut,
+  an object, an array and null by kind and size, never `strconv` or `map[`.
 
 ## 34.8 JSON decoder and jq tests
 
@@ -4157,6 +4261,8 @@ Test invalid JSON:
 - Truncated document.
 - Invalid syntax.
 - Invalid UTF-8 where relevant.
+- NDJSON and other data after the value, with `json` and `auto`, fail saying
+  NDJSON is not supported; trailing whitespace does not.
 
 Test jq:
 
@@ -4176,6 +4282,16 @@ Test jq:
 - Runtime jq errors.
 - Type mismatches.
 - Missing keys.
+- Field paths looked up directly give exactly what gojq gives, value or
+  error, over objects, nested objects, missing keys, null, numbers, big
+  integers, `json.Number`, arrays, strings and booleans, and expressions
+  that are not field paths (`.a[0]`, `.a?`, `.[]`, pipes, interpolation)
+  are left to gojq.
+- The expression cache keeps an expression in use compiled while thousands of
+  others pass through, drops one unused for two generations, and compiles each
+  of a rotation of as many expressions as its bound, or as a configuration
+  holds beyond it, once; a cached XPath program still hands out working
+  copies.
 
 Verify `allow_missing_keys` and per-metric `required` behavior separately from malformed JSON behavior.
 
@@ -4187,7 +4303,9 @@ Test:
 - Valid YAML sequences.
 - Nested YAML.
 - YAML scalar values.
-- Multi-document YAML if supported; otherwise verify that it is rejected clearly.
+- Multi-document YAML is refused saying it is not supported, an explicit
+  null second document too, while a leading `---`, a trailing `---` or `...`
+  and an empty body are accepted.
 - YAML anchors/aliases if supported by the implementation.
 - Nulls.
 - Booleans.
@@ -4254,7 +4372,11 @@ Test:
 - Missing columns.
 - Unicode.
 - Empty input.
-- Malformed CSV.
+- Malformed CSV; a quoted field left open still fails.
+- A stray quote in an unquoted field, `bad 5" disk`, is read as written,
+  beside quoted fields with escaped quotes and delimiters.
+- An unnamed header column holding a value fails naming its number; one
+  empty in every row is left out of the rows.
 - Leading/trailing whitespace according to configuration.
 - Numeric conversion failures.
 
@@ -4278,6 +4400,9 @@ Test:
 - Missing selectors.
 - Selectors matching multiple nodes.
 - Malformed but browser-like HTML that should still parse.
+- Automatic detection of HTML after whitespace, comments and an XHTML XML
+  declaration, in any case, which as XML would fail on `<br>`; an element
+  merely starting with `html` and an unclosed comment are not HTML.
 - Invalid CSS selectors.
 - Invalid XPath expressions.
 
@@ -4377,6 +4502,16 @@ Test verbose per-request self-metrics:
 - Static target scrapes are recorded per request.
 - The series set stops growing at 1000 combinations, an already-tracked request
   keeps updating past the limit, and the capped indicator reads 1.
+- Probes refused by `denied_targets` take no slot: with all slots but one
+  taken, they leave the capped indicator at 0 and a legitimate target probed
+  afterwards is tracked; a refused probe of a request already tracked is
+  counted on it.
+- A request not asked for in an hour expires while a used one and a static
+  target's stay; at the limit, an idle request makes room for a new one and
+  the capped indicator clears.
+- A reload that changes a static target's URL drops the old URL's series.
+- Merging two probes of a new request that finished together adds every
+  counter.
 - A response served from the collector cache leaves the last-scrape timestamp
   and status of the scrape that filled it untouched, and the cache hit is
   counted on the request's own series.
@@ -4423,6 +4558,9 @@ Test the pre-script `data` contract:
   not named.
 - A configuration with no Python scripts needs no interpreter; one with scripts
   fails clearly when the interpreter is unusable.
+- A missing interpreter's error names its path and ends with the failure, not
+  with an empty stderr's `: `; an interpreter's stderr, when it wrote any, is
+  appended.
 - A reload whose pre-script stops producing `data` is rejected and the previous
   configuration stays active.
 - The shipped example configurations satisfy the contract.
@@ -4453,7 +4591,12 @@ succeeds beside one that fails:
   the rule and the mode.
 - `fail` answers 502 with a JSON body carrying `status`, `stage`, `collector`,
   `metric`, `target` and `error`, serves no exposition text at all — not even
-  the metric that succeeded — and logs the failure.
+  the metric that succeeded — and logs the failure once, as the probe's
+  failure naming the metric, with no `metric extraction failed` line.
+- A `log` rule failing on three probes of a target logs one `metric extraction
+  failed` line, at warning level, with the target, while
+  `http_exporter_rule_failures_total` counts all three; once it produces its
+  series again one recovery is logged.
 - `ignore` and `log` answer 200 with an empty body when no metric can be
   extracted.
 - A `fail` rule that succeeds beside a failing `log` rule answers 200.
@@ -4522,6 +4665,9 @@ Test:
 - Timestamps.
 - Empty result set.
 - Python exceptions.
+- A traceback of five nested functions showing the innermost frame, with the
+  failing line and its source, and no worker frame; an error raised in
+  `metric(...)` pointing at the script's call.
 - Syntax errors.
 - Invalid metric definitions.
 - Standard library imports.
@@ -5060,6 +5206,9 @@ Required:
   probe files its result under is the one `probeCacheKey` gives.
 - Failed probes are not cached.
 - Entries beyond `limits.max_cache_entries` are evicted, expired entries first.
+- Eviction goes by the end of the stale window, then by key; over 5000 random
+  stores it keeps exactly the entries sorting every live entry kept; a
+  benchmark stores at the cap of 1000 and 10000 entries.
 - A cached metric set is copied on store and on read, so neither the producer
   nor a reader can mutate the stored entry.
 - Concurrent probes of a cached collector are race-free under `go test -race`.
@@ -5617,6 +5766,9 @@ See § 6.1a, § 30 and § 42.5.
 - HTML with `<meta charset>` or `http-equiv`, and XML with an encoding
   declaration, with and without a header saying the same, decode to `café`
   once; the converted XML says UTF-8 and its `Content-Type` `charset=utf-8`.
+- A `<meta charset>` naming `utf-16`, `utf-16le` or `utf-16be` reads the page
+  as UTF-8 and `x-user-defined` as `windows-1252`, while a `Content-Type`
+  naming UTF-16 still converts from UTF-16.
 - A declared-UTF-8 body with an invalid byte answers 200 with U+FFFD, parses,
   is counted and logged; a shared label map is not changed in place; files of
   a directory are converted and repaired one by one.
@@ -5775,7 +5927,9 @@ See § 5.1 (`graphite`) and § 15a.
   segments, tags from the answer or the tagged target, the newest value, its
   time and the points with a value — leaving out nulls, a series of nulls and
   an empty one; malformed points, a series without a path, a bad tag and bad
-  JSON fail naming the series; `value` `last`, `max`, `min`, `sum` and `avg`
+  JSON fail naming the series; a `1e9999` or `-1e9999` value is left out as
+  infinite, the series' other points and the other series kept; `value`
+  `last`, `max`, `min`, `sum` and `avg`
   reduce the points; `max_age` leaves out older series; an unknown `value`
   fails.
 - Carbon lines: one series per path and tag set in any order, a missing or
@@ -5859,7 +6013,9 @@ See § 22.0a and § 22.0b.
   the type its definition gives it; and every family in the OTLP set has the
   type the text declares.
 - At startup the configuration reports successful with a timestamp and no
-  reloads; a rejected reload reads 0, counts a failure and keeps the timestamp;
+  reloads; a rejected reload reads 0, counts a failure and keeps the timestamp,
+  while `http_exporter_collector_config_valid` stays 1 with a `HELP` that says
+  it is 1 for every loaded collector;
   a later successful reload reads 1, counts a success and moves the timestamp.
   No `static_targets` series appears without a target file.
 - With a target file, a rejected target reload reports under
@@ -5922,6 +6078,8 @@ See § 24.1a.
 - With `web.basic_auth`, the endpoint needs the credentials.
 - `SIGHUP` reloads.
 - Reloads from `/-/reload` and the watch at once do not interleave.
+- A rejected configuration reload and a rejected static target reload each
+  log `file` with the rejected file's path.
 
 ## 34.59 Concurrent probe limit tests
 
@@ -6108,6 +6266,11 @@ sources at run time, so they need neither the network nor `protoc`.
 - A build of every type but `grpc`, and of each alone, links no gRPC or
   protobuf package, and a `grpc` build alone links them.
 - The examples in `docs/GRPC.md` load and run as written.
+- An answer of `google.protobuf.Any` values of the service's own type and of
+  a built-in type is rendered with each as its message, with reflection, a
+  protoset and `.proto` files alike.
+- A server stopped for three seconds of probes and started again on its
+  address is answered at the first probe after, within two seconds.
 
 ## 34.63 Review fixes: limits, headers, caching, schedules, transforms and gRPC tests
 
@@ -6414,7 +6577,8 @@ Tests MUST show:
 - A gauge `foo_count` next to a histogram `foo`, and a counter `bar_sum` next
   to a summary `bar`, fail validation naming both.
 - A CSV header naming a column twice fails the decode naming it; repeated
-  empty names, and a file read without a header, do not.
+  empty names over columns empty in every row, and a file read without a
+  header, do not.
 
 ## 34.73 Review fixes: redirect schemes, credential names, response sizes, Accept-Encoding and zoned addresses tests
 
@@ -6438,6 +6602,36 @@ Tests MUST show:
 - `denied_targets: [fe80::/10]` refuses `fe80::1%eth0`, as a host and as a
   probe's target, `fd00:ec2::254%eth0` is refused as the metadata service,
   and `allowed_targets: [fe80::/10]` allows `fe80::1%eth0`.
+
+## 34.74 Review fixes: credentials, body limits, proxied redirects, target cache keys, the Python sandbox, shutdown and authentication examples tests
+
+Tests MUST show:
+
+- Inline `basic_auth` reaches the target as the username and password it
+  names, a collector's and a static target's alike.
+- An empty `basic_auth_file` username or password file, or an empty
+  `bearer_token_file`, one of whitespace only included, is refused naming
+  what is empty, for a collector and a static target, and no request is sent.
+- A target streaming an endless chunked body to a collector with
+  `max_response_bytes: 1024` fails with a limit error well before the
+  scrape's deadline; a sparse 1 GiB local file with the same limit fails with
+  a limit error having allocated far less than the file.
+- Behind a proxy, where the connection check cannot see the redirect's
+  host, a redirect from an allowed host to an address `allowed_targets` does
+  not list is refused by the redirect check, naming the address and
+  `allowed_targets`, without reaching it.
+- Two static targets of one collector at one address, with a cache TTL,
+  whose `accept_status` lists differ only in their values, each make their
+  own trip: the one accepting `503` is up, the one accepting only `2xx` down.
+- A Python script calling `os.fork`, `os.kill`, `os.remove` or
+  `os.listdir`, or opening `/etc/passwd` in binary through `_io.open`, fails
+  with the sandbox's error.
+- A static target scrape waiting for the file's only slot, with an interval
+  long enough that nothing times out, is not begun when the loop stops, and
+  no advice about `concurrency` is logged.
+- The exporter configurations `docs/AUTHENTICATION.md` shows with their
+  collectors load as written, and one without them says it is part of a
+  configuration.
 
 # 35. Documentation requirements
 
@@ -7392,7 +7586,11 @@ concurrent probes MUST be safe.
 
 The cache MUST be bounded per collector by `limits.max_cache_entries`. When the
 limit is exceeded, the exporter MUST drop expired entries first and then the
-entries closest to expiry.
+entries closest to expiry — by the end of the stale window, not of `ttl` —
+the smaller key first among entries expiring at the same instant. Every store
+keeps the bound under the cache's lock, so it MUST NOT look at or sort every
+entry of the collector: the work of a store MUST grow no faster than the
+logarithm of the collector's entries, times the entries it removes.
 
 The exporter MUST expose per-collector cache self-metrics:
 

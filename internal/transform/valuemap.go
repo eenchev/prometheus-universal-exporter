@@ -35,7 +35,10 @@ func ruleValue(rule model.MetricRule, raw any) (float64, error) {
 		}
 		n, numberErr := model.Number(raw)
 		if numberErr != nil {
-			return 0, fmt.Errorf("value %q is neither in value_map nor a number; add it to value_map, or map \"*\" for any other value", key)
+			if err != nil {
+				return 0, fmt.Errorf("value is %s, which is neither text value_map can look up nor a number; select one value inside it", model.ShowValue(raw))
+			}
+			return 0, fmt.Errorf("value %s is neither in value_map nor a number; add it to value_map, or map \"*\" for any other value", model.QuoteValue(key))
 		}
 		return scaled(rule, n), nil
 	}

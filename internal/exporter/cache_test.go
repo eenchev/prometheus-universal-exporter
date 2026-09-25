@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"os"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -794,14 +795,14 @@ func TestTheCacheIndexFollowsItsEntries(t *testing.T) {
 	check := func(when string) {
 		t.Helper()
 		indexed := 0
-		for collector, keys := range cache.byCollector {
-			if len(keys) == 0 {
+		for collector, entries := range cache.byCollector {
+			if entries.Len() == 0 {
 				t.Errorf("%s: %s has an empty index", when, collector)
 			}
-			for key := range keys {
+			for i, indexedEntry := range *entries {
 				indexed++
-				if entry := cache.entries[key]; entry == nil || entry.collector != collector {
-					t.Errorf("%s: %s indexes %s, which it does not hold", when, collector, key)
+				if entry := cache.entries[indexedEntry.key]; entry != indexedEntry || entry.collector != collector || entry.index != i {
+					t.Errorf("%s: %s indexes %s, which it does not hold at %d", when, collector, indexedEntry.key, i)
 				}
 			}
 		}
@@ -908,5 +909,138 @@ func TestACacheHitAtTheStartOfATripIsQueuedForOTLP(t *testing.T) {
 	}
 	if queued != 1 {
 		t.Fatalf("the cached answer was queued for OTLP %d times, want once", queued)
+	}
+}
+
+// Eviction removes the entries closest to expiry — their stale_if_error
+// window included, not only their ttl — and of two expiring together the one
+// with the smaller key; expired entries go before any live one.
+func TestCacheEvictionOrder(t *testing.T) {
+	cache := newResponseCache()
+	now := time.Now()
+	set := model.MetricSet{Metrics: []model.Metric{{Name: "v", Type: model.GaugeMetricType, Value: 1}}}
+	// b's ttl is the shortest, but its stale window keeps it longest.
+	cache.Put("a", "c", set, 2*time.Minute, 0, 3, now)
+	cache.Put("b", "c", set, time.Second, 10*time.Minute, 3, now)
+	cache.Put("d", "c", set, 3*time.Minute, 0, 3, now)
+	cache.Put("e", "c", set, 3*time.Minute, 0, 3, now)
+	held := func() string {
+		keys := make([]string, 0, len(cache.entries))
+		for _, entry := range *cache.byCollector["c"] {
+			keys = append(keys, entry.key)
+		}
+		slices.Sort(keys)
+		return strings.Join(keys, " ")
+	}
+	if got := held(); got != "b d e" {
+		t.Fatalf("held %q, want a, closest to expiry, gone", got)
+	}
+	cache.Put("f", "c", set, 3*time.Minute, 0, 3, now)
+	if got := held(); got != "b e f" {
+		t.Fatalf("held %q, want d, the smaller of the keys expiring together, gone", got)
+	}
+	// Once e and f have expired, new entries take their places first.
+	later := now.Add(4 * time.Minute)
+	cache.Put("g", "c", set, time.Minute, 0, 3, later)
+	cache.Put("h", "c", set, time.Minute, 0, 3, later)
+	if got := held(); got != "b g h" {
+		t.Fatalf("held %q, want the expired entries gone and b kept", got)
+	}
+}
+
+// The eviction keeps exactly the live entries the sort over all of them kept,
+// whatever the order and lifetimes of the puts.
+func TestCacheEvictionMatchesSortingEveryEntry(t *testing.T) {
+	cache := newResponseCache()
+	reference := map[string]time.Time{} // live key -> expires
+	start := time.Unix(1_700_000_000, 0)
+	set := model.MetricSet{Metrics: []model.Metric{{Name: "v", Type: model.GaugeMetricType, Value: 1}}}
+	const maxEntries = 7
+	seed := uint64(1)
+	next := func(n int) int {
+		seed = seed*6364136223846793005 + 1442695040888963407
+		return int((seed >> 33) % uint64(n))
+	}
+	for i := range 5000 {
+		now := start.Add(time.Duration(i) * time.Second)
+		key := fmt.Sprint("k", next(40))
+		ttl := time.Duration(next(30)) * time.Second
+		stale := time.Duration(next(3)*next(20)) * time.Second
+		if ttl+stale <= 0 {
+			ttl = time.Second
+		}
+		cache.Put(key, "c", set, ttl, stale, maxEntries, now)
+
+		// What the cache did before: every expired entry swept, then the
+		// live ones sorted and those past the budget removed.
+		reference[key] = now.Add(ttl + stale)
+		var live []string
+		for k, expires := range reference {
+			if !expires.After(now) {
+				delete(reference, k)
+				continue
+			}
+			live = append(live, k)
+		}
+		if len(live) > maxEntries {
+			slices.SortFunc(live, func(a, b string) int {
+				if c := reference[a].Compare(reference[b]); c != 0 {
+					return c
+				}
+				return strings.Compare(a, b)
+			})
+			for _, k := range live[:len(live)-maxEntries] {
+				delete(reference, k)
+			}
+		}
+
+		for k, entry := range cache.entries {
+			if _, kept := reference[k]; !kept && entry.expires.After(now) {
+				t.Fatalf("put %d: the cache holds %s, which the sort evicted", i, k)
+			}
+		}
+		for k := range reference {
+			if _, held := cache.entries[k]; !held {
+				t.Fatalf("put %d: the cache evicted %s, which the sort kept", i, k)
+			}
+		}
+	}
+}
+
+// A Put below a collector's max_cache_entries does no eviction work, and one
+// at it finds the entry to evict without looking at, or sorting, the rest.
+func BenchmarkCachePut(b *testing.B) {
+	set := model.MetricSet{Metrics: []model.Metric{{Name: "v", Type: model.GaugeMetricType, Value: 1}}}
+	for _, entries := range []int{1000, 10000} {
+		for _, full := range []bool{false, true} {
+			name := fmt.Sprintf("entries=%d/under_cap", entries)
+			if full {
+				name = fmt.Sprintf("entries=%d/at_cap", entries)
+			}
+			b.Run(name, func(b *testing.B) {
+				cache := newResponseCache()
+				now := time.Now()
+				for i := range entries {
+					cache.Put(fmt.Sprint("k", i), "c", set, time.Hour, 0, entries, now.Add(time.Duration(i)*time.Millisecond))
+				}
+				limit := entries + 1
+				if full {
+					limit = entries
+				}
+				keys := make([]string, 1024)
+				for i := range keys {
+					keys[i] = fmt.Sprint("new", i)
+				}
+				b.ResetTimer()
+				for i := range b.N {
+					key := keys[i%len(keys)]
+					if !full {
+						// Stay one under the cap: replace a key already held.
+						key = "k0"
+					}
+					cache.Put(key, "c", set, time.Hour, 0, limit, now.Add(time.Duration(entries+i)*time.Millisecond))
+				}
+			})
+		}
 	}
 }

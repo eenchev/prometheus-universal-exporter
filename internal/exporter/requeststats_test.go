@@ -6,9 +6,11 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
+	"unsafe"
 
 	"github.com/eenchev/prometheus-universal-exporter/internal/config"
 	"github.com/eenchev/prometheus-universal-exporter/internal/model"
@@ -400,7 +402,7 @@ func TestVerboseRequestSeriesAreCapped(t *testing.T) {
 func TestVerboseCappedIndicatorIsExposed(t *testing.T) {
 	server := verboseServer(t, true, testutil.Collector("capped", "text"))
 	for i := 0; i <= VerboseRequestSeriesLimit; i++ {
-		server.registerRequest("capped", fmt.Sprintf("http://h/%d", i), http.MethodGet)
+		server.requests.statsFor(requestKey{Collector: "capped", URL: fmt.Sprintf("http://h/%d", i), Method: http.MethodGet})
 	}
 	exposition := selfMetrics(t, server)
 	if got := metricValue(t, exposition, "http_exporter_request_series_capped"); got != 1 {
@@ -419,9 +421,9 @@ func TestTrackedSeriesCountIsReported(t *testing.T) {
 	if got := metricValue(t, selfMetrics(t, server), "http_exporter_request_series_tracked"); got != 0 {
 		t.Fatalf("tracked=%v before any request, want 0", got)
 	}
-	server.registerRequest("counted", "http://a.example", http.MethodGet)
-	server.registerRequest("counted", "http://b.example", http.MethodPost)
-	server.registerRequest("counted", "http://a.example", http.MethodGet)
+	server.requests.statsFor(requestKey{Collector: "counted", URL: "http://a.example", Method: http.MethodGet})
+	server.requests.statsFor(requestKey{Collector: "counted", URL: "http://b.example", Method: http.MethodPost})
+	server.requests.statsFor(requestKey{Collector: "counted", URL: "http://a.example", Method: http.MethodGet})
 	if got := metricValue(t, selfMetrics(t, server), "http_exporter_request_series_tracked"); got != 2 {
 		t.Fatalf("tracked=%v, want the two distinct requests", got)
 	}
@@ -495,5 +497,169 @@ func TestSelfMetricsConfigDefaultsToQuiet(t *testing.T) {
 	}
 	if cfg.Web.SelfMetrics.Verbose {
 		t.Fatal("verbose self-metrics must be opt-in")
+	}
+}
+
+// A probe whose target the collector's denied_targets refuses must not take
+// one of the limited request slots: a caller probing refused targets would
+// otherwise fill them, and a legitimate target probed afterwards would never be
+// tracked.
+func TestRefusedProbesDoNotTakeRequestSlots(t *testing.T) {
+	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "text/plain")
+		_, _ = w.Write([]byte("value=42\n"))
+	}))
+	defer target.Close()
+	c := testutil.Collector("guarded", "text")
+	c.Request.DeniedTargets = []string{"denied.example"}
+	server := verboseServer(t, true, c)
+	// All slots but one are taken, so a single refused probe taking one
+	// would leave none for the legitimate target.
+	for i := 0; i < VerboseRequestSeriesLimit-1; i++ {
+		server.requests.statsFor(requestKey{Collector: "other", URL: fmt.Sprintf("http://h/%d", i), Method: http.MethodGet})
+	}
+	for i := 0; i < 5; i++ {
+		response := probeOnce(t, server, fmt.Sprintf("/probe?collector=guarded&target=http://denied.example/%d", i), nil)
+		if response.Code != http.StatusForbidden {
+			t.Fatalf("status=%d, want the refusal's 403", response.Code)
+		}
+	}
+	exposition := selfMetrics(t, server)
+	if strings.Contains(exposition, "denied.example") {
+		t.Fatalf("a refused probe's request is tracked:\n%s", exposition)
+	}
+	if got := metricValue(t, exposition, "http_exporter_request_series_capped"); got != 0 {
+		t.Fatalf("capped=%v after refused probes only", got)
+	}
+	// The refusals are still counted on the collector.
+	if got := metricValue(t, exposition, `http_exporter_targets_refused_total{collector="guarded"}`); got != 5 {
+		t.Fatalf("collector refused=%v, want 5", got)
+	}
+
+	if response := probeOnce(t, server, "/probe?collector=guarded&target="+target.URL, nil); response.Code != http.StatusOK {
+		t.Fatalf("status=%d", response.Code)
+	}
+	exposition = selfMetrics(t, server)
+	labels := fmt.Sprintf(`{collector="guarded",http_method="GET",url="%s"}`, target.URL)
+	if got := metricValue(t, exposition, "http_exporter_scrapes_total"+labels); got != 1 {
+		t.Fatalf("the legitimate target's scrapes=%v, want 1 on its own series", got)
+	}
+	if got := metricValue(t, exposition, "http_exporter_scrape_success_total"+labels); got != 1 {
+		t.Fatalf("the legitimate target's successes=%v, want 1", got)
+	}
+}
+
+// A probe of a request already tracked keeps updating it even when refused,
+// as a reload that denies a target once allowed should show on its series.
+func TestARefusedProbeOfATrackedRequestIsCounted(t *testing.T) {
+	c := testutil.Collector("guarded", "text")
+	c.Request.DeniedTargets = []string{"denied.example"}
+	server := verboseServer(t, true, c)
+	server.requests.statsFor(requestKey{Collector: "guarded", URL: "http://denied.example", Method: http.MethodGet})
+	probeOnce(t, server, "/probe?collector=guarded&target=http://denied.example", nil)
+	labels := `{collector="guarded",http_method="GET",url="http://denied.example"}`
+	if got := metricValue(t, selfMetrics(t, server), "http_exporter_targets_refused_total"+labels); got != 1 {
+		t.Fatalf("refused=%v on the tracked request, want 1", got)
+	}
+}
+
+// Requests nobody asks for any more expire, so their slots come back and their
+// frozen timestamps leave the endpoint; the configured static targets' do not.
+func TestIdleRequestsExpire(t *testing.T) {
+	tracker := newRequestTracker()
+	now := time.Unix(1_700_000_000, 0)
+	tracker.now = func() time.Time { return now }
+	idle := requestKey{Collector: "c", URL: "http://idle", Method: "GET"}
+	busy := requestKey{Collector: "c", URL: "http://busy", Method: "GET"}
+	static := requestKey{Collector: "c", URL: "http://static", Method: "GET"}
+	tracker.statsFor(idle)
+	tracker.statsFor(busy)
+	tracker.setStatic(map[requestKey]bool{static: true})
+
+	now = now.Add(VerboseRequestIdleExpiry / 2)
+	tracker.existing(busy)
+	now = now.Add(VerboseRequestIdleExpiry/2 + time.Second)
+	tracker.expire()
+	samples, _ := tracker.Snapshot()
+	var urls []string
+	for _, sample := range samples {
+		urls = append(urls, sample.Key.URL)
+	}
+	if got := strings.Join(urls, " "); got != "http://busy http://static" {
+		t.Fatalf("tracked after expiry: %s, want the used and the static request", got)
+	}
+	if VerboseRequestIdleExpiry != time.Hour {
+		t.Fatalf("VerboseRequestIdleExpiry=%v, want the documented hour", VerboseRequestIdleExpiry)
+	}
+}
+
+// At the limit, an idle request makes room for a new one at once rather than
+// at the next scrape of the self-metrics.
+func TestAnIdleRequestMakesRoomAtTheLimit(t *testing.T) {
+	tracker := newRequestTracker()
+	now := time.Unix(1_700_000_000, 0)
+	tracker.now = func() time.Time { return now }
+	for i := 0; i < VerboseRequestSeriesLimit; i++ {
+		tracker.statsFor(requestKey{Collector: "c", URL: fmt.Sprintf("http://h/%d", i), Method: "GET"})
+	}
+	if tracker.statsFor(requestKey{Collector: "c", URL: "http://new", Method: "GET"}) != nil {
+		t.Fatal("a new request was tracked past the limit")
+	}
+	now = now.Add(VerboseRequestIdleExpiry + time.Second)
+	if tracker.statsFor(requestKey{Collector: "c", URL: "http://new", Method: "GET"}) == nil {
+		t.Fatal("idle requests did not make room for a new one")
+	}
+	if samples, capped := tracker.Snapshot(); len(samples) != 1 || capped {
+		t.Fatalf("samples=%d capped=%v, want only the new request and the limit clear", len(samples), capped)
+	}
+}
+
+// A reload that points a static target elsewhere drops the old URL's series,
+// which would otherwise stay with a timestamp that never moves again.
+func TestAReloadDropsTheRequestsOfRemovedStaticTargets(t *testing.T) {
+	cfg := &model.Config{
+		Collectors: []model.Collector{testutil.Collector("text", "text")},
+		OTLP:       otlpConfig("http://collector.invalid/v1/metrics"),
+		Web:        model.WebConfig{SelfMetrics: model.SelfMetricsConfig{Verbose: true}},
+	}
+	file := &model.StaticTargetFile{Interval: model.Duration(time.Minute), Targets: []model.StaticTarget{{Name: "one", Collector: "text", Target: "http://old.example"}}}
+	server := newStaticServer(t, cfg, file)
+	if !strings.Contains(selfMetrics(t, server), `url="http://old.example"`) {
+		t.Fatal("the static target's request is not listed")
+	}
+	server.manager.SetTargets("", &model.StaticTargetFile{Interval: model.Duration(time.Minute), Targets: []model.StaticTarget{{Name: "one", Collector: "text", Target: "http://new.example"}}})
+	exposition := selfMetrics(t, server)
+	if strings.Contains(exposition, "old.example") || !strings.Contains(exposition, `url="http://new.example"`) {
+		t.Fatalf("after the reload, want only the new URL listed:\n%s", exposition)
+	}
+	if got := metricValue(t, exposition, "http_exporter_request_series_tracked"); got != 1 {
+		t.Fatalf("tracked=%v, want 1", got)
+	}
+}
+
+// Two probes of a request not tracked yet that finish at once both count.
+func TestAbsorbAddsEveryCounter(t *testing.T) {
+	var a, b statsValues
+	for _, v := range []*statsValues{&a, &b} {
+		rv := reflect.ValueOf(v).Elem()
+		for i := 0; i < rv.NumField(); i++ {
+			if f := rv.Field(i); f.Kind() == reflect.Uint64 {
+				// The fields are unexported; the test sets them all
+				// so a counter added later cannot be left out.
+				reflect.NewAt(f.Type(), unsafe.Pointer(f.UnsafeAddr())).Elem().SetUint(1)
+			}
+		}
+	}
+	b.lastScrape = time.Unix(1, 0)
+	b.lastStatus = http.StatusTeapot
+	a.absorb(b)
+	rv := reflect.ValueOf(a)
+	for i := 0; i < rv.NumField(); i++ {
+		if rv.Field(i).Kind() == reflect.Uint64 && rv.Field(i).Uint() != 2 {
+			t.Errorf("%s=%d after absorb, want 2", rv.Type().Field(i).Name, rv.Field(i).Uint())
+		}
+	}
+	if a.lastStatus != http.StatusTeapot || !a.lastScrape.Equal(b.lastScrape) {
+		t.Fatalf("the later trip's values were not taken: %+v", a)
 	}
 }

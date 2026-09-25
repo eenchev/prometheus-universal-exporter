@@ -3,7 +3,10 @@ package transform
 import (
 	"context"
 	"net/http"
+	"os"
 	"os/exec"
+	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/eenchev/prometheus-universal-exporter/internal/decode"
@@ -53,5 +56,28 @@ for row in doc.xpath('//table[@id="servers"]//tr[td]'):
 	}
 	if len(set.Metrics) != 2 || set.Metrics[0].Labels["server"] != "web01" || set.Metrics[0].Value != 72 || set.Metrics[1].Value != 18.5 {
 		t.Fatalf("metrics=%#v", set.Metrics)
+	}
+}
+
+// An interpreter that is not there fails without a word on stderr, and the
+// error must then end with the failure rather than a dangling ": "; one that
+// does complain has its complaint appended.
+func TestAMissingInterpreterErrorEndsCleanly(t *testing.T) {
+	cfg := &model.Config{Collectors: []model.Collector{pythonLibraryCollector()}}
+	_, err := CheckPythonScripts("/nonexistent/python3", cfg)
+	if err == nil {
+		t.Fatal("a missing interpreter was accepted")
+	}
+	if msg := err.Error(); strings.HasSuffix(strings.TrimSpace(msg), ":") || !strings.Contains(msg, `"/nonexistent/python3"`) {
+		t.Fatalf("error = %q, want it to name the path and end with the failure", msg)
+	}
+
+	complaining := filepath.Join(t.TempDir(), "python3")
+	if err := os.WriteFile(complaining, []byte("#!/bin/sh\necho 'broken interpreter' >&2\nexit 3\n"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	_, err = CheckPythonScripts(complaining, cfg)
+	if err == nil || !strings.HasSuffix(err.Error(), ": broken interpreter") {
+		t.Fatalf("error = %v, want the interpreter's stderr appended", err)
 	}
 }

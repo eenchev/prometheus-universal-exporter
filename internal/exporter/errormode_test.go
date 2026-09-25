@@ -117,7 +117,9 @@ func TestErrorModesThroughAProbe(t *testing.T) {
 	}{
 		{mode: model.ErrorModeIgnore, wantStatus: http.StatusOK, wantUp: true, wantLogLines: 0},
 		{mode: model.ErrorModeLog, wantStatus: http.StatusOK, wantUp: true, wantLogLines: 1},
-		{mode: model.ErrorModeFail, wantStatus: http.StatusBadGateway, wantUp: false, wantLogLines: 1},
+		// fail's one line is the probe's failure, which names the metric
+		// (TestARuleFailureIsLoggedOnce).
+		{mode: model.ErrorModeFail, wantStatus: http.StatusBadGateway, wantUp: false, wantLogLines: 0},
 	}
 	for _, test := range tests {
 		t.Run(test.mode, func(t *testing.T) {
@@ -424,4 +426,94 @@ func TestRuleFailuresThatCarryOnAreCounted(t *testing.T) {
 			t.Errorf("%s = %v, want %v", series, got, want)
 		}
 	}
+}
+
+// A rule under log that fails on every scrape of a target is one failing
+// thing: logged once, at warning level, with the target, then only as a
+// repeat, and its recovery once it produces its series again. Under fail, the
+// probe's failure, which names the metric, is the only line.
+func TestARuleFailureIsLoggedOnce(t *testing.T) {
+	t.Run("log", func(t *testing.T) {
+		out := testutil.CaptureLogs(t)
+		var missing atomic.Bool
+		missing.Store(true)
+		target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			if missing.Load() {
+				_, _ = w.Write([]byte(`{"up":1}`))
+				return
+			}
+			_, _ = w.Write([]byte(`{"up":1,"latency":0.5}`))
+		}))
+		t.Cleanup(target.Close)
+		server := modeServer(t, modeCollector("modes", model.ErrorModeLog))
+		for i := 0; i < 3; i++ {
+			if response := probe(t, server, target.URL, "modes"); response.Code != http.StatusOK {
+				t.Fatalf("status=%d", response.Code)
+			}
+		}
+		records := logRecords(t, out)
+		if got := extractionFailures(t, records); got != 1 {
+			t.Fatalf("three failing scrapes logged %d extraction failures, want 1:\n%s", got, out.String())
+		}
+		for _, record := range records {
+			if record["msg"] != "metric extraction failed" {
+				continue
+			}
+			for key, want := range map[string]any{"level": "WARN", "collector": "modes", "target": target.URL, "metric": "demo_latency_seconds", "error_mode": model.ErrorModeLog} {
+				if record[key] != want {
+					t.Errorf("%s=%v, want %v", key, record[key], want)
+				}
+			}
+		}
+		// The log says it once; the self-metrics still count every
+		// failed series.
+		if got := server.statsFor("modes").ruleFailureCount("demo_latency_seconds"); got != 3 {
+			t.Errorf("rule failures=%d, want 3", got)
+		}
+
+		missing.Store(false)
+		probe(t, server, target.URL, "modes")
+		probe(t, server, target.URL, "modes")
+		recovered := 0
+		for _, record := range logRecords(t, out) {
+			if record["msg"] == "metric extraction recovered" {
+				recovered++
+				if record["target"] != target.URL || record["metric"] != "demo_latency_seconds" {
+					t.Errorf("recovery line %v", record)
+				}
+			}
+		}
+		if recovered != 1 {
+			t.Fatalf("logged %d recoveries, want 1:\n%s", recovered, out.String())
+		}
+	})
+	t.Run("fail", func(t *testing.T) {
+		out := testutil.CaptureLogs(t)
+		target := jsonTarget(t, nil)
+		server := modeServer(t, modeCollector("strict", model.ErrorModeFail))
+		probe(t, server, target.URL, "strict")
+		records := logRecords(t, out)
+		naming := 0
+		for _, record := range records {
+			if strings.Contains(jsonText(t, record), "demo_latency_seconds") {
+				naming++
+				if record["msg"] != "probe failed" || record["metric"] != "demo_latency_seconds" || record["target"] != target.URL {
+					t.Errorf("the failure is logged as %v", record)
+				}
+			}
+		}
+		if naming != 1 {
+			t.Fatalf("the failing rule is in %d log lines, want 1:\n%s", naming, out.String())
+		}
+	})
+}
+
+func jsonText(t *testing.T, record map[string]any) string {
+	t.Helper()
+	b, err := json.Marshal(record)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(b)
 }

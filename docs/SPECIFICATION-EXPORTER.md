@@ -208,6 +208,10 @@ request:
 `backoff` defaults to zero and MUST NOT be exponential. The exporter SHOULD
 retry transport failures and transient HTTP statuses `408`, `425`, `429`, and
 `500` through `599`. Other HTTP statuses MUST be returned without retrying.
+A connection that breaks while the body is read — a reset, a body shorter than
+its `Content-Length` — MUST be retried as a transport failure is, unless the
+probe's deadline is what ended the read, and a debug report MUST show the
+attempt's status followed by the read error.
 The retry loop MUST share the incoming scrape or explicit target timeout. When
 that deadline, a shutdown or the caller ends the wait before a retry, the
 exporter MUST keep what it received: after a retryable status, that response,
@@ -222,11 +226,10 @@ non-idempotent method, without `retry.non_idempotent`, MUST be reported as a
 configuration warning. When a target answers with a status outside `2xx`, the
 logged failure SHOULD carry the start of the body, at most 256 bytes on one
 line, and the probe's answer MUST NOT. What in it reads as a credential — a
-`Bearer` or `Basic` credential, the value of a field or parameter whose name
-contains `token`, `secret`, `password`, `passwd`, `pwd`, `api_key`,
-`access_key`, `private_key`, `session`, `signature`, `credential` or `auth`,
-and a JSON Web Token — MUST be masked before it is logged, including one the
-256-byte cut runs through.
+`Bearer` or `Basic` credential, a JSON Web Token, and the value of a field or
+parameter whose name reads as a credential's by the one rule for a name
+(§ 42.17) — MUST be masked before it is logged, including one the 256-byte
+cut runs through.
 
 The exporter MUST validate and normalize the target according to collector request configuration.
 
@@ -317,7 +320,9 @@ no `://` means no scheme — before the target is parsed, because a URL parser
 rejects `10.0.0.5:8080` outright and reads `legacy.example:8080` as the scheme
 `legacy.example`. IPv6 literals in brackets and credentials in the userinfo
 MUST survive. `allowed_schemes` MUST apply to the result, so a bare target is
-never upgraded to `https`.
+never upgraded to `https`, and to the URL of every redirect followed: a
+redirect to a scheme the collector does not allow MUST fail the request,
+naming the scheme, before it is followed.
 
 When neither `request.path` nor a `path` probe parameter is given, the target
 MUST be requested exactly as given, including any path it carries.
@@ -957,6 +962,7 @@ text/csv                  -> csv
 text/html                 -> html
 text/plain                -> text
 text/plain; version=0.0.4 -> potentially prometheus
+application/openmetrics-text -> prometheus, read as OpenMetrics (§ 14.1)
 ```
 
 Ambiguous formats SHOULD be rejected or require explicit configuration rather than guessed incorrectly.
@@ -1227,6 +1233,16 @@ string that is not a number MUST be the rule's missing value. A label
 expression that computes a value MUST give its text, a number written
 shortest. This holds for XPath over HTML too.
 
+A label read from an element's text, or computed as a string, MUST be trimmed
+of leading and trailing whitespace, as a CSS label is, so the indentation of
+pretty-printed XML is no part of it.
+
+A compiled XPath expression MUST NOT be evaluated by two scrapes at once:
+antchfx/xpath runs an expression's query tree in place. The expression cache
+(`internal/expr`) MUST give each use a compiled copy of its own, from a pool
+per expression, so scrapes of one collector, and collectors sharing an
+expression, run concurrently without a data race.
+
 ---
 
 # 12. HTML decoder
@@ -1381,7 +1397,8 @@ The implementation MUST avoid double-encoding Prometheus text. It must parse it 
 
 ## 14.1 Parser
 
-The decoder parses the text exposition format, version 0.0.4, with its own
+The decoder parses the text exposition format, version 0.0.4, and
+OpenMetrics 1.0 text (below), with its own
 parser (`internal/decode/promparse.go`) rather than `github.com/prometheus/common/expfmt`. That
 package was the only reason the binary carried `prometheus/common`,
 `prometheus/client_model`, the protobuf runtime and `munnerz/goautoneg`; the
@@ -1405,7 +1422,9 @@ The parser MUST follow expfmt's rules:
   `{"my.metric", key="value"} 1` for a metric name that is not a bare name.
   `__name__` is reserved, and a label name may appear once per sample.
 - HELP text and label values unescape `\\`, `\n` and `\"`; any other escape is
-  an error.
+  an error. A label value that is not valid UTF-8 MUST NOT fail the parse: it
+  is repaired with U+FFFD and counted after the transform, as every decoder's
+  output is (§ 6.1a).
 - A value is a Go float without `p`, `P` or `_`, so `NaN`, `+Inf` and `-Inf`
   are accepted and hexadecimal floats and digit separators are not. A
   timestamp is an integer number of milliseconds.
@@ -1429,6 +1448,38 @@ It deliberately differs from expfmt where expfmt was wrong for a scrape target:
 
 Families are returned in the order they were first seen, and series in the
 order of their first sample, so a decode is deterministic.
+
+The body MUST be read as OpenMetrics 1.0 text when its `Content-Type` is
+`application/openmetrics-text`, or, when the `Content-Type` does not say
+`text/plain; version=0.0.4`, when its last line is `# EOF`. The same parser
+reads it (`internal/decode/openmetrics.go`), without `prometheus/common`, and:
+
+- a timestamp MUST be read as a float number of seconds and kept in
+  milliseconds;
+- an exemplar after the value or the timestamp MUST be skipped;
+- a counter family `foo`'s sample `foo_total` MUST be the counter `foo_total`,
+  with the family's type and help, and a counter family named `foo_total` MUST
+  be read the same way;
+- `_created` samples of counters, histograms and summaries MUST be dropped,
+  since the model has no creation time;
+- `unknown` MUST be read as untyped, `stateset` as a gauge, `info` as the
+  gauge `foo_info`, and `gaugehistogram` as the gauges `foo_bucket` (with `le`
+  a plain label), `foo_gcount` and `foo_gsum`, each with the family's help;
+  any other type MUST be an error;
+- `# UNIT` lines MUST be ignored, and a line other than a blank one after
+  `# EOF` MUST be an error; a body without `# EOF` is accepted.
+
+The text format 0.0.4 MUST be read as before: integer millisecond timestamps,
+`_created` and `_total` as families of their own, and `unknown` an error. The
+http request type sends no `Accept` header of its own; a collector asks for
+OpenMetrics through `request.headers`.
+
+For a `prometheus` transform without a `pre_script`, the decoder MUST keep only
+the series the transform passes on — those a rule's expression (or name)
+matches, or, without rules, those `include` and `exclude` pick — and MUST stop
+at the first kept series past `limits.max_metrics` with the limit's error
+(§ 20). The other lines MUST still be parsed and checked. With a
+`pre_script`, which is given every series, every series MUST be kept.
 
 ---
 
@@ -1589,7 +1640,10 @@ a string for text, HTML and XML; and, for Prometheus exposition,
 and its `timestamp` in milliseconds when it has one. NaN and the infinities
 MUST reach a script as Python floats, and MUST come back as floats, in a
 pre-script's `data` and in `metric(...)`, although JSON, which the exporter
-and its workers exchange, has no form for them.
+and its workers exchange, has no form for them. The numbers of a worker's
+answer MUST be read as the JSON decoder reads a response's, integers of any
+length as integers, so an ID above 2^53 that a pre-script passes through keeps
+every digit rather than being rounded to a float64.
 
 ### 16.2 Metric API
 
@@ -2207,8 +2261,9 @@ reads `data` back after the script runs, so a script that computes a value and
 leaves it in another name discards its work silently: the transform then runs
 against the untouched decoded response and the collector appears to be
 mis-extracting rather than misconfigured. Replacing `data`, mutating it by key
-or attribute, augmenting it, binding it as a loop or `with` target, and calling
-a method that mutates it all satisfy this.
+or attribute, augmenting it, binding it as a loop or `with` target or with an
+assignment expression (`(data := ...)`), deleting from it (`del data["x"]`),
+and calling a method that mutates it all satisfy this.
 
 Reading `data` MUST NOT satisfy it, however thoroughly the script reads. A
 method call counts only when the method mutates its receiver: `data.update(...)`
@@ -2385,7 +2440,14 @@ The response a collector reads MUST be bounded by `request.max_response_bytes`
 and `limits.max_response_bytes`: the smaller when both are set, the one set
 otherwise, and 10 MiB when neither is. Neither MUST be filled in with the
 default, so that either alone may raise the bound past it; a negative value
-MUST be refused.
+MUST be refused. An HTTP answer whose `Content-Length` is over the bound MUST
+be refused before its body is read, the error giving that size; one without
+it MUST be refused once reading passes the bound, and the error MUST NOT give
+a size it does not know. A `HEAD` answer's `Content-Length` MUST NOT be held
+against it. The bound MUST count the answer decompressed: `Accept-Encoding`
+is the exporter's own, so one in a collector's or a static target's
+`request.headers` MUST be refused at load, and one the probe carries MUST NOT
+be forwarded, even listed in `forward_headers`.
 
 A probe's cache and coalescing key MUST write the length of every list before
 it — the query's parameters, each parameter's values, the headers and each
@@ -2395,6 +2457,20 @@ key, and MUST treat header names without regard to case.
 A trip cancelled because every probe waiting for it went away MUST NOT be
 reported as a failure of the target: nothing logged, no stale answer counted
 or queued for OTLP.
+
+`max_metrics` MUST bound the memory of a scrape as well as its size: every
+transform MUST stop at the first series past it, and the prometheus decoder
+at the first series its transform would pass on past it (§ 14.1), rather
+than build every series the response describes and count them afterwards.
+The error MUST read `metric count N exceeds limit M`, as the count afterwards
+reads, where N is then M+1; it MUST be the scrape's `validation` stage failure,
+counted in `http_exporter_series_limit_exceeded_total`, whatever
+`error_handling` says. The limit MUST travel with the transform's context,
+spanning every rule of the collector, not in a global. A regex rule MUST ask
+for at most one more match than the limit has room for, and for more only
+when matches made no series; a jq `items` expression's items MUST be taken
+as the program produces them. A python transform's answer is bounded by
+`max_output_bytes`, and its metrics MUST be counted before they are read.
 
 `max_cache_entries` bounds the number of live cache entries a single collector
 may hold. It MUST default to a finite value and MUST be enforced by evicting
@@ -2439,12 +2515,54 @@ A family named like a series of a histogram or a summary — `foo_bucket`,
 next to a summary `foo` — MUST fail validation naming both, since the
 exposition would hold two families of one name.
 
+What would fail this validation on every scrape, whatever the target
+answers, MUST instead be refused when the configuration loads, naming the
+collector and the metric: two rules of one collector giving one metric name
+different types (rules giving it the same type feed one family and MUST be
+accepted; a `prometheus` rule without a `type` is not compared); a rule named
+as a series of another rule's histogram or summary; a `description` longer
+than `limits.max_help_length`; and a static label value, of a rule or of
+`transform.labels`, longer than `limits.max_label_value_length`, unless the
+label has `truncate: true`, a `value_map` maps the value to a shorter one, or
+`remove_labels` drops it. A `python` transform's rules make no series, so only
+its `transform.labels` are checked.
+
 Metric names SHOULD be normalized only when explicitly configured; silent surprising renaming is undesirable. A collector's `metrics_prefix` (§ 5.0a) is such explicit configuration, and validation applies to the prefixed names.
 
 The exposition MUST be served as `text/plain; version=0.0.4; charset=utf-8`,
 with `X-Content-Type-Options: nosniff`: label values and help come from
 scraped targets, and a browser MUST show any markup in them as text rather
 than render it.
+
+`/probe`, the self-metrics and the static targets endpoint MUST answer in
+OpenMetrics 1.0.0 instead, as `application/openmetrics-text; version=1.0.0;
+charset=utf-8` (or `version=0.0.1` when only that is asked for) with `nosniff`,
+when the request's `Accept` gives `application/openmetrics-text` of version
+1.0.0, 0.0.1 or none a higher quality than any of `text/plain`, `text/*` and
+`*/*`; a tie, no `Accept`, or only types the exporter does not write MUST get
+the text format. Every such answer MUST carry `Vary: Accept`. Probes sharing
+one trip to the target (§ 42.13a) MUST each get the format they asked for. The
+OpenMetrics answer MUST hold the same series as the text one, written as
+OpenMetrics requires: a family's series together, in the order the family
+first appears; a counter's family named without `_total` and its samples with
+it; `untyped` as `unknown`; HELP with `\`, `\n` and `\"` escaped; timestamps in
+seconds; `le` and `quantile` values as canonical floats (`1.0`); and `# EOF`
+last. No `_created` series MUST be written, since the exporter does not know
+when a target's counter started.
+No name MUST be claimed by two OpenMetrics families, where a family claims its
+name and its type's sample names (a counter `foo`: `foo`, `foo_total`,
+`foo_created`; a histogram `foo`: `foo`, `foo_bucket`, `foo_count`, `foo_sum`,
+`foo_created`; a summary `foo`: `foo`, `foo_count`, `foo_sum`, `foo_created`;
+a gauge or `unknown` family: its name). Where the natural forms above would
+claim a name twice, the families involved MUST be written as `unknown` under
+the sample names the text format gives them, so either format yields the same
+series, and independently of the order they appear in: first every counter
+whose claims meet another family's becomes the `unknown` family of its own
+name; then every histogram or summary whose claims still meet another's
+becomes one `unknown` family per sample name (`foo_bucket`, `foo_sum`,
+`foo_count`; or `foo`, `foo_sum`, `foo_count`); gauges and `unknown` families
+keep their type unless their name is one of those sample names, when they and
+the lines of that name share one `unknown` family.
 A series' timestamp MUST end every line of it: a plain sample's, and each
 bucket, quantile, `_sum` and `_count` line of a histogram or a summary.
 
@@ -3257,6 +3375,8 @@ such form MUST be refused.
 - With `allowed_targets` set, a target MUST be refused unless its host
   matches it by name, or every address it resolves to is in an allowed
   network. `denied_targets` MUST win over `allowed_targets`.
+- An IPv6 address with a zone (`fe80::1%eth0`) MUST be checked as the address
+  without its zone, against the lists and the metadata addresses alike.
 - Names MUST be checked before the request and again for the host of every
   redirect followed, and so MUST a host written as an address, needing no
   lookup, before anything is sent. For a target reached directly, addresses MUST be checked
@@ -3684,8 +3804,11 @@ Optional:
 
 ```text
 --log.level=info
---log.format=json
 ```
+
+Logs MUST always be JSON, one object per line (docs/LOGGING.md); there MUST
+NOT be a flag selecting another format. No document MAY name an exporter flag
+the exporter does not have.
 
 The exact flag names can follow Prometheus ecosystem conventions.
 
@@ -3891,6 +4014,10 @@ Test at minimum:
   from the fetch up to the probe's answer, its log and the status self-metric;
   after a refused connection it keeps the connection error, noting the wait
   was cut short.
+- An answer whose connection breaks after 5 of 64 promised bytes is retried
+  and the retry's whole body kept, the trace showing `200 OK, then the body
+  broke off`; with no attempts left, or a `POST` without
+  `retry.non_idempotent`, the read error is the fetch's.
 - Empty response bodies.
 - Response body exactly at the maximum allowed size.
 - Response body exceeding the configured maximum size.
@@ -4103,6 +4230,8 @@ Test:
 - XPath syntax errors.
 - XPath expressions yielding zero results.
 - XPath expressions yielding multiple results.
+- Label text of pretty-printed XML, read from an element or computed as a
+  string, trimmed of the indentation around it.
 
 Test both metric values and label extraction from attributes/elements.
 
@@ -4192,6 +4321,18 @@ Also required, for the parser in §14.1:
   `google.golang.org/protobuf` or `munnerz/goautoneg`.
 - A fuzz target (`FuzzParsePrometheusText`) whose seeds run with the ordinary
   suite, and which never produces a metric without a name.
+- A label value that is not valid UTF-8 is repaired with U+FFFD and counted as
+  a repair, and the scrape's other series are kept.
+- OpenMetrics input, as a table of expositions and the series each is read
+  as: a counter `foo` with `foo_total` and `foo_created`, a counter family
+  already named `foo_total`, integer and fractional timestamps in seconds,
+  exemplars with and without a timestamp, `unknown` with a `# UNIT` line,
+  histograms and summaries with `_created`, `info`, `stateset`,
+  `gaugehistogram`, and a body without `# EOF`; content after `# EOF`, a
+  timestamp that is no number and an unknown type are errors naming the line.
+  The text format keeps its own reading of the same lines, and OpenMetrics is
+  detected by `Content-Type` and by a final `# EOF` unless the `Content-Type`
+  says `version=0.0.4`.
 
 Test the canonical metric declaration shape with `name`, `description`,
 `type`, `labels`, and `expression` for every non-Python transform. Verify that
@@ -4265,7 +4406,8 @@ Test the pre-script `data` contract:
 - A pre-script that produces `data` is accepted for every shape that does so:
   replacing it, mutating it by key, nested key or attribute, augmenting it,
   annotated and tuple and starred assignment, a mutating method call on it or on
-  a nested part of it, and binding it as a loop or `with` target.
+  a nested part of it, binding it as a loop or `with` target or with `:=`
+  (in a statement and in a comprehension), and `del` of a key or a nested key.
 - A pre-script that assigns another name, computes and discards, only reads
   `data`, or mutates a different object is rejected, naming the collector.
 - A pre-script that reads `data` extensively — including through a method call
@@ -4390,6 +4532,9 @@ Test:
 - Execution timeout.
 - Excessive metric generation.
 - Excessive output/logging if limited.
+- An integer above 2^53 that a pre-script passes through keeps every digit in
+  a jq label, and a python transform's and a prometheus pre-script's numbers,
+  read as JSON numbers, still work as values, timestamps and counts.
 
 Python scripts MUST NOT be able to perform arbitrary network or process execution. Test that prohibited functionality is unavailable or denied, including at minimum:
 
@@ -4524,6 +4669,18 @@ Test boundary values exactly at the limit and one beyond the limit.
 
 A limit violation MUST be reported through the appropriate self-metrics and MUST NOT crash the exporter.
 
+Test that `max_metrics` bounds a scrape's work: for regex, jq, jq `items`,
+CSV, XPath, CSS `items`, prometheus rules and a prometheus passthrough, a
+response of 100,000 series with a limit of 10 fails with `metric count 11
+exceeds limit 10`, marked as a limit, and allocates less than half of what
+making every series does; at the limit exactly it passes. The prometheus
+decoder stops at the 11th kept series within a few thousand allocations, for
+a passthrough, `include` and rules; series `exclude` leaves out do not count,
+and a `pre_script` sees them all. Through a probe the failure is the
+`validation` stage, counted in `http_exporter_series_limit_exceeded_total` and
+not as a parse or transform error, whatever `on_decode_error` and
+`on_transform_error` say; a file of a directory read fails alone, as a limit.
+
 ## 34.22 Metric exposition tests
 
 Every supported decoder/transform combination MUST have end-to-end tests that verify the final `/probe` response is valid Prometheus exposition.
@@ -4603,6 +4760,9 @@ Test:
 - Simultaneous probes for different collectors.
 - Python transform execution concurrently.
 - jq/yq execution concurrently.
+- One cached XPath expression, computing a value and selecting nodes, with
+  computed and selected labels, evaluated by many scrapes at once under
+  `-race`.
 
 CI MUST run:
 
@@ -4884,6 +5044,10 @@ Required:
   parameter, any forwarded header, or the forwarded credential changes, and
   when any of those is removed. Absence and presence MUST produce different
   keys.
+- Probes differing only in parameters no request type knows, a `header_`
+  parameter for a header not forwarded, or `debug=false` share one cache entry
+  and make one request; `timeout`, `method`, a forwarded `header_` parameter
+  and a `param_` parameter each make a probe of their own.
 - A probe carrying no credential never reads an entry stored by a probe that
   carried one, and probes carrying different credentials never share an entry.
 - A configuration reload retires entries cached under the previous collector
@@ -5150,6 +5314,17 @@ status captured:
   ordered, never chaining.
 - `--dry-run` reports an expression that does not compile as a failed `config`
   check.
+- Two rules giving one name different types, a type left out counting as
+  gauge, are refused naming the collector and the metric; rules giving it the
+  same type, and prometheus rules without a type, are accepted.
+- A rule named `foo_bucket` or `foo_sum` beside a histogram `foo`, or
+  `foo_count` beside a summary `foo`, is refused; `foo_bucket` beside a
+  summary is not.
+- A `description` one byte over `limits.max_help_length` is refused, and one at
+  it accepted; a static rule label over `limits.max_label_value_length` is
+  refused, unless it has `truncate: true`, a `value_map` shortens it or
+  `remove_labels` drops it; a `transform.labels` value over it is refused, a
+  python transform's included.
 
 ## 34.44 Error policy vocabulary tests
 
@@ -5225,7 +5400,9 @@ status captured:
 ## 34.49 Configuration schema tests
 
 See § 24.3. In addition, the README's command-line table lists exactly the flags
-the exporter has.
+the exporter has. No Markdown document in the repository names a flag of the
+exporter's prefixes (`--web.`, `--log.`, `--config.`, `--probe.`, `--python.`,
+`--runtime.`, `--static-targets`) that the exporter does not have (§ 30).
 
 ## 34.50 Shared probe tests
 
@@ -5243,6 +5420,11 @@ the exporter has.
 - Every waiting probe going away cancels the request, and a later probe starts
   afresh and succeeds.
 - `coalesce: false` makes one request per probe.
+- A trip that finds the cache filled when it starts is answered from it
+  without a request, and queues the answer for OTLP once.
+- Concurrent probes differing only in parameters no request type knows or a
+  `header_` parameter for a header not forwarded share one request; probes of
+  a collector with no fingerprint share none.
 - With a cache, concurrent probes make one request and fill the cache, and the
   next probe is a cache hit.
 - A panic in the shared work answers with `500` and leaves nothing in flight.
@@ -5401,7 +5583,9 @@ See § 5.0a, § 5.1a, § 22.0d, § 23 and § 42.1a.
   process within two seconds, killed by the signal, while the first alone did
   not end it.
 - Past `otlp.max_pending_points` the points kept from a failed export go
-  before those queued since, down to nine tenths, counted and logged;
+  before those queued since, and the oldest of them first, down to nine
+  tenths, counted and logged; after two failed exports in a row, the points
+  queued before the first still go first, whatever their names;
   replacing a waiting series is not a new point; draining resets the count.
   Negative `max_pending_points` and `unready_after_failures` are rejected.
 - Failing exports leave `/ready` at 200 by default; with
@@ -5801,6 +5985,10 @@ See § 22.0c, § 23, § 42.1a and § 42.15b.
 - A cumulative point starts at its series' first point, keeps that start as
   the count grows, starts again after a reset and in another resource, and
   after an hour unseen; a histogram likewise; a gauge has none.
+- Start times are remembered for at most twice `otlp.max_pending_points`
+  series, by default and as configured for an export; past it the series
+  seen least recently is forgotten and starts again, and one seen again
+  recently is kept.
 - NaN and infinities from a Prometheus source reach a Python transform and
   come back from `metric(...)` and from a pre-script's `data` as floats.
 - `metric(...)` reads a numeric string, a boolean and a float timestamp, and a
@@ -5833,6 +6021,26 @@ See § 22.0c, § 23, § 42.1a and § 42.15b.
 - Histogram, summary and sample lines all carry the series' timestamp, and the
   exposition is `text/plain; version=0.0.4; charset=utf-8` with `nosniff`, so
   markup a target puts in help or a label value is never rendered as HTML.
+- The format follows `Accept`: Prometheus 2's and 3's headers get
+  OpenMetrics 1.0.0, one asking only for 0.0.1 gets 0.0.1; no header, a
+  browser's, curl's, a tie, text preferred, OpenMetrics refused or of another
+  version, an invalid quality and protobuf alone get the text format.
+- The OpenMetrics rendering of a counter with and without `_total`, a gauge
+  with a timestamp in seconds, `untyped` as `unknown`, a histogram and a
+  summary with float `le` and `quantile` values, escaped HELP and label
+  values, a family's series brought together and `# EOF` last, exactly; an
+  empty answer is `# EOF` alone.
+- OpenMetrics families that would claim one name, in either order: a counter
+  `foo_total` and a gauge `foo`, counters `jobs` and `jobs_total`, a counter
+  `foo` and a gauge `foo_total`, a histogram `h` and a counter `h_sum_total`
+  (the histogram keeps its type), a gauge `h_count` and a histogram `h`, and a
+  summary `s` and a gauge `s_sum`, render exactly; no `# TYPE` names a family
+  twice, no two families claim one name, every sample is one its family's type
+  allows, and the series are the text format's.
+- A probe, the self-metrics and the static targets endpoint, its kept
+  rendering and a filtered read, answer in the format asked for with its
+  `Content-Type`, `Vary: Accept` and `nosniff`; two probes sharing a trip,
+  one asking for each format, each get their own from one request.
 - A `SIGHUP` during the shutdown delay does not end the process, which exits
   cleanly after the graceful shutdown; OTLP exports keep being made through
   the delay.
@@ -6114,6 +6322,9 @@ Tests MUST show:
   the target's body, and leaves the failure log as it was, so the next
   probe's failure is logged as the first.
 - A refused target is reported as refused and not contacted.
+- A debug probe and a debug scrape whose trip panics report the panic, log it
+  with its stack, and give back their trip slot, so a second one is not
+  refused.
 - A followed redirect is listed as a second request, and a stale answer a
   probe would have served is named.
 - A `grpc` collector's call is listed with its method and code and its
@@ -6132,6 +6343,10 @@ Tests MUST show:
   publishes no stale result; a gRPC call refused `UNAUTHENTICATED` or
   `PERMISSION_DENIED` is not answered stale, and one refused `UNAVAILABLE`
   is.
+- A probe whose trip `denied_targets` refuses on a redirect is answered `403`,
+  not stale, and a debug probe says there is no stale result; the entry stays
+  for a later `503`, which is; a static target's scrape refused so publishes
+  no stale result, and a later `503` does.
 - A logged body excerpt masks a bearer credential, a field named like a
   token and one the excerpt's cut runs through; ordinary text is left alone.
 - One set of redaction rules gives a displayed target, a metric label's URL
@@ -6200,6 +6415,29 @@ Tests MUST show:
   to a summary `bar`, fail validation naming both.
 - A CSV header naming a column twice fails the decode naming it; repeated
   empty names, and a file read without a header, do not.
+
+## 34.73 Review fixes: redirect schemes, credential names, response sizes, Accept-Encoding and zoned addresses tests
+
+Tests MUST show:
+
+- An `https`-only collector following redirects refuses a redirect from an
+  HTTPS target to a plain `http` one, naming the scheme, without reaching
+  it; a collector allowing both follows it.
+- A displayed target masks `sig`, `pwd`, `pw`, `pass`, `db_pwd`, `userPass`,
+  `X-Sig`, the `X-Amz-` signing parameters, `apikey`, `api_key`, `auth`,
+  `session`, `passphrase` and `jwt`, and keeps `design`, `signal`, `bypass`,
+  `compass`, `passthrough` and `page`; no form of a URL shows its fragment;
+  a logged body masks a value after `sig=`, `pwd`, `pass=` and a
+  cookie-named field, and one after a harmless name inside another's value.
+- An answer whose `Content-Length` is over the limit is refused with that
+  size before its body is read; one without it is refused with no size; a
+  `HEAD` answer's `Content-Length` is not held against it.
+- `Accept-Encoding` under `request.headers` is refused at load; one the
+  probe carries is not forwarded, listed or not, and a gzip answer still
+  reaches the decoder decompressed.
+- `denied_targets: [fe80::/10]` refuses `fe80::1%eth0`, as a host and as a
+  probe's target, `fd00:ec2::254%eth0` is refused as the metadata service,
+  and `allowed_targets: [fe80::/10]` allows `fe80::1%eth0`.
 
 # 35. Documentation requirements
 
@@ -6509,8 +6747,11 @@ resource attributes MUST be preserved:
 - A cumulative point — a counter's sum, a histogram, a summary — MUST carry a
   start time: the time of its series' first exported point, per resource, and
   of the first point after a reset, when its count or value went down. A
-  series not exported for an hour MUST be forgotten and start again. A gauge
-  MUST NOT carry one.
+  series not exported for an hour MUST be forgotten and start again. The
+  series remembered MUST be at most twice `otlp.max_pending_points` (its
+  default when unset); past that, the series exported least recently MUST be
+  forgotten first, and start again when it comes back. A gauge MUST NOT carry
+  one.
 
 Probe results MUST be queued under the exporter-wide resource, a series known
 by its name, type and labels, so a later probe's point for the same series
@@ -6565,7 +6806,8 @@ process at once, without waiting for the probes or the last export. A
 The data points waiting for export MUST be bounded by `otlp.max_pending_points`,
 100000 by default, a negative value being rejected. Past it, the oldest MUST be
 dropped — points kept from failed exports before any queued since, and among
-those the older first — down to nine tenths of the limit, so that dropping is
+those the older first, a point keeping its age through every failed export
+that queues it again — down to nine tenths of the limit, so that dropping is
 not repeated on every point; they MUST be counted (§ 22.0c) and logged as a
 warning. Replacing the value of a series already waiting MUST NOT count as a
 new point.
@@ -6625,9 +6867,9 @@ collector-scoped:
    [SPECIFICATION-CHART.md](SPECIFICATION-CHART.md) § 42.4.
 4. The exporter MUST reject or ignore forwarding of transport and hop-by-hop
    headers, including `Host`, `Connection`, `Content-Length`, `Proxy-*`,
-   `Transfer-Encoding`, `Trailer`, `Upgrade`, and `TE`. `Authorization` MUST
-   be controlled only by `request.forward_authorization`, not by the generic
-   header allowlist.
+   `Transfer-Encoding`, `Trailer`, `Upgrade`, and `TE`, and MUST NOT forward
+   `Accept-Encoding` (§ 20). `Authorization` MUST be controlled only by
+   `request.forward_authorization`, not by the generic header allowlist.
 5. Monitor header parameters MUST be documented as non-secret. Basic and
    bearer credentials MUST be supplied through Kubernetes Secret references,
    not URL parameters.
@@ -6890,7 +7132,7 @@ read; path parameters are bound on every probe. They MUST compose, so a
 default may be an environment reference expanded at load time:
 `{{param_tenant:${DEFAULT_TENANT}}}`.
 
-Every probe parameter is part of the response cache key (§ 42.13), so two probes
+Every path parameter is part of the response cache key (§ 42.13), so two probes
 differing only in a path parameter MUST NOT share a cache entry.
 
 The verbose self-metrics `url` label (§ 22.1) MUST show a bound placeholder as
@@ -6971,8 +7213,20 @@ MUST:
 - publish versioned and `latest` container tags to GHCR, moving `latest` only
   to the newest release of all and the `MAJOR.MINOR` tag only to the newest
   release of that line, so a patch to an older line never takes them back;
+- run the test suite against the Python the image ships, the Dockerfile's
+  `PYTHON_VERSION`, with the Dockerfile's pinned `lxml`, `PyYAML` and
+  `python-dateutil`, as CI does;
 - build release binaries for the documented target platforms; and
-- create a GitHub Release containing the software archives.
+- create a GitHub Release containing the software archives and a file of
+  their SHA-256 checksums, `prometheus-universal-exporter-<version>-sha256sums.txt`
+  in `sha256sum` format, so a download can be checked with `sha256sum -c`.
+
+Every workflow that runs the test suite — CI, the exporter release, and the
+Dockerfile update workflow, which runs `make ci` against the updated pins
+before proposing them — MUST first install that Python and those libraries,
+read from the Dockerfile; one that runs `make ci` MUST also install the pinned
+golangci-lint and gopls (`make lint-install gopls-install`), since `make ci`
+runs both.
 
 The chart release workflow is specified in
 [SPECIFICATION-CHART.md](SPECIFICATION-CHART.md) § 42.12.
@@ -6984,7 +7238,13 @@ before publishing artifacts.
 The repository's tests MUST cover the release tag contract: that each release
 workflow triggers on its whole namespace, that the format it enforces accepts
 well-formed tags and rejects malformed ones, and that the version committed in
-`Chart.yaml` would produce a tag the chart release accepts.
+`Chart.yaml` would produce a tag the chart release accepts. They MUST also
+fail when a workflow runs the test suite without first setting up the image's
+Python and libraries, or runs `make ci` without installing golangci-lint and
+gopls; when the exporter release publishes its archives without the checksums
+file; and when the chart release pushes before checking its default image, or
+signs the chart by tag rather than by the digest it pushed (SPECIFICATION-CHART.md
+§ 42.12).
 
 ## 42.13 Collector response caching
 
@@ -7019,11 +7279,21 @@ exactly. The cache key MUST be a fingerprint covering at least:
 
 - the collector name and the full effective collector definition;
 - the `target` value;
-- every query parameter of the `/probe` request, including `method`, `path`,
-  `timeout`, `body`, `insecure_skip_verify`, `retry_attempts`,
-  `retry_backoff`, and any `header_<name>` parameter, with all values; and
+- every `/probe` parameter the collector's request type accepts (its
+  declared overrides), including `method`, `path`, `timeout`, `body`,
+  `insecure_skip_verify`, `retry_attempts`, `retry_backoff` and every
+  `param_<name>`, with all values; and
 - every header forwarded to the target, including a forwarded `Authorization`
-  value.
+  value and those given as `header_<name>` parameters.
+
+The key MUST NOT cover a parameter that changes nothing sent: one no request
+type accepts, which the probe ignores (`debug` among them), or a
+`header_<name>` parameter for a header the collector does not forward. Probes
+differing only in such parameters are the same request, and MUST share a
+cache entry and a trip (§ 42.13a); otherwise a caller could fill the cache
+with copies of one result, evicting the entries `stale_if_error` falls back
+on, by adding parameters of its own. A collector whose definition cannot be
+fingerprinted has no key: its probes MUST be neither cached nor shared.
 
 The presence and the absence of a parameter, a header, or a credential MUST
 produce different keys. Every list the key is built from — a parameter's
@@ -7078,7 +7348,11 @@ changes MUST NOT serve a result stored under the previous one.
 A trip that failed because the target refused its credential — HTTP `401` or
 `403`, or gRPC `UNAUTHENTICATED` or `PERMISSION_DENIED` — MUST NOT be answered
 with a stale result, by a probe or a static target's scrape: the credential
-may have been revoked, and the stored result was given to another. The entry
+may have been revoked, and the stored result was given to another. Nor MUST a
+trip the collector's `allowed_targets` or `denied_targets` refused (§ 26.1),
+answered `403`, whether before the request or on a redirect: the target may
+not be reached, and no earlier result stands in for it. A debug probe or
+debug scrape (§ 42.17) MUST report either as having no stale result. The entry
 MUST stay stored, to stand in for a later failure of another kind.
 
 So that a stale answer never passes for a fresh one, while `stale_if_error` is
@@ -7151,12 +7425,15 @@ moment would otherwise each reach it, multiplying the load on a slow or
 rate-limited endpoint.
 
 - Identical MUST mean the response cache key (§ 42.13): the collector
-  definition, the target, every probe parameter and every forwarded header,
-  credentials included. Probes that could get different answers MUST NOT share.
+  definition, the target, every probe parameter that makes the request and
+  every forwarded header, credentials included. Probes that could get
+  different answers MUST NOT share; probes differing only in parameters the
+  key leaves out MUST. A probe without a key MUST NOT share.
 - It MUST work with the response cache off. With it on, the cache is checked
   first, and the shared request fills it once. The probe that starts a shared
   request MUST check the cache again before going to the target, since one that
-  just finished may have filled it.
+  just finished may have filled it; an answer found so is a cache hit, queued
+  for OTLP once, as a hit found before the shared request is.
 - The shared request's own work MUST be counted and logged once: its HTTP
   status, response bytes, decode, transform, validation and error counters, its
   log lines, its cache entry and its OTLP export. Every probe MUST still count
@@ -7456,7 +7733,9 @@ exporter MUST return the redirect response itself, so the collector observes the
 3xx status rather than being sent to another host silently; a collector whose
 `error_handling.on_fetch_error` is `fail` therefore fails the probe, which is the
 intended signal that the target moved. When it is true the exporter MUST follow
-redirects using the HTTP client's normal limit.
+redirects using the HTTP client's normal limit, each redirect's URL held to
+`allowed_schemes` (§ 3.3) and to `allowed_targets` and `denied_targets`
+(§ 26.1).
 
 `enable_http2` controls whether the target request may negotiate HTTP/2. It MUST
 default to `false`, which is the protocol behaviour the exporter has always had,
@@ -7679,6 +7958,10 @@ OTLP. Its failures and recoveries MUST NOT reach the exporter's log or the
 failure log's state (§ 25): the next probe's failure is logged as the first.
 The exporter MUST log one `info` line per debug probe served, naming the
 collector and the target.
+A debug probe or debug scrape MUST give back its trip slot however its trip
+ends; a panic in it MUST be recovered, logged at `error` with its stack, and
+reported as `500: probe failed: internal error: <panic>` (a debug scrape:
+`target up 0`, the scrape failed with that internal error).
 
 The report MUST NOT show query values, a URL's userinfo, request bodies, or
 the values of request or response headers whose names contain `auth`,
@@ -7703,9 +7986,16 @@ credentials by the same rules, kept in one place: userinfo is never shown; a
 metric label drops the query, a debug report masks its values, and a
 displayed target — in a log line, the static targets endpoint's `target`
 label and the OTLP `target` attribute — masks the values of the parameters
-whose names read as credentials, with the header rule's words, and keeps the
-rest, in order, so targets that differ in anything else stay apart; a header value is withheld when its name
-reads as a credential's. An error that quotes a URL, as Go's HTTP client
+whose names read as credentials, and keeps the rest, in order, so targets
+that differ in anything else stay apart; a header value is withheld when its
+name reads as a credential's. One rule MUST say whether a name — a header's,
+a query parameter's or a field's in logged text — reads as a credential's: it
+contains, in any case, `auth`, `cookie`, `token`, `secret`, `password`,
+`passwd`, `passphrase`, `passcode`, `key`, `session`, `signature`,
+`credential` or `jwt`, or has `sig`, `pwd`, `pw` or `pass` as a whole word,
+split at punctuation and at a change to upper case (`sig`, `db_pwd`,
+`userPass`, but not `design`, `signal` or `bypass`). A URL's fragment MUST NOT
+be shown in any of these forms. An error that quotes a URL, as Go's HTTP client
 quotes the one a failed request was sending or `url.Parse` the text it could
 not parse, MUST quote it with its userinfo withheld and every query value
 masked, wherever the error is shown: a log line, a probe's answer or a debug

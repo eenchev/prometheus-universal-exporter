@@ -1,11 +1,13 @@
 package transform
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"math"
+	"math/big"
 	"strconv"
 	"strings"
 	"sync"
@@ -193,6 +195,10 @@ func pythonNumber(v any) (float64, error) {
 		return 0, errors.New("is None, not a number")
 	case float64:
 		return n, nil
+	case json.Number, int, *big.Int:
+		// A worker's answer is read with its numbers as json.Number, and a
+		// pre-script's data normalized to int or *big.Int.
+		return model.Number(n)
 	case bool:
 		if n {
 			return 1, nil
@@ -214,6 +220,12 @@ func pythonNumber(v any) (float64, error) {
 func executePython(ctx context.Context, pythonPath, script string, d *decode.Decoded, r *fetch.HTTPResponse, c *model.Collector) (*model.MetricSet, error) {
 	out, err := runPython(ctx, pythonPath, "metrics", "transform", script, d, r, c)
 	if err != nil {
+		return nil, err
+	}
+	// The answer is bounded by limits.max_output_bytes already; counted
+	// before its metrics are converted, a script that emitted too many fails
+	// as one past limits.max_metrics, not as whatever the conversion finds.
+	if err := takeSeriesN(ctx, len(out.Metrics)); err != nil {
 		return nil, err
 	}
 	set := &model.MetricSet{Metrics: make([]model.Metric, 0, len(out.Metrics))}
@@ -406,8 +418,14 @@ func pythonResult(c *model.Collector, what string, timeout time.Duration, line [
 		PythonWorkers().recordRun(c.Name, pythonRunFailed)
 		return nil, fmt.Errorf("python %s failed: %w", what, err)
 	}
+	// Numbers are read as the JSON decoder reads a response's: as
+	// json.Number, which model.Normalize makes an int, or a *big.Int past
+	// int64, so an ID a pre-script passes through keeps every digit rather
+	// than being rounded to the nearest float64 above 2^53.
 	var out pythonOutput
-	if err := json.Unmarshal(line, &out); err != nil {
+	decoder := json.NewDecoder(bytes.NewReader(line))
+	decoder.UseNumber()
+	if err := decoder.Decode(&out); err != nil {
 		PythonWorkers().recordRun(c.Name, pythonRunFailed)
 		return nil, fmt.Errorf("python %s output: %w", what, err)
 	}

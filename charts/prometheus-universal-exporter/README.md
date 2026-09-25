@@ -161,6 +161,8 @@ A monitor must name a `collector`, and, when the chart holds the configuration, 
 
 > Probe monitors, of either type, send Prometheus to the exporter's Service, so they need `service.enabled: true`; with it off, rendering fails.
 
+Each monitor is named `<release>-prometheus-universal-exporter-<name>`, so `name` is a DNS-1123 label — lower-case letters, digits and `-`, starting and ending with a letter or digit — unique among the entries, and neither `self` nor `static-targets`, the names of the chart's own monitors; anything else fails rendering. Without `targetSelector` a monitor selects the targets labelled `app.kubernetes.io/name: target`; with it, its `matchLabels` or `matchExpressions`. `interval` and `scrapeTimeout`, here and on the self-metrics and static targets monitors, are Prometheus durations, as the Prometheus Operator takes them: whole numbers of `y`, `w`, `d`, `h`, `m`, `s` and `ms`, such as `30s`, `1m30s` or `1500ms`; a fraction such as `1.5m`, or `us` and `ns`, fail rendering.
+
 The exporter's own metrics get a monitor too, `<release>-prometheus-universal-exporter-self`, while `selfMetrics.enabled` is on: a `ServiceMonitor`, or a `PodMonitor` with `selfMetrics.type: pod`. It is rendered when the chart renders any other monitor — a probe monitor or the [static targets](#static-targets) monitor — or when the cluster serves that kind, so an install without the Prometheus Operator does not fail on it.
 
 ## Configure the target request
@@ -195,6 +197,8 @@ Supported parameters include:
 * `param_<name>`, which fills a `{{param_<name>}}` placeholder in the collector's `request.path`
 * `from` and `until`, the render window of a [`graphite`](../../docs/GRAPHITE.md) collector
 * `message`, the request message of a [`grpc`](../../docs/GRPC.md) collector
+
+`collector` and `target` are not among them: the chart renders the collector parameter from the monitor's `collector`, where it is checked against `config.data`, and the target parameter from each discovered target's address. A `params` entry of either would render a second key of the same name, so it fails rendering, pointing to `collector` and `targetSelector`.
 
 For example, a collector with `path: /api/{{param_tenant}}/status` scraped by a
 monitor with `params: {param_tenant: [acme]}` requests `/api/acme/status`. A
@@ -262,7 +266,7 @@ config:
           password: change-me
 ```
 
-A password written there ends up in the chart's ConfigMap. To keep it in a Secret instead, mount the Secret with `webAuth` and point the configuration at the files. The same Secret can give the monitors their credential:
+A password written there ends up in the chart's ConfigMap, and the monitors need the credential too. Mount it from a Secret with `webAuth` instead and point the configuration at the files; every monitor the chart renders then presents it:
 
 ```yaml
 webAuth:
@@ -281,13 +285,9 @@ monitors:
     enabled: true
     type: service
     collector: example
-    auth:
-      enabled: true
-      type: basic
-      secretName: exporter-auth
 ```
 
-The self-metrics monitor uses the `webAuth` Secret by itself, since `web.basic_auth` protects the self-metrics endpoint too; the probing monitors take it through their `auth`, as above, whose keys default to `username` and `password`. `webAuth.usernameKey` and `webAuth.passwordKey` name the Secret's keys, `username` and `password` by default; the files are always named `username` and `password` under `webAuth.mountPath`. The exporter reads a file again when it changes, so a rotated Secret takes effect without a restart. An `extraVolumeMounts` entry at `webAuth.mountPath` is rejected while rendering.
+With `webAuth.enabled`, every monitor the chart renders sends the `webAuth` Secret's credential as `basicAuth`, since `web.basic_auth` protects `/probe` and the self-metrics and static targets endpoints alike: the self-metrics and static targets monitors, and each probing monitor without an `auth` of its own. A probing monitor whose `auth.enabled` is true sends its own credential instead. `webAuth.usernameKey` and `webAuth.passwordKey` name the Secret's keys, `username` and `password` by default; the files are always named `username` and `password` under `webAuth.mountPath`. The exporter reads a file again when it changes, so a rotated Secret takes effect without a restart. An `extraVolumeMounts` entry at `webAuth.mountPath` is rejected while rendering.
 
 The Kubernetes `/health` and `/ready` endpoints remain available for health checks. The readiness probe uses `/ready`, which reports the pod not ready while a reload of its configuration is rejected, and, with `otlp.unready_after_failures` set, while its OTLP exports keep failing; see [Readiness](../../docs/CONFIGURATION.md#readiness).
 
@@ -317,7 +317,7 @@ The exporter's own flags are chart values rather than something to assemble by h
 | `staticTargets.expandEnv` | `--static-targets.expand-env`, with `staticTargets.enabled` | off |
 | `config` | `--config.file` | the chart's ConfigMap |
 
-`server.listenAddress` sets the container port too, so the listener and the probes cannot drift apart. `server.pythonPath` is the interpreter used by the `python` transform; its default is where the exporter image's `python:3.12-slim` base installs Python, and it is worth overriding only for a custom image. `server.logLevel` is one of `debug`, `info`, `warn` and `error`, and anything else fails rendering.
+`server.listenAddress` sets the container port too, so the listener and the probes cannot drift apart. Its host may be empty, as in `:8080`, a wildcard such as `0.0.0.0:8080` or `[::]:8080`, or a pod address; a loopback host — `127.x.x.x`, `localhost` or `[::1]` — fails rendering, since neither the kubelet's probes nor the Service reach it. `server.pythonPath` is the interpreter used by the `python` transform; its default is where the exporter image's `python:3.12-slim` base installs Python, and it is worth overriding only for a custom image. `server.logLevel` is one of `debug`, `info`, `warn` and `error`, and anything else fails rendering.
 
 `server.probeTimeoutOffset` is how much of Prometheus's scrape timeout — a monitor's `scrapeTimeout` — a probe leaves unused, so a slow target or a hung file read is answered with the exporter's own error before Prometheus gives up (see [Probe deadlines](../../docs/CONFIGURATION.md#probe-deadlines)). It takes a Go duration of zero or more. Left empty, the flag is not rendered at all, so the exporter's default applies and an image older than the flag still starts; set it only with an image that has it.
 
@@ -424,7 +424,7 @@ resources:
 
 ### Probes
 
-The chart checks `/health` for liveness and `/ready` for readiness on the `http` port. `livenessProbe` and `readinessProbe` set their timings; the check itself is the chart's, and setting `httpGet`, `exec`, `tcpSocket` or `grpc` fails rendering. The liveness probe has some slack by default, since a pod busy with a burst of probes is slow rather than dead, and a restart would lose its cache and Python workers:
+The chart checks `/health` for liveness and `/ready` for readiness on the `http` port. `livenessProbe` and `readinessProbe` set their timings; the check itself is the chart's, and setting `httpGet`, `exec`, `tcpSocket` or `grpc` fails rendering. `terminationGracePeriodSeconds` is accepted on `livenessProbe` only: Kubernetes refuses it on a readiness probe, so the values schema does too. The liveness probe has some slack by default, since a pod busy with a burst of probes is slow rather than dead, and a restart would lose its cache and Python workers:
 
 ```yaml
 livenessProbe:
@@ -490,6 +490,8 @@ service:
   type: ClusterIP
   port: 8080
 ```
+
+`service.type` is `ClusterIP`, `NodePort` or `LoadBalancer`; not `ExternalName`, a DNS alias with no endpoints, through which neither Prometheus nor the monitors would reach the exporter.
 
 `service.sessionAffinity: ClientIP` sends every probe from one Prometheus to one pod, so with several replicas its probes keep finding that pod's [cache](#autoscaling); empty, the default, leaves Kubernetes' `None`.
 
@@ -742,7 +744,7 @@ Every value has a default, and `values.yaml` documents each one in place. `value
 | `nameOverride` / `fullnameOverride` / `namespaceOverride` | string | `""` | Naming and namespace of the created objects. Objects are named `<release>-prometheus-universal-exporter`, or after the release alone when its name holds the chart's, so two releases in one namespace do not collide; `fullnameOverride` names them outright. |
 | `defaultLabels` / `defaultAnnotations` | map | `{}` | Metadata applied to every object the chart creates. |
 | `serviceAccount` | object | created | `create`, `automount`, `name`, `annotations`. |
-| `service` | object | enabled, ClusterIP, 8080 | The exporter Service: `enabled`, `type`, `port`, `sessionAffinity`, `annotations`. |
+| `service` | object | enabled, ClusterIP, 8080 | The exporter Service: `enabled`, `type` (`ClusterIP`, `NodePort` or `LoadBalancer`), `port`, `sessionAffinity`, `annotations`. |
 | `neg` | object | disabled | GKE Network Endpoint Group annotations on the Service. |
 | `ingress` | object | disabled | Class, hosts, paths, TLS and annotations. |
 | `server` | object | see [Exporter flags](#exporter-flags) | Exporter flags: `listenAddress`, `pythonPath`, `logLevel`, `probeTimeoutOffset`, `probeDefaultTimeout`, `probeMaxConcurrent`, `pythonMaxWorkers`, `shutdownTimeout`, `shutdownDelay`, `enableLifecycle`, `probeDebug`, `watchConfig`, `watchConfigInterval`, `expandEnv`. |
@@ -752,11 +754,11 @@ Every value has a default, and `values.yaml` documents each one in place. `value
 | `extraVolumes` / `extraVolumeMounts` | array | `[]` | Volumes and mounts beyond the chart's own. |
 | `config` | object | enabled | `enabled`, and `data` holding `config.yaml` and any [collector files](#collector-files). |
 | `staticTargets` | object | disabled | Static targets rendered into the ConfigMap. |
-| `monitors` | array | `[]` | `ServiceMonitor` and `PodMonitor` resources. |
+| `monitors` | array | `[]` | `ServiceMonitor` and `PodMonitor` resources, one per entry: `name` a unique DNS-1123 label other than `self` and `static-targets`, `interval` and `scrapeTimeout` Prometheus durations, `params` without `collector` or `target`; see [Configure Prometheus](#4-configure-prometheus). |
 | `selfMetrics` | object | enabled | The monitor for the exporter's own endpoint, `type` `service` or `pod`, and its path; see [Configure Prometheus](#4-configure-prometheus). |
 | `resources` | object | 100m/128Mi, 500m/512Mi | Requests and limits. |
 | `goMemLimit` | object | enabled, `0.8` | `--runtime.memory-limit-ratio`: the Go memory limit as a share of the container's; see [Resources](#resources). |
-| `livenessProbe` / `readinessProbe` | object | see [Probes](#probes) | The probes' timings. |
+| `livenessProbe` / `readinessProbe` | object | see [Probes](#probes) | The probes' timings; `terminationGracePeriodSeconds` on the liveness probe only. |
 | `autoscaling` | object | disabled | `enabled`, `minReplicas`, `maxReplicas`, `targetCPUUtilizationPercentage`, `targetMemoryUtilizationPercentage`, `metrics`, `behavior`; see [Autoscaling](#autoscaling). |
 | `podDisruptionBudget` | object | disabled | `enabled`, `minAvailable` or `maxUnavailable`, `unhealthyPodEvictionPolicy`; see [Replicas](#replicas). |
 | `strategy` | object | RollingUpdate | Deployment strategy and its `rollingUpdate` settings. |
@@ -767,7 +769,7 @@ Every value has a default, and `values.yaml` documents each one in place. `value
 | `topologySpreadConstraints` | array | `[]` | Pod topology spread constraints; one without a `labelSelector` spreads this release's pods. See [Replicas](#replicas). |
 | `networkPolicy` | object | disabled | `ingress` and `egress` rules, and `allowDNS` with egress rules; see [NetworkPolicy](#networkpolicy). |
 | `targetAuth` | object | disabled | Secret-backed credentials mounted for the exporter to send to the target. |
-| `webAuth` | object | disabled | A Secret's username and password mounted as files for the exporter's own Basic Auth; see [Exporter authentication](#exporter-authentication). |
+| `webAuth` | object | disabled | A Secret's username and password mounted as files for the exporter's own Basic Auth, and presented by every monitor without `auth` of its own; see [Exporter authentication](#exporter-authentication). |
 
 ## Other options
 

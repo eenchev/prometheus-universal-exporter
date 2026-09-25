@@ -14,6 +14,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/eenchev/prometheus-universal-exporter/internal/fetch"
 	"github.com/eenchev/prometheus-universal-exporter/internal/model"
 	"gopkg.in/yaml.v3"
 )
@@ -175,9 +176,9 @@ func (c *responseCache) Stats(now time.Time) map[string]int {
 }
 
 // probeCacheKey fingerprints a probe request. The key covers the collector
-// definition, the target, every query parameter of the probe request including
-// per-scrape overrides, and every header forwarded to the target including a
-// forwarded Authorization value. A request that omits a credential, a header,
+// definition, the target, the query parameters that make the request
+// (probeKeyQuery) including per-scrape overrides, and every header forwarded
+// to the target including a forwarded Authorization value. A request that omits a credential, a header,
 // or a TLS override therefore produces a different key and can never read an
 // entry populated by a request that supplied one. An empty result means the
 // request must not be cached.
@@ -188,6 +189,44 @@ func (c *responseCache) Stats(now time.Time) map[string]int {
 // cannot be given a key that reads a result made with them.
 func probeCacheKey(c *model.Collector, target string, query url.Values, forwarded http.Header, own ...string) string {
 	return probeCacheKeyWith(collectorFingerprint(c), c, target, query, forwarded, own...)
+}
+
+// probeKeyQuery is the part of a probe's query that makes its request, and
+// so belongs in its cache key: collector and target, and the probe parameters
+// c's request type accepts (RequestType.Overrides), param_<name> among them.
+// Everything else is left out. A parameter no request type knows is ignored
+// by the probe, so keyed it would let a caller adding &x=1, &x=2, ... fill
+// the cache with copies of one result, pushing out the entries
+// cache.stale_if_error falls back on, and keep identical probes from sharing
+// a trip (probeflight.go). header_<name> parameters are left out too: the
+// ones forwarded are keyed as the headers they become (forwardedHeaders), and
+// the rest are not sent.
+func probeKeyQuery(c *model.Collector, query url.Values) url.Values {
+	var overrides []string
+	if rt := fetch.RequestTypes[c.Request.Type]; rt != nil {
+		overrides = rt.Overrides
+	}
+	out := url.Values{}
+	for key, values := range query {
+		if key == "target" || key == "collector" || (requestParam(overrides, key) && !strings.HasPrefix(strings.ToLower(key), headerParamPrefix)) {
+			out[key] = values
+		}
+	}
+	return out
+}
+
+// headerParamPrefix starts a probe parameter naming a header to forward.
+const headerParamPrefix = "header_"
+
+// requestParam reports whether key is one of overrides, where a name ending
+// in _ is a prefix, as CheckOverrideParams reads them.
+func requestParam(overrides []string, key string) bool {
+	for _, name := range overrides {
+		if strings.HasSuffix(name, "_") && strings.HasPrefix(key, name) || key == name {
+			return true
+		}
+	}
+	return false
 }
 
 // probeCacheKey is the key of a probe of c in cfg, with the collector's

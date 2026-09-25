@@ -129,6 +129,12 @@ func (s *Server) collectFile(ctx context.Context, file fetch.FileRead, c *model.
 		return nil, &fileFailure{"file", file.Err}
 	}
 	d, err := decode.Decode(file.Response, c)
+	if errors.Is(err, model.ErrLimitExceeded) {
+		// Past limits.max_metrics, found by the decoder rather than the
+		// validation (transform/serieslimit.go).
+		rec.update(func(x *serverStats) { x.limitErrors++ })
+		return nil, &fileFailure{"validation", err}
+	}
 	if err != nil {
 		rec.update(func(x *serverStats) { x.parseErrors++ })
 		return nil, &fileFailure{"decode", err}
@@ -136,6 +142,10 @@ func (s *Server) collectFile(ctx context.Context, file fetch.FileRead, c *model.
 	rec.update(func(x *serverStats) { x.decodeOK++ })
 	s.noteGraphite(ctx, d, c, rec, logTarget, keyTarget, file.Name)
 	set, repaired, err := s.transformRecorded(ctx, d, file.Response, c, rec)
+	if errors.Is(err, model.ErrLimitExceeded) {
+		rec.update(func(x *serverStats) { x.limitErrors++ })
+		return nil, &fileFailure{"validation", err}
+	}
 	if err != nil {
 		rec.update(func(x *serverStats) {
 			if errors.Is(err, model.ErrMissingValue) {

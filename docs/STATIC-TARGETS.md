@@ -241,7 +241,9 @@ An environment reference is fixed when the file is read; it is not a
 ## The static targets endpoint
 
 The latest result of every target is served at `--web.static-targets-path`,
-`/static-targets` by default:
+`/static-targets` by default, in OpenMetrics when the scraper asks for it, as
+Prometheus does, and in the text format otherwise (see
+[OpenMetrics](CONFIGURATION.md#openmetrics)):
 
 ```text
 # TYPE application_connections gauge

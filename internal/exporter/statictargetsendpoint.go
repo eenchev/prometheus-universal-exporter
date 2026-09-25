@@ -190,14 +190,16 @@ func (s *Server) storedStaticResults(file *model.StaticTargetFile, now time.Time
 // until a scrape publishes a result or a reload changes the targets, so a
 // read of the endpoint between two scrapes neither merges nor, mostly,
 // renders again. merged holds the series as stored; aged are those whose
-// value is the data's age, set at each read; rendered is the exposition of
-// merged when it has no such series, served as it is to unfiltered reads.
+// value is the data's age, set at each read; rendered and renderedOM are the
+// exposition of merged when it has no such series, in the text format and in
+// OpenMetrics, served as they are to unfiltered reads.
 type staticTargetsView struct {
 	generation uint64
 	file       *model.StaticTargetFile
 	merged     model.MetricSet
 	aged       []agedSeries
 	rendered   []byte
+	renderedOM []byte
 }
 
 // agedSeries is a series of the view whose value is its target's data's age.
@@ -230,6 +232,7 @@ func (s *Server) currentStaticView() *staticTargetsView {
 	}
 	if len(v.aged) == 0 {
 		v.rendered = appendMetricSet(nil, &v.merged)
+		v.renderedOM = appendOpenMetrics(nil, &v.merged)
 	}
 	s.staticView = v
 	return v
@@ -312,8 +315,15 @@ func (s *Server) staticTargetsHandler(w http.ResponseWriter, r *http.Request) {
 	// between scrapes (currentStaticView), so most reads only write it.
 	view := s.currentStaticView()
 	if names == nil && view.rendered != nil {
-		w.Header().Set("Content-Type", expositionContentType)
-		_, _ = w.Write(view.rendered)
+		format := negotiateFormat(r.Header.Get("Accept"))
+		rendered := view.rendered
+		if format.openMetrics {
+			rendered = view.renderedOM
+		}
+		w.Header().Set("Content-Type", format.contentType())
+		w.Header().Set("X-Content-Type-Options", "nosniff")
+		w.Header().Add("Vary", "Accept")
+		_, _ = w.Write(rendered) //nolint:gosec // G705: text/plain with nosniff, never rendered as HTML
 		return
 	}
 	merged := view.read(s, time.Now())
@@ -326,7 +336,7 @@ func (s *Server) staticTargetsHandler(w http.ResponseWriter, r *http.Request) {
 		}
 		merged.Metrics = kept
 	}
-	writeMetricSet(w, &merged)
+	writeMetricSet(w, r, &merged)
 }
 
 // staticTargetsParam is the query parameter that narrows the endpoint to some

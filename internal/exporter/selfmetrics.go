@@ -181,9 +181,9 @@ func selfMetricNames() []string {
 // set OTLP exports, by the same code as collector output, so the two cannot
 // disagree about a family's type or help, and every family is one contiguous
 // block with one HELP and one TYPE line.
-func (s *Server) metricsHandler(w http.ResponseWriter, _ *http.Request) {
+func (s *Server) metricsHandler(w http.ResponseWriter, r *http.Request) {
 	set := s.selfMetricSet()
-	writeMetricSet(w, &set)
+	writeMetricSet(w, r, &set)
 }
 
 // collectorStats returns the counters of every configured collector, sorted

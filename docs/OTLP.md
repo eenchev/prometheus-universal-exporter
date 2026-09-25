@@ -42,6 +42,10 @@ its series started: the first export of the series, and again after a reset,
 when its count went down, as the OpenTelemetry Collector's Prometheus receiver
 does. The exporter cannot know when a target began counting, so this is the
 earliest it can vouch for; a series not exported for an hour starts again.
+The start times remembered are bounded too, at twice
+[`otlp.max_pending_points`](#delivery) (200000 by default), so series whose labels
+keep changing cannot grow them without limit; past it the series exported
+least recently is forgotten first, and starts again if it comes back.
 
 ## Probes of several targets
 
@@ -81,8 +85,9 @@ the data points are kept and sent with the next export, unless a newer value of
 the same series has arrived in the meantime. Only the latest value of each
 series is kept, but an outage long enough can still see many series come and
 go, so what waits is bounded by `otlp.max_pending_points`, 100000 by default:
-past it the oldest data points — those of failed exports first — are dropped,
-down to nine tenths of the limit, counted in
+past it the oldest data points — those of failed exports first, the
+longest-waiting of them first however many exports in a row have failed — are
+dropped, down to nine tenths of the limit, counted in
 `http_exporter_otlp_points_dropped_total` and logged as a warning. Any other
 answer, such as `400` or `401`,
 would be given again: the data points are dropped and counted rather than sent

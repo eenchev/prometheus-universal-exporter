@@ -7,8 +7,13 @@ exporter release does not republish the chart.
 ## Exporter
 
 An `exporter/prometheus-universal-exporter-vMAJOR.MINOR.PATCH` tag runs
-`release.yml`, which publishes the container image to GHCR, builds the
-cross-platform archives, and creates a GitHub Release containing them:
+`release.yml`, which runs the test suite against the Python and libraries the
+image ships (the Dockerfile's `PYTHON_VERSION`, `LXML_VERSION`,
+`PYYAML_VERSION` and `PYTHON_DATEUTIL_VERSION`, as CI does), publishes the
+container image to GHCR, builds the cross-platform archives, and creates a
+GitHub Release containing them and
+`prometheus-universal-exporter-<version>-sha256sums.txt`, their SHA-256
+checksums:
 
 ```sh
 git tag -a exporter/prometheus-universal-exporter-v1.0.0 -m "Exporter v1.0.0"
@@ -19,6 +24,12 @@ The image is published as `ghcr.io/eenchev/prometheus-universal-exporter:1.0.0`,
 also tagged `1.0` when it is the newest release of 1.0, and `latest` when it
 is the newest release of all. A patch to an older line, say 1.0.1 after
 1.1.0, is published as `1.0.1` and `1.0`, and leaves `latest` on 1.1.0.
+
+To check a downloaded archive, download the checksums file beside it and run:
+
+```sh
+sha256sum --ignore-missing -c prometheus-universal-exporter-1.0.0-sha256sums.txt
+```
 
 ## Helm chart
 
@@ -32,17 +43,33 @@ git tag -a chart/prometheus-universal-exporter-0.2.0 -m "Chart 0.2.0"
 git push origin chart/prometheus-universal-exporter-0.2.0
 ```
 
-The workflow re-runs the chart lint and template checks, packages the chart
-exactly as `Chart.yaml` declares it, pushes it to
-`oci://ghcr.io/eenchev/charts/prometheus-universal-exporter`, and creates a
-GitHub Release with the archive.
+The workflow re-runs the chart lint and template checks, checks that the image
+the chart deploys by default, `ghcr.io/eenchev/prometheus-universal-exporter:<appVersion>`,
+exists (`docker buildx imagetools inspect`), packages the chart exactly as
+`Chart.yaml` declares it, pushes it to
+`oci://ghcr.io/eenchev/charts/prometheus-universal-exporter`, signs it with
+cosign by the digest `helm push` reported — not by the tag, which could be
+moved between the push and the signature — verifies that signature, and
+creates a GitHub Release with the archive. When the image does not exist, the
+release fails before anything is pushed, saying to release the exporter first.
+
+To verify a published chart by its digest:
+
+```sh
+cosign verify ghcr.io/eenchev/charts/prometheus-universal-exporter@sha256:<digest> \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+  --certificate-identity-regexp '^https://github\.com/eenchev/prometheus-universal-exporter/\.github/workflows/release-chart\.yml@refs/tags/chart/prometheus-universal-exporter-[0-9]+\.[0-9]+\.[0-9]+$'
+```
+
+`cosign verify` also accepts the tag, which it resolves to that digest.
 
 `appVersion` in `Chart.yaml` is the exporter release a chart version deploys:
 `image.tag` is empty by default, which renders `appVersion`, so installing a
 chart version always runs the exporter release it was validated against. It is
 maintained by hand, and the Artifact Hub `artifacthub.io/images` annotation
 names the same tag; a test fails when they disagree. Release the exporter
-first, so the image the chart points at exists when the chart is published.
+first, so the image the chart points at exists when the chart is published;
+the chart release checks it and refuses otherwise.
 
 A release of both, say 1.1.0:
 

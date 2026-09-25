@@ -18,6 +18,8 @@ serviceAccount:
   name: ""
 service:
   enabled: true
+  # ClusterIP, NodePort or LoadBalancer. Not ExternalName, a DNS alias with no
+  # endpoints, through which nothing would reach the exporter.
   type: ClusterIP
   port: 8080
   # ClientIP sends every probe from one Prometheus to one pod, so with several
@@ -46,6 +48,9 @@ server:
   # IPv4 address, or a bracketed IPv6 address, then a colon and a TCP port.
   # A bare port such as "9115" is rejected while rendering, because Go would
   # otherwise accept the flag and fail to listen with "missing port in address".
+  # A loopback host (127.x.x.x, localhost, [::1]) is rejected too: neither the
+  # kubelet's probes nor the Service reach it. Use ":8080", "0.0.0.0:8080" or
+  # "[::]:8080".
   listenAddress: ":8080"
   # Python interpreter used by the `python` transform. The default is the
   # interpreter path in the exporter image, which is based on python:3.X-slim.
@@ -297,6 +302,13 @@ config:
               labels: []
               expression: 'status:\s+(\d+(?:\.\d+)?)'
 monitors: []
+# Each entry renders <fullname>-<name>. The name is a DNS-1123 label (lower-case
+# letters, digits and -), unique among the entries, and neither self nor
+# static-targets, which the chart's own monitors use. interval and
+# scrapeTimeout are Prometheus durations: whole numbers of y, w, d, h, m, s
+# and ms, such as 30s or 1m30s. With webAuth.enabled, an entry without auth of
+# its own presents the webAuth Secret, as the exporter's Basic Auth protects
+# /probe.
 # Example:
 # monitors:
 #   - name: application-services
@@ -312,6 +324,8 @@ monitors: []
 #     metricRelabelings: []
 #     headers: {}
 #     # Optional /probe request parameter overrides. Values must be lists.
+#     # collector and target are the chart's own, from collector above and
+#     # each discovered target's address; setting either fails rendering.
 #     params:
 #       method: [POST]
 #       path: [/api/status]
@@ -376,6 +390,8 @@ livenessProbe:
   periodSeconds: 10
   timeoutSeconds: 3
   failureThreshold: 5
+# terminationGracePeriodSeconds is accepted on the liveness probe only;
+# Kubernetes refuses it on a readiness probe.
 readinessProbe:
   periodSeconds: 10
   timeoutSeconds: 3
@@ -491,10 +507,10 @@ targetAuth:
 #       username_file: /var/run/prometheus-universal-exporter/web-auth/username
 #       password_file: /var/run/prometheus-universal-exporter/web-auth/password
 #
-# The self-metrics monitor uses this Secret by itself. The same Secret can give
-# the probing monitors their credential: set a monitor's auth to type basic
-# with this secretName. A rotated Secret is picked up by
-# the exporter's next request, without a restart.
+# Every monitor the chart renders presents this Secret's credential by itself:
+# the self-metrics and static targets monitors, and each probing monitor
+# without auth of its own, since web.basic_auth protects /probe too. A rotated
+# Secret is picked up by the exporter's next request, without a restart.
 webAuth:
   enabled: false
   secretName: ""

@@ -155,8 +155,12 @@ func matchesName(globs []string, host string) (string, bool) {
 	return "", false
 }
 
+// matchesAddr finds the network of nets addr is in. A zone, as in
+// fe80::1%eth0, says which interface reaches the address, not which address
+// it is, so it is dropped: netip.Prefix.Contains never matches a zoned
+// address, which would slip past every rule.
 func matchesAddr(nets []netip.Prefix, addr netip.Addr) (netip.Prefix, bool) {
-	addr = addr.Unmap()
+	addr = addr.Unmap().WithZone("")
 	for _, prefix := range nets {
 		if prefix.Contains(addr) {
 			return prefix, true
@@ -255,19 +259,18 @@ type policyGuard struct {
 	// proxied is set once a host the request checked goes through a proxy,
 	// whose own address a connection is then made to.
 	proxied bool
+	// schemes is the collector's request.allowed_schemes, which a redirect
+	// must keep to as the first URL did: an https-only collector does not
+	// follow a redirect to http:// and read the answer in plain text.
+	schemes []string
 }
 
 type policyGuardKey struct{}
 
 // withTargetPolicy checks the host of u against the collector's policy and
-// returns a context whose connections are checked too; ctx itself when the
-// collector sets no policy.
+// returns a context whose connections and redirects are checked too.
 func withTargetPolicy(ctx context.Context, c *model.Collector, u *url.URL, proxy func(*http.Request) (*url.URL, error)) (context.Context, error) {
-	policy := policyOf(c)
-	if policy == nil {
-		return ctx, nil
-	}
-	guard := &policyGuard{policy: policy, proxy: proxy, hosts: map[string]bool{}}
+	guard := &policyGuard{policy: policyOf(c), proxy: proxy, hosts: map[string]bool{}, schemes: c.Request.AllowedSchemes}
 	if err := guard.check(ctx, u); err != nil {
 		return ctx, err
 	}
@@ -279,6 +282,10 @@ func withTargetPolicy(ctx context.Context, c *model.Collector, u *url.URL, proxy
 // connections. Its addresses are resolved here only when a proxy stands in
 // between; otherwise the connection checks the one it is made to.
 func (g *policyGuard) check(ctx context.Context, u *url.URL) error {
+	if g.policy == nil {
+		// The lists were refused at load, so this cannot happen.
+		return nil
+	}
 	host, err := canonicalHost(u.Hostname())
 	if err != nil {
 		return err
@@ -313,12 +320,17 @@ func canonicalHost(host string) (string, error) {
 	return strings.ToLower(strings.TrimSuffix(ascii, ".")), nil
 }
 
-// checkRedirect applies a request's policy to the URL a redirect leads to.
+// checkRedirect applies a request's request.allowed_schemes and policy to
+// the URL a redirect leads to.
 func checkRedirect(ctx context.Context, u *url.URL) error {
-	if guard, ok := ctx.Value(policyGuardKey{}).(*policyGuard); ok {
-		return guard.check(ctx, u)
+	guard, ok := ctx.Value(policyGuardKey{}).(*policyGuard)
+	if !ok {
+		return nil
 	}
-	return nil
+	if err := checkSchemeAllowed(guard.schemes, u.Scheme); err != nil {
+		return fmt.Errorf("redirect to %s refused: %w", RedactURL(u, MaskQueryValues), err)
+	}
+	return guard.check(ctx, u)
 }
 
 // viaProxy says whether proxy, a transport's proxy function, sends a
@@ -344,7 +356,7 @@ var proxyOverride func(*url.URL) bool
 // proxy is refused, since what it reaches was never checked.
 func checkConnection(ctx context.Context, dialed string, conn net.Conn) error {
 	guard, ok := ctx.Value(policyGuardKey{}).(*policyGuard)
-	if !ok {
+	if !ok || guard.policy == nil {
 		return nil
 	}
 	host, _, err := net.SplitHostPort(dialed)

@@ -35,9 +35,37 @@ jobs:
             echo "updated=true" >> "$GITHUB_OUTPUT"
             git --no-pager diff -- Dockerfile
           fi
-      - name: Install the linter
-        run: make lint-install
+      # make ci runs gopls check as well as the linter, so it needs both.
+      - name: Install the linter and gopls
+        run: make lint-install gopls-install
         if: steps.changes.outputs.updated == 'true'
+      # The Python tests run against the Python and libraries the updated
+      # Dockerfile pins, as in ci.yml, so a new Python or library version that
+      # breaks the Python worker fails here rather than after the merge.
+      - name: Read the Python version the image ships
+        id: python
+        if: steps.changes.outputs.updated == 'true'
+        run: |
+          set -eu
+          version="$(sed -n 's/^ARG PYTHON_VERSION=//p' Dockerfile)"
+          if [ -z "$version" ]; then
+            echo "the Dockerfile declares no PYTHON_VERSION" >&2
+            exit 1
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+      - uses: actions/setup-python@v7
+        if: steps.changes.outputs.updated == 'true'
+        with:
+          python-version: ${{ steps.python.outputs.version }}
+      - name: Install the Python libraries the image ships
+        if: steps.changes.outputs.updated == 'true'
+        run: |
+          set -eu
+          arg() { sed -n "s/^ARG $1=//p" Dockerfile; }
+          python3 -m pip install --disable-pip-version-check \
+            "lxml==$(arg LXML_VERSION)" \
+            "PyYAML==$(arg PYYAML_VERSION)" \
+            "python-dateutil==$(arg PYTHON_DATEUTIL_VERSION)"
       - name: Run the full suite against the new versions
         run: make ci
         if: steps.changes.outputs.updated == 'true'

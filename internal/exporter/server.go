@@ -57,13 +57,12 @@ type Server struct {
 	stats               map[string]*serverStats
 	otlpMu              sync.Mutex
 	otlpPending         map[string]*otlpBatch
-	// otlpPoints counts the pending data points, and otlpSeq and
-	// otlpRequeueSeq order them by age for otlp.max_pending_points: queued
-	// points count up from 1, points queued again after a failed export count
-	// down from 0, so they are always the oldest.
-	otlpPoints     int
-	otlpSeq        int64
-	otlpRequeueSeq int64
+	// otlpPoints counts the pending data points, and otlpSeq orders them by
+	// age for otlp.max_pending_points: each point queued takes the next
+	// number, and keeps it when a failed export queues it again, so the
+	// oldest points are dropped first however many exports have failed.
+	otlpPoints int
+	otlpSeq    int64
 	// otlpStarts remembers when each cumulative series exported over OTLP
 	// started (otlpstart.go).
 	otlpStarts *otlpStartTimes
@@ -273,10 +272,9 @@ func (s *Server) probeHandler(w http.ResponseWriter, r *http.Request) {
 			requestURL: requestURL, method: method,
 		}
 		if model.UsesCache(c) {
-			// The key the same probe without debug has.
-			query := r.URL.Query()
-			query.Del(probeDebugParam)
-			p.staleKey = s.probeCacheKey(cfg, c, target, query, forwarded)
+			// The key the same probe without debug has: debug is no
+			// parameter of the request (probeKeyQuery).
+			p.staleKey = s.probeCacheKey(cfg, c, target, probeKeyQuery(c, r.URL.Query()), forwarded)
 		}
 		s.serveDebugProbe(w, r, p)
 		return
@@ -294,7 +292,7 @@ func (s *Server) probeHandler(w http.ResponseWriter, r *http.Request) {
 		})
 	}
 	forwarded := forwardedHeaders(r, c.Request)
-	key := s.probeCacheKey(cfg, c, target, r.URL.Query(), forwarded)
+	key := s.probeCacheKey(cfg, c, target, probeKeyQuery(c, r.URL.Query()), forwarded)
 	var cacheKey string
 	if model.UsesCache(c) {
 		cacheKey = key
@@ -308,7 +306,7 @@ func (s *Server) probeHandler(w http.ResponseWriter, r *http.Request) {
 			// The names were checked before the result was stored.
 			answer, _ := withFreshness(cached, c, false, fetched, time.Now())
 			finish(true)
-			writeMetricSet(w, &answer)
+			writeMetricSet(w, r, &answer)
 			s.queueProbeOTLP(answer, name, logTarget)
 			return
 		}
@@ -326,10 +324,12 @@ func (s *Server) probeHandler(w http.ResponseWriter, r *http.Request) {
 			failureTarget: target + "\x00" + key, requestURL: requestURL,
 		})
 	}
-	if !coalesceProbes(c) {
+	// No key, when the collector's definition could not be fingerprinted,
+	// is no identity to share a trip by: every such probe would share one.
+	if !coalesceProbes(c) || key == "" {
 		result := upstream(r.Context())
 		finish(result.ok)
-		result.writeTo(w)
+		result.writeTo(w, r)
 		return
 	}
 	result, shared, err := s.flights.do(r.Context(), key, upstream)
@@ -343,7 +343,7 @@ func (s *Server) probeHandler(w http.ResponseWriter, r *http.Request) {
 		s.logger.Debug("probe shared an identical probe in flight", "collector", name, "target", logTarget)
 	}
 	finish(result.ok)
-	result.writeTo(w)
+	result.writeTo(w, r)
 }
 
 // upstreamProbe is what one trip to the target needs.
@@ -402,6 +402,14 @@ func (s *Server) probeUpstream(ctx context.Context, p upstreamProbe) *probeResul
 		s.logger.Debug("probe failed on its credential; no stale result served", p.logAttrs()...)
 		return result
 	}
+	// Nor is a target the collector may not reach answered for: the refusal
+	// is the answer, whatever an earlier probe, made before allowed_targets
+	// or denied_targets changed or before the target's name resolved
+	// elsewhere, left in the cache.
+	if result.refused {
+		s.logger.Debug("probe refused by the target policy; no stale result served", p.logAttrs()...)
+		return result
+	}
 	staleKey := failureKey(name, p.failureKeyTarget(), "\x00stale")
 	if result.ok {
 		s.failures.recovered(s.logger, staleKey, "probe answered with a fresh result again", p.logAttrs()...)
@@ -422,7 +430,7 @@ func (s *Server) probeUpstream(ctx context.Context, p upstreamProbe) *probeResul
 	})
 	s.failures.failed(s.logger, slog.LevelWarn, staleKey, "probe failed; answered with the last successful result (cache.stale_if_error)", "stale", nil, append(p.logAttrs(), "result_age", now.Sub(fetched).Round(time.Second).String())...)
 	out := newProbeRecorder()
-	writeMetricSet(out, &answer)
+	out.metrics = &answer
 	s.queueProbeOTLP(answer, name, p.logTarget)
 	// A stale answer is not a success: the trip failed.
 	return out.result(false)
@@ -442,7 +450,12 @@ func (s *Server) probeTrip(ctx context.Context, p upstreamProbe) *probeResult {
 				x.emitted += uint64(len(cached.Metrics))
 			})
 			answer, _ := withFreshness(cached, c, false, fetched, time.Now())
-			writeMetricSet(out, &answer)
+			out.metrics = &answer
+			// Queued for OTLP as a hit before the trip is (probeHandler):
+			// once, since the probes sharing this trip queue nothing of
+			// their own, and the probe that filled the entry queued its own
+			// answer, not this one's.
+			s.queueProbeOTLP(answer, name, logTarget)
 			return out.result(true)
 		}
 		rec.update(func(x *serverStats) { x.cacheMisses++ })
@@ -491,7 +504,9 @@ func (s *Server) probeTrip(ctx context.Context, p upstreamProbe) *probeResult {
 	case result.refused:
 		// The caller asked for a target the collector may not reach.
 		http.Error(out, fmt.Sprintf("collector %s refused the target: %v", name, result.err), http.StatusForbidden)
-		return out.result(false)
+		refused := out.result(false)
+		refused.refused = true
+		return refused
 	case result.failed():
 		http.Error(out, fmt.Sprintf("collector %s %s failed: %v", name, result.stage, result.err), http.StatusBadGateway)
 		failure := out.result(false)
@@ -501,16 +516,20 @@ func (s *Server) probeTrip(ctx context.Context, p upstreamProbe) *probeResult {
 		// Answered 200 with nothing: the stage's policy said to carry on.
 		return out.result(true)
 	}
-	writeMetricSet(out, &result.answer)
+	out.metrics = &result.answer
 	s.queueProbeOTLP(result.answer, name, logTarget)
 	return out.result(true)
 }
 
 // unforwardableHeaders are never forwarded, whatever request.forward_headers
-// lists: Authorization has request.forward_authorization of its own, and the
-// rest describe the connection to the exporter, not the request to the target.
+// lists: Authorization has request.forward_authorization of its own,
+// Accept-Encoding is the exporter's to set (Prometheus asks it for gzip on
+// every scrape, and Go decompresses an answer only when it asked itself), and
+// the rest describe the connection to the exporter, not the request to the
+// target.
 // Neither is any Proxy- header (unforwardable), whatever follows the dash.
 var unforwardableHeaders = map[string]bool{
+	"Accept-Encoding":     true,
 	"Authorization":       true,
 	"Connection":          true,
 	"Content-Length":      true,
@@ -566,10 +585,10 @@ func forwardedHeaders(r *http.Request, request model.RequestConfig) http.Header 
 		}
 	}
 	for key, values := range r.URL.Query() {
-		if len(key) <= len("header_") || !strings.EqualFold(key[:len("header_")], "header_") {
+		if len(key) <= len(headerParamPrefix) || !strings.EqualFold(key[:len(headerParamPrefix)], headerParamPrefix) {
 			continue
 		}
-		name := http.CanonicalHeaderKey(strings.TrimSpace(key[len("header_"):]))
+		name := http.CanonicalHeaderKey(strings.TrimSpace(key[len(headerParamPrefix):]))
 		if name == "" || !allowed[name] {
 			continue
 		}

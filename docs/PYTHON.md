@@ -70,7 +70,10 @@ The launcher blocks `socket`, `ssl`, `subprocess`, `ctypes`, `multiprocessing`, 
 
 `NaN` and the infinities arrive as the floats `float("nan")` and
 `float("inf")`, and may be given back the same way, in `data` from a
-pre-script and as a `metric(...)` value.
+pre-script and as a `metric(...)` value. Integers of any length arrive as
+Python `int`s and come back exact: an ID such as `1500000000000000001` that a
+pre-script leaves in `data` keeps every digit in a label, rather than being
+rounded to the nearest float.
 
 `metric(...)` takes a `value` as the other transforms do: a number, a numeric
 string such as `"12"`, or a boolean, as `1` or `0`; anything else, `None`

@@ -220,6 +220,19 @@ func TestExtraValuesDefaultToEmpty(t *testing.T) {
 	}
 }
 
+// The chart refuses a loopback server.listenAddress while rendering, so its
+// messages must not offer one as an example of a good value either.
+func TestTheChartSuggestsNoLoopbackListenAddress(t *testing.T) {
+	for _, name := range []string{"templates/_helpers.tpl", "values.yaml", "values.schema.json", "README.md"} {
+		text := readChartFile(t, name)
+		for _, loopback := range []string{"[::1]:", "127.0.0.1:", "localhost:"} {
+			if strings.Contains(text, loopback) {
+				t.Errorf("%s offers the loopback address %q, which the chart refuses", name, loopback)
+			}
+		}
+	}
+}
+
 func readChartFile(t *testing.T, name string) string {
 	t.Helper()
 	raw, err := os.ReadFile("charts/prometheus-universal-exporter/" + name)

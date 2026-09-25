@@ -58,6 +58,30 @@ jobs:
         with:
           go-version: ${{ steps.go.outputs.version }}
           check-latest: true
+      # The Python tests run against the Python and libraries the image
+      # ships, as in ci.yml: a release is not tested against whichever Python
+      # the runner happens to have.
+      - name: Read the Python version the image ships
+        id: python
+        run: |
+          set -eu
+          version="$(sed -n 's/^ARG PYTHON_VERSION=//p' Dockerfile)"
+          if [ -z "$version" ]; then
+            echo "the Dockerfile declares no PYTHON_VERSION" >&2
+            exit 1
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+      - uses: actions/setup-python@v7
+        with:
+          python-version: ${{ steps.python.outputs.version }}
+      - name: Install the Python libraries the image ships
+        run: |
+          set -eu
+          arg() { sed -n "s/^ARG $1=//p" Dockerfile; }
+          python3 -m pip install --disable-pip-version-check \
+            "lxml==$(arg LXML_VERSION)" \
+            "PyYAML==$(arg PYYAML_VERSION)" \
+            "python-dateutil==$(arg PYTHON_DATEUTIL_VERSION)"
       - run: go mod download
       - run: go test ./...
       - run: go build ./...
@@ -134,9 +158,12 @@ jobs:
             tar -czf "dist/$output.tar.gz" -C "dist/$output" .
             rm -rf "dist/$output"
           done
+          # A checksum per archive, published with them, so a download can be
+          # checked with sha256sum -c.
+          (cd dist && sha256sum *.tar.gz > "prometheus-universal-exporter-${VERSION}-sha256sums.txt" && sha256sum -c "prometheus-universal-exporter-${VERSION}-sha256sums.txt")
 
       - name: Create GitHub Release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           VERSION: ${{ steps.version.outputs.version }}
-        run: gh release create "${GITHUB_REF_NAME}" dist/*.tar.gz --generate-notes --title "Exporter v${VERSION}"
+        run: gh release create "${GITHUB_REF_NAME}" dist/*.tar.gz "dist/prometheus-universal-exporter-${VERSION}-sha256sums.txt" --generate-notes --title "Exporter v${VERSION}"

@@ -32,8 +32,8 @@ func validatedConfig(t *testing.T, collectors ...model.Collector) *model.Config 
 
 // A pre-script hands its result back through `data`, so every shape that
 // produces one must be accepted: replacing it, mutating it by key or attribute,
-// augmenting it, binding it in a loop or a with-statement, or calling a method
-// that mutates it.
+// augmenting it, binding it in a loop or a with-statement or with :=, deleting
+// from it, or calling a method that mutates it.
 func TestPreScriptProducingDataIsAccepted(t *testing.T) {
 	scripts := map[string]string{
 		"replaces data":            `data = {"value": 1}`,
@@ -50,6 +50,10 @@ func TestPreScriptProducingDataIsAccepted(t *testing.T) {
 		"loop target":              "for data in [{'value': 1}]:\n    pass",
 		"with statement":           "import contextlib\nwith contextlib.suppress(Exception) as data:\n    pass",
 		"conditional reassignment": "if response.status_code == 200:\n    data = {'value': 1}\nelse:\n    data = {}",
+		"deletes a key":            `del data["noise"]`,
+		"deletes a nested key":     `del data["a"]["noise"], data["b"]`,
+		"walrus":                   "if (data := {'value': 1}):\n    pass",
+		"walrus in comprehension":  "[(data := row) for row in [{'value': 1}]]",
 	}
 	for name, script := range scripts {
 		t.Run(name, func(t *testing.T) {

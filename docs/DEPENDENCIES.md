@@ -21,8 +21,11 @@ rather than merely to have been released. A test keeps the resolver's pin table
 and the Dockerfile in agreement, so a renamed build argument cannot leave a
 dependency unwatched.
 
-When anything moves, the workflow runs the whole suite and builds the image
-against the new versions, and opens the pull request only if that passes. Run it
+When anything moves, the workflow installs the pinned golangci-lint and gopls
+(`make lint-install gopls-install`) and the Python and libraries the updated
+Dockerfile pins, runs the whole suite (`make ci`) and builds the image against
+the new versions, and opens the pull request only if that passes; a test fails
+if it stops installing any of them. Run it
 by hand with the workflow dispatch button, or locally:
 
 ```sh

@@ -76,6 +76,22 @@ could never be sent. So is a header name that is not one, such as one with a
 space, and two names that are the same header in different case, `X-Tenant`
 and `x-tenant`, of which a scrape would otherwise send either.
 
+### Compression and the response size
+
+The exporter asks every target for gzip itself and decompresses the answer, so
+`Accept-Encoding` is its own: one under `request.headers`, a collector's or a
+static target's, is refused at startup, since with it set Go would hand the
+decoder the compressed bytes. One the probe carries is never forwarded, even
+listed in `forward_headers` — Prometheus sends `Accept-Encoding: gzip` on every
+scrape.
+
+`max_response_bytes` counts the answer as the decoder gets it, decompressed.
+An answer whose `Content-Length` is over the limit is refused before its body
+is read — `response size 5000 exceeds limit 100` — and one without a
+`Content-Length` once reading passes the limit, `response size exceeds limit
+100`, its size then unknown. A `HEAD` answer's `Content-Length` is the size of
+a body it does not have, and is not held against it.
+
 ## Path parameters
 
 A collector's `request.path` can carry placeholders the scrape fills in, so one
@@ -258,6 +274,12 @@ the collector sees the 3xx status and — with the default `on_fetch_error: fail
 the probe fails. That is deliberate: a target that has moved is worth noticing
 rather than quietly scraping somewhere else. Set it to `true` for endpoints that
 legitimately redirect, such as an API whose documented host forwards to another.
+A followed redirect keeps to the collector's `allowed_schemes` as the first URL
+did: a collector that allows only `https` refuses a redirect to `http://` —
+`redirect to http://… refused: target scheme "http" is not allowed;
+request.allowed_schemes allows https` — rather than read the answer in plain
+text. It keeps to [`allowed_targets` and `denied_targets`](#restricting-targets)
+too.
 
 `enable_http2` decides whether the target request may negotiate HTTP/2. HTTP/2
 is negotiated through ALPN over TLS, so this only affects HTTPS targets;
@@ -317,7 +339,10 @@ by name, or any address it resolves to is in a denied network; and, when
 `allowed_targets` is set, unless its host is allowed by name, or every address
 it resolves to is in an allowed network. `denied_targets` wins. Names are
 compared without case; `*.example.com` matches `a.b.example.com`, not
-`example.com` itself.
+`example.com` itself. An IPv6 address with a zone, `fe80::1%eth0`, is checked
+as the address without it: the zone names the interface that reaches it, so
+`denied_targets: [fe80::/10]` refuses it, and the metadata service's
+`fd00:ec2::254%eth0` is refused as `fd00:ec2::254` is.
 
 Names are checked before the request and again for every redirect followed,
 and so is a target written as an address, which needs no lookup, so it is
@@ -397,7 +422,11 @@ request:
 ```
 
 The exporter retries transport failures and transient HTTP responses (`408`,
-`425`, `429`, and `5xx`). Other HTTP statuses are returned immediately.
+`425`, `429`, and `5xx`). Other HTTP statuses are returned immediately. A
+connection that breaks while the body is being read — reset, or closed before
+the length it promised — counts as a transport failure and is retried too,
+unless the probe's time is what ran out; a [debug probe](CONFIGURATION.md#debugging-a-probe)
+shows such an attempt as its status followed by `then the body broke off`.
 
 Only requests whose method is idempotent are retried — `GET`, `HEAD`,
 `OPTIONS`, `TRACE`, `PUT` and `DELETE` — since sending a `POST` or `PATCH`

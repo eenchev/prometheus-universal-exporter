@@ -352,3 +352,74 @@ func TestCIBuildsEveryRequestTypeOnItsOwn(t *testing.T) {
 		t.Fatalf("ci.yml builds the request types %v on their own, but the tree has %v", listed, types)
 	}
 }
+
+// stepIndex returns the index of the first step whose run script contains
+// every fragment, or -1.
+func stepIndex(steps []map[string]any, fragments ...string) int {
+	for index, step := range steps {
+		run, _ := step["run"].(string)
+		found := true
+		for _, fragment := range fragments {
+			if !strings.Contains(run, fragment) {
+				found = false
+				break
+			}
+		}
+		if found {
+			return index
+		}
+	}
+	return -1
+}
+
+// A chart version deploys its appVersion's image by default, and the exporter
+// is released on its own tags, so the chart release checks that image exists
+// before it pushes anything: a chart published ahead of its image gives every
+// install an ImagePullBackOff. The chart is signed by the digest helm pushed,
+// never by its tag, which could be moved to other content before the signing
+// step resolves it.
+func TestTheChartReleaseChecksItsImageAndSignsTheDigest(t *testing.T) {
+	steps := workflowSteps(t, ".github/workflows/release-chart.yml")["release-chart"]
+	inspect := stepIndex(steps, "appVersion", "docker buildx imagetools inspect", "ghcr.io/${GITHUB_REPOSITORY_OWNER}/prometheus-universal-exporter:${app_version}", "release the exporter")
+	push := stepIndex(steps, "helm push")
+	if inspect < 0 {
+		t.Fatal("release-chart.yml does not check that the chart's default image, at its appVersion, exists")
+	}
+	if push < 0 || inspect > push {
+		t.Error("release-chart.yml checks the chart's image after helm push, or never pushes")
+	}
+	if push >= 0 {
+		if steps[push]["id"] != "push" || stepIndex(steps, "helm push", `echo "digest=$digest" >> "$GITHUB_OUTPUT"`) != push {
+			t.Error("the helm push step does not publish the pushed digest as steps.push.outputs.digest")
+		}
+	}
+	for _, command := range []string{"cosign sign", "cosign verify"} {
+		index := stepIndex(steps, command)
+		if index < 0 {
+			t.Errorf("release-chart.yml no longer runs %s", command)
+			continue
+		}
+		run := steps[index]["run"].(string)
+		env, _ := steps[index]["env"].(map[string]any)
+		if !strings.Contains(run, "prometheus-universal-exporter@${DIGEST}") || env["DIGEST"] != "${{ steps.push.outputs.digest }}" {
+			t.Errorf("%s does not name the chart by the digest helm pushed:\n%s", command, run)
+		}
+		if strings.Contains(run, ":${VERSION}") {
+			t.Errorf("%s names the chart by its tag:\n%s", command, run)
+		}
+	}
+}
+
+// The exporter release publishes a SHA-256 checksum of every archive beside
+// them, so a download can be checked with sha256sum -c.
+func TestTheExporterReleasePublishesChecksums(t *testing.T) {
+	steps := workflowSteps(t, ".github/workflows/release.yml")["release"]
+	build := stepIndex(steps, "tar -czf", `sha256sum *.tar.gz > "prometheus-universal-exporter-${VERSION}-sha256sums.txt"`)
+	if build < 0 {
+		t.Fatal("release.yml does not write the archives' checksums where it builds them")
+	}
+	upload := stepIndex(steps, "gh release create", "dist/*.tar.gz", `"dist/prometheus-universal-exporter-${VERSION}-sha256sums.txt"`)
+	if upload < 0 || upload < build {
+		t.Error("release.yml does not publish the checksums file with the archives")
+	}
+}

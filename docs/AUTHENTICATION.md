@@ -14,7 +14,7 @@ the call and forwarded headers as metadata, lower-cased; see
 
 Monitor authentication is applied by Prometheus when it scrapes the exporter. To pass that credential to the discovered target, set `request.forward_authorization: true` on the selected collector. Each `monitors` entry supports Secret-backed `auth.type: bearer` and `auth.type: basic` settings. The exporter never forwards arbitrary incoming headers.
 
-For non-secret target headers, configure an allowlist in the collector and use the chart's monitor `headers` map. The chart encodes these as `header_<Header-Name>` probe parameters, which the exporter forwards only when the header is listed in `request.forward_headers`. Headers that describe the connection to the exporter rather than the request are never forwarded, even when listed: `Host`, `Connection`, `Content-Length`, `Transfer-Encoding`, `Trailer`, `TE`, `Upgrade`, and every `Proxy-` header; `Authorization` has `forward_authorization` of its own:
+For non-secret target headers, configure an allowlist in the collector and use the chart's monitor `headers` map. The chart encodes these as `header_<Header-Name>` probe parameters, which the exporter forwards only when the header is listed in `request.forward_headers`. Headers that describe the connection to the exporter rather than the request are never forwarded, even when listed: `Host`, `Connection`, `Content-Length`, `Transfer-Encoding`, `Trailer`, `TE`, `Upgrade`, and every `Proxy-` header; nor is `Accept-Encoding`, which the exporter sets itself to decompress the answer ([Target requests](REQUESTS.md#compression-and-the-response-size)); `Authorization` has `forward_authorization` of its own:
 
 ```yaml
 # exporter config
@@ -73,7 +73,9 @@ configuration loads is refused like any other invalid configuration. A file
 changed on disk is read again by the next request, so a rotated Kubernetes
 Secret takes effect without a restart; one that can no longer be read refuses
 every protected request with `500` and logs why, rather than letting requests
-in. The chart mounts the Secret with `webAuth` — see the
+in. The chart mounts the Secret with `webAuth`, and every monitor it renders
+then presents that credential: the self-metrics and static targets monitors,
+and each probing monitor without an `auth` of its own — see the
 [chart README](../charts/prometheus-universal-exporter/README.md#exporter-authentication).
 
 When enabled, Basic Auth is required for `/probe`, the self-metrics path, the static targets path, the landing page at `/` and the collectors page at `/collectors`, which list the collectors. `/health` and `/ready` remain unauthenticated for Kubernetes probes. Exporter-side Basic Auth is mutually exclusive with `request.forward_authorization`; enable one model or the other so the incoming Authorization header cannot be confused with the exporter credential.

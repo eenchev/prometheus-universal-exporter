@@ -2,11 +2,16 @@ package repository
 
 import (
 	"bytes"
+	"errors"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
+
+	"gopkg.in/yaml.v3"
 )
 
 // The chart's options, rendered with helm: what each renders, and each value
@@ -175,6 +180,19 @@ func TestChartRendersItsOptions(t *testing.T) {
 			args: []string{"--set", "server.shutdownTimeout=1m"},
 			want: []string{"terminationGracePeriodSeconds: 75"},
 		},
+		"an IPv6 wildcard listen address": {
+			args: []string{"--set", "server.listenAddress=[::]:9115"},
+			want: []string{`"--web.listen-address=[::]:9115"`, "containerPort: 9115"},
+		},
+		// Only the readiness probe refuses a grace period of its own.
+		"a liveness probe's grace period": {
+			args: []string{"--set", "livenessProbe.terminationGracePeriodSeconds=10"},
+			want: []string{"terminationGracePeriodSeconds: 10"},
+		},
+		"Prometheus durations on the monitors": {
+			args: []string{"--set-json", `monitors=[{"name":"apps","enabled":true,"type":"service","collector":"example","interval":"1m30s","scrapeTimeout":"1500ms"}]`, "--set", "selfMetrics.interval=1d"},
+			want: []string{"interval: 1m30s", "scrapeTimeout: 1500ms", "interval: 1d"},
+		},
 		// The delay counts too: 20s, the default 15s timeout and 10s more.
 		"a longer shutdown delay raises the grace period": {
 			args: []string{"--set", "server.shutdownDelay=20s"},
@@ -225,6 +243,30 @@ func TestChartRefusesInvalidOptions(t *testing.T) {
 		"probe debug as an extra":              {[]string{"--set", "extraArgs[0]=--web.enable-probe-debug"}, "server.probeDebug"},
 		"a pod label the chart sets":           {[]string{"--set", "podLabels.app\\.kubernetes\\.io/name=x"}, "podLabels sets app.kubernetes.io/name"},
 		"a spread without a topology key":      {[]string{"--set", "topologySpreadConstraints[0].maxSkew=1"}, "topologyKey"},
+		// The chart renders the collector and target parameters itself; a
+		// params entry of either would be a second key of the same name.
+		"a monitor's params.collector": {[]string{"--set-json", `monitors=[{"name":"apps","enabled":true,"type":"service","collector":"example","params":{"collector":["other"]}}]`}, "sets params.collector; the chart renders the collector parameter itself, so set the entry's .collector instead"},
+		"a monitor's params.target":    {[]string{"--set-json", `monitors=[{"name":"apps","enabled":true,"type":"pod","collector":"example","params":{"target":["http://x"]}}]`}, "sets params.target"},
+		// Neither the kubelet's probes nor the Service reach a loopback host.
+		"a loopback IPv4 listen address": {[]string{"--set", "server.listenAddress=127.0.0.1:8080"}, "listens on a loopback address"},
+		"a loopback name listen address": {[]string{"--set", "server.listenAddress=localhost:8080"}, "listens on a loopback address"},
+		"a loopback IPv6 listen address": {[]string{"--set", "server.listenAddress=[::1]:8080"}, "listens on a loopback address"},
+		// A monitor is named <fullname>-<name>: a DNS-1123 label, of its own.
+		"an upper-case monitor name":                   {[]string{"--set-json", `monitors=[{"name":"Apps","enabled":true,"type":"service","collector":"example"}]`}, "monitors.0.name"},
+		"a monitor name with an underscore":            {[]string{"--set-json", `monitors=[{"name":"my_apps","enabled":true,"type":"service","collector":"example"}]`}, "monitors.0.name"},
+		"two monitors of one name":                     {[]string{"--set-json", `monitors=[{"name":"apps","enabled":true,"type":"service","collector":"example"},{"name":"apps","enabled":true,"type":"pod","collector":"example"}]`}, `both named "apps"`},
+		"a monitor named after the self one":           {[]string{"--set-json", `monitors=[{"name":"self","enabled":true,"type":"service","collector":"example"}]`}, "the self-metrics monitor"},
+		"a monitor named after the static targets one": {[]string{"--set-json", `monitors=[{"name":"static-targets","enabled":true,"type":"pod","collector":"example"}]`}, "the static targets monitor"},
+		// A Service of type ExternalName has no endpoints to probe through.
+		"an ExternalName Service": {[]string{"--set", "service.type=ExternalName"}, "service.type"},
+		// Kubernetes refuses terminationGracePeriodSeconds on a readiness probe.
+		"a readiness probe's grace period": {[]string{"--set", "readinessProbe.terminationGracePeriodSeconds=10"}, "terminationGracePeriodSeconds is not allowed"},
+		// The Prometheus Operator takes Prometheus durations: whole numbers,
+		// down to milliseconds.
+		"a fractional monitor interval":              {[]string{"--set-json", `monitors=[{"name":"apps","enabled":true,"type":"service","collector":"example","interval":"1.5m"}]`}, "monitors.0.interval"},
+		"a monitor scrape timeout in microseconds":   {[]string{"--set-json", `monitors=[{"name":"apps","enabled":true,"type":"service","collector":"example","scrapeTimeout":"500us"}]`}, "monitors.0.scrapeTimeout"},
+		"a self monitor interval in nanoseconds":     {[]string{"--set", "selfMetrics.interval=30000000000ns"}, "selfMetrics.interval"},
+		"a fractional static targets scrape timeout": {[]string{"--set", "staticTargets.monitor.scrapeTimeout=0.5s"}, "staticTargets.monitor.scrapeTimeout"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			out, ok := helmTemplate(t, helm, chartDir, tc.args...)
@@ -361,6 +403,202 @@ func TestChartNotesWarnAboutABudgetOfNoEviction(t *testing.T) {
 		}
 		if strings.Contains(out, "allows no voluntary eviction") != warned {
 			t.Errorf("maxUnavailable %s: warned %v:\n%s", value, !warned, out)
+		}
+	}
+}
+
+// renderedDocuments renders the chart with args and parses every YAML
+// document it prints, failing the test when rendering or parsing fails.
+func renderedDocuments(t *testing.T, helm string, args ...string) []*yaml.Node {
+	t.Helper()
+	out, ok := helmTemplate(t, helm, chartDir, args...)
+	if !ok {
+		t.Fatalf("rendering failed:\n%s", out)
+	}
+	var docs []*yaml.Node
+	decoder := yaml.NewDecoder(strings.NewReader(out))
+	for {
+		var doc yaml.Node
+		err := decoder.Decode(&doc)
+		if errors.Is(err, io.EOF) {
+			return docs
+		}
+		if err != nil {
+			t.Fatalf("the rendered chart does not parse: %v\n%s", err, out)
+		}
+		if len(doc.Content) > 0 && doc.Content[0].Kind == yaml.MappingNode {
+			docs = append(docs, doc.Content[0])
+		}
+	}
+}
+
+// child returns the value of key in the mapping node, or nil.
+func child(node *yaml.Node, key string) *yaml.Node {
+	if node == nil || node.Kind != yaml.MappingNode {
+		return nil
+	}
+	for i := 0; i+1 < len(node.Content); i += 2 {
+		if node.Content[i].Value == key {
+			return node.Content[i+1]
+		}
+	}
+	return nil
+}
+
+// path follows keys, and list indexes written as numbers, from node.
+func path(node *yaml.Node, keys ...string) *yaml.Node {
+	for _, key := range keys {
+		if node != nil && node.Kind == yaml.SequenceNode {
+			index, err := strconv.Atoi(key)
+			if err != nil || index >= len(node.Content) {
+				return nil
+			}
+			node = node.Content[index]
+			continue
+		}
+		node = child(node, key)
+	}
+	return node
+}
+
+// colonKeys lists the mapping keys under node holding a colon: what a
+// template renders when a trimmed newline runs two keys together, as
+// "selector:matchLabels:" parses as one key of that name.
+func colonKeys(node *yaml.Node) []string {
+	var found []string
+	if node.Kind == yaml.MappingNode {
+		for i := 0; i+1 < len(node.Content); i += 2 {
+			if strings.Contains(node.Content[i].Value, ":") {
+				found = append(found, node.Content[i].Value)
+			}
+		}
+	}
+	for _, c := range node.Content {
+		found = append(found, colonKeys(c)...)
+	}
+	return found
+}
+
+// Every monitor the chart renders is checked as the Prometheus Operator would
+// read it, parsed rather than searched for text: a spec.selector that is a
+// non-empty mapping, and no key that is two keys run together. A text search
+// for "selector:" passes on "selector:matchLabels:", which parses as neither.
+func TestChartMonitorsParseWithASelector(t *testing.T) {
+	helm := requireHelm(t)
+	targetsFile := staticTargetsValues(t, "")
+	for name, tc := range map[string]struct {
+		args []string
+		// The monitors that must be rendered, by name, with their kind.
+		want map[string]string
+		// The labels a probe monitor's selector must match, by monitor name.
+		selects map[string]map[string]string
+	}{
+		"service and pod monitors without a target selector": {
+			args: []string{"--set-json", `monitors=[{"name":"apps","enabled":true,"type":"service","collector":"example"},{"name":"pods","enabled":true,"type":"pod","collector":"example"}]`},
+			want: map[string]string{"test-prometheus-universal-exporter-apps": "ServiceMonitor", "test-prometheus-universal-exporter-pods": "PodMonitor", "test-prometheus-universal-exporter-self": "ServiceMonitor"},
+			selects: map[string]map[string]string{
+				"test-prometheus-universal-exporter-apps": {"app.kubernetes.io/name": "target"},
+				"test-prometheus-universal-exporter-pods": {"app.kubernetes.io/name": "target"},
+			},
+		},
+		"service and pod monitors with a target selector": {
+			args: []string{"--set-json", `monitors=[{"name":"apps","enabled":true,"type":"service","collector":"example","targetSelector":{"matchLabels":{"team":"a"}}},{"name":"pods","enabled":true,"type":"pod","collector":"example","targetSelector":{"matchLabels":{"team":"b"}}}]`, "--set", "selfMetrics.type=pod"},
+			want: map[string]string{"test-prometheus-universal-exporter-apps": "ServiceMonitor", "test-prometheus-universal-exporter-pods": "PodMonitor", "test-prometheus-universal-exporter-self": "PodMonitor"},
+			selects: map[string]map[string]string{
+				"test-prometheus-universal-exporter-apps": {"team": "a"},
+				"test-prometheus-universal-exporter-pods": {"team": "b"},
+			},
+		},
+		"the static targets and self monitors as services": {
+			args: []string{"-f", targetsFile, "--set", "staticTargets.monitor.enabled=true"},
+			want: map[string]string{"test-prometheus-universal-exporter-static-targets": "ServiceMonitor", "test-prometheus-universal-exporter-self": "ServiceMonitor"},
+		},
+		"the static targets and self monitors as pods": {
+			args: []string{"-f", targetsFile, "--set", "staticTargets.monitor.enabled=true", "--set", "staticTargets.monitor.type=pod", "--set", "selfMetrics.type=pod"},
+			want: map[string]string{"test-prometheus-universal-exporter-static-targets": "PodMonitor", "test-prometheus-universal-exporter-self": "PodMonitor"},
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			got := map[string]string{}
+			for _, doc := range renderedDocuments(t, helm, tc.args...) {
+				kind := child(doc, "kind").Value
+				if keys := colonKeys(doc); len(keys) > 0 {
+					t.Errorf("%s has keys run together: %q", kind, keys)
+				}
+				if kind != "ServiceMonitor" && kind != "PodMonitor" {
+					continue
+				}
+				name := path(doc, "metadata", "name").Value
+				got[name] = kind
+				selector := path(doc, "spec", "selector")
+				if selector == nil || selector.Kind != yaml.MappingNode || len(selector.Content) == 0 {
+					t.Errorf("%s %s has no spec.selector", kind, name)
+					continue
+				}
+				labels := child(selector, "matchLabels")
+				if labels == nil || labels.Kind != yaml.MappingNode || len(labels.Content) == 0 {
+					t.Errorf("%s %s has no spec.selector.matchLabels", kind, name)
+				}
+				for key, value := range tc.selects[name] {
+					if v := child(labels, key); v == nil || v.Value != value {
+						t.Errorf("%s %s does not select %s=%s", kind, name, key, value)
+					}
+				}
+			}
+			for name, kind := range tc.want {
+				if got[name] != kind {
+					t.Errorf("want %s %s, got %q", kind, name, got[name])
+				}
+			}
+		})
+	}
+}
+
+// With webAuth.enabled, the exporter's Basic Auth protects /probe as well as
+// its own metrics, so a probe monitor without auth of its own presents the
+// webAuth Secret, as the self-metrics and static targets monitors do;
+// without, every scrape it makes is a 401. A monitor with its own auth keeps
+// it.
+func TestChartProbeMonitorsPresentTheExporterCredential(t *testing.T) {
+	helm := requireHelm(t)
+	monitors := `monitors=[{"name":"apps","enabled":true,"type":"service","collector":"example"},{"name":"pods","enabled":true,"type":"pod","collector":"example"},{"name":"own","enabled":true,"type":"service","collector":"example","auth":{"enabled":true,"type":"bearer","secretName":"own-token"}}]`
+	endpoint := func(doc *yaml.Node) *yaml.Node {
+		if child(doc, "kind").Value == "PodMonitor" {
+			return path(doc, "spec", "podMetricsEndpoints", "0")
+		}
+		return path(doc, "spec", "endpoints", "0")
+	}
+	probes := func(docs []*yaml.Node) map[string]*yaml.Node {
+		found := map[string]*yaml.Node{}
+		for _, doc := range docs {
+			if kind := child(doc, "kind").Value; kind == "ServiceMonitor" || kind == "PodMonitor" {
+				if name := path(doc, "metadata", "name").Value; strings.HasSuffix(name, "-apps") || strings.HasSuffix(name, "-pods") || strings.HasSuffix(name, "-own") {
+					found[name] = endpoint(doc)
+				}
+			}
+		}
+		if len(found) != 3 {
+			t.Fatalf("want 3 probe monitors, got %d", len(found))
+		}
+		return found
+	}
+
+	for name, ep := range probes(renderedDocuments(t, helm, "--set", "webAuth.enabled=true", "--set", "webAuth.secretName=exporter-auth", "--set", "webAuth.usernameKey=user", "--set-json", monitors)) {
+		if strings.HasSuffix(name, "-own") {
+			if child(ep, "basicAuth") != nil || path(ep, "authorization", "credentials", "name").Value != "own-token" {
+				t.Errorf("%s does not keep its own bearer credential", name)
+			}
+			continue
+		}
+		for _, want := range [][]string{{"username", "name", "exporter-auth"}, {"username", "key", "user"}, {"password", "name", "exporter-auth"}, {"password", "key", "password"}} {
+			if v := path(ep, "basicAuth", want[0], want[1]); v == nil || v.Value != want[2] {
+				t.Errorf("%s: basicAuth.%s.%s is not %q", name, want[0], want[1], want[2])
+			}
+		}
+	}
+	for name, ep := range probes(renderedDocuments(t, helm, "--set-json", monitors)) {
+		if child(ep, "basicAuth") != nil {
+			t.Errorf("%s presents a credential without webAuth", name)
 		}
 	}
 }

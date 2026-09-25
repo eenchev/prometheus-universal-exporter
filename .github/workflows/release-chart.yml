@@ -91,6 +91,28 @@ jobs:
               sys.exit(".artifacthub-repo.yml repositoryID is not the UUID Artifact Hub generated")
           PY
 
+      # A chart deploys its appVersion's image by default, and the exporter is
+      # released on its own tags. Publishing a chart whose default image does
+      # not exist yet gives every install an ImagePullBackOff, so the image
+      # the chart renders by default has to be in the registry first.
+      - name: Verify the chart's default image exists
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -eu
+          app_version="$(helm show chart charts/prometheus-universal-exporter | awk '/^appVersion:/ {gsub(/"/, "", $2); print $2; exit}')"
+          image="$(helm template test charts/prometheus-universal-exporter --show-only templates/deployment.yaml | sed -n 's/^ *image: "\(.*\)"$/\1/p')"
+          if [ "$image" != "ghcr.io/${GITHUB_REPOSITORY_OWNER}/prometheus-universal-exporter:${app_version}" ]; then
+            echo "the chart deploys $image by default, not ghcr.io/${GITHUB_REPOSITORY_OWNER}/prometheus-universal-exporter:${app_version}, its appVersion's image" >&2
+            exit 1
+          fi
+          echo "$GH_TOKEN" | docker login ghcr.io -u "${GITHUB_ACTOR}" --password-stdin
+          if ! docker buildx imagetools inspect "$image"; then
+            echo "the chart deploys $image by default, which does not exist" >&2
+            echo "release the exporter ${app_version} first (tag exporter/prometheus-universal-exporter-v${app_version}), or set appVersion in Chart.yaml to a released exporter" >&2
+            exit 1
+          fi
+
       - name: Install ORAS
         uses: oras-project/setup-oras@v2
 
@@ -98,6 +120,7 @@ jobs:
         uses: sigstore/cosign-installer@v4.1.2
 
       - name: Package and publish the chart
+        id: push
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
@@ -110,8 +133,18 @@ jobs:
             -u "${GITHUB_ACTOR}" \
             --password-stdin
 
-          helm push dist/prometheus-universal-exporter-*.tgz \
-            "oci://ghcr.io/${GITHUB_REPOSITORY_OWNER}/charts"
+          # The signature is made for the digest helm pushed, not for the tag,
+          # which anyone with write access could move to other content before
+          # the signing step reads it.
+          pushed="$(helm push dist/prometheus-universal-exporter-*.tgz \
+            "oci://ghcr.io/${GITHUB_REPOSITORY_OWNER}/charts" 2>&1)"
+          printf '%s\n' "$pushed"
+          digest="$(printf '%s\n' "$pushed" | sed -n 's/^Digest: \(sha256:[0-9a-f]\{64\}\)$/\1/p')"
+          if [ -z "$digest" ]; then
+            echo "helm push printed no digest to sign" >&2
+            exit 1
+          fi
+          echo "digest=$digest" >> "$GITHUB_OUTPUT"
 
       - name: Push Artifact Hub repository metadata
         env:
@@ -130,17 +163,17 @@ jobs:
 
       - name: Sign Helm chart
         env:
-          VERSION: ${{ steps.version.outputs.version }}
+          DIGEST: ${{ steps.push.outputs.digest }}
         run: |
           cosign sign --yes \
-            ghcr.io/${GITHUB_REPOSITORY_OWNER}/charts/prometheus-universal-exporter:${VERSION}
- 
+            "ghcr.io/${GITHUB_REPOSITORY_OWNER}/charts/prometheus-universal-exporter@${DIGEST}"
+
       - name: Verify Helm chart signature
         env:
-          VERSION: ${{ steps.version.outputs.version }}
+          DIGEST: ${{ steps.push.outputs.digest }}
         run: |
           cosign verify \
-            ghcr.io/${GITHUB_REPOSITORY_OWNER}/charts/prometheus-universal-exporter:${VERSION} \
+            "ghcr.io/${GITHUB_REPOSITORY_OWNER}/charts/prometheus-universal-exporter@${DIGEST}" \
             --certificate-oidc-issuer https://token.actions.githubusercontent.com \
             --certificate-identity-regexp \
               "^https://github\.com/eenchev/prometheus-universal-exporter/\.github/workflows/release-chart\.yml@refs/tags/chart/prometheus-universal-exporter-[0-9]+\.[0-9]+\.[0-9]+$"            

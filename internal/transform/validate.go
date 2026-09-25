@@ -44,8 +44,10 @@ def roots(node):
 def produces_data(tree):
     for node in ast.walk(tree):
         targets=[]
-        if isinstance(node,ast.Assign): targets=node.targets
-        elif isinstance(node,(ast.AugAssign,ast.AnnAssign,ast.For)): targets=[node.target]
+        # del data['x'] changes data in place, as an assignment to data['x']
+        # does, and (data := ...) assigns data inside an expression.
+        if isinstance(node,(ast.Assign,ast.Delete)): targets=node.targets
+        elif isinstance(node,(ast.AugAssign,ast.AnnAssign,ast.For,ast.NamedExpr)): targets=[node.target]
         elif isinstance(node,ast.withitem):
             if node.optional_vars is not None: targets=[node.optional_vars]
         elif isinstance(node,ast.Call) and isinstance(node.func,ast.Attribute):

@@ -545,6 +545,47 @@ func TestOTLPSettingsAreValidated(t *testing.T) {
 	}
 }
 
+// A point keeps its age through any number of failed exports: after two
+// failures in a row, the points queued before the first are still the oldest
+// and go first, not whichever sort first by name.
+func TestPendingOTLPPointsKeepTheirAgeAcrossFailedExports(t *testing.T) {
+	endpoint := newOTLPEndpoint(t, http.StatusServiceUnavailable)
+	server := otlpServer(t, endpoint.server.URL)
+	server.manager.Get().OTLP.MaxPendingPoints = 10
+	testutil.CaptureLogs(t)
+	server.logger = slog.Default()
+
+	// Named so that sorting by name would put the newest first.
+	for i := range 4 {
+		queueProbeMetric(server, "z_first_"+strconv.Itoa(i), 1)
+	}
+	first := server.drainOTLP()
+	for i := range 4 {
+		queueProbeMetric(server, "m_second_"+strconv.Itoa(i), 1)
+	}
+	server.requeueOTLP(first)
+	second := server.drainOTLP()
+	for i := range 4 {
+		queueProbeMetric(server, "a_third_"+strconv.Itoa(i), 1)
+	}
+	server.requeueOTLP(second)
+	// 12 points against a limit of 10: down to 9, the three oldest going.
+	if server.otlpPoints != 9 {
+		t.Fatalf("%d points pending, want 9", server.otlpPoints)
+	}
+	for i := range 4 {
+		_, ok := pendingValue(server, "z_first_"+strconv.Itoa(i))
+		if want := i == 3; ok != want {
+			t.Errorf("z_first_%d pending=%v, want %v", i, ok, want)
+		}
+		for _, name := range []string{"m_second_", "a_third_"} {
+			if _, ok := pendingValue(server, name+strconv.Itoa(i)); !ok {
+				t.Errorf("%s%d was dropped before an older point", name, i)
+			}
+		}
+	}
+}
+
 // While exports fail, the data points waiting stay within
 // otlp.max_pending_points: past it the oldest go, counted and logged, and a
 // point queued again after a failed export is older than any queued since.
@@ -573,14 +614,12 @@ func TestPendingOTLPPointsAreCapped(t *testing.T) {
 			t.Errorf("late_%d, queued last, was dropped", i)
 		}
 	}
-	early := 0
+	// Among the requeued points, the oldest go: early_0 to early_2.
 	for i := range 6 {
-		if _, ok := pendingValue(server, "early_"+strconv.Itoa(i)); ok {
-			early++
+		_, ok := pendingValue(server, "early_"+strconv.Itoa(i))
+		if want := i >= 3; ok != want {
+			t.Errorf("early_%d pending=%v, want %v: the requeued points were not dropped oldest first", i, ok, want)
 		}
-	}
-	if early != 3 {
-		t.Fatalf("%d of the requeued points are left, want 3", early)
 	}
 	if got := seriesValue(t, selfMetrics(t, server), "http_exporter_otlp_points_dropped_total"); got != 3 {
 		t.Fatalf("dropped %v, want 3", got)

@@ -147,7 +147,14 @@ app.kubernetes.io/managed-by: {{ .Release.Service }}
        while the chart is still being rendered. The host may be empty, a name or
        IPv4 address, or a bracketed IPv6 address. */ -}}
 {{- if not (regexMatch "^([^:]*|\\[[0-9A-Fa-f:.]+\\]):[0-9]+$" $address) -}}
-{{- fail (printf "server.listenAddress %q must be host:port with the port after a colon, for example \":8080\", \"0.0.0.0:8080\" or \"[::1]:8080\"" $address) -}}
+{{- fail (printf "server.listenAddress %q must be host:port with the port after a colon, for example \":8080\", \"0.0.0.0:8080\" or \"[::]:8080\"" $address) -}}
+{{- end -}}
+{{- /* A loopback host renders and starts, and then nothing outside the pod
+       reaches the exporter: the kubelet's probes fail, the pod restarts for
+       ever, and the Service has no endpoint to send Prometheus to. */ -}}
+{{- $host := $address | splitList ":" | initial | join ":" | lower -}}
+{{- if regexMatch "^(127\\.[0-9]+\\.[0-9]+\\.[0-9]+|localhost|\\[::1\\])$" $host -}}
+{{- fail (printf "server.listenAddress %q listens on a loopback address, which neither the kubelet's probes nor the Service reach; leave the host empty, as in \":8080\", or use \"0.0.0.0:8080\" or \"[::]:8080\"" $address) -}}
 {{- end -}}
 {{- $port := $address | splitList ":" | last | int -}}
 {{- if or (lt $port 1) (gt $port 65535) -}}
@@ -360,9 +367,39 @@ app.kubernetes.io/managed-by: {{ .Release.Service }}
 {{- end -}}
 {{- end -}}
 {{- end -}}
+{{- /* A monitor is named <fullname>-<name>, so two entries of one name, or
+       one named after a monitor the chart renders itself, would render two
+       objects of one name, and the second would replace the first. */ -}}
+{{- $reserved := dict "self" "the self-metrics monitor" "static-targets" "the static targets monitor" -}}
+{{- $seen := dict -}}
+{{- range $index, $monitor := .Values.monitors -}}
+{{- $name := toString ($monitor.name | default "") -}}
+{{- if $name -}}
+{{- if hasKey $reserved $name -}}
+{{- fail (printf "monitors entry %q has the name of %s, <fullname>-%s, which the chart renders itself; choose another name" $name (get $reserved $name) $name) -}}
+{{- end -}}
+{{- if hasKey $seen $name -}}
+{{- fail (printf "monitors entries #%v and #%d are both named %q; each entry renders <fullname>-<name>, so names must be unique" (get $seen $name) $index $name) -}}
+{{- end -}}
+{{- $_ := set $seen $name $index -}}
+{{- end -}}
+{{- end -}}
 {{- range $index, $monitor := .Values.monitors -}}
 {{- if $monitor.enabled -}}
 {{- $label := $monitor.name | default (printf "#%d" $index) -}}
+{{- /* The chart renders the collector parameter from .collector and the
+       target parameter from each discovered target's address, so a params
+       entry of either would render a second key of that name, and skip the
+       collector check above. */ -}}
+{{- range $key := list "collector" "target" -}}
+{{- if hasKey ($monitor.params | default dict) $key -}}
+{{- if eq $key "collector" -}}
+{{- fail (printf "monitors entry %s sets params.collector; the chart renders the collector parameter itself, so set the entry's .collector instead" $label) -}}
+{{- else -}}
+{{- fail (printf "monitors entry %s sets params.target; the chart sets the target parameter from each discovered target's address, so select the targets with .targetSelector and name the collector with .collector instead" $label) -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
 {{- if not $monitor.collector -}}
 {{- fail (printf "monitors entry %s names no collector; every probe it sends would be answered 400" $label) -}}
 {{- end -}}

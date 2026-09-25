@@ -94,7 +94,11 @@ The chart MUST expose the exporter's process settings as values rather than
 hardcoding them in the Pod template. At minimum `server.listenAddress` MUST set
 `--web.listen-address` and `server.pythonPath` MUST set `--python.path`. The
 container port MUST be derived from the port in `server.listenAddress`, and a
-value without a valid TCP port MUST fail rendering with a clear message. The
+value without a valid TCP port MUST fail rendering with a clear message; its
+examples of a valid value MUST NOT include a loopback address. A loopback host
+— `127.x.x.x`, `localhost` or `[::1]` — MUST fail rendering too: the exporter
+would start, and neither the kubelet's probes nor the Service would reach it.
+The
 container port MUST keep the name `http` so Service, Ingress, ServiceMonitor,
 and PodMonitor references remain valid when the port changes.
 `server.pythonPath` MUST default to the interpreter path in the published
@@ -235,6 +239,9 @@ The implementation MUST document which behavior is used.
 The chart MUST expose a `service.enabled` value that defaults to `true`. When
 enabled, the chart MUST create a Kubernetes `Service` exposing the exporter
 HTTP port. When disabled, the Service resource MUST NOT be rendered.
+`service.type` MUST be `ClusterIP`, `NodePort` or `LoadBalancer`, and the values
+schema MUST refuse `ExternalName`, a DNS alias with no endpoints through which
+nothing would reach the exporter.
 
 The Service MUST be usable as the target of Prometheus Operator
 `ServiceMonitor` resources. The documentation MUST warn that the chart's
@@ -263,9 +270,15 @@ monitors:
     metricRelabelings: []
 ```
 
-The chart MUST allow configuring `params.collector`, user-provided
-`relabelings`, and `metricRelabelings` to route discovered targets through
-`/probe` and filter or rewrite scraped samples.
+The chart MUST render the endpoint's `params.collector` from the entry's
+`collector`, and allow user-provided `relabelings` and `metricRelabelings`, to
+route discovered targets through `/probe` and filter or rewrite scraped
+samples. An entry's `params` MUST NOT set `collector` or `target`, which the
+chart renders itself — the collector from `collector`, checked against
+`config.data` (§ 42.7), and the target from each discovered target's address
+through the relabeling below: either would render a second key of that name
+and bypass the collector check, so rendering MUST fail with a message pointing
+to the entry's `collector` (and `targetSelector` for `target`).
 
 Because collector selection is target-specific, the chart MUST support a documented configuration pattern where a ServiceMonitor endpoint passes:
 
@@ -289,7 +302,20 @@ relabelings:
 
 Each monitor entry MUST have a unique name and select one collector. Multiple
 entries MUST be supported for different target selectors, collectors, or
-scrape settings.
+scrape settings. An entry renders a monitor named `<fullname>-<name>`, so the
+name MUST be a DNS-1123 label — lower-case letters, digits and `-`, starting
+and ending with a letter or digit, at most 63 characters — which the values
+schema MUST enforce; two entries of one name, or an entry
+named `self` or `static-targets`, the suffixes of the chart's own monitors,
+MUST fail rendering, since the second object would replace the first.
+
+Without `targetSelector` the monitor MUST select targets labelled
+`app.kubernetes.io/name: target`; with it, the selector as given. Either way
+the rendered monitor MUST parse with `spec.selector` a mapping holding its
+keys: a template that trims the newline after `selector:` renders
+`selector:matchLabels:`, one key of that name, which `helm template` and
+`helm lint` accept and the Prometheus Operator reads as a monitor selecting
+everything.
 
 ### 33.6 PodMonitor support
 
@@ -447,7 +473,13 @@ The schema MUST:
 - constrain the values whose wrong value fails late rather than loudly: the
   enumerations the templates compare against (`image.pullPolicy`,
   `service.type`, `ingress` path types, `strategy.type`, a monitor's `type` and
-  `auth.type`, `targetAuth.type`), Go durations, TCP port ranges,
+  `auth.type`, `targetAuth.type`), Go durations, the Prometheus durations of
+  the monitors' `interval` and `scrapeTimeout` — a monitor's, and
+  `selfMetrics`' and `staticTargets.monitor`'s, which the Prometheus Operator
+  takes as whole numbers of `y`, `w`, `d`, `h`, `m`, `s` and `ms`, with no
+  fraction, `us` or `ns` — monitor names as DNS-1123 labels, the probes'
+  timings (`terminationGracePeriodSeconds` on `livenessProbe` only, since
+  Kubernetes refuses it on a readiness probe), TCP port ranges,
   `server.listenAddress` in the same `host:port` shape the render-time check
   enforces, and the `--` prefix on an `extraArgs` entry; and
 - stay open where the chart passes a raw Kubernetes shape straight through —
@@ -483,6 +515,10 @@ The repository MUST include automated Helm validation covering at least:
   mount path the chart already uses, each of which MUST fail.
 - every rendered manifest starting its own YAML document, with monitors enabled
   and the self-metrics monitor rendering alongside them
+- every rendered ServiceMonitor and PodMonitor parsed as YAML, with a
+  `spec.selector.matchLabels` mapping and no mapping key holding a colon, for
+  probe monitors of both types with and without `targetSelector`, the static
+  targets monitor and the self-metrics monitor
 - ConfigMap generation
 - Deployment generation
 - Service generation
@@ -714,6 +750,32 @@ are skipped and the text checks of the templates still run:
    MUST render and `0s` and `0m0s` fail; `maxUnavailable: 0` MUST render as
    `0` with a warning in the notes; the pod MUST not mount a token on the
    default account.
+21. Monitor structure: the rendered ServiceMonitors and PodMonitors MUST be
+   parsed as YAML, not searched as text, and each MUST have a
+   `spec.selector.matchLabels` mapping, with no mapping key anywhere holding a
+   colon, for probe monitors of `type: service` and `type: pod` with and
+   without `targetSelector` (the latter selecting
+   `app.kubernetes.io/name: target`, the former its own labels), the static
+   targets monitor of both types, and the self-metrics monitor of both types.
+22. Monitor values: a monitor name that is not a DNS-1123 label (upper case,
+   an underscore), two entries of one name, and an entry named `self` or
+   `static-targets` MUST fail rendering; so MUST a monitor's `params.collector`,
+   with a message pointing to the entry's `collector`, and its `params.target`;
+   and a fractional or `us`/`ns` `interval` or `scrapeTimeout` on a probe
+   monitor, `selfMetrics` or `staticTargets.monitor`, while `1m30s`, `1500ms`
+   and `1d` MUST render.
+23. The exporter credential on probe monitors: with `webAuth.enabled`, a probe
+   monitor of either type without `auth` MUST render `basicAuth` naming the
+   `webAuth` Secret and its `usernameKey` and `passwordKey`; one with its own
+   bearer `auth` MUST keep that and render no `basicAuth`; without
+   `webAuth` a probe monitor without `auth` MUST render none. CI MUST check
+   the probe monitor itself, not any monitor, for the credential.
+24. Unreachable pods: a `server.listenAddress` of `127.0.0.1:8080`,
+   `localhost:8080` or `[::1]:8080` MUST fail rendering, and `[::]:9115`
+   render; no chart message or document MUST offer a loopback address as an
+   example; `service.type: ExternalName` and a `readinessProbe`
+   `terminationGracePeriodSeconds` MUST fail rendering, while a
+   `livenessProbe` one MUST render.
 
 12. `extraArgs`, `extraVolumes` and `extraVolumeMounts` set together, which MUST
    append the argument, the volume and the mount to the ones the chart renders
@@ -819,9 +881,11 @@ by default) to mount a Secret's two keys as files named `username` and
 `password_file` (SPECIFICATION-EXPORTER.md § 42.5), so the exporter's own
 password need not be in the ConfigMap. `secretName` MUST be required when it
 is enabled, and an `extraVolumeMounts` entry at its `mountPath` MUST fail
-rendering. While it is enabled, the self-health monitors MUST send its
-credential as `basicAuth`, since `web.basic_auth` protects the self-metrics
-endpoint too.
+rendering. While it is enabled, every monitor the chart renders MUST send its
+credential as `basicAuth`, since `web.basic_auth` protects `/probe`, the
+self-metrics and the static targets endpoints alike: the self-health and
+static targets monitors, and each probe monitor without `auth.enabled` of its
+own. Without it, a probe monitor gets a `401` on every scrape.
 
 ### 42.6a Shutdown and the grace period
 
@@ -874,13 +938,16 @@ auth:
   type: bearer # bearer or basic
 ```
 
-When `auth.enabled` is false, the chart MUST NOT render `authorization` or
-`basicAuth`, regardless of the configured `auth.type`. When enabled, `auth.type`
+When `auth.enabled` is false, the chart MUST NOT render `authorization`, nor
+`basicAuth` other than the `webAuth` credential while `webAuth.enabled`
+(§ 42.6), regardless of the configured `auth.type`. When enabled, `auth.type`
 MUST select bearer or basic authentication and the chart MUST render the
 corresponding SecretKeySelectors. Their keys MUST default to `token`,
 `username` and `password`, and `optional` to false, so an entry naming only
-`secretName` renders complete selectors. Tests MUST cover the disabled default, both
-monitor selector types, and enabled bearer/basic authentication rendering.
+`secretName` renders complete selectors. An entry's own enabled `auth` MUST win
+over the `webAuth` credential. Tests MUST cover the disabled default, both
+monitor selector types, enabled bearer/basic authentication rendering, and the
+`webAuth` credential on probe monitors of both types without `auth`.
 
 ## 42.8 Monitor relabeling and Deployment rollout behavior
 
@@ -921,7 +988,8 @@ MUST be preserved.
 A monitor's `params` MUST also pass `param_<name>` entries through unchanged,
 since they fill the `{{param_<name>}}` placeholders of the collector's
 `request.path` (SPECIFICATION-EXPORTER.md § 42.10a). The values schema MUST NOT
-restrict `params` to a fixed set of keys for the same reason.
+restrict `params` to a fixed set of keys for the same reason; only `collector`
+and `target`, which the chart renders itself, MUST fail rendering (§ 33.5).
 
 ## 42.11 Helm-wide default metadata
 
@@ -947,7 +1015,14 @@ The chart release workflow MUST be triggered by tags under `chart` and MUST:
 - re-run the chart lint and template scenarios;
 - package the chart without overriding `version` or `appVersion`, so the
   published artifact carries exactly what the committed `Chart.yaml` declares;
-- publish the chart as an OCI artifact; and
+- before publishing, check that the image the chart deploys by default,
+  `ghcr.io/<owner>/prometheus-universal-exporter:<appVersion>`, exists in the
+  registry (`docker buildx imagetools inspect`), and fail, saying to release
+  the exporter first, when it does not: a chart published ahead of its image
+  leaves every default install in `ImagePullBackOff`;
+- publish the chart as an OCI artifact, and sign and verify it with cosign by
+  the digest `helm push` reports, never by its tag, which could be moved to
+  other content between the push and the signature; and
 - create a GitHub Release containing the chart archive.
 
 The CI workflow MUST run the Go suite for changes to anything the repository

@@ -226,6 +226,13 @@ func (s *Server) collect(ctx context.Context, j collectJob) collected {
 	} else {
 		mark = time.Now()
 		decoded, err := decode.Decode(response, c)
+		if errors.Is(err, model.ErrLimitExceeded) {
+			// The prometheus decoder stops at the first series past
+			// limits.max_metrics, which is the validation's failure,
+			// found sooner (transform/serieslimit.go).
+			rec.update(func(x *serverStats) { x.limitErrors++ })
+			return stageFailed("validation", err, model.ErrorPolicyFail)
+		}
 		if err != nil {
 			rec.update(func(x *serverStats) { x.parseErrors++ })
 			return stageFailed("decode", err, c.ErrorHandling.OnDecodeError)
@@ -239,6 +246,13 @@ func (s *Server) collect(ctx context.Context, j collectJob) collected {
 		var repaired utf8Repairs
 		set, repaired, err = s.transformRecorded(scriptCtx, decoded, response, c, rec)
 		recordScriptDuration(rec, timer)
+		if errors.Is(err, model.ErrLimitExceeded) {
+			// A transform stops at the first series past
+			// limits.max_metrics, which is the validation's failure,
+			// found sooner (transform/serieslimit.go).
+			rec.update(func(x *serverStats) { x.limitErrors++ })
+			return stageFailed("validation", err, model.ErrorPolicyFail)
+		}
 		if err != nil {
 			rec.update(func(x *serverStats) {
 				if errors.Is(err, model.ErrMissingValue) {

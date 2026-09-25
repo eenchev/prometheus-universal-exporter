@@ -171,8 +171,9 @@ func HTTPClient(settings TransportSettings, followRedirects bool, timeout time.D
 	}
 	client := &http.Client{Transport: transport, Timeout: timeout}
 	if followRedirects {
-		// Go's own limit, and the collector's allowed_targets and
-		// denied_targets for the host each redirect leads to.
+		// Go's own limit, and the collector's allowed_schemes, and
+		// allowed_targets and denied_targets, for the URL each redirect
+		// leads to.
 		client.CheckRedirect = func(req *http.Request, via []*http.Request) error {
 			ctx := req.Context()
 			if req.Response != nil {

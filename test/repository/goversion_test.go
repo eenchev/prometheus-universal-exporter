@@ -4,9 +4,12 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
+
+	"gopkg.in/yaml.v3"
 )
 
 // A workflow that installs an older Go than go.mod requires fails on the first
@@ -209,27 +212,59 @@ func TestReleaseBinariesBuildWithTheImagesGo(t *testing.T) {
 }
 
 // The Python worker's sandbox depends on what the standard library imports,
-// which changes between releases: from 3.12 zoneinfo needs threading. CI tests
-// the Python the image ships, read from the Dockerfile, so a test that passes
-// in CI passes in the image.
-func TestCITestsThePythonTheImageShips(t *testing.T) {
-	raw, err := os.ReadFile(".github/workflows/ci.yml")
-	if err != nil {
-		t.Fatal(err)
+// which changes between releases: from 3.12 zoneinfo needs threading. Every
+// workflow that runs the test suite — CI, the exporter release, and the
+// Dockerfile update that tests the new pins before proposing them — tests the
+// Python the image ships, read from the Dockerfile, with its pinned libraries,
+// so a test that passes there passes in the image. One running `make ci`
+// installs gopls first, since `make ci` runs gopls check and fails without it.
+func TestWorkflowsRunTheSuiteWithTheImagesPythonAndTheirTools(t *testing.T) {
+	runsSuite := regexp.MustCompile(`(?m)^\s*(go test |make ci\b)`)
+	checked := map[string]bool{}
+	for _, path := range workflowPaths(t) {
+		name := filepath.Base(path)
+		for job, steps := range workflowSteps(t, path) {
+			for index, step := range steps {
+				run, _ := step["run"].(string)
+				if !runsSuite.MatchString(run) {
+					continue
+				}
+				checked[name] = true
+				before := steps[:index]
+				for what, found := range map[string]bool{
+					"reads PYTHON_VERSION from the Dockerfile in a step with id python": hasStep(before, func(s map[string]any) bool {
+						r, _ := s["run"].(string)
+						return s["id"] == "python" && strings.Contains(r, "sed -n 's/^ARG PYTHON_VERSION=//p' Dockerfile")
+					}),
+					"sets that Python up": hasStep(before, func(s map[string]any) bool {
+						uses, _ := s["uses"].(string)
+						with, _ := s["with"].(map[string]any)
+						return strings.HasPrefix(uses, "actions/setup-python@") && with["python-version"] == "${{ steps.python.outputs.version }}"
+					}),
+					// A setup-python Python has no PyYAML, which
+					// check-manifests.py needs, nor the libraries the Python
+					// tests use.
+					"installs the Dockerfile's lxml, PyYAML and python-dateutil": hasStep(before, func(s map[string]any) bool {
+						r, _ := s["run"].(string)
+						return strings.Contains(r, `"lxml==$(arg LXML_VERSION)"`) && strings.Contains(r, `"PyYAML==$(arg PYYAML_VERSION)"`) && strings.Contains(r, `"python-dateutil==$(arg PYTHON_DATEUTIL_VERSION)"`)
+					}),
+				} {
+					if !found {
+						t.Errorf("%s job %q runs the suite (%s) but no step before it %s", name, job, strings.TrimSpace(run), what)
+					}
+				}
+				if strings.Contains(run, "make ci") && !hasStep(before, func(s map[string]any) bool {
+					r, _ := s["run"].(string)
+					return strings.Contains(r, "gopls-install") && strings.Contains(r, "lint-install")
+				}) {
+					t.Errorf("%s job %q runs make ci, which runs golangci-lint and gopls check, without installing both first (make lint-install gopls-install)", name, job)
+				}
+			}
+		}
 	}
-	ci := string(raw)
-	for _, want := range []string{
-		"sed -n 's/^ARG PYTHON_VERSION=//p' Dockerfile",
-		"actions/setup-python@",
-		"python-version: ${{ steps.python.outputs.version }}",
-		// A setup-python Python has no PyYAML, which check-manifests.py
-		// needs, nor the libraries the Python tests use.
-		`"lxml==$(arg LXML_VERSION)"`,
-		`"PyYAML==$(arg PYYAML_VERSION)"`,
-		`"python-dateutil==$(arg PYTHON_DATEUTIL_VERSION)"`,
-	} {
-		if !strings.Contains(ci, want) {
-			t.Errorf("ci.yml no longer contains %q", want)
+	for _, name := range []string{"ci.yml", "release.yml", "update-docker-deps.yml"} {
+		if !checked[name] {
+			t.Errorf("%s no longer runs the test suite", name)
 		}
 	}
 	dockerfile, err := os.ReadFile("Dockerfile")
@@ -237,8 +272,34 @@ func TestCITestsThePythonTheImageShips(t *testing.T) {
 		t.Fatal(err)
 	}
 	if !regexp.MustCompile(`(?m)^ARG PYTHON_VERSION=3\.[0-9]+$`).Match(dockerfile) {
-		t.Error("the Dockerfile no longer pins PYTHON_VERSION as 3.MINOR, which CI reads")
+		t.Error("the Dockerfile no longer pins PYTHON_VERSION as 3.MINOR, which the workflows read")
 	}
+}
+
+// workflowSteps returns each job's steps of the workflow at path, in order.
+func workflowSteps(t *testing.T, path string) map[string][]map[string]any {
+	t.Helper()
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var document struct {
+		Jobs map[string]struct {
+			Steps []map[string]any `yaml:"steps"`
+		} `yaml:"jobs"`
+	}
+	if err := yaml.Unmarshal(raw, &document); err != nil {
+		t.Fatal(err)
+	}
+	steps := map[string][]map[string]any{}
+	for name, job := range document.Jobs {
+		steps[name] = job.Steps
+	}
+	return steps
+}
+
+func hasStep(steps []map[string]any, match func(map[string]any) bool) bool {
+	return slices.ContainsFunc(steps, match)
 }
 
 // The linter version is pinned twice: in the Makefile for `make lint` and in

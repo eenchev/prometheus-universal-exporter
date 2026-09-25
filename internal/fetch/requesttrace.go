@@ -71,6 +71,22 @@ func traceRequest(ctx context.Context, method, url string, header http.Header, h
 	t.requests = append(t.requests, TracedRequest{Method: method, URL: url, Header: header, Redirect: redirect, started: time.Now()})
 }
 
+// traceBodyError adds to the last request's outcome that its body could not
+// be read, so a debug report shows why an answer that began was retried.
+func traceBodyError(ctx context.Context, err error) {
+	t, ok := ctx.Value(requestTraceKey{}).(*RequestTrace)
+	if !ok {
+		return
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if n := len(t.requests); n > 0 {
+		r := &t.requests[n-1]
+		r.Outcome += ", then the body broke off: " + err.Error()
+		r.Duration = time.Since(r.started)
+	}
+}
+
 // traceOutcome records how the last request recorded ended, unless its end
 // is recorded already.
 func traceOutcome(ctx context.Context, outcome string) {

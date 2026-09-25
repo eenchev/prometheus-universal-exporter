@@ -344,3 +344,35 @@ func TestCloudMetadataIsRefusedByDefault(t *testing.T) {
 		t.Fatalf("err=%v after %s", err, time.Since(start))
 	}
 }
+
+// An IPv6 address with a zone, fe80::1%eth0, is held to the address rules
+// as the address itself: a zone names the interface, not the address, and
+// a network never contains a zoned address as Go compares them.
+func TestAZonedAddressIsCheckedAsItsAddress(t *testing.T) {
+	denied, err := compileTargetPolicy(nil, []string{"fe80::/10"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := denied.check(context.Background(), "fe80::1%eth0", false); !errors.Is(err, ErrTargetRefused) {
+		t.Fatalf("denied: %v", err)
+	}
+	metadata, err := compileTargetPolicy(nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := metadata.check(context.Background(), "fd00:ec2::254%eth0", false); !errors.Is(err, ErrTargetRefused) || !strings.Contains(err.Error(), "metadata") {
+		t.Fatalf("metadata: %v", err)
+	}
+	allowed, err := compileTargetPolicy([]string{"fe80::/10"}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := allowed.check(context.Background(), "fe80::1%eth0", false); err != nil {
+		t.Fatalf("allowed: %v", err)
+	}
+	// So is a target naming one, refused before anything is sent.
+	c := policyCollector(t, nil, []string{"fe80::/10"}, false)
+	if err := fetchRefused(t, "http://[fe80::1%25eth0]:9100/", c); !errors.Is(err, ErrTargetRefused) {
+		t.Fatalf("fetch: %v", err)
+	}
+}

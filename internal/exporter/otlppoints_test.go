@@ -1,8 +1,10 @@
 package exporter
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
+	"net/http/httptest"
 	"net/url"
 	"strconv"
 	"strings"
@@ -110,6 +112,62 @@ func TestOTLPPointsKeepTheTimeTheyWereQueued(t *testing.T) {
 	}
 }
 
+// The start times remembered are bounded by twice otlp.max_pending_points:
+// past it, the series seen least recently is forgotten, and starts again
+// when it comes back; one seen again recently is kept.
+func TestOTLPStartTimesAreBounded(t *testing.T) {
+	starts := newOTLPStartTimes()
+	starts.bound(2)
+	if starts.max != 4 {
+		t.Fatalf("remembers %d series for max_pending_points 2, want 4", starts.max)
+	}
+	start := starts.forResource("r")
+	counter := func(name string) model.Metric {
+		return model.Metric{Name: name, Type: model.CounterMetricType, Value: 1}
+	}
+	for i, name := range []string{"a", "b", "c", "d"} {
+		start(counter(name), strconv.Itoa(i))
+	}
+	// a is seen again, so b is now the least recently seen.
+	if got := start(counter("a"), "10"); got != "0" {
+		t.Fatalf("a: %s", got)
+	}
+	start(counter("e"), "11")
+	if n := len(starts.series); n != 4 {
+		t.Fatalf("%d series remembered, want 4", n)
+	}
+	if got := start(counter("a"), "12"); got != "0" {
+		t.Fatalf("a, seen recently, was forgotten: starts at %s", got)
+	}
+	if got := start(counter("b"), "13"); got != "13" {
+		t.Fatalf("b, seen least recently, was not forgotten: starts at %s", got)
+	}
+	if n := len(starts.series); n != 4 || starts.recent.Len() != 4 {
+		t.Fatalf("%d series remembered (%d in order), want 4", n, starts.recent.Len())
+	}
+	// An export bounds them by the configured otlp.max_pending_points.
+	endpoint := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
+	t.Cleanup(endpoint.Close)
+	otlp := otlpConfig(endpoint.URL)
+	otlp.MaxPendingPoints = 3
+	server := newStaticServer(t, &model.Config{Collectors: []model.Collector{testutil.Collector("text", "text")}, OTLP: otlp}, nil)
+	var set model.MetricSet
+	for i := range 10 {
+		set.Metrics = append(set.Metrics, counter("c"+strconv.Itoa(i)))
+	}
+	if _, _, err := server.pushOTLP(context.Background(), otlp, []otlpResourceSet{{Identity: defaultResourceIdentity(otlp), Set: set}}, time.Minute); err != nil {
+		t.Fatal(err)
+	}
+	if n := len(server.otlpStarts.series); n != 6 {
+		t.Fatalf("an export of 10 counters with max_pending_points 3 left %d start times, want 6", n)
+	}
+	// Without otlp.max_pending_points, its default applies.
+	starts.bound(0)
+	if want := 2 * model.DefaultOTLPMaxPendingPoints; starts.max != want {
+		t.Fatalf("remembers %d series by default, want %d", starts.max, want)
+	}
+}
+
 // A cumulative point starts when its series was first exported, and again
 // after a reset, when its count went down; a gauge has no start.
 func TestOTLPStartTimes(t *testing.T) {
@@ -140,7 +198,6 @@ func TestOTLPStartTimes(t *testing.T) {
 	}
 	// Forgotten after an hour unseen.
 	starts.now = func() time.Time { return time.Now().Add(2 * time.Hour) }
-	starts.lastSweep = time.Time{}
 	if got := start(counter(8), "700"); got != "700" {
 		t.Fatalf("after an hour unseen: %s", got)
 	}

@@ -20,7 +20,7 @@ func TestExpositionIsNeverSniffedAsHTML(t *testing.T) {
 		Labels: map[string]string{"v": "<img src=x onerror=alert(1)>"},
 	}}}
 	recorder := httptest.NewRecorder()
-	writeMetricSet(recorder, set)
+	writeMetricSet(recorder, nil, set)
 	if got := recorder.Header().Get("X-Content-Type-Options"); got != "nosniff" {
 		t.Fatalf("X-Content-Type-Options %q, want nosniff", got)
 	}
@@ -43,7 +43,7 @@ func TestExpositionTimestampsAndCharset(t *testing.T) {
 		{Name: "u", Type: model.GaugeMetricType, Value: 1},
 	}}
 	recorder := httptest.NewRecorder()
-	writeMetricSet(recorder, set)
+	writeMetricSet(recorder, nil, set)
 	if got := recorder.Header().Get("Content-Type"); got != "text/plain; version=0.0.4; charset=utf-8" {
 		t.Fatalf("Content-Type %q", got)
 	}
@@ -90,13 +90,13 @@ func TestExpositionText(t *testing.T) {
 		"s{quantile=\"0.99\"} -1e-07\ns_sum 1e+21\ns_count 4\n" +
 		"g{k=\"\"} -Inf\n"
 	recorder := httptest.NewRecorder()
-	writeMetricSet(recorder, set)
+	writeMetricSet(recorder, nil, set)
 	if got := recorder.Body.String(); got != want {
 		t.Fatalf("got:\n%s\nwant:\n%s", got, want)
 	}
 	// A second answer from a pooled buffer holds nothing of the first.
 	recorder = httptest.NewRecorder()
-	writeMetricSet(recorder, &model.MetricSet{Metrics: []model.Metric{{Name: "x", Type: model.GaugeMetricType, Value: 2}}})
+	writeMetricSet(recorder, nil, &model.MetricSet{Metrics: []model.Metric{{Name: "x", Type: model.GaugeMetricType, Value: 2}}})
 	if got := recorder.Body.String(); got != "# TYPE x gauge\nx 2\n" {
 		t.Fatalf("got %q", got)
 	}
@@ -109,6 +109,6 @@ func BenchmarkExposition(b *testing.B) {
 	}
 	b.ReportAllocs()
 	for b.Loop() {
-		writeMetricSet(httptest.NewRecorder(), set)
+		writeMetricSet(httptest.NewRecorder(), nil, set)
 	}
 }

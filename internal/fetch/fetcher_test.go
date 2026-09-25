@@ -247,6 +247,58 @@ func TestRequestLabelDropsCredentialsAndQuery(t *testing.T) {
 // A request whose method is not idempotent is sent once however many retries
 // are configured, unless retry.non_idempotent allows them: sending a POST again
 // may repeat what it did. GET is retried as configured.
+// A connection that breaks while the body is being read is retried like one
+// that breaks before the answer: the first answer promises 64 bytes and stops
+// after 5, and the retry reads the whole body. Without attempts left, or for
+// a method that is not retried, the read error is the fetch's error.
+func TestABrokenBodyIsRetried(t *testing.T) {
+	var requests atomic.Int64
+	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		if requests.Add(1) == 1 {
+			w.Header().Set("Content-Length", "64")
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte("value"))
+			// Taking the connection over and closing it cuts the body short.
+			conn, _, err := http.NewResponseController(w).Hijack()
+			if err == nil {
+				_ = conn.Close()
+			}
+			return
+		}
+		_, _ = w.Write([]byte("value=42"))
+	}))
+	t.Cleanup(target.Close)
+	for _, test := range []struct {
+		name     string
+		method   string
+		attempts int
+		want     int64
+		ok       bool
+	}{
+		{"retried", http.MethodGet, 1, 2, true},
+		{"no attempts left", http.MethodGet, 0, 1, false},
+		{"a method not retried", http.MethodPost, 1, 1, false},
+	} {
+		requests.Store(0)
+		c := model.Collector{Name: "broken", Request: model.RequestConfig{Type: RequestTypeHTTP, Method: test.method, Retry: model.RetryConfig{Attempts: test.attempts}}, Limits: model.Limits{MaxResponseBytes: 1024}}
+		ctx, trace := WithRequestTrace(context.Background())
+		resp, err := fetch(ctx, target.URL, &c, RequestOverrides{})
+		// A debug report shows why the first answer was not the one kept.
+		if traced := trace.Requests(); len(traced) == 0 || !strings.Contains(traced[0].Outcome, "200 OK, then the body broke off: ") {
+			t.Errorf("%s: the trace says %+v", test.name, traced)
+		}
+		if got := requests.Load(); got != test.want {
+			t.Errorf("%s: %d requests, want %d", test.name, got, test.want)
+		}
+		switch {
+		case test.ok && (err != nil || string(resp.Body) != "value=42"):
+			t.Errorf("%s: resp=%v err=%v", test.name, resp, err)
+		case !test.ok && (err == nil || !strings.Contains(err.Error(), "reading response")):
+			t.Errorf("%s: err=%v, want the read error", test.name, err)
+		}
+	}
+}
+
 func TestOnlyIdempotentRequestsAreRetried(t *testing.T) {
 	var requests atomic.Int64
 	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {

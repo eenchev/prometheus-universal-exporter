@@ -31,6 +31,7 @@ import (
 func Transform(ctx context.Context, d *decode.Decoded, r *fetch.HTTPResponse, c *model.Collector, pythonPath string) (*model.MetricSet, error) {
 	report, _ := ctx.Value(ruleReportKey{}).(*RuleReport)
 	ctx = withResponseVariables(ctx, r)
+	ctx = withSeriesBudget(ctx, c.Limits.MaxMetrics)
 	ctx, failures := withRuleFailures(ctx)
 	defer failures.finish(c, report)
 	set, err := transformMetrics(ctx, d, r, c, pythonPath)
@@ -533,6 +534,9 @@ func transformJQ(ctx context.Context, data any, rules []model.MetricRule, c *mod
 				}
 				return nil, ruleFailure(c, rule, missing)
 			}
+			if err := takeSeries(ctx); err != nil {
+				return nil, err
+			}
 			out.Metrics = append(out.Metrics, model.Metric{Name: rule.Name, Help: rule.Description, Type: rule.Type, Value: n, Labels: model.CloneLabels(labels[index])})
 		}
 	}
@@ -557,17 +561,33 @@ func transformJQItems(ctx context.Context, data any, rule model.MetricRule, c *m
 		}
 		return nil, false, ruleFailure(c, rule, err)
 	}
-	items, err := evaluateJQ(ctx, data, data, rule.Items)
+	code, err := expr.CompileJQ(rule.Items)
 	if err != nil {
 		metrics, _, failure := fail(fmt.Errorf("metric %q items: %w", rule.Name, err))
 		return metrics, failure
 	}
-	if len(items) == 0 && requiredRule(rule, c) {
-		metrics, _, failure := fail(model.MarkError(fmt.Errorf("metric %q items selected nothing", rule.Name), model.ErrMissingValue))
-		return metrics, failure
-	}
+	// The items are taken one at a time, as the program produces them, so
+	// a scrape past limits.max_metrics stops at the first series too many
+	// rather than after collecting every item.
+	vars, _ := ctx.Value(responseVariablesKey{}).(responseVariables)
+	iterator := code.RunWithContext(ctx, data, data, vars.status, vars.headers)
 	var out []model.Metric
-	for index, item := range items {
+	for index := 0; ; index++ {
+		item, more := iterator.Next()
+		if !more {
+			if index == 0 && requiredRule(rule, c) {
+				metrics, _, failure := fail(model.MarkError(fmt.Errorf("metric %q items selected nothing", rule.Name), model.ErrMissingValue))
+				return metrics, failure
+			}
+			break
+		}
+		if itemsErr, isErr := item.(error); isErr {
+			// The rule's series so far are dropped with it, as they were
+			// when the items were all collected before any was read.
+			releaseSeries(ctx, len(out))
+			metrics, _, failure := fail(fmt.Errorf("metric %q items: %w", rule.Name, itemsErr))
+			return metrics, failure
+		}
 		value, err := evaluateJQOne(ctx, item, data, rule.Expression)
 		if err != nil {
 			if _, carryOn, failure := fail(fmt.Errorf("metric %q item %d expression: %w", rule.Name, index, err)); !carryOn {
@@ -621,6 +641,9 @@ func transformJQItems(ctx context.Context, data any, rule model.MetricRule, c *m
 				return nil, failure
 			}
 			continue
+		}
+		if err := takeSeries(ctx); err != nil {
+			return nil, err
 		}
 		out = append(out, model.Metric{Name: rule.Name, Help: rule.Description, Type: rule.Type, Value: n, Labels: labels})
 	}
@@ -792,8 +815,9 @@ func transformRegex(ctx context.Context, text string, rules []model.MetricRule, 
 			}
 			return nil, ruleFailure(c, rule, fmt.Errorf("metric %q regex: %w", rule.Name, err))
 		}
-		matches := re.FindAllStringSubmatchIndex(text, -1)
-		if len(matches) == 0 {
+		matches := regexMatches(ctx, re, text)
+		match, ok := matches()
+		if !ok {
 			if requiredRule(rule, c) {
 				missing := model.MarkError(fmt.Errorf("regex for metric %q matched no text", rule.Name), model.ErrMissingValue)
 				if handleMetricError(ctx, c, rule, missing) {
@@ -804,49 +828,92 @@ func transformRegex(ctx context.Context, text string, rules []model.MetricRule, 
 			continue
 		}
 		names := re.SubexpNames()
-		for _, match := range matches {
-			// The first capture group is the value; the configuration refuses
-			// a regex without one. A group that took no part in the match, as
-			// an optional one can, or that captured only blanks, is a missing
-			// value like a match that never happened.
-			if match[2] < 0 || isBlank(text[match[2]:match[3]]) {
-				if requiredRule(rule, c) {
-					missing := model.MarkError(fmt.Errorf("regex for metric %q matched, but its first capture group captured no value", rule.Name), model.ErrMissingValue)
-					if handleMetricError(ctx, c, rule, missing) {
-						continue
-					}
-					return nil, ruleFailure(c, rule, missing)
-				}
-				continue
+		for ; ok; match, ok = matches() {
+			if err := regexSeries(ctx, out, text, match, names, rule, c); err != nil {
+				return nil, err
 			}
-			n, err := ruleValue(rule, text[match[2]:match[3]])
-			if err != nil {
-				if handleMetricError(ctx, c, rule, err) {
-					continue
-				}
-				return nil, ruleFailure(c, rule, fmt.Errorf("metric %q: %w", rule.Name, err))
-			}
-			labels := map[string]string{}
-			for _, label := range rule.Labels {
-				if label.Static() {
-					labels[label.Name] = label.Value
-					continue
-				}
-				index := captureIndex(label.Expression, names)
-				if index >= 0 && 2*index+1 < len(match) && match[2*index] >= 0 {
-					labels[label.Name] = text[match[2*index]:match[2*index+1]]
-				}
-			}
-			if missing := missingRequiredLabel(rule, labels); missing != nil {
-				if handleMetricError(ctx, c, rule, missing) {
-					continue
-				}
-				return nil, ruleFailure(c, rule, missing)
-			}
-			out.Metrics = append(out.Metrics, model.Metric{Name: rule.Name, Help: rule.Description, Type: rule.Type, Value: n, Labels: labels})
 		}
 	}
 	return out, nil
+}
+
+// regexMatches returns the matches of re in text one at a time, as
+// FindAllStringSubmatchIndex finds them, without finding them all at once
+// when the series budget is smaller: it asks for one more match than the
+// budget has room for, which is where the scrape fails if every match is a
+// series, and only when some were not — a blank capture, a value its rule
+// carried on without — for more, twice as many each time. regexp cannot
+// resume a search where one stopped, since ^ and \b depend on the text
+// before it, so each call searches from the start, and doubling keeps that
+// to twice the work of one search.
+func regexMatches(ctx context.Context, re *regexp.Regexp, text string) func() ([]int, bool) {
+	room := seriesRoom(ctx)
+	want := -1
+	if room >= 0 {
+		want = room + 1
+	}
+	matches := re.FindAllStringSubmatchIndex(text, want)
+	next := 0
+	return func() ([]int, bool) {
+		if next == len(matches) && want >= 0 && len(matches) == want {
+			want = max(2*len(matches), len(matches)+seriesRoom(ctx)+1)
+			more := re.FindAllStringSubmatchIndex(text, want)
+			matches = more
+		}
+		if next == len(matches) {
+			return nil, false
+		}
+		next++
+		return matches[next-1], true
+	}
+}
+
+// regexSeries adds the series of one match to out. An error is the scrape's
+// failure; a match the rule's error mode carries on without adds nothing.
+func regexSeries(ctx context.Context, out *model.MetricSet, text string, match []int, names []string, rule model.MetricRule, c *model.Collector) error {
+	// The first capture group is the value; the configuration refuses a
+	// regex without one. A group that took no part in the match, as an
+	// optional one can, or that captured only blanks, is a missing value
+	// like a match that never happened.
+	if match[2] < 0 || isBlank(text[match[2]:match[3]]) {
+		if requiredRule(rule, c) {
+			missing := model.MarkError(fmt.Errorf("regex for metric %q matched, but its first capture group captured no value", rule.Name), model.ErrMissingValue)
+			if handleMetricError(ctx, c, rule, missing) {
+				return nil
+			}
+			return ruleFailure(c, rule, missing)
+		}
+		return nil
+	}
+	n, err := ruleValue(rule, text[match[2]:match[3]])
+	if err != nil {
+		if handleMetricError(ctx, c, rule, err) {
+			return nil
+		}
+		return ruleFailure(c, rule, fmt.Errorf("metric %q: %w", rule.Name, err))
+	}
+	labels := map[string]string{}
+	for _, label := range rule.Labels {
+		if label.Static() {
+			labels[label.Name] = label.Value
+			continue
+		}
+		index := captureIndex(label.Expression, names)
+		if index >= 0 && 2*index+1 < len(match) && match[2*index] >= 0 {
+			labels[label.Name] = text[match[2*index]:match[2*index+1]]
+		}
+	}
+	if missing := missingRequiredLabel(rule, labels); missing != nil {
+		if handleMetricError(ctx, c, rule, missing) {
+			return nil
+		}
+		return ruleFailure(c, rule, missing)
+	}
+	if err := takeSeries(ctx); err != nil {
+		return err
+	}
+	out.Metrics = append(out.Metrics, model.Metric{Name: rule.Name, Help: rule.Description, Type: rule.Type, Value: n, Labels: labels})
+	return nil
 }
 
 func captureIndex(value string, names []string) int {
@@ -937,17 +1004,22 @@ func xpathLabels[N any](nodes xpathNodes[N], node N, rule model.MetricRule, name
 		case strings.HasPrefix(label.Expression, "@"):
 			labels[label.Name] = nodes.attr(node, strings.TrimPrefix(label.Expression, "@"))
 		default:
-			selector, err := expr.CompileXPath(label.Expression, namespaces)
+			program, err := expr.CompileXPath(label.Expression, namespaces)
 			if err != nil {
 				continue
 			}
+			selector := program.Get()
 			if value, computed := xpathValue(nodes, node, selector); computed {
-				if text := xpathText(value); text != "" {
+				if text := strings.TrimSpace(xpathText(value)); text != "" {
 					labels[label.Name] = text
 				}
 			} else if found, ok := nodes.one(node, selector); ok {
-				labels[label.Name] = nodes.text(found)
+				// Trimmed, as a css label is: the text of an element in
+				// pretty-printed markup starts and ends with the
+				// indentation around it, which is no part of the value.
+				labels[label.Name] = strings.TrimSpace(nodes.text(found))
 			}
+			program.Put(selector)
 		}
 	}
 	return labels
@@ -1006,6 +1078,9 @@ func addComputedXPathSeries[N any](ctx context.Context, out *model.MetricSet, no
 		}
 		return ruleFailure(c, rule, missing)
 	}
+	if err := takeSeries(ctx); err != nil {
+		return err
+	}
 	out.Metrics = append(out.Metrics, model.Metric{Name: rule.Name, Help: rule.Description, Type: rule.Type, Value: number, Labels: labels})
 	return nil
 }
@@ -1013,60 +1088,73 @@ func addComputedXPathSeries[N any](ctx context.Context, out *model.MetricSet, no
 func transformXPathNodes[N any](ctx context.Context, root N, nodes xpathNodes[N], rules []model.MetricRule, c *model.Collector, namespaces map[string]string) (*model.MetricSet, error) {
 	out := &model.MetricSet{}
 	for _, rule := range rules {
-		expression, err := expr.CompileXPath(rule.Expression, namespaces)
+		program, err := expr.CompileXPath(rule.Expression, namespaces)
 		if err != nil {
 			if handleMetricError(ctx, c, rule, err) {
 				continue
 			}
 			return nil, ruleFailure(c, rule, fmt.Errorf("%s %q: %w", nodes.kind, rule.Expression, err))
 		}
-		if value, computed := xpathValue(nodes, root, expression); computed {
-			if err := addComputedXPathSeries(ctx, out, nodes, root, rule, c, namespaces, value); err != nil {
-				return nil, err
-			}
-			continue
-		}
-		selected := nodes.all(root, expression)
-		if len(selected) == 0 {
-			if requiredRule(rule, c) {
-				missing := model.MarkError(fmt.Errorf("%s %q matched no nodes", nodes.kind, rule.Expression), model.ErrMissingValue)
-				if handleMetricError(ctx, c, rule, missing) {
-					continue
-				}
-				return nil, ruleFailure(c, rule, missing)
-			}
-			continue
-		}
-		for _, node := range selected {
-			labels := xpathLabels(nodes, node, rule, namespaces)
-			text := nodes.text(node)
-			if isBlank(text) {
-				if requiredRule(rule, c) {
-					missing := model.MarkError(fmt.Errorf("%s %q selected a node without a value", nodes.kind, rule.Expression), model.ErrMissingValue)
-					if handleMetricError(ctx, c, rule, missing) {
-						continue
-					}
-					return nil, ruleFailure(c, rule, missing)
-				}
-				continue
-			}
-			value, err := ruleValue(rule, text)
-			if err != nil {
-				if handleMetricError(ctx, c, rule, err) {
-					continue
-				}
-				return nil, ruleFailure(c, rule, fmt.Errorf("metric %q: %w", rule.Name, err))
-			}
-			if missing := missingRequiredLabel(rule, labels); missing != nil {
-				if handleMetricError(ctx, c, rule, missing) {
-					continue
-				}
-				return nil, ruleFailure(c, rule, missing)
-			}
-			out.Metrics = append(out.Metrics, model.Metric{Name: rule.Name, Help: rule.Description, Type: rule.Type, Value: value, Labels: labels})
+		expression := program.Get()
+		err = xpathRule(ctx, out, root, nodes, rule, c, namespaces, expression)
+		program.Put(expression)
+		if err != nil {
+			return nil, err
 		}
 	}
 	return out, nil
+}
+
+// xpathRule adds the series of one rule, whose compiled expression it is
+// given, to out. An error is the scrape's failure; a series the rule's error
+// mode carries on without is left out.
+func xpathRule[N any](ctx context.Context, out *model.MetricSet, root N, nodes xpathNodes[N], rule model.MetricRule, c *model.Collector, namespaces map[string]string, expression *xpath.Expr) error {
+	if value, computed := xpathValue(nodes, root, expression); computed {
+		return addComputedXPathSeries(ctx, out, nodes, root, rule, c, namespaces, value)
+	}
+	selected := nodes.all(root, expression)
+	if len(selected) == 0 {
+		if requiredRule(rule, c) {
+			missing := model.MarkError(fmt.Errorf("%s %q matched no nodes", nodes.kind, rule.Expression), model.ErrMissingValue)
+			if handleMetricError(ctx, c, rule, missing) {
+				return nil
+			}
+			return ruleFailure(c, rule, missing)
+		}
+		return nil
+	}
+	for _, node := range selected {
+		labels := xpathLabels(nodes, node, rule, namespaces)
+		text := nodes.text(node)
+		if isBlank(text) {
+			if requiredRule(rule, c) {
+				missing := model.MarkError(fmt.Errorf("%s %q selected a node without a value", nodes.kind, rule.Expression), model.ErrMissingValue)
+				if handleMetricError(ctx, c, rule, missing) {
+					continue
+				}
+				return ruleFailure(c, rule, missing)
+			}
+			continue
+		}
+		value, err := ruleValue(rule, text)
+		if err != nil {
+			if handleMetricError(ctx, c, rule, err) {
+				continue
+			}
+			return ruleFailure(c, rule, fmt.Errorf("metric %q: %w", rule.Name, err))
+		}
+		if missing := missingRequiredLabel(rule, labels); missing != nil {
+			if handleMetricError(ctx, c, rule, missing) {
+				continue
+			}
+			return ruleFailure(c, rule, missing)
+		}
+		if err := takeSeries(ctx); err != nil {
+			return err
+		}
+		out.Metrics = append(out.Metrics, model.Metric{Name: rule.Name, Help: rule.Description, Type: rule.Type, Value: value, Labels: labels})
+	}
+	return nil
 }
 
 func transformCSS(ctx context.Context, doc *goquery.Document, rules []model.MetricRule, c *model.Collector) (*model.MetricSet, error) {
@@ -1132,6 +1220,9 @@ func transformCSS(ctx context.Context, doc *goquery.Document, rules []model.Metr
 			if label.Static() {
 				labels[label.Name] = label.Value
 			}
+		}
+		if err := takeSeries(ctx); err != nil {
+			return nil, err
 		}
 		out.Metrics = append(out.Metrics, model.Metric{Name: rule.Name, Help: rule.Description, Type: rule.Type, Value: value, Labels: labels})
 	}
@@ -1236,6 +1327,9 @@ func transformCSSItems(ctx context.Context, doc *goquery.Document, rule model.Me
 			}
 			continue
 		}
+		if err := takeSeries(ctx); err != nil {
+			return nil, err
+		}
 		out = append(out, model.Metric{Name: rule.Name, Help: rule.Description, Type: rule.Type, Value: value, Labels: labels})
 	}
 	return out, nil
@@ -1313,6 +1407,9 @@ func transformCSV(ctx context.Context, data any, rules []model.MetricRule, c *mo
 					continue
 				}
 				return nil, ruleFailure(c, rule, missing)
+			}
+			if err := takeSeries(ctx); err != nil {
+				return nil, err
 			}
 			out.Metrics = append(out.Metrics, model.Metric{Name: rule.Name, Help: rule.Description, Type: rule.Type, Value: n, Labels: labels})
 		}
@@ -1392,6 +1489,9 @@ func applyPrometheusTransform(ctx context.Context, in model.MetricSet, c *model.
 					}
 					return nil, ruleFailure(c, rule, missing)
 				}
+				if err := takeSeries(ctx); err != nil {
+					return nil, err
+				}
 				out.Metrics = append(out.Metrics, metric)
 			}
 		}
@@ -1431,6 +1531,9 @@ func applyPrometheusTransform(ctx context.Context, in model.MetricSet, c *model.
 		}
 		if name, ok := t.Rename[metric.Name]; ok {
 			metric.Name = name
+		}
+		if err := takeSeries(ctx); err != nil {
+			return nil, err
 		}
 		out.Metrics = append(out.Metrics, metric)
 	}

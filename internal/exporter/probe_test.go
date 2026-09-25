@@ -21,7 +21,7 @@ func TestMetricValidationAndExpositionEscaping(t *testing.T) {
 		t.Fatal(err)
 	}
 	w := httptest.NewRecorder()
-	writeMetricSet(w, &m)
+	writeMetricSet(w, nil, &m)
 	if !strings.Contains(w.Body.String(), `text="a\n\\b\"c"`) {
 		t.Fatalf("unexpected exposition: %s", w.Body.String())
 	}
@@ -99,6 +99,12 @@ func TestForwardedHeadersAreExplicitAndAllowlisted(t *testing.T) {
 	}
 	if got := forwarded.Get("Host"); got != "" {
 		t.Fatalf("hop-by-hop/transport header was forwarded: %q", got)
+	}
+	// Accept-Encoding is the exporter's own, even listed: Prometheus sends
+	// it on every scrape.
+	r.Header.Set("Accept-Encoding", "gzip")
+	if got := forwardedHeaders(r, model.RequestConfig{ForwardHeaders: []string{"Accept-Encoding", "X-Tenant"}}); got.Get("Accept-Encoding") != "" {
+		t.Fatalf("Accept-Encoding was forwarded: %v", got)
 	}
 	// No Proxy- header is forwarded, even listed.
 	if got := forwardableHeaders(model.RequestConfig{ForwardHeaders: []string{"Proxy-Connection", "proxy-x", "X-Tenant", "Proxy-Authorization"}}); len(got) != 1 || got[0] != "X-Tenant" {

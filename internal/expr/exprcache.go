@@ -100,17 +100,50 @@ func CompileCSS(selector string) (cascadia.Selector, error) { return cssSelector
 
 // xpathPrograms are keyed by the expression and the namespace bindings, which
 // change what a prefix in the expression means.
-var xpathPrograms = newExprCache(func(key string) (*xpath.Expr, error) {
+var xpathPrograms = newExprCache(func(key string) (*XPathProgram, error) {
 	expression, namespaces := splitXPathKey(key)
-	if len(namespaces) == 0 {
-		return xpath.Compile(expression)
+	compile := func() (*xpath.Expr, error) {
+		if len(namespaces) == 0 {
+			return xpath.Compile(expression)
+		}
+		return xpath.CompileWithNS(expression, namespaces)
 	}
-	return xpath.CompileWithNS(expression, namespaces)
+	first, err := compile()
+	if err != nil {
+		return nil, err
+	}
+	program := &XPathProgram{}
+	program.pool.New = func() any {
+		// The expression compiled once already, so it compiles again.
+		e, _ := compile()
+		return e
+	}
+	program.pool.Put(first)
+	return program, nil
 })
+
+// XPathProgram is a compiled XPath expression that many goroutines may use at
+// once. Unlike a jq program, an *xpath.Expr may not be shared: Evaluate runs
+// the expression's query tree in place, keeping its position in fields of the
+// tree, and Select clones the same tree while it may be being run. So the
+// program keeps a pool of compiled copies, and each use takes one of its own:
+// a scrape takes a copy the last one returned, and only when every copy is in
+// use is another compiled, which costs about as much as a scrape of a small
+// document.
+type XPathProgram struct {
+	pool sync.Pool
+}
+
+// Get takes a compiled copy of the expression for the caller alone, until it
+// hands it back with Put.
+func (p *XPathProgram) Get() *xpath.Expr { return p.pool.Get().(*xpath.Expr) }
+
+// Put hands back a copy Get took, which the caller must no longer use.
+func (p *XPathProgram) Put(e *xpath.Expr) { p.pool.Put(e) }
 
 // CompileXPath compiles an XPath expression with the given namespace
 // bindings, once per distinct expression and bindings.
-func CompileXPath(expression string, namespaces map[string]string) (*xpath.Expr, error) {
+func CompileXPath(expression string, namespaces map[string]string) (*XPathProgram, error) {
 	return xpathPrograms.get(xpathKey(expression, namespaces))
 }
 

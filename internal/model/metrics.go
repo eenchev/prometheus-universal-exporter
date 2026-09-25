@@ -131,6 +131,15 @@ func (m Metric) seriesKey() string {
 	return b.String()
 }
 
+// MetricCountError is the error of a scrape with more series than
+// limits.max_metrics allows. The transforms and the prometheus decoder stop
+// making series at the first one past the limit, so count is then limit+1:
+// the scrape has at least that many, and how many more is not worth the
+// memory of finding out.
+func MetricCountError(count, limit int) error {
+	return MarkError(fmt.Errorf("metric count %d exceeds limit %d", count, limit), ErrLimitExceeded)
+}
+
 // Validate checks the set against the collector's limits and the rules of
 // the exposition format: valid names and types, no duplicate series, one type
 // per family. It stops at the first problem, which the error describes.
@@ -139,7 +148,7 @@ func (s *MetricSet) Validate(l Limits) error {
 	seen := map[string]bool{}
 	types := map[string]MetricType{}
 	if l.MaxMetrics > 0 && len(s.Metrics) > l.MaxMetrics {
-		return fmt.Errorf("metric count %d exceeds limit %d", len(s.Metrics), l.MaxMetrics)
+		return MetricCountError(len(s.Metrics), l.MaxMetrics)
 	}
 	for i := range s.Metrics {
 		m := &s.Metrics[i]

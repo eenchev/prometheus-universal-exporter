@@ -46,7 +46,7 @@
       "additionalProperties": false,
       "properties": {
         "enabled": {"type": "boolean"},
-        "type": {"enum": ["ClusterIP", "NodePort", "LoadBalancer", "ExternalName"]},
+        "type": {"enum": ["ClusterIP", "NodePort", "LoadBalancer"], "description": "Not ExternalName: a Service of that type is a DNS alias with no endpoints, so nothing would reach the exporter."},
         "port": {"$ref": "#/$defs/port"},
         "sessionAffinity": {"enum": ["", "None", "ClientIP"]},
         "annotations": {"$ref": "#/$defs/stringMap"}
@@ -205,8 +205,8 @@
           "properties": {
             "enabled": {"type": "boolean"},
             "type": {"type": "string", "enum": ["service", "pod"]},
-            "interval": {"$ref": "#/$defs/duration"},
-            "scrapeTimeout": {"$ref": "#/$defs/duration"},
+            "interval": {"$ref": "#/$defs/promDuration"},
+            "scrapeTimeout": {"$ref": "#/$defs/promDuration"},
             "labels": {"$ref": "#/$defs/stringMap"},
             "annotations": {"$ref": "#/$defs/stringMap"},
             "relabelings": {"type": "array", "items": {"type": "object"}},
@@ -237,11 +237,16 @@
         "type": "object",
         "additionalProperties": false,
         "properties": {
-          "name": {"type": "string", "minLength": 1},
+          "name": {
+            "type": "string",
+            "description": "The monitor is named <fullname>-<name>: a DNS-1123 label, unique among the entries, and neither self nor static-targets, which the chart's own monitors use.",
+            "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$",
+            "maxLength": 63
+          },
           "enabled": {"type": "boolean"},
           "type": {"enum": ["service", "pod"]},
-          "interval": {"$ref": "#/$defs/duration"},
-          "scrapeTimeout": {"$ref": "#/$defs/duration"},
+          "interval": {"$ref": "#/$defs/promDuration"},
+          "scrapeTimeout": {"$ref": "#/$defs/promDuration"},
           "labels": {"$ref": "#/$defs/stringMap"},
           "annotations": {"$ref": "#/$defs/stringMap"},
           "targetSelector": {"type": "object"},
@@ -251,7 +256,7 @@
           "headers": {"$ref": "#/$defs/stringMap"},
           "params": {
             "type": "object",
-            "description": "Probe parameter overrides. Prometheus Operator params are list-valued, so every entry is a list of strings.",
+            "description": "Probe parameter overrides. Prometheus Operator params are list-valued, so every entry is a list of strings. collector and target are the chart's own, from .collector and each discovered target's address; setting either fails rendering.",
             "additionalProperties": {"type": "array", "items": {"type": "string"}}
           },
           "auth": {
@@ -284,8 +289,8 @@
         },
         "enabled": {"type": "boolean"},
         "type": {"enum": ["service", "pod"], "description": "A ServiceMonitor, the default, or a PodMonitor."},
-        "interval": {"$ref": "#/$defs/duration"},
-        "scrapeTimeout": {"$ref": "#/$defs/duration"},
+        "interval": {"$ref": "#/$defs/promDuration"},
+        "scrapeTimeout": {"$ref": "#/$defs/promDuration"},
         "labels": {"$ref": "#/$defs/stringMap"},
         "annotations": {"$ref": "#/$defs/stringMap"},
         "relabelings": {"type": "array", "items": {"type": "object"}},
@@ -307,7 +312,7 @@
       "properties": {"enabled": {"type": "boolean"}, "ratio": {"type": ["number", "string"], "exclusiveMinimum": 0, "maximum": 1, "pattern": "^(0?\\.[0-9]*[1-9][0-9]*|1(\\.0*)?)$"}}
     },
     "livenessProbe": {"$ref": "#/$defs/probeTimings", "description": "Timings of the liveness probe, which checks /health on the http port."},
-    "readinessProbe": {"$ref": "#/$defs/probeTimings", "description": "Timings of the readiness probe, which checks /ready on the http port."},
+    "readinessProbe": {"$ref": "#/$defs/readinessProbeTimings", "description": "Timings of the readiness probe, which checks /ready on the http port."},
     "autoscaling": {
       "type": "object",
       "additionalProperties": false,
@@ -416,6 +421,18 @@
         "terminationGracePeriodSeconds": {"type": ["integer", "null"], "minimum": 1}
       }
     },
+    "readinessProbeTimings": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "As probeTimings, without terminationGracePeriodSeconds, which Kubernetes refuses on a readiness probe.",
+      "properties": {
+        "initialDelaySeconds": {"type": "integer", "minimum": 0},
+        "periodSeconds": {"type": "integer", "minimum": 1},
+        "timeoutSeconds": {"type": "integer", "minimum": 1},
+        "successThreshold": {"type": "integer", "minimum": 1},
+        "failureThreshold": {"type": "integer", "minimum": 1}
+      }
+    },
     "quantityMap": {"type": "object", "additionalProperties": {"type": ["string", "number"]}},
     "port": {"type": "integer", "minimum": 1, "maximum": 65535},
     "countOrPercent": {"type": ["integer", "string"], "pattern": "^[0-9]+%?$"},
@@ -423,6 +440,12 @@
       "type": "string",
       "description": "A Go duration such as 30s, 1m30s or 2h.",
       "pattern": "^[0-9]+(\\.[0-9]+)?(ns|us|ms|s|m|h)([0-9]+(\\.[0-9]+)?(ns|us|ms|s|m|h))*$"
+    },
+    "promDuration": {
+      "type": "string",
+      "minLength": 1,
+      "description": "A Prometheus duration, as the Prometheus Operator's interval and scrapeTimeout take it: whole numbers of y, w, d, h, m, s and ms in that order, such as 30s or 1m30s, or 0. No fractions, and no us or ns.",
+      "pattern": "^(0|(([0-9]+)y)?(([0-9]+)w)?(([0-9]+)d)?(([0-9]+)h)?(([0-9]+)m)?(([0-9]+)s)?(([0-9]+)ms)?)$"
     }
   }
 }

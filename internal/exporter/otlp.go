@@ -168,9 +168,12 @@ type otlpResourceIdentity struct {
 }
 
 // otlpResourceSet pairs a drained metric set with the resource it belongs to.
+// seqs, set by drainOTLP, holds each metric's place in the queue, so a failed
+// export queues it again with its age.
 type otlpResourceSet struct {
 	Identity otlpResourceIdentity
 	Set      model.MetricSet
+	seqs     []int64
 }
 
 // key is the stable identity used to group pending metrics by resource.
@@ -214,6 +217,7 @@ func defaultResourceIdentity(cfg model.OTLPConfig) otlpResourceIdentity {
 func (s *Server) pushOTLP(ctx context.Context, cfg model.OTLPConfig, resources []otlpResourceSet, budget time.Duration) (int, otlpPartialSuccess, error) {
 	now := strconv.FormatInt(time.Now().UnixNano(), 10)
 	payload := otlpPayload{}
+	s.otlpStarts.bound(cfg.MaxPendingPoints)
 	for _, resource := range resources {
 		if len(resource.Set.Metrics) == 0 {
 			continue
@@ -803,10 +807,12 @@ func (s *Server) drainOTLP() []otlpResourceSet {
 	for _, key := range keys {
 		batch := s.otlpPending[key]
 		set := model.MetricSet{Metrics: make([]model.Metric, 0, len(batch.metrics))}
+		seqs := make([]int64, 0, len(batch.metrics))
 		for _, metricKey := range model.SortedKeys(batch.metrics) {
 			set.Metrics = append(set.Metrics, batch.metrics[metricKey].metric)
+			seqs = append(seqs, batch.metrics[metricKey].seq)
 		}
-		out = append(out, otlpResourceSet{Identity: batch.identity, Set: set})
+		out = append(out, otlpResourceSet{Identity: batch.identity, Set: set, seqs: seqs})
 	}
 	s.otlpPending = make(map[string]*otlpBatch)
 	s.otlpPoints = 0
@@ -922,17 +928,19 @@ func (s *Server) exportOTLP(ctx context.Context, budget time.Duration) {
 }
 
 // requeueOTLP queues metrics that were not delivered again, each unless a
-// newer value of its series has been queued since it was drained.
+// newer value of its series has been queued since it was drained. Each keeps
+// the place in the queue it was drained with, older than anything queued
+// since, so otlp.max_pending_points drops the oldest points first however
+// many exports in a row have failed.
 func (s *Server) requeueOTLP(resources []otlpResourceSet) {
 	s.otlpMu.Lock()
 	defer s.otlpMu.Unlock()
 	for _, resource := range resources {
 		batch := s.pendingBatchLocked(resource.Identity)
-		for _, metric := range resource.Set.Metrics {
+		for i, metric := range resource.Set.Metrics {
 			key := otlpMetricKey(metric)
 			if _, newer := batch.metrics[key]; !newer {
-				s.putPendingLocked(batch, key, pendingMetric{metric: metric, seq: s.otlpRequeueSeq})
-				s.otlpRequeueSeq--
+				s.putPendingLocked(batch, key, pendingMetric{metric: metric, seq: resource.seqs[i]})
 			}
 		}
 	}

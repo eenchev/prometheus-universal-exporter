@@ -125,7 +125,10 @@ func validateCollector(c *model.Config, x *model.Collector) error {
 	if err := checkCSVColumns(x); err != nil {
 		return err
 	}
-	return transform.CheckTransformSettings(x)
+	if err := transform.CheckTransformSettings(x); err != nil {
+		return err
+	}
+	return checkMetricFamilies(x)
 }
 
 // checkCSVColumns requires a csv transform reading rows without a header row

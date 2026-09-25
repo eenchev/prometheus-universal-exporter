@@ -161,8 +161,9 @@ func (s *Server) scrapeStaticTarget(ctx context.Context, target model.StaticTarg
 		return
 	}
 	if trip.failed() {
-		if trip.unauthorized {
-			// As for a probe: a refused credential gets no stale result.
+		if trip.unauthorized || trip.refused {
+			// As for a probe: a refused credential, or a target the
+			// collector's target policy refused, gets no stale result.
 			cacheKey = ""
 		}
 		failed()

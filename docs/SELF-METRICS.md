@@ -1,6 +1,6 @@
 # Exporter self-metrics
 
-Exporter self-health metrics are served at `/self-metrics` by default, and at that one path only. Change it with `--web.self-metrics-path`, for example `--web.self-metrics-path=/metrics` for the conventional path; a path another endpoint uses, such as `/probe`, is refused at startup. The Helm chart's optional self-metrics ServiceMonitor/PodMonitor scrapes the exporter pods/services separately from target-probing monitors. Configure one or more entries in `monitors`, each with a unique `name` and `type: pod` or `type: service`; each entry supports Prometheus Operator `relabelings` and `metricRelabelings`.
+Exporter self-health metrics are served at `/self-metrics` by default, and at that one path only. Change it with `--web.self-metrics-path`, for example `--web.self-metrics-path=/metrics` for the conventional path; a path another endpoint uses, such as `/probe`, is refused at startup. Like `/probe`, it answers in OpenMetrics when the scraper asks for it and in the text format otherwise (see [OpenMetrics](CONFIGURATION.md#openmetrics)). The Helm chart's optional self-metrics ServiceMonitor/PodMonitor scrapes the exporter pods/services separately from target-probing monitors. Configure one or more entries in `monitors`, each with a unique `name` and `type: pod` or `type: service`; each entry supports Prometheus Operator `relabelings` and `metricRelabelings`.
 
 ## Collector metrics
 

@@ -318,7 +318,12 @@ func buildRequestURL(target string, c *model.Collector, overrides RequestOverrid
 // checkScheme refuses a target scheme request.allowed_schemes does not
 // allow, http and https when it is unset.
 func checkScheme(c *model.Collector, scheme string) error {
-	allowed := c.Request.AllowedSchemes
+	return checkSchemeAllowed(c.Request.AllowedSchemes, scheme)
+}
+
+// checkSchemeAllowed is checkScheme with the collector's list, allowed, as
+// it is: a redirect's scheme is checked against it too (checkRedirect).
+func checkSchemeAllowed(allowed []string, scheme string) error {
 	if len(allowed) == 0 {
 		allowed = []string{"http", "https"}
 	}
@@ -355,6 +360,14 @@ func checkHeaderNames(headers map[string]string) error {
 			return fmt.Errorf("%q is not a header name; a name is letters, digits and !#$%%&'*+-.^_`|~, without spaces", name)
 		}
 		canonical := http.CanonicalHeaderKey(name)
+		if canonical == "Accept-Encoding" {
+			// Go decompresses an answer only when it asked for the
+			// compression itself: with this header set it would hand
+			// the decoder the compressed bytes, and the response limit
+			// would count those rather than what is decoded. Go already
+			// asks for gzip.
+			return fmt.Errorf("%q may not be set: the exporter asks for gzip itself and decompresses the answer, which it would not do with the header set", name)
+		}
 		if other, ok := seen[canonical]; ok {
 			return fmt.Errorf("%q and %q are the same header, whose names are not case-sensitive; set it once", other, name)
 		}
@@ -514,6 +527,12 @@ func fetch(ctx context.Context, target string, c *model.Collector, overrides Req
 		}
 		if len(forwarded) > 0 {
 			for k, v := range forwarded[0] {
+				if strings.EqualFold(k, "Accept-Encoding") {
+					// Never forwarded (checkHeaderNames says why):
+					// Prometheus asks the exporter for gzip on every
+					// scrape, which is no reason to ask the target.
+					continue
+				}
 				if strings.EqualFold(k, "Host") {
 					if len(v) > 0 {
 						req.Host = v[len(v)-1]
@@ -540,16 +559,36 @@ func fetch(ctx context.Context, target string, c *model.Collector, overrides Req
 			return nil, fmt.Errorf("HTTP request failed: %w", err)
 		}
 		traceOutcome(requestContext, resp.Status)
+		// A Content-Length over the limit refuses the answer before a byte
+		// of it is read. A HEAD answer's Content-Length is the size of a
+		// body it does not have, so it is not held against it.
+		if method != http.MethodHead && resp.ContentLength > limit {
+			_ = resp.Body.Close()
+			return nil, model.MarkError(fmt.Errorf("response size %d exceeds limit %d", resp.ContentLength, limit), model.ErrLimitExceeded)
+		}
 		body, readErr := io.ReadAll(io.LimitReader(resp.Body, limit+1))
 		closeErr := resp.Body.Close()
 		if readErr != nil {
+			readErr = RedactURLErrors(readErr)
+			traceBodyError(requestContext, readErr)
+			// A connection that broke while the body was being read is
+			// retried as one that broke before the answer began, unless the
+			// probe's own time is what ran out.
+			if attempt < retryAttempts && requestContext.Err() == nil {
+				if waitErr := waitRetry(requestContext, retryBackoff); waitErr != nil {
+					return nil, fmt.Errorf("reading response: %w (the wait before retrying was cut short: %w)", readErr, waitErr)
+				}
+				continue
+			}
 			return nil, fmt.Errorf("reading response: %w", readErr)
 		}
 		if closeErr != nil {
 			return nil, fmt.Errorf("closing response: %w", closeErr)
 		}
 		if int64(len(body)) > limit {
-			return nil, model.MarkError(fmt.Errorf("response size %d exceeds limit %d", len(body), limit), model.ErrLimitExceeded)
+			// Reading stopped one byte past the limit, so the size is not
+			// known and is not made up.
+			return nil, model.MarkError(fmt.Errorf("response size exceeds limit %d", limit), model.ErrLimitExceeded)
 		}
 		response := &HTTPResponse{StatusCode: resp.StatusCode, Headers: resp.Header.Clone(), Body: body, Target: target, Collector: c.Name, Duration: time.Since(start)}
 		// An answer the collector accepts is its answer, not a failure to

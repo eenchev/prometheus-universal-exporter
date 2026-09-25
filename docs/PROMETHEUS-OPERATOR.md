@@ -42,6 +42,8 @@ monitors:
 
 The body is opaque text and does not need to be JSON. Without a `timeout` parameter, the exporter uses the incoming Prometheus scrape context as the target request timeout.
 
+`params` cannot set `collector` or `target`: the chart renders the first from the entry's `collector`, which it checks against the configuration, and the second from each discovered target's address, so either would be a second key of the same name, and rendering fails. `interval` and `scrapeTimeout` are Prometheus durations — whole numbers of `y`, `w`, `d`, `h`, `m`, `s` and `ms`, such as `1m30s` — and the entry's `name`, which names the monitor `<fullname>-<name>`, is a unique DNS-1123 label.
+
 ## Related pages
 
 - [REQUESTS.md](REQUESTS.md) — the request parameters a monitor's `params` map can set.

@@ -102,15 +102,39 @@ text are replaced with `�` (U+FFFD), counted in
 `http_exporter_invalid_utf8_total`, and logged as a warning naming the first
 metric. Setting `response.charset` fixes it at the source.
 
-Prometheus input is the text exposition format, version 0.0.4, read by the
-exporter's own parser. It follows the reference parser's rules — families from
-HELP and TYPE lines, `_sum`/`_count`/`_bucket` grouped into summaries and
-histograms, quoted UTF-8 names such as `{"my.metric", key="value"} 1` — and
-accepts three things the reference parser rejected: a body without a final
-newline, CRLF line endings, and trailing blanks on a line. It rejects a
-negative, NaN or infinite histogram or summary count. A malformed body fails the
-decode with the offending line number, for example
-`text format parsing error in line 3: expected float as value, got "n/a"`.
+Prometheus input is the text exposition format, version 0.0.4, or
+OpenMetrics 1.0 text, read by the exporter's own parser. It follows the
+reference parser's rules — families from HELP and TYPE lines,
+`_sum`/`_count`/`_bucket` grouped into summaries and histograms, quoted UTF-8
+names such as `{"my.metric", key="value"} 1` — and accepts three things the
+reference parser rejected: a body without a final newline, CRLF line endings,
+and trailing blanks on a line. It rejects a negative, NaN or infinite histogram
+or summary count. A malformed body fails the decode with the offending line
+number, for example
+`text format parsing error in line 3: expected float as value, got "n/a"`. A
+label value that is not valid UTF-8 does not fail it: it is repaired with `�`
+and counted, as above.
+
+A body is read as OpenMetrics when its `Content-Type` is
+`application/openmetrics-text`, or, when the `Content-Type` does not say
+`text/plain; version=0.0.4`, when its last line is `# EOF` — so a file of
+OpenMetrics read by a [`localfile`](LOCALFILE.md) collector is too. The
+exporter sends no `Accept` header of its own, so a target that negotiates
+answers in the text format; set `Accept: application/openmetrics-text` in
+`request.headers` to ask for OpenMetrics. Read as OpenMetrics:
+
+- timestamps are seconds, with a fraction, and are kept as milliseconds;
+- exemplars (`... 1 # {trace_id="abc"} 0.5`) are skipped;
+- a counter `foo`'s sample `foo_total` is the counter `foo_total`, with the
+  family's help, as Prometheus names it; a family named `foo_total` is read the
+  same way;
+- `_created` samples of counters, histograms and summaries are dropped: the
+  exporter has no creation time to export;
+- `unknown` is `untyped`, `stateset` a gauge, `info` the gauge `foo_info`, and
+  a `gaugehistogram` the gauges `foo_bucket` (with `le` as a plain label),
+  `foo_gcount` and `foo_gsum`: a histogram's buckets may only go up, a gauge
+  histogram's go up and down;
+- `# UNIT` lines are ignored, and nothing but blank lines may follow `# EOF`.
 
 All non-Python transforms use the same collector-level metric declaration. Each
 entry has `name`, `description`, `type`, `labels`, and a transform-specific
@@ -167,7 +191,9 @@ The expression and label values are interpreted by the selected transform:
   `/status/@state = 'ok'` — is one series of that value, a comparison `1` or
   `0`; a label may compute its text too, as in `normalize-space(@name)`. A
   computed value that is not a number, such as `number('n/a')`, is the rule's
-  missing value.
+  missing value. A label read from an element's text, or computed as a string,
+  is trimmed of leading and trailing whitespace, as a `css` label is, so the
+  indentation of pretty-printed XML is no part of it.
 - `prometheus`: the expression matches source metric names; it can remap the
   name, description, type, and selected labels. Without `type` a series keeps
   its own.
@@ -271,7 +297,8 @@ exactly as declared.
 
 Prometheus 3 lets a target name a metric or a label in any UTF-8 —
 `http.server.duration`, `{service.name="api"}` — as OpenTelemetry names do.
-The exporter answers in the classic text format, whose names are limited to
+The exporter answers in the classic text format or OpenMetrics (see
+[OpenMetrics](#openmetrics)), whose names are limited to
 letters, digits, `_` and, for metrics, `:`, as are the names older
 Prometheus servers, recording rules and dashboards expect. A name outside
 that can come from a `prometheus` transform passing a target through, a Python
@@ -691,14 +718,14 @@ Each type accepts its own keys. For `http`, `type` is the only required one —
 | `method` | `GET` | GET, POST, PUT, PATCH, DELETE or HEAD. |
 | `path` | — | Joined onto the target; may use [path parameters](REQUESTS.md#path-parameters). |
 | `query` | — | Query parameters added to the request; values may use [placeholders](REQUESTS.md#in-the-body-headers-and-query). |
-| `headers` | — | Sent to the target; values may use [placeholders](REQUESTS.md#in-the-body-headers-and-query). |
+| `headers` | — | Sent to the target; values may use [placeholders](REQUESTS.md#in-the-body-headers-and-query). Not `Accept-Encoding`, which is the exporter's own ([Target requests](REQUESTS.md#compression-and-the-response-size)). |
 | `body` | — | Request body; may use [placeholders](REQUESTS.md#in-the-body-headers-and-query), encoded with `\|json`, `\|number`, `\|form` or `\|xml`. |
 | `basic_auth`, `basic_auth_file` | — | Use one; see [Authentication](AUTHENTICATION.md). |
 | `bearer_token`, `bearer_token_file` | — | Use one; not together with basic auth. |
 | `forward_authorization`, `forward_headers` | off | See [Authentication](AUTHENTICATION.md). |
 | `tls` | verify | See [Target requests](REQUESTS.md#tls). |
 | `retry` | none | See [Target requests](REQUESTS.md#retries). |
-| `max_response_bytes` | 10 MiB | Response size cap. With `limits.max_response_bytes` set too, the smaller wins; either alone may be above 10 MiB. |
+| `max_response_bytes` | 10 MiB | Response size cap, on the decompressed answer; one whose `Content-Length` is over it is refused before it is read ([Target requests](REQUESTS.md#compression-and-the-response-size)). With `limits.max_response_bytes` set too, the smaller wins; either alone may be above 10 MiB. |
 | `follow_redirects`, `enable_http2` | off | See [Target requests](REQUESTS.md#redirects-and-http2). |
 | `allowed_schemes` | `http`, `https` | Schemes a target may use. |
 | `accept_status` | every 2xx | Statuses whose answers are decoded, such as `["2xx", 503]`; see [Accepting other statuses](REQUESTS.md#accepting-other-statuses). |
@@ -878,7 +905,21 @@ metric and the label:
   target, may start with `__`, which Prometheus keeps for its own labels: it
   refuses `__name__` in what it scrapes and drops the others. A series whose
   labels still get such a name, from a Python script or a passthrough, fails
-  validation.
+  validation;
+- rules with the same metric name must give it the same type: several rules
+  may feed one family, as `jobs{queue="a"}` and `jobs{queue="b"}` read from
+  two places, but a family has one type. A `prometheus` rule without a `type`
+  keeps the series' own and is not compared;
+- no rule may be named as a series of another rule's histogram or summary —
+  `foo_bucket`, `foo_sum` or `foo_count` beside a histogram `foo`, `foo_sum` or
+  `foo_count` beside a summary `foo`;
+- a `description` may be no longer than `limits.max_help_length`, and a
+  static label value, of a rule or of `transform.labels`, no longer than
+  `limits.max_label_value_length` — unless the label has `truncate: true`, a
+  `value_map` maps it to something shorter, or `remove_labels` drops it.
+
+Each of these would otherwise load and then fail every scrape's validation,
+whatever the target answered.
 
 A CSS selector that does not compile used to match nothing, on every scrape,
 without saying why; it is now refused when the configuration loads. The
@@ -945,8 +986,8 @@ looks like it is extracting badly rather than configured wrongly. The exporter
 therefore refuses to start when a pre-script never produces `data`, naming the
 collector, and rejects such a configuration on reload with the previous one left
 active. Replacing `data`, mutating it by key or attribute, augmenting it,
-binding it as a loop or `with` target, and calling a method that mutates it all
-count.
+binding it as a loop or `with` target or with `:=` (`(data := ...)`), deleting
+from it (`del data["noise"]`), and calling a method that mutates it all count.
 
 Reading `data` does not count, however much of it the script does. A method call
 only counts when the method mutates: `data.update(...)` and
@@ -1197,6 +1238,52 @@ changes per scrape — a tenant in the URL path — use a
 fills in. The two syntaxes never overlap, and a path parameter's default can
 itself be an environment reference.
 
+## OpenMetrics
+
+`/probe`, `/self-metrics` and the static targets endpoint answer in
+[OpenMetrics](https://github.com/prometheus/OpenMetrics/blob/main/specification/OpenMetrics.md)
+1.0.0 when the scraper's `Accept` header prefers it, and in the Prometheus text
+format, version 0.0.4, otherwise. Prometheus 2 and 3 ask for OpenMetrics first,
+so they get it; `curl`, a browser and anything that does not ask get the text
+format, as before. Nothing needs configuring. The answer's `Content-Type` says
+which it is, and it carries `Vary: Accept`.
+
+The two formats hold the same series, written the way each requires, with one
+difference in names: an OpenMetrics counter's samples always end in `_total`.
+A counter named `jobs_done_total` is the series `jobs_done_total` either way,
+but one named `jobs_done` becomes `jobs_done_total` in OpenMetrics. Name
+counters with `_total`, as Prometheus' naming conventions ask, and the names
+are the same whichever format a scraper takes; the exporter's own counters all
+are. In OpenMetrics, `untyped` is written as `unknown`, timestamps are in
+seconds, `le` and `quantile` values are written as floats (`1.0`), and the
+answer ends with `# EOF`; Prometheus reads either the same.
+
+OpenMetrics also forbids two families from claiming one name, which the text
+format allows: a counter `foo_total` is the OpenMetrics family `foo`, so beside
+a gauge `foo` the name would be used twice and Prometheus would fail the
+scrape. The same goes for counters `jobs` and `jobs_total`, or a histogram `h`
+beside a gauge `h_count` (the histogram's own `h_count` sample). Families that
+would clash like this are written as OpenMetrics `unknown` families under the
+very names their samples have in the text format, whichever comes first: the
+counter `foo_total` stays the series `foo_total`, only without its counter
+type in OpenMetrics, and the gauge `foo` stays a gauge. A counter gives way
+before a histogram or summary does; a histogram or summary that still clashes
+is written as `unknown` families `h_bucket`, `h_sum` and `h_count` (a summary's
+as `s`, `s_sum` and `s_count`). Every series is the same in both formats.
+Distinct names avoid all this, and keep the types.
+
+OpenMetrics can give a counter a `_created` time, when it started counting. The
+exporter writes none: it reads counters from targets and cannot know when they
+started, and OpenMetrics leaves `_created` out when it is not known.
+
+To keep a Prometheus job on the text format, set its `scrape_protocols`:
+
+```yaml
+scrape_configs:
+  - job_name: universal-exporter
+    scrape_protocols: [PrometheusText0.0.4]
+```
+
 ## Response caching
 
 A collector may cache its results with `ttl`, a Go duration such as `60s`,
@@ -1224,10 +1311,16 @@ disk, replicas do not share entries, and a restart empties it.
 
 A stored result is only ever returned to an identical request. The cache key
 covers the collector name and its full effective configuration, the `target`,
-every `/probe` query parameter (`method`, `path`, `timeout`, `body`,
-`insecure_skip_verify`, `follow_redirects`, `enable_http2`, `retry_attempts`,
-`retry_backoff`, and any `header_<name>` entry), and every header forwarded to
-the target, including a forwarded `Authorization` value. Presence and absence differ: a probe that sends
+every `/probe` parameter the collector's request type accepts (`method`,
+`path`, `timeout`, `body`, `insecure_skip_verify`, `follow_redirects`,
+`enable_http2`, `retry_attempts`, `retry_backoff`, `message`, `from`, `until`
+and every `param_<name>`), and every header forwarded to the target, including
+a forwarded `Authorization` value and the `header_<name>` parameters that are
+forwarded. A parameter that changes nothing sent is not part of it: one no
+request type knows, which a probe ignores, and a `header_<name>` for a header
+the collector does not forward. Probes differing only in those share an entry,
+so a caller adding `&x=1`, `&x=2`, ... cannot fill the cache with copies of one
+result. Presence and absence differ: a probe that sends
 no credential, no forwarded header, or no TLS override cannot read an entry
 stored by a probe that sent one, and two probes with different credentials never
 share an entry. Because the collector definition is part of the key, a
@@ -1265,13 +1358,17 @@ probe is less than 5m30s old, that result is answered with `200`. Past that,
 the failure is answered as usual. `ttl` may be `0s`: every probe then goes to
 the target, and the last good result is kept only as a fallback.
 
-One failure is never answered stale: the target refusing the credential it
-was sent, HTTP `401` or `403`, or gRPC `UNAUTHENTICATED` or
+Two failures are never answered stale. One is the target refusing the
+credential it was sent, HTTP `401` or `403`, or gRPC `UNAUTHENTICATED` or
 `PERMISSION_DENIED`. A credential forwarded with `forward_authorization` is
 part of the cache key, but a token that has just been revoked would otherwise
 still be answered with what it was given before, for as long as
-`stale_if_error` lasts. Such a probe fails as usual, and a static target's
-scrape publishes no stale result. A fresh result within `ttl` is still
+`stale_if_error` lasts. The other is the collector's own
+[`allowed_targets` or `denied_targets`](REQUESTS.md#restricting-targets)
+refusing the target, answered `403`: its name now resolves, or a redirect now
+leads, somewhere the collector may not go, and the refusal is the answer.
+Such a probe fails as usual, and a static target's scrape publishes no stale
+result. A fresh result within `ttl` is still
 answered from the cache without asking the target, as any cached result is.
 
 A stale answer must never pass for a fresh one, so while `stale_if_error` is
@@ -1328,7 +1425,8 @@ and a rate-limited one is not pushed over its limit.
 Identical means the same thing it does for the response cache: the same
 collector definition, target, probe parameters and forwarded headers,
 credentials included, so two probes that could get different answers never
-share one. It needs no cache: the cache helps the probes that come after one
+share one, and probes differing only in parameters that change nothing sent
+still do. It needs no cache: the cache helps the probes that come after one
 has finished, and this helps the ones that arrive while it is still running.
 With a cache, the probes that share a request fill the cache once.
 
@@ -1415,6 +1513,22 @@ series while trips are in progress, and the response cache — and the Python
 workers, each a process of its own. `--probe.max-concurrent` bounds the
 first, `--python.max-workers` and
 [`limits.max_script_memory`](PYTHON.md#how-scripts-run) the second.
+
+`limits.max_metrics` (10000 by default) bounds a scrape's series as they are
+made, not after: every transform stops at the first series past it, and the
+scrape fails with `metric count 10001 exceeds limit 10000` — one past the
+limit, since counting further would cost the memory the limit is there to
+save. A response of a million lines read with the regex `(\d+)` is refused
+after ten thousand and one series, not after a million. The prometheus
+decoder keeps only the series its transform passes on — those its rules match,
+or `include` and `exclude` pick — and stops the same way, so a large exposition
+of which a collector keeps a few costs what the few cost; a series a rule
+matches counts even if the rule then drops it. With a `pre_script`, which is
+given every series, the decoder keeps them all and the transform counts. A
+python transform's answer is bounded by `limits.max_output_bytes`, and its
+metrics are counted before they are read. The failure is the probe's
+`validation` stage, counted in `http_exporter_series_limit_exceeded_total`,
+whatever `error_handling` says.
 
 In a container with a memory limit, `--runtime.memory-limit-ratio` sets the Go
 memory limit to a share of it, read at startup from the container's own
@@ -1626,6 +1740,9 @@ failures go to its report, not to the exporter's log, which records only one
 [`allowed_targets` and `denied_targets`](REQUESTS.md#restricting-targets),
 [`max_concurrent_probes` and `--probe.max-concurrent`](#limiting-concurrent-probes)
 and [the probe's deadline](#probe-deadlines) apply as they do to any probe.
+A trip that panics — a bug, in a request type, a decoder or a transform — is
+reported as the `500` a probe would have answered, with the panic's message,
+and logged with its stack; its slot is given back as after any other trip.
 
 The report shows what the target answered, so debug probes are off unless the
 exporter runs with `--web.enable-probe-debug` (the Helm chart's
@@ -1727,6 +1844,12 @@ or a number with a unit:
 powers of 1024, and `B` or no unit is bytes. The unit is case insensitive, and
 a fraction is rounded down to whole bytes. Anything else, such as `lots` or
 `-1`, fails to load, naming the value.
+
+A response over `max_response_bytes` fails the scrape with `response size
+5000 exceeds limit 1024` when the target said its size in `Content-Length`,
+refused before the body is read, and with `response size exceeds limit 1024`
+when it did not, once reading passes the limit. The limit counts the answer
+decompressed.
 
 ## Dry run
 

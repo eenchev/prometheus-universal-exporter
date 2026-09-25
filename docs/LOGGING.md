@@ -62,11 +62,9 @@ the line for a `http_status` failure adds `response_body`: the start of the
 body, at most 256 bytes, on one line. It is logged only, never put in the
 probe's answer. An error page can echo what it was sent, so what reads as a
 credential in it is masked as `<redacted>` first: a `Bearer` or `Basic`
-credential, the value of a field or parameter whose name contains `token`,
-`secret`, `password`, `passwd`, `pwd`, `api_key`, `access_key`,
-`private_key`, `session`, `signature`, `credential` or `auth`, and a JSON Web
-Token. The masking errs towards hiding: an ordinary word after such a name
-may be masked too.
+credential, a JSON Web Token, and the value of a field or parameter whose name
+reads as a credential's, by the rule below for a target's query. The masking
+errs towards hiding: an ordinary word after such a name may be masked too.
 
 A request that fails quotes the URL it was sending, as Go reports it:
 `Get "https://api.example.com/v1/status?api_key=<redacted>": dial tcp ...`.
@@ -76,11 +74,18 @@ reaches neither the log, nor the probe's answer, nor a debug report.
 
 Wherever a line names the target itself, a password in it is shown as
 `redacted:redacted`, and the value of a query parameter whose name reads as a
-credential — containing `auth`, `cookie`, `token`, `secret`, `password`,
-`passwd`, `key`, `session`, `signature` or `credential` — as `<redacted>`:
-`http://host:9100/metrics?token=<redacted>&tenant=a`. Other parameters are
-shown as given. The static targets endpoint's `target` label and the OTLP
-`target` attribute show a target the same way.
+credential as `<redacted>`:
+`http://host:9100/metrics?token=<redacted>&tenant=a`. A name reads as a
+credential's when it contains, in any case, `auth`, `cookie`, `token`,
+`secret`, `password`, `passwd`, `passphrase`, `passcode`, `key`, `session`,
+`signature`, `credential` or `jwt`, or when `sig` (an Azure SAS signature),
+`pwd`, `pw` or `pass` is a whole word of it — the name itself, or a part
+between punctuation or at a change to upper case, as in `db_pwd`, `X-Sig` or
+`userPass`, but not `design`, `signal` or `bypass`. Other parameters are shown
+as given. A URL's fragment, `#…`, is never shown: it is never sent to the
+target, and one copied from a browser can carry a token. The static targets
+endpoint's `target` label and the OTLP `target` attribute show a target the
+same way, and a header's value is withheld by the same rule for its name.
 
 The same applies to static targets (`static target scrape failed`, then
 `static target recovered`; a stage passed over under `error_handling` `log`

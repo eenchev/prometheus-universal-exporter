@@ -172,7 +172,18 @@ jobs:
           out="$(helm template test charts/prometheus-universal-exporter --set webAuth.enabled=true --set webAuth.secretName=exporter-auth --set-json 'monitors=[{"name":"t","enabled":true,"type":"service","collector":"example"}]')"
           echo "$out" | grep -q 'mountPath: "/var/run/prometheus-universal-exporter/web-auth"'
           echo "$out" | grep -q 'secretName: "exporter-auth"'
-          echo "$out" | grep -q 'basicAuth:'
+          # The probe monitor itself, not only the self-metrics one, has to
+          # present the credential, or every probe it sends is a 401.
+          echo "$out" | python3 -c '
+          import sys, yaml
+          docs = [d for d in yaml.safe_load_all(sys.stdin) if d]
+          probe = [d for d in docs if d.get("kind") == "ServiceMonitor" and d["metadata"]["name"] == "test-prometheus-universal-exporter-t"]
+          if len(probe) != 1:
+              sys.exit(f"{len(probe)} probe monitors named test-prometheus-universal-exporter-t were rendered")
+          auth = probe[0]["spec"]["endpoints"][0].get("basicAuth") or {}
+          if auth.get("username", {}).get("name") != "exporter-auth" or auth.get("password", {}).get("name") != "exporter-auth":
+              sys.exit(f"the probe monitor does not present the webAuth Secret: {auth}")
+          '
       - run: helm template test charts/prometheus-universal-exporter --set-json 'extraArgs=["--some.new-flag=value"]' --set-json 'extraVolumes=[{"name":"extra-collectors","configMap":{"name":"my-collectors"}}]' --set-json 'extraVolumeMounts=[{"name":"extra-collectors","mountPath":"/etc/collectors","readOnly":true}]'
         if: steps.changes.outputs.chart == 'true'
       - name: Check that every rendered manifest is its own document
@@ -273,8 +284,9 @@ jobs:
       - name: Reject an invalid server.listenAddress
         run: |
           # A bare port renders as valid YAML and then makes the container exit
-          # with "missing port in address", so the chart has to reject it here.
-          for address in ':http' '9115' '0.0.0.0' ':0'; do
+          # with "missing port in address", so the chart has to reject it here;
+          # so is a loopback host, which neither the probes nor the Service reach.
+          for address in ':http' '9115' '0.0.0.0' ':0' '127.0.0.1:8080' 'localhost:8080' '[::1]:8080'; do
             if helm template test charts/prometheus-universal-exporter --set "server.listenAddress=$address" >/dev/null 2>&1; then
               echo "helm template accepted the invalid server.listenAddress '$address'" >&2
               exit 1

@@ -179,3 +179,28 @@ func CheckLabelValueMapsAgree(x *model.Collector) error {
 	}
 	return nil
 }
+
+// MappedStaticLabelValue is the value the static label of metric rules has on
+// its series once mapLabelValues has run: mapped by the first value_map any
+// rule of that name gives the label, which CheckLabelValueMapsAgree requires
+// to agree with the others, or left as it is.
+func MappedStaticLabelValue(x *model.Collector, metric string, label model.LabelRule) string {
+	for _, rule := range x.Metrics {
+		if rule.Name != metric {
+			continue
+		}
+		for _, other := range rule.Labels {
+			if other.Name != label.Name || len(other.ValueMap) == 0 {
+				continue
+			}
+			if mapped, ok := other.ValueMap[strings.TrimSpace(label.Value)]; ok {
+				return mapped
+			}
+			if mapped, ok := other.ValueMap[valueMapDefault]; ok {
+				return mapped
+			}
+			return label.Value
+		}
+	}
+	return label.Value
+}

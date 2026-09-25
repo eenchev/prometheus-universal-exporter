@@ -6,6 +6,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"unicode"
 )
 
 // Every place the exporter shows something a request carried — a target in a
@@ -23,10 +24,15 @@ import (
 //     attribute — the values of parameters whose names read as credentials
 //     masked, so that targets that differ in anything else stay apart
 //     (URLRedaction).
+//   - A URL's fragment is never shown: it is never sent to the target, so it
+//     tells nothing about the request, and a URL copied from a browser can
+//     carry a token in it (#access_token=…).
 //   - A header's value is withheld when its name reads as a credential's
 //     (CredentialName).
 //   - Text the exporter did not write, such as an error page, has what reads
-//     as a credential in it masked (RedactText).
+//     as a credential in it masked (RedactText), by the same rule for a
+//     name: a key or field whose name CredentialName says reads as a
+//     credential's has its value masked.
 //   - An error that quotes a URL, as Go's HTTP client quotes the one it
 //     requested, quotes it with its userinfo withheld and its query values
 //     masked (RedactURLErrors).
@@ -43,12 +49,13 @@ const (
 	DropQuery URLRedaction = iota
 	// MaskQueryValues keeps each query parameter's name and masks its value,
 	// for a debug report, where request.query may carry a token under any
-	// name.
+	// name. The fragment is dropped.
 	MaskQueryValues
 	// MaskCredentialQueryValues masks the values of the query parameters
 	// whose names read as credentials (CredentialName), and keeps the rest
 	// as they are, in their order, for a displayed target: ?token=… is
-	// withheld, and ?tenant=a and ?tenant=b stay two targets.
+	// withheld, and ?tenant=a and ?tenant=b stay two targets. The fragment
+	// is dropped.
 	MaskCredentialQueryValues
 )
 
@@ -72,6 +79,8 @@ func RedactURL(u *url.URL, how URLRedaction) string {
 	case MaskCredentialQueryValues:
 		shown.RawQuery = maskCredentialQueryValues(u.RawQuery)
 	}
+	shown.Fragment = ""
+	shown.RawFragment = ""
 	if shown.User != nil {
 		shown.User = redactedUser
 	}
@@ -132,12 +141,22 @@ func maskCredentialQueryValues(raw string) string {
 	return strings.Join(parts, "&")
 }
 
-// credentialWords are what the name of a header holding a credential reads
-// like.
-var credentialWords = []string{"auth", "cookie", "token", "secret", "password", "passwd", "key", "session", "signature", "credential"}
+// credentialWords are what the name of a header, a query parameter or a
+// field holding a credential reads like, anywhere in it: Authorization,
+// X-Api-Key, access_token, client_secret, X-Amz-Signature.
+var credentialWords = []string{"auth", "cookie", "token", "secret", "password", "passwd", "passphrase", "passcode", "key", "session", "signature", "credential", "jwt"}
 
-// CredentialName reports whether a header's name reads as a credential's,
-// in any case: Authorization, Cookie, X-Api-Key, X-Auth-Token and the like.
+// credentialParts are what a credential's name reads like only as a whole
+// word of it — the name itself, or a part between punctuation or at a
+// change to upper case — since inside a longer word they are something
+// else: sig (an Azure SAS signature) is not design or signal, and pass is
+// not bypass or compass.
+var credentialParts = []string{"sig", "pwd", "pw", "pass"}
+
+// CredentialName reports whether a name — a header's, a query parameter's,
+// or a field's in text — reads as a credential's, in any case:
+// Authorization, Cookie, X-Api-Key, X-Auth-Token, sig, db_pwd, userPass and
+// the like.
 func CredentialName(name string) bool {
 	lower := strings.ToLower(name)
 	for _, word := range credentialWords {
@@ -145,7 +164,43 @@ func CredentialName(name string) bool {
 			return true
 		}
 	}
+	for _, part := range nameParts(name) {
+		for _, credential := range credentialParts {
+			if strings.EqualFold(part, credential) {
+				return true
+			}
+		}
+	}
 	return false
+}
+
+// nameParts splits a name into its words: at every character that is not a
+// letter or a digit, and where a lower-case letter or a digit is followed by
+// an upper-case one, so X-Sig, sig_v2 and userPwd each have their part.
+func nameParts(name string) []string {
+	var parts []string
+	start := -1
+	prev := rune(0)
+	for i, r := range name {
+		alnum := unicode.IsLetter(r) || unicode.IsDigit(r)
+		switch {
+		case !alnum:
+			if start >= 0 {
+				parts = append(parts, name[start:i])
+				start = -1
+			}
+		case start < 0:
+			start = i
+		case unicode.IsUpper(r) && (unicode.IsLower(prev) || unicode.IsDigit(prev)):
+			parts = append(parts, name[start:i])
+			start = i
+		}
+		prev = r
+	}
+	if start >= 0 {
+		parts = append(parts, name[start:])
+	}
+	return parts
 }
 
 // RedactHeaderValue is a header's value as it may be shown: Redacted when the
@@ -158,29 +213,55 @@ func RedactHeaderValue(name, value string) string {
 }
 
 // textCredentials find what reads as a credential in text the exporter did
-// not write, each with the part to keep in its first group.
+// not write whatever it is called, each with the part to keep in its first
+// group.
 var textCredentials = []struct {
 	pattern *regexp.Regexp
 	keep    string
 }{
 	// Authorization: Bearer abc…, Basic dXNl…
 	{regexp.MustCompile(`(?i)\b(bearer|basic|digest)\s+[A-Za-z0-9._~+/=-]{8,}`), "${1} " + Redacted},
-	// token=abc, "api_key": "abc", password: abc, client_secret=abc
-	{regexp.MustCompile(`(?i)([A-Za-z0-9_.-]*(?:token|secret|passw(?:or)?d|pwd|api[_-]?key|access[_-]?key|private[_-]?key|session|signature|credential|auth)[A-Za-z0-9_.-]*["']?\s*[:=]\s*["']?)[^\s"'&,;}<>]+`), "${1}" + Redacted},
 	// A JSON Web Token, wherever it stands.
 	{regexp.MustCompile(`\beyJ[A-Za-z0-9_-]{5,}\.[A-Za-z0-9_-]{5,}\.[A-Za-z0-9_-]*`), Redacted},
 }
 
+// textField is a key or a field's name in text and what follows it up to
+// its value: token=, "api_key": ", password: .
+var textField = regexp.MustCompile(`([A-Za-z0-9_.-]+)["']?\s*[:=]\s*["']?`)
+
+// textValue is the value that follows a textField.
+var textValue = regexp.MustCompile(`^[^\s"'&,;}<>]+`)
+
 // RedactText masks what reads as a credential in text the exporter did not
 // write, such as an error page's body it logs the start of: a bearer or
-// basic credential, the value of a key or field whose name reads as a
-// credential's, and a JSON Web Token. It errs towards masking: a word that
+// basic credential, a JSON Web Token, and the value of a key or field whose
+// name reads as a credential's (CredentialName, the rule a header's and a
+// query parameter's name are held to). It errs towards masking: a word that
 // only looks like a credential's value may be masked too.
 func RedactText(text string) string {
 	for _, c := range textCredentials {
 		text = c.pattern.ReplaceAllString(text, c.keep)
 	}
-	return text
+	var b strings.Builder
+	done := 0
+	for _, m := range textField.FindAllStringSubmatchIndex(text, -1) {
+		// A field found inside a value already masked is part of it.
+		if m[0] < done || !CredentialName(text[m[2]:m[3]]) {
+			continue
+		}
+		value := textValue.FindStringIndex(text[m[1]:])
+		if value == nil {
+			continue
+		}
+		b.WriteString(text[done:m[1]])
+		b.WriteString(Redacted)
+		done = m[1] + value[1]
+	}
+	if done == 0 {
+		return text
+	}
+	b.WriteString(text[done:])
+	return b.String()
 }
 
 // RedactURLErrors withholds the credentials of every URL quoted by a

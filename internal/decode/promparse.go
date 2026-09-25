@@ -48,13 +48,40 @@ import (
 // Families come back in the order they were first seen, and series in the
 // order of their first sample, so a decode is deterministic.
 func parsePrometheusText(body []byte) ([]model.Metric, error) {
-	p := promParser{byName: map[string]*promFamily{}}
-	lines := bytes.Split(body, []byte("\n"))
-	for i, raw := range lines {
+	return parseExposition(body, promOptions{})
+}
+
+// promOptions says how to read an exposition, and which of its series to
+// keep.
+type promOptions struct {
+	// openMetrics reads the body as OpenMetrics 1.0 text rather than the
+	// text format 0.0.4 (openmetrics.go).
+	openMetrics bool
+	// keep, when set, says whether the series of a metric name are kept;
+	// the others are parsed, and so checked, but not stored.
+	keep func(name string) bool
+	// limit, when above 0, is how many series may be kept: the parse stops
+	// at the first one past it with model.MetricCountError.
+	limit int
+}
+
+// parseExposition parses body as options say. The body is read a line at a
+// time, without first splitting it into a slice of every line.
+func parseExposition(body []byte, options promOptions) ([]model.Metric, error) {
+	p := promParser{byName: map[string]*promFamily{}, options: options}
+	for number := 1; ; number++ {
+		raw, rest, more := bytes.Cut(body, []byte("\n"))
 		line := strings.TrimSuffix(string(raw), "\r")
 		if err := p.line(line); err != nil {
-			return nil, fmt.Errorf("text format parsing error in line %d: %w", i+1, err)
+			if errors.Is(err, model.ErrLimitExceeded) {
+				return nil, err
+			}
+			return nil, fmt.Errorf("text format parsing error in line %d: %w", number, err)
 		}
+		if !more {
+			break
+		}
+		body = rest
 	}
 	return p.metrics(), nil
 }
@@ -63,6 +90,9 @@ const (
 	promRoleNone = iota
 	promRoleSum
 	promRoleCount
+	// promRoleCreated is an OpenMetrics _created sample, which is read and
+	// dropped: the metric model has no creation time.
+	promRoleCreated
 )
 
 type promFamily struct {
@@ -72,6 +102,24 @@ type promFamily struct {
 	typ     model.MetricType // empty until a TYPE line or the first sample
 	series  []*promSeries
 	grouped map[string]*promSeries // summary and histogram series by signature
+	// exported, when set, is the name the family's series have, where
+	// OpenMetrics names them other than the family: foo_total for a
+	// counter foo, foo_info for an info foo.
+	exported string
+	// helpOf, when set, is the family whose HELP this one's series carry:
+	// an OpenMetrics gauge histogram's, for the gauges it is read as.
+	helpOf *promFamily
+	// kept says whether the family's series are stored, once decided by
+	// promOptions.keep at its first series.
+	kept, keptKnown bool
+}
+
+// exportedName is the name of the family's series.
+func (f *promFamily) exportedName() string {
+	if f.exported != "" {
+		return f.exported
+	}
+	return f.name
 }
 
 type promSeries struct {
@@ -85,12 +133,28 @@ type promSeries struct {
 type promParser struct {
 	byName   map[string]*promFamily
 	families []*promFamily
+	options  promOptions
+	// aliases are the OpenMetrics sample names that belong to a family
+	// other than their own, with the role they have in it.
+	aliases map[string]promAlias
+	// kept counts the series stored, for promOptions.limit.
+	kept int
+	// eof is set by OpenMetrics' # EOF, after which nothing may follow.
+	eof bool
+}
+
+type promAlias struct {
+	family *promFamily
+	role   int
 }
 
 func (p *promParser) line(line string) error {
 	s := strings.TrimLeft(line, " \t")
 	if strings.TrimSpace(s) == "" {
 		return nil
+	}
+	if p.eof {
+		return errors.New("unexpected content after # EOF")
 	}
 	if s[0] == '#' {
 		return p.comment(s[1:])
@@ -104,6 +168,10 @@ func (p *promParser) line(line string) error {
 func (p *promParser) comment(s string) error {
 	s = strings.TrimLeft(s, " \t")
 	keyword, rest := cutBlank(s)
+	if p.options.openMetrics && keyword == "EOF" && strings.TrimSpace(rest) == "" {
+		p.eof = true
+		return nil
+	}
 	if keyword != "HELP" && keyword != "TYPE" {
 		return nil
 	}
@@ -143,7 +211,11 @@ func (p *promParser) comment(s string) error {
 	if family.typ != "" {
 		return fmt.Errorf("second TYPE line for metric name %q, or TYPE reported after samples", family.name)
 	}
-	switch t := strings.ToLower(strings.TrimRight(rest, " \t")); t {
+	t := strings.ToLower(strings.TrimRight(rest, " \t"))
+	if p.options.openMetrics {
+		return p.openMetricsType(family, t, rest)
+	}
+	switch t {
 	case "counter":
 		family.typ = model.CounterMetricType
 	case "gauge":
@@ -197,15 +269,25 @@ func (p *promParser) sample(s string) error {
 	if err != nil {
 		return fmt.Errorf("expected float as value, got %q", token)
 	}
+	if p.options.openMetrics {
+		s = withoutExemplar(s)
+	}
 	var timestamp *int64
 	s = strings.TrimLeft(s, " \t")
 	if s != "" {
 		token, s = cutBlank(s)
-		t, err := strconv.ParseInt(token, 10, 64)
-		if err != nil {
-			return fmt.Errorf("expected integer as timestamp, got %q", token)
+		if p.options.openMetrics {
+			timestamp, err = openMetricsTimestamp(token)
+			if err != nil {
+				return err
+			}
+		} else {
+			t, err := strconv.ParseInt(token, 10, 64)
+			if err != nil {
+				return fmt.Errorf("expected integer as timestamp, got %q", token)
+			}
+			timestamp = &t
 		}
-		timestamp = &t
 		if s = strings.TrimSpace(s); s != "" {
 			return fmt.Errorf("spurious string after timestamp: %q", s)
 		}
@@ -217,7 +299,7 @@ func (p *promParser) sample(s string) error {
 	if family.typ == "" {
 		family.typ = model.UntypedMetricType
 	}
-	return family.add(labels, role, value, timestamp)
+	return p.add(family, labels, role, value, timestamp)
 }
 
 // family finds the family a name belongs to, creating it if there is none.
@@ -225,6 +307,9 @@ func (p *promParser) sample(s string) error {
 func (p *promParser) family(name string) (*promFamily, int, error) {
 	if name == "" || !utf8.ValidString(name) {
 		return nil, 0, fmt.Errorf("invalid metric name %q", name)
+	}
+	if alias, ok := p.aliases[name]; ok {
+		return alias.family, alias.role, nil
 	}
 	if f := p.byName[name]; f != nil {
 		return f, promRoleNone, nil
@@ -252,7 +337,13 @@ func (p *promParser) family(name string) (*promFamily, int, error) {
 	return f, promRoleNone, nil
 }
 
-func (f *promFamily) add(labels []promLabel, role int, value float64, timestamp *int64) error {
+// add adds a sample to its family, or checks it and drops it when the family
+// is not kept or the sample is an OpenMetrics _created.
+func (p *promParser) add(f *promFamily, labels []promLabel, role int, value float64, timestamp *int64) error {
+	if !f.keptKnown {
+		f.kept = p.options.keep == nil || p.options.keep(f.exportedName())
+		f.keptKnown = true
+	}
 	special := ""
 	switch f.typ {
 	case model.SummaryMetricType:
@@ -273,7 +364,24 @@ func (f *promFamily) add(labels []promLabel, role int, value float64, timestamp 
 		}
 		own[l.name] = l.value
 	}
+	if role == promRoleCreated {
+		return nil
+	}
+	if role == promRoleCount || (hasBound && f.typ == model.HistogramMetricType) {
+		// A count is a whole number of observations, which a uint64 holds
+		// up to 2^64-1; past it the conversion gives a meaningless number.
+		if value < 0 || math.IsNaN(value) || math.IsInf(value, 0) || value >= math.MaxUint64 {
+			return fmt.Errorf("expected a count from 0 to 2^64-1 for %q, got %v", f.name, value)
+		}
+	}
+	if !f.kept {
+		// Checked as a kept sample is, and dropped: nothing of it is held.
+		return nil
+	}
 	if special == "" {
+		if err := p.keep(); err != nil {
+			return err
+		}
 		f.series = append(f.series, &promSeries{labels: own, value: value, timestamp: timestamp})
 		return nil
 	}
@@ -283,6 +391,9 @@ func (f *promFamily) add(labels []promLabel, role int, value float64, timestamp 
 	key := promSignature(own)
 	series := f.grouped[key]
 	if series == nil {
+		if err := p.keep(); err != nil {
+			return err
+		}
 		series = &promSeries{labels: own}
 		if f.typ == model.SummaryMetricType {
 			series.summary = &model.Summary{}
@@ -303,13 +414,6 @@ func (f *promFamily) add(labels []promLabel, role int, value float64, timestamp 
 		}
 		return nil
 	}
-	if role == promRoleCount || (hasBound && series.histogram != nil) {
-		// A count is a whole number of observations, which a uint64 holds
-		// up to 2^64-1; past it the conversion gives a meaningless number.
-		if value < 0 || math.IsNaN(value) || math.IsInf(value, 0) || value >= math.MaxUint64 {
-			return fmt.Errorf("expected a count from 0 to 2^64-1 for %q, got %v", f.name, value)
-		}
-	}
 	switch {
 	case role == promRoleCount && series.summary != nil:
 		series.summary.Count = uint64(value)
@@ -326,11 +430,27 @@ func (f *promFamily) add(labels []promLabel, role int, value float64, timestamp 
 	return nil
 }
 
+// keep counts one more stored series, and fails past promOptions.limit.
+func (p *promParser) keep() error {
+	p.kept++
+	if p.options.limit > 0 && p.kept > p.options.limit {
+		return model.MetricCountError(p.kept, p.options.limit)
+	}
+	return nil
+}
+
 func (p *promParser) metrics() []model.Metric {
 	var out []model.Metric
+	if p.kept > 0 {
+		out = make([]model.Metric, 0, p.kept)
+	}
 	for _, f := range p.families {
+		help := f.help
+		if f.helpOf != nil && !f.helpSet {
+			help = f.helpOf.help
+		}
 		for _, s := range f.series {
-			m := model.Metric{Name: f.name, Help: f.help, Type: f.typ, Labels: s.labels, Value: s.value, Timestamp: s.timestamp, Histogram: s.histogram, Summary: s.summary}
+			m := model.Metric{Name: f.exportedName(), Help: help, Type: f.typ, Labels: s.labels, Value: s.value, Timestamp: s.timestamp, Histogram: s.histogram, Summary: s.summary}
 			out = append(out, m)
 		}
 	}
@@ -397,9 +517,10 @@ func readPromLabels(s string, bracesForm bool) (string, []promLabel, string, err
 		if err != nil {
 			return "", nil, "", err
 		}
-		if !utf8.ValidString(value) {
-			return "", nil, "", fmt.Errorf("invalid label value %q", value)
-		}
+		// A label value that is not valid UTF-8 is kept as it is: the
+		// transform repairs it with U+FFFD and counts it, as it does the
+		// output of every other decoder (textencoding.go), rather than
+		// failing the whole scrape over one value.
 		labels = append(labels, promLabel{name: label, value: value})
 		after = strings.TrimLeft(after, " \t")
 		switch {

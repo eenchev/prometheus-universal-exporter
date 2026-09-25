@@ -214,6 +214,64 @@ func TestDifferentProbesAreNotShared(t *testing.T) {
 	}
 }
 
+// Probes differing only in parameters that make no request — one no request
+// type knows, a header_ parameter for a header the collector does not
+// forward — are identical probes, and share one trip.
+func TestParametersThatDoNotMakeTheRequestDoNotKeepProbesApart(t *testing.T) {
+	testutil.CaptureLogs(t)
+	target := newGatedTarget(t, http.StatusOK, "value=42\n")
+	server := flightServer(t, testutil.Collector("loose", "text"))
+	extras := []string{"", "&x=1", "&x=2", "&header_X-Other=a"}
+	var outcomes []<-chan probeOutcome
+	for _, extra := range extras {
+		outcomes = append(outcomes, probeAsync(context.Background(), server, probePath("loose", target.URL, extra), nil))
+	}
+	waitForWaiters(t, server, len(extras))
+	target.open()
+	for _, outcome := range outcomes {
+		if got := <-outcome; got.code != http.StatusOK {
+			t.Fatalf("status=%d body=%q", got.code, got.body)
+		}
+	}
+	if n := target.requests.Load(); n != 1 {
+		t.Fatalf("%d probes made %d requests, want one", len(extras), n)
+	}
+}
+
+// A collector whose definition could not be fingerprinted has no key to
+// cache or share by: its probes each make their own trip rather than all
+// share the one keyed "".
+func TestProbesWithoutAKeyAreNotShared(t *testing.T) {
+	testutil.CaptureLogs(t)
+	target := newGatedTarget(t, http.StatusOK, "value=42\n")
+	server := flightServer(t, testutil.Collector("unkeyed", "text"))
+	// The fingerprint every probe of this configuration gets: none.
+	generation := newFingerprintGeneration(server.manager.Get())
+	for i := range generation.once {
+		generation.once[i].Do(func() {})
+	}
+	server.fingerprints.current.Store(generation)
+	other := newGatedTarget(t, http.StatusOK, "value=7\n")
+
+	first := probeAsync(context.Background(), server, probePath("unkeyed", target.URL, ""), nil)
+	second := probeAsync(context.Background(), server, probePath("unkeyed", other.URL, ""), nil)
+	deadline := time.Now().Add(5 * time.Second)
+	for target.requests.Load()+other.requests.Load() < 2 {
+		if time.Now().After(deadline) {
+			t.Fatalf("the probes made %d requests, want one each", target.requests.Load()+other.requests.Load())
+		}
+		time.Sleep(time.Millisecond)
+	}
+	target.open()
+	other.open()
+	if got := <-first; got.code != http.StatusOK || !strings.Contains(got.body, "demo_value 42") {
+		t.Fatalf("first: %d %q", got.code, got.body)
+	}
+	if got := <-second; got.code != http.StatusOK || !strings.Contains(got.body, "demo_value 7") {
+		t.Fatalf("second: %d %q", got.code, got.body)
+	}
+}
+
 // A failure is shared like a success: every waiting probe gets the same error,
 // and it is logged once.
 func TestASharedFailureReachesEveryProbe(t *testing.T) {

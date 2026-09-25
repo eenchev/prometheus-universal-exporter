@@ -37,6 +37,10 @@ type probeResult struct {
 	status int
 	header http.Header
 	body   []byte
+	// metrics is a successful probe's answer. Every probe sharing the trip
+	// writes it in the format its own request asks for (writeMetricSet),
+	// and none changes it.
+	metrics *model.MetricSet
 	// ok is whether the probe counts as a success in the self-metrics.
 	ok bool
 	// abandoned says the trip was cancelled because every probe waiting for
@@ -45,9 +49,16 @@ type probeResult struct {
 	// unauthorized says the target refused the trip's credential
 	// (collected.unauthorized): no stale result answers it.
 	unauthorized bool
+	// refused says the collector's allowed_targets or denied_targets refused
+	// the target (collected.refused): no stale result answers it either.
+	refused bool
 }
 
-func (p *probeResult) writeTo(w http.ResponseWriter) {
+func (p *probeResult) writeTo(w http.ResponseWriter, r *http.Request) {
+	if p.metrics != nil {
+		writeMetricSet(w, r, p.metrics)
+		return
+	}
 	for key, values := range p.header {
 		w.Header()[key] = append([]string(nil), values...)
 	}
@@ -56,10 +67,12 @@ func (p *probeResult) writeTo(w http.ResponseWriter) {
 }
 
 // probeRecorder is the http.ResponseWriter the shared work writes into.
+// A successful probe sets metrics instead, rendered for each request.
 type probeRecorder struct {
-	header http.Header
-	status int
-	body   bytes.Buffer
+	header  http.Header
+	status  int
+	body    bytes.Buffer
+	metrics *model.MetricSet
 }
 
 func newProbeRecorder() *probeRecorder {
@@ -73,7 +86,7 @@ func (r *probeRecorder) Write(b []byte) (int, error) { return r.body.Write(b) }
 func (r *probeRecorder) WriteHeader(status int) { r.status = status }
 
 func (r *probeRecorder) result(ok bool) *probeResult {
-	return &probeResult{status: r.status, header: r.header, body: r.body.Bytes(), ok: ok}
+	return &probeResult{status: r.status, header: r.header, body: r.body.Bytes(), metrics: r.metrics, ok: ok}
 }
 
 type probeFlight struct {

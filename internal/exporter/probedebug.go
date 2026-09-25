@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/url"
+	"runtime/debug"
 	"sort"
 	"strconv"
 	"strings"
@@ -236,13 +237,7 @@ func (s *Server) serveDebugProbe(w http.ResponseWriter, r *http.Request, p debug
 				attrs: []any{"target", p.static.Name, "collector", name, "address", p.logTarget},
 			}
 		}
-		result := s.collect(ctx, collectJob{
-			collector: c, target: p.target, overrides: p.overrides, headers: p.forwarded,
-			display: p.logTarget, budget: p.budget, budgetSource: p.budgetSource,
-			scrape: p.static != nil, log: log,
-		})
-		s.trips.release(name)
-		verdict, answer = s.debugVerdict(result, p)
+		verdict, answer = s.debugTrip(ctx, trace, p, log)
 	}
 	if p.static != nil {
 		s.logger.Info("static target debug report served", "static_target", p.static.Name, "collector", name)
@@ -252,6 +247,35 @@ func (s *Server) serveDebugProbe(w http.ResponseWriter, r *http.Request, p debug
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-store")
 	_, _ = w.Write(trace.report(p, verdict, answer, time.Since(start)))
+}
+
+// debugTrip makes a debug probe's trip, holding the slot serveDebugProbe
+// took for it, and says what it would have answered. The slot is given back
+// however the trip ends: a panic in a request type, a decoder or a transform
+// would otherwise keep it for good, and after max_concurrent_probes of them
+// every probe of the collector would be refused. The panic is recovered, as a
+// probe's is (probeFlights.run), and the report shows it.
+func (s *Server) debugTrip(ctx context.Context, trace *probeTrace, p debugProbe, log collectLog) (verdict string, answer *model.MetricSet) {
+	defer s.trips.release(p.collector.Name)
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			stack := string(debug.Stack())
+			// The stack goes to the exporter's log, where a bug is reported
+			// from; the report says what happened.
+			trace.logger.Error("probe panicked; its stack is in the exporter's log", "panic", fmt.Sprint(recovered))
+			s.logger.Error("debug probe panicked", "collector", p.collector.Name, "target", p.logTarget, "panic", fmt.Sprint(recovered), "stack", stack)
+			verdict, answer = fmt.Sprintf("500: probe failed: internal error: %v", recovered), nil
+			if p.static != nil {
+				verdict = fmt.Sprintf("target up 0: the scrape failed: internal error: %v", recovered)
+			}
+		}
+	}()
+	result := s.collect(ctx, collectJob{
+		collector: p.collector, target: p.target, overrides: p.overrides, headers: p.forwarded,
+		display: p.logTarget, budget: p.budget, budgetSource: p.budgetSource,
+		scrape: p.static != nil, log: log,
+	})
+	return s.debugVerdict(result, p)
 }
 
 // debugVerdict is what a probe would have answered, as probeTrip and
@@ -279,6 +303,9 @@ func (s *Server) debugVerdict(result collected, p debugProbe) (string, *model.Me
 	}
 	if result.unauthorized {
 		return verdict + " (no stale result: the target refused the credential)", nil
+	}
+	if result.refused {
+		return verdict + " (no stale result: the target policy refused the target)", nil
 	}
 	if model.StaleIfError(p.collector) > 0 && p.staleKey != "" {
 		now := time.Now()
@@ -317,6 +344,9 @@ func (s *Server) staticDebugVerdict(result collected, p debugProbe) (string, *mo
 	}
 	if result.unauthorized {
 		return "target up 0: " + reason + " (no stale result: the target refused the credential)", nil
+	}
+	if result.refused {
+		return "target up 0: " + reason + " (no stale result: the target policy refused the target)", nil
 	}
 	if model.StaleIfError(p.collector) > 0 && p.staleKey != "" {
 		now := time.Now()

@@ -606,6 +606,13 @@ func newFlakyTarget(t *testing.T) (*flakyTarget, *httptest.Server) {
 		case "garbage":
 			_, _ = w.Write([]byte("<html>maintenance</html>"))
 			return
+		case "redirect-denied":
+			// A redirect to a host the collector's denied_targets refuses
+			// (deniedRedirectHost): the trip is refused, with the probe's
+			// cache key unchanged.
+			w.Header().Set("Location", "http://"+deniedRedirectHost+"/")
+			w.WriteHeader(http.StatusFound)
+			return
 		}
 		w.Header().Set("Content-Type", "text/plain")
 		_, _ = w.Write([]byte("value=" + strconv.FormatInt(f.value.Load(), 10) + "\n"))
@@ -613,6 +620,10 @@ func newFlakyTarget(t *testing.T) (*flakyTarget, *httptest.Server) {
 	t.Cleanup(server.Close)
 	return f, server
 }
+
+// deniedRedirectHost is where a flaky target in redirect-denied mode sends
+// the trip; a collector that denies it has the trip refused.
+const deniedRedirectHost = "denied.invalid"
 
 func staleCollector(ttl, stale time.Duration) model.Collector {
 	c := testutil.Collector("flaky", "text")
@@ -820,5 +831,82 @@ func TestTheCacheIndexFollowsItsEntries(t *testing.T) {
 	check("after a drop")
 	if _, ok := cache.byCollector["a"]; ok {
 		t.Fatal("a dropped collector is still indexed")
+	}
+}
+
+// A probe's cache key holds only what makes its request (probeKeyQuery): a
+// parameter no request type knows, and a header_ parameter for a header the
+// collector does not forward, change nothing sent, so probes differing only
+// in them share one cache entry. Adding &x=1, &x=2, ... cannot fill the cache
+// and push out the results cache.stale_if_error falls back on. A probe
+// parameter the request type accepts, and a forwarded header, still make a
+// probe of its own.
+func TestParametersThatDoNotMakeTheRequestShareACacheEntry(t *testing.T) {
+	testutil.CaptureLogs(t)
+	flaky, target := newFlakyTarget(t)
+	flaky.value.Store(1)
+	c := staleCollector(time.Minute, 0)
+	c.Request.ForwardHeaders = []string{"X-Tenant"}
+	c.Request.Path = "/{{param_region:eu}}"
+	server, _ := newCacheTestServer(t, c)
+	probe := "/probe?collector=flaky&target=" + url.QueryEscape(target.URL)
+	for _, extra := range []string{"", "&x=1", "&x=2&y=3", "&header_X-Other=a", "&HEADER_X-Other=b", "&debug=false"} {
+		if r := probeOnce(t, server, probe+extra, nil); r.Code != http.StatusOK {
+			t.Fatalf("%s answered %d: %s", extra, r.Code, r.Body)
+		}
+	}
+	if calls := flaky.calls.Load(); calls != 1 {
+		t.Fatalf("probes differing in parameters that make no request went to the target %d times, want once", calls)
+	}
+	if n := len(server.cache.entries); n != 1 {
+		t.Fatalf("%d cache entries, want 1", n)
+	}
+	for _, extra := range []string{"&timeout=5s", "&method=POST", "&header_X-Tenant=a", "&header_X-Tenant=b", "&param_region=us"} {
+		if r := probeOnce(t, server, probe+extra, nil); r.Code != http.StatusOK {
+			t.Fatalf("%s answered %d: %s", extra, r.Code, r.Body)
+		}
+	}
+	if calls := flaky.calls.Load(); calls != 6 {
+		t.Fatalf("five probes with parameters of their own went to the target %d more times, want 5", calls-1)
+	}
+}
+
+// A probe whose trip finds the cache filled by a probe that finished while
+// it waited to start (probeTrip) is answered from the cache as a probe that
+// found it before is, and its answer is queued for OTLP as that one's is:
+// once.
+func TestACacheHitAtTheStartOfATripIsQueuedForOTLP(t *testing.T) {
+	testutil.CaptureLogs(t)
+	flaky, target := newFlakyTarget(t)
+	flaky.value.Store(3)
+	c := staleCollector(time.Minute, 0)
+	cfg := &model.Config{Collectors: []model.Collector{c}, OTLP: otlpConfig("http://collector.invalid/v1/metrics")}
+	server := newStaticServer(t, cfg, nil)
+	if r := probeOnce(t, server, "/probe?collector=flaky&target="+url.QueryEscape(target.URL), nil); r.Code != http.StatusOK {
+		t.Fatalf("%d %s", r.Code, r.Body)
+	}
+	_ = server.drainOTLP()
+	var key string
+	for k := range server.cache.entries {
+		key = k
+	}
+	collector := &server.manager.Get().Collectors[0]
+	result := server.probeTrip(context.Background(), upstreamProbe{
+		collector: collector, target: target.URL, logTarget: target.URL,
+		rec: server.recorderFor(server.statsFor("flaky"), "flaky", "", ""), cacheKey: key,
+	})
+	if !result.ok || result.metrics == nil || flaky.calls.Load() != 1 {
+		t.Fatalf("the trip was not answered from the cache: %+v, %d requests", result, flaky.calls.Load())
+	}
+	queued := 0
+	for _, resource := range server.drainOTLP() {
+		for _, m := range resource.Set.Metrics {
+			if m.Name == "demo_value" && m.Value == 3 {
+				queued++
+			}
+		}
+	}
+	if queued != 1 {
+		t.Fatalf("the cached answer was queued for OTLP %d times, want once", queued)
 	}
 }

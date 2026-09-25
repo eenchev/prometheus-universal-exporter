@@ -6,10 +6,12 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"regexp"
 	"strings"
 
 	"github.com/PuerkitoBio/goquery"
 	"github.com/antchfx/xmlquery"
+	"github.com/eenchev/prometheus-universal-exporter/internal/expr"
 	"github.com/eenchev/prometheus-universal-exporter/internal/fetch"
 	"github.com/eenchev/prometheus-universal-exporter/internal/model"
 	"gopkg.in/yaml.v3"
@@ -130,7 +132,7 @@ func Decode(r *fetch.HTTPResponse, c *model.Collector) (*Decoded, error) {
 		}
 		return &Decoded{Kind: kind, Data: &HTMLDecoded{Document: d, Raw: r.Body}, Raw: r.Body}, nil
 	case "prometheus":
-		return decodePrometheus(r)
+		return decodePrometheus(r, c)
 	case "text":
 		return &Decoded{Kind: kind, Data: string(r.Body), Raw: r.Body}, nil
 	case "graphite":
@@ -210,12 +212,85 @@ func decodeCSV(r *fetch.HTTPResponse, c *model.Collector) (*Decoded, error) {
 	return &Decoded{Kind: "csv", Data: out, Raw: r.Body}, nil
 }
 
-func decodePrometheus(r *fetch.HTTPResponse) (*Decoded, error) {
-	metrics, err := parsePrometheusText(r.Body)
+func decodePrometheus(r *fetch.HTTPResponse, c *model.Collector) (*Decoded, error) {
+	options := promOptions{openMetrics: isOpenMetrics(r)}
+	// A prometheus transform passes on only the series its rules, or its
+	// include and exclude, pick, each at least once, so the decoder keeps
+	// only those, and stops at the first past limits.max_metrics, as the
+	// transform would have: a body of a million series costs a scrape
+	// that keeps ten what the ten cost. A pre-script, or a python
+	// transform, is given every series, and the transform counts what it
+	// makes of them.
+	if c.Transform.Type == "prometheus" && strings.TrimSpace(c.Transform.PreScript) == "" {
+		options.keep = prometheusKeeps(c)
+		options.limit = c.Limits.MaxMetrics
+	}
+	metrics, err := parseExposition(r.Body, options)
+	if errors.Is(err, model.ErrLimitExceeded) {
+		return nil, err
+	}
 	if err != nil {
-		return nil, fmt.Errorf("decoding Prometheus exposition: %w", err)
+		format := "Prometheus exposition"
+		if options.openMetrics {
+			format = "OpenMetrics exposition"
+		}
+		return nil, fmt.Errorf("decoding %s: %w", format, err)
 	}
 	return &Decoded{Kind: "prometheus", Data: model.MetricSet{Metrics: metrics}, Raw: r.Body}, nil
+}
+
+// prometheusKeeps says which metric names a prometheus transform passes on,
+// as applyPrometheusTransform decides: with rules, the names a rule's
+// expression, or its name when it has none, matches; without, the names
+// include matches, or every name when it is empty, less those exclude
+// matches. An expression that does not compile keeps everything, and the
+// transform reports it.
+func prometheusKeeps(c *model.Collector) func(string) bool {
+	compile := func(patterns []string) ([]*regexp.Regexp, bool) {
+		out := make([]*regexp.Regexp, 0, len(patterns))
+		for _, pattern := range patterns {
+			re, err := expr.CompileRegex(pattern)
+			if err != nil {
+				return nil, false
+			}
+			out = append(out, re)
+		}
+		return out, true
+	}
+	matchesAny := func(res []*regexp.Regexp, name string) bool {
+		for _, re := range res {
+			if re.MatchString(name) {
+				return true
+			}
+		}
+		return false
+	}
+	if len(c.Metrics) > 0 {
+		patterns := make([]string, 0, len(c.Metrics))
+		for _, rule := range c.Metrics {
+			pattern := rule.Expression
+			if pattern == "" {
+				pattern = "^" + regexp.QuoteMeta(rule.Name) + "$"
+			}
+			patterns = append(patterns, pattern)
+		}
+		rules, ok := compile(patterns)
+		if !ok {
+			return nil
+		}
+		return func(name string) bool { return matchesAny(rules, name) }
+	}
+	includes, okIncludes := compile(c.Transform.Include)
+	excludes, okExcludes := compile(c.Transform.Exclude)
+	if !okIncludes || !okExcludes {
+		return nil
+	}
+	if len(includes) == 0 && len(excludes) == 0 {
+		return nil
+	}
+	return func(name string) bool {
+		return (len(includes) == 0 || matchesAny(includes, name)) && !matchesAny(excludes, name)
+	}
 }
 
 // decodeYAML decodes a YAML document as the transforms read it. A scalar

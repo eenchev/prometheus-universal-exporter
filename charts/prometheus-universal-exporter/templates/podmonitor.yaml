@@ -14,7 +14,12 @@ metadata:
     {{- include "prometheus-universal-exporter.metadataAnnotations" (list $root $monitor.annotations) | nindent 4 }}
 spec:
   selector:
-    {{- if $monitor.targetSelector }}{{ toYaml $monitor.targetSelector | nindent 4 }}{{ else }}matchLabels:
+    {{- /* Each action trims the newline before it and starts its own line,
+           so the selector's keys always land beneath selector:. */}}
+    {{- if $monitor.targetSelector }}
+    {{- toYaml $monitor.targetSelector | nindent 4 }}
+    {{- else }}
+    matchLabels:
       app.kubernetes.io/name: target
     {{- end }}
   podMetricsEndpoints:
@@ -30,14 +35,14 @@ spec:
         {{ range $name, $values := $monitor.params }}
         {{ $name }}: {{ toYaml $values | nindent 10 }}
         {{ end }}
-      {{ if and $monitor.auth $monitor.auth.enabled (eq $monitor.auth.type "bearer") }}
+      {{- if and $monitor.auth $monitor.auth.enabled (eq $monitor.auth.type "bearer") }}
       authorization:
         type: Bearer
         credentials:
           name: {{ $monitor.auth.secretName | quote }}
           key: {{ $monitor.auth.secretKey | default "token" | quote }}
           optional: {{ $monitor.auth.optional | default false }}
-      {{ else if and $monitor.auth $monitor.auth.enabled (eq $monitor.auth.type "basic") }}
+      {{- else if and $monitor.auth $monitor.auth.enabled (eq $monitor.auth.type "basic") }}
       basicAuth:
         username:
           name: {{ $monitor.auth.secretName | quote }}
@@ -47,7 +52,18 @@ spec:
           name: {{ $monitor.auth.secretName | quote }}
           key: {{ $monitor.auth.passwordKey | default "password" | quote }}
           optional: {{ $monitor.auth.optional | default false }}
-      {{ end }}
+      {{- else if and $root.Values.webAuth $root.Values.webAuth.enabled }}
+      {{- /* The exporter's own Basic Auth protects /probe too, so a monitor
+             without a credential of its own presents the exporter's, as the
+             self-metrics monitor does; without it every scrape is a 401. */}}
+      basicAuth:
+        username:
+          name: {{ $root.Values.webAuth.secretName | quote }}
+          key: {{ $root.Values.webAuth.usernameKey | quote }}
+        password:
+          name: {{ $root.Values.webAuth.secretName | quote }}
+          key: {{ $root.Values.webAuth.passwordKey | quote }}
+      {{- end }}
       relabelings:
         - sourceLabels: [__address__]
           targetLabel: __param_target

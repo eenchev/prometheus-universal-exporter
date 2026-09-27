@@ -32,7 +32,8 @@ the target is requested exactly as given: `http://legacy.example:8080` requests
 `/`, and `http://legacy.example:8080/api/status` requests `/api/status`. A target
 that carries a path keeps it, and `request.path` is appended after it, the
 target's escapes kept as written: `http://h/a%2Fb` with `path: /x` requests
-`/a%2Fb/x`, not `/a/b/x`. Nothing
+`/a%2Fb/x`, not `/a/b/x`. A trailing slash is kept, once: `path: /` requests the
+root, `/`, whether or not the target ends in `/`. Nothing
 warns about a missing path — a target that serves nothing at `/` fails the probe
 with its own status, or returns a page the metric rules cannot read.
 

@@ -1,0 +1,15 @@
+{
+  "beat": "filebeat",
+  "binary_arch": "amd64",
+  "build_commit": "6f5c7b8a3e2d1c0b9a8f7e6d5c4b3a2918f7e6d5",
+  "build_time": "2026-08-12T09:41:27.000Z",
+  "elastic_licensed": true,
+  "ephemeral_id": "0c8f2f1e-6c43-4b0e-9d0b-2b7a3b9c4e11",
+  "gid": "0",
+  "hostname": "logs-node-3",
+  "name": "logs-node-3",
+  "uid": "0",
+  "username": "root",
+  "uuid": "34f6c6e1-45a8-4b12-9125-11b3e6e89866",
+  "version": "9.1.3"
+}

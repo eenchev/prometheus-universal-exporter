@@ -1,0 +1,544 @@
+# Collectors for Filebeat's own monitoring endpoint, the HTTP endpoint of
+# https://www.elastic.co/guide/en/beats/filebeat/current/http-endpoint.html.
+# Filebeat serves it once enabled in filebeat.yml:
+#
+#   http.enabled: true
+#   http.host: 0.0.0.0     # localhost by default; reachable from the exporter
+#   http.port: 5066
+#
+#   go run . --config.file=examples/config.filebeat.json-test.yaml
+#   curl 'http://localhost:8080/probe?collector=filebeat&target=http://filebeat-host:5066'
+#   curl 'http://localhost:8080/probe?collector=filebeat_info&target=http://filebeat-host:5066'
+#
+# Two collectors, because Filebeat answers on two paths:
+#
+#   /stats  the counters and gauges: the process (beat), Filebeat's own
+#           (filebeat, registrar), the publishing pipeline and output
+#           (libbeat) and the host (system). Collector filebeat.
+#   /       who is answering: version, name, uuid, build. Collector
+#           filebeat_info, one series. /stats carries no version, so this is
+#           where a dashboard or an alert gets it from.
+#
+# The documentation's /stats example is abridged. The metrics here are the
+# ones Filebeat registers in its source (filebeat/beater, filebeat/registrar,
+# filebeat/input/log, filebeat/input/filestream, libbeat/publisher,
+# libbeat/outputs, libbeat/cfgfile) and the process metrics every Beat
+# reports. testdata/json/filebeat-stats.json is a complete /stats answer built
+# from that source, with every section present and realistic values for a
+# Filebeat in Kubernetes publishing to Elasticsearch, and
+# testdata/json/filebeat-info.json the matching /; neither is a capture.
+#
+# Not every Filebeat reports every section:
+#
+#   beat.cgroup.*          only on Linux, and only in a cgroup
+#   beat.handles.*         not on Windows
+#   filebeat.filestream.*  only with a filestream input, in recent versions
+#   filebeat.harvester.*,  only with the (deprecated) log input; filestream
+#   filebeat.input.log.*   reports per input under /inputs/ instead
+#   output batches.split,  only in recent versions
+#   dead_letter, toomany,
+#   failure_store
+#   queue added/consumed/  only in recent versions; the memory queue reports
+#   removed/filled/max_*   bytes as 0 unless it is sized in bytes
+#
+# The rules for those set error_mode: ignore, so a section Filebeat does not
+# report has no series rather than failing the scrape or logging on every one.
+# The rules for what every Filebeat reports keep the default, and log when it
+# is missing.
+#
+# Naming: every series starts with filebeat_. Milliseconds become seconds
+# (scale: 0.001), counters end in _total, and outcomes of one kind of thing are
+# one family with a label rather than a family each, so
+#
+#   sum by (instance) (rate(filebeat_output_events_total{outcome="failed"}[5m]))
+#
+# and friends work as usual. The output's type (elasticsearch, logstash,
+# kafka, ...) is a label on filebeat_output_info only, not on every output
+# series.
+#
+# A Prometheus job scraping every Filebeat pod, with the Helm chart, is one
+# monitor per collector; see charts/prometheus-universal-exporter/README.md.
+
+collectors:
+  - name: filebeat
+    request:
+      type: http
+      path: /stats
+      headers:
+        Accept: application/json
+    decoder:
+      type: json
+    transform:
+      type: jq
+    metrics:
+      # --- The process ------------------------------------------------------
+
+      - name: filebeat_uptime_seconds
+        description: Time since Filebeat started
+        type: gauge
+        expression: .beat.info.uptime.ms
+        scale: 0.001
+
+      - name: filebeat_cpu_seconds_total
+        description: CPU time Filebeat used, by mode
+        type: counter
+        expression: .beat.cpu.user.time.ms
+        scale: 0.001
+        labels:
+          - name: mode
+            value: user
+      - name: filebeat_cpu_seconds_total
+        type: counter
+        expression: .beat.cpu.system.time.ms
+        scale: 0.001
+        labels:
+          - name: mode
+            value: system
+
+      - name: filebeat_resident_memory_bytes
+        description: Resident set size of the Filebeat process
+        type: gauge
+        expression: .beat.memstats.rss
+
+      - name: filebeat_go_memstats_alloc_bytes
+        description: Bytes of Go heap objects allocated and still in use
+        type: gauge
+        expression: .beat.memstats.memory_alloc
+
+      - name: filebeat_go_memstats_alloc_bytes_total
+        description: Bytes of Go heap objects allocated since start, freed or not
+        type: counter
+        expression: .beat.memstats.memory_total
+
+      - name: filebeat_go_memstats_sys_bytes
+        description: Bytes of memory the Go runtime obtained from the system
+        type: gauge
+        error_mode: ignore
+        expression: .beat.memstats.memory_sys
+
+      - name: filebeat_go_memstats_next_gc_bytes
+        description: Heap size at which the next garbage collection runs
+        type: gauge
+        expression: .beat.memstats.gc_next
+
+      - name: filebeat_goroutines
+        description: Goroutines running in Filebeat
+        type: gauge
+        expression: .beat.runtime.goroutines
+
+      - name: filebeat_open_fds
+        description: File descriptors Filebeat has open
+        type: gauge
+        error_mode: ignore
+        expression: .beat.handles.open
+
+      - name: filebeat_fds_limit
+        description: File descriptor limit of the Filebeat process, soft and hard
+        type: gauge
+        error_mode: ignore
+        expression: .beat.handles.limit.soft
+        labels:
+          - name: limit
+            value: soft
+      - name: filebeat_fds_limit
+        type: gauge
+        error_mode: ignore
+        expression: .beat.handles.limit.hard
+        labels:
+          - name: limit
+            value: hard
+
+      # cgroup: what the container sees. A limit of 9223372036854771712 (or
+      # close to it) means none is set.
+      - name: filebeat_cgroup_memory_usage_bytes
+        description: Memory used by Filebeat's cgroup
+        type: gauge
+        error_mode: ignore
+        expression: .beat.cgroup.memory.mem.usage.bytes
+
+      - name: filebeat_cgroup_memory_limit_bytes
+        description: Memory limit of Filebeat's cgroup
+        type: gauge
+        error_mode: ignore
+        expression: .beat.cgroup.memory.mem.limit.bytes
+
+      - name: filebeat_cgroup_cpu_seconds_total
+        description: CPU time used by Filebeat's cgroup
+        type: counter
+        error_mode: ignore
+        expression: .beat.cgroup.cpuacct.total.ns
+        scale: 0.000000001
+
+      - name: filebeat_cgroup_cpu_periods_total
+        description: CFS enforcement periods of Filebeat's cgroup
+        type: counter
+        error_mode: ignore
+        expression: .beat.cgroup.cpu.stats.periods
+
+      - name: filebeat_cgroup_cpu_throttled_periods_total
+        description: CFS periods in which Filebeat's cgroup was throttled
+        type: counter
+        error_mode: ignore
+        expression: .beat.cgroup.cpu.stats.throttled.periods
+
+      - name: filebeat_cgroup_cpu_throttled_seconds_total
+        description: Time Filebeat's cgroup spent throttled
+        type: counter
+        error_mode: ignore
+        expression: .beat.cgroup.cpu.stats.throttled.ns
+        scale: 0.000000001
+
+      - name: filebeat_cgroup_cpu_quota_cores
+        description: CPU limit of Filebeat's cgroup in cores; absent without a limit
+        type: gauge
+        error_mode: ignore
+        # A quota of -1 or 0 means no limit, and no series.
+        expression: >-
+          .beat.cgroup.cpu.cfs as $cfs
+          | select($cfs.quota.us > 0 and $cfs.period.us > 0)
+          | $cfs.quota.us / $cfs.period.us
+
+      # --- Filebeat's events and files --------------------------------------
+
+      - name: filebeat_events_active
+        description: Events Filebeat has read and not yet had acknowledged by the output
+        type: gauge
+        expression: .filebeat.events.active
+
+      - name: filebeat_events_added_total
+        description: Events Filebeat has read and handed to the pipeline
+        type: counter
+        expression: .filebeat.events.added
+
+      - name: filebeat_events_done_total
+        description: Events Filebeat has finished with, acknowledged or dropped
+        type: counter
+        expression: .filebeat.events.done
+
+      # The log input's harvesters: one per file being read.
+      - name: filebeat_harvester_running
+        description: Harvesters running, one per file the log input reads
+        type: gauge
+        error_mode: ignore
+        expression: .filebeat.harvester.running
+
+      - name: filebeat_harvester_open_files
+        description: Files the log input's harvesters hold open
+        type: gauge
+        error_mode: ignore
+        expression: .filebeat.harvester.open_files
+
+      - name: filebeat_harvester_started_total
+        description: Harvesters started
+        type: counter
+        error_mode: ignore
+        expression: .filebeat.harvester.started
+
+      - name: filebeat_harvester_closed_total
+        description: Harvesters closed
+        type: counter
+        error_mode: ignore
+        expression: .filebeat.harvester.closed
+
+      - name: filebeat_harvester_skipped_total
+        description: Files the log input found and did not harvest, as harvester_limit was reached
+        type: counter
+        error_mode: ignore
+        expression: .filebeat.harvester.skipped
+
+      - name: filebeat_input_log_files_total
+        description: Files the log input saw renamed or truncated
+        type: counter
+        error_mode: ignore
+        expression: .filebeat.input.log.files.renamed
+        labels:
+          - name: event
+            value: renamed
+      - name: filebeat_input_log_files_total
+        type: counter
+        error_mode: ignore
+        expression: .filebeat.input.log.files.truncated
+        labels:
+          - name: event
+            value: truncated
+
+      # The filestream inputs' file discovery, summed over every filestream
+      # input.
+      - name: filebeat_filestream_files
+        description: Files the filestream inputs' scans found, by what became of them
+        type: gauge
+        error_mode: ignore
+        items: .filebeat.filestream | to_entries | map(select(.key | startswith("files_")))[]
+        expression: .value
+        labels:
+          - name: state
+            # files_matched -> matched, files_no_ingest_target -> no_ingest_target
+            expression: .key | ltrimstr("files_")
+
+      - name: filebeat_filestream_scan_errors
+        description: Files the last filestream scans could not examine
+        type: gauge
+        error_mode: ignore
+        expression: .filebeat.filestream.scan_errors
+
+      # --- The registrar: where Filebeat remembers how far it read ---------
+
+      - name: filebeat_registrar_states_current
+        description: File states the registry holds
+        type: gauge
+        expression: .registrar.states.current
+
+      - name: filebeat_registrar_states_updates_total
+        description: File state updates the registrar applied
+        type: counter
+        expression: .registrar.states.update
+
+      - name: filebeat_registrar_states_cleanups_total
+        description: File states the registrar removed
+        type: counter
+        expression: .registrar.states.cleanup
+
+      - name: filebeat_registrar_writes_total
+        description: Writes of the registry to disk, by result
+        type: counter
+        expression: .registrar.writes.success
+        labels:
+          - name: result
+            value: success
+      - name: filebeat_registrar_writes_total
+        type: counter
+        expression: .registrar.writes.fail
+        labels:
+          - name: result
+            value: fail
+
+      # --- Configuration reloading (filebeat.config.inputs / modules) ------
+
+      - name: filebeat_config_modules_running
+        description: Inputs and modules loaded from reloadable configuration
+        type: gauge
+        expression: .libbeat.config.module.running
+
+      - name: filebeat_config_modules_total
+        description: Inputs and modules started and stopped by configuration reloads
+        type: counter
+        expression: .libbeat.config.module.starts
+        labels:
+          - name: event
+            value: start
+      - name: filebeat_config_modules_total
+        type: counter
+        expression: .libbeat.config.module.stops
+        labels:
+          - name: event
+            value: stop
+
+      - name: filebeat_config_scans_total
+        description: Scans of the reloadable configuration files
+        type: counter
+        expression: .libbeat.config.scans
+
+      - name: filebeat_config_reloads_total
+        description: Reloads of the configuration after a scan found a change
+        type: counter
+        expression: .libbeat.config.reloads
+
+      # --- The publishing pipeline and its queue ---------------------------
+
+      - name: filebeat_pipeline_clients
+        description: Inputs connected to the publishing pipeline
+        type: gauge
+        expression: .libbeat.pipeline.clients
+
+      - name: filebeat_pipeline_events_active
+        description: Events in the pipeline, published and not yet acknowledged
+        type: gauge
+        expression: .libbeat.pipeline.events.active
+
+      # total = published + filtered + dropped + failed; retry counts again
+      # the events the output handed back to send again.
+      - name: filebeat_pipeline_events_total
+        description: Events that entered the publishing pipeline, by what became of them
+        type: counter
+        items: >-
+          .libbeat.pipeline.events
+          | to_entries
+          | map(select(.key != "active" and .key != "total"))[]
+        expression: .value
+        labels:
+          - name: outcome
+            expression: .key
+
+      - name: filebeat_queue_acked_events_total
+        description: Events the queue had acknowledged by the output
+        type: counter
+        expression: .libbeat.pipeline.queue.acked
+
+      - name: filebeat_queue_max_events
+        description: Events the queue can hold; 0 when it is sized in bytes
+        type: gauge
+        error_mode: ignore
+        expression: .libbeat.pipeline.queue.max_events
+
+      - name: filebeat_queue_max_bytes
+        description: Bytes the queue can hold; 0 when it is sized in events
+        type: gauge
+        error_mode: ignore
+        expression: .libbeat.pipeline.queue.max_bytes
+
+      - name: filebeat_queue_filled_events
+        description: Events in the queue now
+        type: gauge
+        error_mode: ignore
+        expression: .libbeat.pipeline.queue.filled.events
+
+      - name: filebeat_queue_filled_bytes
+        description: Bytes in the queue now, when it is sized in bytes
+        type: gauge
+        error_mode: ignore
+        expression: .libbeat.pipeline.queue.filled.bytes
+
+      - name: filebeat_queue_filled_ratio
+        description: How full the queue is, 0 to 1; near 1 the inputs are held back
+        type: gauge
+        error_mode: ignore
+        expression: .libbeat.pipeline.queue.filled.pct
+
+      - name: filebeat_queue_events_total
+        description: Events through the queue, by stage
+        type: counter
+        error_mode: ignore
+        items: >-
+          .libbeat.pipeline.queue
+          | to_entries
+          | map(select(.key == "added" or .key == "consumed" or .key == "removed"))[]
+        expression: .value.events
+        labels:
+          - name: stage
+            expression: .key
+
+      # --- The output ------------------------------------------------------
+
+      - name: filebeat_output_info
+        description: The output Filebeat publishes to, 1 with its type as a label
+        type: gauge
+        expression: 1
+        labels:
+          - name: type
+            expression: .libbeat.output.type
+
+      - name: filebeat_output_events_active
+        description: Events the output is sending now
+        type: gauge
+        expression: .libbeat.output.events.active
+
+      - name: filebeat_output_events_sent_total
+        description: Events the output tried to send, retries included
+        type: counter
+        expression: .libbeat.output.events.total
+
+      # acked: accepted. failed: refused, to be retried. dropped: given up on.
+      # duplicates: already indexed. toomany: refused with 429 and retried.
+      # dead_letter, failure_store: sent to the dead letter index or the
+      # failure store instead.
+      - name: filebeat_output_events_total
+        description: Events the output finished with, by outcome
+        type: counter
+        items: >-
+          .libbeat.output.events
+          | to_entries
+          | map(select(.key != "active" and .key != "total" and .key != "batches"))[]
+        expression: .value
+        labels:
+          - name: outcome
+            expression: .key
+
+      - name: filebeat_output_batches_total
+        description: Batches the output sent
+        type: counter
+        expression: .libbeat.output.events.batches
+
+      - name: filebeat_output_batches_split_total
+        description: Batches the output split because they were too large for the target
+        type: counter
+        error_mode: ignore
+        expression: .libbeat.output.batches.split
+
+      - name: filebeat_output_write_bytes_total
+        description: Bytes the output wrote to the network
+        type: counter
+        expression: .libbeat.output.write.bytes
+
+      - name: filebeat_output_read_bytes_total
+        description: Bytes the output read from the network
+        type: counter
+        expression: .libbeat.output.read.bytes
+
+      - name: filebeat_output_errors_total
+        description: Network errors of the output, by direction
+        type: counter
+        expression: .libbeat.output.write.errors
+        labels:
+          - name: direction
+            value: write
+      - name: filebeat_output_errors_total
+        type: counter
+        expression: .libbeat.output.read.errors
+        labels:
+          - name: direction
+            value: read
+
+      # --- The host ---------------------------------------------------------
+
+      - name: filebeat_system_cpu_cores
+        description: CPU cores of the host Filebeat runs on
+        type: gauge
+        expression: .system.cpu.cores
+
+      - name: filebeat_system_load
+        description: Load average of the host, over 1, 5 and 15 minutes
+        type: gauge
+        items: .system.load | to_entries | map(select(.key != "norm"))[]
+        expression: .value
+        labels:
+          - name: period
+            expression: .key + "m"
+
+      - name: filebeat_system_load_per_core
+        description: Load average of the host divided by its cores
+        type: gauge
+        items: .system.load.norm | to_entries[]
+        expression: .value
+        labels:
+          - name: period
+            expression: .key + "m"
+
+  # Who is answering, from Filebeat's /. One series, always 1.
+  - name: filebeat_info
+    request:
+      type: http
+      path: /
+      headers:
+        Accept: application/json
+    decoder:
+      type: json
+    transform:
+      type: jq
+    metrics:
+      - name: filebeat_build_info
+        description: The Filebeat answering, 1 with its version, name and build as labels
+        type: gauge
+        expression: 1
+        labels:
+          - name: version
+            expression: .version
+          - name: beat
+            expression: .beat
+          - name: name
+            expression: .name
+          - name: uuid
+            expression: .uuid
+          - name: build_commit
+            expression: .build_commit // ""
+          - name: binary_arch
+            expression: .binary_arch // ""

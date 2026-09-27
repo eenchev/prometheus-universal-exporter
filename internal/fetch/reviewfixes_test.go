@@ -73,6 +73,36 @@ func TestHalfAClientCertificateIsRefused(t *testing.T) {
 	}
 }
 
+// request.path / asks for the root: on a target without a path of its own,
+// and with a trailing slash of the target's, it is /, never //, which a Go
+// server such as Filebeat's answers with a redirect or a 404.
+func TestARootPathIsOneSlash(t *testing.T) {
+	var got []string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		got = append(got, r.RequestURI)
+	}))
+	defer server.Close()
+	for _, test := range []struct{ target, path, want string }{
+		{server.URL, "/", "/"},
+		{server.URL + "/", "/", "/"},
+		{server.URL + "/api", "/", "/api/"},
+		{server.URL + "/api/", "/", "/api/"},
+		{server.URL, "/stats/", "/stats/"},
+	} {
+		got = nil
+		c := model.Collector{Name: "root", Request: model.RequestConfig{Type: RequestTypeHTTP, Path: test.path}}
+		if err := ValidateRequest(&c); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := fetch(context.Background(), test.target, &c, RequestOverrides{}); err != nil {
+			t.Fatal(err)
+		}
+		if len(got) != 1 || got[0] != test.want {
+			t.Errorf("target %s path %q: requested %v, want %s", test.target, test.path, got, test.want)
+		}
+	}
+}
+
 // An escape in the target's path, such as %2F inside a segment, is sent as
 // written when request.path is joined onto it, with path parameters too.
 func TestATargetsEscapedPathIsKept(t *testing.T) {

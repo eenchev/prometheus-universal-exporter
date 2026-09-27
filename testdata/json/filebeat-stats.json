@@ -1,0 +1,213 @@
+{
+  "beat": {
+    "cgroup": {
+      "cpu": {
+        "cfs": {
+          "period": {
+            "us": 100000
+          },
+          "quota": {
+            "us": 200000
+          }
+        },
+        "id": "/kubepods/burstable/pod8f1c2b4e/filebeat",
+        "stats": {
+          "periods": 64210,
+          "throttled": {
+            "ns": 3121894012,
+            "periods": 118
+          }
+        }
+      },
+      "cpuacct": {
+        "id": "/kubepods/burstable/pod8f1c2b4e/filebeat",
+        "total": {
+          "ns": 1869023450117
+        }
+      },
+      "memory": {
+        "id": "/kubepods/burstable/pod8f1c2b4e/filebeat",
+        "mem": {
+          "limit": {
+            "bytes": 536870912
+          },
+          "usage": {
+            "bytes": 187645952
+          }
+        }
+      }
+    },
+    "cpu": {
+      "system": {
+        "ticks": 412370,
+        "time": {
+          "ms": 412371
+        }
+      },
+      "total": {
+        "ticks": 1868960,
+        "time": {
+          "ms": 1868964
+        },
+        "value": 1868960
+      },
+      "user": {
+        "ticks": 1456590,
+        "time": {
+          "ms": 1456593
+        }
+      }
+    },
+    "handles": {
+      "limit": {
+        "hard": 1048576,
+        "soft": 1048576
+      },
+      "open": 57
+    },
+    "info": {
+      "ephemeral_id": "0c8f2f1e-6c43-4b0e-9d0b-2b7a3b9c4e11",
+      "uptime": {
+        "ms": 604812345
+      }
+    },
+    "memstats": {
+      "gc_next": 71303168,
+      "memory_alloc": 48211736,
+      "memory_sys": 121012264,
+      "memory_total": 918234771200,
+      "rss": 164790272
+    },
+    "runtime": {
+      "goroutines": 143
+    }
+  },
+  "filebeat": {
+    "events": {
+      "active": 812,
+      "added": 91462377,
+      "done": 91461565
+    },
+    "filestream": {
+      "files_empty": 1,
+      "files_ignored": 2,
+      "files_matched": 27,
+      "files_no_ingest_target": 0,
+      "files_unique": 25,
+      "scan_errors": 0
+    },
+    "harvester": {
+      "closed": 4112,
+      "open_files": 24,
+      "running": 24,
+      "skipped": 3,
+      "started": 4136
+    },
+    "input": {
+      "log": {
+        "files": {
+          "renamed": 318,
+          "truncated": 2
+        }
+      }
+    }
+  },
+  "libbeat": {
+    "config": {
+      "module": {
+        "running": 3,
+        "starts": 5,
+        "stops": 2
+      },
+      "reloads": 4,
+      "scans": 10081
+    },
+    "output": {
+      "batches": {
+        "split": 6
+      },
+      "events": {
+        "acked": 91452107,
+        "active": 1600,
+        "batches": 57318,
+        "dead_letter": 0,
+        "dropped": 41,
+        "duplicates": 12,
+        "failed": 2204,
+        "failure_store": 0,
+        "toomany": 1966,
+        "total": 91456010
+      },
+      "read": {
+        "bytes": 38817744,
+        "errors": 0
+      },
+      "type": "elasticsearch",
+      "write": {
+        "bytes": 97105332117,
+        "errors": 3
+      }
+    },
+    "pipeline": {
+      "clients": 9,
+      "events": {
+        "active": 812,
+        "dropped": 0,
+        "failed": 0,
+        "filtered": 9120,
+        "published": 91453257,
+        "retry": 2204,
+        "total": 91462377
+      },
+      "queue": {
+        "acked": 91452445,
+        "added": {
+          "bytes": 0,
+          "events": 91453257
+        },
+        "consumed": {
+          "bytes": 0,
+          "events": 91453257
+        },
+        "filled": {
+          "bytes": 0,
+          "events": 812,
+          "pct": 0.0254
+        },
+        "max_bytes": 0,
+        "max_events": 32000,
+        "removed": {
+          "bytes": 0,
+          "events": 91452445
+        }
+      }
+    }
+  },
+  "registrar": {
+    "states": {
+      "cleanup": 4087,
+      "current": 29,
+      "update": 91461565
+    },
+    "writes": {
+      "fail": 0,
+      "success": 190211,
+      "total": 190211
+    }
+  },
+  "system": {
+    "cpu": {
+      "cores": 8
+    },
+    "load": {
+      "1": 1.42,
+      "15": 1.18,
+      "5": 1.31,
+      "norm": {
+        "1": 0.1775,
+        "15": 0.1475,
+        "5": 0.1638
+      }
+    }
+  }
+}

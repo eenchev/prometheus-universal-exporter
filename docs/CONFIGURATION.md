@@ -515,6 +515,14 @@ statuspage_component_status{status!="operational"}
   and on (component_id) statuspage_component_incident_info
 ```
 
+[`examples/config.filebeat.json-test.yaml`](../examples/config.filebeat.json-test.yaml)
+reads [Filebeat's monitoring endpoint](https://www.elastic.co/guide/en/beats/filebeat/current/http-endpoint.html),
+`/stats` and `/`, into `filebeat_*` metrics: counters as `_total`, milliseconds
+as seconds, outcomes of one kind as one family with a label
+(`filebeat_output_events_total{outcome="failed"}`), and `error_mode: ignore` on
+the sections only some Filebeats report, so they are absent rather than failing
+the scrape.
+
 [`examples/config.grafanastatus.json-test.yaml`](../examples/config.grafanastatus.json-test.yaml)
 is a complete collector for [status.grafana.com](https://status.grafana.com),
 and for any page hosted on Atlassian Statuspage, which all publish the same

@@ -273,7 +273,9 @@ func buildRequestURL(target string, c *model.Collector, overrides RequestOverrid
 		p := strings.TrimPrefix(requestPath, "/")
 		u.Path = path.Join("/", base, p)
 		u.RawPath = path.Join("/", rawBase, (&url.URL{Path: p}).EscapedPath())
-		if strings.HasSuffix(requestPath, "/") {
+		// A trailing slash is kept, once: request.path / on a target
+		// without a path of its own is /, not //.
+		if strings.HasSuffix(requestPath, "/") && !strings.HasSuffix(u.Path, "/") {
 			u.Path += "/"
 			u.RawPath += "/"
 		}

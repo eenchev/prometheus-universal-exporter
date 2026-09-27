@@ -325,7 +325,10 @@ redirect to a scheme the collector does not allow MUST fail the request,
 naming the scheme, before it is followed.
 
 When neither `request.path` nor a `path` probe parameter is given, the target
-MUST be requested exactly as given, including any path it carries.
+MUST be requested exactly as given, including any path it carries. A path
+ending in `/` MUST keep one trailing slash and never gain a second: `path: /`
+on `http://h:5066` or `http://h:5066/` requests `/`, not `//`, which a Go
+server redirects or refuses.
 
 Rendering a target for a log line or an error body MUST never fail, whatever
 the probe sent. A target that cannot be parsed MUST be withheld rather than
@@ -6281,6 +6284,14 @@ sources at run time, so they need neither the network nor `protoc`.
   case (`Host` and `host` included), are refused at load, in a collector and a
   static target; a placeholder in a name keeps its own message.
 - A client certificate without its key, and the reverse, are refused at load.
+- `path: /` requests `/` on a target with and without a trailing slash, and
+  `/api/` on `http://h/api`; `/stats/` keeps its slash.
+- `examples/config.filebeat.json-test.yaml`, run against a complete Filebeat
+  `/stats` answer (`testdata/json/filebeat-stats.json`), exports every section
+  as its 84 series without logging; with the sections a Filebeat may not report
+  removed (cgroup, handles, filestream, the log input, newer output and queue
+  fields) it exports the rest, the others absent, still without logging; its
+  `filebeat_info` collector reads `/` as one `filebeat_build_info` series.
 - A target's escaped path, `%2F` inside a segment, is sent as written with
   `request.path` joined onto it, with a trailing slash, with path parameters,
   and without `request.path`.

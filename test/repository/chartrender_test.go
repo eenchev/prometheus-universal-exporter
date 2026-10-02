@@ -198,6 +198,55 @@ func TestChartRendersItsOptions(t *testing.T) {
 			args: []string{"--set", "server.shutdownDelay=20s"},
 			want: []string{`"--web.shutdown-delay=20s"`, "terminationGracePeriodSeconds: 45"},
 		},
+		"the default rolling update": {
+			want: []string{"  strategy:\n    type: RollingUpdate\n    rollingUpdate:\n      maxSurge: 1\n      maxUnavailable: 0\n  selector:"},
+		},
+		// Kubernetes refuses rollingUpdate beside Recreate, and the default
+		// values carry it.
+		"the Recreate strategy alone": {
+			args:  []string{"--set", "strategy.type=Recreate"},
+			want:  []string{"  strategy:\n    type: Recreate\n  selector:"},
+			avoid: []string{"rollingUpdate", "maxSurge"},
+		},
+		"a rolling update of its own": {
+			args: []string{"--set", "strategy.rollingUpdate.maxSurge=25%", "--set", "strategy.rollingUpdate.maxUnavailable=1"},
+			want: []string{"    type: RollingUpdate\n    rollingUpdate:\n      maxSurge: 25%\n      maxUnavailable: 1\n"},
+		},
+		// A scrape timeout may be as long as its interval, in whatever units.
+		"a scrape timeout as long as its interval": {
+			args: []string{"--set-json", `monitors=[{"name":"apps","enabled":true,"type":"service","collector":"example","interval":"1m","scrapeTimeout":"60s"}]`, "--set", "selfMetrics.interval=1d", "--set", "selfMetrics.scrapeTimeout=24h"},
+			want: []string{"interval: 1m\n      scrapeTimeout: 60s", "interval: 1d\n      scrapeTimeout: 24h"},
+		},
+		// One of the two alone is compared with nothing: Prometheus's own
+		// default stands for the other, and the chart does not know it.
+		"a scrape timeout without an interval": {
+			args: []string{"--set-json", `monitors=[{"name":"apps","enabled":true,"type":"pod","collector":"example","scrapeTimeout":"5m"}]`},
+			want: []string{"scrapeTimeout: 5m"},
+		},
+		// What is not rendered is not checked.
+		"timings of monitors that are off": {
+			args: []string{"--set", "selfMetrics.enabled=false", "--set", "selfMetrics.interval=10s", "--set", "selfMetrics.scrapeTimeout=5m",
+				"--set", "staticTargets.monitor.interval=10s", "--set", "staticTargets.monitor.scrapeTimeout=5m",
+				"--set-json", `monitors=[{"name":"apps","enabled":false,"type":"service","collector":"example","interval":"10s","scrapeTimeout":"5m"}]`},
+			avoid: []string{"kind: ServiceMonitor"},
+		},
+		"an Ingress to the Service": {
+			args: []string{"--set", "ingress.enabled=true"},
+			want: []string{"kind: Ingress", "service:\n                name: test-prometheus-universal-exporter\n"},
+		},
+		"credential mounts at paths of their own": {
+			args: []string{"--set", "webAuth.enabled=true", "--set", "webAuth.secretName=web", "--set", "webAuth.mountPath=/secrets/web/",
+				"--set", "targetAuth.enabled=true", "--set", "targetAuth.secretName=target", "--set", "targetAuth.mountPath=/secrets/target",
+				"--set-json", `extraVolumes=[{"name":"ca","secret":{"secretName":"ca"}}]`, "--set-json", `extraVolumeMounts=[{"name":"ca","mountPath":"/secrets"}]`},
+			want: []string{`mountPath: "/secrets/web/"`, `mountPath: "/secrets/target"`, "mountPath: /secrets\n"},
+		},
+		// A disabled auth needs neither a type nor a Secret, and renders
+		// nothing.
+		"a monitor's auth that is off": {
+			args:  []string{"--set-json", `monitors=[{"name":"apps","enabled":true,"type":"service","collector":"example","auth":{"enabled":false}},{"name":"pods","enabled":true,"type":"pod","collector":"example","auth":{"enabled":false,"secretName":""}}]`},
+			want:  []string{"name: test-prometheus-universal-exporter-apps", "name: test-prometheus-universal-exporter-pods"},
+			avoid: []string{"authorization:", "basicAuth:"},
+		},
 	} {
 		t.Run(name, func(t *testing.T) {
 			out, ok := helmTemplate(t, helm, chartDir, tc.args...)
@@ -267,6 +316,46 @@ func TestChartRefusesInvalidOptions(t *testing.T) {
 		"a monitor scrape timeout in microseconds":   {[]string{"--set-json", `monitors=[{"name":"apps","enabled":true,"type":"service","collector":"example","scrapeTimeout":"500us"}]`}, "monitors.0.scrapeTimeout"},
 		"a self monitor interval in nanoseconds":     {[]string{"--set", "selfMetrics.interval=30000000000ns"}, "selfMetrics.interval"},
 		"a fractional static targets scrape timeout": {[]string{"--set", "staticTargets.monitor.scrapeTimeout=0.5s"}, "staticTargets.monitor.scrapeTimeout"},
+		// The schema requires a monitor's name, so no template names one
+		// after its place in the list.
+		"a monitor without a name": {[]string{"--set-json", `monitors=[{"enabled":true,"type":"service","collector":"example"}]`}, "monitors.0"},
+		// An enabled auth without a type rendered no credential, or the
+		// exporter's own, and one without a Secret an empty name.
+		"a service monitor's auth without a type":   {[]string{"--set-json", `monitors=[{"name":"apps","enabled":true,"type":"service","collector":"example","auth":{"enabled":true,"secretName":"token"}}]`}, "monitors.0.auth"},
+		"a pod monitor's auth without a type":       {[]string{"--set-json", `monitors=[{"name":"apps","enabled":true,"type":"pod","collector":"example","auth":{"enabled":true,"secretName":"token"}}]`}, "monitors.0.auth"},
+		"a monitor's bearer auth without a Secret":  {[]string{"--set-json", `monitors=[{"name":"apps","enabled":true,"type":"service","collector":"example","auth":{"enabled":true,"type":"bearer"}}]`}, "monitors.0.auth"},
+		"a monitor's basic auth of an empty Secret": {[]string{"--set-json", `monitors=[{"name":"apps","enabled":true,"type":"pod","collector":"example","auth":{"enabled":true,"type":"basic","secretName":""}}]`}, "monitors.0.auth.secretName"},
+		// A monitor's port is a port's name, never its number, and its
+		// namespaceSelector the Prometheus Operator's: any or matchNames.
+		"a monitor's empty port":                          {[]string{"--set-json", `monitors=[{"name":"apps","enabled":true,"type":"service","collector":"example","port":""}]`}, "monitors.0.port"},
+		"a monitor's port number":                         {[]string{"--set-json", `monitors=[{"name":"apps","enabled":true,"type":"service","collector":"example","port":8080}]`}, "monitors.0.port"},
+		"a monitor's port number as a string":             {[]string{"--set-json", `monitors=[{"name":"apps","enabled":true,"type":"service","collector":"example","port":"8080"}]`}, "monitors.0.port"},
+		"a monitor's namespace selector of labels":        {[]string{"--set-json", `monitors=[{"name":"apps","enabled":true,"type":"pod","collector":"example","namespaceSelector":{"matchLabels":{"team":"a"}}}]`}, "monitors.0.namespaceSelector"},
+		"a monitor's namespace selector naming no string": {[]string{"--set-json", `monitors=[{"name":"apps","enabled":true,"type":"pod","collector":"example","namespaceSelector":{"matchNames":[""]}}]`}, "monitors.0.namespaceSelector.matchNames.0"},
+		// Prometheus refuses a scrape timeout longer than its interval, in
+		// every unit a Prometheus duration has.
+		"a monitor's scrape timeout over its interval":        {[]string{"--set-json", `monitors=[{"name":"apps","enabled":true,"type":"service","collector":"example","interval":"10s","scrapeTimeout":"30s"}]`}, "monitors entry apps has scrapeTimeout 30s, longer than its interval 10s"},
+		"a pod monitor's scrape timeout over its interval":    {[]string{"--set-json", `monitors=[{"name":"pods","enabled":true,"type":"pod","collector":"example","interval":"1m","scrapeTimeout":"61s"}]`}, "monitors entry pods has scrapeTimeout 61s, longer than its interval 1m"},
+		"a scrape timeout over its interval in milliseconds":  {[]string{"--set-json", `monitors=[{"name":"apps","enabled":true,"type":"service","collector":"example","interval":"1s500ms","scrapeTimeout":"1501ms"}]`}, "scrapeTimeout 1501ms, longer than its interval 1s500ms"},
+		"a scrape timeout over its interval in hours":         {[]string{"--set-json", `monitors=[{"name":"apps","enabled":true,"type":"service","collector":"example","interval":"90m","scrapeTimeout":"2h"}]`}, "scrapeTimeout 2h, longer than its interval 90m"},
+		"a scrape timeout over its interval in days":          {[]string{"--set-json", `monitors=[{"name":"apps","enabled":true,"type":"service","collector":"example","interval":"1d","scrapeTimeout":"25h"}]`}, "scrapeTimeout 25h, longer than its interval 1d"},
+		"a scrape timeout over its interval in weeks":         {[]string{"--set-json", `monitors=[{"name":"apps","enabled":true,"type":"service","collector":"example","interval":"1w","scrapeTimeout":"8d"}]`}, "scrapeTimeout 8d, longer than its interval 1w"},
+		"a scrape timeout over its interval in years":         {[]string{"--set-json", `monitors=[{"name":"apps","enabled":true,"type":"service","collector":"example","interval":"52w","scrapeTimeout":"1y"}]`}, "scrapeTimeout 1y, longer than its interval 52w"},
+		"the self monitor's scrape timeout over its interval": {[]string{"--set", "selfMetrics.interval=10s", "--set", "selfMetrics.scrapeTimeout=5m"}, "selfMetrics has scrapeTimeout 5m, longer than its interval 10s"},
+		// The Ingress routes to the Service.
+		"an Ingress without the Service": {[]string{"--set", "ingress.enabled=true", "--set", "service.enabled=false"}, "ingress.enabled routes to the exporter's Service, which service.enabled=false leaves out"},
+		// A pod cannot mount two volumes at one path, and a mount at the
+		// configuration directory would hide config.yaml; a trailing slash
+		// hides no collision.
+		"the exporter credential over the configuration":     {[]string{"--set", "webAuth.enabled=true", "--set", "webAuth.secretName=s", "--set", "webAuth.mountPath=/etc/prometheus-universal-exporter"}, `webAuth.mountPath "/etc/prometheus-universal-exporter" is also the configuration directory`},
+		"the exporter credential over the configuration, /":  {[]string{"--set", "webAuth.enabled=true", "--set", "webAuth.secretName=s", "--set", "webAuth.mountPath=/etc/prometheus-universal-exporter/"}, `webAuth.mountPath "/etc/prometheus-universal-exporter/" is also the configuration directory`},
+		"the target credential over the configuration":       {[]string{"--set", "targetAuth.enabled=true", "--set", "targetAuth.secretName=s", "--set", "targetAuth.mountPath=/etc/prometheus-universal-exporter/"}, `targetAuth.mountPath "/etc/prometheus-universal-exporter/" is also the configuration directory`},
+		"both credentials at one path":                       {[]string{"--set", "webAuth.enabled=true", "--set", "webAuth.secretName=s", "--set", "webAuth.mountPath=/secrets/", "--set", "targetAuth.enabled=true", "--set", "targetAuth.secretName=s", "--set", "targetAuth.mountPath=/secrets"}, `webAuth.mountPath "/secrets/" is also targetAuth.mountPath`},
+		"an extra mount over the target credential":          {[]string{"--set", "targetAuth.enabled=true", "--set", "targetAuth.secretName=s", "--set-json", `extraVolumeMounts=[{"name":"x","mountPath":"/var/run/prometheus-universal-exporter/target-auth/"}]`}, "which the chart already mounts as targetAuth.mountPath"},
+		"an extra mount over the target credential's slash":  {[]string{"--set", "targetAuth.enabled=true", "--set", "targetAuth.secretName=s", "--set", "targetAuth.mountPath=/secrets/target/", "--set-json", `extraVolumeMounts=[{"name":"x","mountPath":"/secrets/target"}]`}, "which the chart already mounts as targetAuth.mountPath"},
+		"an extra mount over the exporter credential":        {[]string{"--set", "webAuth.enabled=true", "--set", "webAuth.secretName=s", "--set-json", `extraVolumeMounts=[{"name":"x","mountPath":"/var/run/prometheus-universal-exporter/web-auth"}]`}, "which the chart already mounts as webAuth.mountPath"},
+		"an extra mount over the configuration with a slash": {[]string{"--set-json", `extraVolumeMounts=[{"name":"x","mountPath":"/etc/prometheus-universal-exporter/"}]`}, "which the chart already mounts as the configuration directory"},
+		"two extra mounts at one path":                       {[]string{"--set-json", `extraVolumeMounts=[{"name":"x","mountPath":"/data"},{"name":"y","mountPath":"/data/"}]`}, `extraVolumeMounts uses mountPath "/data/" twice`},
 	} {
 		t.Run(name, func(t *testing.T) {
 			out, ok := helmTemplate(t, helm, chartDir, tc.args...)
@@ -631,5 +720,324 @@ func TestChartProbeMonitorsPresentTheExporterCredential(t *testing.T) {
 		if child(ep, "basicAuth") != nil {
 			t.Errorf("%s presents a credential without webAuth", name)
 		}
+	}
+}
+
+// chartWithNotesAsAManifest copies the chart and has the copy render
+// NOTES.txt as a manifest, templates/notes.yaml, since helm template does not
+// render the notes. It returns the copy's directory.
+func chartWithNotesAsAManifest(t *testing.T) string {
+	t.Helper()
+	dir := filepath.Join(t.TempDir(), "chart")
+	if err := os.CopyFS(dir, os.DirFS(chartDir)); err != nil {
+		t.Fatal(err)
+	}
+	notes, err := os.ReadFile(filepath.Join(dir, "templates", "NOTES.txt"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(filepath.Join(dir, "templates", "NOTES.txt")); err != nil {
+		t.Fatal(err)
+	}
+	wrapped := "{{- define \"test.notes\" -}}\n" + string(notes) + "\n{{- end }}\n"
+	if err := os.WriteFile(filepath.Join(dir, "templates", "_notes.tpl"), []byte(wrapped), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "templates", "notes.yaml"), []byte("kind: Notes\nnotes: {{ include \"test.notes\" . | toJson }}\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return dir
+}
+
+// A budget whose minAvailable is every replica allows no voluntary eviction
+// either, as maxUnavailable: 0 does: a node drain waits for ever. The notes
+// warn when minAvailable, a count or a percentage rounded up as Kubernetes
+// rounds it, reaches replicaCount. With autoscaling the replica count is not
+// the chart's to know, so only 100%, which blocks at any count, is warned
+// about.
+func TestChartNotesWarnAboutABudgetOfEveryReplica(t *testing.T) {
+	helm := requireHelm(t)
+	dir := chartWithNotesAsAManifest(t)
+	for name, tc := range map[string]struct {
+		args   []string
+		warned bool
+	}{
+		"one of one replica":           {[]string{"--set", "podDisruptionBudget.minAvailable=1"}, true},
+		"one of two replicas":          {[]string{"--set", "podDisruptionBudget.minAvailable=1", "--set", "replicaCount=2"}, false},
+		"two of two replicas":          {[]string{"--set", "podDisruptionBudget.minAvailable=2", "--set", "replicaCount=2"}, true},
+		"three of two replicas":        {[]string{"--set", "podDisruptionBudget.minAvailable=3", "--set", "replicaCount=2"}, true},
+		"none of one replica":          {[]string{"--set", "podDisruptionBudget.minAvailable=0"}, false},
+		"half of one replica":          {[]string{"--set-string", "podDisruptionBudget.minAvailable=50%"}, true},
+		"half of two replicas":         {[]string{"--set-string", "podDisruptionBudget.minAvailable=50%", "--set", "replicaCount=2"}, false},
+		"67% of three replicas":        {[]string{"--set-string", "podDisruptionBudget.minAvailable=67%", "--set", "replicaCount=3"}, true},
+		"66% of three replicas":        {[]string{"--set-string", "podDisruptionBudget.minAvailable=66%", "--set", "replicaCount=3"}, false},
+		"all of three replicas":        {[]string{"--set-string", "podDisruptionBudget.minAvailable=100%", "--set", "replicaCount=3"}, true},
+		"one with autoscaling":         {[]string{"--set", "podDisruptionBudget.minAvailable=1", "--set", "autoscaling.enabled=true"}, false},
+		"all with autoscaling":         {[]string{"--set-string", "podDisruptionBudget.minAvailable=100%", "--set", "autoscaling.enabled=true"}, true},
+		"one of no replicas":           {[]string{"--set", "podDisruptionBudget.minAvailable=1", "--set", "replicaCount=0"}, false},
+		"the default budget":           {nil, false},
+		"one unavailable of one":       {[]string{"--set", "podDisruptionBudget.maxUnavailable=1"}, false},
+		"a budget that is not enabled": {[]string{"--set", "podDisruptionBudget.enabled=false", "--set", "podDisruptionBudget.minAvailable=1"}, false},
+	} {
+		t.Run(name, func(t *testing.T) {
+			args := append([]string{"--set", "podDisruptionBudget.enabled=true", "--show-only", "templates/notes.yaml"}, tc.args...)
+			out, ok := helmTemplate(t, helm, dir, args...)
+			if !ok {
+				t.Fatalf("rendering failed:\n%s", out)
+			}
+			if warned := strings.Contains(out, "WARNING: podDisruptionBudget.minAvailable is") && strings.Contains(out, "leaves no pod that may be evicted"); warned != tc.warned {
+				t.Errorf("warned %v, want %v:\n%s", warned, tc.warned, out)
+			}
+		})
+	}
+}
+
+// probeMonitors renders the chart with args and returns each probe monitor,
+// by the name its monitors entry gives it, with its one endpoint.
+func probeMonitors(t *testing.T, helm string, args ...string) (monitors, endpoints map[string]*yaml.Node) {
+	t.Helper()
+	monitors, endpoints = map[string]*yaml.Node{}, map[string]*yaml.Node{}
+	for _, doc := range renderedDocuments(t, helm, args...) {
+		kind := child(doc, "kind").Value
+		if kind != "ServiceMonitor" && kind != "PodMonitor" {
+			continue
+		}
+		name := strings.TrimPrefix(path(doc, "metadata", "name").Value, "test-prometheus-universal-exporter-")
+		if name == "self" || name == "static-targets" {
+			continue
+		}
+		monitors[name] = doc
+		list := "endpoints"
+		if kind == "PodMonitor" {
+			list = "podMetricsEndpoints"
+		}
+		if all := path(doc, "spec", list); all == nil || len(all.Content) != 1 {
+			t.Fatalf("%s %s does not have one endpoint", kind, name)
+		}
+		endpoints[name] = path(doc, "spec", list, "0")
+	}
+	return monitors, endpoints
+}
+
+// A probe monitor reaches the targets its entry describes: on the port the
+// entry names, where it rendered http whatever the targets called theirs, so
+// a gRPC server's grpc port could not be probed; and in the namespaces its
+// namespaceSelector gives, where it rendered none, so only targets in the
+// monitor's own namespace were found. Without either, the port is http and
+// no namespaceSelector is rendered, as before.
+func TestChartProbeMonitorsTakeAPortAndNamespaces(t *testing.T) {
+	helm := requireHelm(t)
+	monitors, endpoints := probeMonitors(t, helm, "--set-json", `monitors=[
+		{"name":"plain","enabled":true,"type":"service","collector":"example"},
+		{"name":"plain-pods","enabled":true,"type":"pod","collector":"example"},
+		{"name":"grpc","enabled":true,"type":"service","collector":"example","port":"grpc","namespaceSelector":{"matchNames":["payments","search"]}},
+		{"name":"everywhere","enabled":true,"type":"pod","collector":"example","port":"metrics","namespaceSelector":{"any":true}},
+		{"name":"odd-port","enabled":true,"type":"service","collector":"example","port":"on"}]`)
+	if len(monitors) != 5 {
+		t.Fatalf("%d probe monitors rendered, want 5", len(monitors))
+	}
+	for name, want := range map[string]string{"plain": "http", "plain-pods": "http", "grpc": "grpc", "everywhere": "metrics", "odd-port": "on"} {
+		// The tag too: an unquoted on would be a boolean, not a port's name.
+		if port := child(endpoints[name], "port"); port == nil || port.Value != want || port.Tag != "!!str" {
+			t.Errorf("%s: the endpoint's port is %+v, want the string %q", name, port, want)
+		}
+		if got := child(endpoints[name], "path"); got == nil || got.Value != "/probe" {
+			t.Errorf("%s: the endpoint does not scrape /probe", name)
+		}
+	}
+	for _, name := range []string{"plain", "plain-pods", "odd-port"} {
+		if selector := path(monitors[name], "spec", "namespaceSelector"); selector != nil {
+			t.Errorf("%s: a namespaceSelector is rendered without one in the values", name)
+		}
+	}
+	names := path(monitors["grpc"], "spec", "namespaceSelector", "matchNames")
+	if names == nil || len(names.Content) != 2 || names.Content[0].Value != "payments" || names.Content[1].Value != "search" {
+		t.Errorf("grpc: spec.namespaceSelector.matchNames is not [payments search]")
+	}
+	if selector := path(monitors["grpc"], "spec", "selector", "matchLabels"); selector == nil {
+		t.Errorf("grpc: the namespaceSelector displaced spec.selector")
+	}
+	if all := path(monitors["everywhere"], "spec", "namespaceSelector", "any"); all == nil || all.Value != "true" || all.Tag != "!!bool" {
+		t.Errorf("everywhere: spec.namespaceSelector.any is not true")
+	}
+}
+
+// A monitor's port is a port's name, as the Prometheus Operator's port field
+// is, and the chart rendered whatever string it was given: port: "9115"
+// became a name no port has, so the monitor found no target and nothing said
+// why. Now the values schema holds it to the grammar of the names it can
+// match — a Service port's for type service, a DNS label of up to 63
+// characters, and a container port's for type pod, up to 15 with no two
+// hyphens in a row — with at least one letter in either, so a number is
+// refused whether it is written as one or as a string.
+func TestChartProbeMonitorsTakeAPortNameAndRefuseANumber(t *testing.T) {
+	helm := requireHelm(t)
+	monitor := func(kind, port string) string {
+		return `monitors=[{"name":"apps","enabled":true,"type":"` + kind + `","collector":"example","port":` + port + `}]`
+	}
+	sixteen, sixtyFour := strings.Repeat("a", 16), strings.Repeat("a", 64)
+	for _, kind := range []string{"service", "pod"} {
+		accepted := []string{"http", "grpc", "metrics-2", "a", "9-a", strings.Repeat("a", 15)}
+		refused := []string{"9115", `"9115"`, `"Http"`, `"-http"`, `"http-"`, `""`, `"1-2"`, `"my_port"`, `"` + sixtyFour + `"`, "true"}
+		if kind == "pod" {
+			refused = append(refused, `"a--b"`, `"`+sixteen+`"`)
+		} else {
+			// A Service port's name is a DNS label, which may be longer than
+			// a container port's and hold two hyphens in a row.
+			accepted = append(accepted, "a--b", sixteen, strings.Repeat("a", 63))
+		}
+		for _, port := range accepted {
+			_, endpoints := probeMonitors(t, helm, "--set-json", monitor(kind, `"`+port+`"`))
+			if got := child(endpoints["apps"], "port"); got == nil || got.Value != port || got.Tag != "!!str" {
+				t.Errorf("type %s, port %q: the endpoint's port is %+v, want that name as a string", kind, port, got)
+			}
+		}
+		for _, port := range refused {
+			out, ok := helmTemplate(t, helm, chartDir, "--set-json", monitor(kind, port))
+			if ok || !namesInHelmError(out, "monitors.0.port") {
+				t.Errorf("type %s, port %s: ok=%v, want the values schema to refuse it naming monitors.0.port:\n%s", kind, port, ok, out)
+			}
+		}
+	}
+}
+
+// The templates refuse such a port themselves, naming the monitor and saying
+// what to give instead, as well as the values schema does: with the schema
+// skipped a number was rendered as a name, quoted, and anything else as it
+// was written. A number is told to be one, since the fix is to name the port
+// on the Service or the pod; a null port is none, and the default.
+func TestChartMonitorTemplatesRefuseAPortThatIsNoName(t *testing.T) {
+	helm := requireHelm(t)
+	if out, _ := helmTemplate(t, helm, chartDir, "--skip-schema-validation"); strings.Contains(out, "unknown flag") {
+		t.Skip("this helm cannot skip the values schema")
+	}
+	const (
+		serviceNumber = `monitors entry "apps" has port 9115, a port number; a monitor of type service takes the name of a Service port, so name the port in the selected Services' spec.ports and set port to that name`
+		podNumber     = `monitors entry "apps" has port 9115, a port number; a monitor of type pod takes the name of a container port, so name the port in the selected pods' spec.containers[].ports and set port to that name`
+		serviceName   = `; a monitor of type service takes the name of a Service port: 1 to 63 lower-case letters, digits and hyphens, at least one of them a letter, with no hyphen first or last`
+		podName       = `; a monitor of type pod takes the name of a container port: 1 to 15 lower-case letters, digits and hyphens, at least one of them a letter, with no hyphen first or last and no two in a row`
+	)
+	sixteen := strings.Repeat("a", 16)
+	for _, tc := range []struct {
+		kind, port, want string
+	}{
+		{"service", "9115", serviceNumber},
+		{"service", `"9115"`, serviceNumber},
+		{"pod", "9115", podNumber},
+		{"pod", `"9115"`, podNumber},
+		{"service", `"Http"`, `monitors entry "apps" has port "Http"` + serviceName},
+		{"service", `"-http"`, `has port "-http"` + serviceName},
+		{"service", `"http-"`, `has port "http-"` + serviceName},
+		{"service", `""`, `has port ""` + serviceName},
+		{"service", `"1-2"`, `has port "1-2"` + serviceName},
+		{"service", `"` + strings.Repeat("a", 64) + `"`, serviceName},
+		{"service", "true", `has port "true"` + serviceName},
+		{"pod", `"Http"`, `monitors entry "apps" has port "Http"` + podName},
+		{"pod", `"-http"`, `has port "-http"` + podName},
+		{"pod", `"http-"`, `has port "http-"` + podName},
+		{"pod", `"a--b"`, `has port "a--b"` + podName},
+		{"pod", `"` + sixteen + `"`, `has port "` + sixteen + `"` + podName},
+		{"pod", `""`, `has port ""` + podName},
+	} {
+		out, ok := helmTemplate(t, helm, chartDir, "--skip-schema-validation", "--set-json", `monitors=[{"name":"apps","enabled":true,"type":"`+tc.kind+`","collector":"example","port":`+tc.port+`}]`)
+		if ok || !strings.Contains(out, tc.want) {
+			t.Errorf("type %s, port %s: ok=%v, want an error saying %q:\n%s", tc.kind, tc.port, ok, tc.want, out)
+		}
+	}
+	for _, kind := range []string{"service", "pod"} {
+		for port, want := range map[string]string{`"grpc"`: "grpc", `"metrics-2"`: "metrics-2", `"a"`: "a", "null": "http"} {
+			_, endpoints := probeMonitors(t, helm, "--skip-schema-validation", "--set-json", `monitors=[{"name":"apps","enabled":true,"type":"`+kind+`","collector":"example","port":`+port+`}]`)
+			if got := child(endpoints["apps"], "port"); got == nil || got.Value != want || got.Tag != "!!str" {
+				t.Errorf("type %s, port %s, with the schema skipped: the endpoint's port is %+v, want %q", kind, port, got, want)
+			}
+		}
+	}
+	// An entry that is not enabled renders no monitor, so its port is not the
+	// templates' to refuse.
+	if out, ok := helmTemplate(t, helm, chartDir, "--skip-schema-validation", "--set-json", `monitors=[{"name":"apps","enabled":false,"type":"service","collector":"example","port":9115}]`); !ok {
+		t.Errorf("a monitor that is not enabled fails rendering over its port:\n%s", out)
+	}
+}
+
+// A monitor's own credential renders complete Secret selectors from its type
+// and Secret alone, the keys defaulting to token, username and password, for
+// monitors of both types.
+func TestChartProbeMonitorsRenderTheirOwnCredential(t *testing.T) {
+	helm := requireHelm(t)
+	_, endpoints := probeMonitors(t, helm, "--set", "webAuth.enabled=true", "--set", "webAuth.secretName=exporter-auth", "--set-json", `monitors=[
+		{"name":"bearer","enabled":true,"type":"service","collector":"example","auth":{"enabled":true,"type":"bearer","secretName":"scrape-token"}},
+		{"name":"bearer-pods","enabled":true,"type":"pod","collector":"example","auth":{"enabled":true,"type":"bearer","secretName":"scrape-token","secretKey":"jwt","optional":true}},
+		{"name":"basic","enabled":true,"type":"service","collector":"example","auth":{"enabled":true,"type":"basic","secretName":"scrape-user","usernameKey":"user"}},
+		{"name":"basic-pods","enabled":true,"type":"pod","collector":"example","auth":{"enabled":true,"type":"basic","secretName":"scrape-user"}}]`)
+	for name, want := range map[string]map[string]string{
+		"bearer":      {"authorization.type": "Bearer", "authorization.credentials.name": "scrape-token", "authorization.credentials.key": "token", "authorization.credentials.optional": "false"},
+		"bearer-pods": {"authorization.type": "Bearer", "authorization.credentials.name": "scrape-token", "authorization.credentials.key": "jwt", "authorization.credentials.optional": "true"},
+		"basic":       {"basicAuth.username.name": "scrape-user", "basicAuth.username.key": "user", "basicAuth.password.name": "scrape-user", "basicAuth.password.key": "password", "basicAuth.password.optional": "false"},
+		"basic-pods":  {"basicAuth.username.name": "scrape-user", "basicAuth.username.key": "username", "basicAuth.password.name": "scrape-user", "basicAuth.password.key": "password"},
+	} {
+		endpoint := endpoints[name]
+		if endpoint == nil {
+			t.Errorf("%s is not rendered", name)
+			continue
+		}
+		for field, value := range want {
+			if got := path(endpoint, strings.Split(field, ".")...); got == nil || got.Value != value {
+				t.Errorf("%s: %s is %+v, want %q", name, field, got, value)
+			}
+		}
+		// One credential, the entry's own: not the exporter's beside it.
+		if other := map[bool]string{true: "basicAuth", false: "authorization"}[strings.HasPrefix(name, "bearer")]; child(endpoint, other) != nil {
+			t.Errorf("%s also renders %s", name, other)
+		}
+		if relabelings := child(endpoint, "relabelings"); relabelings == nil || len(relabelings.Content) != 3 {
+			t.Errorf("%s: the credential displaced the endpoint's relabelings", name)
+		}
+	}
+}
+
+// The templates refuse an enabled auth without a type or a Secret themselves,
+// naming the monitor, as well as the values schema does: with the schema
+// skipped, such an entry rendered no credential at all, or the exporter's
+// own in place of the entry's, or a selector naming no Secret.
+func TestChartMonitorTemplatesRefuseAnIncompleteCredential(t *testing.T) {
+	helm := requireHelm(t)
+	if out, _ := helmTemplate(t, helm, chartDir, "--skip-schema-validation"); strings.Contains(out, "unknown flag") {
+		t.Skip("this helm cannot skip the values schema")
+	}
+	for name, tc := range map[string]struct {
+		monitor, want string
+	}{
+		"a service monitor without a type":   {`{"name":"apps","enabled":true,"type":"service","collector":"example","auth":{"enabled":true,"secretName":"token"}}`, `monitors entry "apps" enables auth without a type; set its auth.type to bearer or basic`},
+		"a pod monitor without a type":       {`{"name":"pods","enabled":true,"type":"pod","collector":"example","auth":{"enabled":true,"secretName":"token"}}`, `monitors entry "pods" enables auth without a type`},
+		"a service monitor of an odd type":   {`{"name":"apps","enabled":true,"type":"service","collector":"example","auth":{"enabled":true,"type":"digest","secretName":"token"}}`, `monitors entry "apps" enables auth without a type`},
+		"a service monitor without a Secret": {`{"name":"apps","enabled":true,"type":"service","collector":"example","auth":{"enabled":true,"type":"bearer"}}`, `monitors entry "apps" enables auth without a Secret; set its auth.secretName to the Secret holding the bearer credential`},
+		"a pod monitor of an empty Secret":   {`{"name":"pods","enabled":true,"type":"pod","collector":"example","auth":{"enabled":true,"type":"basic","secretName":""}}`, `monitors entry "pods" enables auth without a Secret; set its auth.secretName to the Secret holding the basic credential`},
+	} {
+		t.Run(name, func(t *testing.T) {
+			// With webAuth too: the exporter's credential must not stand in
+			// for the one the entry asked for.
+			out, ok := helmTemplate(t, helm, chartDir, "--skip-schema-validation", "--set", "webAuth.enabled=true", "--set", "webAuth.secretName=exporter-auth", "--set-json", "monitors=["+tc.monitor+"]")
+			if ok || !strings.Contains(out, tc.want) {
+				t.Fatalf("ok=%v, want an error saying %q:\n%s", ok, tc.want, out)
+			}
+		})
+	}
+}
+
+// The static targets monitor's scrape timeout may not be longer than its
+// interval either, while the monitor is rendered.
+func TestChartRefusesAStaticTargetsMonitorTimeoutOverItsInterval(t *testing.T) {
+	helm := requireHelm(t)
+	targets := staticTargetsValues(t, "")
+	timings := []string{"--set", "staticTargets.monitor.interval=10s", "--set", "staticTargets.monitor.scrapeTimeout=11s"}
+	out, ok := helmTemplate(t, helm, chartDir, append([]string{"-f", targets, "--set", "staticTargets.monitor.enabled=true"}, timings...)...)
+	if want := "staticTargets.monitor has scrapeTimeout 11s, longer than its interval 10s"; ok || !strings.Contains(out, want) {
+		t.Errorf("ok=%v, want an error saying %q:\n%s", ok, want, out)
+	}
+	if out, ok := helmTemplate(t, helm, chartDir, append([]string{"-f", targets}, timings...)...); !ok {
+		t.Errorf("the timings of a static targets monitor that is off fail rendering:\n%s", out)
+	}
+	if out, ok := helmTemplate(t, helm, chartDir, "-f", targets, "--set", "staticTargets.monitor.enabled=true", "--set", "staticTargets.monitor.interval=10s", "--set", "staticTargets.monitor.scrapeTimeout=10s"); !ok {
+		t.Errorf("a scrape timeout equal to the interval fails rendering:\n%s", out)
 	}
 }

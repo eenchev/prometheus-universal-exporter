@@ -65,7 +65,7 @@ The launcher blocks `socket`, `ssl`, `subprocess`, `ctypes`, `multiprocessing`, 
 | `json`, `yaml` | The document: dicts, lists, strings, numbers, booleans and `None`. |
 | `graphite` | The [series document](GRAPHITE.md#the-series-document), `{"series": [...]}`. |
 | `csv` | A list of rows: a dict per row, by header, or with `response.csv.header: false` a list of the row's fields. |
-| `prometheus` | `{"metrics": [...]}`, a dict per series with `name`, `type`, `help`, `labels` and `value` — or, for a histogram, `buckets` (each `{"le": ..., "count": ...}`, the `+Inf` bucket as `float("inf")`), `sum` and `count`, and for a summary `quantiles` (each `{"quantile": ..., "value": ...}`), `sum` and `count` — and `timestamp`, in milliseconds, when the series has one. |
+| `prometheus` | `{"metrics": [...]}`, a dict per series with `name`, `type`, `help`, `labels` and `value` — or, for a histogram, `buckets` (each `{"le": ..., "count": ...}`, the `+Inf` bucket as `float("inf")`), `sum` and `count`, and for a summary `quantiles` (each `{"quantile": ..., "value": ...}`), `sum` and `count` — and `timestamp`, in milliseconds, when the series has one. A histogram or summary the target wrote without a `_sum` or a `_count` has no `sum` or `count` key: read one with `series.get("sum")`. A histogram's `count` and the `count` of its `+Inf` bucket are each what the target wrote, and [may differ](CONFIGURATION.md#character-encodings) for a target scraped between two of its updates. A `count`, the series' or a bucket's, must stay a whole number from 0: `2.5` fails the scrape. |
 | `text`, `html`, `xml` | The body as a string; parse HTML and XML with [lxml](#parsing-html-with-lxml). |
 
 `NaN` and the infinities arrive as the floats `float("nan")` and
@@ -80,13 +80,22 @@ string such as `"12"`, or a boolean, as `1` or `0`; anything else, `None`
 included, fails the script naming the metric. A `timestamp` is milliseconds
 since the Unix epoch, and may be a float, as `time.time() * 1000` is; it is
 cut to whole milliseconds, and one beyond what 64 bits of milliseconds hold
-fails the script.
+fails the script. `name`, `type` and `help` are strings, and `None` for the
+type or the help is none given; anything else fails the script naming the
+metric and the argument, as in `metric 'jobs' help 5 is not a string`.
 
 A dict appended to `metrics` by hand, `{"name": ..., "value": ..., "labels":
 {...}}`, is checked as `metric(...)` checks its arguments: its value and
 timestamp are read the same way, `None` failing, its label values are
 written the same way, `None` leaving the label off, and a missing `type` is
-`gauge`.
+`gauge`. A name, type or help that is not a string, labels that are not a
+mapping, and an entry of `metrics` that is not a dict fail the scrape the same
+way, naming the metric and what is wrong with it — `metric "jobs" labels are
+an array of 1 item, not a mapping of label names to values`.
+
+`response.text`, `response.body` and, where the decoder gives a script the
+body as text, `data` are one string, not three copies: a large response costs
+its size once to hand to a script.
 
 ## How scripts run
 
@@ -101,15 +110,31 @@ start once and then serves scrape after scrape.
   such as an attribute set on an imported module, lasts for the worker's life.
   A changed script, after a reload, gets new workers.
 - **Timeouts.** `limits.script_timeout` (100 ms by default) bounds running the
-  script, not starting the interpreter. A script that overruns fails the scrape
-  with a timeout error, and its worker is killed; the next scrape starts another.
+  script: its clock starts when the worker has read the response and is about
+  to run the script. It does not count starting the interpreter, nor handing
+  the worker the response, which takes longer the larger the response is — a
+  one-line script reading a 10 MiB body does not time out for the body's size.
+  A script that overruns fails the scrape with a timeout error,
+  `python transform timed out after 100ms`, and its worker is killed; the next
+  scrape starts another. Handing the response over is bounded by
+  [the probe's deadline](CONFIGURATION.md#probe-deadlines), as the whole probe
+  is, and a worker that has not taken a request after 30 seconds is given up
+  on. When the probe's deadline, not `script_timeout`, is what ends a script,
+  the error says that — `python transform was stopped after 1.2s because its
+  probe or scrape ran out of time, not because of limits.script_timeout (30s)`
+  — so the limit to raise is the probe's, and the run is counted with
+  the outcome `deadline`, not `timeout`.
 - **Declared libraries are preloaded.** The libraries in `libraries` are
   imported when the worker starts, so their import time is not counted against
   the script, and a library that itself needs a module the sandbox blocks, such
   as `threading`, still loads.
 - **Errors.** A script that raises, calls `fail(...)` or `sys.exit()` fails that
   scrape with the Python error; the worker carries on. A worker that crashes, or
-  answers with more than `limits.max_output_bytes`, is replaced. The error is
+  answers with more than `limits.max_output_bytes`, is replaced. A worker that
+  died while it sat idle — killed by the kernel for memory, or by a signal a
+  script armed and left behind, such as `signal.alarm` — fails no scrape: it
+  is found dead when it is next taken, counted as a `crash`, and another runs
+  the script. The error is
   the traceback of your script alone — its five innermost frames, so the
   failing line is always there, each with the line of the script it ran,
   then the exception; the worker's own frames, `metric(...)`'s and
@@ -131,8 +156,17 @@ start once and then serves scrape after scrape.
   `--log.level=debug` shows it while a script is being written; the rest is
   dropped, and counts against `limits.max_output_bytes` no further.
 - **Memory.** `limits.max_script_memory`, such as `256MiB`, bounds the address
-  space of each of the collector's workers — the interpreter and its libraries
-  included — through `RLIMIT_AS`, set after the libraries are loaded. A script
+  space of each of the collector's workers through `RLIMIT_AS`, set after the
+  libraries are loaded. Everything the worker's process has mapped counts
+  against it: the interpreter itself (about 17 MiB of address space for
+  Python 3.12 before any library), the libraries preloaded from
+  `libraries`, and what the script allocates — so a script has the limit
+  less the interpreter and its libraries. Workers run with one malloc arena
+  (`MALLOC_ARENA_MAX=1` in their environment): glibc would otherwise reserve
+  64 MiB of address space for the worker's second thread, the one that
+  watches the exporter, and that reservation would be taken from the limit
+  though nothing uses it. An exporter started with `MALLOC_ARENA_MAX` set
+  passes its own value on instead. A script
   that needs more fails the scrape with `MemoryError: the script ran out of
   memory under limits.max_script_memory`, and the worker carries on. A
   library written in C, such as lxml, that cannot allocate may end the
@@ -154,7 +188,13 @@ start once and then serves scrape after scrape.
   — checked every minute, so a collector nobody scrapes any more does not keep
   its interpreters. A reload that changes or removes a script stops its idle
   workers at once, and a busy one when its run ends.
-  Workers exit with the exporter.
+  Workers exit with the exporter. An idle worker exits when the exporter's end
+  of its request pipe closes, however the exporter ended. A worker busy in a
+  script is not reading that pipe, and an exporter that was killed stops
+  nobody, so every worker also watches its parent process, once a second, and
+  ends within about that second of the exporter being gone, even in the middle
+  of a script that would never have returned. The watch keeps running through
+  a script that uses all of `limits.max_script_memory`.
 - **Metrics.** With `web.self_metrics.verbose`, the exporter publishes each
   collector's workers by state (starting, idle, busy), how many started or
   failed to, why they stopped, and how script runs ended, and the same for
@@ -236,8 +276,18 @@ A pre-script of a `prometheus` transform gets `{"metrics": [...]}`, [as above](#
 and must leave `data` in the same shape: it may drop series, change their
 values and labels, or add series, which the transform's rules then read as
 they read the exposition. A series without a `type` is `untyped`; a histogram
-needs `buckets`, `sum` and `count`, and a summary `quantiles`, `sum` and
-`count`. Anything else fails the pre-script, naming the series.
+has `buckets`, and a summary `quantiles`. A histogram or summary left without
+`sum` or `count`, or with `None` for it, is exported without a `_sum` or a
+`_count`, as one the target wrote without it, and a histogram's count is then
+its `+Inf` bucket's. A histogram is checked as one read from the target is:
+no bound, nor a summary's quantile, may appear twice, which fails the
+pre-script, naming the series. Its `count` and the `count` of its `+Inf`
+bucket are read back as the script left them, each exported as it is: a
+script that changes one of the two changes the other as well, or leaves a
+histogram whose two numbers differ, which the text format writes as they are
+and [OpenMetrics](CONFIGURATION.md#openmetrics) as `unknown` families. One
+left with neither is exported with the buckets it has, without a `+Inf`
+bucket and without a `_count`.
 
 A CSV row a pre-script changed may hold numbers and `None`: a label read from
 a number is written as `metric(...)` writes one, `1234567` as `1234567`, and

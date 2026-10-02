@@ -13,9 +13,9 @@ import (
 	"github.com/eenchev/prometheus-universal-exporter/internal/model"
 )
 
-// scrapeTarget scrapes one static target with the configuration in force.
-func (s *Server) scrapeTarget(ctx context.Context, target model.StaticTarget) {
-	cfg := s.manager.Get()
+// scrapeTarget scrapes one static target with cfg, the configuration that was
+// in force together with it (config.Manager's InForce).
+func (s *Server) scrapeTarget(ctx context.Context, cfg *model.Config, target model.StaticTarget) {
 	collector := model.CollectorByName(cfg, target.Collector)
 	if collector == nil {
 		s.logger.Error("static target references unknown collector", "target", target.Name, "collector", target.Collector)
@@ -82,10 +82,13 @@ func (s *Server) scrapeStaticTarget(ctx context.Context, target model.StaticTarg
 		health := staticTargetHealthMetrics(target, c, up, elapsed.Seconds(), lastSuccess).Metrics
 		published := model.MetricSet{Metrics: make([]model.Metric, 0, len(result.Metrics)+len(health))}
 		published.Metrics = append(append(published.Metrics, result.Metrics...), health...)
+		// Over OTLP the result is as of when it came from the target, the
+		// health metrics after it as of now (scrapeTime).
+		at := scraped(result, c, fetched)
 		if model.StaleIfError(c) <= 0 || len(result.Metrics) == 0 {
 			fetched = time.Time{}
 		}
-		s.publishStaticResult(target, identity, published, fetched)
+		s.publishStaticResult(target, identity, published, fetched, at)
 	}
 	// cacheKey is set once the request is known; a failure before it has no
 	// cached result to fall back on.
@@ -175,7 +178,7 @@ func (s *Server) scrapeStaticTarget(ctx context.Context, target model.StaticTarg
 	count(func(st *serverStats) { st.success++ })
 	if !trip.carriedOn {
 		result = withTargetLabels(trip.answer, target.Labels)
-		fetched = time.Now()
+		fetched = trip.fetched
 	}
 	finish(1)
 }
@@ -190,9 +193,12 @@ func (s *Server) abortedByShutdown(target model.StaticTarget, c *model.Collector
 // staticTargetHealthMetrics reports the outcome of one static target scrape.
 // Without it a failing target would simply be absent from the endpoint and the
 // OTLP stream, which cannot be told from a target that was never configured.
-// lastSuccess is when the target was last scraped successfully, zero if never:
-// the endpoint keeps serving a target's last values while its scrapes are
-// skipped or failing, and the timestamp is what tells how old they are.
+// lastSuccess is when the target was last scraped successfully, zero if
+// never. It is what tells how long a target has given nothing new, whatever
+// the endpoint then serves of it: a failed scrape leaves only these health
+// series, or, with cache.stale_if_error, the last good result marked stale;
+// a turn that publishes nothing — one skipped, or cut short by a shutdown —
+// leaves the last result, values and all, as it was.
 func staticTargetHealthMetrics(target model.StaticTarget, c *model.Collector, up, duration float64, lastSuccess time.Time) model.MetricSet {
 	labels := map[string]string{"collector": c.Name, "static_target": target.Name, "target": fetch.DisplayTarget(c, target.Target)}
 	for name, value := range target.Labels {
@@ -209,7 +215,9 @@ func staticTargetHealthMetrics(target model.StaticTarget, c *model.Collector, up
 
 // withTargetLabels adds a target's configured labels to every metric it
 // produced. A label the collector already extracted is never overwritten, so
-// declared metric labels keep precedence over target-wide ones. The cached
+// declared metric labels keep precedence over target-wide ones; nor is the
+// label a histogram's buckets or a summary's quantiles carry, le or quantile,
+// which such a series has on every sample that can hold it. The cached
 // metric set stays unlabelled, which is what lets a static target scrape and an
 // equivalent probe share cache entries.
 func withTargetLabels(set model.MetricSet, labels map[string]string) model.MetricSet {
@@ -221,8 +229,9 @@ func withTargetLabels(set model.MetricSet, labels map[string]string) model.Metri
 		if out.Metrics[i].Labels == nil {
 			out.Metrics[i].Labels = map[string]string{}
 		}
+		own := model.SeriesOwnLabel(out.Metrics[i])
 		for name, value := range labels {
-			if _, exists := out.Metrics[i].Labels[name]; !exists {
+			if _, exists := out.Metrics[i].Labels[name]; !exists && name != own {
 				out.Metrics[i].Labels[name] = value
 			}
 		}

@@ -164,7 +164,7 @@ func TestTransformSettingsWhereTheyApply(t *testing.T) {
 		return c
 	}
 	jq := func(t model.TransformConfig) model.Collector {
-		c := testutil.Collector("checked", "text")
+		c := testutil.Collector("checked", "json")
 		t.Type = "jq"
 		c.Transform = t
 		c.Metrics[0].Expression = ".v"

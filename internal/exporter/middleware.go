@@ -3,10 +3,13 @@ package exporter
 import (
 	"compress/gzip"
 	"crypto/subtle"
+	"errors"
 	"net/http"
+	"os"
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/eenchev/prometheus-universal-exporter/internal/config"
 )
@@ -112,6 +115,75 @@ func compressed(next http.HandlerFunc) http.HandlerFunc {
 		}()
 		next(cw, r)
 	}
+}
+
+// AnswerWriteTimeout is how long a client has to read an answer, from the
+// moment the exporter starts writing it.
+//
+// Nothing else bounds the write. An answer can be megabytes — a passed-through
+// exposition, the static targets, the verbose self-metrics, a debug report —
+// and a client that asks for one and stops reading would hold its handler,
+// and the rendered answer with it, for as long as it kept the connection
+// open: the server has no write timeout (lifecycle.go), and a probe's budget
+// ends with the trip to the target. Prometheus reads an answer as fast as the
+// network carries it, and gives up at its scrape timeout in any case.
+const AnswerWriteTimeout = 30 * time.Second
+
+// answerWriter sets the connection's write deadline when the first byte of an
+// answer is written, status line included, so the time a handler took to make
+// the answer is not counted against the client reading it.
+type answerWriter struct {
+	http.ResponseWriter
+	timeout time.Duration
+	started bool
+	// dropped is called once, when a write fails because the deadline
+	// passed.
+	dropped func()
+	failed  bool
+}
+
+func (w *answerWriter) start() {
+	if w.started {
+		return
+	}
+	w.started = true
+	// A writer without a connection, as a test's recorder is, has no
+	// deadline to set and nothing that could block.
+	_ = http.NewResponseController(w.ResponseWriter).SetWriteDeadline(time.Now().Add(w.timeout))
+}
+
+func (w *answerWriter) WriteHeader(code int) {
+	w.start()
+	w.ResponseWriter.WriteHeader(code)
+}
+
+func (w *answerWriter) Write(p []byte) (int, error) {
+	w.start()
+	n, err := w.ResponseWriter.Write(p)
+	if err != nil && !w.failed && errors.Is(err, os.ErrDeadlineExceeded) {
+		w.failed = true
+		w.dropped()
+	}
+	return n, err
+}
+
+// Unwrap lets http.ResponseController reach the connection through this
+// writer.
+func (w *answerWriter) Unwrap() http.ResponseWriter { return w.ResponseWriter }
+
+// writeBounded gives the client of every answer next writes
+// AnswerWriteTimeout to read it. A client that has not is dropped: the write
+// fails, net/http closes the connection, which cannot carry another answer
+// after half of this one, and the handler returns. It is no failure of the
+// exporter's or of a target's, so it is logged at debug level only. The
+// deadline is the answer's alone: net/http clears it before the connection's
+// next request.
+func (s *Server) writeBounded(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		next.ServeHTTP(&answerWriter{ResponseWriter: w, timeout: s.answerWriteTimeout, dropped: func() {
+			s.logger.Debug("a client did not read its answer in time; its connection is closed", "path", r.URL.Path, "remote_address", r.RemoteAddr, "write_timeout", s.answerWriteTimeout.String())
+		}}, r)
+	})
 }
 
 func (s *Server) basicAuthMiddleware(next http.HandlerFunc) http.HandlerFunc {

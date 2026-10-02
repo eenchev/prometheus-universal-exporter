@@ -133,3 +133,31 @@ func TestDockerfileBuildsTheSelectedRequestTypes(t *testing.T) {
 		}
 	}
 }
+
+// The chart README says which Python the image's interpreter is, by its base
+// image, so readers know what their scripts run on. The Dockerfile's
+// PYTHON_VERSION is updated by a workflow, in a pull request that touches
+// nothing else: this fails that pull request until the README says the same.
+func TestChartReadmeNamesTheImagesPython(t *testing.T) {
+	dockerfile, err := os.ReadFile("Dockerfile")
+	if err != nil {
+		t.Skipf("no Dockerfile to check: %v", err)
+	}
+	match := regexp.MustCompile(`(?m)^ARG PYTHON_VERSION=(3\.[0-9]+)$`).FindSubmatch(dockerfile)
+	if match == nil {
+		t.Fatal("the Dockerfile no longer pins PYTHON_VERSION as 3.MINOR")
+	}
+	if !bytes.Contains(dockerfile, []byte("\nFROM python:${PYTHON_VERSION}-slim\n")) {
+		t.Fatal("the image is no longer built on python:${PYTHON_VERSION}-slim, which the chart README names")
+	}
+	readme := readChartFile(t, "README.md")
+	named := regexp.MustCompile("`python:([0-9][0-9.]*)-slim`").FindAllStringSubmatch(readme, -1)
+	if len(named) == 0 {
+		t.Fatal("the chart README no longer names the image's Python base; this test must not pass by finding nothing")
+	}
+	for _, name := range named {
+		if name[1] != string(match[1]) {
+			t.Errorf("the chart README names python:%s-slim, but the Dockerfile pins PYTHON_VERSION=%s", name[1], match[1])
+		}
+	}
+}

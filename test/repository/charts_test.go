@@ -1,12 +1,17 @@
 package repository
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"sort"
 	"strings"
 	"testing"
+
+	"github.com/eenchev/prometheus-universal-exporter/internal/config"
+	"github.com/eenchev/prometheus-universal-exporter/internal/testutil"
 )
 
 // A Helm template file may render more than one Kubernetes manifest: either
@@ -409,5 +414,178 @@ func TestTheHorizontalPodAutoscaler(t *testing.T) {
 	}
 	if !strings.Contains(readChartFile(t, "values.yaml"), "\nautoscaling:\n  enabled: false\n") {
 		t.Error("autoscaling must be disabled by default")
+	}
+}
+
+// tableFlags returns the exporter flags named in the rows of the first
+// Markdown table after heading in text, a row being a line that starts with
+// a value in backquotes.
+func tableFlags(t *testing.T, name, text, heading string) map[string]bool {
+	t.Helper()
+	_, section, found := strings.Cut(text, heading)
+	if !found {
+		t.Fatalf("%s has no %q", name, strings.TrimSpace(heading))
+	}
+	flags := map[string]bool{}
+	inTable := false
+	for _, line := range strings.Split(section, "\n") {
+		if !strings.HasPrefix(line, "|") {
+			if inTable {
+				break
+			}
+			continue
+		}
+		inTable = true
+		if strings.HasPrefix(line, "| `") {
+			for _, flag := range flagReference.FindAllString(line, -1) {
+				flags[flag] = true
+			}
+		}
+	}
+	if len(flags) == 0 {
+		t.Fatalf("%s: the table after %q names no flags", name, strings.TrimSpace(heading))
+	}
+	return flags
+}
+
+// The chart README says every flag a serving exporter takes has a value, and
+// lists them in a table; the specification holds the same table as the
+// requirement. Both left flags out, --web.static-targets-path and
+// --runtime.memory-limit-ratio among them, and the README's list of the
+// one-shot flags, which have no value, left out --static-targets-file-schema.
+// The tables name exactly the flags the Deployment renders, and the one-shot
+// sentence every other flag the exporter defines, so a flag added to the
+// exporter or to the chart cannot be left out of either again.
+func TestChartFlagTablesListEveryFlag(t *testing.T) {
+	var flags []string
+	for _, match := range regexp.MustCompile(`(?m)^  -([a-z.-]+)`).FindAllStringSubmatch(helpText(t), -1) {
+		flags = append(flags, "--"+match[1])
+	}
+	if len(flags) == 0 {
+		t.Fatal("the exporter lists no flags")
+	}
+	rendered := map[string]bool{}
+	for _, line := range argLines(readChartFile(t, "templates/deployment.yaml")) {
+		for _, match := range flagReference.FindAllString(line, -1) {
+			rendered[match] = true
+		}
+	}
+	readme := readChartFile(t, "README.md")
+	tables := map[string]map[string]bool{
+		"the chart README":            tableFlags(t, "the chart README", readme, "\n### Exporter flags\n"),
+		"docs/SPECIFICATION-CHART.md": tableFlags(t, "docs/SPECIFICATION-CHART.md", read(t, "docs/SPECIFICATION-CHART.md"), "\n### 33.10 Helm values\n"),
+	}
+	oneShot := ""
+	for _, line := range strings.Split(readme, "\n") {
+		if strings.HasPrefix(line, "The one-shot flags") {
+			oneShot = line
+		}
+	}
+	if oneShot == "" {
+		t.Fatal("the chart README no longer has its sentence listing the one-shot flags")
+	}
+	for _, flag := range flags {
+		for name, table := range tables {
+			if rendered[flag] && !table[flag] {
+				t.Errorf("the chart renders %s from a value, but the flag table of %s does not list it", flag, name)
+			}
+		}
+		if !rendered[flag] && !strings.Contains(oneShot, "`"+flag+"`") {
+			t.Errorf("the exporter has the one-shot flag %s, which the chart README's list of them leaves out", flag)
+		}
+	}
+	for name, table := range tables {
+		for flag := range table {
+			if !rendered[flag] {
+				t.Errorf("the flag table of %s lists %s, which the chart does not render", name, flag)
+			}
+		}
+	}
+}
+
+// A monitor is named after its entry's name, which the values schema
+// requires, so the monitor templates carry no other name for one: the
+// fallback made of the entry's index could never render, and the
+// specification called the name optional beside the rule requiring it.
+func TestMonitorTemplatesNameAMonitorAfterItsEntry(t *testing.T) {
+	for _, name := range []string{"templates/servicemonitor.yaml", "templates/podmonitor.yaml"} {
+		template := readChartFile(t, name)
+		if !strings.Contains(template, `  name: {{ include "prometheus-universal-exporter.fullname" $root }}-{{ $monitor.name }}`+"\n") {
+			t.Errorf("%s does not name a probe monitor <fullname>-<name>", name)
+		}
+		for _, fallback := range []string{"-monitor-", "$index }}{{ end }}"} {
+			if strings.Contains(template, fallback) {
+				t.Errorf("%s still holds a fallback name for a monitor without one (%q), which the schema never lets through", name, fallback)
+			}
+		}
+		// Both templates check and render the credential the same way.
+		if !strings.Contains(template, `include "prometheus-universal-exporter.monitorAuth" (list $root $monitor)`) {
+			t.Errorf("%s does not render the monitor's credential through the shared check", name)
+		}
+	}
+	var schema struct {
+		Properties struct {
+			Monitors struct {
+				Items struct {
+					Required []string `json:"required"`
+				} `json:"items"`
+			} `json:"monitors"`
+		} `json:"properties"`
+	}
+	if err := json.Unmarshal([]byte(readChartFile(t, "values.schema.json")), &schema); err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Contains(schema.Properties.Monitors.Items.Required, "name") {
+		t.Errorf("the values schema no longer requires a monitor's name: %v", schema.Properties.Monitors.Items.Required)
+	}
+	if spec := read(t, "docs/SPECIFICATION-CHART.md"); strings.Contains(spec, "unique optional resource name") {
+		t.Error("the specification still calls a monitor's name optional")
+	}
+}
+
+// The static target example in values.yaml's comments is one document, and
+// one the exporter takes: its last lines, the target's labels and otlp
+// settings, had drifted below the monitor values, where they read as a
+// comment on those and left the example above them cut short; and put back,
+// they lacked the export_via_otlp the exporter requires beside a target's
+// otlp settings.
+func TestTheStaticTargetExampleInTheValuesIsWhole(t *testing.T) {
+	values := readChartFile(t, "values.yaml")
+	_, rest, found := strings.Cut(values, "\n  # Example:\n  # data: |\n")
+	if !found {
+		t.Fatal("values.yaml no longer shows an example static target document")
+	}
+	var example strings.Builder
+	for _, line := range strings.SplitAfter(rest, "\n") {
+		text, commented := strings.CutPrefix(line, "  #   ")
+		if !commented {
+			break
+		}
+		example.WriteString(text)
+	}
+	// As the exporter reads the document, so a key it does not know, or a
+	// target it would refuse, fails here.
+	document, err := config.LoadStaticTargets(testutil.WriteIn(t, t.TempDir(), "static-targets.yaml", example.String()))
+	if err == nil {
+		err = config.ValidateStaticTargets(document)
+	}
+	if err != nil {
+		t.Fatalf("the exporter does not take the example: %v\n%s", err, example.String())
+	}
+	if len(document.Targets) != 1 {
+		t.Fatalf("the example has %d targets, want 1:\n%s", len(document.Targets), example.String())
+	}
+	target := document.Targets[0]
+	if target.Name == "" || target.Collector == "" || target.Target == "" || target.Request.Path == "" || target.Labels["region"] == "" || !target.ExportViaOTLP || target.OTLP.ServiceName == "" {
+		t.Errorf("the example's target is cut short: %+v", target)
+	}
+	// Nothing commented trails the monitor values.
+	_, after, found := strings.Cut(values, "\n    targets: []\n")
+	if !found {
+		t.Fatal("values.yaml no longer ends staticTargets.monitor with targets")
+	}
+	if strings.HasPrefix(after, "  #") {
+		line, _, _ := strings.Cut(after, "\n")
+		t.Errorf("a commented line follows the monitor values, belonging to nothing there: %q", line)
 	}
 }

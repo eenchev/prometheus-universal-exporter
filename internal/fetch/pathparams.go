@@ -113,11 +113,8 @@ func bindPathParams(path string, params map[string]string) (string, []string, er
 		if err != nil {
 			return "", nil, err
 		}
-		// "." and ".." are the two values escaping cannot make safe: both are
-		// legal in a path segment, and a server resolving them would serve a
-		// different path than the one configured.
-		if value == "." || value == ".." {
-			return "", nil, fmt.Errorf("path parameter %s must not be %q", p.Name, value)
+		if err := checkPathParamValue(p.Name, value); err != nil {
+			return "", nil, err
 		}
 		b.WriteString(path[previous:p.start])
 		b.WriteString(pathToken(i))
@@ -128,26 +125,32 @@ func bindPathParams(path string, params map[string]string) (string, []string, er
 	return b.String(), values, nil
 }
 
+// checkPathParamValue is what every path parameter's value is held to,
+// whoever gave it. "." and ".." are the two values escaping cannot make
+// safe: both are legal in a path segment, and a server resolving them would
+// serve a different path than the one configured.
+func checkPathParamValue(name, value string) error {
+	if value == "." || value == ".." {
+		return fmt.Errorf("path parameter %s must not be %q", name, value)
+	}
+	return nil
+}
+
 // pathToken marks where a bound value goes. NUL cannot occur in a configured
 // path, and path.Join leaves it alone.
 func pathToken(i int) string {
 	return "\x00" + strconv.Itoa(i) + "\x00"
 }
 
-// applyPathParams substitutes the bound values into a URL whose path still
-// carries the tokens. Each value is escaped as one path segment — a "/" in it
-// becomes %2F rather than a new segment — and the URL keeps both forms, so Go
-// sends the escaped one while Path still reads as the value.
-func applyPathParams(u *url.URL, values []string) {
-	decoded := u.Path
-	raw := u.EscapedPath()
+// applyPathParams substitutes the bound values into an escaped path that
+// still carries the tokens. Each value is escaped as one path segment — a "/"
+// in it becomes %2F rather than a new segment — whatever it holds: a % in a
+// value is a percent sign, never the start of an escape.
+func applyPathParams(raw string, values []string) string {
 	for i, value := range values {
-		token := pathToken(i)
-		decoded = strings.Replace(decoded, token, value, 1)
-		raw = strings.Replace(raw, url.PathEscape(token), url.PathEscape(value), 1)
+		raw = strings.Replace(raw, pathToken(i), url.PathEscape(value), 1)
 	}
-	u.Path = decoded
-	u.RawPath = raw
+	return raw
 }
 
 // CheckPathParams validates a probe's path parameters against the collector

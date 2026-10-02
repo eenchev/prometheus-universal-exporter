@@ -21,6 +21,26 @@ rather than merely to have been released. A test keeps the resolver's pin table
 and the Dockerfile in agreement, so a renamed build argument cannot leave a
 dependency unwatched.
 
+Go and the three Python libraries move by minor and patch versions. Python
+itself does not move to another feature release (the `3.12` of
+`PYTHON_VERSION`): your collector scripts run on that interpreter, a feature
+release removes standard-library modules and changes behaviour, and the suite
+cannot test scripts it does not have. `PYTHON_VERSION` therefore stays as it
+is — a two-component `3.12` already picks up patch rebuilds, and a
+three-component `3.12.4` moves to the newest `3.12.x` only. When a newer
+feature release is published as `python:<version>-slim`, the pull request the
+updater opens for other pins says so:
+
+```text
+Python 3.14 is available; PYTHON_VERSION stays at 3.12 until it is bumped by hand, because collector scripts run on it.
+```
+
+A newer Python alone opens no pull request; the line is in the workflow run's
+log either way. To move, change `ARG PYTHON_VERSION` in the Dockerfile
+yourself: CI reads the version from there and runs the Python tests on it,
+and a test fails until the pages that write the base image out, such as the
+chart README's `python:3.12-slim`, say the same.
+
 When anything moves, the workflow installs the pinned golangci-lint and gopls
 (`make lint-install gopls-install`) and the Python and libraries the updated
 Dockerfile pins, runs the whole suite (`make ci`) and builds the image against
@@ -31,6 +51,24 @@ by hand with the workflow dispatch button, or locally:
 ```sh
 go run ./tools/depupdate --dry-run
 ```
+
+### The pull request
+
+The workflow opens the pull request with the repository's `GITHUB_TOKEN`, which
+has two consequences.
+
+The repository has to allow it: **Settings → Actions → General → Workflow
+permissions → "Allow GitHub Actions to create and approve pull requests"**.
+Without that setting the run fails at its last step with `GitHub Actions is not
+permitted to create or approve pull requests`, after it has already pushed the
+`deps/dockerfile` branch; turn the setting on and run the workflow again, or
+open the pull request from that branch by hand.
+
+And a pull request opened with that token does not start `ci.yml`: GitHub does
+not run workflows for events its own token causes. The update workflow has
+already run `make ci` and the image build on the new versions before it opened
+the pull request, so the proposal is tested even though it shows no checks.
+To run CI on the pull request itself, close it and reopen it.
 
 Both schedules land mid-morning on a Tuesday in Sofia. Dependabot uses an
 explicit `Europe/Sofia` timezone; the workflow's cron is UTC, which has no

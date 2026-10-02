@@ -153,7 +153,7 @@ func validateGRPCRequest(x *model.Collector) error {
 	}
 	// The placeholders of the message and the metadata values.
 	for _, f := range requestTemplates(x, RequestOverrides{}) {
-		if _, err := f.parse(); err != nil {
+		if err := f.check(); err != nil {
 			return fmt.Errorf("collector %q: %w", x.Name, err)
 		}
 	}
@@ -330,12 +330,14 @@ func checkGRPCTargetRequest(c *model.Collector, t *model.StaticTarget) error {
 	if err := checkGRPCMetadata(t.Request.Metadata, false, credentials); err != nil {
 		return fmt.Errorf("request.metadata %w", err)
 	}
+	// The target may be in force, so copies are checked: its codes were
+	// written in upper case when the file was loaded (NormalizeTargetRequest).
 	if retry := t.Request.Retry; retry != nil {
-		if err := normalizeRetryCodes(retry.Codes); err != nil {
+		if err := normalizeRetryCodes(slices.Clone(retry.Codes)); err != nil {
 			return fmt.Errorf("request.retry.codes %w", err)
 		}
 	}
-	if err := normalizeRetryCodes(t.Request.AcceptCodes); err != nil {
+	if err := normalizeRetryCodes(slices.Clone(t.Request.AcceptCodes)); err != nil {
 		return fmt.Errorf("request.accept_codes %s", strings.Replace(err.Error(), "never retried", "always accepted", 1))
 	}
 	if t.Request.Message == "" {

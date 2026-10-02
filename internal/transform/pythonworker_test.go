@@ -10,6 +10,7 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/eenchev/prometheus-universal-exporter/internal/decode"
@@ -145,14 +146,63 @@ metric(name="v", value=1)
 	}
 }
 
-// script_timeout bounds the script, not starting the interpreter, so a cold
-// start does not count against a small budget.
+// script_timeout bounds the script, not starting the interpreter: a worker
+// that takes four hundred times the budget to start, and whose script then
+// runs for all but a millisecond of it, does not time out, and the run is
+// said to have taken what the script took. One whose script runs a
+// millisecond over does, however quickly it started.
+//
+// The worker is a stand-in and the clock the test's own (testing/synctest),
+// so starting and running take exactly the time given here. A real cold
+// start against a real 25ms passed or failed by how long the machine left
+// the interpreter waiting for a CPU between taking the request and answering.
 func TestPythonWorkerStartupIsNotCountedAgainstTheScript(t *testing.T) {
-	requirePython(t)
-	c := workerCollector("cold_start", `metric(name="v", value=1)`)
-	c.Limits.ScriptTimeout = model.Duration(25 * time.Millisecond)
-	if _, err := runWorkerScript(t, c); err != nil {
-		t.Fatalf("a cold start with a 25ms budget failed: %v", err)
+	const budget, startup = 25 * time.Millisecond, 10 * time.Second
+	for _, test := range []struct {
+		name            string
+		startup, script time.Duration
+		timesOut        bool
+	}{
+		{"a slow start and a script within the budget", startup, budget - time.Millisecond, false},
+		{"a start in no time and a script over the budget", 0, budget + time.Millisecond, true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				usePythonPool(t)
+				PythonWorkers().start = func(context.Context, pythonSpec) (*pythonWorker, error) {
+					time.Sleep(test.startup)
+					return heldWorker(t, heldAnswer{0, pythonRequestTaken}, heldAnswer{test.script, `{"ok": true, "metrics": [{"name": "v", "value": 1}]}`}), nil
+				}
+				c := workerCollector("cold_start", `metric(name="v", value=1)`)
+				c.Limits.ScriptTimeout = model.Duration(budget)
+				ctx, timer := WithScriptTimer(context.Background())
+				began := time.Now()
+				r := &fetch.HTTPResponse{StatusCode: 200, Body: []byte("value=7"), Headers: http.Header{}}
+				set, err := executePython(ctx, "python3", c.Transform.Script, &decode.Decoded{Kind: "text", Data: "value=7", Raw: r.Body}, r, c)
+				took := time.Since(began)
+				// The clock stops when this function returns, so the
+				// stand-in is first left the time to end.
+				time.Sleep(test.script)
+				if test.timesOut {
+					if err == nil || !strings.Contains(err.Error(), "python transform timed out after 25ms") || took != budget {
+						t.Fatalf("a script that ran %s under a budget of %s: after %s, %v", test.script, budget, took, err)
+					}
+					return
+				}
+				if err != nil {
+					t.Fatalf("a start of %s and a script of %s under a budget of %s failed after %s: %v", test.startup, test.script, budget, took, err)
+				}
+				if workerMetricValue(t, set, "v") != 1 || took != test.startup+test.script {
+					t.Fatalf("%+v after %s", set.Metrics, took)
+				}
+				if seconds, ran := timer.Seconds(); !ran || seconds != test.script.Seconds() {
+					t.Fatalf("the script is said to have run %vs, %v; it ran %s", seconds, ran, test.script)
+				}
+				if snap := PythonWorkers().Snapshot(c.Name); snap.Starts != 1 || snap.Runs[pythonRunOK] != 1 {
+					t.Fatalf("%d started, runs %v", snap.Starts, snap.Runs)
+				}
+			})
+		})
 	}
 }
 

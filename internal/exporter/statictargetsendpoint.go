@@ -71,15 +71,16 @@ func (s *Server) staticTargetsEndpoint() string {
 // arrive under the same resource with the same series, and without it the
 // later target's values would replace the earlier's in the pending export.
 func (s *Server) publishStaticTarget(target model.StaticTarget, identity otlpResourceIdentity, set model.MetricSet) {
-	s.publishStaticResult(target, identity, set, time.Time{})
+	s.publishStaticResult(target, identity, set, time.Time{}, scrapeTime{})
 }
 
 // publishStaticResult is publishStaticTarget for a result whose data came
 // from the target at fetched: its http_exporter_result_age_seconds is worked
 // out again at every read of the endpoint, so it says how old the data is
 // when Prometheus reads it, not how old it was when the scrape made it.
-// fetched is zero for a result without that series.
-func (s *Server) publishStaticResult(target model.StaticTarget, identity otlpResourceIdentity, set model.MetricSet, fetched time.Time) {
+// fetched is zero for a result without that series. at is when the result
+// was scraped, for its points over OTLP (scrapeTime).
+func (s *Server) publishStaticResult(target model.StaticTarget, identity otlpResourceIdentity, set model.MetricSet, fetched time.Time, at scrapeTime) {
 	// A reload may have removed the target while its scrape was in flight;
 	// its result then goes nowhere, over OTLP included.
 	if !s.staticTargetInForce(target.Name) {
@@ -104,7 +105,7 @@ func (s *Server) publishStaticResult(target model.StaticTarget, identity otlpRes
 	}
 	s.staticMu.Unlock()
 	if target.ExportViaOTLP {
-		s.queueOTLPResource(labelled, identity)
+		s.queueOTLPResource(labelled, identity, at)
 	}
 }
 
@@ -282,6 +283,26 @@ type namedSet struct {
 // of the same name already has otherwise.
 var errFamilyTypeClash = errors.New("another static target exports this metric with a different type")
 
+// errFamilyNameClash is a target's family whose name is that of a series of
+// another target's histogram or summary, or the reverse: a histogram x is
+// written as x_bucket, x_sum and x_count and a summary x as x, x_sum and
+// x_count, so a gauge x_sum of another target would be a second family of a
+// name the first already writes, which no parser accepts. One target's own
+// result cannot hold both (model.MetricSet.Validate); two targets' can.
+var errFamilyNameClash = errors.New("another static target exports a histogram or summary whose series have this metric's name")
+
+// derivedSeriesNames are the names a family of name and typ is written
+// under, beside its own: those of a histogram's or a summary's series.
+func derivedSeriesNames(name string, typ model.MetricType) []string {
+	switch typ {
+	case model.HistogramMetricType:
+		return []string{name + "_bucket", name + "_sum", name + "_count"}
+	case model.SummaryMetricType:
+		return []string{name + "_sum", name + "_count"}
+	}
+	return nil
+}
+
 func (s *Server) staticTargetsHandler(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet && r.Method != http.MethodHead {
 		w.Header().Set("Allow", "GET, HEAD")
@@ -386,8 +407,10 @@ func (s *Server) requestedStaticTargets(query url.Values) (map[string]bool, erro
 // series labelled with its target, and each family's series together, as the
 // text format requires, in the order the families first appear. A family one
 // target exports with another type than an earlier target is left out for that
-// target and logged, since one family cannot have two types; the rest of both
-// targets is served.
+// target and logged, since one family cannot have two types; so is a family
+// named like a series of an earlier target's histogram or summary, and a
+// histogram or summary one of whose series is named like an earlier target's
+// family (errFamilyNameClash). The rest of both targets is served.
 func (s *Server) mergeStaticTargets(results []namedSet) model.MetricSet {
 	clashes := map[string]staticClash{}
 	type family struct {
@@ -395,6 +418,16 @@ func (s *Server) mergeStaticTargets(results []namedSet) model.MetricSet {
 		metrics []model.Metric
 	}
 	families := map[string]*family{}
+	// derived is, for the name of every series of a histogram or summary
+	// on the endpoint, the family it is a series of.
+	derived := map[string]string{}
+	leftOut := func(target string, m model.Metric, clash error, attrs ...any) {
+		key := failureKey("", "static target "+target, "family "+m.Name)
+		clashes[key] = staticClash{target: target, metric: m.Name}
+		s.failures.failed(s.logger, slog.LevelWarn, key,
+			"static target metric left out of the static targets endpoint", "exposition", clash,
+			append([]any{"target", target, "metric", m.Name, "type", string(m.Type)}, attrs...)...)
+	}
 	var order []string
 	for _, result := range results {
 		set := result.set
@@ -404,16 +437,32 @@ func (s *Server) mergeStaticTargets(results []namedSet) model.MetricSet {
 		for _, m := range set.Metrics {
 			f := families[m.Name]
 			if f == nil {
+				// A family new to the endpoint: its name, and the names
+				// of its series, must be nobody else's.
+				if owner, taken := derived[m.Name]; taken {
+					leftOut(result.name, m, errFamilyNameClash, "clashes_with", owner, "type_in_use", string(families[owner].typ))
+					continue
+				}
+				clash := ""
+				for _, name := range derivedSeriesNames(m.Name, m.Type) {
+					if _, taken := families[name]; taken {
+						clash = name
+						break
+					}
+				}
+				if clash != "" {
+					leftOut(result.name, m, errFamilyNameClash, "clashes_with", clash, "type_in_use", string(families[clash].typ))
+					continue
+				}
 				f = &family{typ: m.Type}
 				families[m.Name] = f
 				order = append(order, m.Name)
+				for _, name := range derivedSeriesNames(m.Name, m.Type) {
+					derived[name] = m.Name
+				}
 			}
 			if f.typ != m.Type {
-				key := failureKey("", "static target "+result.name, "family "+m.Name)
-				clashes[key] = staticClash{target: result.name, metric: m.Name}
-				s.failures.failed(s.logger, slog.LevelWarn, key,
-					"static target metric left out of the static targets endpoint", "exposition", errFamilyTypeClash,
-					"target", result.name, "metric", m.Name, "type", string(m.Type), "type_in_use", string(f.typ))
+				leftOut(result.name, m, errFamilyTypeClash, "type_in_use", string(f.typ))
 				continue
 			}
 			f.metrics = append(f.metrics, m)

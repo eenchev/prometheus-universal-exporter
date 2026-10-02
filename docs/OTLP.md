@@ -25,6 +25,30 @@ otlp:
   # probe_attributes: false
 ```
 
+`enabled` is the switch, and a block that sets anything must say it: `true`
+exports, `false` keeps the settings without using or checking them. An `otlp`
+block with an endpoint and no `enabled` would export nothing, so it is refused
+when the configuration loads, with `otlp sets endpoint but not enabled; say
+enabled: true to turn it on, or enabled: false to keep the settings without
+using them`.
+
+What the export sends and connects with is checked when the configuration
+loads, as a collector's request is, rather than failing every export:
+
+- `headers` names must be header names, each set once whatever its case, and
+  their values hold no control character but a tab;
+- `tls.cert_file` and `tls.key_file` are set together, and the `tls` files —
+  `ca_file` too — must be there and hold a certificate or key: the export
+  needs them from its first request. A reload that finds one missing or
+  half replaced, as while a Secret is rotated, is rejected, and with
+  `--config.watch` tried again once the file
+  [is in place](CONFIGURATION.md#watching-the-configuration);
+- `interval` is at least `1s`, and `timeout` is not negative; left out, they
+  are `30s` and `5s`;
+- `resource_attributes` may not set `service.name`, which `service_name`
+  sets — the resource would carry it twice. The same holds for a static
+  target's `otlp.resource_attributes` and its `otlp.service_name`.
+
 OTLP export is best-effort and does not make a Prometheus probe fail. Metric
 values are buffered as latest values and exported every `otlp.interval`;
 the default is 30 seconds. Each export request is bounded by `otlp.timeout`,
@@ -36,7 +60,15 @@ is running.
 
 Each data point carries the time it was scraped, or the timestamp the target
 gave it, not the time of the export that sends it, so a point that waited for
-the next export, or through an outage, is not taken for a newer one. A
+the next export, or through an outage, is not taken for a newer one. An answer
+from a collector's [cache](CONFIGURATION.md#response-caching) is exported as
+of the scrape that filled the entry, not as of the answer: a cached result
+served for a minute, or a
+[stale one](CONFIGURATION.md#serving-the-last-good-result-when-the-target-fails)
+served for as long as the target is down, is one old measurement, not a new
+one each time. The series the exporter adds about the answer itself —
+`http_exporter_result_stale`, `http_exporter_result_age_seconds` and a static
+target's `http_exporter_target_*` — are as of the answer. A
 cumulative point — a counter, a histogram, a summary — also carries the time
 its series started: the first export of the series, and again after a reset,
 when its count went down, as the OpenTelemetry Collector's Prometheus receiver
@@ -131,10 +163,43 @@ Metrics keep their type:
 
 Prometheus counts histogram buckets cumulatively and OTLP counts each bucket on
 its own, so the counts are converted; the `+Inf` bucket becomes the count above
-the highest bound rather than a bound. Every series of a metric is a data point
+the highest bound rather than a bound. A histogram the target wrote without a
+`_sum` is sent without a sum, which OTLP allows. OTLP's summary has no way to
+leave its count or its sum out — a field not set is `0` there — so a summary
+the target wrote without a `_count` or a `_sum` is sent with `0` for it, where
+the exposition formats leave the line out. Every series of a metric is a data point
 of one OTLP metric. A `NaN` or infinite value is sent as `"NaN"`, `"Infinity"`
 or `"-Infinity"`, as the OTLP JSON encoding writes them, rather than failing
-the export.
+the export. A histogram's buckets and a summary's quantiles are sent in
+ascending order, in whatever order the target wrote them.
+
+A family keeps its type only where its values allow it. The Prometheus text
+format lets a target write a counter that is `NaN` or negative, a histogram
+whose bucket counts fall, whose `_sum` is `NaN` or negative or stands beside a
+negative bound, which has a bound that is not a number, whose `+Inf` bucket
+and `_count` differ — as a target scraped between two of its updates writes
+them — or which has neither of the two, and a summary whose
+`_sum` is `NaN` or negative, with a quantile outside 0 to 1 or with a negative
+value for one: the families the
+[OpenMetrics output](CONFIGURATION.md#openmetrics) writes as `unknown`. None of
+them can be a monotonic sum, a histogram or a summary in OTLP either — a
+bucket's own count would be negative, a histogram point has one count where
+the target wrote two, and OTLP's quantiles are within 0 to 1
+and not negative. Such a family is exported as gauges under the names of its
+samples, with the series and values the text format writes, so every point of
+an export is valid and none is dropped:
+
+| Prometheus family | OTLP gauges |
+| --- | --- |
+| counter `jobs_total` | `jobs_total` |
+| histogram `h` | `h_bucket` with an `le` attribute, `+Inf` among them, with its own count, where the series has that bucket or a count; `h_sum` and `h_count` where the series has them |
+| summary `s` | `s` with a `quantile` attribute; `s_sum` and `s_count` where the series has them |
+
+`le` and `quantile` are written as the text format writes them (`0.5`, `1`,
+`+Inf`). The whole family is exported so when one of its series in the export
+is such a series, so that a name is one kind of metric in an export, and its
+points carry no start time, as no gauge does. A family whose values its type
+allows always keeps the type.
 
 ## Static targets
 

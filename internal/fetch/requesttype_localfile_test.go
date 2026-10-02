@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -78,6 +79,56 @@ func TestLocalFileTargetInterpretation(t *testing.T) {
 	}
 	if !errors.Is(CheckTarget(ptr(testutil.Collector("web", "text")), "", false), ErrMissingTarget) {
 		t.Error("an http probe without a target must be refused")
+	}
+}
+
+// A file:// URL is a URL: its path is percent-decoded before it is read, so
+// file:///root/a%20b.prom is the file "a b.prom", and a percent sign of a
+// file's own name is written %25. What it decodes to is held to the same
+// rules as any target. A plain path is not a URL and is taken as written.
+func TestLocalFileURLTargetIsPercentDecoded(t *testing.T) {
+	root := t.TempDir()
+	testutil.WriteIn(t, root, "a b.prom", "spaced 1\n")
+	testutil.WriteIn(t, root, "100%.prom", "percent 1\n")
+	testutil.WriteIn(t, root, "a%20b.prom", "literal 1\n")
+	testutil.WriteIn(t, filepath.Join(root, "sub"), "ü.prom", "umlaut 1\n")
+	c := validated(t, fileCollector("files", root, ""))
+	url := "file://" + filepath.ToSlash(root)
+	for target, want := range map[string]string{
+		url + "/a%20b.prom":          "spaced 1\n",
+		url + "/a b.prom":            "spaced 1\n",
+		url + "/100%25.prom":         "percent 1\n",
+		url + "/a%2520b.prom":        "literal 1\n",
+		url + "/sub/%C3%BC.prom":     "umlaut 1\n",
+		url + "/sub%2F%c3%bc.prom":   "umlaut 1\n",
+		"a%20b.prom":                 "literal 1\n",
+		root + "/a%20b.prom":         "literal 1\n",
+		url + "/sub/../a%20b.prom":   "spaced 1\n",
+		url + "/sub/%2E%2E/a b.prom": "spaced 1\n",
+	} {
+		if err := CheckTarget(c, target, false); err != nil {
+			t.Errorf("%q: refused: %v", target, err)
+			continue
+		}
+		resp, err := FetchCollector(context.Background(), target, c, RequestOverrides{}, nil)
+		if err != nil || string(resp.Body) != want {
+			t.Errorf("%q: resp=%v err=%v, want the body %q", target, resp, err, want)
+		}
+	}
+	for target, want := range map[string]string{
+		url + "/100%.prom":            "write a % that is part of a file's name as %25",
+		url + "/a%2":                  "is not a valid file:// URL",
+		url + "/%2E%2E/%2E%2E/passwd": "is outside request.root",
+		"file:///etc/%70asswd":        "is outside request.root",
+		url + "/a%00b.prom":           "must not contain a NUL byte",
+	} {
+		err := CheckTarget(c, target, false)
+		if err == nil || !strings.Contains(err.Error(), want) {
+			t.Errorf("%q: err=%v, want one containing %q", target, err, want)
+		}
+		if _, err := FetchCollector(context.Background(), target, c, RequestOverrides{}, nil); err == nil {
+			t.Errorf("%q was read", target)
+		}
 	}
 }
 

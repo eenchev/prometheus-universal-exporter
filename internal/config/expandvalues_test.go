@@ -168,6 +168,11 @@ func TestExpansionInEveryPlaceAValueStands(t *testing.T) {
 		"flow mapping":         {"a: {k: ${DEMO_NAME}, n: ${DEMO_PORT}}\n", `{"a":{"k":"eu west","n":8080}}`},
 		"flow key":             {"a: {${DEMO_KEY}: v}\n", `{"a":{"X-Tenant":"v"}}`},
 		"flow with quotes too": {"a: [\"${DEMO_NAME}\", x]\nb: ${DEMO_PORT}\n", `{"a":["eu west","x"],"b":8080}`},
+		"flow, part of value":  {"a: {Authorization: Bearer ${DEMO_KEY}, n: p${DEMO_PORT}}\n", `{"a":{"Authorization":"Bearer X-Tenant","n":"p8080"}}`},
+		"flow, after a quote":  {"a: {X-Name: \"x\", X-Token: ${DEMO_NAME}}\n", `{"a":{"X-Name":"x","X-Token":"eu west"}}`},
+		"flow after a comment": {"a: 1 # {\nb: [x, ${DEMO_PORT}] # ${DEMO_UNSET}\n", `{"a":1,"b":["x",8080]}`},
+		"flow over lines":      {"a: [\n  ${DEMO_PORT},\n  ${DEMO_NAME}\n]\n", `{"a":[8080,"eu west"]}`},
+		"flow, a dollar kept":  {"a: [$${DEMO_PORT}, ${DEMO_PORT}]\n", ""},
 		"lone dash":            {"a: ${DEMO_DASH}\n", `{"a":"-"}`},
 		"lone dash in a list":  {"a:\n  - ${DEMO_DASH}\n", `{"a":["-"]}`},
 		"empty in a sequence":  {"a: [${DEMO_EMPTY}, b]\n", `{"a":["","b"]}`},
@@ -181,6 +186,15 @@ func TestExpansionInEveryPlaceAValueStands(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
+			if tc.want == "" {
+				// Not YAML with the reference expanded either: $$ leaves a
+				// brace in a flow collection, so the file is handed on as
+				// it is, for the decoder's own error.
+				if string(out) != tc.document {
+					t.Fatalf("the document was changed:\n%s", out)
+				}
+				return
+			}
 			var value any
 			if err := yaml.Unmarshal(out, &value); err != nil {
 				t.Fatalf("%v:\n%s", err, out)
@@ -191,6 +205,101 @@ func TestExpansionInEveryPlaceAValueStands(t *testing.T) {
 			}
 			if strings.Count(string(out), "\n") != strings.Count(tc.document, "\n") {
 				t.Fatalf("the lines changed:\n%s", out)
+			}
+		})
+	}
+}
+
+// A bare reference in a flow collection makes the document one YAML cannot
+// read as written. Reading it all the same must not change any other value:
+// a reference alone on a line of a block value, after a comma in an unquoted
+// description or in a JSON body expands to the variable's value, without the
+// quotes that once helped the flow collection parse.
+func TestABareFlowReferenceChangesNoOtherValue(t *testing.T) {
+	t.Setenv("DEMO_TOKEN", "tok")
+	t.Setenv("DEMO_TENANT", "acme")
+	rest := "body: |\n  tenant: ${DEMO_TENANT}\n  ids: [${DEMO_TENANT}, other]\n  {\"tenant\": ${DEMO_TENANT}}\ndescription: queue depth, ${DEMO_TENANT}\nlist:\n  - ${DEMO_TENANT}\n"
+	want := map[string]any{
+		"body":        "tenant: acme\nids: [acme, other]\n{\"tenant\": acme}\n",
+		"description": "queue depth, acme",
+		"list":        []any{"acme"},
+	}
+	for _, headers := range []string{
+		`headers: {X-Token: "${DEMO_TOKEN}"}`,
+		`headers: {X-Token: ${DEMO_TOKEN}}`,
+		`headers: {Authorization: Bearer ${DEMO_TOKEN}}`,
+	} {
+		out, err := expandEnvironment("test.yaml", []byte(headers+"\n"+rest), configEnvFlag)
+		if err != nil {
+			t.Fatalf("%s: %v", headers, err)
+		}
+		var got map[string]any
+		if err := yaml.Unmarshal(out, &got); err != nil {
+			t.Fatalf("%s: %v:\n%s", headers, err, out)
+		}
+		for key, value := range want {
+			if a, b := mustJSON(t, got[key]), mustJSON(t, value); a != b {
+				t.Errorf("%s: %s = %s, want %s", headers, key, a, b)
+			}
+		}
+	}
+}
+
+func mustJSON(t *testing.T, value any) string {
+	t.Helper()
+	var out strings.Builder
+	encoder := json.NewEncoder(&out)
+	encoder.SetEscapeHTML(false)
+	if err := encoder.Encode(value); err != nil {
+		t.Fatal(err)
+	}
+	return strings.TrimSuffix(out.String(), "\n")
+}
+
+// The braces of a reference are masked while a document with a bare flow
+// reference is read. Text that already looks like a masked reference is not
+// one: it stays as written, and the references beside it still expand.
+func TestTextThatLooksLikeAMaskedReferenceIsKept(t *testing.T) {
+	t.Setenv("DEMO_TOKEN", "tok")
+	document := "a: [${DEMO_TOKEN}, $<DEMO_TOKEN>, $(DEMO_TOKEN)]\nb: say $<DEMO_TOKEN> and ${DEMO_TOKEN}\n"
+	out, err := expandEnvironment("test.yaml", []byte(document), configEnvFlag)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got any
+	if err := yaml.Unmarshal(out, &got); err != nil {
+		t.Fatalf("%v:\n%s", err, out)
+	}
+	if text := mustJSON(t, got); text != `{"a":["tok","$<DEMO_TOKEN>","$(DEMO_TOKEN)"],"b":"say $<DEMO_TOKEN> and tok"}` {
+		t.Fatalf("read back %s from:\n%s", text, out)
+	}
+}
+
+// A block value whose header says how far it is indented, as in |2, may start
+// with a line indented further than the rest. Every line of it is expanded,
+// in a mapping, in a list, and as the value of a key written after a dash;
+// the keys that follow it are still keys.
+func TestABlockValueWithAnIndentationIndicatorIsExpandedInFull(t *testing.T) {
+	t.Setenv("DEMO_TENANT", "acme")
+	for name, tc := range map[string]struct{ document, want string }{
+		"in a mapping":       {"a:\n  body: |2\n        first ${DEMO_TENANT}\n    second ${DEMO_TENANT}\n  next: ${DEMO_TENANT}\n", `{"a":{"body":"    first acme\nsecond acme\n","next":"acme"}}`},
+		"folded and chomped": {"a:\n  body: >-2\n        first ${DEMO_TENANT}\n    second ${DEMO_TENANT}\nnext: ${DEMO_TENANT}\n", `{"a":{"body":"    first acme\nsecond acme"},"next":"acme"}`},
+		"in a list":          {"a:\n  - |1\n      first ${DEMO_TENANT}\n   second ${DEMO_TENANT}\n  - ${DEMO_TENANT}\n", `{"a":["   first acme\nsecond acme\n","acme"]}`},
+		"after a dash":       {"- body: |2\n       first ${DEMO_TENANT}\n     second ${DEMO_TENANT}\n  next: ${DEMO_TENANT}\n", `[{"body":"   first acme\n second acme\n","next":"acme"}]`},
+		"at the top":         {"--- |1\n   first ${DEMO_TENANT}\n second ${DEMO_TENANT}\n", `"  first acme\nsecond acme\n"`},
+		"no indicator":       {"a:\n  body: |-\n    first ${DEMO_TENANT}\n      second ${DEMO_TENANT}\n  next: ${DEMO_TENANT}\n", `{"a":{"body":"first acme\n  second acme","next":"acme"}}`},
+	} {
+		t.Run(name, func(t *testing.T) {
+			out, err := expandEnvironment("test.yaml", []byte(tc.document), configEnvFlag)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var value any
+			if err := yaml.Unmarshal(out, &value); err != nil {
+				t.Fatalf("%v:\n%s", err, out)
+			}
+			if got := mustJSON(t, value); got != tc.want {
+				t.Fatalf("read back %s, want %s, from:\n%s", got, tc.want, out)
 			}
 		})
 	}

@@ -51,22 +51,35 @@
 {{- end -}}
 {{- end -}}
 {{- end }}
-{{- define "prometheus-universal-exporter.validateExtraMounts" -}}
-{{- /* A mount at the configuration directory replaces it, so the exporter
-       starts with no config.yaml and crash-loops with an error that points at
-       the file rather than at the mount that hid it. */ -}}
-{{- $reserved := list "/etc/prometheus-universal-exporter" -}}
-{{- if and .Values.targetAuth .Values.targetAuth.enabled -}}
-{{- $reserved = append $reserved (.Values.targetAuth.mountPath | toString) -}}
+{{- define "prometheus-universal-exporter.validateMounts" -}}
+{{- /* A pod cannot mount two volumes at one path, and Kubernetes says so only
+       once the Deployment is applied; a mount at the configuration directory
+       would, where it is accepted, replace it, so the exporter starts with no
+       config.yaml and crash-loops with an error that points at the file
+       rather than at the mount that hid it. So every path the chart mounts,
+       and every extraVolumeMounts entry, has to be a path of its own. Paths
+       are compared cleaned, so a trailing slash does not hide a collision. */ -}}
+{{- $taken := dict "/etc/prometheus-universal-exporter" "the configuration directory" -}}
+{{- range $name := list "targetAuth" "webAuth" -}}
+{{- $auth := index $.Values $name -}}
+{{- if and $auth $auth.enabled -}}
+{{- $path := $auth.mountPath | toString | clean -}}
+{{- if hasKey $taken $path -}}
+{{- fail (printf "%s.mountPath %q is also %s, and a pod cannot mount two volumes at one path; choose another path" $name (toString $auth.mountPath) (get $taken $path)) -}}
 {{- end -}}
-{{- if and .Values.webAuth .Values.webAuth.enabled -}}
-{{- $reserved = append $reserved (.Values.webAuth.mountPath | toString | trimSuffix "/") -}}
+{{- $_ := set $taken $path (printf "%s.mountPath" $name) -}}
 {{- end -}}
+{{- end -}}
+{{- $extra := dict -}}
 {{- range $mount := .Values.extraVolumeMounts -}}
-{{- $path := $mount.mountPath | toString | trimSuffix "/" -}}
-{{- if has $path $reserved -}}
-{{- fail (printf "extraVolumeMounts uses mountPath %q, which the chart already mounts; choose another path" $mount.mountPath) -}}
+{{- $path := $mount.mountPath | toString | clean -}}
+{{- if hasKey $taken $path -}}
+{{- fail (printf "extraVolumeMounts uses mountPath %q, which the chart already mounts as %s; choose another path" (toString $mount.mountPath) (get $taken $path)) -}}
 {{- end -}}
+{{- if hasKey $extra $path -}}
+{{- fail (printf "extraVolumeMounts uses mountPath %q twice, and a pod cannot mount two volumes at one path; give each entry a path of its own" (toString $mount.mountPath)) -}}
+{{- end -}}
+{{- $_ := set $extra $path true -}}
 {{- end -}}
 {{- end }}
 {{- define "prometheus-universal-exporter.name" -}}
@@ -242,15 +255,37 @@ app.kubernetes.io/managed-by: {{ .Release.Service }}
 {{- $delay -}}
 {{- end -}}
 {{- end }}
-{{- define "prometheus-universal-exporter.durationSeconds" -}}
-{{- $seconds := 0 -}}
-{{- range $part := regexFindAll "[0-9]+[hms]" . -1 -}}
-{{- $n := $part | trimSuffix "h" | trimSuffix "m" | trimSuffix "s" | atoi -}}
-{{- if hasSuffix "h" $part -}}{{- $seconds = add $seconds (mul $n 3600) -}}
-{{- else if hasSuffix "m" $part -}}{{- $seconds = add $seconds (mul $n 60) -}}
-{{- else -}}{{- $seconds = add $seconds $n -}}{{- end -}}
+{{- define "prometheus-universal-exporter.durationMilliseconds" -}}
+{{- /* A duration of whole numbers in milliseconds: Go's h, m and s, and the
+       ms, d, w and y a Prometheus duration adds, a year being 365 days as
+       Prometheus counts it. */ -}}
+{{- $seconds := dict "y" 31536000 "w" 604800 "d" 86400 "h" 3600 "m" 60 "s" 1 -}}
+{{- $milliseconds := 0 -}}
+{{- range $part := regexFindAll "[0-9]+(ms|[ywdhms])" (toString .) -1 -}}
+{{- $unit := regexFind "[a-z]+$" $part -}}
+{{- $n := trimSuffix $unit $part | atoi -}}
+{{- if eq $unit "ms" -}}{{- $milliseconds = add $milliseconds $n -}}
+{{- else -}}{{- $milliseconds = add $milliseconds (mul $n (get $seconds $unit) 1000) -}}{{- end -}}
 {{- end -}}
-{{- $seconds -}}
+{{- $milliseconds -}}
+{{- end }}
+{{- define "prometheus-universal-exporter.durationSeconds" -}}
+{{- div (include "prometheus-universal-exporter.durationMilliseconds" . | int64) 1000 -}}
+{{- end }}
+{{- define "prometheus-universal-exporter.validateScrapeTiming" -}}
+{{- /* Prometheus refuses a scrape whose timeout is longer than its interval,
+       so the Prometheus Operator leaves such a monitor out of the
+       configuration and its targets are never scraped, with nothing said
+       where the values were written. From (list name interval
+       scrapeTimeout); one left unset, or 0, takes Prometheus's own default,
+       which the chart does not know, and is not compared. */ -}}
+{{- $interval := index . 1 | default "" | toString -}}
+{{- $timeout := index . 2 | default "" | toString -}}
+{{- $every := include "prometheus-universal-exporter.durationMilliseconds" $interval | int64 -}}
+{{- $limit := include "prometheus-universal-exporter.durationMilliseconds" $timeout | int64 -}}
+{{- if and (gt $every 0) (gt $limit $every) -}}
+{{- fail (printf "%s has scrapeTimeout %s, longer than its interval %s; Prometheus refuses a scrape timeout longer than the scrape interval, so lower scrapeTimeout or raise interval" (index . 0) $timeout $interval) -}}
+{{- end -}}
 {{- end }}
 {{- define "prometheus-universal-exporter.terminationGracePeriodSeconds" -}}
 {{- /* A stopping pod needs the shutdown delay, the shutdown timeout, then
@@ -406,7 +441,113 @@ app.kubernetes.io/managed-by: {{ .Release.Service }}
 {{- if and $complete (not (hasKey $names $monitor.collector)) (not (contains "${" $monitor.collector)) -}}
 {{- fail (printf "monitors entry %s names collector %q, which config.data does not define; every probe it sends would be answered 400" $label $monitor.collector) -}}
 {{- end -}}
+{{- include "prometheus-universal-exporter.validateScrapeTiming" (list (printf "monitors entry %s" $label) $monitor.interval $monitor.scrapeTimeout) -}}
 {{- end -}}
+{{- end -}}
+{{- /* The chart's own monitors, while their values say to render them. */ -}}
+{{- if .Values.selfMetrics.enabled -}}
+{{- include "prometheus-universal-exporter.validateScrapeTiming" (list "selfMetrics" .Values.selfMetrics.interval .Values.selfMetrics.scrapeTimeout) -}}
+{{- end -}}
+{{- if and .Values.staticTargets.enabled .Values.staticTargets.monitor.enabled -}}
+{{- include "prometheus-universal-exporter.validateScrapeTiming" (list "staticTargets.monitor" .Values.staticTargets.monitor.interval .Values.staticTargets.monitor.scrapeTimeout) -}}
+{{- end -}}
+{{- end }}
+{{- /* The credential a probe monitor's endpoint presents, from (list root
+       monitor): the entry's own auth when it is enabled, else the webAuth
+       Secret's while webAuth is enabled, else none. An enabled auth says
+       which kind it is and which Secret holds it: without a type no
+       credential would be rendered, or the exporter's own instead of the
+       entry's, and without a Secret a selector naming none, so Prometheus
+       would scrape with the wrong credential or with none and nothing would
+       say why. */ -}}
+{{- define "prometheus-universal-exporter.monitorAuth" -}}
+{{- $root := index . 0 -}}
+{{- $monitor := index . 1 -}}
+{{- $auth := $monitor.auth | default dict -}}
+{{- if $auth.enabled -}}
+{{- if not (has $auth.type (list "bearer" "basic")) -}}
+{{- fail (printf "monitors entry %q enables auth without a type; set its auth.type to bearer or basic" (toString $monitor.name)) -}}
+{{- end -}}
+{{- if not $auth.secretName -}}
+{{- fail (printf "monitors entry %q enables auth without a Secret; set its auth.secretName to the Secret holding the %s credential" (toString $monitor.name) $auth.type) -}}
+{{- end -}}
+{{- if eq $auth.type "bearer" -}}
+authorization:
+  type: Bearer
+  credentials:
+    name: {{ $auth.secretName | quote }}
+    key: {{ $auth.secretKey | default "token" | quote }}
+    optional: {{ $auth.optional | default false }}
+{{- else -}}
+basicAuth:
+  username:
+    name: {{ $auth.secretName | quote }}
+    key: {{ $auth.usernameKey | default "username" | quote }}
+    optional: {{ $auth.optional | default false }}
+  password:
+    name: {{ $auth.secretName | quote }}
+    key: {{ $auth.passwordKey | default "password" | quote }}
+    optional: {{ $auth.optional | default false }}
+{{- end -}}
+{{- else if and $root.Values.webAuth $root.Values.webAuth.enabled -}}
+{{- /* The exporter's own Basic Auth protects /probe too, so a monitor
+       without a credential of its own presents the exporter's, as the
+       self-metrics monitor does; without it every scrape is a 401. */ -}}
+basicAuth:
+  username:
+    name: {{ $root.Values.webAuth.secretName | quote }}
+    key: {{ $root.Values.webAuth.usernameKey | quote }}
+  password:
+    name: {{ $root.Values.webAuth.secretName | quote }}
+    key: {{ $root.Values.webAuth.passwordKey | quote }}
+{{- end -}}
+{{- end }}
+{{- /* The port of a probe monitor's endpoint, from its monitors entry: http
+       unless the entry names another. It is a port's name, which is what the
+       Prometheus Operator's port field takes: of a Service port for type
+       service, a DNS label of up to 63 characters, and of a container port
+       for type pod, up to 15 with no two hyphens in a row. A number, 9115 or
+       "9115", would be rendered as a name and looked for among the ports'
+       names, so the monitor would find no target and nothing would say why;
+       it is refused here, as the values schema refuses it, and so is any
+       other text no port is named. A name needs a letter: Kubernetes lets a
+       Service port be named in digits alone, which the chart does not take,
+       since it cannot tell such a name from a number given by mistake. */ -}}
+{{- define "prometheus-universal-exporter.monitorPort" -}}
+{{- if or (not (hasKey . "port")) (kindIs "invalid" .port) -}}
+http
+{{- else -}}
+{{- $text := toString .port -}}
+{{- $name := toString .name -}}
+{{- $pod := eq (toString .type) "pod" -}}
+{{- if regexMatch "^[0-9]+$" $text -}}
+{{- if $pod -}}
+{{- fail (printf "monitors entry %q has port %s, a port number; a monitor of type pod takes the name of a container port, so name the port in the selected pods' spec.containers[].ports and set port to that name" $name $text) -}}
+{{- end -}}
+{{- fail (printf "monitors entry %q has port %s, a port number; a monitor of type service takes the name of a Service port, so name the port in the selected Services' spec.ports and set port to that name" $name $text) -}}
+{{- end -}}
+{{- $named := and (kindIs "string" .port) (regexMatch "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$" $text) (regexMatch "[a-z]" $text) -}}
+{{- if $pod -}}
+{{- if not (and $named (le (len $text) 15) (not (contains "--" $text))) -}}
+{{- fail (printf "monitors entry %q has port %q; a monitor of type pod takes the name of a container port: 1 to 15 lower-case letters, digits and hyphens, at least one of them a letter, with no hyphen first or last and no two in a row" $name $text) -}}
+{{- end -}}
+{{- else if not (and $named (le (len $text) 63)) -}}
+{{- fail (printf "monitors entry %q has port %q; a monitor of type service takes the name of a Service port: 1 to 63 lower-case letters, digits and hyphens, at least one of them a letter, with no hyphen first or last" $name $text) -}}
+{{- end -}}
+{{- $text -}}
+{{- end -}}
+{{- end }}
+{{- /* Whether a file of the configuration ConfigMap can be written as a
+       block scalar and read back as the same bytes: "true", or empty. It
+       cannot with control characters, carriage returns and the other line
+       breaks YAML would rewrite, a byte order mark, bytes that are not
+       UTF-8, or anything but one line break or none after its last visible
+       character, since what ends a manifest in white space is helm's to
+       trim; such a file goes into binaryData instead, which the pod mounts
+       as the same file. */ -}}
+{{- define "prometheus-universal-exporter.textFile" -}}
+{{- if and (regexMatch "[^\\s\\p{Z}]\\n?$" .) (not (regexMatch "[^\\t\\n\\x20-\\x7e\\x{a0}-\\x{2027}\\x{202a}-\\x{d7ff}\\x{e000}-\\x{fefe}\\x{ff00}-\\x{fffc}\\x{10000}-\\x{10ffff}]" .)) -}}
+true
 {{- end -}}
 {{- end }}
 {{- define "prometheus-universal-exporter.serviceAccountName" -}}
@@ -424,6 +565,67 @@ app.kubernetes.io/managed-by: {{ .Release.Service }}
 {{- fail (printf "goMemLimit.ratio %s must be more than 0 and at most 1, such as 0.8" $ratio) -}}
 {{- end -}}
 {{- $ratio -}}
+{{- end -}}
+{{- end }}
+{{- define "prometheus-universal-exporter.goGC" -}}
+{{- /* The GOGC environment variable from goGC.percent: empty, leaving the
+       variable out and Go's default of 100 in place, when it is empty or
+       null. The Go runtime reads the variable itself, so the exporter has no
+       flag for it. A whole number from 1 to 10000, or off. */ -}}
+{{- $percent := (.Values.goGC | default dict).percent -}}
+{{- if not (or (kindIs "invalid" $percent) (eq (toString $percent) "")) -}}
+{{- $text := toString $percent -}}
+{{- if not (regexMatch "^([1-9][0-9]{0,3}|10000|off)$" $text) -}}
+{{- fail (printf "goGC.percent %q must be a whole number from 1 to 10000, or \"off\" — in quotes in a values file, since YAML reads a bare off as false — or empty to keep Go's default of 100" $text) -}}
+{{- end -}}
+{{- /* The variable has one source. Kubernetes accepts a name twice in env
+       and keeps the last, so a GOGC entry there would replace this one
+       without a word, or be replaced by it. An entry on its own, with no
+       percent here, is rendered as it always was. */ -}}
+{{- $memoryLimit := "" -}}
+{{- range $entry := .Values.env -}}
+{{- if eq (toString $entry.name) "GOGC" -}}
+{{- fail (printf "goGC.percent is %s and env has a GOGC entry too: the container would get the variable from both, and Kubernetes keeps the last; remove the env entry, or leave goGC.percent empty" $text) -}}
+{{- end -}}
+{{- if eq (toString $entry.name) "GOMEMLIMIT" -}}
+{{- $value := get $entry "value" | default "" | toString -}}
+{{- if eq $value "off" -}}
+{{- $memoryLimit = "off" -}}
+{{- else if or $value (hasKey $entry "valueFrom") -}}
+{{- $memoryLimit = "set" -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
+{{- /* With off, nothing collects until the Go memory limit is near, so
+       without one the heap grows until the node or the container's limit
+       kills the pod. The limit is in force as memoryLimitRatio above gives
+       it: goMemLimit.enabled renders the ratio, and the exporter then takes
+       that share of the container's memory limit, which is there only with
+       resources.limits.memory. GOMEMLIMIT in env wins over the ratio in the
+       exporter, so it does here: an entry is the operator's own limit,
+       unless it says off; an empty one the exporter takes as unset. A
+       number needs no limit: the heap then stays within its multiple of the
+       live data. */ -}}
+{{- if eq $text "off" -}}
+{{- $why := "" -}}
+{{- $remedy := "" -}}
+{{- if eq $memoryLimit "off" -}}
+{{- $why = "env sets GOMEMLIMIT to off" -}}
+{{- $remedy = "remove that env entry or give it a limit" -}}
+{{- else if not $memoryLimit -}}
+{{- if not .Values.goMemLimit.enabled -}}
+{{- $why = "goMemLimit.enabled is false" -}}
+{{- $remedy = "enable goMemLimit, with resources.limits.memory set" -}}
+{{- else if not (dig "limits" "memory" "" (.Values.resources | default dict)) -}}
+{{- $why = "resources.limits.memory is not set" -}}
+{{- $remedy = "set resources.limits.memory" -}}
+{{- end -}}
+{{- end -}}
+{{- if $why -}}
+{{- fail (printf "goGC.percent is off, which leaves garbage collection to the Go memory limit alone, and %s, so no Go memory limit is in force and the heap would grow without bound; %s, or set goGC.percent to a number such as 400" $why $remedy) -}}
+{{- end -}}
+{{- end -}}
+{{- $text -}}
 {{- end -}}
 {{- end }}
 {{- define "prometheus-universal-exporter.validateProbe" -}}

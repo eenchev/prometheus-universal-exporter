@@ -223,6 +223,39 @@ func TestCheckListsEveryPythonFault(t *testing.T) {
 	}
 }
 
+// A Python fault of a collector that a collector file defines names that
+// file, in the check's error and in what startup logs before it exits: it
+// named the collector alone, under the configuration that only lists the file.
+func TestStartupAndDryRunNameTheCollectorFileOfAPythonFault(t *testing.T) {
+	dir := t.TempDir()
+	file := testutil.WriteIn(t, dir, "collectors.d/scripted.yaml", `collectors:
+  - name: scripted
+    request:
+      type: http
+    transform:
+      type: jq
+      pre_script: |
+        result = 1
+    metrics:
+      - name: scripted_value
+        expression: .value
+`)
+	conf := testutil.WriteIn(t, dir, "config.yaml", "collector_files: ['collectors.d/*.yaml']\n"+testutil.MinimalConfig)
+	want := "collector file " + file + ": collector scripted pre_script must produce its result in a variable named 'data'"
+	check := runCheckCLI(t, "--config.file="+conf)
+	python := check.result(t, "python_scripts")
+	if check.code != 1 || python.Status != checkFailed || len(python.Errors) != 1 || !strings.HasPrefix(python.Errors[0], want) {
+		t.Fatalf("--dry-run exit=%d python=%+v, want the error %q", check.code, python, want)
+	}
+	start := runCLI(t, "--config.file="+conf)
+	if start.code != 1 || len(start.logs) == 0 {
+		t.Fatalf("startup exit=%d stderr=%s", start.code, start.stderr)
+	}
+	if last := start.logs[len(start.logs)-1]; last["msg"] != "invalid startup configuration; exiting" || !strings.HasPrefix(fmt.Sprint(last["error"]), want) {
+		t.Fatalf("startup logged %v, want the error %q", last, want)
+	}
+}
+
 // Without an interpreter the scripts cannot be checked, which is a failure —
 // the exporter would not start either — but a configuration with no scripts
 // never needs one.
@@ -408,6 +441,33 @@ func TestCommandLineErrorsAreNotCheckResults(t *testing.T) {
 	help := runCLI(t, "-h")
 	if help.code != 0 || !strings.Contains(help.stdout, "-dry-run") || help.stderr != "" {
 		t.Fatalf("-h exit=%d stdout=%q stderr=%q", help.code, help.stdout, help.stderr)
+	}
+}
+
+// An argument that is not a flag is a command-line error, at a start and at a
+// --dry-run alike. The flag package stops reading at one and leaves the flags
+// after it unread, so "--config.watch true --static-targets-file=..." would
+// otherwise start an exporter without its static targets, and without a word.
+func TestAnArgumentThatIsNotAFlagIsACommandLineError(t *testing.T) {
+	conf := "--config.file=" + testutil.WriteFile(t, "config.yaml", testutil.MinimalConfig)
+	// A start that got past its command line would end on this file, with
+	// status 1, rather than serve.
+	missing := "--config.file=/nonexistent/config.yaml"
+	for argument, args := range map[string][]string{
+		"true":         {missing, "--config.watch", "true", "--static-targets-file=/nonexistent/targets.yaml"},
+		"false":        {"--dry-run", conf, "--config.expand-env", "false"},
+		"targets.yaml": {"--dry-run", conf, "targets.yaml"},
+		"":             {missing, ""},
+	} {
+		out := runCLI(t, args...)
+		want := fmt.Sprintf("unexpected argument %q; flags take --name=value", argument)
+		if out.code != 2 || out.stdout != "" || len(out.logs) != 1 || out.logs[0]["error"] != want || out.logs[0]["msg"] != "invalid command line; exiting" {
+			t.Errorf("%q: exit=%d stdout=%q logs=%v, want status 2 and the one error %q", args, out.code, out.stdout, out.logs, want)
+		}
+	}
+	// A flag that takes a value still takes it from the next argument.
+	if out := runCheckCLI(t, "--config.file", testutil.WriteFile(t, "config.yaml", testutil.MinimalConfig), "--log.level", "debug"); out.code != 0 {
+		t.Fatalf("exit=%d\n%s", out.code, out.stderr)
 	}
 }
 

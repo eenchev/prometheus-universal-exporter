@@ -96,13 +96,23 @@ func ValidateShutdownTimeout(timeout time.Duration) error {
 // keep-alive connection idle for httpIdleTimeout is closed, so a client that
 // went away without closing it does not keep it, and its goroutine, until TCP
 // notices. Prometheus reuses its connection between scrapes, which are far
-// more frequent than that. There is no write timeout: a probe may take as long
-// as its scrape timeout, and its own deadline bounds it (scrapetimeout.go).
+// more frequent than that. The server has no write timeout of its own, which
+// would count from the request's arrival and so cut off a probe that takes as
+// long as its scrape timeout: the probe's own deadline bounds that
+// (scrapetimeout.go), and the writing of the answer is bounded from its first
+// byte (AnswerWriteTimeout, middleware.go).
+//
+// A request's line and headers together may be httpMaxHeaderBytes, where Go's
+// default is 1 MiB: a probe is a URL of a few parameters, each bounded on its
+// own (probeparams.go), and the headers Prometheus sends.
 var (
 	httpReadHeaderTimeout = 10 * time.Second
 	httpReadTimeout       = 30 * time.Second
 	httpIdleTimeout       = 2 * time.Minute
 )
+
+// httpMaxHeaderBytes bounds a request's line and headers.
+const httpMaxHeaderBytes = 64 << 10
 
 // ValidateListenAddress refuses a --web.listen-address the server could not
 // listen on: it must be host:port, the host empty, a name or an address,
@@ -123,7 +133,7 @@ func ValidateListenAddress(address string) error {
 }
 
 // NewHTTPServer returns the exporter's HTTP server on address, with the read
-// and idle timeouts above.
+// and idle timeouts and the header limit above.
 func NewHTTPServer(address string, handler http.Handler) *http.Server {
 	return &http.Server{
 		Addr:              address,
@@ -131,6 +141,7 @@ func NewHTTPServer(address string, handler http.Handler) *http.Server {
 		ReadHeaderTimeout: httpReadHeaderTimeout,
 		ReadTimeout:       httpReadTimeout,
 		IdleTimeout:       httpIdleTimeout,
+		MaxHeaderBytes:    httpMaxHeaderBytes,
 	}
 }
 

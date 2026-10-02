@@ -56,6 +56,14 @@ func main() { os.Exit(run(os.Args[1:], os.Stdout, os.Stderr)) }
 // configuration is invalid, a --dry-run fails or the server stops with an error,
 // and 2 when the command line itself cannot be parsed.
 func run(args []string, stdout, stderr io.Writer) int {
+	// SIGHUP is caught before anything else, and until run returns. Its
+	// default action ends the process, and a start can take seconds — the
+	// configuration is read and its Python scripts are checked — in which a
+	// reload sidecar or an operator's kill -HUP may already send one. It
+	// waits in the channel, which holds one, and is the first thing the
+	// reload loop finds: one reload once the exporter has started.
+	hup := exporter.ReloadSignals()
+	defer signal.Stop(hup)
 	flags := flag.NewFlagSet("prometheus-universal-exporter", flag.ContinueOnError)
 	// The flag package would print its own plain-text complaint to stderr;
 	// it is silenced so every line on stderr stays JSON, and the error is
@@ -95,6 +103,16 @@ func run(args []string, stdout, stderr io.Writer) int {
 			return 0
 		}
 		newLogger("info", stderr).Error("invalid command line; exiting", "error", err.Error())
+		return 2
+	}
+	// The flag package stops reading at the first argument that is not a
+	// flag and leaves every flag after it unread, without a word:
+	// "--config.watch true --static-targets-file=targets.yaml" would start
+	// an exporter with no static targets. No argument is taken that way, so
+	// one is a mistake, most often a value written after its flag rather
+	// than with it.
+	if flags.NArg() > 0 {
+		newLogger("info", stderr).Error("invalid command line; exiting", "error", fmt.Sprintf("unexpected argument %q; flags take --name=value", flags.Arg(0)))
 		return 2
 	}
 	// A negative offset is a malformed flag rather than a configuration
@@ -203,7 +221,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 	}
 	config.LogNotices(logger, *configFile, conf)
 
-	if err := transform.ValidatePythonScripts(*pythonPath, conf); err != nil {
+	if err := config.ValidatePythonScripts(*pythonPath, conf); err != nil {
 		logger.Error("invalid startup configuration; exiting", "error", err)
 		return 1
 	}
@@ -255,10 +273,11 @@ func run(args []string, stdout, stderr io.Writer) int {
 	// SIGHUP is caught until the process exits, not only until the first
 	// SIGTERM: a reload sidecar sending one during the shutdown would
 	// otherwise meet Go's default action and end the process at once,
-	// cutting off the probes in flight and the last OTLP export.
+	// cutting off the probes in flight and the last OTLP export. It has been
+	// caught since run began; one sent during the start reloads now.
 	reloadCtx, stopReloads := context.WithCancel(context.Background())
 	defer stopReloads()
-	go exporter.ReloadOn(reloadCtx, exporter.ReloadSignals(), manager, logger)
+	go exporter.ReloadOn(reloadCtx, hup, manager, logger)
 	// The static targets keep being scraped, and what they and the probes
 	// queue keeps being exported, through --web.shutdown-delay, while the
 	// endpoints are still served, so the two loops have a context of their

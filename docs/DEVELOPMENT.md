@@ -68,6 +68,15 @@ standard library imports, and that changes between releases — from 3.12,
 `zoneinfo` loads `sysconfig`, which imports the blocked `threading`, so a
 sandbox change can pass on 3.11 and fail in the image.
 
+One test uses a Python module the image does not ship:
+`TestTheStrictOpenMetricsParserReadsEveryAnswerOfOddValues` gives the
+OpenMetrics answers for metric sets with odd values to the strict parser of
+`prometheus_client`, and is skipped, saying what is missing, where `python3`
+does not have the module (`pip install prometheus-client`). The rules that
+parser checks are also written out in Go beside it
+(`strictOpenMetricsError`) and checked by tests that run everywhere; the
+module confirms that they are the parser's.
+
 ## The configuration schema
 
 `configs/config.schema.json`, `configs/collector-file.schema.json` for
@@ -85,6 +94,43 @@ Allowed values, patterns and descriptions that a struct cannot express are added
 by path, in `configSchemaRules` for the configuration and collector files and
 in `targetsSchemaRules` for the target file, both in
 `internal/config/configschema.go`.
+
+When the exporter comes to refuse a value, give the schema the rule too where
+a schema can tell, and add the value to
+`test/repository/schemaloader_test.go`, which puts each document of its
+tables through both the committed schema and `config.Load` and fails when
+they disagree. What a schema cannot tell — a least duration, the range of a
+size — goes in the key's description and in that file's table of what the
+exporter alone refuses.
+
+## Measuring speed
+
+`internal/exporter/probe_bench_test.go` benchmarks a whole probe — the request
+to a target on the same machine, the decode, the transform, validation and
+the answer — for each transform over the same items, 100 and 5,000 of them:
+
+```sh
+go test -run '^$' -bench 'Probe' -benchtime 2s ./internal/exporter/
+```
+
+`jq_cached` is answered from the cache, so it measures writing an answer
+alone, and `/gzip` writing it compressed. Measure a change to the pipeline
+with these before and after, on a machine doing nothing else: `ns/op` moves
+with whatever else runs, while `B/op` and `allocs/op` do not, and say most
+about a change that saves allocation. A profile says where the time goes:
+
+```sh
+go test -run '^$' -bench 'Probe/prom/n=5000$' -benchtime 2s -cpuprofile cpu.out ./internal/exporter/
+go tool pprof -top cpu.out
+```
+
+What was made fast stays fast by tests, not by the benchmarks: the decoders,
+the transforms, the duplicate check and the body read each have a test that
+bounds their allocations per series or per body, and a test that compares
+them with the plainer code they replaced, kept beside the tests, over a
+table and tens of thousands of generated inputs. The allocation bounds are
+skipped under `-race`, which changes what is allocated; `make ci` runs the
+tests without it as well.
 
 ## Tests that reach the internet
 
@@ -122,6 +168,17 @@ in it must be named `TestExternal*`, so `make test-external` picks it up, and
 start with `requireExternalE2E(t)`. `TestExternalSuiteTestsAreOptIn`, which
 does run by default, fails when either is missing.
 
+The default suite covers every example too, without the network. The tests in
+`test/repository` that check the examples — against the schemas, that each
+loads, that its scripts satisfy the contract, and that a static target file
+is valid with the configuration in its directory — walk `examples/` at any
+depth, so a new example, a file or a directory like `examples/open-meteo/`,
+is covered without a test naming it. And two examples run against a local
+stand-in answering in their service's documented shape, with every series
+asserted: Filebeat's (`internal/exporter/filebeat_example_test.go`) and
+Open-Meteo's (`internal/exporter/openmeteo_example_test.go`, which also checks
+the query the collector sent and scrapes the example's static targets).
+
 Static analysis is configured in `.golangci.yml`, so a local `make lint` and the
 CI run check exactly the same rules. Install the pinned version with `make
 lint-install`; the Makefile and the CI workflow pin the same version, and a test
@@ -147,8 +204,74 @@ workflow that installs helm installs too, and a test keeps them equal. `make
 helm-test` refuses another installed release, since helm releases word the
 schema's errors and render details differently — a chart test that passes
 with one can fail with another. `make helm-install` installs it with `go
-install` (Homebrew's `helm` works too when its version matches). To move to a
-newer helm, change `HELM_VERSION` and the workflows' `version:` together.
+install`, setting the version at link time as helm's release build does: built
+from source without that, helm reports only its release line, `v4.3`, and `make
+helm-test` would refuse the helm just installed. (Homebrew's `helm` works too
+when its version matches.) To move to a newer helm, change `HELM_VERSION` and
+the workflows' `version:` together.
+
+`make helm-test` makes every chart check `ci.yml` makes: the same renders, the
+same values that have to be rejected and the same lines looked for in what is
+rendered. A test (`TestMakeHelmTestChecksWhatTheCIWorkflowChecks`) reads both
+and fails when one has a case the other lacks, so add a chart case to both.
+
+Both go beyond the plain renders: the Recreate strategy without a
+`rollingUpdate`, a monitor's `port` and `namespaceSelector` on both monitor
+types, the garbage collector's target (`goGC.percent` rendered as `GOGC`, and
+no `GOGC` by default), a configuration file whose first line is indented, the
+chart as a dependency of a parent chart, and the values that must be refused,
+among them a monitor's `auth` without a `type`, a monitor's `port` given as a
+number, a `scrapeTimeout` longer than its `interval`, an Ingress without the
+Service, a mount at the configuration directory written with a trailing
+slash, and a `goGC.percent` that is `off` with no Go memory limit, `0`, or
+set beside a `GOGC` entry in `env`. The Go tests in `test/repository`
+check the same behaviour in more detail, but are skipped without helm, so a
+case worth keeping goes into these two lists as well. Write a case that looks
+at what is rendered so that it keeps the render first
+(`out="$(helm template ...)"`) and then reads `"$out"`: neither `make` nor the
+workflow's shell fails a pipeline whose first command failed, so a check that
+some text is absent would pass on a render that failed. Every such check in
+the two lists is written that way; `tools/check-manifests.py`, which the
+render is piped into, refuses a render with no manifests for the same reason.
+
+A check also has to be able to fail, and the same reader says whether each
+one can (`TestEveryHelmCheckOfMakeAndCIFailsWhenItShould`), naming the file,
+the line and the recipe or step of one that cannot. What it holds a check to
+is how the two files run their shell:
+
+- make runs each recipe line, with the lines continued onto it, in a shell of
+  its own started without `-e`, and the line's result is its last command's.
+  So a line of more than one command starts with `set -eu`, and no line
+  starts with make's `-`, which ignores a failure. GitHub starts a step's
+  shell as `bash -e`, so a step needs no `set -e`; a step with a `shell:` of
+  its own that lacks the flag, with `continue-on-error`, or with an `if` other
+  than the chart steps' is reported.
+- A render that must succeed, or a line that must be found, is a command of
+  its own: nothing follows it with `||`, `&&` or `&`, each of which takes its
+  failure away, under `set -e` too.
+- A render that must be refused, or a text that must be absent, is the one
+  condition of an `if` whose `then` branch runs `exit 1`:
+  `if helm template ... >/dev/null 2>&1; then echo "..." >&2; exit 1; fi`.
+  Without the `exit 1` the check prints its message and passes.
+- helm is piped only into `grep -q` as a command of its own or into
+  `tools/check-manifests.py`, both of which fail on a render of nothing; a
+  kept render holds the one helm command, and is read with `grep -q` and a
+  pattern, `python3 -c` or `tools/check-manifests.py`.
+
+The reader reports what it does not understand (`!`, `while`, `case`, a
+subshell) rather than passing it. `TestAHelmCheckMadeToothlessIsNoticed`
+makes each such change — a `|| true`, a dropped `exit 1` or `set -eu`, a
+leading `-`, `continue-on-error` and the like — to a copy of the Makefile's
+or the workflow's text in memory, and fails if the reader does not report it.
+
+The files those cases render are in `testdata/chart`: a static target
+document, `indented-first-line.yaml`, and `parent`, a chart whose one
+dependency is the exporter's chart by a `file://` path. `helm dependency
+build` writes a `charts` directory and a `Chart.lock` into the parent, so
+`make helm-test` and CI build it in a temporary copy of the two charts and the
+working tree stays as it is; it needs no network. The parent pins the chart's
+version, as a real parent does, and a test fails when a chart bump leaves it
+behind.
 
 Run `make hooks` once in a clone. It points git at `.githooks`, whose
 `pre-commit` hook runs `make precommit` — `gofmt`, `golangci-lint` and `gopls

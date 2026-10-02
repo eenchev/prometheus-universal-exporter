@@ -121,18 +121,18 @@
                 "type": "integer"
               },
               "max_output_bytes": {
-                "description": "A size: a number of bytes, or a number with a unit such as 512KiB, 10MB or 1.5GiB.",
+                "description": "A size: a whole number of bytes, or a number with a unit such as 512KiB, 10MB or 1.5GiB. Under 2^63 bytes, which the exporter checks when the configuration loads.",
                 "minimum": 0,
-                "pattern": "^[0-9]+(\\.[0-9]+)? ?([kKmMgGtT][iI]?)?[bB]?$",
+                "pattern": "^([0-9]+|[0-9]+(\\.[0-9]+)? ?([kKmMgGtT][iI]?[bB]?|[bB]))$",
                 "type": [
                   "integer",
                   "string"
                 ]
               },
               "max_response_bytes": {
-                "description": "A size: a number of bytes, or a number with a unit such as 512KiB, 10MB or 1.5GiB.",
+                "description": "A size: a whole number of bytes, or a number with a unit such as 512KiB, 10MB or 1.5GiB. Under 2^63 bytes, which the exporter checks when the configuration loads.",
                 "minimum": 0,
-                "pattern": "^[0-9]+(\\.[0-9]+)? ?([kKmMgGtT][iI]?)?[bB]?$",
+                "pattern": "^([0-9]+|[0-9]+(\\.[0-9]+)? ?([kKmMgGtT][iI]?[bB]?|[bB]))$",
                 "type": [
                   "integer",
                   "string"
@@ -141,7 +141,7 @@
               "max_script_memory": {
                 "description": "The most memory, as address space, each of the collector's Python workers may use, the interpreter and its libraries included, such as 256MiB. A script that needs more fails with a MemoryError. At least 32MiB; 0, the default, leaves it unbounded. Enforced on Linux.",
                 "minimum": 0,
-                "pattern": "^[0-9]+(\\.[0-9]+)? ?([kKmMgGtT][iI]?)?[bB]?$",
+                "pattern": "^([0-9]+|[0-9]+(\\.[0-9]+)? ?([kKmMgGtT][iI]?[bB]?|[bB]))$",
                 "type": [
                   "integer",
                   "string"
@@ -555,9 +555,9 @@
                 "type": "integer"
               },
               "max_response_bytes": {
-                "description": "A size: a number of bytes, or a number with a unit such as 512KiB, 10MB or 1.5GiB.",
+                "description": "A size: a whole number of bytes, or a number with a unit such as 512KiB, 10MB or 1.5GiB. Under 2^63 bytes, which the exporter checks when the configuration loads.",
                 "minimum": 0,
-                "pattern": "^[0-9]+(\\.[0-9]+)? ?([kKmMgGtT][iI]?)?[bB]?$",
+                "pattern": "^([0-9]+|[0-9]+(\\.[0-9]+)? ?([kKmMgGtT][iI]?[bB]?|[bB]))$",
                 "type": [
                   "integer",
                   "string"
@@ -566,7 +566,7 @@
               "max_total_bytes": {
                 "description": "localfile with request.files: the most one scrape reads across every file; a file that would go past it is refused. Defaults to 64 MiB.",
                 "minimum": 0,
-                "pattern": "^[0-9]+(\\.[0-9]+)? ?([kKmMgGtT][iI]?)?[bB]?$",
+                "pattern": "^([0-9]+|[0-9]+(\\.[0-9]+)? ?([kKmMgGtT][iI]?[bB]?|[bB]))$",
                 "type": [
                   "integer",
                   "string"
@@ -790,11 +790,18 @@
                 "additionalProperties": false,
                 "properties": {
                   "delimiter": {
-                    "type": [
-                      "string",
-                      "number",
-                      "boolean"
-                    ]
+                    "description": "csv decoder: the one character between fields, any but a double quote and a line break. Defaults to a comma. For a tab, write \"\\t\" in double quotes, where YAML reads \\t as the tab character.",
+                    "maxLength": 1,
+                    "not": {
+                      "enum": [
+                        "\"",
+                        "\r",
+                        "\n",
+                        "\u0000",
+                        "�"
+                      ]
+                    },
+                    "type": "string"
                   },
                   "header": {
                     "type": "boolean"

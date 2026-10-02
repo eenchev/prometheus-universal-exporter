@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"net/http"
 	"net/url"
 	"os"
@@ -265,29 +266,18 @@ func buildRequestURL(target string, c *model.Collector, overrides RequestOverrid
 		}
 	}
 	if requestPath != "" {
-		// The target's path is joined in both its forms, so an escape it
-		// was written with, such as %2F inside a segment, is sent as
-		// written rather than decoded into a new segment.
-		rawBase := strings.TrimSuffix(u.EscapedPath(), "/")
-		base := strings.TrimSuffix(u.Path, "/")
-		p := strings.TrimPrefix(requestPath, "/")
-		u.Path = path.Join("/", base, p)
-		u.RawPath = path.Join("/", rawBase, (&url.URL{Path: p}).EscapedPath())
+		// The path is joined in its escaped form, the target's as it was
+		// written and the request path's with the escapes it was written
+		// with (escapedRequestPath), so an escape such as %2F inside a
+		// segment is sent as written rather than decoded into a new segment
+		// or escaped a second time, into %252F.
+		raw := path.Join("/", strings.TrimSuffix(u.EscapedPath(), "/"), escapedRequestPath(strings.TrimPrefix(requestPath, "/"), len(bound) > 0))
 		// A trailing slash is kept, once: request.path / on a target
 		// without a path of its own is /, not //.
-		if strings.HasSuffix(requestPath, "/") && !strings.HasSuffix(u.Path, "/") {
-			u.Path += "/"
-			u.RawPath += "/"
+		if strings.HasSuffix(requestPath, "/") && !strings.HasSuffix(raw, "/") {
+			raw += "/"
 		}
-		// A raw form the default escaping gives anyway is not kept; one
-		// that does not decode to the path is ignored by Go, which then
-		// escapes the path itself.
-		if u.RawPath == (&url.URL{Path: u.Path}).EscapedPath() {
-			u.RawPath = ""
-		}
-	}
-	if len(bound) > 0 {
-		applyPathParams(u, bound)
+		setEscapedPath(u, applyPathParams(raw, bound))
 	}
 	query := c.Request.Query
 	if bind {
@@ -298,23 +288,141 @@ func buildRequestURL(target string, c *model.Collector, overrides RequestOverrid
 			return nil, err
 		}
 	}
-	q := u.Query()
+	// The target's own query is sent as it was written, byte for byte:
+	// parsed and encoded again, a bare key would gain a =, a pair with a ;
+	// in it would be dropped, and the pairs would be sorted and escaped
+	// anew. Only what could not be sent at all is escaped (sendableQuery).
+	// request.query is added after it, encoded.
+	added := make(url.Values, len(query))
 	for k, v := range query {
-		q.Set(k, v)
+		added.Set(k, v)
 	}
-	// What the type builds itself goes last, over request.query; the
-	// label drops the query, so it is built only for the request.
+	rawQuery := joinQuery(sendableQuery(u.RawQuery), added.Encode())
+	// What the type builds itself goes last, and alone: the label drops the
+	// query, so it is built only for the request.
 	if rt := requestTypeOf(c); bind && rt != nil && rt.Query != nil {
 		own, err := rt.Query(c, overrides)
 		if err != nil {
 			return nil, err
 		}
-		for k, v := range own {
-			q[k] = v
+		rawQuery = joinQuery(withoutQueryKeys(rawQuery, own), own.Encode())
+	}
+	u.RawQuery = rawQuery
+	return u, nil
+}
+
+// escapedRequestPath is a request path in the form it is sent in. A % with
+// two hexadecimal digits after it is an escape the author wrote, and is kept
+// as written: /projects/group%2Fproject asks for exactly that, where escaping
+// the % again would ask for group%252Fproject, a path nobody wrote. Everything
+// else is escaped as a path is, a % that begins no escape included, as %25.
+// With tokens, the NUL bytes that mark where bound values go (pathToken) are
+// left as they are for applyPathParams to find: an escape cannot be mistaken
+// for one, since a written %00 stays the text %00.
+func escapedRequestPath(p string, tokens bool) string {
+	var b strings.Builder
+	literal := 0
+	flush := func(end int) {
+		if end > literal {
+			b.WriteString((&url.URL{Path: p[literal:end]}).EscapedPath())
 		}
 	}
-	u.RawQuery = q.Encode()
-	return u, nil
+	for i := 0; i < len(p); i++ {
+		switch {
+		case p[i] == '%' && i+2 < len(p) && isHex(p[i+1]) && isHex(p[i+2]):
+			flush(i)
+			b.WriteString(p[i : i+3])
+			i += 2
+			literal = i + 1
+		case tokens && p[i] == 0:
+			flush(i)
+			b.WriteByte(0)
+			literal = i + 1
+		}
+	}
+	flush(len(p))
+	return b.String()
+}
+
+func isHex(c byte) bool {
+	return c >= '0' && c <= '9' || c >= 'a' && c <= 'f' || c >= 'A' && c <= 'F'
+}
+
+// setEscapedPath gives u the path whose escaped form is raw. The URL keeps
+// both forms, so Go sends the escaped one as it is; a raw form the default
+// escaping gives anyway is not kept. raw is made of a parsed URL's escaped
+// path and escapedRequestPath's output, so it always decodes.
+func setEscapedPath(u *url.URL, raw string) {
+	decoded, err := url.PathUnescape(raw)
+	if err != nil {
+		decoded, raw = raw, ""
+	}
+	u.Path, u.RawPath = decoded, raw
+	if raw == (&url.URL{Path: decoded}).EscapedPath() {
+		u.RawPath = ""
+	}
+}
+
+// sendableQuery is a query as written, with the few characters escaped that
+// a URL cannot hold as they are: a space, which a target taken from a probe
+// parameter may well hold and which would end the URL in the request line,
+// answered 400 Bad Request, a double quote, angle brackets and every byte
+// outside ASCII. They are escaped where they stand, the space as %20;
+// everything else, a % that begins no escape included, stays as it was
+// written.
+func sendableQuery(raw string) string {
+	const hex = "0123456789ABCDEF"
+	var b strings.Builder
+	for i := 0; i < len(raw); i++ {
+		switch c := raw[i]; {
+		case c <= ' ' || c == '"' || c == '<' || c == '>' || c >= 0x7f:
+			b.WriteByte('%')
+			b.WriteByte(hex[c>>4])
+			b.WriteByte(hex[c&0xf])
+		default:
+			b.WriteByte(c)
+		}
+	}
+	return b.String()
+}
+
+// joinQuery puts two encoded queries together, either of which may be empty.
+func joinQuery(first, second string) string {
+	if first == "" || second == "" {
+		return first + second
+	}
+	return first + "&" + second
+}
+
+// withoutQueryKeys is the encoded query raw without the pairs whose name is
+// one of own, the parameters a request type sets itself, in any case; every
+// other pair stays as it was written. The type's own are then what a server
+// reads, whichever of two values it would take: a graphite target that named
+// target=, as a probe's may, would otherwise add an expression to the
+// collector's. A pair is dropped too when a ; in it sets one of them, as
+// servers that still split on ; would read it.
+func withoutQueryKeys(raw string, own url.Values) string {
+	if raw == "" || len(own) == 0 {
+		return raw
+	}
+	pairs := strings.Split(raw, "&")
+	kept := pairs[:0]
+	for _, pair := range pairs {
+		drop := false
+		for _, part := range strings.Split(pair, ";") {
+			name, _, _ := strings.Cut(part, "=")
+			if decoded, err := url.QueryUnescape(name); err == nil {
+				name = decoded
+			}
+			for key := range own {
+				drop = drop || strings.EqualFold(name, key)
+			}
+		}
+		if !drop {
+			kept = append(kept, pair)
+		}
+	}
+	return strings.Join(kept, "&")
 }
 
 // checkScheme refuses a target scheme request.allowed_schemes does not
@@ -503,7 +611,7 @@ func fetch(ctx context.Context, target string, c *model.Collector, overrides Req
 		retryBackoff = 0
 	}
 
-	authorization, err := requestAuthorization(c)
+	authorization, err := collectorAuthorization(c, forwarded...)
 	if err != nil {
 		return nil, err
 	}
@@ -551,6 +659,20 @@ func fetch(ctx context.Context, target string, c *model.Collector, overrides Req
 			// Go's error quotes the whole URL, request.query included.
 			err = RedactURLErrors(err)
 			traceOutcome(requestContext, "error: "+err.Error())
+			// Headers over the bound are over it on every attempt, and
+			// Go's own words for it name neither the limit's reason nor
+			// what to do about it.
+			if responseHeadersTooLarge(err) {
+				return nil, model.MarkError(fmt.Errorf("the response headers are larger than %d bytes, the most the exporter reads of a response's headers, whatever max_response_bytes allows its body; the target has to send fewer or smaller headers", maxResponseHeaderBytes), model.ErrLimitExceeded)
+			}
+			// Over HTTP/2 the same answer mostly ends as a connection the
+			// client closed for a protocol error, which says nothing of
+			// headers and has other causes too, so it cannot be called a
+			// limit. It is not retried either: what broke the protocol
+			// once is sent again, and the error says where to look.
+			if http2ProtocolError(err) {
+				return nil, fmt.Errorf("HTTP request failed: %w: the HTTP/2 connection was closed over what the target sent, which is not retried; an answer whose headers are larger than %d bytes, the most the exporter reads of a response's headers, ends this way over HTTP/2, so look at the size of the target's response headers first", err, maxResponseHeaderBytes)
+			}
 			// A refused target is refused again on every attempt.
 			if attempt < retryAttempts && requestContext.Err() == nil && !errors.Is(err, ErrTargetRefused) {
 				if waitErr := waitRetry(requestContext, retryBackoff); waitErr != nil {
@@ -568,7 +690,15 @@ func fetch(ctx context.Context, target string, c *model.Collector, overrides Req
 			_ = resp.Body.Close()
 			return nil, model.MarkError(fmt.Errorf("response size %d exceeds limit %d", resp.ContentLength, limit), model.ErrLimitExceeded)
 		}
-		body, readErr := io.ReadAll(io.LimitReader(resp.Body, limit+1))
+		// The Content-Length is the length of the body as it is read here:
+		// Go takes it off an answer it decompresses itself, the only kind
+		// decompressed at all (checkHeaderNames), and a HEAD answer's is
+		// that of a body it does not have.
+		declared := resp.ContentLength
+		if method == http.MethodHead {
+			declared = 0
+		}
+		body, readErr := readBody(resp.Body, limit, declared)
 		closeErr := resp.Body.Close()
 		if readErr != nil {
 			readErr = RedactURLErrors(readErr)
@@ -632,6 +762,11 @@ const defaultResponseLimit = 10 << 20
 // the one that is set otherwise, and 10 MiB when neither is. Neither is
 // filled in with the default, so either alone may raise the limit past it.
 // Every request type reads through it.
+//
+// Each of them reads one byte past the limit to tell an answer of exactly the
+// limit from a longer one, so the limit is at most maxResponseLimit, one
+// under the largest number: a limit written as that number, for "no limit",
+// would otherwise wrap round to a read of nothing.
 func responseLimit(c *model.Collector) int64 {
 	limit := c.Limits.MaxResponseBytes
 	if limit <= 0 || c.Request.MaxResponseBytes > 0 && c.Request.MaxResponseBytes < limit {
@@ -640,8 +775,11 @@ func responseLimit(c *model.Collector) int64 {
 	if limit <= 0 {
 		limit = defaultResponseLimit
 	}
-	return int64(limit)
+	return min(int64(limit), maxResponseLimit)
 }
+
+// maxResponseLimit is the largest response limit there is (responseLimit).
+const maxResponseLimit = math.MaxInt64 - 1
 
 // IdempotentMethod reports whether sending a request with method twice has the
 // effect of sending it once, so a failed one may be retried without asking:
@@ -746,10 +884,16 @@ func safeTarget(raw string) string {
 // rejects 10.0.0.5:8080 outright ("first path segment cannot contain colon")
 // and reads legacy.example:8080 as the scheme "legacy.example". So the
 // decision is made on the text, before parsing: no "://" means no scheme.
+// A scheme ends before the path, the query and the fragment begin, so a
+// "://" after the first /, ? or # is part of those — the URL in
+// host:8080/login?next=http://other/ — and names no scheme.
 // A target that wants https says so explicitly.
 func normalizeTarget(raw string) string {
 	raw = strings.TrimSpace(raw)
-	if raw == "" || strings.Contains(raw, "://") {
+	if raw == "" {
+		return raw
+	}
+	if scheme, _, found := strings.Cut(raw, "://"); found && !strings.ContainsAny(scheme, "/?#") {
 		return raw
 	}
 	return "http://" + raw

@@ -21,7 +21,10 @@ import (
 // one of them does. What remains is what the response costs before any
 // series is made — gojq's walk over the array, the nodes an XPath selects —
 // and is a fraction of it; refusing the scrape after making every series, as
-// the count afterwards did, allocated all of it.
+// the count afterwards did, allocated all of it. A prometheus pass-through
+// makes its series of the decoded ones without copying them, so there both
+// are next to nothing, the error itself being most of a refusal: a refusal
+// within refusalBytes stopped in time whatever making every series costs.
 
 const (
 	manySeries  = 100000
@@ -30,6 +33,9 @@ const (
 	// 11th series; one that reads every line makes several per line.
 	boundedAllocs   = 5000
 	wantLimitFailed = "metric count 11 exceeds limit 10"
+	// refusalBytes is more than refusing a scrape allocates by itself, and
+	// far less than a hundredth of the series any case's body describes.
+	refusalBytes = 16 << 10
 )
 
 func repeated(item string, n int) string { return strings.Repeat(item, n) }
@@ -89,7 +95,7 @@ func TestTransformsStopAtTheSeriesLimit(t *testing.T) {
 				t.Fatalf("err = %v, want %q marked as a limit", err, wantLimitFailed)
 			}
 			t.Logf("all %d, limited %d", all, limited)
-			if limited > all/2 {
+			if limited > all/2 && limited > refusalBytes {
 				t.Fatalf("refusing the scrape allocated %d bytes, making every series %d; it should stop at the 11th series", limited, all)
 			}
 		})

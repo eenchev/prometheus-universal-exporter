@@ -1,6 +1,9 @@
 package transform
 
 import (
+	"fmt"
+	"math"
+	"math/rand/v2"
 	"net/http"
 	"strings"
 	"testing"
@@ -102,13 +105,87 @@ func TestValueMapWithoutADefault(t *testing.T) {
 	}
 }
 
+// A scale that is exactly one over a whole number, as 0.001 is written,
+// divides by that number, so the value is the nearest float to the exact
+// quotient, not a product off by the representation error of 0.001 or
+// 0.000000001. Any other scale multiplies.
+//
+// "One over a whole number" was taken within a relative tolerance of 1e-9,
+// which every scale below about 2e-9 is within and 0.3333333333 too: 2e9
+// scaled by 1.5e-9 gave 2.9999999985 and 3e10 scaled by 0.3333333333 gave
+// 1e10. Only the scale that is the float64 nearest to the reciprocal
+// divides; one that comes close to it multiplies, as on main.
+func TestAScaleOfOneOverAWholeNumberDivides(t *testing.T) {
+	for _, c := range []struct{ value, scale, want float64 }{
+		{412, 0.001, 0.412},
+		{3121894012, 0.000000001, 3.121894012},
+		{3121894012, 1e-9, 3.121894012},
+		{17.5, 0.001, 0.0175},
+		{7, -0.01, -0.07},
+		{7, 0.5, 3.5},
+		{7, 0.25, 1.75},
+		{7, 0.1, 0.7},
+		{7, 0.2, 1.4},
+		{0.25, 100, 25},
+		{5, 0.4, 2},
+		{5, 2.5, 12.5},
+		{2e9, 1.5e-9, 3},
+		{3e10, 0.3333333333, 9999999999},
+	} {
+		if got := scaled(model.MetricRule{Scale: &c.scale}, c.value); got != c.want {
+			t.Errorf("%v scaled by %v = %v, want %v", c.value, c.scale, got, c.want)
+		}
+	}
+	// Which scales divide, and by what: with a value the quotient and the
+	// product differ for, the result says which was taken.
+	for _, c := range []struct{ scale, whole float64 }{{0.001, 1000}, {0.000000001, 1e9}, {1e-9, 1e9}, {-0.01, -100}, {0.5, 2}, {0.25, 4}, {0.1, 10}, {0.2, 5}} {
+		for _, value := range []float64{412, 3121894012, 17.5, 7, 3, 1e-300, -5.5e20} {
+			if got := scale(value, c.scale); got != value/c.whole {
+				t.Errorf("%v scaled by %v = %v, want it divided by %v: %v", value, c.scale, got, c.whole, value/c.whole)
+			}
+		}
+	}
+	for _, scaleBy := range []float64{1.5e-9, 7e-11, 3e-10, 0.3333333333, 0.9999999995, 0.3, 2.5, 100, 1, -1, 7.5e-10, 2.78e-13, 0.50000000099, 5e-324, 1e308, math.MaxFloat64} {
+		for _, value := range []float64{2e9, 3e10, 1e10, 412, 7, 3, 5} {
+			if got := scale(value, scaleBy); got != value*scaleBy {
+				t.Errorf("%v scaled by %v = %v, want the product %v", value, scaleBy, got, value*scaleBy)
+			}
+		}
+	}
+	// Every exact reciprocal divides by its whole number: small ones, powers
+	// of ten and of two, and whole numbers at random up to 2^50.
+	wholes := []float64{-1e9, -1000, -3, -2}
+	for n := 2.0; n <= 5000; n++ {
+		wholes = append(wholes, n)
+	}
+	for n := 10.0; n <= 1e15; n *= 10 {
+		wholes = append(wholes, n, n*3, n-1)
+	}
+	for n := 4.0; n <= 1<<50; n *= 2 {
+		wholes = append(wholes, n, n+1, n-1)
+	}
+	random := rand.New(rand.NewPCG(20261002, 6))
+	for range 20000 {
+		wholes = append(wholes, float64(2+random.Int64N(1<<50)))
+	}
+	for _, whole := range wholes {
+		for _, value := range []float64{412, 3121894012, 0.3, 1 + random.Float64()*1e6} {
+			if got := scale(value, 1/whole); got != value/whole {
+				t.Fatalf("%v scaled by 1/%v = %v, want %v", value, whole, got, value/whole)
+			}
+		}
+	}
+}
+
 // scale multiplies a prometheus rule's samples, and refuses a histogram;
 // value_map, and either on a python transform, is refused at load, as is a
 // scale of 0.
 func TestValueRulesPerTransform(t *testing.T) {
 	half := 0.5
+	// Each body holds one of the two metrics, so neither rule is required.
+	optional := false
 	c := model.Collector{Name: "p", Decoder: model.DecoderConfig{Type: "prometheus"}, Transform: model.TransformConfig{Type: "prometheus"},
-		Metrics: []model.MetricRule{{Expression: "^up$", Scale: &half}, {Expression: "^h$", Scale: &half, ErrorMode: model.ErrorModeFail}}}
+		Metrics: []model.MetricRule{{Expression: "^up$", Scale: &half, Required: &optional}, {Expression: "^h$", Scale: &half, ErrorMode: model.ErrorModeFail, Required: &optional}}}
 	set, err := runBody(t, c, "text/plain", "# TYPE up gauge\nup 4\n")
 	if err != nil || len(set.Metrics) != 1 || set.Metrics[0].Value != 2 {
 		t.Fatalf("%v %+v", err, set)
@@ -265,4 +342,39 @@ func TestValueErrorsNameTheValue(t *testing.T) {
 	if _, err := runBody(t, c, "application/json", `{"state": {"a": 1}}`); err == nil || !strings.Contains(err.Error(), "value is an object with 1 key, which is neither text value_map can look up nor a number") {
 		t.Errorf("err=%v", err)
 	}
+}
+
+// ruleTextValue gives a text the value ruleValue gives it, or the error it
+// gives it in the same words, for rules with and without value_map, its "*"
+// and scale: a table of the texts a response holds where a number is
+// expected, and random ones made of what numbers are written with.
+func TestRuleTextValueAgreesWithRuleValue(t *testing.T) {
+	thousandth, double := 0.001, 2.0
+	rules := []model.MetricRule{
+		{Name: "plain"},
+		{Name: "scaled", Scale: &thousandth},
+		{Name: "mapped", ValueMap: map[string]float64{"up": 1, "down": 0, "7": 70}},
+		{Name: "mapped and scaled", ValueMap: map[string]float64{"up": 1, "1e3": 5}, Scale: &double},
+		{Name: "mapped with any", ValueMap: map[string]float64{"up": 1, "*": -1}},
+	}
+	texts := []string{"1", " 2 ", "\t3\n", "1e3", "0x10", "0b11", "NaN", "nan", "+Inf", "-inf", "Infinity", "", "  ", "up", " up ", "UP", "down", "7", " 7", "1_000", "1,5", "١", "1e400", "-1e400", ".5", "5.", "-0", "abc", "1 2", "0x1p-2", strings.Repeat("9", 400), strings.Repeat("text ", 30), "caf\xc3\xa9", "\xff"}
+	random := rand.New(rand.NewPCG(20261002, 3))
+	const alphabet = "0123456789+-.eE xXpP_iInNfFaAuUpP \t"
+	for range 4000 {
+		text := make([]byte, random.IntN(8))
+		for i := range text {
+			text[i] = alphabet[random.IntN(len(alphabet))]
+		}
+		texts = append(texts, string(text))
+	}
+	for _, rule := range rules {
+		for _, text := range texts {
+			want, wantErr := ruleValue(rule, text)
+			got, gotErr := ruleTextValue(rule, text)
+			if math.Float64bits(got) != math.Float64bits(want) || fmt.Sprint(gotErr) != fmt.Sprint(wantErr) {
+				t.Fatalf("rule %s, text %q: %v, %v; ruleValue gives %v, %v", rule.Name, text, got, gotErr, want, wantErr)
+			}
+		}
+	}
+	t.Logf("%d values compared", len(rules)*len(texts))
 }

@@ -5,6 +5,9 @@
   "type": "object",
   "additionalProperties": false,
   "properties": {
+    "global": {"type": "object", "description": "Helm's own: the parent chart's global values, which Helm passes to every dependency, an empty map when there are none. The chart reads none of it."},
+    "enabled": {"type": "boolean", "description": "Not read by the chart: the key a parent chart's dependency condition, such as prometheus-universal-exporter.enabled, switches this chart on and off with, which Helm passes on with the rest of the values."},
+
     "replicaCount": {"type": "integer", "minimum": 0},
     "namespaceOverride": {"type": "string"},
     "nameOverride": {"type": "string"},
@@ -250,6 +253,22 @@
           "labels": {"$ref": "#/$defs/stringMap"},
           "annotations": {"$ref": "#/$defs/stringMap"},
           "targetSelector": {"type": "object"},
+          "namespaceSelector": {
+            "type": "object",
+            "additionalProperties": false,
+            "description": "The namespaces the targets are looked for in, as the Prometheus Operator defines it: any: true for every namespace, or matchNames for a list of them. Without it, the monitor's own namespace.",
+            "properties": {
+              "any": {"type": "boolean"},
+              "matchNames": {"type": "array", "items": {"type": "string", "minLength": 1}}
+            }
+          },
+          "port": {
+            "type": "string",
+            "description": "The name, not the number, of the port whose address becomes the probe's target, as the Prometheus Operator's monitors take it: a port of the selected Services for type service, a container port of the selected pods for type pod. Lower-case letters, digits and hyphens with at least one letter and no hyphen first or last: up to 63 characters for type service, as a Service port is named, and up to 15 with no two hyphens in a row for type pod, as a container port is. A number such as \"9115\" would be looked for as a name and match no port, so it is refused: name the port and give that name. Default http.",
+            "minLength": 1,
+            "maxLength": 63,
+            "pattern": "^([0-9]+-+)*[0-9]*[a-z]([-a-z0-9]*[a-z0-9])?$"
+          },
           "collector": {"type": "string", "minLength": 1},
           "relabelings": {"type": "array", "items": {"type": "object"}},
           "metricRelabelings": {"type": "array", "items": {"type": "object"}},
@@ -262,6 +281,7 @@
           "auth": {
             "type": "object",
             "additionalProperties": false,
+            "description": "The credential Prometheus presents to the exporter on this monitor's scrapes, from a Secret. Enabled, it says which kind, type, and which Secret, secretName; rendering fails without either.",
             "properties": {
               "enabled": {"type": "boolean"},
               "type": {"enum": ["bearer", "basic"]},
@@ -270,10 +290,14 @@
               "usernameKey": {"type": "string"},
               "passwordKey": {"type": "string"},
               "optional": {"type": "boolean"}
-            }
+            },
+            "if": {"properties": {"enabled": {"const": true}}, "required": ["enabled"]},
+            "then": {"required": ["type", "secretName"], "properties": {"secretName": {"minLength": 1}}}
           }
         },
-        "required": ["name", "type"]
+        "required": ["name", "type"],
+        "if": {"properties": {"type": {"const": "pod"}}, "required": ["type"]},
+        "then": {"properties": {"port": {"maxLength": 15, "pattern": "^([0-9]+-)*[0-9]*[a-z](-?[a-z0-9])*$"}}}
       }
     },
 
@@ -310,6 +334,12 @@
       "additionalProperties": false,
       "description": "Rendered as --runtime.memory-limit-ratio when enabled: the Go memory limit as a share of the container's memory limit, which the exporter reads from its cgroup. GOMEMLIMIT set in env wins.",
       "properties": {"enabled": {"type": "boolean"}, "ratio": {"type": ["number", "string"], "exclusiveMinimum": 0, "maximum": 1, "pattern": "^(0?\\.[0-9]*[1-9][0-9]*|1(\\.0*)?)$"}}
+    },
+    "goGC": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Rendered as the GOGC environment variable of the exporter container when percent is set: the Go garbage collector's target, how far the heap may grow over the live data before the next collection. A whole number from 1 to 10000, as a number or a string, or the string off, which needs a Go memory limit in force; empty or null leaves Go's default, 100. In a values file off needs quotes, since YAML reads a bare off as the boolean false.",
+      "properties": {"percent": {"type": ["integer", "string", "null"], "minimum": 1, "maximum": 10000, "pattern": "^$|^([1-9][0-9]{0,3}|10000|off)$"}}
     },
     "livenessProbe": {"$ref": "#/$defs/probeTimings", "description": "Timings of the liveness probe, which checks /health on the http port."},
     "readinessProbe": {"$ref": "#/$defs/readinessProbeTimings", "description": "Timings of the readiness probe, which checks /ready on the http port."},

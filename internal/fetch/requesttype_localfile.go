@@ -6,9 +6,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io"
 	"io/fs"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -54,7 +54,9 @@ import (
 //     modification time reaches transforms as the Last-Modified header.
 //   - Bounded. The read stops at the collector's response limit, and a probe
 //     returns when its timeout or context ends even if the filesystem hangs.
-//     The reads left running on a hung filesystem are capped per collector.
+//     The reads left running on a hung filesystem are capped per collector;
+//     reads whose probe is still waiting for them are not counted, so probes
+//     of a healthy filesystem are never refused for being many.
 
 func init() {
 	registerRequestType(&RequestType{
@@ -112,8 +114,15 @@ func validateLocalFileRequest(x *model.Collector) error {
 		return fmt.Errorf("collector %q request.max_age must not be negative", x.Name)
 	}
 	if HasPathParams(x.Request.Path) {
-		if _, err := parsePathParams(x.Request.Path); err != nil {
+		placeholders, err := parsePathParams(x.Request.Path)
+		if err != nil {
 			return fmt.Errorf("collector %q: %w", x.Name, err)
+		}
+		// A default no probe could read a file with (resolveLocalFile) is
+		// refused now, rather than by every probe that leaves the parameter
+		// out.
+		if err := checkPathParamDefaults(x.Name, placeholders, checkLocalFileParamValue); err != nil {
+			return err
 		}
 	}
 	if err := checkLocalFileName("request.path", x.Request.Path); err != nil {
@@ -140,16 +149,44 @@ func checkLocalFileName(what, name string) error {
 	return nil
 }
 
+// checkLocalFileElement requires of a path parameter's value that it is one
+// path element: it may not add directories to the path it is written into.
+func checkLocalFileElement(value string) error {
+	if strings.ContainsAny(value, `/\`) || strings.ContainsRune(value, 0) {
+		return fmt.Errorf("path parameter value %q must be a single file or directory name, without / or \\", value)
+	}
+	return nil
+}
+
+// checkLocalFileParamValue is everything a path parameter's value is held
+// to before a file is read with it, the two steps of resolveLocalFile in
+// one: what any path parameter may not be (bindPathParams), and one path
+// element. An empty value is not refused: the placeholder then adds nothing
+// to the path, as a probe that leaves it out of a path with an empty default
+// has it.
+func checkLocalFileParamValue(name, value string) error {
+	if err := checkPathParamValue(name, value); err != nil {
+		return err
+	}
+	return checkLocalFileElement(value)
+}
+
 // localFileTargetDir turns a target into a path relative to root. A target
 // may be relative to root, an absolute path inside it, or a file:// URL of
-// one; it may be empty.
+// one; it may be empty. A URL's path is percent-decoded, as a URL is read
+// everywhere else: file:///srv/a%20b.prom is the file "a b.prom". The two
+// plain forms are paths, not URLs, and are taken as written.
 func localFileTargetDir(c *model.Collector, target string) (string, error) {
 	target = strings.TrimSpace(target)
 	if rest, ok := strings.CutPrefix(target, "file://"); ok {
 		if !strings.HasPrefix(rest, "/") {
 			return "", fmt.Errorf("target %q is not a file:// URL of an absolute path", target)
 		}
-		target = rest
+		decoded, err := url.PathUnescape(rest)
+		if err != nil {
+			return "", fmt.Errorf("target %q is not a valid file:// URL: %w; write a %% that is part of a file's name as %%25", target, err)
+		}
+		target = decoded
 	}
 	if target == "" {
 		return "", nil
@@ -192,10 +229,9 @@ func resolveLocalFile(target string, c *model.Collector, overrides RequestOverri
 			return "", err
 		}
 		for i, value := range values {
-			// A value is one path element: it may not add directories, and
 			// "." and ".." are already refused by bindPathParams.
-			if strings.ContainsAny(value, `/\`) || strings.ContainsRune(value, 0) {
-				return "", fmt.Errorf("path parameter value %q must be a single file or directory name, without / or \\", value)
+			if err := checkLocalFileElement(value); err != nil {
+				return "", err
 			}
 			bound = strings.Replace(bound, pathToken(i), value, 1)
 		}
@@ -228,48 +264,80 @@ func localFileLabel(target string, c *model.Collector, overrides RequestOverride
 	return "file://" + filepath.ToSlash(filepath.Join(c.Request.Root, file)), nil
 }
 
-// localFileMaxPendingReads is how many reads of one collector may be in
-// progress at once, including reads whose probe has already given up on them.
-// Identical probes share a read (exporter/probeflight.go), so reaching it takes
-// different files on a filesystem that has stopped answering.
-const localFileMaxPendingReads = 4
+// localFileMaxAbandonedReads is how many reads of one collector may be left
+// running by probes that have given up on them. A read cannot be cancelled,
+// so on a filesystem that has stopped answering every probe would leave one
+// behind; identical probes share a read (exporter/probeflight.go), so
+// reaching the cap takes different files. A read whose probe is still waiting
+// for it is not counted: however many probes read a healthy filesystem at
+// once, none is refused. The reads left behind can therefore pass the cap by
+// the probes that were waiting when the filesystem stopped, which
+// limits.max_concurrent_probes bounds, and no read is started after that.
+const localFileMaxAbandonedReads = 4
 
-// pendingReads counts the reads in progress per collector.
-type pendingReads struct {
+// abandonedReads counts, per collector, the reads still running whose probe
+// has given up on them.
+type abandonedReads struct {
 	mu    sync.Mutex
 	count map[string]int
 }
 
-var localFileReads = &pendingReads{count: map[string]int{}}
+var localFileReads = &abandonedReads{count: map[string]int{}}
 
-// acquire takes a read slot for a collector, or refuses at once when every
-// slot is held by a read that has not returned. release frees it, and is
-// called when the read returns, not when the probe does.
-func (p *pendingReads) acquire(collector string) (release func(), err error) {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	if p.count[collector] >= localFileMaxPendingReads {
-		return nil, fmt.Errorf("collector %q already has %d file reads that have not returned; the filesystem under request.root is not answering, so no further read is started until one does", collector, localFileMaxPendingReads)
-	}
-	p.count[collector]++
-	var once sync.Once
-	return func() {
-		once.Do(func() {
-			p.mu.Lock()
-			defer p.mu.Unlock()
-			p.count[collector]--
-			if p.count[collector] == 0 {
-				delete(p.count, collector)
-			}
-		})
-	}, nil
+// startedRead is one read as abandonedReads follows it, under its lock.
+type startedRead struct {
+	reads               *abandonedReads
+	collector           string
+	abandoned, returned bool
 }
 
-// pending reports how many reads of a collector are in progress, for tests.
-func (p *pendingReads) pending(collector string) int {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	return p.count[collector]
+// start admits a read of a collector, or refuses it at once when the
+// collector already has the cap of abandoned reads that have not returned.
+// The probe calls abandon when it stops waiting for the read, and the read
+// calls done when it returns, whichever happens first.
+func (a *abandonedReads) start(collector string) (*startedRead, error) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if n := a.count[collector]; n >= localFileMaxAbandonedReads {
+		return nil, fmt.Errorf("collector %q already has %d file reads that have not returned; the filesystem under request.root is not answering, so no further read is started until one does", collector, n)
+	}
+	return &startedRead{reads: a, collector: collector}, nil
+}
+
+// abandon counts the read as left behind, unless it has returned already.
+func (r *startedRead) abandon() {
+	r.reads.mu.Lock()
+	defer r.reads.mu.Unlock()
+	if r.returned || r.abandoned {
+		return
+	}
+	r.abandoned = true
+	r.reads.count[r.collector]++
+}
+
+// done records that the read returned, which frees its place when its probe
+// had abandoned it.
+func (r *startedRead) done() {
+	r.reads.mu.Lock()
+	defer r.reads.mu.Unlock()
+	if r.returned {
+		return
+	}
+	r.returned = true
+	if r.abandoned {
+		r.reads.count[r.collector]--
+		if r.reads.count[r.collector] == 0 {
+			delete(r.reads.count, r.collector)
+		}
+	}
+}
+
+// abandoned reports how many abandoned reads of a collector have not
+// returned, for tests.
+func (a *abandonedReads) abandoned(collector string) int {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.count[collector]
 }
 
 type localFileRead struct {
@@ -295,21 +363,22 @@ func fetchLocalFile(ctx context.Context, target string, c *model.Collector, over
 	full := filepath.Join(c.Request.Root, file)
 	// A read cannot be cancelled, and a hung network filesystem would hold it
 	// for good; the scrape stops waiting when its context ends, but the read
-	// goes on. The reads still going on are capped per collector, so a stuck
-	// filesystem costs a few goroutines rather than one per scrape.
-	release, err := localFileReads.acquire(c.Name)
+	// goes on. The reads left behind this way are capped per collector, so a
+	// stuck filesystem costs a few goroutines rather than one per scrape.
+	started, err := localFileReads.start(c.Name)
 	if err != nil {
 		return nil, err
 	}
 	done := make(chan localFileRead, 1)
 	go func() {
-		defer release()
+		defer started.done()
 		body, info, err := readLocalFile(c.Request.Root, file, responseLimit(c))
 		done <- localFileRead{body: body, info: info, err: err}
 	}()
 	var read localFileRead
 	select {
 	case <-ctx.Done():
+		started.abandon()
 		return nil, fmt.Errorf("reading %s: %w", full, ctx.Err())
 	case read = <-done:
 	}
@@ -396,7 +465,11 @@ func readOpenedFile(root *os.Root, name, full string, limit int64) ([]byte, fs.F
 	if !opened.Mode().IsRegular() {
 		return nil, nil, fmt.Errorf("%s is not a regular file (%s)", full, fileKind(opened.Mode()))
 	}
-	body, err := io.ReadAll(io.LimitReader(f, limit+1))
+	// The file's size is how long a buffer to read it into, and no more
+	// than that: a file that grew or shrank since is read to its end, and a
+	// file that gives no size, as those of /proc do, as a body of unknown
+	// length.
+	body, err := readBody(f, limit, opened.Size())
 	if err != nil {
 		return nil, nil, localFileError(full, err)
 	}

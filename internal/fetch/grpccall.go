@@ -79,10 +79,12 @@ func callGRPC(ctx context.Context, target string, c *model.Collector, overrides 
 			key.settings.InsecureSkipVerify = *overrides.InsecureSkipVerify
 		}
 	}
-	conn, refusal, err := grpcConns.get(key, time.Now())
+	entry, err := grpcConns.get(key, time.Now())
 	if err != nil {
 		return nil, err
 	}
+	defer grpcConns.release(entry)
+	conn, refusal := entry.conn, entry.refusal
 	if overrides.Timeout > 0 {
 		var cancel context.CancelFunc
 		ctx, cancel = context.WithTimeout(ctx, overrides.Timeout)
@@ -126,7 +128,7 @@ func callGRPC(ctx context.Context, target string, c *model.Collector, overrides 
 		// The reflection question carries the call's metadata, credentials
 		// included: a server that authenticates every RPC authenticates it
 		// too.
-		files, err := reflectionAnswers.files(metadata.NewOutgoingContext(ctx, md), conn, reflection, time.Now())
+		files, err := reflectionAnswers.files(metadata.NewOutgoingContext(ctx, md), entry, reflection, time.Now())
 		if err != nil {
 			return grpcMethod{}, reflectionError(ctx, err)
 		}
@@ -143,23 +145,75 @@ func callGRPC(ctx context.Context, target string, c *model.Collector, overrides 
 		}
 		return m, in, nil
 	}
-	// A connection the policy refused reaches the call, or the reflection
-	// question before it, as UNAVAILABLE; it is the refusal, and not
-	// retried.
-	refused := func(err error) error {
-		if r := refusal.Load(); r != nil && unavailable(err) {
-			return r
+	// again says whether a failed attempt is followed by another: its status
+	// is one retry.codes lists, an attempt is left, and so is time. It waits
+	// the backoff, and then ends the connection's own wait. An attempt that
+	// found no connection left the channel backing off, where grpc-go fails
+	// every call at once without dialing, so the retries of a refused
+	// connection would all be answered by the first refusal; with the wait
+	// ended, the retry connects, and reaches a server that came back.
+	again := func(attempt int, code string, failure error) (bool, error) {
+		if attempt >= attempts || !slices.Contains(retried, code) || ctx.Err() != nil {
+			return false, failure
 		}
-		return err
+		if waitErr := waitRetry(ctx, backoff); waitErr != nil {
+			return false, fmt.Errorf("%w (the wait before retrying was cut short: %w)", failure, waitErr)
+		}
+		reconnectNow(ctx, conn)
+		if waitErr := ctx.Err(); waitErr != nil {
+			return false, fmt.Errorf("%w (connecting again before retrying was cut short: %w)", failure, waitErr)
+		}
+		return true, nil
 	}
-	m, in, err := encode()
-	if err != nil {
-		return nil, refused(err)
+	// silent drops a connection that has stopped answering without a word:
+	// the probe's own deadline ended the wait, and grpc-go still calls the
+	// connection ready. One that is still connecting, or waiting to, is kept:
+	// it is making itself anew already, and dropping it would start a slow
+	// handshake over at every probe.
+	silent := func() {
+		if conn.GetState() == connectivity.Ready {
+			grpcConns.drop(key, entry)
+		}
 	}
 	callCtx := metadata.NewOutgoingContext(ctx, md)
 	start := time.Now()
-	refreshed := false
+	var (
+		m  grpcMethod
+		in *dynamicpb.Message
+		// resolved says m and in are the method and the encoded message;
+		// with reflection they are asked for again after a schema change.
+		resolved  bool
+		refreshed bool
+	)
 	for attempt := 0; ; attempt++ {
+		if !resolved {
+			// With reflection this asks the server, on the same connection as
+			// the call: a question that ends with a status fails as a call
+			// with that status does, and is retried as one.
+			if m, in, err = encode(); err != nil {
+				// A connection the policy refused reaches the question as
+				// UNAVAILABLE; it is the refusal, and not retried.
+				if r := refusal.Load(); r != nil && unavailable(err) {
+					return nil, r
+				}
+				var failed *CallStatusError
+				answered := errors.As(err, &failed)
+				// The probe's deadline ended the wait for the answer, or the
+				// question's own did (reflectionQuestionTimeout).
+				if errors.Is(ctx.Err(), context.DeadlineExceeded) || answered && failed.Code == int(codes.DeadlineExceeded) {
+					silent()
+				}
+				if answered {
+					retry, failure := again(attempt, failed.CodeName, err)
+					if retry {
+						continue
+					}
+					return nil, failure
+				}
+				return nil, err
+			}
+			resolved = true
+		}
 		out := dynamicpb.NewMessage(m.desc.Output())
 		var header, trailer metadata.MD
 		traceRequest(ctx, "POST", grpcTraceScheme(secure)+address.hostPort+m.path(), grpcTraceHeader(md), "", false)
@@ -186,6 +240,11 @@ func callGRPC(ctx context.Context, target string, c *model.Collector, overrides 
 				return nil, r
 			}
 		}
+		// The deadline that ended the call is the probe's own, not a status
+		// the server sent while it still had time.
+		if st.Code() == codes.DeadlineExceeded && errors.Is(ctx.Err(), context.DeadlineExceeded) {
+			silent()
+		}
 		// A status the collector accepts is its answer, with no message:
 		// the rules read it as $status, and its message as
 		// $headers["grpc-message"], against an empty object.
@@ -203,19 +262,15 @@ func callGRPC(ctx context.Context, target string, c *model.Collector, overrides 
 		if c.Request.Descriptors == descriptorsReflection && !refreshed && (st.Code() == codes.Unimplemented || undecodable(st)) && ctx.Err() == nil {
 			refreshed = true
 			reflectionAnswers.forget(reflection)
-			if m, in, err = encode(); err != nil {
-				return nil, refused(err)
-			}
+			resolved = false
 			attempt--
 			continue
 		}
-		if attempt < attempts && slices.Contains(retried, grpcCodeName(st.Code())) && ctx.Err() == nil {
-			if waitErr := waitRetry(ctx, backoff); waitErr != nil {
-				return nil, fmt.Errorf("%w (the wait before retrying was cut short: %w)", callStatusError(ctx, st), waitErr)
-			}
+		retry, failure := again(attempt, grpcCodeName(st.Code()), callStatusError(ctx, st))
+		if retry {
 			continue
 		}
-		return nil, callStatusError(ctx, st)
+		return nil, failure
 	}
 }
 
@@ -294,7 +349,7 @@ func grpcOutgoing(c *model.Collector, overrides RequestOverrides, forwarded http
 	for key, value := range overrides.Metadata {
 		md.Set(key, value)
 	}
-	authorization, err := requestAuthorization(c)
+	authorization, err := collectorAuthorization(c, forwarded)
 	if err != nil {
 		return nil, err
 	}
@@ -415,8 +470,11 @@ func (r answerTypes) FindExtensionByNumber(message protoreflect.FullName, field 
 // reconnectNow ends the wait of a connection that is backing off after
 // failing to connect. grpc-go fails every call at once while it waits, so a
 // server that came back would be reported down until the wait ended; a
-// probe is the moment to try again, once. The call then waits for that
-// attempt, within its deadline, rather than failing at the old state.
+// probe, and each retry of one, is the moment to try again, once. The call
+// then waits for that attempt, up to a second and within its deadline,
+// rather than failing at the old state. grpc-go keeps reporting the failure
+// until a connection is made, so a target that refuses again is waited for
+// the whole second: there is nothing to see the refusal by.
 func reconnectNow(ctx context.Context, conn *grpc.ClientConn) {
 	if conn.GetState() != connectivity.TransientFailure {
 		return

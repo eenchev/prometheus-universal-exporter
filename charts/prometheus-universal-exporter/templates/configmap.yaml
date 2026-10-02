@@ -8,13 +8,34 @@ metadata:
     {{- include "prometheus-universal-exporter.metadataLabels" (list .) | nindent 4 }}
   annotations:
     {{- include "prometheus-universal-exporter.metadataAnnotations" (list .) | nindent 4 }}
+{{- /* Every key of config.data is a file of the configuration directory,
+       and so is the static target document. */}}
+{{- $text := dict }}
+{{- $binary := dict }}
+{{- range $name, $content := .Values.config.data }}
+{{- $_ := set (ternary $text $binary (eq (include "prometheus-universal-exporter.textFile" (toString $content)) "true")) $name (toString $content) }}
+{{- end }}
+{{- if .Values.staticTargets.enabled }}
+{{- $content := .Values.staticTargets.data | default "" | toString }}
+{{- $_ := set (ternary $text $binary (eq (include "prometheus-universal-exporter.textFile" $content) "true")) (include "prometheus-universal-exporter.staticTargetsFile" .) $content }}
+{{- end }}
+{{- /* A name is quoted, so one YAML reads as something other than a string,
+       such as 123 or true, stays a key. A file is a block scalar with an
+       explicit indentation indicator: without one YAML takes the
+       indentation from the first line, so a file whose first line is
+       indented, as one starting with an indented comment is, would end the
+       scalar at its first line indented less, and rendering would fail on
+       the rest. */}}
 data:
-  {{- range $name, $content := .Values.config.data }}
-  {{ $name }}: |
-{{ $content | indent 4 }}
+  {{- range $name, $content := $text }}
+  {{ $name | quote }}: |2{{ if not (hasSuffix "\n" $content) }}-{{ end }}
+{{ $content | trimSuffix "\n" | indent 4 }}
   {{- end }}
-  {{- if .Values.staticTargets.enabled }}
-  {{ include "prometheus-universal-exporter.staticTargetsFile" . }}: |
-{{ .Values.staticTargets.data | indent 4 }}
+{{- with $binary }}
+{{- /* A file a block scalar cannot hold as it is: see textFile. */}}
+binaryData:
+  {{- range $name, $content := . }}
+  {{ $name | quote }}: {{ $content | b64enc | quote }}
   {{- end }}
+{{- end }}
 {{- end }}

@@ -1,0 +1,6 @@
+# Helm passes a dependency the parent's global values with its own, and the
+# enabled its condition reads, which the render check sets.
+global:
+  team: observability
+prometheus-universal-exporter:
+  replicaCount: 2

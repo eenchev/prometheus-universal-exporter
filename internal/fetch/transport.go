@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"reflect"
 	"strconv"
 	"strings"
 	"sync"
@@ -47,6 +48,12 @@ const (
 	transportIdleConnTimeout = 90 * time.Second
 	transportMaxIdlePerHost  = 8
 )
+
+// maxResponseHeaderBytes is the most a response's status line and headers
+// may take. max_response_bytes bounds the body only, and Go's own bound on
+// the headers is 10 MiB, all of it kept in memory for as long as the answer
+// is, whatever the collector's limit; no API's headers come near 1 MiB.
+const maxResponseHeaderBytes = 1 << 20
 
 // TransportSettings are what a connection pool depends on. Requests with the
 // same settings share one pool.
@@ -109,10 +116,52 @@ func (c *transportCache) get(settings TransportSettings, now time.Time) (*http.T
 		MaxIdleConnsPerHost: transportMaxIdlePerHost,
 		IdleConnTimeout:     transportIdleConnTimeout,
 		TLSHandshakeTimeout: 10 * time.Second,
+		// An answer with more headers than this fails the request
+		// (responseHeadersTooLarge).
+		MaxResponseHeaderBytes: maxResponseHeaderBytes,
 	}
 	c.entries[settings] = &cachedTransport{stamp: stamp, transport: transport, lastUsed: now}
 	return transport, nil
 }
+
+// responseHeadersTooLarge says whether err is Go's for a response whose
+// headers are over the transport's MaxResponseHeaderBytes. Go has no error
+// value for it, only these two texts. The first is HTTP/1's. The second is
+// HTTP/2's for a header list it decoded to the end and found over the limit
+// it had advertised; that is the rarer of HTTP/2's two ends, since a list
+// that is over the limit before its last frame has the connection closed
+// instead, with an error that says nothing of headers (http2ProtocolError).
+func responseHeadersTooLarge(err error) bool {
+	if err == nil {
+		return false
+	}
+	text := err.Error()
+	return strings.Contains(text, "server response headers exceeded") || strings.Contains(text, "response header list larger than advertised limit")
+}
+
+// http2ProtocolError says whether err is the HTTP/2 client ending its
+// connection for what the target sent: a connection error whose code is
+// PROTOCOL_ERROR. That is how Go ends an answer whose headers pass
+// MaxResponseHeaderBytes while more of them are still to come — it stops
+// reading them, closes the connection and reports this, with no word of the
+// headers — and how it ends one that broke the protocol in any other way,
+// which nothing here can tell from the first. The error's type is internal
+// to net/http, so it is told by what it is: an error code, 1 being
+// PROTOCOL_ERROR, of a type named for a connection error.
+func http2ProtocolError(err error) bool {
+	found := false
+	walkErrors(err, func(e error) {
+		v := reflect.ValueOf(e)
+		if v.Kind() == reflect.Uint32 && v.Uint() == http2ErrCodeProtocol && strings.HasSuffix(v.Type().Name(), "ConnectionError") {
+			found = true
+		}
+	})
+	return found
+}
+
+// http2ErrCodeProtocol is PROTOCOL_ERROR among HTTP/2's error codes
+// (RFC 9113, section 7).
+const http2ErrCodeProtocol = 1
 
 // environmentProxy is the proxy the environment names now. It is read here
 // rather than through http.ProxyFromEnvironment, which reads the environment

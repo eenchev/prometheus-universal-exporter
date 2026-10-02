@@ -161,7 +161,45 @@ A monitor must name a `collector`, and, when the chart holds the configuration, 
 
 > Probe monitors, of either type, send Prometheus to the exporter's Service, so they need `service.enabled: true`; with it off, rendering fails.
 
-Each monitor is named `<release>-prometheus-universal-exporter-<name>`, so `name` is a DNS-1123 label — lower-case letters, digits and `-`, starting and ending with a letter or digit — unique among the entries, and neither `self` nor `static-targets`, the names of the chart's own monitors; anything else fails rendering. Without `targetSelector` a monitor selects the targets labelled `app.kubernetes.io/name: target`; with it, its `matchLabels` or `matchExpressions`. `interval` and `scrapeTimeout`, here and on the self-metrics and static targets monitors, are Prometheus durations, as the Prometheus Operator takes them: whole numbers of `y`, `w`, `d`, `h`, `m`, `s` and `ms`, such as `30s`, `1m30s` or `1500ms`; a fraction such as `1.5m`, or `us` and `ns`, fail rendering.
+Each monitor is named `<release>-prometheus-universal-exporter-<name>`, so `name` is a DNS-1123 label — lower-case letters, digits and `-`, starting and ending with a letter or digit — unique among the entries, and neither `self` nor `static-targets`, the names of the chart's own monitors; anything else fails rendering. Without `targetSelector` a monitor selects the targets labelled `app.kubernetes.io/name: target`; with it, its `matchLabels` or `matchExpressions`. `interval` and `scrapeTimeout`, here and on the self-metrics and static targets monitors, are Prometheus durations, as the Prometheus Operator takes them: whole numbers of `y`, `w`, `d`, `h`, `m`, `s` and `ms`, such as `30s`, `1m30s` or `1500ms`; a fraction such as `1.5m`, or `us` and `ns`, fail rendering. So does a `scrapeTimeout` longer than its `interval`: Prometheus refuses such a scrape, so the monitor would scrape nothing.
+
+A monitor finds its targets in its own namespace, the release's unless `namespaceOverride` is set, and probes each on the port named `http`. Both are the entry's to change. `port` names the port whose address becomes the probe's target: a port of the selected Services for `type: service`, a container port of the selected pods for `type: pod`. `namespaceSelector` is the Prometheus Operator's: `matchNames` lists the namespaces to look in, and `any: true` looks in all of them.
+
+```yaml
+monitors:
+  - name: payments
+    enabled: true
+    type: service
+    collector: example
+    port: metrics
+    namespaceSelector:
+      matchNames: [payments, checkout]
+    targetSelector:
+      matchLabels:
+        app.kubernetes.io/part-of: payments
+```
+
+`port` is a port's name, never its number: that is what the Prometheus Operator's `port` field takes, so `port: "9115"` would be looked for among the ports' names, match none, and leave the monitor without targets. Rendering fails on a number, written as one or as a string, with a message that says to name the port, and on anything else no port is named. A name is lower-case letters, digits and `-`, with at least one letter and no `-` first or last: up to 63 characters for `type: service`, as a Service port is named, and up to 15 with no `--` for `type: pod`, as a container port is. A target whose port has no name gets one where the port is declared — for `type: service` in the Service:
+
+```yaml
+spec:
+  ports:
+    - name: metrics
+      port: 9115
+```
+
+and for `type: pod` in the pod's container:
+
+```yaml
+spec:
+  containers:
+    - name: app
+      ports:
+        - name: metrics
+          containerPort: 9115
+```
+
+The chart renders no port number. The Operator's fields for one are not the same on the two kinds or in all its releases — a PodMonitor's `portNumber` is unknown to the CRDs of releases before 0.79, and `targetPort` is deprecated on a PodMonitor and, on a ServiceMonitor, is a container port of the pods behind the Service rather than the Service's own — while every release takes a name.
 
 The exporter's own metrics get a monitor too, `<release>-prometheus-universal-exporter-self`, while `selfMetrics.enabled` is on: a `ServiceMonitor`, or a `PodMonitor` with `selfMetrics.type: pod`. It is rendered when the chart renders any other monitor — a probe monitor or the [static targets](#static-targets) monitor — or when the cluster serves that kind, so an install without the Prometheus Operator does not fail on it.
 
@@ -213,8 +251,9 @@ as `param_env: [staging]`, or set the window, such as `from: [-1h]`. `method`
 and `body` do not apply to it and are answered with `400`.
 
 A [`grpc`](../../docs/GRPC.md) collector is monitored the same way too: a
-monitor selects the Service of the gRPC server, on its gRPC port, whose
-`host:port` address becomes the `target`, called in plaintext unless the
+monitor selects the Service of the gRPC server and names its gRPC port with
+`port`, such as `port: grpc`, since the default is the port named `http`; that
+port's `host:port` address becomes the `target`, called in plaintext unless the
 collector sets `request.tls`. Its `params` fill the placeholders of the
 collector's `request.message` and `metadata`, such as `param_queue: [orders]`,
 or replace the message, such as `message: ['{"queue": "orders"}']`. `method`,
@@ -250,6 +289,26 @@ request:
 ```
 
 Bearer authentication is also supported.
+
+`targetAuth.mountPath` must be a path of its own: the configuration directory, `webAuth.mountPath` or an `extraVolumeMounts` entry at the same path fails rendering.
+
+### Monitor authentication
+
+A monitor's `auth` is the credential Prometheus presents to the exporter when it scrapes through that monitor, taken from a Secret in the monitor's namespace. It is off by default. With `enabled: true` it must say which kind it is, `type: bearer` or `type: basic`, and which Secret holds it, `secretName`; rendering fails, naming the monitor, when either is missing, rather than rendering a monitor that scrapes with no credential or with the wrong one. The Secret's keys default to `token` for bearer, and `username` and `password` for basic:
+
+```yaml
+monitors:
+  - name: application-services
+    enabled: true
+    type: service
+    collector: example
+    auth:
+      enabled: true
+      type: bearer
+      secretName: scrape-token   # key: token, or set secretKey
+```
+
+To pass that credential on to the target, set `request.forward_authorization: true` on the collector; see [Authentication](../../docs/AUTHENTICATION.md).
 
 ### Exporter authentication
 
@@ -307,7 +366,7 @@ monitors:
     collector: example
 ```
 
-With `webAuth.enabled`, every monitor the chart renders sends the `webAuth` Secret's credential as `basicAuth`, since `web.basic_auth` protects `/probe` and the self-metrics and static targets endpoints alike: the self-metrics and static targets monitors, and each probing monitor without an `auth` of its own. A probing monitor whose `auth.enabled` is true sends its own credential instead. `webAuth.usernameKey` and `webAuth.passwordKey` name the Secret's keys, `username` and `password` by default; the files are always named `username` and `password` under `webAuth.mountPath`. The exporter reads a file again when it changes, so a rotated Secret takes effect without a restart. An `extraVolumeMounts` entry at `webAuth.mountPath` is rejected while rendering.
+With `webAuth.enabled`, every monitor the chart renders sends the `webAuth` Secret's credential as `basicAuth`, since `web.basic_auth` protects `/probe` and the self-metrics and static targets endpoints alike: the self-metrics and static targets monitors, and each probing monitor without an `auth` of its own. A probing monitor whose `auth.enabled` is true sends its own credential instead. `webAuth.usernameKey` and `webAuth.passwordKey` name the Secret's keys, `username` and `password` by default; the files are always named `username` and `password` under `webAuth.mountPath`. The exporter reads a file again when it changes, so a rotated Secret takes effect without a restart. `webAuth.mountPath` must be a path of its own: the configuration directory, `targetAuth.mountPath` or an `extraVolumeMounts` entry at the same path is rejected while rendering.
 
 The Kubernetes `/health` and `/ready` endpoints remain available for health checks. The readiness probe uses `/ready`, which reports the pod not ready while a reload of its configuration is rejected, and, with `otlp.unready_after_failures` set, while its OTLP exports keep failing; see [Readiness](../../docs/CONFIGURATION.md#readiness).
 
@@ -334,7 +393,9 @@ The exporter's own flags are chart values rather than something to assemble by h
 | `server.enableLifecycle` | `--web.enable-lifecycle` | off |
 | `server.probeDebug` | `--web.enable-probe-debug` | off |
 | `staticTargets.enabled` | `--static-targets-file` | off |
+| `staticTargets.path` | `--web.static-targets-path` | `/static-targets` |
 | `staticTargets.expandEnv` | `--static-targets.expand-env`, with `staticTargets.enabled` | off |
+| `goMemLimit.enabled` / `goMemLimit.ratio` | `--runtime.memory-limit-ratio` | on / `0.8` |
 | `config` | `--config.file` | the chart's ConfigMap |
 
 `server.listenAddress` sets the container port too, so the listener and the probes cannot drift apart. Its host may be empty, as in `:8080`, a wildcard such as `0.0.0.0:8080` or `[::]:8080`, or a pod address; a loopback host — `127.x.x.x`, `localhost` or `[::1]` — fails rendering, since neither the kubelet's probes nor the Service reach it. `server.pythonPath` is the interpreter used by the `python` transform; its default is where the exporter image's `python:3.12-slim` base installs Python, and it is worth overriding only for a custom image. `server.logLevel` is one of `debug`, `info`, `warn` and `error`, and anything else fails rendering.
@@ -372,7 +433,7 @@ Raise `terminationGracePeriodSeconds` further if `otlp.timeout` is longer than i
 
 `server.probeDebug` enables `/probe?debug=true`, which answers a probe with a plain-text report of its trip instead of its metrics, a *Debug report* switch on each form of `/collectors`, and `/static-targets?debug=<name>` for one static target — see [Debugging a probe](../../docs/CONFIGURATION.md#debugging-a-probe). The report shows what the target answered, so it is off by default; turn it on while a collector is being written or fixed, and off again. Rendered only when `true`.
 
-The one-shot flags — `--dry-run`, `--config.schema`, `--config.collector-file-schema`, `--version` — print something and exit, so they have no values: run them as a separate command. A flag an exporter image has that this chart version does not know yet goes in `extraArgs`, described under [Extra volumes and arguments](#extra-volumes-and-arguments).
+The one-shot flags — `--dry-run`, `--config.schema`, `--config.collector-file-schema`, `--static-targets-file-schema`, `--version` — print something and exit, so they have no values: run them as a separate command. A flag an exporter image has that this chart version does not know yet goes in `extraArgs`, described under [Extra volumes and arguments](#extra-volumes-and-arguments).
 
 ### Configuration mount and rollout
 
@@ -417,6 +478,8 @@ config:
 
 A collector file holds `collectors` and nothing else, and a collector name must be unique across `config.yaml` and every file, or the pod refuses to start. Name the keys so a pattern matches them and nothing else: `*.yaml` would also match the static target file the chart puts in the same directory. A file changes the ConfigMap checksum like `config.yaml` does, so it rolls the Deployment, or, with `server.watchConfig`, is reloaded in place. Collector files kept in a ConfigMap of their own can be mounted with `extraVolumes` and `extraVolumeMounts` at their own path, such as `/etc/collectors`, and listed by absolute path: `/etc/collectors/*.yaml`.
 
+Every file reaches the pod as it was given, whatever its first line's indentation and whatever its name. A file is rendered into the ConfigMap as readable text; one that YAML text cannot hold unchanged — with carriage returns or control characters, or ending in blank lines or trailing spaces — is rendered base64 under the ConfigMap's `binaryData` instead, and is the same file in the pod.
+
 ### Default labels and annotations
 
 `defaultLabels` and `defaultAnnotations` are applied to every object the chart creates. Metadata set on a particular object overrides a default of the same name.
@@ -442,6 +505,25 @@ resources:
 
 `goMemLimit`, on by default, renders `--runtime.memory-limit-ratio` with `goMemLimit.ratio`, `0.8`: the exporter reads the container's memory limit from its cgroup and sets the Go memory limit to that share of it, so the Go runtime collects harder as its heap nears it instead of growing past the container's limit into an OOM kill. The rest is left to what the Go heap does not count — the Python workers, which are processes of their own, and the runtime's overhead; lower the ratio for a configuration with many Python workers, and bound those with `server.pythonMaxWorkers` and `limits.max_script_memory`. Without a memory limit in `resources`, the exporter keeps the Go default, and `GOMEMLIMIT` set in `env` wins over the ratio.
 
+### Garbage collector
+
+`goGC.percent` sets the Go garbage collector's target, the `GOGC` environment variable of the exporter container: how far the heap may grow over the live data before the next collection, in percent. Empty, the default, leaves the variable out and Go's own default, 100, in place. Garbage collection is 13% to 22% of the exporter's CPU in every profile of a probe, so collecting less often saves a good part of it: measured on 2 CPUs with `GOGC=400` instead of the default, a Prometheus pass-through probe of 5,000 series took 14.2 ms instead of 18.1 ms, a jq probe over 5,000 items 58 ms instead of 78 ms, and a csv probe 11.9 ms instead of 16.8 ms — 15% to 30% less. The price is memory: between collections the heap may grow to about (1 + percent/100) times the live data, five times at 400 where the default allows two.
+
+The Go memory limit above is what makes raising it safe. With a memory limit in `resources` and `goMemLimit` on, Go collects sooner as the heap nears the limit, whatever `GOGC` says, so a higher target cannot push the process past it; without a container memory limit there is no such ceiling, and the heap grows as far as the target lets it. With a memory limit, 200 to 400 is a good place to start:
+
+```yaml
+resources:
+  limits:
+    memory: 512Mi
+goMemLimit:
+  enabled: true
+  ratio: 0.8
+goGC:
+  percent: 400
+```
+
+It takes a whole number from 1 to 10000, as a number or as a string, or `"off"`, which collects nothing until the Go memory limit is near. `off` therefore fails rendering unless a limit is in force — `goMemLimit.enabled` with `resources.limits.memory` set, or a `GOMEMLIMIT` of your own in `env`, which wins over the ratio — and it needs its quotes in a values file, where YAML reads a bare `off` as `false`, which the values schema refuses. A number needs no limit. `GOGC` in `env` beside a `goGC.percent` fails rendering, since the container would get the variable from both; `GOGC` in `env` alone is rendered as written, and the chart does not check it. Changing the value changes the pod template, so it rolls the pods as any other change to the Deployment does.
+
 ### Probes
 
 The chart checks `/health` for liveness and `/ready` for readiness on the `http` port. `livenessProbe` and `readinessProbe` set their timings; the check itself is the chart's, and setting `httpGet`, `exec`, `tcpSocket` or `grpc` fails rendering. `terminationGracePeriodSeconds` is accepted on `livenessProbe` only: Kubernetes refuses it on a readiness probe, so the values schema does too. The liveness probe has some slack by default, since a pod busy with a burst of probes is slow rather than dead, and a restart would lose its cache and Python workers:
@@ -464,6 +546,13 @@ replicaCount: 2
 ```
 
 Probes scale with replicas, since Prometheus sends each to one pod through the Service. Static targets do not: every replica scrapes every static target on its own schedule and serves its own results, so run [static targets](#static-targets) with `replicaCount: 1` (the chart's notes warn otherwise), or split them over releases.
+
+A change rolls the pods with `strategy`, `RollingUpdate` by default with `maxUnavailable: 0` and `maxSurge: 1`: the old pod stays until its replacement is ready, so for a moment there is one pod more. For no overlap, set `strategy.type: Recreate`, which stops the old pods first; `strategy.rollingUpdate` is then left out of the Deployment, as Kubernetes refuses it there, so the one line is enough:
+
+```yaml
+strategy:
+  type: Recreate
+```
 
 To keep replicas apart, spread them over zones or nodes. A constraint without a `labelSelector` gets one selecting this release's pods:
 
@@ -491,7 +580,7 @@ Each replica keeps its own [response cache](../../docs/CONFIGURATION.md#response
 
 Autoscaling suits a release that serves probes. It does not suit [static targets](#static-targets): every replica scrapes every static target, so each replica the autoscaler adds is another full set of requests to every target — the load it was scaling out from grows with it — and each replica serves its own results. A target with `export_via_otlp` is exported over OTLP by every replica, so the OTLP backend receives duplicate series under the same resource. The chart's notes warn when static targets are rendered with autoscaling, naming the targets exported over OTLP. Put static targets in a release of their own, with `replicaCount: 1` and autoscaling off.
 
-`podDisruptionBudget` renders a PodDisruptionBudget, so a node drain does not take every replica down at once. Set one of `minAvailable` or `maxUnavailable`, a count or a percentage; both fail rendering, and neither gives `maxUnavailable: 1`. With one replica, `minAvailable: 1` would block a drain until the pod is deleted by hand. `maxUnavailable: 0` is valid Kubernetes and is rendered as set, but it allows no voluntary eviction at all, so a drain of a node running the exporter waits for ever; the chart's notes warn about it.
+`podDisruptionBudget` renders a PodDisruptionBudget, so a node drain does not take every replica down at once. Set one of `minAvailable` or `maxUnavailable`, a count or a percentage; both fail rendering, and neither gives `maxUnavailable: 1`. With one replica, `minAvailable: 1` would block a drain until the pod is deleted by hand, and so does any `minAvailable` that is every replica, as a count or as a percentage rounded up. `maxUnavailable: 0` is valid Kubernetes and is rendered as set, but it allows no voluntary eviction at all, so a drain of a node running the exporter waits for ever. The chart's notes warn about both: `maxUnavailable` of `0`, and `minAvailable` of `replicaCount` or more, or of `100%`.
 
 ```yaml
 replicaCount: 3
@@ -527,6 +616,8 @@ ingress:
         - path: /
           pathType: Prefix
 ```
+
+The Ingress routes to the exporter's Service, so it needs `service.enabled: true`; with the Service off, rendering fails.
 
 ### NetworkPolicy
 
@@ -689,11 +780,11 @@ extraArgs:
 Two collisions are rejected while rendering, because both fail in a way that points somewhere other than the values file:
 
 * An `extraArgs` entry that sets a flag the chart already renders — `--web.listen-address`, `--config.file`, `--python.path`, `--log.level`, `--probe.timeout-offset` and the rest. Go keeps the last occurrence of a repeated flag, so the entry would quietly win; for the listen address the container port and the probes would still follow `server.listenAddress`, leaving a pod that listens on one port while Kubernetes checks another. The error names the value to set instead.
-* An `extraVolumeMounts` entry whose `mountPath` is one the chart already mounts. Mounting over `/etc/prometheus-universal-exporter` replaces it, so the exporter starts with no `config.yaml` and crash-loops with an error about the file rather than about the mount that hid it. To add a file to that directory, mount it at its own path — `/etc/collectors`, say — and point the configuration at it.
+* An `extraVolumeMounts` entry whose `mountPath` is one the chart already mounts — the configuration directory, and `targetAuth.mountPath` and `webAuth.mountPath` while they are enabled — or one another entry uses. Mounting over `/etc/prometheus-universal-exporter` replaces it, so the exporter starts with no `config.yaml` and crash-loops with an error about the file rather than about the mount that hid it. To add a file to that directory, mount it at its own path — `/etc/collectors`, say — and point the configuration at it. Paths are compared without a trailing slash, so `/etc/prometheus-universal-exporter/` is the same path.
 
 A [`localfile`](../../docs/LOCALFILE.md) collector reads files the same way: mount the directory it names as `request.root` with these values, read-only, as shown in [Local files in Kubernetes](../../docs/LOCALFILE.md#in-kubernetes).
 
-`--dry-run`, `--config.schema`, `--config.collector-file-schema`, `--version` and `--help` are rejected as well: each prints something and exits, so a pod started with one would restart for ever instead of serving. Run them as a separate command, a Job or an init container instead — see [Dry run](../../docs/CONFIGURATION.md#dry-run).
+`--dry-run`, `--config.schema`, `--config.collector-file-schema`, `--static-targets-file-schema`, `--version` and `--help` are rejected as well: each prints something and exits, so a pod started with one would restart for ever instead of serving. Run them as a separate command, a Job or an init container instead — see [Dry run](../../docs/CONFIGURATION.md#dry-run).
 
 An entry that does not begin with `--` is rejected too, since `some.new-flag=value` as an argument is read as a positional value and ignored.
 
@@ -736,7 +827,7 @@ staticTargets:
 | `staticTargets.expandEnv` | `false` | Rendered as `--static-targets.expand-env` with `enabled`: expand `${NAME}` references in `data` from the container's environment. Independent of `server.expandEnv`. |
 | `staticTargets.monitor.enabled` | `true` | Render the monitor that scrapes the endpoint, when `staticTargets.enabled` is. It needs the Prometheus Operator's CRDs. |
 | `staticTargets.monitor.type` | `service` | `service` for a ServiceMonitor, `pod` for a PodMonitor. |
-| `staticTargets.monitor.interval` / `scrapeTimeout` | `30s` / `10s` | How often Prometheus reads the endpoint. The exporter scrapes the targets on the document's own intervals whatever this is. |
+| `staticTargets.monitor.interval` / `scrapeTimeout` | `30s` / `10s` | How often Prometheus reads the endpoint. The exporter scrapes the targets on the document's own intervals whatever this is. A `scrapeTimeout` longer than `interval` fails rendering. |
 | `staticTargets.monitor.labels` / `annotations` | `{}` | Added to the monitor. |
 | `staticTargets.monitor.relabelings` / `metricRelabelings` | `[]` | Passed to the monitor's endpoint. |
 | `staticTargets.monitor.targets` | `[]` | Names of the static targets the monitor reads, rendered as the endpoint's `targets` parameter; empty reads every target. A name that is not a target in `data` fails rendering. |
@@ -751,6 +842,30 @@ the self-metrics monitor does.
 A target with `export_via_otlp` needs `otlp.enabled: true` in the exporter
 configuration. When the chart manages the configuration, rendering fails if a
 target sets it while OTLP export is off, rather than the pod failing to start.
+
+## Using the chart as a dependency
+
+The chart can be a dependency of your own chart. Its values then go under its name in the parent's values, and a `condition` switches it on and off:
+
+```yaml
+# Chart.yaml of the parent chart
+dependencies:
+  - name: prometheus-universal-exporter
+    version: 1.5.0
+    repository: oci://ghcr.io/eenchev/charts
+    condition: prometheus-universal-exporter.enabled
+```
+
+```yaml
+# values.yaml of the parent chart
+global:
+  team: observability
+prometheus-universal-exporter:
+  enabled: true
+  replicaCount: 2
+```
+
+Helm passes a dependency the parent's `global` values, and the `enabled` its condition reads, along with its own. The values schema lets those two through and the chart reads neither; any other key the chart does not know still fails rendering.
 
 ## Values
 
@@ -772,16 +887,17 @@ Every value has a default, and `values.yaml` documents each one in place. `value
 | `env` / `envFrom` | array | `[]` | Container environment, in the Kubernetes shapes. |
 | `extraArgs` | array | `[]` | Extra command-line flags. |
 | `extraVolumes` / `extraVolumeMounts` | array | `[]` | Volumes and mounts beyond the chart's own. |
-| `config` | object | enabled | `enabled`, and `data` holding `config.yaml` and any [collector files](#collector-files). |
+| `config` | object | enabled | `enabled`, and `data` holding `config.yaml` and any [collector files](#collector-files), each rendered as it is given. |
 | `staticTargets` | object | disabled | Static targets rendered into the ConfigMap. |
-| `monitors` | array | `[]` | `ServiceMonitor` and `PodMonitor` resources, one per entry: `name` a unique DNS-1123 label other than `self` and `static-targets`, `interval` and `scrapeTimeout` Prometheus durations, `params` without `collector` or `target`; see [Configure Prometheus](#4-configure-prometheus). |
+| `monitors` | array | `[]` | `ServiceMonitor` and `PodMonitor` resources, one per entry: `name` a unique DNS-1123 label other than `self` and `static-targets`, `interval` and `scrapeTimeout` Prometheus durations with the timeout no longer than the interval, `port` (`http` by default), a port's name and never its number, and `namespaceSelector` for where the targets are, `params` without `collector` or `target`, `auth` with a `type` and `secretName` when enabled; see [Configure Prometheus](#4-configure-prometheus) and [Monitor authentication](#monitor-authentication). |
 | `selfMetrics` | object | enabled | The monitor for the exporter's own endpoint, `type` `service` or `pod`, and its path; see [Configure Prometheus](#4-configure-prometheus). |
 | `resources` | object | 100m/128Mi, 500m/512Mi | Requests and limits. |
 | `goMemLimit` | object | enabled, `0.8` | `--runtime.memory-limit-ratio`: the Go memory limit as a share of the container's; see [Resources](#resources). |
+| `goGC` | object | unset | `percent`, the Go garbage collector's target, rendered as the container's `GOGC` environment variable: a whole number from 1 to 10000, or `"off"` with a Go memory limit in force; empty keeps Go's default, 100. See [Garbage collector](#garbage-collector). |
 | `livenessProbe` / `readinessProbe` | object | see [Probes](#probes) | The probes' timings; `terminationGracePeriodSeconds` on the liveness probe only. |
 | `autoscaling` | object | disabled | `enabled`, `minReplicas`, `maxReplicas`, `targetCPUUtilizationPercentage`, `targetMemoryUtilizationPercentage`, `metrics`, `behavior`; see [Autoscaling](#autoscaling). |
 | `podDisruptionBudget` | object | disabled | `enabled`, `minAvailable` or `maxUnavailable`, `unhealthyPodEvictionPolicy`; see [Replicas](#replicas). |
-| `strategy` | object | RollingUpdate | Deployment strategy and its `rollingUpdate` settings. |
+| `strategy` | object | RollingUpdate | Deployment strategy and its `rollingUpdate` settings, which are rendered with `RollingUpdate` only; see [Replicas](#replicas). |
 | `podSecurityContext` / `securityContext` | object | hardened | Pod and container security context; the pod runs as user, group and `fsGroup` 65532. |
 | `podLabels` / `podAnnotations` | map | `{}` | Labels and annotations of the pods only, over `defaultLabels` and `defaultAnnotations`. A label the chart sets itself, such as `app.kubernetes.io/name`, fails rendering; `checksum/config` stays the chart's. |
 | `priorityClassName` | string | `""` | The pods' PriorityClass. |

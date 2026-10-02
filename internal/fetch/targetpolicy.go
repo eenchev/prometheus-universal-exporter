@@ -10,8 +10,10 @@ import (
 	"net/url"
 	"path"
 	"regexp"
+	"strconv"
 	"strings"
 	"sync"
+	"unicode"
 
 	"github.com/eenchev/prometheus-universal-exporter/internal/model"
 	"golang.org/x/net/idna"
@@ -32,7 +34,10 @@ import (
 // one address that matters, which also catches a name that resolves
 // elsewhere from one lookup to the next. Behind a proxy the exporter connects
 // to the proxy rather than the target, so it resolves the target's name
-// itself, before the request, and checks those addresses instead.
+// itself, before the request, and checks those addresses instead. A name the
+// exporter cannot look up is the proxy's to resolve, as it is for any client
+// behind one, unless the collector's own lists name addresses or networks,
+// which could then not be held to.
 
 // TargetRefusedError is a request refused by the collector's
 // allowed_targets or denied_targets. The exporter answers it 403.
@@ -72,7 +77,10 @@ var metadataAddrs = []netip.Prefix{
 	netip.MustParsePrefix("fd00:ec2::254/128"),
 }
 
-var hostGlob = regexp.MustCompile(`^[a-z0-9*?_]([a-z0-9*?_.-]*[a-z0-9*?_])?$`)
+// hostGlob is what an entry that is a name, or a glob of one, is made of. It
+// takes what a host a request can reach may be written with, which is more
+// than a registered domain: an underscore, and a hyphen first or last.
+var hostGlob = regexp.MustCompile(`^[a-z0-9*?_-]([a-z0-9*?_.-]*[a-z0-9*?_-])?$`)
 
 // compileTargetPolicy reads the two lists. With both empty the policy still
 // refuses the cloud metadata addresses.
@@ -201,6 +209,13 @@ func (p *targetPolicy) needsAddrs(nameAllowed bool) bool {
 	return len(p.denyNets)+len(p.implicitDeny) > 0 || (!nameAllowed && len(p.allowNames)+len(p.allowNets) > 0)
 }
 
+// hasAddressRules says whether the collector's own lists name an address or
+// a network. The cloud metadata addresses, refused by default, are not the
+// collector's own.
+func (p *targetPolicy) hasAddressRules() bool {
+	return len(p.allowNets)+len(p.denyNets) > 0
+}
+
 // check applies the policy to host before a request: its name, then, with
 // resolve, every address it resolves to. It returns whether the name alone
 // allowed it. Without resolve the addresses are left to the connection
@@ -216,7 +231,7 @@ func (p *targetPolicy) check(ctx context.Context, host string, resolve bool) (bo
 	}
 	// An address written as the target needs no lookup, so it is checked
 	// before anything is sent, proxy or not.
-	if addr, literal := netip.ParseAddr(strings.TrimSuffix(strings.TrimPrefix(host, "["), "]")); literal == nil {
+	if addr, literal := literalAddr(host); literal {
 		return nameAllowed, p.checkAddr(host, addr, nameAllowed)
 	}
 	if !resolve {
@@ -224,7 +239,7 @@ func (p *targetPolicy) check(ctx context.Context, host string, resolve bool) (bo
 	}
 	addrs, err := resolveHost(ctx, host)
 	if err != nil {
-		return nameAllowed, err
+		return nameAllowed, p.unresolved(host, nameAllowed, err)
 	}
 	for _, addr := range addrs {
 		if err := p.checkAddr(host, addr, nameAllowed); err != nil {
@@ -234,16 +249,79 @@ func (p *targetPolicy) check(ctx context.Context, host string, resolve bool) (bo
 	return nameAllowed, nil
 }
 
+// unresolved decides for a host behind a proxy whose name the exporter
+// could not look up itself. That is the ordinary state of a host with no
+// outside DNS, whose proxy resolves every name it is given, so it fails the
+// request only when the collector's own lists name addresses or networks:
+// those rules cannot be held to an address nobody here knows. Otherwise the
+// name rules, which were applied already, are all there is to apply, and the
+// proxy resolves the name. The cloud metadata addresses are then refused by
+// name and by address as written, not by what the proxy resolves a name to.
+func (p *targetPolicy) unresolved(host string, nameAllowed bool, lookupErr error) error {
+	if p.hasAddressRules() {
+		return fmt.Errorf("the request goes through a proxy, so %s has to be looked up here to hold it to the addresses and networks in request.allowed_targets and denied_targets, and the lookup failed: %w", host, lookupErr)
+	}
+	if !nameAllowed && len(p.allowNames) > 0 {
+		return &TargetRefusedError{Host: host, Reason: "it is not in request.allowed_targets"}
+	}
+	return nil
+}
+
+// literalAddr is the address host is when it is written as one, which then
+// needs no lookup: an IPv4 or IPv6 address as Go reads them, or an IPv4
+// address in one of the older forms resolvers, curl and proxies still read —
+// one number (2130706433), fewer than four parts (127.1), or parts in
+// hexadecimal or octal (0x7f.0.0.1, 0177.0.0.1) — which would otherwise pass
+// as a name and be turned into the address by whoever resolves it.
+func literalAddr(host string) (netip.Addr, bool) {
+	host = strings.TrimSuffix(strings.TrimPrefix(host, "["), "]")
+	if addr, err := netip.ParseAddr(host); err == nil {
+		return addr, true
+	}
+	parts := strings.Split(host, ".")
+	if len(parts) > 4 {
+		return netip.Addr{}, false
+	}
+	var value uint64
+	for i, part := range parts {
+		base, digits := 10, part
+		switch {
+		case strings.HasPrefix(part, "0x"):
+			base, digits = 16, part[2:]
+		case len(part) > 1 && part[0] == '0':
+			base, digits = 8, part[1:]
+		}
+		// ParseUint alone would take a sign, and an underscore with base 0.
+		if digits == "" || strings.Trim(digits, "0123456789abcdef") != "" {
+			return netip.Addr{}, false
+		}
+		n, err := strconv.ParseUint(digits, base, 32)
+		if err != nil {
+			return netip.Addr{}, false
+		}
+		// Every part but the last is one byte; the last fills the rest.
+		rest := 8 * (4 - i)
+		if i < len(parts)-1 {
+			if n > 0xff {
+				return netip.Addr{}, false
+			}
+			value |= n << (rest - 8)
+			continue
+		}
+		if n >= 1<<rest {
+			return netip.Addr{}, false
+		}
+		value |= n
+	}
+	return netip.AddrFrom4([4]byte{byte(value >> 24), byte(value >> 16), byte(value >> 8), byte(value)}), true
+}
+
 // resolveHost is host's addresses: the address itself for an IP literal.
 var resolveHost = func(ctx context.Context, host string) ([]netip.Addr, error) {
 	if addr, err := netip.ParseAddr(strings.TrimSuffix(strings.TrimPrefix(host, "["), "]")); err == nil {
 		return []netip.Addr{addr}, nil
 	}
-	addrs, err := net.DefaultResolver.LookupNetIP(ctx, "ip", host)
-	if err != nil {
-		return nil, fmt.Errorf("resolving %s to check it against request.allowed_targets and denied_targets: %w", host, err)
-	}
-	return addrs, nil
+	return net.DefaultResolver.LookupNetIP(ctx, "ip", host)
 }
 
 // policyGuard carries a request's policy to the connections it makes: the
@@ -303,21 +381,54 @@ func (g *policyGuard) check(ctx context.Context, u *url.URL) error {
 }
 
 // canonicalHost is host as the transport dials it and the policy matches
-// it: in ASCII, as Go's HTTP transport converts an internationalised name
-// or one written in full-width characters before it dials (so
-// "１２７.０.０.１" is 127.0.0.1 and "bücher.example" xn--bcher-kva.example),
-// lower case, without a trailing dot. A host that does not convert is
-// refused, since what it would reach cannot be told.
+// it: lower case, without a trailing dot, and in ASCII. A host is an IP
+// address or a name, and a name is made only of what a name in the DNS, a
+// hosts file or a container network can hold: letters, digits, '.', '-' and
+// '_'. Within those it is dialed as it is written — an underscore, as
+// my_service, a Docker Compose or Kubernetes name, or hyphens where a
+// registered domain may not have them — so it is checked as written and not
+// held to the rules of an internationalised name. A host with other
+// characters is converted, as Go's HTTP transport converts it before it
+// dials (so "１２７.０.０.１" is 127.0.0.1 and "bücher.example"
+// xn--bcher-kva.example); one that does not convert is refused, since what
+// it would reach cannot be told.
+//
+// Any other character refuses the host. No resolver here would find such a
+// name, but behind a proxy the name is the proxy's to resolve, and a proxy
+// may read it differently from the policy: a '%' above all, which is how a
+// URL's host carries one ("local%2568ost" parses to the host "local%68ost"),
+// since a proxy that decodes it once more asks for localhost, a name the
+// policy never saw. The same goes for 169.254.169.254 with one digit
+// written as an escape.
 func canonicalHost(host string) (string, error) {
 	host = strings.TrimSuffix(strings.TrimPrefix(host, "["), "]")
 	if _, err := netip.ParseAddr(host); err == nil {
 		return strings.ToLower(host), nil
 	}
-	ascii, err := idna.Lookup.ToASCII(host)
-	if err != nil {
-		return "", &TargetRefusedError{Host: host, Reason: "it is not a host name or address the policy can check: " + err.Error()}
+	name := host
+	if strings.IndexFunc(host, func(r rune) bool { return r > unicode.MaxASCII }) >= 0 {
+		ascii, err := idna.Lookup.ToASCII(host)
+		if err != nil {
+			return "", &TargetRefusedError{Host: host, Reason: "it is not a host name or address the policy can check: " + err.Error()}
+		}
+		name = ascii
 	}
-	return strings.ToLower(strings.TrimSuffix(ascii, ".")), nil
+	// The converted form is held to the rule as well, whatever the
+	// conversion let through.
+	if i := strings.IndexFunc(name, notHostCharacter); i >= 0 {
+		return "", &TargetRefusedError{Host: host, Reason: fmt.Sprintf("it has %q, a character that no host name or address has: a host is an IP address, or a name of letters, digits, '.', '-' and '_'", name[i:i+1])}
+	}
+	return strings.ToLower(strings.TrimSuffix(name, ".")), nil
+}
+
+// notHostCharacter says whether r is something no host name is written
+// with (canonicalHost).
+func notHostCharacter(r rune) bool {
+	switch {
+	case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9', r == '.', r == '-', r == '_':
+		return false
+	}
+	return true
 }
 
 // checkRedirect applies a request's request.allowed_schemes and policy to

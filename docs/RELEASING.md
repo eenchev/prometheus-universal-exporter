@@ -25,17 +25,28 @@ also tagged `1.0` when it is the newest release of 1.0, and `latest` when it
 is the newest release of all. A patch to an older line, say 1.0.1 after
 1.1.0, is published as `1.0.1` and `1.0`, and leaves `latest` on 1.1.0.
 
-To check a downloaded archive, download the checksums file beside it and run:
+To check a downloaded archive, download the checksums file beside it and run,
+on Linux:
 
 ```sh
 sha256sum --ignore-missing -c prometheus-universal-exporter-1.0.0-sha256sums.txt
+```
+
+macOS, which the `darwin` archives are for, has no `sha256sum`; its `shasum`
+reads the same file:
+
+```sh
+shasum -a 256 --ignore-missing -c prometheus-universal-exporter-1.0.0-sha256sums.txt
 ```
 
 ## Helm chart
 
 Chart tags are namespaced under `chart/`. Bump `version` in
 `charts/prometheus-universal-exporter/Chart.yaml` first — it is the source of
-truth, and `release-chart.yml` refuses to publish a tag that disagrees with it:
+truth, and `release-chart.yml` refuses to publish a tag that disagrees with it.
+The documented install commands and the chart README's dependency example pin
+the same version, and so does the parent chart the chart checks render
+(`testdata/chart/parent/Chart.yaml`); tests fail until they follow:
 
 ```sh
 # after setting version: 0.2.0 in Chart.yaml

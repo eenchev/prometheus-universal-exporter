@@ -20,7 +20,8 @@ import (
 // examples/config.filebeat.json-test.yaml reads Filebeat's monitoring
 // endpoint. testdata/json/filebeat-stats.json is a complete /stats answer,
 // every section Filebeat's source registers present with realistic values,
-// and testdata/json/filebeat-info.json its /. Unlike the demos of public services, Filebeat runs locally, so these run
+// testdata/json/filebeat-stats-kafka.json the same Filebeat publishing to
+// Kafka, and testdata/json/filebeat-info.json its /. Unlike the demos of public services, Filebeat runs locally, so these run
 // with the rest of the suite.
 
 const filebeatConfig = "../../examples/config.filebeat.json-test.yaml"
@@ -129,7 +130,9 @@ func TestTheFilebeatExampleReadsACompleteStatsAnswer(t *testing.T) {
 	}
 	// Counts, not values, are the pipeline's and output's own totals; the
 	// outcome families leave them and the gauges out.
-	for _, unwanted := range []string{`outcome="total"`, `outcome="active"`, `outcome="batches"`, `state="scan_errors"`, `period="norm"`} {
+	// The Kafka output's own metrics are absent with Elasticsearch: no
+	// series, and nothing logged for them either.
+	for _, unwanted := range []string{`outcome="total"`, `outcome="active"`, `outcome="batches"`, `state="scan_errors"`, `period="norm"`, "filebeat_output_kafka_"} {
 		if strings.Contains(body, unwanted) {
 			t.Errorf("exported %s", unwanted)
 		}
@@ -190,6 +193,72 @@ func TestTheFilebeatExampleLeavesOutWhatFilebeatDoesNotReport(t *testing.T) {
 	}
 	if logs.Len() != 0 {
 		t.Errorf("reading an answer without the optional sections logged:\n%s", logs)
+	}
+}
+
+// With the Kafka output, its client's own metrics from libbeat.outputs
+// become series too: bytes, requests in flight, requests and their latency
+// in seconds. The generic output series stay, with type="kafka".
+func TestTheFilebeatExampleReadsTheKafkaOutput(t *testing.T) {
+	logs := testutil.CaptureLogs(t)
+	body := probeFilebeat(t, "filebeat", readFixture(t, "filebeat-stats-kafka.json"), nil)
+	got := samples(body)
+	for _, want := range []string{
+		`filebeat_output_info{type="kafka"} 1`,
+		`filebeat_output_events_total{outcome="acked"} 9.1452107e+07`,
+		`filebeat_output_events_total{outcome="failed"} 1180`,
+		`filebeat_output_write_bytes_total 0`,
+		`filebeat_output_kafka_write_bytes_total 6.1840227915e+10`,
+		`filebeat_output_kafka_read_bytes_total 2.251739e+07`,
+		`filebeat_output_kafka_requests_in_flight 2`,
+		`filebeat_output_kafka_requests_total 1.146372e+06`,
+		`filebeat_output_kafka_request_latency_seconds{quantile="0.5"} 0.005`,
+		`filebeat_output_kafka_request_latency_seconds{quantile="0.75"} 0.008`,
+		`filebeat_output_kafka_request_latency_seconds{quantile="0.95"} 0.0175`,
+		`filebeat_output_kafka_request_latency_seconds{quantile="0.99"} 0.04127`,
+		`filebeat_output_kafka_request_latency_seconds{quantile="0.999"} 0.188921`,
+		`filebeat_output_kafka_request_latency_mean_seconds 0.006843`,
+		`filebeat_output_kafka_request_latency_max_seconds 0.412`,
+	} {
+		if !slices.Contains(got, want) {
+			t.Errorf("missing %s", want)
+		}
+	}
+	if len(got) != 84+11 {
+		t.Errorf("%d series, want %d:\n%s", len(got), 84+11, strings.Join(got, "\n"))
+	}
+	if logs.Len() != 0 {
+		t.Errorf("reading a Kafka answer logged:\n%s", logs)
+	}
+}
+
+// The Kafka client registers its metrics when it first reaches a broker, and
+// can register some before others: whatever is there is read, the rest is
+// absent without logging.
+func TestTheFilebeatExampleReadsWhatTheKafkaOutputRegisteredSoFar(t *testing.T) {
+	logs := testutil.CaptureLogs(t)
+	var stats map[string]any
+	if err := json.Unmarshal(readFixture(t, "filebeat-stats-kafka.json"), &stats); err != nil {
+		t.Fatal(err)
+	}
+	outputs := stats["libbeat"].(map[string]any)["outputs"].(map[string]any)
+	delete(outputs, "kafka")
+	delete(outputs["write"].(map[string]any), "latency")
+	partial, err := json.Marshal(stats)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := probeFilebeat(t, "filebeat", partial, nil)
+	if !strings.Contains(body, "\nfilebeat_output_kafka_write_bytes_total 6.1840227915e+10\n") {
+		t.Error("missing filebeat_output_kafka_write_bytes_total")
+	}
+	for _, absent := range []string{"filebeat_output_kafka_requests_", "filebeat_output_kafka_request_latency_"} {
+		if strings.Contains(body, "\n"+absent) {
+			t.Errorf("%s is exported for a metric the answer does not have", absent)
+		}
+	}
+	if logs.Len() != 0 {
+		t.Errorf("reading a partial Kafka answer logged:\n%s", logs)
 	}
 }
 

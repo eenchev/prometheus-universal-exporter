@@ -45,11 +45,20 @@ var PythonLibraries = map[string]bool{"lxml": true, "PyYAML": true, "yaml": true
 // its output is captured per run, as before. The worker's stdin and stdout are
 // /dev/null, and stderr is kept, bounded, for error messages.
 //
-// Time. limits.script_timeout bounds the run of a script, not the start of the
-// interpreter: start-up, including importing the collector's declared
-// libraries, has its own budget. A script that overruns is not interrupted
-// inside the interpreter, which Python cannot do reliably; the worker is
-// killed, and the next scrape starts another.
+// A worker that has read and parsed a request says so, with a line of its
+// own, before it runs the script, and then answers with the result
+// (pythonWorker.call).
+//
+// Time. limits.script_timeout bounds the run of a script: its clock starts
+// when the worker says it has the request. It bounds neither the start of the
+// interpreter, which, with importing the collector's declared libraries, has
+// its own budget, nor handing the worker the request, which takes as long as
+// the response is large and is bounded by the probe's deadline, and by
+// pythonHandoverTimeout where that is later or there is none. A script that
+// overruns is not interrupted inside the interpreter, which Python cannot do
+// reliably; the worker is killed, and the next scrape starts another. A
+// script the probe's deadline ends first is stopped the same way, and
+// reported and counted as that rather than as overrunning script_timeout.
 //
 // Lifetime. A worker that fails in any way is discarded. A healthy one is
 // reused up to pythonWorkerMaxRuns times, so a slow leak in a script or a
@@ -59,11 +68,31 @@ var PythonLibraries = map[string]bool{"lxml": true, "PyYAML": true, "yaml": true
 // PythonWorkerReapInterval whether or not anything runs Python, so a collector
 // nobody scrapes any more does not keep its interpreters. A reload stops at
 // once the idle workers of scripts it removed or changed, and those still busy
-// when they finish. When the exporter exits, a worker sees its request pipe
-// close and exits too.
+// when they finish.
+//
+// An idle worker can die: the kernel may kill it for memory, and a script
+// can arm a signal that outlives its run. One found dead when it is taken
+// from the pool is replaced, and one that turns out dead before it took the
+// request, when nothing of the script has run, costs the scrape another
+// worker rather than a failure (PythonPool.run).
+//
+// When the exporter exits, an idle worker sees its request pipe close and
+// exits too. A busy one is not reading the pipe, and when the exporter is
+// killed nobody is left to stop it, so every worker also watches for the
+// process that started it: a thread of the launcher looks once a second
+// whether its parent is still that process, and ends the worker when it is
+// not. The worker does this itself, rather than asking the kernel to signal
+// it when its parent dies, because that request is tied to the thread of the
+// exporter that started the worker, which the Go runtime may end long before
+// the exporter does.
 
 const (
-	pythonStartupTimeout    = 10 * time.Second
+	pythonStartupTimeout = 10 * time.Second
+	// pythonHandoverTimeout is how long a worker may take to read and parse
+	// a request when the probe's deadline does not end it sooner: far longer
+	// than the largest response takes, and short enough that a worker that
+	// has stopped reading does not hold a scrape without a deadline for ever.
+	pythonHandoverTimeout   = 30 * time.Second
 	pythonWorkerMaxRuns     = 1000
 	pythonWorkerMaxIdle     = 4
 	pythonWorkerIdleTimeout = 5 * time.Minute
@@ -78,6 +107,31 @@ var (
 	errPythonTimeout        = errors.New("python script timed out")
 	errPythonOutputTooLarge = errors.New("python output exceeds limit")
 )
+
+// pythonDeadlineError is a run the probe's deadline ended, rather than
+// limits.script_timeout: started says whether the script had started, and
+// ran for how long it had run.
+type pythonDeadlineError struct {
+	started bool
+	ran     time.Duration
+}
+
+func (e pythonDeadlineError) Error() string {
+	return "the probe's deadline ended the python script"
+}
+
+// Unwrap makes the error the deadline it is.
+func (e pythonDeadlineError) Unwrap() error { return context.DeadlineExceeded }
+
+// pythonWorkerGone is a worker found dead before it took a request, so that
+// nothing of the script has run and another worker can run it.
+type pythonWorkerGone struct{ why string }
+
+func (e pythonWorkerGone) Error() string { return e.why }
+
+// pythonRequestTaken is the line a worker writes when it has read and parsed
+// a request, before it runs the script.
+const pythonRequestTaken = `{"started": true}`
 
 // pythonLibraryModules are the modules a declared library preloads. Importing
 // them at start-up keeps their import time out of script_timeout, and lets a
@@ -155,12 +209,17 @@ type PythonPool struct {
 	maxWorkers int
 	live       int
 	waiting    []chan struct{}
+	// start starts a worker: startPythonWorker. It is a field so a test can
+	// give the pool a stand-in whose start-up takes the time the test says,
+	// rather than what an interpreter takes on the machine as it is loaded.
+	start func(ctx context.Context, spec pythonSpec) (*pythonWorker, error)
 }
 
 // Why a worker stopped, and how a run ended: bounded sets, so they can be
 // label values.
 const (
 	pythonStopTimeout     = "timeout"
+	pythonStopDeadline    = "deadline"
 	pythonStopCrash       = "crash"
 	pythonStopOutputLimit = "output_limit"
 	pythonStopCancelled   = "cancelled"
@@ -173,6 +232,7 @@ const (
 	pythonRunOK          = "ok"
 	pythonRunScriptError = "script_error"
 	pythonRunTimeout     = "timeout"
+	pythonRunDeadline    = "deadline"
 	pythonRunOutputLimit = "output_limit"
 	pythonRunFailed      = "failed"
 )
@@ -180,8 +240,8 @@ const (
 // PythonStopReasons and PythonRunOutcomes are every reason a worker stops and
 // every way a run ends, so each has a series from the start.
 var (
-	PythonStopReasons = []string{pythonStopTimeout, pythonStopCrash, pythonStopOutputLimit, pythonStopCancelled, pythonStopRetired, pythonStopSurplus, pythonStopIdle, pythonStopReload, pythonStopEvicted}
-	PythonRunOutcomes = []string{pythonRunOK, pythonRunScriptError, pythonRunTimeout, pythonRunOutputLimit, pythonRunFailed}
+	PythonStopReasons = []string{pythonStopTimeout, pythonStopDeadline, pythonStopCrash, pythonStopOutputLimit, pythonStopCancelled, pythonStopRetired, pythonStopSurplus, pythonStopIdle, pythonStopReload, pythonStopEvicted}
+	PythonRunOutcomes = []string{pythonRunOK, pythonRunScriptError, pythonRunTimeout, pythonRunDeadline, pythonRunOutputLimit, pythonRunFailed}
 )
 
 type pythonCollectorStats struct {
@@ -217,7 +277,7 @@ func IsolatePythonWorkers() (restore func()) {
 }
 
 func newPythonPool() *PythonPool {
-	return &PythonPool{idle: map[string][]*pythonWorker{}, stats: map[string]*pythonCollectorStats{}, busy: map[string]int{}, obsolete: map[string]bool{}}
+	return &PythonPool{idle: map[string][]*pythonWorker{}, stats: map[string]*pythonCollectorStats{}, busy: map[string]int{}, obsolete: map[string]bool{}, start: startPythonWorker}
 }
 
 // SetMaxWorkers bounds the workers alive at once, of every collector
@@ -281,27 +341,35 @@ func (p *PythonPool) recordRun(collector, outcome string) {
 }
 
 // run sends one request to a worker for spec and returns its answer line and
-// how long the script ran: the call to the worker, without starting one.
+// how long the script ran, without starting a worker or handing it the
+// request. A worker from the pool that turns out to have died while it was
+// idle, before it took the request, is replaced by another, so its death
+// fails no scrape; one just started that dies is the failure it looks like.
 func (p *PythonPool) run(ctx context.Context, spec pythonSpec, payload []byte, timeout time.Duration) ([]byte, time.Duration, error) {
-	worker, err := p.acquire(ctx, spec)
-	if err != nil {
-		return nil, 0, err
-	}
-	start := time.Now()
-	line, err := worker.call(ctx, payload, timeout)
-	elapsed := time.Since(start)
-	if err != nil {
+	for {
+		worker, reused, err := p.acquire(ctx, spec)
+		if err != nil {
+			return nil, 0, err
+		}
+		line, ran, err := worker.call(ctx, payload, timeout)
+		if err == nil {
+			p.release(spec, worker)
+			return line, ran, nil
+		}
 		p.discard(worker, stopReason(err))
-		return nil, elapsed, err
+		if gone := (pythonWorkerGone{}); reused && errors.As(err, &gone) {
+			continue
+		}
+		return nil, ran, err
 	}
-	p.release(spec, worker)
-	return line, elapsed, nil
 }
 
 func stopReason(err error) string {
 	switch {
 	case errors.Is(err, errPythonTimeout):
 		return pythonStopTimeout
+	case errors.As(err, &pythonDeadlineError{}):
+		return pythonStopDeadline
 	case errors.Is(err, errPythonOutputTooLarge):
 		return pythonStopOutputLimit
 	case errors.Is(err, context.Canceled):
@@ -330,7 +398,9 @@ func (p *PythonPool) unbusyLocked(key string) {
 	}
 }
 
-func (p *PythonPool) acquire(ctx context.Context, spec pythonSpec) (*pythonWorker, error) {
+// acquire gives a worker for spec: an idle one of the pool, which reused
+// then says, or one it starts.
+func (p *PythonPool) acquire(ctx context.Context, spec pythonSpec) (*pythonWorker, bool, error) {
 	key := spec.key()
 	p.mu.Lock()
 	p.reapLocked(time.Now())
@@ -341,11 +411,18 @@ func (p *PythonPool) acquire(ctx context.Context, spec pythonSpec) (*pythonWorke
 			worker = idle[len(idle)-1]
 			p.idle[key] = idle[:len(idle)-1]
 		}
+		if worker != nil && worker.gone() {
+			// It died while it was idle: stopped and counted as the crash
+			// it was, and the next one, or a new one, serves the run.
+			p.stopLocked(worker)
+			p.statsLocked(worker.collector).stops[pythonStopCrash]++
+			continue
+		}
 		if worker != nil {
 			p.statsLocked(spec.Collector).busy++
 			p.busy[key]++
 			p.mu.Unlock()
-			return worker, nil
+			return worker, true, nil
 		}
 		if p.maxWorkers <= 0 || p.live < p.maxWorkers || p.evictIdleLocked() {
 			break
@@ -375,7 +452,7 @@ func (p *PythonPool) acquire(ctx context.Context, spec pythonSpec) (*pythonWorke
 			}
 			limit := p.maxWorkers
 			p.mu.Unlock()
-			return nil, fmt.Errorf("the exporter already runs %d Python workers, its --python.max-workers, and none was free in time: %w", limit, ctx.Err())
+			return nil, false, fmt.Errorf("the exporter already runs %d Python workers, its --python.max-workers, and none was free in time: %w", limit, ctx.Err())
 		}
 		p.mu.Lock()
 	}
@@ -385,7 +462,7 @@ func (p *PythonPool) acquire(ctx context.Context, spec pythonSpec) (*pythonWorke
 	p.mu.Unlock()
 
 	p.started.Add(1)
-	worker, err := startPythonWorker(ctx, spec)
+	worker, err := p.start(ctx, spec)
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	st = p.statsLocked(spec.Collector)
@@ -394,12 +471,12 @@ func (p *PythonPool) acquire(ctx context.Context, spec pythonSpec) (*pythonWorke
 		p.live--
 		p.notifyLocked()
 		st.startFailures++
-		return nil, err
+		return nil, false, err
 	}
 	st.starts++
 	st.busy++
 	p.busy[key]++
-	return worker, nil
+	return worker, false, nil
 }
 
 // evictIdleLocked stops the idle worker unused for longest, of whatever
@@ -630,6 +707,8 @@ type pythonWorker struct {
 	cmd       *exec.Cmd
 	requests  *os.File
 	lines     chan pythonLine
+	// exited is closed when the worker's process has ended.
+	exited    chan struct{}
 	stderr    *tailBuffer
 	runs      int
 	idleSince time.Time
@@ -660,6 +739,7 @@ func startPythonWorker(ctx context.Context, spec pythonSpec) (*pythonWorker, err
 	// would fail.
 	cmd := exec.CommandContext(context.WithoutCancel(ctx), spec.Path, "-I", "-B", "-c", pythonWorkerLauncher, string(modules), strconv.FormatInt(spec.MaxMemory, 10)) // #nosec G204 -- the interpreter is the operator's --python.path
 	cmd.ExtraFiles = []*os.File{requestRead, answerWrite}                                                                                                             // descriptors 3 and 4
+	cmd.Env = pythonWorkerEnvironment(os.Environ())
 	stderr := &tailBuffer{max: pythonStderrTail}
 	cmd.Stderr = stderr
 	if err := cmd.Start(); err != nil {
@@ -669,9 +749,12 @@ func startPythonWorker(ctx context.Context, spec pythonSpec) (*pythonWorker, err
 	// The child holds its own copies of these ends.
 	closeFiles(requestRead, answerWrite)
 
-	worker := &pythonWorker{collector: spec.Collector, key: spec.key(), cmd: cmd, requests: requestWrite, lines: make(chan pythonLine, 1), stderr: stderr, maxMemory: spec.MaxMemory}
+	worker := &pythonWorker{collector: spec.Collector, key: spec.key(), cmd: cmd, requests: requestWrite, lines: make(chan pythonLine, 1), exited: make(chan struct{}), stderr: stderr, maxMemory: spec.MaxMemory}
 	go worker.readAnswers(answerRead, spec.MaxOutput)
-	go func() { _ = cmd.Wait() }()
+	go func() {
+		_ = cmd.Wait()
+		close(worker.exited)
+	}()
 
 	timer := time.NewTimer(pythonStartupTimeout)
 	defer timer.Stop()
@@ -691,6 +774,31 @@ func startPythonWorker(ctx context.Context, spec pythonSpec) (*pythonWorker, err
 	}
 }
 
+// pythonWorkerEnvironment is the environment a worker starts in: the
+// exporter's own, and MALLOC_ARENA_MAX=1 unless the operator has set that
+// variable, whose value then stands.
+//
+// glibc gives a second thread a malloc arena of its own, for which it
+// reserves 64 MiB of address space, used or not. A worker has a second
+// thread, the one that watches its parent, and limits.max_script_memory
+// bounds its address space: without the variable a worker that is ready
+// holds about 82 MiB where its interpreter needs 17, and the difference is
+// taken from what the limit leaves the script. With one arena both threads
+// allocate from the same heap. Other C libraries and systems ignore the
+// variable.
+func pythonWorkerEnvironment(environ []string) []string {
+	for _, entry := range environ {
+		if strings.HasPrefix(entry, pythonArenaVariable+"=") {
+			return environ
+		}
+	}
+	return append(environ[:len(environ):len(environ)], pythonArenaVariable+"=1")
+}
+
+// pythonArenaVariable is the variable glibc reads the greatest number of
+// malloc arenas from.
+const pythonArenaVariable = "MALLOC_ARENA_MAX"
+
 // readAnswers turns the answer stream into lines until the worker exits or
 // writes a line longer than the output limit.
 func (w *pythonWorker) readAnswers(answers *os.File, maxOutput int) {
@@ -706,33 +814,105 @@ func (w *pythonWorker) readAnswers(answers *os.File, maxOutput int) {
 	}
 }
 
-func (w *pythonWorker) call(ctx context.Context, payload []byte, timeout time.Duration) ([]byte, error) {
-	deadline := time.Now().Add(timeout)
-	_ = w.requests.SetWriteDeadline(deadline)
-	if _, err := w.requests.Write(append(payload, '\n')); err != nil {
-		if errors.Is(err, os.ErrDeadlineExceeded) {
-			return nil, errPythonTimeout
-		}
-		return nil, errors.New(w.describe(err))
+// gone reports, without waiting, whether an idle worker can no longer serve:
+// its process has ended, or its answers have, or it wrote a line nobody asked
+// for, after which its answers cannot be told from one another.
+func (w *pythonWorker) gone() bool {
+	select {
+	case <-w.exited:
+		return true
+	case <-w.lines:
+		return true
+	default:
+		return false
 	}
-	timer := time.NewTimer(time.Until(deadline))
-	defer timer.Stop()
+}
+
+// call runs one request in the worker, and returns its answer line and how
+// long the script ran.
+//
+// The request is handed over first: written, and read and parsed by the
+// worker, which then says it has it (pythonRequestTaken). That takes as long
+// as the response is large, so it is bounded by the probe's deadline, or by
+// pythonHandoverTimeout when that comes first, and not by timeout,
+// limits.script_timeout, whose clock starts when the worker has the request:
+// a trivial script given a large response does not time out. A worker that
+// turns out dead before it has the request fails with pythonWorkerGone.
+//
+// What ends the wait for the answer says what the run failed of: the
+// script's own time, errPythonTimeout; the probe's deadline, where that
+// comes before it, a pythonDeadlineError; or the probe being abandoned, the
+// context's error.
+func (w *pythonWorker) call(ctx context.Context, payload []byte, timeout time.Duration) ([]byte, time.Duration, error) {
+	handover := time.Now().Add(pythonHandoverTimeout)
+	probeDeadline, hasDeadline := ctx.Deadline()
+	if hasDeadline && probeDeadline.Before(handover) {
+		handover = probeDeadline
+	}
+	notTaken := func() error {
+		if hasDeadline && !handover.Before(probeDeadline) {
+			return pythonDeadlineError{}
+		}
+		return fmt.Errorf("the worker did not take the request within %s", pythonHandoverTimeout)
+	}
+	_ = w.requests.SetWriteDeadline(handover)
+	for _, part := range [][]byte{payload, {'\n'}} {
+		if _, err := w.requests.Write(part); err != nil {
+			if errors.Is(err, os.ErrDeadlineExceeded) {
+				return nil, 0, notTaken()
+			}
+			return nil, 0, pythonWorkerGone{why: w.describe(err)}
+		}
+	}
+	taken := time.NewTimer(time.Until(handover))
+	defer taken.Stop()
 	select {
 	case line, ok := <-w.lines:
-		if !ok {
-			return nil, errors.New(w.describe(nil) + w.memoryHint())
+		switch {
+		case !ok:
+			return nil, 0, pythonWorkerGone{why: w.describe(nil) + w.memoryHint()}
+		case line.err != nil:
+			return nil, 0, line.err
+		case string(line.data) != pythonRequestTaken:
+			// The worker could not read the request, and says why.
+			return line.data, 0, nil
 		}
-		if line.err != nil {
-			return nil, line.err
-		}
-		return line.data, nil
-	case <-timer.C:
-		return nil, errPythonTimeout
+	case <-taken.C:
+		return nil, 0, notTaken()
 	case <-ctx.Done():
 		if errors.Is(ctx.Err(), context.DeadlineExceeded) {
-			return nil, errPythonTimeout
+			return nil, 0, pythonDeadlineError{}
 		}
-		return nil, ctx.Err()
+		return nil, 0, ctx.Err()
+	}
+
+	// The script runs. Its own time ends it unless the probe's deadline
+	// comes first, which then is what ended it.
+	started := time.Now()
+	var overrun <-chan time.Time
+	if !hasDeadline || !probeDeadline.Before(started.Add(timeout)) {
+		timer := time.NewTimer(timeout)
+		defer timer.Stop()
+		overrun = timer.C
+	}
+	select {
+	case line, ok := <-w.lines:
+		ran := time.Since(started)
+		if !ok {
+			return nil, ran, errors.New(w.describe(nil) + w.memoryHint())
+		}
+		if line.err != nil {
+			return nil, ran, line.err
+		}
+		return line.data, ran, nil
+	case <-overrun:
+		return nil, time.Since(started), errPythonTimeout
+	case <-ctx.Done():
+		ran := time.Since(started)
+		if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+			return nil, ran, pythonDeadlineError{started: true, ran: ran}
+		}
+		return nil, ran, ctx.Err()
 	}
 }
 
@@ -809,6 +989,45 @@ func (b *tailBuffer) String() string {
 const pythonWorkerLauncher = `import sys,json,builtins,contextlib,io,os,traceback,decimal,linecache
 requests=os.fdopen(3,'r',encoding='utf-8')
 answers=os.fdopen(4,'w',encoding='utf-8')
+def watch_parent():
+    # A worker busy in a script does not see its request pipe close when the
+    # exporter is gone, and an exporter that was killed stops nobody. So a
+    # thread looks once a second whether the worker's parent is still the
+    # process that started it, and ends the worker when it is not: an orphan
+    # is given another parent. It is started here, before the memory limit
+    # and the sandbox, with what it calls bound now, so neither a limit too
+    # small for a thread nor a script that replaces os.getppid stops it, and
+    # the launcher goes on only once the thread runs: a thread still starting
+    # when the limit is installed could fail of it before its first line.
+    # Its stack is small, since it counts against that limit, and its
+    # modules are imported in here, so the launcher's own names stay as they
+    # were.
+    import _thread,time
+    parent,getppid,leave,sleep=os.getppid(),os.getppid,os._exit,time.sleep
+    running=_thread.allocate_lock()
+    running.acquire()
+    def watch():
+        running.release()
+        while True:
+            # A script that has used all of limits.max_script_memory leaves
+            # none for the number getppid answers with. The watch outlives
+            # that, and whatever else is raised in here, and looks again a
+            # second later: it must not end while the worker lives. Nothing
+            # is named after except, so nothing a script can replace.
+            try:
+                sleep(1)
+                if getppid()!=parent: leave(0)
+            except: pass
+    try: _thread.stack_size(262144)
+    except Exception: pass
+    try:
+        _thread.start_new_thread(watch,())
+        running.acquire(True,5)
+    except Exception: pass
+    try: _thread.stack_size(0)
+    except Exception: pass
+watch_parent()
+del watch_parent
 for _module in json.loads(sys.argv[1]) or []:
     try: __import__(_module)
     except Exception: pass
@@ -881,7 +1100,8 @@ def code_only(open_code):
 builtins.open=tz_only(io.open); io.FileIO=tz_only(_io.FileIO); _io.open=code_only(_io.open); io.open=builtins.open; _io.FileIO=io.FileIO
 del _io, _name, code_only, tz_only, tz_roots
 class Response:
-    def __init__(self,x): self.status_code=x['status_code']; self.headers=x['headers']; self.body=x['body']; self.text=x['text']
+    # The body is sent once: text is the same string.
+    def __init__(self,x): self.status_code=x['status_code']; self.headers=x['headers']; self.body=self.text=x['body']
     def header(self,name,default=None):
         # One header's values joined by ", ", as jq's $headers has them, the
         # name in any case; default when the response has none.
@@ -946,11 +1166,21 @@ while True:
     if not line: break
     try:
         p=json.loads(line)
+        # The request's text is not kept while the script runs, and data
+        # that is the body is the body's own string, not a copy.
+        line=None
+        if p.get('data_is_body'): p['data']=p['response']['body']
+        # The request is read: the script's time, limits.script_timeout,
+        # starts when the exporter reads this line.
+        answer({'started': True})
         metrics=[]
         def metric(name,type='gauge',value=0,labels=None,help=None,timestamp=None,_metrics=metrics):
-            if not isinstance(name,str): raise ValueError('metric name must be a string')
+            if not isinstance(name,str): raise ValueError('metric name %r is not a string'%(name,))
+            if type is None: type='gauge'
+            if not isinstance(type,str): raise ValueError('metric %r type %r is not a string; give "gauge", "counter" or "untyped"'%(name,type))
+            if help is not None and not isinstance(help,str): raise ValueError('metric %r help %r is not a string'%(name,help))
             if labels is None: labels={}
-            if not isinstance(labels,dict): raise ValueError('metric labels must be a mapping of label names to values')
+            if not isinstance(labels,dict): raise ValueError('metric %r labels must be a mapping of label names to values, not a %s'%(name,labels.__class__.__name__))
             labels={str(k):t for k,t in ((k,label_text(k,v)) for k,v in labels.items()) if t is not None}
             value=metric_number(name,'value',value)
             if timestamp is not None:

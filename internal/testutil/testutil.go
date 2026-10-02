@@ -154,11 +154,14 @@ func FirstLines(s string, n int) string {
 	return strings.Join(lines, "\n")
 }
 
-// WaitFor polls done until it is true, and fails the test after a few
-// seconds, naming what it waited for.
+// WaitFor polls done until it is true, and fails the test after half a
+// minute, naming what it waited for. The bound is for what never happens,
+// not a measure of how soon it should: what is waited for takes
+// milliseconds, and on a machine with every CPU busy elsewhere it has been
+// seen to take more than five seconds.
 func WaitFor(t *testing.T, what string, done func() bool) {
 	t.Helper()
-	deadline := time.Now().Add(5 * time.Second)
+	deadline := time.Now().Add(30 * time.Second)
 	for !done() {
 		if time.Now().After(deadline) {
 			t.Fatalf("timed out waiting for %s", what)

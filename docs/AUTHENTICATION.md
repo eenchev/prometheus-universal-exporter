@@ -47,7 +47,7 @@ monitors:
       secretKey: token
 ```
 
-Header values in monitor parameters are not suitable for secrets. Monitor authentication is disabled by default; set an entry's `auth.enabled: true` and use its `auth` block with a Kubernetes Secret for bearer/basic authentication. Explicitly opt in per collector before forwarding the incoming Authorization header.
+Header values in monitor parameters are not suitable for secrets. Monitor authentication is disabled by default; set an entry's `auth.enabled: true` and use its `auth` block with a Kubernetes Secret for bearer/basic authentication. An enabled `auth` must say its `type`, `bearer` or `basic`, and its `secretName`, or the chart fails rendering, naming the monitor. Explicitly opt in per collector before forwarding the incoming Authorization header.
 
 The exporter endpoints can also be protected with exporter-side Basic Auth,
 added to the configuration beside its collectors:
@@ -72,6 +72,15 @@ web:
     enabled: true
     username: exporter                # or username_file
     password_file: /var/run/prometheus-universal-exporter/web-auth/password
+```
+
+`enabled` is the switch, and it must be said: `true` requires the credential,
+`false` keeps the block's settings without using them. A block that sets a
+username or a password without it would protect nothing, so it is refused
+when the configuration loads:
+
+```text
+line 3: web.basic_auth sets username and password but not enabled; say enabled: true to turn it on, or enabled: false to keep the settings without using them
 ```
 
 Set one of `username` and `username_file`, and one of `password` and

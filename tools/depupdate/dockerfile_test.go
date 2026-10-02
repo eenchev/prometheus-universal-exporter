@@ -108,14 +108,41 @@ func TestPypiCandidatesDropReleasesPipCannotInstall(t *testing.T) {
 }
 
 func TestSummaryIsEmptyWhenNothingMoves(t *testing.T) {
-	if summaryMarkdown(nil) != "" {
+	if summaryMarkdown(nil, nil) != "" {
 		t.Fatal("an empty update set must produce no pull request body")
 	}
-	body := summaryMarkdown([]update{{Arg: "GO_VERSION", Source: "docker.io/library/golang (`alpine`)", Previous: "1.23", Next: "1.24"}})
+	body := summaryMarkdown([]update{{Arg: "GO_VERSION", Source: "docker.io/library/golang (`alpine`)", Previous: "1.23", Next: "1.24"}}, nil)
 	for _, want := range []string{"GO_VERSION", "1.23", "1.24", "library/golang"} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("the pull request body should mention %q:\n%s", want, body)
 		}
+	}
+	if strings.Contains(body, "is available") {
+		t.Fatalf("the pull request body announces a held release where there is none:\n%s", body)
+	}
+}
+
+// A newer Python feature release is a note in a pull request that is opened
+// anyway. On its own it is no reason to open one, so it produces no body, and
+// the body no longer claims that every pin moves by minor versions.
+func TestSummaryNamesAHeldPythonOnlyBesideAnUpdate(t *testing.T) {
+	held := []heldRelease{{
+		Arg: "PYTHON_VERSION", Product: "Python", Current: "3.12", Available: "3.14",
+		Because: "collector scripts run on it",
+	}}
+	if body := summaryMarkdown(nil, held); body != "" {
+		t.Fatalf("a newer Python alone must produce no pull request body, got:\n%s", body)
+	}
+	body := summaryMarkdown([]update{{Arg: "GO_VERSION", Source: "docker.io/library/golang (`alpine`)", Previous: "1.26", Next: "1.27"}}, held)
+	const note = "\nPython 3.14 is available; PYTHON_VERSION stays at 3.12 until it is bumped by hand, because collector scripts run on it.\n"
+	if !strings.Contains(body, note) {
+		t.Fatalf("the pull request body should end with the note %q:\n%s", note, body)
+	}
+	if strings.Contains(body, "Only minor and patch versions move") {
+		t.Fatalf("the pull request body still says every pin moves by minor versions:\n%s", body)
+	}
+	if !strings.Contains(body, "Python only within its feature release") {
+		t.Fatalf("the pull request body does not say how far Python moves:\n%s", body)
 	}
 }
 
@@ -151,7 +178,9 @@ func TestPolicyKeepsTheDockerfilePinsWithinTheirMajor(t *testing.T) {
 		want       string
 	}{
 		{"GO_VERSION", "1.23", []string{"1.22", "1.24", "2.0"}, "1.24"},
-		{"PYTHON_VERSION", "3.12", []string{"3.13", "4.0", "3.13.1"}, "3.13"},
+		// Python's feature release is the users' scripts' interpreter: held.
+		{"PYTHON_VERSION", "3.12", []string{"3.13", "3.14", "4.0", "3.13.1"}, ""},
+		{"PYTHON_VERSION", "3.12.4", []string{"3.12.9", "3.13.1", "4.0.0", "3.12"}, "3.12.9"},
 		{"LXML_VERSION", "6.1.3", []string{"6.1.4", "6.2.0", "7.0.0"}, "6.2.0"},
 		{"PYTHON_DATEUTIL_VERSION", "2.9.0.post0", []string{"2.9.0.post1", "3.0.0.post0"}, "2.9.0.post1"},
 	}
@@ -160,7 +189,7 @@ func TestPolicyKeepsTheDockerfilePinsWithinTheirMajor(t *testing.T) {
 		byArg[p.Arg] = p
 	}
 	for _, tc := range cases {
-		t.Run(tc.arg, func(t *testing.T) {
+		t.Run(tc.arg+" "+tc.current, func(t *testing.T) {
 			p, ok := byArg[tc.arg]
 			if !ok {
 				t.Fatalf("%s is not in the pin table", tc.arg)
@@ -173,5 +202,33 @@ func TestPolicyKeepsTheDockerfilePinsWithinTheirMajor(t *testing.T) {
 				t.Fatalf("selectUpdate(%q)=%q, want %q", tc.current, got, tc.want)
 			}
 		})
+	}
+}
+
+// docs/DEPENDENCIES.md quotes the line a pull request carries for a newer
+// Python, and says what moves; both are this command's to keep true.
+func TestTheDependencyPageQuotesTheHeldPythonLine(t *testing.T) {
+	raw, err := os.ReadFile("../../docs/DEPENDENCIES.md")
+	if err != nil {
+		t.Skipf("no dependency page to check against: %v", err)
+	}
+	page := string(raw)
+	var python pin
+	for _, p := range pins {
+		if p.Arg == "PYTHON_VERSION" {
+			python = p
+		}
+	}
+	if python.Policy.AllowMinor || python.Product == "" || python.HeldBecause == "" {
+		t.Fatalf("PYTHON_VERSION is not held with a product and a reason: %+v", python)
+	}
+	line := heldRelease{Arg: python.Arg, Product: python.Product, Current: "3.12", Available: "3.14", Because: python.HeldBecause}.sentence() + "."
+	if !strings.Contains(page, "\n"+line+"\n") {
+		t.Errorf("docs/DEPENDENCIES.md does not quote the pull request's line:\n%s", line)
+	}
+	for _, p := range pins {
+		if p.Arg != "PYTHON_VERSION" && !p.Policy.AllowMinor {
+			t.Errorf("%s no longer moves by minor versions, which docs/DEPENDENCIES.md says Go and the Python libraries do", p.Arg)
+		}
 	}
 }

@@ -75,6 +75,18 @@ Every query value is masked and a password in the URL is shown as
 `redacted:redacted`, so a token in `request.query` or in the target's query
 reaches neither the log, nor the probe's answer, nor a debug report.
 
+A query is shown as it was sent, with values masked where they stand: every
+pair keeps its place and its spelling, a bare key stays a bare key, and a pair
+no parser would take — `x=100%` — is still there. Pairs are told apart at `&`
+and at `;`, since servers differ on `;`, and masked by the more cautious
+reading of the two: the token of `a=1;token=SECRET` is masked, and once a
+value is masked so is what follows it up to the next `&`, which is the rest of
+that value to a server that splits at `&` alone — `token=SE;CRET` is shown as
+`token=<redacted>;<redacted>`, and `token=SECRET;x=1` as
+`token=<redacted>;x=<redacted>`. A name is read as a server reads it, so
+`%74oken=SECRET` and `TOKEN=SECRET` are masked as `token=SECRET` is, each
+shown under the name it was written with.
+
 Wherever a line names the target itself, a password in it is shown as
 `redacted:redacted`, and the value of a query parameter whose name reads as a
 credential as `<redacted>`:

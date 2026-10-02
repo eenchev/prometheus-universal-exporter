@@ -63,6 +63,10 @@ but `method` and `body`, plus its own `targets`, `from` and `until`, and for
 [`grpc`](GRPC.md#static-targets) `timeout`, `insecure_skip_verify`, `retry`,
 with its `codes`, and its own `message` and `metadata`. It also takes static `headers` and its own target
 credentials, inline or file-backed, as basic authentication or a bearer token.
+A target's own credential is sent instead of the collector's, whose
+`bearer_token_file` or `basic_auth_file` is then not read for that target: a
+collector's credential file that is missing fails only the targets that
+would have sent it.
 An `http` or `graphite` target may set its own
 [`accept_status`](REQUESTS.md#accepting-other-statuses), and a `grpc` target
 its own [`accept_codes`](GRPC.md#errors-and-retries), replacing the
@@ -102,7 +106,9 @@ for a value an environment variable supplies, since the file is checked after
 it is expanded.
 
 `labels` are added to every metric the target produces, without overwriting a
-label the collector already extracted. `static_target` is the endpoint's own
+label the collector already extracted. A target's `le` is left off a
+histogram and its `quantile` off a summary, whose buckets and quantiles carry
+that label already. `static_target` is the endpoint's own
 label, and `job` and `instance` are Prometheus's, set when it scrapes the
 endpoint, so a target may set none of the three: kept as the series' own
 labels, as the endpoint is scraped, a target's `job` would move its series out
@@ -129,6 +135,16 @@ targets:
     labels: {city: Varna}
 ```
 
+That is [`examples/open-meteo/static-targets.yaml`](../examples/open-meteo/static-targets.yaml),
+shortened; the configuration with its collector is
+[`config.yaml`](../examples/open-meteo/config.yaml) beside it, and the two run
+together as
+`prometheus-universal-exporter --config.file=examples/open-meteo/config.yaml --static-targets-file=examples/open-meteo/static-targets.yaml`.
+
+A merge key works inside a target's `request` too — `request: {<<: *request,
+timeout: 2s}` — and a `path` or `body` it brings in replaces the collector's
+as one written there does.
+
 Check a target file together with its configuration before deploying it:
 `prometheus-universal-exporter --dry-run --config.file=config.yaml --static-targets-file=static-targets.yaml`
 reports whether each would load, including whether every target names a
@@ -153,21 +169,39 @@ static targets with more than one replica or with autoscaling (see
 
 A target is first scraped within ten seconds of the exporter starting, or of
 the reload that added it or changed it in any way — its address, its request,
-its params, its interval — so it is on the endpoint
+its params, its interval, or anything in the definition of its collector — so
+it is on the endpoint
 promptly even with an interval of an hour. After that it keeps a cadence at a
 point within its interval set by its name, so targets sharing an interval are
 spread over it rather than all scraped at once: the cadence starts at the first
-such point at least half an interval after the first scrape, and then comes
-every interval, however long a scrape takes. A scrape
+such point at least one whole interval after the first scrape began — between
+one interval and two after it — and then comes every interval, however long a
+scrape takes. The first scrape has its interval to end in, as every scrape
+has, so it has ended when the cadence starts, and a target whose scrapes take
+most of their interval — 26 seconds of 30 — is not cut short and reported
+down after a start or a reload. A scrape
 must end within its interval — one that does not fails saying the scrape ran
 out of its interval — so `request.timeout` may not be longer, and
 retries — the target's `request.retry`, else the collector's — whose waits
 alone fill the interval (`attempts` × `backoff`) are refused, since the last of
 them could never be made; retries that fit can still be cut short by slow
-attempts. A scrape still
-running when the next is due makes that one skipped, with a
-`static target scrape skipped` warning, rather than overlapping it. The
-interval is at least `1s`. At most `concurrency` targets are scraped at once,
+attempts. The interval is at least `1s`.
+
+Two scrapes of a target never run at once. A scrape that uses its whole
+interval — as every scrape of a target that never answers does — ends just
+after the target's next turn has come. That turn is not given up: it waits
+for the scrape, starts as soon as it has ended, and must itself end by the
+turn after it, so it has slightly less than the interval. That only happens
+on the steady cadence, where the scrape before ran over by little; the first
+scrape never runs into the cadence. A target that hangs
+is therefore tried once per interval, each failure logged as
+`static target scrape failed`, and is seen to answer again within one
+interval. A turn is skipped, with a `static target scrape skipped` warning,
+only when it is really lost: the scrape before it was still running when the
+turn after it came — a scrape held by something its deadline does not end, or
+an exporter short of CPU — or no scrape slot came free within the interval.
+
+At most `concurrency` targets are scraped at once,
 8 unless the file says otherwise; a target due while all are busy waits for a
 slot within its interval, and is skipped, with a warning, if none frees. Each
 also waits for a slot of its collector's `max_concurrent_probes`, which it
@@ -264,19 +298,39 @@ http_exporter_target_up{collector="legacy_text",region="us",static_target="legac
   report each target's last scrape, so a failing target is visible rather
   than simply absent.
 - `http_exporter_target_last_success_timestamp_seconds` is when the target was
-  last scraped successfully, 0 until it has been. The endpoint keeps serving a
-  target's last values while its scrapes fail or are skipped, so alert on
-  their age:
+  last scraped successfully, 0 until it has been, and is kept through later
+  failures. Alert on its age to find a target that has given nothing new for
+  too long, however its scrapes went:
 
   ```promql
   time() - http_exporter_target_last_success_timestamp_seconds > 3 * 3600
   ```
+- What the endpoint serves of a target is what its last scrape left:
+  - A scrape that succeeded leaves the target's metrics and its health
+    series, with `http_exporter_target_up` 1.
+  - A scrape that failed leaves the health series only, with
+    `http_exporter_target_up` 0: the metrics of the scrape before it are no
+    longer served, so values the target did not give are never presented as
+    current, and Prometheus marks their series stale.
+  - A scrape that failed on a collector with
+    [`cache.stale_if_error`](CONFIGURATION.md#serving-the-last-good-result-when-the-target-fails)
+    leaves the last good result in their place for as long as that setting
+    keeps it, marked by `http_exporter_result_stale` 1 and aged by
+    `http_exporter_result_age_seconds`, beside `http_exporter_target_up` 0;
+    once it has expired, a failed scrape leaves the health series only.
+  - A turn that publishes nothing — one skipped, or a scrape cut short by a
+    shutdown — changes nothing: the result of the last scrape that ended,
+    whether it succeeded or failed, is still served, and the last success
+    timestamp says how old it is.
 - A target that has not been scraped yet is not on the endpoint, and one
   removed from the file leaves it with the reload.
 - The same metric from two targets must have one type. A target whose metric
   another target already serves with a different type has that metric left
-  out, with a warning in the log, and the rest of both is served. When the
-  types agree again, a `static target metric back on the static targets
+  out, with a warning in the log, and the rest of both is served. The same
+  goes for a metric named like a series of another target's histogram or
+  summary — a gauge `x_sum` beside a histogram `x`, whichever target came
+  first — since the endpoint cannot serve two families of one name. When the
+  clash is gone, a `static target metric back on the static targets
   endpoint` line says so.
 - Reading the endpoint contacts no target: it is as fast as the self-metrics,
   whatever the targets are doing, so Prometheus can scrape it on any interval.
@@ -381,7 +435,9 @@ target's metrics arrive under; both fall back to the exporter-wide `otlp`
 settings, and per-target attributes are merged over the exporter-wide ones.
 Targets with different identities are exported as separate `resourceMetrics`
 entries. The `otlp` block is only for a target with `export_via_otlp`, and
-refused on any other. Over OTLP every series carries `static_target`, as on
+refused on any other. `resource_attributes` may not set `service.name`, which
+`service_name` sets: the resource would carry it twice, so the file is
+refused pointing at `service_name`. Over OTLP every series carries `static_target`, as on
 the endpoint: targets often share a resource — the same collector, the
 exporter-wide identity — and the label is what keeps their series apart.
 
@@ -402,13 +458,26 @@ loaded target sets `export_via_otlp`, is rejected, and the last valid pair
 stays active. A target the reload changed starts again — first scraped within
 ten seconds, then on a cadence of its own — once a scrape begun on the old
 definition has ended, so two never overlap, and a fixed address or credential
-shows within seconds rather than at the old cadence's next turn; an unchanged
-target keeps its cadence; a
+shows within seconds rather than at the old cadence's next turn. So does every
+target of a collector the reload changed in any way — a rule, a label, its
+request — although the target file is as it was: the endpoint serves what the
+new definition makes within ten seconds, not what the old one made until the
+target's next turn. A target that did not change, of a collector that did not
+change, keeps its cadence; a
 target removed while its scrape runs publishes nothing.
+
+The configuration and the target file take effect as one pair. A reload that
+changes both — a collector renamed in the configuration and in the targets
+that use it — puts both in force in one step, and every scrape uses the
+configuration its target was read with, so no scrape runs a target of one
+reload against the collectors of another. A scrape already waiting or running
+when the reload comes finishes on the pair it started with; its target is
+then scraped again as above if the reload changed it or its collector.
 
 On `SIGTERM` or `SIGINT` the targets keep being scraped through
 `--web.shutdown-delay`, while their endpoint is still served. Then no scrape
-starts, and those in flight finish within `--web.shutdown-timeout`; one it
+starts, not one that was waiting for a slot and gets it then either, and
+those in flight finish within `--web.shutdown-timeout`; one it
 cuts short publishes nothing and logs no failure, so a restart never reports
 a target down, over OTLP or anywhere else, and the target's last result
 stands.

@@ -4,10 +4,44 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"slices"
+	"strings"
 	"time"
 
 	"github.com/eenchev/prometheus-universal-exporter/internal/model"
 )
+
+// A static target file in force is read by the scrapes while a reload checks
+// it against the configuration just read (CheckTargetRequest), so that check
+// never writes into it: the spellings a scrape compares — accept_status in
+// lower case, accept_codes and retry.codes in upper case — are written once,
+// by NormalizeTargetRequest, when the file is loaded and nothing reads it
+// yet, and the check only reads.
+
+// NormalizeTargetRequest writes a static target's request.accept_status,
+// request.accept_codes and request.retry.codes as a scrape compares them:
+// trimmed, statuses in lower case and codes in upper case. It is called once,
+// when the target file is loaded; whether each entry is one the collector's
+// request type takes is CheckTargetRequest's to say.
+func NormalizeTargetRequest(t *model.StaticTarget) {
+	for i, entry := range t.Request.AcceptStatus {
+		t.Request.AcceptStatus[i] = strings.ToLower(strings.TrimSpace(entry))
+	}
+	for i, code := range t.Request.AcceptCodes {
+		t.Request.AcceptCodes[i] = strings.ToUpper(strings.TrimSpace(code))
+	}
+	if retry := t.Request.Retry; retry != nil {
+		for i, code := range retry.Codes {
+			retry.Codes[i] = strings.ToUpper(strings.TrimSpace(code))
+		}
+	}
+}
+
+// checkAcceptStatus is normalizeAcceptStatus for a list that must not be
+// written, a static target's: a copy is normalized and checked.
+func checkAcceptStatus(entries []string) error {
+	return normalizeAcceptStatus(slices.Clone(entries))
+}
 
 // TargetOverrides translates the target request block into the same per-scrape
 // override structure the /probe endpoint produces.

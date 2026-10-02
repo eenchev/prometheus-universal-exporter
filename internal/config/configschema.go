@@ -131,7 +131,7 @@ func schemaFor(t reflect.Type, path string, rules map[string]map[string]any) map
 	case durationType:
 		schema = map[string]any{"type": "string", "pattern": durationPattern, "description": "A duration such as 500ms, 30s or 5m."}
 	case byteSizeType:
-		schema = map[string]any{"type": []string{"integer", "string"}, "minimum": 0, "pattern": model.ByteSizePattern, "description": "A size: a number of bytes, or a number with a unit such as 512KiB, 10MB or 1.5GiB."}
+		schema = map[string]any{"type": []string{"integer", "string"}, "minimum": 0, "pattern": model.ByteSizePattern, "description": "A size: a whole number of bytes, or a number with a unit such as 512KiB, 10MB or 1.5GiB. Under 2^63 bytes, which the exporter checks when the configuration loads."}
 	case metricTypeType:
 		schema = map[string]any{"type": "string", "enum": []string{string(model.GaugeMetricType), string(model.CounterMetricType), string(model.HistogramMetricType), string(model.SummaryMetricType), string(model.UntypedMetricType)}}
 	default:
@@ -179,6 +179,22 @@ func schemaFor(t reflect.Type, path string, rules map[string]map[string]any) map
 		}
 	}
 	return schema
+}
+
+// enabledSwitchRule is the rule of a block that does nothing until its
+// enabled key turns it on: every other key it takes requires enabled beside
+// it, as the exporter does when it reads the block
+// (model.decodeSwitchedBlock), so an editor flags credentials or an endpoint
+// that nothing would use.
+func enabledSwitchRule(t reflect.Type, description string) map[string]any {
+	dependent := map[string]any{}
+	for i := 0; i < t.NumField(); i++ {
+		key, _, _ := strings.Cut(t.Field(i).Tag.Get("yaml"), ",")
+		if key != "" && key != "-" && key != "enabled" {
+			dependent[key] = []string{"enabled"}
+		}
+	}
+	return map[string]any{"dependentRequired": dependent, "description": description}
 }
 
 func joinSchemaPath(path, key string) string {
@@ -247,6 +263,15 @@ func configSchemaRules() map[string]map[string]any {
 			"enum":        model.GraphiteInvalidLines,
 			"description": "graphite decoder: what a carbon line that cannot be read does: fail the decode, the default, or skip, leaving it out, counted in http_exporter_decoder_lines_skipped_total and logged.",
 		},
+		// What checkCSVDelimiter refuses: more than one character, which a
+		// schema counts as the exporter does, and the four that are one and
+		// cannot separate fields.
+		"collectors[].response.csv.delimiter": {
+			"type":        "string",
+			"maxLength":   1,
+			"not":         map[string]any{"enum": []string{`"`, "\r", "\n", "\x00", "\uFFFD"}},
+			"description": "csv decoder: the one character between fields, any but a double quote and a line break. Defaults to a comma. For a tab, write \"\\t\" in double quotes, where YAML reads \\t as the tab character.",
+		},
 		"collectors[].decoder.type": {
 			"enum":        model.DecoderTypes,
 			"description": "How to decode the response. Defaults to auto, which the transform or the Content-Type decides.",
@@ -290,6 +315,10 @@ func configSchemaRules() map[string]map[string]any {
 		"collectors[].metrics[].scale":               {"description": "Multiplies the value, mapped or read as a number, such as 0.001 for milliseconds to seconds. Finite and not 0. Not for the python transform; for prometheus, plain samples only."},
 		"collectors[].limits.max_script_memory":      {"description": "The most memory, as address space, each of the collector's Python workers may use, the interpreter and its libraries included, such as 256MiB. A script that needs more fails with a MemoryError. At least 32MiB; 0, the default, leaves it unbounded. Enforced on Linux."},
 		"collectors[].limits.script_timeout":         {"description": "How long a Python script may run. Starting the interpreter is not counted. Defaults to 100ms."},
+		"otlp":                                       enabledSwitchRule(reflect.TypeOf(model.OTLPConfig{}), "OTLP export of probe results, self-metrics and static targets with export_via_otlp. Off until enabled is true; a block that sets any other key must say enabled, true or false. See docs/OTLP.md."),
+		"otlp.enabled":                               {"description": "Turn the export on. false keeps the block's settings without using them."},
+		"web.basic_auth":                             enabledSwitchRule(reflect.TypeOf(model.ExporterBasicAuth{}), "Basic authentication on the exporter's own endpoints. Off until enabled is true; a block that sets any other key must say enabled, true or false."),
+		"web.basic_auth.enabled":                     {"description": "Require the credentials. false keeps the block's settings without using them."},
 		"otlp.endpoint":                              {"description": "OTLP/HTTP metrics endpoint, such as http://otel-collector:4318/v1/metrics."},
 		"web.basic_auth.username_file":               {"description": "Read the username from this file instead of username, such as a mounted Secret. Read again when it changes."},
 		"web.basic_auth.password_file":               {"description": "Read the password from this file instead of password, such as a mounted Secret. Read again when it changes."},
@@ -301,6 +330,10 @@ func configSchemaRules() map[string]map[string]any {
 		"collectors[].request.tls.server_name":       {"description": "The name the target's certificate is checked against, and sent as SNI, when the target is addressed by something else, such as an IP address. Unset, the target's host."},
 		"otlp.compression":                           {"enum": []string{model.OTLPCompressionGzip, model.OTLPCompressionNone}, "description": "Compression of the export requests. Defaults to gzip."},
 		"otlp.timeout":                               {"description": "How long one export attempt may take. Defaults to 5s. Also bounds the last export at shutdown."},
+		// The least interval is checked when the configuration loads
+		// (validateOTLP): a duration is text to a schema, which cannot tell
+		// 500ms from 5s, and a disabled block may hold any.
+		"otlp.interval": {"description": "How often the points waiting are exported. At least 1s, which the exporter checks when the configuration loads; defaults to 30s."},
 	}
 }
 

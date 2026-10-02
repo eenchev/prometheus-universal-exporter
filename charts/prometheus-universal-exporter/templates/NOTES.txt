@@ -40,3 +40,30 @@ but it allows no voluntary eviction at all: draining a node that runs the
 exporter waits for ever, until the budget is changed or the pod is deleted.
 Use maxUnavailable: 1, or minAvailable below the replica count.
 {{- end }}
+{{- /* minAvailable of every replica leaves no pod that may be evicted
+       either. A count is compared with replicaCount, which autoscaling does
+       not render; a percentage is rounded up, as Kubernetes rounds it, and
+       100% blocks at any replica count. */}}
+{{- if and $pdb.enabled (not (kindIs "invalid" $pdb.minAvailable)) }}
+{{- $min := toString $pdb.minAvailable }}
+{{- $replicas := int .Values.replicaCount }}
+{{- $fixed := and (not .Values.autoscaling.enabled) (gt $replicas 0) }}
+{{- $blocked := false }}
+{{- if hasSuffix "%" $min }}
+{{- $percent := trimSuffix "%" $min | atoi }}
+{{- if ge $percent 100 }}
+{{- $blocked = true }}
+{{- else if $fixed }}
+{{- $blocked = ge (div (add (mul $percent $replicas) 99) 100) (int64 $replicas) }}
+{{- end }}
+{{- else if $fixed }}
+{{- $blocked = ge (atoi $min) $replicas }}
+{{- end }}
+{{- if $blocked }}
+
+WARNING: podDisruptionBudget.minAvailable is {{ $min }}{{ if $fixed }} with replicaCount {{ $replicas }}{{ end }}. Kubernetes
+accepts it, but it leaves no pod that may be evicted: draining a node that
+runs the exporter waits for ever, until the budget is changed or the pod is
+deleted. Use maxUnavailable: 1, or minAvailable below the replica count.
+{{- end }}
+{{- end }}

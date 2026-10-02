@@ -1,0 +1,3 @@
+  # A file whose first line is indented, as a generated one may be, for the
+  # chart's render checks: the ConfigMap has to hold it as it is given.
+collectors: []

@@ -38,6 +38,31 @@ declaration, other markup as XML, JSON by its opening bracket, Prometheus text b
 dot) as Graphite series, and anything else as text. If the decoded response cannot be used by the selected transform, the
 probe fails with a clear mapping error.
 
+Each transform reads what certain decoders produce:
+
+| Transform | Decoders it reads |
+| --- | --- |
+| `jq`, `yq` | `json`, `yaml`, `graphite` |
+| `regex` | `text` |
+| `csv` | `csv` |
+| `css` | `html` |
+| `xpath` | `xml`, `html` |
+| `prometheus` | `prometheus` |
+| `python` | every decoder |
+
+A `decoder.type` that names a decoder the collector's transform does not read
+could never work, so it is refused when the configuration loads, naming both
+and what would work:
+
+```text
+collector "app" decodes with json, which its regex transform cannot read: it reads text; set decoder.type to text, or use a transform that reads json: jq, yq or python
+```
+
+A `jq` or `yq` transform with a `pre_script` is the exception: its rules read
+the mapping or list the script leaves in `data`, whatever was decoded, so it
+may name any decoder. The same table decides on a scrape, when the decoder
+was left to each response.
+
 That fallback means a target that changes its `Content-Type`, or a file renamed
 to another extension, is quietly read another way. So a collector that leaves
 `decoder.type` unset where the transform implies none is logged at startup and
@@ -70,7 +95,9 @@ fails the scrape saying so, and so does a second YAML document after `---`
 than everything after the first being dropped unseen. XML supports XPath, HTML supports CSS
 selectors and XPath (including bare element selectors such as `h1`), text
 supports regular expressions, and Prometheus input is parsed before
-filtering/renaming.
+filtering/renaming. An XML document may nest its elements 512 deep, as an HTML
+document may; a deeper one fails the scrape in the `decode` stage, saying so,
+whatever its size.
 
 ### Character encodings
 
@@ -102,7 +129,8 @@ none. Names follow the WHATWG Encoding Standard, as in a browser: `utf-8`,
 as browsers do. An unknown name in `response.charset` fails to load; an
 unknown name declared by a target fails the `decode` stage, naming it.
 Transforms and Python scripts see the converted body, and its `Content-Type`
-says `charset=utf-8`.
+says `charset=utf-8`. A [debug report](#debugging-a-probe) shows the response
+as the target sent it, and says what its body was converted from.
 
 What still is not valid UTF-8 after that — a target that says UTF-8 and is
 not — no longer fails the scrape: the invalid bytes in label values and help
@@ -116,12 +144,60 @@ reference parser's rules — families from HELP and TYPE lines,
 `_sum`/`_count`/`_bucket` grouped into summaries and histograms, quoted UTF-8
 names such as `{"my.metric", key="value"} 1` — and accepts three things the
 reference parser rejected: a body without a final newline, CRLF line endings,
-and trailing blanks on a line. It rejects a negative, NaN or infinite histogram
-or summary count. A malformed body fails the decode with the offending line
+and trailing blanks on a line. It rejects a histogram or summary count, or a
+bucket's, that is negative, NaN, infinite or a fraction such as `1.5`: a count
+is a whole number of observations, however it is written (`7`, `7.0`,
+`1e3`). A malformed body fails the decode with the offending line
 number, for example
 `text format parsing error in line 3: expected float as value, got "n/a"`. A
 label value that is not valid UTF-8 does not fail it: it is repaired with `�`
 and counted, as above.
+
+A histogram or a summary is passed on as the target wrote it, with its
+buckets and quantiles in ascending order, and with values that the text
+format allows and OpenMetrics does not, such as a negative `_sum` or bucket
+counts that fall (see [OpenMetrics](#openmetrics) for how those are written).
+OpenMetrics allows a histogram of buckets alone and a summary of quantiles
+alone, and some
+text format targets leave `_sum` or `_count` out: such a series is exported
+without the line, in either exposition format, never with a `_sum 0` or a
+`_count 0` the target did not write. A histogram's count is then the count of
+its `+Inf` bucket, which counts every observation, and one with a `_count`
+and no `+Inf` bucket is given the bucket.
+
+A histogram's `+Inf` bucket and its `_count` are one number written twice,
+and a target that updates the two without a lock is scraped between the
+updates now and then: `h_bucket{le="+Inf"} 7` beside `h_count 8`. Such a
+histogram does not fail the scrape, which would lose every other family of
+the target with it. It is passed on as written: the text format answers
+`h_bucket{le="+Inf"} 7` and `h_count 8`, each as it was read. So is a
+histogram with neither a `+Inf` bucket nor a `_count`, which is exported
+with the buckets and the `_sum` it has and is given neither line. Neither
+is an OpenMetrics histogram, so [OpenMetrics](#openmetrics) writes both as
+`unknown` families and [OTLP](OTLP.md#delivery) as gauges, with the same
+series and values.
+
+What cannot be one series fails the decode, as two samples of one plain
+series fail the scrape, and the error names the series and the line it
+starts in:
+
+- two buckets with one bound, however it is written — `le="1"` and
+  `le="1.0"` — or two values of one quantile
+  (`the histogram h, which starts in line 2, has two buckets with the upper
+  bound 1`);
+- a second `_sum` or `_count` sample of the series.
+
+A sample line that is no part of its family fails the decode too, as any
+malformed line does, naming the line and what was expected there: under
+`# TYPE h histogram`, a sample named `h` itself, or an `h_bucket` without an
+`le` label, has a value no histogram series has a place for
+(`text format parsing error in line 2: expected h_bucket with an le label,
+h_sum or h_count as a sample of the histogram h, got h`), and so has a
+sample named as its summary without a `quantile` label. The value is not
+dropped without a word. This is a line the format does not allow, as a value
+that is no number is, rather than a series whose numbers disagree, which is
+why it fails where the histograms above are passed on. OpenMetrics'
+`_created` samples are read and left out, as before.
 
 A body is read as OpenMetrics when its `Content-Type` is
 `application/openmetrics-text`, or, when the `Content-Type` does not say
@@ -190,14 +266,30 @@ The expression and label values are interpreted by the selected transform:
   columns by number with `header: false`. An unnamed column empty in every
   row, as a delimiter ending each line leaves, is left out. A quote inside a
   field that does not start with one, as in `5" disk`, is read as written; a
-  quoted field left open still fails the scrape.
+  quoted field left open, or with a quote in it that is not doubled, still
+  fails the scrape, whatever the other rows hold, rather than be read on over
+  the rows after it. `response.csv.trim_space: true` trims the blanks on both
+  sides of every field, with a header row and without one; with a tab or
+  another blank as the delimiter an empty field stays where it is, and the
+  fields after it in their columns. A response with no
+  rows — a header alone, or nothing at all — has no value for any rule, so a
+  required rule is [missing its value](#when-a-metric-cannot-be-extracted).
 - `css`: the expression selects the HTML element whose text is numeric. Without
   [`items`](#metrics-per-item) a metric is one value, so the expression must
   match at most one element. Several values, and labels read from the page,
   need `items`: select the rows with it, and the value and the labels as cells
   of each row.
 - `xpath`: the expression selects XML/HTML nodes whose text is numeric; labels
-  are relative XPath expressions or `@attribute` selectors. An expression that
+  are XPath expressions relative to each node, such as `../@name`, or `@name`
+  for an attribute of the node itself. A rule may select attributes, as
+  `//job/@size` does: a label is then relative to the attribute, `.` its
+  value, `name()` its name and `../@name` another attribute of its element.
+  Over XML, prefixes in them mean what
+  [`response.namespaces`](#xml-namespaces) says. HTML has no namespaces: a
+  label that is `@` and one attribute name, on the node or after `../` steps,
+  is read by that name as the page writes it, a colon included, as in
+  `@xml:lang`, `@og:type`, `@v-on:click` or `../@data-id`
+  ([Attribute labels](#attribute-labels)). An expression that
   computes a value instead of selecting nodes — `count(//job)`,
   `sum(//job/@size)`, `string(/status/@load)`, a comparison such as
   `/status/@state = 'ok'` — is one series of that value, a comparison `1` or
@@ -208,7 +300,9 @@ The expression and label values are interpreted by the selected transform:
   indentation of pretty-printed XML is no part of it.
 - `prometheus`: the expression matches source metric names; it can remap the
   name, description, type, and selected labels. Without `type` a series keeps
-  its own.
+  its own. A rule that matches no metric of the response has no value, so a
+  required rule is [missing its value](#when-a-metric-cannot-be-extracted);
+  give a rule for a metric the target may leave out `required: false`.
 
 CSS remains available specifically for HTML tables and HTML status pages; it is
 not used for CSV.
@@ -260,6 +354,93 @@ and, under `ignore` and `log`, in `http_exporter_rule_failures_total`, and it
 applies whatever `required` and `error_handling.allow_missing_keys` say
 about the value. `required` applies to `expression` labels, and not to
 the python transform, whose labels come from its script.
+
+### XML namespaces
+
+In an XPath expression a name without a prefix, such as `entry` or `@unit`,
+matches what the document writes without a prefix. A name with one, such as
+`m:size`, is matched against the prefixes as the document writes them, which
+works until the target picks another prefix for the same namespace, and
+cannot tell an `entry` in one default namespace from an `entry` in another.
+
+`response.namespaces` maps prefixes of your choosing to namespace URIs, for
+all of the collector's XPath expressions, the metrics' and the labels' alike.
+A prefixed name then matches by the URI, whatever prefix the document uses
+for it, or none:
+
+```xml
+<feed xmlns="http://www.w3.org/2005/Atom" xmlns:m="urn:example:metrics">
+  <entry><title>db01</title><m:size m:unit="bytes">5120</m:size></entry>
+</feed>
+```
+
+```yaml
+  - name: feed_sizes
+    request:
+      type: http
+    decoder:
+      type: xml
+    response:
+      namespaces:
+        a: http://www.w3.org/2005/Atom
+        x: urn:example:metrics
+    transform:
+      type: xpath
+    metrics:
+      - name: entry_size
+        expression: //a:entry/x:size      # a prefixed element
+        labels:
+          - name: unit
+            expression: '@x:unit'         # a prefixed attribute
+          - name: entry
+            expression: ../a:title
+```
+
+```text
+entry_size{entry="db01",unit="bytes"} 5120
+```
+
+`x` finds what the document writes as `m:`, and `a:entry` finds the `entry`
+of the Atom namespace, which the document writes without a prefix, and no
+other. Once `response.namespaces` is set, the prefixes in the collector's
+expressions are its own: one it does not map, the document's `m` here, is
+refused when the configuration loads, rather than matching nothing on every
+scrape.
+
+The prefix `xml` needs no mapping and takes none: XML reserves it for
+`http://www.w3.org/XML/1998/namespace`, which no document declares, so
+`@xml:lang`, `../@xml:lang` and `//entry[@xml:lang='en']` work with
+`response.namespaces` set or not, whatever the map holds for `xml`.
+
+#### Attribute labels
+
+A label that is `@` and the name of one attribute of the node is read
+straight from the node, by the name as the document writes it:
+
+- **In XML**, a plain name — `@name`, `@data-id`: letters, digits, `_`, `.`
+  and `-`, not starting with a digit, `.` or `-` — always. A prefixed name,
+  `@m:unit`, is read that way too while `response.namespaces` is not set: the
+  prefix is then the document's own, as it was before there were namespaces
+  to set. With `response.namespaces` set, a prefixed attribute is XPath: its
+  prefix means what the map says, `@x:unit` above, and one the map does not
+  have, other than `xml`, is refused when the configuration loads.
+- **In HTML**, which has no namespaces, any name at all: `@xml:lang`,
+  `@og:type`, `@v-on:click`, `@x-on:click.prevent`, `@:href`, `@@click` for
+  the attribute `@click`, `@2x`. A colon is a character of the name, and
+  `response.namespaces` plays no part. An attribute of a parent is read the
+  same way, `../@og:type`, and so is one HTML gives a namespace inside `svg`
+  or `math`, `@xlink:href`. Names are as the HTML parser keeps them, in
+  lower case. Deeper in an expression XPath cannot say such a name; write
+  `@*[name()='og:type']` there.
+
+A name is everything after the `@` when it holds nothing XPath takes for an
+operator: no `/`, `|`, `[`, `]`, `(`, `)`, `=`, `<`, `>`, `!`, `+`, `*`, `,`,
+`$`, quote or blank. Anything else that starts with `@` is XPath like every
+other label, and is checked when the configuration loads: `@id | @name` for
+the first of two attributes that is there, `@state = 'ok'` for `true` or
+`false`; one that is neither a name nor XPath, such as `@[attr]`, is refused
+there. With `decoder.type` left at `auto` a label is accepted when either
+kind of document would read it.
 
 ### Collector-wide labels
 
@@ -412,7 +593,13 @@ that yields none leaves the label off. Any other count than one per series
 means values would land on the wrong series — a label that yields nothing for
 one server would shift every later label along — so the metric fails under its
 `error_mode` instead, the error saying how many values the label gave for how
-many series. With `items` there is nothing to pair: a label that yields nothing
+many series. The metric then fails as a whole, once: none of its series is
+exported, one failure is counted and logged for it — the label's, not one
+for each value that could not be read as well — and under `fail` the scrape's
+error names the pairing mistake. The same holds for whatever else fails the
+metric as a whole: its expression failing at any of its values, a label
+expression failing, or a label value that is an object or a list. With
+`items` there is nothing to pair: a label that yields nothing
 for an item is simply absent on that series.
 
 Per item, the value and each label must yield at most one value; two is an
@@ -521,7 +708,28 @@ reads [Filebeat's monitoring endpoint](https://www.elastic.co/guide/en/beats/fil
 as seconds, outcomes of one kind as one family with a label
 (`filebeat_output_events_total{outcome="failed"}`), and `error_mode: ignore` on
 the sections only some Filebeats report, so they are absent rather than failing
-the scrape.
+the scrape. With the Kafka output it also reads the Kafka client's own metrics
+from `libbeat.outputs`, which other outputs do not have: bytes sent and
+received, requests in flight, requests sent and their latency as
+`filebeat_output_kafka_request_latency_seconds{quantile="0.99"}` and friends.
+
+[`examples/open-meteo/`](../examples/open-meteo/config.yaml) reads the current
+weather of a place from [Open-Meteo](https://open-meteo.com), which needs no
+API key. Its `config.yaml` takes the place from the probe — `latitude:
+"{{param_latitude:42.6977}}"`, Sofia unless the probe says otherwise — asks for
+metres per second, and turns the answer into `weather_*` series that carry the
+grid point the API answered for, with percentages as ratios and the
+observation time as Unix seconds. A repeated probe of one place is answered
+from memory for five minutes, and while the API is down the last result is
+served, marked stale, for an hour (`cache.ttl`, `cache.stale_if_error`):
+
+```sh
+curl 'http://localhost:8080/probe?collector=open_meteo_current&target=https://api.open-meteo.com&param_latitude=43.2141&param_longitude=27.9147'
+```
+
+The [`static-targets.yaml`](../examples/open-meteo/static-targets.yaml) beside
+it has the exporter scrape three places itself, every ten minutes; see
+[Static targets](STATIC-TARGETS.md#the-target-file).
 
 [`examples/config.grafanastatus.json-test.yaml`](../examples/config.grafanastatus.json-test.yaml)
 is a complete collector for [status.grafana.com](https://status.grafana.com),
@@ -598,7 +806,12 @@ not a number`, `an array of 3 items`, `null` — which usually means the
 expression stops one field short. `true` and `false` are read as `1` and `0`.
 
 `scale` multiplies the value, mapped or read as a number — `0.001` for
-milliseconds to seconds, `100` for a fraction to a percentage:
+milliseconds to seconds, `100` for a fraction to a percentage. A scale that is
+exactly one over a whole number, as `0.001`, `0.000000001`, `1e-9` or `0.5`
+is written, divides by that number instead, so 412 milliseconds are `0.412`
+seconds, not the `0.41200000000000003` multiplying by the binary
+approximation of `0.001` gives. A scale that only comes close to such a
+number, `0.3333333333` or `1.5e-9`, multiplies like any other:
 
 ```yaml
 - name: api_latency_seconds
@@ -688,6 +901,10 @@ transform:
     data = [row for row in data if row["state"] == "active"]
 ```
 
+When the filter can leave no row at all, give the rules `required: false`, as
+for a jq condition: a response without a row is a missing value of every
+required rule.
+
 **Python.** The script calls `metric(...)` for what it wants exported, under
 any condition it likes.
 
@@ -743,8 +960,8 @@ Each type accepts its own keys. For `http`, `type` is the only required one —
 | --- | --- | --- |
 | `type` | — | **Required.** `http`. |
 | `method` | `GET` | GET, POST, PUT, PATCH, DELETE or HEAD. |
-| `path` | — | Joined onto the target; may use [path parameters](REQUESTS.md#path-parameters). |
-| `query` | — | Query parameters added to the request; values may use [placeholders](REQUESTS.md#in-the-body-headers-and-query). |
+| `path` | — | Joined onto the target; may use [path parameters](REQUESTS.md#path-parameters). A `%XX` escape in it is sent as written ([Target requests](REQUESTS.md#the-request-url)). |
+| `query` | — | Query parameters added to the request, after the target's own query, which is sent as written; values may use [placeholders](REQUESTS.md#in-the-body-headers-and-query). |
 | `headers` | — | Sent to the target; values may use [placeholders](REQUESTS.md#in-the-body-headers-and-query). Not `Accept-Encoding`, which is the exporter's own ([Target requests](REQUESTS.md#compression-and-the-response-size)). |
 | `body` | — | Request body; may use [placeholders](REQUESTS.md#in-the-body-headers-and-query), encoded with `\|json`, `\|number`, `\|form` or `\|xml`. |
 | `basic_auth`, `basic_auth_file` | — | Use one; see [Authentication](AUTHENTICATION.md). |
@@ -752,9 +969,9 @@ Each type accepts its own keys. For `http`, `type` is the only required one —
 | `forward_authorization`, `forward_headers` | off | See [Authentication](AUTHENTICATION.md). |
 | `tls` | verify | See [Target requests](REQUESTS.md#tls). |
 | `retry` | none | See [Target requests](REQUESTS.md#retries). |
-| `max_response_bytes` | 10 MiB | Response size cap, on the decompressed answer; one whose `Content-Length` is over it is refused before it is read ([Target requests](REQUESTS.md#compression-and-the-response-size)). With `limits.max_response_bytes` set too, the smaller wins; either alone may be above 10 MiB. |
+| `max_response_bytes` | 10 MiB | Response size cap, on the decompressed answer; one whose `Content-Length` is over it is refused before it is read ([Target requests](REQUESTS.md#compression-and-the-response-size)). With `limits.max_response_bytes` set too, the smaller wins; either alone may be above 10 MiB. It bounds the body; the response's headers are bounded apart, at 1 MiB. |
 | `follow_redirects`, `enable_http2` | off | See [Target requests](REQUESTS.md#redirects-and-http2). |
-| `allowed_schemes` | `http`, `https` | Schemes a target may use. |
+| `allowed_schemes` | `http`, `https` | Schemes a target may use: `http`, `https` or both. Any other entry stops the exporter at startup. |
 | `accept_status` | every 2xx | Statuses whose answers are decoded, such as `["2xx", 503]`; see [Accepting other statuses](REQUESTS.md#accepting-other-statuses). |
 | `allowed_targets`, `denied_targets` | none | Hosts, globs, addresses and networks its requests may and may not reach; see [Restricting targets](REQUESTS.md#restricting-targets). |
 
@@ -787,6 +1004,18 @@ is optional. `graphite` accepts what `http` does but `method` and `body`,
 and `from` and `until`, which no other type accepts. `grpc` accepts
 `timeout`, `insecure_skip_verify`, `retry_attempts`, `retry_backoff`,
 `header_<name>`, `param_<name>` and `message`, which no other type accepts.
+
+`target`, `collector` and each of these parameters is given once. A second
+value gets a `400` naming the parameter rather than one of the two being
+used: `timeout=5s&timeout=1h` does not say which was meant. `header_<name>` is
+the exception, since every value of it is forwarded. A value may be at most
+8 KiB (8192 bytes), and a longer one gets a `400` naming the parameter and the
+limit: what a probe names is kept after it is answered, in the
+[log of repeated failures](LOGGING.md#repeated-failures) and the
+[verbose self-metrics](SELF-METRICS.md#verbose-per-request-self-metrics), and
+is bounded there by being bounded here. A parameter no request type knows is
+not read at all, whatever its values. A whole request, its line and headers,
+may be 64 KiB; the exporter answers a longer one `431`.
 
 #### Choosing request types at build time
 
@@ -881,8 +1110,16 @@ absent, so no mode applies to it, `fail` included: it is simply left out.
 A value is absent the same way in every transform: nothing matched, a null, or
 text that is empty or only whitespace — an empty CSV cell, an empty JSON
 string, an empty XML element or HTML cell, a regex group that captured
-nothing. Text that is there but is not a number, such as `"up"`, is not absent:
-it is a failure to read the value, which `required: false` does not excuse.
+nothing. Nothing matched is a jq expression or `items` that gave nothing, a
+regex that matched no text, a selector that matched no node, a `prometheus`
+rule that matched no metric of the response, and a `csv` rule over a response
+without a row. Text that is there but is not a number, such as `"up"`, is not
+absent: it is a failure to read the value, which `required: false` does not
+excuse.
+
+A probe that runs out of time inside a rule is not that rule's failure, and
+no mode applies to it: the probe fails as a whole (see
+[Probe deadlines](#probe-deadlines)).
 
 ### When a stage of the probe fails
 
@@ -935,7 +1172,12 @@ metric and the label:
   target, may start with `__`, which Prometheus keeps for its own labels: it
   refuses `__name__` in what it scrapes and drops the others. A series whose
   labels still get such a name, from a Python script or a passthrough, fails
-  validation;
+  validation. So does a histogram given a label `le` of its own, or a summary
+  a `quantile` — by a rule's label, `transform.labels` or a pre-script —
+  since its buckets or quantiles carry that label: the scrape fails naming the
+  series, as in `metric "h" is a histogram and has a label le of its own,
+  which its buckets carry; name the label something else`. On any other
+  series `le` and `quantile` are labels like any other;
 - rules with the same metric name must give it the same type: several rules
   may feed one family, as `jobs{queue="a"}` and `jobs{queue="b"}` read from
   two places, but a family has one type. A `prometheus` rule without a `type`
@@ -946,10 +1188,47 @@ metric and the label:
 - a `description` may be no longer than `limits.max_help_length`, and a
   static label value, of a rule or of `transform.labels`, no longer than
   `limits.max_label_value_length` — unless the label has `truncate: true`, a
-  `value_map` maps it to something shorter, or `remove_labels` drops it.
+  `value_map` maps it to something shorter, or `remove_labels` drops it;
+- an explicit `decoder.type` must be one the transform
+  [reads](#collectors);
+- a setting must belong to the decoder or transform the collector has:
+  `transform.script` to a `python` transform, `transform.libraries` and
+  `required_libs` to a collector with a `python` transform or a `pre_script`,
+  `response.csv` to the `csv` decoder, `response.graphite` to the `graphite`
+  decoder — either may also be left to each response with `auto` — and
+  `response.namespaces` to an `xpath` transform. Anywhere else the setting
+  would be ignored, so it is refused, naming it and the decoder or transform
+  the collector has instead;
+- `response.csv.delimiter` is one character, and not a double quote or a line
+  break. For tab-separated values write `delimiter: "\t"` in double quotes,
+  where YAML reads `\t` as the tab character; in single quotes, or
+  unquoted, `\t` is a backslash and a `t`, and is refused;
+- a `{{param_...}}` placeholder stands only where a probe's parameters are
+  [filled in](REQUESTS.md#in-the-body-headers-and-query). In any other
+  setting of a collector — `request.bearer_token`, `basic_auth`,
+  `tls.server_name`, `transform.labels`, a label's `value` — it would be
+  sent or exported as written, so it is refused, naming the field. A Python
+  script, an expression and a description are not searched: there the text
+  is the script's, the expression's or the description's own;
+- a limit is a whole number from 0: a negative one, as in
+  `limits.max_metrics: -1`, and one with a fraction, as in
+  `max_concurrent_probes: 1.9`, are refused naming the key and the value
+  rather than quietly becoming the default or losing the fraction. 0, like a
+  limit left out, is the default. [Sizes](#sizes) are held to the same;
+- a mapping key YAML reads as no key at all — `null`, `~`, or nothing before
+  the colon, as in `value_map: {null: 0}` — is refused, since the entry would
+  be dropped; quote it, `"null"`, when that text is the key.
+
+The last two look at the values YAML gives the exporter. With a
+[merge key](#reusing-settings-with-yaml-anchors), a key the mapping sets
+itself replaces the one merged in, and of a list of merges (`<<: [*a, *b]`)
+the first that sets a key is the one read, so
+`limits: {<<: *defaults, max_metrics: 500}` loads even if the anchor's own
+`max_metrics` is `0.5`: that value is never read there. A value that is read
+is refused, at the line it is written on.
 
 Each of these would otherwise load and then fail every scrape's validation,
-whatever the target answered.
+or be ignored, whatever the target answered.
 
 Every mistake is reported at once, not one per run: the mistakes of every
 collector and every rule, and of every [collector file](#collector-files), in
@@ -960,6 +1239,13 @@ collector "a" metric "x" expression ".foo[": unexpected EOF
 collector "a" metric "bad-name": "bad-name" is not a valid Prometheus metric name; use letters, digits, underscores and colons, not starting with a digit
 collector "b" metric "z" regex "value=\\d+" has no capture group; the first capture group is the value, so wrap the number in one, such as 'requests=(\d+)'
 ```
+
+A mistake in a collector that a [collector file](#collector-files) defines
+names that file, as in `collector file /etc/exporter/collectors.d/payments.yaml:
+collector "pay" metric "depth" expression ".queue.depth[": unexpected EOF`, and
+a rejected reload whose mistakes are all in one collector file is logged with
+that file as its `file`; with mistakes in several files, `file` is the
+configuration and the text names each.
 
 Past 20, the rest are counted (`and 5 more problems`); `--dry-run` lists
 every one as an error of its own. A collector whose request, limits or
@@ -1009,7 +1295,11 @@ target file one — are in `configs/` with the examples, and are regenerated wit
 you are running; its `request.type` values are the request types that binary
 was built with. The schema describes the canonical spelling and is not the last
 word: startup validation also checks what a schema cannot, such as that an
-expression compiles.
+expression compiles, that `otlp.interval` is at least `1s` — a duration is
+text to a schema — and that a [size](#sizes) is under 2^63 bytes. Where a
+schema can tell, it refuses what the exporter refuses: a
+`response.csv.delimiter` of more than one character, a size with a fraction
+and no unit, a block that sets keys beside a missing `enabled`.
 
 On a static target there is no HTTP response to carry an error. `fail` there
 means the scrape serves nothing except `http_exporter_target_up` at 0, and
@@ -1116,6 +1406,11 @@ merged mapping whole — `query` above, or a `request` set beside a merged
 collector — rather than being merged into it. Anchors work in collector
 files and the [static target file](STATIC-TARGETS.md#the-target-file) too,
 each file on its own: an anchor in one file cannot be used in another.
+Aliases and merge keys work in every mapping of the three files, a
+collector's `cache` and a static target's `request` included, and what a
+merge brings in is read as if it were written out: a key the block does not
+take is refused, and a `path` or `body` merged into a target's `request`
+replaces the collector's.
 
 An `x-` key is only ignored at the top level; anywhere else it is an unknown
 key like any other, and so is a bare `x-`. With
@@ -1175,6 +1470,11 @@ collectors:
   they had been written in the configuration: defaults, expressions, Python
   scripts, everything in
   [Checked when the configuration loads](#checked-when-the-configuration-loads).
+  A mistake found in a collector names the collector file that defines it,
+  in the error and, when it rejects a reload, as the log line's `file`; so
+  does a fault the interpreter finds in the collector's Python, as in
+  `collector file /etc/exporter/collectors.d/payments.yaml: collector pay
+  pre_script has a Python syntax error on line 3: invalid syntax`.
   A configuration needs at least one collector across all of them; with
   `collector_files`, its own `collectors` key may be left out.
 - **Unique names.** A collector name must be unique across the configuration
@@ -1255,16 +1555,25 @@ always exactly that value. A token holding ` #`, one starting with `*`, `&` or
 `[`, quotes, backslashes and line breaks all arrive as written: the value is
 written back quoted where YAML would otherwise read it differently, and left
 unquoted where it reads the same, so a number stays a number. A reference in
-a comment is left alone, set or not. That holds in a flow collection too —
-`regions: [${PRIMARY}, ${SECONDARY}]` or `{token: ${TOKEN}}` — after an anchor,
+a comment is left alone, set or not. That holds in a flow collection too,
+where a bare reference is not YAML until it is expanded — alone, as in
+`regions: [${PRIMARY}, ${SECONDARY}]` or `{token: ${TOKEN}}`, as part of a
+longer value, as in `{Authorization: Bearer ${TOKEN}}`, and beside quoted
+values, as in `{X-Name: "x", X-Token: ${TOKEN}}` — and reading such a file
+changes no other value in it: a reference in a block value or after a comma
+in an unquoted description expands to the variable's value, exactly as in a
+file without one. It holds after an anchor,
 as in `&base ${BASE}`, and for values YAML reads specially on their own, such as
 `-` or an empty string: a key is always written quoted, an empty value is
 written quoted inside a flow collection, and `-` always is. A variable supplies a value and never
-structure: `headers: ${ALL_HEADERS}` is one string, not a mapping. Two places
-cannot take every value: a block value (`|` or `>`) takes one without a line
+structure: `headers: ${ALL_HEADERS}` is one string, not a mapping. A block
+value (`|` or `>`) is expanded in every line, also when its header says how
+far it is indented, as in `|2`. Two places
+cannot take every value: a block value takes one without a line
 break, and an unquoted value folded over several lines is refused; quote the
-reference there, as in `"${NAME}"`. Errors name the file's own line
-numbers.
+reference there, as in `"${NAME}"`. A literal `$${NAME}` in a flow collection
+must be quoted, since its braces are not YAML there. Errors name the file's
+own line numbers.
 
 `--config.watch` re-expands on every reload, so a reload cannot quietly
 replace a working configuration with literal references.
@@ -1314,6 +1623,62 @@ is written as `unknown` families `h_bucket`, `h_sum` and `h_count` (a summary's
 as `s`, `s_sum` and `s_count`). Every series is the same in both formats.
 Distinct names avoid all this, and keep the types.
 
+Two kinds of family have no OpenMetrics form of their own type, and are
+written so that the answer stays valid:
+
+- A counter named exactly `_total` would be a family with no name. It is
+  written as the `unknown` family `_total`.
+- A histogram that the target wrote with a `_sum` and no `_count`, or the
+  reverse (see [Prometheus input](#character-encodings)), is not an
+  OpenMetrics histogram, which has both or neither. It is written as
+  `unknown` families `h_bucket` and `h_sum` (or `h_count`), with the same
+  series as in the text format.
+
+A counter whose name was escaped by [`name_escaping: values`](#utf-8-names)
+is written as any counter is, and as Prometheus writes one: its family is the
+escaped name without a `_total` it ends in, and its sample the family with
+`_total`, the plain text in both places. `my.errors`, exported as
+`U__my_2e_errors`, is the family `U__my_2e_errors` with the sample
+`U__my_2e_errors_total`. The escaping doubles every underscore, so
+`my.requests_total` is exported as `U__my_2e_requests__total`, which is the
+family `U__my_2e_requests_` with that same sample: the family keeps one of
+the two underscores. A sample is always its family and `_total`, which is
+what lets a reader of OpenMetrics — Prometheus, and this exporter's own
+`prometheus` decoder — find the counter's sample in its family.
+
+The text format also lets a target write values that OpenMetrics does not
+allow a family of its type, and a strict OpenMetrics parser refuses a whole
+answer over one of them. The exporter passes such values on in both formats —
+a negative counter a target wrote is not refused, and not left out — and keeps
+the OpenMetrics answer valid in the same way: the family is written as
+`unknown` families under its sample names, with the same series and values as
+in the text format, and loses only a type it does not meet. A family has one
+type, so the whole family is written so when one of its series is:
+
+- a counter that is `NaN` or negative. `+Inf` is a counter's value;
+- a histogram whose `_sum` is `NaN` or negative; one with a `_sum` and a
+  bucket with a negative bound, which OpenMetrics allows only without a sum;
+  one with a bound that is not a number, `le="NaN"`; one whose bucket
+  counts fall from one bound to the next higher, or whose highest bucket
+  holds more than its `+Inf` bucket; one whose `+Inf` bucket and `_count`
+  differ, as a target scraped between two of its updates writes them; or one
+  with neither of the two (see [Prometheus input](#character-encodings));
+- a summary whose `_sum` is `NaN` or negative; one with a `quantile` outside
+  0 to 1, such as percentiles written as `50` and `99`; or one with a negative
+  value for a quantile. `NaN`, which a quantile is while nothing was observed,
+  is allowed.
+
+A gauge and an untyped series may have any value. So a target's counter
+`jobs_total -5` is `# TYPE jobs_total unknown` and `jobs_total -5` in
+OpenMetrics, and a histogram `h` whose counts fall is the `unknown` families
+`h_bucket`, `h_sum` and `h_count`; a family whose values its type allows
+always keeps the type. [OTLP export](OTLP.md#delivery) follows the same rule,
+with gauges.
+
+Order is not among these: a histogram's buckets are written in ascending order
+of `le`, with `+Inf` last, and a summary's quantiles in ascending order, in
+both formats, in whatever order the target wrote them.
+
 OpenMetrics can give a counter a `_created` time, when it started counting. The
 exporter writes none: it reads counters from targets and cannot know when they
 started, and OpenMetrics leaves `_created` out when it is not known.
@@ -1362,7 +1727,11 @@ forwarded. A parameter that changes nothing sent is not part of it: one no
 request type knows, which a probe ignores, and a `header_<name>` for a header
 the collector does not forward. Probes differing only in those share an entry,
 so a caller adding `&x=1`, `&x=2`, ... cannot fill the cache with copies of one
-result. Presence and absence differ: a probe that sends
+result. The parameters are keyed as the probe reads them, not as they were
+written: `method=get` and `method=GET`, `timeout=5s` and `timeout=5000ms`,
+`insecure_skip_verify=TRUE` and `true` are one request and one entry, and a
+parameter [given twice](#request-types) is refused rather than keyed. Presence
+and absence differ: a probe that sends
 no credential, no forwarded header, or no TLS override cannot read an entry
 stored by a probe that sent one, and two probes with different credentials never
 share an entry. Because the collector definition is part of the key, a
@@ -1561,7 +1930,9 @@ made, not after: every transform stops at the first series past it, and the
 scrape fails with `metric count 10001 exceeds limit 10000` — one past the
 limit, since counting further would cost the memory the limit is there to
 save. A response of a million lines read with the regex `(\d+)` is refused
-after ten thousand and one series, not after a million. The prometheus
+after ten thousand and one series, not after a million; a jq rule makes a
+series, and its labels, as its expression gives each value, with `items` and
+without. The prometheus
 decoder keeps only the series its transform passes on — those its rules match,
 or `include` and `exclude` pick — and stops the same way, so a large exposition
 of which a collector keeps a few costs what the few cost; a series a rule
@@ -1589,6 +1960,16 @@ was set. Without a container limit the Go default stays, and `GOMEMLIMIT` in
 the environment wins over the ratio. `0`, the default, leaves it off; the Helm
 chart sets `0.8`.
 
+`GOGC` in the environment is honoured as by any Go program: it is the
+garbage collector's target, how far the heap may grow over the live data
+before the next collection, 100 by default. Garbage collection is 13% to 22%
+of the exporter's CPU, and with `GOGC=400` a probe of 5,000 series took 15%
+to 30% less time when measured, for a heap that may grow to about five times
+the live data between collections instead of two; with a memory limit set as
+above, Go collects sooner as the heap nears it, so the higher target cannot
+push the process past the limit. The Helm chart sets it from `goGC.percent`
+(see [the chart README](../charts/prometheus-universal-exporter/README.md#garbage-collector)).
+
 ## Probe deadlines
 
 Prometheus says how long it will wait for each scrape, in the
@@ -1608,9 +1989,21 @@ collector legacy_text http failed: HTTP request failed: ... context deadline exc
 - A scrape timeout above an hour counts as an hour: whoever reaches `/probe`
   sends the header, and a timeout of years would hold a slot of
   `max_concurrent_probes` for as long as a target hangs.
+- A header that is not a positive, finite number — `0`, `-1`, `NaN`, `Inf`,
+  text — is no scrape timeout, and the probe is bounded as one without the
+  header is. A positive one is a budget however small: `1e-10` ends the probe
+  at once.
 - The budget bounds the whole trip: the request or file read, decoding,
   transforms and Python scripts. The `timeout` probe parameter still bounds the
   request alone; whichever ends first stops the probe.
+- A budget that runs out while a metric rule is being evaluated — a jq
+  expression that takes too long, a response of more nodes or rows than there
+  is time to read — fails the probe in the `transform` stage, naming the rule
+  it was at (`the transform was stopped at metric "queue_depth"`). It is not
+  that rule's failure: its [`error_mode`](#when-a-metric-cannot-be-extracted)
+  does not apply, `ignore` and `log` included, nothing is counted against it,
+  and the series the other rules made are not answered or cached as if they
+  were the whole response.
 - An offset of half the scrape timeout or more would leave too little, so a
   probe always keeps at least half.
 - Without the header — a probe from `curl`, a script, or anything other than
@@ -1621,6 +2014,15 @@ collector legacy_text http failed: HTTP request failed: ... context deadline exc
   budget and cannot lift it: `timeout=1h` still ends after 30s, and the error says the parameter was capped. `0` leaves
   such a probe unbounded; a negative value is a command-line error.
 - A probe answered from the [response cache](#response-caching) needs no budget.
+
+Once the exporter starts writing an answer, the client has 30 seconds to read
+it, on every endpoint. An answer can be megabytes — a passed-through
+exposition, the static targets, the verbose self-metrics, a
+[debug report](#debugging-a-probe) — and a client that asked for one and
+stopped reading would otherwise hold the request, and the answer in memory,
+for as long as it kept the connection open. After 30 seconds its connection is
+closed, which the log notes at `debug` level only. The time a probe takes to
+make its answer does not count: that is the probe's budget above.
   Identical probes that [share one request](#identical-probes-share-one-request)
   share the budget of the probe that started it.
 - The offset covers writing the answer and the network between the exporter
@@ -1661,6 +2063,30 @@ attached to, so such a watch would stop firing after the first change.
 The watch follows the [collector files](#collector-files) too: a collector file
 edited, a new file matching a pattern, or a file removed triggers a reload.
 
+A reload that is rejected is not tried again until something changes, and is
+logged once. What can change is more than the configuration: loading it opens
+the files it names, and a reload that runs in the moment one is being
+replaced — a certificate missing while a Secret is rotated, the new
+certificate in place before its key — is rejected for that file alone. So
+while a configuration is rejected the watch also looks at the files it names
+and the load opens, and those of the configuration in force:
+
+- `otlp.tls.ca_file`, `cert_file` and `key_file`, when `otlp` is enabled;
+- `web.basic_auth.username_file` and `password_file`, when it is enabled;
+- a grpc collector's `request.protoset_file` and `request.proto_files` (not
+  the files those import, which the configuration does not name).
+
+When one of them appears, disappears or changes — its modification time, its
+size, its permissions, or, through a symbolic link, the file the path leads
+to, which is how Kubernetes swaps in a new version of a Secret — the next
+tick reloads, once however many of them changed, and a reload that then
+succeeds is logged like any other. A tick that finds them as they were does
+nothing and logs nothing. Once the configuration is in force the watch
+leaves these files alone: the export, the exporter's own authentication and
+the grpc collectors each read their files again when they change. A
+collector's own credential and TLS files are read at each request, not when
+the configuration loads, and never reject a reload.
+
 The watch does not relax any reload rule. An invalid configuration, one that
 would disable OTLP while a loaded static target sets `export_via_otlp`, a
 collector name defined twice, and a pre-script that stops producing `data` are
@@ -1695,7 +2121,10 @@ follows. `POST` (or `PUT`) `/-/reload` answers:
 
 The endpoint is off unless `--web.enable-lifecycle` is passed, as in Prometheus,
 and when `web.basic_auth` is configured it needs the same credentials as the
-other endpoints. `SIGHUP` needs no flag. Either way the reload is logged with
+other endpoints. `SIGHUP` needs no flag, and is safe to send at any time: one
+that arrives while the exporter is still starting, reading its configuration
+and checking its Python scripts, does not end the process but waits, and the
+exporter reloads once as soon as it has started. Either way the reload is logged with
 what triggered it — `"trigger":"http"`, `"sighup"` or `"watch"` — and counted
 in the [reload self-metrics](SELF-METRICS.md#configuration-reloads). Reloads
 from different triggers never interleave: one runs at a time.
@@ -1703,7 +2132,10 @@ from different triggers never interleave: one runs at a time.
 Whatever the trigger, the exporter's state follows the new configuration: a
 removed collector's [self-metrics](SELF-METRICS.md#collector-metrics) stop,
 and what was kept about it is dropped, and a changed collector's cached results
-are dropped.
+are dropped, and its [static targets](STATIC-TARGETS.md#reloading) are scraped
+again within ten seconds. The configuration and the static target file take
+effect together, in one step: nothing ever runs with the new one of the two
+and the old other.
 
 ## Debugging a probe
 
@@ -1752,8 +2184,15 @@ The report lists:
   with its headers and how it ended. A `grpc` call is listed with its method,
   metadata and status code. A `localfile` read, which sends nothing, is
   listed as the file it reads.
-- **Response:** the status, the headers and the body, up to 64 KiB. A body
-  that is not text is shown only by its length, and a directory as its files.
+- **Response:** the status, the headers and the body, up to 64 KiB, as the
+  target sent them: the `Content-Type` is the target's own, not the
+  `charset=utf-8` the rules see after the body is
+  [converted](#character-encodings). A body in another encoding is listed with
+  its size as sent and what it was converted from —
+  `Body: 3174 bytes in windows-1251, converted to UTF-8 before decoding and
+  shown here as UTF-8` — and shown as the same text in UTF-8, since the report
+  is UTF-8. A body that is not text is shown only by its length, and a
+  directory as its files.
 - **Stages:** each stage with how long it took and how it ended. A stage whose
   `error_handling` carried on says so.
 - **Transform:** the series each metric got, the rules that got none, and the
@@ -1794,7 +2233,9 @@ exporter runs with `--web.enable-probe-debug` (the Helm chart's
 probe. The report redacts:
 
 - every query value, in the requests listed and in the errors that quote a
-  URL alike;
+  URL alike. The query is otherwise shown as it was sent: each pair where it
+  stood and as it was written, a pair with a `;` or a malformed escape
+  included ([how a query is masked](LOGGING.md#repeated-failures));
 - a URL's userinfo;
 - the values of request and response headers whose names read as
   credentials: any name containing `auth`, `cookie`, `token`, `secret`,
@@ -1885,8 +2326,13 @@ or a number with a unit:
 
 `kB`, `MB`, `GB` and `TB` are powers of 1000, `KiB`, `MiB`, `GiB` and `TiB`
 powers of 1024, and `B` or no unit is bytes. The unit is case insensitive, and
-a fraction is rounded down to whole bytes. Anything else, such as `lots` or
-`-1`, fails to load, naming the value.
+a fraction of a unit is rounded down to whole bytes. Anything else fails to
+load, naming the value and its line: text that is no size, such as `lots`; a
+negative size, such as `-1`; a fraction without a unit, such as `1.5`, since
+there is no half byte; space around the size in quotes, such as `" 10MiB"`;
+and a size of 2^63 bytes (`8388608TiB`) or more, which is past what a size
+can hold. The [schema](#editor-support) flags the same spellings, all but the
+last: the range is checked when the configuration loads.
 
 A response over `max_response_bytes` fails the scrape with `response size
 5000 exceeds limit 1024` when the target said its size in `Content-Length`,
@@ -1965,7 +2411,7 @@ The report lists one entry per startup step, in the order startup runs them:
 | `check` | Present | What it validates |
 | --- | --- | --- |
 | `config` | always | The configuration file and its collector files load and are valid, and no collector name is defined twice. |
-| `python_scripts` | always | Every pre-script and `python` transform compiles, and every pre-script produces `data`. Each faulty script is its own entry in `errors`. A configuration without Python needs no interpreter and passes with `"scripts": 0`. |
+| `python_scripts` | always | Every pre-script and `python` transform compiles, and every pre-script produces `data`. Each faulty script is its own entry in `errors`, which names the [collector file](#collector-files) of a collector defined in one. A configuration without Python needs no interpreter and passes with `"scripts": 0`. |
 | `config_watch` | with `--config.watch` | `--config.watch-interval` is positive. |
 | `static_targets` | with `--static-targets-file` | The [static target file](STATIC-TARGETS.md) is valid on its own, and against the configuration: every collector exists, and a target with `export_via_otlp` has OTLP export enabled. |
 

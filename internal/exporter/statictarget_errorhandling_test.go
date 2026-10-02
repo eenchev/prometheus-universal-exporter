@@ -37,11 +37,15 @@ var errorStageCases = []errorStageCase{
 		},
 	},
 	{
-		// A regex transform over a JSON response fails in the transform
-		// stage itself, before any metric rule runs.
+		// An xpath transform whose decoder is left to each response fails
+		// in the transform stage itself, before any metric rule runs, when
+		// the response turns out to be JSON. (A decoder the transform can
+		// never read is refused when the configuration loads.)
 		name: "transform", stage: "transform", status: http.StatusOK, body: `{"value": 1}`,
 		setup: func(c *model.Collector, policy string) {
-			c.Decoder.Type = "json"
+			c.Decoder.Type = ""
+			c.Transform.Type = "xpath"
+			c.Metrics = []model.MetricRule{{Name: "demo_value", Type: model.GaugeMetricType, Expression: "//value"}}
 			c.ErrorHandling.OnTransformError = policy
 		},
 	},

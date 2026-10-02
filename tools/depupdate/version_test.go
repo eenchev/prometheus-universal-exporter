@@ -93,3 +93,31 @@ func TestCompareOrdersAcrossGranularity(t *testing.T) {
 		t.Fatal("1.23 and 1.23.0 should compare equal")
 	}
 }
+
+// The minor a policy holds is reported when a newer one exists in the pin's own
+// major and granularity, and only then: not for a pin whose minor may move, not
+// for a new major, a pre-release or a patch release of the minor it is on.
+func TestHeldMinorNamesTheNewestMinorThePolicyKeepsThePinFrom(t *testing.T) {
+	cases := []struct {
+		name       string
+		current    string
+		candidates []string
+		policy     policy
+		want       string
+	}{
+		{"a newer feature release", "3.12", []string{"3.11", "3.12", "3.13", "3.14"}, policy{}, "3.14"},
+		{"a three-component pin", "3.12.4", []string{"3.12.9", "3.13.7", "3.14.1", "3.14"}, policy{}, "3.14"},
+		{"only a patch release is newer", "3.12.4", []string{"3.12.9", "3.12"}, policy{}, ""},
+		{"only a major and a release candidate are newer", "3.12", []string{"4.0", "3.13.0rc1", "3.13rc1"}, policy{}, ""},
+		{"another granularity is not what the build pulls", "3.12", []string{"3.13.1", "3.14.0"}, policy{}, ""},
+		{"the minor may move", "1.26", []string{"1.27"}, policy{AllowMinor: true}, ""},
+		{"a pin that does not parse", "stable", []string{"3.14"}, policy{}, ""},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := heldMinor(tc.current, tc.candidates, tc.policy); got != tc.want {
+				t.Fatalf("heldMinor(%q, %v)=%q, want %q", tc.current, tc.candidates, got, tc.want)
+			}
+		})
+	}
+}

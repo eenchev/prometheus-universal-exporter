@@ -89,7 +89,26 @@ kept between probes and closed after 5 minutes unused, and made again with a
 new certificate when a TLS file changes on disk. When the server goes away,
 the connection tries to reconnect at most every 5 seconds, and a probe that
 finds it waiting tries at once, so a server that comes back is answered at
-the next probe rather than after a growing wait. It is made through the proxy
+the next probe rather than after a growing wait.
+
+A connection can also die without a word: a node that lost power, or a
+firewall or NAT that forgot the connection, sends nothing to close it, and it
+goes on looking established. The probe that finds it so waits out its
+deadline and fails with `DEADLINE_EXCEEDED`; it also drops the connection, so
+the next probe connects anew and is answered, rather than every probe waiting
+out its deadline until the operating system gives the connection up, which
+takes minutes. Only the probe's own deadline, on a connection that was
+established, does this: a `DEADLINE_EXCEEDED` the server answered with leaves
+the connection alone, as does a deadline that ends while the connection is
+still being made. Other probes whose calls are on the dropped connection are
+not cut off; it is closed when the last of them has ended. A server that is
+merely slower than the probe's deadline therefore gets a new connection at
+each probe, which is what a timed-out `http` request costs too. The exporter
+sends no keepalive pings to find dead connections: a gRPC server that has not
+been configured to allow them closes the connection of a client that pings
+more often than every five minutes.
+
+The connection is made through the proxy
 the environment names, `HTTPS_PROXY` and `NO_PROXY`, as the other types'
 requests are. A name that resolves to several addresses is called on the
 first that answers; a probe asks one target, and balancing across the
@@ -114,10 +133,13 @@ so a scrape costs one call rather than two, and probes that find no answer at
 the same time share one question to the server. A call that fails with
 `UNIMPLEMENTED`, or whose answer does not decode, asks again and calls again,
 once, which covers a server upgraded to a new schema; this is not one of the
-retries. A target without reflection fails saying so, and to register it on
-the server or use `protoset` or `proto`. The reflection question carries the
-call's `metadata` and credentials, so a server that authenticates every RPC,
-reflection included, answers it.
+retries. A question that fails with a status is reported as a call with that
+status, and retried as one: a server that refuses the connection when it is
+asked is `UNAVAILABLE`, and asked again under `retry`, the same attempts
+covering the question and the call. A target without reflection fails saying
+so, and to register it on the server or use `protoset` or `proto`. The
+reflection question carries the call's `metadata` and credentials, so a server
+that authenticates every RPC, reflection included, answers it.
 
 Only unary methods are called. A streaming method is refused when the
 configuration loads with `protoset` and `proto`, and at the first call with
@@ -264,6 +286,8 @@ calls one method.
 
 When the configuration loads, every placeholder takes its default, or a
 stand-in of its filter's kind when it has none, and the message must be JSON.
+A default its filter refuses, `{{param_limit:ten|number}}`, or a metadata
+default with a control character, is refused then, naming the parameter.
 With `protoset` and `proto`, a message whose placeholders all have defaults
 is also checked against the method's input type then; one with a placeholder
 without a default is checked when a probe fills it in.
@@ -279,7 +303,7 @@ stage, under `error_handling.on_fetch_error` like any fetch error:
 
 | Status | Retried | Notes |
 | --- | --- | --- |
-| `UNAVAILABLE` | yes | The server is down, refused the connection, or the TLS handshake failed. |
+| `UNAVAILABLE` | yes | The server is down, refused the connection, or the TLS handshake failed. Each retry connects again. |
 | `DEADLINE_EXCEEDED` | no | The probe ran out of its budget; the error says where the budget came from, as it does for `http`. |
 | `UNIMPLEMENTED` | once, with fresh descriptors | The server does not know the service or the method. |
 | `UNAUTHENTICATED`, `PERMISSION_DENIED` | no | Logged with the server's message, never the credentials. |
@@ -287,8 +311,14 @@ stage, under `error_handling.on_fetch_error` like any fetch error:
 | anything else | no | The status and the server's message. |
 
 The Retried column is the default, `retry.codes: [UNAVAILABLE]`: the server
-did not start the call, so making it again cannot repeat what it did. A
-collector whose method is safe to repeat can retry more:
+did not start the call, so making it again cannot repeat what it did. A retry
+is a new attempt at the server, not a repeat of the answer the connection
+already had: after `backoff`, a connection that could not be made is made
+again at once, and the retry waits up to a second for it before it calls, so a
+server that comes back between two attempts is reached by the next one. While
+the server stays down each retry therefore takes up to a second longer than
+`backoff`, within the probe's budget as always. A collector whose method is
+safe to repeat can retry more:
 
 ```yaml
 retry:
@@ -342,7 +372,9 @@ from the next scrape. Setting `authorization` in `metadata` as well is refused.
 `forward_headers` the headers it lists, as metadata, lower-cased; a
 `header_<name>` probe parameter fills a listed header, as for `http`. A
 forwarded header replaces the collector's metadata and credentials of the
-same name. A name gRPC reserves cannot be listed.
+same name. A name gRPC reserves cannot be listed. A call that carries an
+`authorization` of its own, forwarded or a static target's, does not read
+the collector's credential files at all, so a missing one does not fail it.
 
 A token sent to a plaintext target travels in the clear, as it does to an
 `http://` one: use TLS, or a network, such as a service mesh, that encrypts

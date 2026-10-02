@@ -12,6 +12,9 @@ import (
 // would not notice. Two rules encode that:
 //
 //   - The major version never moves. A major bump is deliberate work.
+//   - A pin whose policy holds the minor keeps it too, for a dependency whose
+//     minor releases break what the suite cannot see: the Python that the
+//     users' collector scripts run on.
 //   - The pin keeps its granularity. `1.23` is a floating tag that already
 //     picks up patch releases on every rebuild, so rewriting it to `1.23.4`
 //     would freeze it and make things worse, not better.
@@ -129,4 +132,31 @@ func selectUpdate(current string, candidates []string, p policy) (string, error)
 		return "", nil
 	}
 	return best.raw, nil
+}
+
+// minorOf names the minor release a version belongs to, `3.12` for `3.12` and
+// for `3.12.4`. A one-component version, or one that does not parse, is
+// returned as it is.
+func minorOf(raw string) string {
+	parsed, ok := parseVersion(raw)
+	if !ok || len(parsed.release) < 2 {
+		return raw
+	}
+	return strconv.Itoa(parsed.release[0]) + "." + strconv.Itoa(parsed.release[1])
+}
+
+// heldMinor returns the newest minor release, in the same major, that the
+// policy keeps the pin from, such as `3.14` for a pin at `3.12`; the empty
+// string when the policy lets the minor move or no newer one exists. It answers
+// from the same candidates an update is chosen from, so the release it names
+// exists in the image form and granularity the build pulls.
+func heldMinor(current string, candidates []string, p policy) string {
+	if p.AllowMinor {
+		return ""
+	}
+	newest, err := selectUpdate(current, candidates, policy{AllowMinor: true})
+	if err != nil || newest == "" || minorOf(newest) == minorOf(current) {
+		return ""
+	}
+	return minorOf(newest)
 }

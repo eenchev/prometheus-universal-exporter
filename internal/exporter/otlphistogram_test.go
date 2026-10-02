@@ -52,10 +52,6 @@ func TestHistogramsAreExportedAsOTLPHistograms(t *testing.T) {
 			buckets: []model.Bucket{{UpperBound: 1, CumulativeCount: 5}, {UpperBound: 0.1, CumulativeCount: 2}}, count: 5,
 			bounds: []otlpDouble{0.1, 1}, counts: []string{"2", "3", "0"},
 		},
-		"a count that falls": {
-			buckets: []model.Bucket{{UpperBound: 0.1, CumulativeCount: 4}, {UpperBound: 1, CumulativeCount: 3}}, count: 4,
-			bounds: []otlpDouble{0.1, 1}, counts: []string{"4", "0", "0"},
-		},
 		"no buckets": {
 			count: 3, bounds: []otlpDouble{}, counts: []string{"3"},
 		},

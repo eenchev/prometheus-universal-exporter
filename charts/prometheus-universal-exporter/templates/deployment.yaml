@@ -17,7 +17,16 @@ spec:
          count here would be put back on every upgrade. */}}
   replicas: {{ .Values.replicaCount }}
   {{- end }}
-  strategy: {{- toYaml .Values.strategy | nindent 4 }}
+  {{- /* rollingUpdate belongs to the RollingUpdate strategy alone: Kubernetes
+         refuses a Deployment that carries it with Recreate, and the default
+         values carry it, so it is left out for any other type. */}}
+  {{- $strategy := .Values.strategy | default dict }}
+  {{- $strategyType := $strategy.type | default "RollingUpdate" }}
+  strategy:
+    type: {{ $strategyType }}
+    {{- if and (eq $strategyType "RollingUpdate") $strategy.rollingUpdate }}
+    rollingUpdate: {{- toYaml $strategy.rollingUpdate | nindent 6 }}
+    {{- end }}
   selector:
     matchLabels:
       app.kubernetes.io/name: {{ include "prometheus-universal-exporter.name" . }}
@@ -135,8 +144,18 @@ spec:
             {{- range .Values.extraArgs }}
             - {{ . | quote }}
             {{- end }}
-          {{- with .Values.env }}
-          env: {{- toYaml . | nindent 12 }}
+          {{- /* GOGC from goGC.percent comes first, and is the only GOGC:
+                 the helper refuses an env entry of that name beside it. */}}
+          {{- $goGC := include "prometheus-universal-exporter.goGC" . }}
+          {{- if or $goGC .Values.env }}
+          env:
+            {{- with $goGC }}
+            - name: GOGC
+              value: {{ . | quote }}
+            {{- end }}
+            {{- with .Values.env }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
           {{- end }}
           {{- with .Values.envFrom }}
           envFrom: {{- toYaml . | nindent 12 }}
@@ -170,7 +189,7 @@ spec:
               mountPath: {{ .Values.webAuth.mountPath | quote }}
               readOnly: true
             {{- end }}
-            {{- include "prometheus-universal-exporter.validateExtraMounts" . }}
+            {{- include "prometheus-universal-exporter.validateMounts" . }}
             {{- with .Values.extraVolumeMounts }}
             {{- toYaml . | nindent 12 }}
             {{- end }}

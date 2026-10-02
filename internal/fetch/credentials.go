@@ -4,6 +4,8 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
+	"net/http"
+	"strings"
 
 	"github.com/eenchev/prometheus-universal-exporter/internal/model"
 )
@@ -11,6 +13,23 @@ import (
 // The credential keys, basic_auth, basic_auth_file, bearer_token and
 // bearer_token_file, mean the same for every type that sends them: an
 // Authorization header over HTTP, the authorization metadata over gRPC.
+
+// collectorAuthorization is requestAuthorization for a request that also
+// carries forwarded headers: a static target's own, or the ones a probe
+// forwards. An Authorization among them is sent instead of the collector's,
+// so the collector's is not built at all: a static target with a credential
+// of its own must not fail because the file of the collector's credential,
+// which it never sends, is missing or empty.
+func collectorAuthorization(c *model.Collector, forwarded ...http.Header) (string, error) {
+	for _, headers := range forwarded {
+		for name, values := range headers {
+			if len(values) > 0 && strings.EqualFold(name, "Authorization") {
+				return "", nil
+			}
+		}
+	}
+	return requestAuthorization(c)
+}
 
 // requestAuthorization is the Authorization value a collector's credential
 // keys make, or "" when it sets none. Credential files are read on every

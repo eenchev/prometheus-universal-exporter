@@ -17,10 +17,10 @@ configured:
 | `http_exporter_scrape_response_bytes` | gauge | Size of the most recent response body. |
 | `http_exporter_decode_success_total` | counter | Responses decoded. |
 | `http_exporter_parse_errors_total` | counter | Responses the decoder could not parse. |
-| `http_exporter_transform_errors_total` | counter | Failed transforms. |
+| `http_exporter_transform_errors_total` | counter | Failed transforms. A transform cut off because every probe waiting for its trip went away, or by a shutdown, is not one. |
 | `http_exporter_missing_keys_total` | counter | Values the response did not contain: a jq or yq value, a CSV column, a regex that matched no text, an XPath or CSS selector that matched no nodes, `items` that selected nothing, a required label. Counted when a transform fails for it, and for each series a metric rule carried on without under `error_mode` `log` or `ignore`. |
 | `http_exporter_script_errors_total` | counter | Python script failures. |
-| `http_exporter_script_duration_seconds` | gauge | How long the Python of the most recent probe that ran any took — pre-script and python transform together, not counting starting an interpreter. |
+| `http_exporter_script_duration_seconds` | gauge | How long the Python of the most recent probe that ran any took — pre-script and python transform together, as `limits.script_timeout` measures each: the script's own run, not counting starting an interpreter or handing it the response. |
 | `http_exporter_metrics_emitted_total` | counter | Metrics produced, across scrapes. |
 | `http_exporter_invalid_utf8_total` | counter | Label values and help texts that were not valid UTF-8, whose invalid bytes were replaced with `�`. See [Character encodings](CONFIGURATION.md#character-encodings). |
 | `http_exporter_decoder_series_left_out_total` | counter | Series the [`graphite` decoder](GRAPHITE.md#the-series-document) left out before the metric rules saw them: with no point that has a value, older than `response.graphite.max_age`, or answered twice. `0` for other decoders. |
@@ -146,7 +146,10 @@ to the target themselves (see
 With several Prometheus replicas it is normal for it to be roughly
 `(replicas - 1) / replicas` of `http_exporter_scrapes_total`; the trip to the
 target itself — its status, bytes, decode and transform counters — is counted
-once.
+once. It belongs to none of the probes sharing it: in the
+[verbose per-request series](#verbose-per-request-self-metrics) it is counted
+on the request whichever probe started it, also when that probe's caller went
+away and the trip answered the others.
 
 ## Resource metrics
 
@@ -248,8 +251,24 @@ is the one series that exists only in verbose mode: the per-collector view has
 no timestamp of its own. Status codes carry `0` when the request failed before a
 response arrived, so a transport failure is distinguishable from an HTTP error.
 
-The two views are raised through the same path, so a collector's total is always
-the sum of its requests'; a test checks that.
+The two views are raised through the same path, so a counter is never raised
+on one and not on the other; a test checks that. A collector's total is the
+sum of its tracked requests' and of what started no tracked request: a probe
+the collector's `allowed_targets` or `denied_targets` refused, a probe whose
+caller went away before it was answered, a trip to the target cancelled
+because every probe waiting for it had gone, and a probe past the limit
+below. A request that has since expired takes its share with it too.
+
+A trip that [identical probes share](#shared-probes) is counted on the request
+when it ends, not with the probe that happened to start it. When that probe's
+caller goes away and the trip goes on to answer the others, everything the
+trip counted — the cache miss, the target's status and bytes, the decode,
+transform and error counters, the series emitted, the time of the scrape — is
+on the request those probes are counted on, once. The request's counters then
+differ from the collector's only by the probe that left, in
+`http_exporter_scrapes_total`. A request already tracked when a probe arrives
+counts that probe, and its trip, whatever becomes of them: only a request not
+tracked yet waits for a trip to end with an answer.
 
 Static targets are recorded the same way, and because their requests are
 fully described by the target file they are listed from startup with zero
@@ -292,7 +311,9 @@ whole metric family, so tracking is capped at 1000 collector/URL/method
 combinations. Requests already tracked keep updating past the limit; only new
 combinations are refused. A probe refused by the collector's `allowed_targets`
 or `denied_targets` does not take a slot, so probing forbidden targets cannot
-crowd out legitimate ones. A combination nothing has probed or scraped for an
+crowd out legitimate ones; nor does a probe whose caller went away before it
+was answered, or a trip cancelled because every probe waiting for it had gone:
+neither got the verdict. A combination nothing has probed or scraped for an
 hour is dropped and its slot freed; the configured static targets' stay, and
 leave when a reload removes the target or changes its URL. The truncation is
 visible rather than silent:
@@ -373,19 +394,25 @@ the state of its [Python workers](PYTHON.md#how-scripts-run):
 | `http_exporter_python_runs_total` | `outcome` | Script runs, and how they ended (below). |
 
 A worker stops because of a `timeout` (the script overran `limits.script_timeout`
-and the worker was killed), a `crash` (the interpreter died), an `output_limit`
-(it answered with more than `limits.max_output_bytes`), `cancelled` (the scrape
-was abandoned mid-run), `retired` (it reached 1,000 runs), `surplus` (more than
-four were idle after a burst), `idle` (unused for five minutes), `reload` (a
-reload changed or removed its script) or `evicted` (it was idle when another
-script needed a worker under `--python.max-workers`). `retired`, `surplus`,
-`idle` and `reload` are routine; the first four each cost the next scrape a
-fresh interpreter, and many `evicted` say the limit is too low for the scripts
-in use.
+and the worker was killed), a `deadline` (the probe's or scrape's deadline
+ended the script before `limits.script_timeout` did, and the worker was
+killed), a `crash` (the interpreter died, during a run or while it sat idle),
+an `output_limit` (it answered with more than `limits.max_output_bytes`),
+`cancelled` (the scrape was abandoned mid-run), `retired` (it reached 1,000
+runs), `surplus` (more than four were idle after a burst), `idle` (unused for
+five minutes), `reload` (a reload changed or removed its script) or `evicted`
+(it was idle when another script needed a worker under
+`--python.max-workers`). `retired`, `surplus`, `idle` and `reload` are routine;
+the first five each cost the next scrape a fresh interpreter, and many
+`evicted` say the limit is too low for the scripts in use.
 
 A run ends `ok`, `script_error` (the script raised or called `fail(...)`; the
-worker carries on), `timeout`, `output_limit` or `failed` (the worker could not
-be reached or its answer was unreadable).
+worker carries on), `timeout` (it overran `limits.script_timeout`), `deadline`
+(the probe's or scrape's deadline ended it first, or ran out while the
+response was handed to the worker: the time to raise is the probe's, not
+`script_timeout`), `output_limit` or `failed` (the worker could not be reached
+or its answer was unreadable). A worker found dead when it was taken from the
+pool is replaced before the run, and is no failed run.
 
 ```promql
 # a collector whose script keeps timing out

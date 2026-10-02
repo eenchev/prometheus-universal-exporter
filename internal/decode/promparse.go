@@ -5,7 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
-	"sort"
+	"slices"
 	"strconv"
 	"strings"
 	"unicode/utf8"
@@ -39,11 +39,28 @@ import (
 // the last line need not end in a newline, lines may end in \r\n, and trailing
 // blanks after the value or timestamp are ignored. It is stricter where expfmt
 // produced nonsense: a histogram or summary count, or a bucket count, that is
-// negative, NaN or infinite is an error instead of an arbitrary integer; a
+// negative, NaN, infinite or a fraction is an error instead of an arbitrary
+// integer; a
 // label set with no metric name is an error instead of joining the previous
 // line's family; and a name that mixes bare and quoted parts, such as a"b", is
 // an error instead of being spliced together. It never panics, where expfmt
 // did on input such as {b="c",} 1.
+//
+// A histogram or a summary is kept as the source wrote it (settle): one
+// without _sum or without _count, which OpenMetrics allows and expfmt read as
+// a sum or a count of 0, is marked as having none, a histogram's count then
+// being its +Inf bucket's. A histogram whose +Inf bucket and _count differ
+// keeps both numbers, and one with neither of the two has neither
+// (model.Histogram): a target that updates its buckets and its count without
+// a lock is read between the two now and then, and one such series must not
+// fail every family of the scrape. What cannot be one series is an error
+// naming it: a second _sum or _count, and two buckets with one bound or two
+// values of one quantile. So is a sample line that is no part of its family,
+// as any malformed line is: a sample of a histogram that is neither a bucket
+// with an le label, a _sum nor a _count, such as one named as the family
+// itself, and a sample named as its summary family without a quantile label.
+// expfmt made an empty series of such a line, and it is refused rather than
+// left out without a word.
 //
 // Families come back in the order they were first seen, and series in the
 // order of their first sample, so a decode is deterministic.
@@ -65,13 +82,52 @@ type promOptions struct {
 	limit int
 }
 
-// parseExposition parses body as options say. The body is read a line at a
-// time, without first splitting it into a slice of every line.
+// parseExposition parses body as options say.
+//
+// A large exposition is most of what a pass-through probe costs, so the
+// parser is written to do little for each line and to keep little of it:
+//
+//   - The body is read where it lies, a line at a time, as bytes: no line is
+//     copied to a string, and no slice of every line is made first. Only
+//     what a kept series holds is copied out of the body, so that the series
+//     of a scrape that keeps ten of a million do not hold on to the rest.
+//   - A sample's labels are read into a list the parser uses again for every
+//     line (promParser.labels), and are made the series' map only when a
+//     series is made of them: not for a sample of a family that is not
+//     kept, and not for the second and later buckets of a histogram, which
+//     find their series by a signature written over the same buffer every
+//     time.
+//   - The text of a label's name, and of its value, is the previous line's
+//     where it is the same (promParser.previous), as the names nearly always
+//     are and the values often.
+//   - Series are held in one slice in the order they were read
+//     (promParser.series), sized from the number of lines when every series
+//     is kept, and are put in the families' order at the end only when they
+//     were not read in it, which is rare.
 func parseExposition(body []byte, options promOptions) ([]model.Metric, error) {
 	p := promParser{byName: map[string]*promFamily{}, options: options}
+	if options.keep == nil {
+		// Without a filter every sample line may be a series, and most
+		// are: the slice is made once, for as many series as there are
+		// lines, or as many as may be kept. The estimate is capped, since
+		// an exposition of histograms has ten lines to a series; past it
+		// the slice grows as any does. With a filter nothing says how few
+		// are kept, and the slice starts empty.
+		estimate := min(bytes.Count(body, []byte("\n"))+1, promSeriesEstimate)
+		if options.limit > 0 {
+			estimate = min(estimate, options.limit)
+		}
+		p.series = make([]promSeries, 0, estimate)
+	}
 	for number := 1; ; number++ {
-		raw, rest, more := bytes.Cut(body, []byte("\n"))
-		line := strings.TrimSuffix(string(raw), "\r")
+		line, more := body, false
+		if end := bytes.IndexByte(body, '\n'); end >= 0 {
+			line, body, more = body[:end], body[end+1:], true
+		}
+		if len(line) > 0 && line[len(line)-1] == '\r' {
+			line = line[:len(line)-1]
+		}
+		p.number = number
 		if err := p.line(line); err != nil {
 			if errors.Is(err, model.ErrLimitExceeded) {
 				return nil, err
@@ -81,10 +137,16 @@ func parseExposition(body []byte, options promOptions) ([]model.Metric, error) {
 		if !more {
 			break
 		}
-		body = rest
+	}
+	if err := p.settle(); err != nil {
+		return nil, fmt.Errorf("text format parsing error: %w", err)
 	}
 	return p.metrics(), nil
 }
+
+// promSeriesEstimate is the most series the parser makes room for before it
+// has read any.
+const promSeriesEstimate = 1 << 16
 
 const (
 	promRoleNone = iota
@@ -100,8 +162,13 @@ type promFamily struct {
 	help    string
 	helpSet bool
 	typ     model.MetricType // empty until a TYPE line or the first sample
-	series  []*promSeries
-	grouped map[string]*promSeries // summary and histogram series by signature
+	// index is the family's place among the families, in the order they
+	// were first seen, which is the order their series come back in.
+	index int
+	// grouped finds a summary's or a histogram's series, in
+	// promParser.series, by its signature, and latest is the one made last.
+	grouped map[string]int
+	latest  int
 	// exported, when set, is the name the family's series have, where
 	// OpenMetrics names them other than the family: foo_total for a
 	// counter foo, foo_info for an info foo.
@@ -123,24 +190,59 @@ func (f *promFamily) exportedName() string {
 }
 
 type promSeries struct {
+	family    *promFamily
 	labels    map[string]string
 	value     float64
 	timestamp *int64
 	histogram *model.Histogram
 	summary   *model.Summary
+	// line is the line of a histogram's or summary's first sample, for the
+	// error of one that cannot be a series (settle).
+	line int
 }
 
 type promParser struct {
-	byName   map[string]*promFamily
-	families []*promFamily
+	byName map[string]*promFamily
+	// families counts the families, for promFamily.index.
+	families int
 	options  promOptions
 	// aliases are the OpenMetrics sample names that belong to a family
 	// other than their own, with the role they have in it.
 	aliases map[string]promAlias
-	// kept counts the series stored, for promOptions.limit.
-	kept int
+	// series are the series kept, in the order their first samples were
+	// read, and unordered says that this is not the families' order.
+	series    []promSeries
+	unordered bool
 	// eof is set by OpenMetrics' # EOF, after which nothing may follow.
 	eof bool
+	// number is the line being read.
+	number int
+
+	// What follows is used again for every line, so that a line costs no
+	// allocation of its own.
+
+	// labels are the labels of the sample being read, as they are written
+	// in the body or, when they have escapes, unescaped in unescaped.
+	labels    []promLabel
+	unescaped []byte
+	// seen holds the label names of a sample with more labels than
+	// promLabelsCompared, to find one written twice.
+	seen map[string]struct{}
+	// signature is where a histogram's or a summary's sample writes what
+	// identifies its series (promSignature).
+	signature []byte
+	// previous are the label names and values of the last series made, by
+	// their place in the label set. The next series mostly has the same
+	// names, and often some of the same values, and takes these strings
+	// rather than making its own.
+	previous []promLabelText
+	// sampleName, sampleFamily and sampleRole are the name of the sample
+	// read last and what family found it to be, which the next sample has
+	// too when it has the same name, as within a family it has. No comment
+	// line may lie between the two: a TYPE line changes what a name is.
+	sampleName   []byte
+	sampleFamily *promFamily
+	sampleRole   int
 }
 
 type promAlias struct {
@@ -148,42 +250,58 @@ type promAlias struct {
 	role   int
 }
 
-func (p *promParser) line(line string) error {
-	s := strings.TrimLeft(line, " \t")
-	if strings.TrimSpace(s) == "" {
+func (p *promParser) line(line []byte) error {
+	s := skipBlanks(line)
+	if blankLine(s) {
 		return nil
 	}
 	if p.eof {
 		return errors.New("unexpected content after # EOF")
 	}
+	p.unescaped = p.unescaped[:0]
 	if s[0] == '#' {
 		return p.comment(s[1:])
 	}
 	return p.sample(s)
 }
 
+// blankLine reports whether s, which starts with neither a space nor a tab,
+// holds nothing but white space, as a form feed or a no-break space is. A
+// line nearly always starts with a letter or a #, which settles it.
+func blankLine(s []byte) bool {
+	if len(s) == 0 {
+		return true
+	}
+	if c := s[0]; c > ' ' && c < utf8.RuneSelf {
+		return false
+	}
+	return len(bytes.TrimSpace(s)) == 0
+}
+
 // comment handles a # line. Only HELP and TYPE mean anything; a HELP or TYPE
 // line that stops after its keyword or after its metric name is not an error,
 // as it is not for expfmt.
-func (p *promParser) comment(s string) error {
-	s = strings.TrimLeft(s, " \t")
+func (p *promParser) comment(s []byte) error {
+	s = skipBlanks(s)
 	keyword, rest := cutBlank(s)
-	if p.options.openMetrics && keyword == "EOF" && strings.TrimSpace(rest) == "" {
+	if p.options.openMetrics && string(keyword) == "EOF" && len(bytes.TrimSpace(rest)) == 0 {
 		p.eof = true
 		return nil
 	}
-	if keyword != "HELP" && keyword != "TYPE" {
+	if string(keyword) != "HELP" && string(keyword) != "TYPE" {
 		return nil
 	}
-	rest = strings.TrimLeft(rest, " \t")
-	if rest == "" {
+	// A TYPE line changes which family a name belongs to.
+	p.sampleFamily = nil
+	rest = skipBlanks(rest)
+	if len(rest) == 0 {
 		return nil
 	}
-	name, rest, err := readPromName(rest, isPromMetricNameStart, isPromMetricNameByte)
+	name, rest, err := p.readName(rest, promMetricNameStart, promMetricNameByte)
 	if err != nil {
 		return err
 	}
-	if rest == "" {
+	if len(rest) == 0 {
 		return nil
 	}
 	if !isBlank(rest[0]) {
@@ -193,15 +311,15 @@ func (p *promParser) comment(s string) error {
 	if err != nil {
 		return err
 	}
-	rest = strings.TrimLeft(rest, " \t")
-	if rest == "" {
+	rest = skipBlanks(rest)
+	if len(rest) == 0 {
 		return nil
 	}
-	if keyword == "HELP" {
+	if string(keyword) == "HELP" {
 		if family.helpSet {
 			return fmt.Errorf("second HELP line for metric name %q", family.name)
 		}
-		help, err := unescapePromText(rest, "help text")
+		help, err := unescapePromText(string(rest), "help text")
 		if err != nil {
 			return err
 		}
@@ -211,9 +329,10 @@ func (p *promParser) comment(s string) error {
 	if family.typ != "" {
 		return fmt.Errorf("second TYPE line for metric name %q, or TYPE reported after samples", family.name)
 	}
-	t := strings.ToLower(strings.TrimRight(rest, " \t"))
+	raw := string(rest)
+	t := strings.ToLower(strings.TrimRight(raw, " \t"))
 	if p.options.openMetrics {
-		return p.openMetricsType(family, t, rest)
+		return p.openMetricsType(family, t, raw)
 	}
 	switch t {
 	case "counter":
@@ -227,43 +346,43 @@ func (p *promParser) comment(s string) error {
 	case "untyped":
 		family.typ = model.UntypedMetricType
 	default:
-		return fmt.Errorf("unknown metric type %q", rest)
+		return fmt.Errorf("unknown metric type %q", raw)
 	}
 	return nil
 }
 
 // sample handles a sample line: a name, optional labels, a value and an
 // optional timestamp.
-func (p *promParser) sample(s string) error {
+func (p *promParser) sample(s []byte) error {
 	var (
-		name   string
-		labels []promLabel
-		err    error
+		name []byte
+		err  error
 	)
+	p.labels = p.labels[:0]
 	if s[0] == '{' {
-		name, labels, s, err = readPromLabels(s[1:], true)
+		name, s, err = p.readLabels(s[1:], true)
 		if err != nil {
 			return err
 		}
-		if name == "" {
+		if len(name) == 0 {
 			return errors.New("invalid metric name")
 		}
 	} else {
-		name, s, err = readPromName(s, isPromMetricNameStart, isPromMetricNameByte)
+		name, s, err = p.readName(s, promMetricNameStart, promMetricNameByte)
 		if err != nil {
 			return err
 		}
-		if name == "" {
+		if len(name) == 0 {
 			return errors.New("invalid metric name")
 		}
-		s = strings.TrimLeft(s, " \t")
-		if s != "" && s[0] == '{' {
-			if _, labels, s, err = readPromLabels(s[1:], false); err != nil {
+		s = skipBlanks(s)
+		if len(s) != 0 && s[0] == '{' {
+			if _, s, err = p.readLabels(s[1:], false); err != nil {
 				return err
 			}
 		}
 	}
-	s = strings.TrimLeft(s, " \t")
+	s = skipBlanks(s)
 	token, s := cutBlank(s)
 	value, err := parsePromFloat(token)
 	if err != nil {
@@ -272,9 +391,12 @@ func (p *promParser) sample(s string) error {
 	if p.options.openMetrics {
 		s = withoutExemplar(s)
 	}
-	var timestamp *int64
-	s = strings.TrimLeft(s, " \t")
-	if s != "" {
+	var (
+		timestamp int64
+		timed     bool
+	)
+	s = skipBlanks(s)
+	if len(s) != 0 {
 		token, s = cutBlank(s)
 		if p.options.openMetrics {
 			timestamp, err = openMetricsTimestamp(token)
@@ -282,64 +404,79 @@ func (p *promParser) sample(s string) error {
 				return err
 			}
 		} else {
-			t, err := strconv.ParseInt(token, 10, 64)
+			timestamp, err = strconv.ParseInt(string(token), 10, 64)
 			if err != nil {
 				return fmt.Errorf("expected integer as timestamp, got %q", token)
 			}
-			timestamp = &t
 		}
-		if s = strings.TrimSpace(s); s != "" {
+		timed = true
+		if s = bytes.TrimSpace(s); len(s) != 0 {
 			return fmt.Errorf("spurious string after timestamp: %q", s)
 		}
 	}
-	family, role, err := p.family(name)
-	if err != nil {
-		return err
+	family, role := p.sampleFamily, p.sampleRole
+	if family == nil || !bytes.Equal(name, p.sampleName) {
+		family, role, err = p.family(name)
+		if err != nil {
+			return err
+		}
+		// The name is copied: the body's may be one unescaped into a
+		// buffer the next line writes over.
+		p.sampleName = append(p.sampleName[:0], name...)
+		p.sampleFamily, p.sampleRole = family, role
 	}
 	if family.typ == "" {
 		family.typ = model.UntypedMetricType
 	}
-	return p.add(family, labels, role, value, timestamp)
+	return p.add(family, role, value, timestamp, timed)
 }
 
 // family finds the family a name belongs to, creating it if there is none.
 // The role says whether the name is a summary's or histogram's _sum or _count.
-func (p *promParser) family(name string) (*promFamily, int, error) {
-	if name == "" || !utf8.ValidString(name) {
+// The name is made a string only for a new family: a map is looked up by a
+// string made of bytes without the string being allocated.
+func (p *promParser) family(name []byte) (*promFamily, int, error) {
+	if len(name) == 0 || !utf8.Valid(name) {
 		return nil, 0, fmt.Errorf("invalid metric name %q", name)
 	}
-	if alias, ok := p.aliases[name]; ok {
+	if alias, ok := p.aliases[string(name)]; ok {
 		return alias.family, alias.role, nil
 	}
-	if f := p.byName[name]; f != nil {
+	if f := p.byName[string(name)]; f != nil {
 		return f, promRoleNone, nil
 	}
 	role := promRoleNone
 	base := name
 	switch {
-	case len(name) > len("_count") && strings.HasSuffix(name, "_count"):
-		role, base = promRoleCount, strings.TrimSuffix(name, "_count")
-	case len(name) > len("_sum") && strings.HasSuffix(name, "_sum"):
-		role, base = promRoleSum, strings.TrimSuffix(name, "_sum")
+	case len(name) > len("_count") && bytes.HasSuffix(name, []byte("_count")):
+		role, base = promRoleCount, name[:len(name)-len("_count")]
+	case len(name) > len("_sum") && bytes.HasSuffix(name, []byte("_sum")):
+		role, base = promRoleSum, name[:len(name)-len("_sum")]
 	}
-	if f := p.byName[base]; f != nil && f.typ == model.SummaryMetricType {
+	if f := p.byName[string(base)]; f != nil && f.typ == model.SummaryMetricType {
 		return f, role, nil
 	}
-	if role == promRoleNone && len(name) > len("_bucket") && strings.HasSuffix(name, "_bucket") {
-		base = strings.TrimSuffix(name, "_bucket")
+	if role == promRoleNone && len(name) > len("_bucket") && bytes.HasSuffix(name, []byte("_bucket")) {
+		base = name[:len(name)-len("_bucket")]
 	}
-	if f := p.byName[base]; f != nil && f.typ == model.HistogramMetricType {
+	if f := p.byName[string(base)]; f != nil && f.typ == model.HistogramMetricType {
 		return f, role, nil
 	}
-	f := &promFamily{name: name}
-	p.byName[name] = f
-	p.families = append(p.families, f)
-	return f, promRoleNone, nil
+	return p.newFamily(&promFamily{name: string(name)}), promRoleNone, nil
 }
 
-// add adds a sample to its family, or checks it and drops it when the family
-// is not kept or the sample is an OpenMetrics _created.
-func (p *promParser) add(f *promFamily, labels []promLabel, role int, value float64, timestamp *int64) error {
+// newFamily adds a family, after those there are.
+func (p *promParser) newFamily(f *promFamily) *promFamily {
+	f.index = p.families
+	p.families++
+	p.byName[f.name] = f
+	return f
+}
+
+// add adds the sample read, whose labels are p.labels, to its family, or
+// checks it and drops it when the family is not kept or the sample is an
+// OpenMetrics _created.
+func (p *promParser) add(f *promFamily, role int, value float64, timestamp int64, timed bool) error {
 	if !f.keptKnown {
 		f.kept = p.options.keep == nil || p.options.keep(f.exportedName())
 		f.keptKnown = true
@@ -351,18 +488,23 @@ func (p *promParser) add(f *promFamily, labels []promLabel, role int, value floa
 	case model.HistogramMetricType:
 		special = "le"
 	}
-	own := map[string]string{}
+	// A summary's quantile label, and a histogram's le, is not a label of
+	// the series: it is taken out of p.labels, which then are the series'
+	// own, and read as the number it is.
 	bound, hasBound := math.NaN(), false
-	for _, l := range labels {
-		if special != "" && l.name == special {
+	if special != "" {
+		for i, l := range p.labels {
+			if string(l.name) != special {
+				continue
+			}
 			b, err := parsePromFloat(l.value)
 			if err != nil {
 				return fmt.Errorf("expected float as value for '%s' label, got %q", special, l.value)
 			}
 			bound, hasBound = b, true
-			continue
+			p.labels = append(p.labels[:i], p.labels[i+1:]...)
+			break
 		}
-		own[l.name] = l.value
 	}
 	if role == promRoleCreated {
 		return nil
@@ -373,55 +515,106 @@ func (p *promParser) add(f *promFamily, labels []promLabel, role int, value floa
 		if value < 0 || math.IsNaN(value) || math.IsInf(value, 0) || value >= math.MaxUint64 {
 			return fmt.Errorf("expected a count from 0 to 2^64-1 for %q, got %v", f.name, value)
 		}
+		// Nor is it a fraction: 1.5 observations would be passed on as 1,
+		// a number the target never reported.
+		if value != math.Trunc(value) {
+			return fmt.Errorf("expected a whole number as the count for %q, got %v", f.name, value)
+		}
+	}
+	if special != "" && role == promRoleNone && !hasBound {
+		// A summary or histogram sample that is neither _sum, _count, a
+		// quantile nor a bucket holds nothing a series of the family has: its
+		// value has no place. That is a malformed line, as a value that is no
+		// number is, and is refused as one, also in a family that is not kept.
+		return p.strayError(f)
 	}
 	if !f.kept {
 		// Checked as a kept sample is, and dropped: nothing of it is held.
 		return nil
 	}
 	if special == "" {
-		if err := p.keep(); err != nil {
+		series, err := p.keep(f)
+		if err != nil {
 			return err
 		}
-		f.series = append(f.series, &promSeries{labels: own, value: value, timestamp: timestamp})
+		series.value = value
+		if timed {
+			// A copy, made only here: a parameter whose address is taken
+			// is allocated for every call, with a time or without.
+			at := timestamp
+			series.timestamp = &at
+		}
 		return nil
 	}
-	if f.grouped == nil {
-		f.grouped = map[string]*promSeries{}
-	}
-	key := promSignature(own)
-	series := f.grouped[key]
-	if series == nil {
-		if err := p.keep(); err != nil {
+	var series *promSeries
+	p.signature = promSignature(p.signature[:0], p.labels)
+	if at, ok := f.grouped[string(p.signature)]; ok {
+		series = &p.series[at]
+	} else {
+		// As many buckets or quantiles as the family's series before this
+		// one had, which is how many this one will have.
+		size := 0
+		if len(f.grouped) > 0 {
+			if latest := &p.series[f.latest]; latest.summary != nil {
+				size = len(latest.summary.Quantiles)
+			} else {
+				size = len(latest.histogram.Buckets)
+			}
+		}
+		var err error
+		if series, err = p.keep(f); err != nil {
 			return err
 		}
-		series = &promSeries{labels: own}
+		// The series has no _sum and no _count until one is read.
+		series.line = p.number
 		if f.typ == model.SummaryMetricType {
-			series.summary = &model.Summary{}
+			series.summary = &model.Summary{NoSum: true, NoCount: true}
+			if size > 0 {
+				series.summary.Quantiles = make([]model.Quantile, 0, size)
+			}
 		} else {
-			series.histogram = &model.Histogram{}
+			series.histogram = &model.Histogram{NoSum: true, NoCount: true}
+			if size > 0 {
+				series.histogram.Buckets = make([]model.Bucket, 0, size)
+			}
 		}
-		f.grouped[key] = series
-		f.series = append(f.series, series)
+		if f.grouped == nil {
+			f.grouped = map[string]int{}
+		}
+		f.latest = len(p.series) - 1
+		f.grouped[string(p.signature)] = f.latest
 	}
-	if timestamp != nil {
-		series.timestamp = timestamp
-	}
-	if role == promRoleSum {
-		if series.summary != nil {
-			series.summary.Sum = value
+	if timed {
+		// The series' time is its last sample's. It is held by nothing
+		// but the series, and so is written over rather than made anew
+		// for each of a histogram's buckets.
+		if series.timestamp == nil {
+			at := timestamp
+			series.timestamp = &at
 		} else {
-			series.histogram.Sum = value
+			*series.timestamp = timestamp
 		}
-		return nil
+	}
+	var (
+		sum            *float64
+		count          *uint64
+		noSum, noCount *bool
+	)
+	if x := series.summary; x != nil {
+		sum, count, noSum, noCount = &x.Sum, &x.Count, &x.NoSum, &x.NoCount
+	} else {
+		x := series.histogram
+		sum, count, noSum, noCount = &x.Sum, &x.Count, &x.NoSum, &x.NoCount
 	}
 	switch {
-	case role == promRoleCount && series.summary != nil:
-		series.summary.Count = uint64(value)
+	case role == promRoleSum && !*noSum:
+		return fmt.Errorf("second %s_sum sample for the %s", f.name, describePromSeries(f, series))
+	case role == promRoleSum:
+		*sum, *noSum = value, false
+	case role == promRoleCount && !*noCount:
+		return fmt.Errorf("second %s_count sample for the %s", f.name, describePromSeries(f, series))
 	case role == promRoleCount:
-		series.histogram.Count = uint64(value)
-	case !hasBound:
-		// A summary or histogram sample that is neither _sum, _count, a
-		// quantile nor a bucket carries nothing to keep, as for expfmt.
+		*count, *noCount = uint64(value), false
 	case series.summary != nil:
 		series.summary.Quantiles = append(series.summary.Quantiles, model.Quantile{Quantile: bound, Value: value})
 	default:
@@ -430,67 +623,190 @@ func (p *promParser) add(f *promFamily, labels []promLabel, role int, value floa
 	return nil
 }
 
-// keep counts one more stored series, and fails past promOptions.limit.
-func (p *promParser) keep() error {
-	p.kept++
-	if p.options.limit > 0 && p.kept > p.options.limit {
-		return model.MetricCountError(p.kept, p.options.limit)
+// strayError is the error of the sample being read, which belongs to the
+// histogram or summary family f by its name and is none of the samples such a
+// family has: it names the sample and what was expected in its place.
+func (p *promParser) strayError(f *promFamily) error {
+	if f.typ == model.SummaryMetricType {
+		return fmt.Errorf("expected %[1]s with a quantile label, %[1]s_sum or %[1]s_count as a sample of the summary %[1]s, got %[2]s without a quantile label", f.name, p.sampleName)
+	}
+	got := string(p.sampleName)
+	if got == f.name+"_bucket" {
+		got += " without an le label"
+	}
+	return fmt.Errorf("expected %[1]s_bucket with an le label, %[1]s_sum or %[1]s_count as a sample of the histogram %[1]s, got %[2]s", f.name, got)
+}
+
+// settle checks every histogram and summary read, once all their samples
+// are, and gives a histogram without a _count its +Inf bucket's
+// (model.Histogram.Settle). Its error names the series and the line of its
+// first sample, since what is wrong with a series is not on one line.
+//
+// It first puts the series in the order they come back in, the families'
+// and within a family the series', which is the order they are checked in.
+// An exposition writes a family's series together, after its HELP and TYPE,
+// so they nearly always were read in that order.
+func (p *promParser) settle() error {
+	if p.unordered {
+		slices.SortStableFunc(p.series, func(a, b promSeries) int { return a.family.index - b.family.index })
+	}
+	for i := range p.series {
+		s := &p.series[i]
+		var err error
+		switch {
+		case s.histogram != nil:
+			err = s.histogram.Settle()
+		case s.summary != nil:
+			err = s.summary.Settle()
+		}
+		if err != nil {
+			return fmt.Errorf("the %s, which starts in line %d, %w", describePromSeries(s.family, s), s.line, err)
+		}
 	}
 	return nil
 }
 
-func (p *promParser) metrics() []model.Metric {
-	var out []model.Metric
-	if p.kept > 0 {
-		out = make([]model.Metric, 0, p.kept)
+// describePromSeries names a histogram or summary series for an error: its
+// type, its family and its labels, as the exposition writes them.
+func describePromSeries(f *promFamily, s *promSeries) string {
+	var b strings.Builder
+	b.WriteString(string(f.typ))
+	b.WriteByte(' ')
+	b.WriteString(f.name)
+	if len(s.labels) > 0 {
+		b.WriteByte('{')
+		for i, name := range model.SortedKeys(s.labels) {
+			if i > 0 {
+				b.WriteByte(',')
+			}
+			b.WriteString(name)
+			b.WriteByte('=')
+			b.WriteString(model.QuoteValue(s.labels[name]))
+		}
+		b.WriteByte('}')
 	}
-	for _, f := range p.families {
+	return b.String()
+}
+
+// keep stores one more series of f, with p.labels as its labels, and fails
+// past promOptions.limit, before anything is made of the series.
+func (p *promParser) keep(f *promFamily) (*promSeries, error) {
+	if kept := len(p.series) + 1; p.options.limit > 0 && kept > p.options.limit {
+		return nil, model.MetricCountError(kept, p.options.limit)
+	}
+	if n := len(p.series); n > 0 && f.index < p.series[n-1].family.index {
+		p.unordered = true
+	}
+	p.series = append(p.series, promSeries{family: f, labels: p.labelMap()})
+	return &p.series[len(p.series)-1], nil
+}
+
+// labelMap makes p.labels the label set of a series: a map of the size it
+// has, filled once. A name or a value that the series made before this one
+// had in the same place is that series' string.
+func (p *promParser) labelMap() map[string]string {
+	labels := make(map[string]string, len(p.labels))
+	for len(p.previous) < len(p.labels) {
+		p.previous = append(p.previous, promLabelText{})
+	}
+	for i, l := range p.labels {
+		before := &p.previous[i]
+		// Neither comparison makes a string: the bytes are compared in
+		// place.
+		if before.name != string(l.name) {
+			before.name = string(l.name)
+		}
+		if before.value != string(l.value) {
+			before.value = string(l.value)
+		}
+		labels[before.name] = before.value
+	}
+	return labels
+}
+
+func (p *promParser) metrics() []model.Metric {
+	if len(p.series) == 0 {
+		return nil
+	}
+	out := make([]model.Metric, len(p.series))
+	for i := range p.series {
+		s := &p.series[i]
+		f := s.family
 		help := f.help
 		if f.helpOf != nil && !f.helpSet {
 			help = f.helpOf.help
 		}
-		for _, s := range f.series {
-			m := model.Metric{Name: f.exportedName(), Help: help, Type: f.typ, Labels: s.labels, Value: s.value, Timestamp: s.timestamp, Histogram: s.histogram, Summary: s.summary}
-			out = append(out, m)
-		}
+		out[i] = model.Metric{Name: f.exportedName(), Help: help, Type: f.typ, Labels: s.labels, Value: s.value, Timestamp: s.timestamp, Histogram: s.histogram, Summary: s.summary}
 	}
 	return out
 }
 
-type promLabel struct{ name, value string }
+// promLabel is a label as a sample line writes it: parts of the body, or of
+// promParser.unescaped.
+type promLabel struct{ name, value []byte }
 
-// readPromLabels reads a label set after its opening brace, up to and
-// including the closing one, and returns the rest of the line. In the braces
-// form, where the line starts with the brace, one entry may be a bare metric
-// name instead of a label.
-func readPromLabels(s string, bracesForm bool) (string, []promLabel, string, error) {
-	var (
-		name   string
-		labels []promLabel
-		seen   = map[string]bool{}
-	)
+// promLabelText is a label as a series holds it.
+type promLabelText struct{ name, value string }
+
+// promLabelsCompared is how many labels of a sample are compared with each
+// new one, to find a name written twice, before a set of them is kept.
+const promLabelsCompared = 16
+
+// duplicateLabel reports whether name is the name of one of p.labels. A
+// sample has a few labels, and comparing each new name with those before it
+// costs less than the set the parser made of them for every line; a sample
+// with many has its names in a set, so that a line of a million labels is
+// not compared a million times a million.
+func (p *promParser) duplicateLabel(name []byte) bool {
+	if len(p.labels) < promLabelsCompared {
+		for _, l := range p.labels {
+			if bytes.Equal(l.name, name) {
+				return true
+			}
+		}
+		return false
+	}
+	if len(p.labels) == promLabelsCompared {
+		p.seen = make(map[string]struct{}, 2*promLabelsCompared)
+		for _, l := range p.labels {
+			p.seen[string(l.name)] = struct{}{}
+		}
+	}
+	if _, seen := p.seen[string(name)]; seen {
+		return true
+	}
+	p.seen[string(name)] = struct{}{}
+	return false
+}
+
+// readLabels reads a label set after its opening brace, up to and including
+// the closing one, into p.labels, and returns the rest of the line. In the
+// braces form, where the line starts with the brace, one entry may be a bare
+// metric name instead of a label, which is returned.
+func (p *promParser) readLabels(s []byte, bracesForm bool) ([]byte, []byte, error) {
+	var name []byte
 	for {
-		s = strings.TrimLeft(s, " \t")
-		if s == "" {
-			return "", nil, "", errors.New("unexpected end of label set")
+		s = skipBlanks(s)
+		if len(s) == 0 {
+			return nil, nil, errors.New("unexpected end of label set")
 		}
 		if s[0] == '}' {
-			return name, labels, s[1:], nil
+			return name, s[1:], nil
 		}
-		label, rest, err := readPromName(s, isPromLabelNameStart, isPromLabelNameByte)
+		label, rest, err := p.readName(s, promLabelNameStart, promLabelNameByte)
 		if err != nil {
-			return "", nil, "", err
+			return nil, nil, err
 		}
-		if label == "" {
-			return "", nil, "", fmt.Errorf("invalid label name %q", firstRune(s))
+		if len(label) == 0 {
+			return nil, nil, fmt.Errorf("invalid label name %q", firstRune(s))
 		}
-		rest = strings.TrimLeft(rest, " \t")
-		if rest == "" || rest[0] != '=' {
-			if !bracesForm || rest == "" || (rest[0] != ',' && rest[0] != '}') {
-				return "", nil, "", fmt.Errorf("expected '=' after label name %q", label)
+		rest = skipBlanks(rest)
+		if len(rest) == 0 || rest[0] != '=' {
+			if !bracesForm || len(rest) == 0 || (rest[0] != ',' && rest[0] != '}') {
+				return nil, nil, fmt.Errorf("expected '=' after label name %q", label)
 			}
-			if name != "" {
-				return "", nil, "", fmt.Errorf("multiple metric names for metric %q", name)
+			if len(name) != 0 {
+				return nil, nil, fmt.Errorf("multiple metric names for metric %q", name)
 			}
 			name = label
 			if rest[0] == ',' {
@@ -499,88 +815,126 @@ func readPromLabels(s string, bracesForm bool) (string, []promLabel, string, err
 			s = rest
 			continue
 		}
-		if label == "__name__" {
-			return "", nil, "", fmt.Errorf("label name %q is reserved", label)
+		if string(label) == "__name__" {
+			return nil, nil, fmt.Errorf("label name %q is reserved", label)
 		}
-		if !utf8.ValidString(label) {
-			return "", nil, "", fmt.Errorf("invalid label name %q", label)
+		if !utf8.Valid(label) {
+			return nil, nil, fmt.Errorf("invalid label name %q", label)
 		}
-		if seen[label] {
-			return "", nil, "", fmt.Errorf("duplicate label name %q", label)
+		if p.duplicateLabel(label) {
+			return nil, nil, fmt.Errorf("duplicate label name %q", label)
 		}
-		seen[label] = true
-		rest = strings.TrimLeft(rest[1:], " \t")
-		if rest == "" || rest[0] != '"' {
-			return "", nil, "", fmt.Errorf("expected '\"' at start of the value of label %q", label)
+		rest = skipBlanks(rest[1:])
+		if len(rest) == 0 || rest[0] != '"' {
+			return nil, nil, fmt.Errorf("expected '\"' at start of the value of label %q", label)
 		}
-		value, after, err := readPromQuoted(rest[1:], "label value")
+		value, after, err := p.readQuoted(rest[1:], "label value")
 		if err != nil {
-			return "", nil, "", err
+			return nil, nil, err
 		}
 		// A label value that is not valid UTF-8 is kept as it is: the
 		// transform repairs it with U+FFFD and counts it, as it does the
 		// output of every other decoder (textencoding.go), rather than
 		// failing the whole scrape over one value.
-		labels = append(labels, promLabel{name: label, value: value})
-		after = strings.TrimLeft(after, " \t")
+		p.labels = append(p.labels, promLabel{name: label, value: value})
+		after = skipBlanks(after)
 		switch {
-		case after == "":
-			return "", nil, "", fmt.Errorf("unexpected end of label set after label %q", label)
+		case len(after) == 0:
+			return nil, nil, fmt.Errorf("unexpected end of label set after label %q", label)
 		case after[0] == ',':
 			s = after[1:]
 		case after[0] == '}':
 			s = after
 		default:
-			return "", nil, "", fmt.Errorf("unexpected %q after the value of label %q", firstRune(after), label)
+			return nil, nil, fmt.Errorf("unexpected %q after the value of label %q", firstRune(after), label)
 		}
 	}
 }
 
-// readPromName reads a bare name, whose bytes the two predicates allow, or a
-// quoted UTF-8 name. It returns the name and the rest of the line; an empty
-// name means the line does not start with one.
-func readPromName(s string, start, cont func(byte) bool) (string, string, error) {
-	if s == "" {
-		return "", s, nil
+// The bytes of a bare name: a label's, and a metric's, which may also hold
+// colons. A table answers for a byte faster than a function called for it.
+const (
+	promLabelNameStart = 1 << iota
+	promLabelNameByte
+	promMetricNameStart
+	promMetricNameByte
+)
+
+var promNameBytes = func() (table [256]uint8) {
+	for c := 0; c < 256; c++ {
+		letter := c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c == '_'
+		digit := c >= '0' && c <= '9'
+		if letter {
+			table[c] |= promLabelNameStart | promMetricNameStart
+		}
+		if letter || digit {
+			table[c] |= promLabelNameByte | promMetricNameByte
+		}
+		if c == ':' {
+			table[c] |= promMetricNameStart | promMetricNameByte
+		}
+	}
+	return table
+}()
+
+// readName reads a bare name, which starts with a byte that is a start in
+// promNameBytes and goes on with those that are a cont, or a quoted UTF-8
+// name. It returns the name and the rest of the line; an empty name means
+// the line does not start with one.
+func (p *promParser) readName(s []byte, start, cont uint8) ([]byte, []byte, error) {
+	if len(s) == 0 {
+		return nil, s, nil
 	}
 	if s[0] == '"' {
-		return readPromQuoted(s[1:], "name")
+		return p.readQuoted(s[1:], "name")
 	}
-	if !start(s[0]) {
-		return "", s, nil
+	if promNameBytes[s[0]]&start == 0 {
+		return nil, s, nil
 	}
 	i := 1
-	for i < len(s) && cont(s[i]) {
+	for i < len(s) && promNameBytes[s[i]]&cont != 0 {
 		i++
 	}
 	return s[:i], s[i:], nil
 }
 
-// readPromQuoted reads up to the closing quote, unescaping \\, \n and \".
-func readPromQuoted(s, what string) (string, string, error) {
-	var b strings.Builder
-	for i := 0; i < len(s); i++ {
+// readQuoted reads up to the closing quote, unescaping \\, \n and \". What
+// has no escape, as nearly every name and value, is returned where it lies
+// in the body; what has is written to p.unescaped, after what the line
+// already wrote there.
+func (p *promParser) readQuoted(s []byte, what string) ([]byte, []byte, error) {
+	plain := 0
+	for plain < len(s) && s[plain] != '"' && s[plain] != '\\' {
+		plain++
+	}
+	if plain < len(s) && s[plain] == '"' {
+		return s[:plain], s[plain+1:], nil
+	}
+	start := len(p.unescaped)
+	b := append(p.unescaped, s[:plain]...)
+	for i := plain; i < len(s); i++ {
 		switch c := s[i]; c {
 		case '"':
-			return b.String(), s[i+1:], nil
+			p.unescaped = b
+			return b[start:], s[i+1:], nil
 		case '\\':
 			if i+1 == len(s) {
-				return "", "", fmt.Errorf("%s %q ends in a lone backslash", what, b.String())
+				return nil, nil, fmt.Errorf("%s %q ends in a lone backslash", what, b[start:])
 			}
 			i++
 			switch s[i] {
 			case '\\', '"':
-				b.WriteByte(s[i])
+				b = append(b, s[i])
 			case 'n':
-				b.WriteByte('\n')
+				b = append(b, '\n')
 			default:
-				return "", "", fmt.Errorf("invalid escape sequence '\\%c'", s[i])
+				return nil, nil, fmt.Errorf("invalid escape sequence '\\%c'", s[i])
 			}
 		default:
-			b.WriteByte(c)
+			b = append(b, c)
 		}
 	}
-	return "", "", fmt.Errorf("%s %q contains unescaped new-line", what, b.String())
+	return nil, nil, fmt.Errorf("%s %q contains unescaped new-line", what, b[start:])
 }
 
 // unescapePromText unescapes HELP text, which runs to the end of the line.
@@ -612,54 +966,55 @@ func unescapePromText(s, what string) (string, error) {
 }
 
 // parsePromFloat parses a sample value the way expfmt does: as a Go float,
-// but without hexadecimal exponents or digit separators.
-func parsePromFloat(s string) (float64, error) {
-	if strings.ContainsAny(s, "pP_") {
-		return 0, errors.New("unsupported character in float")
+// but without hexadecimal exponents or digit separators. The string it is
+// read from is not kept, and so costs nothing to make.
+func parsePromFloat(s []byte) (float64, error) {
+	for _, c := range s {
+		if c == 'p' || c == 'P' || c == '_' {
+			return 0, errors.New("unsupported character in float")
+		}
 	}
-	return strconv.ParseFloat(s, 64)
+	return strconv.ParseFloat(string(s), 64)
 }
 
-// promSignature identifies a label set regardless of the order of its labels.
-func promSignature(labels map[string]string) string {
-	keys := make([]string, 0, len(labels))
-	for k := range labels {
-		keys = append(keys, k)
+// promSignature identifies a label set regardless of the order of its
+// labels, which it puts in the order of their names; it is written after
+// signature, which is returned.
+func promSignature(signature []byte, labels []promLabel) []byte {
+	slices.SortFunc(labels, func(a, b promLabel) int { return bytes.Compare(a.name, b.name) })
+	for _, l := range labels {
+		signature = append(signature, l.name...)
+		signature = append(signature, 0xff)
+		signature = append(signature, l.value...)
+		signature = append(signature, 0xff)
 	}
-	sort.Strings(keys)
-	var b strings.Builder
-	for _, k := range keys {
-		b.WriteString(k)
-		b.WriteByte(0xff)
-		b.WriteString(labels[k])
-		b.WriteByte(0xff)
-	}
-	return b.String()
+	return signature
 }
 
-func cutBlank(s string) (string, string) {
-	i := strings.IndexAny(s, " \t")
-	if i < 0 {
-		return s, ""
+// skipBlanks is s without the spaces and tabs it starts with. It is a loop
+// rather than strings.TrimLeft, which makes a set of the characters to trim
+// at every call, and the parser calls it several times for every line.
+func skipBlanks(s []byte) []byte {
+	i := 0
+	for i < len(s) && (s[i] == ' ' || s[i] == '\t') {
+		i++
 	}
-	return s[:i], s[i:]
+	return s[i:]
 }
 
-func firstRune(s string) string {
-	r, _ := utf8.DecodeRuneInString(s)
+// cutBlank cuts s before its first space or tab.
+func cutBlank(s []byte) ([]byte, []byte) {
+	for i, c := range s {
+		if c == ' ' || c == '\t' {
+			return s[:i], s[i:]
+		}
+	}
+	return s, nil
+}
+
+func firstRune(s []byte) string {
+	r, _ := utf8.DecodeRune(s)
 	return string(r)
 }
 
 func isBlank(b byte) bool { return b == ' ' || b == '\t' }
-
-func isPromLabelNameStart(b byte) bool {
-	return b >= 'a' && b <= 'z' || b >= 'A' && b <= 'Z' || b == '_'
-}
-
-func isPromLabelNameByte(b byte) bool {
-	return isPromLabelNameStart(b) || b >= '0' && b <= '9'
-}
-
-func isPromMetricNameStart(b byte) bool { return isPromLabelNameStart(b) || b == ':' }
-
-func isPromMetricNameByte(b byte) bool { return isPromLabelNameByte(b) || b == ':' }

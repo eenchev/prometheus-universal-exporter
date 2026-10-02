@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"net/url"
 	"os"
+	"reflect"
 	"regexp"
 	"slices"
 	"strconv"
@@ -44,15 +45,18 @@ func Validate(c *model.Config) error {
 	seen := map[string]bool{}
 	for i := range c.Collectors {
 		x := &c.Collectors[i]
+		// A problem with a collector that a collector file defines names
+		// that file, which is the one to edit.
+		file := collectorFileOf(c, x.Name)
 		if !namePattern.MatchString(x.Name) {
-			errs = append(errs, fmt.Errorf("collector %q has invalid name", x.Name))
+			errs = append(errs, inCollectorFile(file, fmt.Errorf("collector %q has invalid name", x.Name)))
 		}
 		if seen[x.Name] {
 			errs = append(errs, fmt.Errorf("duplicate collector %q", x.Name))
 			continue
 		}
 		seen[x.Name] = true
-		errs = append(errs, validateCollector(c, x))
+		errs = append(errs, inCollectorFile(file, validateCollector(c, x)))
 	}
 	errs = append(errs, validateWebAuthSettings(c), validateOTLP(&c.OTLP))
 	if err := model.JoinProblems(errs...); err != nil {
@@ -85,8 +89,14 @@ func validateCollector(c *model.Config, x *model.Collector) error {
 	if err := fetch.ValidateRequest(x); err != nil {
 		return err
 	}
+	if err := checkPlaceholdersAreFilled(x); err != nil {
+		return err
+	}
 	if x.Limits.MaxResponseBytes < 0 {
 		return fmt.Errorf("collector %q limits.max_response_bytes must not be negative", x.Name)
+	}
+	if err := checkLimits(x); err != nil {
+		return err
 	}
 	if m := x.Limits.MaxScriptMemory; m < 0 || (m > 0 && m < minScriptMemory) {
 		return fmt.Errorf("collector %q limits.max_script_memory must be 0, for no limit, or at least 32MiB, since it bounds the Python interpreter and its libraries too; got %d bytes", x.Name, m)
@@ -266,7 +276,14 @@ func normalizeFormats(x *model.Collector) error {
 	if x.Transform.Type == "python" && strings.TrimSpace(x.Transform.Script) == "" {
 		return fmt.Errorf("collector %q Python transform requires a script", x.Name)
 	}
-	return checkGraphiteResponse(x)
+	if err := checkGraphiteResponse(x); err != nil {
+		return err
+	}
+	// A decoder the transform can never read would fail every scrape.
+	if err := transform.CheckDecoder(x); err != nil {
+		return err
+	}
+	return checkSettingsApply(x)
 }
 
 // checkGraphiteResponse checks response.graphite; value left out is last. It
@@ -389,6 +406,10 @@ func validateWebAuthSettings(c *model.Config) error {
 	return nil
 }
 
+// otlpServiceNameAttribute is the resource attribute otlp.service_name, and a
+// static target's otlp.service_name, are exported as.
+const otlpServiceNameAttribute = "service.name"
+
 // validateOTLP checks the OTLP export settings and fills in their defaults.
 func validateOTLP(o *model.OTLPConfig) error {
 	if !o.Enabled {
@@ -401,11 +422,33 @@ func validateOTLP(o *model.OTLPConfig) error {
 	if err != nil || u.Scheme != "http" && u.Scheme != "https" || u.Host == "" {
 		return errors.New("otlp.endpoint must be an http or https URL")
 	}
-	if o.Timeout <= 0 {
+	// What the export sends and connects with is held to what a collector's
+	// request is: a header Go would refuse, or half a client certificate,
+	// would otherwise load and then fail every export.
+	if err := fetch.CheckHeaders(o.Headers); err != nil {
+		return fmt.Errorf("otlp.headers %w", err)
+	}
+	if err := fetch.CheckClientTLS(o.TLS); err != nil {
+		return fmt.Errorf("otlp.tls %w", err)
+	}
+	switch {
+	case o.Timeout < 0:
+		return fmt.Errorf("otlp.timeout must not be negative; got %s", time.Duration(o.Timeout))
+	case o.Timeout == 0:
 		o.Timeout = model.Duration(5 * time.Second)
 	}
-	if o.Interval <= 0 {
+	// An export may retry for up to an interval, and each is a request of
+	// every pending point: under a second it would be a busy loop.
+	switch {
+	case o.Interval == 0:
 		o.Interval = model.Duration(30 * time.Second)
+	case o.Interval < model.Duration(time.Second):
+		return fmt.Errorf("otlp.interval %s is under the least, 1s; leave it out for the default, 30s", time.Duration(o.Interval))
+	}
+	// service_name is the resource's service.name; set among the attributes
+	// too, the resource would carry the key twice.
+	if _, twice := o.ResourceAttributes[otlpServiceNameAttribute]; twice {
+		return fmt.Errorf("otlp.resource_attributes sets %s, which otlp.service_name sets; write the name as service_name", otlpServiceNameAttribute)
 	}
 	if o.ServiceName == "" {
 		o.ServiceName = "prometheus-universal-exporter"
@@ -483,6 +526,14 @@ func readDocument(path string, opts []LoadOption) ([]byte, error) {
 // Load reads the configuration file at path and the collector files it
 // lists, and validates the result.
 func Load(path string, opts ...LoadOption) (*model.Config, error) {
+	return load(path, opts, nil)
+}
+
+// load is Load. decoded, when given, is called with the configuration as its
+// files write it, once they could be read and before it is validated: the
+// validation is what opens the files the configuration names (namedFiles),
+// so a reload that stamps them stamps them before they are read.
+func load(path string, opts []LoadOption, decoded func(*model.Config)) (*model.Config, error) {
 	b, err := readDocument(path, opts)
 	if err != nil {
 		return nil, err
@@ -490,7 +541,7 @@ func Load(path string, opts ...LoadOption) (*model.Config, error) {
 	var c model.Config
 	dec := yaml.NewDecoder(strings.NewReader(string(b)))
 	dec.KnownFields(true)
-	if err = withoutExtensionKeys(dec.Decode(&c)); err != nil {
+	if err = withValueProblems(withoutExtensionKeys(dec.Decode(&c)), b, reflect.TypeOf(c)); err != nil {
 		if errors.Is(err, io.EOF) {
 			return nil, fmt.Errorf("configuration file %s is empty; it must define collectors", path)
 		}
@@ -499,9 +550,13 @@ func Load(path string, opts ...LoadOption) (*model.Config, error) {
 	if err = oneDocument(dec); err != nil {
 		return nil, err
 	}
+	err = mergeCollectorFiles(&c, path, opts)
+	if decoded != nil {
+		decoded(&c)
+	}
 	// The collectors that were read are checked even when a collector file
 	// could not be, so one run reports the mistakes of every file.
-	if err = mergeCollectorFiles(&c, path, opts); err != nil {
+	if err != nil {
 		if len(c.Collectors) > 0 {
 			err = model.JoinProblems(err, Validate(&c))
 		}
@@ -518,7 +573,9 @@ func Load(path string, opts ...LoadOption) (*model.Config, error) {
 // POST /-/reload. A rejected reload leaves the previous configuration in
 // force.
 type Manager struct {
-	current atomic.Value
+	// current is the configuration and the static target file in force,
+	// one value, so a reload puts both in force at once (inForce).
+	current atomic.Pointer[inForce]
 	path    string
 	logger  *slog.Logger
 	// lastMod and lastSize are the configuration file's modification time
@@ -534,8 +591,16 @@ type Manager struct {
 	// is a change the watch sees.
 	collectorFiles string
 	watchedFiles   []string
+	// retryFiles are the files the configuration last read names and loading
+	// it opens (namedFiles), with those of the configuration in force, and
+	// retryStamp how they were just before they were read (filesStamp). They
+	// are kept while that configuration is refused: one of them changing is
+	// then a change the watch sees, so a reload refused because a
+	// certificate was being replaced is tried again when it is in place,
+	// although the configuration itself is as it was.
+	retryFiles     []string
+	retryStamp     string
 	targetPath     string
-	targetFile     atomic.Pointer[model.StaticTargetFile]
 	targetsLastMod time.Time
 	// targetsLastSize is lastSize for the static target file.
 	targetsLastSize int64
@@ -554,6 +619,18 @@ type Manager struct {
 	reloadMu sync.Mutex
 }
 
+// inForce is the configuration and the static target file in force. The two
+// are checked against each other — a target names a collector and fills its
+// placeholders — so they are published as one value, never changed once
+// stored: a reader that needs both takes them in one read (Manager.InForce)
+// and so never sees the configuration of one reload with the targets of
+// another, as it could when each was stored on its own. targets is nil
+// without a static target file.
+type inForce struct {
+	config  *model.Config
+	targets *model.StaticTargetFile
+}
+
 // DefaultWatchInterval is how often an enabled watch re-stats the configuration
 // files. Changes are detected by modification time rather than by filesystem
 // events, because Kubernetes republishes a mounted ConfigMap by swapping the
@@ -564,7 +641,7 @@ const DefaultWatchInterval = 60 * time.Second
 // NewManager returns a manager holding c, which was read from path.
 func NewManager(c *model.Config, path string, l *slog.Logger) *Manager {
 	m := &Manager{path: path, logger: l, Reloads: newReloadStatus()}
-	m.current.Store(c)
+	m.current.Store(&inForce{config: c})
 	if c != nil {
 		m.Reloads.loaded(reloadFileConfig)
 	}
@@ -626,7 +703,16 @@ func (m *Manager) UseTargetsStamp(s Stamp) {
 }
 
 // Get returns the configuration in force.
-func (m *Manager) Get() *model.Config { return m.current.Load().(*model.Config) }
+func (m *Manager) Get() *model.Config { return m.current.Load().config }
+
+// InForce returns the configuration and the static target file in force, nil
+// without one, as one reload left them: a caller that uses both, as a static
+// target scrape does, reads them here once rather than each on its own, with
+// a reload possibly between the two reads.
+func (m *Manager) InForce() (*model.Config, *model.StaticTargetFile) {
+	pair := m.current.Load()
+	return pair.config, pair.targets
+}
 
 // SetWatchInterval enables the configuration watch and sets how often the
 // files are re-stated. A non-positive interval leaves the watch disabled, which
@@ -677,7 +763,7 @@ func (m *Manager) SetPythonPath(path string) { m.pythonPath = path }
 func (m *Manager) SetTargets(path string, f *model.StaticTargetFile) {
 	m.targetPath = path
 	if f != nil {
-		m.targetFile.Store(f)
+		m.current.Store(&inForce{config: m.Get(), targets: f})
 	}
 	if path != "" && f != nil {
 		m.Reloads.loaded(ReloadFileStaticTargets)
@@ -691,7 +777,7 @@ func (m *Manager) SetTargets(path string, f *model.StaticTargetFile) {
 
 // StaticTargets returns the static targets currently in force.
 func (m *Manager) StaticTargets() []model.StaticTarget {
-	f := m.targetFile.Load()
+	f := m.current.Load().targets
 	if f == nil {
 		return nil
 	}
@@ -701,12 +787,12 @@ func (m *Manager) StaticTargets() []model.StaticTarget {
 // StaticTargetFile returns the static target file in force, nil without one.
 // A reload that changes the targets stores a new file, so the pointer tells a
 // reader whether the targets changed since it last looked.
-func (m *Manager) StaticTargetFile() *model.StaticTargetFile { return m.targetFile.Load() }
+func (m *Manager) StaticTargetFile() *model.StaticTargetFile { return m.current.Load().targets }
 
 // StaticTargetConcurrency is how many static targets are scraped at once, as
 // the file in force says.
 func (m *Manager) StaticTargetConcurrency() int {
-	return m.targetFile.Load().ScrapeConcurrency()
+	return m.current.Load().targets.ScrapeConcurrency()
 }
 
 // ReloadLoop watches the configuration files when the watch is enabled and
@@ -750,8 +836,10 @@ const (
 // refused until it was touched again.
 
 // reloadChanged reloads what the watch finds changed: the configuration, when
-// the file or one of its collector files changed, and the static target file,
-// when it changed; and with either, the other when it waits for it.
+// the file or one of its collector files changed, or, after a refused
+// reload, a file it names; and the static target file, when it changed; and
+// with either, the other when it waits for it. It is one tick of the watch:
+// whatever changed since the last, there is one reload.
 func (m *Manager) reloadChanged() {
 	m.reloadMu.Lock()
 	defer m.reloadMu.Unlock()
@@ -772,8 +860,11 @@ func (m *Manager) configChanged() bool {
 		return false
 	}
 	// A collector file edited, added or removed is a change too, although the
-	// configuration file itself is untouched.
-	return !st.ModTime().Equal(m.lastMod) || st.Size() != m.lastSize || collectorFilesStamp(m.path, m.watchedFiles) != m.collectorFiles
+	// configuration file itself is untouched; and so, while the configuration
+	// last read is refused, is a file it names (retryFiles). Nothing is
+	// logged for a tick that finds them as they were.
+	return !st.ModTime().Equal(m.lastMod) || st.Size() != m.lastSize || collectorFilesStamp(m.path, m.watchedFiles) != m.collectorFiles ||
+		len(m.retryFiles) > 0 && filesStamp(m.retryFiles) != m.retryStamp
 }
 
 // targetsChanged reports whether the static target file changed since it was
@@ -818,35 +909,31 @@ func (m *Manager) apply(trigger string, doConfig, doTargets bool) error {
 	if cfg == nil && targets == nil {
 		return errors.Join(errs...)
 	}
-	// Together: each read file with the other as read, or as in force.
-	pairConfig, pairTargets := cfg, targets
-	if pairConfig == nil {
-		pairConfig = m.Get()
+	// Together: each read file with the other as read, or as in force. The
+	// checks only read the pair in force, which the scrapes are reading.
+	pairConfig, pairTargets := m.InForce()
+	if cfg != nil {
+		pairConfig = cfg
 	}
-	if pairTargets == nil {
-		pairTargets = m.targetFile.Load()
+	if targets != nil {
+		pairTargets = targets
 	}
 	if agree(pairTargets, pairConfig) == nil {
-		if cfg != nil {
-			m.installConfig(trigger, cfg)
-		}
-		if targets != nil {
-			m.installTargets(trigger, targets)
-		}
+		m.install(trigger, cfg, targets)
 		return errors.Join(errs...)
 	}
 	// They disagree. When both were read, one may still go alone, with the
 	// other in force; what is left is refused, and waits for the other file.
-	if cfg != nil && agree(m.targetFile.Load(), cfg) == nil {
-		m.installConfig(trigger, cfg)
+	if cfg != nil && agree(m.StaticTargetFile(), cfg) == nil {
+		m.install(trigger, cfg, nil)
 		cfg = nil
 	}
 	if targets != nil && agree(targets, m.Get()) == nil {
-		m.installTargets(trigger, targets)
+		m.install(trigger, nil, targets)
 		targets = nil
 	}
 	if cfg != nil {
-		errs = append(errs, m.rejectConfig(trigger, agree(m.targetFile.Load(), cfg), true))
+		errs = append(errs, m.rejectConfig(trigger, agree(m.StaticTargetFile(), cfg), true))
 	}
 	if targets != nil {
 		errs = append(errs, m.rejectTargets(trigger, agree(targets, m.Get()), true))
@@ -898,11 +985,20 @@ func (m *Manager) loadConfig() (*model.Config, error) {
 		entries = listed
 	}
 	m.watchCollectorFiles(entries)
-	c, err := Load(m.path, m.loadOptions()...)
+	// The files the configuration names are stamped before the load opens
+	// them, as the configuration file is, so one replaced while it was read
+	// is a change for the next tick: those of the configuration in force,
+	// and with them those of the one being read as soon as it says which.
+	inForce := namedFiles(m.Get())
+	m.retryFiles, m.retryStamp = inForce, filesStamp(inForce)
+	c, err := load(m.path, m.loadOptions(), func(candidate *model.Config) {
+		m.retryFiles = namedFiles(m.Get(), candidate)
+		m.retryStamp = filesStamp(m.retryFiles)
+	})
 	if err != nil {
 		return nil, err
 	}
-	if err := transform.ValidatePythonScripts(m.pythonPath, c); err != nil {
+	if err := ValidatePythonScripts(m.pythonPath, c); err != nil {
 		return nil, err
 	}
 	return c, nil
@@ -924,10 +1020,35 @@ func (m *Manager) loadTargets() (*model.StaticTargetFile, error) {
 	return f, nil
 }
 
-// installConfig puts c in force. reloadMu is held.
-func (m *Manager) installConfig(trigger string, c *model.Config) {
-	m.current.Store(c)
+// install puts c and f in force, either of which may be nil to keep the one
+// in force, in one step: no reader sees the configuration of this reload
+// with the targets of the last, or the reverse, which could name a collector
+// the other no longer has. What follows from each is done once both are in
+// force. reloadMu is held.
+func (m *Manager) install(trigger string, c *model.Config, f *model.StaticTargetFile) {
+	pair := *m.current.Load()
+	if c != nil {
+		pair.config = c
+	}
+	if f != nil {
+		pair.targets = f
+	}
+	m.current.Store(&pair)
+	if c != nil {
+		m.installedConfig(trigger, c)
+	}
+	if f != nil {
+		m.installedTargets(trigger, f)
+	}
+}
+
+// installedConfig records and logs that c was put in force, and lets what is
+// kept for a configuration follow it. reloadMu is held.
+func (m *Manager) installedConfig(trigger string, c *model.Config) {
 	m.configWaits = false
+	// In force, the configuration is not read again for a file it names:
+	// what uses a certificate or a credential file reads it again itself.
+	m.retryFiles, m.retryStamp = nil, ""
 	m.Reloads.record(reloadFileConfig, true)
 	// Interpreters of scripts this reload removed or changed are stopped now
 	// rather than after the idle timeout.
@@ -942,9 +1063,9 @@ func (m *Manager) installConfig(trigger string, c *model.Config) {
 	m.logger.Info("configuration reloaded", "trigger", trigger, "collectors", len(c.Collectors), "collector_files", len(c.LoadedCollectorFiles))
 }
 
-// installTargets puts f in force. reloadMu is held.
-func (m *Manager) installTargets(trigger string, f *model.StaticTargetFile) {
-	m.targetFile.Store(f)
+// installedTargets records and logs that f was put in force. reloadMu is
+// held.
+func (m *Manager) installedTargets(trigger string, f *model.StaticTargetFile) {
 	m.targetsWaits = false
 	m.Reloads.record(ReloadFileStaticTargets, true)
 	m.logger.Info("static targets reloaded", "trigger", trigger, "targets", len(f.Targets))
@@ -956,8 +1077,9 @@ func (m *Manager) installTargets(trigger string, f *model.StaticTargetFile) {
 func (m *Manager) rejectConfig(trigger string, err error, waits bool) error {
 	m.configWaits = waits
 	// The file is named, as a collector file's error names its own: a YAML
-	// error's line number means nothing without it.
-	attrs := []any{"trigger", trigger, "file", m.path, "error", err}
+	// error's line number means nothing without it. Problems that are all
+	// in one collector file are logged against that file.
+	attrs := []any{"trigger", trigger, "file", problemFile(err, m.path), "error", err}
 	if waits {
 		attrs = append(attrs, "retried_when", "the static target file changes")
 	}

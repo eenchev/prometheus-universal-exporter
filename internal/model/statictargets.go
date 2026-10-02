@@ -130,7 +130,8 @@ type TargetOTLPConfig struct {
 }
 
 // UnmarshalYAML records whether path and body were present, because an empty
-// string is a meaningful override for both.
+// string is a meaningful override for both. A key a merge key (<<) supplies
+// is present like one written out.
 func (t *TargetRequestConfig) UnmarshalYAML(n *yaml.Node) error {
 	type plain TargetRequestConfig
 	// Node.Decode does not refuse unknown keys the way the file's decoder
@@ -143,8 +144,8 @@ func (t *TargetRequestConfig) UnmarshalYAML(n *yaml.Node) error {
 		return err
 	}
 	*t = TargetRequestConfig(out)
-	for i := 0; i+1 < len(n.Content); i += 2 {
-		switch n.Content[i].Value {
+	for _, entry := range MappingEntries(n) {
+		switch entry.Key.Value {
 		case "path":
 			t.PathSet = true
 		case "body":

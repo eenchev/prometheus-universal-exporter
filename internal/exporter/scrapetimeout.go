@@ -56,18 +56,22 @@ const (
 const maxScrapeTimeout = time.Hour
 
 // probeBudget reads the scrape timeout Prometheus sent and returns how long the
-// probe may take. A missing, unparseable or non-positive header gives no
-// budget, so a probe from something other than Prometheus behaves as before.
+// probe may take. A missing, unparseable, non-positive or non-finite header
+// gives no budget, so a probe from something other than Prometheus behaves as
+// before: Inf is no length of time to wait, and counted as the longest one it
+// would bound the probe by an hour in place of --probe.default-timeout.
 // An offset larger than the timeout would leave nothing; the probe then keeps
 // half the timeout rather than failing at once. A timeout above
-// maxScrapeTimeout counts as that.
+// maxScrapeTimeout counts as that. Any positive timeout is a budget, however
+// small: one below a nanosecond, which rounds to none, is a nanosecond and
+// ends the probe at once, rather than no header at all and thirty seconds.
 func probeBudget(h http.Header, offset time.Duration) time.Duration {
 	raw := strings.TrimSpace(h.Get(scrapeTimeoutHeader))
 	if raw == "" {
 		return 0
 	}
 	seconds, err := strconv.ParseFloat(raw, 64)
-	if err != nil || seconds <= 0 || math.IsNaN(seconds) {
+	if err != nil || seconds <= 0 || math.IsNaN(seconds) || math.IsInf(seconds, 0) {
 		return 0
 	}
 	// Whoever reaches /probe sends the header, so it is bounded: a scrape
@@ -80,7 +84,7 @@ func probeBudget(h http.Header, offset time.Duration) time.Duration {
 	if budget < timeout/2 {
 		budget = timeout / 2
 	}
-	return budget
+	return max(budget, time.Nanosecond)
 }
 
 // ValidateTimeoutOffset refuses a negative --probe.timeout-offset.

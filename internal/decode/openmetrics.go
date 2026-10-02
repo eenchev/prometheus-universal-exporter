@@ -97,9 +97,7 @@ func (p *promParser) openMetricsType(family *promFamily, t, raw string) error {
 			if p.byName[name+suffix] != nil {
 				continue
 			}
-			part := &promFamily{name: name + suffix, typ: model.GaugeMetricType, helpOf: family}
-			p.byName[part.name] = part
-			p.families = append(p.families, part)
+			p.newFamily(&promFamily{name: name + suffix, typ: model.GaugeMetricType, helpOf: family})
 		}
 	default:
 		return fmt.Errorf("unknown metric type %q", raw)
@@ -110,8 +108,8 @@ func (p *promParser) openMetricsType(family *promFamily, t, raw string) error {
 // withoutExemplar is the rest of a sample line after its value without the
 // exemplar that may end it. An exemplar starts with a # after a blank; a
 // timestamp, the only other thing that may follow the value, has none.
-func withoutExemplar(s string) string {
-	if i := strings.Index(s, "#"); i >= 0 && (i == 0 || isBlank(s[i-1])) {
+func withoutExemplar(s []byte) []byte {
+	if i := bytes.IndexByte(s, '#'); i >= 0 && (i == 0 || isBlank(s[i-1])) {
 		return s[:i]
 	}
 	return s
@@ -119,12 +117,11 @@ func withoutExemplar(s string) string {
 
 // openMetricsTimestamp reads an OpenMetrics timestamp, a float number of
 // seconds, as milliseconds.
-func openMetricsTimestamp(token string) (*int64, error) {
+func openMetricsTimestamp(token []byte) (int64, error) {
 	seconds, err := parsePromFloat(token)
 	ms := math.Round(seconds * 1000)
 	if err != nil || math.IsNaN(ms) || math.IsInf(ms, 0) || ms >= math.MaxInt64 || ms < math.MinInt64 {
-		return nil, fmt.Errorf("expected a number of seconds as timestamp, got %q", token)
+		return 0, fmt.Errorf("expected a number of seconds as timestamp, got %q", token)
 	}
-	at := int64(ms)
-	return &at, nil
+	return int64(ms), nil
 }

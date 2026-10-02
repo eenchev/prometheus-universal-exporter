@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -139,12 +140,28 @@ func TestAbortedScrapesPublishNothing(t *testing.T) {
 // long, so neither scrape can time out while the test runs, and the names
 // are ones whose first scrapes are due early, held50 at 5ms and queued3 at
 // 106ms (scheduleOffset), so the test does not wait out firstScrapeWindow.
+//
+// Which scrape holds the slot and which waits is the test's doing, not the
+// clock's: the scrape of queued3 is held where it would begin to wait until
+// that of held50 has reached its target, with the slot. On a machine too
+// busy to run held50's scrape in the 101ms before queued3's came due, the
+// two otherwise raced for the slot.
 func TestAStoppingLoopDropsScrapesWaitingForASlot(t *testing.T) {
 	logs := testutil.CaptureLogs(t)
 	waiting := make(chan string, 4)
-	hook := func(name string) { waiting <- name }
+	slotTaken := make(chan struct{})
+	hook := func(name string) {
+		if name == "queued3" {
+			<-slotTaken
+		}
+		waiting <- name
+	}
 	slotWaitHook.Store(&hook)
 	t.Cleanup(func() { slotWaitHook.Store(nil) })
+	// However the test ends, the scrape it holds is let go, or the loop
+	// would never return.
+	letGo := sync.OnceFunc(func() { close(slotTaken) })
+	defer letGo()
 	held, heldHits, release := holdingTarget(t, 0)
 	queued, queuedHits := countingTarget(func(*http.Request) string { return "value=1\n" })
 	defer queued.Close()
@@ -153,6 +170,7 @@ func TestAStoppingLoopDropsScrapesWaitingForASlot(t *testing.T) {
 		model.StaticTarget{Name: "queued3", Collector: "text", Target: queued.URL, Interval: model.Duration(time.Minute)},
 	)
 	testutil.WaitFor(t, "the held scrape to take the only slot", func() bool { return heldHits.Load() >= 1 })
+	letGo()
 	for name := ""; name != "queued3"; {
 		select {
 		case name = <-waiting:
@@ -175,14 +193,58 @@ func TestAStoppingLoopDropsScrapesWaitingForASlot(t *testing.T) {
 	}
 }
 
+// A scrape that comes to take its slot when the loop has already stopped is
+// not begun either, though the slot is free: it is held here just before it
+// would take one until the loop has been stopped, so it finds the slot free
+// and the loop stopped at once. Go takes either way out of a select with
+// both ready, so the scrape used to begin every second time; the rounds
+// make a loop that still does that fail all but once in a thousand runs,
+// and one that does not never.
+func TestAStoppedLoopDoesNotBeginAScrapeThatFindsASlotFree(t *testing.T) {
+	t.Cleanup(func() { slotWaitHook.Store(nil) })
+	target, hits := countingTarget(func(*http.Request) string { return "value=1\n" })
+	defer target.Close()
+	round := func() {
+		arrived, stopped := make(chan struct{}), make(chan struct{})
+		hook := func(string) {
+			close(arrived)
+			<-stopped
+		}
+		slotWaitHook.Store(&hook)
+		// However the round ends, the scrape it holds is let go, or the
+		// loop would never return.
+		letGo := sync.OnceFunc(func() { close(stopped) })
+		defer letGo()
+		_, stop, done := loopServer(t, 1, model.StaticTarget{Name: "held50", Collector: "text", Target: target.URL, Interval: model.Duration(time.Minute)})
+		select {
+		case <-arrived:
+		case <-time.After(15 * time.Second):
+			t.Fatal("the scrape never came due")
+		}
+		stop()
+		letGo()
+		select {
+		case <-done:
+		case <-time.After(15 * time.Second):
+			t.Fatal("the loop did not return")
+		}
+	}
+	for n := 1; n <= 10; n++ {
+		round()
+		if begun := hits.Load(); begun != 0 {
+			t.Fatalf("round %d: a scrape was begun after the loop stopped: %d requests", n, begun)
+		}
+	}
+}
+
 // A target given a new interval while its scrape is in flight is not scraped
 // again until that scrape ends, so two scrapes of it never overlap.
 func TestANewIntervalDoesNotOverlapTheScrapeInFlight(t *testing.T) {
 	schedule := newTargetSchedule()
 	now := time.Unix(1_000_000, 0)
-	schedule.plan([]model.StaticTarget{scheduled("a", time.Second)}, now)
+	schedule.plan(nil, []model.StaticTarget{scheduled("a", time.Second)}, now)
 	now = now.Add(time.Second)
-	due, _, _ := schedule.plan([]model.StaticTarget{scheduled("a", time.Second)}, now)
+	due, _, _ := schedule.plan(nil, []model.StaticTarget{scheduled("a", time.Second)}, now)
 	if len(due) != 1 {
 		t.Fatalf("due=%d", len(due))
 	}
@@ -190,9 +252,9 @@ func TestANewIntervalDoesNotOverlapTheScrapeInFlight(t *testing.T) {
 	// The reload changes the interval; the new cadence, first due within
 	// firstScrapeWindow, comes due while the scrape begun on the old one
 	// still runs.
-	schedule.plan([]model.StaticTarget{scheduled("a", 30*time.Second)}, now)
+	schedule.plan(nil, []model.StaticTarget{scheduled("a", 30*time.Second)}, now)
 	now = now.Add(firstScrapeWindow)
-	due, skipped, _ := schedule.plan([]model.StaticTarget{scheduled("a", 30*time.Second)}, now)
+	due, skipped, _ := schedule.plan(nil, []model.StaticTarget{scheduled("a", 30*time.Second)}, now)
 	if len(due) != 0 || len(skipped) != 0 {
 		t.Fatalf("while the old scrape runs: due=%d skipped=%d", len(due), len(skipped))
 	}
@@ -200,7 +262,7 @@ func TestANewIntervalDoesNotOverlapTheScrapeInFlight(t *testing.T) {
 	// The first scrape on the new interval waited for the old one, and is
 	// made at the next check after it ended.
 	now = now.Add(scheduleCheckInterval)
-	if due, _, _ = schedule.plan([]model.StaticTarget{scheduled("a", 30*time.Second)}, now); len(due) != 1 {
+	if due, _, _ = schedule.plan(nil, []model.StaticTarget{scheduled("a", 30*time.Second)}, now); len(due) != 1 {
 		t.Fatalf("once it ended: due=%d", len(due))
 	}
 }

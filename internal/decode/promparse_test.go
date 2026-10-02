@@ -208,6 +208,9 @@ func TestPromParseErrors(t *testing.T) {
 		{"# TYPE h histogram\nh_bucket{le=\"1\"} NaN\n", `expected a count from 0 to 2^64-1 for "h", got NaN`},
 		{"# TYPE s summary\ns_count +Inf\n", `expected a count from 0 to 2^64-1 for "s", got +Inf`},
 		{"# TYPE s summary\ns_count 1e20\n", `expected a count from 0 to 2^64-1 for "s", got 1e+20`},
+		{"# TYPE h histogram\nh_bucket{le=\"1\"} 1.5\n", `expected a whole number as the count for "h", got 1.5`},
+		{"# TYPE h histogram\nh_bucket{le=\"+Inf\"} 2\nh_count 2.5\n", `expected a whole number as the count for "h", got 2.5`},
+		{"# TYPE s summary\ns_count 0.5\n", `expected a whole number as the count for "s", got 0.5`},
 	}
 	for _, test := range tests {
 		_, err := parsePrometheusText([]byte(test.body))

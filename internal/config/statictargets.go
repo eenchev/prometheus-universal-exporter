@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"reflect"
 	"regexp"
 	"sort"
 	"strings"
@@ -31,7 +32,7 @@ func LoadStaticTargets(path string, opts ...LoadOption) (*model.StaticTargetFile
 	var f model.StaticTargetFile
 	dec := yaml.NewDecoder(strings.NewReader(string(b)))
 	dec.KnownFields(true)
-	if err = withoutExtensionKeys(dec.Decode(&f)); err != nil {
+	if err = withValueProblems(withoutExtensionKeys(dec.Decode(&f)), b, reflect.TypeOf(f)); err != nil {
 		if errors.Is(err, io.EOF) {
 			return nil, fmt.Errorf("static target file %s is empty; it must define targets", path)
 		}
@@ -109,6 +110,11 @@ func ValidateStaticTargets(f *model.StaticTargetFile) error {
 		if t.Request.Timeout < 0 {
 			return fmt.Errorf("target %q request.timeout must not be negative", t.Name)
 		}
+		// Statuses and codes are written as a scrape compares them here,
+		// once, while nothing reads the file yet: the check against the
+		// configuration, which a reload repeats on the file in force,
+		// only reads them.
+		fetch.NormalizeTargetRequest(t)
 		switch {
 		case t.Interval < 0:
 			return fmt.Errorf("target %q interval must not be negative", t.Name)
@@ -173,6 +179,11 @@ func ValidateStaticTargets(f *model.StaticTargetFile) error {
 		if !t.ExportViaOTLP && (t.OTLP.ServiceName != "" || len(t.OTLP.ResourceAttributes) > 0) {
 			return fmt.Errorf("target %q sets otlp, which only a target with export_via_otlp: true uses", t.Name)
 		}
+		// As for the exporter-wide otlp block: service_name is the
+		// resource's service.name, which the attributes must not set again.
+		if _, twice := t.OTLP.ResourceAttributes[otlpServiceNameAttribute]; twice {
+			return fmt.Errorf("target %q otlp.resource_attributes sets %s, which otlp.service_name sets; write the name as the target's otlp.service_name", t.Name, otlpServiceNameAttribute)
+		}
 	}
 	return nil
 }
@@ -184,7 +195,10 @@ const StaticTargetLabel = "static_target"
 
 // ValidateStaticTargetsAgainst enforces the preconditions that depend on the
 // exporter configuration: every target must name a configured collector, and a
-// target exported over OTLP needs OTLP export enabled.
+// target exported over OTLP needs OTLP export enabled. It writes into neither:
+// a reload checks the file in force against the configuration it read, and
+// the file it read against the configuration in force, while scrapes read
+// both.
 func ValidateStaticTargetsAgainst(f *model.StaticTargetFile, c *model.Config) error {
 	for i := range f.Targets {
 		t := &f.Targets[i]

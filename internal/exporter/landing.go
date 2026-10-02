@@ -117,7 +117,7 @@ var landingTemplate = template.Must(template.New("landing").Parse(`<!DOCTYPE htm
 `))
 
 func (s *Server) landingHandler(w http.ResponseWriter, _ *http.Request) {
-	cfg := s.manager.Get()
+	cfg, file := s.manager.InForce()
 	build := BuildVersion()
 	page := landingPage{
 		Version: build.Version, Revision: build.Revision, GoVersion: build.GoVersion,
@@ -129,7 +129,7 @@ func (s *Server) landingHandler(w http.ResponseWriter, _ *http.Request) {
 		StaticTargetsPath: s.staticTargetsEndpoint(),
 		Docs:              landingDocs,
 	}
-	for _, target := range s.manager.StaticTargets() {
+	for _, target := range staticTargetsOf(file) {
 		page.StaticTargets++
 		if target.ExportViaOTLP {
 			page.StaticTargetsViaOTLP++

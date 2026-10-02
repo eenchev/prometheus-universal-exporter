@@ -404,7 +404,12 @@ func TestTheHelmVersionIsPinnedConsistently(t *testing.T) {
 		t.Fatal("the Makefile no longer pins HELM_VERSION")
 	}
 	pinned := string(match[1])
-	for _, want := range []string{"\nhelm-test: helm-version\n", "go install helm.sh/helm/v4/cmd/helm@$(HELM_VERSION)"} {
+	for _, want := range []string{
+		"\nhelm-test: helm-version\n",
+		// The version is stamped into the build as helm's releases do it, or
+		// the installed helm would report only its release line.
+		`go install -ldflags "-X helm.sh/helm/v4/internal/version.version=$(HELM_VERSION)" helm.sh/helm/v4/cmd/helm@$(HELM_VERSION)`,
+	} {
 		if !strings.Contains(string(makefile), want) {
 			t.Errorf("the Makefile no longer contains %q", want)
 		}

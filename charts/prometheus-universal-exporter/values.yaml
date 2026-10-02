@@ -30,6 +30,8 @@ service:
 neg:
   enabled: false
   annotations: {}
+# The Ingress routes to the Service above, so it needs service.enabled;
+# without it rendering fails.
 ingress:
   enabled: false
   className: ""
@@ -195,6 +197,7 @@ extraArgs: []
 #
 # A mount path the chart already uses is rejected while rendering: mounting over
 # the configuration directory would hide config.yaml and crash-loop the pod.
+# So is a path two entries share. Paths are compared without a trailing slash.
 extraVolumes: []
 extraVolumeMounts: []
 
@@ -244,11 +247,21 @@ staticTargets:
   #       request:
   #         path: /status
   #         timeout: 5s
+  #       labels:
+  #         region: eu
+  #       # Also delivered over OTLP, under a resource of its own; the otlp
+  #       # block is refused on a target without export_via_otlp.
+  #       export_via_otlp: true
+  #       otlp:
+  #         service_name: legacy-app
+  #         resource_attributes:
+  #           deployment.environment: production
   # The ServiceMonitor (type: service) or PodMonitor (type: pod) that scrapes
   # the static targets endpoint, rendered when staticTargets.enabled is. It
   # needs the Prometheus Operator's CRDs; set enabled: false without them.
   # interval is how often Prometheus reads the targets' latest results, not
   # how often the exporter scrapes them, which the document's intervals say.
+  # scrapeTimeout may not be longer than interval, or rendering fails.
   monitor:
     enabled: true
     type: service
@@ -263,12 +276,6 @@ staticTargets:
     # a target in staticTargets.data, or rendering fails. To read groups of
     # targets on different intervals, add a monitor of your own per group.
     targets: []
-  #       labels:
-  #         region: eu
-  #       otlp:
-  #         service_name: legacy-app
-  #         resource_attributes:
-  #           deployment.environment: production
 
 # The exporter configuration, rendered into the exporter ConfigMap. Every key of
 # data becomes a file next to config.yaml, so collector files can be added as
@@ -283,6 +290,11 @@ staticTargets:
 #       collectors:
 #         - name: payments_api
 #           ...
+#
+# A file is rendered as it is given, whatever its first line's indentation. One
+# a YAML block cannot hold unchanged, with carriage returns or control
+# characters, or ending in blank lines or trailing spaces, is rendered under
+# the ConfigMap's binaryData, base64, and is the same file in the pod.
 config:
   enabled: true
   data:
@@ -306,9 +318,10 @@ monitors: []
 # letters, digits and -), unique among the entries, and neither self nor
 # static-targets, which the chart's own monitors use. interval and
 # scrapeTimeout are Prometheus durations: whole numbers of y, w, d, h, m, s
-# and ms, such as 30s or 1m30s. With webAuth.enabled, an entry without auth of
-# its own presents the webAuth Secret, as the exporter's Basic Auth protects
-# /probe.
+# and ms, such as 30s or 1m30s; a scrapeTimeout longer than its interval fails
+# rendering, since Prometheus refuses it. With webAuth.enabled, an entry
+# without auth of its own presents the webAuth Secret, as the exporter's Basic
+# Auth protects /probe.
 # Example:
 # monitors:
 #   - name: application-services
@@ -319,6 +332,21 @@ monitors: []
 #     labels: {}
 #     annotations: {}
 #     targetSelector: {}
+#     # The namespaces the targets are looked for in, as the Prometheus
+#     # Operator defines it: `any: true` for all of them, or `matchNames`.
+#     # Without it, the monitor's own namespace only.
+#     namespaceSelector:
+#       matchNames: [payments, search]
+#     # The name of the port whose address becomes the probe's target: a port
+#     # of the selected Services (type service) or a container port of the
+#     # selected pods (type pod). Default http. A name, never a number: the
+#     # Prometheus Operator looks the value up among the ports' names, so
+#     # "9115" would match no port, and rendering fails on it. Name the port
+#     # in the Service's spec.ports, or in the pod's containers' ports, and
+#     # give that name: lower-case letters, digits and hyphens with at least
+#     # one letter, up to 63 characters for type service and up to 15, with
+#     # no two hyphens in a row, for type pod.
+#     port: http
 #     collector: example
 #     relabelings: []
 #     metricRelabelings: []
@@ -333,6 +361,9 @@ monitors: []
 #       body: [raw request body]
 #       follow_redirects: ["true"]
 #       enable_http2: ["true"]
+#     # The credential Prometheus presents to the exporter, from a Secret in
+#     # the monitor's namespace. With enabled: true, type and secretName are
+#     # required, or rendering fails.
 #     auth:
 #       enabled: false
 #       type: bearer # bearer or basic
@@ -381,6 +412,22 @@ resources:
 goMemLimit:
   enabled: true
   ratio: 0.8
+# The Go garbage collector's target, the GOGC environment variable of the
+# exporter container: how far the heap may grow over the live data before
+# the next collection, in percent. Go's default is 100; a higher value
+# collects less often, which saves CPU and costs memory. Garbage collection
+# is 13% to 22% of the exporter's CPU, and with 400 a probe of 5,000 series
+# took 15% to 30% less time when measured, for a heap that may grow to about
+# (1 + percent/100) times the live data between collections. With a memory
+# limit in resources and goMemLimit on, the Go memory limit keeps that under
+# the container's limit, since Go collects sooner as the limit nears: 200 to
+# 400 is a good start there. Without one there is no such ceiling. A whole
+# number from 1 to 10000, or "off" — in quotes, since YAML reads a bare off
+# as false — which leaves collecting to the Go memory limit alone, and so
+# fails rendering unless one is in force. Empty leaves the variable out and
+# Go's default in place. GOGC in env beside a percent here fails rendering.
+goGC:
+  percent: ""
 # Timings of the container's probes. The chart sets what they check, /health
 # for liveness and /ready for readiness on the http port; these add to it.
 # /health only says the process answers, so a liveness probe is given some
@@ -421,7 +468,8 @@ autoscaling:
 # replica, minAvailable: 1 would block a drain until the pod is deleted by
 # hand, so use maxUnavailable: 1 there if you want one at all. Set one of
 # minAvailable or maxUnavailable, a count or a percentage; with neither, the
-# budget is maxUnavailable: 1.
+# budget is maxUnavailable: 1. The chart's notes warn about a budget that
+# allows no eviction: maxUnavailable of 0, or minAvailable of every replica.
 podDisruptionBudget:
   enabled: false
   minAvailable: null
@@ -434,6 +482,9 @@ podDisruptionBudget:
 # seconds, the 10 for the exporter's last OTLP export and exit. Set explicitly, it must be at
 # least that, or rendering fails.
 terminationGracePeriodSeconds: null
+# The Deployment's strategy. rollingUpdate is rendered with RollingUpdate
+# only: with type Recreate it is left out, as Kubernetes refuses it there, so
+# `strategy.type: Recreate` alone is enough.
 strategy:
   type: RollingUpdate
   rollingUpdate:
@@ -489,6 +540,8 @@ targetAuth:
   mountPath: /var/run/prometheus-universal-exporter/target-auth
   usernameFileName: username
   passwordFileName: password
+# mountPath must be a path of its own: not the configuration directory,
+# webAuth.mountPath or an extraVolumeMounts entry's, or rendering fails.
 # For basic auth from a Secret, set enabled: true and type: basic, then
 # reference the mounted files from a collector:
 # request:
@@ -511,6 +564,7 @@ targetAuth:
 # the self-metrics and static targets monitors, and each probing monitor
 # without auth of its own, since web.basic_auth protects /probe too. A rotated
 # Secret is picked up by the exporter's next request, without a restart.
+# mountPath must be a path of its own, as targetAuth.mountPath must.
 webAuth:
   enabled: false
   secretName: ""

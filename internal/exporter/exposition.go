@@ -1,6 +1,7 @@
 package exporter
 
 import (
+	"cmp"
 	"encoding/json"
 	"math"
 	"net/http"
@@ -114,7 +115,9 @@ func appendMetricSet(b []byte, s *model.MetricSet) []byte {
 
 // expositionWriter holds what rendering reuses from series to series.
 type expositionWriter struct {
-	keys []string
+	keys      []string
+	buckets   []model.Bucket
+	quantiles []model.Quantile
 }
 
 // appendSample writes one sample line: name and suffix, the labels with
@@ -192,19 +195,33 @@ func appendEscaped(b []byte, text string, quotes bool) []byte {
 	return b
 }
 
+// appendHistogram writes a histogram's lines: its buckets, in ascending order
+// of their bounds whatever order the source had them in (ascendingBuckets),
+// and its _sum and _count unless the source it was read from had none
+// (model.Histogram), so a histogram goes out as it came in rather than with a
+// sum or a count of 0 it never had. The +Inf bucket and the _count are each
+// written with the number the source gave it, also when the two differ; a
+// histogram that has a _count and no +Inf bucket is given the bucket, and one
+// with neither is written without both.
 func (e *expositionWriter) appendHistogram(b []byte, m model.Metric) []byte {
-	for _, x := range m.Histogram.Buckets {
-		// The +Inf bucket is written below from the count. A histogram decoded
-		// from a Prometheus source carries its own +Inf bucket, which written
-		// here as well would be a duplicate series.
+	for _, x := range e.ascendingBuckets(m.Histogram.Buckets) {
+		// The +Inf bucket is written below, last and once, whether the
+		// histogram carries one of its own or is given it from its count.
 		if math.IsInf(x.UpperBound, 1) {
 			continue
 		}
 		b = e.appendCount(b, m.Name, "_bucket", m.Labels, "le", strconv.FormatFloat(x.UpperBound, 'g', -1, 64), x.CumulativeCount, m)
 	}
-	b = e.appendCount(b, m.Name, "_bucket", m.Labels, "le", "+Inf", m.Histogram.Count, m)
-	b = e.appendSample(b, m.Name, "_sum", m.Labels, "", "", m.Histogram.Sum, m)
-	return e.appendCount(b, m.Name, "_count", m.Labels, "", "", m.Histogram.Count, m)
+	if inf, has := m.Histogram.InfBucket(); has {
+		b = e.appendCount(b, m.Name, "_bucket", m.Labels, "le", "+Inf", inf, m)
+	}
+	if !m.Histogram.NoSum {
+		b = e.appendSample(b, m.Name, "_sum", m.Labels, "", "", m.Histogram.Sum, m)
+	}
+	if !m.Histogram.NoCount {
+		b = e.appendCount(b, m.Name, "_count", m.Labels, "", "", m.Histogram.Count, m)
+	}
+	return b
 }
 
 // appendTimestamp ends a sample line of m: its own timestamp, in
@@ -218,12 +235,122 @@ func appendTimestamp(b []byte, m model.Metric) []byte {
 	return append(b, '\n')
 }
 
+// ascendingBuckets returns a histogram's buckets in ascending order of their
+// upper bounds, which is the order both formats are written in: a target may
+// write its buckets in any order, the Prometheus text format asking for none,
+// while OpenMetrics, and a reader that takes the first bucket a value fits
+// in, need them ascending. A bound that is not a number comes first, and
+// +Inf, which is written from the count, last. Buckets nearly always arrive
+// in order, and are then returned as they are; others are sorted in the
+// writer's own copy, the metric set being shared with the cache.
+func (e *expositionWriter) ascendingBuckets(buckets []model.Bucket) []model.Bucket {
+	if slices.IsSortedFunc(buckets, compareBuckets) {
+		return buckets
+	}
+	e.buckets = append(e.buckets[:0], buckets...)
+	slices.SortStableFunc(e.buckets, compareBuckets)
+	return e.buckets
+}
+
+// ascendingQuantiles returns a summary's quantiles in ascending order, as
+// ascendingBuckets does a histogram's buckets.
+func (e *expositionWriter) ascendingQuantiles(quantiles []model.Quantile) []model.Quantile {
+	if slices.IsSortedFunc(quantiles, compareQuantiles) {
+		return quantiles
+	}
+	e.quantiles = append(e.quantiles[:0], quantiles...)
+	slices.SortStableFunc(e.quantiles, compareQuantiles)
+	return e.quantiles
+}
+
+func compareBuckets(a, b model.Bucket) int { return cmp.Compare(a.UpperBound, b.UpperBound) }
+
+func compareQuantiles(a, b model.Quantile) int { return cmp.Compare(a.Quantile, b.Quantile) }
+
+// typedValues reports whether the values of m are ones a series of its type
+// may have in OpenMetrics, and in OTLP, which follows it. The Prometheus text
+// format asks nothing of them, so a target may write, and the exporter
+// passes on, what a strict OpenMetrics parser refuses, failing the scrape:
+//
+//   - a counter that is NaN or negative;
+//   - a histogram whose _sum is NaN or negative, or is there beside a bucket
+//     with a negative bound, which makes it no counter; one with a bound that
+//     is not a number; one whose bucket counts fall from one bound to the
+//     next higher, or to its +Inf bucket's; one whose +Inf bucket and _count
+//     differ, as a target read between its updating the one and the other
+//     writes them (model.Histogram); and one with neither of the two, which
+//     has no +Inf bucket;
+//   - a summary whose _sum is NaN or negative, with a quantile that is not
+//     within 0 to 1, or with a negative value for a quantile. NaN is a
+//     quantile's value when nothing was observed, and is allowed.
+//
+// A gauge and an untyped series may have any value, and a count, being
+// unsigned, is never NaN or negative. A family with such a series is written
+// as unknown in OpenMetrics (planOpenMetrics) and exported as gauges over
+// OTLP (otlpMetrics), with the same series and values, rather than left out
+// or refused.
+func typedValues(m model.Metric) bool {
+	switch {
+	case m.Histogram != nil:
+		h := m.Histogram
+		if !h.NoSum && !counts(h.Sum) {
+			return false
+		}
+		buckets := h.Buckets
+		if !slices.IsSortedFunc(buckets, compareBuckets) {
+			buckets = slices.Clone(buckets)
+			slices.SortStableFunc(buckets, compareBuckets)
+		}
+		inf, has := h.InfBucket()
+		if !has || !h.NoCount && inf != h.Count {
+			return false
+		}
+		var below uint64
+		for _, b := range buckets {
+			switch {
+			case math.IsInf(b.UpperBound, 1):
+				// Written last, and checked below.
+				continue
+			case math.IsNaN(b.UpperBound), b.UpperBound < 0 && !h.NoSum, b.CumulativeCount < below:
+				return false
+			}
+			below = b.CumulativeCount
+		}
+		return below <= inf
+	case m.Summary != nil:
+		s := m.Summary
+		if !s.NoSum && !counts(s.Sum) {
+			return false
+		}
+		for _, q := range s.Quantiles {
+			if !(q.Quantile >= 0 && q.Quantile <= 1) || q.Value < 0 {
+				return false
+			}
+		}
+		return true
+	case m.Type == model.CounterMetricType:
+		return counts(m.Value)
+	}
+	return true
+}
+
+// counts reports whether v is a value a counter may have: not NaN and not
+// negative.
+func counts(v float64) bool { return v >= 0 }
+
+// appendSummary writes a summary's lines: its quantiles, in ascending order,
+// and its _sum and _count unless the source it was read from had none.
 func (e *expositionWriter) appendSummary(b []byte, m model.Metric) []byte {
-	for _, x := range m.Summary.Quantiles {
+	for _, x := range e.ascendingQuantiles(m.Summary.Quantiles) {
 		b = e.appendSample(b, m.Name, "", m.Labels, "quantile", strconv.FormatFloat(x.Quantile, 'g', -1, 64), x.Value, m)
 	}
-	b = e.appendSample(b, m.Name, "_sum", m.Labels, "", "", m.Summary.Sum, m)
-	return e.appendCount(b, m.Name, "_count", m.Labels, "", "", m.Summary.Count, m)
+	if !m.Summary.NoSum {
+		b = e.appendSample(b, m.Name, "_sum", m.Labels, "", "", m.Summary.Sum, m)
+	}
+	if !m.Summary.NoCount {
+		b = e.appendCount(b, m.Name, "_count", m.Labels, "", "", m.Summary.Count, m)
+	}
+	return b
 }
 
 // expositionFormat is the format an answer is written in.
@@ -320,7 +447,7 @@ func parseMediaRange(entry string) (string, map[string]string) {
 //     with another.
 //   - A counter family is named without _total, and its samples with it: a
 //     counter named requests is written as the family requests with samples
-//     requests_total, as one named requests_total is.
+//     requests_total, as one named requests_total is (openMetricsCounter).
 //   - untyped is written as unknown.
 //   - HELP escapes double quotes, as label values do.
 //   - A timestamp is in seconds rather than milliseconds.
@@ -329,6 +456,11 @@ func parseMediaRange(entry string) (string, map[string]string) {
 //   - No two families claim the same name (planOpenMetrics): where they
 //     would, the families involved are written as unknown under the names
 //     their samples have in the text format.
+//   - A family with values OpenMetrics does not allow its type, such as a
+//     negative counter (typedValues), is written as unknown in the same way.
+//
+// In both formats a histogram's buckets and a summary's quantiles are
+// written in ascending order (ascendingBuckets).
 //
 // No _created series is written: the exporter reads counters from targets
 // and does not know when they started, and OpenMetrics leaves _created out
@@ -433,7 +565,29 @@ type omFamily struct {
 //
 // A counter not named _total in the text format is still written with
 // _total in its natural form, as OpenMetrics requires of a counter's
-// samples.
+// samples. One that has no natural form, the counter named _total, whose
+// family would have no name, is written as unknown under its own name from
+// the start.
+//
+// A histogram or summary read without a _sum or a _count (model.Histogram)
+// has no such line in either form, and a family that would hold only such
+// lines is not written. OpenMetrics has a histogram's _sum and _count
+// together or not at all, so a histogram with one of the two, as a target
+// may write it in the text format, is no OpenMetrics histogram, and its
+// family is written as unknown families from the start as well.
+//
+// So is every family with a series whose values OpenMetrics does not allow
+// its type (typedValues): a counter that is NaN or negative, a histogram
+// whose bucket counts fall or whose +Inf bucket is not its _count, a summary
+// with a quantile of 1.5. The text format allows them, a target may write
+// them, and a strict OpenMetrics parser refuses the whole answer over one of
+// them. Written as unknown, the family keeps every series and value, and
+// loses only a type it does not meet. That is decided for the family, not
+// the series, since a family has one type; a histogram with a label of its
+// own named le, whose _sum and _count would carry it and so be no part of
+// the series its buckets are, is treated the same. These families are
+// unknown before any gives way, so the names they claim are their samples'
+// alone and the planning above holds.
 func planOpenMetrics(s *model.MetricSet) []*omFamily {
 	type textFamily struct {
 		name    string
@@ -450,8 +604,17 @@ func planOpenMetrics(s *model.MetricSet) []*omFamily {
 		f := byName[m.Name]
 		if f == nil {
 			f = &textFamily{name: m.Name, typ: m.Type, help: m.Help}
+			if _, _, _, natural := openMetricsCounter(m.Name); m.Type == model.CounterMetricType && !natural {
+				f.unknown = true
+			}
 			byName[m.Name] = f
 			order = append(order, f)
+		}
+		if h := m.Histogram; h != nil && (h.NoSum != h.NoCount || !h.NoSum && hasLabel(m, "le")) {
+			f.unknown = true
+		}
+		if !typedValues(m) {
+			f.unknown = true
 		}
 		f.indexes = append(f.indexes, i)
 	}
@@ -465,8 +628,8 @@ func planOpenMetrics(s *model.MetricSet) []*omFamily {
 		case f.unknown:
 			return []string{n}
 		case f.typ == model.CounterMetricType:
-			base := strings.TrimSuffix(n, "_total")
-			return []string{base, base + "_total", base + "_created"}
+			family, sample, created, _ := openMetricsCounter(n)
+			return []string{family, sample, created}
 		case f.typ == model.HistogramMetricType:
 			return []string{n, n + "_bucket", n + "_count", n + "_sum", n + "_created"}
 		case f.typ == model.SummaryMetricType:
@@ -522,26 +685,95 @@ func planOpenMetrics(s *model.MetricSet) []*omFamily {
 			out.parts = append(out.parts, omPart{index: i, kind: kind})
 		}
 	}
+	// addLines is add for one kind of line of a histogram or a summary
+	// written as unknown, which only the series that have the line are part
+	// of; with none, there is no family.
+	addLines := func(name string, f *textFamily, kind omPartKind) {
+		with := *f
+		with.indexes = nil
+		for _, i := range f.indexes {
+			if hasOpenMetricsLine(s.Metrics[i], kind) {
+				with.indexes = append(with.indexes, i)
+			}
+		}
+		if len(with.indexes) > 0 {
+			add(name, "unknown", name, &with, kind)
+		}
+	}
 	for _, f := range order {
 		switch {
 		case f.unknown && f.typ == model.HistogramMetricType:
-			add(f.name+"_bucket", "unknown", f.name+"_bucket", f, omBuckets)
-			add(f.name+"_sum", "unknown", f.name+"_sum", f, omSum)
-			add(f.name+"_count", "unknown", f.name+"_count", f, omCount)
+			addLines(f.name+"_bucket", f, omBuckets)
+			addLines(f.name+"_sum", f, omSum)
+			addLines(f.name+"_count", f, omCount)
 		case f.unknown && f.typ == model.SummaryMetricType:
-			add(f.name, "unknown", f.name, f, omQuantiles)
-			add(f.name+"_sum", "unknown", f.name+"_sum", f, omSum)
-			add(f.name+"_count", "unknown", f.name+"_count", f, omCount)
+			addLines(f.name, f, omQuantiles)
+			addLines(f.name+"_sum", f, omSum)
+			addLines(f.name+"_count", f, omCount)
 		case f.unknown:
 			add(f.name, "unknown", f.name, f, omWhole)
 		case f.typ == model.CounterMetricType:
-			base := strings.TrimSuffix(f.name, "_total")
-			add(base, "counter", base+"_total", f, omWhole)
+			family, sample, _, _ := openMetricsCounter(f.name)
+			add(family, "counter", sample, f, omWhole)
 		default:
 			add(f.name, openMetricsType(f.typ), f.name, f, omWhole)
 		}
 	}
 	return families
+}
+
+// hasLabel reports whether a series has a label of its own by a name.
+func hasLabel(m model.Metric, name string) bool {
+	_, has := m.Labels[name]
+	return has
+}
+
+// hasOpenMetricsLine reports whether a histogram or a summary has the kind
+// of line: its _sum or _count, which the source it was read from may not have
+// had, a quantile, or a bucket, which a histogram read with neither a +Inf
+// bucket nor a _count may have none of.
+func hasOpenMetricsLine(m model.Metric, kind omPartKind) bool {
+	switch {
+	case kind == omBuckets && m.Histogram != nil:
+		_, inf := m.Histogram.InfBucket()
+		return inf || len(m.Histogram.Buckets) > 0
+	case kind == omSum && m.Histogram != nil:
+		return !m.Histogram.NoSum
+	case kind == omCount && m.Histogram != nil:
+		return !m.Histogram.NoCount
+	case kind == omSum && m.Summary != nil:
+		return !m.Summary.NoSum
+	case kind == omCount && m.Summary != nil:
+		return !m.Summary.NoCount
+	case kind == omQuantiles && m.Summary != nil:
+		return len(m.Summary.Quantiles) > 0
+	}
+	return true
+}
+
+// openMetricsCounter is the natural OpenMetrics form of the counter the text
+// format names name: its family, named without _total, its sample, named
+// with it, and the _created sample the family also claims. natural is false
+// for a counter that has no such form: the one named _total, whose family
+// would have no name.
+//
+// The suffix is the plain text _total whatever the name is, also for one
+// escaped by name_escaping values (transform/nameescaping.go), where the
+// _total of the original name reads __total: my.requests_total, exported as
+// U__my_2e_requests__total, is the family U__my_2e_requests_ with the sample
+// U__my_2e_requests__total, and my.errors, exported as U__my_2e_errors, is
+// the family U__my_2e_errors with the sample U__my_2e_errors_total. That is
+// how Prometheus writes an escaped counter, and it is the one form in which a
+// reader of OpenMetrics, which knows a counter's sample as its family and
+// _total, finds the sample in its family: a suffix written in escaped form,
+// __total, gave a strict parser, and this exporter's own, a counter family
+// without samples and a sample of no family beside it.
+func openMetricsCounter(name string) (family, sample, created string, natural bool) {
+	family = strings.TrimSuffix(name, "_total")
+	if family == "" {
+		return name, name, name, false
+	}
+	return family, family + "_total", family + "_created", true
 }
 
 func openMetricsType(t model.MetricType) string {
@@ -569,32 +801,46 @@ func (e *expositionWriter) appendOpenMetricsCount(b []byte, name string, labels 
 
 func (e *expositionWriter) appendOpenMetricsHistogram(b []byte, family string, m model.Metric) []byte {
 	b = e.appendOpenMetricsBuckets(b, family+"_bucket", m)
-	b = e.appendOpenMetricsSample(b, family+"_sum", m.Labels, "", "", m.Histogram.Sum, m)
-	return e.appendOpenMetricsCount(b, family+"_count", m.Labels, "", "", m.Histogram.Count, m)
+	if !m.Histogram.NoSum {
+		b = e.appendOpenMetricsSample(b, family+"_sum", m.Labels, "", "", m.Histogram.Sum, m)
+	}
+	if !m.Histogram.NoCount {
+		b = e.appendOpenMetricsCount(b, family+"_count", m.Labels, "", "", m.Histogram.Count, m)
+	}
+	return b
 }
 
 // appendOpenMetricsBuckets writes a histogram's bucket lines as samples
-// named name.
+// named name: the +Inf bucket last, with its own count (model.Histogram), and
+// none for a histogram that has none, which is written as unknown families.
 func (e *expositionWriter) appendOpenMetricsBuckets(b []byte, name string, m model.Metric) []byte {
-	for _, x := range m.Histogram.Buckets {
+	for _, x := range e.ascendingBuckets(m.Histogram.Buckets) {
 		if math.IsInf(x.UpperBound, 1) {
 			continue
 		}
 		b = e.appendOpenMetricsCount(b, name, m.Labels, "le", openMetricsFloat(x.UpperBound), x.CumulativeCount, m)
 	}
-	return e.appendOpenMetricsCount(b, name, m.Labels, "le", "+Inf", m.Histogram.Count, m)
+	if inf, has := m.Histogram.InfBucket(); has {
+		b = e.appendOpenMetricsCount(b, name, m.Labels, "le", "+Inf", inf, m)
+	}
+	return b
 }
 
 func (e *expositionWriter) appendOpenMetricsSummary(b []byte, family string, m model.Metric) []byte {
 	b = e.appendOpenMetricsQuantiles(b, family, m)
-	b = e.appendOpenMetricsSample(b, family+"_sum", m.Labels, "", "", m.Summary.Sum, m)
-	return e.appendOpenMetricsCount(b, family+"_count", m.Labels, "", "", m.Summary.Count, m)
+	if !m.Summary.NoSum {
+		b = e.appendOpenMetricsSample(b, family+"_sum", m.Labels, "", "", m.Summary.Sum, m)
+	}
+	if !m.Summary.NoCount {
+		b = e.appendOpenMetricsCount(b, family+"_count", m.Labels, "", "", m.Summary.Count, m)
+	}
+	return b
 }
 
 // appendOpenMetricsQuantiles writes a summary's quantile lines as samples
 // named name.
 func (e *expositionWriter) appendOpenMetricsQuantiles(b []byte, name string, m model.Metric) []byte {
-	for _, x := range m.Summary.Quantiles {
+	for _, x := range e.ascendingQuantiles(m.Summary.Quantiles) {
 		b = e.appendOpenMetricsSample(b, name, m.Labels, "quantile", openMetricsFloat(x.Quantile), x.Value, m)
 	}
 	return b

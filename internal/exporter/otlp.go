@@ -429,49 +429,133 @@ func otlpAttributesForLabels(labels map[string]string) []otlpAttribute {
 // appears: a gauge, a monotonic cumulative sum for a counter, a cumulative
 // histogram, or a summary. start gives a cumulative point its start time;
 // nil leaves it out.
+//
+// A family with a series whose values its type does not allow (typedValues)
+// — a counter that is NaN or negative, a histogram whose bucket counts fall
+// or whose +Inf bucket and _count differ, a summary with a quantile of 1.5 —
+// cannot be a monotonic sum, a histogram or a summary in OTLP either: a
+// bucket's own count would be negative, a histogram's point has one count,
+// and OTLP's quantiles are within 0 to 1 and not negative as OpenMetrics'
+// are. It is exported as gauges under the names of its samples, with the
+// series and values the exposition formats write: what OpenMetrics' unknown,
+// which such a family is written as there (planOpenMetrics), is in OTLP.
+// Every point then is valid, and none is left out.
 func otlpMetrics(set model.MetricSet, now string, start func(m model.Metric, at string) string) []otlpMetric {
 	var out []otlpMetric
 	index := map[string]int{}
+	// metric is the metric of a name and a kind that a point is added to. A
+	// name first seen, or reused with another kind, is a new metric, so
+	// points of different kinds are never mixed in one.
+	metric := func(name, help string, kind int) *otlpMetric {
+		i, seen := index[name]
+		if !seen || otlpKind(out[i]) != kind {
+			index[name] = len(out)
+			i = len(out)
+			out = append(out, newOTLPMetric(name, help, kind))
+		}
+		return &out[i]
+	}
+	untyped := untypedFamilies(set)
+	var e expositionWriter
 	for _, m := range set.Metrics {
 		at := now
 		if m.Timestamp != nil {
 			at = strconv.FormatInt(*m.Timestamp*int64(time.Millisecond), 10)
 		}
 		attributes := otlpAttributesForLabels(m.Labels)
-		i, seen := index[m.Name]
-		if !seen || otlpKind(out[i]) != otlpKindOf(m) {
-			// A name first seen, or reused with another type: a new metric,
-			// so points of different kinds are never mixed in one.
-			index[m.Name] = len(out)
-			i = len(out)
-			out = append(out, newOTLPMetric(m))
+		gauge := func(name string, attributes []otlpAttribute, value float64) {
+			v := otlpDouble(value)
+			g := metric(name, m.Help, otlpKindGauge).Gauge
+			g.DataPoints = append(g.DataPoints, otlpNumberDataPoint{Attributes: attributes, TimeUnixNano: at, AsDouble: &v})
 		}
-		metric := &out[i]
+		kind := otlpKindOf(m)
+		if kind != otlpKindGauge && untyped[m.Name] {
+			// The lines the text format writes for the series, each a gauge.
+			switch kind {
+			case otlpKindHistogram:
+				for _, b := range e.ascendingBuckets(m.Histogram.Buckets) {
+					if !math.IsInf(b.UpperBound, 1) {
+						gauge(m.Name+"_bucket", otlpAttributesWith(m.Labels, "le", strconv.FormatFloat(b.UpperBound, 'g', -1, 64)), float64(b.CumulativeCount))
+					}
+				}
+				if inf, has := m.Histogram.InfBucket(); has {
+					gauge(m.Name+"_bucket", otlpAttributesWith(m.Labels, "le", "+Inf"), float64(inf))
+				}
+				if !m.Histogram.NoSum {
+					gauge(m.Name+"_sum", attributes, m.Histogram.Sum)
+				}
+				if !m.Histogram.NoCount {
+					gauge(m.Name+"_count", attributes, float64(m.Histogram.Count))
+				}
+			case otlpKindSummary:
+				for _, q := range e.ascendingQuantiles(m.Summary.Quantiles) {
+					gauge(m.Name, otlpAttributesWith(m.Labels, "quantile", strconv.FormatFloat(q.Quantile, 'g', -1, 64)), q.Value)
+				}
+				if !m.Summary.NoSum {
+					gauge(m.Name+"_sum", attributes, m.Summary.Sum)
+				}
+				if !m.Summary.NoCount {
+					gauge(m.Name+"_count", attributes, float64(m.Summary.Count))
+				}
+			default:
+				gauge(m.Name, attributes, m.Value)
+			}
+			continue
+		}
 		startAt := ""
-		if start != nil && otlpKind(*metric) != otlpKindGauge {
+		if start != nil && kind != otlpKindGauge {
 			startAt = start(m, at)
 		}
-		switch {
-		case metric.Histogram != nil:
+		switch kind {
+		case otlpKindHistogram:
 			point := otlpHistogramPoint(m, attributes, at)
 			point.StartTimeUnixNano = startAt
-			metric.Histogram.DataPoints = append(metric.Histogram.DataPoints, point)
-		case metric.Summary != nil:
+			h := metric(m.Name, m.Help, kind).Histogram
+			h.DataPoints = append(h.DataPoints, point)
+		case otlpKindSummary:
 			point := otlpSummaryPoint(m, attributes, at)
 			point.StartTimeUnixNano = startAt
-			metric.Summary.DataPoints = append(metric.Summary.DataPoints, point)
-		default:
+			s := metric(m.Name, m.Help, kind).Summary
+			s.DataPoints = append(s.DataPoints, point)
+		case otlpKindSum:
 			v := otlpDouble(m.Value)
-			point := otlpNumberDataPoint{Attributes: attributes, TimeUnixNano: at, AsDouble: &v}
-			if metric.Sum != nil {
-				point.StartTimeUnixNano = startAt
-				metric.Sum.DataPoints = append(metric.Sum.DataPoints, point)
-			} else {
-				metric.Gauge.DataPoints = append(metric.Gauge.DataPoints, point)
-			}
+			s := metric(m.Name, m.Help, kind).Sum
+			s.DataPoints = append(s.DataPoints, otlpNumberDataPoint{Attributes: attributes, StartTimeUnixNano: startAt, TimeUnixNano: at, AsDouble: &v})
+		default:
+			gauge(m.Name, attributes, m.Value)
 		}
 	}
 	return out
+}
+
+// untypedFamilies are the names of the families of a set that have a series
+// whose values its type does not allow (typedValues), which are exported as
+// gauges; nil when there is none, as nearly always. It is decided for the
+// family, as in OpenMetrics, so that a name is one kind of metric in an
+// export.
+func untypedFamilies(set model.MetricSet) map[string]bool {
+	var untyped map[string]bool
+	for _, m := range set.Metrics {
+		if !typedValues(m) {
+			if untyped == nil {
+				untyped = map[string]bool{}
+			}
+			untyped[m.Name] = true
+		}
+	}
+	return untyped
+}
+
+// otlpAttributesWith is otlpAttributesForLabels with one more attribute, a
+// bucket's le or a quantile, set over a label of that name, as the
+// exposition writes it.
+func otlpAttributesWith(labels map[string]string, name, value string) []otlpAttribute {
+	with := make(map[string]string, len(labels)+1)
+	for k, v := range labels {
+		with[k] = v
+	}
+	with[name] = value
+	return otlpAttributesForLabels(with)
 }
 
 const (
@@ -507,9 +591,9 @@ func otlpKind(m otlpMetric) int {
 	return otlpKindGauge
 }
 
-func newOTLPMetric(m model.Metric) otlpMetric {
-	out := otlpMetric{Name: m.Name, Description: m.Help}
-	switch otlpKindOf(m) {
+func newOTLPMetric(name, help string, kind int) otlpMetric {
+	out := otlpMetric{Name: name, Description: help}
+	switch kind {
 	case otlpKindHistogram:
 		out.Histogram = &otlpHistogram{AggregationTemporality: "AGGREGATION_TEMPORALITY_CUMULATIVE"}
 	case otlpKindSummary:
@@ -523,52 +607,60 @@ func newOTLPMetric(m model.Metric) otlpMetric {
 }
 
 // otlpHistogramPoint turns Prometheus's cumulative buckets into OTLP's
-// per-bucket counts. The +Inf bucket, when the histogram carries one, is not a
-// bound: what lies above the highest finite bound is the count less the last
-// finite bucket's cumulative count.
+// per-bucket counts, in ascending order of their bounds whatever order the
+// source had them in. The +Inf bucket, when the histogram carries one, is
+// not a bound: what lies above the highest finite bound is the count less
+// the last finite bucket's cumulative count. The histogram is one whose
+// values its type allows (typedValues): its bounds are numbers, its +Inf
+// bucket's count is its _count where it has both, and its cumulative counts
+// never fall, up to that count, so every bucket's own count is its
+// cumulative count less the one before, and they add up to the count, as
+// OTLP requires.
 func otlpHistogramPoint(m model.Metric, attributes []otlpAttribute, at string) otlpHistogramDataPoint {
 	h := m.Histogram
-	buckets := make([]model.Bucket, 0, len(h.Buckets))
-	for _, b := range h.Buckets {
-		if !math.IsInf(b.UpperBound, 1) && !math.IsNaN(b.UpperBound) {
-			buckets = append(buckets, b)
-		}
-	}
-	sort.SliceStable(buckets, func(i, j int) bool { return buckets[i].UpperBound < buckets[j].UpperBound })
+	var e expositionWriter
+	buckets := e.ascendingBuckets(h.Buckets)
+	count, _ := h.InfBucket()
 	point := otlpHistogramDataPoint{
 		Attributes:     attributes,
 		TimeUnixNano:   at,
-		Count:          strconv.FormatUint(h.Count, 10),
+		Count:          strconv.FormatUint(count, 10),
 		BucketCounts:   make([]string, 0, len(buckets)+1),
 		ExplicitBounds: make([]otlpDouble, 0, len(buckets)),
 	}
-	sum := otlpDouble(h.Sum)
-	point.Sum = &sum
+	// OTLP's sum is optional, so a histogram read without a _sum is sent
+	// without one rather than with a sum of 0.
+	if !h.NoSum {
+		sum := otlpDouble(h.Sum)
+		point.Sum = &sum
+	}
 	var previous uint64
 	for _, b := range buckets {
-		point.ExplicitBounds = append(point.ExplicitBounds, otlpDouble(b.UpperBound))
-		point.BucketCounts = append(point.BucketCounts, strconv.FormatUint(delta(b.CumulativeCount, previous), 10))
-		if b.CumulativeCount > previous {
-			previous = b.CumulativeCount
+		if math.IsInf(b.UpperBound, 1) {
+			continue
 		}
+		point.ExplicitBounds = append(point.ExplicitBounds, otlpDouble(b.UpperBound))
+		point.BucketCounts = append(point.BucketCounts, strconv.FormatUint(b.CumulativeCount-previous, 10))
+		previous = b.CumulativeCount
 	}
-	point.BucketCounts = append(point.BucketCounts, strconv.FormatUint(delta(h.Count, previous), 10))
+	point.BucketCounts = append(point.BucketCounts, strconv.FormatUint(count-previous, 10))
 	return point
 }
 
-// delta is a bucket's own count. Cumulative counts never fall in a valid
-// histogram; one that does counts as empty rather than wrapping around.
-func delta(cumulative, previous uint64) uint64 {
-	if cumulative < previous {
-		return 0
-	}
-	return cumulative - previous
-}
-
+// otlpSummaryPoint is a summary as an OTLP point. OTLP's summary has no way
+// to leave out its count or its sum, which a field left unset is 0 of, so a
+// summary read without a _count or a _sum is sent with 0 for it.
 func otlpSummaryPoint(m model.Metric, attributes []otlpAttribute, at string) otlpSummaryDataPoint {
 	s := m.Summary
-	point := otlpSummaryDataPoint{Attributes: attributes, TimeUnixNano: at, Count: strconv.FormatUint(s.Count, 10), Sum: otlpDouble(s.Sum)}
-	for _, q := range s.Quantiles {
+	point := otlpSummaryDataPoint{Attributes: attributes, TimeUnixNano: at, Count: "0"}
+	if !s.NoCount {
+		point.Count = strconv.FormatUint(s.Count, 10)
+	}
+	if !s.NoSum {
+		point.Sum = otlpDouble(s.Sum)
+	}
+	var e expositionWriter
+	for _, q := range e.ascendingQuantiles(s.Quantiles) {
 		point.QuantileValues = append(point.QuantileValues, otlpQuantileValue{Quantile: otlpDouble(q.Quantile), Value: otlpDouble(q.Value)})
 	}
 	return point
@@ -683,7 +775,42 @@ type pendingMetric struct {
 
 // queueOTLP stages metrics under the exporter-wide OTLP resource.
 func (s *Server) queueOTLP(set model.MetricSet) {
-	s.queueOTLPResource(set, defaultResourceIdentity(s.manager.Get().OTLP))
+	s.queueOTLPResource(set, defaultResourceIdentity(s.manager.Get().OTLP), scrapeTime{})
+}
+
+// scrapeTime is when the series of a result queued for OTLP were scraped. A
+// data point carries the time its value came from the target, and an answer
+// from the cache, fresh or stale (cache.go), is made of values that came
+// from it earlier than the answer was given: exported as of the answer, an
+// old value would look newly measured every time it was served again.
+//
+// The first data series of the result came from the target at at. The rest
+// are the exporter's own account of the result as it is queued — a static
+// target's health metrics — and so are, wherever they stand, the freshness
+// series of a collector with cache.stale_if_error, which say how old the
+// result is now. Those are as of now, as every series is when at is zero.
+type scrapeTime struct {
+	at        time.Time
+	data      int
+	freshness bool
+}
+
+// scraped is scrapeTime for a result that is all the target's but for its
+// freshness series, as a probe's answer is.
+func scraped(set model.MetricSet, c *model.Collector, at time.Time) scrapeTime {
+	return scrapeTime{at: at, data: len(set.Metrics), freshness: model.StaleIfError(c) > 0}
+}
+
+// covers reports whether the i-th series of the result, m, came from the
+// target at t.at.
+func (t scrapeTime) covers(i int, m model.Metric) bool {
+	if t.at.IsZero() || i >= t.data {
+		return false
+	}
+	if _, own := resultFreshnessHelp[m.Name]; own && t.freshness {
+		return false
+	}
+	return true
 }
 
 // Probes of every target and collector are queued under the one exporter-wide
@@ -703,24 +830,28 @@ const (
 
 // queueProbeOTLP stages a probe's answer under the exporter-wide resource,
 // with collector and target attributes when otlp.probe_attributes says so.
-func (s *Server) queueProbeOTLP(set model.MetricSet, collector, target string) {
+// fetched is when the answer's data came from the target: the trip just
+// made, or the earlier one whose result the cache answered with.
+func (s *Server) queueProbeOTLP(set model.MetricSet, c *model.Collector, target string, fetched time.Time) {
 	cfg := s.manager.Get().OTLP
 	if !cfg.Enabled || len(set.Metrics) == 0 {
 		return
 	}
+	at := scraped(set, c, fetched)
 	if cfg.ProbeAttributes {
-		attributes := map[string]string{probeCollectorAttribute: collector}
+		attributes := map[string]string{probeCollectorAttribute: c.Name}
 		if target != "" {
 			attributes[probeTargetAttribute] = target
 		}
 		set = withTargetLabels(set, attributes)
 	}
-	s.queueOTLPResource(set, defaultResourceIdentity(cfg))
+	s.queueOTLPResource(set, defaultResourceIdentity(cfg), at)
 }
 
 // queueOTLPResource stages metrics under a specific resource, so a static
 // target's own service name and resource attributes survive to the exporter.
-func (s *Server) queueOTLPResource(set model.MetricSet, identity otlpResourceIdentity) {
+// at says when they were scraped.
+func (s *Server) queueOTLPResource(set model.MetricSet, identity otlpResourceIdentity, at scrapeTime) {
 	cfg := s.manager.Get().OTLP
 	if !cfg.Enabled || cfg.Endpoint == "" || len(set.Metrics) == 0 {
 		return
@@ -728,14 +859,19 @@ func (s *Server) queueOTLPResource(set model.MetricSet, identity otlpResourceIde
 	s.otlpMu.Lock()
 	defer s.otlpMu.Unlock()
 	batch := s.pendingBatchLocked(identity)
-	queued := time.Now().UnixMilli()
-	for _, metric := range set.Metrics {
+	queued, fetched := time.Now().UnixMilli(), at.at.UnixMilli()
+	for i, metric := range set.Metrics {
 		s.otlpSeq++
 		point := model.CloneMetric(metric)
 		// A point is exported at the time it was scraped, which the queue
 		// keeps through the wait for the next export and any retries, not
-		// at the time the export is sent.
-		if point.Timestamp == nil {
+		// at the time the export is sent, and which for a result answered
+		// from the cache is when the cached trip was made (scrapeTime).
+		switch {
+		case point.Timestamp != nil:
+		case at.covers(i, metric):
+			point.Timestamp = &fetched
+		default:
 			point.Timestamp = &queued
 		}
 		s.putPendingLocked(batch, otlpMetricKey(point), pendingMetric{metric: point, seq: s.otlpSeq})

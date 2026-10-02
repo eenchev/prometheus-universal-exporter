@@ -1,0 +1,373 @@
+package exporter
+
+import (
+	"fmt"
+	"io"
+	"net"
+	"net/http"
+	"net/http/httptest"
+	"net/url"
+	"strings"
+	"sync"
+	"testing"
+	"time"
+
+	"github.com/eenchev/prometheus-universal-exporter/internal/config"
+	"github.com/eenchev/prometheus-universal-exporter/internal/fetch"
+	"github.com/eenchev/prometheus-universal-exporter/internal/model"
+	"github.com/eenchev/prometheus-universal-exporter/internal/testutil"
+)
+
+// What a probe's query may be, and what of it makes the probe's cache and
+// coalescing key (probeparams.go, cache.go).
+
+// A parameter the probe reads one value of is refused when it is given twice,
+// with a 400 naming it, before the target is contacted or anything is
+// counted: the probe would use one value and key the entry by both.
+// header_<name> may repeat, every value being forwarded, and so may a
+// parameter the probe does not read.
+func TestARepeatedProbeParameterIsRefused(t *testing.T) {
+	testutil.CaptureLogs(t)
+	flaky, target := newFlakyTarget(t)
+	flaky.value.Store(1)
+	c := staleCollector(time.Minute, time.Hour)
+	c.Request.ForwardHeaders = []string{"X-Tenant"}
+	c.Request.Path = "/{{param_region:eu}}"
+	server, _ := newCacheTestServer(t, c)
+	probe := "/probe?collector=flaky&target=" + url.QueryEscape(target.URL)
+	for name, repeat := range map[string]string{
+		"target":               "&target=x",
+		"collector":            "&collector=x",
+		"method":               "&method=GET&method=POST",
+		"path":                 "&path=/a&path=/b",
+		"timeout":              "&timeout=5s&timeout=x",
+		"body":                 "&body=a&body=a",
+		"insecure_skip_verify": "&insecure_skip_verify=true&insecure_skip_verify=true",
+		"follow_redirects":     "&follow_redirects=true&follow_redirects=false",
+		"enable_http2":         "&enable_http2=true&enable_http2=",
+		"retry_attempts":       "&retry_attempts=1&retry_attempts=2",
+		"retry_backoff":        "&retry_backoff=1s&retry_backoff=2s",
+		"param_region":         "&param_region=us&param_region=eu",
+	} {
+		r := probeOnce(t, server, probe+repeat, nil)
+		if want := "probe parameter " + name + " is given 2 times; give it once"; r.Code != http.StatusBadRequest || !strings.Contains(r.Body.String(), want) {
+			t.Errorf("%s: answered %d %q, want 400 saying %q", repeat, r.Code, r.Body, want)
+		}
+	}
+	if calls := flaky.calls.Load(); calls != 0 {
+		t.Fatalf("refused probes went to the target %d times", calls)
+	}
+	if counted := metricValue(t, selfMetrics(t, server), `http_exporter_scrapes_total{collector="flaky"}`); counted != 0 {
+		t.Fatalf("%v refused probes were counted", counted)
+	}
+	for _, allowed := range []string{"&header_X-Tenant=a&header_X-Tenant=b", "&x=1&x=2"} {
+		if r := probeOnce(t, server, probe+allowed, nil); r.Code != http.StatusOK {
+			t.Errorf("%s: answered %d %q, want 200", allowed, r.Code, r.Body)
+		}
+	}
+}
+
+// Every request type's parameters are refused when repeated, whatever the
+// type: the names are read from the type itself, so one added to a type
+// later is covered without a line here.
+func TestEveryRequestTypesParametersAreReadOnce(t *testing.T) {
+	for name, rt := range fetch.RequestTypes {
+		reads := probeRequestParam(&model.Collector{Request: model.RequestConfig{Type: name}})
+		for _, override := range rt.Overrides {
+			key := override
+			if strings.HasSuffix(key, "_") {
+				key += "x"
+			}
+			err := checkProbeParams(url.Values{key: {"1", "2"}}, reads)
+			switch {
+			case override == headerParamPrefix:
+				if err != nil {
+					t.Errorf("%s: a repeated %s is refused: %v", name, key, err)
+				}
+			case err == nil || !strings.Contains(err.Error(), "probe parameter "+key+" is given 2 times"):
+				t.Errorf("%s: a repeated %s is not refused by name: %v", name, key, err)
+			}
+		}
+		// A parameter the type does not read is the probe's to ignore.
+		if err := checkProbeParams(url.Values{"no_such_parameter": {"1", "2"}}, reads); err != nil {
+			t.Errorf("%s: a repeated parameter the probe does not read is refused: %v", name, err)
+		}
+	}
+}
+
+// One request written several ways is one cache entry: the key is made of the
+// parameters as the probe read them, so the case of a method, the unit of a
+// duration, the case of a boolean and the padding of a number make no
+// difference, and none of them takes the probe to the target past cache.ttl.
+// A different value is still a probe of its own.
+func TestSpellingsOfOneRequestShareACacheEntry(t *testing.T) {
+	testutil.CaptureLogs(t)
+	flaky, target := newFlakyTarget(t)
+	flaky.value.Store(1)
+	server, _ := newCacheTestServer(t, staleCollector(time.Minute, time.Hour))
+	probe := "/probe?collector=flaky&target=" + url.QueryEscape(target.URL)
+	for _, spelling := range []string{
+		"&method=GET&timeout=5s&retry_backoff=1s&retry_attempts=2&insecure_skip_verify=true&follow_redirects=false",
+		"&method=get&timeout=5s&retry_backoff=1s&retry_attempts=2&insecure_skip_verify=true&follow_redirects=false",
+		"&method=%20Get%20&timeout=5000ms&retry_backoff=1000ms&retry_attempts=2&insecure_skip_verify=true&follow_redirects=false",
+		"&method=GET&timeout=5.0s&retry_backoff=0m1s&retry_attempts=02&insecure_skip_verify=TRUE&follow_redirects=False",
+		"&method=GET&timeout=%205s&retry_backoff=1s&retry_attempts=%2B2&insecure_skip_verify=%20true&follow_redirects=false&x=1",
+	} {
+		if r := probeOnce(t, server, probe+spelling, nil); r.Code != http.StatusOK {
+			t.Fatalf("%s answered %d: %s", spelling, r.Code, r.Body)
+		}
+	}
+	if calls := flaky.calls.Load(); calls != 1 {
+		t.Errorf("five spellings of one request went to the target %d times, want once", calls)
+	}
+	if n := server.cache.Stats(time.Now())["flaky"]; n != 1 {
+		t.Errorf("five spellings of one request hold %d cache entries, want 1", n)
+	}
+	// An empty method or timeout is one not given.
+	bare := []string{"", "&method=", "&timeout=", "&method=%20&timeout=%20"}
+	for _, spelling := range bare {
+		if r := probeOnce(t, server, probe+spelling, nil); r.Code != http.StatusOK {
+			t.Fatalf("%s answered %d: %s", spelling, r.Code, r.Body)
+		}
+	}
+	if calls := flaky.calls.Load(); calls != 2 {
+		t.Errorf("the probe without parameters, written %d ways, went to the target %d times, want once", len(bare), calls-1)
+	}
+	for _, other := range []string{"&method=POST", "&timeout=6s", "&retry_attempts=3", "&follow_redirects=true"} {
+		before := flaky.calls.Load()
+		if r := probeOnce(t, server, probe+other, nil); r.Code != http.StatusOK || flaky.calls.Load() != before+1 {
+			t.Errorf("%s answered %d after %d trips, want a trip of its own", other, r.Code, flaky.calls.Load()-before)
+		}
+	}
+}
+
+// Identical probes in flight share a trip by the same key, so two spellings
+// of one request arriving together make one trip.
+func TestSpellingsOfOneRequestShareATrip(t *testing.T) {
+	testutil.CaptureLogs(t)
+	entered, release := make(chan struct{}, 2), make(chan struct{})
+	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		entered <- struct{}{}
+		<-release
+		_, _ = w.Write([]byte("value=1\n"))
+	}))
+	t.Cleanup(target.Close)
+	// Released before the target is closed, also when the test fails.
+	var once sync.Once
+	letGo := func() { once.Do(func() { close(release) }) }
+	t.Cleanup(letGo)
+	server, _ := newCacheTestServer(t, testutil.Collector("text", "text"))
+	probe := "/probe?collector=text&target=" + url.QueryEscape(target.URL)
+	answers := make(chan int, 2)
+	go func() { answers <- probeOnce(t, server, probe+"&method=get&timeout=5s", nil).Code }()
+	<-entered
+	go func() { answers <- probeOnce(t, server, probe+"&method=GET&timeout=5000ms", nil).Code }()
+	testutil.WaitFor(t, "the second probe to join the first", func() bool {
+		server.flights.mu.Lock()
+		defer server.flights.mu.Unlock()
+		for _, flight := range server.flights.flights {
+			return flight.waiters == 2
+		}
+		return false
+	})
+	letGo()
+	for range 2 {
+		if code := <-answers; code != http.StatusOK {
+			t.Fatalf("a probe answered %d", code)
+		}
+	}
+	if got := metricValue(t, selfMetrics(t, server), `http_exporter_probes_coalesced_total{collector="text"}`); got != 1 || len(entered) != 0 {
+		t.Fatalf("coalesced probes %v, further requests to the target %d; want 1 and 0", got, len(entered))
+	}
+}
+
+// probeParameterValues are two valid values of every probe parameter some
+// request type accepts, for TestEveryProbeParameterIsPartOfTheKey.
+var probeParameterValues = map[string][2]string{
+	"method":               {"POST", "PUT"},
+	"path":                 {"/a", "/b"},
+	"timeout":              {"5s", "6s"},
+	"body":                 {"a", "b"},
+	"message":              {`{"a": 1}`, `{"a": 2}`},
+	"insecure_skip_verify": {"true", "false"},
+	"follow_redirects":     {"true", "false"},
+	"enable_http2":         {"true", "false"},
+	"retry_attempts":       {"1", "2"},
+	"retry_backoff":        {"1s", "2s"},
+	"from":                 {"-1h", "-2h"},
+	"until":                {"now", "-1min"},
+	fetch.PathParamPrefix:  {"a", "b"},
+}
+
+// The key is made of the parsed parameters, field by field, so a parameter a
+// request type accepts and the key leaves out would let two different
+// requests share an entry. Every parameter of every registered type changes
+// the key, by its presence and by its value. A parameter added to a type
+// without a value here fails the test, which is the reminder to key it.
+func TestEveryProbeParameterIsPartOfTheKey(t *testing.T) {
+	c := testutil.Collector("text", "text")
+	key := func(query url.Values) string {
+		t.Helper()
+		overrides, err := fetch.ParseRequestOverrides(query)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return probeCacheKey(&c, "http://h", probeKeyQuery("text", "http://h", overrides), nil)
+	}
+	bare := key(url.Values{})
+	for name, rt := range fetch.RequestTypes {
+		for _, override := range rt.Overrides {
+			if override == headerParamPrefix {
+				// Keyed as the headers they become, when forwarded.
+				continue
+			}
+			values, known := probeParameterValues[override]
+			if !known {
+				t.Errorf("%s accepts the probe parameter %s, which this test has no values for: add them, and the parameter to probeKeyQuery", name, override)
+				continue
+			}
+			parameter := override
+			if strings.HasSuffix(parameter, "_") {
+				parameter += "x"
+			}
+			one, other := key(url.Values{parameter: {values[0]}}), key(url.Values{parameter: {values[1]}})
+			if one == bare || other == bare || one == other {
+				t.Errorf("%s: %s is not part of the key: without it %.8s, with %q %.8s, with %q %.8s", name, parameter, bare, values[0], one, values[1], other)
+			}
+		}
+	}
+	// A path parameter left empty is one not given, where it is bound and
+	// here.
+	if key(url.Values{"param_x": {""}}) != bare {
+		t.Error("an empty param_x makes a key of its own")
+	}
+	// Present and empty is not absent for the parameters that replace
+	// something wholesale.
+	for _, parameter := range []string{"path", "body", "message"} {
+		if key(url.Values{parameter: {""}}) == bare {
+			t.Errorf("an empty %s shares the key of a probe without it", parameter)
+		}
+	}
+}
+
+// A static target's scrape and the probe that makes the same request share a
+// cache entry, however the probe spells it: both keys are written the same
+// way.
+func TestAStaticTargetAndTheProbeOfItsRequestShareAKey(t *testing.T) {
+	yes, attempts, backoff := true, 2, model.Duration(time.Second)
+	target := model.StaticTarget{
+		Name: "one", Collector: "text", Target: "http://h",
+		Params: map[string]string{"param_region": "eu"},
+		Request: model.TargetRequestConfig{
+			Method: "POST", Path: "/api", PathSet: true, Body: "payload", BodySet: true,
+			Timeout: model.Duration(5 * time.Second), InsecureSkipVerify: &yes, FollowRedirects: &yes, EnableHTTP2: &yes,
+			Retry: &model.TargetRetryConfig{Attempts: &attempts, Backoff: &backoff},
+		},
+	}
+	query, err := url.ParseQuery("method=post&path=/api&body=payload&timeout=5000ms&insecure_skip_verify=TRUE&follow_redirects=true&enable_http2=true&retry_attempts=02&retry_backoff=1000ms&param_region=eu")
+	if err != nil {
+		t.Fatal(err)
+	}
+	overrides, err := fetch.ParseRequestOverrides(query)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if probe, static := probeKeyQuery("text", "http://h", overrides).Encode(), targetCacheQuery(&target).Encode(); probe != static {
+		t.Fatalf("the probe is keyed by\n%s\nand the static target by\n%s", probe, static)
+	}
+}
+
+// The value of target, collector and every parameter a probe reads may be
+// MaxProbeParameterBytes long, and a longer one is refused with a 400 naming
+// the parameter and the limit, before anything remembers the probe: the
+// failure log and the verbose self-metrics keep what a probe names, and a
+// failing probe with a megabyte of target would leave a megabyte behind.
+func TestAnOverLongProbeParameterIsRefused(t *testing.T) {
+	testutil.CaptureLogs(t)
+	c := testutil.Collector("text", "text")
+	c.Request.ForwardHeaders = []string{"X-Tenant"}
+	c.Request.Path = "/{{param_region:eu}}"
+	server := verboseServer(t, true, c)
+	long := strings.Repeat("a", MaxProbeParameterBytes+1)
+	// A port nothing listens on: a probe that is let through fails at once.
+	target := "http://127.0.0.1:1/"
+	for name, query := range map[string]string{
+		"target":          "collector=text&target=" + target + long,
+		"collector":       "target=" + target + "&collector=" + long,
+		"path":            "collector=text&target=" + target + "&path=/" + long,
+		"body":            "collector=text&target=" + target + "&method=POST&body=" + long,
+		"param_region":    "collector=text&target=" + target + "&param_region=" + long,
+		"header_X-Tenant": "collector=text&target=" + target + "&header_X-Tenant=ok&header_X-Tenant=" + long,
+		"HEADER_X-Tenant": "collector=text&target=" + target + "&HEADER_X-Tenant=" + long,
+	} {
+		r := probeOnce(t, server, "/probe?"+query, nil)
+		want := fmt.Sprintf("probe parameter %s is %d bytes long; a probe parameter's value may be at most %d bytes", name, len(query)-strings.LastIndex(query, "=")-1, MaxProbeParameterBytes)
+		if r.Code != http.StatusBadRequest || !strings.Contains(r.Body.String(), want) {
+			t.Errorf("%s: answered %d %.200q, want 400 saying %q", name, r.Code, r.Body, want)
+		}
+		if r.Body.Len() > 1024 {
+			t.Errorf("%s: the refusal is %d bytes long; it repeats the value", name, r.Body.Len())
+		}
+	}
+	server.failures.mu.Lock()
+	remembered := len(server.failures.entries)
+	server.failures.mu.Unlock()
+	if tracked, _ := server.requests.Snapshot(); remembered != 0 || len(tracked) != 0 {
+		t.Fatalf("refused probes left %d failure log entries and %d tracked requests", remembered, len(tracked))
+	}
+	// A value of exactly the limit is let through, and so is a longer one of
+	// a parameter the probe does not read.
+	atLimit := target + strings.Repeat("a", MaxProbeParameterBytes-len(target))
+	for _, query := range []string{"collector=text&target=" + atLimit, "collector=text&target=" + target + "&x=" + long} {
+		if r := probeOnce(t, server, "/probe?"+query, nil); r.Code != http.StatusBadGateway {
+			t.Errorf("a probe within the limit answered %d %.200q, want the 502 of its failed trip", r.Code, r.Body)
+		}
+	}
+	// What a failing probe leaves behind is bounded by what it may name.
+	server.failures.mu.Lock()
+	defer server.failures.mu.Unlock()
+	for key := range server.failures.entries {
+		if len(key) > 2*MaxProbeParameterBytes {
+			t.Errorf("a failure log key is %d bytes long", len(key))
+		}
+	}
+}
+
+// The exporter's HTTP server takes 64 KiB of request line and headers, where
+// Go's default is 1 MiB, and answers a longer request 431 without reading the
+// rest.
+func TestTheHTTPServerBoundsARequestsLineAndHeaders(t *testing.T) {
+	cfg := &model.Config{Collectors: []model.Collector{testutil.Collector("text", "text")}}
+	if err := config.Validate(cfg); err != nil {
+		t.Fatal(err)
+	}
+	server := NewServer(config.NewManager(cfg, "", testutil.QuietLogger(t)), "python3", testutil.QuietLogger(t))
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	httpServer := NewHTTPServer("", server.Handler())
+	if httpServer.MaxHeaderBytes != 64<<10 {
+		t.Fatalf("MaxHeaderBytes is %d, want 64 KiB", httpServer.MaxHeaderBytes)
+	}
+	go func() { _ = httpServer.Serve(listener) }()
+	t.Cleanup(func() { _ = httpServer.Close() })
+	get := func(pad int) (int, string) {
+		t.Helper()
+		resp, err := http.Get("http://" + listener.Addr().String() + "/probe?collector=text&x=" + strings.Repeat("a", pad))
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer func() { _ = resp.Body.Close() }()
+		body, _ := io.ReadAll(resp.Body)
+		return resp.StatusCode, string(body)
+	}
+	if code, body := get(200 << 10); code != http.StatusRequestHeaderFieldsTooLarge {
+		t.Fatalf("a request of 200 KiB answered %d %.200q, want 431", code, body)
+	}
+	// Within the limit the request reaches the probe, which answers for
+	// itself.
+	if code, body := get(32 << 10); code != http.StatusBadRequest || !strings.Contains(body, "the target parameter is required") {
+		t.Fatalf("a request of 32 KiB answered %d %.200q, want the probe's own 400", code, body)
+	}
+}

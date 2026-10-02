@@ -1,13 +1,14 @@
 package model
 
 import (
-	"bytes"
+	"encoding/binary"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"hash/maphash"
 	"math"
 	"math/big"
+	"math/bits"
 	"slices"
 	"sort"
 	"strconv"
@@ -43,11 +44,57 @@ type Metric struct {
 	Summary   *Summary          `json:"-"`
 }
 
-// Histogram is the value of a histogram series.
+// Histogram is the value of a histogram series. NoSum and NoCount say that
+// the source it was read from gave no _sum or no _count sample, so that none
+// is written for it: a histogram made here, whose zero value has both, always
+// has them.
+//
+// A histogram's +Inf bucket counts every observation, as its _count does, so
+// the two are one number written twice, and a histogram holds each as its
+// source wrote it: the +Inf bucket among Buckets, the _count in Count. A
+// source may write only one of them, and the other is then read from it
+// (InfBucket, Settle). It may also write two that differ, as a target does
+// that counts an observation in its buckets and in its count without a lock
+// and is read between the two; both are then kept and written as they were
+// read, since nothing says which of them is right. And it may write neither,
+// which leaves a histogram without a +Inf bucket.
 type Histogram struct {
 	Buckets []Bucket
 	Sum     float64
 	Count   uint64
+	NoSum   bool
+	NoCount bool
+}
+
+// InfBucket is the count of the histogram's +Inf bucket, and whether it has
+// one: the bucket of that bound among Buckets, or, for a histogram without
+// one, its _count, which a +Inf bucket is then written from. A histogram with
+// neither has none. The +Inf bucket is nearly always the last, which is
+// looked at first.
+func (h *Histogram) InfBucket() (count uint64, ok bool) {
+	for i := len(h.Buckets) - 1; i >= 0; i-- {
+		if math.IsInf(h.Buckets[i].UpperBound, 1) {
+			return h.Buckets[i].CumulativeCount, true
+		}
+	}
+	return h.Count, !h.NoCount
+}
+
+// Settle checks a histogram read from a source and settles its count. Two
+// buckets with one upper bound, such as le="1" and le="1.0", are an error, as
+// two samples of one series are. Without a _count (NoCount) the count is the
+// +Inf bucket's, which counts every observation. A +Inf bucket and a _count
+// that differ are no error, and neither is a histogram without either
+// (Histogram): one such series must not fail a whole scrape. The error does
+// not name the series, which its caller knows.
+func (h *Histogram) Settle() error {
+	if bound, duplicate := duplicateFloat(len(h.Buckets), func(i int) float64 { return h.Buckets[i].UpperBound }); duplicate {
+		return fmt.Errorf("has two buckets with the upper bound %s", formatBound(bound))
+	}
+	if h.NoCount {
+		h.Count, _ = h.InfBucket()
+	}
+	return nil
 }
 
 // Bucket is one bucket of a histogram: how many observations were at most
@@ -57,12 +104,54 @@ type Bucket struct {
 	CumulativeCount uint64
 }
 
-// Summary is the value of a summary series.
+// Summary is the value of a summary series. NoSum and NoCount say that the
+// source it was read from gave no _sum or no _count sample, so that none is
+// written for it, as for a Histogram.
 type Summary struct {
 	Quantiles []Quantile
 	Sum       float64
 	Count     uint64
+	NoSum     bool
+	NoCount   bool
 }
+
+// Settle checks a summary read from a source: two values for one quantile,
+// such as quantile="0.5" and quantile="0.50", are an error, as two samples of
+// one series are. The error does not name the series, which its caller knows.
+func (s *Summary) Settle() error {
+	if quantile, duplicate := duplicateFloat(len(s.Quantiles), func(i int) float64 { return s.Quantiles[i].Quantile }); duplicate {
+		return fmt.Errorf("has two values for the quantile %s", formatBound(quantile))
+	}
+	return nil
+}
+
+// duplicateFloat reports a value that is twice among the n that at gives.
+// Two NaN count as the same value, since both are written as NaN. Values in
+// ascending order, as buckets and quantiles nearly always are written, hold
+// none, which one pass over them shows; only others are copied and sorted.
+func duplicateFloat(n int, at func(int) float64) (float64, bool) {
+	ascending := true
+	for i := 1; i < n && ascending; i++ {
+		ascending = at(i) > at(i-1)
+	}
+	if ascending {
+		return 0, false
+	}
+	values := make([]float64, n)
+	for i := range values {
+		values[i] = at(i)
+	}
+	slices.Sort(values)
+	for i := 1; i < len(values); i++ {
+		if values[i] == values[i-1] || (math.IsNaN(values[i]) && math.IsNaN(values[i-1])) {
+			return values[i], true
+		}
+	}
+	return 0, false
+}
+
+// formatBound writes a bucket's bound or a quantile as the exposition does.
+func formatBound(v float64) string { return strconv.FormatFloat(v, 'g', -1, 64) }
 
 // Quantile is one quantile of a summary and its value.
 type Quantile struct {
@@ -106,6 +195,22 @@ func classicName(name string, colon bool) bool {
 // from a scraped series after relabelling.
 func ReservedLabelName(name string) bool { return strings.HasPrefix(name, "__") }
 
+// seriesOwnLabel is the label a series of m's type keeps for its own
+// samples: le for a histogram's buckets, quantile for a summary's quantiles,
+// and none for any other type, where both are labels like any other.
+func seriesOwnLabel(m *Metric) string {
+	switch {
+	case m.Histogram != nil:
+		return "le"
+	case m.Summary != nil:
+		return "quantile"
+	}
+	return ""
+}
+
+// SeriesOwnLabel is seriesOwnLabel for a metric held by value.
+func SeriesOwnLabel(m Metric) string { return seriesOwnLabel(&m) }
+
 // reservedLabelError says why a label name is refused.
 func reservedLabelError(name string) string {
 	return fmt.Sprintf("label name %q starts with __, which Prometheus reserves for its own labels", name)
@@ -123,80 +228,137 @@ func CheckLabelName(name string) error {
 	return nil
 }
 
-// appendSeriesKey appends the key identifying the series m is to Prometheus
-// to key, and reports whether m has a label with an empty value. Prometheus
-// reads such a label as no label at all, so m{a=""} and m are one series and
-// have one key. names is scratch space for the label names, returned for the
-// next call to reuse.
-func (m *Metric) appendSeriesKey(key []byte, names []string) ([]byte, []string, bool) {
-	names = names[:0]
-	empty := false
-	for k, v := range m.Labels {
-		if v == "" {
-			empty = true
-			continue
-		}
-		names = append(names, k)
-	}
-	slices.Sort(names)
-	key = append(key, m.Name...)
-	for _, k := range names {
-		key = append(key, '\xff')
-		key = append(key, k...)
-		key = append(key, '=')
-		key = append(key, m.Labels[k]...)
-	}
-	return key, names, empty
-}
-
-// seriesSet is the series of a set Validate has seen so far. It keeps each
-// series by a hash of its key, the first series with that hash standing for
-// it, so seeing a series allocates nothing: a series whose hash is taken is
-// told apart from the one holding it by building that one's key again, and
-// only a series that really differs from it goes by its key in full.
+// seriesSet is the series of a set Validate has seen so far, which tells a
+// series seen twice. To Prometheus a series is its name and its labels, in
+// whatever order, and a label with an empty value is no label at all, so
+// m{a=""} and m are one series.
+//
+// Validate looks at every series of every scrape, so seeing one is shaped to
+// cost little and to allocate nothing. A series is kept by a hash rather than
+// by a key written out: its name and the name and value of each label are
+// hashed where they lie, and the labels' hashes are added up, which comes to
+// the same sum in any order, so nothing is sorted and nothing copied. The
+// first series with a hash stands for it in byHash. A series whose hash is
+// taken is compared, label by label, with the one holding it, and only that
+// comparison says they are the same series: two different series with one
+// hash cost a comparison, and the second then goes into others, where the few
+// series that share a hash with a different, earlier one are kept in a list
+// and compared in turn. A hash therefore never makes a duplicate of two
+// different series, nor hides a real one.
+//
+// The hashes are seeded anew for every set, so a target cannot choose names
+// that share a hash and make the check slow.
 type seriesSet struct {
 	metrics []Metric
-	hash    func([]byte) uint64
-	byHash  map[uint64]int
-	// others holds series whose hash a different series took first, and
-	// whether each has a label with an empty value.
-	others     map[string]bool
-	key, other []byte
-	names      []string
+	seed    maphash.Seed
+	// hash makes a series' hash of its digest: the hash of its name and the
+	// sum of its labels' hashes, eight bytes each. A test replaces it with a
+	// weak one, to make series collide.
+	hash   func([]byte) uint64
+	digest [16]byte
+	byHash map[uint64]int
+	// others holds, by hash, the series whose hash a different series took
+	// first. It is made when the first such series is seen, which with a
+	// 64-bit hash is as good as never.
+	others map[uint64][]int
 }
 
 func newSeriesSet(metrics []Metric) *seriesSet {
 	seed := maphash.MakeSeed()
 	return &seriesSet{
 		metrics: metrics,
-		hash:    func(key []byte) uint64 { return maphash.Bytes(seed, key) },
+		seed:    seed,
+		hash:    func(digest []byte) uint64 { return maphash.Bytes(seed, digest) },
 		byHash:  make(map[uint64]int, len(metrics)),
 	}
+}
+
+// The label hash mixes the hashes of a label's name and of its value with
+// these, so that a="b" and b="a" do not hash alike.
+const (
+	labelNameSalt  = 0x9e3779b97f4a7c15
+	labelValueSalt = 0xc2b2ae3d27d4eb4f
+)
+
+// labelHash is the hash of one label, to be added to those of the series'
+// other labels in any order. A label with an empty value is not hashed: it
+// is no label.
+func (s *seriesSet) labelHash(name, value string) uint64 {
+	hi, lo := bits.Mul64(maphash.String(s.seed, name)^labelNameSalt, maphash.String(s.seed, value)^labelValueSalt)
+	return hi ^ lo
 }
 
 // add adds metrics[i]. When the series was seen already, it reports so, and
 // whether either of the two has a label with an empty value.
 func (s *seriesSet) add(i int) (duplicate, empty bool) {
-	s.key, s.names, empty = s.metrics[i].appendSeriesKey(s.key[:0], s.names)
-	h := s.hash(s.key)
+	var labels uint64
+	for k, v := range s.metrics[i].Labels {
+		if v != "" {
+			labels += s.labelHash(k, v)
+		}
+	}
+	return s.addHashed(i, labels)
+}
+
+// addHashed is add for a caller that went through the labels of metrics[i]
+// itself, as Validate does to check them, and added up the labelHash of each
+// one with a value: going through a map a second time costs more than the
+// hashing does.
+func (s *seriesSet) addHashed(i int, labels uint64) (duplicate, empty bool) {
+	binary.LittleEndian.PutUint64(s.digest[:8], maphash.String(s.seed, s.metrics[i].Name))
+	binary.LittleEndian.PutUint64(s.digest[8:], labels)
+	h := s.hash(s.digest[:])
 	first, taken := s.byHash[h]
 	if !taken {
 		s.byHash[h] = i
 		return false, false
 	}
-	var firstEmpty bool
-	s.other, s.names, firstEmpty = s.metrics[first].appendSeriesKey(s.other[:0], s.names)
-	if bytes.Equal(s.key, s.other) {
-		return true, empty || firstEmpty
+	if same, empty := sameSeries(&s.metrics[first], &s.metrics[i]); same {
+		return true, empty
 	}
-	if earlierEmpty, seen := s.others[string(s.key)]; seen {
-		return true, empty || earlierEmpty
+	for _, other := range s.others[h] {
+		if same, empty := sameSeries(&s.metrics[other], &s.metrics[i]); same {
+			return true, empty
+		}
 	}
 	if s.others == nil {
-		s.others = map[string]bool{}
+		s.others = map[uint64][]int{}
 	}
-	s.others[string(s.key)] = empty
+	s.others[h] = append(s.others[h], i)
 	return false, false
+}
+
+// sameSeries reports whether a and b are one series to Prometheus: the same
+// name and the same labels, leaving out those with an empty value. When they
+// are, it also reports whether either has such a label.
+func sameSeries(a, b *Metric) (same, empty bool) {
+	if a.Name != b.Name {
+		return false, false
+	}
+	// Every label of a with a value is one of b, and b has as many: a label
+	// b lacks reads as "" there, which is not a's value.
+	valued := 0
+	for k, v := range a.Labels {
+		if v == "" {
+			empty = true
+			continue
+		}
+		if b.Labels[k] != v {
+			return false, false
+		}
+		valued++
+	}
+	for _, v := range b.Labels {
+		if v == "" {
+			empty = true
+			continue
+		}
+		valued--
+	}
+	if valued != 0 {
+		return false, false
+	}
+	return true, empty
 }
 
 // MetricCountError is the error of a scrape with more series than
@@ -215,7 +377,12 @@ func (s *MetricSet) Validate(l Limits) error {
 	if l.MaxMetrics > 0 && len(s.Metrics) > l.MaxMetrics {
 		return MetricCountError(len(s.Metrics), l.MaxMetrics)
 	}
-	seen := newSeriesSet(s.Metrics)
+	return s.validate(l, newSeriesSet(s.Metrics))
+}
+
+// validate is Validate past the count of series, with the set that tells
+// duplicate series, which a test makes itself to give it a weak hash.
+func (s *MetricSet) validate(l Limits, seen *seriesSet) error {
 	types := map[string]MetricType{}
 	for i := range s.Metrics {
 		m := &s.Metrics[i]
@@ -246,6 +413,7 @@ func (s *MetricSet) Validate(l Limits) error {
 		if len(m.Labels) > l.MaxLabelsPerMetric && l.MaxLabelsPerMetric > 0 {
 			return fmt.Errorf("metric %q has too many labels", m.Name)
 		}
+		var labels uint64
 		for k, v := range m.Labels {
 			if !ValidLabelName(k) {
 				if k != "" && utf8.ValidString(k) {
@@ -256,18 +424,37 @@ func (s *MetricSet) Validate(l Limits) error {
 			if ReservedLabelName(k) {
 				return fmt.Errorf("metric %q has %s", m.Name, reservedLabelError(k))
 			}
+			// A histogram's buckets are told apart by le and a summary's
+			// quantiles by quantile. A series with that label of its own
+			// would be written with it on _sum and _count, which a parser
+			// reads as a bucket or a quantile without a bound, and twice on
+			// every bucket.
+			if own := seriesOwnLabel(m); k == own {
+				return fmt.Errorf("metric %q is a %s and has a label %s of its own, which its %s carry; name the label something else", m.Name, m.Type, own, map[string]string{"le": "buckets", "quantile": "quantiles"}[own])
+			}
 			if l.MaxLabelValueLength > 0 && len(v) > l.MaxLabelValueLength {
 				return fmt.Errorf("metric %q label %q is too long", m.Name, k)
+			}
+			// The labels are gone through once, for these checks and for
+			// the duplicate check below alike (seriesSet).
+			if v != "" {
+				labels += seen.labelHash(k, v)
 			}
 		}
 		if l.MaxHelpLength > 0 && len(m.Help) > l.MaxHelpLength {
 			return fmt.Errorf("metric %q help is too long", m.Name)
 		}
-		if prior, ok := types[m.Name]; ok && prior != m.Type {
-			return fmt.Errorf("metric %q has inconsistent types", m.Name)
+		// The series of a family nearly always follow one another, so a
+		// series of the family and type of the one before it has nothing to
+		// look up, and a family's type is written down once.
+		if i == 0 || m.Type != s.Metrics[i-1].Type || m.Name != s.Metrics[i-1].Name {
+			if prior, ok := types[m.Name]; !ok {
+				types[m.Name] = m.Type
+			} else if prior != m.Type {
+				return fmt.Errorf("metric %q has inconsistent types", m.Name)
+			}
 		}
-		types[m.Name] = m.Type
-		if duplicate, empty := seen.add(i); duplicate {
+		if duplicate, empty := seen.addHashed(i, labels); duplicate {
 			if empty {
 				return fmt.Errorf("duplicate metric series %q: Prometheus reads a label with an empty value as no label, so series that differ only in one are the same series", m.Name)
 			}
@@ -404,12 +591,43 @@ func counted(what string, n int, noun string) string {
 	return fmt.Sprintf("%s %d %s", what, n, noun)
 }
 
+// MaxWholeNumberDigits is the longest whole number read as a number, sign
+// included: a longer one is kept as its text, every digit of it. Reading
+// digits into a *big.Int takes time that grows with the square of their
+// number — a million of them, which a response within the default size limit
+// can hold, took two seconds that no deadline could interrupt — and no
+// identifier or count is thousands of digits long.
+const MaxWholeNumberDigits = 4096
+
+// WholeNumberText reports whether s is a whole number as JSON writes one:
+// digits, with a minus sign before them or not.
+func WholeNumberText(s string) bool {
+	if len(s) > 0 && s[0] == '-' {
+		s = s[1:]
+	}
+	if s == "" {
+		return false
+	}
+	for i := 0; i < len(s); i++ {
+		if s[i] < '0' || s[i] > '9' {
+			return false
+		}
+	}
+	return true
+}
+
 // Normalize rewrites decoded JSON or YAML in place into the shapes the
 // transforms expect, all of which gojq, the jq and yq engine, handles: maps
 // keyed by string; a whole number as an int, or a *big.Int beyond int64, so
 // an ID of any length keeps every digit; any other json.Number as a float64,
-// or as its text when it is not one; and a time.Time, which YAML makes of
-// what reads as a timestamp and gojq cannot handle, as RFC 3339 text.
+// or as its text when it is not one, or is a whole number of more digits
+// than MaxWholeNumberDigits; and a time.Time, which YAML makes of what reads
+// as a timestamp and gojq cannot handle, as RFC 3339 text.
+//
+// The json decoder makes these shapes itself as it reads a body, without a
+// second pass here (internal/decode/jsonvalue.go), and a test compares what
+// it makes with what Normalize makes of encoding/json's values: a change to
+// the rules for numbers here is a change to make there too.
 func Normalize(v any) any {
 	switch x := v.(type) {
 	case map[any]any:
@@ -432,7 +650,11 @@ func Normalize(v any) any {
 		if i, err := x.Int64(); err == nil {
 			return int(i)
 		}
-		if i, ok := new(big.Int).SetString(string(x), 10); ok {
+		if WholeNumberText(string(x)) {
+			if len(x) > MaxWholeNumberDigits {
+				return string(x)
+			}
+			i, _ := new(big.Int).SetString(string(x), 10)
 			return i
 		}
 		if n, err := x.Float64(); err == nil {

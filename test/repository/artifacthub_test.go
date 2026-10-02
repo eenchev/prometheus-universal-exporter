@@ -262,6 +262,24 @@ func TestValuesSchemaMatchesValues(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	// Two keys are Helm's rather than the chart's, and reach the chart only as
+	// a dependency of another: the parent's global values, which Helm passes
+	// to every dependency, and the enabled a dependency's condition reads.
+	// The schema must let both through, with their types, and values.yaml
+	// sets neither, since the chart reads neither.
+	fromTheParent := map[string]string{"global": "object", "enabled": "boolean"}
+	for key, kind := range fromTheParent {
+		var property struct {
+			Type string `json:"type"`
+		}
+		if err := json.Unmarshal(schema.Properties[key], &property); err != nil || property.Type != kind {
+			t.Errorf("the schema must declare %s as %s, or the chart cannot be a dependency of another chart: %s", key, kind, schema.Properties[key])
+		}
+		if _, set := values[key]; set {
+			t.Errorf("values.yaml sets %s, which is the parent chart's to set", key)
+		}
+	}
+
 	var undeclared, unused []string
 	for key := range values {
 		if _, ok := schema.Properties[key]; !ok {
@@ -269,7 +287,7 @@ func TestValuesSchemaMatchesValues(t *testing.T) {
 		}
 	}
 	for key := range schema.Properties {
-		if _, ok := values[key]; !ok {
+		if _, ok := values[key]; !ok && fromTheParent[key] == "" {
 			unused = append(unused, key)
 		}
 	}

@@ -20,6 +20,7 @@ import (
 	"github.com/eenchev/prometheus-universal-exporter/internal/grpctest"
 	"github.com/eenchev/prometheus-universal-exporter/internal/model"
 	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/connectivity"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/reflect/protoregistry"
 )
@@ -316,9 +317,15 @@ func TestGRPCStaticTargetRequest(t *testing.T) {
 		Message: `{"queue": "b"}`, Metadata: map[string]string{"x-tenant": "b"},
 		Retry: &model.TargetRetryConfig{Attempts: &attempts, Codes: []string{"aborted"}},
 	}}
+	// The check only reads the target, which may be in force; its codes are
+	// written in upper case when its file is loaded.
 	if err := CheckTargetRequest(good, checked); err != nil {
 		t.Fatal(err)
 	}
+	if good.Request.Retry.Codes[0] != "aborted" {
+		t.Fatalf("the check rewrote the codes: %v", good.Request.Retry.Codes)
+	}
+	NormalizeTargetRequest(good)
 	if good.Request.Retry.Codes[0] != "ABORTED" {
 		t.Fatalf("codes %v", good.Request.Retry.Codes)
 	}
@@ -673,29 +680,34 @@ func TestGRPCTLS(t *testing.T) {
 func TestGRPCConnectionsAreReused(t *testing.T) {
 	cache := &grpcConnCache{entries: map[grpcConnKey]*grpcConnEntry{}}
 	start := time.Now()
-	a := grpcConnKey{dial: "127.0.0.1:1"}
-	first, _, err := cache.get(a, start)
-	if err != nil {
-		t.Fatal(err)
+	// call is a call that has ended: it took the connection and let it go.
+	call := func(key grpcConnKey, at time.Time) *grpcConnEntry {
+		t.Helper()
+		entry, err := cache.get(key, at)
+		if err != nil {
+			t.Fatal(err)
+		}
+		cache.release(entry)
+		return entry
 	}
-	again, _, _ := cache.get(a, start.Add(time.Minute))
-	if first != again {
+	a := grpcConnKey{dial: "127.0.0.1:1"}
+	first := call(a, start)
+	if again := call(a, start.Add(time.Minute)); first != again {
 		t.Fatal("a second call made a new connection")
 	}
-	if _, _, err := cache.get(grpcConnKey{dial: "127.0.0.1:2"}, start.Add(time.Minute+transportIdleTTL/2)); err != nil {
-		t.Fatal(err)
-	}
+	call(grpcConnKey{dial: "127.0.0.1:2"}, start.Add(time.Minute+transportIdleTTL/2))
 	if cache.size() != 2 {
 		t.Fatalf("%d connections", cache.size())
 	}
-	if _, _, err := cache.get(grpcConnKey{dial: "127.0.0.1:2"}, start.Add(time.Minute+transportIdleTTL+time.Second)); err != nil {
-		t.Fatal(err)
-	}
+	call(grpcConnKey{dial: "127.0.0.1:2"}, start.Add(time.Minute+transportIdleTTL+time.Second))
 	if cache.size() != 1 {
 		t.Fatalf("%d connections after the first went unused", cache.size())
 	}
+	if state := first.conn.GetState(); state != connectivity.Shutdown {
+		t.Fatalf("the connection that went unused is %s, want it closed", state)
+	}
 	// A missing CA is an error, not a connection.
-	if _, _, err := cache.get(grpcConnKey{dial: "127.0.0.1:3", tls: true, settings: model.TLSConfig{CAFile: "/nonexistent"}}, start); err == nil {
+	if _, err := cache.get(grpcConnKey{dial: "127.0.0.1:3", tls: true, settings: model.TLSConfig{CAFile: "/nonexistent"}}, start); err == nil {
 		t.Fatal("a missing CA file made a connection")
 	}
 }
@@ -754,12 +766,13 @@ func TestGRPCConcurrentMissesAskReflectionOnce(t *testing.T) {
 
 // A probe whose deadline ends while the shared reflection question is in
 // flight fails alone: the question is not its own, and the probes still
-// waiting get the answer.
+// waiting get the answer. The probe drops the connection as it gives up, for
+// all it knows the connection is dead, but the connection is not closed under
+// the question and the probe still waiting.
 func TestGRPCAShortProbeDoesNotFailTheSharedReflection(t *testing.T) {
-	server := grpctest.Start(t, grpctest.Options{Reflection: "v1", Answer: statsAnswer, ReflectionDelay: 300 * time.Millisecond})
+	server := grpctest.Start(t, grpctest.Options{Reflection: "v1", Answer: statsAnswer, ReflectionDelay: time.Second})
 	c := validGRPC(t, grpcCollector())
-	short, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
-	defer cancel()
+	short, endDeadline := deadlineEndedByHand()
 	shortDone := make(chan error, 1)
 	go func() {
 		_, err := FetchCollector(short, server.Addr, c, RequestOverrides{}, nil)
@@ -769,15 +782,73 @@ func TestGRPCAShortProbeDoesNotFailTheSharedReflection(t *testing.T) {
 	for deadline := time.Now().Add(5 * time.Second); server.ReflectionStreams.Load() == 0 && time.Now().Before(deadline); {
 		time.Sleep(time.Millisecond)
 	}
-	if _, err := FetchCollector(context.Background(), server.Addr, c, RequestOverrides{}, nil); err != nil {
-		t.Fatalf("the patient probe failed with the short one: %v", err)
+	patientDone := make(chan error, 1)
+	go func() {
+		_, err := FetchCollector(context.Background(), server.Addr, c, RequestOverrides{}, nil)
+		patientDone <- err
+	}()
+	// Both probes and the question hold the connection.
+	key := grpcConnKey{dial: server.Addr, policy: policyOf(c)}
+	waitFor(t, "the patient probe to join the question", func() bool { return grpcConns.holders(key) == 3 })
+	endDeadline()
+	if err := <-shortDone; !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("the short probe outlived its deadline: %v", err)
 	}
-	if err := <-shortDone; err == nil {
-		t.Fatal("the short probe outlived its deadline")
+	if err := <-patientDone; err != nil {
+		t.Fatalf("the patient probe failed with the short one: %v", err)
 	}
 	if n := server.ReflectionStreams.Load(); n != 1 {
 		t.Fatalf("%d reflection streams, want 1", n)
 	}
+	// The question outlives the probe that started it even when no other
+	// probe waits: its answer serves the next probe, which asks nothing.
+	alone := validGRPC(t, grpcCollector())
+	lonely := grpctest.Start(t, grpctest.Options{Reflection: "v1", Answer: statsAnswer, ReflectionDelay: 300 * time.Millisecond})
+	if _, err := probeGRPC(lonely.Addr, alone, 50*time.Millisecond, RequestOverrides{}); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("the short probe outlived its deadline: %v", err)
+	}
+	lonelyKey := reflectedKey{conn: grpcConnKey{dial: lonely.Addr, policy: policyOf(alone)}, service: grpctest.Service}
+	waitFor(t, "the question the short probe left behind to be answered", func() bool { return !reflectionAnswers.fetchedAt(lonelyKey).IsZero() })
+	if _, err := probeGRPC(lonely.Addr, alone, 5*time.Second, RequestOverrides{}); err != nil {
+		t.Fatal(err)
+	}
+	if n := lonely.ReflectionStreams.Load(); n != 1 {
+		t.Fatalf("%d reflection streams, want the one the short probe started", n)
+	}
+}
+
+// handDeadline is a context whose deadline the test ends itself, so that what
+// a probe does at its deadline does not depend on the clock.
+type handDeadline struct {
+	context.Context
+	ended chan struct{}
+}
+
+func deadlineEndedByHand() (ctx context.Context, end func()) {
+	c := &handDeadline{Context: context.Background(), ended: make(chan struct{})}
+	return c, func() { close(c.ended) }
+}
+
+func (c *handDeadline) Done() <-chan struct{} { return c.ended }
+
+func (c *handDeadline) Err() error {
+	select {
+	case <-c.ended:
+		return context.DeadlineExceeded
+	default:
+		return nil
+	}
+}
+
+// holders is how many calls and reflection questions hold the connection
+// kept for key, zero when there is none.
+func (c *grpcConnCache) holders(key grpcConnKey) int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if entry := c.entries[key]; entry != nil {
+		return entry.calls
+	}
+	return 0
 }
 
 // A slow read of one descriptor set keeps no other set waiting.
@@ -874,6 +945,7 @@ func TestGRPCAcceptedCodes(t *testing.T) {
 	}
 	// A static target's accept_codes replace the collector's.
 	target := &model.StaticTarget{Name: "t", Request: model.TargetRequestConfig{AcceptCodes: []string{"not_found"}}}
+	NormalizeTargetRequest(target)
 	if err := CheckTargetRequest(target, validGRPC(t, other)); err != nil {
 		t.Fatal(err)
 	}

@@ -1,0 +1,13 @@
+# A chart whose one dependency is the exporter's chart, for the chart's render
+# checks: `make helm-test` and CI build it in a copy of this tree and render
+# it. The version is the chart's, as a parent pins it; a test keeps them equal.
+apiVersion: v2
+name: parent
+description: A parent of the exporter's chart, for its render checks
+type: application
+version: 0.1.0
+dependencies:
+  - name: prometheus-universal-exporter
+    version: 1.5.0
+    repository: file://../../../charts/prometheus-universal-exporter
+    condition: prometheus-universal-exporter.enabled

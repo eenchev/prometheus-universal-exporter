@@ -3,7 +3,6 @@ package fetch
 import (
 	"net/url"
 	"regexp"
-	"sort"
 	"strconv"
 	"strings"
 	"unicode"
@@ -23,7 +22,10 @@ import (
 //     log line, the static targets endpoint's target label, an OTLP target
 //     attribute — the values of parameters whose names read as credentials
 //     masked, so that targets that differ in anything else stay apart
-//     (URLRedaction).
+//     (URLRedaction). Where a query is shown it is the query as it was
+//     sent, masked where it stands (maskQuery): a query is sent as it was
+//     written, so what is shown of it is not a query parsed and written
+//     again, which would leave out what does not parse.
 //   - A URL's fragment is never shown: it is never sent to the target, so it
 //     tells nothing about the request, and a URL copied from a browser can
 //     carry a token in it (#access_token=…).
@@ -47,9 +49,10 @@ const (
 	// DropQuery drops the query, the fragment and the userinfo, for a metric
 	// label.
 	DropQuery URLRedaction = iota
-	// MaskQueryValues keeps each query parameter's name and masks its value,
-	// for a debug report, where request.query may carry a token under any
-	// name. The fragment is dropped.
+	// MaskQueryValues keeps each query parameter's name, as it was written
+	// and where it stood, and masks its value, for a debug report, where
+	// request.query may carry a token under any name. The fragment is
+	// dropped.
 	MaskQueryValues
 	// MaskCredentialQueryValues masks the values of the query parameters
 	// whose names read as credentials (CredentialName), and keeps the rest
@@ -75,9 +78,9 @@ func RedactURL(u *url.URL, how URLRedaction) string {
 		shown.RawFragment = ""
 		return shown.String()
 	case MaskQueryValues:
-		shown.RawQuery = maskQueryValues(u.Query())
+		shown.RawQuery = maskQuery(u.RawQuery, true)
 	case MaskCredentialQueryValues:
-		shown.RawQuery = maskCredentialQueryValues(u.RawQuery)
+		shown.RawQuery = maskQuery(u.RawQuery, false)
 	}
 	shown.Fragment = ""
 	shown.RawFragment = ""
@@ -97,48 +100,86 @@ func RedactURLString(raw string, how URLRedaction) string {
 	return RedactURL(u, how)
 }
 
-// maskQueryValues is a query with every value masked, sorted by name.
-func maskQueryValues(query url.Values) string {
-	if len(query) == 0 {
+// maskQuery is a raw query as it was sent, with values masked where they
+// stand: every pair's with all, and otherwise those of the pairs whose names
+// read as credentials (CredentialName). The query is not parsed and written
+// again: every pair keeps its place and its spelling, and one that would not
+// parse — a malformed escape, no = at all — is shown as it was written, so
+// nothing that was sent is missing from what is shown.
+//
+// Pairs are told apart at & and at ; alike. Servers disagree about ;, so
+// the query is read both ways and masked by the more cautious of the two:
+//
+//   - a pair after a ; is a pair of its own, so the token of
+//     a=1;token=SECRET is masked, as a server that splits there reads it;
+//   - once a value has been masked, what follows it up to the next & is the
+//     rest of that value to a server that splits at & alone, so there the
+//     values of later pairs are masked too, and a piece without = whole:
+//     token=SE;CRET shows neither half.
+//
+// A name is compared as a server reads it, its escapes decoded (queryName),
+// so %74oken=SECRET is masked as token=SECRET is; it is shown as written.
+func maskQuery(raw string, all bool) string {
+	if raw == "" {
 		return ""
 	}
 	var b strings.Builder
-	names := make([]string, 0, len(query))
-	for name := range query {
-		names = append(names, name)
-	}
-	sort.Strings(names)
-	for _, name := range names {
-		for range query[name] {
-			if b.Len() > 0 {
-				b.WriteByte('&')
-			}
-			b.WriteString(url.QueryEscape(name))
+	b.Grow(len(raw))
+	// masked says a value has been masked since the last &.
+	masked := false
+	for len(raw) > 0 {
+		piece, separator := raw, ""
+		if end := strings.IndexAny(raw, "&;"); end >= 0 {
+			piece, separator = raw[:end], raw[end:end+1]
+		}
+		raw = raw[len(piece)+len(separator):]
+		name, _, hasValue := strings.Cut(piece, "=")
+		switch {
+		case hasValue && (all || masked || CredentialName(queryName(name))):
+			b.WriteString(name)
 			b.WriteString("=" + Redacted)
+			masked = true
+		case !hasValue && masked && piece != "":
+			b.WriteString(Redacted)
+		default:
+			b.WriteString(piece)
+		}
+		b.WriteString(separator)
+		if separator == "&" {
+			masked = false
 		}
 	}
 	return b.String()
 }
 
-// maskCredentialQueryValues is a raw query with the values of the
-// parameters whose names read as credentials masked, the rest, and the
-// order, as they were.
-func maskCredentialQueryValues(raw string) string {
-	if raw == "" {
-		return ""
+// queryName is the name of a query pair as a server reads it: its escapes
+// decoded and a + a space. An escape that is malformed stays as it was
+// written and the rest is decoded all the same, so a name is recognised
+// however it is spelled.
+func queryName(raw string) string {
+	if !strings.ContainsAny(raw, "%+") {
+		return raw
 	}
-	parts := strings.Split(raw, "&")
-	for i, part := range parts {
-		name, _, _ := strings.Cut(part, "=")
-		unescaped, err := url.QueryUnescape(name)
-		if err != nil {
-			unescaped = name
-		}
-		if CredentialName(unescaped) {
-			parts[i] = name + "=" + Redacted
+	if name, err := url.QueryUnescape(raw); err == nil {
+		return name
+	}
+	var b strings.Builder
+	for i := 0; i < len(raw); i++ {
+		switch {
+		case raw[i] == '+':
+			b.WriteByte(' ')
+		case raw[i] == '%' && i+2 < len(raw):
+			if value, err := strconv.ParseUint(raw[i+1:i+3], 16, 8); err == nil {
+				b.WriteByte(byte(value))
+				i += 2
+				continue
+			}
+			b.WriteByte('%')
+		default:
+			b.WriteByte(raw[i])
 		}
 	}
-	return strings.Join(parts, "&")
+	return b.String()
 }
 
 // credentialWords are what the name of a header, a query parameter or a

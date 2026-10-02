@@ -67,9 +67,12 @@ func (s *Server) logTripFailure(ctx context.Context, l collectLog, stage string,
 // collected is how a trip ended.
 type collected struct {
 	// set is the validated result and answer the same with its freshness
-	// series, when the trip went through whole.
-	set    *model.MetricSet
-	answer model.MetricSet
+	// series, when the trip went through whole. fetched is when it did: the
+	// time its cache entry has, so the result is exported over OTLP as of
+	// the same moment now and when the cache answers with it later.
+	set     *model.MetricSet
+	answer  model.MetricSet
+	fetched time.Time
 	// carriedOn is set when a stage failed under error_handling log or
 	// ignore: the trip counts as a success with nothing to export.
 	carriedOn bool
@@ -159,7 +162,9 @@ func (s *Server) collect(ctx context.Context, j collectJob) collected {
 	}
 
 	response, err := fetch.FetchCollector(ctx, j.target, c, j.overrides, j.headers)
-	trace.record(func(t *probeTrace) { t.response = response })
+	// A debug probe's report shows what the target sent: a copy made here,
+	// before the decode converts the body and rewrites its Content-Type.
+	trace.record(func(t *probeTrace) { t.response = sentResponse(response) })
 	grpcCode, grpc := fetch.GRPCStatusCode(c, err)
 	if err != nil {
 		rec.update(func(x *serverStats) {
@@ -226,6 +231,7 @@ func (s *Server) collect(ctx context.Context, j collectJob) collected {
 	} else {
 		mark = time.Now()
 		decoded, err := decode.Decode(response, c)
+		trace.converted(c, decoded)
 		if errors.Is(err, model.ErrLimitExceeded) {
 			// The prometheus decoder stops at the first series past
 			// limits.max_metrics, which is the validation's failure,
@@ -254,15 +260,22 @@ func (s *Server) collect(ctx context.Context, j collectJob) collected {
 			return stageFailed("validation", err, model.ErrorPolicyFail)
 		}
 		if err != nil {
-			rec.update(func(x *serverStats) {
-				if errors.Is(err, model.ErrMissingValue) {
-					x.missing++
-				}
-				if errors.Is(err, model.ErrScriptFailed) {
-					x.scriptErrors++
-				}
-				x.transformErrors++
-			})
+			// A transform that ended because its trip was cancelled did not
+			// fail: nobody waited for the answer, and its error is the
+			// cancellation, wherever in a rule or a script it was met. It is
+			// counted as no failure of the transform, as a trip cancelled in
+			// another stage is counted as none of that stage's.
+			if !cutShort(ctx) {
+				rec.update(func(x *serverStats) {
+					if errors.Is(err, model.ErrMissingValue) {
+						x.missing++
+					}
+					if errors.Is(err, model.ErrScriptFailed) {
+						x.scriptErrors++
+					}
+					x.transformErrors++
+				})
+			}
 			// A metric rule with error_mode fail asked for the scrape to fail
 			// when it cannot produce its value. That is a statement about this
 			// one metric, more specific than the collector's
@@ -303,7 +316,7 @@ func (s *Server) collect(ctx context.Context, j collectJob) collected {
 	if trace == nil && (response.Directory == nil || !response.Directory.CutShort) {
 		s.cache.Put(j.cacheKey, c.Name, *set, model.CacheTTL(c), model.StaleIfError(c), c.Limits.MaxCacheEntries, now)
 	}
-	return collected{set: set, answer: answer}
+	return collected{set: set, answer: answer, fetched: now}
 }
 
 // transformRecorded transforms a decoded response, and counts in the

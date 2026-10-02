@@ -113,6 +113,27 @@ var externalCases = []externalCase{
 		},
 		wantLabel: `component_id=`,
 	},
+	{
+		name:      "open-meteo/json",
+		config:    "../../examples/open-meteo/config.yaml",
+		collector: "open_meteo_current",
+		target:    "https://api.open-meteo.com",
+		wantMetrics: []string{
+			"weather_temperature_celsius",
+			"weather_apparent_temperature_celsius",
+			"weather_relative_humidity_ratio",
+			"weather_precipitation_millimeters",
+			"weather_cloud_cover_ratio",
+			"weather_pressure_msl_hectopascals",
+			"weather_wind_speed_meters_per_second",
+			"weather_wind_gusts_meters_per_second",
+			"weather_wind_direction_degrees",
+			"weather_code",
+			"weather_is_day",
+			"weather_observation_timestamp_seconds",
+		},
+		wantLabel: `latitude=`,
+	},
 }
 
 func TestExternalDemoConfigurationsStillMatchTheirSources(t *testing.T) {

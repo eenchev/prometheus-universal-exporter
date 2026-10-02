@@ -149,21 +149,23 @@ func fetchLocalDirectory(ctx context.Context, target string, c *model.Collector,
 		defer cancel()
 	}
 	full := filepath.Join(c.Request.Root, dir)
-	// As for one file, the reading goes on in its own goroutine, holding one of
-	// the collector's pending-read slots until the filesystem answers.
-	release, err := localFileReads.acquire(c.Name)
+	// As for one file, the reading goes on in its own goroutine, and a read the
+	// probe stops waiting for is one of the collector's abandoned reads until
+	// the filesystem answers.
+	started, err := localFileReads.start(c.Name)
 	if err != nil {
 		return nil, err
 	}
 	progress := &directoryProgress{}
 	done := make(chan error, 1)
 	go func() {
-		defer release()
+		defer started.done()
 		done <- readLocalDirectory(c, dir, progress)
 	}()
 	var read *DirectoryRead
 	select {
 	case <-ctx.Done():
+		started.abandon()
 		// What was read before the deadline is answered; a file the read had
 		// not reached, or was still reading, fails alone. The read stops
 		// starting new files.

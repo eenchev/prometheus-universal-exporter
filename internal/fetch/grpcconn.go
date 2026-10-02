@@ -26,6 +26,21 @@ import (
 // new connection at the next call, and a connection nothing has used for
 // transportIdleTTL, 5 minutes, is closed and forgotten.
 //
+// A connection can die without a word: a node that lost power, a firewall or
+// a NAT that dropped its entry, sends neither FIN nor RST, and grpc-go goes on
+// believing the connection ready. Every call on it would wait out its whole
+// deadline. So a call that its own deadline ended on a connection grpc-go
+// calls ready drops the connection (drop), and the next probe makes a new
+// one, as an http request that timed out has its connection closed. Client
+// keepalive pings would find the dead connection too, but a server with
+// grpc-go's default enforcement policy answers pings more often than every
+// five minutes with GOAWAY, so they are not sent.
+//
+// A connection is shared by the probes calling its target at the same time,
+// so one the cache forgets is not closed under them: each call holds it
+// (get) until it ends (release), as does a reflection question in flight, and
+// a forgotten connection is closed when the last of them has ended.
+//
 // A connection is made through the proxy the environment names
 // (HTTPS_PROXY, NO_PROXY), which grpc-go reads itself.
 
@@ -49,6 +64,10 @@ type grpcConnEntry struct {
 	// made; grpc-go reports a dialer's error to the call only as
 	// UNAVAILABLE, with the reason as text.
 	refusal *atomic.Pointer[TargetRefusedError]
+	// calls is how many calls hold the connection now. retired says the
+	// cache has forgotten it, so it is closed when the last of them ends.
+	calls   int
+	retired bool
 }
 
 type grpcConnCache struct {
@@ -59,9 +78,10 @@ type grpcConnCache struct {
 var grpcConns = &grpcConnCache{entries: map[grpcConnKey]*grpcConnEntry{}}
 
 // get returns the connection for key, making it when there is none or when
-// a TLS file changed since it was made. grpc.NewClient does not dial: the
+// a TLS file changed since it was made, and holds it for the caller, who
+// calls release when its call has ended. grpc.NewClient does not dial: the
 // connection is made at the first call, and made again after it breaks.
-func (c *grpcConnCache) get(key grpcConnKey, now time.Time) (*grpc.ClientConn, *atomic.Pointer[TargetRefusedError], error) {
+func (c *grpcConnCache) get(key grpcConnKey, now time.Time) (*grpcConnEntry, error) {
 	stamp := ""
 	if key.tls {
 		stamp = tlsFilesStamp(key.settings)
@@ -72,19 +92,19 @@ func (c *grpcConnCache) get(key grpcConnKey, now time.Time) (*grpc.ClientConn, *
 	if entry := c.entries[key]; entry != nil {
 		if entry.stamp == stamp {
 			entry.lastUsed = now
-			return entry.conn, entry.refusal, nil
+			entry.calls++
+			return entry, nil
 		}
 		// A call may still be using the old connection, which Close would
-		// cancel; it is closed once any call has long ended.
-		old := entry.conn
-		time.AfterFunc(transportIdleTTL, func() { _ = old.Close() })
+		// cancel; it is closed when the last such call has ended.
 		delete(c.entries, key)
+		c.retireLocked(entry)
 	}
 	creds := insecure.NewCredentials()
 	if key.tls {
 		cfg, err := tlsConfig(key.settings)
 		if err != nil {
-			return nil, nil, err
+			return nil, err
 		}
 		creds = credentials.NewTLS(cfg)
 	}
@@ -98,18 +118,64 @@ func (c *grpcConnCache) get(key grpcConnKey, now time.Time) (*grpc.ClientConn, *
 	}
 	conn, err := grpc.NewClient(key.dial, options...)
 	if err != nil {
-		return nil, nil, err
+		return nil, err
 	}
-	c.entries[key] = &grpcConnEntry{stamp: stamp, conn: conn, lastUsed: now, refusal: refusal}
-	return conn, refusal, nil
+	entry := &grpcConnEntry{stamp: stamp, conn: conn, lastUsed: now, refusal: refusal, calls: 1}
+	c.entries[key] = entry
+	return entry, nil
 }
 
-// sweepLocked closes the connections nothing has used for transportIdleTTL.
+// hold adds a hold on a connection its caller already holds, for work that
+// outlives the caller's call; it ends with release as well.
+func (c *grpcConnCache) hold(entry *grpcConnEntry) {
+	c.mu.Lock()
+	entry.calls++
+	c.mu.Unlock()
+}
+
+// release ends a call's hold on a connection get returned, and closes the
+// connection when the cache has forgotten it and no other call holds it.
+func (c *grpcConnCache) release(entry *grpcConnEntry) {
+	c.mu.Lock()
+	entry.calls--
+	closeNow := entry.retired && entry.calls == 0
+	c.mu.Unlock()
+	if closeNow {
+		_ = entry.conn.Close()
+	}
+}
+
+// drop forgets a connection that stopped answering, so the next call to its
+// target makes a new one. The calls still holding it go on: one that is
+// being answered is not cut off, and the connection is closed when the last
+// of them ends. A connection already replaced is left alone: probes that
+// time out together on one dead connection drop it once, and none of them
+// drops the connection made after it.
+func (c *grpcConnCache) drop(key grpcConnKey, entry *grpcConnEntry) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.entries[key] != entry {
+		return
+	}
+	delete(c.entries, key)
+	c.retireLocked(entry)
+}
+
+// retireLocked marks a connection the cache has just forgotten, and closes
+// it unless a call holds it; release closes it then.
+func (c *grpcConnCache) retireLocked(entry *grpcConnEntry) {
+	entry.retired = true
+	if entry.calls == 0 {
+		_ = entry.conn.Close()
+	}
+}
+
+// sweepLocked forgets the connections nothing has used for transportIdleTTL.
 func (c *grpcConnCache) sweepLocked(now time.Time) {
 	for key, entry := range c.entries {
 		if now.Sub(entry.lastUsed) > transportIdleTTL {
-			_ = entry.conn.Close()
 			delete(c.entries, key)
+			c.retireLocked(entry)
 		}
 	}
 }
@@ -169,7 +235,7 @@ func grpcPolicyDialer(policy *targetPolicy, hostPort string, refused *atomic.Poi
 // call at once, so after a long outage a server that is back would go on
 // being reported down for up to two minutes. Five seconds at most is as
 // often as a probe could matter; a probe that finds the connection waiting
-// also ends the wait (reconnectNow).
+// also ends the wait, and so does each of its retries (reconnectNow).
 var grpcReconnect = grpc.WithConnectParams(grpc.ConnectParams{
 	Backoff:           backoff.Config{BaseDelay: time.Second, Multiplier: 1.6, Jitter: 0.2, MaxDelay: 5 * time.Second},
 	MinConnectTimeout: 20 * time.Second,

@@ -64,6 +64,13 @@ is its host:
 | `query` | — | Further render parameters, such as [`maxDataPoints`](#the-window). `target`, `from`, `until` and `format` are the type's own and refused here. |
 | `headers`, credentials, `tls`, `retry`, `max_response_bytes`, `follow_redirects`, `enable_http2`, `allowed_schemes`, `accept_status`, `allowed_targets`, `denied_targets`, `forward_authorization`, `forward_headers` | as for `http` | The request is an `http` request in everything but its URL; see [Target requests](REQUESTS.md) and [Authentication](AUTHENTICATION.md). |
 
+The probe's target is the Graphite server, and a query it carries is sent as
+written, before `query` and the type's own parameters — except a pair of it
+that names `target`, `from`, `until` or `format`, in any case, which is
+dropped: those are the collector's, so a probe whose target is
+`graphite:8080/?target=secret.*` asks for the collector's expressions and no
+other, in the collector's window, as JSON.
+
 The request is a `GET`; `method` and `body` are refused, as is any key of
 another request type. When the expressions together are too long for a URL
 every proxy passes — over 2 KiB encoded — the same parameters go as a form
@@ -103,7 +110,9 @@ hold only what a path node or a tag value is made of: letters, digits and
 `_ - . : @ % + ~`. Anything else — a quote, a comma, a bracket, a `*` — is
 refused with `400`, since it could change the expression rather than fill a
 value in it: `x'),sumSeries('y` would otherwise add a series nobody
-configured.
+configured. A default is held to the same rule when the configuration loads:
+`{{param_env:prod*}}` stops the exporter at startup, since every probe that
+left `param_env` out would be refused.
 
 ## The series document
 

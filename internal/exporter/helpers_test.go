@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"os/exec"
+	"runtime"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -104,10 +105,16 @@ func regexCollector(name string) model.Collector {
 // pool (fetch/transport.go).
 
 // countingServer counts the connections made to it.
+//
+// It answers a request only once the client has reported it written
+// (awaitRequestsReported), so that whether the next request reuses the
+// connection depends on the exporter alone: on its keeping the pool, and
+// reading the answer to its end.
 func countingServer(t *testing.T, tlsServer bool) (*httptest.Server, *atomic.Int64) {
 	t.Helper()
 	var conns atomic.Int64
 	server := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		awaitRequestsReported(t)
 		w.Header().Set("Content-Type", "text/plain")
 		_, _ = w.Write([]byte("value=42\n"))
 	}))
@@ -123,6 +130,65 @@ func countingServer(t *testing.T, tlsServer bool) (*httptest.Server, *atomic.Int
 	}
 	t.Cleanup(server.Close)
 	return server, &conns
+}
+
+// awaitRequestsReported waits until every HTTP/1 connection this process
+// has made as a client has reported the request it wrote.
+//
+// Go writes a request in a goroutine of the connection, which then reports
+// the write and waits for the next request. When the answer has been read
+// before that report, the connection waits 50ms for it and is otherwise
+// closed rather than reused (net/http's persistConn.wroteRequest). The bytes
+// are on the wire before the report is made, so a server in the same
+// process can answer in between, and on a machine busy enough to leave the
+// writing goroutine without a CPU for 50ms the next request then opens a
+// second connection, whatever the exporter does. A test that counts
+// connections must not answer in that gap.
+//
+// Nothing in net/http's API tells when the report has been made, but the
+// goroutine dump does: the writing goroutine, persistConn.writeLoop, is back
+// in its select. So this reads the dump until every such goroutine is, and
+// there is at least one, the connection the request came on; should a later
+// Go name them otherwise, it finds none and fails the test saying so rather
+// than letting the gap back in.
+func awaitRequestsReported(t *testing.T) {
+	const writeLoop = "net/http.(*persistConn).writeLoop("
+	var seen string
+	reported := func() bool {
+		stacks := make([]byte, 1<<16)
+		for {
+			n := runtime.Stack(stacks, true)
+			if n < len(stacks) {
+				stacks = stacks[:n]
+				break
+			}
+			stacks = make([]byte, 2*len(stacks))
+		}
+		loops := 0
+		for _, goroutine := range strings.Split(string(stacks), "\n\n") {
+			if !strings.Contains(goroutine, writeLoop) {
+				continue
+			}
+			loops++
+			// The first line is the goroutine's state: "goroutine 52 [select]:".
+			if state, _, _ := strings.Cut(goroutine, "\n"); !strings.Contains(state, "[select") {
+				seen = goroutine
+				return false
+			}
+		}
+		if loops == 0 {
+			seen = "no goroutine in " + writeLoop + ")"
+		}
+		return loops > 0
+	}
+	// The wait is a few microseconds; the bound is only for a write loop
+	// that never comes back, which is a failure of its own.
+	for deadline := time.Now().Add(30 * time.Second); !reported(); time.Sleep(50 * time.Microsecond) {
+		if time.Now().After(deadline) {
+			t.Errorf("the client never reported its request written; last seen:\n%s", seen)
+			return
+		}
+	}
 }
 
 const watchConfigTemplate = "collectors:\n  - name: watched\n    request:\n      type: http\n    transform:\n      type: regex\n" +
@@ -177,14 +243,15 @@ func (s *Server) scrapeStaticTargets(ctx context.Context, budget time.Duration) 
 	scrapeCtx, cancel := context.WithTimeout(ctx, budget)
 	defer cancel()
 	var wg sync.WaitGroup
-	slots := make(chan struct{}, s.manager.StaticTargetConcurrency())
-	for _, target := range s.manager.StaticTargets() {
+	cfg, file := s.manager.InForce()
+	slots := make(chan struct{}, file.ScrapeConcurrency())
+	for _, target := range staticTargetsOf(file) {
 		wg.Add(1)
 		slots <- struct{}{}
 		go func() {
 			defer wg.Done()
 			defer func() { <-slots }()
-			s.scrapeTarget(scrapeCtx, target)
+			s.scrapeTarget(scrapeCtx, cfg, target)
 		}()
 	}
 	wg.Wait()

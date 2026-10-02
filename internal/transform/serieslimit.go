@@ -2,6 +2,7 @@ package transform
 
 import (
 	"context"
+	"slices"
 
 	"github.com/eenchev/prometheus-universal-exporter/internal/model"
 )
@@ -76,4 +77,29 @@ func seriesRoom(ctx context.Context) int {
 		return -1
 	}
 	return max(budget.limit-budget.made, 0)
+}
+
+// growSeries makes room in metrics for the series of n more things a rule is
+// about to read — items, rows, nodes, matches, a response's own series —
+// each of which makes one series at most: the slice is then made once, at
+// the size it ends with, instead of growing from nothing, which copies every
+// series made so far each time it fills and allocates several times what it
+// ends up holding. The room is never more than limits.max_metrics still
+// leaves, since a transform stops at the first series past that: a response
+// that describes more series than the limit allows gets no more memory for
+// them than the limit does.
+func growSeries(ctx context.Context, metrics []model.Metric, n int) []model.Metric {
+	if room := seriesRoom(ctx); room >= 0 && room < n {
+		n = room
+	}
+	return slices.Grow(metrics, n)
+}
+
+// noSeriesIsNil gives a set that holds no series no slice of them either, as
+// a transform that never added one always left it, whatever room was made.
+func noSeriesIsNil(set *model.MetricSet) *model.MetricSet {
+	if len(set.Metrics) == 0 {
+		set.Metrics = nil
+	}
+	return set
 }

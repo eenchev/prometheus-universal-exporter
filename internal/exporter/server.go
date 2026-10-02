@@ -50,6 +50,9 @@ type Server struct {
 	// timeoutOffset is how much of Prometheus's scrape timeout a probe leaves
 	// unused (scrapetimeout.go).
 	timeoutOffset time.Duration
+	// answerWriteTimeout is how long a client has to read an answer
+	// (middleware.go): AnswerWriteTimeout, but for tests.
+	answerWriteTimeout time.Duration
 	// defaultProbeTimeout bounds a probe without a scrape timeout
 	// (scrapetimeout.go).
 	defaultProbeTimeout time.Duration
@@ -96,7 +99,7 @@ type Server struct {
 // NewServer returns a server using the configuration m holds and running
 // Python scripts with the interpreter at p.
 func NewServer(m *config.Manager, p string, l *slog.Logger) *Server {
-	s := &Server{manager: m, pythonPath: p, logger: l, stats: map[string]*serverStats{}, otlpPending: map[string]*otlpBatch{}, cache: newResponseCache(), requests: newRequestTracker(), flights: newProbeFlights(), durations: newScrapeDurations(), trips: newTripLimiter(), otlp: &otlpStatus{}, otlpStarts: newOTLPStartTimes(), failures: newFailureLog(), fingerprints: &fingerprintMemo{}, timeoutOffset: DefaultTimeoutOffset, defaultProbeTimeout: DefaultProbeTimeout}
+	s := &Server{manager: m, pythonPath: p, logger: l, stats: map[string]*serverStats{}, otlpPending: map[string]*otlpBatch{}, cache: newResponseCache(), requests: newRequestTracker(), flights: newProbeFlights(), durations: newScrapeDurations(), trips: newTripLimiter(), otlp: &otlpStatus{}, otlpStarts: newOTLPStartTimes(), failures: newFailureLog(), fingerprints: &fingerprintMemo{}, timeoutOffset: DefaultTimeoutOffset, defaultProbeTimeout: DefaultProbeTimeout, answerWriteTimeout: AnswerWriteTimeout}
 	s.seenConfig.Store(m.Get())
 	return s
 }
@@ -162,7 +165,8 @@ func (s *Server) statsFor(name string) *serverStats {
 // Handler routes the exporter's endpoints: the landing page at /, the
 // collectors page at /collectors, /probe, the self-metrics path, the static
 // targets path,
-// /health, /ready and /-/reload.
+// /health, /ready and /-/reload. Whatever answers, its client has
+// AnswerWriteTimeout to read the answer (middleware.go).
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/health", func(w http.ResponseWriter, _ *http.Request) {
@@ -179,7 +183,7 @@ func (s *Server) Handler() http.Handler {
 	// Only / itself: any other unknown path is still a 404.
 	mux.HandleFunc("GET /{$}", protected(s.landingHandler))
 	mux.HandleFunc("GET /collectors", protected(s.collectorsHandler))
-	return mux
+	return s.writeBounded(mux)
 }
 
 func (s *Server) probeHandler(w http.ResponseWriter, r *http.Request) {
@@ -194,7 +198,8 @@ func (s *Server) probeHandler(w http.ResponseWriter, r *http.Request) {
 	start := time.Now()
 	// A debug probe is refused before anything else when it is not enabled,
 	// so the refusal does not depend on the rest of the probe being right.
-	debug, err := probeDebugRequested(r.URL.Query())
+	query := r.URL.Query()
+	debug, err := probeDebugRequested(query)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
@@ -203,8 +208,15 @@ func (s *Server) probeHandler(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, errProbeDebugDisabled.Error(), http.StatusForbidden)
 		return
 	}
-	target := r.URL.Query().Get("target")
-	name := r.URL.Query().Get("collector")
+	// One target and one collector, neither longer than a probe parameter may
+	// be (probeparams.go): nothing below reads a second value, and nothing
+	// below is then given a name too long to remember.
+	if err := checkProbeParams(query, probeIdentityParam); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	target := query.Get("target")
+	name := query.Get("collector")
 	if name == "" {
 		http.Error(w, "the collector parameter is required: /probe?collector=<name>&target=<target>", http.StatusBadRequest)
 		return
@@ -233,17 +245,23 @@ func (s *Server) probeHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	logTarget := fetch.DisplayTarget(c, target)
+	// The same holds for the parameters that change the request: each once,
+	// but for header_<name>, and none over-long.
+	if err := checkProbeParams(query, probeRequestParam(c)); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
 	// The request parameters are resolved before anything is counted, so every
 	// counter this probe raises lands on the individual request as well as on
 	// the collector rather than only on the collector.
-	overrides, err := fetch.ParseRequestOverrides(r.URL.Query())
+	overrides, err := fetch.ParseRequestOverrides(query)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
 	// Each request type accepts its own probe parameters; one that belongs to
 	// another type is a mistake, reported before anything else happens.
-	if err := fetch.CheckOverrideParams(c, r.URL.Query()); err != nil {
+	if err := fetch.CheckOverrideParams(c, query); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
@@ -274,7 +292,7 @@ func (s *Server) probeHandler(w http.ResponseWriter, r *http.Request) {
 		if model.UsesCache(c) {
 			// The key the same probe without debug has: debug is no
 			// parameter of the request (probeKeyQuery).
-			p.staleKey = s.probeCacheKey(cfg, c, target, probeKeyQuery(c, r.URL.Query()), forwarded)
+			p.staleKey = s.probeCacheKey(cfg, c, target, probeKeyQuery(name, target, overrides), forwarded)
 		}
 		s.serveDebugProbe(w, r, p)
 		return
@@ -283,7 +301,8 @@ func (s *Server) probeHandler(w http.ResponseWriter, r *http.Request) {
 	rec := s.probeRecorderFor(st, name, requestURL, method)
 	rec.update(func(x *serverStats) { x.probes++ })
 	// finish counts the probe's outcome and ends its per-request record: a
-	// probe the target policy refused leaves no new request tracked.
+	// probe the target policy refused, or whose caller went away, leaves no
+	// new request tracked.
 	finish := func(ok, refused bool) {
 		duration := time.Since(start)
 		rec.update(func(x *serverStats) {
@@ -295,7 +314,7 @@ func (s *Server) probeHandler(w http.ResponseWriter, r *http.Request) {
 		rec.commit(refused)
 	}
 	forwarded := forwardedHeaders(r, c.Request)
-	key := s.probeCacheKey(cfg, c, target, probeKeyQuery(c, r.URL.Query()), forwarded)
+	key := s.probeCacheKey(cfg, c, target, probeKeyQuery(name, target, overrides), forwarded)
 	var cacheKey string
 	if model.UsesCache(c) {
 		cacheKey = key
@@ -310,17 +329,18 @@ func (s *Server) probeHandler(w http.ResponseWriter, r *http.Request) {
 			answer, _ := withFreshness(cached, c, false, fetched, time.Now())
 			finish(true, false)
 			writeMetricSet(w, r, &answer)
-			s.queueProbeOTLP(answer, name, logTarget)
+			s.queueProbeOTLP(answer, c, logTarget, fetched)
 			return
 		}
 		// A miss is counted when the trip goes to the target (probeTrip);
 		// a probe that shares another's trip is counted as coalesced.
 	}
 	budget, budgetSource := s.probeDeadline(r.Header, overrides)
-	upstream := func(ctx context.Context) *probeResult {
+	// upstream is the trip to the target, counted on trip.
+	upstream := func(ctx context.Context, trip statsRecorder) *probeResult {
 		return s.probeUpstream(ctx, upstreamProbe{
 			collector: c, target: target, logTarget: logTarget, overrides: overrides,
-			forwarded: forwarded, rec: rec, cacheKey: cacheKey,
+			forwarded: forwarded, rec: trip, cacheKey: cacheKey,
 			budget: budget, budgetSource: budgetSource,
 			// Probes of one target differing in their parameters or
 			// forwarded headers — tenants, paths — fail apart in the log.
@@ -330,15 +350,30 @@ func (s *Server) probeHandler(w http.ResponseWriter, r *http.Request) {
 	// No key, when the collector's definition could not be fingerprinted,
 	// is no identity to share a trip by: every such probe would share one.
 	if !coalesceProbes(c) || key == "" {
-		result := upstream(r.Context())
-		finish(result.ok, result.refused)
+		// The trip is this probe's alone, and is counted where the probe is.
+		result := upstream(r.Context(), rec)
+		// A trip its caller abandoned ends without the target policy's
+		// verdict, as a shared one every caller left does below: counted on
+		// the collector, and no new request tracked.
+		finish(result.ok, result.refused || result.abandoned)
 		result.writeTo(w, r)
 		return
 	}
-	result, shared, err := s.flights.do(r.Context(), key, upstream)
+	// A shared trip is counted apart from the probe that happens to start it
+	// (forTrip), which may leave while the trip goes on for the others. What
+	// it counted is the request's when it ends, before any probe is answered
+	// by it, unless the target policy refused it or it was cancelled because
+	// every probe left, without the policy's verdict.
+	trip := rec.forTrip()
+	result, shared, err := s.flights.do(r.Context(), key, func(ctx context.Context) *probeResult {
+		result := upstream(ctx, trip)
+		trip.commit(result.refused || result.abandoned)
+		return result
+	})
 	if err != nil {
 		// This caller went away while it waited; there is nobody to answer,
-		// and no verdict of the target policy to go by.
+		// and no verdict of the target policy to go by. The probe starts no
+		// tracked request, whatever becomes of the trip.
 		finish(false, true)
 		return
 	}
@@ -435,7 +470,7 @@ func (s *Server) probeUpstream(ctx context.Context, p upstreamProbe) *probeResul
 	s.failures.failed(s.logger, slog.LevelWarn, staleKey, "probe failed; answered with the last successful result (cache.stale_if_error)", "stale", nil, append(p.logAttrs(), "result_age", now.Sub(fetched).Round(time.Second).String())...)
 	out := newProbeRecorder()
 	out.metrics = &answer
-	s.queueProbeOTLP(answer, name, p.logTarget)
+	s.queueProbeOTLP(answer, c, p.logTarget, fetched)
 	// A stale answer is not a success: the trip failed.
 	return out.result(false)
 }
@@ -459,7 +494,7 @@ func (s *Server) probeTrip(ctx context.Context, p upstreamProbe) *probeResult {
 			// once, since the probes sharing this trip queue nothing of
 			// their own, and the probe that filled the entry queued its own
 			// answer, not this one's.
-			s.queueProbeOTLP(answer, name, logTarget)
+			s.queueProbeOTLP(answer, c, logTarget, fetched)
 			return out.result(true)
 		}
 		rec.update(func(x *serverStats) { x.cacheMisses++ })
@@ -521,7 +556,7 @@ func (s *Server) probeTrip(ctx context.Context, p upstreamProbe) *probeResult {
 		return out.result(true)
 	}
 	out.metrics = &result.answer
-	s.queueProbeOTLP(result.answer, name, logTarget)
+	s.queueProbeOTLP(result.answer, c, logTarget, result.fetched)
 	return out.result(true)
 }
 
@@ -589,7 +624,7 @@ func forwardedHeaders(r *http.Request, request model.RequestConfig) http.Header 
 		}
 	}
 	for key, values := range r.URL.Query() {
-		if len(key) <= len(headerParamPrefix) || !strings.EqualFold(key[:len(headerParamPrefix)], headerParamPrefix) {
+		if !headerParam(key) {
 			continue
 		}
 		name := http.CanonicalHeaderKey(strings.TrimSpace(key[len(headerParamPrefix):]))

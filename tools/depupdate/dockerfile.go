@@ -102,9 +102,27 @@ type update struct {
 	Next     string
 }
 
+// heldRelease is a newer minor release that exists and is not proposed, because
+// the pin's policy holds the minor.
+type heldRelease struct {
+	Arg       string
+	Product   string
+	Current   string
+	Available string
+	Because   string
+}
+
+// sentence is what the run's log and the pull request say about a held release.
+func (h heldRelease) sentence() string {
+	return fmt.Sprintf("%s %s is available; %s stays at %s until it is bumped by hand, because %s",
+		h.Product, h.Available, h.Arg, h.Current, h.Because)
+}
+
 // summaryMarkdown renders the updates for a pull request body. The empty string
-// means nothing moved, which the caller treats as "do not open a pull request".
-func summaryMarkdown(updates []update) string {
+// means nothing moved, which the caller treats as "do not open a pull request":
+// a held release is a note in a summary that is written anyway, never a reason
+// to write one.
+func summaryMarkdown(updates []update, held []heldRelease) string {
 	if len(updates) == 0 {
 		return ""
 	}
@@ -115,8 +133,13 @@ func summaryMarkdown(updates []update) string {
 	for _, u := range updates {
 		fmt.Fprintf(&b, "| `%s` | `%s` | `%s` | %s |\n", u.Arg, u.Previous, u.Next, u.Source)
 	}
-	b.WriteString("\nOnly minor and patch versions move; a major bump is never proposed automatically. " +
+	b.WriteString("\nGo and the Python libraries move by minor and patch versions, and Python only within " +
+		"its feature release (the `3.x` of `PYTHON_VERSION`), which collector scripts run on; " +
+		"a major bump is never proposed automatically. " +
 		"The full suite ran against these versions before this pull request was opened.\n")
+	for _, h := range held {
+		fmt.Fprintf(&b, "\n%s.\n", h.sentence())
+	}
 	return b.String()
 }
 

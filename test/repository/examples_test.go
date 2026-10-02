@@ -133,15 +133,10 @@ func TestShippedExampleFilesLoadTogether(t *testing.T) {
 // different file format demos runs against, which is the only one of them carrying a
 // pre-script.
 func TestShippedExampleScriptsSatisfyTheContract(t *testing.T) {
-	for _, path := range []string{
+	for _, path := range append([]string{
 		"configs/config.example.yaml",
 		"configs/config.otlp.example.yaml",
-		"examples/config.frankfurter.json-test.yaml",
-		"examples/config.usgs.csv-test.yaml",
-		"examples/config.k8sguestbook.yaml-test.yaml",
-		"examples/config.scrapethissite.html-test.yaml",
-		"examples/config.grafanastatus.json-test.yaml",
-	} {
+	}, shippedExamples(t).configs...) {
 		t.Run(path, func(t *testing.T) {
 			cfg, err := config.Load(path)
 			if err != nil {

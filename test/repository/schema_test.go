@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
-	"path/filepath"
 	"reflect"
 	"regexp"
 	"sort"
@@ -110,12 +109,12 @@ func TestCommittedConfigSchemaIsCurrent(t *testing.T) {
 }
 
 // Every shipped configuration is valid against the schema, so an editor
-// pointed at it shows no false errors on the examples.
+// pointed at it shows no false errors on the examples, those in a directory
+// of their own included.
 func TestShippedConfigurationsMatchTheSchema(t *testing.T) {
 	schema := loadSchema(t)
 	files := []string{"configs/config.example.yaml", "configs/config.otlp.example.yaml"}
-	examples, _ := filepath.Glob("examples/config.*.yaml")
-	files = append(files, examples...)
+	files = append(files, shippedExamples(t).configs...)
 	for _, file := range files {
 		t.Run(file, func(t *testing.T) {
 			if errs := validateAgainstSchema(schema, readYAMLDocument(t, file)); len(errs) > 0 {
@@ -192,6 +191,8 @@ func TestConfigSchemaRejectsInvalidConfigurations(t *testing.T) {
 		"unsupported library":     strings.Replace(base, "      type: jq\n", "      type: jq\n      libraries: [requests]\n", 1),
 		"string for a list":       strings.Replace(base, "  - name: demo\n", "  - name: demo\n    request_list: x\n", 1),
 		"boolean for a structure": strings.Replace(base, "    request:\n      type: http\n", "    request: true\n", 1),
+		"otlp without enabled":    "otlp: {endpoint: 'http://collector:4318/v1/metrics'}\n" + base,
+		"auth without enabled":    "web: {basic_auth: {username: admin, password: s3cret}}\n" + base,
 	}
 	var doc any
 	if err := yaml.Unmarshal([]byte(base), &doc); err != nil {
@@ -430,6 +431,18 @@ func validateAgainstSchema(schema map[string]any, value any) []string {
 			for _, key := range toStrings(schema["required"]) {
 				if _, ok := x[key]; !ok {
 					errs = append(errs, fmt.Sprintf("%s: %s is required", path, key))
+				}
+			}
+			if dependent, ok := schema["dependentRequired"].(map[string]any); ok {
+				for key, needs := range dependent {
+					if _, set := x[key]; !set {
+						continue
+					}
+					for _, needed := range toStrings(needs) {
+						if _, ok := x[needed]; !ok {
+							errs = append(errs, fmt.Sprintf("%s: %s is required beside %s", path, needed, key))
+						}
+					}
 				}
 			}
 			keys := make([]string, 0, len(x))

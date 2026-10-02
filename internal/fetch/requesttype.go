@@ -84,7 +84,9 @@ type RequestType struct {
 	CheckOverride func(c *model.Collector, key string) error
 	// Query adds the query parameters the type builds itself to the URL
 	// of a request made over HTTP, such as graphite's repeated target, which
-	// request.query, one value to a name, cannot hold. Unset, it adds none.
+	// request.query, one value to a name, cannot hold. They are the type's
+	// alone: a pair of the target's own query that names one is dropped
+	// (withoutQueryKeys). Unset, it adds none.
 	Query func(c *model.Collector, overrides RequestOverrides) (url.Values, error)
 	// CheckTargetRequest checks the values of a static target's request
 	// block, where CheckOverride sees only its keys. Unset, any value of an
@@ -240,7 +242,8 @@ func CheckOverrideParams(c *model.Collector, values url.Values) error {
 }
 
 // CheckTargetRequest rejects a static target request block that sets keys
-// its collector's request type does not accept.
+// its collector's request type does not accept. It writes nothing into the
+// target, which may be in force and read by a scrape (NormalizeTargetRequest).
 func CheckTargetRequest(t *model.StaticTarget, c *model.Collector) error {
 	rt := requestTypeOf(c)
 	if rt == nil {
@@ -268,7 +271,7 @@ func CheckTargetRequest(t *model.StaticTarget, c *model.Collector) error {
 			return fmt.Errorf("target %q %w", t.Name, err)
 		}
 	}
-	if err := normalizeAcceptStatus(t.Request.AcceptStatus); err != nil {
+	if err := checkAcceptStatus(t.Request.AcceptStatus); err != nil {
 		return fmt.Errorf("target %q request.accept_status %w", t.Name, err)
 	}
 	if rt.URLPath && t.Request.PathSet {

@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/url"
 	"runtime/debug"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -16,6 +17,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/eenchev/prometheus-universal-exporter/internal/decode"
 	"github.com/eenchev/prometheus-universal-exporter/internal/fetch"
 	"github.com/eenchev/prometheus-universal-exporter/internal/model"
 	"github.com/eenchev/prometheus-universal-exporter/internal/transform"
@@ -74,17 +76,45 @@ func probeDebugRequested(query url.Values) (bool, error) {
 	return debug, nil
 }
 
-// probeTrace is what a debug probe's trip recorded.
+// probeTrace is what a debug probe's trip recorded. response is the
+// response as the target sent it (sentResponse), and convertedFrom the
+// encoding its body was converted from before it was decoded, empty when it
+// was not converted.
 type probeTrace struct {
-	mu        sync.Mutex
-	logs      bytes.Buffer
-	logger    *slog.Logger
-	requests  *fetch.RequestTrace
-	steps     []traceStep
-	response  *fetch.HTTPResponse
-	decoded   string
-	transform *model.MetricSet
-	failures  []transform.RuleFailure
+	mu            sync.Mutex
+	logs          bytes.Buffer
+	logger        *slog.Logger
+	requests      *fetch.RequestTrace
+	steps         []traceStep
+	response      *fetch.HTTPResponse
+	convertedFrom string
+	decoded       string
+	transform     *model.MetricSet
+	failures      []transform.RuleFailure
+}
+
+// sentResponse is a copy of a response as it was fetched, for a report to
+// show after the decode has converted the response's body to UTF-8 and
+// rewritten its Content-Type to say so (decode/textencoding.go). The decode
+// replaces the body rather than changing its bytes, so the copy shares them:
+// only a trip that is reported keeps the body the target sent, and only for
+// a body that was converted is that a second one. A directory's files are
+// copied the same way.
+func sentResponse(r *fetch.HTTPResponse) *fetch.HTTPResponse {
+	if r == nil {
+		return nil
+	}
+	sent := *r
+	sent.Headers = r.Headers.Clone()
+	if r.Directory != nil {
+		directory := *r.Directory
+		directory.Files = slices.Clone(r.Directory.Files)
+		for i, f := range directory.Files {
+			directory.Files[i].Response = sentResponse(f.Response)
+		}
+		sent.Directory = &directory
+	}
+	return &sent
 }
 
 // traceStep is one stage of the trip.
@@ -147,6 +177,26 @@ func (t *probeTrace) record(change func(*probeTrace)) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	change(t)
+}
+
+// converted records the encoding the decode converted the response's body
+// from, which the report says beside the body the target sent; t may be nil.
+// decoded is what the decode gave, nil when it failed, where the encoding is
+// the one the collector's own decoder type would have had converted.
+func (t *probeTrace) converted(c *model.Collector, decoded *decode.Decoded) {
+	if t == nil {
+		return
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if t.response == nil {
+		return
+	}
+	kind := c.Decoder.Type
+	if decoded != nil {
+		kind = decoded.Kind
+	}
+	t.convertedFrom = decode.ConvertedFrom(t.response, c, kind)
 }
 
 // tripFailed logs a failure of a trip: to the failure log, or for a debug
@@ -365,8 +415,11 @@ func (s *Server) staticDebugVerdict(result collected, p debugProbe) (string, *mo
 // a debug probe is. It publishes nothing: the endpoint keeps serving the
 // target's last scheduled result.
 func (s *Server) serveStaticTargetDebug(w http.ResponseWriter, r *http.Request, name string) {
+	// The target and its collector are read together, as its scrape reads
+	// them.
+	cfg, file := s.manager.InForce()
 	var target *model.StaticTarget
-	for _, t := range s.manager.StaticTargets() {
+	for _, t := range staticTargetsOf(file) {
 		if t.Name == name {
 			target = &t
 			break
@@ -376,7 +429,6 @@ func (s *Server) serveStaticTargetDebug(w http.ResponseWriter, r *http.Request, 
 		http.Error(w, fmt.Sprintf("no static target is named %q", name), http.StatusNotFound)
 		return
 	}
-	cfg := s.manager.Get()
 	c := model.CollectorByName(cfg, target.Collector)
 	if c == nil {
 		http.Error(w, fmt.Sprintf("static target %q references unknown collector %q", target.Name, target.Collector), http.StatusNotFound)
@@ -450,7 +502,7 @@ func (t *probeTrace) report(p debugProbe, verdict string, answer *model.MetricSe
 	if t.response == nil {
 		b.WriteString("  none\n")
 	} else {
-		writeResponse(&b, t.response)
+		writeResponse(&b, t.response, t.convertedFrom)
 	}
 
 	b.WriteString("\nStages\n")
@@ -493,9 +545,12 @@ func (t *probeTrace) report(p debugProbe, verdict string, answer *model.MetricSe
 	return b.Bytes()
 }
 
-// writeResponse renders the response: its status, headers and body, or a
-// directory's files.
-func writeResponse(b *bytes.Buffer, r *fetch.HTTPResponse) {
+// writeResponse renders the response as the target sent it: its status,
+// headers and body, or a directory's files. convertedFrom, when not empty,
+// is the encoding the body was converted from before it was decoded, which
+// the report says, since the rules read the converted text and not the bytes
+// shown.
+func writeResponse(b *bytes.Buffer, r *fetch.HTTPResponse, convertedFrom string) {
 	switch {
 	case r.GRPCCode != nil:
 		fmt.Fprintf(b, "  gRPC status %d\n", *r.GRPCCode)
@@ -525,12 +580,20 @@ func writeResponse(b *bytes.Buffer, r *fetch.HTTPResponse) {
 		}
 		return
 	}
-	writeBody(b, r.Body)
+	writeBody(b, r.Body, convertedFrom)
 }
 
-// writeBody renders a body, up to debugBodyLimit, text only.
-func writeBody(b *bytes.Buffer, body []byte) {
-	shown := body
+// writeBody renders a body, up to debugBodyLimit, text only. The report is
+// UTF-8, so a body in another encoding, whose bytes it cannot show as they
+// are, is shown as the same text in UTF-8, under a line that gives its size
+// as sent and says what it was converted from.
+func writeBody(b *bytes.Buffer, body []byte, convertedFrom string) {
+	shown, note := body, ""
+	if convertedFrom != "" {
+		if text, err := decode.TextFrom(body, convertedFrom); err == nil {
+			shown, note = text, " in "+convertedFrom+", converted to UTF-8 before decoding and shown here as UTF-8"
+		}
+	}
 	cut := len(shown) > debugBodyLimit
 	if cut {
 		shown = shown[:debugBodyLimit]
@@ -543,7 +606,7 @@ func writeBody(b *bytes.Buffer, body []byte) {
 		fmt.Fprintf(b, "  Body: %d bytes, not text\n", len(body))
 		return
 	}
-	fmt.Fprintf(b, "  Body: %d bytes\n", len(body))
+	fmt.Fprintf(b, "  Body: %d bytes%s\n", len(body), note)
 	for _, line := range strings.Split(strings.TrimRight(string(shown), "\n"), "\n") {
 		b.WriteString("    ")
 		b.WriteString(line)

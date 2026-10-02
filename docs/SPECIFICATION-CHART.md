@@ -102,7 +102,10 @@ The
 container port MUST keep the name `http` so Service, Ingress, ServiceMonitor,
 and PodMonitor references remain valid when the port changes.
 `server.pythonPath` MUST default to the interpreter path in the published
-container image.
+container image. Where the chart README names that image's Python base, it
+MUST name the release the Dockerfile pins as `PYTHON_VERSION`, and a test MUST
+fail when the two differ, so a Dockerfile update cannot leave the README
+describing another interpreter.
 
 Arguments rendered into the Pod template MUST be quoted so the argument value
 reaches the process exactly as configured, without literal quote characters.
@@ -153,12 +156,51 @@ With `goMemLimit.enabled`, the default, the chart MUST render
 `--runtime.memory-limit-ratio` with `goMemLimit.ratio`, `0.8` by default,
 more than 0 and at most 1, or fail rendering.
 
+`goGC.percent` is the Go garbage collector's target. Empty, the default, or
+null, the chart MUST render nothing for it, so Go's default, 100, stays, and
+a release that does not set it MUST render as it did without the value. Set,
+it MUST be rendered as the `GOGC` environment variable of the exporter
+container, its value a string, before the entries of `env` and with
+`envFrom` unchanged; the exporter takes no flag for it, since the Go runtime
+reads the variable itself. It MUST be a whole number from 1 to 10000, given
+as a number or as a string, or the string `off`; anything else MUST be
+refused by the values schema and, with the schema skipped, MUST fail
+rendering with a message saying what it may be. A boolean is among what is
+refused: YAML reads an unquoted `off` as `false`, which could as well mean
+"leave it alone", so `off` MUST be written in quotes in a values file, and
+`values.yaml` and the chart README MUST say so.
+
+The variable MUST have one source: a `GOGC` entry in `env` beside a
+`goGC.percent` MUST fail rendering with a message naming both, since
+Kubernetes accepts a name twice and keeps the last. A `GOGC` entry in `env`
+with no `goGC.percent` MUST be rendered as given.
+
+`goGC.percent: off` collects nothing until the Go memory limit is near, so
+it MUST fail rendering, with a message naming `goGC.percent` and the value
+that leaves the limit out, unless a Go memory limit is in force. One is in
+force when `goMemLimit.enabled` renders the ratio and
+`resources.limits.memory` is set, which is the limit the exporter takes its
+share of; and, since `GOMEMLIMIT` in the environment wins over the ratio in
+the exporter (SPECIFICATION-EXPORTER.md § 30), when `env` holds a
+`GOMEMLIMIT` entry, the operator's own limit, unless its value is `off`,
+which sets no limit and wins over the ratio all the same; an entry with an
+empty value is no entry to the exporter, and none here. A number MUST
+render with or without a memory limit. Changing `goGC.percent` changes the
+pod template and so rolls the pods (§ 33.3); it MUST NOT need an annotation
+of its own.
+
 The chart MUST offer an optional PodDisruptionBudget, `podDisruptionBudget`,
 disabled by default, selecting the Deployment's pods with `minAvailable` or
 `maxUnavailable`, `maxUnavailable: 1` when neither is set; setting both MUST
 fail rendering. A value MUST be rendered as set, `maxUnavailable: 0`
 included, which Kubernetes accepts though it allows no voluntary eviction;
-the notes MUST warn about `0` and `0%`.
+the notes MUST warn about `0` and `0%`. They MUST warn as well about a
+`minAvailable` that leaves no pod to evict: without autoscaling, a count of
+`replicaCount` or more, or a percentage that, rounded up as Kubernetes rounds
+it, is `replicaCount` or more, while `replicaCount` is above zero; and `100%`
+or more whatever the replicas, autoscaling included. With autoscaling the
+replica count is not the chart's to know, so no other `minAvailable` is warned
+about.
 
 `service.sessionAffinity`, empty by default, MUST be rendered on the Service
 when set, `None` or `ClientIP`, and the chart MUST document that each replica
@@ -209,7 +251,20 @@ Every key of `config.data` MUST be rendered into the ConfigMap and the whole
 ConfigMap mounted as that directory, so collector files (§ 5.0 of the exporter
 specification) can be supplied as further keys and listed under
 `collector_files` relative to `config.yaml`. A change to any key MUST roll or
-reload the exporter as a change to `config.yaml` does (§ 33.3). The chart
+reload the exporter as a change to `config.yaml` does (§ 33.3). Every file
+the chart renders into the ConfigMap — each key of `config.data` and the
+static target document — MUST reach the pod byte for byte as it was given,
+under a key rendered as a string: the key MUST be quoted, so a name YAML
+reads as a number or a boolean stays a key, and the content MUST NOT depend
+on the indentation of its first line, so a file starting with an indented
+line, which a block scalar without an indentation indicator ends at the
+first line indented less, MUST render. A file SHOULD stay readable text in
+the rendered ConfigMap; one that YAML text cannot hold unchanged — with
+control characters, carriage returns or other line breaks YAML rewrites, a
+byte order mark, bytes that are not UTF-8, or anything but one line break or
+none after its last visible character — MUST be rendered under `binaryData`
+instead, which the pod mounts as the same file. The checksum annotation
+(§ 33.3) MUST change with any such file, however it is rendered. The chart
 documentation MUST show collector files supplied this way, with a key naming
 pattern that cannot match the static target file rendered into the same
 directory, and a test MUST load that example as the exporter would.
@@ -264,6 +319,8 @@ monitors:
     labels: {}
     annotations: {}
     targetSelector: {}
+    namespaceSelector: {}
+    port: http
     collector: example
     params: {}
     relabelings: []
@@ -308,6 +365,38 @@ and ending with a letter or digit, at most 63 characters — which the values
 schema MUST enforce; two entries of one name, or an entry
 named `self` or `static-targets`, the suffixes of the chart's own monitors,
 MUST fail rendering, since the second object would replace the first.
+
+An entry's `port` MUST be rendered as its endpoint's `port`, quoted, and
+`http` when the entry has none: the name of the port whose address becomes
+the probe's target, a port of the selected Services for `type: service` and a
+container port of the selected pods for `type: pod`, so targets that name
+their port otherwise, a gRPC server's `grpc` port among them, can be probed.
+A `port` is a port's name and never its number, as the Prometheus Operator's
+`port` field is, which looks the value up among the ports' names: a number
+rendered as a name matches no port and leaves the monitor without targets.
+So a `port` MUST be lower-case letters, digits and `-` with at least one
+letter and no `-` first or last, of at most 63 characters for `type: service`,
+as Kubernetes names a Service port, and of at most 15 with no `--` for
+`type: pod`, as it names a container port; a name of digits alone, which
+Kubernetes allows a Service port, is not taken, since it cannot be told from
+a number given by mistake. The values schema MUST enforce this, and the
+templates MUST enforce it themselves when the schema is skipped, failing with
+a message that names the monitor and, for a number — written as one or as a
+string of digits — says to name the port on the Services or the pods and give
+that name. The chart MUST NOT render a port number: a PodMonitor's
+`portNumber` is unknown to the CRDs of Prometheus Operator releases before
+0.79, and `targetPort` is deprecated on a PodMonitor and on a ServiceMonitor
+is a container port of the pods behind the Service, not the Service's own.
+The chart documentation MUST say where a port is given its name, on a Service
+and on a pod.
+
+An entry's `namespaceSelector` MUST be rendered as the monitor's
+`spec.namespaceSelector`, as the Prometheus Operator defines it — `any`, a
+boolean, or `matchNames`, a list of namespace names — so targets outside the
+monitor's own namespace can be found; without one, none MUST be rendered. The
+values schema MUST refuse a `namespaceSelector` with any other key. The
+chart documentation MUST name the port in its description of monitoring a
+`grpc` collector.
 
 Without `targetSelector` the monitor MUST select targets labelled
 `app.kubernetes.io/name: target`; with it, the selector as given. Either way
@@ -406,12 +495,18 @@ values schema:
 | `staticTargets.expandEnv` | `--static-targets.expand-env`, rendered only when `true` and `staticTargets.enabled` |
 | `staticTargets.enabled`, `staticTargets.fileName` | `--static-targets-file`, rendered only when enabled |
 | `staticTargets.path` | `--web.static-targets-path`, always rendered; a path of plain segments that is neither `selfMetrics.path` nor another endpoint's; default `/static-targets` |
+| `goMemLimit.enabled`, `goMemLimit.ratio` | `--runtime.memory-limit-ratio`, rendered only when enabled (§ 33.1) |
+| `config` | `--config.file`, always the chart's mount path of `config.yaml` (§ 33.2) |
 
 An invalid value MUST fail rendering and be refused by the values schema.
 `server.probeTimeoutOffset`, `server.probeDefaultTimeout`, `server.probeMaxConcurrent`, `server.pythonMaxWorkers` and `server.shutdownTimeout` MUST default to empty
 and, while empty, MUST NOT render their flags at all, so the exporter's own default applies and an image
 older than the flag still starts. A test MUST fail when the exporter has a flag
-the chart neither renders nor refuses as one-shot (§ 33.10a).
+the chart neither renders nor refuses as one-shot (§ 33.10a). The chart
+README's flag table MUST list every flag the chart renders, and its
+description of the one-shot flags every flag the chart refuses as one; a test
+MUST compare that table, that description and the table above with the flags
+the exporter defines and the chart renders, and fail when any is incomplete.
 
 ### 33.10a Extra volumes and command-line arguments
 
@@ -445,14 +540,25 @@ other than the values file:
   mounts. A mount over the configuration directory replaces it, so the exporter
   starts with no `config.yaml` and crash-loops with an error about the missing
   file rather than about the mount that hid it. The reserved set MUST follow the
-  values, so a path is reserved only while the chart actually mounts it.
+  values, so a path is reserved only while the chart actually mounts it: the
+  configuration directory always, and `targetAuth.mountPath` and
+  `webAuth.mountPath` while each is enabled.
+
+The chart's own mounts MUST NOT collide either, since a pod cannot mount two
+volumes at one path: an enabled `targetAuth.mountPath` or `webAuth.mountPath`
+that is the configuration directory, or the two being one path, MUST fail
+rendering, naming the value and what it collides with, and so MUST two
+`extraVolumeMounts` entries of one `mountPath`. Every one of these
+comparisons MUST ignore a trailing slash, so `/etc/prometheus-universal-exporter/`
+collides with `/etc/prometheus-universal-exporter`.
 
 An `extraArgs` entry that does not begin with `--` MUST be rejected as well: a
 bare word is read as a positional argument and ignored, so it would fail by
 doing nothing. So MUST every one-shot flag, which prints something and exits so
 that a pod started with it would restart for ever instead of serving:
 `--dry-run` (SPECIFICATION-EXPORTER.md § 30), `--config.schema`,
-`--config.collector-file-schema`, `--version` and `--help`.
+`--config.collector-file-schema`, `--static-targets-file-schema`, `--version`
+and `--help`.
 
 ### 33.10b Values schema
 
@@ -464,7 +570,14 @@ a Deployment that starts and quietly ignores what the operator asked for.
 The schema MUST:
 
 - declare a property for every key `values.yaml` sets, and set none the chart
-  does not read, so the schema and the defaults describe the same chart;
+  does not read, so the schema and the defaults describe the same chart. Two
+  properties are the exception, since Helm passes them to a chart used as a
+  dependency of another and a root schema that refuses unknown keys would
+  otherwise refuse every parent chart: `global`, any object, which holds the
+  parent's global values and is an empty map when it has none, and `enabled`,
+  a boolean, the key a dependency's `condition` conventionally reads. The
+  schema MUST allow both, `values.yaml` MUST set neither, and the templates
+  MUST NOT read either;
 - require nothing at the top level. Every value has a default, so an install
   passing no values MUST succeed;
 - set `additionalProperties: false` on the top level and on the objects the
@@ -473,7 +586,9 @@ The schema MUST:
 - constrain the values whose wrong value fails late rather than loudly: the
   enumerations the templates compare against (`image.pullPolicy`,
   `service.type`, `ingress` path types, `strategy.type`, a monitor's `type` and
-  `auth.type`, `targetAuth.type`), Go durations, the Prometheus durations of
+  `auth.type`, `targetAuth.type`), a monitor's `auth` that is enabled without
+  a `type` or a non-empty `secretName` (§ 42.7), a monitor's `port` and
+  `namespaceSelector` (§ 33.5), Go durations, the Prometheus durations of
   the monitors' `interval` and `scrapeTimeout` — a monitor's, and
   `selfMetrics`' and `staticTargets.monitor`'s, which the Prometheus Operator
   takes as whole numbers of `y`, `w`, `d`, `h`, `m`, `s` and `ms`, with no
@@ -481,7 +596,9 @@ The schema MUST:
   timings (`terminationGracePeriodSeconds` on `livenessProbe` only, since
   Kubernetes refuses it on a readiness probe), TCP port ranges,
   `server.listenAddress` in the same `host:port` shape the render-time check
-  enforces, and the `--` prefix on an `extraArgs` entry; and
+  enforces, `goGC.percent` as the whole number from 1 to 10000 or the `off`
+  the render-time check accepts (§ 33.1), and the `--` prefix on an
+  `extraArgs` entry; and
 - stay open where the chart passes a raw Kubernetes shape straight through —
   `resources`, `affinity`, the security contexts, `tolerations`, `env`,
   `envFrom`, `extraVolumes`, relabelings, network policy rules — beyond the
@@ -513,6 +630,20 @@ The repository MUST include automated Helm validation covering at least:
   and one rendering each for an `extraArgs` entry naming a chart-managed flag,
   an `extraArgs` entry that is not a flag, and an `extraVolumeMounts` entry at a
   mount path the chart already uses, each of which MUST fail.
+- `helm template` with `strategy.type=Recreate`, with a monitor's `port` and
+  `namespaceSelector` on a monitor of each type, with a configuration file
+  whose first line is indented, and of a parent chart that has the chart as a
+  dependency.
+- `helm template` with a monitor's enabled `auth` without a `type`, with a
+  monitor's `port` given as a number, with a
+  scrape timeout longer than its interval, with the Ingress enabled and the
+  Service not, and with a `webAuth.mountPath` and an `extraVolumeMounts` entry
+  at the configuration directory written with a trailing slash, each of which
+  MUST fail.
+- `helm template` with `goGC.percent` set, which MUST render `GOGC` with that
+  value, and with the default values, which MUST render no `GOGC`; and with
+  `goGC.percent` `off` and `goMemLimit` disabled, `0`, and a number beside a
+  `GOGC` entry in `env`, each of which MUST fail.
 - every rendered manifest starting its own YAML document, with monitors enabled
   and the self-metrics monitor rendering alongside them
 - every rendered ServiceMonitor and PodMonitor parsed as YAML, with a
@@ -523,6 +654,28 @@ The repository MUST include automated Helm validation covering at least:
 - Deployment generation
 - Service generation
 - Correct `/probe` path and collector parameter configuration
+
+The validation is written twice, as the `helm-test` recipe of the Makefile and
+as the chart steps of the CI workflow, and the two MUST make the same checks.
+Every check of either MUST fail its run when what it checks does not hold:
+
+- a render that must succeed, and a line that must be in a render, MUST be a
+  command whose failure ends its shell: the last command of its recipe line
+  or step, or one under `set -e` — which a workflow step's shell has from
+  GitHub unless a `shell:` takes it away, and a recipe line has only by saying
+  so — and MUST NOT be followed by `||`, `&&` or `&`;
+- a render that must be refused, and a text that must be absent from a render,
+  MUST be the whole condition of an `if` whose `then` branch ends the shell
+  with a status that is not zero;
+- helm MUST NOT be piped into a command that passes on a render of nothing,
+  nor into a condition, and a render kept in a variable MUST be kept from the
+  one helm command; and
+- no recipe line of the checks MAY start with make's `-`, and no chart step, or
+  its job, MAY have `continue-on-error` or an `if` other than the one that
+  runs the chart steps when the chart changed.
+
+A test MUST read both lists as the shell runs them and fail, naming the file,
+the line and the recipe or step, on a check that breaks one of these rules.
 
 If feasible, use a Kubernetes schema/testing tool such as `kubeconform` or an equivalent to validate rendered manifests.
 
@@ -556,6 +709,9 @@ The Helm chart README MUST document:
   the chart rejects
 - Installation and upgrade from the published OCI repository, including the
   recommendation to pin a version
+- Use as a dependency of another chart, with the `condition` that switches it
+  and the values under its name; the version the example pins MUST be the
+  chart's
 - A reference listing every top-level value, its type and its default
 - The features the chart deploys, described only where the exporter
   implements them
@@ -781,6 +937,186 @@ are skipped and the text checks of the templates still run:
    as the exporter loads it, the `webAuth` files standing in a directory of
    the test's own; an example that replaces `config.yaml` MUST therefore keep
    collectors in it, and one whose monitors name a collector MUST define it.
+26. A dependency of another chart: a parent chart built in a directory of the
+   test's own, naming the chart by its `file://` path with a `condition` of
+   `prometheus-universal-exporter.enabled`, MUST render the chart's
+   Deployment and ConfigMap with no values, with `global` values and with
+   `enabled: true` and a value of the chart's under its name; the condition
+   set false MUST render nothing of the chart; a misspelled value under the
+   chart's name and an `enabled` that is not a boolean MUST still fail
+   rendering. Without helm, the schema MUST still be checked to declare
+   `global` as an object and `enabled` as a boolean, and `values.yaml` to set
+   neither.
+27. The Deployment strategy: the default MUST render `RollingUpdate` with
+   `maxSurge: 1` and `maxUnavailable: 0`; `strategy.type: Recreate` alone MUST
+   render `type: Recreate` and no `rollingUpdate`; a `rollingUpdate` set with
+   `RollingUpdate` MUST be rendered as set.
+28. Monitor credentials: an enabled `auth` of `type: bearer` and of
+   `type: basic` MUST render complete selectors on monitors of both types,
+   with the default keys, a key and `optional` of its own, the endpoint's
+   relabelings still in place, and no `webAuth` credential beside it; an
+   `auth` that is not enabled MUST render none and need neither `type` nor
+   `secretName`; an enabled `auth` without a `type`, without a `secretName`
+   or with an empty one MUST fail rendering on monitors of both types, by the
+   values schema, and, with the schema skipped and `webAuth` enabled, by the
+   templates, with a message naming the monitor and `auth.type` or
+   `auth.secretName`. A monitor without a `name` MUST fail rendering, and
+   neither monitor template MUST hold a fallback name.
+29. Monitor ports and namespaces: a monitor without `port` MUST render the
+   port `http` and no `namespaceSelector`, for both types; a `port` MUST be
+   rendered as a string on the endpoint, one YAML would read as a boolean
+   included; `namespaceSelector.matchNames` and `namespaceSelector.any` MUST
+   be rendered under the monitor's `spec`, beside its `selector`; an empty
+   `port`, a `port` that is a number, a `namespaceSelector` with another key
+   and a `matchNames` entry that is empty MUST fail rendering. For both
+   types the ports `http`, `grpc`, `metrics-2`, `a`, `9-a` and one of 15
+   characters MUST render as given, as strings, and `9115` as a number and
+   as a string, `Http`, `-http`, `http-`, `1-2`, `my_port`, a boolean, an
+   empty one and one of 64 characters MUST be refused by the values schema,
+   naming `monitors.0.port`; `a--b` and a name of 16 characters MUST be
+   refused for `type: pod` and rendered for `type: service`, as one of 63
+   MUST be. With the schema skipped the templates MUST refuse the same
+   values, naming the monitor: a number, as a number or as a string, with a
+   message saying that the port is a number and to name the port in the
+   Services' `spec.ports` or the pods' `spec.containers[].ports`, anything
+   else with the grammar of the type's port names; `grpc`, `metrics-2` and
+   `a` MUST still render, a null `port` MUST render `http`, and the `port`
+   of an entry that is not enabled MUST NOT fail rendering.
+30. Configuration files as given: files whose first line is indented, blank
+   or starts with a tab, without a final line break, holding document
+   markers, blank and whitespace-only lines and trailing spaces inside, or
+   characters outside ASCII, and files named `123` and `true`, MUST be
+   rendered under `data` with string keys and read back as the bytes given;
+   files ending in two line breaks, a trailing space, a no-break space or a
+   whitespace-only line, holding carriage returns, a control character, a delete character,
+   a byte order mark, a next-line, line-separator or paragraph-separator
+   character or bytes that are not UTF-8, an empty file and a file of one
+   line break MUST be rendered under `binaryData` and decode to the bytes
+   given. Each text file MUST also round-trip as the last file of the
+   ConfigMap and as the first lines of the static target document. The
+   `checksum/config` annotation MUST be the same for the same values and
+   differ after a change to `config.yaml`, to a collector file, to its first
+   line's indentation or its final line break, to a file under `binaryData`,
+   after a file is added, and after the static target document is added or
+   changed.
+31. Scrape timings, the Ingress and mount paths: a `scrapeTimeout` longer
+   than its `interval` MUST fail rendering, naming the monitor and both
+   values, on a probe monitor of either type, in seconds against minutes,
+   milliseconds, hours, days, weeks and years, on `selfMetrics` and on the
+   static targets monitor; one equal to its interval in other units, one
+   without an interval, and the timings of a disabled entry, of
+   `selfMetrics` when disabled and of a static targets monitor that is not
+   rendered MUST render. `ingress.enabled` MUST render an Ingress to the
+   Service and, with `service.enabled: false`, fail rendering.
+   `webAuth.mountPath` or `targetAuth.mountPath` at the configuration
+   directory, with or without a trailing slash, the two at one path, an
+   `extraVolumeMounts` entry at either or at the configuration directory
+   with a trailing slash on either side, and two entries at one path MUST
+   fail rendering, naming what collides; the three at paths of their own,
+   one nested in another, MUST render.
+32. A budget of every replica: the notes MUST warn when `minAvailable` is 1
+   with one replica, 2 or 3 with two, `50%` with one, `67%` with three and
+   `100%` with three or with autoscaling, and MUST NOT warn for 1 with two
+   replicas, 0, `50%` with two, `66%` with three, 1 with autoscaling, 1 with
+   no replicas, the default budget, `maxUnavailable: 1` or a budget that is
+   not enabled.
+33. Documentation in step with the code: the chart README's flag table and
+   § 33.10's MUST name every flag the chart's Deployment renders and no
+   other, and the README's one-shot sentence every exporter flag the chart
+   does not render; the Python base image the chart README names MUST be
+   the Dockerfile's `PYTHON_VERSION`; the version the README's dependency
+   example pins MUST be the chart's; and the static target example in
+   `values.yaml`'s comments MUST load and validate as the exporter loads a
+   static target document, its one target holding its `request`, `labels`,
+   `export_via_otlp` and `otlp`, with no commented line left after the
+   `monitor` values.
+34. The cases of `make helm-test` and CI: the Go tests above are skipped
+   without helm, which neither `make helm-test` nor the chart steps of the CI
+   workflow are, so each of the two MUST also render
+   `strategy.type=Recreate` and find `type: Recreate` and no `rollingUpdate`;
+   render a monitor of `type: service` and one of `type: pod` with
+   `port: grpc` and `namespaceSelector.matchNames`, and find the port, the
+   selector and the namespace; render `goGC.percent=400` and find
+   `name: GOGC` and `value: "400"`, and render the default values and find
+   no `GOGC`; render a further `config.data` file whose
+   first line is indented, `testdata/chart/indented-first-line.yaml`, find
+   that line indented in the ConfigMap and pass the render to the manifest
+   check; and build the parent chart `testdata/chart/parent` with
+   `helm dependency build`, render it with
+   `prometheus-universal-exporter.enabled=true`, and find the dependency's
+   Deployment and the replica count the parent's values give it. The parent
+   MUST be built in a temporary copy of the two charts, so that neither the
+   `charts` directory nor the `Chart.lock` helm writes reaches the working
+   tree, and the build MUST need no network. Each of the two MUST fail when
+   helm accepts a monitor's enabled `auth` without a `type`, a monitor's
+   `port` of `"9115"`, a
+   `selfMetrics.scrapeTimeout` longer than `selfMetrics.interval`,
+   `ingress.enabled` with `service.enabled=false`, a `webAuth.mountPath` at
+   the configuration directory written with a trailing slash, an
+   `extraVolumeMounts` entry there written with one, `goGC.percent` `off` as
+   a string with `goMemLimit.enabled=false`, `goGC.percent=0`, or
+   `goGC.percent=200` beside a `GOGC` entry in `env`. A check of what a render
+   holds MUST keep the render before reading it, so that helm failing fails
+   the check rather than handing the reader nothing. A test MUST fail when
+   either list lacks one of these checks. A test MUST also find no check in
+   either list whose failure would fail nothing (§ 33.11), reading at least
+   as many checks from each list as it has had, and with it a recipe line as
+   a shell started without `-e` at the line it is written on, make's `@`,
+   `+` and `-` off it, and a step as a shell started with `-e` unless its
+   `shell:`, its job's or the workflow's default is a command without the
+   flag. Each of these changes, made to a copy of the Makefile's or the
+   workflow's text and never to the files, MUST be reported with the file
+   and what is wrong: a `then` branch that lost its `exit 1`, that exits
+   with 0, or that exits only when its message fails; a check followed by
+   `|| true` or `|| :`; a recipe line that lost its `set -eu`, that turns it
+   off again with `set +e`, that goes on after a check without it, or that
+   starts with `-` or `@-`; `.IGNORE` in the Makefile; `continue-on-error`
+   on a chart step or on its job; a chart step with `if: false` or with a
+   `shell:` without `-e`; a condition joined to `&& false` or followed by
+   another command; a render piped into a condition, piped into `cat`, or
+   kept from `helm ... || true`; a render read with `grep -qv` or with an
+   empty pattern; an `if` piped into another command; a refusal written
+   behind `!`; and a rejection replaced by `if false`, a case rendering
+   another value and a pattern weakened in one list only. The parent chart MUST hold a
+   `Chart.yaml` and a `values.yaml` and nothing else, name the chart as its
+   one dependency by a relative `file://` path that reaches it, at the
+   chart's version and with the condition
+   `prometheus-universal-exporter.enabled`, and set `global` values and the
+   chart's `replicaCount` but not the condition; the indented file MUST keep
+   an indented first line and a later line that is not indented, and MUST be
+   rendered and read back as given; tests MUST check both, the renders
+   whenever helm is on the PATH.
+35. The garbage collector's target: the default, an empty and a null
+   `goGC.percent` MUST render no `GOGC` and no `env`, the same text as a
+   render without the value, and `goGC.percent=400` MUST differ from it by
+   the exporter container's `env` alone. `400`, as a number, from a values
+   file and as a string, `1` and `10000` MUST render `GOGC` once in the
+   whole render, on the exporter container, as a quoted string; with `env`
+   and `envFrom` set it MUST come first in `env`, the entries of `env` after
+   it in their order and `envFrom` after `env`. `off` MUST render with the
+   default values, quoted in a values file, with another ratio and memory
+   limit, and with `goMemLimit` off or no memory limit beside a
+   `GOMEMLIMIT` entry in `env` holding a value or a `valueFrom`; a number
+   MUST render without a memory limit
+   and with `goMemLimit` off; a `GOGC` entry in `env` with no `goGC.percent`
+   MUST render as given. `0`, `-1`, `10001`, `1.5` as a string and as a
+   number, `fast`, the strings `0`, `10001` and `0400`, `400%`, `true`, an
+   unquoted `off` in a values file and another key under `goGC` MUST be
+   refused by the values schema, naming `goGC.percent` or the key. A number
+   or `off` beside a `GOGC` entry in `env`, with a value or a `valueFrom`,
+   MUST fail rendering naming both; `off` with `goMemLimit.enabled: false`,
+   without `resources.limits.memory`, `resources.limits` or `resources`,
+   with neither, with `GOMEMLIMIT=off` in `env`, and with `goMemLimit` off
+   beside an empty `GOMEMLIMIT` entry MUST fail rendering naming
+   `goGC.percent` and what leaves the limit out, and with
+   `goMemLimit.ratio=0` by the ratio's own rule. With the schema skipped,
+   `0`, `-1`, `10001`, `1.5`, `fast`, `0400`, `false` and `true` MUST fail
+   rendering with the templates' own message, and `400`, `"400"`, `"off"`,
+   an empty string and null MUST render. Without helm, `values.yaml` MUST
+   still be checked to default `goGC.percent` to empty, the Deployment to
+   take `GOGC` from the helper that checks it, and the schema to take an
+   integer from 1 to 10000, a string or null, refuse another key, and hold
+   the pattern the helper checks with an alternative for the empty string.
 
 12. `extraArgs`, `extraVolumes` and `extraVolumeMounts` set together, which MUST
    append the argument, the volume and the mount to the ones the chart renders
@@ -837,6 +1173,8 @@ The Helm chart MUST support:
   `checksum/config` MUST stay the chart's, a `podLabels` key among them
   failing rendering;
 - an optional Ingress resource with class, host, path, TLS, and annotations;
+  it routes to the exporter's Service, so `ingress.enabled` with
+  `service.enabled: false` MUST fail rendering;
 - optional NEG integration, implemented by a configurable Service annotation
   such as the GKE `cloud.google.com/neg` annotation.
 
@@ -885,8 +1223,9 @@ by default) to mount a Secret's two keys as files named `username` and
 `password`, for the exporter's `web.basic_auth.username_file` and
 `password_file` (SPECIFICATION-EXPORTER.md § 42.5), so the exporter's own
 password need not be in the ConfigMap. `secretName` MUST be required when it
-is enabled, and an `extraVolumeMounts` entry at its `mountPath` MUST fail
-rendering. While it is enabled, every monitor the chart renders MUST send its
+is enabled, and its `mountPath` MUST be a path of its own: an
+`extraVolumeMounts` entry at it, or it being the configuration directory or
+`targetAuth.mountPath`, MUST fail rendering (§ 33.10a). While it is enabled, every monitor the chart renders MUST send its
 credential as `basicAuth`, since `web.basic_auth` protects `/probe`, the
 self-metrics and the static targets endpoints alike: the self-health and
 static targets monitors, and each probe monitor without `auth.enabled` of its
@@ -907,8 +1246,8 @@ it is less than the need, naming both.
 ## 42.7 Helm monitor arrays and opt-in monitor authentication
 
 The Helm chart MUST expose a `monitors` array. Each entry MUST contain a
-unique optional resource name, an `enabled` flag, and a `type` of `pod` or
-`service`:
+unique resource name, which is required (§ 33.5), an `enabled` flag, and a
+`type` of `pod` or `service`:
 
 ```yaml
 monitors:
@@ -918,8 +1257,10 @@ monitors:
 ```
 
 Each enabled entry MUST render exactly one corresponding PodMonitor or
-ServiceMonitor. The chart MUST support multiple enabled entries and produce
-unique resource names. Every enabled entry MUST name a `collector`, and, with
+ServiceMonitor, named `<fullname>-<name>` and nothing else: the values schema
+requires the name, so the templates MUST NOT carry a fallback name, such as
+one made of the entry's index. The chart MUST support multiple enabled entries
+and produce unique resource names. Every enabled entry MUST name a `collector`, and, with
 `config.enabled`, one `config.data` defines in `config.yaml` or a collector
 file among its keys, unless `config.yaml` lists collector files by absolute
 path; otherwise rendering MUST fail. A probe monitor MUST send Prometheus to
@@ -945,14 +1286,22 @@ auth:
 
 When `auth.enabled` is false, the chart MUST NOT render `authorization`, nor
 `basicAuth` other than the `webAuth` credential while `webAuth.enabled`
-(§ 42.6), regardless of the configured `auth.type`. When enabled, `auth.type`
-MUST select bearer or basic authentication and the chart MUST render the
-corresponding SecretKeySelectors. Their keys MUST default to `token`,
-`username` and `password`, and `optional` to false, so an entry naming only
-`secretName` renders complete selectors. An entry's own enabled `auth` MUST win
-over the `webAuth` credential. Tests MUST cover the disabled default, both
-monitor selector types, enabled bearer/basic authentication rendering, and the
-`webAuth` credential on probe monitors of both types without `auth`.
+(§ 42.6), regardless of the configured `auth.type`. When enabled, `auth` MUST
+say its `type`, `bearer` or `basic`, and its `secretName`, not empty, and the
+chart MUST render the corresponding SecretKeySelectors. An enabled `auth`
+without a `type`, or without a `secretName`, MUST fail rendering, in the
+values schema and again in the ServiceMonitor and PodMonitor templates with a
+message naming the monitor and the value to set: such an entry would
+otherwise render no credential at all, or the `webAuth` credential in place
+of the entry's own, or a selector naming no Secret, and Prometheus would
+scrape with the wrong credential or none. The selectors' keys MUST default to
+`token`, `username` and `password`, and `optional` to false, so an entry
+naming only its `type` and `secretName` renders complete selectors. An
+entry's own enabled `auth` MUST win over the `webAuth` credential. Tests MUST
+cover the disabled default, both monitor selector types, enabled bearer/basic
+authentication rendering, an enabled `auth` missing its `type` or its
+`secretName` on monitors of both types, and the `webAuth` credential on probe
+monitors of both types without `auth`.
 
 ## 42.8 Monitor relabeling and Deployment rollout behavior
 
@@ -972,7 +1321,12 @@ The default Deployment strategy MUST work with `replicaCount: 1`. The default
 `maxSurge: 1`, keeping the old ready Pod until the replacement is ready and
 temporarily allowing two Pods. The chart MAY accept percentage values as
 supported by Kubernetes, but MUST document their rounding behavior. Users that
-require no overlap MAY choose `strategy.type: Recreate`.
+require no overlap MAY choose `strategy.type: Recreate`. `rollingUpdate` MUST
+be rendered only with `strategy.type: RollingUpdate`, or with no type, which
+MUST render `RollingUpdate`: with `Recreate` it MUST be left out, the default
+values' `rollingUpdate` included, since Kubernetes refuses a Deployment that
+carries it beside `Recreate`, and `strategy.type: Recreate` alone MUST
+therefore render a Deployment Kubernetes accepts.
 
 ## 42.10 Per-scrape request overrides
 
@@ -984,7 +1338,15 @@ each `monitors` item, and MUST expose `interval` and `scrapeTimeout` on each
 item as the Prometheus Operator scrape settings. The monitor scrape timeout
 and the exporter target-request timeout override are distinct: the former is
 set on the generated ServiceMonitor or PodMonitor, while the latter is passed
-to `/probe` as `params.timeout`. The TLS override is passed as
+to `/probe` as `params.timeout`. Prometheus refuses a scrape timeout longer
+than the scrape interval, so a monitor whose `scrapeTimeout` is longer than
+its `interval` MUST fail rendering, naming the monitor and both values: an
+enabled `monitors` entry, `selfMetrics` while enabled, and
+`staticTargets.monitor` while it is rendered. The two MUST be compared as
+Prometheus durations in every unit one may hold — `y` of 365 days, `w`, `d`,
+`h`, `m`, `s` and `ms` — so `61s` is longer than `1m`; equal values MUST
+render; and a monitor that sets only one of the two, or `0`, MUST render,
+since Prometheus's own default stands for the other. The TLS override is passed as
 `params.insecure_skip_verify`; when absent, the collector's TLS setting MUST be
 preserved. `params.retry_attempts` and `params.retry_backoff` override the
 collector's retry settings for that scrape; when absent, the collector values

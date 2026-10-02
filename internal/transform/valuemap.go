@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"maps"
 	"math"
+	"strconv"
 	"strings"
 
 	"github.com/eenchev/prometheus-universal-exporter/internal/model"
@@ -49,11 +50,51 @@ func ruleValue(rule model.MetricRule, raw any) (float64, error) {
 	return scaled(rule, n), nil
 }
 
+// ruleTextValue is ruleValue for text, as a regex capture, an element's text
+// and a node's are: the same value and the same error, without handing the
+// text over as a value of any type, which allocates a copy of the string's
+// header for every series. Only a text that is no number, whose error
+// ruleValue words, is handed to it.
+func ruleTextValue(rule model.MetricRule, text string) (float64, error) {
+	trimmed := strings.TrimSpace(text)
+	if len(rule.ValueMap) > 0 {
+		if mapped, ok := rule.ValueMap[trimmed]; ok {
+			return scaled(rule, mapped), nil
+		}
+		if mapped, ok := rule.ValueMap[valueMapDefault]; ok {
+			return scaled(rule, mapped), nil
+		}
+	}
+	if n, err := strconv.ParseFloat(trimmed, 64); err == nil {
+		return scaled(rule, n), nil
+	}
+	return ruleValue(rule, text)
+}
+
 func scaled(rule model.MetricRule, value float64) float64 {
 	if rule.Scale == nil {
 		return value
 	}
-	return value * *rule.Scale
+	return scale(value, *rule.Scale)
+}
+
+// scale multiplies value by s, dividing instead when s is exactly one over
+// a whole number, so milliseconds scaled by 0.001 become 0.412 seconds
+// rather than 0.41200000000000003: 0.001 has no exact binary form, 1000
+// has.
+//
+// Exactly: s is the float64 nearest to one over the whole number, which is
+// what the scale written as 0.001, 1e-9 or 0.5 parses to. A scale that only
+// comes close to such a number is itself: 1.5e-9 is within a billionth of
+// its inverse's distance from 1/666666667, as every scale that small is,
+// and 0.3333333333 from 1/3, and dividing by the rounded inverse gave
+// 2.9999999985 for 2e9 scaled by 1.5e-9 and 1e10 for 3e10 scaled by
+// 0.3333333333. Those multiply, as every scale did before one divided.
+func scale(value, s float64) float64 {
+	if whole := math.Round(1 / s); math.Abs(whole) >= 2 && 1/whole == s {
+		return value / whole
+	}
+	return value * s
 }
 
 // checkValueRules checks a rule's value_map and scale at load.

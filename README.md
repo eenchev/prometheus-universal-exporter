@@ -160,6 +160,8 @@ pattern needs. See the
 | `--version` | off | Print the version, git revision, Go version and request types of the build, and exit. The same is in the `http_exporter_build_info` self-metric. |
 | `--dry-run` | off | Validate the files and flags above, print a JSON report and exit `0` or `1`, without starting. See [Dry run](docs/CONFIGURATION.md#dry-run). |
 
+A flag takes its value as `--name=value`. An argument that is not a flag is refused with exit status `2`, at a start and with `--dry-run` alike, naming the argument: after `--config.watch true`, every flag that follows `true` would otherwise be left unread without a word.
+
 ## Documentation
 
 - [Configuration](docs/CONFIGURATION.md) — collectors, decoders, transforms, metric rules, caching and serving the last good result while a target is down, environment variables, reloading.

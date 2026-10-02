@@ -68,7 +68,7 @@ func TestOTLPProbeAttributes(t *testing.T) {
 	otlp := otlpConfig("http://collector.invalid/v1/metrics")
 	otlp.ProbeAttributes = true
 	server := newStaticServer(t, &model.Config{OTLP: otlp, Collectors: []model.Collector{testutil.Collector("text", "text")}}, nil)
-	server.queueProbeOTLP(model.MetricSet{Metrics: []model.Metric{{Name: "v", Type: model.GaugeMetricType, Value: 1, Labels: map[string]string{"target": "own"}}}}, "text", "http://t")
+	server.queueProbeOTLP(model.MetricSet{Metrics: []model.Metric{{Name: "v", Type: model.GaugeMetricType, Value: 1, Labels: map[string]string{"target": "own"}}}}, &model.Collector{Name: "text"}, "http://t", time.Time{})
 	if points := pendingPoints(server); len(points) != 1 || points[0].Labels["target"] != "own" || points[0].Labels["collector"] != "text" {
 		t.Fatalf("%+v", points)
 	}

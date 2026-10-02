@@ -40,8 +40,14 @@ func truncateLabels(set *model.MetricSet, c *model.Collector) {
 	}
 	for i := range set.Metrics {
 		metric := &set.Metrics[i]
+		copied := false
 		for _, name := range byMetric[metric.Name] {
 			if value, ok := metric.Labels[name]; ok && len(value) > limit {
+				// Copied before the first cut, since series may share
+				// their labels (applyPrometheusTransform).
+				if !copied {
+					metric.Labels, copied = model.CloneLabels(metric.Labels), true
+				}
 				metric.Labels[name] = truncateLabelValue(value, limit)
 			}
 		}

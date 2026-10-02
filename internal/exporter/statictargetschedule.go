@@ -25,9 +25,29 @@ import (
 // firstScrapeWindow, again by the hash: otherwise a target with a long interval
 // would be missing from the static targets endpoint for up to that interval
 // after a start or a reload, which looks the same as a target nobody
-// configured. Its cadence then starts at the next point of it at least half an
-// interval after that first scrape, so the two are never close together. A scrape is bounded by its interval, and one still running
-// when the next is due makes that one skipped rather than overlapping it.
+// configured. Its cadence then starts at the next point of it at least one
+// whole interval after that first scrape began. The first scrape has its
+// interval to end in, as every scrape has, so it has ended when the cadence
+// starts, and the first turn of the cadence starts on time with an interval
+// of its own. Started sooner, half an interval on, the cadence's first turn
+// found the first scrape of a slow target still running, waited for it, and
+// was left what remained of its turn: less than the scrape takes, so a
+// healthy target whose scrapes take most of their interval was cut short and
+// reported down once after every start and every reload that changed it.
+//
+// A scrape is bounded by its interval, and two scrapes of a target never run
+// at once. A turn that comes while the target's last scrape still runs —
+// one that used its whole interval, as a target that never answers makes
+// every scrape do, ends just after the next turn has come — is not given up:
+// it waits for that scrape, starts as soon as it has ended, and must itself
+// end by the turn after it, so the cadence stays at one scrape per interval
+// and a target that answers again is seen within one. Giving the turn up
+// instead scraped such a target every second interval, and logged a skipped
+// scrape beside every failed one. A turn is skipped, and logged, only when it
+// is really lost: the scrape it waited for had not ended when the turn after
+// it came, or no scrape slot came free within the interval. That budget, less
+// than an interval by the little the scrape before it ran over, is one of the
+// steady cadence only: the first scrape never runs into the cadence.
 
 // scheduleCheckInterval is the longest the scheduler sleeps, so a reloaded
 // target file takes effect within it.
@@ -41,15 +61,22 @@ const firstScrapeWindow = 10 * time.Second
 // targetSchedule is when each static target is next due.
 type targetSchedule struct {
 	states map[string]*staticTargetState
+	// config and targets are what the schedule was last brought in step
+	// with. Neither changes once in force, so while a plan is given the
+	// same ones no target is compared with its state again.
+	config  *model.Config
+	targets []model.StaticTarget
 }
 
 // staticTargetState is one target's place in the schedule.
 type staticTargetState struct {
-	// target is the definition the state was made for; a reload that
-	// changes it starts the target again (plan).
-	target   model.StaticTarget
-	interval time.Duration
-	next     time.Time
+	// target is the definition the state was made for, and collector the
+	// fingerprint of its collector's definition (collectorFingerprint); a
+	// reload that changes either starts the target again (plan).
+	target    model.StaticTarget
+	collector string
+	interval  time.Duration
+	next      time.Time
 	// cadence is where the target's regular cadence starts, until its first,
 	// earlier scrape has been made; zero after.
 	cadence time.Time
@@ -58,27 +85,81 @@ type staticTargetState struct {
 	// a scrape begun on the old definition still keeps the next one from
 	// starting beside it, where the older could publish after the newer.
 	running *atomic.Bool
+	// awaited, shared as running is, is set when the schedule waits for
+	// the scrape in flight to end, so the loop is woken when it does.
+	awaited *atomic.Bool
+	// waiting is set while a turn of the cadence has come and its scrape
+	// has not started, because the last scrape still runs; until is when
+	// the scrape of that turn must end, the turn after it.
+	waiting bool
+	until   time.Time
 }
 
-// dueTarget is a target to scrape now, with its state.
+// awaitScrape reports whether a scrape of the target still runs, and if so
+// asks for the loop to be woken when it ends (scrapeEnded). It looks again
+// after asking: a scrape that ended in between has not seen the request.
+func (st *staticTargetState) awaitScrape() bool {
+	if !st.running.Load() {
+		return false
+	}
+	st.awaited.Store(true)
+	return st.running.Load()
+}
+
+// scrapeEnded marks the target's scrape as ended, and reports whether the
+// schedule waits for that.
+func (st *staticTargetState) scrapeEnded() bool {
+	st.running.Store(false)
+	return st.awaited.Swap(false)
+}
+
+// dueTarget is a target to scrape now, with its state, the configuration
+// that was in force with it, which its scrape uses, and when the scrape must
+// end. For a skipped one only the target and the state are set.
 type dueTarget struct {
-	target model.StaticTarget
-	state  *staticTargetState
+	target   model.StaticTarget
+	state    *staticTargetState
+	config   *model.Config
+	deadline time.Time
 }
 
 func newTargetSchedule() *targetSchedule {
 	return &targetSchedule{states: map[string]*staticTargetState{}}
 }
 
-// plan brings the schedule in step with targets, the ones in force, and
-// returns those due at now, those due but still running from their last
-// scrape, and when the next one is due. A target new to the schedule, or one
-// a reload changed — its interval, its address, its request, its params —
-// starts again: first scraped soon, within firstScrapeWindow, then on a
-// cadence of its own. A fixed address or credential therefore shows within
-// seconds rather than after the old definition's next turn, which for a long
-// interval could be an hour away. One no longer in targets is forgotten.
-func (s *targetSchedule) plan(targets []model.StaticTarget, now time.Time) (due, skipped []dueTarget, next time.Time) {
+// plan brings the schedule in step with targets, the ones in force together
+// with cfg, and returns those to scrape at now, those whose turn was lost
+// because their last scrape still runs, and when the next one is due. A
+// target new to the schedule, or one a reload changed — its interval, its
+// address, its request, its params, or anything in the definition of its
+// collector — starts again: first scraped soon, within firstScrapeWindow,
+// then on a cadence of its own. A fixed address, credential or metric rule
+// therefore shows within seconds rather than after the old definition's next
+// turn, which for a long interval could be an hour away, with the endpoint
+// serving what the old definition made until then. A target whose collector
+// did not change keeps its cadence through a reload of the configuration.
+// One no longer in targets is forgotten.
+func (s *targetSchedule) plan(cfg *model.Config, targets []model.StaticTarget, now time.Time) (due, skipped []dueTarget, next time.Time) {
+	// A reload puts another configuration or another list in force; until
+	// one does, every state is that of its target as it is. The collectors'
+	// fingerprints are worked out only for another configuration, and then
+	// once per collector, however many targets share it.
+	reloaded := cfg != s.config
+	changed := reloaded || len(targets) != len(s.targets) || len(targets) > 0 && &targets[0] != &s.targets[0]
+	s.config, s.targets = cfg, targets
+	fingerprints := map[string]string{}
+	fingerprint := func(collector string) string {
+		value, known := fingerprints[collector]
+		if !known {
+			if cfg != nil {
+				if c := model.CollectorByName(cfg, collector); c != nil {
+					value = collectorFingerprint(c)
+				}
+			}
+			fingerprints[collector] = value
+		}
+		return value
+	}
 	seen := make(map[string]bool, len(targets))
 	for _, target := range targets {
 		interval := time.Duration(target.Interval)
@@ -89,47 +170,75 @@ func (s *targetSchedule) plan(targets []model.StaticTarget, now time.Time) (due,
 		}
 		seen[target.Name] = true
 		state := s.states[target.Name]
-		if state == nil || !reflect.DeepEqual(state.target, target) {
-			running := &atomic.Bool{}
+		if state == nil || changed && (!reflect.DeepEqual(state.target, target) || reloaded && state.collector != fingerprint(target.Collector)) {
+			running, awaited := &atomic.Bool{}, &atomic.Bool{}
 			if state != nil {
-				running = state.running
+				running, awaited = state.running, state.awaited
 			}
 			state = &staticTargetState{
-				target:   target,
-				interval: interval,
-				next:     now.Add(scheduleOffset(target.Name, min(interval, firstScrapeWindow))),
-				cadence:  now.Add(scheduleOffset(target.Name, interval)),
-				running:  running,
+				target:    target,
+				collector: fingerprint(target.Collector),
+				interval:  interval,
+				next:      now.Add(scheduleOffset(target.Name, min(interval, firstScrapeWindow))),
+				cadence:   now.Add(scheduleOffset(target.Name, interval)),
+				running:   running,
+				awaited:   awaited,
 			}
 			s.states[target.Name] = state
 		}
-		if !now.Before(state.next) && state.running.Load() && !state.cadence.IsZero() {
+		// look is when the target is to be looked at again; came says a
+		// turn of its cadence came at this very look.
+		look, came := state.next, false
+		switch {
+		case now.Before(state.next):
+		case !state.cadence.IsZero() && state.awaitScrape():
 			// The first scrape of a target a reload changed, due while a
 			// scrape begun on its old definition still runs: it is not
-			// skipped, which would put it off to its cadence, but made as
-			// soon as that scrape ends, looked at again every check.
-			state.next = now.Add(scheduleCheckInterval)
-		} else if !now.Before(state.next) {
-			if state.running.Load() {
-				skipped = append(skipped, dueTarget{target, state})
-			} else {
-				due = append(due, dueTarget{target, state})
+			// skipped, which would put it off to its cadence, but stays
+			// due, and is made as soon as that scrape ends: the loop
+			// plans again when it does, and at every check.
+			look = now.Add(scheduleCheckInterval)
+		case !state.cadence.IsZero():
+			// The first scrape, with the whole interval to end in: the
+			// cadence takes over a whole interval on or later, when this
+			// scrape has ended, so its first turn waits for nothing and has
+			// a whole interval too.
+			due = append(due, dueTarget{target: target, state: state, config: cfg, deadline: now.Add(interval)})
+			state.next = state.cadence
+			state.cadence = time.Time{}
+			for state.next.Sub(now) < interval {
+				state.next = state.next.Add(interval)
 			}
-			if !state.cadence.IsZero() {
-				// The first scrape: the cadence takes over, at least half an
-				// interval on.
-				state.next = state.cadence
-				state.cadence = time.Time{}
-				for state.next.Sub(now) < interval/2 {
-					state.next = state.next.Add(interval)
-				}
+			look = state.next
+		default:
+			// A turn of the cadence. One that still waits from the turn
+			// before is lost: the scrape it waited for outlasted it.
+			if state.waiting {
+				skipped = append(skipped, dueTarget{target: target, state: state})
 			}
 			for !state.next.After(now) {
 				state.next = state.next.Add(interval)
 			}
+			look, came = state.next, true
+			state.waiting, state.until = true, state.next
 		}
-		if next.IsZero() || state.next.Before(next) {
-			next = state.next
+		if state.waiting && !state.awaitScrape() {
+			// The turn's scrape starts. It has the whole interval when it
+			// starts as its turn comes, as it nearly always does; one that
+			// had to wait for the last scrape to end has what is left of
+			// its turn, so it ends before the turn after it and the
+			// cadence holds. The scrape waited for is one of the cadence,
+			// which ran over its turn by little: the first scrape has ended
+			// before the cadence starts.
+			deadline := state.until
+			if came {
+				deadline = now.Add(interval)
+			}
+			state.waiting = false
+			due = append(due, dueTarget{target: target, state: state, config: cfg, deadline: deadline})
+		}
+		if next.IsZero() || look.Before(next) {
+			next = look
 		}
 	}
 	for name := range s.states {
@@ -149,7 +258,7 @@ func scheduleOffset(name string, interval time.Duration) time.Duration {
 }
 
 var (
-	errStillRunning = errors.New("the previous scrape is still running")
+	errStillRunning = errors.New("the scrape before it was still running when the turn after it came, so it was never started; a scrape is ended with its interval, so the one still running is held by something its deadline does not end, or the exporter is short of CPU")
 	errNoSlot       = errors.New("no scrape slot came free within the interval; other static target scrapes held them all, so raise the file's concurrency or lengthen the interval")
 	// errShuttingDown is why AbortStaticScrapes cancels the scrapes in flight.
 	errShuttingDown = errors.New("the exporter is shutting down")
@@ -164,6 +273,14 @@ var (
 // nothing and logs no failure: the target did not fail, the exporter stopped,
 // and its last result stands. Without this every restart published each
 // target in flight as down, and sent that over OTLP on the way out.
+
+// staticTargetsOf is the targets of a static target file, none without one.
+func staticTargetsOf(file *model.StaticTargetFile) []model.StaticTarget {
+	if file == nil {
+		return nil
+	}
+	return file.Targets
+}
 
 // staticScrapes is the context static target scrapes run under, and
 // AbortStaticScrapes cancels it.
@@ -203,12 +320,20 @@ func (s *Server) StaticScrapeLoop(ctx context.Context) {
 	var slots chan struct{}
 	var wg sync.WaitGroup
 	defer wg.Wait()
+	// ended wakes the loop when a scrape the schedule waits for ends, so
+	// the turn waiting for it starts then rather than at the next check.
+	ended := make(chan struct{}, 1)
 	for {
-		if limit := s.manager.StaticTargetConcurrency(); slots == nil || cap(slots) != limit {
+		// The configuration and the targets are read once, as one reload
+		// left them, and each scrape uses the configuration its target was
+		// read with: read apart, a reload between the two could give a
+		// scrape a collector its target was not checked against.
+		cfg, file := s.manager.InForce()
+		if limit := file.ScrapeConcurrency(); slots == nil || cap(slots) != limit {
 			slots = make(chan struct{}, limit)
 		}
 		now := time.Now()
-		due, skipped, next := schedule.plan(s.manager.StaticTargets(), now)
+		due, skipped, next := schedule.plan(cfg, staticTargetsOf(file), now)
 		for _, d := range skipped {
 			// Repeats are logged sparingly, as failed scrapes are.
 			s.failures.failed(s.logger, slog.LevelWarn, failureKey(d.target.Collector, "static target "+d.target.Name, "schedule"),
@@ -221,8 +346,15 @@ func (s *Server) StaticScrapeLoop(ctx context.Context) {
 			slots := slots
 			go func() {
 				defer wg.Done()
-				defer d.state.running.Store(false)
-				scrapeCtx, cancel := context.WithTimeout(s.staticScrapes(), d.state.interval)
+				defer func() {
+					if d.state.scrapeEnded() {
+						select {
+						case ended <- struct{}{}:
+						default:
+						}
+					}
+				}()
+				scrapeCtx, cancel := context.WithDeadline(s.staticScrapes(), d.deadline)
 				defer cancel()
 				if hook := slotWaitHook.Load(); hook != nil {
 					(*hook)(d.target.Name)
@@ -243,10 +375,16 @@ func (s *Server) StaticScrapeLoop(ctx context.Context) {
 					return
 				}
 				defer func() { <-slots }()
+				// A slot free as the loop stops leaves the select above two
+				// ways to go, and it takes either: the scrape that got the
+				// slot is not begun any more than the one that saw the stop.
+				if ctx.Err() != nil {
+					return
+				}
 				// A scrape that starts ends a run of skipped ones.
 				s.failures.recovered(s.logger, failureKey(d.target.Collector, "static target "+d.target.Name, "schedule"),
 					"static target scrapes on schedule again", "target", d.target.Name, "collector", d.target.Collector)
-				s.scrapeTarget(scrapeCtx, d.target)
+				s.scrapeTarget(scrapeCtx, d.config, d.target)
 			}()
 		}
 		wait := scheduleCheckInterval
@@ -258,6 +396,8 @@ func (s *Server) StaticScrapeLoop(ctx context.Context) {
 		case <-ctx.Done():
 			timer.Stop()
 			return
+		case <-ended:
+			timer.Stop()
 		case <-timer.C:
 		}
 	}

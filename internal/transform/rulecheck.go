@@ -90,14 +90,19 @@ func CheckMetricRule(x *model.Collector, r *model.MetricRule) error {
 			}
 		}
 	case x.Transform.Type == "xpath":
-		if _, err := expr.CompileXPath(r.Expression, x.Response.Namespaces); err != nil {
+		// xml is bound without being mapped, as XML binds it.
+		namespaces := boundNamespaces(x.Response.Namespaces)
+		if _, err := expr.CompileXPath(r.Expression, namespaces); err != nil {
 			fail(fmt.Errorf("%s XPath %q: %w", where, r.Expression, err))
 		}
 		for _, label := range expressionLabels(r) {
-			if strings.HasPrefix(label.Expression, "@") {
+			// An attribute read from the node by its name as written is
+			// not compiled (ownAttributeLabel, xpathLabelShape); anything
+			// else is XPath, with the collector's namespaces.
+			if xpathLabelReadByName(label.Expression, x.Decoder.Type, namespaces) {
 				continue
 			}
-			if _, err := expr.CompileXPath(label.Expression, x.Response.Namespaces); err != nil {
+			if _, err := expr.CompileXPath(label.Expression, namespaces); err != nil {
 				fail(fmt.Errorf("%s label %q XPath %q: %w", where, label.Name, label.Expression, err))
 			}
 		}
@@ -109,6 +114,28 @@ func CheckMetricRule(x *model.Collector, r *model.MetricRule) error {
 		}
 	}
 	return model.JoinProblems(errs...)
+}
+
+// xpathLabelReadByName reports whether a label of an xpath collector is an
+// attribute read by its name as written rather than by the XPath engine, in
+// a document of the collector's decoder: HTML, XML, or, for a decoder left
+// to each response, either, since the one that reads it by name may be the
+// one that arrives.
+func xpathLabelReadByName(expression, decoder string, namespaces map[string]string) bool {
+	if decoder != "xml" {
+		if _, own := ownAttributeLabel(expression, true, namespaces); own {
+			return true
+		}
+		if kind, _, _, walked := xpathLabelShape(expression, true); walked && kind == xpathLabelAttribute {
+			return true
+		}
+	}
+	if decoder != "html" {
+		if _, own := ownAttributeLabel(expression, false, namespaces); own {
+			return true
+		}
+	}
+	return false
 }
 
 // CheckTransformSettings checks the collector-wide transform settings.

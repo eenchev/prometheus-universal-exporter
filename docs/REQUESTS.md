@@ -15,17 +15,23 @@ map renders into.
 ## The request URL
 
 The URL requested is the probe's `target` with the collector's `request.path`
-joined onto it and `request.query` merged into it.
+joined onto it and `request.query` added after the target's own query.
 
 A target without a scheme is `http`. That is the normal case rather than an
 exception: Prometheus service discovery produces `__address__` as a bare
 `host:port`, and the chart's monitors pass it through as the target. So
 `10.0.0.5:8080`, `legacy.example:8080` and `[fd00::5]:9000` all mean `http://`.
 A target that needs HTTPS says so, `https://secure.example:8443`, or a
-relabeling rule adds the scheme. `allowed_schemes` applies to the result, so a
+relabeling rule adds the scheme. A scheme stands before the path, the query
+and the fragment begin, so a `://` further on is theirs:
+`app.example:8080/login?next=http://other/` has none and is `http`.
+`allowed_schemes` applies to the result, so a
 collector that allows only `https` rejects a bare target instead of upgrading
 it. A static target's scheme is checked when the file loads, so one the
 collector does not allow stops the exporter instead of failing every scrape.
+`allowed_schemes` itself holds `http`, `https` or both, in any case: any other
+entry — `htps`, `ftp`, `https://`, one with a space around it, an empty one —
+would refuse every target, and stops the exporter at startup instead.
 
 `request.path` is optional. Without it, and without a `path` probe parameter,
 the target is requested exactly as given: `http://legacy.example:8080` requests
@@ -51,6 +57,32 @@ request:
   query:
     format: json
 ```
+
+**Escapes in a path.** A `%` followed by two hexadecimal digits in
+`request.path`, in a `path` probe parameter or in a static target's
+`request.path` is an escape you wrote, and is sent as written:
+`path: /api/v4/projects/group%2Fproject` requests exactly that, the `%2F`
+neither decoded into a second segment nor escaped again into `%252F`.
+Everything else is escaped as a path needs — a space as `%20`, `é` as
+`%C3%A9` — and a `%` that begins no escape is a percent sign, sent as `%25`:
+`/100%/x` requests `/100%25/x`. To send the three characters `%2F` literally,
+write `%252F`. An escaped `.` or `..` (`%2E%2E`) is sent as written too and
+is not resolved as a parent directory. In the `path` probe parameter the
+escape is what the exporter reads after decoding the probe's own URL, so a
+monitor writes `path=/api/group%252Fproject` on the wire, which the `params`
+of a Prometheus scrape configuration do for it.
+
+**The target's own query.** A query the target carries is sent byte for byte
+as it was written — a bare key stays bare (`?debug`), a pair with a `;` in it
+stays (`?a=1;b=2`), and the pairs keep their order and their escapes
+(`?z=a%20b&a=1`). Only what could not be sent at all is escaped, where it
+stands: a space as `%20`, a double quote, `<`, `>` and characters outside
+ASCII. `request.query` is appended after it, encoded, in name
+order. A name both carry is sent twice, the target's first:
+`http://h/x?format=xml` with `query: {format: json}` requests
+`/x?format=xml&format=json`, and which of the two a server reads is the
+server's choice — leave the name out of one of them. (A `graphite` collector's
+own parameters are the exception: see [Graphite](GRAPHITE.md#a-collector).)
 
 ### The Host header
 
@@ -91,7 +123,29 @@ An answer whose `Content-Length` is over the limit is refused before its body
 is read — `response size 5000 exceeds limit 100` — and one without a
 `Content-Length` once reading passes the limit, `response size exceeds limit
 100`, its size then unknown. A `HEAD` answer's `Content-Length` is the size of
-a body it does not have, and is not held against it.
+a body it does not have, and is not held against it. There is no "no limit":
+the largest value that can be written, `9223372036854775807`, is held one
+byte lower and reads the whole answer.
+
+`max_response_bytes` bounds the body. The response's status line and headers
+have a bound of their own, 1 MiB, which no setting changes: a target that
+sends more fails the scrape as a limit does — `the response headers are larger
+than 1048576 bytes, the most the exporter reads of a response's headers` —
+and is not retried, since it would send them again.
+
+Over HTTP/2 ([`enable_http2`](#redirects-and-http2)) the bound is the same and
+so is the single attempt, but the error is that one only when the headers
+arrive whole before they are found too large, as headers that repeat one value
+do. Headers that pass the bound while more are still arriving make Go's HTTP/2
+client close the connection, and what it reports then says nothing of headers
+and is what it reports for any answer that breaks the protocol. The exporter
+cannot tell the two apart, so it does not call it a limit: the scrape fails
+as a failed request, `connection error: PROTOCOL_ERROR: the HTTP/2 connection
+was closed over what the target sent, which is not retried; an answer whose
+headers are larger than 1048576 bytes, the most the exporter reads of a
+response's headers, ends this way over HTTP/2, so look at the size of the
+target's response headers first`. A request still waiting for its answer on
+that connection fails the same way; the next request opens a new one.
 
 ## Path parameters
 
@@ -129,9 +183,15 @@ is allowed and binds nothing.
 
 **Escaping.** A value is always one path segment. It is escaped, so `a/b` is
 sent as `a%2Fb` rather than becoming two segments, and `?`, `#`, spaces and
-non-ASCII characters are escaped likewise. The values `.` and `..` are rejected
+non-ASCII characters are escaped likewise; so is a `%`, which in a value is
+always a percent sign, `50%2F` sent as `50%252F`, whereas an escape written in
+the path around the placeholder is [sent as written](#the-request-url). The
+values `.` and `..` are rejected
 with `400`, since a server resolving them would serve a different path than the
-one configured. Defaults are escaped the same way.
+one configured. Defaults are escaped the same way, and a default of `.` or
+`..` stops the exporter at startup, since no probe could use it. A `localfile`
+path holds a default to what it holds a value to, so there one with `/` or
+`\` in it [stops it too](LOCALFILE.md#which-file-is-read).
 
 **Mistakes are errors, not fallbacks.** A `param_` parameter the collector's path
 does not use is rejected with `400`, and so is one given twice. The first is
@@ -249,11 +309,42 @@ The filter follows the default, if there is one: `{{param_limit:10|number}}`.
 Filters exist only in the body; a header or query value has one encoding and
 always gets it, so a filter there stops the exporter at startup.
 
+A default is held to the same rules as a value, when the configuration loads:
+one its place refuses — `{{param_limit:ten|number}}`, a header default with a
+line break in it, a glob as the default of a Graphite expression — stops the
+exporter at startup, naming the collector, the field and the parameter. Loaded,
+it would answer `400` to every probe that left the parameter out, blaming the
+probe for the configuration's mistake.
+
 **Braces of the body's own.** In a body, a header value or a query value,
 `{{` opens a placeholder only when `param_` follows it, since a body may well
 contain braces of its own; `{{ param_x }}` with spaces is refused at startup
 rather than sent as text. Header names and query names cannot hold
 placeholders.
+
+**Only there.** Placeholders are filled in the places above and nowhere else.
+A `{{param_...}}` in any other setting of a collector — `bearer_token`,
+`basic_auth`, a credential or TLS file, `tls.server_name`, a label's `value`,
+`transform.labels`, a `value_map`, a prometheus transform's `include` and
+`exclude` — would be used as written, the token sent with the braces in it
+and the label exported as `{{param_region}}`, so it stops the exporter at
+startup, naming the field:
+
+```text
+collector "api" request.bearer_token has a {{param_...}} placeholder, which is not filled in there and would be used as written; a probe's parameters fill placeholders only in the request's path, body, header and query values, a grpc message and metadata values, and a graphite collector's targets
+```
+
+To send a token the probe supplies, put it in a header value:
+`headers: {Authorization: "Bearer {{param_token}}"}`.
+
+Three kinds of field are written in a language of their own and are not
+searched for placeholders, since there the same characters are that
+language's: Python, `transform.script` and `transform.pre_script`, where an
+f-string writes a literal brace as two (`f"{{param_x}}"`); a metric's
+`items` and `expression` and a label's `expression`, where a jq string or a
+regex may hold the text; and a metric's `description`, which may well say
+that the path takes `{{param_tenant}}`. None of them is filled in either: a
+placeholder written in an expression is evaluated as the text it is.
 
 The values are part of the response cache key like every probe parameter, and
 the verbose self-metrics never carry them: the `url` label has no query string,
@@ -335,7 +426,8 @@ probe's target. A collector that must reach it lists its address, or a network
 holding it, in `allowed_targets`; a name that resolves to it is not enough.
 
 Each entry is a host name, a glob of one, an IP address or a CIDR network,
-without a scheme, port or path. A target is refused when its host is denied
+without a scheme, port or path; a name is letters, digits, dots, hyphens and
+underscores, so `my_service` and `*.svc_local` can be listed. A target is refused when its host is denied
 by name, or any address it resolves to is in a denied network; and, when
 `allowed_targets` is set, unless its host is allowed by name, or every address
 it resolves to is in an allowed network. `denied_targets` wins. Names are
@@ -347,17 +439,58 @@ as the address without it: the zone names the interface that reaches it, so
 
 Names are checked before the request and again for every redirect followed,
 and so is a target written as an address, which needs no lookup, so it is
-refused before anything is sent. A host is checked as it will be dialed: an
-internationalised name as its ASCII form (`bücher.example` as
+refused before anything is sent. A host is checked as it will be dialed. It is
+an IP address or a name, and a name is letters, digits, `.`, `-` and `_`,
+dialed as written, so it is checked as written, in lower case and without a
+final dot: `my_service`,
+`db--primary.internal` and `-edge.internal` are not names a registrar would
+sell, but they are names Docker Compose, Kubernetes and a hosts file hand
+out, and they are reached and matched like any other. A name with characters
+outside ASCII is checked as its ASCII form (`bücher.example` as
 `xn--bcher-kva.example`), and one written in full-width characters as the
 characters they stand for (`１２７.０.０.１` is `127.0.0.1`); one that has no
-such form is refused. A connection to a host the request did not check, when
+such form is refused. A host with any other character is refused, with `403`
+and before anything is sent or looked up, whatever the lists are: `target
+intern%61l.example refused: it has "%", a character that no host name or
+address has`. No name is written with a `%`, a `,` or a `;`, and such a host
+is not harmless behind a [proxy](#proxies), which may read it differently
+from the lists: a URL carries a `%` in its host as `%25`, so
+`http://intern%2561l.example/` names the host `intern%61l.example`, which
+matches no entry for `internal.example` — and which a proxy that decodes it
+once more fetches from `internal.example`. The same spelling of
+`169.254.169.254` would reach the metadata service. A redirect to such a host
+is not followed, and a `grpc` target naming one is refused the same way. An
+IPv4 address in one of the older forms resolvers and
+proxies still read — one number (`2130706433`), fewer than four parts
+(`127.1`), parts in hexadecimal or octal (`0x7f.0.0.1`, `0177.0.0.1`) — is
+checked as the address it is, `127.0.0.1` here, before anything is sent,
+rather than as a name. A connection to a host the request did not check, when
 no proxy is in between, is refused too.
 Addresses are checked against the one each connection is actually made to, so
 the name is looked up once, by the connection, and a name that resolves
 somewhere else from one lookup to the next cannot slip through. Behind a
 [proxy](#proxies) the exporter connects to the proxy, so it looks the target's
-name up itself before the request and checks those addresses. Whether a
+name up itself before the request and checks those addresses. A name it
+cannot look up is left to the proxy to resolve, as it is for curl or any other
+client behind one — an exporter with no outside DNS of its own still reaches
+what its proxy reaches — and the name rules of both lists still apply. Only a
+collector whose own lists hold an address or a network fails then, since its
+rules could not be held to an address nobody here knows: `the request goes
+through a proxy, so metrics.partner.example has to be looked up here to hold
+it to the addresses and networks in request.allowed_targets and
+denied_targets, and the lookup failed`. List names instead, or give the
+exporter a resolver that knows the targets.
+
+This bounds the protection behind a proxy, the default refusal of the cloud
+metadata service included. The exporter checks the name, the address when the
+target is written as one, and the addresses its own lookup returns; it does
+not see the address the proxy resolves the name to. A name the exporter
+cannot resolve, or resolves differently than the proxy does, reaches whatever
+the proxy reaches for it — the metadata service of the proxy's machine, if a
+name there leads to it. Where that matters, restrict the collector by name
+with `allowed_targets`, and deny `169.254.169.254` at the proxy.
+
+Whether a
 request goes through a proxy is decided as the connection pool sending it
 decides, from the environment as it read it. A `grpc` collector does the same:
 its connections are checked as they are made, and one refused is reported as
@@ -423,7 +556,12 @@ request:
 ```
 
 The exporter retries transport failures and transient HTTP responses (`408`,
-`425`, `429`, and `5xx`). Other HTTP statuses are returned immediately. A
+`425`, `429`, and `5xx`). Other HTTP statuses are returned immediately. Three
+failures are not retried, since the same request would fail the same way: a
+target the collector's lists [refuse](#restricting-targets), response headers
+over [their bound](#compression-and-the-response-size), and an HTTP/2
+connection closed for a protocol error before the answer's headers were read.
+A
 connection that breaks while the body is being read — reset, or closed before
 the length it promised — counts as a transport failure and is retried too,
 unless the probe's time is what ran out; a [debug probe](CONFIGURATION.md#debugging-a-probe)

@@ -49,7 +49,7 @@ func TestPythonLabelValuesRefuseListsAndNonMappings(t *testing.T) {
 	requirePython(t)
 	for script, want := range map[string]string{
 		`metric(name="up", value=1, labels={"tags": ["a", "b"]})`: `label 'tags' is a list, not a single value`,
-		`metric(name="up", value=1, labels=[("a", "b")])`:         "metric labels must be a mapping",
+		`metric(name="up", value=1, labels=[("a", "b")])`:         "metric 'up' labels must be a mapping of label names to values, not a list",
 	} {
 		_, err := runWorkerScript(t, workerCollector("bad_labels", script))
 		if err == nil || !strings.Contains(err.Error(), want) {

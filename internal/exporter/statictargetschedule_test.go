@@ -31,18 +31,18 @@ func TestAScheduleKeepsItsCadence(t *testing.T) {
 	if offset < 0 || offset >= 10*time.Second || offset != scheduleOffset("a", 10*time.Second) {
 		t.Fatalf("offset %s is not a stable place within the interval", offset)
 	}
-	due, _, next := schedule.plan([]model.StaticTarget{target}, start)
+	due, _, next := schedule.plan(nil, []model.StaticTarget{target}, start)
 	if len(due) != 0 && offset > 0 || !next.Equal(start.Add(offset)) {
 		t.Fatalf("due=%d next=%s, want the first scrape at the offset %s", len(due), next.Sub(start), offset)
 	}
 	first := start.Add(offset)
-	due, _, next = schedule.plan([]model.StaticTarget{target}, first)
+	due, _, next = schedule.plan(nil, []model.StaticTarget{target}, first)
 	if len(due) != 1 || !next.Equal(first.Add(10*time.Second)) {
 		t.Fatalf("at the offset: due=%d next=%s", len(due), next.Sub(first))
 	}
 	// Looking 3.5 intervals late scrapes once, and keeps the cadence.
 	late := first.Add(35 * time.Second)
-	due, _, next = schedule.plan([]model.StaticTarget{target}, late)
+	due, _, next = schedule.plan(nil, []model.StaticTarget{target}, late)
 	if len(due) != 1 || !next.Equal(first.Add(40*time.Second)) {
 		t.Fatalf("late: due=%d next=+%s, want the cadence kept at +40s", len(due), next.Sub(first))
 	}
@@ -50,59 +50,61 @@ func TestAScheduleKeepsItsCadence(t *testing.T) {
 
 // A target with a long interval is first scraped within firstScrapeWindow,
 // not up to an interval later, and its cadence, spread over the interval by
-// name, starts at least half an interval after that first scrape.
+// name, starts at least a whole interval after that first scrape, and less
+// than two.
 func TestALongIntervalIsFirstScrapedPromptly(t *testing.T) {
 	const interval = time.Hour
 	for _, name := range []string{"a", "b", "payments", "legacy_eu", "nightly_backup"} {
 		schedule := newTargetSchedule()
 		start := time.Unix(1_000_000, 0)
 		target := scheduled(name, interval)
-		_, _, first := schedule.plan([]model.StaticTarget{target}, start)
+		_, _, first := schedule.plan(nil, []model.StaticTarget{target}, start)
 		if wait := first.Sub(start); wait < 0 || wait >= firstScrapeWindow {
 			t.Fatalf("%s: first scrape after %s, want within %s", name, wait, firstScrapeWindow)
 		}
-		due, _, second := schedule.plan([]model.StaticTarget{target}, first)
+		due, _, second := schedule.plan(nil, []model.StaticTarget{target}, first)
 		if len(due) != 1 {
 			t.Fatalf("%s: due=%d at the first scrape", name, len(due))
 		}
 		gap := second.Sub(first)
-		if gap < interval/2 || gap >= interval*3/2 {
-			t.Fatalf("%s: second scrape %s after the first, want between half and one and a half intervals", name, gap)
+		if gap < interval || gap >= 2*interval {
+			t.Fatalf("%s: second scrape %s after the first, want between one and two intervals", name, gap)
 		}
 		if offset := second.Sub(start) % interval; offset != scheduleOffset(name, interval) {
 			t.Fatalf("%s: cadence at %s into the interval, want its offset %s", name, offset, scheduleOffset(name, interval))
 		}
-		due, _, third := schedule.plan([]model.StaticTarget{target}, second)
+		due, _, third := schedule.plan(nil, []model.StaticTarget{target}, second)
 		if len(due) != 1 || third.Sub(second) != interval {
 			t.Fatalf("%s: then due=%d every %s, want every interval", name, len(due), third.Sub(second))
 		}
 	}
 }
 
-// A target still running when it is due again is skipped, not overlapped; a
-// changed interval starts a new cadence; a removed target is forgotten.
+// A target still running when it is due again is not scraped beside that
+// scrape: its turn waits for it; a changed interval starts a new cadence; a
+// removed target is forgotten.
 func TestAScheduleFollowsItsTargets(t *testing.T) {
 	schedule := newTargetSchedule()
 	now := time.Unix(1_000_000, 0)
 	target := scheduled("a", time.Second)
-	schedule.plan([]model.StaticTarget{target}, now)
+	schedule.plan(nil, []model.StaticTarget{target}, now)
 	now = now.Add(time.Second)
-	due, _, _ := schedule.plan([]model.StaticTarget{target}, now)
+	due, _, turn := schedule.plan(nil, []model.StaticTarget{target}, now)
 	if len(due) != 1 {
 		t.Fatalf("due=%d", len(due))
 	}
 	due[0].state.running.Store(true)
-	now = now.Add(time.Second)
-	due, skipped, _ := schedule.plan([]model.StaticTarget{target}, now)
-	if len(due) != 0 || len(skipped) != 1 {
-		t.Fatalf("while running: due=%d skipped=%d", len(due), len(skipped))
+	now = turn
+	due, skipped, _ := schedule.plan(nil, []model.StaticTarget{target}, now)
+	if len(due) != 0 || len(skipped) != 0 || !schedule.states["a"].waiting {
+		t.Fatalf("while running: due=%d skipped=%d, want the turn waiting", len(due), len(skipped))
 	}
-	state := skipped[0].state
-	schedule.plan([]model.StaticTarget{scheduled("a", 5*time.Second)}, now)
+	state := schedule.states["a"]
+	schedule.plan(nil, []model.StaticTarget{scheduled("a", 5*time.Second)}, now)
 	if schedule.states["a"] == state || schedule.states["a"].interval != 5*time.Second {
 		t.Fatal("a changed interval kept the old cadence")
 	}
-	schedule.plan(nil, now)
+	schedule.plan(nil, nil, now)
 	if len(schedule.states) != 0 {
 		t.Fatal("a removed target is still scheduled")
 	}
@@ -171,10 +173,11 @@ func TestTheExportLoopDoesNotScrape(t *testing.T) {
 		exports.Add(1)
 	}))
 	t.Cleanup(endpoint.Close)
-	otlp := otlpConfig(endpoint.URL)
-	otlp.Interval = model.Duration(20 * time.Millisecond)
-	server := newStaticServer(t, &model.Config{Collectors: []model.Collector{testutil.Collector("text", "text")}, OTLP: otlp},
+	server := newStaticServer(t, &model.Config{Collectors: []model.Collector{testutil.Collector("text", "text")}, OTLP: otlpConfig(endpoint.URL)},
 		&model.StaticTargetFile{Interval: model.Duration(time.Minute), Targets: []model.StaticTarget{{Name: "t", Collector: "text", Target: target.URL}}})
+	// Shorter than a configuration may set, which is 1s at the least, so a
+	// few exports do not take the test seconds; set before the loop starts.
+	server.manager.Get().OTLP.Interval = model.Duration(20 * time.Millisecond)
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})
 	go func() {
@@ -255,33 +258,33 @@ func TestAChangedTargetStartsAgain(t *testing.T) {
 	schedule := newTargetSchedule()
 	now := time.Unix(1_000_000, 0)
 	target := scheduled("a", time.Hour)
-	_, _, first := schedule.plan([]model.StaticTarget{target}, now)
-	due, _, _ := schedule.plan([]model.StaticTarget{target}, first)
+	_, _, first := schedule.plan(nil, []model.StaticTarget{target}, now)
+	due, _, _ := schedule.plan(nil, []model.StaticTarget{target}, first)
 	if len(due) != 1 {
 		t.Fatalf("due=%d", len(due))
 	}
 	now = first.Add(time.Minute)
 	state := schedule.states["a"]
-	if _, _, next := schedule.plan([]model.StaticTarget{scheduled("a", time.Hour)}, now); schedule.states["a"] != state || next.Sub(now) < 10*time.Minute {
+	if _, _, next := schedule.plan(nil, []model.StaticTarget{scheduled("a", time.Hour)}, now); schedule.states["a"] != state || next.Sub(now) < 10*time.Minute {
 		t.Fatalf("an unchanged target started again, next in %s", next.Sub(now))
 	}
 	due[0].state.running.Store(true)
 	fixed := target
 	fixed.Target = "http://fixed.invalid"
-	_, _, next := schedule.plan([]model.StaticTarget{fixed}, now)
+	_, _, next := schedule.plan(nil, []model.StaticTarget{fixed}, now)
 	if schedule.states["a"] == state || next.Sub(now) >= firstScrapeWindow {
 		t.Fatalf("a changed target keeps its old cadence: next in %s", next.Sub(now))
 	}
 	// While the old definition's scrape runs, the new one's first scrape
 	// waits for it, neither made beside it nor put off to its cadence.
-	due, skipped, again := schedule.plan([]model.StaticTarget{fixed}, next)
+	due, skipped, again := schedule.plan(nil, []model.StaticTarget{fixed}, next)
 	if len(due) != 0 || len(skipped) != 0 || again.Sub(next) != scheduleCheckInterval {
 		t.Fatalf("while the old definition's scrape runs: due=%d skipped=%d, next in %s", len(due), len(skipped), again.Sub(next))
 	}
 	// It ends, and the first scrape is made at the next check.
 	schedule.states["a"].running.Store(false)
-	due, skipped, after := schedule.plan([]model.StaticTarget{fixed}, again)
-	if len(due) != 1 || len(skipped) != 0 || after.Sub(again) < 30*time.Minute {
+	due, skipped, after := schedule.plan(nil, []model.StaticTarget{fixed}, again)
+	if len(due) != 1 || len(skipped) != 0 || after.Sub(again) < time.Hour || !due[0].deadline.Equal(again.Add(time.Hour)) {
 		t.Fatalf("after the old scrape ended: due=%d skipped=%d, then next in %s", len(due), len(skipped), after.Sub(again))
 	}
 }

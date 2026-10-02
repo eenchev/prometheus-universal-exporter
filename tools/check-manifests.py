@@ -22,6 +22,17 @@ def main() -> int:
     # parsing strictly.
     documents = [document for document in yaml.safe_load_all(rendered) if document]
     manifests = sum(1 for line in rendered.splitlines() if line.startswith("kind:"))
+    # Nothing rendered is a failed render, not a chart without mistakes: the
+    # checks pipe helm into this script, and a pipeline succeeds when its
+    # last command does, so helm failing would otherwise pass as "0
+    # manifests, each its own document".
+    if manifests == 0:
+        print(
+            "no manifests were rendered: the render this check reads failed "
+            "or printed nothing.",
+            file=sys.stderr,
+        )
+        return 1
     if manifests != len(documents):
         print(
             f"{manifests} manifests were rendered but the output parses as "

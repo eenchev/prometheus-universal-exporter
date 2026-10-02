@@ -50,9 +50,18 @@ func validateHTTPRequest(x *model.Collector) error {
 	if x.Request.Retry.Backoff < 0 {
 		return fmt.Errorf("collector %q request.retry.backoff must not be negative", x.Name)
 	}
+	if err := checkAllowedSchemes(x.Request.AllowedSchemes); err != nil {
+		return fmt.Errorf("collector %q %w", x.Name, err)
+	}
 	if HasPathParams(x.Request.Path) {
-		if _, err := parsePathParams(x.Request.Path); err != nil {
+		placeholders, err := parsePathParams(x.Request.Path)
+		if err != nil {
 			return fmt.Errorf("collector %q: %w", x.Name, err)
+		}
+		// A default no probe could be sent with (bindPathParams) is refused
+		// now, rather than by every probe that leaves the parameter out.
+		if err := checkPathParamDefaults(x.Name, placeholders, checkPathParamValue); err != nil {
+			return err
 		}
 	}
 	if err := checkURLPath(x.Request.Path); err != nil {
@@ -98,8 +107,22 @@ func validateRequestTemplates(c *model.Collector) error {
 		}
 	}
 	for _, f := range requestTemplates(c, RequestOverrides{}) {
-		if _, err := f.parse(); err != nil {
+		if err := f.check(); err != nil {
 			return fmt.Errorf("collector %q: %w", c.Name, err)
+		}
+	}
+	return nil
+}
+
+// checkAllowedSchemes checks request.allowed_schemes at load. A request is
+// made over http or https and nothing else, so any other entry is a typing
+// mistake, such as htps, that would refuse every target the collector is
+// given; so would an entry with a space around it, or the :// of a URL,
+// which matches no scheme.
+func checkAllowedSchemes(schemes []string) error {
+	for i, scheme := range schemes {
+		if !strings.EqualFold(scheme, "http") && !strings.EqualFold(scheme, "https") {
+			return fmt.Errorf("request.allowed_schemes[%d] is %q; an entry is http or https, written without spaces or ://", i, scheme)
 		}
 	}
 	return nil

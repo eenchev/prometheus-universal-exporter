@@ -33,8 +33,18 @@ func TestProbeBudget(t *testing.T) {
 		"3600":  time.Hour - 500*time.Millisecond,
 		"1e9":   time.Hour - 500*time.Millisecond,
 		"1e300": time.Hour - 500*time.Millisecond,
-		"+Inf":  time.Hour - 500*time.Millisecond,
-		"2.5":   2 * time.Second,
+		// Infinity is no timeout at all, however it is written, and nor is
+		// a number too large to be one.
+		"+Inf":     0,
+		"Inf":      0,
+		"infinity": 0,
+		"-Inf":     0,
+		"1e400":    0,
+		"2.5":      2 * time.Second,
+		// A positive timeout is a budget, however small.
+		"1e-10": time.Nanosecond,
+		"1e-9":  time.Nanosecond,
+		"4e-9":  2 * time.Nanosecond,
 		// An offset larger than half the timeout would leave too little.
 		"0.6": 300 * time.Millisecond,
 		"1":   500 * time.Millisecond,
@@ -184,6 +194,54 @@ func TestAProbeWithoutADeadlineGetsTheDefaultTimeout(t *testing.T) {
 	}
 }
 
+// A scrape timeout that is no length of time, Inf, leaves the probe unbounded
+// by the header: it gets --probe.default-timeout, as a probe without the
+// header does, not the hour the longest timeout counts as. A positive
+// timeout is a budget however small: one that rounds to no time at all ends
+// the probe at once, rather than counting as no header.
+func TestANonFiniteScrapeTimeoutIsNoneAndATinyOneIsABudget(t *testing.T) {
+	fetch.RequestTypes["hanging"] = &fetch.RequestType{
+		Name:     "hanging",
+		Validate: func(*model.Collector) error { return nil },
+		Fetch: func(ctx context.Context, _ string, _ *model.Collector, _ fetch.RequestOverrides, _ http.Header) (*fetch.HTTPResponse, error) {
+			<-ctx.Done()
+			return nil, ctx.Err()
+		},
+	}
+	t.Cleanup(func() { delete(fetch.RequestTypes, "hanging") })
+	c := testutil.Collector("hung", "text")
+	c.Request = model.RequestConfig{Type: "hanging"}
+	cfg := &model.Config{Collectors: []model.Collector{c}}
+	if err := config.Validate(cfg); err != nil {
+		t.Fatal(err)
+	}
+	server := NewServer(config.NewManager(cfg, "", testutil.QuietLogger(t)), "python3", testutil.QuietLogger(t))
+	server.SetDefaultProbeTimeout(200 * time.Millisecond)
+	// The caller gives up after five seconds, so a probe given a longer
+	// budget than it should have fails the test rather than holding it.
+	probe := func(header string) *httptest.ResponseRecorder {
+		t.Helper()
+		ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+		defer cancel()
+		request := httptest.NewRequest(http.MethodGet, "/probe?collector=hung&target=somewhere", nil).WithContext(ctx)
+		request.Header.Set(scrapeTimeoutHeader, header)
+		recorder := httptest.NewRecorder()
+		server.Handler().ServeHTTP(recorder, request)
+		return recorder
+	}
+	for _, header := range []string{"Inf", "+Inf", "infinity"} {
+		if recorder := probe(header); recorder.Code != http.StatusBadGateway || !strings.Contains(recorder.Body.String(), "ran out of its 200ms budget: --probe.default-timeout") {
+			t.Errorf("a scrape timeout of %s: answered %d: %s", header, recorder.Code, recorder.Body)
+		}
+	}
+	// With the default a minute, only the header's own budget ends the probe
+	// at once.
+	server.SetDefaultProbeTimeout(time.Minute)
+	if recorder := probe("1e-10"); recorder.Code != http.StatusBadGateway || !strings.Contains(recorder.Body.String(), "ran out of its 1ns budget: Prometheus's scrape timeout less --probe.timeout-offset") {
+		t.Errorf("a scrape timeout of 1e-10: answered %d: %s", recorder.Code, recorder.Body)
+	}
+}
+
 // Which deadline a probe gets: Prometheus's when it sent one, else the
 // default, which a timeout parameter cannot lift, unless the default is 0.
 func TestWhichDeadlineAProbeGets(t *testing.T) {
@@ -265,7 +323,7 @@ func TestAStaticTargetScrapeSaysItsIntervalRanOut(t *testing.T) {
 	server.logger = slog.New(slog.NewJSONHandler(&logs, nil))
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
-	server.scrapeTarget(ctx, server.manager.StaticTargets()[0])
+	server.scrapeTarget(ctx, server.manager.Get(), server.manager.StaticTargets()[0])
 	if !strings.Contains(logs.String(), "the scrape ran out of its 1s budget: the target's interval, which a scrape must end within") {
 		t.Fatalf("%s", logs.String())
 	}

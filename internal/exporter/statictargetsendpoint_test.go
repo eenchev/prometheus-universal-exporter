@@ -525,3 +525,56 @@ func TestAReadAgainstAReplacedFileForgetsNothing(t *testing.T) {
 		t.Fatal("a removed target's result was kept")
 	}
 }
+
+// A family named like a series of another target's histogram or summary is
+// left out for the later target, whichever of the two it is, and logged with
+// the name it clashes with: a histogram x is written as x_bucket, x_sum and
+// x_count, so another target's gauge x_sum beside it was a second family of a
+// name already written, an exposition the exporter's own decoder refuses.
+// Everything else of both targets is served, and what is served reads back.
+func TestAFamilyNamedLikeAnotherTargetsHistogramSeriesIsLeftOut(t *testing.T) {
+	histogram := model.Metric{Name: "x", Type: model.HistogramMetricType, Histogram: &model.Histogram{Buckets: []model.Bucket{{UpperBound: 1, CumulativeCount: 2}}, Sum: 3, Count: 2}}
+	summary := model.Metric{Name: "y", Type: model.SummaryMetricType, Summary: &model.Summary{Quantiles: []model.Quantile{{Quantile: 0.5, Value: 1}}, Sum: 4, Count: 2}}
+	gauge := func(name string) model.Metric { return model.Metric{Name: name, Type: model.GaugeMetricType, Value: 7} }
+	for name, tc := range map[string]struct {
+		first, second []model.Metric
+		want          string
+		clashesWith   string
+	}{
+		"a gauge after the histogram":       {[]model.Metric{histogram}, []model.Metric{gauge("x_sum"), gauge("own")}, "x/a own/b", `"metric":"x_sum"`},
+		"a bucket-named gauge after it":     {[]model.Metric{histogram}, []model.Metric{gauge("x_bucket"), gauge("own")}, "x/a own/b", `"metric":"x_bucket"`},
+		"the histogram after the gauge":     {[]model.Metric{gauge("x_count"), gauge("own")}, []model.Metric{histogram, gauge("other")}, "x_count/a own/a other/b", `"clashes_with":"x_count"`},
+		"a gauge after the summary":         {[]model.Metric{summary}, []model.Metric{gauge("y_count"), gauge("own")}, "y/a own/b", `"clashes_with":"y"`},
+		"the summary after the gauge":       {[]model.Metric{gauge("y_sum")}, []model.Metric{summary, gauge("own")}, "y_sum/a own/b", `"clashes_with":"y_sum"`},
+		"a summary's bucket name is nobody": {[]model.Metric{summary}, []model.Metric{gauge("y_bucket")}, "y/a y_bucket/b", ""},
+		"names that only look alike":        {[]model.Metric{histogram}, []model.Metric{gauge("x_summary"), gauge("xx_sum")}, "x/a x_summary/b xx_sum/b", ""},
+	} {
+		t.Run(name, func(t *testing.T) {
+			server := newStaticServer(t, &model.Config{Collectors: []model.Collector{testutil.Collector("text", "text")}}, nil)
+			logs := testutil.CaptureLogs(t)
+			server.logger = slog.Default()
+			merged := server.mergeStaticTargets([]namedSet{{name: "a", set: model.MetricSet{Metrics: tc.first}}, {name: "b", set: model.MetricSet{Metrics: tc.second}}})
+			var got []string
+			for _, m := range merged.Metrics {
+				got = append(got, m.Name+"/"+m.Labels["static_target"])
+			}
+			if strings.Join(got, " ") != tc.want {
+				t.Fatalf("merged %v, want %s", got, tc.want)
+			}
+			const left = "static target metric left out of the static targets endpoint"
+			if tc.clashesWith == "" {
+				if strings.Contains(logs.String(), left) {
+					t.Fatalf("a family was left out:\n%s", logs)
+				}
+			} else if !strings.Contains(logs.String(), left) || !strings.Contains(logs.String(), tc.clashesWith) || !strings.Contains(logs.String(), `"target":"b"`) {
+				t.Fatalf("the clash was not logged with %s for target b:\n%s", tc.clashesWith, logs)
+			}
+			// The exposition is one the exporter's own decoder reads.
+			recorder := httptest.NewRecorder()
+			writeMetricSet(recorder, nil, &merged)
+			if err := parseExposition(recorder.Body.Bytes()); err != nil {
+				t.Fatalf("the merged exposition does not read back: %v\n%s", err, recorder.Body)
+			}
+		})
+	}
+}

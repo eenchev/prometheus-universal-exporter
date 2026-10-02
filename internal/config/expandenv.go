@@ -52,14 +52,18 @@ var envReference = regexp.MustCompile(`\$\$|\$\{([A-Za-z_][A-Za-z0-9_]*)\}`)
 func expandEnvironment(path string, raw []byte, flag string) ([]byte, error) {
 	text := string(raw)
 	doc, ok := parseDocument(text)
-	// A bare reference in a flow collection, as in [${A}, b] or {k: ${A}},
-	// is not YAML until it is expanded: { and } end an unquoted value there.
-	// Such references are read as if quoted, and written back as the bare
-	// value they stand for (encodeScalar).
-	var wrapped map[int]bool
+	// A bare reference in a flow collection, as in [${A}, b] or
+	// {k: Bearer ${A}}, is not YAML until it is expanded: { and } end an
+	// unquoted value there. The document is then read with the braces of
+	// every reference masked (maskReferences), which changes neither what a
+	// value is nor where it stands, so each value is found, and written
+	// back, exactly as in a document that needed no help.
 	if !ok && envReference.MatchString(text) {
-		text, wrapped = quoteBareReferences(text)
-		doc, ok = parseDocument(text)
+		if masked, unmask, masks := maskReferences(text); masks {
+			if doc, ok = parseDocument(masked); ok {
+				unmaskScalars(doc, unmask)
+			}
+		}
 	}
 	if !ok {
 		// Not YAML at all: the decoder that reads the file says so, in the
@@ -107,7 +111,7 @@ func expandEnvironment(path string, raw []byte, flag string) ([]byte, error) {
 	}
 	var edits []textEdit
 	for i, ref := range scalars {
-		edit, err := scalarEdit(text, lineStarts, ref, values[i], expand, wrapped)
+		edit, err := scalarEdit(text, lineStarts, ref, values[i], expand)
 		if err != nil {
 			return nil, fmt.Errorf("%s: line %d: %w", path, ref.node.Line, err)
 		}
@@ -129,37 +133,44 @@ func parseDocument(text string) (*yaml.Node, bool) {
 	return &doc, true
 }
 
-// bareReference is a reference standing alone as a value or a key, between
-// what can come before a flow value — [ { , : or the start of the line — and
-// what can come after it.
-var bareReference = regexp.MustCompile(`([\[{,:]|^)([ \t]*)(\$\{[A-Za-z_][A-Za-z0-9_]*\})([ \t]*)([,\]}:]|$)`)
+// referenceMasks are the pairs of characters that can stand in for the braces
+// of a reference while the document is parsed: none of them means anything to
+// YAML inside a value, plain or quoted, in a flow collection or out of one.
+var referenceMasks = []string{"<>", "()", "~~", "^^", "++", "=="}
 
-// quoteBareReferences quotes each reference standing alone as a flow value,
-// line by line, so the document parses. It returns the text and the offsets,
-// in it, of the quotes it added. The lines stay as they were.
-func quoteBareReferences(text string) (string, map[int]bool) {
-	wrapped := map[int]bool{}
-	var out strings.Builder
-	for i, line := range strings.SplitAfter(text, "\n") {
-		if i > 0 && line == "" {
-			break
+// maskReferences writes every reference of text with its braces replaced by
+// the first pair of referenceMasks that no text of the document already looks
+// like a masked reference with, so ${NAME} becomes, say, $<NAME>. The masked
+// text has every character where it was, and unmask turns a value read from
+// it back into the value the document holds. It reports false when every
+// pair is taken, which no configuration written by hand comes near.
+func maskReferences(text string) (masked string, unmask func(string) string, ok bool) {
+	for _, pair := range referenceMasks {
+		open, closing := pair[:1], pair[1:]
+		maskedReference := regexp.MustCompile(`\$` + regexp.QuoteMeta(open) + `([A-Za-z_][A-Za-z0-9_]*)` + regexp.QuoteMeta(closing))
+		if maskedReference.MatchString(text) {
+			continue
 		}
-		body := strings.TrimRight(line, "\r\n")
-		rest := line[len(body):]
-		for {
-			match := bareReference.FindStringSubmatchIndex(body)
-			if match == nil || strings.ContainsAny(body[:match[6]], `"'#`) {
-				break
+		masked = envReference.ReplaceAllStringFunc(text, func(match string) string {
+			if match == "$$" {
+				return match
 			}
-			wrapped[out.Len()+match[6]] = true
-			quoted := body[:match[6]] + `"` + body[match[6]:match[7]] + `"`
-			out.WriteString(quoted)
-			body = body[match[7]:]
-		}
-		out.WriteString(body)
-		out.WriteString(rest)
+			return "$" + open + match[2:len(match)-1] + closing
+		})
+		return masked, func(value string) string { return maskedReference.ReplaceAllString(value, "$${$1}") }, true
 	}
-	return out.String(), wrapped
+	return "", nil, false
+}
+
+// unmaskScalars gives every scalar of a document parsed from masked text the
+// value the document holds.
+func unmaskScalars(n *yaml.Node, unmask func(string) string) {
+	if n.Kind == yaml.ScalarNode {
+		n.Value = unmask(n.Value)
+	}
+	for _, child := range n.Content {
+		unmaskScalars(child, unmask)
+	}
 }
 
 // scalarRef is a scalar that holds a reference, and where it stands.
@@ -170,7 +181,13 @@ type scalarRef struct {
 
 // scalarContext is where a scalar stands: as a mapping key, and within a flow
 // collection, [...] or {...}. Both limit how a value may be written back.
-type scalarContext struct{ key, flow bool }
+// indent is the column, from 0, of the block mapping's keys or the block
+// sequence's dashes the scalar is an entry of, and -1 for the document's own
+// value: what a block scalar's indentation indicator counts from.
+type scalarContext struct {
+	key, flow bool
+	indent    int
+}
 
 // collectReferences gathers the scalars of n, keys included, that hold a
 // reference or a $$. An alias is the node it names, gathered where that is.
@@ -183,7 +200,14 @@ func collectReferences(n *yaml.Node, where scalarContext, out *[]scalarRef) {
 	case yaml.DocumentNode, yaml.SequenceNode, yaml.MappingNode:
 		flow := where.flow || n.Style&yaml.FlowStyle != 0
 		for i, child := range n.Content {
-			collectReferences(child, scalarContext{key: n.Kind == yaml.MappingNode && i%2 == 0, flow: flow}, out)
+			context := scalarContext{key: n.Kind == yaml.MappingNode && i%2 == 0, flow: flow, indent: n.Column - 1}
+			switch {
+			case n.Kind == yaml.DocumentNode:
+				context.indent = -1
+			case n.Kind == yaml.MappingNode && i%2 == 1:
+				context.indent = n.Content[i-1].Column - 1
+			}
+			collectReferences(child, context, out)
 		}
 	}
 }
@@ -195,7 +219,7 @@ func collectReferences(n *yaml.Node, where scalarContext, out *[]scalarRef) {
 // is, so a variable only such a block names need not be set.
 func documentReferences(doc *yaml.Node) []scalarRef {
 	var all []scalarRef
-	collectReferences(doc, scalarContext{}, &all)
+	collectReferences(doc, scalarContext{indent: -1}, &all)
 	where := make(map[*yaml.Node]scalarContext, len(all))
 	for _, ref := range all {
 		where[ref.node] = ref.scalarContext
@@ -241,7 +265,7 @@ type textEdit struct {
 
 // scalarEdit is the edit that writes value in place of scalar n's text, on as
 // many lines as it took. expand expands the text of a block scalar's lines.
-func scalarEdit(text string, lineStarts []int, ref scalarRef, value string, expand func(string) string, wrapped map[int]bool) (textEdit, error) {
+func scalarEdit(text string, lineStarts []int, ref scalarRef, value string, expand func(string) string) (textEdit, error) {
 	n := ref.node
 	if n.Line < 1 || n.Line > len(lineStarts) {
 		return textEdit{}, errors.New("an environment reference could not be placed")
@@ -265,15 +289,13 @@ func scalarEdit(text string, lineStarts []int, ref scalarRef, value string, expa
 	}
 	switch {
 	case n.Style&(yaml.LiteralStyle|yaml.FoldedStyle) != 0:
-		return blockEdit(text, lineStarts, n, expand)
+		return blockEdit(text, lineStarts, n, text[min(start, lineEnd):lineEnd], ref.indent, expand)
 	case n.Style&(yaml.DoubleQuotedStyle|yaml.SingleQuotedStyle) != 0:
 		end, ok := quotedEnd(text, start)
 		if !ok {
 			return textEdit{}, errors.New("an environment reference is in a quoted value whose end could not be found")
 		}
-		// A reference quoted only to be read (quoteBareReferences) was bare
-		// in the file, and is written back as a bare value would be.
-		return textEdit{start, end, encodeScalar(value, wrapped[start], ref.scalarContext) + strings.Repeat("\n", strings.Count(text[start:end], "\n"))}, nil
+		return textEdit{start, end, encodeScalar(value, false, ref.scalarContext) + strings.Repeat("\n", strings.Count(text[start:end], "\n"))}, nil
 	default:
 		// A plain scalar on one line is its own text; one folded over
 		// several lines is not, and cannot be rewritten in place.
@@ -284,11 +306,31 @@ func scalarEdit(text string, lineStarts []int, ref scalarRef, value string, expa
 	}
 }
 
+// blockIndentation is the indentation indicator of a block scalar's header,
+// such as the 2 of |2 or >-2, and 0 when it has none.
+func blockIndentation(header string) int {
+	for i := 1; i < len(header) && i <= 2; i++ {
+		switch c := header[i]; {
+		case c >= '1' && c <= '9':
+			return int(c - '0')
+		case c != '+' && c != '-':
+			return 0
+		}
+	}
+	return 0
+}
+
 // blockEdit expands the references in the lines of a literal or folded block
 // scalar, whose text is its value line by line. A value with a line break
 // would need the block's indentation on each new line, and more lines, so it
 // is refused there; a quoted value takes one.
-func blockEdit(text string, lineStarts []int, n *yaml.Node, expand func(string) string) (textEdit, error) {
+//
+// The block's lines are those indented at least as far as its content: as far
+// as its first line that is not blank, or, when the header says how far, as
+// in |2, that many columns past the mapping or sequence it is an entry of
+// (parentIndent) — the first line may then be indented further than the rest,
+// which is what the indicator is for.
+func blockEdit(text string, lineStarts []int, n *yaml.Node, header string, parentIndent int, expand func(string) string) (textEdit, error) {
 	first := n.Line // the block's first content line, 0-based
 	if first >= len(lineStarts) {
 		return textEdit{}, errors.New("an environment reference could not be placed")
@@ -301,6 +343,9 @@ func blockEdit(text string, lineStarts []int, n *yaml.Node, expand func(string) 
 		return text[lineStarts[i]:end]
 	}
 	indent := -1
+	if indicator := blockIndentation(header); indicator > 0 {
+		indent = max(parentIndent, 0) + indicator
+	}
 	last := first - 1
 	for i := first; i < len(lineStarts); i++ {
 		line := strings.TrimRight(lineAt(i), "\r")

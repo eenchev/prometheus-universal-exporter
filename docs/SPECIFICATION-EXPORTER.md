@@ -161,6 +161,19 @@ Invalid request overrides MUST return a client error. When `timeout` is absent,
 the exporter MUST use the incoming scrape request context as the target request
 deadline rather than a collector-configured timeout.
 
+`target`, `collector` and every parameter the collector's request type accepts
+MUST be given at most once: a probe that gives one of them more than once MUST
+be answered `400` naming the parameter, before the target is contacted or the
+probe counted, rather than read for one of its values. `header_<name>` is the
+exception: every value of it is forwarded (§ 42.4). The value of `target`,
+`collector` and of every parameter the request type accepts, `header_<name>`
+and `param_<name>` among them, MUST be at most 8 KiB (8192 bytes); a longer
+one MUST be answered `400` naming the parameter and the limit, without
+repeating the value, so what the exporter keeps about a probe after
+answering it — a failure log entry (§ 25.1), a tracked request (§ 22.1) — is
+bounded by what a probe may name. A parameter no request type accepts MUST stay
+ignored, repeated or long as it may be.
+
 #### 3.2a Probe deadline
 
 When a probe carries `X-Prometheus-Scrape-Timeout-Seconds`, as Prometheus sends
@@ -172,9 +185,15 @@ A timeout above one hour MUST count as one hour, never overflowing.
 When the offset would leave less than half the timeout, the probe MUST keep
 half. When the budget runs out the probe MUST fail in the stage that was
 running, and the error MUST say that the probe's budget, with its length, ran
-out, so Prometheus receives the reason before its own timeout. A missing,
-unparseable, non-positive or non-finite header MUST leave the probe
-unbounded by it. The `timeout` parameter keeps bounding the request alone; the
+out, so Prometheus receives the reason before its own timeout. A budget that
+runs out while a metric rule is evaluated MUST fail the probe in the
+`transform` stage whatever the rule's `error_mode` (§ 18.1). A missing,
+unparseable, non-positive or non-finite header — `Inf` in any spelling, as
+`NaN` — MUST leave the probe unbounded by it, and so bounded by
+`--probe.default-timeout` below; it MUST NOT count as the longest timeout. A
+positive finite header MUST always give a budget, however small: one that
+rounds to no time at all, such as `1e-10`, MUST end the probe at once rather
+than count as no header. The `timeout` parameter keeps bounding the request alone; the
 earlier deadline wins.
 
 A probe without a usable header, as from curl, a script or the collectors
@@ -208,6 +227,9 @@ request:
 `backoff` defaults to zero and MUST NOT be exponential. The exporter SHOULD
 retry transport failures and transient HTTP statuses `408`, `425`, `429`, and
 `500` through `599`. Other HTTP statuses MUST be returned without retrying.
+A refused target (§ 26.1), response headers over their bound and an HTTP/2
+connection closed for a protocol error before the response's headers were
+read (§ 4) MUST NOT be retried.
 A connection that breaks while the body is read — a reset, a body shorter than
 its `Content-Length` — MUST be retried as a transport failure is, unless the
 probe's deadline is what ended the read, and a debug report MUST show the
@@ -318,7 +340,9 @@ produces `__address__` as a bare `host:port`, and monitors pass it through as
 the target, so this is the common case. The decision MUST be made on the text —
 no `://` means no scheme — before the target is parsed, because a URL parser
 rejects `10.0.0.5:8080` outright and reads `legacy.example:8080` as the scheme
-`legacy.example`. IPv6 literals in brackets and credentials in the userinfo
+`legacy.example`. Only a `://` before the first `/`, `?` or `#` of the target
+MUST count as a scheme's: `h:8080/login?next=http://other/` has no scheme and
+MUST be requested as `http`, its query unchanged. IPv6 literals in brackets and credentials in the userinfo
 MUST survive. `allowed_schemes` MUST apply to the result, so a bare target is
 never upgraded to `https`, and to the URL of every redirect followed: a
 redirect to a scheme the collector does not allow MUST fail the request,
@@ -329,6 +353,39 @@ MUST be requested exactly as given, including any path it carries. A path
 ending in `/` MUST keep one trailing slash and never gain a second: `path: /`
 on `http://h:5066` or `http://h:5066/` requests `/`, not `//`, which a Go
 server redirects or refuses.
+
+A percent-escape written in a request path — `%` and two hexadecimal digits,
+in `request.path`, the `path` probe parameter or a static target's
+`request.path` — MUST be sent as written, neither decoded nor escaped again:
+`path: /projects/group%2Fproject` requests `/projects/group%2Fproject`.
+Everything else in the path MUST be escaped as a path, and a `%` that begins
+no escape MUST be sent as `%25`. An escaped dot segment (`%2E%2E`) MUST be sent
+as written and MUST NOT be resolved. The escapes of the target's own path MUST
+be kept likewise.
+
+The target's own query MUST be sent byte for byte as it was written: a bare
+key MUST NOT gain a `=`, a pair containing `;` MUST NOT be dropped, and the
+pairs MUST NOT be reordered or escaped anew; only a space, a double quote,
+`<`, `>` and a byte outside ASCII, which cannot be sent as they are, MUST be
+percent-escaped where they stand. `request.query` MUST be appended
+after it, encoded, and the parameters a request type builds itself after
+that. A name both the target's query and `request.query` carry MUST be sent
+twice, the target's first. A pair of the target's query naming a parameter
+the request type builds itself (§ 5.1, `graphite`) MUST be dropped, every
+other pair left as written.
+
+A response's status line and headers MUST be bounded at 1 MiB, apart from
+the body's bound (§ 20). A response over it MUST fail the request and MUST
+NOT be retried. Over HTTP/1 the failure MUST be a limit error that says the
+headers were too large. Over HTTP/2 it MUST be that same limit error where
+the client reports the headers as too large, which it does for a header list
+it reads to its end; a header list still arriving when it passes the bound
+makes the client close the connection with the protocol error it reports for
+any answer that breaks HTTP/2, which cannot be told from one. A request
+whose HTTP/2 connection is closed for a protocol error before its response's
+headers are read MUST therefore fail as a transport failure, not a limit
+error, MUST NOT be retried, and its error MUST say that response headers over
+the bound end this way.
 
 Rendering a target for a log line or an error body MUST never fail, whatever
 the probe sent. A target that cannot be parsed MUST be withheld rather than
@@ -400,6 +457,17 @@ collector_files:
   order. The merged list MUST then be validated as one: defaults, the rule
   checks of § 24.2 and the Python checks of § 16 apply to a collector from a
   file exactly as to one written in the configuration.
+- A mistake validation finds in a collector that a collector file defines
+  MUST name that file in its text, as `collector file <path>: collector ...`,
+  at startup, in `--dry-run` and on reload, since that file, not the
+  configuration listing it, is the one to edit. The log line of a rejected
+  reload MUST carry as `file` the collector file when every mistake of the
+  reload is in that one collector file — an error of reading it included —
+  and the configuration file otherwise. A problem the Python checks of § 16
+  find with such a collector is a mistake of that kind and MUST be reported
+  the same way, at startup, in `--dry-run` and on reload, in the order of
+  the collectors; which file a problem belongs to MUST NOT be read out of
+  the problem's text.
 - With `collector_files`, the configuration's own `collectors` MAY be omitted;
   the merged list MUST NOT be empty.
 - `${NAME}` expansion (§ 42.15a) MUST apply to collector files whenever it
@@ -445,9 +513,18 @@ Every setting that is a number of bytes — `request.max_response_bytes`,
 a number, optionally with a fraction, followed by an optional space and unit:
 `B`; `kB`, `MB`, `GB`, `TB` as powers of 1000; `KiB`, `MiB`, `GiB`, `TiB` as
 powers of 1024. The unit MUST be case insensitive, the `B` MAY be left out, and
-a fraction MUST be rounded down to whole bytes. Anything else, including a
-negative number, an exponent or an unknown unit, MUST fail to load naming the
-value. The configuration schema MUST accept both forms for these settings.
+a fraction of a unit MUST be rounded down to whole bytes. Anything else MUST
+fail to load naming the value and its line, and MUST NOT be read as some
+other size or as the default: a negative number, as a YAML integer or in a
+string; an exponent or an unknown unit; a number with a fraction and no unit,
+such as `1.5`; and a size of 2^63 bytes or more, with a unit (`8388608TiB`)
+or without, which is past what a size holds; and a string with space before
+or after the size. A whole number of bytes MUST be read exactly, up to
+2^63 - 1. The configuration schema MUST accept both forms for these
+settings, and its pattern for the string MUST accept exactly the strings
+the exporter does but for the range, which the exporter alone checks; a
+test MUST hold the pattern and the exporter to the same verdict over a
+table of spellings.
 
 ### 5.1 Request types
 
@@ -540,8 +617,8 @@ type.
 | Key | Default | Rule |
 | --- | --- | --- |
 | `method` | `GET` | One of GET, POST, PUT, PATCH, DELETE, HEAD, case-insensitive. |
-| `path` | none | Joined onto the target URL; may carry path parameters (§ 42.10a). Empty is valid, since the target URL may carry the whole path. |
-| `query` | none | Query parameters added to the request. |
+| `path` | none | Joined onto the target URL; may carry path parameters (§ 42.10a). Empty is valid, since the target URL may carry the whole path. A percent-escape in it MUST be sent as written (§ 4). |
+| `query` | none | Query parameters added to the request, after the target's own query (§ 4). |
 | `headers` | none | Headers sent to the target. |
 | `body` | none | Raw request body. |
 | `basic_auth` / `basic_auth_file` | none | Mutually exclusive; the file form needs both paths. |
@@ -550,10 +627,10 @@ type.
 | `forward_headers` | none | Allowlist for `header_<name>` probe parameters (§ 42.4). |
 | `tls` | verify | CA, client certificate and `insecure_skip_verify` (§ 42.9). |
 | `retry` | none | `attempts` and `backoff`, both non-negative. |
-| `max_response_bytes` | 10 MiB | Response size cap. |
+| `max_response_bytes` | 10 MiB | Response size cap (§ 20). |
 | `follow_redirects` | `false` | § 42.15. |
 | `enable_http2` | `false` | § 42.15. |
-| `allowed_schemes` | `http`, `https` | Schemes a target may use. |
+| `allowed_schemes` | `http`, `https` | Schemes a target may use. Each entry MUST be `http` or `https`, in any case; any other, including an empty one and one with a space or `://` around it, MUST be refused at load naming the collector and the entry. |
 | `accept_status` | every 2xx | A static target MAY set its own, replacing the collector's for it, checked at load and part of its cache key; so MAY a `grpc` target for `accept_codes`. Statuses whose answers are decoded: numbers from 100 to 599 and classes such as `2xx`, written as YAML numbers or strings; any other entry MUST be refused at load. A response with another status MUST fail in the `http_status` stage, and an accepted status MUST NOT be retried. |
 | `allowed_targets`, `denied_targets` | none | Hosts, globs, addresses and networks its requests may and may not reach (§ 26.1). |
 
@@ -590,10 +667,16 @@ The file read MUST be `root` / target / `path`:
   MUST be a path relative to `root`, an absolute path inside `root`, or a
   `file://` URL of one, and a target leading outside `root` MUST be refused —
   a probe with `400` before anything is read, a static target at load. A
-  `file://` URL MUST carry an absolute path.
+  `file://` URL MUST carry an absolute path, and its path MUST be
+  percent-decoded before it is read and before it is held to these rules, so
+  `file:///srv/a%20b.prom` names the file `a b.prom` and a `%` of a file's
+  own name is written `%25`; a `%` that does not begin an escape MUST be
+  refused the same way, saying so. The two plain forms are paths, not URLs,
+  and MUST be taken as written.
 - A `path` probe parameter replaces `request.path` and is held to the same
   rules. A path parameter value MUST be a single file or directory name: `/`,
-  `\`, NUL, `.` and `..` MUST be refused.
+  `\`, NUL, `.` and `..` MUST be refused, in a probe's value as a failed
+  scrape and in a placeholder's default at load (§ 42.10a).
 - When neither names a file the scrape MUST fail saying so.
 
 Every read MUST be confined to `root` by the operating system (Go's
@@ -607,11 +690,15 @@ it, counted as a limit error. A file whose size or modification time changes
 while it is read MUST be read again, and the scrape MUST fail, advising an
 atomic rename, if it changes a second time. A read MUST NOT hold a probe past
 its `timeout`, budget (§ 3.2a) or context, even when the filesystem does not
-answer. Because a read cannot be cancelled, the reads of one collector still in
-progress — including those whose probe has given up — MUST be capped, at four.
-A probe that would exceed the cap MUST fail at once, saying the filesystem is
-not answering, and the slot MUST be freed when the read returns rather than
-when its probe does.
+answer. Because a read cannot be cancelled, the reads of one collector that are
+still in progress after their probe has given up on them — abandoned reads —
+MUST be capped, at four. A probe that finds the cap reached MUST fail at once,
+without starting a read, saying the filesystem is not answering, and an
+abandoned read MUST stop counting when it returns. A read whose probe is still
+waiting for it MUST NOT count: probes of a filesystem that answers MUST NOT be
+refused for being many, whatever their number. The reads in progress MAY
+therefore pass the cap by the probes that were waiting when the filesystem
+stopped answering, which `limits.max_concurrent_probes` bounds.
 
 A successful read MUST be presented to the shared pipeline as a response with
 status `200` and the headers `Content-Type`, chosen from the extension
@@ -671,11 +758,12 @@ non-blocking, re-read when it changes under the read — and additionally:
 The files chosen MUST be read four at a time, and answered in name order
 whichever finished first.
 
-The whole directory read MUST be one read for the pending-read cap and MUST end
-with the probe's `timeout`, budget or context. When it ends before the read is
-done, the files read by then MUST be answered, and each file still being read
-or not yet reached MUST fail alone with an error saying it was not read before
-the deadline, its modification time reported when it had been taken; no further
+The whole directory read MUST be one read for the cap on abandoned reads,
+counted only when its probe has given up on it, and MUST end with the probe's
+`timeout`, budget or context. When it ends before the read is done, the files
+read by then MUST be answered, and each file still being read or not yet
+reached MUST fail alone with an error saying it was not read before the
+deadline, its modification time reported when it had been taken; no further
 file MUST be started. Only a directory not listed in time MUST fail the probe.
 An answer cut short this way MUST NOT be cached, since the cache would go on
 serving the files not reached as failed. When the exporter's shutdown cut it
@@ -730,7 +818,11 @@ lines: it only pulls. Its keys:
   configuration validated again does not read as one that sets it.
 - The URL MUST be the target with `path`, `query`, then every expression as a
   `target` parameter, `from`, `until` and `format=json`. `request.query` MUST
-  NOT set `target`, `from`, `until` or `format`, in any case.
+  NOT set `target`, `from`, `until` or `format`, in any case. A pair of the
+  target's own query naming one of the four, in any case and however the name
+  is escaped, MUST be dropped, so a probe's target can neither add an
+  expression nor change the window or the format; a pair in which a `;` sets
+  one MUST be dropped too.
 - When the expressions a request carries, as configured and URL-encoded with
   `&target=` each, exceed 2048 bytes, the request MUST instead be a `POST` of
   the same parameters as an `application/x-www-form-urlencoded` body, with no
@@ -822,14 +914,20 @@ keys:
   drop the answer, ask again and call again once, apart from the retries. A
   server without reflection MUST fail saying so and naming `protoset` and
   `proto`; a reflection call ending with a status MUST be reported as a call
-  with that status.
+  with that status, and MUST be retried as a call with that status is: a
+  status `retry.codes` lists, after `backoff`, the question and the call
+  sharing the `attempts`.
 - A message that does not fit the input type MUST fail the probe at the
   `message` stage before the target is called, naming the field; a call
   ending with a status other than `OK` MUST fail at the `grpc` stage with the
   status's name and message, logged with a `grpc_code` attribute. The status
   codes listed in `retry.codes` MUST be retried up to `attempts` times, after
-  `backoff`, within the probe's budget. The probe's budget or `timeout` MUST
-  be the call's deadline. An answer over the response limit MUST fail with
+  `backoff`, within the probe's budget. A retry MUST NOT be answered from the
+  connection's earlier failure: when the connection is waiting to try again,
+  the retry MUST end the wait and connect at once, waiting up to one second
+  for the connection before it calls, so that a retry of a refused connection
+  dials the target again. The probe's budget or `timeout` MUST be the call's
+  deadline. An answer over the response limit MUST fail with
   `RESOURCE_EXHAUSTED` and count as a limit.
 - Metadata MUST be the collector's, a static target's own over it, the
   credentials as `authorization`, and the forwarded headers lower-cased over
@@ -839,7 +937,17 @@ keys:
   without cancelling a call still using the old one. A connection that failed
   to connect MUST wait at most 5 seconds before trying again, and a call that
   finds it waiting MUST end the wait and try at once, within its deadline, so
-  a server that came back is reached at the next probe.
+  a server that came back is reached at the next probe. A connection that
+  stopped answering without being closed MUST be replaced: when the probe's
+  own deadline ends a call, or the wait for a reflection answer, on a
+  connection that is established, the connection MUST be dropped, so the next
+  call to the target makes a new one. A `DEADLINE_EXCEEDED` the server sent,
+  and a deadline that ends while the connection is still being made, MUST NOT
+  drop it. Dropping MUST NOT cancel the other calls using the connection, nor
+  a reflection question in flight on it: it MUST be closed when the last of
+  them has ended, and a call made after the drop MUST NOT wait for a
+  reflection question asked on the dropped connection. Client keepalive pings
+  MUST NOT be sent.
 - It MUST accept the `/probe` parameters `timeout`, `insecure_skip_verify`,
   `retry_attempts`, `retry_backoff`, `header_<name>`, `param_<name>` and
   `message`, which replaces `request.message`, placeholders and all; a
@@ -925,6 +1033,28 @@ decoded response cannot be mapped to the selected transform, the exporter MUST
 return a clear transform error. An explicit decoder remains available for
 ambiguous or incorrectly labeled endpoints.
 
+Which decoder's document each transform reads MUST be held in one table, read
+by the scrape and by the load alike: `jq` and `yq` read `json`, `yaml` and
+`graphite`; `regex` reads `text`; `csv` reads `csv`; `css` reads `html`;
+`xpath` reads `xml` and `html`; `prometheus` reads `prometheus`; `python`
+reads every decoder. An explicit `decoder.type` the collector's transform
+does not read MUST be refused when the configuration loads, with a message
+naming the collector, the decoder, the transform, the decoders that transform
+reads and the transforms that read that decoder, since every scrape would
+fail whatever the target answered. A `jq` or `yq` transform with a
+`pre_script` MUST be exempt: its rules read the mapping or list the script
+leaves, whatever was decoded (§ 16); for any other transform a `pre_script`
+MUST NOT lift the check. A decoder left to each response (`auto`) MUST be
+checked against the same table on the scrape.
+
+A setting that belongs to a decoder or a transform the collector does not
+have MUST be refused at load rather than ignored, naming the setting and the
+decoder or transform the collector has: `transform.script` without a `python`
+transform; `transform.libraries` and `transform.required_libs` on a collector
+with neither a `python` transform nor a `pre_script`; `response.csv` on a
+collector whose decoder is neither `csv` nor `auto`; `response.namespaces`
+without an `xpath` transform; and `response.graphite` as § 15a says.
+
 Where the transform implies no decoder and `decoder.type` is left unset, each
 response MUST be decoded by its `Content-Type` header for `http`, by its file
 extension for `localfile`, and by its content when those do not say, where an
@@ -990,7 +1120,8 @@ as UTF-8 and one naming `x-user-defined` as `windows-1252`; a byte order mark,
 `decode` stage naming it. The converted body MUST be what decoders, transforms
 and Python scripts see, with `charset=utf-8` in its `Content-Type`, and an XML
 declaration naming another encoding MUST be rewritten to UTF-8 so the XML
-parser does not convert it again.
+parser does not convert it again. Converting MUST NOT change the bytes of the
+body that was fetched: a debug report (§ 42.17) shows them.
 
 After every transform, label values and help texts that are not valid UTF-8
 MUST have their invalid bytes replaced with U+FFFD rather than failing the
@@ -1124,9 +1255,15 @@ Do not hardcode decoder-specific logic in the Prometheus emitter.
 The JSON decoder MUST:
 
 - Parse JSON safely.
-- Detect malformed JSON.
+- Detect malformed JSON, and say where it is malformed: what is wrong, and
+  the line and column of the byte that cannot be there.
 - Refuse anything but whitespace after the value, such as NDJSON's second
   record, saying NDJSON is not supported, rather than dropping it.
+- Read a whole number of more than 4,096 digits, sign included, as its text,
+  every digit kept, rather than as a number: reading that many digits as an
+  integer takes time growing with the square of their count, which a body
+  within the size limit could spend seconds on with no deadline to stop it. A
+  pre-script's result MUST be read by the same rule.
 - Provide decoded data to the transformation layer.
 - Support jq transformations.
 - Support simple metric extraction without jq if practical.
@@ -1245,6 +1382,11 @@ Example:
 
 The implementation MUST document XPath behavior and namespaces.
 
+A rule MAY select attributes, as `//job/@size`. Its labels MUST then be
+evaluated from each attribute as XPath has it — `.` its value, `name()` its
+name, `..` its element — and MUST NOT end the scrape with an error of the
+XPath library's own.
+
 An XPath expression that computes a value rather than selecting nodes — a
 number, a string or a boolean, as `count(//job)`, `string(/s/@load)` or
 `/s/@state = 'ok'` — MUST make one series of that value, a boolean as 1 or 0,
@@ -1256,6 +1398,52 @@ shortest. This holds for XPath over HTML too.
 A label read from an element's text, or computed as a string, MUST be trimmed
 of leading and trailing whitespace, as a CSS label is, so the indentation of
 pretty-printed XML is no part of it.
+
+`response.namespaces` MUST map prefixes to namespace URIs for every XPath
+expression of the collector, its metrics' and its labels' alike. A prefixed
+name in an expression MUST then match by the URI, whatever prefix the document
+writes for that namespace, or none, and an expression using a prefix the map
+does not have MUST be refused at load. Without `response.namespaces` a prefix
+MUST be matched against the prefixes as the document writes them. The prefix
+`xml` MUST always be bound to `http://www.w3.org/XML/1998/namespace`, which
+XML reserves it for and no document declares: an expression using it, as
+`@xml:lang` and `../@xml:lang` do, MUST load and match with
+`response.namespaces` set or not, without the map naming it and whatever the
+map holds for it.
+
+A label expression that is `@` followed by the name of one attribute of the
+node MUST be read from the node by that name as the document writes it,
+where that is what it means:
+
+- Over HTML, which has no namespaces, every name: whatever follows the `@`
+  when it holds no `/`, `|`, `[`, `]`, `(`, `)`, `=`, `<`, `>`, `!`, `+`,
+  `*`, `,`, `$`, quote or blank — `@xml:lang`, `@og:type`, `@v-on:click`,
+  `@:href`, `@@click`, `@2x`, `@data-id` — whatever `response.namespaces`
+  holds. The same name after one or more `../` steps MUST be read from that
+  ancestor by the name as written, and an attribute the HTML parser gives a
+  namespace, as `xlink:href` inside `svg`, MUST be found by its name as
+  written too.
+- Over XML, a plain name, `^@[A-Za-z_][\w.-]*$`, as `@name` or `@data-id`;
+  and, while `response.namespaces` is not set, a plain name with a plain
+  prefix, `@m:unit`, the prefix being the document's own.
+
+Every other label expression, those starting with `@` included — over XML
+with `response.namespaces` set a prefixed attribute such as `@x:unit`, whose
+prefix MUST then mean what the map says and MUST be refused at load when the
+map lacks it and it is not `xml`; over either a union, a predicate, a
+comparison, a step after the attribute — MUST be compiled and evaluated as
+XPath with the collector's namespaces, and checked at load (§ 24.2); it MUST
+NOT be taken for an attribute's name, which leaves the label off without a
+word. For a collector whose decoder is left to each response, a label MUST
+be accepted at load when the document of either kind would read it.
+
+The XML decoder MUST refuse a document whose elements nest more than 512
+deep, the bound the HTML parser has for its own, as a `decode` failure saying
+so; XML a pre-script leaves MUST be held to the same bound. The text of the
+nodes a rule selects MUST NOT cost the product of their number and the depth
+they nest to: where a selected node lies within the one selected before it,
+what is beneath them MUST be read once, each node's text being the text the
+document gives for it alone.
 
 A compiled XPath expression MUST NOT be evaluated by two scrapes at once:
 antchfx/xpath runs an expression's query tree in place. The expression cache
@@ -1361,7 +1549,21 @@ other. A column with an empty header name that holds a value in any row MUST
 fail the decode naming its number; one empty in every row, as a trailing
 delimiter leaves, MUST be left out of the rows. A quote inside a field that
 does not start with one MUST be read as written rather than failing the
-decode; a quoted field left open MUST still fail it.
+decode; a quoted field left open, or holding a quote that is neither doubled
+nor the one closing it, MUST still fail it, with the error it has in a body
+without such a field, whatever the other fields of the body hold: it MUST NOT
+be read on over the rows after it. `response.csv.trim_space` MUST trim the
+whitespace on both sides of every field, with a header row and without one,
+and MUST NOT take a delimiter that is itself whitespace, a tab above all, for
+whitespace of the field after it: an empty field MUST keep its column.
+
+`response.csv.delimiter` MUST be exactly one character, and one the CSV
+reader can split on: not a double quote, a carriage return, a line feed or
+the Unicode replacement character. Anything else — two characters such as
+the backslash and `t` of a single-quoted `'\t'`, a word such as `tab`, a
+quote — MUST be refused when the configuration loads, with a message showing
+the value and how a tab is written: `delimiter: "\t"` in double quotes, where
+YAML reads `\t` as the tab character.
 
 ---
 
@@ -1454,7 +1656,10 @@ The parser MUST follow expfmt's rules:
   timestamp is an integer number of milliseconds.
 - Comments other than HELP and TYPE, including OpenMetrics' `# EOF`, are
   ignored. A family that ends up without samples is dropped.
-- Every error names its line: `text format parsing error in line N: ...`.
+- Every error names its line: `text format parsing error in line N: ...`. An
+  error about a histogram or a summary as a whole, which is not on one line,
+  names the series and the line of its first sample: `text format parsing
+  error: the histogram h{op="get"}, which starts in line N, ...`.
 
 It deliberately differs from expfmt where expfmt was wrong for a scrape target:
 
@@ -1462,7 +1667,44 @@ It deliberately differs from expfmt where expfmt was wrong for a scrape target:
   trailing blanks after the value, the timestamp or the TYPE; expfmt rejected
   all three.
 - It rejects a histogram or summary count, or a bucket count, that is negative,
-  NaN or infinite, which expfmt silently turned into an arbitrary integer.
+  NaN or infinite, which expfmt silently turned into an arbitrary integer, and
+  one that is a fraction, which would otherwise lose it: a count MUST be a
+  whole number, in any spelling (`7`, `7.0`, `1e3`). A count a pre-script
+  leaves (§ 16) MUST be held to the same rule.
+- It keeps a histogram or a summary as the target wrote it. One without a
+  `_sum` or without a `_count`, which OpenMetrics allows and expfmt read as a
+  sum or a count of 0, MUST be marked as having none, so that none is
+  exported (§ 21); a histogram without a `_count` MUST take its count from its
+  `+Inf` bucket, and one with a `_count` and no `+Inf` bucket is given the
+  bucket when it is written, as before.
+- It MUST NOT reject a histogram whose `+Inf` bucket and `_count` differ, nor
+  one with neither of the two. A target that updates its buckets and its
+  count without a lock is scraped between the two now and then, and one such
+  series MUST NOT fail every family of the scrape. The histogram MUST be
+  kept with both numbers as they were read, the `+Inf` bucket's own count
+  beside the `_count`, or with neither, and § 21 says how each output writes
+  it.
+- It rejects, naming the line and the samples the family has, a sample line
+  that belongs to a histogram or summary family by its name and is none of
+  its samples: under a histogram `h`, a sample named `h`, or `h_bucket`
+  without an `le` label; under a summary `s`, a sample `s` without a
+  `quantile` label. The value of such a line has no place in a series, so it
+  MUST NOT be dropped silently, and it MUST NOT make a series; it is a
+  malformed line, refused as a value that is no number is, also in a family
+  the collector's rules do not keep. An OpenMetrics `_created` sample is no
+  such line, and is read and dropped (below).
+- It MUST NOT reject a value the text format allows because OpenMetrics does
+  not allow it a series of its type: a counter or a `_sum` that is NaN or
+  negative, buckets or quantiles out of order, bucket counts that fall, a
+  `le` of NaN, a quantile outside 0 to 1. Such a series is passed on, and § 21
+  says how each output writes it.
+- It rejects what cannot be one series, where expfmt kept the last sample or
+  wrote both: a second `_sum` or `_count` sample of a series, naming its
+  line; and, naming the series with its labels and the line of its first
+  sample, two buckets with one upper bound however written (`le="1"` and
+  `le="1.0"`) and two values of one quantile.
+  A series the collector's rules do not keep is not held and so is checked
+  only sample by sample.
 - It rejects a label set with no metric name, such as `{a="b"} 1`, which
   expfmt attached to the previous line's family, and names that mix bare and
   quoted parts, such as `a"b"`, which expfmt spliced together.
@@ -1662,7 +1904,16 @@ a string for text, HTML and XML; and, for Prometheus exposition,
 `{"metrics": [...]}` with a dict per series of its `name`, `type`, `help`,
 `labels`, and `value` — or a histogram's `buckets` (`le`, `count`), `sum` and
 `count`, or a summary's `quantiles` (`quantile`, `value`), `sum` and `count` —
-and its `timestamp` in milliseconds when it has one. NaN and the infinities
+and its `timestamp` in milliseconds when it has one. A histogram or summary
+read without a `_sum` or a `_count` MUST have no `sum` or `count` key, and one
+a pre-script leaves without the key, or with `None` for it, MUST be read back
+as having none; what a pre-script leaves MUST be checked as the decoder
+checks a target's (§ 14.1): duplicate bounds or quantiles MUST fail the scrape
+naming the series. A histogram's `count` and the `count` of the `+Inf` entry
+of its `buckets` MUST each reach the script as the target wrote it, also when
+they differ, and MUST each be read back as the script left it: a `count` that
+is not the `+Inf` bucket's, and a histogram left with neither, MUST be passed
+on as a target's is (§ 14.1), not refused. NaN and the infinities
 MUST reach a script as Python floats, and MUST come back as floats, in a
 pre-script's `data` and in `metric(...)`, although JSON, which the exporter
 and its workers exchange, has no form for them. The numbers of a worker's
@@ -1698,7 +1949,11 @@ and a non-finite one, or one beyond an int64 of milliseconds, refused. A
 metric a script appends to `metrics` itself MUST be read the same way: its
 value and timestamp as `metric(...)` reads them, `None` refused, its label
 values written as label text with `None` leaving the label off, and a missing
-type `gauge`.
+type `gauge`. A name, type or help that is not a string (`None` for the type
+or the help being none given), labels that are not a mapping, and an entry of
+`metrics` that is not a mapping MUST fail the scrape with a message naming the
+metric and the argument, whether given to `metric(...)` or appended; the
+message MUST NOT be the JSON decoder's error about the exporter's own types.
 
 A series typed `histogram` MUST have buckets and one typed `summary`
 quantiles, and a series with either MUST have that type; a `prometheus` rule
@@ -1890,10 +2145,31 @@ typical script.
   libraries (§ 16.4) are imported and before any script runs. Declared libraries
   MUST be imported at start-up, so their import time is not the script's, and so
   a library that itself imports a module the sandbox blocks still loads.
-- `limits.script_timeout` MUST bound the run of a script, not the start of the
-  interpreter, which has its own budget of 10 seconds. A script that overruns
-  MUST fail the run with a timeout error naming the limit, and its worker MUST be
-  killed.
+- The response's body MUST be sent to a worker once: `response.text`,
+  `response.body` and, where the script's `data` is the body as text, `data`
+  MUST be one string in the worker, not a copy each in the request.
+- A worker MUST say, with a line of its own before it runs the script, that
+  it has read and parsed the request. `limits.script_timeout` MUST bound the
+  run of a script from that line on: not the start of the interpreter, which
+  has its own budget of 10 seconds, and not handing the worker the request,
+  which MUST be bounded by the probe's deadline, and by 30 seconds where that
+  is later or there is none. A script that overruns MUST fail the run with a
+  timeout error naming the limit, and its worker MUST be killed.
+- A run that the probe's or scrape's deadline ends before
+  `limits.script_timeout` does MUST be stopped the same way and MUST NOT be
+  reported as a timeout of the script: its error MUST say that the probe's
+  time ran out, how long the script had run and the `script_timeout` it had
+  not reached, or that the script never ran when the deadline came while the
+  request was handed over; it MUST be counted as a run of outcome `deadline`
+  and a worker stopped for the reason `deadline` (§ 22.1a).
+- A worker of the pool that died while idle MUST NOT fail a scrape. An idle
+  worker whose process has ended MUST be found so when it is taken from the
+  pool, stopped, counted with the reason `crash`, and replaced by the next
+  idle worker or a new one. A worker from the pool that turns out dead before
+  it said it has the request, when nothing of the script has run, MUST be
+  replaced the same way and the request given to another; a worker just
+  started that dies, or one that dies after it took the request, fails the
+  run.
 - A script error, including `SystemExit`, MUST fail that run with the Python
   error and leave the worker in service. The error MUST be the traceback of
   the script's own frames, the five innermost, so the failing line is always
@@ -1908,7 +2184,14 @@ typical script.
   imported. A script that needs more MUST fail the run with a `MemoryError`
   naming the limit and leave the worker in service. It MUST be at least 32MiB
   or `0`, the default, for none; a smaller one MUST be refused at load. A
-  different limit MUST mean a different pool of workers.
+  different limit MUST mean a different pool of workers. What counts against
+  the limit is the interpreter, the preloaded libraries and what the script
+  allocates, and nothing the worker reserves without using: a worker MUST be
+  started with `MALLOC_ARENA_MAX=1` added to the exporter's environment, so
+  that glibc does not reserve a second arena of 64 MiB for the thread that
+  watches the worker's parent, unless the exporter's environment sets that
+  variable, whose value MUST then be passed on unchanged. The variable MUST
+  be set on every system, since those it means nothing to ignore it.
 - `--python.max-workers` MUST bound the workers alive at once, starting, busy
   or idle, of every collector together. A run that finds no idle worker for its
   script while the limit is reached MUST stop the idle worker unused for
@@ -1929,12 +2212,25 @@ typical script.
   idle workers at once and each busy one when its run finishes, counting them
   with the stop reason `reload`; workers of scripts the reload keeps MUST be
   left alone.
-- The time each run takes in its worker — not starting one — MUST be kept per
-  probe, the pre-script's and the python transform's together, and published
-  as `http_exporter_script_duration_seconds` of the collector and of the
-  request (§ 22).
-- A worker MUST exit when the exporter does, which closing its request pipe
-  achieves.
+- The time each script runs in its worker, as `limits.script_timeout`
+  measures it — not starting a worker, nor handing it the request — MUST be
+  kept per probe, the pre-script's and the python transform's together, and
+  published as `http_exporter_script_duration_seconds` of the collector and of
+  the request (§ 22).
+- A worker MUST exit when the exporter does. Closing its request pipe ends an
+  idle one. A worker busy in a script does not read the pipe, and an exporter
+  that was killed stops no worker, so every worker MUST also watch for the
+  process that started it — a thread of its own that checks about once a
+  second whether its parent process is still the one it started with — and
+  exit when it is not. The watch MUST be started, and running, before the
+  memory limit and the sandbox are installed, MUST NOT depend on anything a
+  script can replace, and MUST NOT make a module the sandbox blocks reachable
+  by a script. It MUST NOT end while the worker lives: an error raised in
+  it, such as the `MemoryError` of a look taken while a script holds all of
+  `limits.max_script_memory`, MUST be passed over and the look taken again a
+  second later. The exporter MUST NOT instead ask the kernel to signal the worker
+  at its parent's death (`PR_SET_PDEATHSIG`), which follows the thread that
+  started the worker, not the exporter.
 
 ---
 
@@ -2088,7 +2384,12 @@ writes it and a boolean as `true` or `false`, case-sensitively. A value it
 lists MUST take the mapped number; any other MUST take the number mapped to
 `"*"` when there is one, numbers included, and otherwise be read as a number
 as without the map, failing the rule, naming `value_map`, when it is not one.
-`scale` MUST then multiply the value, mapped or read. A label MAY set
+`scale` MUST then multiply the value, mapped or read; a `scale` that is
+exactly one over a whole number of magnitude 2 or more, as `0.001` is
+written — the scale being the float64 nearest to that reciprocal — MUST
+divide by that number instead, so the result is the nearest number to the
+exact quotient. A scale that only comes close to such a reciprocal, as
+`0.3333333333` and `1.5e-9` do, MUST multiply. A label MAY set
 `value_map` too, text to text, applied to the value its expression gives, as
 text without surrounding blanks, with `"*"` for any other value; without a
 match and without `"*"` the value MUST be kept, and a value mapped to `""`
@@ -2155,9 +2456,26 @@ A value MUST be treated as absent in the same way by every transform when
 nothing matched, when it is null, and when it is text that is empty or only
 whitespace: an empty CSV cell, an empty JSON or YAML string, an XML or HTML
 node without text, a regex whose first capture group took no part in the match
-or captured only whitespace. Text that is present and is not a number MUST
-NOT be treated as absent: it is a failure of the rule, whatever `required`
-says.
+or captured only whitespace. Nothing matched MUST include a `prometheus` rule
+whose pattern, or whose name when it has no pattern, matches no metric of the
+response, and a `csv` rule over a response without a row: each MUST be the
+missing value of its rule, once for the scrape, failing it under `fail`,
+logged and counted under `log`, counted under `ignore`, and omitted without
+logging when the rule is not required. Text that is present and is not a
+number MUST NOT be treated as absent: it is a failure of the rule, whatever
+`required` says.
+
+A context that is done — the probe's budget ran out (§ 3.2a), or the trip was
+cancelled — MUST NOT be handled as a rule's failure. Once it is done no rule
+MUST carry on under `ignore` or `log`, nothing MUST be logged or counted
+against a rule, and the transform MUST fail as a whole with the context's
+error, naming the rule it was at: the `transform` stage's failure, under
+`fail` too, and never the `metric` stage's, so that the series the other
+rules made are neither answered nor cached as if they were the whole
+response. Failures of rules that failed before it MUST still be counted. The
+transforms that walk a response themselves MUST ask after the context before
+each node an XPath selected, each item of a css rule, each CSV row and each
+regex match; a jq program stops by itself.
 
 A probe failed by `fail` MUST respond `502 Bad Gateway` with
 `Content-Type: application/json` and a body of the form:
@@ -2260,6 +2578,25 @@ Without `items`, a label expression yielding no value MUST leave the label off
 every series, one value MUST apply to every series, and one per series MUST
 pair by position; any other count MUST fail the metric under its `error_mode`,
 naming the label and the counts, rather than export mislabelled series.
+
+Such a metric fails as a whole, and MUST be reported as one failure: no
+series of it MUST be exported; under `log` and `ignore` exactly one failure
+MUST be counted for it, and logged under `log`, being the failure of the rule
+and not of any of its values; and under `fail` the scrape's error MUST be that
+failure. What fails a rule without `items` as a whole MUST be, in this order:
+its expression failing at any of its values (`metric "m" expression: …`);
+then the first of its labels, as the rule lists them, whose expression fails
+at any of its values, which gives another count than none, one or one per
+series (`label "a" gave 7 values for 4 series, so they cannot be paired; give
+one value, or one per series, or set items to evaluate labels per element`),
+or which gives a series a value that is an object or a list
+(`metric "m" labels: …`). A value that fails by itself — missing, no number,
+its series lacking a required label — MUST be counted and reported as that
+value's failure only where nothing fails the rule as a whole, whichever is
+met first; under `fail` the first such value MUST then be the scrape's error.
+The exporter MAY take the values one at a time and stop at the first series
+past `limits.max_metrics` (§ 20), which then is the scrape's failure; to tell
+whether the rule fails as a whole it MUST NOT keep the values it reads.
 
 ```yaml
 metrics:
@@ -2428,8 +2765,9 @@ error, set where the error is made and read with `errors.Is`, and never by
 searching the error's text: an error that merely mentions "missing", "response
 size" or "python" MUST NOT raise those counters, and rewording a message MUST
 NOT stop one being counted. A value the response did not contain is any
-required value a rule could not find: a jq or yq value, a CSV column, a regex
-that matched no text, an XPath or CSS selector that matched no nodes, and an
+required value a rule could not find: a jq or yq value, a CSV column, a CSV
+response without a row, a regex that matched no text, an XPath or CSS selector
+that matched no nodes, a prometheus rule that matched no metric, and an
 `items` expression that selected nothing.
 
 ### 19.2 Missing keys
@@ -2491,7 +2829,9 @@ The response a collector reads MUST be bounded by `request.max_response_bytes`
 and `limits.max_response_bytes`: the smaller when both are set, the one set
 otherwise, and 10 MiB when neither is. Neither MUST be filled in with the
 default, so that either alone may raise the bound past it; a negative value
-MUST be refused. An HTTP answer whose `Content-Length` is over the bound MUST
+MUST be refused. The bound MUST be held to one byte under the largest 64-bit
+number, for every request type, so that the largest value that can be written
+reads the whole answer rather than none of it. An HTTP answer whose `Content-Length` is over the bound MUST
 be refused before its body is read, the error giving that size; one without
 it MUST be refused once reading passes the bound, and the error MUST NOT give
 a size it does not know. A `HEAD` answer's `Content-Length` MUST NOT be held
@@ -2507,7 +2847,12 @@ key, and MUST treat header names without regard to case.
 
 A trip cancelled because every probe waiting for it went away MUST NOT be
 reported as a failure of the target: nothing logged, no stale answer counted
-or queued for OTLP.
+or queued for OTLP. One cancelled while its transform ran MUST NOT be counted
+as a failed transform either — in `http_exporter_transform_errors_total`,
+`http_exporter_missing_keys_total`, `http_exporter_script_errors_total` or
+against the rule it was at — since the error that ended the transform is the
+cancellation; what the trip had done by then, its request and its decode,
+MUST stay counted.
 
 `max_metrics` MUST bound the memory of a scrape as well as its size: every
 transform MUST stop at the first series past it, and the prometheus decoder
@@ -2520,7 +2865,13 @@ counted in `http_exporter_series_limit_exceeded_total`, whatever
 spanning every rule of the collector, not in a global. A regex rule MUST ask
 for at most one more match than the limit has room for, and for more only
 when matches made no series; a jq `items` expression's items MUST be taken
-as the program produces them. A python transform's answer is bounded by
+as the program produces them, and so MUST the values of a jq rule without
+`items`, which MUST make the labels of a series when it makes the series and
+of no value it does not keep, and MUST fail with the same error as one with
+`items`. A value that makes no series MUST take no room. A jq rule without
+`items` that fails as a whole after it made series — its program failing part
+of the way, a label's values not pairing — MUST drop them and give their room
+back, as a rule with `items` does. A python transform's answer is bounded by
 `max_output_bytes`, and its metrics MUST be counted before they are read.
 
 `max_cache_entries` bounds the number of live cache entries a single collector
@@ -2557,7 +2908,13 @@ Before exposition, validate:
 A label name starting with `__` MUST fail validation, and MUST be refused at
 load wherever the configuration names one (a rule's labels,
 `transform.labels`, `rename_labels`, a static target's labels): Prometheus
-refuses `__name__` in what it scrapes and drops the rest. Series that differ
+refuses `__name__` in what it scrapes and drops the rest. A histogram with a
+label `le` of its own, and a summary with a label `quantile` of its own, MUST
+fail validation naming the series and the label, whatever gave it the label —
+a rule, `transform.labels` or a script — since its buckets or quantiles carry
+that label and the series would be written with it on `_sum` and `_count`,
+which no parser reads as intended; on a series of another type both MUST be
+labels like any other. Series that differ
 only in a label with an empty value MUST be duplicates, since Prometheus reads
 such a label as absent, and the error MUST say so.
 
@@ -2614,8 +2971,54 @@ becomes one `unknown` family per sample name (`foo_bucket`, `foo_sum`,
 `foo_count`; or `foo`, `foo_sum`, `foo_count`); gauges and `unknown` families
 keep their type unless their name is one of those sample names, when they and
 the lines of that name share one `unknown` family.
+A counter named exactly `_total`, whose family would have no name, MUST be
+written as the `unknown` family `_total`. Every other counter's sample MUST
+be its family's name and the plain text `_total`, and its family the
+counter's name without a `_total` it ends in, whatever the name is: a
+strict OpenMetrics parser, and the exporter's own reader (§ 14.1), find a
+counter's sample only under that name. That holds for a name
+`name_escaping: values` wrote (§ 21.1), where the `_total` of the original
+name reads `__total`, as Prometheus writes such a counter:
+`U__my_2e_requests__total` MUST be the family `U__my_2e_requests_` with the
+sample `U__my_2e_requests__total`, and the counter `U__my_2e_errors` the
+family of that name with the sample `U__my_2e_errors_total`. The suffix MUST
+NOT be cut or added in escaped form.
 A series' timestamp MUST end every line of it: a plain sample's, and each
 bucket, quantile, `_sum` and `_count` line of a histogram or a summary.
+A histogram or a summary read from a target without a `_sum` or without a
+`_count` (§ 14.1) MUST be written without that line, in both formats, and
+MUST NOT be given a sum or a count of 0. A histogram's `+Inf` bucket MUST be
+written with the count the target gave that bucket, and its `_count` with
+the count the target gave that, also when the two differ; a histogram read
+with a `_count` and no `+Inf` bucket MUST be given the bucket with that
+count, and one read with neither MUST be written with neither. In
+OpenMetrics, where a histogram has both
+or neither, a histogram family with a series that has one of the two MUST be
+written as `unknown` families under its sample names, as a family that gives
+way is, and an `unknown` family that would hold no line MUST NOT be written.
+A histogram's buckets MUST be written in ascending order of their upper
+bounds, with a bound that is not a number first and `+Inf` last, and a
+summary's quantiles in ascending order, in both formats, in whatever order
+they were read; the metric set an answer is written from MUST NOT be
+reordered.
+The text format MUST pass on every value a target wrote for a series (§ 14.1).
+The OpenMetrics answer MUST be one a strict OpenMetrics parser accepts, so a
+family with a series whose values OpenMetrics does not allow its type MUST be
+written as `unknown` families under its sample names, as a family that gives
+way is, with the same series and values as the text format. Those series are:
+a counter that is NaN or negative; a histogram whose `_sum` is NaN or
+negative, that has a `_sum` and a bucket with a negative bound, that has a
+bound that is NaN, whose cumulative bucket counts fall from one bound to the
+next higher or exceed its `+Inf` bucket's, whose `+Inf` bucket and `_count`
+differ, or that has neither of the two (§ 14.1); and a summary whose `_sum` is
+NaN or negative, with a quantile
+that is NaN or outside 0 to 1, or with a negative value for a quantile. A
+counter or a `_sum` of `+Inf`, a quantile's value of NaN, and any value of a
+gauge or an untyped series MUST NOT cost a family its type, and a family with
+no such series MUST keep its type unless it gives way over a name. The choice
+MUST be made for the family, since a family has one type, and before any
+family gives way over a name, so that the rule on claimed names holds for
+what is written.
 
 ### 21.1 UTF-8 names
 
@@ -2879,8 +3282,8 @@ the per-collector series and `http_method!=""` the per-request ones.
 
 A counter MUST be raised on the collector and on the request through the same
 path, so the two views cannot drift: the collector's total MUST equal the sum of
-its requests' values for every counter, and the repository's tests MUST check
-this.
+its requests' values for every counter, but for the probes and trips that start
+no tracked combination, below, and the repository's tests MUST check this.
 
 Verbose mode MUST be configured in the exporter configuration under
 `web.self_metrics.verbose` and MUST default to false. Because it is
@@ -2926,7 +3329,21 @@ indicator alone with nothing to explain it.
 The slots MUST NOT be taken by requests the exporter never made: a probe whose
 target the collector's `request.allowed_targets` or `denied_targets` refused
 (§ 26.1) MUST NOT start a tracked combination, though it MUST keep updating one
-already tracked, and it is counted on the collector as always. A combination no
+already tracked, and it is counted on the collector as always. The same MUST
+hold for a probe whose caller went away before it was answered, whether or not
+the collector shares identical probes, and for a trip cancelled because every
+probe waiting for it went away (§ 42.13a): neither got the target policy's
+verdict. A trip that ends otherwise and was not refused MUST be counted on its
+combination, starting it if it is not tracked yet, whichever probe started the
+trip and whichever probes went away before its answer: what a trip shared by
+identical probes counted — its cache miss, the target's status and bytes, its
+decode, transform, validation and error counters, the series emitted, the time
+of the scrape — MUST be on the combination the probes it answered are counted
+on, once, and MUST NOT be kept with, and forgotten with, the probe that
+started it. A collector's total is therefore the sum of its tracked
+combinations' and of the probes and trips above that started none; with a
+trip that answered a probe, the two differ only by the probes that went away,
+in `http_exporter_scrapes_total`. A combination no
 probe or static target scrape has asked for in the last hour MUST be dropped,
 so a target probed once, or no longer probed, gives its slot back and does not
 leave a series with a timestamp that never moves; the combinations of the
@@ -3005,9 +3422,11 @@ would otherwise reach an OTLP backend as one name with two types.
 
 The Python families MUST be published for every collector with a Python
 transform or pre-script, and for no other. `state` MUST be one of `starting`,
-`idle` and `busy`; `reason` one of `timeout`, `crash`, `output_limit`,
+`idle` and `busy`; `reason` one of `timeout`, `deadline`, `crash`, `output_limit`,
 `cancelled`, `retired`, `surplus`, `idle`, `reload` and `evicted`; `outcome` one of `ok`,
-`script_error`, `timeout`, `output_limit` and `failed`. Every value of `reason`
+`script_error`, `timeout`, `deadline`, `output_limit` and `failed`. `deadline` is
+a run the probe's or scrape's deadline ended before `limits.script_timeout`
+did, or before the worker had the request (§ 16.7). Every value of `reason`
 and `outcome` MUST be published, zero included, so a rate can be taken before
 the first event. The pool MUST keep these counts regardless of verbose mode,
 since it maintains them anyway; only their publication depends on it.
@@ -3112,9 +3531,18 @@ gzip.
 
 The exporter's own HTTP server MUST bound what a client can hold open: request
 headers within 10 seconds, the whole request within 30 seconds, and an idle
-keep-alive connection closed after two minutes. It MUST NOT have a write
-timeout, which would cut off a probe that legitimately takes as long as its
-scrape timeout.
+keep-alive connection closed after two minutes. A request's line and headers
+together MUST be bounded at 64 KiB, a longer request being answered `431`. It
+MUST NOT have a write timeout counted from the request's arrival, which would
+cut off a probe that legitimately takes as long as its scrape timeout.
+Instead every endpoint MUST set a write deadline of 30 seconds, a named
+constant, when it starts writing its answer, status line included: a client
+that has not read the answer by then MUST be dropped — its connection closed
+and its handler, with the rendered answer, released — and that MUST be logged
+at debug level at most, being no failure of the exporter or of a target. The
+deadline MUST be the answer's alone: the time the answer took to make MUST NOT
+count against it, and it MUST NOT outlive the answer on a kept-alive
+connection.
 
 ---
 
@@ -3168,6 +3596,24 @@ that configuration is refused, so a configuration adding a collector file with
 a mistake in it reloads once that file is fixed. Starting the watch MUST NOT
 reload a configuration that has not changed since it was loaded.
 
+While the configuration last read is refused, whatever triggered that reload,
+the files it names that loading it opens MUST count among the files whose
+change reloads it, with those the configuration in force names:
+`otlp.tls.ca_file`, `cert_file` and `key_file` when `otlp` is enabled,
+`web.basic_auth.username_file` and `password_file` when it is enabled, and a
+collector's `request.protoset_file` and `request.proto_files`. A reload
+refused because one of them was missing or half replaced — a Secret being
+rotated — MUST thus be tried again at the tick after the file is in place,
+without the configuration being touched. Such a file MUST be stamped before
+the load reads it, as what its path leads to: its modification time, size
+and permissions, the file a symbolic link resolves to, or that there is
+none, so a swapped `..data` link is a change even when the new file has the
+time and size of the old. A tick that finds nothing changed MUST NOT read
+the configuration and MUST NOT log; however many files changed since the
+last tick, a tick MUST make one reload, logged as any other. Once the
+configuration is in force these files MUST NOT reload it: what uses them
+reads them again itself.
+
 Enabling the watch MUST NOT weaken any reload rule: an invalid configuration, a
 configuration that would disable OTLP while a loaded static target sets
 `export_via_otlp`, a
@@ -3181,7 +3627,10 @@ all.
 
 The exporter MUST reload when asked, not only when the watch finds a change:
 
-- On `SIGHUP`, always.
+- On `SIGHUP`, always. The signal MUST be caught from the moment the process
+  begins, before the configuration is read: one that arrives during the
+  start MUST NOT end the process, as the default action of an uncaught
+  `SIGHUP` would, and MUST cause one reload once the exporter has started.
 - On `POST` or `PUT` `/-/reload`, when started with `--web.enable-lifecycle`,
   which MUST default to off. Without the flag the endpoint MUST answer `403`
   saying how to enable it; any other method MUST answer `405` with
@@ -3209,6 +3658,20 @@ an error that gives only a line number can be placed. Reloads MUST be
 serialized, so two triggers at once never interleave. The Helm chart MUST expose the flag as a
 value (SPECIFICATION-CHART.md § 33.10).
 
+The configuration and the static target file are checked against each other,
+so they MUST be put in force as one pair, in one step: when a reload accepts
+both, no reader may find the new one of the two in force with the old other.
+Whatever needs both — a static target scrape above all — MUST read the pair
+once rather than each on its own, and a scrape MUST use the configuration
+its target was read with. Validation MUST NOT write into a configuration or
+a static target file in force, which scrapes are reading: whatever spelling
+it normalizes — a target's `accept_status`, `accept_codes` and
+`retry.codes` — MUST be written once, when the file is loaded and before it
+is in force, and the check of the target file against the configuration,
+which a reload repeats on the file in force, MUST only read both. A reload
+that changes a collector's definition MUST make that collector's static
+targets due again (§ 42.14).
+
 ### 24.2 Validation of metric rules
 
 Everything about a metric rule that can be known before a scrape MUST be
@@ -3222,8 +3685,9 @@ label:
   `items` and label expressions (compiled, not only parsed, so an undefined
   function or variable is caught); regular expressions; CSS selectors, which
   goquery would otherwise silently treat as matching nothing; XPath expressions
-  and relative label expressions, with the collector's namespaces; and a
-  prometheus transform's patterns, `include` and `exclude`.
+  and relative label expressions, with the collector's namespaces, all but a
+  label that is one attribute read by its name (§ 11); and a prometheus
+  transform's patterns, `include` and `exclude`.
 - A regex metric's expression MUST have at least one capture group, the first
   being the value.
 - A regex label MUST name a capture group the regex has, by number or name.
@@ -3232,6 +3696,46 @@ label:
   than a prometheus transform without `metrics` rules, rather than ignored.
 - `transform.labels` keys and `rename_labels` targets MUST be valid label
   names, and two `rename_labels` entries with one target MUST be rejected.
+
+- A `{{param_...}}` placeholder (§ 42.10a, § 42.10b) in a setting of a
+  collector where a probe's parameters are not filled in MUST be refused,
+  naming the field — `request.bearer_token`, `request.basic_auth.username`,
+  a credential or TLS file, `request.tls.server_name`,
+  `transform.labels.<name>`, a prometheus transform's `include` or
+  `exclude`, a `value_map`, a label's `value` — since it would be sent or
+  exported as written. Every string the collector holds MUST be checked but
+  those written in a language of their own, where the text `{{param_` is that
+  language's and no placeholder: `transform.script` and
+  `transform.pre_script`, a metric's `items`, `expression` and `description`,
+  and a label's `expression` MUST NOT be searched, so that a Python f-string
+  (`f"{{param_x}}"`), a jq string, a regex matching the text and a
+  description naming a parameter load and run as written; nothing fills a
+  placeholder there. The fields that are filled in MUST be asked of the code
+  that fills them rather than listed a second time, so the check stays
+  complete as fields are added. Braces that open no `param_` placeholder are
+  text.
+- A limit that is a whole number — the `limits` counts and lengths,
+  `max_concurrent_probes`, `retry.attempts`, `max_files`, the OTLP and static
+  target counts — MUST NOT be negative and MUST be written as a whole number:
+  a negative one MUST be refused naming the key and the value, and a number
+  with a fraction, such as `max_metrics: 0.5` or `max_concurrent_probes: 1.9`,
+  MUST be refused naming the key, the value and the line, in the
+  configuration, a collector file and the static target file alike, rather
+  than becoming the default or losing its fraction. A whole number written
+  as `4.0` or `1e3` is one. A negative `limits.script_timeout` MUST be
+  refused. 0, like a limit left out, keeps its meaning: the default.
+- A mapping key YAML reads as null — `null`, `~`, or an empty key — in any
+  mapping of names to values, such as `value_map`, `headers` or `labels`,
+  MUST be refused naming the mapping and the line, since the decoder would
+  drop the entry; quoted, it is that text.
+- These two checks MUST look at the values the decoder uses (§ 24.2a): with
+  a merge key, the mapping's own key and not the merged one it replaces,
+  wherever the merge key stands, and of a list of merges the first that sets
+  the key, a merged mapping's own before what it merges in itself. A
+  fraction in an anchor that every mapping using it overrides MUST NOT be
+  refused; one that is used MUST be, at the line it is written on. A null
+  key replaces nothing and is replaced by nothing, so one merged in MUST be
+  refused.
 
 An error about an expression MUST quote it: `collector "a" metric "x"
 expression ".foo[": unexpected EOF`, as a CSS selector's and an XPath's do.
@@ -3280,7 +3784,16 @@ blocks uses what the block defines, directly or through other aliases; an
 unused block's references MUST be left alone, their variables not required.
 Aliases and merge keys MUST work
 in all three files as YAML defines them: a key set beside a merge replaces the
-merged value of that key whole.
+merged value of that key whole, and of a list of merged mappings the first
+that sets a key supplies it. They MUST work in every mapping, including
+the blocks decoded by custom code — a collector's `cache`, a static target's
+`request`, `otlp`, `web.basic_auth` and the top level of a collector file —
+with `<<` taking one mapping or a list of them. Wherever the exporter looks
+at a mapping's keys itself, a key a merge supplies MUST count as a key of
+the mapping: an unknown one MUST be refused as if written there, at any
+depth and through an alias, and a `path` or `body` merged into a static
+target's `request` MUST replace the collector's as one written out does. A
+quoted `"<<"` is an ordinary key.
 
 Each of these files MUST hold one YAML document. A second document after a
 `---` MUST be refused naming the line it starts on, since it would otherwise
@@ -3329,6 +3842,20 @@ it. `make schemas` MUST regenerate all three.
 The schema describes the canonical spelling, and MUST allow an unquoted number
 or boolean where the exporter reads a string, since YAML reads `expression: 1`
 as a number. Startup validation remains the authority on what is valid.
+
+Where a schema can tell, it MUST refuse what the exporter refuses, and a test
+MUST put a table of documents through both the committed schema and the
+exporter's loader and require the same verdict of each, for at least:
+`response.csv.delimiter`, a string of at most one character (`maxLength`,
+which counts characters, so a tab or a letter of several bytes is one) that
+is not a double quote, a carriage return, a line feed, NUL or U+FFFD; the
+sizes of § 5.0a; and the blocks an `enabled` key switches on (§ 42.1), every
+key of which the test MUST try. What a schema cannot tell MUST be said in the
+key's description and stay the exporter's to refuse: the least
+`otlp.interval`, 1s, since a duration is a string to a schema and a disabled
+block may hold any; the range of a size; and a size written as an unquoted
+number with an exponent or a fraction of zero (`1e3`, `1.0`), which a schema
+sees as the whole number it equals.
 
 ---
 
@@ -3453,12 +3980,33 @@ and `request.denied_targets`, lists of host names, globs of host names
 `a.b.example.com` but not `example.com`), IP addresses and CIDR networks. An
 entry that is none of these, such as one with a scheme, a port or a path,
 MUST be refused at load; another request type setting either MUST be refused
-as any key of another type is. Names MUST be compared without case and
+as any key of another type is. A name entry MAY hold letters, digits, dots,
+hyphens and underscores, a hyphen first or last included. Names MUST be compared without case and
 without a final dot, and an IPv4-mapped IPv6 address as its IPv4 address. A
-host MUST be checked as it is dialed: an internationalised name, or one
-written in full-width characters, in the ASCII form the transport converts
-it to before dialing (`１２７.０.０.１` is `127.0.0.1`), and a host with no
-such form MUST be refused.
+host MUST be checked as it is dialed. A host is an IP address — an IPv6
+address MAY carry a zone — or a name, and a name is made of ASCII letters,
+digits, `.`, `-` and `_` alone. Such a name is dialed as
+written, so it MUST be checked as written, in lower case and without a final
+dot, and MUST NOT be refused for what a registered domain may not hold: an
+underscore (`my_service`), hyphens in its third and fourth place
+(`db--primary`) or a hyphen first (`-edge`). A host with characters outside
+ASCII —
+an internationalised name, or one
+written in full-width characters — MUST be checked in the ASCII form the transport converts
+it to before dialing (`１２７.０.０.１` is `127.0.0.1`), and one with no
+such form MUST be refused. A host that is not an address and holds any other
+character — `%`, which is how a URL's host carries one written `%25`, a
+comma, a semicolon, `=`, `*`, a space, a control character — or whose
+converted form does, MUST be refused as a target is refused (`403`), saying
+which character, before anything is looked up or sent, whatever the lists
+are and whether or not a proxy is in between: a proxy that decodes
+`intern%61l.example` would fetch a name the lists never saw. The rule MUST
+hold for the first URL, for the host of every redirect followed and for a
+`grpc` target in each of its forms. An IPv4 address written as one number, as fewer
+than four parts, or with parts in hexadecimal (`0x`) or octal (a leading
+`0`), as resolvers and proxies read them (`2130706433`, `127.1`,
+`0x7f.0.0.1`), MUST be checked as the address it is, before anything is sent,
+whether or not a proxy is in between.
 
 - Every such collector MUST refuse the cloud metadata addresses,
   `169.254.169.254` and `fd00:ec2::254`, even with neither list set, unless
@@ -3480,7 +4028,14 @@ such form MUST be refused.
   that resolves elsewhere between lookups is still refused. For a target
   reached through a proxy, the connection is the proxy's and MUST NOT be
   checked as the target's; the exporter MUST resolve the target's name itself
-  before the request and check those addresses. Whether a request goes
+  before the request and check those addresses. When that lookup fails, the
+  request MUST go on to the proxy, which resolves the name, unless the
+  collector's own lists hold an address or a network, in which case it MUST
+  fail with an error naming the lists and the failed lookup; the name rules
+  MUST apply either way, and a name `allowed_targets` does not match, when it
+  holds names only, MUST be refused. The same holds for `grpc`. The
+  documentation MUST say what this leaves unchecked: the address a proxy
+  resolves a name to, the cloud metadata addresses included. Whether a request goes
   through a proxy MUST be decided by the proxy function of the transport that
   sends it, and for `grpc` as grpc-go decides, so the check and the
   connection never disagree. A `grpc` call MUST check its connections as
@@ -3875,7 +4430,8 @@ malformed command line.
 Static targets (§ 42.14) MUST keep being scraped during the delay, while their
 endpoint is still served. When the delay ends no static target scrape MUST
 start, and one waiting for a slot MUST give up without logging advice about
-`concurrency`; those in flight MUST be allowed to finish within
+`concurrency`; one that comes by a slot as the delay ends, or after, MUST NOT
+begin either. Those in flight MUST be allowed to finish within
 `--web.shutdown-timeout`, and publish as usual. One the timeout cuts short
 MUST publish nothing — on the endpoint or over OTLP — and MUST NOT be logged as
 a failure: the target did not fail, so it MUST NOT be reported down, and its
@@ -3969,7 +4525,11 @@ The exit status MUST be `0` when the report's status is `ok` and `1` otherwise.
 A command line that cannot be parsed checks nothing, so it MUST exit `2` —
 distinguishing "your command is wrong" from "your configuration is wrong" —
 and MUST report the problem as a JSON log line rather than plain text. `-h`
-MUST print usage to stdout and exit `0`.
+MUST print usage to stdout and exit `0`. An argument that is not a flag is
+such a command line, at a start as with `--dry-run`: the exporter takes none,
+and the flags after one would be left unread, so it MUST exit `2` with
+`unexpected argument "<argument>"; flags take --name=value` rather than run
+with half its flags.
 
 ---
 
@@ -5028,6 +5588,20 @@ place, every test in them MUST be named `TestExternal*` so that
 calling the opt-in check. A test in the default suite MUST enforce both, by
 reading the source of the listed files.
 
+Whether or not its service is probed for real, every example under
+`examples/` MUST be covered by the default suite, at any depth: an example
+may be one file or a directory holding a configuration and the static target
+file that goes with it. The tests that check every example — against the
+committed schemas, that it loads, and that its scripts satisfy the contract —
+MUST take their list from the directory tree rather than from a file name
+pattern or a written list, telling a configuration from a static target file
+by its content, and MUST fail on a YAML file there that is neither. An
+example's static target file MUST be valid against the configuration in its
+directory, as startup checks the two. An example SHOULD also be run in the
+default suite against a local stand-in answering in the service's documented
+shape, asserting every series and the request the collector sent, as the
+Filebeat and Open-Meteo examples are.
+
 ## 34.32 Regression tests
 
 Every bug fixed in the project MUST add a regression test reproducing the bug before or alongside the fix.
@@ -5155,8 +5729,8 @@ Required:
 - Only a target with `export_via_otlp` is queued for OTLP; every target is
   served on the endpoint.
 - A target with an hour's interval is first due within ten seconds; its
-  cadence then keeps its offset within the interval, starting between half an
-  interval and one and a half after the first scrape, and then every interval.
+  cadence then keeps its offset within the interval, starting between one
+  interval and two after the first scrape, and then every interval.
 - Retries whose waits alone reach the interval are refused, from the
   collector or the target, and retries within it, or turned off by the
   target, are accepted.
@@ -6053,8 +6627,8 @@ See § 42.15b, § 16 and § 19.1.
 
 See § 42.1.
 
-- A histogram with a `+Inf` bucket, without one, with buckets out of order,
-  with a count that falls and without buckets is exported with the right
+- A histogram with a `+Inf` bucket, without one, with buckets out of order
+  and without buckets is exported with the right
   bounds, per-bucket counts, count, sum and attributes, and one count more than
   bounds.
 - A summary with quantiles, and one without, keeps count, sum and quantiles.
@@ -6176,7 +6750,8 @@ See § 22.0c, § 23, § 42.1a and § 42.15b.
   `non_idempotent`.
 - A static target changed in its address starts again within the first-scrape
   window while an unchanged one keeps its cadence, and a scrape still running
-  on the old definition makes the next skipped.
+  on the old definition is waited for: the new definition is scraped once it
+  has ended.
 - A static target scrape that runs out of its interval says the scrape ran
   out of its interval's budget.
 - Histogram, summary and sample lines all carry the series' timestamp, and the
@@ -6292,6 +6867,12 @@ sources at run time, so they need neither the network nor `protoc`.
   removed (cgroup, handles, filestream, the log input, newer output and queue
   fields) it exports the rest, the others absent, still without logging; its
   `filebeat_info` collector reads `/` as one `filebeat_build_info` series.
+- Run against the same Filebeat publishing to Kafka
+  (`testdata/json/filebeat-stats-kafka.json`), the example also exports the
+  Kafka client's bytes, requests in flight, requests and latency quantiles
+  and mean and max in seconds, 95 series without logging; with only some of
+  them registered it exports those, the others absent, without logging; with
+  Elasticsearch it exports none of them.
 - A target's escaped path, `%2F` inside a segment, is sent as written with
   `request.path` joined onto it, with a trailing slash, with path parameters,
   and without `request.path`.
@@ -6394,6 +6975,12 @@ Tests MUST show:
   match and without `"*"` is read as a number or fails naming `value_map`;
   `scale` multiplies a `prometheus` sample and fails for a histogram; the
   combinations refused at load are refused.
+- A `scale` of `0.001`, `0.000000001`, `1e-9`, `-0.01`, `0.5`, `0.25`, `0.1`
+  or `0.2` gives the value as written (412 ms as `0.412`), not the product
+  with the scale's binary approximation, and so does every exact reciprocal
+  of a whole number up to 2^50; `100`, `0.4`, `2.5`, `1`, `-1` and scales
+  that only come close to a reciprocal — `1.5e-9`, `7e-11`, `3e-10`,
+  `0.3333333333`, `0.9999999995`, `0.3` — multiply.
 
 ## 34.65 Review fixes: statuses, limits, waiting, lookups and label maps tests
 
@@ -6643,6 +7230,1334 @@ Tests MUST show:
 - The exporter configurations `docs/AUTHENTICATION.md` shows with their
   collectors load as written, and one without them says it is part of a
   configuration.
+
+## 34.75 Review fixes: requests as written, gRPC and file reads, rules, pass-through, probe parameters, static targets, loading and tooling tests
+
+- A host written in ASCII that a registered domain could not be —
+  `my_service`, `app_1.internal`, `db--primary.internal`, `-edge.internal` —
+  is requested with no lists set, is allowed by `allowed_targets` entries
+  naming it or globbing it (`*.svc_local`), in any case and with a final dot,
+  and is refused by a `denied_targets` glob; a name not on the allowed list is
+  still refused, and a non-ASCII name with no ASCII form still is.
+- An IPv4 address written as one number, as fewer than four parts, or in
+  hexadecimal or octal (`2130706433`, `127.1`, `0x7f.0.0.1`, `0177.0.0.1`)
+  is refused by `denied_targets: [127.0.0.0/8]` before anything is sent, with
+  and without a lookup, and such forms of `169.254.169.254` are refused as the
+  cloud metadata address with no lists set; `256.1.1.1`, `08.0.0.1`,
+  `1.2.3.4.5` and `1e3` are read as names.
+- The target's own query reaches the target byte for byte — a bare key, a
+  pair with `;`, the order and escapes of its pairs, an empty query, a
+  repeated name — with only a space, a double quote, `<`, `>` and non-ASCII
+  characters escaped where they stand; `request.query`, placeholders filled,
+  follows it encoded, and a name both carry is sent twice, the target's
+  first.
+- A target with no scheme whose query, path or fragment holds `://`
+  (`h:8080/login?next=http://other/`) is requested as `http` with that query
+  unchanged, and one that names its scheme keeps it.
+- A percent-escape written in `request.path`, in the `path` probe parameter
+  and onto a target's own escaped path is requested as written (`%2F`, `%20`,
+  lower-case digits, `%2E%2E`), beside characters that are escaped; a `%`
+  that begins no escape is requested as `%25`; a placeholder's value and
+  default are escaped whole, their `%` included; and the verbose `url` label
+  shows the escape as requested.
+- Behind a proxy, a name the exporter cannot look up is left to the proxy
+  with no lists, with a name allowed or another denied by name; is refused
+  when a names-only `allowed_targets` does not match it or `denied_targets`
+  matches it; fails, naming the lists and the lookup, when the collector's
+  lists hold an address or a network; and a name that does resolve to the
+  cloud metadata address, or the address in an older form, is still refused.
+- Behind `HTTP_PROXY`, a probe of a target only the proxy can resolve is
+  answered with the proxy's answer, the proxy having been asked for the
+  target's URL; with a denied network the probe fails without the proxy
+  being asked.
+- `max_response_bytes: 9223372036854775807`, under `request` or `limits`,
+  reads the whole answer of an `http` target sending no `Content-Length`, of a
+  Graphite render API and of a local file; the limit is then one under that
+  number, and an ordinary limit is unchanged.
+- A target answering with 2 MiB of headers fails with a limit error that
+  says the response headers are larger than 1048576 bytes, and is asked once
+  although the collector retries; 64 KiB of headers under
+  `max_response_bytes: 100` are read.
+- `allowed_schemes` entries `htps`, `ftp`, `https://`, one with a space
+  before or after and an empty one are refused at load naming the collector
+  and the entry, for `http` and `graphite`; `https`, `http` with `https`, and
+  `HTTPS` load, and an `https` target passes under `[HTTPS]`.
+- A default its place refuses is refused at load naming the collector, the
+  field and the parameter: a word or an empty default under `|number`, also
+  beside a placeholder without a default, a line break in a header default,
+  `..` as a path default, a glob as the default in a Graphite expression, and
+  for `grpc` a word under `|number` in the message and a line break in a
+  metadata default; defaults that can be written load and render.
+- A static target with a credential of its own, and a probe forwarding an
+  `Authorization`, are sent with that credential and succeed although the
+  collector's `bearer_token_file` or `basic_auth_file` does not exist; a
+  target without one fails naming the missing file and sends nothing; a
+  `grpc` call carrying its own `authorization` does not read the collector's
+  file either.
+- A graphite target's own query is kept as written before `request.query`
+  and the type's parameters, without its pairs naming `target`, `from`,
+  `until` or `format`, in any case, with the name escaped, or set after a
+  `;`.
+- Three times the cap of different files of one `localfile` collector, read
+  at the same moment on a filesystem that answers, are all answered and
+  leave no abandoned read; so are as many directory reads of a collector
+  with `files`.
+- With four reads of one collector abandoned by probes whose deadline ended,
+  a fifth probe fails at once saying the filesystem is not answering; the
+  same holds for four abandoned directory reads; the places come back when
+  the reads return.
+- A `file://` target is percent-decoded: `a%20b.prom` reads `a b.prom`,
+  `100%25.prom` reads `100%.prom`, `a%2520b.prom` reads the file named
+  `a%20b.prom`, and `%2F` and UTF-8 escapes decode; a relative and an
+  absolute plain path with `%20` are taken as written.
+- A `file://` target with a `%` that begins no escape is refused, advising
+  `%25`; one that decodes to a path outside `root`, by `%2E%2E` or
+  otherwise, or to a NUL byte, is refused as its plain form is.
+- A `grpc` probe with retries whose server is down at the first attempt and
+  back a quarter of a second later is answered by a retry, with `protoset`
+  descriptors and with `reflection`, where the refused connection fails the
+  reflection question.
+- A `grpc` call and its two retries to a target that hangs up on every
+  connection dial it at least three times, make three attempts and fail
+  `UNAVAILABLE`.
+- A `grpc` connection silenced without FIN or RST fails the probe that finds
+  it with `DEADLINE_EXCEEDED`; the next probe is answered at once on a
+  second connection, and the dead one is closed.
+- A reflection question on a silenced connection fails its probe at the
+  deadline; the next probe asks again on a new connection and is answered
+  rather than waiting for the question on the dead one.
+- A probe whose deadline ends by hand while it and a patient probe wait for
+  one reflection question fails alone: the patient probe is answered from
+  the one reflection stream, on the connection the short probe dropped. A
+  question left behind by the only probe waiting for it is still answered,
+  and the next probe asks no second one.
+- A probe whose deadline ends while the server is still working on another
+  probe's call on the same connection drops the connection: a third probe
+  makes a second connection, the call in progress is answered, and the first
+  connection is closed only when that call has ended.
+- The connection cache hands one connection to calls made together; a
+  dropped connection is forgotten at once, not closed while a call holds it,
+  and closed when the last does; dropping it again leaves the connection
+  that replaced it; one no call holds is closed as it is dropped or goes
+  unused.
+- A `DEADLINE_EXCEEDED` status the server sent keeps the connection for the
+  next call, and so does a probe deadline that ends while the connection is
+  still being made: the next probe makes no second one.
+- A deadline that passes while a jq rule's value, a label of it, its `items`,
+  or an item's value or label is evaluated fails the transform with
+  `the transform was stopped at metric "<rule>": context deadline exceeded`
+  under `ignore`, `log` and `fail` alike: no series, not a metric failure,
+  nothing logged and nothing in the rule report. A rule that fails once its
+  context is cancelled fails the transform with the cancellation; a rule that
+  failed before the deadline is still counted.
+- A probe whose budget runs out inside a jq rule answers `502` in the
+  `transform` stage naming the rule and the budget, under each error mode,
+  without the other rule's series; the next probe goes to the target again
+  with a cache TTL set, and `http_exporter_rule_failures_total` stays 0 for
+  both rules.
+- With a cancelled context the xpath transform over XML and over HTML, a css
+  rule with `items`, the csv transform and the regex transform each stop with
+  the context's error, where with a live one they make their series.
+- A quoted CSV field left open, with or without a final line end, or holding
+  a stray quote on its first or a later line, fails the decode beside a row
+  with a bare quote, with the error and position the same body gives without
+  that row; so does one in the same row as the bare quote.
+- Beside a bare quote, quoted fields with escaped quotes, delimiters and line
+  breaks, with LF and CRLF line ends and with or without a final one, are
+  read as written, six rows of three fields; a quote after a blank is a
+  quoted field with `trim_space` and text without it.
+- For every two rows built from three of ten kinds of field, reading them
+  after a row with a bare quote gives what the strict reader gives for them
+  alone, or fails where it fails.
+- `trim_space` without a header row trims both sides of every field, quoted
+  ones included; without it the fields are as written.
+- A prometheus rule that matches no series — by name, by expression, without
+  a name, over an empty exposition — and a csv rule over a header alone or an
+  empty body are a missing value: under `fail` the rule's failure, under
+  `log` logged once and counted as missing, under `ignore` counted in
+  silence. With `required: false` or `allow_missing_keys` they are left out
+  under `fail`, uncounted.
+- A prometheus rule beside it that matched passes its series on, one whose
+  series was refused for its type is a failure and not a missing value, a
+  passthrough of an empty exposition has none, and a csv rule over rows reads
+  them.
+- XPath labels `@x:href` with the prefix mapped by `response.namespaces`,
+  `@id | @state`, `@state='ok'`, `@*[1]`, `@id/..` and `@ id` give the value
+  XPath gives; `@id` and `@data-id` the attribute; an absent attribute no
+  label; the same over HTML and, without a map, by the document's prefix.
+- At load a label `@xl:href` whose prefix the map lacks, `@id |` and `@*[`
+  are refused naming the label; plain names, a mapped prefix and `@*` load.
+- The namespaces example of CONFIGURATION.md gives
+  `entry_size{entry="db01",unit="bytes"} 5120` and not the `entry` of another
+  default namespace; a prefix the map lacks is refused in the expression and
+  in a label; without a map the document's prefix matches.
+- An XML document nested 512 deep, with a comment, text and CDATA in the
+  innermost element, decodes; 513 and 100,000 deep are refused with
+  `XML decode: the document nests elements more than 512 deep, which is the
+  most the exporter reads`; a wide document decodes; XML nested 600 deep that
+  a pre-script leaves is refused the same way.
+- `//a` over 400 elements nested one in the next makes 400 series of the one
+  value, asking the document for one text and walking each element at most
+  three times.
+- Over XML and HTML documents with nested and sibling elements, comments,
+  CDATA, processing instructions, text nodes and attributes, every node of
+  eleven XML and six HTML selections — in document order, against it, and
+  unions of both — reads the text the document gives for it alone; nesting
+  is found in document order and not against it.
+- A jq rule without `items` over 100,000 values, with a label paired by
+  position, a label of one value and a static one, fails at a limit of 10
+  with `metric count 11 exceeds limit 10`, the error of the same rule with
+  `items`, having allocated less than an eighth of what making every series
+  does.
+- Seven values of which three make series pass a limit of 3: nulls and blank
+  text under `required: false` take no room, and text that is no number is
+  the rule's one failure.
+- A jq rule without `items` that fails after making series — its program
+  failing at the third value, a label with too few values, with too many,
+  with several for one series, a label's program failing, a label that is an
+  object — is dropped under `log` with one failure, the label's error
+  counting values and series, and the rule after it makes four series within
+  a limit of four; under `fail` it is the rule's failure.
+- A histogram a target writes without a `_count`, in the text format or as
+  OpenMetrics' buckets alone, is read with its `+Inf` bucket's count and
+  marked as having no `_count`, and one without a `_sum` as having none; one
+  with a `_count` and no `+Inf` bucket keeps its count. A summary of quantiles
+  alone, or of a count alone, is read as having only that, and a `_sum 0` the
+  target did write is kept.
+- Two buckets with one bound (`le="1"` and `le="1.0"`, `+Inf` and `Inf`, two
+  `NaN`) and two values of one quantile fail the parse naming the series, its
+  labels and the line it starts in; a second `_sum` or `_count` sample fails
+  naming its own line.
+- A series the rules do not keep is not checked as a series.
+- The text format and OpenMetrics write a histogram of buckets alone, a
+  summary of quantiles alone and a summary of a count alone without the lines
+  they lack, the `+Inf` bucket with the histogram's count; a histogram with a
+  sum and no count is `unknown` families `i_bucket` and `i_sum` in
+  OpenMetrics, with the text format's series.
+- Histograms and summaries written as `unknown` families have a `_sum` and a
+  `_count` family only of the series that have the line, and no family
+  without a line.
+- Through a probe, a target's histogram of buckets alone and summary of
+  quantiles alone come back unchanged in the text format and without `_sum`
+  and `_count` in OpenMetrics; a histogram with a bucket written twice fails
+  the probe `502` naming the series.
+- Over OTLP a histogram read without a sum has no sum and its count and
+  bucket counts, one with a sum and no count has both, and a summary read
+  without a count or a sum has 0 for it.
+- A pre-script of a `prometheus` transform sees no `sum` or `count` key of a
+  series the target wrote without one; a series it leaves without the key,
+  or with `None`, is read back as having none, a histogram's count from its
+  `+Inf` bucket. A bucket or a quantile appended twice fails the scrape
+  naming the series.
+- In OpenMetrics a counter named `_total` is the `unknown` family `_total`,
+  beside a counter that keeps its type.
+- In OpenMetrics an escaped counter beside a gauge named as its sample
+  would be is `unknown`.
+- Through a probe with `name_escaping: values`, the text format has a
+  target's counters `my.requests_total` and `my.errors` as
+  `U__my_2e_requests__total` and `U__my_2e_errors`.
+- A debug probe of a target answering in windows-1251 reports the
+  `Content-Type` the target sent, its body's size as sent with the encoding
+  it was converted from, and the body's text, and the rules read the
+  converted text; no `charset=utf-8` the target did not send appears.
+- A debug probe of a UTF-8 target reports its `Content-Type` as written and
+  nothing of a conversion.
+- The copy of a response a report keeps shares the fetched body, and is
+  unchanged after the decode converted an XML body from windows-1251 and
+  rewrote its declaration and `Content-Type`; rendered, it shows the
+  target's `Content-Type` and the declaration naming windows-1251.
+- The encoding a body is converted from is named by a byte order mark,
+  `response.charset`, the `Content-Type` and an HTML `<meta>` in that order,
+  only for the decoder kind that reads the document, and is empty for UTF-8,
+  for no name and for an unknown one.
+- The request for a Python script holds a text response's body once, is not
+  much larger than it, and the script finds `response.text`, `response.body`
+  and `data` to be one string; data that is not the body is sent as it is.
+- A worker that takes twice `script_timeout` to say it has the request and
+  then answers at once succeeds, with a script time under the timeout; one
+  that has it at once and runs three times the timeout times out; one that
+  answers an error instead of taking the request gives that answer.
+- With a real worker and a 32 MiB response, the script time a probe reports
+  is under a third of the run.
+- A script the probe's deadline ends before `script_timeout` fails with an
+  error naming the time it ran and the `script_timeout` it had not reached,
+  not a timeout, that is a deadline error and a script failure, and counts
+  one run `deadline` and one worker stopped `deadline`, no `timeout`; a
+  deadline already past fails saying the script did not run and counts
+  `deadline`; `script_timeout` first, with the deadline a minute away, is a
+  `timeout`; both values are among those the self-metrics publish.
+- `metric(...)` given a `help`, `type` or `name` that is not a string, or
+  `labels` that are not a mapping, fails naming the metric and the argument;
+  a dict appended to `metrics` with such a name, help, type or labels, and an
+  entry that is no dict, fail naming the metric or the entry; none is a JSON
+  decoding error; `None` for the type or help is none given.
+- Four idle workers killed while idle fail none of the next five scrapes:
+  four stops are counted `crash`, one worker is started, no run `failed`.
+- Idle workers whose request pipes are closed, alive or not when taken,
+  cost the next scrape another worker and no failure.
+- A script that arms `signal.alarm` leaves a worker that dies idle a second
+  later, and the scrape after that succeeds.
+- A worker whose script replaces `os.getppid` and runs for 2.5 seconds, past
+  the parent watch's interval, serves the runs before and after it: one
+  worker started.
+- A worker running a script that never returns ends within seconds of the
+  process that started it being killed.
+- Settling a histogram gives one without a `_count` its `+Inf` bucket's
+  count, keeps a `_count` with or without a `+Inf` bucket, accepts buckets and
+  quantiles out of order, and refuses a bound, `NaN` or `+Inf` included, or a
+  quantile given twice, next to each other or apart.
+- A probe giving `target`, `collector`, `method`, `path`, `timeout`, `body`,
+  `insecure_skip_verify`, `follow_redirects`, `enable_http2`,
+  `retry_attempts`, `retry_backoff` or a `param_<name>` twice is answered
+  `400` naming the parameter, without a request to the target and without
+  being counted; a repeated `header_<name>` and a repeated parameter the
+  probe does not read are answered `200`. Every parameter of every
+  registered request type is refused when repeated, but `header_<name>`.
+- Five spellings of one request — the method's case and padding, a duration's
+  unit, a boolean's case, a padded or signed number, a parameter no request
+  type knows — make one trip and one cache entry; an empty `method` or
+  `timeout` is the probe without it; a different method, timeout, retry count
+  or redirect setting makes a trip of its own.
+- Two spellings of one request arriving together share one trip, counted as
+  one coalesced probe.
+- Every probe parameter of every registered request type changes the key by
+  its presence and by its value; an empty `param_<name>` does not; an empty
+  `path`, `body` or `message` does. A parameter added to a type without being
+  keyed fails the test.
+- A static target and the probe making its request, spelled differently,
+  have the same key query.
+- A `target`, `collector`, `path`, `body`, `param_<name>` or `header_<name>`
+  value of 8193 bytes is answered `400` naming the parameter, its length and
+  the limit of 8192, in under 1 KiB, leaving no failure log entry and no
+  tracked request; a target of exactly 8192 bytes and an over-long parameter
+  the probe does not read are let through to the trip.
+- The exporter's HTTP server has `MaxHeaderBytes` of 64 KiB: a request of
+  200 KiB is answered `431`, and one of 32 KiB reaches the probe.
+- Every endpoint — a probe, a debug probe, a refused probe, the static
+  targets and a debug scrape, the self-metrics, the landing and collectors
+  pages, `/health`, `/ready`, `/-/reload` and an unknown path — sets one write
+  deadline, 30 seconds ahead, before the first byte of its answer, compressed
+  or not.
+- A client that asks for a 7 MiB probe answer and reads nothing holds its
+  handler only until the write deadline: the handler returns, the connection
+  is closed, and the drop is logged once, at debug level, with the path, the
+  client's address and the deadline, and nothing at warn or error level.
+- A second probe on a kept-alive connection, sent after twice the write
+  deadline, is answered in full on the same connection, and so is a probe
+  whose trip takes longer than the deadline.
+- A probe's OTLP point carries the time its cache entry has; a cache hit ten
+  seconds later, a cache hit at the start of a trip, and a stale answer five
+  minutes later carry that scrape's time, while
+  `http_exporter_result_stale` and `http_exporter_result_age_seconds` carry
+  the time of the answer.
+- A static target with `export_via_otlp` whose scrape the cache answers is
+  exported as of the trip that filled the entry, with and without
+  `cache.stale_if_error`, and its `http_exporter_target_*` and freshness
+  series as of the scrape.
+- A trip reports the very time its cache entry has; a point with a timestamp
+  of its own keeps it; a set queued without a scrape time is as of now.
+- A scrape timeout header of `Inf`, `+Inf`, `infinity`, `-Inf` or `1e400`
+  gives no budget, and a hanging probe carrying `Inf` ends at
+  `--probe.default-timeout`, its error naming that flag; `1e-10` and `1e-9`
+  give a budget of one nanosecond, and a hanging probe carrying `1e-10` ends
+  at once, its error naming Prometheus's scrape timeout, with the default a
+  minute.
+- A probe whose caller goes away before its trip ends is counted on its
+  collector and starts no tracked request, with `coalesce` on and off; the
+  same probe waited for is then tracked, and the collector's total is the
+  request's count and the abandoned probe.
+- `--config.watch true --static-targets-file=...`, `--dry-run ...
+  --config.expand-env false`, a trailing file name and an empty argument each
+  exit `2` with nothing on stdout and the one JSON log line `unexpected
+  argument "<argument>"; flags take --name=value`; a flag's value given as
+  the next argument is still accepted.
+- A `SIGHUP` sent to an exporter that is still checking its Python scripts
+  does not end it: it starts, logs one reload with the trigger `sighup`, and
+  exits `0` on `SIGTERM`.
+- A turn of a static target that comes while its last scrape still runs
+  waits, is scraped once that scrape has ended, and must end by the turn
+  after it; a turn that starts as it comes has the whole interval. Only a
+  turn whose wait outlasts it is reported as skipped, the newer turn waiting
+  in its place.
+- A static target that never answers is scraped once per interval rather
+  than every second one, each scrape logged as failed and none as skipped.
+- A reload that changes a collector's definition starts that collector's
+  static targets again, due within the first-scrape window, while the
+  targets of an unchanged collector, and every target when the same
+  definitions are read again, keep their place in the schedule; with the
+  scrape loop running, a renamed metric of a target with an hour's interval
+  is served on the static targets endpoint within seconds of the reload.
+- A static target scrape waiting for a scrape slot while a reload renames
+  its collector in both files scrapes with the configuration its target was
+  read with, logging no unknown collector, and the renamed collector's
+  targets are then scraped again.
+- A failed static target scrape leaves only the health series on the
+  endpoint, with `http_exporter_target_up` 0 and the last success timestamp
+  kept; with `cache.stale_if_error` it leaves the last good result marked
+  stale; a scrape a shutdown cuts short leaves what the last scrape left.
+- A reload that renames a collector in the configuration and in the target
+  file puts both in force as one pair: at each line the reload logs, read
+  apart or together, the targets in force name a collector the configuration
+  in force has; a file reloaded alone keeps the other of the pair, and
+  without a target file the pair is the configuration alone.
+- A static target's `accept_status` is trimmed and written in lower case,
+  and a `grpc` target's `accept_codes` and `retry.codes` in upper case, when
+  the file is validated on its own; the check against the configuration
+  leaves a file not written so exactly as it is, and still refuses an entry
+  that is no status or code.
+- With reloads of the configuration alone, of the target file alone and of
+  both racing a reader that does what a scrape does with the pair in force,
+  the race detector finds no write into either, every pair read holds a
+  target whose collector it has, and no reload is refused.
+- With environment expansion on, a document with a bare reference in a flow
+  collection — quoted, alone, or as `{Authorization: Bearer ${TOKEN}}` —
+  expands the references of its other values exactly as one without: a
+  reference alone on a line of a block value, in a JSON body and after a
+  comma in an unquoted description is the variable's value, with no quote
+  added.
+- A bare flow reference expands as part of a longer value, beside a quoted
+  value, before a comment, across the lines of a flow sequence, and beside
+  text of the document that only looks like the mask the exporter reads
+  references under, which is kept as written; a `$$` escape left bare in a
+  flow collection hands the document on unchanged for the YAML error.
+- A block value with an indentation indicator (`|2`, `>-2`, `|1`) whose
+  first line is indented further than the rest is expanded in every line —
+  in a mapping, in a list, as a key's value after a dash and as the
+  document's own value — and the keys after it stay keys; a block without
+  an indicator expands as before.
+- A merge key in a collector's `cache`, one mapping or a list of them, is
+  read with the key beside it winning; an unknown key a merge brings in is
+  refused naming its line, and a quoted `"<<"` is an unknown key.
+- A merge key in a static target's `request` supplies its settings, a
+  nested alias is read, and a merged `path` and `body` count as set as
+  written ones do; a request without them has neither set; a merged unknown
+  key, and one in an aliased nested mapping, are refused in the file's
+  terms.
+- A collector file may bring in its `collectors` with a merge key at its top
+  level, and a key other than `collectors` merged in is refused naming it.
+- An explicit decoder its transform never reads — json with regex, css,
+  csv, xpath or prometheus, text or csv or prometheus with jq or yq, xml
+  with css, html with regex — is refused at load naming the collector, both
+  types, the decoders the transform reads and the transforms that read the
+  decoder; a jq transform with a `pre_script` over text loads, a regex one
+  with a `pre_script` over json does not, and every decoder with every
+  transform loads exactly when the table says the transform reads it.
+- The table of what each transform reads lists every transform but python,
+  only decoders that exist, and leaves no decoder unread; the load and the
+  scrape agree on every decoder and transform pair.
+- A decoder left to each response that turns out to be one the transform
+  cannot read still fails the scrape with the transform's own error.
+- `web.basic_auth` with a username and password, and `otlp` with an
+  endpoint, without `enabled`, are refused in one pass, each naming the
+  block, its keys, the line and both ways out; so are an `enabled` left
+  empty, a key set to its zero value, a setting merged in, and the file
+  keys of `web.basic_auth`.
+- `enabled: false` with other settings, invalid ones included, loads with
+  the block off; `enabled: true` turns it on; a merge key may supply
+  `enabled`; an empty block and a block with no value need none.
+- The two blocks still refuse, with the line and in the file's terms, an
+  unknown key, an unknown nested key, a value of the wrong kind, a bad
+  duration and a block that is not a mapping, and report an unknown key
+  together with the missing `enabled`.
+- The configuration schema rejects an `otlp` block and a `web.basic_auth`
+  block that set a key without `enabled`.
+- An enabled `otlp` block is refused at load for a header name with a
+  space or in braces, a header value with a line break, one header in two
+  cases, a `cert_file` without a `key_file` and the reverse, and a
+  `ca_file` or certificate that is missing or holds no certificate; each
+  loads with `enabled: false`, and valid headers load.
+- `otlp.interval` of 1ns, 999ms and a negative one, and a negative
+  `otlp.timeout`, are refused naming the value; 1s loads, and left out they
+  are 30s and 5s.
+- `service.name` in `otlp.resource_attributes`, and in a static target's,
+  is refused pointing at `service_name`; a `service_name` with another
+  attribute loads.
+- A `{{param_...}}` placeholder in `request.bearer_token`, a `basic_auth`
+  username or password, `tls.server_name`, a credential file path, a
+  `transform.labels` value or a static label's `value`, with or without a
+  space after the braces, is refused naming the field; two are reported
+  together; placeholders in the path, a header value, a query value and the
+  body load, and braces that open no `param_` placeholder are text.
+- `transform.script`, `transform.libraries` and `transform.required_libs`
+  on a jq collector without a `pre_script`, `response.csv` with a json or
+  text decoder, and `response.namespaces` on a jq or python transform are
+  refused naming the setting and what the collector has; libraries with a
+  `pre_script`, `response.csv` with the csv decoder or an undecided one, and
+  namespaces with xpath load.
+- A `response.csv.delimiter` of a backslash and `t`, a word, two characters,
+  a double quote, a line feed, a carriage return or the replacement
+  character is refused at load showing the value and how a tab is written;
+  a real tab, a semicolon, a pipe, a space and a two-byte character load.
+- Each negative `limits` count or length is refused naming the key and the
+  value, as are a negative `script_timeout` and a negative size, in a file
+  and in a configuration built in code; 0 loads as the default.
+- A fraction where a whole number belongs — `max_metrics: 0.5`,
+  `max_concurrent_probes: 1.9`, `retry.attempts: 2.5`, one merged in, and
+  `concurrency` and a target's `retry.attempts` in the static target file —
+  is refused naming the key, the value and the line, together with an
+  unknown key in the same file; a size of `1.5` without a unit is refused;
+  `1e3`, `100.0` and `4.0` load as whole numbers.
+- A size of `8388608TiB`, `9223372036854775808` or more is refused as too
+  large, `8388607TiB` and `9223372036854775807` load, and a negative or
+  fractional YAML number is refused with its line.
+- A `null`, `~` or empty key in a metric's or a label's `value_map`, or in
+  `headers`, is refused naming the mapping and the line; quoted `"null"` and
+  `'~'` are keys.
+- A validation error of a collector defined in a collector file names that
+  file in its text at startup and on reload, and the rejected reload is
+  logged with the collector file as `file`, for one mistake, for two in the
+  one file, and for an unknown key in it.
+- A mistake in the configuration's own collector names no collector file
+  and is logged against the configuration; mistakes in the configuration
+  and a collector file, or in two collector files, are logged against the
+  configuration with each collector file named in its own problem's text.
+- The dependency updater, run against a registry listing Python 3.13 and
+  3.14 beside a newer Go and a newer lxml, leaves `PYTHON_VERSION=3.12`,
+  moves `GO_VERSION` and `LXML_VERSION`, and writes a summary whose table
+  has no `PYTHON_VERSION` row and which says `Python 3.14 is available;
+  PYTHON_VERSION stays at 3.12 until it is bumped by hand, because collector
+  scripts run on it`; the run's output says the same.
+- With a newer Python and nothing else to move the updater leaves the
+  Dockerfile byte for byte and writes no summary, so the workflow opens no
+  pull request, while its output still names the newer Python and does not
+  call every pin current; with nothing newer at all it says every pinned
+  version is current.
+- A `PYTHON_VERSION` pinned to a patch release, `3.12.4`, moves to the
+  newest `3.12.x` and not to 3.13 or 3.14, which the summary announces
+  beside the move.
+- The held release is the newest minor in the pin's major and granularity:
+  none is reported for a pin whose minor may move, for a new major, a
+  release candidate, a patch release of the same minor, or a version of
+  another granularity.
+- The summary no longer says that only minor and patch versions move: it
+  says Python moves only within its feature release. `docs/DEPENDENCIES.md`
+  quotes the held-release line as the command writes it, and Go and the
+  Python libraries still move by minor versions.
+- `--dry-run` reports the moves and writes the summary without rewriting
+  the Dockerfile.
+- `docs/DEPENDENCIES.md` has a section on the update pull request naming
+  `GITHUB_TOKEN`, the setting "Allow GitHub Actions to create and approve
+  pull requests" and where it is, the error the last step fails with
+  without it, the branch the workflow pushes, that `ci.yml` does not start
+  on such a pull request, and closing and reopening it.
+- Wherever the documentation writes the base image as
+  `python:<version>-slim`, the version is the Dockerfile's `PYTHON_VERSION`.
+- `make helm-install helm-version`, run with a stand-in for `go` that
+  builds a helm reporting the version set with
+  `-X helm.sh/helm/v4/internal/version.version` and the release line `v4.3`
+  when none is set, succeeds, and the installed helm reports the pinned
+  version.
+- `make helm-version` accepts a helm reporting the pinned version, with or
+  without a `+g<commit>` suffix, and refuses the release line alone, another
+  patch release and another minor, saying which helm it found, which CI
+  runs, and `make helm-install`.
+- `make helm-test` and the chart steps of `ci.yml`, read as the shell reads
+  them — loops expanded over their words, a render kept in a variable, a
+  pipeline in a condition — make the same checks: the same helm command
+  lines that must succeed, the same that must fail (the loopback listen
+  addresses, the shutdown delay and timeout, `terminationGracePeriodSeconds`
+  and `webAuth.enabled` values among them), the same lines that must and
+  must not be in what is rendered, and the same Python check of the webAuth
+  probe monitor. A case in only one of them fails the test, naming it.
+- The reader those comparisons use reads a workflow script and the same
+  script written as a Makefile recipe, with `$$`, `@` and continued lines,
+  to the same list of checks.
+- The example tests take their list from the `examples/` tree:
+  `examples/open-meteo/config.yaml` is checked against the configuration
+  schema, loads, and passes the script contract check beside the
+  single-file examples.
+- An example file is a configuration by its `collectors` or
+  `collector_files` and a static target file by its `targets`; one with
+  neither, with both, or that is not a mapping is refused rather than left
+  out of the checks.
+- `examples/open-meteo/static-targets.yaml` matches the static target file
+  schema and is valid, as at startup, against the configuration in its
+  directory.
+- The Open-Meteo example, probed at a stand-in answering `/v1/forecast` in
+  the API's documented shape, yields exactly its twelve `weather_*` series
+  with the grid point's `latitude` and `longitude`, humidity and cloud
+  cover as ratios and the observation time as Unix seconds, beside
+  `http_exporter_result_stale 0`, and logs nothing; the request carries the
+  default `latitude=42.6977` and `longitude=23.3219`, the configured
+  `current` list and `wind_speed_unit=ms`.
+- A probe's `param_latitude` and `param_longitude` reach the Open-Meteo
+  request; a second probe of the same place within `cache.ttl` is answered
+  from memory, and one of another place asks the API.
+- With the API answering 503, the Open-Meteo example retries once and then
+  serves the last result marked `http_exporter_result_stale 1` within
+  `cache.stale_if_error`, and fails with 502 past it.
+- The Open-Meteo static targets, scraped at the stand-in, ask for Sofia's,
+  Plovdiv's and Varna's coordinates, and each place's series carry its
+  `city` and `static_target` labels, with nothing logged.
+- `docs/RELEASING.md` gives the checksum check with `sha256sum` and, for
+  macOS, with `shasum -a 256`, on the same file.
+
+## 34.76 Review fixes: shared trips, values OpenMetrics does not allow, abandoned transforms, a stopping scrape loop and tests under load
+
+- A probe that started a shared trip leaves and the trip answers the two
+  probes that joined it: the trip's cache miss, the target's status and bytes,
+  the decode, the emitted series and the time of the scrape are on the request
+  those probes start tracking, once, as on the collector, for a trip that
+  succeeds, one the target answers `503` and one whose answer is past
+  `max_response_bytes`; the collector counts three probes and the request the
+  two answered, both coalesced.
+- A probe that joined a shared trip leaves and the probe that started it is
+  answered: the trip is on the request, the collector counts two probes and
+  the request one, and none is coalesced.
+- When both probes sharing a trip leave, the request at the target is
+  cancelled, nothing is cached and no request is tracked, while the collector
+  counts two probes, no success and one cache miss; the next probe makes a
+  trip of its own and is tracked with one probe and one miss, the collector
+  having three and two.
+- With the request already tracked, the probe that started a shared trip and
+  left is counted on it like the probe the trip answered: every counter of
+  the request equals the collector's, probes included.
+- While a shared trip to a request not tracked yet is under way, another
+  probe of the same request with a query of its own starts tracking it; the
+  trip's counts join that request when the trip ends, though its starter
+  left, and the request keeps the duration of the last probe answered.
+- A trip's statistics joining a request add their counters and latest status
+  and leave the duration of the request's last probe; another probe's replace
+  it.
+- Every OpenMetrics answer for a metric set with odd values is valid by a
+  strict parser's rules, written out in the test, claims no name twice and
+  holds the series and values of the text format's answer: each of NaN, the
+  infinities, negative, zero in both signs, the largest and the smallest
+  float as a gauge, an untyped series and a counter with and without
+  `_total`, with and without a timestamp; histograms of every shape of
+  bounds (none, out of order, negative, `-Inf`, NaN, `+Inf` written first)
+  and bucket counts (rising, level, falling, above the count, up to 2^64-1),
+  with a sum of each kind and with and without `_sum` and `_count`;
+  summaries of every shape of quantiles (out of order, below 0, above 1, NaN,
+  infinite) and values likewise; a family with one series that fits its type
+  and one that does not; a histogram and a summary with labels of their own
+  named `le` and `quantile`; and 4000 seeded random sets of two to four
+  families whose names meet through OpenMetrics' suffixes.
+- A family is written as `unknown` in OpenMetrics exactly when a strict
+  parser refuses it as a family of its own type, over every one-family set
+  above: no family loses its type needlessly, and none that must is missed.
+- prometheus_client's strict OpenMetrics parser, run from the Go test where
+  `python3` has the module and skipped with a message naming what is missing
+  where it does not, reads every such answer, reads from it the series and
+  values of the text format's answer, agrees with the rules written out in
+  the test on which sets it accepts with every family in its own type, and
+  refuses what the exporter used to write: a NaN and a negative counter, a
+  histogram with buckets out of order, with counts that fall or exceed its
+  count, with a NaN or negative sum, with a sum beside a negative bound and
+  with a `le` of NaN, and a summary with a quantile of 1.5, a negative
+  quantile value and a NaN or negative sum.
+- The exact text and OpenMetrics output of: a negative counter, a NaN
+  counter beside a series that counts (the whole family is `unknown`), a
+  negative counter named without `_total` (it keeps the text format's name),
+  an infinite counter and one of `-0` (both stay counters); a histogram with
+  its buckets out of order (written in order in both formats, still a
+  histogram), whose bucket counts fall, with more in a bucket than its count,
+  with a NaN sum, with a negative bound and a sum, with a bound of NaN (each
+  `unknown` families `h_bucket`, `h_sum`, `h_count`) and with a negative
+  bound and no sum (still a histogram); a summary with its quantiles out of
+  order and NaN values (written in order, still a summary), with quantiles of
+  50 and 99, and of negative values and sum (each `unknown` families `s`,
+  `s_sum`, `s_count`).
+- Writing buckets and quantiles in order, in either format or over OTLP,
+  leaves the metric set, which the cache holds, in the order it was read, and
+  the next answer is the same.
+- End to end, a target's negative counter, histogram with buckets out of
+  order and counts that fall, summary with quantiles of 50 and 99 and
+  histogram that is only out of order pass through a `prometheus` probe: the
+  decoder does not refuse them, the text format answers with them in order,
+  and the OpenMetrics answer is valid, with the first three as `unknown`
+  families and the last as a histogram.
+- Over OTLP every such set is a valid export — monotonic sums neither NaN nor
+  negative, histogram bounds ascending and bucket counts adding up to the
+  count, no sum that is NaN, negative or beside a negative bound, summary
+  quantiles within 0 to 1 and not negative, one metric per name — where a
+  family whose values its type allows is one metric of its kind and any other
+  is gauges holding the series and values of the text format's answer.
+- A counter family with a negative series is one OTLP gauge with every
+  series of the family, its help and no start time, a NaN counter is a gauge,
+  and a counter family beside them stays a monotonic sum with a start time.
+- A histogram family with a series whose bucket counts fall is the OTLP
+  gauges `h_bucket`, with `le` among the attributes in name order and the
+  buckets in order, `h_sum` and `h_count`, each point with its series' labels
+  and timestamp, and a series read without `_sum` and `_count` has only its
+  bucket; a summary family with quantiles of 50 and 99, and one of negative
+  values without a count, are the gauges `s`, `s_sum`, `s_count`, `t` and
+  `t_sum`, while a summary with a NaN quantile value stays a summary with its
+  quantiles in order.
+- End to end, the same target's families reach the OTLP endpoint as valid
+  OTLP: the three as gauges of their lines, the histogram that was only out
+  of order as a histogram with its bounds in order and its bucket counts
+  adding up.
+- A summary read without a `_sum` or a `_count` is sent over OTLP with 0 for
+  it whatever the model holds in the field.
+- A trip whose only probe went away while a jq rule of its transform ran is
+  counted as a decoded answer and as nothing else: no failed transform, no
+  missing key, no failure of the rule it was at.
+- A static target scrape held just before it takes its slot until the loop
+  has been stopped finds the slot free and the loop stopped, and makes no
+  request to its target, in each of ten rounds.
+- The Python start-up rule is shown on a stand-in worker and the test's own
+  clock: a worker that takes ten seconds to start, with a script one
+  millisecond under a 25ms `script_timeout`, runs to its end and is said to
+  have taken what the script took; a script one millisecond over times out
+  after exactly the budget.
+- The connection-reuse tests count connections with a target that answers
+  only once the client has reported its request written, so the count is the
+  exporter's doing on a machine however busy.
+- An OTLP export arrives after the shutdown signal and before the log says
+  the delay has ended.
+- `tools/check-manifests.py` fails for a render of nothing and for one of
+  comments alone, as for two manifests in one document, and passes two
+  manifests in a document each; neither the `helm-test` recipe nor the
+  workflow pipes a render into a condition.
+- A histogram's `_count` or bucket count, and a summary's `_count`, written
+  as `1.5`, `2.5` or `0.5` fails the decode saying a whole number is expected;
+  `7.0`, `1e3` and `1000.0` are read as 7, 1000 and 1000. A pre-script that
+  leaves a bucket count of `4.5` or a count of `2.5` fails the scrape naming
+  the series.
+- A histogram with a label `le` and a summary with a label `quantile` fail
+  validation naming the series; a histogram with `quantile`, a summary with
+  `le` and a gauge with both pass. A probe of a `prometheus` collector whose
+  rule gives a histogram `le`, whose rule gives a summary `quantile`, or
+  whose pre-script gives a histogram `le`, is answered `502` with that
+  message, and one whose rule gives a gauge both is answered with them.
+- A static target's `le`, `quantile` and `site` labels reach a gauge whole, a
+  histogram without `le` and a summary without `quantile`, and the labelled
+  set passes validation.
+
+## 34.77 Speed: one-pass JSON, the exposition parser, transforms, the duplicate check and body reads
+
+- The json decoder, which reads a body in one pass into the values the
+  transforms use, agrees with the decoder it replaced, kept as an oracle
+  (`encoding/json` with `UseNumber`, then the number rewriting), on a table of
+  276 edge cases, each also inside an array, inside an object and between
+  whitespace: both accept or both refuse, a refusal is of the same kind
+  (empty, ends too early, data after the value, a byte that cannot be there)
+  and what is accepted has the same values of the same types, a float bit for
+  bit and an integer beyond int64 by its value.
+- That table holds: an empty body, whitespace alone, a byte order mark and
+  other bytes that are no JSON whitespace; scalars at the root and literals
+  misspelt or cut short; `-0`, exponents, fractions that are whole, integers
+  at and beyond both ends of int64 and of uint64, floats beyond a float64
+  (kept as their text) and below its smallest, a leading zero, a leading `+`,
+  a point or an `e` without a digit, `NaN`, `Infinity` and hexadecimal; every
+  escape, an escape JSON has not, `\u` with too few or wrong digits, a
+  surrogate pair, half a pair, two halves in the wrong order and a pair after
+  half of one, control characters raw and escaped, and bytes that are not
+  UTF-8 in a value and in a key (each read as U+FFFD); arrays and objects
+  with a comma missing, doubled or last, an object's key unquoted, without a
+  colon or without a value, and a key written twice, at one level and nested,
+  whose later value is kept; data after the value with and without
+  whitespace before it; comments; arrays and objects nested 10,000 deep,
+  accepted, and 10,001 deep, refused, closed or not; an object of 2,000
+  members with 1,000 different keys, an array of more than 20,000 items, and
+  a string and a key of many kilobytes.
+- The same holds for 20,000 random documents written from a fixed seed, with
+  every kind of number, escape, surrogate, byte that is not UTF-8, repeated
+  key and whitespace, and for three corruptions of each (a byte removed,
+  replaced or added, the body cut short, a part written twice, something
+  appended): 80,000 bodies, of which more than 30,000 are accepted and more
+  than 45,000 refused. A fuzz target compares the two on whatever body the
+  fuzzer finds.
+- A JSON body that cannot be read fails with `JSON decode:` and what is wrong
+  where: the byte that cannot be there, what was being read (the beginning of
+  a value, an object key, after an object key, after a key:value pair, after
+  an array element, a string literal, an escape, a `\u` escape, a literal, a
+  number, its fraction, its exponent) and its line and column; nesting past
+  10,000 deep says so with the line and column; a body that ends inside its
+  value says `unexpected EOF`, an empty one `EOF`, and one that goes on after
+  its value that NDJSON is not supported.
+- Decoding a JSON document of 1,000 items, each an object of five members
+  and a nested object with an array, takes at most 16 allocations for each
+  item (10 measured; 41 with the decoder it replaced).
+- The parser of Prometheus and OpenMetrics text, made cheaper, agrees with
+  the parser it was, kept as an oracle, on a table of 345 expositions, each
+  read ten ways (as the text format and as OpenMetrics, with every family
+  kept and with a filter on the family names, without a limit on the series
+  and with limits of 1, 2 and 3, with `\r\n` line ends, and without the last
+  line's end): the same series in the same order, with the same names, help,
+  types, labels (an empty set being an empty map), values bit for bit,
+  timestamps, buckets, quantiles, sums and counts and their absence, or the
+  same error word for word, a limit's being marked as a limit; the filter is
+  asked about the same names in the same order, and the body is not changed.
+- That table holds: blank lines and lines of other white space (form feed,
+  vertical tab, no-break space, line separator); values in every spelling
+  and what is no value; timestamps that are integers, floats, too large or
+  followed by something; bare names with colons, quoted UTF-8 names inside
+  and outside the braces, with escapes, empty, unterminated, two in one set
+  or not UTF-8; label sets with and without blanks, a last comma, missing
+  quotes, equals signs or commas; label values with every escape, an escape
+  the format has not, a lone backslash, braces, commas and quotes inside,
+  and bytes that are not UTF-8; a label name written twice among two labels
+  and among 17, 18 and 41; `__name__`; HELP and TYPE lines complete, cut short,
+  repeated, after samples, with escapes, in other cases and for quoted
+  names; comments, `# EOF` in the middle, twice, with something after it;
+  families declared in one order and written in another, and series of two
+  families written between each other; summaries and histograms complete,
+  without a `_sum`, a `_count` or a `+Inf` bucket, with one of them twice,
+  with two buckets of one bound or two values of one quantile, with counts
+  that are fractions, negative, NaN, infinite or beyond a uint64, with their
+  labels in a different order on every line, and with two label sets whose
+  signatures are the same bytes; names that end in `_sum`, `_count` and
+  `_bucket` without being a part of a summary or a histogram; OpenMetrics
+  counters with `_total` and `_created`, info, stateset, unknown and
+  gaugehistogram families, exemplars and timestamps in seconds; and
+  expositions of hundreds of series and families.
+- The same holds for 12,000 random expositions written from a fixed seed
+  (families with and without HELP and TYPE, histograms and summaries complete
+  and incomplete, escapes, quoted UTF-8 names, timestamps, exemplars, `\r\n`,
+  a last line without an end, series written twice, families written apart,
+  comments and `# EOF`) and for a corruption of each (a byte removed, replaced
+  or added, the body cut short, a line written twice), each read two ways
+  chosen at random among the text format and OpenMetrics, a filter, and a
+  limit: 48,000 parses, of which more than 12,000 are accepted and more than
+  12,000 refused. A fuzz target compares the two on whatever body and reading
+  the fuzzer finds.
+- Parsing an exposition of 1,000 series of one family, each with two labels,
+  takes at most 5 allocations for each series (3 measured; 8 with the parser
+  it was).
+- Parsing 100 histograms of ten buckets, a `_sum` and a `_count` takes at
+  most 3 allocations for each line (0.5 measured; 9 with the parser it was),
+  and at most 1 for each line when the collector's `include` does not keep
+  the family (none measured; 7 with the parser it was).
+- What a transform allocates for each series it makes is bounded, for a
+  response of 2,000 items in each format, in allocations and in bytes, each
+  bound between what the transform took before and what it takes now: a
+  prometheus pass-through (0.011 allocations and 356 bytes a series before,
+  0.004 and 0 now), a prometheus rule that gives no label (2.0 and 692, now
+  0.004 and 90), one that gives a label (692 bytes, now 426), an include
+  (356 bytes, now 90), a jq rule with items (7.9 and 911, now 3.9 and 491),
+  two jq rules sharing their items (7.9 and 970, now 2.9 and 526), xpath with
+  a parent's attribute and a sibling's text as labels (42 and 1,978, now 5.0
+  and 524), regex with two named groups as labels (8.0 and 955, now 3.0 and
+  570), csv (692 bytes, now 426) and css with items (12.0 and 1,027, now 11.0
+  and 655). The test is skipped under the race detector, which changes what
+  is allocated.
+- Two jq rules with items of their own cost a series no more allocations
+  than one rule alone does: rules that share no items pay nothing for the
+  sharing.
+- The room a transform makes for its series beforehand is bounded by
+  `limits.max_metrics`: of a response describing 20,000 series, five of them
+  with a value, under a limit of 100, the csv, xpath, css, regex, jq and
+  prometheus transforms each return their five (jq its ten, of two rules)
+  in a set with room for fewer than 200.
+- A prometheus transform gives what it gave while it copied every series and
+  gave every rule's series a label map of its own, the old transform being
+  kept as the oracle: over 30 collectors (a pass-through; a prefix;
+  `transform.labels`, `remove_labels` and `rename_labels`; each
+  `name_escaping`; include, exclude and rename; a limit met, passed and
+  exact; rules by name and by expression, with static, copied, absent and
+  required labels under each error mode, a type no histogram takes, scale, a
+  pattern that does not compile, several rules for one series, label
+  value maps, and truncation by a rule with and without a name) and 44
+  responses (one with every kind of series, with and without a label value
+  that is not valid UTF-8, an empty one, one series, and 40 random ones from
+  a fixed seed), each with the label-less series given an empty map and no
+  map, and each transformed twice: 5,280 transforms with the same series,
+  the same labels in a map or none, the same error and the same failures
+  counted, and the decoded response left as it was decoded after each.
+- A prometheus pass-through hands on the decoded series themselves when the
+  collector changes nothing, also under `name_escaping: fail`; with a prefix,
+  an escaping scheme, include or rename, or rules without labels, it gives
+  series of its own that keep the decoded label maps; with
+  `transform.labels`, and when a label value needs its UTF-8 repaired, it
+  gives series and label maps of its own.
+- A label cut by `truncate: true` is cut in the series of the rule's name
+  and not in another rule's series of the same source, nor in the decoded
+  series, which share one label map.
+- The set a probe of a prometheus pass-through, and of prometheus rules,
+  caches is unchanged, compared whole, after a second probe was answered
+  from it, after static targets with labels of their own were scraped from
+  it and their series queued for OTLP, and after a third probe; it holds no
+  freshness series; the probes' answers are the same each time; the static
+  targets' series carry the target's labels, which replace none of their
+  own; and the target was asked once for each collector.
+- jq rules that share an `items` expression give what they gave when each
+  evaluated it for itself, compared whole — series, the scrape's error and
+  its kind, the rule it names, each rule's failures counted, missing values
+  among them, whether logged and the first, and the log lines — against the
+  same rules with each one's items made a text of its own: for items read
+  through by three rules; a rule failing an item under `fail`, first and
+  second; items failing part of the way under each mix of modes, and at
+  once; items selecting nothing under `log`, `ignore`, `fail` and with
+  `required: false`; items that do not compile; two lists with their rules
+  interleaved and a rule without items between; items the program makes;
+  the limit met in the first rule, in the second, exactly, and by a response
+  with more items than the limit has room for, failing or not.
+- The rule after one with the same `items` reads the items that rule's
+  program gave and does not run the program again: with the kept list
+  changed between the two rules, the second rule's series are of the
+  changed items; a rule with another expression runs its own; and a rule
+  alone with its expression keeps nothing.
+- Shared items are kept only while they are no more than
+  `limits.max_metrics` left room for series when the first rule began: of 50
+  items, a limit of 20 or 49 keeps none and the second rule evaluates its
+  own, a limit of 50 and no limit keep all 50, and the series are the same
+  each time.
+- A deadline that passes while a rule reads items another rule's program
+  gave fails the transform with the context's error, naming that rule, with
+  no series and nothing counted against a rule, under each error mode; with
+  a live context both rules read every item.
+- The length an `items` expression of a field path and an iteration gives
+  is known beforehand for `.[]`, `.items[]`, `.data.rows[]` and an object's
+  values, and for none of 17 others: expressions of another shape, and
+  paths where the data has no array or object.
+- `evaluateJQOne` agrees with a list of the program's values on 17
+  expressions over 6 inputs (102 evaluations): the one value, nil for none,
+  the program's error, and the error counting more than one.
+- An XPath label read by walking the tree has the value the engine gives it,
+  the label absent, empty or trimmed alike, at every node of every document:
+  202 walked expressions (`.`, `text()`, and for 25 names `name`, `./name`,
+  `../name`, `../../name`, `../../../name`, `../@name`, `../../@name`,
+  `../../../@name`) and 80 near misses the engine goes on reading (blanks,
+  prefixes, predicates, axes by name, second steps, functions, unions,
+  wildcards, node tests), over three XML documents made to tell the two
+  apart (several children of a name, a processing instruction named like an
+  element, comments, CDATA, a directive, blank and mixed text, names that are
+  node tests and operators, a default namespace, one that changes, prefixed
+  and plain elements and attributes of one local name), twelve random XML
+  documents from a fixed seed, each under no `response.namespaces`, the
+  documents' own and ones that rebind the prefixes and bind the empty one,
+  and two HTML documents; at elements, text, comments, processing
+  instructions, the document and the nodes made of attributes, where an
+  engine's panic is the walk's too: 417,924 labels. Every walked expression
+  is recognised as walked and no near miss is, and `nodeText` equals the
+  node's text at every node.
+- An XPath rule mixing a static label, the node's attribute, walked labels,
+  an engine label and a required one gives each series the labels the
+  engine would, and leaves out the nodes whose required label is missing or
+  empty, a processing instruction read as a value without text, and a value
+  that is no number.
+- `ruleTextValue` gives a text the value `ruleValue` gives it, bit for bit,
+  or its error in the same words, for rules with and without `value_map`,
+  its `*` and `scale`: 34 texts a response holds where a number is expected
+  and 4,000 random ones from a fixed seed, under five rules (20,170 values).
+- Refusing a scrape past `limits.max_metrics` allocates less than half of
+  what making every series does, or less than 16 KiB where making them
+  allocates next to nothing, as a prometheus pass-through's do.
+- The duplicate check by hash and comparison gives, for every series of a set
+  gone through to its end, the verdict the check by key gave — a duplicate or
+  not, and whether either of the two has a label with an empty value — and
+  `Validate` the same error, word for word, with its own hash and with weak
+  ones under which different series share a hash throughout (one hash for
+  all, two, by name alone, by labels alone): for the same series twice,
+  another value, label or name, a label more or fewer, labels with empty
+  values on either or both, labels written in another order, a name and a
+  value changing places, values swapped or run together, text beyond ASCII
+  and a third occurrence; and for 3,000 seeded random sets of up to 40
+  series, some of dozens of labels, 2,319 of them holding a duplicate
+  (307,805 verdicts).
+- A series is compared with another itself, not through a key, so a value
+  holding what a key would read as a second label is not taken for one:
+  `a{x="1\xffy=2"}` and `a{x="1",y="2"}` are two series, which the keyed
+  check took for one.
+- Seeing a series allocates nothing: a set and its 2,000 series of 16 labels
+  cost the allocations of the set's map and 2 more, held to at most 6 more;
+  the keyed check took 13 more, for its key and label name buffers.
+- `Validate` of one family of 500 and of 4,000 series of 16 labels allocates
+  what the map of its series does and at most 6 allocations more (2; 13 with
+  the keyed check), however many series there are.
+- A family of two types is refused wherever its series stand — one after the
+  other, with another family between, after a run of one type, in the second
+  of two families — and a family whose type comes back after another
+  family's series is not.
+- A body is read as `io.ReadAll` read it through a reader stopping one byte
+  past the limit — the same bytes, the same error with what was read before
+  it, never nil, and not a byte more taken from the source — with no length
+  declared, the right one, one too small or too large or one far beyond the
+  limit; shorter than, at and over the limit; empty; at and around round
+  sizes and the size at which the first buffer is full; handed over whole or
+  in pieces, some of nothing, with the
+  end coming with the last bytes or after them; and broken off by an error at
+  the start, in the middle or at the end: 37,502 bodies of a table and 3,000
+  seeded random ones of up to 5 MiB.
+- A declared length is only a hint for the buffer: a body said to be a
+  petabyte long is read into a buffer of the limit and a byte, or of the
+  largest first buffer and a byte, and a body shorter than it said into a
+  buffer of what was said and a byte.
+- A megabyte of declared length is read with at most 1.5 MiB and 4
+  allocations (one, of the body; `io.ReadAll` took 2.1 MiB in 25). A body of
+  unknown length, as a chunked or a compressed answer is, is read as
+  `io.ReadAll` reads it.
+- An HTTP answer is read whole and held to `max_response_bytes` whether it
+  declares its length or not: a body up to the limit is the response's, to
+  the byte, megabytes included; one over it is refused with `response size N
+  exceeds limit L` when the answer declared its length and `response size
+  exceeds limit L` when it did not; an answer compressed by the target is
+  read decompressed, whatever length its compressed bytes declared, and held
+  to the limit by its decompressed size; an empty answer, with a length of 0
+  or none, is an empty body, not nil; a `HEAD` answer's length makes no
+  buffer of that length and is not held against the limit; an answer shorter than it
+  declared fails with `reading response: unexpected EOF`; one longer than it
+  declared is cut at what it declared; and an answer without a length is
+  read to the close of the connection.
+- Fetching a megabyte over HTTP from an answer that declares its length
+  allocates at most 1.5 MiB in all, the target's side included (1.01 MiB;
+  2.1 MiB read with `io.ReadAll`); a chunked answer of a megabyte is read
+  whole.
+- A local file that has a size is read whole into a buffer of its size and
+  one byte: a file up to the limit is the body, megabytes included, an empty file an empty
+  body, not nil, a file a byte over the limit is refused with `file F:
+  response size exceeds limit L`, and the largest limit that can be written
+  reads the file whole.
+- A file whose size says nothing of its content, as those of `/proc` with
+  their size of 0, is read to its end.
+- The files of a directory are each read into a buffer of their size and one
+  byte, ones at and just past a round size among them, and an empty one is
+  an empty body.
+- Reading a local file of a megabyte allocates at most 1.5 MiB (1.0 MiB;
+  2.1 MiB read with `io.ReadAll`).
+
+## 34.78 Review of the branch: tab-separated values, long whole numbers, selected attributes and names shared between static targets
+
+- Tab-separated and space-separated values with `trim_space` on and off keep
+  an empty field in its column — `web02`, an empty note and `31` as host,
+  note and cpu, and an empty first field — and comma-separated values are
+  trimmed as before, a quoted field after blanks included.
+- A JSON whole number of 4,096 digits, sign included, is an integer; one of a
+  digit more, negative or not, two million digits among them, is its text,
+  by the decoder and by the normalisation of a
+  pre-script's result alike; a long number with a fraction or an exponent is
+  read as before.
+- An XPath rule selecting attributes (`//i/@w`), and one selecting an element
+  and an attribute together, give each series the labels `.`, `string(.)`,
+  `name()`, `../@id`, `../name`, `name(..)` and `count(../@*)` as XPath has
+  them, the attribute of that name and value being found where its element
+  has two of one local name.
+- A gauge named `x_sum` or `x_bucket` after another target's histogram `x`,
+  the histogram after another target's gauge `x_count`, a gauge `y_count`
+  after a summary `y` and the summary after a gauge `y_sum` are each left out
+  for the later target, logged with the name clashed with, and the rest of
+  both targets is served in an exposition the exporter's own decoder reads;
+  a gauge `y_bucket` beside a summary `y`, and names that only look alike,
+  are served.
+
+## 34.79 Review of the branch: hosts, shown queries, worker memory, attribute labels, exact scales, torn histograms, escaped counters, reloads and the schema
+
+- Behind a forwarding proxy that percent-decodes the host it is asked for, a
+  target whose host carries an escape of a denied name
+  (`intern%2561l.example`, `%2569nternal.example`, `internal%252eexample`,
+  in upper case, with a port) or of `169.254.169.254`
+  (`%2531%2536%2539.254.169.254`, `169%252e254.169.254`) is refused naming
+  the `%`, and the proxy is asked nothing: with no lists, with an allowed glob
+  the host would match beside the denied name, with denied names alone and
+  with lists of networks. The plain spellings are refused as before, and a
+  name nothing refuses is still fetched through the proxy.
+- A redirect whose `Location` names a host with such an escape, or with a
+  comma, is not followed: the request is refused naming the character and
+  the proxy is asked for the first host only.
+- A host holding `%`, `,`, `;`, `=`, `*`, `!`, `'`, `(`, `)`, `+`, `$`, `&`,
+  `~`, `"`, `<`, `>`, a space, a tab, NUL, DEL, a colon outside an address or
+  a zone on what is no IPv6 address is refused as a target is, naming the
+  character, with no lists and with nothing dialed; so is a non-ASCII host
+  whose ASCII form would hold one (a full-width `％`).
+- Still requested, each checked under the name or address it is dialed by:
+  `my_service`, `_dmarc.example.com`, `db--primary.internal`,
+  `-edge.internal`, `edge-.internal`, a name with a final dot, one in mixed
+  case, `xn--bcher-kva.example`, `bücher.example`, `192.0.2.7`,
+  `0x7f.0.0.1`, `2130706433`, `[2001:db8::7]` in either case and
+  `[fe80::1%25eth0]`.
+- An `allowed_targets` or `denied_targets` entry with a character no host
+  name has (`intern%61l.example`, `a,b`, `a;b`, `a b.example`, `fe80::1%`)
+  is refused at load naming the key and the entry; a glob with `*` or `?`,
+  a name with an underscore or a hyphen first, a punycode name, an address
+  and a network load.
+- A `grpc` target in each of its forms (`host:port`, `dns:///`, `grpc://`,
+  `grpcs://`) whose host holds `%`, `,`, `;`, `=`, `+` or a space is refused
+  before any connection, behind a proxy, with no lists, with lists of names
+  and with a denied network.
+- Over HTTP/2, with `retry.attempts: 2`: headers just under the 1 MiB bound
+  are read under `max_response_bytes: 100`; headers just over it that arrive
+  whole (one value repeated) fail with the limit error that says the response
+  headers are larger than 1048576 bytes, the target asked once; 1.2 MiB of
+  headers in 150 different fields fail as a transport failure, not a limit
+  error, that says `PROTOCOL_ERROR`, that it is not retried and that headers
+  larger than 1048576 bytes end this way over HTTP/2, the target asked once;
+  and the request after it is answered on a new connection.
+- Only a connection error whose code is `PROTOCOL_ERROR` is taken for the
+  HTTP/2 client closing its connection, wrapped or not: one with another
+  code, an error that only reads `connection error: PROTOCOL_ERROR`, a reset
+  connection, a deadline and a short read are not.
+- What a target is sent is what is shown of it: for `a=1;b=2&c=3`, `x=100%`,
+  `debug&c=3`, `c=3&token=SECRET;x=1`, `a=1;token=SECRET`,
+  `token=SE%ZZCRET`, `TOKEN=SECRET`, `%74oken=SECRET`, `token=SE;CRET`,
+  `tenant=a&&flag&` and a target query followed by `request.query`, the
+  request line the target received, the debug report's request line and the
+  displayed target hold the same pairs in the same places, every value masked
+  in the report and the credential-named ones in the displayed target.
+- A query is masked where it stands: a bare key stays bare (`debug`,
+  `token`), a pair with a malformed escape is shown with its value masked or
+  not by its name, empty pairs and trailing separators stay, a name is
+  recognised in upper case, written in escapes (`%74oken`,
+  `%54%4F%4B%45%4E`), with `+` or `%20` in it and beside a malformed escape
+  (`%74oken%ZZ`), and is shown as written; after a masked value the later
+  pairs up to the next `&` have theirs masked and a piece without `=` is
+  masked whole (`token=SE;CRET` is `token=<redacted>;<redacted>`), in a
+  report, a displayed target and an error quoting the URL alike; the
+  userinfo and the fragment are withheld as before.
+- A `localfile` `request.path` default of `..`, `.`, `a/b`, `/etc`, `a\b`,
+  `../x` or one with a NUL byte is refused at load naming the collector, the
+  placeholder and the default, with the reason a probe sending that value is
+  given; `{{param_dir:eu}}`, two placeholders with defaults, an empty default
+  inside a path and as the whole path, and `e..u` load, and the file is read
+  with the default.
+- A Python worker is started with `MALLOC_ARENA_MAX=1` added to the
+  exporter's environment and sees it; an exporter run with
+  `MALLOC_ARENA_MAX=8` passes its own value on; a variable that only begins
+  alike is another variable, and the environment given is not written to.
+- A ready worker, with no limit and under `limits.max_script_memory` of
+  64MiB and 256MiB, has two threads and less than 48 MiB of address space
+  (it had about 82 MiB, 64 of them a malloc arena reserved for the thread
+  that watches its parent).
+- A script allocating 200 MiB under `limits.max_script_memory: 256MiB` runs,
+  three times in one worker, and one allocating 250 MiB fails with
+  `MemoryError: the script ran out of memory under limits.max_script_memory
+  (268435456 bytes)`.
+- Under limits of 32MiB and 64MiB a script that only calls `metric()` and
+  one that allocates 8 MiB run, and one that allocates 200 MiB fails naming
+  the limit.
+- A script that fills a limit of 64MiB down to the last 32 bytes, holds it
+  for longer than two turns of the parent watch and gives it back leaves its
+  worker with both its threads, and the worker serves the next run.
+- With `MALLOC_ARENA_MAX=8` in the exporter's environment and a limit of
+  32MiB, a ready worker has both its threads and has written nothing to its
+  standard error: the watch runs before the limit is installed.
+- Over HTML the labels `@xml:lang`, `@lang`, `@v-on:click`, `@og:type`,
+  `@data-id`, `@größe`, `@x-on:click.prevent`, `@:href`, `@@click` and `@2x`
+  give the attribute of that name, untrimmed, and one that is absent no
+  label — what main's reading by key gives for each — with `decoder.type`
+  `html` and `auto`, and whatever `response.namespaces` holds.
+- Over HTML `../@og:type`, `../@v-on:click`, `../@data-id` and an `@xml:lang`
+  five parents up give the ancestor's attribute, with and without
+  `response.namespaces`; from a text node the rule selects, nothing.
+- Over HTML `@xlink:href` on an element inside `svg`, and `../@xlink:href`
+  from its child, give the attribute the parser splits into a namespace and
+  a key; `@href` and `@id` still do.
+- Over HTML `@data-id | @plain`, `@plain = ' padded '`, `@*[name()='2x']`,
+  `@*[name()=':href']` and `@ plain` are evaluated as XPath; `@[attr]`,
+  `@id |`, `@*[`, `@`, `../@[attr]` and `../@` are refused at load naming
+  the label, for the decoders `html`, `auto` and `xml`; what counts as one
+  attribute name is held to a table of names with and without operators.
+- Over XML `@xml:lang`, `../@xml:lang`, `string(../@xml:lang)` and
+  `ancestor::*[@xml:lang]/@id` in a label, and `//*[@xml:lang='de']/*` as a
+  rule's expression, load and match without `response.namespaces`, with an
+  empty map, with another prefix mapped, with `xml` mapped to its own
+  namespace and with `xml` mapped to another.
+- Over XML without `response.namespaces` `@x:kind` is read by name with the
+  document's own prefix, and a prefix the document lacks gives no label;
+  with the prefix mapped, or another prefix mapped to the document's
+  namespace, it matches by URI, and mapped to another namespace it gives no
+  label; with `response.namespaces` set and the prefix unmapped the label is
+  refused at load with `prefix x not defined`.
+- A prefixed attribute read by name gives, at every element of four XML
+  documents and for six prefixed names, the value the XPath engine gives,
+  untrimmed where the engine trims and empty where it finds none.
+- A `scale` of `1.5e-9`, `7e-11`, `3e-10`, `0.3333333333`, `0.9999999995`,
+  `0.3`, `7.5e-10`, `2.78e-13`, `0.50000000099`, the smallest and the
+  largest float multiplies (2e9 by `1.5e-9` is 3, 3e10 by `0.3333333333` is
+  9999999999); `1/N` for every whole N from 2 to 5,000, powers of ten and of
+  two and their neighbours, negative ones and 20,000 at random up to 2^50
+  gives the value divided by N.
+- A jq rule without `items` one of whose values is no number, with a label
+  of too many values, of too few, or a later label of too few, is one
+  failure, `label "a" gave 8 values for 4 series, so they cannot be paired;
+  give one value, or one per series, or set items to evaluate labels per
+  element` with its counts, under `log` (logged once, `failures` 1) and
+  `ignore`, with no series of the rule and the rule after it untouched;
+  under `fail` the scrape's error is `metric "m" labels: ` and that message.
+- The same holds, in main's order, for the expression failing after a label
+  ran out (`metric "m" expression: error: val`), a label failing after a
+  value was no number, after a later label ran out, or after its last paired
+  value (`label "a": error: lbl`), a label that does not pair before a later
+  one that fails, a label value that is an object for the series whose value
+  is no number, a label that is an object and does not pair (the pairing
+  failure), and a label failing where the expression gives no values (the
+  label's failure, not a missing value).
+- Where nothing fails the rule as a whole, two values that are no numbers, a
+  missing one and a series without its required label are four failures,
+  two of them missing, the first logged once with `failures` 4, the other
+  series exported; under `fail` the first is the scrape's error; called
+  without a Transform gathering them they are logged once too.
+- Of a jq rule without `items` over 20,000 values, a label that runs out at
+  the third series (`label "few" gave 2 values for 20000 series`), a first
+  value that is no number under `fail`, and both together are found having
+  allocated less than a quarter of what making every series does; a label
+  one value short is one failure, and under a limit of 10 the rule stops
+  with `metric count 11 exceeds limit 10` in less than an eighth of it.
+- A histogram whose `+Inf` bucket and `_count` differ, whichever is the
+  larger and in whatever order they are written, is read with both numbers,
+  as the text format and as OpenMetrics, beside the families around it; one
+  with neither a `+Inf` bucket nor a `_count`, with buckets and a `_sum` or
+  with a `_sum` alone, is read as written without a `_count` and has no
+  `+Inf` bucket.
+- `Settle` gives a histogram without a `_count` its `+Inf` bucket's, leaves a
+  `_count` that is not the `+Inf` bucket's and the bucket as they are, leaves
+  a histogram with neither as it is, and still refuses a bound written twice;
+  a histogram's `+Inf` bucket is the one among its buckets, wherever it
+  stands, else its `_count`, and none when it has neither.
+- A sample named as its histogram family, with labels or without, before or
+  after the family's valid samples, a `_bucket` sample without an `le`
+  label, a sample of a quoted UTF-8 histogram name, and a sample named as its
+  summary family without a `quantile` label each fail the parse naming the
+  line, the sample and the samples the family has, as the text format, as
+  OpenMetrics and in a family the rules do not keep.
+- An OpenMetrics `_created` sample of a histogram or a summary is still read
+  and dropped, and in the text format `h_total` and `h_created` beside a
+  histogram `h` are families of their own.
+- The differential test of the parser allows, by name, the one difference
+  from the parser it was: a sample that is no part of its histogram or
+  summary family is refused where the older parser read past the line.
+- The text format writes a histogram's `+Inf` bucket with the bucket's own
+  count and its `_count` with the count, also when they differ and when the
+  `+Inf` bucket was read first; OpenMetrics writes such a family as `unknown`
+  families `h_bucket`, `h_sum` and `h_count` with the same values, and with
+  it a series of the family whose two numbers agree.
+- A histogram with neither a `+Inf` bucket nor a `_count` is written with
+  its buckets and `_sum` and neither line in the text format and as
+  `unknown` families in OpenMetrics; one of a `_sum` alone has no bucket
+  family.
+- Every answer for the odd-value sets, which now hold histograms whose
+  `_count` is two more than their `+Inf` bucket and histograms with neither,
+  is valid by the strict rules and by `prometheus_client`'s parser, holds the
+  text format's series, and keeps a family's type exactly when a strict
+  parser accepts it with that type; the strict parser refuses a histogram
+  written with a `_count` that is not its `+Inf` bucket's and one without a
+  `+Inf` bucket.
+- Through a probe, a target whose histogram has `+Inf` 7 and `_count` 8
+  beside a gauge and a counter is answered `200` with the target's own lines
+  in the text format and with `unknown` families `h_bucket`, `h_sum` and
+  `h_count` in OpenMetrics, the gauge and the counter keeping their types;
+  the text answer read by the exporter's own decoder gives the series the
+  target's body gives, and the OpenMetrics answer is read by it too.
+- Through a probe, a target's histogram with neither a `+Inf` bucket nor a
+  `_count` is answered `200` unchanged in the text format and as `unknown`
+  families in OpenMetrics.
+- The text answer of every histogram of the odd-value sets without a label
+  of its own named `le`, those whose two numbers differ and those with
+  neither among them, reads back through the exporter's decoder to the same
+  answer.
+- Over OTLP a histogram whose `+Inf` bucket and `_count` differ is gauges
+  `h_bucket` (the `+Inf` one with the bucket's count), `h_sum` and `h_count`,
+  one with neither is gauges of its buckets and `_sum` alone, and one whose
+  two numbers agree, or that has one of them, is a histogram with that
+  count.
+- A pre-script of a `prometheus` transform is given a histogram's `count`
+  and the `count` of its `+Inf` bucket as the target wrote them when they
+  differ; a script that changes the `count` alone, sets one beside buckets
+  alone, or takes the `+Inf` bucket out of a histogram without a count leaves
+  a histogram read back with those numbers, or with neither, and the scrape
+  does not fail. A bucket or a quantile appended twice and a count that is a
+  fraction still fail it.
+- In OpenMetrics a counter's sample is its family and the plain `_total`
+  whatever its name: `U__my_2e_requests__total` is the family
+  `U__my_2e_requests_`, `U__my_2e_requests` has the sample
+  `U__my_2e_requests_total`, `U__my_2e_total` is the family `U__my_2e`, and
+  `U___e9___total`, `U__jobs_total`, `U____total`, `jobs` and `jobs_total`
+  likewise; each answer is valid by the strict rules and is read by the
+  exporter's own decoder as one counter named as its sample.
+- `prometheus_client`'s parser reads each of those answers as one counter
+  family holding its sample, and does not read a sample with the suffix in
+  escaped form, `__total`, as a sample of its counter.
+- An escaped counter beside a gauge named as its sample would be is
+  `unknown` under its own name.
+- Through a probe with `name_escaping: values`, a target's counters
+  `my.requests_total`, `my.errors`, `my.total` and `plain_total` and its
+  histogram `my.hist` are OpenMetrics counters `U__my_2e_requests_`,
+  `U__my_2e_errors`, `U__my_2e` and `plain`, each sample its family and
+  `_total`, and the histogram `U__my_2e_hist`; the exporter's own decoder
+  reads four counters and the histogram from that answer, and the text
+  format has the names as they were escaped.
+- With an interval of 30 seconds and a first scrape that takes 26 seconds,
+  or the whole interval, for each of 400 target names: the cadence starts
+  between one interval and two after the first scrape began, at the name's
+  offset within the interval and not before the first scrape has ended;
+  nothing is due, skipped or left waiting while it runs; and the first turn
+  of the cadence is due on time with a whole interval. The same holds for a
+  target a reload changed while its scrape ran: its first scrape starts when
+  that scrape has ended, with a whole interval, and its cadence a whole
+  interval or more after that.
+- With an hour's interval, the first scrape of a target a reload changed,
+  made once the old definition's scrape has ended, must end within the hour,
+  and its cadence starts an hour or more after it.
+- A Python `script` with an f-string `f"{{param_x}}"`, with the text in a
+  comment and a string, a `pre_script` with nested braces, a description
+  naming `{{param_tenant}}`, a jq string, jq `items`, a regex matching the
+  text and a label expression holding `{{param_` load as written, and the
+  scripts pass the interpreter's check; a metric's and a label's `value_map`
+  and a prometheus transform's `include` and `exclude` holding a placeholder
+  are refused naming the field.
+- A fraction in an anchor loads where the mapping merging it in sets the key
+  itself, before the merge key or after it, where an earlier mapping of a
+  list of merges sets it, where a merged mapping overrides what it merges in,
+  and where the mapping sets the whole nested mapping; the value in force is
+  the overriding one, in the configuration and the static target file.
+- A fraction merged in and not overridden, one in the first mapping of a
+  list, one reached through a merge of a merge, and a null key merged into a
+  `value_map` are refused at the line of the anchor.
+- `DecodedEntries` gives each key the value the decoder gives it, over
+  documents with the mapping's own key before and after the merge key, lists
+  of merges in both orders, merges in merged mappings, a mapping written in
+  the merge, keys YAML does not read as text, a null key and a null value.
+- An `otlp` block whose own `enabled` is left empty is refused although a
+  merged mapping says `enabled: true`.
+- A reload refused because a file the configuration names is missing — an
+  OTLP `ca_file` the new configuration adds, the exporter's own
+  `password_file` — is logged once; three ticks with nothing changed read
+  nothing and log nothing; the tick after the file is back reloads, logged
+  as `configuration reloaded` with the trigger `watch`; with the
+  configuration in force, the file replaced again reloads nothing.
+- A file changed twice between two ticks and still no certificate is one more
+  refused reload, logged once; a certificate at last, the reload goes
+  through.
+- A certificate behind a `..data` symbolic link swapped to a directory whose
+  file has the size and modification time of the old is seen by the next
+  tick, which reloads.
+- A `SIGHUP` reload with the new client certificate beside the old key is
+  refused as `private key does not match public key`, leaves the
+  configuration in force, logs once, and the tick after the key follows
+  reloads.
+- The files watched for a refused configuration are the TLS files of an
+  enabled `otlp`, the credential files of an enabled `web.basic_auth` and a
+  collector's `protoset_file` and `proto_files`, each once across two
+  configurations; a collector's own credential and TLS files, the blocks
+  switched off and no configuration name none.
+- A pre_script that never produces `data`, and one with a syntax error, in a
+  collector of a collector file are reported as `collector file <path>:
+  collector ...` by the startup check and on reload, whose log line carries
+  the collector file as `file`; two scripts of one file are each named.
+- Python problems in the configuration's own collector name no collector
+  file; in the configuration and a collector file, and in two collector
+  files, they are logged against the configuration, each naming its file, in
+  the order of the collectors; an interpreter that is not there is an error
+  and no problem of a file.
+- `--dry-run` and startup report a Python fault of a collector file's
+  collector with `collector file <path>: ` before it.
+- The size pattern and the size parser give one verdict on over 70
+  spellings: units in every case, with and without `B`, a space or a
+  fraction; and, refused by both, a fraction without a unit, a sign, an
+  exponent, hexadecimal, an unknown unit, two spaces, space or a line break
+  around the size and full-width digits. Sizes of 2^63 bytes or more match
+  the pattern and are refused as too large; `9223372036854775807` and
+  `9007199254740993` as strings are read exactly.
+- The committed schema and the loader both accept, as
+  `response.csv.delimiter`, a semicolon, a pipe, a comma, a space, a tab
+  written `"\t"`, letters of two, three and four bytes and the empty string,
+  and both refuse `tab`, `'\t'`, two characters, a double quote, a line
+  feed, a carriage return, both together, NUL and U+FFFD.
+- The committed schema and the loader agree on some 60 spellings of
+  `limits.max_output_bytes`, as YAML numbers and as text; a size past the
+  range, `1.0` and `1e3` unquoted pass the schema and are refused by the
+  loader with their message.
+- `otlp.interval` of `1s`, `30s`, `1m`, `1h30m` and `1.5s` is accepted by
+  both and `soon`, `5`, `1d` and a list refused by both; `500ms`, `999ms`,
+  `1ns` and `-1s` pass the schema and are refused by the loader, and are
+  accepted by both with `enabled: false`; the schema's description says the
+  exporter checks the least.
+- For every key of `otlp` and of `web.basic_auth` but `enabled`, the schema
+  and the loader both refuse the block with that key alone and with an empty
+  `enabled`, and both accept it with `enabled: false`; an empty block,
+  `enabled: false` alone, a block switched on, the switch merged in and a
+  setting merged in without it get the same verdict from both.
 
 # 35. Documentation requirements
 
@@ -6908,11 +8823,44 @@ configuration MUST include an OTLP endpoint and SHOULD support headers,
 timeout, interval, TLS verification settings, service name, and resource
 attributes.
 
+`otlp.enabled` is the block's switch, and a block that sets any other key
+MUST say it: `true` turns the export on, and `false` keeps the settings
+without using or checking them. An `otlp` block with other keys and no
+`enabled`, or an `enabled` left empty, MUST be refused when the configuration
+loads, naming the block, the keys it sets, the line and both ways out —
+settings without the switch would be ignored without a word, the endpoint
+nothing is exported to. An empty block, and none, need no switch. The same
+rule MUST hold for `web.basic_auth` (§ 42.5), and for any block added later
+that does nothing until an `enabled` key turns it on. The configuration
+schema MUST say so, each other key of such a block requiring `enabled`
+(`dependentRequired`). A key a merge key supplies counts as said (§ 24.2a),
+unless the block sets it itself: an `enabled` the block leaves empty is the
+one read, whatever a merged mapping says.
+
 `otlp.interval` MUST control the export cadence and SHOULD default to 30
 seconds. The exporter MUST buffer the latest general metric value for each
 metric/label set between exports and include an exporter self-health snapshot
 in each interval export. `otlp.timeout` MUST bound each export request and
 SHOULD default to 5 seconds.
+
+What an enabled export sends and connects with MUST be checked when the
+configuration loads, by the checks a collector's request gets (§ 4), rather
+than failing every export:
+
+- `otlp.headers` names MUST be valid header names, none set twice in
+  different case, and their values MUST hold no control character other than
+  a tab; a name in `{{...}}` is no header name.
+- `otlp.tls.cert_file` and `key_file` MUST be set together, and the files the
+  `tls` block names — `ca_file`, `cert_file`, `key_file` — MUST be readable
+  and hold a certificate or key, since the export needs them from its first
+  request.
+- `otlp.interval` MUST be at least `1s`, and `otlp.timeout` MUST NOT be
+  negative; a shorter or negative interval MUST be refused naming the value
+  and the least, not replaced by the default.
+- `otlp.resource_attributes` MUST NOT set `service.name`, which
+  `otlp.service_name` sets: the resource would carry the key twice. The error
+  MUST point at `service_name`. The same MUST hold for a static target's
+  `otlp.resource_attributes` (§ 42.14).
 
 Both metric classes MUST be exportable through the same OTLP exporter:
 
@@ -6930,15 +8878,36 @@ resource attributes MUST be preserved:
 - A gauge MUST be an OTLP gauge, and a counter a monotonic sum with cumulative
   temporality.
 - A histogram MUST be an OTLP histogram with cumulative temporality, its count
-  and sum, and its buckets converted from Prometheus's cumulative counts to
-  OTLP's per-bucket counts: the finite upper bounds, in ascending order, as
+  and sum — without the sum, which OTLP allows, when it was read from a target
+  without a `_sum` (§ 14.1) — and its buckets converted from Prometheus's
+  cumulative counts to OTLP's per-bucket counts: the finite upper bounds, in ascending order, as
   explicit bounds, and one count more than bounds, the last being everything
   above the highest bound — Prometheus's `+Inf` bucket, which MUST NOT appear
-  as a bound. A cumulative count that falls MUST count as an empty bucket rather
-  than wrap around.
+  as a bound. The per-bucket counts MUST add up to the count.
 - A summary MUST be an OTLP summary with its count, sum and quantiles, and a
   summary without quantiles, such as `go_gc_duration_seconds` (§ 22.0a), MUST
-  still carry its count and sum.
+  still carry its count and sum. OTLP's summary cannot leave either out, an
+  unset field being 0, so a summary read from a target without a `_count` or a
+  `_sum` is exported with 0 for it.
+  A summary's quantiles MUST be exported in ascending order.
+- A family with a series whose values its type does not allow — the value
+  rules of § 21: a counter that is NaN or negative; a histogram whose `_sum`
+  is NaN or negative or stands beside a negative bound, with a bound that is
+  NaN, whose cumulative bucket counts fall or exceed its `+Inf` bucket's,
+  whose `+Inf` bucket and `_count` differ, or that has neither; a summary
+  whose `_sum` is NaN or negative, with a quantile that is NaN or outside 0
+  to 1, or with a negative value for a quantile — cannot be a monotonic sum,
+  a histogram or a summary in OTLP either, and MUST be exported as gauges
+  under the names of its samples, with the series and values the text format
+  writes: a counter as the gauge of its name; a histogram `h` as `h_bucket`
+  with an `le` attribute, in ascending order and with `+Inf`, and `h_sum` and
+  `h_count` where the series has them; a summary `s` as `s` with a `quantile`
+  attribute, and `s_sum` and `s_count` likewise; `le` and `quantile` written
+  as the text format writes them, over a label of the series' own by that
+  name. Every series of the family in the export MUST be exported so, so that
+  a name is one kind of metric in it; such a point MUST NOT be dropped, and
+  MUST NOT carry a start time. A family with no such series MUST keep its
+  kind.
 - A metric declared a histogram or summary but carrying no such data MUST be
   exported as a gauge of its value.
 - Every series of a family MUST be a data point of one OTLP metric, not a
@@ -6946,9 +8915,16 @@ resource attributes MUST be preserved:
 - NaN and the infinities MUST be encoded as the protobuf JSON mapping writes
   them — `"NaN"`, `"Infinity"`, `"-Infinity"` — since a JSON number cannot
   express them, and one such value MUST NOT fail the encoding of an export.
-- A data point's time MUST be the time it was queued — its scrape — or the
+- A data point's time MUST be the time of its scrape or the
   timestamp its series carries, never the time of the export that sends it,
-  and MUST survive the wait for the export and any retry.
+  and MUST survive the wait for the export and any retry. The scrape is the
+  trip that fetched the value from the target: an answer from the response
+  cache, fresh or stale (§ 42.13), of a probe or of a static target's scrape,
+  MUST be exported as of the trip that filled the entry — the very time the
+  trip's own export carried — not as of the answer. The series the exporter
+  adds about the answer itself — `http_exporter_result_stale`,
+  `http_exporter_result_age_seconds` and a static target's health metrics —
+  MUST be as of the answer.
 - A cumulative point — a counter's sum, a histogram, a summary — MUST carry a
   start time: the time of its series' first exported point, per resource, and
   of the first point after a reset, when its count or value went down. A
@@ -7102,6 +9078,11 @@ web:
     username: exporter
     password: change-me
 ```
+
+`enabled` is the block's switch, and a `web.basic_auth` block that sets a
+credential MUST say it, `true` or `false`: one that sets any other key
+without `enabled` MUST be refused when the configuration loads, as § 42.1
+says for `otlp`, since the credentials would protect nothing.
 
 The username MAY instead be read from `username_file` and the password from
 `password_file`, for a credential mounted from a Secret rather than written in
@@ -7318,8 +9299,14 @@ A bound value MUST occupy exactly one path segment: it MUST be escaped as a path
 segment, so that `/`, `?`, `#`, spaces and non-ASCII characters are
 percent-encoded rather than changing the structure of the URL, and binding MUST
 happen after the path is joined and cleaned, so that cleaning cannot rewrite a
-value. The values `.` and `..` MUST be rejected with `400`, since escaping cannot
-make them safe and a server resolving them would serve a different path.
+value. A `%` in a value MUST be escaped too, as `%25`, whatever follows it:
+only an escape written in the path itself is sent as written (§ 4). The values `.` and `..` MUST be rejected with `400`, since escaping cannot
+make them safe and a server resolving them would serve a different path; a
+default of `.` or `..` MUST be rejected at load, naming the collector and the
+parameter. A request type that holds a value to more MUST hold a default to
+the same, by the same check: a `localfile` path (§ 5.1) MUST reject at load a
+default that is `.` or `..` or holds `/`, `\` or NUL, naming the collector,
+the parameter and the default.
 
 The probe MUST also be rejected with `400` when a `param_` parameter is given
 more than once, or when the collector's path does not use it. The latter is
@@ -7385,7 +9372,16 @@ Each value MUST be written as its place requires:
   writes it as escaped XML text; `raw`, or no filter, writes it as given.
 
 A filter MUST be rejected at load outside the body, and an unknown filter
-anywhere. The values MUST NOT reach any self-metric label.
+anywhere. A default MUST be held to the rule of its place at load: one its
+place refuses — a default that is no number under `number`, one with a
+control character in a header or a gRPC metadata value, one a Graphite
+expression cannot hold — MUST be rejected, naming the collector, the field
+and the parameter, whether or not the field's other placeholders have
+defaults. The values MUST NOT reach any self-metric label.
+
+Placeholders are filled in the request's path (§ 42.10a) and in the places
+above, and nowhere else: a `{{param_...}}` in any other setting of a
+collector MUST be refused at load, naming the field (§ 24.2).
 
 ## 42.12 CI, container, and chart releases
 
@@ -7425,6 +9421,9 @@ MUST:
 - create a GitHub Release containing the software archives and a file of
   their SHA-256 checksums, `prometheus-universal-exporter-<version>-sha256sums.txt`
   in `sha256sum` format, so a download can be checked with `sha256sum -c`.
+  The release documentation MUST give the check for every platform an archive
+  is built for: macOS has no `sha256sum`, so beside the Linux command it MUST
+  give `shasum -a 256 -c`, which reads the same file.
 
 Every workflow that runs the test suite — CI, the exporter release, and the
 Dockerfile update workflow, which runs `make ci` against the updated pins
@@ -7500,6 +9499,15 @@ with copies of one result, evicting the entries `stale_if_error` falls back
 on, by adding parameters of its own. A collector whose definition cannot be
 fingerprinted has no key: its probes MUST be neither cached nor shared.
 
+The key MUST cover a probe's parameters as the probe reads them, not as the
+caller wrote them: the method upper-cased and trimmed, a duration as a
+duration, a boolean as a boolean, a number as a number, and a `param_<name>`
+left empty as one not given. `method=get` and `method=GET`, `timeout=5s` and
+`timeout=5000ms` MUST be one key, one cache entry and one shared trip; a
+parameter given more than once is refused before a key is made (§ 3.2). A
+static target's scrape and the probe making the same request MUST still share
+an entry.
+
 The presence and the absence of a parameter, a header, or a credential MUST
 produce different keys. Every list the key is built from — a parameter's
 values, a header's values, and a static target's own sections (`targets`,
@@ -7509,7 +9517,8 @@ requests share a key. A probe that supplies no credential, no forwarded
 header, or no TLS override therefore MUST NOT be able to read an entry stored
 by a probe that supplied one, and two probes presenting different credentials
 MUST NOT share an entry. This is a confidentiality requirement: a cached result
-may only ever be returned to a byte-for-byte identical request.
+may only ever be returned to a probe that would send the target the very same
+request.
 
 A stored entry MUST be the cache's own copy of the result, taken when it is
 stored. Hits MAY share that copy rather than copy it again, provided nothing
@@ -7649,7 +9658,9 @@ rate-limited endpoint.
   in `http_exporter_scrapes_total` and, by the shared outcome,
   `http_exporter_scrape_success_total`, with its own duration. Each probe answered by
   another's request MUST increment `http_exporter_probes_coalesced_total` for
-  its collector.
+  its collector. The shared request's counts belong to none of the probes
+  sharing it: per request (§ 22.1) they MUST be counted when it ends, whichever
+  probe started it and whether or not that probe is still waiting.
 - The shared request MUST run detached from the probe that started it, so that
   probe's client going away MUST NOT fail the others. It MUST be cancelled when
   every probe waiting on it has gone, and a probe arriving after that MUST start
@@ -7758,14 +9769,20 @@ accepts — `method`, `path`, `body`, `timeout`, `insecure_skip_verify`,
 `retry.attempts`, and `retry.backoff` — with the same semantics, overriding the
 collector's own request settings for that target only. Each target MUST also
 accept static request `headers` and its own target credentials, as inline or
-file-backed basic authentication or a bearer token. Because the document is
+file-backed basic authentication or a bearer token. A request that carries an
+`Authorization` of its own — a static target's credential, or one a probe
+forwards — sends it instead of the collector's, and the collector's
+credential files MUST NOT be read for it: a missing or empty one MUST fail
+only the requests that would have sent it. Because the document is
 operator configuration rather than caller input, these headers are applied
 directly and MUST NOT be filtered through the collector's
 `request.forward_headers` allowlist.
 
 Each target MAY declare `labels`, which the exporter MUST add to every metric
 that target produces. A label the collector already extracted MUST NOT be
-overwritten. `static_target` MUST be refused as a target label, since the
+overwritten, and a target's `le` MUST NOT be added to a histogram, nor its
+`quantile` to a summary, whose buckets and quantiles carry that label.
+`static_target` MUST be refused as a target label, since the
 endpoint sets it, and so MUST `job` and `instance`, which Prometheus sets when
 it scrapes the endpoint and which, kept with `honor_labels`, a target's would
 replace.
@@ -7780,18 +9797,36 @@ Retries whose waits alone — `attempts` × `backoff`, the target's
 refused naming the target, since the scrape ends with its interval and the
 last retries could never be made.
 A target new to the schedule — at startup, or added or changed in any way by
-a reload: its address, request, params, labels or interval — MUST be first
+a reload: its address, request, params, labels or interval, or anything in
+the definition of its collector — MUST be first
 scraped within ten seconds, or within its interval if
-that is shorter, so it does not stay absent from the endpoint for up to an
-interval. Its scrapes MUST then keep a fixed cadence, which SHOULD be offset
+that is shorter, so it does not stay absent from the endpoint, or served as
+a definition no longer in force made it, for up to an
+interval. A target that did not change, of a collector whose definition did
+not change, MUST keep its place in the schedule through a reload. Its scrapes MUST then keep a fixed cadence, which SHOULD be offset
 within its interval by a stable hash of its name so targets are spread over
-it, starting no sooner than half an interval after the first scrape. A scrape
-MUST be bounded by its interval, and one still running when the next is due
-MUST make that one skipped, logged, rather than overlapping it. The first
+it, starting no sooner than one whole interval after the first scrape began
+and sooner than two: the first scrape, which has its interval to end in, MUST
+have ended when the cadence starts, so that the first turn of the cadence
+waits for no scrape and has a whole interval, and a target whose scrapes take
+most of their interval is not cut short after a start or a reload. A scrape
+MUST be bounded by its interval, and two scrapes of one target MUST NOT run
+at once. A turn that comes while the target's last scrape still runs — a
+scrape that used its whole interval ends just after the next turn has come —
+MUST NOT be given up: it MUST wait for that scrape, start as soon as it has
+ended, without waiting for a further interval, and end by the turn after it
+— a budget of the steady cadence only, which the first scrape never runs
+into —
+so a target that never answers is scraped once per interval, each scrape
+failing, and one that answers again is seen within one interval. A turn MUST
+be skipped, and logged as `static target scrape skipped`, only when it is
+lost: the scrape it waited for was still running when the turn after it
+came, the newer turn then waiting in its place, or no scrape slot came free
+(below). A failed scrape MUST NOT by itself log a skipped one. The first
 scrape of a target a reload changed, due while a scrape begun on its old
-definition runs, MUST instead wait for that scrape, neither skipped nor
-overlapping it, and be made at the first check after it ends. A scrape that
-starts on time after skipped ones MUST end their run in the failure log. A scrape that runs out
+definition runs, MUST likewise wait for that scrape, neither skipped nor
+overlapping it, and be made when it ends. A scrape that
+starts after skipped ones MUST end their run in the failure log. A scrape that runs out
 of its interval MUST fail saying so: that the scrape ran out of its interval's
 budget, not only that a deadline was exceeded. A result
 of a target a reload removed while its scrape was in flight MUST NOT be
@@ -7828,11 +9863,16 @@ http_exporter_target_last_success_timestamp_seconds
 Without them a failing target is absent and cannot be distinguished from a
 target that was never configured. The last success timestamp MUST be the Unix
 time of the target's last successful scrape, kept through later failures, and
-0 until one succeeds, so the age of the values the endpoint keeps serving can
+0 until one succeeds, so how long a target has given nothing new can
 be alerted on. A failed scrape MUST produce the health
 result with `http_exporter_target_up` set to zero and MUST NOT produce
 collector metrics for that target, except the last good result, marked stale,
-under `cache.stale_if_error` (§ 42.13). Whether a failed stage fails the
+under `cache.stale_if_error` (§ 42.13): the metrics an earlier scrape
+produced MUST NOT go on being served as the target's after a scrape of it
+failed. A turn that publishes nothing — one skipped, or a scrape a shutdown
+cut short — MUST leave the result of the last scrape that ended as it was.
+The documentation MUST say what the endpoint serves in each of the three
+cases. Whether a failed stage fails the
 scrape is the collector's `error_handling` to say, as on a probe (§ 19).
 
 ### 42.14a The static targets endpoint
@@ -7847,7 +9887,13 @@ metrics with its labels, or its stale result, and its health result — at
   as the text format requires. A family a target produces with a different
   type than an earlier target, in target name order, MUST be left out for that
   target and logged, sparingly like repeated failures (§ 25); the rest of both
-  targets MUST be served. A clash that a later read no longer finds MUST be
+  targets MUST be served. So MUST a family whose name is that of a series of
+  an earlier target's histogram or summary — `x_bucket`, `x_sum` or `x_count`
+  beside a histogram `x`, `x_sum` or `x_count` beside a summary `x` — and a
+  histogram or summary one of whose series has the name of an earlier
+  target's family, since the exposition would hold two families of one name;
+  the log line MUST name the family it clashes with. A clash that a later
+  read no longer finds MUST be
   logged as ended while its target is still served, and forgotten without a
   line when its target is gone, so a clash that comes back is logged anew.
 - A target not yet scraped MUST be absent, and a target removed from the
@@ -7908,7 +9954,10 @@ only with `export_via_otlp`; set without it, the block MUST be refused rather
 than ignored. These form the OTLP resource the target's metrics are exported
 under. Both MUST default to the exporter-wide `otlp.service_name` and
 `otlp.resource_attributes`, and per-target attributes MUST be merged over the
-exporter-wide ones rather than replacing them. The exporter MUST emit one
+exporter-wide ones rather than replacing them. A target's
+`otlp.resource_attributes` MUST NOT set `service.name`, which its
+`otlp.service_name` sets; the file MUST be refused naming the target and
+pointing at `service_name` (§ 42.1). The exporter MUST emit one
 `resourceMetrics` entry per distinct resource in an export, so metrics from
 targets with different identities are not conflated. Every series exported
 over OTLP — the collector's metrics and the health result — MUST carry
@@ -8037,10 +10086,22 @@ variable supplies a value, never structure. The expansion SHOULD read as the
 value would written by hand — unquoted where that reads it back unchanged, so
 a number stays a number, and a double-quoted string otherwise. A reference in
 a comment MUST be left alone, set or not. This MUST hold in a flow sequence
-or mapping, where a bare reference is not valid YAML until the exporter
-quotes it, after an anchor, and for values YAML reads specially on their own:
+or mapping, where a bare reference is not valid YAML until it is expanded,
+whether the reference is the whole value or key, part of a longer one, as in
+`{Authorization: Bearer ${TOKEN}}`, or stands beside quoted values, as in
+`{X-Name: "x", X-Token: ${TOKEN}}`; after an anchor; and for values YAML
+reads specially on their own:
 an expanded key MUST be written quoted, an empty value MUST be written quoted
-inside a flow collection, and `-` MUST always be. Where a value cannot be rewritten
+inside a flow collection, and `-` MUST always be. Reading a document with a
+bare flow reference MUST NOT change how any other value of it expands: a
+reference in a block value, or in a plain value elsewhere, MUST expand to
+the variable's value exactly as in a document without one, and nothing the
+exporter adds to read the document — a quote, a placeholder — may end up in
+a value. Text of the document that only looks like what the exporter writes
+in a reference's place while reading MUST be kept as written. A block value
+(`|` or `>`) MUST be expanded in every one of its lines, also when its header
+carries an indentation indicator, as in `|2`, and its first line is indented
+further than the rest. Where a value cannot be rewritten
 in place — a block value given a line break, an unquoted value folded over
 lines, an explicitly tagged one — the document MUST be refused naming the
 line and how to write it. The expanded document MUST keep the file's line
@@ -8079,6 +10140,19 @@ The resolver MUST live in the repository as ordinary Go code under `tools/`, so
 its rules are covered by the same test suite as the exporter, and MUST:
 
 - never cross a major version, for any pin;
+- never move `PYTHON_VERSION` to another Python feature release (its second
+  component, `3.12` to `3.13`): collector scripts run on that interpreter, a
+  feature release removes standard-library modules and changes behaviour, and
+  the suite cannot cover scripts it does not have. A `PYTHON_VERSION` pinned to
+  a patch release MAY move within its feature release. Go's version and the
+  Python libraries MUST keep moving by minor and patch versions;
+- when a newer Python feature release is published in the image form the build
+  pulls, say so in the pull request summary, naming the release, the one
+  `PYTHON_VERSION` stays at, and that it moves by hand only (`Python 3.14 is
+  available; PYTHON_VERSION stays at 3.12 until it is bumped by hand, because
+  collector scripts run on it`), and in the run's output. That line MUST appear
+  only in a summary written for other updates: a newer Python alone MUST NOT
+  write a summary or change the Dockerfile, so it opens no pull request;
 - keep each pin's granularity, so a two-component pin such as `1.27` is only
   ever replaced by another two-component version. A two-component image tag is a
   floating tag that already picks up patch rebuilds, so rewriting it to
@@ -8113,6 +10187,16 @@ module requires — it is raised by dependency updates, not by the toolchain the
 build happens to use — and the Dockerfile MUST pin a Go version that satisfies
 it.
 
+`make helm-test` MUST make every chart check the CI workflow makes — the same
+renders, the same values that must be rejected, the same lines looked for in
+what is rendered — and no other, and a test MUST compare the two, so that a
+clean local run means a clean CI run and the reverse. `make helm-test` MUST
+refuse any helm but the pinned release, and `make helm-install` MUST install
+one it accepts: built from source with `go install`, helm reports only its
+release line (`v4.3`) unless the version is set at link time as helm's own
+release build sets it (`-X helm.sh/helm/v4/internal/version.version`), so the
+target MUST pass that flag with the pinned version.
+
 A dependency update can raise the go directive in a pull request that touches no
 workflow, which leaves every later build failing with `go.mod requires go >= X`
 and nothing nearby to explain it. A test MUST therefore verify that every Go
@@ -8125,6 +10209,14 @@ the full quality suite and build the container image against the new versions
 before opening a pull request. A proposed version that does not build or breaks
 a test MUST fail the workflow rather than arrive as a pull request that looks
 ready to merge.
+
+The workflow opens the pull request with the repository's `GITHUB_TOKEN`. The
+documentation MUST say which repository setting that needs ("Allow GitHub
+Actions to create and approve pull requests", without which the run fails at
+its last step after pushing the `deps/dockerfile` branch), and that a pull
+request opened with that token does not start `ci.yml`, so the suite the
+update workflow ran is the proposal's test until the pull request is closed
+and reopened.
 
 Both schedules MUST land during Bulgarian working hours on a working day.
 Dependabot MUST use an explicit `Europe/Sofia` timezone so the run does not
@@ -8151,8 +10243,13 @@ and MUST answer `200` with a `text/plain` report of it:
 - every request sent, with retries and redirects, its method, URL, headers
   and outcome; a `grpc` call with its method, metadata and code; a
   `localfile` read as its file;
-- the response's status, headers and body, the body up to 64 KiB and shown
-  only when it is valid UTF-8, or a directory's files;
+- the response's status, headers and body as the target sent them, before
+  the body was converted to UTF-8 (§ 6.1a): the `Content-Type` MUST be the
+  target's own. The body is shown up to 64 KiB and only when it is text. A
+  body that was converted MUST be listed with its size as sent and the
+  encoding it was converted from, and shown as the same text in UTF-8, in
+  which an XML declaration still names the encoding it was sent in. A
+  directory is shown as its files, with their sizes as read;
 - each stage, its duration and outcome, saying when `error_handling` carried
   on;
 - the series by metric name, the rules that gave none, and the rules that
@@ -8160,6 +10257,10 @@ and MUST answer `200` with a `text/plain` report of it:
 - every line the trip logged, at every level whatever `--log.level` is,
   including rule failures and what a Python script printed;
 - the exposition a probe would have served.
+
+The report's copy of the response MUST be made before the decode and MUST
+share the fetched body rather than copy it; a trip that is not reported MUST
+NOT keep the body the target sent beside the converted one.
 
 A debug probe MUST NOT read or fill the response cache, share a trip with a
 probe in flight (§ 42.13a), be counted in any self-metric, or be queued for
@@ -8197,7 +10298,17 @@ displayed target — in a log line, the static targets endpoint's `target`
 label and the OTLP `target` attribute — masks the values of the parameters
 whose names read as credentials, and keeps the rest, in order, so targets
 that differ in anything else stay apart; a header value is withheld when its
-name reads as a credential's. One rule MUST say whether a name — a header's,
+name reads as a credential's. A query MUST be shown as it was sent (§ 4),
+masked where it stands, not parsed and written again: every pair MUST keep
+its place and its spelling, a bare key MUST stay one, and a pair with a
+malformed escape MUST be shown, its value masked or not by the rule for its
+name. Pairs MUST be told apart at `&` and at `;` alike, so the token of
+`a=1;token=SECRET` is masked; and after a masked value, up to the next `&`,
+the value of every later pair MUST be masked and a piece without `=` masked
+whole, since that is the rest of the value to a server that splits at `&`
+alone (`token=SE;CRET` is shown as `token=<redacted>;<redacted>`). A pair's
+name MUST be compared with its escapes decoded, a malformed one left as it
+is (`%74oken` is `token`), and shown as written. One rule MUST say whether a name — a header's,
 a query parameter's or a field's in logged text — reads as a credential's: it
 contains, in any case, `auth`, `cookie`, `token`, `secret`, `password`,
 `passwd`, `passphrase`, `passcode`, `key`, `session`, `signature`,

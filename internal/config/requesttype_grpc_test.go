@@ -175,3 +175,41 @@ func TestGRPCStaticTargets(t *testing.T) {
 		}
 	}
 }
+
+// A grpc target's retry codes and accept_codes are written in upper case
+// once, when the file is loaded; the check against the configuration, which
+// a reload repeats on the file in force while scrapes read it, only reads
+// them, and still refuses a name that is no status code.
+func TestGRPCTargetCodesAreWrittenWhenTheFileIsLoaded(t *testing.T) {
+	dir := t.TempDir()
+	cfg, err := Load(testutil.WriteIn(t, dir, "config.yaml", strings.Replace(grpcConfig, "PROTOSET_OR_REFLECTION", "reflection", 1)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	f, err := LoadStaticTargets(testutil.WriteIn(t, dir, "targets.yaml", "interval: 1m\ntargets:\n  - name: health\n    collector: health\n    target: grpc.internal:9090\n    request:\n      accept_codes: [' not_found ']\n      retry:\n        codes: [unavailable]\n"))
+	if err == nil {
+		err = ValidateStaticTargets(f)
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := &f.Targets[0].Request
+	if request.AcceptCodes[0] != "NOT_FOUND" || request.Retry.Codes[0] != "UNAVAILABLE" {
+		t.Fatalf("after the file's own validation: accept_codes %q, retry codes %q", request.AcceptCodes, request.Retry.Codes)
+	}
+	if err := ValidateStaticTargetsAgainst(f, cfg); err != nil {
+		t.Fatal(err)
+	}
+	// Written otherwise, as no loaded file is, they are still only read.
+	request.AcceptCodes[0], request.Retry.Codes[0] = "not_found", "unavailable"
+	if err := ValidateStaticTargetsAgainst(f, cfg); err != nil {
+		t.Fatal(err)
+	}
+	if request.AcceptCodes[0] != "not_found" || request.Retry.Codes[0] != "unavailable" {
+		t.Fatalf("the check against the configuration rewrote the codes: %q %q", request.AcceptCodes, request.Retry.Codes)
+	}
+	request.Retry.Codes[0] = "SOMETIMES"
+	if err := ValidateStaticTargetsAgainst(f, cfg); err == nil || !strings.Contains(err.Error(), "request.retry.codes") {
+		t.Fatalf("err=%v", err)
+	}
+}

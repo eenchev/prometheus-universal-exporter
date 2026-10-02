@@ -37,8 +37,9 @@ type cacheEntry struct {
 
 // responseCache is the process-local, in-memory probe cache. Entries are keyed
 // by a fingerprint covering the collector definition and every element of the
-// incoming probe request, so a cached result can only ever be served to a
-// byte-for-byte identical request. Nothing is written to disk and nothing is
+// incoming probe request that makes the request to the target, so a cached
+// result can only ever be served to a probe that would send the target the
+// very same request. Nothing is written to disk and nothing is
 // shared between exporter processes.
 type responseCache struct {
 	mu      sync.Mutex
@@ -236,42 +237,73 @@ func probeCacheKey(c *model.Collector, target string, query url.Values, forwarde
 	return probeCacheKeyWith(collectorFingerprint(c), c, target, query, forwarded, own...)
 }
 
-// probeKeyQuery is the part of a probe's query that makes its request, and
-// so belongs in its cache key: collector and target, and the probe parameters
-// c's request type accepts (RequestType.Overrides), param_<name> among them.
-// Everything else is left out. A parameter no request type knows is ignored
-// by the probe, so keyed it would let a caller adding &x=1, &x=2, ... fill
-// the cache with copies of one result, pushing out the entries
-// cache.stale_if_error falls back on, and keep identical probes from sharing
-// a trip (probeflight.go). header_<name> parameters are left out too: the
-// ones forwarded are keyed as the headers they become (forwardedHeaders), and
-// the rest are not sent.
-func probeKeyQuery(c *model.Collector, query url.Values) url.Values {
-	var overrides []string
-	if rt := fetch.RequestTypes[c.Request.Type]; rt != nil {
-		overrides = rt.Overrides
-	}
-	out := url.Values{}
-	for key, values := range query {
-		if key == "target" || key == "collector" || (requestParam(overrides, key) && !strings.HasPrefix(strings.ToLower(key), headerParamPrefix)) {
-			out[key] = values
+// probeKeyQuery is a probe's request as its cache key holds it: collector and
+// target, and the probe parameters as the probe read them
+// (fetch.ParseRequestOverrides) rather than as the caller wrote them. Each is
+// written one way — the method in upper case, a duration as Go prints it, a
+// boolean as true or false, a whole number without padding — so method=get
+// and method=GET, or timeout=5s and timeout=5000ms, which make the same
+// request, make the same key. Keyed as written, every spelling of one request
+// would be an entry of its own: a caller could go to the target past
+// cache.ttl, fill max_cache_entries with copies of one result, pushing out the
+// entries cache.stale_if_error falls back on, and keep identical probes from
+// sharing a trip (probeflight.go).
+//
+// Nothing else of the query is in the key. A parameter no request type knows
+// is ignored by the probe, so &x=1, &x=2, ... are one request; a parameter
+// given twice, of which the probe would read one value, is refused before a
+// key is made (checkProbeParams). A param_<name> left empty counts as not
+// given, as it does where it is bound. header_<name> parameters are left out
+// too: the ones forwarded are keyed as the headers they become
+// (forwardedHeaders), and the rest are not sent.
+//
+// The values are written as targetCacheQuery writes a static target's, so a
+// static target's scrape and the probe that makes the same request share an
+// entry.
+func probeKeyQuery(collector, target string, o fetch.RequestOverrides) url.Values {
+	out := url.Values{"target": {target}, "collector": {collector}}
+	for name, value := range o.Params {
+		if value != "" {
+			out.Set(name, value)
 		}
+	}
+	if o.Method != "" {
+		out.Set("method", o.Method)
+	}
+	if o.PathSet {
+		out.Set("path", o.Path)
+	}
+	if o.Body != nil {
+		out.Set("body", *o.Body)
+	}
+	if o.Message != nil {
+		out.Set("message", *o.Message)
+	}
+	if o.Timeout > 0 {
+		out.Set("timeout", o.Timeout.String())
+	}
+	for name, value := range map[string]*bool{
+		"insecure_skip_verify": o.InsecureSkipVerify,
+		"follow_redirects":     o.FollowRedirects,
+		"enable_http2":         o.EnableHTTP2,
+	} {
+		if value != nil {
+			out.Set(name, strconv.FormatBool(*value))
+		}
+	}
+	if o.RetryAttempts != nil {
+		out.Set("retry_attempts", strconv.Itoa(*o.RetryAttempts))
+	}
+	if o.RetryBackoff != nil {
+		out.Set("retry_backoff", o.RetryBackoff.String())
+	}
+	if o.From != "" {
+		out.Set("from", o.From)
+	}
+	if o.Until != "" {
+		out.Set("until", o.Until)
 	}
 	return out
-}
-
-// headerParamPrefix starts a probe parameter naming a header to forward.
-const headerParamPrefix = "header_"
-
-// requestParam reports whether key is one of overrides, where a name ending
-// in _ is a prefix, as CheckOverrideParams reads them.
-func requestParam(overrides []string, key string) bool {
-	for _, name := range overrides {
-		if strings.HasSuffix(name, "_") && strings.HasPrefix(key, name) || key == name {
-			return true
-		}
-	}
-	return false
 }
 
 // probeCacheKey is the key of a probe of c in cfg, with the collector's

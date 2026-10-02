@@ -318,7 +318,11 @@ func TestASIGHUPDuringTheShutdownDoesNotEndIt(t *testing.T) {
 }
 
 // The OTLP export keeps running through --web.shutdown-delay, as the static
-// targets whose results it delivers keep being scraped.
+// targets whose results it delivers keep being scraped: an export arrives
+// after the signal and before the delay has ended, which the log tells — the
+// last export, sent as the exporter finishes, comes after the line that says
+// so. The delay is five intervals long, so the export is one of several the
+// delay has room for, whatever the machine is busy with.
 func TestOTLPExportsThroughTheShutdownDelay(t *testing.T) {
 	var exports atomic.Int64
 	collector := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
@@ -326,20 +330,109 @@ func TestOTLPExportsThroughTheShutdownDelay(t *testing.T) {
 		w.WriteHeader(http.StatusOK)
 	}))
 	defer collector.Close()
-	p := startHeldExporterWith(t, "otlp:\n  enabled: true\n  endpoint: "+collector.URL+"/v1/metrics\n  interval: 300ms\n", "--web.shutdown-delay=2s", "--web.shutdown-timeout=1s")
+	// 1s is the least otlp.interval a configuration may set.
+	p := startHeldExporterWith(t, "otlp:\n  enabled: true\n  endpoint: "+collector.URL+"/v1/metrics\n  interval: 1s\n", "--web.shutdown-delay=5s", "--web.shutdown-timeout=1s")
 	testutil.WaitFor(t, "an export", func() bool { return exports.Load() >= 1 })
 	p.signal(t, syscall.SIGTERM)
-	atSignal := exports.Load()
-	time.Sleep(1500 * time.Millisecond)
-	if during := exports.Load() - atSignal; during < 2 {
-		t.Errorf("%d exports in the first 1.5s of a 2s delay at a 300ms interval, want at least 2\n%s", during, p.logs.String())
+	testutil.WaitFor(t, "the delay to begin", func() bool { return strings.Contains(p.logs.String(), "shutting down: /ready answers 503") })
+	inDelay := exports.Load()
+	testutil.WaitFor(t, "an export during the delay", func() bool { return exports.Load() > inDelay })
+	if strings.Contains(p.logs.String(), "shutting down: finishing the probes in progress") {
+		t.Errorf("no export arrived in a 5s delay at a 1s interval before the delay ended\n%s", p.logs.String())
 	}
 	select {
 	case err := <-p.exited:
 		if err != nil {
 			t.Fatalf("exit: %v\n%s", err, p.logs.String())
 		}
-	case <-time.After(8 * time.Second):
+	case <-time.After(30 * time.Second):
 		t.Fatalf("the exporter did not exit\n%s", p.logs.String())
+	}
+}
+
+// A SIGHUP sent while the exporter is still starting, its configuration read
+// and its Python scripts being checked, does not end the process, as Go's
+// default action for a signal nobody catches would: it waits, and the
+// exporter reloads once, as soon as it has started.
+func TestASIGHUPDuringStartupReloadsOnceStarted(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("no signals on Windows")
+	}
+	dir := t.TempDir()
+	reached, release := dir+"/reached", dir+"/release"
+	// The interpreter the scripts are checked with says when the check has
+	// begun, and holds it until the test has sent its signal.
+	python := dir + "/python"
+	if err := os.WriteFile(python, []byte("#!/bin/sh\n: > '"+reached+"'\nwhile [ ! -e '"+release+"' ]; do sleep 0.05; done\nexec python3 \"$@\"\n"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	conf := testutil.WriteIn(t, dir, "config.yaml", "collectors:\n  - name: scripted\n    request:\n      type: http\n    transform:\n      type: python\n      script: |\n        metric(\"x\", 1)\n")
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	address := listener.Addr().String()
+	_ = listener.Close()
+	logs := &syncBuffer{}
+	cmd := exec.Command(os.Args[0], "-test.run=^TestRunHelperProcess$")
+	cmd.Env = append(os.Environ(), helperArgsEnv+"="+strings.Join([]string{"--config.file=" + conf, "--web.listen-address=" + address, "--python.path=" + python}, "\x1f"))
+	cmd.Stderr = logs
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	exited := make(chan error, 1)
+	go func() { exited <- cmd.Wait() }()
+	t.Cleanup(func() { _ = cmd.Process.Kill() })
+	// waitFor is testutil.WaitFor that also notices the exporter ending.
+	waitFor := func(what string, done func() bool) {
+		t.Helper()
+		deadline := time.Now().Add(20 * time.Second)
+		for !done() {
+			select {
+			case err := <-exited:
+				t.Fatalf("the exporter ended while the test waited for %s: %v\n%s", what, err, logs.String())
+			default:
+			}
+			if time.Now().After(deadline) {
+				t.Fatalf("timed out waiting for %s\n%s", what, logs.String())
+			}
+			time.Sleep(5 * time.Millisecond)
+		}
+	}
+	waitFor("the startup to reach the Python check", func() bool {
+		_, err := os.Stat(reached)
+		return err == nil
+	})
+	if err := cmd.Process.Signal(syscall.SIGHUP); err != nil {
+		t.Fatal(err)
+	}
+	// The signal is delivered before the startup goes on.
+	time.Sleep(100 * time.Millisecond)
+	if err := os.WriteFile(release, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	waitFor("the exporter to listen", func() bool {
+		resp, err := http.Get("http://" + address + "/health")
+		if err == nil {
+			_ = resp.Body.Close()
+		}
+		return err == nil
+	})
+	waitFor("the reload the signal asked for", func() bool {
+		return strings.Contains(logs.String(), `"msg":"configuration reloaded","trigger":"sighup"`)
+	})
+	if err := cmd.Process.Signal(syscall.SIGTERM); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case err := <-exited:
+		if err != nil {
+			t.Fatalf("exit: %v\n%s", err, logs.String())
+		}
+	case <-time.After(20 * time.Second):
+		t.Fatalf("the exporter did not exit\n%s", logs.String())
+	}
+	if n := strings.Count(logs.String(), `"msg":"configuration reloaded","trigger":"sighup"`); n != 1 {
+		t.Fatalf("one SIGHUP reloaded %d times:\n%s", n, logs.String())
 	}
 }

@@ -225,9 +225,10 @@ func (s *Server) verboseSelfMetrics() bool {
 type statsRecorder struct {
 	collector *serverStats
 	request   *serverStats
-	// pending is set while request is a probe's statistics for a request
-	// not tracked yet, which commit adopts once the probe is known not to
-	// have been refused by the target policy.
+	// pending is set while request is a probe's statistics, or those of the
+	// trip it started (forTrip), for a request not tracked yet, which commit
+	// adopts once the probe is known not to have been refused by the target
+	// policy.
 	pending *pendingRequest
 }
 
@@ -268,9 +269,27 @@ func (s *Server) probeRecorderFor(collector *serverStats, name, labelURL, method
 	return statsRecorder{collector: collector, request: &serverStats{}, pending: &pendingRequest{tracker: s.requests, key: key}}
 }
 
-// commit ends a probe: a new request whose target was not refused starts
-// being tracked with what the probe recorded; a refused one is forgotten.
-// Updates made after commit are not guaranteed to reach the request.
+// forTrip is the recorder of the trip r's probe starts for every identical
+// probe in flight (probeflight.go). Such a trip belongs to none of the probes
+// sharing it, and neither does what it counts: for a request already tracked
+// that is counted on the request as it happens, as r's own counts are, and for
+// a new one it is gathered apart from r's and committed when the trip ends,
+// whichever probe started the trip and whichever left before the answer.
+// Gathered with the starter's own, the trip's counts would be forgotten with a
+// starter that left, while the trip went on to answer the probes that joined
+// it.
+func (r statsRecorder) forTrip() statsRecorder {
+	if r.pending == nil {
+		return r
+	}
+	return statsRecorder{collector: r.collector, request: &serverStats{}, pending: &pendingRequest{tracker: r.pending.tracker, key: r.pending.key}}
+}
+
+// commit ends a probe, or a shared trip: a new request whose target was not
+// refused starts being tracked with what was recorded; a refused one is
+// forgotten, and so is one whose probe or trip was abandoned, which its
+// caller passes as refused. Updates made after commit are not guaranteed to
+// reach the request.
 func (r statsRecorder) commit(refused bool) {
 	if r.pending == nil || refused {
 		return
@@ -302,10 +321,12 @@ func (r statsRecorder) scraped(at time.Time) {
 	r.request.mu.Unlock()
 }
 
-// absorb adds what another probe of the same request recorded: its counters
-// are added, and its latest values, of a trip that reached the target, replace
-// these. It is only needed when two probes of a request not tracked yet ran at
-// once (requestTracker.adopt).
+// absorb adds what another probe of the same request, or a shared trip to its
+// target, recorded: its counters are added, and its latest values, of a trip
+// that reached the target, replace these. The duration is a probe's: a trip
+// gathered apart from the probes sharing it (forTrip) has none to give. It is
+// needed when two probes of a request not tracked yet ran at once, and when a
+// probe joins the trip that answered it (requestTracker.adopt).
 func (v *statsValues) absorb(o statsValues) {
 	for _, pair := range [][2]*uint64{
 		{&v.probes, &o.probes}, {&v.success, &o.success}, {&v.decodeOK, &o.decodeOK},
@@ -318,7 +339,9 @@ func (v *statsValues) absorb(o statsValues) {
 	} {
 		*pair[0] += *pair[1]
 	}
-	v.lastDuration = o.lastDuration
+	if o.probes > 0 {
+		v.lastDuration = o.lastDuration
+	}
 	if o.lastScrape.After(v.lastScrape) {
 		v.lastScrape = o.lastScrape
 		v.lastStatus, v.lastBytes, v.lastScriptDuration = o.lastStatus, o.lastBytes, o.lastScriptDuration
@@ -334,9 +357,11 @@ func (v *statsValues) absorb(o statsValues) {
 // appears the first time it is asked for, and expires when it is no longer
 // asked for (VerboseRequestIdleExpiry).
 func (s *Server) seedStaticRequests() {
-	cfg := s.manager.Get()
+	// Read together, so every target finds the collector it was checked
+	// against.
+	cfg, file := s.manager.InForce()
 	keys := map[requestKey]bool{}
-	for _, target := range s.manager.StaticTargets() {
+	for _, target := range staticTargetsOf(file) {
 		c := model.CollectorByName(cfg, target.Collector)
 		if c == nil {
 			continue

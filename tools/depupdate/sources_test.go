@@ -101,11 +101,11 @@ func TestPypiVersionsReadsTheReleaseIndex(t *testing.T) {
 // resolve drives the whole table; a pin the Dockerfile no longer declares is
 // skipped rather than failing the run.
 func TestResolveSkipsArgumentsTheDockerfileNoLongerDeclares(t *testing.T) {
-	updates, err := resolve(context.Background(), map[string]string{})
+	updates, held, err := resolve(context.Background(), map[string]string{})
 	if err != nil {
 		t.Fatalf("an empty Dockerfile should resolve to no updates, got %v", err)
 	}
-	if len(updates) != 0 {
-		t.Fatalf("updates=%v, want none", updates)
+	if len(updates) != 0 || len(held) != 0 {
+		t.Fatalf("updates=%v held=%v, want none", updates, held)
 	}
 }

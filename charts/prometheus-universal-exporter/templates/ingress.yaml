@@ -1,4 +1,9 @@
 {{- if .Values.ingress.enabled }}
+{{- /* The Ingress routes to the exporter's Service; without it every request
+       through the Ingress is answered 503 by the controller. */}}
+{{- if not .Values.service.enabled }}
+{{- fail "ingress.enabled routes to the exporter's Service, which service.enabled=false leaves out; enable the Service or disable the Ingress" }}
+{{- end }}
 apiVersion: networking.k8s.io/v1
 kind: Ingress
 metadata:

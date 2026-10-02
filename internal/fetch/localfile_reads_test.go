@@ -99,11 +99,12 @@ func TestLocalFileTimeout(t *testing.T) {
 }
 
 // Reads left running on a filesystem that has stopped answering are capped per
-// collector: once every slot is held, a read fails at once instead of adding
-// another goroutine, and the slots come back as the reads return.
-func TestLocalFilePendingReadsAreCapped(t *testing.T) {
+// collector: once the cap of reads has been abandoned by probes that gave up
+// on them, a read fails at once instead of adding another goroutine, and the
+// places come back as the reads return.
+func TestLocalFileAbandonedReadsAreCapped(t *testing.T) {
 	root := t.TempDir()
-	for i := 0; i <= localFileMaxPendingReads; i++ {
+	for i := 0; i <= localFileMaxAbandonedReads; i++ {
 		testutil.WriteIn(t, root, "f"+strconv.Itoa(i)+".prom", promFile)
 	}
 	stuck := validated(t, fileCollector("stuck", root, ""))
@@ -116,38 +117,178 @@ func TestLocalFilePendingReadsAreCapped(t *testing.T) {
 	}
 
 	// Different files, as probes that do not share one read would ask for.
-	for i := 0; i < localFileMaxPendingReads; i++ {
+	for i := 0; i < localFileMaxAbandonedReads; i++ {
 		if _, err := read("f"+strconv.Itoa(i)+".prom", 20*time.Millisecond); !errors.Is(err, context.DeadlineExceeded) {
 			t.Fatalf("read %d: err=%v", i, err)
 		}
 	}
-	if got := localFileReads.pending("stuck"); got != localFileMaxPendingReads {
-		t.Fatalf("pending=%d, want %d", got, localFileMaxPendingReads)
+	if got := localFileReads.abandoned("stuck"); got != localFileMaxAbandonedReads {
+		t.Fatalf("abandoned=%d, want %d", got, localFileMaxAbandonedReads)
 	}
 	start := time.Now()
-	if _, err := read("f"+strconv.Itoa(localFileMaxPendingReads)+".prom", 5*time.Second); err == nil || !strings.Contains(err.Error(), "already has 4 file reads that have not returned") {
+	if _, err := read("f"+strconv.Itoa(localFileMaxAbandonedReads)+".prom", 5*time.Second); err == nil || !strings.Contains(err.Error(), "already has 4 file reads that have not returned") || !strings.Contains(err.Error(), "the filesystem under request.root is not answering") {
 		t.Fatalf("err=%v", err)
 	}
 	if time.Since(start) > time.Second {
 		t.Fatal("a read over the cap waited instead of failing at once")
 	}
 	// The cap is per collector.
-	if got := localFileReads.pending("other"); got != 0 {
-		t.Fatalf("other collector pending=%d", got)
+	if got := localFileReads.abandoned("other"); got != 0 {
+		t.Fatalf("other collector abandoned=%d", got)
 	}
 
 	close(release)
-	deadline := time.Now().Add(5 * time.Second)
-	for localFileReads.pending("stuck") > 0 {
-		if time.Now().After(deadline) {
-			t.Fatalf("pending reads never returned: %d", localFileReads.pending("stuck"))
-		}
-		time.Sleep(5 * time.Millisecond)
-	}
+	waitForNoAbandonedReads(t, "stuck")
 	afterLocalFileRead.Store(nil)
 	resp, err := read("f0.prom", 5*time.Second)
 	if err != nil || !strings.Contains(string(resp.Body), "} 7") {
 		t.Fatalf("resp=%v err=%v", resp, err)
+	}
+}
+
+// waitForNoAbandonedReads waits until every abandoned read of a collector has
+// returned.
+func waitForNoAbandonedReads(t *testing.T, collector string) {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for localFileReads.abandoned(collector) > 0 {
+		if time.Now().After(deadline) {
+			t.Fatalf("abandoned reads never returned: %d", localFileReads.abandoned(collector))
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+}
+
+// readsHeldTogether holds every file read until want of them are in progress
+// at the same moment, and reports whether that many ever were: the proof that
+// the reads ran side by side rather than one after another.
+func readsHeldTogether(t *testing.T, want int) (together func() bool) {
+	t.Helper()
+	var mu sync.Mutex
+	held := 0
+	all := make(chan struct{})
+	onFileRead(t, func(string) {
+		mu.Lock()
+		held++
+		if held == want {
+			close(all)
+		}
+		mu.Unlock()
+		select {
+		case <-all:
+		case <-time.After(5 * time.Second):
+		}
+	})
+	return func() bool {
+		select {
+		case <-all:
+			return true
+		default:
+			return false
+		}
+	}
+}
+
+// Probes of a healthy filesystem are never refused for being many: reads whose
+// probe is still waiting for them do not count against the cap, which is for
+// the reads a probe has given up on. Three times the cap of different files
+// are read at the same moment, and every probe is answered.
+func TestLocalFileConcurrentReadsOfAHealthyFilesystemAreNotRefused(t *testing.T) {
+	root := t.TempDir()
+	const probes = 3 * localFileMaxAbandonedReads
+	for i := range probes {
+		testutil.WriteIn(t, root, "f"+strconv.Itoa(i)+".prom", promFile)
+	}
+	c := validated(t, fileCollector("busy", root, ""))
+	together := readsHeldTogether(t, probes)
+	errs := make(chan error, probes)
+	for i := range probes {
+		go func() {
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
+			resp, err := fetchLocalFile(ctx, "f"+strconv.Itoa(i)+".prom", c, RequestOverrides{}, nil)
+			if err == nil && !strings.Contains(string(resp.Body), "} 7") {
+				err = errors.New("the file was not answered: " + string(resp.Body))
+			}
+			errs <- err
+		}()
+	}
+	for range probes {
+		if err := <-errs; err != nil {
+			t.Errorf("a probe of a healthy filesystem failed: %v", err)
+		}
+	}
+	if !together() {
+		t.Errorf("the %d reads were never in progress together", probes)
+	}
+	// A read that returned to a waiting probe was never abandoned.
+	if got := localFileReads.abandoned("busy"); got != 0 {
+		t.Errorf("abandoned=%d after every read returned to its probe", got)
+	}
+}
+
+// The same holds for a collector reading directories: each directory read is
+// one read, many at once are all answered, and directory reads their probes
+// gave up on are capped as file reads are.
+func TestLocalDirectoryReadsCountOnlyWhenAbandoned(t *testing.T) {
+	root := t.TempDir()
+	const probes = 3 * localFileMaxAbandonedReads
+	for i := range probes {
+		testutil.WriteIn(t, filepath.Join(root, "d"+strconv.Itoa(i)), "app.prom", promFile)
+	}
+	c := validated(t, dirCollector("busydir", root, "*.prom"))
+	read := func(dir string, timeout time.Duration) (*HTTPResponse, error) {
+		ctx, cancel := context.WithTimeout(context.Background(), timeout)
+		defer cancel()
+		return fetchLocalFile(ctx, dir, c, RequestOverrides{}, nil)
+	}
+	together := readsHeldTogether(t, probes)
+	errs := make(chan error, probes)
+	for i := range probes {
+		go func() {
+			resp, err := read("d"+strconv.Itoa(i), 10*time.Second)
+			switch {
+			case err != nil:
+			case resp.Directory == nil || len(resp.Directory.Files) != 1:
+				err = errors.New("the directory's one file was not answered")
+			default:
+				err = resp.Directory.Files[0].Err
+			}
+			errs <- err
+		}()
+	}
+	for range probes {
+		if err := <-errs; err != nil {
+			t.Errorf("a probe of a healthy filesystem failed: %v", err)
+		}
+	}
+	if !together() {
+		t.Errorf("the %d directory reads were never in progress together", probes)
+	}
+	if got := localFileReads.abandoned("busydir"); got != 0 {
+		t.Fatalf("abandoned=%d after every read returned to its probe", got)
+	}
+
+	// The filesystem stops answering: each probe's deadline ends with its
+	// directory read still running, and the cap is reached.
+	release := make(chan struct{})
+	t.Cleanup(sync.OnceFunc(func() { close(release) }))
+	onFileRead(t, func(string) { <-release })
+	for i := range localFileMaxAbandonedReads {
+		resp, err := read("d"+strconv.Itoa(i), 200*time.Millisecond)
+		if err != nil || !errors.Is(fileErrors(t, resp)["app.prom"], context.DeadlineExceeded) {
+			t.Fatalf("read %d: resp=%v err=%v", i, resp, err)
+		}
+	}
+	if got := localFileReads.abandoned("busydir"); got != localFileMaxAbandonedReads {
+		t.Fatalf("abandoned=%d, want %d", got, localFileMaxAbandonedReads)
+	}
+	start := time.Now()
+	if _, err := read("d"+strconv.Itoa(localFileMaxAbandonedReads), 5*time.Second); err == nil || !strings.Contains(err.Error(), "already has 4 file reads that have not returned") {
+		t.Fatalf("err=%v", err)
+	}
+	if time.Since(start) > time.Second {
+		t.Fatal("a directory read over the cap waited instead of failing at once")
 	}
 }
 

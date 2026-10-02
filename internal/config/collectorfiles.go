@@ -7,6 +7,8 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"reflect"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -28,6 +30,75 @@ import (
 // and then validated together exactly as if they had been written in one file.
 // A collector name must be unique across all of them: the same name twice is a
 // startup error, and a rejected reload, naming both places it was defined.
+
+// fileProblem is a mistake in a collector file. Its text names the file, and
+// File says which it is, so a rejected reload is logged against the file the
+// operator has to edit rather than the configuration that only lists it.
+type fileProblem struct {
+	file string
+	err  error
+	// named is set when err's own text already names the file, as the
+	// errors of reading one do.
+	named bool
+}
+
+func (p *fileProblem) Error() string {
+	if p.named {
+		return p.err.Error()
+	}
+	return fmt.Sprintf("collector file %s: %v", p.file, p.err)
+}
+
+func (p *fileProblem) Unwrap() error { return p.err }
+
+// inCollectorFile names the collector file a collector was defined in on
+// each problem validation found with it. file is empty for a collector of
+// the configuration itself, whose problems are left as they are.
+func inCollectorFile(file string, err error) error {
+	if file == "" || err == nil {
+		return err
+	}
+	if problems, several := err.(model.Problems); several { //nolint:errorlint // a Problems itself, as JoinProblems splices it
+		out := make(model.Problems, 0, len(problems))
+		for _, problem := range problems {
+			out = append(out, &fileProblem{file: file, err: problem})
+		}
+		return out
+	}
+	return &fileProblem{file: file, err: err}
+}
+
+// collectorFileOf is the collector file the named collector was read from,
+// and empty for one the configuration defines itself, or one that was not
+// read from a file at all.
+func collectorFileOf(c *model.Config, name string) string {
+	if source := c.CollectorSources[name]; slices.Contains(c.LoadedCollectorFiles, source) {
+		return source
+	}
+	return ""
+}
+
+// problemFile is the file a refused configuration's problems are in: the
+// collector file, when every one of them is in the same one, and the
+// configuration otherwise, whose error then names each file in its text.
+func problemFile(err error, configPath string) string {
+	problems := model.Problems{err}
+	if several, ok := err.(model.Problems); ok { //nolint:errorlint // see inCollectorFile
+		problems = several
+	}
+	file := ""
+	for i, problem := range problems {
+		var inFile *fileProblem
+		if !errors.As(problem, &inFile) || i > 0 && inFile.file != file {
+			return configPath
+		}
+		file = inFile.file
+	}
+	if file == "" {
+		return configPath
+	}
+	return file
+}
 
 // collectorFile is the shape of a collector file.
 type collectorFile struct {
@@ -115,15 +186,17 @@ func loadCollectorFile(path string, opts []LoadOption) ([]model.Collector, error
 	if root.Kind != yaml.MappingNode {
 		return nil, fmt.Errorf("collector file %s must be a mapping with a collectors list", path)
 	}
-	for i := 0; i+1 < len(root.Content); i += 2 {
-		if key := root.Content[i].Value; key != collectorFileKey && !isExtensionKey(key) {
-			return nil, fmt.Errorf("collector file %s: line %d: %q is not allowed; a collector file may only contain %s, and x- keys of its own for YAML anchors", path, root.Content[i].Line, key, collectorFileKey)
+	// The keys are the file's own and those a merge key (<<) brings in, as
+	// the decoder reads them.
+	for _, entry := range model.MappingEntries(root) {
+		if key := entry.Key.Value; key != collectorFileKey && !isExtensionKey(key) {
+			return nil, fmt.Errorf("collector file %s: line %d: %q is not allowed; a collector file may only contain %s, and x- keys of its own for YAML anchors", path, entry.Key.Line, key, collectorFileKey)
 		}
 	}
 	var file collectorFile
 	dec := yaml.NewDecoder(bytes.NewReader(b))
 	dec.KnownFields(true)
-	if err := withoutExtensionKeys(dec.Decode(&file)); err != nil && !errors.Is(err, io.EOF) {
+	if err := withValueProblems(withoutExtensionKeys(dec.Decode(&file)), b, reflect.TypeOf(file)); err != nil && !errors.Is(err, io.EOF) {
 		return nil, fmt.Errorf("collector file %s: %w", path, yamlError(err))
 	}
 	if err := oneDocument(dec); err != nil {
@@ -163,7 +236,7 @@ func mergeCollectorFiles(c *model.Config, configPath string, opts []LoadOption) 
 	for _, file := range files {
 		collectors, err := loadCollectorFile(file, opts)
 		if err != nil {
-			errs = append(errs, err)
+			errs = append(errs, &fileProblem{file: file, err: err, named: true})
 			continue
 		}
 		for _, x := range collectors {

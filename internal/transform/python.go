@@ -18,43 +18,61 @@ import (
 	"github.com/eenchev/prometheus-universal-exporter/internal/model"
 )
 
+// pythonInput is one request to a worker. The body goes to it once: a
+// script's response.text is its response.body, and so is its data when the
+// decoder gives the script the body as text, so the worker makes the three
+// one string (DataIsBody) rather than being sent, and parsing, a copy for
+// each. A large body would otherwise cost three times its size to hand over.
 type pythonInput struct {
-	Mode      string         `json:"mode"`
-	Script    string         `json:"script"`
-	Data      any            `json:"data"`
-	Response  pythonResponse `json:"response"`
-	Target    string         `json:"target"`
-	Collector string         `json:"collector"`
+	Mode       string         `json:"mode"`
+	Script     string         `json:"script"`
+	Data       any            `json:"data"`
+	DataIsBody bool           `json:"data_is_body,omitempty"`
+	Response   pythonResponse `json:"response"`
+	Target     string         `json:"target"`
+	Collector  string         `json:"collector"`
 }
 
 type pythonResponse struct {
 	StatusCode any                 `json:"status_code"`
 	Headers    map[string][]string `json:"headers"`
 	Body       string              `json:"body"`
-	Text       string              `json:"text"`
 }
 
 // pythonOutput is one answer from a worker: the metrics a transform emitted or
-// the data a pre-script left, or the error the script raised.
+// the data a pre-script left, or the error the script raised. A script can
+// append anything to metrics, so each is read as whatever it is (pythonMetric).
 type pythonOutput struct {
-	OK      bool           `json:"ok"`
-	Error   string         `json:"error"`
-	Metrics []pythonMetric `json:"metrics"`
-	Data    any            `json:"data"`
-	Log     string         `json:"log"`
+	OK      bool   `json:"ok"`
+	Error   string `json:"error"`
+	Metrics []any  `json:"metrics"`
+	Data    any    `json:"data"`
+	Log     string `json:"log"`
 }
 
 // pythonMetric is a metric as a script emitted it. metric(...) makes its
-// value a float, its labels text and its timestamp whole milliseconds, but a
-// script can also append to metrics itself, so all three are read as
-// whatever they are, and checked here as metric(...) checks them.
+// name, type and help text, its value a float, its labels text and its
+// timestamp whole milliseconds, but a script can also append to metrics
+// itself, so each is read as whatever it is, and checked here as metric(...)
+// checks it: what is wrong is reported naming the metric and the argument
+// rather than as the JSON decoder's error about a field of this struct.
 type pythonMetric struct {
-	Name      string           `json:"name"`
-	Help      string           `json:"help"`
-	Type      model.MetricType `json:"type"`
-	Value     any              `json:"value"`
-	Labels    map[string]any   `json:"labels"`
-	Timestamp any              `json:"timestamp"`
+	Name      any
+	Help      any
+	Type      any
+	Value     any
+	Labels    any
+	Timestamp any
+}
+
+// pythonMetricFrom reads one entry of a script's metrics, which must be a
+// mapping, as metric(...) appends.
+func pythonMetricFrom(index int, raw any) (pythonMetric, error) {
+	entry, ok := raw.(map[string]any)
+	if !ok {
+		return pythonMetric{}, fmt.Errorf("metrics[%d] is %s, not a metric; call metric(...), or append a mapping with a name and a value", index, showScriptValue(raw))
+	}
+	return pythonMetric{Name: entry["name"], Help: entry["help"], Type: entry["type"], Value: entry["value"], Labels: entry["labels"], Timestamp: entry["timestamp"]}, nil
 }
 
 // A float that is NaN or infinite has no JSON form, and the worker and the
@@ -72,7 +90,9 @@ var nonFiniteValues = map[string]float64{
 }
 
 // nonFiniteJSON replaces each marker, as json.Marshal writes it, with the
-// token Python's json reads.
+// token Python's json reads; nonFiniteJSONMarker is how each starts.
+var nonFiniteJSONMarker = []byte(`"\u0000pue-nonfinite:`)
+
 var nonFiniteJSON = strings.NewReplacer(
 	`"\u0000pue-nonfinite:NaN\u0000"`, "NaN",
 	`"\u0000pue-nonfinite:+Inf\u0000"`, "Infinity",
@@ -129,40 +149,64 @@ func pythonFloats(data any) any {
 // metric is the emitted metric as the exporter's: its value a float, a
 // numeric string read as one, and its timestamp whole milliseconds.
 func (m pythonMetric) metric() (model.Metric, error) {
-	out := model.Metric{Name: m.Name, Help: m.Help, Type: m.Type}
-	if out.Type == "" {
-		out.Type = model.GaugeMetricType
+	name, ok := m.Name.(string)
+	if !ok {
+		return model.Metric{}, fmt.Errorf("metric name %s is not a string", showScriptValue(m.Name))
 	}
-	if len(m.Labels) > 0 {
-		out.Labels = make(map[string]string, len(m.Labels))
-		for name, value := range m.Labels {
+	out := model.Metric{Name: name, Type: model.GaugeMetricType}
+	// None for the help or the type is none given, as in metric(...).
+	switch help := m.Help.(type) {
+	case nil:
+	case string:
+		out.Help = help
+	default:
+		return out, fmt.Errorf("metric %q help %s is not a string", name, showScriptValue(m.Help))
+	}
+	switch kind := m.Type.(type) {
+	case nil:
+	case string:
+		if kind != "" {
+			out.Type = model.MetricType(kind)
+		}
+	default:
+		return out, fmt.Errorf(`metric %q type %s is not a string; give "gauge", "counter" or "untyped"`, name, showScriptValue(m.Type))
+	}
+	switch labels := m.Labels.(type) {
+	case nil:
+	case map[string]any:
+		if len(labels) > 0 {
+			out.Labels = make(map[string]string, len(labels))
+		}
+		for label, value := range labels {
 			// None leaves the label out, as metric(...) does.
 			if value == nil {
 				continue
 			}
 			text, err := labelText(pythonFloats(value))
 			if err != nil {
-				return out, fmt.Errorf("metric %q label %q %w", m.Name, name, err)
+				return out, fmt.Errorf("metric %q label %q %w", name, label, err)
 			}
-			out.Labels[name] = text
+			out.Labels[label] = text
 		}
+	default:
+		return out, fmt.Errorf("metric %q labels are %s, not a mapping of label names to values", name, showScriptValue(m.Labels))
 	}
 	value, err := pythonNumber(m.Value)
 	if m.Value == nil {
-		return out, fmt.Errorf("metric %q value %w", m.Name, err)
+		return out, fmt.Errorf("metric %q value %w", name, err)
 	}
 	if err != nil {
-		return out, fmt.Errorf("metric %q value %s %w", m.Name, model.ShowValue(m.Value), err)
+		return out, fmt.Errorf("metric %q value %s %w", name, model.ShowValue(m.Value), err)
 	}
 	out.Value = value
 	if m.Timestamp != nil {
 		at, err := pythonNumber(m.Timestamp)
 		if err != nil {
-			return out, fmt.Errorf("metric %q timestamp %s is not a number of milliseconds", m.Name, model.ShowValue(m.Timestamp))
+			return out, fmt.Errorf("metric %q timestamp %s is not a number of milliseconds", name, model.ShowValue(m.Timestamp))
 		}
 		ms, err := timestampMillis(at)
 		if err != nil {
-			return out, fmt.Errorf("metric %q timestamp %w", m.Name, err)
+			return out, fmt.Errorf("metric %q timestamp %w", name, err)
 		}
 		out.Timestamp = &ms
 	}
@@ -182,8 +226,8 @@ func timestampMillis(at float64) (int64, error) {
 // observationCount is a histogram's or summary's count, or a bucket's, which
 // is a whole number of observations from 0 to 2^64-1.
 func observationCount(v float64) (uint64, error) {
-	if math.IsNaN(v) || math.IsInf(v, 0) || v < 0 || v >= math.MaxUint64 {
-		return 0, fmt.Errorf("%v is not a count of observations", v)
+	if math.IsNaN(v) || math.IsInf(v, 0) || v < 0 || v >= math.MaxUint64 || v != math.Trunc(v) {
+		return 0, fmt.Errorf("%v is not a count of observations, a whole number from 0", v)
 	}
 	return uint64(v), nil
 }
@@ -229,7 +273,11 @@ func executePython(ctx context.Context, pythonPath, script string, d *decode.Dec
 		return nil, err
 	}
 	set := &model.MetricSet{Metrics: make([]model.Metric, 0, len(out.Metrics))}
-	for _, emitted := range out.Metrics {
+	for i, raw := range out.Metrics {
+		emitted, err := pythonMetricFrom(i, raw)
+		if err != nil {
+			return nil, model.MarkError(fmt.Errorf("python transform: %w", err), model.ErrScriptFailed)
+		}
 		metric, err := emitted.metric()
 		if err != nil {
 			return nil, model.MarkError(fmt.Errorf("python transform: %w", err), model.ErrScriptFailed)
@@ -243,7 +291,11 @@ func executePython(ctx context.Context, pythonPath, script string, d *decode.Dec
 // left in data: the {"metrics": [...]} document pythonPrometheusData gave it,
 // each series a mapping of name, type, help, labels and timestamp, and value,
 // or buckets, sum and count for a histogram, quantiles, sum and count for a
-// summary.
+// summary. A histogram or summary without sum or count, or with None for it,
+// has none, as one the target wrote without it, and is checked as one read
+// from the target is (model.Histogram.Settle): a histogram's count and the
+// +Inf entry of its buckets are each read as the script left them, also when
+// they differ or when it left neither.
 func prometheusFromPython(data any) (model.MetricSet, error) {
 	document, ok := data.(map[string]any)
 	list, listed := document["metrics"].([]any)
@@ -306,29 +358,33 @@ func prometheusSeries(series map[string]any) (model.Metric, error) {
 		}
 		return value, nil
 	}
-	count := func() (uint64, float64, error) {
-		sum, err := number("sum")
-		if err != nil {
-			return 0, 0, err
+	// sumAndCount reads the series' sum and count, and whether it has
+	// neither: a key that is missing or None.
+	sumAndCount := func() (sum float64, n uint64, noSum, noCount bool, err error) {
+		if noSum = series["sum"] == nil; !noSum {
+			if sum, err = number("sum"); err != nil {
+				return 0, 0, false, false, err
+			}
 		}
-		total, err := number("count")
-		if err != nil {
-			return 0, 0, err
+		if noCount = series["count"] == nil; !noCount {
+			total, err := number("count")
+			if err != nil {
+				return 0, 0, false, false, err
+			}
+			if n, err = observationCount(total); err != nil {
+				return 0, 0, false, false, fmt.Errorf("%s count %w", name, err)
+			}
 		}
-		n, err := observationCount(total)
-		if err != nil {
-			return 0, 0, fmt.Errorf("%s count %w", name, err)
-		}
-		return n, sum, nil
+		return sum, n, noSum, noCount, nil
 	}
 	switch m.Type {
 	case model.HistogramMetricType:
 		buckets, _ := series["buckets"].([]any)
-		n, sum, err := count()
+		sum, n, noSum, noCount, err := sumAndCount()
 		if err != nil {
 			return m, err
 		}
-		m.Histogram = &model.Histogram{Sum: sum, Count: n}
+		m.Histogram = &model.Histogram{Sum: sum, Count: n, NoSum: noSum, NoCount: noCount}
 		for _, raw := range buckets {
 			b, _ := raw.(map[string]any)
 			le, errLe := pythonNumber(b["le"])
@@ -342,13 +398,16 @@ func prometheusSeries(series map[string]any) (model.Metric, error) {
 			}
 			m.Histogram.Buckets = append(m.Histogram.Buckets, model.Bucket{UpperBound: le, CumulativeCount: cumulative})
 		}
+		if err := m.Histogram.Settle(); err != nil {
+			return m, fmt.Errorf("the histogram %s %w", name, err)
+		}
 	case model.SummaryMetricType:
 		quantiles, _ := series["quantiles"].([]any)
-		n, sum, err := count()
+		sum, n, noSum, noCount, err := sumAndCount()
 		if err != nil {
 			return m, err
 		}
-		m.Summary = &model.Summary{Sum: sum, Count: n}
+		m.Summary = &model.Summary{Sum: sum, Count: n, NoSum: noSum, NoCount: noCount}
 		for _, raw := range quantiles {
 			q, _ := raw.(map[string]any)
 			quantile, errQ := pythonNumber(q["quantile"])
@@ -357,6 +416,9 @@ func prometheusSeries(series map[string]any) (model.Metric, error) {
 				return m, fmt.Errorf("%s has a quantile that is not {\"quantile\": <number>, \"value\": <number>}", name)
 			}
 			m.Summary.Quantiles = append(m.Summary.Quantiles, model.Quantile{Quantile: quantile, Value: value})
+		}
+		if err := m.Summary.Settle(); err != nil {
+			return m, fmt.Errorf("the summary %s %w", name, err)
 		}
 	default:
 		value, err := number("value")
@@ -385,15 +447,13 @@ func runPython(ctx context.Context, pythonPath, mode, what, script string, d *de
 	if timeout <= 0 {
 		timeout = 100 * time.Millisecond
 	}
-	input := pythonInput{Mode: mode, Script: script, Data: withNonFiniteMarkers(pythonScriptData(d)), Target: r.Target, Collector: c.Name, Response: pythonResponse{StatusCode: r.Status(), Headers: r.Headers, Body: string(r.Body), Text: string(r.Body)}}
-	payload, err := json.Marshal(input)
+	payload, err := pythonRequest(mode, script, d, r, c)
 	if err != nil {
 		return nil, model.MarkError(err, model.ErrScriptFailed)
 	}
-	payload = []byte(nonFiniteJSON.Replace(string(payload)))
-	line, elapsed, err := PythonWorkers().run(ctx, pythonWorkerSpec(pythonPath, c), payload, timeout)
-	if timer := scriptTimerFrom(ctx); timer != nil && elapsed > 0 {
-		timer.add(elapsed)
+	line, ran, err := PythonWorkers().run(ctx, pythonWorkerSpec(pythonPath, c), payload, timeout)
+	if timer := scriptTimerFrom(ctx); timer != nil && ran > 0 {
+		timer.add(ran)
 	}
 	out, err := pythonResult(c, what, timeout, line, err)
 	if err == nil && out.Log != "" {
@@ -405,12 +465,60 @@ func runPython(ctx context.Context, pythonPath, mode, what, script string, d *de
 	return out, model.MarkError(err, model.ErrScriptFailed)
 }
 
+// pythonRequest is the request line that has a worker run script: the
+// response, with its body once, and the data, unless it is the body.
+func pythonRequest(mode, script string, d *decode.Decoded, r *fetch.HTTPResponse, c *model.Collector) ([]byte, error) {
+	input := pythonInput{Mode: mode, Script: script, Target: r.Target, Collector: c.Name, Response: pythonResponse{StatusCode: r.Status(), Headers: r.Headers, Body: string(r.Body)}}
+	if data := pythonScriptData(d); dataIsBody(data, input.Response.Body) {
+		input.DataIsBody = true
+	} else {
+		input.Data = withNonFiniteMarkers(data)
+	}
+	payload, err := json.Marshal(input)
+	if err != nil {
+		return nil, err
+	}
+	// Only a request that holds a marker is rewritten, which copies it.
+	if bytes.Contains(payload, nonFiniteJSONMarker) {
+		payload = []byte(nonFiniteJSON.Replace(string(payload)))
+	}
+	return payload, nil
+}
+
+// dataIsBody reports whether a script's data is the response's body as text,
+// as it is for the text, html and xml decoders unless a pre-script changed
+// it, so that it is sent once.
+func dataIsBody(data any, body string) bool {
+	text, ok := data.(string)
+	return ok && text == body
+}
+
+// showScriptValue names a value a script gave for an error, as
+// model.ShowValue does, with a number as the script wrote it: a worker's
+// answer is read with its numbers as json.Number, which ShowValue quotes.
+func showScriptValue(v any) string {
+	if n, ok := v.(json.Number); ok {
+		return string(n)
+	}
+	return model.ShowValue(v)
+}
+
 // pythonResult reads a worker's answer, counting how the run ended.
 func pythonResult(c *model.Collector, what string, timeout time.Duration, line []byte, err error) (*pythonOutput, error) {
+	var deadline pythonDeadlineError
 	switch {
 	case errors.Is(err, errPythonTimeout):
 		PythonWorkers().recordRun(c.Name, pythonRunTimeout)
 		return nil, fmt.Errorf("python %s timed out after %s: %w", what, timeout, context.DeadlineExceeded)
+	case errors.As(err, &deadline):
+		// The probe's deadline, not limits.script_timeout, ended the run:
+		// said and counted as that, so nobody raises a script_timeout the
+		// script never reached.
+		PythonWorkers().recordRun(c.Name, pythonRunDeadline)
+		if !deadline.started {
+			return nil, fmt.Errorf("python %s did not run: its probe or scrape ran out of time while the response was handed to the worker: %w", what, context.DeadlineExceeded)
+		}
+		return nil, fmt.Errorf("python %s was stopped after %s because its probe or scrape ran out of time, not because of limits.script_timeout (%s): %w", what, deadline.ran.Round(time.Millisecond), timeout, context.DeadlineExceeded)
 	case errors.Is(err, errPythonOutputTooLarge):
 		PythonWorkers().recordRun(c.Name, pythonRunOutputLimit)
 		return nil, fmt.Errorf("python %s output exceeds limit", what)
@@ -442,8 +550,9 @@ func pythonResult(c *model.Collector, what string, timeout time.Duration, line [
 // A probe reports how long its Python ran in
 // http_exporter_script_duration_seconds. The scripts run deep inside the
 // transform, so the probe hands them a timer through the context, and they add
-// the time each call to a worker took: the pre-script and the python transform
-// together, without starting an interpreter.
+// the time each script ran, as limits.script_timeout measures it: the
+// pre-script and the python transform together, without starting an
+// interpreter or handing it the response.
 type ScriptTimer struct {
 	mu    sync.Mutex
 	total time.Duration
@@ -482,7 +591,11 @@ func (t *ScriptTimer) Seconds() (float64, bool) {
 // without one; the text of text, HTML and XML; and, for Prometheus
 // exposition, {"metrics": [...]}, each series a mapping of its name, type,
 // help, labels and value — or a histogram's buckets, sum and count, a
-// summary's quantiles, sum and count — and its timestamp when it has one.
+// summary's quantiles, sum and count — and its timestamp when it has one. A
+// histogram or summary the target wrote without a _sum or a _count has no
+// sum or count key. A histogram's +Inf bucket is among its buckets with the
+// count the target gave it, which its count key need not be the same as
+// (model.Histogram).
 func pythonScriptData(d *decode.Decoded) any {
 	switch d.Kind {
 	case "html", "xml":
@@ -513,13 +626,25 @@ func pythonPrometheusData(set model.MetricSet) map[string]any {
 			for _, b := range m.Histogram.Buckets {
 				buckets = append(buckets, map[string]any{"le": b.UpperBound, "count": float64(b.CumulativeCount)})
 			}
-			series["buckets"], series["sum"], series["count"] = buckets, m.Histogram.Sum, float64(m.Histogram.Count)
+			series["buckets"] = buckets
+			if !m.Histogram.NoSum {
+				series["sum"] = m.Histogram.Sum
+			}
+			if !m.Histogram.NoCount {
+				series["count"] = float64(m.Histogram.Count)
+			}
 		case m.Summary != nil:
 			quantiles := make([]any, 0, len(m.Summary.Quantiles))
 			for _, q := range m.Summary.Quantiles {
 				quantiles = append(quantiles, map[string]any{"quantile": q.Quantile, "value": q.Value})
 			}
-			series["quantiles"], series["sum"], series["count"] = quantiles, m.Summary.Sum, float64(m.Summary.Count)
+			series["quantiles"] = quantiles
+			if !m.Summary.NoSum {
+				series["sum"] = m.Summary.Sum
+			}
+			if !m.Summary.NoCount {
+				series["count"] = float64(m.Summary.Count)
+			}
 		default:
 			series["value"] = m.Value
 		}

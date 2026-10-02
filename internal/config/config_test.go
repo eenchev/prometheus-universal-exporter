@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -234,19 +235,80 @@ func TestTransformInfersResponseFormatAndMetricErrorMode(t *testing.T) {
 	}
 }
 
+// A decoder left to each response may turn out to be one the transform cannot
+// read; the scrape then fails saying what the transform requires. A decoder
+// the configuration names is checked when it loads instead
+// (TestADecoderTheTransformCannotReadIsRefused).
 func TestTransformRejectsIncompatibleResponseFormat(t *testing.T) {
-	cfg := &model.Config{Collectors: []model.Collector{{Request: model.RequestConfig{Type: fetch.RequestTypeHTTP}, Name: "invalid", Decoder: model.DecoderConfig{Type: "json"}, Transform: model.TransformConfig{Type: "regex"}, Metrics: []model.MetricRule{{Name: "value", Type: model.GaugeMetricType, Expression: `value=(\d+)`}}}}}
+	cfg := &model.Config{Collectors: []model.Collector{{Request: model.RequestConfig{Type: fetch.RequestTypeHTTP}, Name: "undecided", Transform: model.TransformConfig{Type: "xpath"}, Metrics: []model.MetricRule{{Name: "value", Type: model.GaugeMetricType, Expression: `//value`}}}}}
 	if err := Validate(cfg); err != nil {
 		t.Fatal(err)
 	}
 	c := &cfg.Collectors[0]
-	r := &fetch.HTTPResponse{Body: []byte(`{"value":42}`), Headers: make(http.Header)}
+	headers := make(http.Header)
+	headers.Set("Content-Type", "application/json")
+	r := &fetch.HTTPResponse{Body: []byte(`{"value":42}`), Headers: headers}
 	d, err := decode.Decode(r, c)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := transform.Transform(context.Background(), d, r, c, "python3"); err == nil || !strings.Contains(err.Error(), "requires a text response") {
+	if _, err := transform.Transform(context.Background(), d, r, c, "python3"); err == nil || !strings.Contains(err.Error(), `xpath transform requires an XML or HTML response, got "json"`) {
 		t.Fatalf("expected incompatible response error, got %v", err)
+	}
+}
+
+// An explicit decoder.type the collector's transform can never read is
+// refused when the configuration loads, naming both, the decoders the
+// transform reads and the transforms that read the decoder: every scrape
+// would fail, whatever the target answered. A jq or yq transform with a
+// pre_script is let be, since its rules read what the script leaves; every
+// pair a scrape can read loads.
+func TestADecoderTheTransformCannotReadIsRefused(t *testing.T) {
+	collector := func(decoder, transformType, preScript string) *model.Config {
+		expression := map[string]string{"jq": ".x", "yq": ".x", "regex": `x=(\d+)`, "css": "h1", "csv": "x", "xpath": "//x", "prometheus": "^up$"}[transformType]
+		c := model.Collector{Name: "a", Request: model.RequestConfig{Type: fetch.RequestTypeHTTP}, Decoder: model.DecoderConfig{Type: decoder},
+			Transform: model.TransformConfig{Type: transformType, PreScript: preScript}, Metrics: []model.MetricRule{{Name: "m", Expression: expression}}}
+		if transformType == "python" {
+			c.Transform.Script, c.Metrics = `metric(name="m", value=1)`, nil
+		}
+		return &model.Config{Collectors: []model.Collector{c}}
+	}
+	for _, pair := range []struct{ decoder, transform, reads, readBy string }{
+		{"json", "regex", "it reads text; set decoder.type to text", "jq, yq or python"},
+		{"json", "css", "it reads html; set decoder.type to html", "jq, yq or python"},
+		{"json", "csv", "it reads csv; set decoder.type to csv", "jq, yq or python"},
+		{"json", "xpath", "it reads xml or html; set decoder.type to one of them", "jq, yq or python"},
+		{"json", "prometheus", "it reads prometheus; set decoder.type to prometheus", "jq, yq or python"},
+		{"text", "jq", "it reads json, yaml or graphite; set decoder.type to one of them, give the transform a pre_script that leaves its rules a mapping or a list", "regex or python"},
+		{"csv", "yq", "it reads json, yaml or graphite", "csv or python"},
+		{"xml", "css", "it reads html", "xpath or python"},
+		{"html", "regex", "it reads text", "xpath, css or python"},
+		{"prometheus", "jq", "it reads json, yaml or graphite", "python or prometheus"},
+	} {
+		err := Validate(collector(pair.decoder, pair.transform, ""))
+		want := fmt.Sprintf("collector \"a\" decodes with %s, which its %s transform cannot read: %s", pair.decoder, pair.transform, pair.reads)
+		if err == nil || !strings.Contains(err.Error(), want) || !strings.HasSuffix(err.Error(), fmt.Sprintf("or use a transform that reads %s: %s", pair.decoder, pair.readBy)) {
+			t.Errorf("decoder %s with transform %s: %v", pair.decoder, pair.transform, err)
+		}
+	}
+	// A pre_script hands a jq or yq transform a mapping or a list whatever
+	// was decoded; any other transform still reads the decoder's document.
+	if err := Validate(collector("text", "jq", `data = {"x": 1}`)); err != nil {
+		t.Errorf("jq with a pre_script over text: %v", err)
+	}
+	if err := Validate(collector("json", "regex", `data = "x=1"`)); err == nil || !strings.Contains(err.Error(), "which its regex transform cannot read") {
+		t.Errorf("regex with a pre_script over json: %v", err)
+	}
+	// Every decoder is read by the python transform and by the transforms
+	// the table lists it for, and each of those pairs loads.
+	for _, decoder := range model.DecoderTypes[1:] {
+		for _, transformType := range model.TransformTypes {
+			readable := transform.ReadableDecoders(transformType)
+			err := Validate(collector(decoder, transformType, ""))
+			if reads := readable == nil || slices.Contains(readable, decoder); reads != (err == nil) {
+				t.Errorf("decoder %s with transform %s: reads %v, but Validate says %v", decoder, transformType, reads, err)
+			}
+		}
 	}
 }
 

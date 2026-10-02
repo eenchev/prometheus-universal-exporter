@@ -164,7 +164,8 @@ jobs:
           echo "$out" | grep -q -- '--web.shutdown-delay=20s'
           echo "$out" | grep -q 'terminationGracePeriodSeconds: 45'
           helm template test charts/prometheus-universal-exporter --set server.shutdownDelay=0s | grep -q -- '--web.shutdown-delay=0s'
-          if helm template test charts/prometheus-universal-exporter --set server.shutdownDelay= | grep -q -- '--web.shutdown-delay'; then
+          out="$(helm template test charts/prometheus-universal-exporter --set server.shutdownDelay=)"
+          if echo "$out" | grep -q -- '--web.shutdown-delay'; then
             echo "an empty server.shutdownDelay rendered the flag" >&2
             exit 1
           fi
@@ -207,14 +208,83 @@ jobs:
           out="$(helm template test charts/prometheus-universal-exporter --set staticTargets.enabled=true --set-file staticTargets.data=testdata/chart/static-targets-endpoint-only.yaml --set staticTargets.path=/targets --set staticTargets.monitor.type=pod)"
           echo "$out" | grep -q -- '--web.static-targets-path=/targets'
           echo "$out" | grep -q 'kind: PodMonitor'
-          if helm template test charts/prometheus-universal-exporter --set staticTargets.enabled=true --set-file staticTargets.data=testdata/chart/static-targets-endpoint-only.yaml --set staticTargets.monitor.enabled=false | grep -q -- '-static-targets$'; then
+          out="$(helm template test charts/prometheus-universal-exporter --set staticTargets.enabled=true --set-file staticTargets.data=testdata/chart/static-targets-endpoint-only.yaml --set staticTargets.monitor.enabled=false)"
+          if echo "$out" | grep -q -- '-static-targets$'; then
             echo "the static targets monitor rendered with staticTargets.monitor.enabled false" >&2
             exit 1
           fi
-          if helm template test charts/prometheus-universal-exporter | grep -q -- '--static-targets-file'; then
+          out="$(helm template test charts/prometheus-universal-exporter)"
+          if echo "$out" | grep -q -- '--static-targets-file'; then
             echo "--static-targets-file rendered without staticTargets.enabled" >&2
             exit 1
           fi
+      - name: Render the Recreate strategy without a rollingUpdate
+        if: steps.changes.outputs.chart == 'true'
+        run: |
+          set -eu
+          # Kubernetes refuses a rollingUpdate beside type Recreate, so
+          # strategy.type alone has to be enough to switch.
+          out="$(helm template test charts/prometheus-universal-exporter --set strategy.type=Recreate)"
+          echo "$out" | grep -q 'type: Recreate'
+          if echo "$out" | grep -q rollingUpdate; then
+            echo "strategy.type Recreate rendered a rollingUpdate" >&2
+            exit 1
+          fi
+      - name: Render the garbage collector's target
+        if: steps.changes.outputs.chart == 'true'
+        run: |
+          set -eu
+          # goGC.percent renders GOGC on the exporter container, which the Go
+          # runtime reads; the default values render none.
+          out="$(helm template test charts/prometheus-universal-exporter --set goGC.percent=400)"
+          echo "$out" | grep -q 'name: GOGC'
+          echo "$out" | grep -q 'value: "400"'
+          out="$(helm template test charts/prometheus-universal-exporter)"
+          if echo "$out" | grep -q GOGC; then
+            echo "the default values rendered GOGC" >&2
+            exit 1
+          fi
+      - name: Render a monitor's port and namespaces
+        if: steps.changes.outputs.chart == 'true'
+        run: |
+          set -eu
+          out="$(helm template test charts/prometheus-universal-exporter --set-json 'monitors=[{"name":"t","enabled":true,"type":"service","collector":"example","interval":"30s","scrapeTimeout":"10s","port":"grpc","namespaceSelector":{"matchNames":["a"]}}]')"
+          echo "$out" | grep -q 'port: "grpc"'
+          echo "$out" | grep -q 'namespaceSelector:'
+          echo "$out" | grep -q '^    - a$'
+          out="$(helm template test charts/prometheus-universal-exporter --set-json 'monitors=[{"name":"t","enabled":true,"type":"pod","collector":"example","interval":"30s","scrapeTimeout":"10s","port":"grpc","namespaceSelector":{"matchNames":["a"]}}]')"
+          echo "$out" | grep -q 'kind: PodMonitor'
+          echo "$out" | grep -q 'port: "grpc"'
+          echo "$out" | grep -q 'namespaceSelector:'
+          echo "$out" | grep -q '^    - a$'
+      - name: Render a configuration file whose first line is indented
+        if: steps.changes.outputs.chart == 'true'
+        run: |
+          set -eu
+          # A block scalar takes its indentation from its first line unless it
+          # is told otherwise, so such a file used to end the ConfigMap early.
+          # The render is kept first: a pipeline would hide helm failing.
+          out="$(helm template test charts/prometheus-universal-exporter --set-file 'config.data.extra\.yaml=testdata/chart/indented-first-line.yaml')"
+          echo "$out" | grep -q '^      # A file whose first line is indented'
+          echo "$out" | python3 tools/check-manifests.py
+      - name: Render the chart as a dependency of a parent chart
+        if: steps.changes.outputs.chart == 'true'
+        run: |
+          set -eu
+          # helm dependency build writes the dependency and a Chart.lock into
+          # the parent, so the parent is built in a copy of the two charts, laid
+          # out as they are here for its file:// path to reach the chart. Helm
+          # then passes the chart the parent's global values and the enabled
+          # its condition reads, which the values schema has to let through.
+          tree=$(mktemp -d)
+          trap 'rm -rf "$tree"' EXIT
+          mkdir -p "$tree/charts" "$tree/testdata/chart"
+          cp -R charts/prometheus-universal-exporter "$tree/charts/"
+          cp -R testdata/chart/parent "$tree/testdata/chart/"
+          helm dependency build "$tree/testdata/chart/parent" >/dev/null
+          out="$(helm template test "$tree/testdata/chart/parent" --set prometheus-universal-exporter.enabled=true)"
+          echo "$out" | grep -q '^# Source: parent/charts/prometheus-universal-exporter/templates/deployment.yaml$'
+          echo "$out" | grep -q 'replicas: 2'
       - name: Reject static targets exported over OTLP without OTLP export
         run: |
           if helm template test charts/prometheus-universal-exporter --set staticTargets.enabled=true --set-file staticTargets.data=configs/static-targets.example.yaml --set-file 'config.data.config\.yaml=configs/config.example.yaml' >/dev/null 2>&1; then
@@ -222,7 +292,7 @@ jobs:
             exit 1
           fi
         if: steps.changes.outputs.chart == 'true'
-      - name: Reject extraArgs and extraVolumeMounts that collide with the chart
+      - name: Reject extraArgs and mount paths that collide with the chart
         run: |
           # Go keeps the last occurrence of a repeated flag, and a mount over the
           # configuration directory hides config.yaml. Both render happily and
@@ -253,6 +323,56 @@ jobs:
           fi
           if helm template test charts/prometheus-universal-exporter --set-json 'extraVolumes=[{"name":"shadow","configMap":{"name":"shadow"}}]' --set-json 'extraVolumeMounts=[{"name":"shadow","mountPath":"/etc/prometheus-universal-exporter"}]' >/dev/null 2>&1; then
             echo "helm template accepted an extraVolumeMounts entry hiding the configuration directory" >&2
+            exit 1
+          fi
+          # A trailing slash names the same directory.
+          if helm template test charts/prometheus-universal-exporter --set-json 'extraVolumes=[{"name":"shadow","configMap":{"name":"shadow"}}]' --set-json 'extraVolumeMounts=[{"name":"shadow","mountPath":"/etc/prometheus-universal-exporter/"}]' >/dev/null 2>&1; then
+            echo "helm template accepted an extraVolumeMounts entry hiding the configuration directory behind a trailing slash" >&2
+            exit 1
+          fi
+          if helm template test charts/prometheus-universal-exporter --set webAuth.enabled=true --set webAuth.secretName=s --set webAuth.mountPath=/etc/prometheus-universal-exporter/ >/dev/null 2>&1; then
+            echo "helm template accepted a webAuth.mountPath at the configuration directory with a trailing slash" >&2
+            exit 1
+          fi
+        if: steps.changes.outputs.chart == 'true'
+      - name: Reject monitor auth without a type, a monitor's port given as a number, a scrape timeout longer than its interval and an Ingress without the Service
+        run: |
+          # Each renders manifests that are refused or lead nowhere once they
+          # are applied: the operator has no credential to build, no port is
+          # named by a number, Prometheus refuses the scrape configuration,
+          # and the Ingress has no backend.
+          if helm template test charts/prometheus-universal-exporter --set-json 'monitors=[{"name":"t","enabled":true,"type":"service","collector":"example","auth":{"enabled":true,"secretName":"s"}}]' >/dev/null 2>&1; then
+            echo "helm template accepted a monitor that enables auth without a type" >&2
+            exit 1
+          fi
+          if helm template test charts/prometheus-universal-exporter --set-json 'monitors=[{"name":"t","enabled":true,"type":"service","collector":"example","port":"9115"}]' >/dev/null 2>&1; then
+            echo "helm template accepted a monitor's port given as a number, which names no port" >&2
+            exit 1
+          fi
+          if helm template test charts/prometheus-universal-exporter --set selfMetrics.enabled=true --set selfMetrics.interval=10s --set selfMetrics.scrapeTimeout=5m >/dev/null 2>&1; then
+            echo "helm template accepted a selfMetrics.scrapeTimeout longer than selfMetrics.interval" >&2
+            exit 1
+          fi
+          if helm template test charts/prometheus-universal-exporter --set ingress.enabled=true --set service.enabled=false >/dev/null 2>&1; then
+            echo "helm template accepted an Ingress without the Service it routes to" >&2
+            exit 1
+          fi
+        if: steps.changes.outputs.chart == 'true'
+      - name: Reject a garbage collector target that collects nothing, is 0 or has two sources
+        run: |
+          # off needs a Go memory limit in force, or the heap grows without
+          # bound; 0 is not a target; and GOGC in env beside goGC.percent
+          # would give the container the variable twice.
+          if helm template test charts/prometheus-universal-exporter --set-string goGC.percent=off --set goMemLimit.enabled=false >/dev/null 2>&1; then
+            echo "helm template accepted goGC.percent off with no Go memory limit in force" >&2
+            exit 1
+          fi
+          if helm template test charts/prometheus-universal-exporter --set goGC.percent=0 >/dev/null 2>&1; then
+            echo "helm template accepted a goGC.percent of 0" >&2
+            exit 1
+          fi
+          if helm template test charts/prometheus-universal-exporter --set goGC.percent=200 --set-json 'env=[{"name":"GOGC","value":"50"}]' >/dev/null 2>&1; then
+            echo "helm template accepted goGC.percent beside a GOGC entry in env" >&2
             exit 1
           fi
         if: steps.changes.outputs.chart == 'true'

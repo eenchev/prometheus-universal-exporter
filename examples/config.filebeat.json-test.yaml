@@ -25,8 +25,10 @@
 # libbeat/outputs, libbeat/cfgfile) and the process metrics every Beat
 # reports. testdata/json/filebeat-stats.json is a complete /stats answer built
 # from that source, with every section present and realistic values for a
-# Filebeat in Kubernetes publishing to Elasticsearch, and
-# testdata/json/filebeat-info.json the matching /; neither is a capture.
+# Filebeat in Kubernetes publishing to Elasticsearch,
+# testdata/json/filebeat-stats-kafka.json the same Filebeat publishing to
+# Kafka, and testdata/json/filebeat-info.json the matching /; none is a
+# capture.
 #
 # Not every Filebeat reports every section:
 #
@@ -40,6 +42,8 @@
 #   failure_store
 #   queue added/consumed/  only in recent versions; the memory queue reports
 #   removed/filled/max_*   bytes as 0 unless it is sized in bytes
+#   libbeat.outputs.*      only with the Kafka output, once it reached a
+#                          broker; see "The Kafka output" below
 #
 # The rules for those set error_mode: ignore, so a section Filebeat does not
 # report has no series rather than failing the scrape or logging on every one.
@@ -487,6 +491,78 @@ collectors:
         labels:
           - name: direction
             value: read
+
+      # --- The Kafka output ------------------------------------------------
+      #
+      # The Kafka output counts events in libbeat.output like every output,
+      # but not bytes or network errors: those stay 0 there. Its Kafka client
+      # reports its own under libbeat.outputs, plural, and Filebeat keeps four
+      # of the client's metrics (libbeat/outputs/kafka/config.go):
+      #
+      #   write.bytes                bytes sent to the brokers
+      #   read.bytes                 bytes received from them
+      #   write.latency.*            request latency in milliseconds: count,
+      #                              min, max, mean, stddev, median, p75, p95,
+      #                              p99, p999
+      #   kafka.requests-in-flight   requests waiting for a broker's answer
+      #
+      # The client registers them when it first talks to a broker, so they are
+      # absent with any other output and before Kafka is reached; the rules
+      # set error_mode: ignore. The percentiles are of a decaying sample of
+      # recent requests, not of all of them: gauges with a quantile label, the
+      # way a summary reports them.
+
+      - name: filebeat_output_kafka_write_bytes_total
+        description: Bytes the Kafka output sent to the brokers
+        type: counter
+        error_mode: ignore
+        expression: .libbeat.outputs.write.bytes
+
+      - name: filebeat_output_kafka_read_bytes_total
+        description: Bytes the Kafka output received from the brokers
+        type: counter
+        error_mode: ignore
+        expression: .libbeat.outputs.read.bytes
+
+      - name: filebeat_output_kafka_requests_in_flight
+        description: Requests the Kafka output sent and has no answer to yet
+        type: gauge
+        error_mode: ignore
+        expression: .libbeat.outputs.kafka."requests-in-flight"
+
+      - name: filebeat_output_kafka_requests_total
+        description: Requests the Kafka output sent to the brokers
+        type: counter
+        error_mode: ignore
+        expression: .libbeat.outputs.write.latency.count
+
+      - name: filebeat_output_kafka_request_latency_seconds
+        description: Latency of the Kafka output's recent requests, by quantile
+        type: gauge
+        error_mode: ignore
+        items: >-
+          .libbeat.outputs.write.latency
+          | [{q: "0.5", v: .median}, {q: "0.75", v: .p75}, {q: "0.95", v: .p95},
+             {q: "0.99", v: .p99}, {q: "0.999", v: .p999}][]
+        expression: .v
+        scale: 0.001
+        labels:
+          - name: quantile
+            expression: .q
+
+      - name: filebeat_output_kafka_request_latency_mean_seconds
+        description: Mean latency of the Kafka output's recent requests
+        type: gauge
+        error_mode: ignore
+        expression: .libbeat.outputs.write.latency.mean
+        scale: 0.001
+
+      - name: filebeat_output_kafka_request_latency_max_seconds
+        description: Highest latency among the Kafka output's recent requests
+        type: gauge
+        error_mode: ignore
+        expression: .libbeat.outputs.write.latency.max
+        scale: 0.001
 
       # --- The host ---------------------------------------------------------
 

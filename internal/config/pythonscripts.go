@@ -1,0 +1,66 @@
+package config
+
+import (
+	"errors"
+
+	"github.com/eenchev/prometheus-universal-exporter/internal/model"
+	"github.com/eenchev/prometheus-universal-exporter/internal/transform"
+)
+
+// The Python of a configuration's collectors is checked with the interpreter
+// once the configuration has loaded (transform.CheckPythonScripts): a syntax
+// error, a pre_script that never produces data. A problem with a collector
+// that a collector file defines names that file, as a validation error of
+// that collector does (inCollectorFile), at startup, in --dry-run and on
+// reload: that file, not the configuration listing it, is the one to edit.
+// The check reports its problems as text that names the collector, which is
+// not read back out of it; the collectors of each file are checked on their
+// own instead, so a problem is in the file whose collectors were checked.
+
+// ValidatePythonScripts refuses a configuration whose Python cannot work,
+// reporting every problem (model.Problems), each naming the collector file
+// its collector is defined in. A configuration without Python needs no
+// interpreter.
+func ValidatePythonScripts(pythonPath string, c *model.Config) error {
+	problems, err := CheckPythonScripts(pythonPath, c)
+	if err != nil {
+		return err
+	}
+	return model.JoinProblems(problems...)
+}
+
+// CheckPythonScripts is ValidatePythonScripts with the faults kept apart: err
+// is the interpreter itself failing, and problems are the faults of the
+// scripts, in the order of the collectors, which --dry-run reports one by
+// one.
+func CheckPythonScripts(pythonPath string, c *model.Config) (problems []error, err error) {
+	found, err := transform.CheckPythonScripts(pythonPath, c)
+	if err != nil || len(found) == 0 {
+		return nil, err
+	}
+	// Only a configuration with a problem, and with collector files, is
+	// checked a second time, file by file: one that is sound costs one run
+	// of the interpreter however many files it has.
+	if len(c.LoadedCollectorFiles) == 0 {
+		for _, problem := range found {
+			problems = append(problems, errors.New(problem))
+		}
+		return problems, nil
+	}
+	for _, file := range append([]string{""}, c.LoadedCollectorFiles...) {
+		var defined model.Config
+		for i := range c.Collectors {
+			if collectorFileOf(c, c.Collectors[i].Name) == file {
+				defined.Collectors = append(defined.Collectors, c.Collectors[i])
+			}
+		}
+		found, err := transform.CheckPythonScripts(pythonPath, &defined)
+		if err != nil {
+			return nil, err
+		}
+		for _, problem := range found {
+			problems = append(problems, inCollectorFile(file, errors.New(problem)))
+		}
+	}
+	return problems, nil
+}

@@ -369,8 +369,11 @@ type reflected struct {
 }
 
 // reflectionCall is a question to a reflection service in flight, which the
-// probes that need the same answer wait for.
+// probes that need the same answer wait for. conn is the connection it was
+// put on: a probe whose connection is a newer one does not wait for a
+// question on a connection that was dropped for not answering.
 type reflectionCall struct {
+	conn  *grpc.ClientConn
 	done  chan struct{}
 	files *protoregistry.Files
 	err   error
@@ -397,8 +400,12 @@ var reflectionQuestionTimeout = 30 * time.Second
 // files returns the service's files, asking the server when there is no
 // answer younger than reflectionTTL. Every caller, the one that started the
 // question included, waits for the shared answer only as long as its own
-// context allows.
-func (r *reflected) files(ctx context.Context, conn *grpc.ClientConn, key reflectedKey, now time.Time) (*protoregistry.Files, error) {
+// context allows. The question holds its connection until it ends, so a
+// probe that gives up on it, and drops a connection it takes for dead, does
+// not close the connection under a question a slow server is still answering:
+// the answer arrives, and serves the probes that follow.
+func (r *reflected) files(ctx context.Context, held *grpcConnEntry, key reflectedKey, now time.Time) (*protoregistry.Files, error) {
+	conn := held.conn
 	r.mu.Lock()
 	r.sweepLocked(now)
 	if entry := r.entries[key]; entry != nil {
@@ -406,18 +413,22 @@ func (r *reflected) files(ctx context.Context, conn *grpc.ClientConn, key reflec
 		return entry.files, nil
 	}
 	call := r.asking[key]
-	if call == nil {
-		call = &reflectionCall{done: make(chan struct{})}
+	if call == nil || call.conn != conn {
+		call = &reflectionCall{conn: conn, done: make(chan struct{})}
 		r.asking[key] = call
 		// The question keeps the probe's values (its metadata) but not its
 		// deadline or cancellation.
 		detached, cancel := context.WithTimeout(context.WithoutCancel(ctx), reflectionQuestionTimeout)
+		grpcConns.hold(held)
 		go func() {
+			defer grpcConns.release(held)
 			defer cancel()
 			files, err := askReflection(detached, conn, key.service)
 			r.mu.Lock()
 			call.files, call.err = files, err
-			delete(r.asking, key)
+			if r.asking[key] == call {
+				delete(r.asking, key)
+			}
 			if err == nil {
 				r.entries[key] = &reflectedEntry{files: files, fetched: now}
 			}

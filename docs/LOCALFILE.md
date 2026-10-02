@@ -60,6 +60,10 @@ The file is `root` / target / `path`:
 written relative to `root`, as an absolute path inside it, or as a `file://`
 URL of one: `nightly`, `/var/lib/node_exporter/textfile_collector/nightly` and
 `file:///var/lib/node_exporter/textfile_collector/nightly` are the same target.
+A `file://` URL is read as a URL, percent-escapes decoded:
+`file:///var/lib/node_exporter/textfile_collector/a%20b.prom` is the file
+`a b.prom`, and a `%` that is part of a file's name is written `%25`. The two
+plain forms are paths and are taken as written.
 With a target that names the file, `path` can be left out of the collector:
 
 ```yaml
@@ -79,7 +83,13 @@ A target, `path` or path parameter that would lead outside `root` — `..`, an
 absolute path elsewhere, a symbolic link pointing out — is refused: a target
 with `400 Bad Request` before anything is read, a `path` or path parameter as a
 failed scrape. A path parameter fills exactly one file or directory name and
-may not contain `/`.
+may not contain `/` or `\`, nor be `.` or `..`. A placeholder's default is
+held to the same rule when the configuration loads, since every probe that
+left the parameter out would fail on it: `collector "files" request.path: the
+default of param_dir is "..", which no probe could use (path parameter
+param_dir must not be ".."), so every probe that leaves param_dir out would
+fail; change the default`. An empty default, `{{param_sub:}}`, adds nothing
+to the path and loads.
 
 The `/probe` parameters that apply are `path`, `timeout` and `param_<name>`.
 Any parameter that belongs only to `http`, such as `method` or `header_<name>`,
@@ -274,8 +284,9 @@ each file, and `limits.max_metrics` to the whole answer.
 
 Files are read four at a time, and answered in name order whichever finished
 first. Reading the directory is one read for the
-[bounds on reads](#what-it-takes-from-node_exporter): it takes one of the
-collector's four pending-read slots and ends with the probe's `timeout` or
+[bounds on reads](#what-it-takes-from-node_exporter): left running by a probe
+that gave up on it, it is one of the collector's four abandoned reads. It ends
+with the probe's `timeout` or
 deadline. **A deadline does not lose what was read.** The files read by then
 are answered; a file still being read, or not reached, fails alone —
 `localfile_scrape_error` `1`, its mtime reported when it was taken, and a log
@@ -359,11 +370,13 @@ in:
   probe returns when its `timeout` or Prometheus's scrape timeout ends even if
   the file lives on a network filesystem that has stopped answering (see
   [Probe deadlines](CONFIGURATION.md#probe-deadlines)). A read cannot be
-  cancelled, though, so the read itself goes on; at most four of a collector's
-  reads may still be running at once. Once all four are held by reads that have
+  cancelled, though, so the read itself goes on, abandoned by its probe; a
+  collector may have at most four such reads. Once four abandoned reads have
   not returned, a probe fails at once — `collector "textfile" already has 4 file
   reads that have not returned` — rather than adding another, and reads resume
-  as the filesystem answers.
+  as the filesystem answers. Reads whose probe is still waiting for them are
+  not counted, so any number of probes may read a filesystem that answers at
+  the same time.
 - **Least privilege.** The published image runs as the unprivileged user
   `exporter`, so the files must be readable by it; a file it may not read fails
   the scrape with `permission denied` rather than being skipped silently.

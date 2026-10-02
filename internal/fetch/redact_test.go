@@ -19,9 +19,9 @@ func TestRedactURL(t *testing.T) {
 	}{
 		{"https://user:pass@host/p?a=1&b=2&a=3#frag", MaskCredentialQueryValues, "https://redacted:redacted@host/p?a=1&b=2&a=3", ""},
 		{"https://host/p?tenant=a&access_token=s3cret&X-Amz-Signature=abc&api%5Fkey=k&token&view=full", MaskCredentialQueryValues,
-			"https://host/p?tenant=a&access_token=<redacted>&X-Amz-Signature=<redacted>&api%5Fkey=<redacted>&token=<redacted>&view=full", ""},
+			"https://host/p?tenant=a&access_token=<redacted>&X-Amz-Signature=<redacted>&api%5Fkey=<redacted>&token&view=full", ""},
 		{"https://user:pass@host/p?a=1&b=2&a=3#frag", DropQuery, "https://host/p", ""},
-		{"https://user:pass@host/p?a=1&b=2&a=3", MaskQueryValues, "https://redacted:redacted@host/p?a=<redacted>&a=<redacted>&b=<redacted>", ""},
+		{"https://user:pass@host/p?a=1&b=2&a=3", MaskQueryValues, "https://redacted:redacted@host/p?a=<redacted>&b=<redacted>&a=<redacted>", ""},
 		// The fragment is never sent, and can carry a token: it is not shown
 		// in any mode.
 		{"https://host/cb#access_token=s3cret&state=x", MaskQueryValues, "https://host/cb", ""},
@@ -154,5 +154,103 @@ func TestRedactURLErrors(t *testing.T) {
 	// An error quoting no URL is left as it is.
 	if plain := errors.New("no"); RedactURLErrors(plain) != plain { //nolint:errorlint // the very same error, not one like it
 		t.Fatal("an error without a URL was wrapped")
+	}
+}
+
+// A query is sent as it was written, so it is shown as it was written, with
+// values masked where they stand. It used to be parsed and written again for
+// a debug report, which left out every pair a parser refuses — one with a ;
+// in it, one with a malformed escape — sorted the rest and gave a bare key a
+// value; and a displayed target split it at & alone, so the token of
+// a=1;token=SECRET, which a server that splits at ; reads as one, was shown
+// in logs. Every pair now keeps its place and spelling in both, a name is
+// recognised in any case and however it is escaped, and what follows a
+// masked value up to the next & is masked with it.
+func TestAQueryIsMaskedWhereItStands(t *testing.T) {
+	for _, tc := range []struct{ query, report, displayed string }{
+		{"a=1;b=2&c=3", "a=<redacted>;b=<redacted>&c=<redacted>", "a=1;b=2&c=3"},
+		{"x=100%&c=3", "x=<redacted>&c=<redacted>", "x=100%&c=3"},
+		{"debug&c=3", "debug&c=<redacted>", "debug&c=3"},
+		{"debug;verbose&c=3", "debug;verbose&c=<redacted>", "debug;verbose&c=3"},
+		{"c=3&token=SECRET;x=1", "c=<redacted>&token=<redacted>;x=<redacted>", "c=3&token=<redacted>;x=<redacted>"},
+		{"a=1;token=SECRET", "a=<redacted>;token=<redacted>", "a=1;token=<redacted>"},
+		{"a=1;token=SECRET&tenant=b", "a=<redacted>;token=<redacted>&tenant=<redacted>", "a=1;token=<redacted>&tenant=b"},
+		{"token=SE%ZZCRET", "token=<redacted>", "token=<redacted>"},
+		{"TOKEN=SECRET&tenant=a", "TOKEN=<redacted>&tenant=<redacted>", "TOKEN=<redacted>&tenant=a"},
+		{"%74oken=SECRET&v=1", "%74oken=<redacted>&v=<redacted>", "%74oken=<redacted>&v=1"},
+		{"%54%4F%4B%45%4E=SECRET", "%54%4F%4B%45%4E=<redacted>", "%54%4F%4B%45%4E=<redacted>"},
+		{"%74oken%ZZ=SECRET&v=1", "%74oken%ZZ=<redacted>&v=<redacted>", "%74oken%ZZ=<redacted>&v=1"},
+		{"api+key=SECRET&api%20key=SECRET", "api+key=<redacted>&api%20key=<redacted>", "api+key=<redacted>&api%20key=<redacted>"},
+		{"token=SE;CRET&v=1", "token=<redacted>;<redacted>&v=<redacted>", "token=<redacted>;<redacted>&v=1"},
+		{"v=SE;CRET&w=1", "v=<redacted>;<redacted>&w=<redacted>", "v=SE;CRET&w=1"},
+		{"sig=SEC=RET&x=1", "sig=<redacted>&x=<redacted>", "sig=<redacted>&x=1"},
+		{"token=&x=1", "token=<redacted>&x=<redacted>", "token=<redacted>&x=1"},
+		{"token&x=1", "token&x=<redacted>", "token&x=1"},
+		{"v=1&&w=2&", "v=<redacted>&&w=<redacted>&", "v=1&&w=2&"},
+		{"v=1;;w=2;", "v=<redacted>;;w=<redacted>;", "v=1;;w=2;"},
+		{"100%", "100%", "100%"},
+		{"", "", ""},
+	} {
+		raw := "https://host/p"
+		if tc.query != "" {
+			raw += "?" + tc.query
+		}
+		want := func(query string) string {
+			if query == "" {
+				return "https://host/p"
+			}
+			return "https://host/p?" + query
+		}
+		if got := RedactURLString(raw, MaskQueryValues); got != want(tc.report) {
+			t.Errorf("a report of %q shows %q, want %q", tc.query, got, want(tc.report))
+		}
+		if got := RedactURLString(raw, MaskCredentialQueryValues); got != want(tc.displayed) {
+			t.Errorf("%q is displayed as %q, want %q", tc.query, got, want(tc.displayed))
+		}
+		if got := safeTarget(raw); got != want(tc.displayed) {
+			t.Errorf("the target with %q is displayed as %q, want %q", tc.query, got, want(tc.displayed))
+		}
+		// An error quoting the URL shows it as a report does.
+		err := RedactURLErrors(&url.Error{Op: "Get", URL: raw, Err: errors.New("connection refused")})
+		if text := err.Error(); !strings.Contains(text, `"`+want(tc.report)+`"`) || strings.Contains(text, "SECRET") || strings.Contains(text, "CRET") {
+			t.Errorf("an error quoting %q reads %q", tc.query, text)
+		}
+		// Every piece that was sent has its place in what is shown.
+		for _, shown := range []string{maskQuery(tc.query, true), maskQuery(tc.query, false)} {
+			if strings.Count(shown, "&") != strings.Count(tc.query, "&") || strings.Count(shown, ";") != strings.Count(tc.query, ";") {
+				t.Errorf("%q is shown as %q, with other pairs than it has", tc.query, shown)
+			}
+		}
+	}
+	// A credential in the userinfo or the fragment is withheld as before,
+	// beside a query shown as written.
+	if got := safeTarget("http://user:SECRET@host/m?a=1;b=2#access_token=SECRET"); got != "http://redacted:redacted@host/m?a=1;b=2" {
+		t.Errorf("safeTarget = %q", got)
+	}
+	if got := RedactURLString("http://user:SECRET@host/m?a=1;b=2#access_token=SECRET", MaskQueryValues); got != "http://redacted:redacted@host/m?a=<redacted>;b=<redacted>" {
+		t.Errorf("a report shows %q", got)
+	}
+}
+
+// A query pair's name is compared as a server reads it, whatever is wrong
+// with one of its escapes.
+func TestAQueryNameIsReadAsAServerReadsIt(t *testing.T) {
+	for raw, want := range map[string]string{
+		"token":         "token",
+		"%74oken":       "token",
+		"%74%6F%6b%65n": "token",
+		"api+key":       "api key",
+		"api%5Fkey":     "api_key",
+		"%74oken%ZZ":    "token%ZZ",
+		"%ZZ%74oken":    "%ZZtoken",
+		"tok%":          "tok%",
+		"tok%6":         "tok%6",
+		"%+7oken":       "% 7oken",
+		"%-1oken":       "%-1oken",
+		"":              "",
+	} {
+		if got := queryName(raw); got != want {
+			t.Errorf("queryName(%q) = %q, want %q", raw, got, want)
+		}
 	}
 }

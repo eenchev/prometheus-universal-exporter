@@ -2,7 +2,6 @@ package decode
 
 import (
 	"bytes"
-	"encoding/csv"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -11,7 +10,6 @@ import (
 	"strings"
 
 	"github.com/PuerkitoBio/goquery"
-	"github.com/antchfx/xmlquery"
 	"github.com/eenchev/prometheus-universal-exporter/internal/expr"
 	"github.com/eenchev/prometheus-universal-exporter/internal/fetch"
 	"github.com/eenchev/prometheus-universal-exporter/internal/model"
@@ -138,19 +136,12 @@ func Decode(r *fetch.HTTPResponse, c *model.Collector) (*Decoded, error) {
 	}
 	switch kind {
 	case "json":
-		var v any
-		d := json.NewDecoder(bytes.NewReader(r.Body))
-		d.UseNumber()
-		if err := d.Decode(&v); err != nil {
+		// Read in one pass into the values the transforms use (jsonvalue.go).
+		v, err := decodeJSON(r.Body)
+		if err != nil {
 			return nil, fmt.Errorf("JSON decode: %w", err)
 		}
-		// Only whitespace may follow the value: a second record, as in
-		// NDJSON, or anything else would otherwise be dropped unseen, and
-		// the collector would report the first record as the whole answer.
-		if _, err := d.Token(); !errors.Is(err, io.EOF) {
-			return nil, errors.New("JSON decode: trailing data after the JSON value (NDJSON, one value per line, is not supported)")
-		}
-		return &Decoded{Kind: kind, Data: model.Normalize(v), Raw: r.Body}, nil
+		return &Decoded{Kind: kind, Data: v, Raw: r.Body}, nil
 	case "yaml":
 		v, err := decodeYAML(r.Body)
 		if err != nil {
@@ -160,7 +151,7 @@ func Decode(r *fetch.HTTPResponse, c *model.Collector) (*Decoded, error) {
 	case "csv":
 		return decodeCSV(r, c)
 	case "xml":
-		n, err := xmlquery.Parse(bytes.NewReader(r.Body))
+		n, err := ParseXML(r.Body)
 		if err != nil {
 			return nil, fmt.Errorf("XML decode: %w", err)
 		}
@@ -192,23 +183,7 @@ func decodeCSV(r *fetch.HTTPResponse, c *model.Collector) (*Decoded, error) {
 		}
 		delim = rr[0]
 	}
-	read := func(lazyQuotes bool) ([][]string, error) {
-		cr := csv.NewReader(bytes.NewReader(r.Body))
-		cr.Comma = delim
-		cr.FieldsPerRecord = -1
-		cr.TrimLeadingSpace = cfg.TrimSpace
-		cr.LazyQuotes = lazyQuotes
-		return cr.ReadAll()
-	}
-	// A quote inside a field that does not start with one, as in
-	// `5" disk`, is taken as written rather than failing the whole file,
-	// so a file refused for that alone is read again with lazy quotes. A
-	// quoted field left open, or with a stray quote, still fails, since
-	// read lazily it would swallow the rows after it.
-	rows, err := read(false)
-	if errors.Is(err, csv.ErrBareQuote) {
-		rows, err = read(true)
-	}
+	rows, err := readCSV(r.Body, delim, cfg.TrimSpace)
 	if err != nil {
 		return nil, fmt.Errorf("CSV decode: %w", err)
 	}
@@ -264,6 +239,11 @@ func decodeCSV(r *fetch.HTTPResponse, c *model.Collector) (*Decoded, error) {
 		for _, row := range rows {
 			a := make([]any, len(row))
 			for i, v := range row {
+				// Both sides, as with a header: the reader itself trims
+				// only what leads a field.
+				if cfg.TrimSpace {
+					v = strings.TrimSpace(v)
+				}
 				a[i] = v
 			}
 			out = append(out, a)

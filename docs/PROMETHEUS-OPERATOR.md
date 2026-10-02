@@ -42,7 +42,22 @@ monitors:
 
 The body is opaque text and does not need to be JSON. Without a `timeout` parameter, the exporter uses the incoming Prometheus scrape context as the target request timeout.
 
-`params` cannot set `collector` or `target`: the chart renders the first from the entry's `collector`, which it checks against the configuration, and the second from each discovered target's address, so either would be a second key of the same name, and rendering fails. `interval` and `scrapeTimeout` are Prometheus durations — whole numbers of `y`, `w`, `d`, `h`, `m`, `s` and `ms`, such as `1m30s` — and the entry's `name`, which names the monitor `<fullname>-<name>`, is a unique DNS-1123 label.
+`params` cannot set `collector` or `target`: the chart renders the first from the entry's `collector`, which it checks against the configuration, and the second from each discovered target's address, so either would be a second key of the same name, and rendering fails. `interval` and `scrapeTimeout` are Prometheus durations — whole numbers of `y`, `w`, `d`, `h`, `m`, `s` and `ms`, such as `1m30s` — and the entry's `name`, which names the monitor `<fullname>-<name>`, is a unique DNS-1123 label. A `scrapeTimeout` longer than its `interval` fails rendering, since Prometheus refuses such a scrape.
+
+A monitor probes its targets on the port named `http` and finds them in its own namespace. An entry's `port` names another port — of the selected Services for `type: service`, of the selected pods' containers for `type: pod` — and its `namespaceSelector`, the Prometheus Operator's, other namespaces:
+
+```yaml
+monitors:
+  - name: queues
+    enabled: true
+    type: service
+    collector: queue_depth
+    port: grpc
+    namespaceSelector:
+      matchNames: [payments, search]   # or any: true
+```
+
+`port` is the port's name, never its number, as the Prometheus Operator's `port` field is: `port: "9115"` would match no port, so the chart refuses a number while rendering and says to name the port — in the Service's `spec.ports` for `type: service`, in the pod's `containers[].ports` for `type: pod` — and give that name.
 
 ## Related pages
 

@@ -84,6 +84,13 @@ type ExporterBasicAuth struct {
 	PasswordFile string `yaml:"password_file"`
 }
 
+// UnmarshalYAML reads web.basic_auth, refusing credentials that enabled does
+// not switch on or off (decodeSwitchedBlock).
+func (a *ExporterBasicAuth) UnmarshalYAML(n *yaml.Node) error {
+	type plain ExporterBasicAuth
+	return decodeSwitchedBlock(n, (*plain)(a), "model.ExporterBasicAuth", "web.basic_auth")
+}
+
 // Collector is one entry of collectors: how to reach a target, read its
 // response and turn it into metrics. Probes name it with ?collector=.
 type Collector struct {
@@ -302,6 +309,13 @@ type OTLPConfig struct {
 	UnreadyAfterFailures int `yaml:"unready_after_failures"`
 }
 
+// UnmarshalYAML reads otlp, refusing settings that enabled does not switch
+// on or off (decodeSwitchedBlock).
+func (o *OTLPConfig) UnmarshalYAML(n *yaml.Node) error {
+	type plain OTLPConfig
+	return decodeSwitchedBlock(n, (*plain)(o), "model.OTLPConfig", "otlp")
+}
+
 // DefaultOTLPMaxPendingPoints is otlp.max_pending_points when unset.
 const DefaultOTLPMaxPendingPoints = 100000
 
@@ -454,7 +468,8 @@ type CacheConfig struct {
 var cacheConfigKeys = []string{"ttl", "stale_if_error"}
 
 // UnmarshalYAML refuses the keys it does not know, which a custom decoder
-// would otherwise let through, and explains the one-value form.
+// would otherwise let through, and explains the one-value form. The keys of
+// a mapping merged in with << are the cache's own keys, and checked as such.
 func (c *CacheConfig) UnmarshalYAML(n *yaml.Node) error {
 	if n.Kind == yaml.ScalarNode {
 		return fmt.Errorf("line %d: cache is a mapping: write cache: {ttl: %s} to answer repeats of a probe for %s, and add stale_if_error to answer with the last good result when the target fails", n.Line, n.Value, n.Value)
@@ -462,9 +477,9 @@ func (c *CacheConfig) UnmarshalYAML(n *yaml.Node) error {
 	if n.Kind != yaml.MappingNode {
 		return fmt.Errorf("line %d: cache must be a mapping with ttl and stale_if_error", n.Line)
 	}
-	for i := 0; i+1 < len(n.Content); i += 2 {
-		if key := n.Content[i].Value; !slices.Contains(cacheConfigKeys, key) {
-			return fmt.Errorf("line %d: cache has the unknown key %q; it takes %s", n.Content[i].Line, key, strings.Join(cacheConfigKeys, " and "))
+	for _, entry := range MappingEntries(n) {
+		if key := entry.Key.Value; !slices.Contains(cacheConfigKeys, key) {
+			return fmt.Errorf("line %d: cache has the unknown key %q; it takes %s", entry.Key.Line, key, strings.Join(cacheConfigKeys, " and "))
 		}
 	}
 	type plain CacheConfig

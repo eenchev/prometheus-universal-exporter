@@ -29,7 +29,10 @@ import (
 //
 // The shared work belongs to no single caller. It runs detached from the probe
 // that started it, so that probe's client going away does not fail the others,
-// and it is cancelled only when every probe waiting on it has gone.
+// and it is cancelled only when every probe waiting on it has gone. Its
+// statistics are kept the same way: on the collector as they happen, and on
+// the request when the trip ends rather than with the probe that started it
+// (statsRecorder.forTrip).
 
 // probeResult is a finished probe, recorded so it can be written to any number
 // of callers.

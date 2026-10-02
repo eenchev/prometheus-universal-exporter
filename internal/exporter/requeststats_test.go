@@ -252,6 +252,68 @@ func TestPerCollectorTotalsMatchTheSumOfItsRequests(t *testing.T) {
 	}
 }
 
+// A probe whose caller went away before its trip ended is counted on its
+// collector and starts no tracked request, whether the collector shares
+// identical probes or not: the trip ended without the target policy's verdict
+// on a request nobody waited for. The collector's total is then its requests'
+// sum and that probe.
+func TestAProbeItsCallerAbandonedStartsNoTrackedRequest(t *testing.T) {
+	for _, coalesce := range []bool{true, false} {
+		entered, release := make(chan struct{}, 4), make(chan struct{})
+		target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			entered <- struct{}{}
+			select {
+			case <-release:
+			case <-r.Context().Done():
+				return
+			}
+			_, _ = w.Write([]byte("value=1\n"))
+		}))
+		c := testutil.Collector("text", "text")
+		c.Coalesce = &coalesce
+		server := verboseServer(t, true, c)
+		server.logger = testutil.QuietLogger(t)
+		front := httptest.NewServer(server.Handler())
+		probe := front.URL + "/probe?collector=text&target=" + target.URL
+
+		ctx, leave := context.WithCancel(context.Background())
+		gone := make(chan struct{})
+		go func() {
+			defer close(gone)
+			request, _ := http.NewRequestWithContext(ctx, http.MethodGet, probe, nil)
+			if resp, err := http.DefaultClient.Do(request); err == nil {
+				_ = resp.Body.Close()
+			}
+		}()
+		<-entered
+		leave()
+		<-gone
+		testutil.WaitFor(t, "the abandoned trip to end", func() bool {
+			inFlight, _ := server.trips.totals()
+			return inFlight == 0 && server.flights.inFlight() == 0
+		})
+		exposition := selfMetrics(t, server)
+		if total, tracked := metricValue(t, exposition, `http_exporter_scrapes_total{collector="text"}`), metricValue(t, exposition, "http_exporter_request_series_tracked"); total != 1 || tracked != 0 {
+			t.Errorf("coalesce %v: after an abandoned probe the collector counts %v probes and %v requests are tracked, want 1 and 0", coalesce, total, tracked)
+		}
+
+		// The same probe, waited for, is tracked from then on.
+		close(release)
+		resp, err := http.Get(probe)
+		if err != nil || resp.StatusCode != http.StatusOK {
+			t.Fatalf("coalesce %v: the probe waited for: %v %v", coalesce, resp, err)
+		}
+		_ = resp.Body.Close()
+		exposition = selfMetrics(t, server)
+		request := fmt.Sprintf(`http_exporter_scrapes_total{collector="text",http_method="GET",url=%q}`, target.URL)
+		if total, own := metricValue(t, exposition, `http_exporter_scrapes_total{collector="text"}`), metricValue(t, exposition, request); total != 2 || own != 1 {
+			t.Errorf("coalesce %v: the collector counts %v probes and the request %v, want 2 and 1", coalesce, total, own)
+		}
+		front.Close()
+		target.Close()
+	}
+}
+
 func TestVerboseRequestMetricsRecordFailures(t *testing.T) {
 	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		http.Error(w, "unavailable", http.StatusServiceUnavailable)

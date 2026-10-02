@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"reflect"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -277,7 +278,7 @@ func TestStaticTargetsOwnRequestKeepsTheirCacheEntriesApart(t *testing.T) {
 	// before the other looks.
 	up := map[string]float64{}
 	for _, static := range []model.StaticTarget{accepting, plain} {
-		server.scrapeTarget(context.Background(), static)
+		server.scrapeTarget(context.Background(), server.manager.Get(), static)
 		for _, resource := range server.drainOTLP() {
 			for _, metric := range resource.Set.Metrics {
 				if metric.Name == "http_exporter_target_up" {
@@ -305,6 +306,31 @@ func TestStaticTargetLabelsDoNotOverrideMetricLabels(t *testing.T) {
 	}
 	if set.Metrics[0].Labels["environment"] != "" {
 		t.Fatalf("the source metric set was mutated: %v", set.Metrics[0].Labels)
+	}
+}
+
+// A target's le is not given to a histogram, nor its quantile to a summary:
+// the series has that label on every bucket or quantile already, and one of
+// its own would be written on _sum and _count too, which no parser reads.
+// Every other series gets both.
+func TestStaticTargetLabelsLeaveAHistogramItsLeAndASummaryItsQuantile(t *testing.T) {
+	set := model.MetricSet{Metrics: []model.Metric{
+		{Name: "h", Type: model.HistogramMetricType, Histogram: &model.Histogram{Count: 1}},
+		{Name: "s", Type: model.SummaryMetricType, Summary: &model.Summary{Count: 1}},
+		{Name: "g", Type: model.GaugeMetricType},
+	}}
+	out := withTargetLabels(set, map[string]string{"le": "target", "quantile": "target", "site": "a"})
+	for i, want := range []map[string]string{
+		{"quantile": "target", "site": "a"},
+		{"le": "target", "site": "a"},
+		{"le": "target", "quantile": "target", "site": "a"},
+	} {
+		if got := out.Metrics[i].Labels; !reflect.DeepEqual(got, want) {
+			t.Errorf("%s has the labels %v, want %v", out.Metrics[i].Name, got, want)
+		}
+	}
+	if err := out.Validate(model.Limits{}); err != nil {
+		t.Errorf("the labelled set is refused: %v", err)
 	}
 }
 

@@ -20,7 +20,7 @@ import (
 // answered without starting it.
 //
 // Every check below calls the function startup calls for the same step —
-// config.Load, transform.CheckPythonScripts, validateWatchInterval,
+// config.Load, config.CheckPythonScripts, validateWatchInterval,
 // config.LoadStaticTargets, config.ValidateStaticTargets and config.ValidateStaticTargetsAgainst —
 // so the verdict cannot drift from what a real
 // start would do. A check that passes means the same files, with the same
@@ -128,12 +128,12 @@ func checkStartup(in checkInputs) checkReport {
 		results = append(results, skippedCheck("python_scripts", in.ConfigFile, "the configuration did not load, so its scripts could not be read"))
 	} else {
 		scripts := len(transform.CollectorScripts(conf))
-		problems, err := transform.CheckPythonScripts(in.PythonPath, conf)
+		problems, err := config.CheckPythonScripts(in.PythonPath, conf)
 		switch {
 		case err != nil:
 			results = append(results, failedCheck("python_scripts", in.ConfigFile, err))
 		case len(problems) > 0:
-			results = append(results, checkResult{Check: "python_scripts", File: in.ConfigFile, Status: checkFailed, Errors: problems})
+			results = append(results, failedCheck("python_scripts", in.ConfigFile, model.Problems(problems)))
 		default:
 			details := map[string]any{"scripts": scripts}
 			if scripts > 0 {

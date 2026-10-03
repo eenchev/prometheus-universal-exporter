@@ -304,8 +304,8 @@ func TestAHostWithACharacterNoNameHasIsRefused(t *testing.T) {
 		t.Errorf("%q were dialed", dialed)
 	}
 	mu.Unlock()
-	// A name with characters outside ASCII is held to the rule in the
-	// ASCII form it is converted to: a full-width '%' is a '%'.
+	// A name with characters outside ASCII is refused whatever else it
+	// holds, a full-width '%' or a comma.
 	for _, host := range []string{"bücher％.example", "ｉｎｔｅｒｎ％６１ｌ.example", "bü,cher.example"} {
 		if got, err := canonicalHost(host); !errors.Is(err, ErrTargetRefused) {
 			t.Errorf("canonicalHost(%q) = %q, %v, want it refused", host, got, err)
@@ -317,7 +317,8 @@ func TestAHostWithACharacterNoNameHasIsRefused(t *testing.T) {
 // an underscore, with two hyphens or a hyphen first, with a final dot or in
 // mixed case, a punycode name, an IPv4 address and an IPv6 address in
 // brackets, with a zone or without, are requested, each checked under the
-// name or address it is dialed by.
+// name or address it is dialed by. A name written outside ASCII is no longer
+// among them (wirename_test.go).
 func TestEveryHostANameOrAddressCanBeIsStillRequested(t *testing.T) {
 	target := newRequestRecorder(t)
 	backend := strings.TrimPrefix(target.URL, "http://")
@@ -335,7 +336,6 @@ func TestEveryHostANameOrAddressCanBeIsStillRequested(t *testing.T) {
 		"metrics.example.com.":  "metrics.example.com",
 		"Metrics.Example.COM":   "metrics.example.com",
 		"xn--bcher-kva.example": "xn--bcher-kva.example",
-		"bücher.example":        "xn--bcher-kva.example",
 		"192.0.2.7":             "192.0.2.7",
 		"0x7f.0.0.1":            "0x7f.0.0.1",
 		"2130706433":            "2130706433",

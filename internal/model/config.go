@@ -14,6 +14,14 @@ type Duration time.Duration
 
 // UnmarshalYAML reads a duration, reporting a bad one with its line like any
 // other decoding error, so every problem in the file is reported at once.
+//
+// A duration written as a negative amount is negative however small. Go
+// reads -0.4ns as zero, there being no part of a nanosecond, and a key that
+// takes zero then took it, while the schemas refuse it for its minus sign.
+// So a text with a minus sign and a digit other than zero that comes to
+// zero is read as the negative duration nearest to it, -1ns, and each key
+// refuses it as it refuses -5s. A zero written with a sign, -0s, has no such
+// digit and stays the zero it is.
 func (d *Duration) UnmarshalYAML(n *yaml.Node) error {
 	if n.Kind != yaml.ScalarNode {
 		return lineError(n, "expected a duration such as 30s, not %s", describeNode(n))
@@ -21,6 +29,9 @@ func (d *Duration) UnmarshalYAML(n *yaml.Node) error {
 	v, err := time.ParseDuration(n.Value)
 	if err != nil {
 		return lineError(n, "%q is not a duration; write one such as 500ms, 30s or 1m30s", n.Value)
+	}
+	if v == 0 && strings.HasPrefix(n.Value, "-") && strings.ContainsAny(n.Value, "123456789") {
+		v = -1
 	}
 	*d = Duration(v)
 	return nil
@@ -69,6 +80,12 @@ type SelfMetricsConfig struct {
 	// exporter's own CPU and memory. Opt-in because reading them is not free:
 	// runtime.ReadMemStats briefly stops the world on every scrape.
 	ResourceMetrics bool `yaml:"resource_metrics_enabled"`
+	// CreatedTimestamps writes, in an OpenMetrics answer, a _created sample
+	// after each of the exporter's own counters, histograms and summaries:
+	// when the series began to count. Opt-in, as in Prometheus' Go client: a
+	// Prometheus without its created-timestamp feature stores every _created
+	// line as one more series.
+	CreatedTimestamps bool `yaml:"created_timestamps"`
 }
 
 // ExporterBasicAuth is web.basic_auth, the credentials a client must present
@@ -143,6 +160,11 @@ type RequestConfig struct {
 	FollowRedirects      bool              `yaml:"follow_redirects"`
 	EnableHTTP2          bool              `yaml:"enable_http2"`
 	AllowedSchemes       []string          `yaml:"allowed_schemes"`
+	// RedirectTrustedHosts are the hosts, besides the origin the request is
+	// made to, that a followed redirect may carry the request's headers,
+	// credentials and body to: host names, globs of them and IP addresses
+	// (fetch/redirecttrust.go).
+	RedirectTrustedHosts []string `yaml:"redirect_trusted_hosts"`
 	// AllowedTargets and DeniedTargets are the hosts, host globs, addresses
 	// and networks the collector's requests may, and may not, reach.
 	AllowedTargets []string `yaml:"allowed_targets"`
@@ -362,6 +384,13 @@ type MetricRule struct {
 	// seconds.
 	ValueMap map[string]float64 `yaml:"value_map"`
 	Scale    *float64           `yaml:"scale"`
+	// TimeFormat says the text the expression gives is a time, and the value
+	// that time in Unix seconds: rfc3339, rfc1123, or a layout, the reference
+	// time Mon Jan 2 15:04:05 MST 2006 written as the text writes its times,
+	// such as "2006-01-02 15:04". TimeZone is the zone a text that names none
+	// is read in, an IANA name such as Europe/Sofia; UTC when unset.
+	TimeFormat string `yaml:"time_format"`
+	TimeZone   string `yaml:"time_zone"`
 }
 
 // What a metric rule does when it cannot produce its value. The first two keep

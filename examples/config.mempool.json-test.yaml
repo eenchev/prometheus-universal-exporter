@@ -1,0 +1,120 @@
+# Demo collectors for the REST API of mempool.space, the open-source Bitcoin
+# block explorer: public, no authentication and no API key. The same API is
+# served by every self-hosted mempool instance, so the collectors work against
+# one of those by changing the target.
+#
+#   go run . --config.file=examples/config.mempool.json-test.yaml
+#   curl 'http://localhost:8080/probe?collector=bitcoin_fees&target=https://mempool.space'
+#   curl 'http://localhost:8080/probe?collector=bitcoin_mempool&target=https://mempool.space'
+#   curl 'http://localhost:8080/probe?collector=bitcoin_chain&target=https://mempool.space'
+#
+# One collector is one request, so the three endpoints are three collectors,
+# probed at the same target. A scrape job per collector, or one job with three
+# targets that differ in their collector parameter, puts them side by side.
+#
+# x-request is this file's own key, which the exporter ignores: it holds what
+# the three requests share, merged into each with <<: *request.
+x-request: &request
+  type: http
+  method: GET
+  allowed_schemes: [https]
+  headers:
+    Accept: application/json
+  retry:
+    attempts: 1
+    backoff: 2s
+
+collectors:
+  # /api/v1/fees/recommended answers with the fee rate to pay for each
+  # confirmation target:
+  #
+  #   {"fastestFee":12,"halfHourFee":9,"hourFee":7,"economyFee":4,"minimumFee":2}
+  - name: bitcoin_fees
+    # A new block arrives about every ten minutes and the estimate moves
+    # between blocks, so a repeated probe within half a minute is answered
+    # from memory.
+    cache:
+      ttl: 30s
+    request:
+      <<: *request
+      path: /api/v1/fees/recommended
+    decoder:
+      type: json
+    transform:
+      type: jq
+    metrics:
+      - name: bitcoin_recommended_fee_sats_per_vbyte
+        description: Fee rate mempool.space suggests for a transaction to confirm within the target
+        type: gauge
+        error_mode: log
+        # The object's keys are the things the metric is about, so `items`
+        # walks its entries: the value and the label are read from each entry,
+        # and a key a later version of the API adds becomes a series without
+        # this file changing.
+        items: to_entries[]
+        expression: .value
+        labels:
+          - name: target
+            expression: .key
+            # A label's value_map renames the API's keys to label values that
+            # read well in a query; a key it does not list is kept as it is.
+            value_map:
+              fastestFee: next_block
+              halfHourFee: half_hour
+              hourFee: hour
+              economyFee: economy
+              minimumFee: minimum
+
+  # /api/mempool answers with the backlog of unconfirmed transactions:
+  #
+  #   {"count":48213,"vsize":31876540,"total_fee":61250834,"fee_histogram":[[14.02,50012], ...]}
+  - name: bitcoin_mempool
+    cache:
+      ttl: 30s
+    request:
+      <<: *request
+      path: /api/mempool
+    decoder:
+      type: json
+    transform:
+      type: jq
+    metrics:
+      - name: bitcoin_mempool_transactions
+        description: Unconfirmed transactions waiting in the mempool
+        type: gauge
+        error_mode: log
+        expression: .count
+      - name: bitcoin_mempool_virtual_bytes
+        description: Virtual size of the unconfirmed transactions
+        type: gauge
+        error_mode: log
+        expression: .vsize
+      - name: bitcoin_mempool_fees_bitcoin
+        description: Fees the unconfirmed transactions offer in total
+        type: gauge
+        error_mode: log
+        # The API counts satoshis; a bitcoin is a hundred million of them.
+        expression: .total_fee
+        scale: 0.00000001
+
+  # /api/blocks/tip/height answers with the height of the newest block and
+  # nothing else, as text: a number alone is the simplest response there is,
+  # read by a regex that is the whole body.
+  - name: bitcoin_chain
+    cache:
+      ttl: 30s
+    request:
+      <<: *request
+      path: /api/blocks/tip/height
+      headers:
+        Accept: text/plain
+    decoder:
+      type: text
+    transform:
+      type: regex
+    metrics:
+      - name: bitcoin_block_height
+        description: Height of the newest block of the chain
+        type: gauge
+        error_mode: fail
+        expression: '^\s*(\d+)\s*$'

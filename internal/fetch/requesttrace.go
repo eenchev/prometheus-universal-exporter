@@ -29,6 +29,11 @@ type TracedRequest struct {
 	Header http.Header
 	// Redirect is set on a request that followed a redirect.
 	Redirect bool
+	// Withheld names the headers of the first request that a redirect to a
+	// host the collector does not trust was not sent (redirecttrust.go),
+	// and WithheldWhy says why the redirect was not trusted.
+	Withheld    []string
+	WithheldWhy string
 	// Outcome is how it ended: a status, a gRPC code, or the error.
 	Outcome  string
 	Duration time.Duration
@@ -69,6 +74,23 @@ func traceRequest(ctx context.Context, method, url string, header http.Header, h
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	t.requests = append(t.requests, TracedRequest{Method: method, URL: url, Header: header, Redirect: redirect, started: time.Now()})
+}
+
+// traceWithheld records the names of the headers the last request recorded,
+// a redirect, was not sent, and why.
+func traceWithheld(ctx context.Context, names []string, why string) {
+	if len(names) == 0 {
+		return
+	}
+	t, ok := ctx.Value(requestTraceKey{}).(*RequestTrace)
+	if !ok {
+		return
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if n := len(t.requests); n > 0 {
+		t.requests[n-1].Withheld, t.requests[n-1].WithheldWhy = names, why
+	}
 }
 
 // traceBodyError adds to the last request's outcome that its body could not

@@ -124,7 +124,7 @@ func (s *Server) collect(ctx context.Context, j collectJob) collected {
 		// is in neither.
 		if trace == nil {
 			rec.scraped(time.Now())
-			s.observeTargetScrape(c.Name, time.Since(start))
+			s.observeTargetScrape(rec.collector, time.Since(start))
 		}
 	}()
 	// stageFailed applies a stage's error policy.
@@ -211,7 +211,14 @@ func (s *Server) collect(ctx context.Context, j collectJob) collected {
 			excerpt = []any{"response_body", body}
 		}
 		mark = time.Now()
-		failure := stageFailed("http_status", fmt.Errorf("received HTTP status %d", response.StatusCode), c.ErrorHandling.OnFetchError, excerpt...)
+		statusErr := fmt.Errorf("received HTTP status %d", response.StatusCode)
+		if response.RedirectWithheld != "" {
+			// The status is the answer of a host a redirect led to, which
+			// was not sent what the collector identifies itself with
+			// (fetch/redirecttrust.go): most often why it answers 401 or 403.
+			statusErr = fmt.Errorf("received HTTP status %d %s", response.StatusCode, response.RedirectWithheld)
+		}
+		failure := stageFailed("http_status", statusErr, c.ErrorHandling.OnFetchError, excerpt...)
 		failure.unauthorized = response.StatusCode == http.StatusUnauthorized || response.StatusCode == http.StatusForbidden
 		return failure
 	}

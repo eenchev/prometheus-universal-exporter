@@ -1,0 +1,13 @@
+sensor	location	temperature	humidity	battery	note
+th-01	cold room 1	4.2	71	98	ok
+th-02	cold room 2		68	97	
+th-03	  "dock, east"	17.9			
+th-04	 office 	 21.5	40 	 12 	battery low
+th-05	server room	24.1	33		door open
+th-06	roof	-3.5	88	64	"north	side"
+th-07		19.0	45	81	
+th-08	basement				offline
+th-09	garage	8.75	59	100	
+th-10	lab	22		55	calibrating
+th-11	freezer	-18.4	52	9	 battery low 
+th-12	greenhouse	28.6	93	77	

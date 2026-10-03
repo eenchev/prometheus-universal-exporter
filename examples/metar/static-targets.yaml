@@ -1,0 +1,35 @@
+# The exporter scrapes these itself, every 10 minutes, and serves them
+# together on /static-targets. Each target is an airport; its params fill the
+# collector's placeholder, and its label adds the city to the station the
+# collector reads from the report itself. (A target's health series,
+# http_exporter_target_up and the others, carry the target's labels and its
+# name, so there the city and static_target say which airport it is.)
+#
+#   go run . --config.file=examples/metar/config.yaml --static-targets-file=examples/metar/static-targets.yaml
+#   curl http://localhost:8080/static-targets
+#
+# x-metar is this file's own key, which the exporter ignores: it holds what
+# every target shares, merged into each with <<: *metar.
+x-metar: &metar
+  collector: metar
+  target: https://tgftp.nws.noaa.gov
+interval: 10m
+targets:
+  - <<: *metar
+    name: sofia
+    params:
+      param_station: LBSF
+    labels:
+      city: Sofia
+  - <<: *metar
+    name: burgas
+    params:
+      param_station: LBBG
+    labels:
+      city: Burgas
+  - <<: *metar
+    name: varna
+    params:
+      param_station: LBWN
+    labels:
+      city: Varna

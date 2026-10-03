@@ -5,7 +5,11 @@ Updates are proposed, never applied: each one arrives as a pull request.
 Dependabot handles the Go modules and the GitHub Actions, configured in
 `.github/dependabot.yml`. Each ecosystem is grouped into one pull request, and
 major bumps are excluded — a Go major version lives at a different import path
-and needs real work.
+and needs real work. It also handles the Python modules only the tests use,
+pinned in `test/python/requirements.txt` — `prometheus-client`, whose strict
+OpenMetrics parser the suite runs the exporter's answers through; CI runs the
+suite on a change to that file, with the module required
+(see [Repeatable tests](DEVELOPMENT.md#repeatable-tests)).
 
 The Dockerfile is updated by `.github/workflows/update-docker-deps.yml` instead.
 Dependabot cannot read it: `GO_VERSION`, `PYTHON_VERSION` and the pip pins are

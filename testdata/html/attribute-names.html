@@ -1,0 +1,23 @@
+<!DOCTYPE html>
+<html lang="en" xml:lang="en-GB" prefix="og: https://ogp.me/ns#" data-build="2026.10.1">
+<head>
+<meta charset="utf-8">
+<title>Checkout service</title>
+<meta property="og:type" content="website">
+<meta property="og:title" content="Checkout service">
+<meta name="queue-depth" content="17" og:type="gauge">
+</head>
+<body>
+<div id="app" v-cloak data-region="eu-west-1" data-Shard="7">
+  <ul id="hosts" og:type="list" v-on:click="select" x-data="{ open: false }">
+    <li data-id="h1" xml:lang="bg" :href="'/hosts/' + h1" @click="open(h1)" x-on:click.prevent="toggle" 2x="hi-dpi" title="  padded title  "><span class="load">0.42</span></li>
+    <li data-id="h2" xml:lang="de" :href="'/hosts/' + h2" @click="open(h2)" x-on:click.prevent="toggle" 2x="lo-dpi" title=""><span class="load">1.75</span></li>
+    <li data-id="h3" DATA-ROLE="primary" aria-label="third host"><span class="load">0.08</span></li>
+  </ul>
+  <table id="pools" og:type="table" data-kind="pools">
+    <tr data-pool="checkout" 2x="a" :href="/pools/checkout" x-on:click.prevent="open"><td v-on:click="pick" data-unit="conns">25</td></tr>
+    <tr data-pool="payment" 2x="b" :href="/pools/payment" x-on:click.prevent="open"><td v-on:click="pick" data-unit="conns">40</td></tr>
+  </table>
+</div>
+</body>
+</html>

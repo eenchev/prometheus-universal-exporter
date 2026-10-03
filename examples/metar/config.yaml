@@ -1,0 +1,162 @@
+# The latest weather report of an airport, as its METAR: the line every
+# airport's weather station issues once or twice an hour, which the US
+# National Weather Service keeps for the whole world, one small text file per
+# station, free and without an API key. The probe's target is the server,
+# https://tgftp.nws.noaa.gov, and the station comes from the probe's
+# param_station, an ICAO code (LBSF, Sofia, by default).
+#
+#   go run . --config.file=examples/metar/config.yaml
+#   curl 'http://localhost:8080/probe?collector=metar&target=https://tgftp.nws.noaa.gov&param_station=EGLL'
+#
+# The response is two lines, the time of the report and the report:
+#
+#   2026/10/03 09:00
+#   LBSF 030900Z 12004KT 9999 FEW043 BKN100 14/08 Q1021 NOSIG
+#
+# which reads: Sofia, on the 3rd at 09:00 UTC, wind from 120 degrees at 4
+# knots, visibility 10 km or more, a few clouds at 4,300 ft and broken cloud at
+# 10,000 ft, temperature 14 °C, dew point 8 °C, pressure 1021 hPa.
+#
+# It is a text example: there is nothing to decode, and each metric is a
+# regular expression. The rule for the report's time starts at the date's
+# line and every other one at the report's, (?m)^, where the station's code
+# is in a group named station, which a label reads; each goes on to the
+# group named value, which is the number: a named value can stand after a
+# label, where an unnamed first group could not. Some sources write METAR or
+# SPECI, the kind of report, before the station, so every rule takes either
+# there. The date's line begins with a year and a slash, so no rule takes it
+# for a report. A report leaves out what it has nothing to say about, and
+# writes some things in one of two ways, so the rules are optional
+# (required: false) and two of them may share a name: whichever matches
+# gives the series.
+#
+# A report may end with a forecast (BECMG or TEMPO and the wind, visibility
+# and weather expected) and with remarks (RMK), whose groups look like the
+# observation's own. So a rule says where its group stands and does not look
+# for it anywhere on the line: the wind directly after the station and the
+# time, the visibility directly after the wind, the pressure directly after
+# the temperature. A report whose group there is written another way gives
+# no series of that metric, rather than one from the forecast.
+collectors:
+  - name: metar
+    # A station reports every half hour or hour; a probe within five minutes
+    # of the last one for the same station is answered from memory, and while
+    # the server is down the last report is served for up to an hour, marked
+    # stale.
+    cache:
+      ttl: 5m
+      stale_if_error: 1h
+    request:
+      type: http
+      method: GET
+      path: /data/observations/metar/stations/{{param_station:LBSF}}.TXT
+      allowed_schemes: [https]
+      retry:
+        attempts: 1
+        backoff: 2s
+    decoder:
+      type: text
+    transform:
+      type: regex
+    metrics:
+      # The first line is when the report was made, in UTC. time_format reads
+      # it as a time, written the way that line writes the reference time
+      # (2006/01/02 15:04), and the value is its Unix seconds: time() minus
+      # it is the report's age. Every answer has that line, so this rule is
+      # not optional. It starts at the start of the answer, \A. The station
+      # is on the next line, which \s+ reaches. Its label is written once
+      # here and reused by every rule below (&station, *station).
+      - name: metar_observation_timestamp_seconds
+        description: When the report was made, in Unix seconds.
+        expression: '\A(?P<value>\d{4}/\d{2}/\d{2} \d{2}:\d{2})\s+(?:METAR |SPECI )?(?P<station>[A-Z0-9]{4}) '
+        time_format: "2006/01/02 15:04"
+        labels: &station
+          - name: station
+            expression: station
+
+      # Temperature and dew point are whole degrees, written TT/DD before the
+      # pressure, with an M for minus: 14/08, 02/M01, M05/M11. A regex cannot
+      # turn M into a sign, so each has a rule for either case, and the one
+      # for M scales by -1. (M00 is a temperature just below zero, and comes
+      # out as -0.) The group is the one the pressure follows, and no group
+      # of a forecast or of the remarks is written that way.
+      - name: metar_temperature_celsius
+        description: Air temperature.
+        required: false
+        expression: '(?m)^(?:METAR |SPECI )?(?P<station>[A-Z0-9]{4}) .*? (?P<value>\d{2})/(?:M?\d{2})? [QA]\d{4}\b'
+        labels: *station
+      - name: metar_temperature_celsius
+        description: Air temperature.
+        required: false
+        expression: '(?m)^(?:METAR |SPECI )?(?P<station>[A-Z0-9]{4}) .*? M(?P<value>\d{2})/(?:M?\d{2})? [QA]\d{4}\b'
+        scale: -1
+        labels: *station
+      - name: metar_dew_point_celsius
+        description: Dew point.
+        required: false
+        expression: '(?m)^(?:METAR |SPECI )?(?P<station>[A-Z0-9]{4}) .*? M?\d{2}/(?P<value>\d{2}) [QA]\d{4}\b'
+        labels: *station
+      - name: metar_dew_point_celsius
+        description: Dew point.
+        required: false
+        expression: '(?m)^(?:METAR |SPECI )?(?P<station>[A-Z0-9]{4}) .*? M?\d{2}/M(?P<value>\d{2}) [QA]\d{4}\b'
+        scale: -1
+        labels: *station
+
+      # Pressure is Q and hectopascals in most of the world, and A and
+      # hundredths of an inch of mercury in North America: A3012 is 30.12 inHg,
+      # 1019.98 hPa. It is the group directly after the temperature's, which
+      # is the one with a slash (14/08, and 12/ or ///// when a part is
+      # missing): the remarks of some stations repeat the pressure in the
+      # other unit (Q1013 ... RMK A2992), which would be the same series
+      # twice.
+      - name: metar_pressure_hectopascals
+        description: Air pressure reduced to mean sea level (QNH).
+        required: false
+        expression: '(?m)^(?:METAR |SPECI )?(?P<station>[A-Z0-9]{4}) .*? [M\d]*/[M\d/]* Q(?P<value>\d{4})\b'
+        labels: *station
+      - name: metar_pressure_hectopascals
+        description: Air pressure reduced to mean sea level (QNH).
+        required: false
+        expression: '(?m)^(?:METAR |SPECI )?(?P<station>[A-Z0-9]{4}) .*? [M\d]*/[M\d/]* A(?P<value>\d{4})\b'
+        scale: 0.3386389
+        labels: *station
+
+      # Wind is direction, speed and, when there are any, gusts: 12004KT,
+      # 31015G25KT, and VRB02KT when the direction varies. Knots become metres
+      # per second, the base unit. (A station that reports in metres per
+      # second writes MPS for KT; change the unit here and drop the scale.)
+      # The wind is the group directly after the station and the time,
+      # \d{6}Z, with AUTO or COR between them in an automatic or a corrected
+      # report. A wind further along is a forecast's (BECMG 27015G25KT), so a
+      # report whose own wind has no gust, no one direction or another unit
+      # gives no such series.
+      - name: metar_wind_speed_meters_per_second
+        description: Mean wind speed over the ten minutes before the report.
+        required: false
+        expression: '(?m)^(?:METAR |SPECI )?(?P<station>[A-Z0-9]{4}) \d{6}Z (?:AUTO |COR )?(?:\d{3}|VRB)(?P<value>\d{2,3})(?:G\d{2,3})?KT\b'
+        scale: 0.514444
+        labels: *station
+      - name: metar_wind_gust_meters_per_second
+        description: Highest gust, in a report that has gusts.
+        required: false
+        expression: '(?m)^(?:METAR |SPECI )?(?P<station>[A-Z0-9]{4}) \d{6}Z (?:AUTO |COR )?(?:\d{3}|VRB)\d{2,3}G(?P<value>\d{2,3})KT\b'
+        scale: 0.514444
+        labels: *station
+      - name: metar_wind_direction_degrees
+        description: Direction the wind blows from, unless it varies.
+        required: false
+        expression: '(?m)^(?:METAR |SPECI )?(?P<station>[A-Z0-9]{4}) \d{6}Z (?:AUTO |COR )?(?P<value>\d{3})\d{2,3}(?:G\d{2,3})?KT\b'
+        labels: *station
+
+      # Visibility is four digits of metres directly after the wind, in
+      # whichever unit that is, and after the two directions it varies
+      # between when the report gives them (350V070): 9999 for 10 km or
+      # more. CAVOK stands in for it when the sky is clear as well, and North
+      # America writes statute miles (10SM): neither gives a series, and
+      # neither does a forecast's visibility (TEMPO 3000).
+      - name: metar_visibility_meters
+        description: Prevailing visibility, 9999 for 10 km or more.
+        required: false
+        expression: '(?m)^(?:METAR |SPECI )?(?P<station>[A-Z0-9]{4}) \d{6}Z (?:AUTO |COR )?[0-9A-Z/]+(?:KT|MPS) (?:\d{3}V\d{3} )?(?P<value>\d{4})\b'
+        labels: *station

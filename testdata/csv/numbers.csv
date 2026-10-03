@@ -1,0 +1,56 @@
+form,value
+integer,42
+zero,0
+negative,-17
+decimal,3.14159
+leading zeros,007
+no integer part,.5
+no fraction,5.
+exponent,1.5e3
+exponent upper case,2E-3
+exponent with plus,6.02e+23
+leading plus,+7
+blanks around,  42  
+quoted,"42"
+quoted with blanks," 42 "
+long integer,123456789012345678901234567890
+smallest step,9007199254740993
+NaN,NaN
+nan lower case,nan
+Inf,Inf
++Inf,+Inf
+-Inf,-Inf
+Infinity,Infinity
+inf lower case,-inf
+hex integer,0x1F
+octal,0o17
+binary,0b101
+thousands comma,"1,234"
+thousands blank,1 234
+thousands apostrophe,1'234
+decimal comma,"1,5"
+percent,85%
+currency before,$12.50
+currency after,12.50 EUR
+unit,512MB
+duration,1m30s
+beyond a float,1e400
+below a float,1e-400
+unicode minus,−5
+fullwidth digits,４２
+version,1.0.0
+two numbers,1 2
+empty,
+blanks,   
+quoted empty,""
+dash,-
+N/A,N/A
+null,null
+none,None
+true,true
+false,false
+TRUE upper case,TRUE
+yes,yes
+no,no
+on,on
+off,off

@@ -4,10 +4,12 @@ package fetch
 
 import (
 	"context"
+	"errors"
 	"math"
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	"github.com/eenchev/prometheus-universal-exporter/internal/model"
@@ -72,4 +74,45 @@ func TestTheLargestResponseLimitReadsAGraphiteAnswer(t *testing.T) {
 	if err != nil || string(resp.Body) != answer {
 		t.Fatalf("resp=%+v err=%v, want the answer whole", resp, err)
 	}
+}
+
+// A graphite collector's request is an HTTP request, held to the same rule
+// for its host: a render API named with a character outside ASCII is
+// refused before anything is sent, as a target and as the host a redirect
+// leads to. "ｌｏｃａｌｈｏｓｔ", in full-width letters, was judged as localhost and
+// requested there, with a Host that was another name.
+func TestAGraphiteHostOutsideASCIIIsRefused(t *testing.T) {
+	var asked atomic.Int32
+	var location atomic.Pointer[string]
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		asked.Add(1)
+		if to := location.Load(); to != nil {
+			w.Header().Set("Location", *to)
+			w.WriteHeader(http.StatusFound)
+			return
+		}
+		_, _ = w.Write([]byte("[]"))
+	}))
+	defer server.Close()
+	c := graphiteCollector("app.count")
+	c.Request.FollowRedirects = true
+	if err := ValidateRequest(&c); err != nil {
+		t.Fatal(err)
+	}
+	elsewhere := strings.Replace(server.URL, "127.0.0.1", "ｌｏｃａｌｈｏｓｔ", 1)
+	refused := func(name string, err error, requests int32) {
+		t.Helper()
+		if !errors.Is(err, ErrTargetRefused) || !strings.Contains(err.Error(), "target ｌｏｃａｌｈｏｓｔ refused: it has U+FF4C 'ｌ', a character outside ASCII: write an internationalised name in its ASCII form") {
+			t.Errorf("%s: err=%v, want the host refused for a character outside ASCII", name, err)
+		}
+		if got := asked.Swap(0); got != requests {
+			t.Errorf("%s: the server was sent %d requests, want %d", name, got, requests)
+		}
+	}
+	_, err := FetchCollector(context.Background(), elsewhere, &c, RequestOverrides{}, nil)
+	refused("as the target", err, 0)
+	to := elsewhere + "/render"
+	location.Store(&to)
+	_, err = FetchCollector(context.Background(), server.URL, &c, RequestOverrides{}, nil)
+	refused("as a redirect's host", err, 1)
 }

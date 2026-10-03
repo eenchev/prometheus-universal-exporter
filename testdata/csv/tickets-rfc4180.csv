@@ -1,0 +1,16 @@
+id,queue,subject,customer,priority,age_hours,replies
+10231,billing,Invoice 2026-0917 charged twice,"Acme, Inc.",high,52.5,4
+10232,billing,"Refund for order #5541, second request","Müller & Söhne GmbH",normal,30,2
+10233,hardware,"Printer says ""PC LOAD LETTER""",Initech,low,211.25,7
+10234,hardware,"Rack 12, unit 4: fan alarm","Globex, Ltd.",urgent,1.5,0
+10235,network,"VPN drops every 30 min
+(since the firewall change)",Initech,high,18,3
+10236,network,Wi-Fi guest portal certificate expired,"Hooli, LLC",normal,6.75,1
+10237,accounts,"Password reset for ""j.doe"", locked out","Acme, Inc.",normal,0.25,0
+10238,accounts,New starter needs access,Umbrella Corp,low,73,5
+10239,software,"Crash on export: ""index out of range""
+Steps:
+1. open report, 2. click ""Export""",Stark Industries,high,12,2
+10240,software,Licence renewal,"Wayne Enterprises, Inc.",normal,340,9
+10241,billing,"Quote for 5"" tablets, 20 units",Initech,low,96,1
+10242,network,,Globex,normal,3,0

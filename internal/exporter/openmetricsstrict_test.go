@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"math"
 	"math/rand"
+	"os"
 	"os/exec"
 	"runtime"
 	"slices"
@@ -802,18 +803,65 @@ func TestOpenMetricsFamilyKeepsItsTypeExactlyWhenItsValuesAllowIt(t *testing.T) 
 	}
 }
 
+// strictParserEnv, set to anything, says the strict reference parser has to
+// be there: a test that needs it then fails where it would have been
+// skipped. The workflows that run the suite set it, having installed the
+// module (test/python/requirements.txt), so a run there cannot pass with
+// these tests left out without anyone seeing.
+const strictParserEnv = "STRICT_OPENMETRICS_PARSER"
+
+// strictParserMissing ends a test that cannot run the strict reference
+// parser: skipped, saying what is missing, or failed with the same words
+// where strictParserEnv says the parser is required.
+func strictParserMissing(t interface {
+	Helper()
+	Fatalf(format string, args ...any)
+	Skipf(format string, args ...any)
+}, required bool, format string, args ...any) {
+	t.Helper()
+	if required {
+		t.Fatalf(format+"; "+strictParserEnv+" is set, so this is a failure and not a skip", args...)
+		return
+	}
+	t.Skipf(format, args...)
+}
+
+// endedTest records how strictParserMissing ended a test.
+type endedTest struct{ failed, skipped string }
+
+func (*endedTest) Helper()                             {}
+func (e *endedTest) Fatalf(format string, args ...any) { e.failed = fmt.Sprintf(format, args...) }
+func (e *endedTest) Skipf(format string, args ...any)  { e.skipped = fmt.Sprintf(format, args...) }
+
+// Without the reference parser a test that needs it is skipped, saying what
+// is missing; where the parser is required, as in the workflows, the same
+// words fail it, so a run cannot pass with those tests quietly left out.
+func TestAMissingStrictParserFailsTheTestWhereItIsRequired(t *testing.T) {
+	var optional, required endedTest
+	strictParserMissing(&optional, false, "python3 has no %s module", "prometheus_client")
+	if optional.failed != "" || optional.skipped != "python3 has no prometheus_client module" {
+		t.Errorf("not required: failed=%q skipped=%q, want it skipped with the message", optional.failed, optional.skipped)
+	}
+	strictParserMissing(&required, true, "python3 has no %s module", "prometheus_client")
+	if required.skipped != "" || !strings.HasPrefix(required.failed, "python3 has no prometheus_client module; ") || !strings.Contains(required.failed, strictParserEnv) {
+		t.Errorf("required: failed=%q skipped=%q, want it failed with the message and the variable's name", required.failed, required.skipped)
+	}
+}
+
 // strictParser runs prometheus_client's OpenMetrics parser, the strict
 // reference parser, over answers, and returns for each why it was refused
 // ("" when it was not) and the samples read. The test is skipped where
-// python3 or the module is missing.
+// python3 or the module is missing, and fails there instead when
+// strictParserEnv is set.
 func strictParser(t *testing.T, answers []string) []strictVerdict {
 	t.Helper()
+	required := os.Getenv(strictParserEnv) != ""
 	python, err := exec.LookPath("python3")
 	if err != nil {
-		t.Skip("python3 is not available, so the strict OpenMetrics parser of prometheus_client cannot be run")
+		strictParserMissing(t, required, "python3 is not available, so the strict OpenMetrics parser of prometheus_client cannot be run")
 	}
 	if out, err := exec.Command(python, "-c", "import prometheus_client.openmetrics.parser").CombinedOutput(); err != nil {
-		t.Skipf("python3 has no prometheus_client module (pip install prometheus-client), so its strict OpenMetrics parser cannot be run: %v: %s", err, bytes.TrimSpace(out))
+		strictParserMissing(t, required, "python3 has no prometheus_client module (pip install -r test/python/requirements.txt), so its strict OpenMetrics parser cannot be run: %v: %s", err, bytes.TrimSpace(out))
 	}
 	// The parser takes most of a millisecond for an answer, so the answers
 	// are shared out among a few of it.

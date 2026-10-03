@@ -119,9 +119,24 @@ var (
 	metricTypeType = reflect.TypeOf(model.MetricType(""))
 )
 
-// durationPattern is what time.ParseDuration accepts: a sequence of decimal
-// numbers with units, optionally signed, or a bare 0.
-const durationPattern = `^[-+]?(0|([0-9]*(\.[0-9]*)?(ns|us|µs|μs|ms|s|m|h))+)$`
+// A duration is written as time.ParseDuration reads it: a sequence of decimal
+// numbers with units, each number with a digit before or after its point, or
+// a bare 0, and a sign before it. No key takes a negative duration, so
+// durationPattern, a duration key's pattern, takes a - only before a zero,
+// such as -0s, which is the zero it equals, and a + before any, as the
+// exporter does: an editor then flags timeout: -5s, which the exporter
+// refuses at the load. Whether a duration is long enough, the least interval
+// say, is not a pattern's to tell, nor whether it is too long to be held,
+// 2562048h, which the exporter refuses as no duration (documented with the
+// schemas, docs/CONFIGURATION.md). signedDurationPattern is any duration, the
+// negative ones too: what a block that is switched off holds, unchecked.
+const (
+	durationNumber        = `([0-9]+(\.[0-9]*)?|\.[0-9]+)`
+	durationZero          = `(0+(\.0*)?|\.0+)`
+	durationUnit          = `(ns|us|µs|μs|ms|s|m|h)`
+	durationPattern       = `^(\+?(0|(` + durationNumber + durationUnit + `)+)|-(0|(` + durationZero + durationUnit + `)+))$`
+	signedDurationPattern = `^[-+]?(0|(` + durationNumber + durationUnit + `)+)$`
+)
 
 // schemaFor describes t, found at path, with rules adding what the type
 // cannot say (configSchemaRules, staticTargetsSchemaRules).
@@ -308,14 +323,17 @@ func configSchemaRules() map[string]map[string]any {
 		"collectors[].metrics[].labels[].required":   {"description": "expression labels only: a series the expression gives no value, or an empty one, fails the metric under its error_mode instead of being exported without the label. Defaults to false."},
 		"collectors[].request.accept_codes":          {"items": map[string]any{"type": "string"}, "description": "grpc: the gRPC status codes other than OK whose calls are answers rather than failures, by name, such as [NOT_FOUND]. Such a call is not retried; its rules see an empty object, the code as $status and the status message as $headers[\"grpc-message\"]."},
 		"collectors[].request.accept_status":         {"items": map[string]any{"type": []string{"integer", "string"}, "minimum": 100, "maximum": 599, "pattern": "^[1-5][xX][xX]$|^[1-5][0-9][0-9]$"}, "description": "The HTTP statuses whose answers are decoded, such as [200, 503] or [\"2xx\", 503]; every 2xx when left out. Any other status fails the scrape in the http_status stage. An accepted status is not retried. http and graphite."},
-		"collectors[].request.allowed_targets":       {"description": "Hosts, globs such as *.example.com, IP addresses and CIDR networks the collector's requests may reach: a target is allowed when its host matches by name, or every address it resolves to is in an allowed network. Checked before the request, on every redirect and on every connection. http, graphite and grpc."},
-		"collectors[].request.denied_targets":        {"description": "Hosts, globs, IP addresses and CIDR networks the collector's requests may not reach: a target matching by name, or resolving to any address in a denied network, is refused with 403. Wins over allowed_targets."},
+		"collectors[].request.allowed_targets":       {"description": "Hosts, globs such as *.example.com, IP addresses and CIDR networks the collector's requests may reach: a target is allowed when its host matches by name, or every address it resolves to is in an allowed network. Checked before the request, on every redirect and on every connection. Written in ASCII, as a target's host is: an internationalised name is listed, and requested, in its xn-- form. http, graphite and grpc."},
+		"collectors[].request.denied_targets":        {"description": "Hosts, globs, IP addresses and CIDR networks the collector's requests may not reach: a target matching by name, or resolving to any address in a denied network, is refused with 403. Wins over allowed_targets. Written in ASCII, as allowed_targets is."},
 		"collectors[].metrics[].labels[].value_map":  {"description": "Turns the value the label's expression gives into another, such as {\"1\": running}; \"*\" maps any value it does not list, and a value mapped to \"\" leaves the label off. Without a match and without \"*\", the value is kept."},
 		"collectors[].metrics[].value_map":           {"description": "Turns the text the expression gives into the value, such as {up: 1, down: 0}; \"*\" maps any value it does not list, numbers included. Without a match and without \"*\", the value is read as a number. Not for the prometheus and python transforms."},
 		"collectors[].metrics[].scale":               {"description": "Multiplies the value, mapped or read as a number, such as 0.001 for milliseconds to seconds. Finite and not 0. Not for the python transform; for prometheus, plain samples only."},
+		"collectors[].metrics[].time_format":         {"description": "Reads the text the expression gives as a time; the value is that time in Unix seconds. rfc3339, rfc1123, or a layout: the reference time Mon Jan 2 15:04:05 MST 2006 written as the text writes its times, such as \"2006-01-02 15:04:05\", with a year, a month and a day. scale applies after. Not with value_map, and not for the prometheus and python transforms."},
+		"collectors[].metrics[].time_zone":           {"type": "string", "description": "With time_format: the zone a text that names none of its own is read in, as an IANA name such as Europe/Sofia. Defaults to UTC."},
+		"collectors[].metrics[]":                     metricRuleSchemaRule(),
 		"collectors[].limits.max_script_memory":      {"description": "The most memory, as address space, each of the collector's Python workers may use, the interpreter and its libraries included, such as 256MiB. A script that needs more fails with a MemoryError. At least 32MiB; 0, the default, leaves it unbounded. Enforced on Linux."},
 		"collectors[].limits.script_timeout":         {"description": "How long a Python script may run. Starting the interpreter is not counted. Defaults to 100ms."},
-		"otlp":                                       enabledSwitchRule(reflect.TypeOf(model.OTLPConfig{}), "OTLP export of probe results, self-metrics and static targets with export_via_otlp. Off until enabled is true; a block that sets any other key must say enabled, true or false. See docs/OTLP.md."),
+		"otlp":                                       otlpSchemaRule(),
 		"otlp.enabled":                               {"description": "Turn the export on. false keeps the block's settings without using them."},
 		"web.basic_auth":                             enabledSwitchRule(reflect.TypeOf(model.ExporterBasicAuth{}), "Basic authentication on the exporter's own endpoints. Off until enabled is true; a block that sets any other key must say enabled, true or false."),
 		"web.basic_auth.enabled":                     {"description": "Require the credentials. false keeps the block's settings without using them."},
@@ -329,11 +347,55 @@ func configSchemaRules() map[string]map[string]any {
 		"otlp.probe_attributes":                      {"description": "Add collector and target attributes to the points a probe queues, so probes of different targets or collectors answering the same series are exported apart. Off, the default, the later probe's point replaces the earlier's."},
 		"collectors[].request.tls.server_name":       {"description": "The name the target's certificate is checked against, and sent as SNI, when the target is addressed by something else, such as an IP address. Unset, the target's host."},
 		"otlp.compression":                           {"enum": []string{model.OTLPCompressionGzip, model.OTLPCompressionNone}, "description": "Compression of the export requests. Defaults to gzip."},
-		"otlp.timeout":                               {"description": "How long one export attempt may take. Defaults to 5s. Also bounds the last export at shutdown."},
+		// A disabled block may hold any duration, so the two keys take a
+		// signed one, and otlpSchemaRule refuses a negative one of a block
+		// that is switched on.
+		"otlp.timeout": {"pattern": signedDurationPattern, "description": "How long one export attempt may take. Defaults to 5s. Also bounds the last export at shutdown."},
 		// The least interval is checked when the configuration loads
 		// (validateOTLP): a duration is text to a schema, which cannot tell
 		// 500ms from 5s, and a disabled block may hold any.
-		"otlp.interval": {"description": "How often the points waiting are exported. At least 1s, which the exporter checks when the configuration loads; defaults to 30s."},
+		"otlp.interval": {"pattern": signedDurationPattern, "description": "How often the points waiting are exported. At least 1s, which the exporter checks when the configuration loads; defaults to 30s."},
+		// What a followed redirect carries (fetch/redirecttrust.go). An entry
+		// of the list is what parseTrustedHost takes, as far as a pattern can
+		// say it: "*", a name or a glob of one, with a final dot or without,
+		// that is digits and dots alone or has a letter, a hyphen or an
+		// underscore in it, or what is written as an IPv6 address is; in
+		// brackets or not, with spaces around it. An address of that shape
+		// that is none is the exporter's to refuse.
+		"collectors[].request.follow_redirects":         {"description": "http and graphite: follow redirect statuses instead of answering with the redirect itself. A redirect that leaves the origin the request was made to — its scheme, host and port — is sent only Accept, Accept-Language and User-Agent, with the values the first request had, so a token must never be put in those three, and never the request body, and is refused over https when the collector has a tls.cert_file, unless its host is in redirect_trusted_hosts. Defaults to false. See docs/REQUESTS.md#what-a-followed-redirect-carries."},
+		"collectors[].request.redirect_trusted_hosts":   {"description": "http and graphite: the hosts, besides the origin the request is made to, that a followed redirect may carry the collector's headers, credentials and request body to, and present its TLS client certificate to: host names, globs such as *.example.com, whose star matches dots too, and single IP addresses, each trusted on every port; \"*\" trusts every host. Matched against the host the redirect names as it is written there, which is never looked up: a final dot is part of the name, and an internationalised name is listed, and matched, in its xn-- form. No probe parameter sets it."},
+		"collectors[].request.redirect_trusted_hosts[]": {"type": "string", "pattern": fetch.TrustedHostPattern},
+		// An entry of allowed_targets or denied_targets is ASCII, which a
+		// pattern can say; that it is a name, a glob, an address or a network
+		// is the exporter's to check (fetch/targetpolicy.go). The pattern is
+		// of what an entry may not hold, under not, so that an entry YAML
+		// reads as a number is still taken, as the exporter takes it.
+		"collectors[].request.allowed_targets[]": {"not": map[string]any{"type": "string", "pattern": fetch.OutsideASCIIPattern}},
+		"collectors[].request.denied_targets[]":  {"not": map[string]any{"type": "string", "pattern": fetch.OutsideASCIIPattern}},
+	}
+}
+
+// otlpSchemaRule is the rule of the otlp block: one that enabled switches on
+// (enabledSwitchRule), whose timeout and interval, once it is on, are not
+// negative, as the exporter checks them then (validateOTLP). Switched off,
+// the block is kept unchecked by both, and the keys' own pattern takes any
+// duration.
+func otlpSchemaRule() map[string]any {
+	rule := enabledSwitchRule(reflect.TypeOf(model.OTLPConfig{}), "OTLP export of probe results, self-metrics and static targets with export_via_otlp. Off until enabled is true; a block that sets any other key must say enabled, true or false. See docs/OTLP.md.")
+	notNegative := map[string]any{"pattern": durationPattern}
+	rule["if"] = map[string]any{"properties": map[string]any{"enabled": map[string]any{"const": true}}, "required": []string{"enabled"}}
+	rule["then"] = map[string]any{"properties": map[string]any{"timeout": notNegative, "interval": notNegative}}
+	return rule
+}
+
+// metricRuleSchemaRule is what the exporter refuses of a metric rule's
+// time_format and time_zone that a schema can tell (transform.CheckMetricRule):
+// time_zone without time_format, and time_format beside value_map, each of
+// which turns the text into the value.
+func metricRuleSchemaRule() map[string]any {
+	return map[string]any{
+		"dependentRequired": map[string]any{"time_zone": []string{"time_format"}},
+		"not":               map[string]any{"required": []string{"time_format", "value_map"}},
 	}
 }
 

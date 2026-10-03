@@ -36,6 +36,13 @@ type HTTPResponse struct {
 	Target    string
 	Collector string
 	Duration  time.Duration
+	// RedirectWithheld says where the answer came from when a redirect led
+	// there and headers of the request were not sent to it, the host being
+	// neither the request's own origin nor one of the collector's
+	// request.redirect_trusted_hosts (redirecttrust.go), in the words the
+	// error of a failing status goes on with: "from <host>, where a
+	// redirect led: ..."; "" otherwise.
+	RedirectWithheld string
 	// Directory is set instead of Body by a localfile collector reading a
 	// directory: every file it read, each to be decoded on its own.
 	Directory *DirectoryRead
@@ -696,8 +703,11 @@ func fetch(ctx context.Context, target string, c *model.Collector, overrides Req
 				}
 				return nil, fmt.Errorf("HTTP request failed: %w: the HTTP/2 connection was closed over what the target sent, %s; an answer whose headers are larger than %d bytes, the most the exporter reads of a response's headers, ends this way over HTTP/2, so look at the size of the target's response headers first", err, closed, maxResponseHeaderBytes)
 			}
-			// A refused target is refused again on every attempt.
-			if attempt < retryAttempts && requestContext.Err() == nil && !errors.Is(err, ErrTargetRefused) {
+			// A refused target is refused again on every attempt, and so
+			// is a redirect that would send the body, or show the client
+			// certificate, to a host that is not trusted.
+			var redirectRefused *redirectRefusedError
+			if attempt < retryAttempts && requestContext.Err() == nil && !errors.Is(err, ErrTargetRefused) && !errors.As(err, &redirectRefused) {
 				if waitErr := waitRetry(requestContext, retryBackoff); waitErr != nil {
 					return nil, fmt.Errorf("HTTP request failed: %w (the wait before retrying was cut short: %w)", err, waitErr)
 				}
@@ -746,6 +756,12 @@ func fetch(ctx context.Context, target string, c *model.Collector, overrides Req
 			return nil, model.MarkError(fmt.Errorf("response size exceeds limit %d", limit), model.ErrLimitExceeded)
 		}
 		response := &HTTPResponse{StatusCode: resp.StatusCode, Headers: resp.Header.Clone(), Body: body, Target: target, Collector: c.Name, Duration: time.Since(start)}
+		// The answer of a request a redirect led to says so when the
+		// redirect left the collector's headers behind, so a 401 from
+		// there can be told from one the target gave.
+		if resp.Request != nil && resp.Request.Response != nil {
+			response.RedirectWithheld = redirectWithheldFrom(requestContext)
+		}
 		// An answer the collector accepts is its answer, not a failure to
 		// retry, even a 503 it asked to read.
 		if retryableStatus(resp.StatusCode) && !AcceptedStatus(c, overrides, resp.StatusCode) && attempt < retryAttempts {

@@ -1,0 +1,75 @@
+<!DOCTYPE HTML PUBLIC "-//W3C//DTD HTML 4.01 Transitional//EN" "http://www.w3.org/TR/html4/loose.dtd">
+<html>
+<head>
+<title>Statistics Report for lb01.example.net</title>
+<meta http-equiv="Content-Type" content="text/html; charset=utf-8">
+<meta http-equiv="refresh" content="10">
+<style type="text/css"><!--
+body { font-family: arial, helvetica, sans-serif; font-size: 12px; }
+table.tbl { border-collapse: collapse; }
+table.tbl td { text-align: right; border: 1px solid gray; padding: 2px 4px; }
+td.state.up { background: #c0ffc0; }
+td.state.down { background: #ff9090; }
+td.state.maint { background: #c07820; }
+-->
+</style>
+</head>
+<body>
+<h1>Server Status for lb01.example.net (via 10.0.4.17)</h1>
+
+<dl>
+<dt>Server Version: Apache/2.4.62 (Unix) OpenSSL/3.0.15</dt>
+<dt>Server MPM: event</dt>
+<dt>Server Built: Jul 17 2026 09:12:44</dt>
+</dl><hr><dl>
+<dt>Current Time: Saturday, 03-Oct-2026 09:00:07 UTC</dt>
+<dt>Restart Time: Monday, 21-Sep-2026 04:29:00 UTC</dt>
+<dt>Parent Server Config. Generation: 3</dt>
+<dt>Parent Server MPM Generation: 2</dt>
+<dt>Server uptime:  12 days 4 hours 31 minutes 7 seconds</dt>
+<dt>Server load: 0.42 0.37 0.35</dt>
+<dt>Total accesses: 1234567 - Total Traffic: 48.2 GB - Total Duration: 98123456</dt>
+<dt>CPU Usage: u412.5 s98.25 cu0 cs0 - .0485% CPU load</dt>
+<dt>11.7 requests/sec - 468.3 kB/second - 40.0 kB/request - 79.4795 ms/request</dt>
+<dt>7 requests currently being processed, 93 idle workers</dt>
+</dl>
+
+<pre>Active connections: 291
+server accepts handled requests
+ 16630948 16630948 31070465
+Reading: 6 Writing: 179 Waiting: 106
+</pre>
+
+<p id="workers">Workers: <span id="busy" class="num">7</span> busy,
+  <span id="idle" class="num">93</span> idle,
+  <span id="limit" class="num">400</span> limit</p>
+
+<h2>Backends</h2>
+<table id="backends" class="tbl" border="1" cellspacing="0" cellpadding="2">
+<caption>Statistics of the configured backends</caption>
+<thead>
+<tr class="titre"><th rowspan="2">Backend</th><th rowspan="2">Server</th><th colspan="3">Sessions</th><th colspan="2">Bytes</th><th rowspan="2">Usage</th><th rowspan="2">Status</th><th rowspan="2">Weight</th></tr>
+<tr class="titre"><th>Cur</th><th>Max</th><th>Limit</th><th>In</th><th>Out</th></tr>
+</thead>
+<tfoot>
+<tr class="total"><th colspan="2" scope="row">Total</th><td class="scur">44</td><td class="smax">251</td><td class="slim">4,000</td><td class="bin" data-value="5731516212" title="5731516212 bytes">5.3 GB</td><td class="bout" data-value="89214455910" title="89214455910 bytes">83.1 GB</td><td class="usage">1%</td><td class="state up" title="3 of 4 servers up">UP</td><td class="weight">300</td></tr>
+</tfoot>
+<tbody>
+<tr class="active_up" data-backend="web" data-server="web01"><th scope="row" rowspan="3">web</th><td class="name">web01</td><td class="scur">12</td><td class="smax">85</td><td class="slim">1,000</td><td class="bin" data-value="1321205760" title="1321205760 bytes">1.2 GB</td><td class="bout" data-value="27917287424" title="27917287424 bytes">26.0 GB</td><td class="usage">1%</td><td class="state up" title="L7OK/200 in 3ms">UP</td><td class="weight">100</td></tr>
+<tr class="active_up" data-backend="web" data-server="web02"><td class="name">web02</td><td class="scur">31</td><td class="smax">166</td><td class="slim">1,000</td><td class="bin" data-value="4294967296" title="4294967296 bytes">4.0 GB</td><td class="bout" data-value="61203283968" title="61203283968 bytes">57.0 GB</td><td class="usage">3%</td><td class="state up" title="L7OK/200 in 5ms">UP</td><td class="weight">100</td></tr>
+<tr class="active_down" data-backend="web" data-server="web03"><td class="name">web03</td><td class="scur">0</td><td class="smax">0</td><td class="slim">1,000</td><td class="bin" data-value="0" title="0 bytes">0</td><td class="bout" data-value="0" title="0 bytes">0</td><td class="usage">0%</td><td class="state down" title="L4CON in 2001ms: Connection refused">DOWN</td><td class="weight">100</td></tr>
+<tr class="maintenance" data-backend="api" data-server="api01"><th scope="row">api</th><td class="name">api01</td><td class="scur">1</td><td class="smax">12</td><td class="slim">1,000</td><td class="bin" data-value="115343156" title="115343156 bytes">110.0 MB</td><td class="bout" data-value="93884518" title="93884518 bytes">89.5 MB</td><td class="usage">0%</td><td class="state maint" title="">MAINT</td><td class="weight">0</td></tr>
+</tbody>
+</table>
+
+<h2>Scoreboard</h2>
+<table id="scoreboard" border="0">
+<tr><th>Srv</th><th>PID</th><th>Acc</th><th>M</th><th>CPU</th><th>SS</th><th>Req</th><th>Conn</th><th>VHost</th><th>Request</th></tr>
+<tr><td><b>0-2</b></td><td>30411</td><td>0/312/20814</td><td>_</td><td>4.25</td><td>0</td><td>3</td><td>0.0</td><td nowrap>www.example.net:443</td><td nowrap>GET /index.html HTTP/1.1</td></tr>
+<tr><td><b>1-2</b></td><td>30412</td><td>1/298/20650</td><td><b>W</b></td><td>3.98</td><td>0</td><td>0</td><td>0.0</td><td nowrap>www.example.net:443</td><td nowrap>GET /server-status HTTP/1.1</td></tr>
+<tr><td><b>2-2</b></td><td>-</td><td>0/0/19877</td><td>.</td><td>0.00</td><td>4117</td><td>0</td><td>0.0</td><td nowrap></td><td nowrap></td></tr>
+</table>
+<hr>
+<address>Apache/2.4.62 (Unix) Server at lb01.example.net Port 443</address>
+</body>
+</html>

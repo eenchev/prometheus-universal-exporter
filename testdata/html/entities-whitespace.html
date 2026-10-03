@@ -1,0 +1,57 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Tank farm &amp; pump room &mdash; readings</title>
+</head>
+<body>
+<h1>Tank farm &amp; pump room</h1>
+<table id="readings">
+  <thead>
+    <tr><th>Sensor</th><th>Reading</th><th>Note</th></tr>
+  </thead>
+  <tbody>
+    <tr id="plain"><td class="name">Tank A level</td><td class="v">71.5</td><td class="note">plain</td></tr>
+    <tr id="indented">
+      <td class="name">
+        Tank B level
+      </td>
+      <td class="v">
+        64.25
+      </td>
+      <td class="note">leading and trailing newlines and indentation</td>
+    </tr>
+    <tr id="nbsp-entity"><td class="name">Pump&nbsp;1 &amp; 2</td><td class="v">&nbsp;12&nbsp;</td><td class="note">&amp;nbsp; around the value</td></tr>
+    <tr id="nbsp-literal"><td class="name">Pump 3</td><td class="v"> 13 </td><td class="note">U+00A0 around the value</td></tr>
+    <tr id="numeric-entities"><td class="name">R&#233;servoir &#x2116;4 &lt;north&gt;</td><td class="v">&#52;&#x32;</td><td class="note">numeric entities: 42</td></tr>
+    <tr id="minus-entity"><td class="name">Outside temp</td><td class="v">&minus;7.5</td><td class="note">&amp;minus;</td></tr>
+    <tr id="minus-literal"><td class="name">Cold store temp</td><td class="v">−18</td><td class="note">U+2212</td></tr>
+    <tr id="hyphen-minus"><td class="name">Freezer temp</td><td class="v">-21.5</td><td class="note">ASCII hyphen-minus</td></tr>
+    <tr id="thin-space"><td class="name">Total volume</td><td class="v">1 234 567</td><td class="note">thin spaces group the digits</td></tr>
+    <tr id="narrow-nbsp"><td class="name">Daily flow</td><td class="v">12 500</td><td class="note">narrow no-break spaces group the digits</td></tr>
+    <tr id="nbsp-inside"><td class="name">Weekly flow</td><td class="v">87&nbsp;500</td><td class="note">a no-break space groups the digits</td></tr>
+    <tr id="br"><td class="name">Pressure<br>(inlet)</td><td class="v">4.2<br>bar</td><td class="note">a br between the value and its unit</td></tr>
+    <tr id="br-only"><td class="name">Pressure<br/>(outlet)</td><td class="v">3.9<br></td><td class="note">a br after the value</td></tr>
+    <tr id="split"><td class="name"><b>Flow</b> <i>rate</i></td><td class="v"><b>12</b>.5</td><td class="note">the value split across inline tags</td></tr>
+    <tr id="split-deep"><td class="name"><span>Valve</span><span> 7</span></td><td class="v"><span class="int">3</span><span class="sep">.</span><span class="frac">75</span></td><td class="note">the value in three spans</td></tr>
+    <tr id="comment"><td class="name">Filter<!-- renamed 2026-09 --> load</td><td class="v">5<!-- was 6 -->5</td><td class="note">comments inside cells</td></tr>
+    <tr id="comment-only"><td class="name">Spare</td><td class="v"><!-- no sensor --></td><td class="note">a comment and nothing else</td></tr>
+    <tr id="whitespace-only"><td class="name">Spare 2</td><td class="v"> &nbsp;
+      </td><td class="note">blanks and a no-break space and nothing else</td></tr>
+    <tr id="wrapped"><td class="name">Header tank
+        level (north
+        wing)</td><td class="v">2.5</td><td class="note">a name wrapped over three lines</td></tr>
+    <tr id="tabs"><td class="name">	Sump	level	</td><td class="v">	0.8	</td><td class="note">tabs</td></tr>
+    <tr id="quote"><td class="name">Tank &quot;C&quot; / line&#39;s end \ back</td><td class="v">9</td><td class="note">quotes and a backslash in the name</td></tr>
+    <tr id="plus"><td class="name">Drift</td><td class="v">+0.5</td><td class="note">a plus sign</td></tr>
+    <tr id="exponent"><td class="name">Leak rate</td><td class="v">1.5e-3</td><td class="note">an exponent</td></tr>
+    <tr id="zwsp"><td class="name">Level&#8203;switch</td><td class="v">1&#8203;</td><td class="note">a zero-width space after the value</td></tr>
+  </tbody>
+</table>
+<p class="summary">
+  Sensors&nbsp;online:&nbsp;<span id="online">
+    21
+  </span>
+</p>
+</body>
+</html>

@@ -17,6 +17,10 @@ import (
 // down, which only a reset does. A series not exported for otlpStartForget is
 // forgotten, and starts again when it comes back.
 //
+// The exporter's own counters, histograms and summaries are not among them:
+// it knows when each began to count, and their points carry that time
+// (selfcreated.go, otlpMetrics).
+//
 // The series remembered are bounded as well, by otlpStartSeriesPerPoint
 // times otlp.max_pending_points: series whose labels keep changing — a
 // request ID, a timestamp — would otherwise each be kept for an hour, without

@@ -1,3 +1,32 @@
+# Demo collector for an HTML page: "Countries of the World" on
+# scrapethissite.com, a public page made for practising scraping that needs
+# no authentication and no API key.
+#
+#   go run . --config.file=examples/config.scrapethissite.html-test.yaml
+#   curl 'http://localhost:8080/probe?collector=countries_html&target=https://www.scrapethissite.com'
+#
+# The page holds one block per country:
+#
+#   <div class="col-md-4 country">
+#     <h3 class="country-name">
+#       <i class="flag-icon flag-icon-ad"></i>
+#       Andorra
+#     </h3>
+#     <div class="country-info">
+#       <strong>Capital:</strong> <span class="country-capital">Andorra la Vella</span><br>
+#       <strong>Population:</strong> <span class="country-population">84000</span><br>
+#       <strong>Area (km<sup>2</sup>):</strong> <span class="country-area">468.0</span><br>
+#     </div>
+#   </div>
+#
+# items selects the blocks, and the value and the label are selectors within
+# one block, so every country is a series, named by the page itself:
+#
+#   country_population{country="Andorra"} 84000
+#   country_area{country="Andorra"} 468
+#
+# The text of an element is read without the blanks around it, so the name
+# is Andorra although it stands on a line of its own after the flag.
 web:
   self_metrics:
     verbose: true
@@ -18,23 +47,28 @@ collectors:
       type: html
 
     transform:
-      type: xpath
+      type: css
 
     metrics:
       - name: country_population
-        description: Population of the first country on the page
+        description: Population of a country
         type: gauge
         error_mode: log
-        expression: "(//span[contains(@class, 'country-population')])[1]"
+        items: div.country
+        expression: span.country-population
         labels:
           - name: country
-            value: Andorra
+            expression: h3.country-name
+            # A block without a name would be a series nobody can tell apart.
+            required: true
 
       - name: country_area
-        description: Area in square kilometres of the first country on the page
+        description: Area of a country in square kilometres
         type: gauge
         error_mode: log
-        expression: "(//span[contains(@class, 'country-area')])[1]"
+        items: div.country
+        expression: span.country-area
         labels:
           - name: country
-            value: Andorra
+            expression: h3.country-name
+            required: true

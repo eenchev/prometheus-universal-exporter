@@ -46,6 +46,12 @@ otlp:
 #     # scheme, host and path only; credentials and the query string are never
 #     # put in a label.
 #     verbose: false
+#     # Writes, in an OpenMetrics answer of the self-metrics, a _created sample
+#     # after each of the exporter's own counters, histograms and summaries:
+#     # the time it began to count. Off by default: a Prometheus without
+#     # --enable-feature=created-timestamp-zero-ingestion stores each one as a
+#     # series of its own. See "Created timestamps" in docs/SELF-METRICS.md.
+#     created_timestamps: false
 
 # A top-level key starting with x- is this file's own: the exporter ignores
 # it. It is the place for settings several collectors share, written once as
@@ -58,7 +64,8 @@ x-guarded-request: &guarded_request
   # probe is answered 403. allowed_targets, when set, is the only place
   # requests may go. The cloud metadata service, 169.254.169.254 and
   # fd00:ec2::254, is refused by every collector unless allowed_targets
-  # lists it.
+  # lists it. Entries are written in ASCII, as a target's host is: an
+  # internationalised name in its xn-- form.
   denied_targets: [127.0.0.0/8, "::1"]
   # allowed_targets: ["*.internal.example", 10.0.0.0/8]
 
@@ -109,8 +116,15 @@ collectors:
       #   insecure_skip_verify: false
       # Follow HTTP redirect statuses on the target request. Defaults to
       # false, so a redirect is returned as-is and fails the probe rather
-      # than sending the scrape to another host.
+      # than sending the scrape to another host. A followed redirect that
+      # leaves the origin the request was made to (scheme, host and port) is
+      # sent only Accept, Accept-Language and User-Agent, and never the
+      # request body, and is refused over https when tls.cert_file is set,
+      # unless its host is listed in redirect_trusted_hosts: host names,
+      # globs and single IP addresses, trusted on every port.
       # follow_redirects: false
+      # redirect_trusted_hosts:
+      #   - "*.cdn.example.com"
       # Allow the target request to negotiate HTTP/2. Negotiated through ALPN
       # over TLS, so it applies to HTTPS targets. Defaults to false.
       # enable_http2: false

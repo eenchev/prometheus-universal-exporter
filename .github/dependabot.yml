@@ -39,6 +39,23 @@ updates:
         update-types:
           - version-update:semver-major
 
+  # The Python modules only the tests use (test/python/requirements.txt):
+  # prometheus_client, whose strict OpenMetrics parser the suite runs the
+  # exporter's answers through. The libraries the image ships are pinned in
+  # the Dockerfile and updated with it.
+  - package-ecosystem: pip
+    directory: /test/python
+    schedule:
+      interval: weekly
+      day: tuesday
+      time: "10:00"
+      timezone: Europe/Sofia
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: deps
+    labels:
+      - dependencies
+
   # Keeps the actions used by CI and the release workflows current.
   - package-ecosystem: github-actions
     directory: /

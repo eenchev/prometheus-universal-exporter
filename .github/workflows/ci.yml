@@ -5,6 +5,10 @@ on:
 jobs:
   test:
     runs-on: ubuntu-latest
+    # The tests that need the strict reference parser fail without it
+    # instead of being skipped (internal/exporter/openmetricsstrict_test.go).
+    env:
+      STRICT_OPENMETRICS_PARSER: required
     steps:
       - uses: actions/checkout@v7
       - uses: dorny/paths-filter@v4
@@ -35,6 +39,9 @@ jobs:
               - 'Makefile'
               - 'tools/**'
               - '.golangci.yml'
+              # The Python modules the tests use: a new version of the
+              # reference parser has to be run against the suite.
+              - 'test/python/**'
             chart:
               - 'charts/**'
               # The chart steps render configs and testdata files.
@@ -80,6 +87,14 @@ jobs:
             "lxml==$(arg LXML_VERSION)" \
             "PyYAML==$(arg PYYAML_VERSION)" \
             "python-dateutil==$(arg PYTHON_DATEUTIL_VERSION)"
+      # The OpenMetrics answers are also given to prometheus_client's parser,
+      # the strict reference parser, which the image does not ship. It is
+      # installed for the tests alone, at the version test/python pins, and
+      # the job's STRICT_OPENMETRICS_PARSER has those tests fail, should the
+      # module be missing, where they would otherwise be skipped.
+      - name: Install the Python modules only the tests use
+        if: steps.changes.outputs.go == 'true'
+        run: python3 -m pip install --disable-pip-version-check -r test/python/requirements.txt
       - run: go mod download
         if: steps.changes.outputs.go == 'true'
       - name: Check formatting
@@ -124,6 +139,17 @@ jobs:
             tags="$(sh tools/request-type-tags.sh "$type")"
             go vet -tags "$tags" ./...
             go build -tags "$tags" ./...
+          done
+        if: steps.changes.outputs.go == 'true'
+      # And test each: a build with one type is one the exporter ships, so its
+      # tests have to pass too. A test that needs a type says so with a build
+      # constraint, so each run is of the tests that build can pass. Once and
+      # without -race, which the runs above cover with every type.
+      - name: Test with each request type on its own
+        run: |
+          for type in graphite grpc http localfile; do
+            tags="$(sh tools/request-type-tags.sh "$type")"
+            go test -count=1 -tags "$tags" ./...
           done
         if: steps.changes.outputs.go == 'true'
       - run: helm lint charts/prometheus-universal-exporter

@@ -1,0 +1,157 @@
+[
+  {
+    "bytes_processed_total": 48211905331,
+    "events_pipeline_filtered_total": 9120,
+    "events_pipeline_published_total": 88111336,
+    "events_pipeline_total": 88120456,
+    "events_processed_total": 88120456,
+    "files_active": 22,
+    "files_closed_total": 4051,
+    "files_opened_total": 4073,
+    "gzip_bytes_processed_total": 0,
+    "gzip_events_processed_total": 0,
+    "gzip_files_active": 0,
+    "gzip_files_closed_total": 0,
+    "gzip_files_opened_total": 0,
+    "gzip_messages_read_total": 0,
+    "gzip_messages_truncated_total": 0,
+    "gzip_processing_errors_total": 0,
+    "gzip_processing_time": {
+      "histogram": {
+        "count": 0,
+        "max": 0,
+        "mean": 0,
+        "median": 0,
+        "min": 0,
+        "p75": 0,
+        "p95": 0,
+        "p99": 0,
+        "p999": 0,
+        "stddev": 0
+      }
+    },
+    "harvester_active_readers": 3,
+    "harvester_parked": 19,
+    "harvester_waiting": 0,
+    "id": "kubernetes-container-logs",
+    "input": "filestream",
+    "messages_read_total": 88120991,
+    "messages_truncated_total": 17,
+    "processing_errors_total": 4,
+    "processing_time": {
+      "histogram": {
+        "count": 88120456,
+        "max": 48211456,
+        "mean": 236518.5,
+        "median": 184320,
+        "min": 31744,
+        "p75": 251904,
+        "p95": 612352,
+        "p99": 1843200,
+        "p999": 12492800,
+        "stddev": 512043.75
+      }
+    }
+  },
+  {
+    "arrival_period": {
+      "histogram": {
+        "count": 3341920,
+        "max": 9000001536,
+        "mean": 181012480.25,
+        "median": 1536000,
+        "min": 20480,
+        "p75": 4096000,
+        "p95": 512000000,
+        "p99": 2048000000,
+        "p999": 6144000000,
+        "stddev": 702113024.5
+      }
+    },
+    "device": "0.0.0.0:9000",
+    "events_pipeline_filtered_total": 0,
+    "events_pipeline_published_total": 3341921,
+    "events_pipeline_total": 3341921,
+    "id": "syslog-tcp",
+    "input": "tcp",
+    "processing_time": {
+      "histogram": {
+        "count": 3341921,
+        "max": 7340032,
+        "mean": 61952.25,
+        "median": 51200,
+        "min": 12288,
+        "p75": 66560,
+        "p95": 143360,
+        "p99": 409600,
+        "p999": 3072000,
+        "stddev": 88473.5
+      }
+    },
+    "published_events_total": 3341921,
+    "receive_queue_length": 0,
+    "received_bytes_total": 912344433,
+    "received_events_total": 3341921
+  },
+  {
+    "bytes_processed_total": 1930412877,
+    "events_pipeline_filtered_total": 0,
+    "events_pipeline_published_total": 7120044,
+    "events_pipeline_total": 7120044,
+    "events_processed_total": 7120044,
+    "files_active": 2,
+    "files_closed_total": 61,
+    "files_opened_total": 63,
+    "gzip_bytes_processed_total": 0,
+    "gzip_events_processed_total": 0,
+    "gzip_files_active": 0,
+    "gzip_files_closed_total": 0,
+    "gzip_files_opened_total": 0,
+    "gzip_messages_read_total": 0,
+    "gzip_messages_truncated_total": 0,
+    "gzip_processing_errors_total": 0,
+    "gzip_processing_time": {
+      "histogram": {
+        "count": 0,
+        "max": 0,
+        "mean": 0,
+        "median": 0,
+        "min": 0,
+        "p75": 0,
+        "p95": 0,
+        "p99": 0,
+        "p999": 0,
+        "stddev": 0
+      }
+    },
+    "harvester_active_readers": 1,
+    "harvester_parked": 1,
+    "harvester_waiting": 0,
+    "id": "nginx-access",
+    "input": "filestream",
+    "messages_read_total": 7120044,
+    "messages_truncated_total": 0,
+    "processing_errors_total": 0,
+    "processing_time": {
+      "histogram": {
+        "count": 7120044,
+        "max": 9437184,
+        "mean": 148992.75,
+        "median": 122880,
+        "min": 28672,
+        "p75": 163840,
+        "p95": 368640,
+        "p99": 921600,
+        "p999": 5120000,
+        "stddev": 204800.25
+      }
+    }
+  },
+  {
+    "events_pipeline_filtered_total": 310,
+    "events_pipeline_published_total": 221647,
+    "events_pipeline_total": 221957,
+    "id": "journald-system::LOCAL_SYSTEM_JOURNAL",
+    "input": "journald"
+  }
+]

@@ -11,6 +11,7 @@ import (
 	"os"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/eenchev/prometheus-universal-exporter/internal/config"
@@ -23,6 +24,17 @@ import (
 // testdata/json/filebeat-stats-kafka.json the same Filebeat publishing to
 // Kafka, and testdata/json/filebeat-info.json its /. Unlike the demos of public services, Filebeat runs locally, so these run
 // with the rest of the suite.
+//
+// testdata/json/filebeat-inputs.json is its /inputs/: two filestream inputs,
+// a tcp input and a journald one. It is written from the Beats source at
+// version 9.6.0 (commit b5529c228d2b of 25 September 2026), not captured
+// from a running Filebeat: the array of one object per input with "id" and
+// "input" is what libbeat/monitoring/inputmon serves, the events_pipeline_*
+// counters are the ones filebeat/input/v2 registers for every input, the
+// filestream metrics those of filebeat/input/filestream/internal/input-logfile,
+// the tcp ones those of filebeat/input/netmetrics, and the fields of
+// "histogram" the ones filebeat/tests/integration/filestream_gzip_test.go
+// decodes from this endpoint.
 
 const filebeatConfig = "../../examples/config.filebeat.json-test.yaml"
 
@@ -269,5 +281,233 @@ func TestTheFilebeatExampleReadsWhoIsAnswering(t *testing.T) {
 	want := []string{`filebeat_build_info{beat="filebeat",binary_arch="amd64",build_commit="6f5c7b8a3e2d1c0b9a8f7e6d5c4b3a2918f7e6d5",name="logs-node-3",uuid="34f6c6e1-45a8-4b12-9125-11b3e6e89866",version="9.1.3"} 1`}
 	if got := samples(body); !slices.Equal(got, want) {
 		t.Fatalf("got\n%s\nwant\n%s", strings.Join(got, "\n"), strings.Join(want, "\n"))
+	}
+}
+
+// probeFilebeatInputs serves inputs at /inputs/ and nowhere else, as
+// Filebeat's route does, probes the filebeat_inputs collector, and returns
+// the exposition with the requests the stand-in received, as "METHOD URI".
+func probeFilebeatInputs(t *testing.T, inputs []byte) (string, []string) {
+	t.Helper()
+	var (
+		mu       sync.Mutex
+		requests []string
+	)
+	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		requests = append(requests, r.Method+" "+r.RequestURI)
+		mu.Unlock()
+		if r.URL.Path != "/inputs/" {
+			http.NotFound(w, r)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json; charset=utf-8")
+		_, _ = w.Write(inputs)
+	}))
+	t.Cleanup(target.Close)
+	cfg, err := config.Load(filebeatConfig)
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := NewServer(config.NewManager(cfg, filebeatConfig, slog.Default()), "python3", slog.Default())
+	response := httptest.NewRecorder()
+	server.Handler().ServeHTTP(response, httptest.NewRequest(http.MethodGet,
+		"/probe?collector=filebeat_inputs&target="+url.QueryEscape(target.URL), nil))
+	if response.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	return response.Body.String(), slices.Clone(requests)
+}
+
+// filebeatInputs returns the inputs of testdata/json/filebeat-inputs.json
+// that keep says to keep, as a /inputs/ answer.
+func filebeatInputs(t *testing.T, keep func(input map[string]any) bool) []byte {
+	t.Helper()
+	var inputs []map[string]any
+	if err := json.Unmarshal(readFixture(t, "filebeat-inputs.json"), &inputs); err != nil {
+		t.Fatal(err)
+	}
+	kept := []map[string]any{}
+	for _, input := range inputs {
+		if keep(input) {
+			kept = append(kept, input)
+		}
+	}
+	answer, err := json.Marshal(kept)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return answer
+}
+
+// The inputs collector asks for /inputs/, with its slash, and every input of
+// the answer becomes series with its id and type: the pipeline counters of
+// all four, the file, message, byte, event and error counters and the open
+// files of the two filestream inputs, and the processing time, nanoseconds
+// as seconds, of the three that report one. Nothing is logged: the metrics
+// the tcp and journald inputs do not have are simply absent for them.
+func TestTheFilebeatExampleReadsEveryInput(t *testing.T) {
+	logs := testutil.CaptureLogs(t)
+	body, requests := probeFilebeatInputs(t, readFixture(t, "filebeat-inputs.json"))
+	if want := []string{"GET /inputs/"}; !slices.Equal(requests, want) {
+		t.Errorf("the collector requested %q, want %q", requests, want)
+	}
+	const (
+		containers = `id="kubernetes-container-logs",input="filestream"`
+		nginx      = `id="nginx-access",input="filestream"`
+		syslog     = `id="syslog-tcp",input="tcp"`
+		journald   = `id="journald-system::LOCAL_SYSTEM_JOURNAL",input="journald"`
+	)
+	want := []string{
+		// What every input reports.
+		`filebeat_input_pipeline_events_added_total{` + containers + `} 8.8120456e+07`,
+		`filebeat_input_pipeline_events_added_total{` + nginx + `} 7.120044e+06`,
+		`filebeat_input_pipeline_events_added_total{` + syslog + `} 3.341921e+06`,
+		`filebeat_input_pipeline_events_added_total{` + journald + `} 221957`,
+		`filebeat_input_pipeline_events_total{` + containers + `,outcome="filtered"} 9120`,
+		`filebeat_input_pipeline_events_total{` + containers + `,outcome="published"} 8.8111336e+07`,
+		`filebeat_input_pipeline_events_total{` + nginx + `,outcome="filtered"} 0`,
+		`filebeat_input_pipeline_events_total{` + nginx + `,outcome="published"} 7.120044e+06`,
+		`filebeat_input_pipeline_events_total{` + syslog + `,outcome="filtered"} 0`,
+		`filebeat_input_pipeline_events_total{` + syslog + `,outcome="published"} 3.341921e+06`,
+		`filebeat_input_pipeline_events_total{` + journald + `,outcome="filtered"} 310`,
+		`filebeat_input_pipeline_events_total{` + journald + `,outcome="published"} 221647`,
+		// What a filestream input reports.
+		`filebeat_input_files_total{event="opened",` + containers + `} 4073`,
+		`filebeat_input_files_total{event="closed",` + containers + `} 4051`,
+		`filebeat_input_files_total{event="opened",` + nginx + `} 63`,
+		`filebeat_input_files_total{event="closed",` + nginx + `} 61`,
+		`filebeat_input_files_active{` + containers + `} 22`,
+		`filebeat_input_files_active{` + nginx + `} 2`,
+		`filebeat_input_messages_read_total{` + containers + `} 8.8120991e+07`,
+		`filebeat_input_messages_read_total{` + nginx + `} 7.120044e+06`,
+		`filebeat_input_messages_truncated_total{` + containers + `} 17`,
+		`filebeat_input_messages_truncated_total{` + nginx + `} 0`,
+		`filebeat_input_bytes_processed_total{` + containers + `} 4.8211905331e+10`,
+		`filebeat_input_bytes_processed_total{` + nginx + `} 1.930412877e+09`,
+		`filebeat_input_events_processed_total{` + containers + `} 8.8120456e+07`,
+		`filebeat_input_events_processed_total{` + nginx + `} 7.120044e+06`,
+		`filebeat_input_processing_errors_total{` + containers + `} 4`,
+		`filebeat_input_processing_errors_total{` + nginx + `} 0`,
+		// The processing time of the inputs that measure one.
+		`filebeat_input_processing_time_seconds{` + containers + `,quantile="0.5"} 0.00018432`,
+		`filebeat_input_processing_time_seconds{` + containers + `,quantile="0.75"} 0.000251904`,
+		`filebeat_input_processing_time_seconds{` + containers + `,quantile="0.95"} 0.000612352`,
+		`filebeat_input_processing_time_seconds{` + containers + `,quantile="0.99"} 0.0018432`,
+		`filebeat_input_processing_time_seconds{` + containers + `,quantile="0.999"} 0.0124928`,
+		`filebeat_input_processing_time_seconds{` + nginx + `,quantile="0.5"} 0.00012288`,
+		`filebeat_input_processing_time_seconds{` + nginx + `,quantile="0.75"} 0.00016384`,
+		`filebeat_input_processing_time_seconds{` + nginx + `,quantile="0.95"} 0.00036864`,
+		`filebeat_input_processing_time_seconds{` + nginx + `,quantile="0.99"} 0.0009216`,
+		`filebeat_input_processing_time_seconds{` + nginx + `,quantile="0.999"} 0.00512`,
+		`filebeat_input_processing_time_seconds{` + syslog + `,quantile="0.5"} 5.12e-05`,
+		`filebeat_input_processing_time_seconds{` + syslog + `,quantile="0.75"} 6.656e-05`,
+		`filebeat_input_processing_time_seconds{` + syslog + `,quantile="0.95"} 0.00014336`,
+		`filebeat_input_processing_time_seconds{` + syslog + `,quantile="0.99"} 0.0004096`,
+		`filebeat_input_processing_time_seconds{` + syslog + `,quantile="0.999"} 0.003072`,
+		`filebeat_input_processing_time_mean_seconds{` + containers + `} 0.0002365185`,
+		`filebeat_input_processing_time_mean_seconds{` + nginx + `} 0.00014899275`,
+		`filebeat_input_processing_time_mean_seconds{` + syslog + `} 6.195225e-05`,
+		`filebeat_input_processing_time_max_seconds{` + containers + `} 0.048211456`,
+		`filebeat_input_processing_time_max_seconds{` + nginx + `} 0.009437184`,
+		`filebeat_input_processing_time_max_seconds{` + syslog + `} 0.007340032`,
+	}
+	got := samples(body)
+	for _, series := range want {
+		if !slices.Contains(got, series) {
+			t.Errorf("missing %s", series)
+		}
+	}
+	if len(got) != len(want) {
+		t.Errorf("%d series, want %d:\n%s", len(got), len(want), strings.Join(got, "\n"))
+	}
+	if logs.Len() != 0 {
+		t.Errorf("reading a complete answer logged:\n%s", logs)
+	}
+}
+
+// Inputs of other types than filestream have none of its metrics: the tcp
+// input keeps its pipeline counters and its processing time, the journald
+// one its pipeline counters alone, the filestream families are not exported
+// at all, and nothing is logged.
+func TestTheFilebeatExampleReadsInputsWithoutTheFilestreamMetrics(t *testing.T) {
+	logs := testutil.CaptureLogs(t)
+	body, _ := probeFilebeatInputs(t, filebeatInputs(t, func(input map[string]any) bool {
+		return input["input"] != "filestream"
+	}))
+	for _, absent := range []string{"filebeat_input_files_", "filebeat_input_messages_", "filebeat_input_bytes_processed_total",
+		"filebeat_input_events_processed_total", "filebeat_input_processing_errors_total", `input="filestream"`} {
+		if strings.Contains(body, absent) {
+			t.Errorf("%s is exported for inputs that do not report it", absent)
+		}
+	}
+	got := samples(body)
+	for _, want := range []string{
+		`filebeat_input_pipeline_events_added_total{id="journald-system::LOCAL_SYSTEM_JOURNAL",input="journald"} 221957`,
+		`filebeat_input_pipeline_events_total{id="journald-system::LOCAL_SYSTEM_JOURNAL",input="journald",outcome="filtered"} 310`,
+		`filebeat_input_pipeline_events_total{id="journald-system::LOCAL_SYSTEM_JOURNAL",input="journald",outcome="published"} 221647`,
+		`filebeat_input_pipeline_events_added_total{id="syslog-tcp",input="tcp"} 3.341921e+06`,
+		`filebeat_input_processing_time_seconds{id="syslog-tcp",input="tcp",quantile="0.99"} 0.0004096`,
+		`filebeat_input_processing_time_max_seconds{id="syslog-tcp",input="tcp"} 0.007340032`,
+	} {
+		if !slices.Contains(got, want) {
+			t.Errorf("missing %s", want)
+		}
+	}
+	// Three pipeline series each, and the tcp input's five quantiles, mean
+	// and max.
+	if len(got) != 3+3+7 {
+		t.Errorf("%d series, want %d:\n%s", len(got), 3+3+7, strings.Join(got, "\n"))
+	}
+	if logs.Len() != 0 {
+		t.Errorf("reading inputs without the filestream metrics logged:\n%s", logs)
+	}
+}
+
+// A Filebeat too old to count each input's pipeline events reports the
+// inputs without those counters: the rest is read, and nothing is logged.
+func TestTheFilebeatExampleReadsInputsWithoutThePipelineCounters(t *testing.T) {
+	logs := testutil.CaptureLogs(t)
+	body, _ := probeFilebeatInputs(t, filebeatInputs(t, func(input map[string]any) bool {
+		for key := range input {
+			if strings.HasPrefix(key, "events_pipeline_") {
+				delete(input, key)
+			}
+		}
+		return true
+	}))
+	if strings.Contains(body, "filebeat_input_pipeline_") {
+		t.Errorf("pipeline counters are exported for inputs that do not report them:\n%s", body)
+	}
+	got := samples(body)
+	if want := `filebeat_input_files_active{id="nginx-access",input="filestream"} 2`; !slices.Contains(got, want) {
+		t.Errorf("missing %s", want)
+	}
+	// The complete answer's 49 series without the 12 pipeline ones; the
+	// journald input is left with none.
+	if len(got) != 49-12 {
+		t.Errorf("%d series, want %d:\n%s", len(got), 49-12, strings.Join(got, "\n"))
+	}
+	if logs.Len() != 0 {
+		t.Errorf("reading inputs without the pipeline counters logged:\n%s", logs)
+	}
+}
+
+// A Filebeat none of whose inputs registers metrics answers /inputs/ with an
+// empty array. The probe succeeds with no series, and nothing is logged:
+// every rule of the collector is optional.
+func TestTheFilebeatExampleReadsAFilebeatWithoutInputs(t *testing.T) {
+	logs := testutil.CaptureLogs(t)
+	body, requests := probeFilebeatInputs(t, []byte("[]\n"))
+	if want := []string{"GET /inputs/"}; !slices.Equal(requests, want) {
+		t.Errorf("the collector requested %q, want %q", requests, want)
+	}
+	if body != "" {
+		t.Errorf("an empty array gave an exposition:\n%s", body)
+	}
+	if logs.Len() != 0 {
+		t.Errorf("reading an empty array logged:\n%s", logs)
 	}
 }

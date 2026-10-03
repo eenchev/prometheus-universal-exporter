@@ -1,0 +1,244 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <title>Countries of the World: A Simple Example | Scrape This Site | A public sandbox for learning web scraping</title>
+    <link rel="icon" type="image/png" href="/static/images/scraper-icon.png" />
+
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="description" content="A single page that lists information about all the countries in the world. Good for those just get started with web scraping.">
+
+    <link href="https://maxcdn.bootstrapcdn.com/bootstrap/3.3.5/css/bootstrap.min.css" rel="stylesheet" crossorigin="anonymous">
+    <link href='https://fonts.googleapis.com/css?family=Lato:400,700' rel='stylesheet' type='text/css'>
+    <link rel="stylesheet" type="text/css" href="/static/css/styles.css">
+  </head>
+
+  <body>
+    <nav id="site-nav">
+      <div class="container">
+        <div class="col-md-12">
+          <ul class="nav nav-tabs">
+            <li id="nav-homepage">
+              <a href="/" class="nav-link hidden-sm hidden-xs">
+                <img src="/static/images/scraper-icon.png" id="nav-logo">
+                Scrape This Site
+              </a>
+            </li>
+            <li id="nav-sandbox">
+              <a href="/pages/" class="nav-link">
+                <i class="glyphicon glyphicon-console hidden-sm hidden-xs"></i>
+                Sandbox
+              </a>
+            </li>
+            <li id="nav-lessons">
+              <a href="/lessons/" class="nav-link">
+                <i class="glyphicon glyphicon-education hidden-sm hidden-xs"></i>
+                Lessons
+              </a>
+            </li>
+            <li id="nav-faq">
+              <a href="/faq/" class="nav-link">
+                <i class="glyphicon glyphicon-flag hidden-sm hidden-xs"></i>
+                FAQ
+              </a>
+            </li>
+          </ul>
+        </div>
+      </div>
+    </nav>
+
+    <script type="text/javascript">
+      var path = document.location.pathname;
+      var tab = undefined;
+      if (path === "/"){
+        tab = document.querySelector("#nav-homepage");
+      } else if (path.indexOf("/pages/") === 0){
+        tab = document.querySelector("#nav-sandbox");
+      }
+      if (tab) { tab.className += " active"; }
+    </script>
+
+    <div id="page">
+      <section id="countries">
+        <div class="container">
+          <div class="row">
+            <div class="col-md-12">
+              <h1>
+                Countries of the World: A Simple Example
+                <small>13 items</small>
+              </h1>
+              <hr>
+              <p class="lead">
+                There are 4 lessons associated with this page. <a href="/lessons/">Sign up to access them.</a>
+              </p>
+              <hr>
+            </div><!--.col-->
+          </div><!--.row-->
+          <div class="row">
+            <div class="col-md-4 country">
+              <h3 class="country-name">
+                <i class="flag-icon flag-icon-ad"></i>
+                Andorra
+              </h3>
+              <div class="country-info">
+                <strong>Capital:</strong> <span class="country-capital">Andorra la Vella</span><br>
+                <strong>Population:</strong> <span class="country-population">84000</span><br>
+                <strong>Area (km<sup>2</sup>):</strong> <span class="country-area">468.0</span><br>
+              </div>
+            </div><!--.col-->
+            <div class="col-md-4 country">
+              <h3 class="country-name">
+                <i class="flag-icon flag-icon-ae"></i>
+                United Arab Emirates
+              </h3>
+              <div class="country-info">
+                <strong>Capital:</strong> <span class="country-capital">Abu Dhabi</span><br>
+                <strong>Population:</strong> <span class="country-population">4975593</span><br>
+                <strong>Area (km<sup>2</sup>):</strong> <span class="country-area">82880.0</span><br>
+              </div>
+            </div><!--.col-->
+            <div class="col-md-4 country">
+              <h3 class="country-name">
+                <i class="flag-icon flag-icon-af"></i>
+                Afghanistan
+              </h3>
+              <div class="country-info">
+                <strong>Capital:</strong> <span class="country-capital">Kabul</span><br>
+                <strong>Population:</strong> <span class="country-population">29121286</span><br>
+                <strong>Area (km<sup>2</sup>):</strong> <span class="country-area">647500.0</span><br>
+              </div>
+            </div><!--.col-->
+          </div><!--.row-->
+          <div class="row">
+            <div class="col-md-4 country">
+              <h3 class="country-name">
+                <i class="flag-icon flag-icon-ag"></i>
+                Antigua and Barbuda
+              </h3>
+              <div class="country-info">
+                <strong>Capital:</strong> <span class="country-capital">St. John&#39;s</span><br>
+                <strong>Population:</strong> <span class="country-population">86754</span><br>
+                <strong>Area (km<sup>2</sup>):</strong> <span class="country-area">443.0</span><br>
+              </div>
+            </div><!--.col-->
+            <div class="col-md-4 country">
+              <h3 class="country-name">
+                <i class="flag-icon flag-icon-ai"></i>
+                Anguilla
+              </h3>
+              <div class="country-info">
+                <strong>Capital:</strong> <span class="country-capital">The Valley</span><br>
+                <strong>Population:</strong> <span class="country-population">13254</span><br>
+                <strong>Area (km<sup>2</sup>):</strong> <span class="country-area">102.0</span><br>
+              </div>
+            </div><!--.col-->
+            <div class="col-md-4 country">
+              <h3 class="country-name">
+                <i class="flag-icon flag-icon-al"></i>
+                Albania
+              </h3>
+              <div class="country-info">
+                <strong>Capital:</strong> <span class="country-capital">Tirana</span><br>
+                <strong>Population:</strong> <span class="country-population">2986952</span><br>
+                <strong>Area (km<sup>2</sup>):</strong> <span class="country-area">28748.0</span><br>
+              </div>
+            </div><!--.col-->
+          </div><!--.row-->
+          <div class="row">
+            <div class="col-md-4 country">
+              <h3 class="country-name">
+                <i class="flag-icon flag-icon-am"></i>
+                Armenia
+              </h3>
+              <div class="country-info">
+                <strong>Capital:</strong> <span class="country-capital">Yerevan</span><br>
+                <strong>Population:</strong> <span class="country-population">2968000</span><br>
+                <strong>Area (km<sup>2</sup>):</strong> <span class="country-area">29800.0</span><br>
+              </div>
+            </div><!--.col-->
+            <div class="col-md-4 country">
+              <h3 class="country-name">
+                <i class="flag-icon flag-icon-ao"></i>
+                Angola
+              </h3>
+              <div class="country-info">
+                <strong>Capital:</strong> <span class="country-capital">Luanda</span><br>
+                <strong>Population:</strong> <span class="country-population">13068161</span><br>
+                <strong>Area (km<sup>2</sup>):</strong> <span class="country-area">1246700.0</span><br>
+              </div>
+            </div><!--.col-->
+            <div class="col-md-4 country">
+              <h3 class="country-name">
+                <i class="flag-icon flag-icon-aq"></i>
+                Antarctica
+              </h3>
+              <div class="country-info">
+                <strong>Capital:</strong> <span class="country-capital">None</span><br>
+                <strong>Population:</strong> <span class="country-population">0</span><br>
+                <strong>Area (km<sup>2</sup>):</strong> <span class="country-area">1.4E7</span><br>
+              </div>
+            </div><!--.col-->
+          </div><!--.row-->
+          <div class="row">
+            <div class="col-md-4 country">
+              <h3 class="country-name">
+                <i class="flag-icon flag-icon-ar"></i>
+                Argentina
+              </h3>
+              <div class="country-info">
+                <strong>Capital:</strong> <span class="country-capital">Buenos Aires</span><br>
+                <strong>Population:</strong> <span class="country-population">41343201</span><br>
+                <strong>Area (km<sup>2</sup>):</strong> <span class="country-area">2766890.0</span><br>
+              </div>
+            </div><!--.col-->
+            <div class="col-md-4 country">
+              <h3 class="country-name">
+                <i class="flag-icon flag-icon-as"></i>
+                American Samoa
+              </h3>
+              <div class="country-info">
+                <strong>Capital:</strong> <span class="country-capital">Pago Pago</span><br>
+                <strong>Population:</strong> <span class="country-population">57881</span><br>
+                <strong>Area (km<sup>2</sup>):</strong> <span class="country-area">199.0</span><br>
+              </div>
+            </div><!--.col-->
+            <div class="col-md-4 country">
+              <h3 class="country-name">
+                <i class="flag-icon flag-icon-at"></i>
+                Austria
+              </h3>
+              <div class="country-info">
+                <strong>Capital:</strong> <span class="country-capital">Vienna</span><br>
+                <strong>Population:</strong> <span class="country-population">8205000</span><br>
+                <strong>Area (km<sup>2</sup>):</strong> <span class="country-area">83858.0</span><br>
+              </div>
+            </div><!--.col-->
+          </div><!--.row-->
+          <div class="row">
+            <div class="col-md-4 country">
+              <h3 class="country-name">
+                <i class="flag-icon flag-icon-bg"></i>
+                Bulgaria
+              </h3>
+              <div class="country-info">
+                <strong>Capital:</strong> <span class="country-capital">Sofia</span><br>
+                <strong>Population:</strong> <span class="country-population">7148785</span><br>
+                <strong>Area (km<sup>2</sup>):</strong> <span class="country-area">110910.0</span><br>
+              </div>
+            </div><!--.col-->
+          </div><!--.row-->
+        </div><!--.container-->
+      </section>
+    </div>
+
+    <section id="footer">
+      <div class="container">
+        <div class="row">
+          <div class="col-md-12 text-center text-muted">
+            Lessons and Videos &copy; Hartley Brody 2023
+          </div><!--.col-->
+        </div><!--.row-->
+      </div><!--.container-->
+    </section>
+  </body>
+</html>

@@ -52,11 +52,18 @@ func (s *Server) reconcile() {
 	if len(removed) > 0 {
 		s.statsMu.Lock()
 		for name := range removed {
+			// The histogram goes with the statistics it is part of. A trip
+			// still under way holds them and goes on counting in them, where
+			// nothing shows. They are retired before the collector's requests
+			// are forgotten, so that such a trip cannot start a request of
+			// the collector being tracked afterwards (requestTracker.adopt).
+			if stats := s.stats[name]; stats != nil {
+				stats.retired.Store(true)
+			}
 			delete(s.stats, name)
 		}
 		s.statsMu.Unlock()
 		s.requests.forgetCollectors(removed)
-		s.durations.forgetCollectors(removed)
 		s.failures.forgetCollectors(removed)
 	}
 	dropped := s.cache.dropCollectors(stale)
@@ -81,17 +88,8 @@ func (t *requestTracker) forgetCollectors(names map[string]bool) {
 	defer t.mu.Unlock()
 	for key := range t.stats {
 		if names[key.Collector] {
-			delete(t.stats, key)
+			t.dropLocked(key)
 		}
 	}
 	t.capReached = len(t.stats) >= VerboseRequestSeriesLimit
-}
-
-// forgetCollectors drops the scrape-time histograms of the named collectors.
-func (d *scrapeDurations) forgetCollectors(names map[string]bool) {
-	d.mu.Lock()
-	defer d.mu.Unlock()
-	for name := range names {
-		delete(d.collectors, name)
-	}
 }

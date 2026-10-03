@@ -12,6 +12,19 @@ to `grpc` ones, which send the credential as the `authorization` metadata of
 the call and forwarded headers as metadata, lower-cased; see
 [gRPC](GRPC.md#authentication).
 
+The credential and the collector's headers are for the target: its origin,
+the scheme, host and port the request is made to. When the collector
+[follows redirects](REQUESTS.md#what-a-followed-redirect-carries), a redirect
+that stays on that origin carries them, and one that leads anywhere else — a
+subdomain, another port, another scheme — is sent neither the `Authorization`
+header nor any other header of the collector's or the probe's, only `Accept`,
+`Accept-Language` and `User-Agent`, and never the request body, unless its
+host is listed in the collector's `request.redirect_trusted_hosts`. A TLS
+client certificate is a credential of the same kind: a redirect over `https`
+to a host that is neither the origin nor listed is refused, since the
+connection would present it. Those three headers go wherever a redirect
+leads, so a token never belongs in them.
+
 Monitor authentication is applied by Prometheus when it scrapes the exporter. To pass that credential to the discovered target, set `request.forward_authorization: true` on the selected collector. Each `monitors` entry supports Secret-backed `auth.type: bearer` and `auth.type: basic` settings. The exporter never forwards arbitrary incoming headers.
 
 For non-secret target headers, configure an allowlist in the collector and use the chart's monitor `headers` map. The chart encodes these as `header_<Header-Name>` probe parameters, which the exporter forwards only when the header is listed in `request.forward_headers`. Headers that describe the connection to the exporter rather than the request are never forwarded, even when listed: `Host`, `Connection`, `Content-Length`, `Transfer-Encoding`, `Trailer`, `TE`, `Upgrade`, and every `Proxy-` header; nor is `Accept-Encoding`, which the exporter sets itself to decompress the answer ([Target requests](REQUESTS.md#compression-and-the-response-size)); `Authorization` has `forward_authorization` of its own:

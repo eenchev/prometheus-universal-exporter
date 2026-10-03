@@ -475,6 +475,16 @@ target's next turn. A target that did not change, of a collector that did not
 change, keeps its cadence; a
 target removed while its scrape runs publishes nothing.
 
+A rejected reload is tried again when the file changes. With
+`--config.watch` it is also tried again, the file untouched, when a file its
+check opened changes: the descriptor files (`request.protoset_file`,
+`request.proto_files`) of a grpc collector whose target sets a
+`request.message`. A reload that ran while such a file was being replaced
+thus goes through at the tick after it is in place (see
+[Watching the configuration](CONFIGURATION.md#watching-the-configuration)).
+A target's credential files are read at each scrape, so one that is missing
+fails that target's scrapes, not the reload.
+
 The configuration and the target file take effect as one pair. A reload that
 changes both — a collector renamed in the configuration and in the targets
 that use it — puts both in force in one step, and every scrape uses the

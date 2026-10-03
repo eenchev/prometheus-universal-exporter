@@ -62,7 +62,7 @@ is its host:
 | `until` | `now` | The end of the window. |
 | `path` | `/render` | Joined onto the target, for a Graphite served under a prefix or behind a proxy such as Grafana's. |
 | `query` | — | Further render parameters, such as [`maxDataPoints`](#the-window). `target`, `from`, `until` and `format` are the type's own and refused here. |
-| `headers`, credentials, `tls`, `retry`, `max_response_bytes`, `follow_redirects`, `enable_http2`, `allowed_schemes`, `accept_status`, `allowed_targets`, `denied_targets`, `forward_authorization`, `forward_headers` | as for `http` | The request is an `http` request in everything but its URL; see [Target requests](REQUESTS.md) and [Authentication](AUTHENTICATION.md). |
+| `headers`, credentials, `tls`, `retry`, `max_response_bytes`, `follow_redirects`, `redirect_trusted_hosts`, `enable_http2`, `allowed_schemes`, `accept_status`, `allowed_targets`, `denied_targets`, `forward_authorization`, `forward_headers` | as for `http` | The request is an `http` request in everything but its URL; see [Target requests](REQUESTS.md) and [Authentication](AUTHENTICATION.md). |
 
 The probe's target is the Graphite server, and a query it carries is sent as
 written, before `query` and the type's own parameters — except a pair of it

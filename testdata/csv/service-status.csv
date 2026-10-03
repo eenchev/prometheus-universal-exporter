@@ -1,0 +1,17 @@
+service,host,dc,env,state,restarts_total,requests_total,errors_total,latency_ms,queue_depth,version,internal_id
+api,web01,fra1,prod,up,3,18250411,912,41.5,0,2.14.1,7f3a91
+api,web02,fra1,prod,up,1,18011230,845,39,2,2.14.1,7f3a92
+api,web03,ams2,prod,degraded,14,9120455,20417,412,57,2.14.0,7f3a93
+api,stg01,fra1,staging,up,0,1204,3,55.25,0,2.15.0-rc1,7f3a94
+checkout,web01,fra1,prod,up,0,2210934,118,120,1,5.2.0,8c1101
+checkout,web03,ams2,prod,down,22,1804120,90211,,340,5.2.0,8c1102
+checkout,stg01,fra1,staging,maintenance,2,88,0,130.5,0,5.3.0,8c1103
+search,srch01,ams2,prod,up,5,7741209,2051,18.75,4,1.9.3,a40e11
+search,srch02,sof1,prod,up,5,7702113,1988,19,3,1.9.3,a40e12
+search,dev01,lab,dev,up,41,312,9,25,0,2.0.0-dev,a40e13
+mailer,job01,sof1,prod,up,2,402118,37,950,12,0.8.4,b9d201
+mailer,job02,sof1,prod,starting,7,0,0,,0,0.8.4,b9d202
+auth,web01,fra1,prod,up,0,25550921,4410,7.5,0,3.3.1,c00d01
+auth,web02,fra1,prod,up,0,25190077,4302,7.25,0,3.3.1,c00d02
+auth,web03,ams2,prod,unknown,1,12010550,2209,9,0,3.3.1,c00d03
+auth,stg01,fra1,staging,up,0,640,1,11,0,3.4.0,c00d04

@@ -9,8 +9,9 @@
 #   go run . --config.file=examples/config.filebeat.json-test.yaml
 #   curl 'http://localhost:8080/probe?collector=filebeat&target=http://filebeat-host:5066'
 #   curl 'http://localhost:8080/probe?collector=filebeat_info&target=http://filebeat-host:5066'
+#   curl 'http://localhost:8080/probe?collector=filebeat_inputs&target=http://filebeat-host:5066'
 #
-# Two collectors, because Filebeat answers on two paths:
+# Three collectors, because Filebeat answers on three paths:
 #
 #   /stats  the counters and gauges: the process (beat), Filebeat's own
 #           (filebeat, registrar), the publishing pipeline and output
@@ -18,6 +19,11 @@
 #   /       who is answering: version, name, uuid, build. Collector
 #           filebeat_info, one series. /stats carries no version, so this is
 #           where a dashboard or an alert gets it from.
+#   /inputs/
+#           what each running input did, one object per input: the events
+#           it handed to the pipeline and, by input type, its files, bytes
+#           and processing time. Collector filebeat_inputs, every series
+#           with the labels id and input; see "The inputs" below.
 #
 # The documentation's /stats example is abridged. The metrics here are the
 # ones Filebeat registers in its source (filebeat/beater, filebeat/registrar,
@@ -27,10 +33,10 @@
 # from that source, with every section present and realistic values for a
 # Filebeat in Kubernetes publishing to Elasticsearch,
 # testdata/json/filebeat-stats-kafka.json the same Filebeat publishing to
-# Kafka, and testdata/json/filebeat-info.json the matching /; none is a
-# capture.
+# Kafka, testdata/json/filebeat-info.json the matching / and
+# testdata/json/filebeat-inputs.json its /inputs/; none is a capture.
 #
-# Not every Filebeat reports every section:
+# Not every Filebeat reports every section of /stats:
 #
 #   beat.cgroup.*          only on Linux, and only in a cgroup
 #   beat.handles.*         not on Windows
@@ -48,11 +54,13 @@
 # The rules for those set error_mode: ignore, so a section Filebeat does not
 # report has no series rather than failing the scrape or logging on every one.
 # The rules for what every Filebeat reports keep the default, and log when it
-# is missing.
+# is missing. The rules of filebeat_inputs are all optional (required: false)
+# instead, as no input reports every metric.
 #
-# Naming: every series starts with filebeat_. Milliseconds become seconds
-# (scale: 0.001), counters end in _total, and outcomes of one kind of thing are
-# one family with a label rather than a family each, so
+# Naming: every series starts with filebeat_. Milliseconds and nanoseconds
+# become seconds (scale: 0.001 and 0.000000001), counters end in _total, and
+# outcomes of one kind of thing are one family with a label rather than a
+# family each, so
 #
 #   sum by (instance) (rate(filebeat_output_events_total{outcome="failed"}[5m]))
 #
@@ -618,3 +626,237 @@ collectors:
             expression: .build_commit // ""
           - name: binary_arch
             expression: .binary_arch // ""
+
+  # --- The inputs ---------------------------------------------------------
+  #
+  # /inputs/ answers with an array, one object per running input that
+  # registers metrics (libbeat/monitoring/inputmon): its "id", its "input"
+  # (the type: filestream, tcp, journald, ...) and the metrics of that type.
+  # Every rule runs once per input (items: .[]) and labels its series with
+  # both.
+  #
+  #   every input   events_pipeline_total, events_pipeline_filtered_total,
+  #                 events_pipeline_published_total (filebeat/input/v2), in
+  #                 recent versions
+  #   filestream    files_opened_total, files_closed_total, files_active,
+  #                 messages_read_total, messages_truncated_total,
+  #                 bytes_processed_total, events_processed_total,
+  #                 processing_errors_total
+  #   filestream,   processing_time.histogram in nanoseconds: count, min,
+  #   tcp, udp,     max, mean, stddev, median, p75, p95, p99, p999
+  #   unix
+  #
+  # An input has the metrics of its type and no others, and a Filebeat whose
+  # inputs register none answers []. So every rule is optional (required:
+  # false): a metric an input does not report has no series for that input,
+  # and an empty array no series at all, without failing the scrape or
+  # logging. A value that is there and is not a number is still logged.
+  #
+  # The id is the one the input was configured with (for an input reading
+  # several sources, such as journald, "id::source"), or a hash of its
+  # configuration when it has none, so the series are as stable as the
+  # configuration. With autodiscover the id usually carries the container's,
+  # and the series come and go with the containers, as a pod's do.
+  #
+  # The processing time is not a histogram of buckets: Filebeat reports the
+  # percentiles, mean and max of a sample of 1024 of the events the input
+  # published since it started. They are gauges, the percentiles with a
+  # quantile label, like the Kafka output's latency above.
+  #
+  # The other metrics of an input type (the filestream gzip_* ones, the
+  # received_* ones of tcp, udp and unix, ...) take a rule each, written the
+  # same way.
+  - name: filebeat_inputs
+    request:
+      type: http
+      path: /inputs/
+      headers:
+        Accept: application/json
+    decoder:
+      type: json
+    transform:
+      type: jq
+    metrics:
+      - name: filebeat_input_pipeline_events_added_total
+        description: Events of the input that arrived at the publishing pipeline
+        type: counter
+        required: false
+        items: .[]
+        expression: .events_pipeline_total
+        labels:
+          - name: id
+            expression: .id
+          - name: input
+            expression: .input
+
+      # filtered: dropped by a processor. published: put on the queue. An
+      # event the pipeline dropped while it waited for the queue, as the input
+      # was closing, is in neither.
+      - name: filebeat_input_pipeline_events_total
+        description: Events of the input the pipeline filtered out or put on the queue
+        type: counter
+        required: false
+        items: .[]
+        expression: .events_pipeline_filtered_total
+        labels:
+          - name: id
+            expression: .id
+          - name: input
+            expression: .input
+          - name: outcome
+            value: filtered
+      - name: filebeat_input_pipeline_events_total
+        type: counter
+        required: false
+        items: .[]
+        expression: .events_pipeline_published_total
+        labels:
+          - name: id
+            expression: .id
+          - name: input
+            expression: .input
+          - name: outcome
+            value: published
+
+      - name: filebeat_input_files_total
+        description: Files the input opened and closed
+        type: counter
+        required: false
+        items: .[]
+        expression: .files_opened_total
+        labels:
+          - name: id
+            expression: .id
+          - name: input
+            expression: .input
+          - name: event
+            value: opened
+      - name: filebeat_input_files_total
+        type: counter
+        required: false
+        items: .[]
+        expression: .files_closed_total
+        labels:
+          - name: id
+            expression: .id
+          - name: input
+            expression: .input
+          - name: event
+            value: closed
+
+      - name: filebeat_input_files_active
+        description: Files the input holds open
+        type: gauge
+        required: false
+        items: .[]
+        expression: .files_active
+        labels:
+          - name: id
+            expression: .id
+          - name: input
+            expression: .input
+
+      - name: filebeat_input_messages_read_total
+        description: Messages the input read, those it then left out as empty or by its line filters included
+        type: counter
+        required: false
+        items: .[]
+        expression: .messages_read_total
+        labels:
+          - name: id
+            expression: .id
+          - name: input
+            expression: .input
+
+      - name: filebeat_input_messages_truncated_total
+        description: Messages the input cut short as longer than message_max_bytes
+        type: counter
+        required: false
+        items: .[]
+        expression: .messages_truncated_total
+        labels:
+          - name: id
+            expression: .id
+          - name: input
+            expression: .input
+
+      - name: filebeat_input_bytes_processed_total
+        description: Bytes of the messages the input made events of
+        type: counter
+        required: false
+        items: .[]
+        expression: .bytes_processed_total
+        labels:
+          - name: id
+            expression: .id
+          - name: input
+            expression: .input
+
+      - name: filebeat_input_events_processed_total
+        description: Events the input handed to the pipeline
+        type: counter
+        required: false
+        items: .[]
+        expression: .events_processed_total
+        labels:
+          - name: id
+            expression: .id
+          - name: input
+            expression: .input
+
+      - name: filebeat_input_processing_errors_total
+        description: Errors of the input reading a file or handing an event to the pipeline
+        type: counter
+        required: false
+        items: .[]
+        expression: .processing_errors_total
+        labels:
+          - name: id
+            expression: .id
+          - name: input
+            expression: .input
+
+      - name: filebeat_input_processing_time_seconds
+        description: Time from reading to publishing an event, over a sample of the input's events, by quantile
+        type: gauge
+        required: false
+        items: >-
+          .[]
+          | {id, input} + (.processing_time.histogram
+          | {q: "0.5", v: .median}, {q: "0.75", v: .p75}, {q: "0.95", v: .p95},
+            {q: "0.99", v: .p99}, {q: "0.999", v: .p999})
+        expression: .v
+        scale: 0.000000001
+        labels:
+          - name: id
+            expression: .id
+          - name: input
+            expression: .input
+          - name: quantile
+            expression: .q
+
+      - name: filebeat_input_processing_time_mean_seconds
+        description: Mean time from reading to publishing an event, over a sample of the input's events
+        type: gauge
+        required: false
+        items: .[]
+        expression: .processing_time.histogram.mean
+        scale: 0.000000001
+        labels:
+          - name: id
+            expression: .id
+          - name: input
+            expression: .input
+
+      - name: filebeat_input_processing_time_max_seconds
+        description: Longest time from reading to publishing an event in a sample of the input's events
+        type: gauge
+        required: false
+        items: .[]
+        expression: .processing_time.histogram.max
+        scale: 0.000000001
+        labels:
+          - name: id
+            expression: .id
+          - name: input
+            expression: .input

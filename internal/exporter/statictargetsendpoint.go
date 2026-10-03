@@ -63,23 +63,18 @@ func (s *Server) staticTargetsEndpoint() string {
 	return s.staticTargetsPath
 }
 
-// publishStaticTarget records set as target's latest result, for the endpoint,
-// and queues it for OTLP when the target is exported that way.
+// publishStaticResult records set as target's latest result, for the
+// endpoint, and queues it for OTLP when the target is exported that way. Its
+// data came from the target at fetched: its http_exporter_result_age_seconds
+// is worked out again at every read of the endpoint, so it says how old the
+// data is when Prometheus reads it, not how old it was when the scrape made
+// it. fetched is zero for a result without that series. at is when the result
+// was scraped, for its points over OTLP (scrapeTime).
 //
 // Over OTLP every series carries static_target too, as on the endpoint. Two
 // targets of one collector, without labels or an OTLP identity of their own,
 // arrive under the same resource with the same series, and without it the
 // later target's values would replace the earlier's in the pending export.
-func (s *Server) publishStaticTarget(target model.StaticTarget, identity otlpResourceIdentity, set model.MetricSet) {
-	s.publishStaticResult(target, identity, set, time.Time{}, scrapeTime{})
-}
-
-// publishStaticResult is publishStaticTarget for a result whose data came
-// from the target at fetched: its http_exporter_result_age_seconds is worked
-// out again at every read of the endpoint, so it says how old the data is
-// when Prometheus reads it, not how old it was when the scrape made it.
-// fetched is zero for a result without that series. at is when the result
-// was scraped, for its points over OTLP (scrapeTime).
 func (s *Server) publishStaticResult(target model.StaticTarget, identity otlpResourceIdentity, set model.MetricSet, fetched time.Time, at scrapeTime) {
 	// A reload may have removed the target while its scrape was in flight;
 	// its result then goes nowhere, over OTLP included.
@@ -132,14 +127,6 @@ func withStaticTargetLabel(set model.MetricSet, name string) model.MetricSet {
 		m.Labels[config.StaticTargetLabel] = name
 		out.Metrics[i] = m
 	}
-	return out
-}
-
-// staticTargetResults returns the latest result of each target in force, by
-// name, its data's age as of now, and forgets the results of targets no
-// longer in force.
-func (s *Server) staticTargetResults() []namedSet {
-	out, _ := s.storedStaticResults(s.manager.StaticTargetFile(), time.Now())
 	return out
 }
 

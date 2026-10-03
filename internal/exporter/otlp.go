@@ -503,7 +503,13 @@ func otlpMetrics(set model.MetricSet, now string, start func(m model.Metric, at 
 			continue
 		}
 		startAt := ""
-		if start != nil && kind != otlpKindGauge {
+		switch {
+		case kind == otlpKindGauge:
+		case m.Created != 0:
+			// One of the exporter's own series, which says when it began to
+			// count (selfcreated.go).
+			startAt = strconv.FormatInt(m.Created*int64(time.Millisecond), 10)
+		case start != nil:
 			startAt = start(m, at)
 		}
 		switch kind {
@@ -771,11 +777,6 @@ type otlpBatch struct {
 type pendingMetric struct {
 	metric model.Metric
 	seq    int64
-}
-
-// queueOTLP stages metrics under the exporter-wide OTLP resource.
-func (s *Server) queueOTLP(set model.MetricSet) {
-	s.queueOTLPResource(set, defaultResourceIdentity(s.manager.Get().OTLP), scrapeTime{})
 }
 
 // scrapeTime is when the series of a result queued for OTLP were scraped. A

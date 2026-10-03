@@ -36,6 +36,7 @@ func CheckMetricRule(x *model.Collector, r *model.MetricRule) error {
 		fail(fmt.Errorf("%s sets items, which only the jq, yq and css transforms support", where))
 	}
 	fail(checkValueRules(x, r, where))
+	fail(checkTimeRules(x, r, where))
 	fail(checkLabelValueMaps(x, r, where))
 	switch {
 	case jqFamily(x.Transform.Type):
@@ -58,12 +59,16 @@ func CheckMetricRule(x *model.Collector, r *model.MetricRule) error {
 			fail(fmt.Errorf("%s regex %q: %w", where, r.Expression, err))
 			break
 		}
-		// The first capture group is the value. Without one there is nothing
-		// to say which part of the match is the number.
+		// The capture group named value is the value, or else the first.
+		// Without one there is nothing to say which part of the match is
+		// the number, and with two named value, which of them.
 		if re.NumSubexp() == 0 {
-			fail(fmt.Errorf("%s regex %q has no capture group; the first capture group is the value, so wrap the number in one, such as 'requests=(\\d+)'", where, r.Expression))
+			fail(fmt.Errorf("%s regex %q has no capture group; the value is the capture group named value, as in '(?P<value>\\d+)', or else the first, so wrap the number in one, such as 'requests=(\\d+)'", where, r.Expression))
 		}
 		names := re.SubexpNames()
+		if named := countOf(names, regexValueName); named > 1 {
+			fail(fmt.Errorf("%s regex %q has %d capture groups named %s; the group of that name is the value, so the regex can have one: name the others something else, or leave them unnamed", where, r.Expression, named, regexValueName))
+		}
 		for _, label := range expressionLabels(r) {
 			if index := captureIndex(label.Expression, names); index < 0 || index >= len(names) {
 				fail(fmt.Errorf("%s label %q refers to capture group %q, which the regex does not have", where, label.Name, label.Expression))
@@ -225,6 +230,17 @@ func checkMetricName(name string) error {
 		return fmt.Errorf("%q starts with \"__\", which Prometheus reserves", name)
 	}
 	return nil
+}
+
+// countOf is how many of names are name.
+func countOf(names []string, name string) int {
+	count := 0
+	for _, other := range names {
+		if other == name {
+			count++
+		}
+	}
+	return count
 }
 
 func expressionLabels(r *model.MetricRule) []model.LabelRule {

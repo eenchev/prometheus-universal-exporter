@@ -1,3 +1,5 @@
+//go:build !select_request_types || request_type_http
+
 package config
 
 import (

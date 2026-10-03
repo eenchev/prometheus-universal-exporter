@@ -1,0 +1,11 @@
+commune,département,température,humidité,état
+Besançon,Doubs,11.5,76,nuageux
+Orléans,Loiret,13,70,ensoleillé
+Nîmes,Gard,21.25,44,ensoleillé
+Angoulême,Charente,15,68,pluie
+Saint-Étienne,Loire,10,81,brouillard
+Châlons-en-Champagne,Marne,9.5,83,pluie
+"L'Haÿ-les-Roses",Val-de-Marne,12,72,nuageux
+Bâle (aéroport),Haut-Rhin,8,79,neige fondue
+Fort-de-France,Martinique,30,85,orage
+"Sète, port",Hérault,22,61,ensoleillé

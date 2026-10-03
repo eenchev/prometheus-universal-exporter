@@ -1,0 +1,13 @@
+time,latitude,longitude,depth,mag,magType,nst,gap,dmin,rms,net,id,updated,place,type,horizontalError,depthError,magError,magNst,status,locationSource,magSource
+2026-10-03T09:14:55.400Z,17.936,-66.960,7.56,2.09,md,7,224,0.06074,0.05,pr,pr71532588,2026-10-03T09:27:31.250Z,"4 km SSE of Guánica, Puerto Rico",earthquake,0.61,0.84,0.09,3,reviewed,pr,pr
+2026-10-03T09:11:02.110Z,38.8221664,-122.7971649,1.71,0.82,md,12,84,0.01108,0.02,nc,nc75242391,2026-10-03T09:12:38.842Z,"7 km NW of The Geysers, CA",earthquake,0.33,0.71,0.19,13,automatic,nc,nc
+2026-10-03T09:08:47.823Z,61.4375,-150.0462,45.2,1.6,ml,,,,0.42,ak,ak0269cx1f2k,2026-10-03T09:10:55.412Z,"11 km WNW of Susitna, Alaska",earthquake,,0.3,,,automatic,ak,ak
+2026-10-03T09:05:30.910Z,33.4928333,-116.7968333,3.04,0.54,ml,22,57,0.02634,0.16,ci,ci41097632,2026-10-03T09:09:07.633Z,"9 km NE of Aguanga, CA",earthquake,0.24,0.62,0.111,18,automatic,ci,ci
+2026-10-03T09:01:19.670Z,19.4031658,-155.2828369,0.12,1.87,md,18,71,,0.19,hv,hv74481052,2026-10-03T09:04:28.900Z,"7 km SW of Volcano, Hawaii",earthquake,0.26,0.19,0.42,8,automatic,hv,hv
+2026-10-03T08:58:06.239Z,-21.1523,-68.7441,112.853,4.6,mb,41,58,0.538,0.87,us,us7000rb4q,2026-10-03T09:16:22.040Z,"83 km NNE of Calama, Chile",earthquake,7.26,6.412,0.094,34,reviewed,us,us
+2026-10-03T08:52:44.520Z,36.5861667,-121.1876667,6.35,1.33,md,15,112,0.03187,0.07,nc,nc75242386,2026-10-03T08:54:20.181Z,"15 km NW of Pinnacles, CA",earthquake,0.39,0.94,0.24,11,automatic,nc,nc
+2026-10-03T08:47:13.006Z,31.6742,-104.2981,5.9814,2.3,ml,29,62,0.1,0.2,tx,tx2026tkqgzb,2026-10-03T08:59:48.331Z,"54 km S of Whites City, New Mexico",earthquake,0.7459,1.3407,0.2,17,automatic,tx,tx
+2026-10-03T08:41:58.300Z,44.7781667,-110.7908333,-1.38,,md,9,151,0.0721,0.11,uu,uu80091472,2026-10-03T08:45:09.570Z,"25 km NNE of Old Faithful Geyser, Wyoming",earthquake,0.48,1.02,,,automatic,uu,uu
+2026-10-03T08:36:27.740Z,46.8526667,-121.7591667,0.47,0.31,ml,6,133,0.004969,0.04,uw,uw62204187,2026-10-03T08:39:55.120Z,"24 km ESE of Eatonville, Washington",explosion,0.52,0.31,0.066,3,reviewed,uw,uw
+2026-10-03T08:29:40.085Z,52.0364,178.2147,118.6,3.1,ml,,,,0.55,ak,ak0269cwqv8m,2026-10-03T08:41:12.660Z,"72 km WSW of Adak, Alaska",earthquake,,1.4,,,automatic,ak,ak
+2026-10-03T08:21:09.440Z,35.6951667,-117.5021667,8.11,1.02,ml,26,49,0.07255,0.14,ci,ci41097608,2026-10-03T08:24:44.870Z,"14 km SW of Searles Valley, CA",earthquake,0.19,0.57,0.158,21,automatic,ci,ci

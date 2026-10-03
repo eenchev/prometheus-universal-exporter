@@ -547,7 +547,9 @@ type MUST be required rather than defaulted, so that no configuration means
 `http` by accident. A missing type
 MUST be rejected at startup and on reload with a message naming the collector,
 stating that the type is required, listing the supported types and showing
-`type: http`; an unknown type MUST be rejected with the supported types listed.
+`type: http` — or, in a build that left `http` out (below), the first of the
+types it carries, never one the build would then refuse; an unknown type MUST
+be rejected with the supported types listed.
 The value MUST be matched without regard to case or surrounding whitespace and
 stored in lower case.
 
@@ -621,6 +623,25 @@ type.
   `--dry-run` report (§ 30.1).
 - CI MUST vet and build each single-type selection as well as the default
   build, so no type depends on code only another type compiles.
+- Every single-type selection MUST pass its tests, and CI MUST run them:
+  `go test` once under each selection's tags, which `make test-request-types`
+  runs locally and `make ci` includes. A test that needs a request type —
+  its configuration names the type, it stands in for a target of the type,
+  or it asserts what only a build with the type does — MUST say so with a
+  build constraint on its file, `!select_request_types || request_type_<name>`,
+  with `(request_type_<a> && request_type_<b>)` in place of the one type
+  where it needs two, and `!select_request_types` alone where it holds only
+  with every type; it MUST NOT be skipped at run time instead. A test that
+  holds whatever the build carries MUST stay without a constraint, so every
+  selection runs it, and a test helper MUST be compiled exactly where
+  something that calls it is.
+- A build that left a type out MUST behave as if the type did not exist,
+  apart from the message above for a collector that names it: a `/probe`
+  parameter that only left-out types accept is a parameter no type accepts
+  and MUST be ignored as one, and the schema the binary prints (§ 24.3)
+  lists only its own types. The committed schemas are those of a build with
+  every type, and the test that compares them with what the code generates
+  MUST run in that build alone.
 
 #### `http`
 
@@ -641,6 +662,7 @@ type.
 | `retry` | none | `attempts` and `backoff`, both non-negative. |
 | `max_response_bytes` | 10 MiB | Response size cap (§ 20). |
 | `follow_redirects` | `false` | § 42.15. |
+| `redirect_trusted_hosts` | none | Hosts a followed redirect may carry the request's headers, credentials and body to, and present its TLS client certificate to, besides its own origin (§ 42.15c). |
 | `enable_http2` | `false` | § 42.15. |
 | `allowed_schemes` | `http`, `https` | Schemes a target may use. Each entry MUST be `http` or `https`, in any case; any other, including an empty one and one with a space or `://` around it, MUST be refused at load naming the collector and the entry. |
 | `accept_status` | every 2xx | A static target MAY set its own, replacing the collector's for it, checked at load and part of its cache key; so MAY a `grpc` target for `accept_codes`. Statuses whose answers are decoded: numbers from 100 to 599 and classes such as `2xx`, written as YAML numbers or strings; any other entry MUST be refused at load. A response with another status MUST fail in the `http_status` stage, and an accepted status MUST NOT be retried. |
@@ -822,7 +844,7 @@ lines: it only pulls. Its keys:
 | `from` | `-15min` | The window's start, sent as `from`. Wide enough to hold a point of a series stored at one- or five-minute resolution. |
 | `until` | `now` | The window's end, sent as `until`. |
 | `path` | `/render` | As `http`'s. |
-| `query`, `headers`, `basic_auth` / `basic_auth_file`, `bearer_token` / `bearer_token_file`, `forward_authorization`, `forward_headers`, `tls`, `retry`, `max_response_bytes`, `follow_redirects`, `enable_http2`, `allowed_schemes`, `accept_status`, `allowed_targets`, `denied_targets` | as `http` | With `http`'s rules. |
+| `query`, `headers`, `basic_auth` / `basic_auth_file`, `bearer_token` / `bearer_token_file`, `forward_authorization`, `forward_headers`, `tls`, `retry`, `max_response_bytes`, `follow_redirects`, `redirect_trusted_hosts`, `enable_http2`, `allowed_schemes`, `accept_status`, `allowed_targets`, `denied_targets` | as `http` | With `http`'s rules. |
 
 - The request MUST be `http`'s in everything but its URL — the same transport,
   credentials, retries, limits and proxy — and a `GET`; `method` and `body`
@@ -2463,6 +2485,59 @@ rule MUST refuse both at load. A `scale` of 0 or one that is not finite, and a
 `value_map` key that is empty or has surrounding blanks, MUST be refused at
 load.
 
+A rule MAY set `time_format`, and with it `time_zone`. The text its
+expression gives, without surrounding blanks, MUST then be read as a time, and
+the value MUST be that time in Unix seconds, as a float64 with its fraction of
+a second, which `scale` MUST then multiply as it does any value. `time_format`
+MUST be `rfc3339` (RFC 3339, with or without fractional seconds), `rfc1123`
+(the HTTP date, `Mon, 02 Jan 2006 15:04:05 GMT`, and the same with a numeric
+zone), either name in any case, or a layout: the reference time
+`Mon Jan 2 15:04:05 MST 2006` written as the text writes its times, the
+convention of Go's `time` package, Promtail and Telegraf, such as
+`2006-01-02 15:04:05`. Seconds a layout writes `05`, or with nines after them
+(`05.999`), MUST read a fraction of any length after the seconds, and none;
+zeros after them (`05.000`) stand for exactly that many digits. Text in a
+layout that is an element of the reference time is that element wherever it
+stands, as the convention has it — the `4` of `Q4` is a minute — and a year
+of two digits is one of 1969 to 2068. There MUST NOT be names for Unix
+seconds or milliseconds: a number is read without `time_format`, with
+`scale`. A text that gives its zone or offset MUST be read by it when the
+layout has a zone element there (`Z07:00`, `-0700`, `-07:00`, `MST`); any
+other, one whose zone the layout writes as plain text (`Z`, `UTC`) included,
+MUST be read in `time_zone`, an IANA zone name, by the offset the zone has at
+that time, and in UTC when `time_zone` is unset or `UTC`. A local time that
+the zone's change of clocks gives twice or not at all is read by one of the
+two offsets, as Go's `time.Date` reads it, and this specification does not
+say which. The binary MUST carry the IANA zones (`time/tzdata`), so a zone is
+known on a host without zone files. A zone the text names by an abbreviation
+MUST be one of `time_zone`'s own, `UTC` or `GMT`, or `GMT` with a signed
+whole number of hours (`GMT+3`, `GMT-5`), which MUST be read as that many
+hours ahead of UTC or behind it whatever `time_zone` is; any other MUST fail
+the rule rather than be read as UTC. It MUST work
+the same way in the `regex`, `css`, `xpath`, `csv`, `jq` and `yq` transforms.
+A value that is not text — a jq or yq number, boolean, object or array, an
+XPath number — MUST fail the rule with an error saying `time_format` reads
+text; text that is no time in the format MUST fail the rule, handled by its
+`error_mode`, with an error that quotes the text, cut as a value that is no
+number is, and the format, in the exporter's words and not the time
+package's; an empty or absent text MUST stay a missing value. At load a
+layout MUST be refused when it holds no element of the reference time, as
+`yyyy-mm-dd` and `%Y-%m-%d` do, with an error showing the reference time and
+an example; when it lacks a year, a month or a day, since a time without a
+date has no Unix time, naming what it lacks; when it cannot read back a
+time it writes; when it begins or ends with a blank, which the text it reads
+never does; and when it has the hour of a 12-hour clock (`03`, `3`) without
+`PM`, which would read no afternoon, with an error saying to write `15` or to
+add `PM`. The error for a layout that lacks a date or cannot read what it
+writes MUST end, as the first does, with what a layout is, since a sample
+date or the name of another format is refused by these checks. `time_zone`
+without `time_format`, a `time_zone` that names no
+zone (`Local` included, which differs from host to host), `time_format`
+beside `value_map`, and `time_format` on a `python` or a `prometheus` rule
+MUST be refused at load, the last two in the words `value_map` is refused
+there. A rule without `time_format` MUST read its value exactly as before,
+at the cost of one comparison.
+
 A rule MUST NOT take a condition of its own (a `when` key): which values
 become series is said in each transform's language — jq and yq `select` and
 `empty`, XPath predicates, CSS selectors in `items`, the regex pattern, and a
@@ -2514,8 +2589,9 @@ others.
 A value MUST be treated as absent in the same way by every transform when
 nothing matched, when it is null, and when it is text that is empty or only
 whitespace: an empty CSV cell, an empty JSON or YAML string, an XML or HTML
-node without text, a regex whose first capture group took no part in the match
-or captured only whitespace. Nothing matched MUST include a `prometheus` rule
+node without text, a regex whose value group (the capture group named
+`value`, or else the first) took no part in the match or captured only
+whitespace. Nothing matched MUST include a `prometheus` rule
 whose pattern, or whose name when it has no pattern, matches no metric of the
 response, and a `csv` rule over a response without a row: each MUST be the
 missing value of its rule, once for the scrape, failing it under `fail`,
@@ -2570,11 +2646,25 @@ label MUST be interpreted by the same transform as the metric expression:
 | Transform | `expression` | `labels` |
 | --- | --- | --- |
 | `jq`, `yq` | jq-compatible expression evaluated against decoded data | jq-compatible expressions evaluated against the same data |
-| `regex` | RE2 expression with at least one capture group; capture group 1 is the numeric value | capture-group number or named capture group |
+| `regex` | RE2 expression with at least one capture group; the capture group named `value`, or else capture group 1, is the numeric value | capture-group number or named capture group |
 | `csv` | numeric column name | column names |
 | `css` | CSS selector for numeric text; without `items`, matching at most one element | selectors relative to the selected element |
 | `xpath` | XPath selecting numeric text | relative XPath or `@attribute` |
 | `prometheus` | regular expression matching source metric names | destination label name to source label name |
+
+A `regex` rule's value MUST be the text of the capture group named `value`
+(`(?P<value>...)`) when its expression has one, wherever the group stands,
+and of the first capture group otherwise; an expression without a group
+named `value` MUST give exactly what it gave before the name had a meaning.
+Everything said of the value holds for that group: `value_map`, `scale` and
+`time_format` apply to its text, and a match in which it took no part or
+captured only whitespace is a missing value of that match, whose error names
+the group. Labels MUST go on referring to groups by number or by name, a
+group's number being its place in the expression whichever group is the
+value, so a label can read a group that stands before the value; a label MAY
+read the value's group itself, by `value` or by its number, and takes its
+text as written. An expression with two or more groups named `value` MUST be
+refused at load.
 
 For example, these labels distinguish a response-derived value from a
 constant:
@@ -3019,8 +3109,10 @@ OpenMetrics requires: a family's series together, in the order the family
 first appears; a counter's family named without `_total` and its samples with
 it; `untyped` as `unknown`; HELP with `\`, `\n` and `\"` escaped; timestamps in
 seconds; `le` and `quantile` values as canonical floats (`1.0`); and `# EOF`
-last. No `_created` series MUST be written, since the exporter does not know
-when a target's counter started.
+last. No `_created` sample MUST be written for a series read from a target,
+since the exporter does not know when a target's counter started; the
+exporter's own counters, histograms and summaries have one where the
+configuration asks for it (§ 22.1b).
 No name MUST be claimed by two OpenMetrics families, where a family claims its
 name and its type's sample names (a counter `foo`: `foo`, `foo_total`,
 `foo_created`; a histogram `foo`: `foo`, `foo_bucket`, `foo_count`, `foo_sum`,
@@ -3510,6 +3602,74 @@ delivered over OTLP like the rest of the self-metrics.
 ---
 
 
+### 22.1b Created timestamps
+
+The exporter MUST know when each of its own counters, histograms and
+summaries began to count, its creation time:
+
+- the exporter's start, for a series that has counted since then: the
+  counters of a collector of the configuration the exporter started with, its
+  `http_exporter_rule_failures_total` series and its
+  `http_exporter_collector_scrape_duration_seconds` histogram; the reload
+  counters (§ 22.0b) and the OTLP ones (§ 22.0c); the Python worker counters
+  of § 22.1a, per collector and of the pool, which the pool keeps whatever a
+  reload does; and the `go_` and `process_` counters and summary (§ 22.0a).
+  The exporter's start MUST be the start of its process, the very time
+  `process_start_time_seconds` gives where the platform has it and the moment
+  the exporter was loaded where it has not, and one value for the life of the
+  process;
+- the moment a collector's counters were made, for a collector a reload added,
+  or removed and brought back (§ 24.1): its counters, rule failures and
+  histogram start from zero then;
+- the start of the probe that got a request tracked, which of several probes
+  of a request not yet tracked is the first to end, or the moment a static
+  target's request was registered, for the per-request series of verbose mode
+  (§ 22.1). A request dropped — not asked for within the hour, removed with
+  its collector or its static target, or with verbose mode switched off — and
+  tracked again MUST have a later time than it had, as it counts from zero
+  again: when the probe that gets it tracked again began no later than a
+  dropped request's creation time, the time MUST be the moment the request is
+  tracked again, which is when that probe's counts become the series', and
+  not the probe's start.
+
+A series that goes on counting across a reload MUST keep its creation time,
+and a creation time MUST NOT be later than anything the series has counted. A
+creation time MUST NOT change while its series is tracked, so it is the same
+in every answer and in every OTLP export: a probe that began before a
+per-request series' creation time and ends after it adds its counts to the
+series then, and MUST leave the time as it is. A trip to a target MUST be
+observed in the scrape-time histogram that belongs to the counters the trip
+counts in, so that a histogram holds no observation its collector's counters
+do not, and none older than its creation time: a trip that counts in the
+counters of a collector a reload has removed (§ 24.1a) is not observed in the
+histogram of a collector brought back under the name. A histogram MUST have
+its creation time in every answer it is in, the one during which a reload
+added its collector included.
+
+`web.self_metrics.created_timestamps`, a boolean that MUST default to false,
+MUST make the self-metrics endpoint write the creation times in an OpenMetrics
+answer: after each counter, histogram and summary series, in its family and
+without a `TYPE` line of its own, one sample named as the family with
+`_created`, with the series' labels and the time in seconds since the Unix
+epoch — after a counter's `_total`, and after a histogram's or summary's
+`_sum` and `_count`. A family written as `unknown` (§ 21) has no such sample,
+which leaves out `go_memstats_alloc_bytes_total`, whose OpenMetrics family
+would be named as the gauge `go_memstats_alloc_bytes` is. It is configuration,
+so a reload MUST be able to turn it on and off. It is opt-in because a
+Prometheus without its `created-timestamp-zero-ingestion` feature stores every
+`_created` sample as one more series.
+
+Nothing else MUST change with the setting: the text format's answer, which has
+no `_created` sample, the format an `Accept` header is answered in, and every
+answer of `/probe` and of the static targets endpoint, whose series are read
+from targets and have no creation time, MUST be byte for byte what they are
+without it. The exporter's own reader (§ 14.1) drops `_created` samples, so an
+exporter probing another's self-metrics MUST give the same series with the
+setting as without.
+
+Over OTLP the creation time MUST be the start time of the series' cumulative
+points (§ 42.1), whatever the setting.
+
 # 23. Health endpoints
 
 Implement:
@@ -3678,6 +3838,20 @@ last tick, a tick MUST make one reload, logged as any other. Once the
 configuration is in force these files MUST NOT reload it: what uses them
 reads them again itself.
 
+The static target file MUST be held to the same. While the target file last
+read is refused, whatever triggered that reload, the files that checking it
+against the configuration opens MUST count among the files whose change
+reloads it: the `request.protoset_file` and `request.proto_files` of the
+collectors named by its targets that set a `request.message`, in the
+configuration it was checked against and in the one in force. They MUST be
+stamped before the check reads them, as above; a tick that finds them as
+they were MUST NOT read the target file and MUST NOT log; and once the
+target file is in force they MUST NOT reload it. A target file refused
+before that check — one that cannot be read as a target file, or is invalid
+on its own — opens no other file, and no file but itself changing MUST read
+it again. A target's own credential files are read at a scrape and MUST NOT
+refuse a reload.
+
 Enabling the watch MUST NOT weaken any reload rule: an invalid configuration, a
 configuration that would disable OTLP while a loaded static target sets
 `export_via_otlp`, a
@@ -3708,9 +3882,14 @@ new configuration before it is next used: a removed collector's self-metric
 series, per-request series, scrape-time histogram, cached results and
 remembered failures MUST be dropped, so its series stop being exposed and
 exported and Prometheus marks them stale, and a collector added again under
-the name MUST start from zero; a collector whose definition changed MUST keep
-its counters and MUST have its cached results dropped, since their keys carry
-the old definition; an unchanged collector MUST keep everything.
+the name MUST start from zero. A probe or static target scrape of the removed
+collector that had begun to count before its state was dropped, and ends
+afterwards, MUST NOT be counted in the counters, the scrape-time histogram or
+a per-request series of a collector added again under the name, and MUST NOT
+start a per-request series of the removed collector. A collector whose
+definition changed MUST keep its counters and MUST have its cached results
+dropped, since their keys carry the old definition; an unchanged collector
+MUST keep everything.
 
 Both MUST reload the configuration, with its collector files, and the
 static target file when there is one, whether or not they changed, under the
@@ -3718,7 +3897,15 @@ same rules as the watch (§ 24.1), and record the result in the reload
 self-metrics (§ 22.0b). Every reload, whatever its trigger, MUST be logged with
 the trigger — `watch`, `sighup` or `http` — and a rejected reload's line MUST
 carry `file`, the path of the configuration or static target file rejected, so
-an error that gives only a line number can be placed. Reloads MUST be
+an error that gives only a line number can be placed. With the watch on, a
+rejected reload's line MUST also say, as `retried_when`, what the watch reads
+that file again for, naming each of these that holds and nothing else: the
+file itself changing, which for the configuration counts its collector
+files; a file watched for it while it is refused (§ 24.1), when there is
+one; and the other of the two files, when the file was rejected only because
+it disagrees with the other as in force, which a change to the other MUST
+then read again. Without the watch nothing is read again until a reload is
+asked for, and the line MUST NOT carry `retried_when`. Reloads MUST be
 serialized, so two triggers at once never interleave. The Helm chart MUST expose the flag as a
 value (SPECIFICATION-CHART.md § 33.10).
 
@@ -3752,8 +3939,14 @@ label:
   and relative label expressions, with the collector's namespaces, all but a
   label that is one attribute read by its name (§ 11); and a prometheus
   transform's patterns, `include` and `exclude`.
-- A regex metric's expression MUST have at least one capture group, the first
-  being the value.
+- A regex metric's expression MUST have at least one capture group — the
+  value is the group named `value`, or else the first, and the error says so
+  — and MUST NOT have two groups named `value`.
+- A rule's `time_format` MUST be a name or a layout with a year, a month and
+  a day, no blanks around it and `PM` beside the hour of a 12-hour clock, and
+  its `time_zone` a known zone; `time_zone` without `time_format`,
+  `time_format` beside `value_map`, and `time_format` on a `python` or
+  `prometheus` rule MUST be refused (§ 18.1).
 - A regex label MUST name a capture group the regex has, by number or name.
 - A prometheus transform's `rename` targets MUST be valid metric names.
   `include`, `exclude` and `rename` MUST be rejected on any collector other
@@ -3875,7 +4068,9 @@ configuration cannot be missing from it. `--config.schema` MUST print the
 schema of the running binary — its `request.type` values are the request types
 that binary was built with (§ 5.1) — and exit 0.
 
-A test MUST fail when the committed file differs from what the code generates,
+A test MUST fail when the committed file differs from what the code generates
+in a build with every request type, which is the build the committed files
+describe (§ 5.1),
 when a key the configuration reads is missing from the schema or the schema has
 a key the configuration does not read, when any shipped configuration (the
 examples, the demo configurations and the chart's default configuration) does
@@ -3913,8 +4108,27 @@ exporter's loader and require the same verdict of each, for at least:
 `response.csv.delimiter`, a string of at most one character (`maxLength`,
 which counts characters, so a tab or a letter of several bytes is one) that
 is not a double quote, a carriage return, a line feed, NUL or U+FFFD; the
-sizes of § 5.0a; and the blocks an `enabled` key switches on (§ 42.1), every
-key of which the test MUST try. What a schema cannot tell MUST be said in the
+sizes of § 5.0a; the blocks an `enabled` key switches on (§ 42.1), every
+key of which the test MUST try; and durations, in a key of each kind — one
+that takes zero, one whose zero is its default, and the target file's
+required `interval` — of each of the three schemas. A duration key's pattern
+MUST take what the exporter reads as a duration that is not negative, and
+beyond that only a duration too long to be held: numbers with units, each
+number with a digit before or after its point, or a bare `0`; a `+` before
+any of them; and a `-` only before a zero written with no other digit, such
+as `-0s`. No key takes a negative duration, so `timeout: -5s` MUST be
+refused by the schema as it is at the load. A duration written with a `-`
+and a digit other than zero is negative however small: the exporter MUST
+read one that rounds to zero, such as `-0.4ns`, as negative, so that each
+key refuses it as it refuses `-1ns`, and the pattern with it. Only
+`otlp.timeout` and `otlp.interval` MUST take a negative duration, in a block
+with `enabled: false`, which the exporter keeps unchecked, and MUST refuse
+it with `enabled: true`. A duration too long to be held — more than
+2^63 - 1 nanoseconds, some 292 years, such as `2562048h` — is written as
+one, which is all a pattern can tell: the schemas take it, it stays the
+exporter's to refuse, as no duration, the test MUST hold both to that, and
+the documentation of the schemas MUST say so. What else a schema cannot
+tell MUST be said in the
 key's description and stay the exporter's to refuse: the least
 `otlp.interval`, 1s, since a duration is a string to a schema and a disabled
 block may hold any; the range of a size; and a size written as an unquoted
@@ -4029,6 +4243,10 @@ Requirements:
 - Avoid SSRF escalation where reasonable.
 - Consider configurable allowed URL schemes (`http`, `https`).
 - Offer per-collector target allowlists and deny lists (§ 26.1).
+- Send the collector's headers, credentials and request body, and present
+  its TLS client certificate, only to the origin a request is made to: a
+  followed redirect MUST NOT carry them anywhere else, unless the collector
+  lists the host (§ 42.15c).
 - Protect against excessively large responses.
 - Bound regex, jq, yq, and Python execution.
 - Restrict Python networking/process/file capabilities.
@@ -4045,7 +4263,14 @@ and `request.denied_targets`, lists of host names, globs of host names
 entry that is none of these, such as one with a scheme, a port or a path,
 MUST be refused at load; another request type setting either MUST be refused
 as any key of another type is. A name entry MAY hold letters, digits, dots,
-hyphens and underscores, a hyphen first or last included. Names MUST be compared without case and
+hyphens and underscores, a hyphen first or last included. An entry MUST be
+written in ASCII: one with any character outside it — an internationalised
+name in its own letters, a full-width spelling, a space outside ASCII beside
+the entry — MUST be refused at load, with an error naming the key, the entry
+and the character and saying that an internationalised name is written in
+its ASCII (`xn--`) form, and MUST NOT be read as the entry lower case or
+trimming would make of it. The configuration schema MUST refuse such an
+entry too. Names MUST be compared without case and
 without a final dot, and an IPv4-mapped IPv6 address as its IPv4 address. A
 host MUST be checked as it is dialed. A host is an IP address — an IPv6
 address MAY carry a zone — or a name, and a name is made of ASCII letters,
@@ -4053,18 +4278,38 @@ digits, `.`, `-` and `_` alone. Such a name is dialed as
 written, so it MUST be checked as written, in lower case and without a final
 dot, and MUST NOT be refused for what a registered domain may not hold: an
 underscore (`my_service`), hyphens in its third and fourth place
-(`db--primary`) or a hyphen first (`-edge`). A host with characters outside
-ASCII —
-an internationalised name, or one
-written in full-width characters — MUST be checked in the ASCII form the transport converts
-it to before dialing (`１２７.０.０.１` is `127.0.0.1`), and one with no
-such form MUST be refused. A host that is not an address and holds any other
+(`db--primary`) or a hyphen first (`-edge`).
+
+The name judged MUST be the name the request is made to. For every request
+of a collector — the first URL and every redirect followed, direct or through
+a proxy, over HTTP/1 or HTTP/2, `http` or `https` — the host the lists
+judged, the name looked up and dialed, the `Host` header or `:authority`,
+the name the TLS handshake asks for, and the host in the request line or the
+`CONNECT` a proxy reads MUST be one name, capitals and a final dot aside
+(TLS names no address and no final dot), or the request MUST be refused
+before anything is sent; only a `Host` header the collector sets or forwards
+and its `tls.server_name` MAY replace that name, in the header and the
+handshake. A host with a character outside ASCII — an
+internationalised name in its own letters, or a name or an address in
+full-width characters, with another dot (U+3002, U+FF0E, U+FF61), with a
+combining mark, in capitals, or with a byte that is no UTF-8 — MUST therefore
+be refused as a target is refused (`403`), whatever it would convert to,
+whatever the lists are and with none set, naming the character and saying
+that an internationalised name is written in its ASCII (`xn--`) form: the
+HTTP client dials, and names in the handshake and in a `CONNECT`, the form
+such a host maps to (`ｏrigin.test` and `origin。test` are `origin.test`) and
+writes the `Host` header, the `:authority` and a proxy's request line in the
+unmapped one (`xn--rigin-qr33a.test`, `xn--origintest-sh3i`), so a verdict on
+either form is a verdict on a name part of the request is not made to. A
+name in its `xn--` form is ASCII and MUST be judged and sent as it is
+written, without being decoded or validated as punycode. A host that is not
+an address and holds any other
 character — `%`, which is how a URL's host carries one written `%25`, a
-comma, a semicolon, `=`, `*`, a space, a control character — or whose
-converted form does, MUST be refused as a target is refused (`403`), saying
+comma, a semicolon, `=`, `*`, a space, a control character — MUST be refused
+as a target is refused (`403`), saying
 which character, before anything is looked up or sent, whatever the lists
 are and whether or not a proxy is in between: a proxy that decodes
-`intern%61l.example` would fetch a name the lists never saw. The rule MUST
+`intern%61l.example` would fetch a name the lists never saw. Both rules MUST
 hold for the first URL, for the host of every redirect followed and for a
 `grpc` target in each of its forms. An IPv4 address written as one number, as fewer
 than four parts, or with parts in hexadecimal (`0x`) or octal (a leading
@@ -5664,7 +5909,8 @@ example's static target file MUST be valid against the configuration in its
 directory, as startup checks the two. An example SHOULD also be run in the
 default suite against a local stand-in answering in the service's documented
 shape, asserting every series and the request the collector sent, as the
-Filebeat and Open-Meteo examples are.
+Filebeat, Open-Meteo, ECB, METAR, mempool.space, Prometheus demo, Frankfurter,
+USGS and scrapethissite.com examples are.
 
 ## 34.32 Regression tests
 
@@ -6037,8 +6283,8 @@ status captured:
   `select_request_types,request_type_http` compiles http and not the guard,
   `select_request_types,request_type_graphite` compiles graphite alone, and
   `select_request_types,request_type_grpc` compiles grpc alone, and
-  `select_request_types` alone compiles only the guard; CI's loop over
-  single-type builds names every type in the tree; a default build
+  `select_request_types` alone compiles only the guard; each of CI's loops
+  over single-type builds names every type in the tree; a default build
   registers every known type; a known type missing from the build is rejected
   as left out of the build, naming the tag, while an unknown name is not;
   registering a type twice panics; the `--dry-run` report lists the built
@@ -7195,9 +7441,10 @@ Tests MUST show:
 Tests MUST show:
 
 - A target written in full-width characters (`１２７.０.０.１`,
-  `ｌｏｃａｌｈｏｓｔ`) and an internationalised name resolving into a denied
-  network are refused as the host they are dialed as; a connection to a host
-  the request did not check, without a proxy, is refused.
+  `ｌｏｃａｌｈｏｓｔ`) is refused where the host it stands for is, and an
+  internationalised name resolving into a denied network is refused, in its
+  `xn--` form once dialed and in its own letters before it is; a connection
+  to a host the request did not check, without a proxy, is refused.
 - An idle connection an open collector left does not carry a strict
   collector's request to an address its lists refuse.
 - `retry_attempts` above 10 is refused, as a collector's `retry.attempts`
@@ -7302,7 +7549,7 @@ Tests MUST show:
   is requested with no lists set, is allowed by `allowed_targets` entries
   naming it or globbing it (`*.svc_local`), in any case and with a final dot,
   and is refused by a `denied_targets` glob; a name not on the allowed list is
-  still refused, and a non-ASCII name with no ASCII form still is.
+  still refused, and a non-ASCII name, with an ASCII form or none, is.
 - An IPv4 address written as one number, as fewer than four parts, or in
   hexadecimal or octal (`2130706433`, `127.1`, `0x7f.0.0.1`, `0177.0.0.1`)
   is refused by `denied_targets: [127.0.0.0/8]` before anything is sent, with
@@ -7902,7 +8149,8 @@ Tests MUST show:
   above: no family loses its type needlessly, and none that must is missed.
 - prometheus_client's strict OpenMetrics parser, run from the Go test where
   `python3` has the module and skipped with a message naming what is missing
-  where it does not, reads every such answer, reads from it the series and
+  where it does not (failed with it where `STRICT_OPENMETRICS_PARSER` is set,
+  § 34.85), reads every such answer, reads from it the series and
   values of the text format's answer, agrees with the rules written out in
   the test on which sets it accepts with every family in its own type, and
   refuses what the exporter used to write: a NaN and a negative counter, a
@@ -8316,11 +8564,11 @@ Tests MUST show:
   `~`, `"`, `<`, `>`, a space, a tab, NUL, DEL, a colon outside an address or
   a zone on what is no IPv6 address is refused as a target is, naming the
   character, with no lists and with nothing dialed; so is a non-ASCII host
-  whose ASCII form would hold one (a full-width `％`).
+  that holds one or its full-width form (`％`).
 - Still requested, each checked under the name or address it is dialed by:
   `my_service`, `_dmarc.example.com`, `db--primary.internal`,
   `-edge.internal`, `edge-.internal`, a name with a final dot, one in mixed
-  case, `xn--bcher-kva.example`, `bücher.example`, `192.0.2.7`,
+  case, `xn--bcher-kva.example`, `192.0.2.7`,
   `0x7f.0.0.1`, `2130706433`, `[2001:db8::7]` in either case and
   `[fe80::1%25eth0]`.
 - An `allowed_targets` or `denied_targets` entry with a character no host
@@ -8621,8 +8869,8 @@ Tests MUST show:
   range, `1.0` and `1e3` unquoted pass the schema and are refused by the
   loader with their message.
 - `otlp.interval` of `1s`, `30s`, `1m`, `1h30m` and `1.5s` is accepted by
-  both and `soon`, `5`, `1d` and a list refused by both; `500ms`, `999ms`,
-  `1ns` and `-1s` pass the schema and are refused by the loader, and are
+  both and `soon`, `5`, `1d` and a list refused by both; `500ms`, `999ms`
+  and `1ns` pass the schema and are refused by the loader, and are
   accepted by both with `enabled: false`; the schema's description says the
   exporter checks the least.
 - For every key of `otlp` and of `web.basic_auth` but `enabled`, the schema
@@ -8822,6 +9070,1178 @@ Tests MUST show:
   beside the message, in the order of the collectors (`first`, `last`, the
   sound one between them absent), and the error of the whole is `invalid
   collector Python scripts:` followed by the messages, as before.
+
+## 34.81 Examples for XML, text, a JSON API of several endpoints and a Prometheus pass-through
+
+- `examples/config.ecb.xml-test.yaml`, probed at a stand-in answering
+  `/stats/eurofxref/eurofxref-daily.xml` with a document in the shape the ECB
+  publishes — every element in a namespace, the `Cube`s in the default one,
+  the rates in attributes — yields one `ecb_euro_reference_rate` per rate, 29
+  of them, each with its `currency` and without the date,
+  `ecb_euro_reference_rates{sender="European Central Bank"} 29`, and the day
+  the rates are for as a value, `ecb_euro_reference_rates_timestamp_seconds`
+  at the Unix time of `2026-10-02T00:00:00Z`, read by `time_format`, no
+  series carrying the date as a label, beside `http_exporter_result_stale 0`;
+  the document is asked for once and nothing is logged.
+- The ECB example answers a second probe within `cache.ttl` from memory;
+  with the stand-in answering `503` an hour on it serves the same series
+  marked stale after the one retry, three requests in all, and a day later
+  the probe fails with the `503`.
+- `examples/metar/config.yaml`, probed at a stand-in holding four stations'
+  files, reads each report as it is written: the default station's plain
+  report (temperature, dew point, pressure, wind speed in metres per second,
+  direction, visibility); a variable wind with `CAVOK` (no direction and no
+  visibility); gusts, a varying direction group before the visibility and a
+  dew point of `M01` as `-1`; and a North American report with `M02/M11`,
+  `A3012` as hectopascals, statute miles and remarks (no visibility, nothing
+  from the remarks). Every series carries the `station` its report's line
+  starts with, captured before the group named `value`, and each answer has
+  `metar_observation_timestamp_seconds`, the first line's date and time read
+  by `time_format` as UTC. Each answer has exactly those series and
+  `http_exporter_result_stale 0`, each station's file is asked for once, in
+  the order probed, and nothing is logged.
+- A station the stand-in has no file for fails the probe with the `404`.
+- `examples/metar/static-targets.yaml` is valid, as at startup, against the
+  configuration beside it, names three targets every ten minutes at the
+  server's address, each with a `city` label and no `station` of its own,
+  and, scraped at the stand-in, gives each airport's series with the
+  `station` the collector read, the target's `city` and `static_target`,
+  none for a group a report lacks, one request per station and nothing
+  logged.
+- `examples/config.mempool.json-test.yaml` holds the collectors
+  `bitcoin_fees`, `bitcoin_mempool` and `bitcoin_chain`. Probed at a stand-in,
+  the first yields a fee rate per key of the answer, the five keys renamed by
+  the label's `value_map`; the second the backlog's transactions, virtual
+  bytes and fees in bitcoin (`61250834` satoshis as `0.61250834`); the third
+  `bitcoin_block_height`; each asks for its own path once and nothing is
+  logged.
+- The height is read with a line end after it; an answer that is no number
+  fails the probe naming the metric. A key the fees answer adds is a series
+  under the key as written.
+- `examples/config.promdemo.prometheus-test.yaml`, probed at a stand-in
+  answering `/metrics` as a Prometheus server writes it, passes through
+  exactly the families `include` names less the one `exclude` takes back: 50
+  samples of 15 families, the histogram with its buckets, sum and count for
+  both handlers, the summary with its quantiles, each family with its own
+  type, and the seven `process_*` and `go_*` families under their new names
+  only. The other `go_*` families, the WAL summary, the connection tracker's
+  and the handler's counters are absent; `/metrics` is asked for once and
+  nothing is logged. A second probe within `cache.ttl` is answered from
+  memory.
+- The opt-in external suite probes the four services themselves: the ECB,
+  the METAR server for the default station, mempool.space once per collector
+  and the Prometheus demo server.
+- The example list reaches `examples/metar/config.yaml` and
+  `examples/metar/static-targets.yaml`.
+
+## 34.82 Durations in the schemas, a refused target file retried, a regex value group by name, times as values, created timestamps and Filebeat's inputs
+
+- `-5s`, `'-5s'`, `-1ns`, `-1h30m`, `-0h1m`, `-.5s`, `-1.5h` and
+  `-0m0.001s` are refused by the committed schema and by the loader alike
+  in a key of each kind of each file: the configuration's
+  `collectors[].cache.ttl`, `otlp.timeout` and `otlp.interval`, a collector
+  file's `collectors[].request.retry.backoff`, and the target file's
+  `interval`, `targets[].interval` and `targets[].request.retry.backoff`.
+- In the same keys both accept `1s`, `5s`, `+5s`, `'+1m'`, `1h30m`, `1.5h`,
+  `5.s`, `1m0.5s` and `+1h0m0s`, and both refuse what is no duration: `5`,
+  `'5'`, `'-5'`, `''`, `s`, `.s`, `+s`, `-s`, `'-'`, `1d`, `5 s`, a duration
+  with a space before or after it, `--5s`, `+-5s`, `1s1`, `5S`, `soon`,
+  `0.0`, `00`, `true`, a list and a mapping.
+- A zero, written `0s`, `'0'`, `+0s`, `-0s`, `'+0'`, `'-0'`, `0h0m`,
+  `-0h0m0s`, `-0.0s`, `-.0s` or `-0.m`, is accepted by both where the key
+  takes zero or zero is its default, and passes the schema and is refused by
+  the loader as `interval is required` in the target file's `interval`.
+- A duration under a second — `.5s`, `+.5s`, `500ms`, `0.999s`, `1ns`,
+  `1us`, `1µs`, `1μs`, `0h0m0.1s` — is accepted by both where the key takes
+  zero, and passes the schema and is refused by the loader as under the
+  least, 1s, in `otlp.interval`, `targets[].interval` and the target file's
+  `interval`.
+- In an `otlp` block with `enabled: false`, `otlp.timeout` and
+  `otlp.interval` take every one of those durations, the negative ones
+  included, from both the schema and the loader, and what is no duration
+  from neither; `otlp.interval: -1s` is refused by both with
+  `enabled: true`.
+- An unquoted `0` is refused by the schema, to which it is a number, and
+  read by the loader as the duration zero.
+- Over some 9700 texts — a sign, two signs or none, and one or two numbers
+  with units, well written and not — and `-0.4ns`, `-0.0000000001s`,
+  `-0s0s0s0.1ns` and their like without the sign, a duration key's pattern
+  takes exactly the texts the loader reads as a duration that is not
+  negative, and the pattern of a switched-off block exactly those it reads
+  as a duration, with no exception; and the pattern takes nothing the
+  pattern before it did not.
+- A reload of the static target file by the watch while the `protoset_file`
+  of the grpc collector its target sends a `request.message` to is missing
+  is refused as `reading protoset_file`, logged once, and leaves the target
+  file in force; three ticks with nothing changed read nothing and log
+  nothing; the tick after the file is back logs `static targets reloaded`
+  with the trigger `watch` and puts the target file in force, the
+  configuration not being read; with the target file in force, the file
+  replaced again reloads nothing.
+- A descriptor file that changes and is still no descriptor set is one more
+  refused reload of the target file over two ticks, logged once; the set
+  back, the reload goes through. After a `SIGHUP` reload with the file
+  missing, which refuses both files, a tick with nothing changed logs
+  nothing and the tick after the file is back reloads the configuration and
+  the target file, each logged once.
+- A target file that is not YAML, written after a reload refused for a
+  missing descriptor file, is refused once and not read again when the
+  descriptor file comes back or changes: two ticks log nothing and count no
+  reload; written anew and valid, it is put in force.
+- The files watched for a refused target file are the `protoset_file` and
+  `proto_files` of the collectors that its targets with a `request.message`
+  name, in the configuration it is checked against and the one in force,
+  each once: none for a target without a message, for a collector no target
+  uses, for a collector that is unknown, for a nil configuration, nor the
+  credential files a target or a collector names or an enabled `otlp`'s TLS
+  files.
+- A regex rule whose expression has a capture group named `value` takes that
+  group as its value wherever it stands: with the station in the first group
+  and the temperature in `(?P<value>\d{2})` near the line's end, each line
+  gives a series of the temperature whose labels read the groups before it,
+  by name and by number, a group's number being its place in the expression.
+- `value_map` and `scale` apply to the group named `value`; a regex may have
+  that group and no other, or have it first; `(?<value>...)` names it as
+  `(?P<value>...)` does; blanks around its text are dropped.
+- A label may read the value's group, by `value` or by its number, and takes
+  its text as written (`07` beside the value 7), as a label reading group 1
+  of a regex without a named value does.
+- A match whose group named `value` took no part, captured nothing or
+  captured only blanks is a missing value of that match alone, whatever the
+  first group captured: under `fail` the error says `its capture group named
+  value captured no value`, an optional rule leaves the match out, and the
+  other matches keep their series. Text in the group that is no number fails
+  the rule and is not a missing value.
+- At load a regex without a capture group is refused in words that name both
+  ways of giving the value (`the value is the capture group named value, as
+  in '(?P<value>\d+)', or else the first`), and one with two or three groups
+  named `value` is refused with their count; a group named `value` alone or
+  among others, duplicate names other than `value`, and `Value` or `values`
+  load. A label must still name a group the regex has.
+- A regex without a group named `value` gives what it gave before: over a
+  table of 18 expressions, 12 texts, 4 label sets, 5 rule variants (plain,
+  scaled, mapped, mapped with `"*"` and scaled, optional) and the 3 error
+  modes, the transform and a copy of the former one return the same series
+  in the same order and the same error text.
+- A rule with `time_format` gives the Unix seconds of the time its text
+  writes: `rfc3339` with and without a fraction and with an offset;
+  `rfc1123` with `GMT`, `UTC` and a numeric zone; either name in upper case;
+  layouts with dashes, slashes, dots, month names and a 12-hour clock,
+  without separators, by day of the year, with a two-digit year, with `Z`,
+  a numeric zone or an abbreviation; dates before 1970; and the text's
+  surrounding
+  blanks dropped. A fraction of a second is kept (`…:00.25Z` is
+  `1791018000.25`).
+- A text that gives its zone is read by it whatever `time_zone` says; one
+  that gives none is read in UTC, or in `time_zone` by the offset the zone
+  has on that day: `Europe/Sofia` at UTC+3 in July and UTC+2 in January and
+  on either side of the October change of clocks, `America/New_York`,
+  `Asia/Kolkata`. An abbreviation of `time_zone`'s own (`EET`, `EEST`) is
+  read by it.
+- `scale` multiplies the seconds `time_format` read: `1000` gives
+  milliseconds, `1/86400` days.
+- Text that is no time in the format fails the rule with `value "…" is not a
+  time in time_format "…"`, followed by how a layout is written or by what
+  the name reads; a part out of its range is named (`day out of range`); a
+  text of 219 bytes is quoted to its first 64 with its length; no error
+  carries the time package's words. An abbreviation that is neither
+  `time_zone`'s, `UTC`, `GMT` nor `GMT` with hours (`EST` in UTC, `PDT` in
+  `Europe/Sofia`) fails the rule saying its offset is not known.
+- A value that is not text under `time_format` — a float, a whole number, a
+  boolean, an object, an array, null — fails the rule with `value is …, which
+  time_format cannot read: it reads text`.
+- At load `time_format` is refused, naming the collector and the metric,
+  when it holds no element of the reference time (`yyyy-mm-dd`, `%Y-%m-%d`,
+  `YYYY-MM-DD HH:mm:ss`, `unix`, `unix_ms`), with the reference time and an
+  example; when it lacks a year, a month or a day (`15:04`, `Jan 2
+  15:04:05`, `2006-01`, `2006`, `02 15:04`), naming which; and when it cannot
+  read a time it writes (`12006`). `time_zone` without `time_format`, a
+  `time_zone` that is no zone (a misspelt name, an abbreviation that is no
+  IANA name such as `EEST`, an offset, `Local`, `utc`, a path),
+  `time_format` beside `value_map`, an empty one
+  included, and `time_format` on a `python` or `prometheus` rule are refused,
+  each in its own words; a rule's other mistakes are reported beside it.
+  Names in either case, layouts of every kind above, `time_zone` and `scale`
+  load.
+- `time_format` reads a time in every transform with rules: a regex capture,
+  with a `value` group and a label; a CSS element with and without `items`;
+  an XPath node, attribute and computed string; a CSV cell; a jq string,
+  alone, per item and paired with a label; a yq string and a YAML date
+  written without quotes.
+- In each of those transforms a text that is no time fails the scrape under
+  `fail`, naming the rule, the text and the format, and under `log` leaves
+  that series out and keeps the others; a jq number fails the same way; an
+  empty or absent text is a missing value an optional rule leaves out.
+- A rule without `time_format` reads its value as before: for 5 rule
+  variants and 31 values of every type, `ruleValue` and `ruleTextValue`
+  return the same bits and the same error text as copies of the former two.
+  Reading a number, a mapped text, and a time in UTC, by name, in a named
+  zone and with a zone abbreviation each allocate nothing.
+- A named zone is loaded once: eight goroutines asking for it get the one
+  location; no name and `UTC` are UTC.
+- The schema and the exporter give one verdict on `time_format` and
+  `time_zone`: both accept a name, a quoted layout, a layout of digits
+  written as a number, `time_zone` and `scale` beside it; both refuse
+  `time_zone` alone, `time_format` beside `value_map` (an empty one too), a
+  `time_zone` that is a number, a boolean or a list, a `time_format` that is
+  a list or a mapping, and a misspelt key. A layout that is none or has no
+  date, an unknown zone, `Local`, and `time_format` on a `python` or
+  `prometheus` rule pass the schema and are refused by the exporter in the
+  words above. A layout written without quotes loads as the text it is, and
+  both keys have a description in the schema.
+- `main.go` imports `time/tzdata`, so the binary carries the IANA zones.
+- `examples/config.frankfurter.json-test.yaml`, probed at a stand-in
+  answering `/v1/latest` in the API's shape, yields a rate and its inverse
+  per currency, in the pre-script's sorted order, with `currency` and
+  `base`, and `exchange_rate_observation_timestamp_seconds{base="EUR"}` at
+  the Unix time of `2026-09-18T00:00:00Z`; the rule reads `.date` with
+  `time_format: "2006-01-02"`, the pre-script imports nothing and parses no
+  date, the API is asked once with the example's query, and nothing is
+  logged.
+- The METAR example's series each carry `station`, and each answer has
+  `metar_observation_timestamp_seconds` (`2026/10/03 09:00` as `1791018000`,
+  `2026/01/15 08:51` as `1768467060`); its target file sets a `city` and no
+  `station` on each target.
+- The ECB example has `ecb_euro_reference_rates_timestamp_seconds` at
+  `1790899200` and no series with the date in a label.
+- The external suite expects `ecb_euro_reference_rates_timestamp_seconds`
+  of the ECB, and `metar_observation_timestamp_seconds` and a
+  `station="LBSF"` label of the METAR server.
+- `web.self_metrics.created_timestamps` is read from the configuration file,
+  is off unless set, and switches the `_created` samples of the self-metrics'
+  OpenMetrics answer on.
+- The schema and the exporter give one verdict on every key of
+  `web.self_metrics`, `created_timestamps` among them: `true` and `false` are
+  accepted by both, and a number, a word, text that reads `true`, a list, a
+  mapping and a key the block does not have are refused by both.
+- Without the setting the self-metrics have no `_created` sample, in the text
+  format or in OpenMetrics, whatever `Accept` asks for.
+- With the setting the text format's answer of the self-metrics is byte for
+  byte what it is without, and the OpenMetrics answer is what it is without
+  plus one `_created` line for every counter, histogram and summary series:
+  no family moves and no other line changes.
+- The setting does not change the format an `Accept` header is answered in:
+  none, `text/plain`, Prometheus 2's, Prometheus 3's and OpenMetrics 0.0.1
+  are answered with the same content type with it and without.
+- With the setting, every counter, histogram and summary series of the
+  self-metrics, the verbose, Python, reload, OTLP and resource families
+  included, ends with its `_created` sample, in its family and with its
+  labels: after a counter's `_total` and after a histogram's or summary's
+  `_count`; a gauge family has none; every time is between the exporter's
+  start and now; and the answer passes the rules of a strict parser.
+- `go_memstats_alloc_bytes_total`, written as an `unknown` family in
+  OpenMetrics beside the gauge `go_memstats_alloc_bytes`, is the one counter
+  of the self-metrics without a `_created` sample.
+- The strict reference parser, `prometheus_client`'s, reads the self-metrics
+  with their `_created` samples and reads every one of them, in counter,
+  histogram and summary families only.
+- A collector the exporter started with, its rule failures and its scrape-time
+  histogram, the reload, OTLP and Python worker counters, per collector and of
+  the pool, are created at the exporter's start; a per-request series is
+  created when the first probe of the request began, and a static target's
+  when it was registered; the time is written in seconds.
+- A static target's request first registered by its scrape is created at the
+  time of that scrape.
+- The `go_` and `process_` counters and `go_gc_duration_seconds` are created
+  at the exporter's start, which is the time `process_start_time_seconds`
+  gives.
+- A collector a reload removed and brought back starts from zero and is
+  created at the reload, not at the exporter's start, its rule failures and
+  histogram with it; one a reload adds is created then, whether a probe or a
+  read of the self-metrics first asks for it; one that stayed keeps its
+  counts and its time; and the times do not change from read to read.
+- A per-request series dropped after an hour without a probe, or with verbose
+  mode switched off, starts from zero when probed again, and is created at
+  that probe, while its collector's counter goes on counting since the
+  exporter's start.
+- Counters that absorb another probe's keep their own creation time,
+  whichever of the two began earlier, and a request first probed by two
+  probes at once counts since the one that ended first began: the other adds
+  its count without moving the time.
+- A probe's answer and the static targets endpoint's, of a target with a
+  counter, a histogram and a summary, are byte for byte the same with the
+  setting as without, in the text format and in OpenMetrics, and have no
+  `_created` sample, while the same server's self-metrics have theirs.
+- An exporter probing another's self-metrics as OpenMetrics reads the answer
+  with `_created` samples without an error, passes none of them on, and gives
+  byte for byte the answer it gives when the other writes none.
+- Over OTLP every sum, histogram and summary point of the exporter's own
+  series starts at the series' creation time, without the setting too; a
+  gauge has no start time; a counter read from a target starts at its first
+  export as before, and is the only series whose start is remembered.
+- The OpenMetrics writer puts a `_created` sample, with the series' labels
+  and timestamp and the time in seconds, after a series with a creation time
+  in a counter, histogram or summary family that keeps its type, a histogram
+  of buckets alone included; a series without one, a gauge, an untyped
+  series and a family written as `unknown` have none; and the text format is
+  the same with creation times as without.
+- For sets of every type with odd values and clashing names whose every
+  series has a creation time, the OpenMetrics answer passes the rules of a
+  strict parser and is the answer without creation times plus `_created`
+  lines; a histogram with a label of its own named `le` has no `_created`
+  sample; and the strict reference parser reads every such answer.
+- `examples/config.filebeat.json-test.yaml` has a third collector,
+  `filebeat_inputs`, which requests `/inputs/` with its slash and nothing
+  else. Run against `testdata/json/filebeat-inputs.json` (two `filestream`
+  inputs, a `tcp` and a `journald` one, written from the Beats source, not
+  captured), it exports 49 series labelled `id` and `input` without logging:
+  `filebeat_input_pipeline_events_added_total` and
+  `filebeat_input_pipeline_events_total{outcome}` for all four inputs,
+  `filebeat_input_files_total{event}`, `filebeat_input_files_active` and the
+  message, byte, event and error counters for the two `filestream` inputs,
+  and `filebeat_input_processing_time_seconds{quantile}` with its mean and
+  max, nanoseconds as seconds, for the three inputs that report a processing
+  time.
+- With only the inputs that are not `filestream`, the collector exports their
+  pipeline counters and the `tcp` input's processing time, no `filestream`
+  family at all, without logging; with the `events_pipeline_*` counters
+  removed from every input, as an older Filebeat answers, it exports the
+  other 37 series, none for the `journald` input, without logging.
+- Against a Filebeat answering `/inputs/` with `[]`, the probe answers 200
+  with an empty exposition and logs nothing.
+- With the watch on, the line of a refused reload carries `retried_when`,
+  naming what the watch reads that file again for: `the configuration
+  changes` for a configuration that is not YAML, and `the configuration or a
+  file it names changes` when the configuration in force names a
+  `web.basic_auth.password_file`; `the configuration or the static target
+  file changes` for a configuration refused only because the target file in
+  force uses a collector it drops, and `the configuration, a file it names
+  or the static target file changes` when it names a file too; `the static
+  target file changes` for a target file that is not YAML; and `the static
+  target file or the configuration changes` for a target file naming a
+  collector the configuration lacks, whether or not the configuration names
+  files.
+- A target file refused while the `protoset_file` its check opens is gone
+  says `the static target file, a file its check opens or the configuration
+  changes`; refused next for not being YAML, with no file watched for it, it
+  says `the static target file changes`.
+- Without the watch none of those lines carries `retried_when`, whether the
+  watch's tick or a `SIGHUP` reload refused the file; with the watch on, a
+  configuration refused at a `SIGHUP` for the target file's sake says `the
+  configuration or the static target file changes`, with the trigger
+  `sighup`.
+- `-0.4ns`, `-.5ns`, `-0.0000000001s`, `-0s0s0s0.1ns`,
+  `-0h0.0000000000001h`, `-0.9ns0.9ns` and `-0.000001µs` are read as a
+  negative duration; `-0s`, `-0`, `-0h0m0s`, `-0.0s`, `-.0s`, `-0.m`, `+0s`
+  and what is under a nanosecond and not written negative — `0.4ns`,
+  `+0.4ns`, `.5ns`, `0.0000000001s`, `0s0s0s0.1ns` — are read as zero.
+- Over some 7000 texts — a sign, two or none, and one or two numbers with
+  units, well written and not, a number too large among them — a duration
+  is read, or refused, as `time.ParseDuration` reads it, except that what Go
+  rounds to zero and is written with a `-` and a digit other than zero is
+  read as -1ns.
+- `-0.4ns`, `-.5ns`, `-0.0000000001s` and `-0s0s0s0.1ns` are refused by the
+  committed schema and by the loader alike in a key of each kind of each
+  file, the loader refusing each in the words it has for `-1ns` in that key
+  — `cache.ttl must not be negative`, `otlp.timeout must not be negative;
+  got -1ns`, `otlp.interval -1ns is under the least, 1s`, `request.retry.backoff
+  must not be negative`, `interval must not be negative`, `interval -1ns is
+  under the least, 1s` — and are taken by both in `otlp.timeout` and
+  `otlp.interval` of a block with `enabled: false`.
+- A duration too long to be held — `2562048h`, `9223372036854775808ns`,
+  thirty nines and `h` — passes each schema, in a key of each kind and in a
+  switched-off `otlp` block, and is refused by the loader as `is not a
+  duration`: the documented disagreement. Both patterns take those texts and
+  `+2562048h`; the longest duration, `2562047h47m16.854775807s`, is taken by
+  both.
+- A zone the text writes as `GMT` and a signed whole number of hours is read
+  by that offset: `2026-10-03 09:00:00 GMT+3` under `2006-01-02 15:04:05 MST`
+  is `06:00Z` and `GMT-5` is `14:00Z`, with no `time_zone`, with `UTC`,
+  `Europe/Sofia`, `America/New_York` and `Etc/GMT-3`, written `GMT+03`, for
+  one hour and eleven and twelve, across midnight and the year's end, with
+  the fraction of a second kept, and through a regex rule's capture. `GMT`,
+  `GMT+0`, `GMT-0` and `UTC` are UTC; beside a numeric zone in the layout the
+  numeric zone is the offset; `GMT+24`, `GMT+3:30`, `GMT3` and `UTC+3` are no
+  time in the layout, and `+03` and `EEST` without their zone still fail as
+  abbreviations whose offset is not known.
+- Nothing else is read differently: over 12 formats, 7 zones, 5 times, 27
+  ways of writing the zone and a rule with and without `scale`, `ruleTime`
+  and a copy of the former one return the same bits and the same error text,
+  but for the 280 texts that name `GMT` with hours under the layout with
+  `MST` and no numeric zone, which differ by exactly those hours.
+- At load a layout with the hour of a 12-hour clock and no `PM`
+  (`2006-01-02 03:04:05`, `2006-01-02 3:04`, a `3` meant as itself in
+  `v3 2006-01-02` and in `… UTC+3`) is refused, saying to write the hour as
+  `15` or to add `PM`; with `PM` or `pm`, and a 24-hour clock with `PM`, it
+  loads. A layout with a blank, a tab or a line end before or after it is
+  refused, saying the text is read without its surrounding blanks; a layout
+  of one blank is no layout.
+- A sample date (`2026-10-03`), the name of a format the exporter does not
+  have (`RFC3339Nano`, `rfc822`, `iso8601`) and every layout refused for
+  lacking a year, a month or a day or for not reading what it writes is
+  refused in words that end with what a layout is: the reference time, how
+  it is written and an example.
+- The load check takes no layout it refused before and newly refuses only
+  those two kinds: over 106 names, layouts and texts that are no layout, its
+  verdict and that of a copy of the former check agree, but for the nine
+  with blanks around them or a 12-hour hour without `PM`.
+- A `time_zone` that is an IANA name loads though it reads as an
+  abbreviation (`EET`, `CET`, `EST`, `GMT`); `PST` and `EEST`, which are no
+  IANA names, are refused.
+- Seconds a layout writes `05` read a text with no fraction and with one of
+  one, three and nine digits, after a dot or a comma, and so do `05.999` and
+  `05.999999999`; `05.000` and `05,000` read exactly three digits, after
+  either mark, and `05.000000` exactly six, and a text with fewer, more or
+  none is no time in the layout; a minute takes no fraction.
+- Text in a layout that is an element of the reference time is read as one:
+  under `Q4 2006-01-02` the text `Q3 2026-10-03` is the third minute of the
+  day. A zone typed into the layout (`…05Z`, `… UTC`, `… GMT`) is not read as
+  a zone, so the text is read in `time_zone` (`09:00` as `13:00Z` in
+  `America/New_York`, `06:00Z` in `Europe/Sofia`), where `Z07:00` and `MST`
+  in its place read the text's zone.
+- At a change of clocks a local time is read as `time.Date` reads it: in
+  `Europe/Sofia`, `2026-10-25 03:30`, which occurs twice, is `01:30Z`, the
+  second, and `2026-03-29 03:30`, which does not occur, is `01:30Z`, an hour
+  after `02:30`. A two-digit year is one of 1969 to 2068 (`68` is 2068, `69`
+  is 1969, `99` is 1999, `00` is 2000).
+- The schema passes, and the exporter alone refuses, a layout with a 12-hour
+  hour and no `PM`, one with blanks around it and a sample date, each in the
+  words above.
+- The METAR example reads the observation and never the forecast or the
+  remarks after it, each report served inline as its station's file with
+  exactly the series listed and nothing logged: `EGLL … 24008KT 9999 … Q1015
+  BECMG 27015G25KT` has no gust; `LBBG … VRB02KT CAVOK … BECMG 27015KT 3000`
+  has a wind speed and neither a direction nor a visibility; `UUEE …
+  24005MPS 9999 … TEMPO 27015G25KT 2000` has no wind series and the
+  visibility `9999`; `ENZV … AUTO /////KT 9999 FEW030 12/// Q1013 BECMG
+  20010G20KT 4000` has the timestamp, the pressure and the visibility `9999`
+  alone.
+- The METAR example reads a report whose line starts with `METAR` or `SPECI`
+  (all its series, with the station after the prefix), with `AUTO` or `COR`
+  after the time, and with a variation group between the wind and the
+  visibility; a calm, `00000KT`, is a speed of `0` and a direction of `0`,
+  and the visibility before a runway's visual range is read (`0800` as
+  `800`).
+- The METAR example's pressure is the group directly after the temperature's:
+  a report whose remarks repeat it in the other unit (`Q1013 … RMK 1CU030
+  A2992`) or that gives both (`Q1012 A2990`) yields one
+  `metar_pressure_hectopascals`, the first, where two rules matching made
+  the probe fail on a duplicate series; remarks with a peak wind, a
+  temperature to the tenth and a pressure tendency (`PK WND 20028/0815 …
+  T02331011 53012`) give no series.
+- A probe under way when a reload removes its collector, ending after the
+  collector's state was dropped, is counted nowhere that is shown: the
+  removed collector has no series, a per-request one included, and the
+  collector brought back under the name has an empty scrape-time histogram,
+  counters at zero and no tracked request, all created no earlier than the
+  reload that brought it back.
+- When such a probe ends only after the collector brought back was probed
+  again, the histogram, the counters and the per-request series hold that one
+  new probe and nothing of the old one, and the request is created no earlier
+  than the reload.
+- A probe of a request, committed with the statistics of a collector a reload
+  removed, starts no tracked request; committed with a configured collector's
+  it does.
+- The `_created` of a per-request series does not move when a probe that
+  began before it ends after it: the series, tracked since the probe that
+  ended first began, takes the earlier probe's count and keeps its time, in
+  that read and the next.
+- A request dropped with verbose mode switched off and on, and tracked again
+  by a probe that began before the dropped request was tracked, is created
+  when that probe ended, later than the time it showed before, and counts
+  that probe alone.
+- A request dropped and tracked again by a new probe keeps that probe's time
+  when a probe that began before the drop ends afterwards and adds its count.
+- Whether a request is dropped with verbose mode, for an hour without a
+  probe, with its collector or with its static target, a probe that began
+  before the dropped request's creation time and is the first committed
+  afterwards has the request created at that moment, later than before, and
+  a probe of another request that began after the drop keeps its own start.
+- Counters that absorb another probe's keep their own creation time, whether
+  the absorbed probe began earlier, later or has no time.
+- A request whose first probe shares its trip counts since that probe began,
+  on a clock that moves at every reading too.
+- A collector a reload adds while the self-metrics are being read, after the
+  collectors' counters were taken, has its histogram's `_created` in that
+  answer, at the time of the read, and the same time in the next answer,
+  where its counters have it too, and in the set OTLP exports.
+- The self-metrics of each of those states pass the rules of a strict parser,
+  and the strict reference parser reads them.
+- The scrape-time histogram kept in a collector's statistics has, for trips
+  from a microsecond to two minutes, on the bucket bounds and between them,
+  the buckets, sum and count of the histogram formerly kept by the
+  collector's name, and the same empty histogram before the first trip.
+- The test of a short gRPC probe that gives up on a shared reflection
+  question holds the server's answer until the probe has given up, instead
+  of for a second, so the patient probe has always joined the question,
+  however busy the machine.
+
+## 34.83 What a followed redirect carries
+
+- A redirect on the origin the request was made to — its `Location` a path,
+  the origin in full, or the origin with its scheme in capitals — is sent
+  everything the first request carried: the collector's headers, a header
+  forwarded from the probe, `Authorization` and `Cookie`, and no `Referer`.
+- A redirect to another host, to the same host on another port, from
+  `https` to `http` and from `http` to `https` is sent only `Accept`,
+  `Accept-Language` and `User-Agent`, as the first request had them, beside
+  the transport's own `Accept-Encoding`, and no `Referer`; where the machine
+  has an IPv6 loopback, so is one to a host written as `[::1]`, which `::1`,
+  `[::1]` and `0:0:0:0:0:0:0:1` in `redirect_trusted_hosts` each trust.
+- A host in `redirect_trusted_hosts` is sent everything: listed by name, in
+  another case, by a glob with `*` or `?`, by `"*"`, and by its address when
+  the redirect writes the address; an entry that does not match, the name
+  with a final dot, and an address for a host written as a name, trust
+  nothing. A listed host is trusted on another port and over `https`.
+- An entry matches a host as it is written: `*.example` does not match
+  `example`, an address matches its other textual forms and its IPv4-mapped
+  form, and neither the address with a zone, `127.1` nor a name; a network
+  entry matches nothing.
+- A subdomain of the first host, reached through a proxy, is sent only the
+  neutral headers, where the same request sent with the redirect check of
+  before hands it `Authorization`, `Cookie`, every other header and a
+  `Referer`; listed as `*.api.example` it is sent everything but a
+  `Referer`.
+- A chain that leaves the origin for a host that is not trusted and returns
+  carries everything again on its return, where the redirect check of
+  before sent the returning request neither `Authorization` nor `Cookie`.
+- In a chain of three redirects — to a listed host, on to the first host on
+  another port, on to the listed host on that port — the requests carry
+  everything, everything, the neutral headers and everything.
+- A `Referer` set in `request.headers` is sent as written on the first
+  request and on a redirect on the origin, and not to another origin.
+- A bearer token, a basic credential and an `Authorization` forwarded from
+  the probe each reach a listed host and not an unlisted one.
+- A credential in the target URL's userinfo is sent after a redirect whose
+  `Location` is a path, and neither after one naming the origin in full nor
+  after one to a listed host.
+- A `Host` set in `request.headers` is kept across a redirect to a path; a
+  `Location` of the form `//host/path` to another host is sent that host's
+  own `Host`, where the redirect check of before sent the collector's, and
+  so is one to a listed host, with everything else.
+- A `POST` with a body answered `307` or `308` towards an unlisted host
+  fails with `redirect to <URL> refused: it would send the request body to
+  <host>, which is not the origin the request was made to and is not listed
+  in request.redirect_trusted_hosts`, the URL's query values masked; the
+  host receives nothing, the refusal is not retried under `retry.attempts`
+  with `non_idempotent`, a `body` probe parameter is refused alike, and a
+  host `denied_targets` refuses is refused by that first.
+- The same `POST` answered `307` or `308` towards its origin or a listed
+  host is sent again as a `POST` with its body, its `Content-Type` and
+  everything else.
+- A `POST` answered `301`, `302` or `303` is followed as a `GET` without
+  body and without `Content-Type`: with everything else on the origin, with
+  the neutral headers to another host. A `GET` answered `307` towards an
+  unlisted host is followed with the neutral headers.
+- A `graphite` request posted as a form and answered `307` is sent again
+  with its form on its origin and to a listed host, and refused towards an
+  unlisted one, which receives nothing, without a retry.
+- A retry after a `503` from a host a redirect led to starts again at the
+  first URL with everything, and its redirect carries the neutral headers.
+- An answer says `from <host>, where a redirect led: the collector's headers
+  and credentials were not sent to that host, …` when a redirect led there
+  and headers were withheld, and says nothing for an answer from a listed
+  host, from a collector with nothing to withhold, from a chain that
+  returned to the origin, or without a redirect.
+- A probe whose status fails after such a redirect, `401`, `403` or `404`,
+  is answered `502` with `received HTTP status <n> from <host>, where a
+  redirect led: the collector's headers and credentials were not sent to
+  that host, which is not the origin the request was made to; list it in
+  request.redirect_trusted_hosts if it is to be sent them`, and the host was
+  sent neither `Authorization` nor the API key; with the host listed the
+  probe succeeds, and a target's own `401` reads `received HTTP status 401`
+  and no more.
+- A request trace records each redirect with the headers it was sent, and
+  for one that is not trusted the withheld names, sorted, `Host` among them
+  when a `Location` without a scheme would have carried it; a debug probe
+  lists the first request with its redacted credentials, the redirect
+  without them, and under it `not sent: Authorization, X-Api-Key — the
+  redirect leads to a host that is not the origin the request was made to
+  and is not in request.redirect_trusted_hosts`; for a listed host it lists
+  the credentials, redacted, no such line and no `Referer`.
+- No request type takes `redirect_trusted_hosts` as a probe parameter or a
+  static target key; a probe sending `follow_redirects=true` and
+  `redirect_trusted_hosts=localhost` or `=*` is answered `200` and the
+  redirect's host is sent nothing of the collector's, while following
+  switched on by the probe keeps to the collector's own list. A static
+  target file setting the key is refused by its schema and by the exporter,
+  as an unknown key.
+- `redirect_trusted_hosts` refuses at load, each with its message, an empty
+  entry, a URL, a path, a name with a space, a name with a bare colon, an
+  address that is none, a network (IPv4 and IPv6) and a host with a port
+  (name, glob and bracketed IPv6, naming the host to write); it accepts
+  names, globs, `"*"`, `my_service`, IPv4 and IPv6 addresses, and an `http`
+  collector without `follow_redirects`; `localfile` and `grpc` collectors
+  refuse the key as one that does not apply.
+- The configuration schema and the exporter agree on those entries, an
+  address of IPv6 shape that is none being the exporter's alone to refuse.
+- Two URLs are one origin with the same scheme, host and port: a path, a
+  query and userinfo aside, the host in any case, the port written or the
+  scheme's own; another scheme, another port, the other scheme's default
+  port, a subdomain, a parent domain, `localhost` for `127.0.0.1`, `127.1`
+  for `127.0.0.1` and a host with a `%` are not.
+- The limit of ten redirects holds: a loop ends with `stopped after 10
+  redirects` after ten requests.
+- One client and its copy for a connection of its own, used at once for
+  requests of a collector that lists a host and one that does not, give
+  each request its own collector's answer.
+- A client used without a target policy, as the OTLP exporter's, follows a
+  `307` to another host as the HTTP client does: the body and the request's
+  own header sent again, a `Referer` added, `Authorization` dropped.
+- For a `GET` and a `POST` without a redirect, a `GET` redirected by `302`
+  to a path and by `301` to the origin in full, a `POST` redirected by
+  `307` and by `303`, and a redirect with a `Host` or a `Referer` of the
+  collector's, the requests read off the connection are byte for byte those
+  of the same request sent with the redirect check of before, but for the
+  `Referer` line that check added; a request without a redirect is shown in
+  full.
+- Through a proxy, a redirect from `api.example` to `api.example.` asks the
+  proxy for `api.example.` and is sent only the neutral headers, where the
+  redirect check of before sent it every header but `Authorization` and
+  `Cookie`; a redirect from `api.example.` to `api.example` is sent the
+  neutral headers too, and one from `api.example.` to `API.example.`
+  everything.
+- `api.example` and `*.example` in `redirect_trusted_hosts` do not trust a
+  redirect to `api.example.`, which `api.example.`, `*.example.` and `"*"`
+  trust; `api.example.` does not trust a redirect to `api.example`.
+- Through a proxy, a redirect from `origin.test` to that name written with a
+  fullwidth `o`, or with U+3002 for its dot, is refused for the character
+  outside ASCII, the proxy asked for the first URL alone, also with
+  `origin.test`, or `*.test` and `"*"`, listed, where the proxy was asked
+  for `xn--rigin-qr33a.test` and `xn--origintest-sh3i`.
+  `xn--bcher-kva.example` listed trusts a redirect written
+  `xn--bcher-kva.example`, and one written `bücher.example` is refused; a
+  first URL written `bücher.example` is refused with the proxy asked
+  nothing, and from one written `xn--bcher-kva.example`, a redirect written
+  the same way, in capitals or as a path is sent everything.
+- A redirect to the first URL's own listener under another spelling — its
+  port with a zero before it, `127.0.0.1` as `[::ffff:127.0.0.1]` or
+  `[::FFFF:7f00:1]` — arrives there with the neutral headers alone;
+  `HTTP://LOCALHOST` for `localhost` is sent everything.
+- Two URLs are not one origin when one host has a final dot and the other
+  none, when a port is written `080` or `08080` for `80` or `8080`, for
+  `127.0.0.1` against `127.0.0.1.`, `0x7f.0.0.1`, `2130706433` and
+  `[::ffff:127.0.0.1]`, for `[::1]` against `[0:0:0:0:0:0:0:1]`, for an IPv6
+  address with another zone, the zone in another case or no zone, and for a
+  host outside ASCII against its capitals, its `xn--` form, or an ASCII name
+  it converts to (fullwidth letter, U+3002 or U+FF0E for the dot), or
+  itself; they are one origin with the dot on both, and with the same zone
+  and the address in another case.
+- An entry of `redirect_trusted_hosts` matches a host in another case; with
+  a final dot it matches the dotted host alone, and without one the host
+  without; `*example.com` matches `evilexample.com`, which `*.example.com`
+  does not, and `api.example.*` matches `api.example.evil.net`; no entry,
+  `"*"` included, matches a host outside ASCII; an address entry with a zone
+  matches that zone alone, in its case, and one without a zone no zoned
+  host; `1.2.3.4.` matches the host `1.2.3.4.` and not `1.2.3.4`.
+- For hosts without a final dot, a zone or a character outside ASCII — names
+  in either case, a subdomain, addresses in several spellings, a host with a
+  `%` — and for the entries that still load, the origin, the list and the
+  reading of an entry give what the comparison of before, copied into the
+  test, gave.
+- The first URL's path and the collector's `query` are on the first request's
+  line and not in the request a redirect to another host is sent, which is
+  shown in full: its own path, the three neutral headers and
+  `Accept-Encoding`.
+- A `Location` with a user and password, towards an unlisted host, is
+  followed with the neutral headers and no `Authorization`, and traced with
+  its URL without them; towards a listed host the collector's own
+  `Authorization` is the one sent, and a collector without one sends the
+  `Location`'s as basic auth.
+- A credential in the target URL's userinfo, the collector's only one, is not
+  sent to an unlisted host a redirect leads to; the answer says so, and the
+  trace names `Authorization (the target URL's credentials)` as withheld,
+  and `Authorization` alone when the collector has a bearer token. A probe
+  of such a target is answered `502` with `received HTTP status 401 from
+  localhost, where a redirect led: the collector's headers and credentials
+  were not sent to that host`, and its debug report lists `not sent:
+  Authorization (the target URL's credentials) — …` without the password.
+- A redirect to the first URL's host on another port answers with `from
+  <origin>, where a redirect led: the collector's headers and credentials
+  were not sent there, since <origin> is not the origin the request was made
+  to, <first origin>; list <host> in request.redirect_trusted_hosts if it is
+  to be sent them`, and is traced with the reason `the redirect leads to
+  <origin>, which is not the origin the request was made to, <first origin>,
+  and whose host is not in request.redirect_trusted_hosts`; a redirect to
+  another host keeps the reason of before. A probe shows the same in its
+  `502` and in its debug report's `not sent:` line.
+- A `POST` answered `307` from `http://api.example` towards
+  `https://api.example` or `http://API.example:8080` fails with `… refused:
+  it would send the request body to <origin>, which is not the origin the
+  request was made to, http://api.example, and whose host is not listed in
+  request.redirect_trusted_hosts`, the query value masked, after one request.
+- With `tls.cert_file` and `key_file` set, a redirect over `https` to
+  another host, or to the same host on another port, fails with `redirect to
+  <URL> refused: it would present the collector's TLS client certificate to
+  …`, the query value masked; the origin received one request, with the
+  certificate, under `retry.attempts: 2`, and the other server accepted no
+  connection. A host `denied_targets` refuses is refused by that first. A
+  listed host is sent everything on a connection that presented the
+  certificate, a redirect on the origin presents it, a redirect over plain
+  `http` is followed with the neutral headers and no certificate, and
+  without a client certificate an `https` redirect to another host is
+  followed as before.
+- With `tls.server_name` and `ca_file` set, a redirect to another `https`
+  server holding the target's certificate is followed, and one to a server
+  whose certificate, trusted by the same `ca_file`, is for another name
+  fails verification against the `server_name`, after one request.
+- `redirect_trusted_hosts` refuses at load, each with its message, `10.*`,
+  `192.168.*.*`, `10.0.0.?`, `[10.*]` and `*.1.` as globs written like a
+  range of addresses, naming a host each would match; `**`, `*.`, `[*]`,
+  `*.*`, `?` and `*?` as wildcards alone; `fe80::*`, `*:*`, `10.*:80`,
+  `::1.` and `[::1].` as no host; a network without proposing a glob. It
+  accepts `fe80::1%eth0`, `" * "`, `10-*`, `*.10.example`, `1.2.3.4.` and
+  `::1:80`.
+- The configuration schema and the exporter agree on those refusals and
+  acceptances, and on `1*a`, `?a`, `[api.example.com].`, `0x7f.0.0.1`,
+  `a..b` and `-` accepted and `1*`, `[**].`, `fe80::1%eth0.` and `fe80::1%`
+  refused.
+
+## 34.84 Hosts outside ASCII, the tests of single-type builds, and CSV and HTML fixtures
+
+- Go's HTTP client alone, given a host with a character outside ASCII, sends
+  it under two names: it dials, asks the TLS handshake for and names in a
+  proxy's `CONNECT` the mapped form (`origin.test` for `ｏrigin.test`,
+  `origin。test`, `origin．test` and `origin｡test`, `xn--bcher-kva.example`
+  for `BÜCHER.example` and for `bücher` written with a combining mark,
+  `ab.example` for a name with a soft hyphen, `127.0.0.1` for
+  `１２７.０.０.１`), and writes the `Host` header and the request line a proxy
+  reads in the unmapped one (`xn--rigin-qr33a.test`, `xn--origintest-sh3i`,
+  `xn--origintest-6f99c`, `xn--origintest-9599c`, `xn--BCHER-2pa.example`,
+  `xn--bucher-xyd.example`, `xn--ab-5da.example`,
+  `xn--8g7ccp.xn--7g7c.xn--7g7c.xn--8g7c`); a host with no mapped form (a
+  zero width joiner) is dialed as it is written; only a name already in the
+  mapped form, `bücher.example`, is one name everywhere. Over HTTP/2 a host
+  whose two forms differ is dialed again and again, three handshakes until
+  the test's dialer stops it, and no request is sent.
+- A target whose host has a character outside ASCII — full-width letters
+  and digits, U+3002, U+FF0E or U+FF61 for a dot, an internationalised name
+  in lower case, in capitals and with a combining mark, `ß` and `ς`, Hebrew
+  letters, a zero width joiner, a soft hyphen, the Kelvin sign and the dotted
+  capital I, a circled digit, a label of 60 `ü`, an empty label, a final dot,
+  `xn--ü`, an IPv6 zone in full-width letters, a byte that is no UTF-8, and
+  such a name with `_` or a full-width `％` — is refused as a target is
+  refused, with nothing dialed, no TLS handshake and no request, over `http`
+  and `https`, with `enable_http2` and without, with no lists, with
+  `allowed_targets: ["*"]`, with the mapped names allowed (`origin.test`,
+  `localhost`, `*.example`, `127.0.0.1`) and with the unmapped names denied
+  (`xn--rigin-qr33a.test`, `xn--origintest-*`).
+- The refusal names the first such character and says how the name is
+  written: `target ｏrigin.test refused: it has U+FF4F 'ｏ', a character
+  outside ASCII: write an internationalised name in its ASCII form, as
+  xn--bcher-kva.example for bücher.example`; a character that does not print
+  is named by its code point alone (`U+200D`), a byte that is no UTF-8 as
+  `U+FFFD`, and a host that also holds a `%` is refused for the character
+  outside ASCII.
+- Behind a proxy, for `http` and `https` targets and with no lists, the
+  mapped names allowed or the unmapped names denied, such a target is refused
+  with the proxy asked nothing, and a redirect to one is refused with the
+  proxy asked for the first URL alone; on a direct connection a redirect to
+  one is refused with the first host alone dialed and requested.
+- A host written in ASCII is sent under the one name the policy judged: for
+  names in either case, with a final dot, with an underscore or hyphens a
+  registered domain may not have, `xn--` labels in either case, a label that
+  only looks like punycode (`xn--zz`, `xn--`), a label of 64 characters, an
+  empty label, IPv4 addresses in dotted and older forms and IPv6 addresses
+  with and without a zone, the address dialed, the `Host` header, the
+  `:authority` of HTTP/2, the request line a proxy reads and its `CONNECT`
+  are the host as the target writes it, and the name the TLS handshake asks
+  for is that name without its final dot, and none for an address; an entry
+  of that name in lower case without the dot allows it in `allowed_targets`
+  and refuses it in `denied_targets`. The zone of an IPv6 address is left out
+  of the `Host` header and of a proxy's request line, and kept in the
+  `:authority` of HTTP/2.
+- For every host written in ASCII — names, addresses in all their forms,
+  hosts with a character no name has, and each string of up to three of
+  thirteen ASCII characters — the host the policy judges, or the error it
+  refuses with, is what the function of before, copied into the test, gave;
+  every host with a character outside ASCII, the same strings with `ü`, `ｏ`,
+  `。` and the Kelvin sign among them, is refused for that character.
+- For `allowed_targets` and `denied_targets` entries written in ASCII —
+  names, globs, addresses, networks, entries with spaces or a tab around
+  them, and entries that fail to load — the compiled lists, or the error,
+  are what the reading of before, copied into the test, gave.
+- An `allowed_targets`, `denied_targets` or `redirect_trusted_hosts` entry
+  with a character outside ASCII stops the load with `collector "web"
+  request.<key> entry "<entry>" has <character>, a character outside ASCII:
+  write an internationalised name in its ASCII form, as
+  xn--bcher-kva.example for bücher.example`: `bücher.example`, a glob of it,
+  `BÜCHER.example`, a full-width spelling, U+3002 for a dot, also after an
+  `xn--` name, a network or an address in full-width digits, a zero width
+  joiner, a right-to-left override, and the entries that were read as
+  another one: the Kelvin sign (as `k`), the dotted capital I (as `i`) and an
+  entry with a no-break or ideographic space beside it (as the entry
+  without).
+- Entries in the `xn--` form load, in either case, and judge the host
+  written so: through a proxy, `xn--bcher-kva.example`, the same in capitals
+  with a final dot, `xn--rigin-qr33a.test` and a name an `xn--origintest-*`
+  glob allows are asked of the proxy as the target writes them, `origin.test`
+  and `xn--bcher-2pa.example` are refused as not in `allowed_targets`, and
+  `xn--origintest-sh3i` as denied, with the proxy asked nothing; an
+  `XN--bcher-kva.example` entry of `redirect_trusted_hosts` trusts
+  `xn--BCHER-kva.example` and not `bücher.example`.
+- The configuration schema and the exporter agree on `allowed_targets` and
+  `denied_targets` entries outside ASCII, which both refuse, and on names,
+  globs, `xn--` names, addresses, networks, an entry YAML reads as a number
+  and an entry with spaces around it, which both accept; an entry with a
+  comma, a URL and an empty entry pass the schema and are the exporter's to
+  refuse. Both refuse a `redirect_trusted_hosts` entry outside ASCII, the
+  Kelvin sign and a no-break space beside the entry included.
+- A `grpc` target whose host has a character outside ASCII is refused in
+  each of its forms (`host:port`, `dns:///`, `grpc://`, `grpcs://`), behind a
+  proxy and without one, with no lists, with the mapped names allowed and
+  with the unmapped names denied, with the same message and with no
+  connection set up; `grpcs://XN--bcher-kva.example:443` is refused by
+  `denied_targets: [xn--bcher-kva.example]`.
+- A `graphite` collector's render API named `ｌｏｃａｌｈｏｓｔ`, in full-width
+  letters, is refused with nothing requested, as the target and as the host
+  of a redirect, which leaves the server with the first request alone.
+- Under each single-type selection (`select_request_types,request_type_<name>`
+  for graphite, grpc, http and localfile) the whole suite passes: a test file
+  that needs a request type carries
+  `!select_request_types || request_type_<name>`, one that needs two the two
+  joined with `&&`, and the comparison of the committed schemas with the
+  generated ones, the check that every request key belongs to a type and the
+  check that every known type is registered carry `!select_request_types`
+  alone; the default build runs every test and subtest it ran before.
+- A collector without `request.type` is told to add a type the build has:
+  `type: http` where the build carries http, and otherwise the first of the
+  types it carries, and the message shows no type the build left out.
+- ci.yml has a step that runs `go test -count=1` under the tags of each
+  request type on its own, under the condition of its other Go steps; each of
+  its loops over the request types names every type in the tree, and so does
+  that of `make test-request-types`, which runs the command ci.yml runs and
+  is part of `make ci`.
+- In a build with grpc and without http the exporter's grpc fixture carries
+  its grpc collector alone, so the grpc probe, static target, collectors
+  page, debug probe and stale result tests run there too; with http the
+  fixture carries the http collector beside it, as before.
+- Every file of `testdata/csv` is listed, with the shape it stands for, by
+  `internal/decode/csvfixtures_test.go` and named in `docs/DEVELOPMENT.md`;
+  the files are written as their names say — CRLF on every line of the
+  RFC 4180 export, the byte order marks, the UTF-16, windows-1251 and
+  ISO 8859-1 lists the same text as their UTF-8 twins, one report without
+  a final line end, fields that keep their blanks.
+- Each fixture decodes into its rows, every row with the header's columns:
+  a comma, a doubled quote and a line break inside a quoted field are the
+  field's text, a CRLF inside it read as a line feed; with a semicolon, a
+  pipe or a colon as the delimiter a comma is text; with a tab an empty
+  field keeps its column in the middle of a row and at its end, and
+  `trim_space` takes the blanks around a field and reads a field quoted
+  after blanks as a quoted one; a row with fewer fields than the header,
+  the footer of a `psql -A` result among them, has empty text in the
+  columns it lacks; without a header row a row is the list of its fields.
+- A byte order mark is no part of the first column's name, and a body in
+  UTF-8 with one, in UTF-16 with or without one, in windows-1251 and in
+  ISO 8859-1 decodes into the rows of its text when the mark, the
+  `Content-Type` or `response.charset` names the encoding; the mark comes
+  before both, and `response.charset` before a `Content-Type` naming
+  another.
+- Columns aligned with spaces decode with a space as the delimiter and
+  `trim_space`, a note of several words read from its quotes; without
+  `trim_space` the header's runs of spaces leave columns unnamed and the
+  decode fails naming the first that holds values.
+- A delimiter ending every line leaves no column; blank lines between the
+  rows and after them are no rows; a line of blanks is a row whose first
+  column holds them; a last line without a line end is a row.
+- A header naming a column twice, and one leaving a column of values
+  unnamed, fail the decode naming the column; a charset the response
+  names and the exporter does not know fails it naming the charset.
+- Over each fixture a `csv` collector gives a series of every rule for
+  every row whose column holds a number, with the row's labels, an empty
+  field leaving its label off: all of them are asserted, with each rule's
+  failures and the one log line a rule under `log` gets however many rows
+  it failed on. An empty field is a missing value, logged for a required
+  rule, left out without a failure when `required: false`, counted and
+  not logged under `ignore`; a column number past a row's last field is a
+  missing value too.
+- A body in an encoding nothing names has no column of the names the rules
+  read: every rule is missing its value on every row.
+- Read by number without a header row, as the decode's error advises for
+  a header that cannot name its columns, the header's line is a row whose
+  names are no numbers, a failure of each rule; a pre-script dropping the
+  first row leaves the rows of values.
+- A number written with a decimal comma (`"62,5"`, `"1.234,56"`) fails its
+  rule as text that is no number; `value_map` reads the texts it lists and
+  `scale` multiplies mapped and read values alike; a pre-script rewriting
+  the columns has every row read.
+- Of the forms a number is written in, a rule reads integers, decimals
+  with or without digits before or after the dot, exponents, a leading
+  plus, blanks and quotes around the number, `NaN` and the infinities in
+  any case; an integer longer than a float64 holds is the nearest it has;
+  an empty cell, one of blanks and an empty quoted one are missing values;
+  thousands separators, a percent sign, a currency, a unit, hexadecimal,
+  octal and binary integers, digits and a minus sign that are not ASCII,
+  `-`, `N/A`, `null`, `true`, `false`, `yes`, `no`, `on` and `off` fail
+  the rule naming the value, and a number beyond a float64's range says
+  so. `trim_space` changes none of it.
+- `required: false` excuses the missing values and no text that is not a
+  number; `value_map` maps the texts it lists, case-sensitively, a listed
+  number included, and `"*"` every cell that holds anything; under `fail`
+  the first cell that is no number fails the transform as a failure of
+  its metric.
+- Times in the columns of one report are read by each rule's
+  `time_format`: a local time in `time_zone`, the second of an hour the
+  clocks repeat; RFC 3339 with `Z`, an offset and a fraction; a German
+  date in Berlin's time and an American one with a 12-hour clock in New
+  York's; the compact ISO 8601 form; the date of an HTTP header with
+  `GMT` or a numeric zone; a date alone; Unix seconds as they are and
+  milliseconds by `scale`. An empty cell is a missing value and a text
+  that is no time fails the rule naming the text and the format.
+- Through `/probe`, a collector with a `csv` transform reads a response as
+  CSV whatever its `Content-Type` — `text/csv` with and without
+  parameters, `application/csv`, `text/tab-separated-values`,
+  `text/plain`, `application/octet-stream`, `application/json` — and
+  without one, with `decoder.type` left out, `auto` or `csv`; labels with
+  a quote or a line break are escaped in the text format and in
+  OpenMetrics, which answers each family together under its `TYPE` and
+  `HELP`.
+- A `python` collector with `decoder.type: auto` is given the rows only
+  when the `Content-Type` is `text/csv`, the text of the body for any
+  other type that names no decoder and for none, and fails in the decode
+  stage for a CSV body sent as `application/json`; with `decoder.type:
+  csv` it is given the rows whatever the response says.
+- A status export read with a pre-script that keeps some rows, a value
+  `value_map` with `"*"`, counters, `scale`, a rule that is not required,
+  labels from several columns, a label `value_map` naming codes and
+  leaving one value off, `transform.labels`, `remove_labels`,
+  `rename_labels` and `metrics_prefix` answers exactly the series of the
+  rows kept, with their types and help, in the text format and in
+  OpenMetrics, a counter's family there named without `_total`, and logs
+  nothing.
+- Through `/probe`, a windows-1251 body is read by the `Content-Type`'s
+  charset, written `windows-1251` or `CP1251`, and by `response.charset`
+  when the response names no encoding, the wrong one or no type at all; a
+  UTF-16 body by its byte order mark whatever the `Content-Type` says, and
+  by the `Content-Type` without one. An unknown charset fails the probe in
+  the decode stage.
+- A generated table of 5000 rows, some 280 KiB, answers a series of each
+  of two rules for every row, 10000 of them, each asserted; a third rule
+  fails the probe in the validation stage for the default
+  `limits.max_metrics`, and answers all 15000 with the limit raised; past
+  `limits.max_response_bytes` the probe fails before decoding.
+- A label over `limits.max_label_value_length` fails the probe naming the
+  metric and the label; with `truncate: true` each longer value is cut to
+  the limit on a character boundary, ending in an ellipsis that counts
+  towards it, and shorter values are left alone.
+- Through `/probe`, a rule's failures under `log` are one warning per
+  rule with the collector and the number of rows, none under `ignore` or
+  for a rule that is not required; `error_mode: fail` answers `502` with
+  the JSON error naming the collector, the metric, the target and the
+  value; rows of one sensor without a label telling them apart fail
+  validation as a duplicate series; a header naming a column twice fails
+  the decode stage, and under `on_decode_error: log` a header with an
+  unnamed column of values is logged as a warning and the probe answers
+  `200` without series.
+- A `localfile` collector reads a fixture by its `path` and by the
+  probe's target; with `decoder.type: auto` a script is given the rows of
+  a `.csv` file and the text of a `.tsv` or `.txt` one, and with
+  `decoder.type: csv` and the file's delimiter the rows of that too.
+- A directory of three reports read with `request.files` answers every
+  file's series with its `file` label, each family together, beside
+  `localfile_mtime_seconds` and `localfile_scrape_error` for each file
+  and `localfile_files_skipped`; a file the patterns do not match is not
+  read; what a line of blanks and short rows are missing is logged per
+  file and rule, and no file fails.
+- A directory holding lists in UTF-8 and UTF-16 with byte order marks and
+  one in windows-1251 is read whole with `response.charset:
+  windows-1251`; two rules of one metric that are not required each read
+  the header one kind of list has.
+- `examples/config.usgs.csv-test.yaml`, probed at a stand-in answering
+  `/earthquakes/feed/v1.0/summary/all_hour.csv` with twelve events in the
+  feed's documented columns — places with commas in quotes, some numeric
+  cells empty, one event without a magnitude — yields an
+  `earthquake_magnitude` for eleven events, each with its `id`, `network`,
+  `magnitude_type` and `review_status`, and an
+  `earthquake_depth_kilometers` for all twelve; the event without a
+  magnitude is logged once, as a warning with `failures` 1, and the feed
+  is asked for once. A second probe within `cache.ttl` is answered from
+  memory and logs nothing.
+- Every file under `testdata/html`, the `charset` directory included, is
+  listed with the page it stands for by
+  `internal/exporter/htmlfixtures_test.go`; a file the list lacks, a listed
+  file that is gone and a fixture no test names fail a test.
+- Each HTML fixture is read by `css` and by `xpath` collectors loaded from
+  YAML as a configuration file holds them, through the decoder and the
+  transform directly and through `/probe` from a local server holding the
+  page: both give the same series, every series and every log line is
+  asserted, a rule that carries on is logged once with its first error and
+  the number of series it failed on, at error level by the transform and
+  as a warning by the probe, and series that are alike pass the transform
+  and fail the probe's validation as `duplicate metric series`.
+- Over a statistics table with a two-row header of spanning cells, a
+  `tfoot` written before the `tbody` and row headers that span rows, `css`
+  with `items` reads a series a body row, a spanning row header being a
+  cell of its first row only, `:has()` keeps the rows whose state cell has
+  a class, and cells read by `:nth-child()` are one further left in the
+  rows under a spanning cell; `1,000`, `1%` and `1.2 GB` fail their rows
+  as text that is no number, logged once a rule under `log` and not at all
+  under `ignore`, and a `value_map` without the cell's state fails that
+  row.
+- Over the same table `xpath` reads the row's attributes as labels
+  (`../@data-server`), a state from a class through the label's
+  `value_map`, a `title` attribute that is empty as no label, rows kept by
+  a predicate on a class, a value that is an attribute (`@data-value`),
+  `sum()` over such attributes, and single values computed out of a
+  thousands separator, a percent sign, a sentence and a `pre` with
+  `translate`, `substring-before`, `substring-after` and
+  `normalize-space`.
+- Over layout tables around data tables with one `id` used twice, `css`
+  picks a table by the heading before it (`h2:contains("Input") + table`),
+  a row's own cell beside a nested table by a sibling combinator, and
+  fails, under `error_mode`, an expression without `items` that matches
+  two elements with an error pointing at `items`, and a selector that
+  matches three cells within an item; `xpath` names each row by the
+  heading before its table and each nested row by the row around it with
+  the `ancestor` axis, which `css` cannot: one `css` rule reads one outer
+  row's nested rows.
+- Over definition lists, lists and a grid of cards, `css` reads with
+  `:not()`, `:has()`, `:contains()`, `:nth-child()`, `:nth-of-type()`,
+  `:first-child`, attribute selectors (`[a]`, `[a="b"]`, `[a^="b"]`,
+  `[a$="b"]`), a selector list and the combinators `+` and `~`; an empty
+  `dd` is a missing value an optional rule leaves out; an item cannot be
+  its own value, its selector matching nothing beneath it. `xpath` names a
+  `dd` by `preceding-sibling::dt[1]`, computes `name: value` items, and
+  reads `boolean(../@hidden)` as `true` and `false`.
+- A page in upper case with unclosed cells, rows, paragraphs and list
+  items, unquoted and repeated attributes, stray end tags and text after
+  `</html>` is read as a browser parses it: element and attribute names
+  are lower case to XPath (`//B[@ID='load']` and `../@WIDTH` find
+  nothing), a selector's element name matches in any case while an id and
+  a class match as written, the first of two attributes of one name is
+  kept, the rows are children of the `tbody` the page left out (`table >
+  tr` and `/table/tr` find nothing, `table > tbody > tr` does), and what
+  follows the end of the page is in the body.
+- A fragment without `html` and `body` is given both when read as HTML
+  (`html > body > div`, `/html/body/div`), and a row outside any table is
+  no element; with the decoder left to each answer the fragment is HTML
+  under `text/html` and XML, without a body, with no `Content-Type`. A
+  page that is one line of text is the text of a body: `css` maps it with
+  `value_map`, `xpath` computes its number and reads `starts-with()` as 1;
+  called `text/plain` it fails a collector that leaves the decoder to the
+  answer with `xpath transform requires an XML or HTML response, got
+  "text"`.
+- Entities by name and by number are their characters in values and
+  labels; the text of a cell is trimmed of the blanks around it, no-break
+  spaces included, and holds what its inline elements hold and nothing of
+  its comments (`<b>12</b>.5` is 12.5, `5<!-- -->5` is 55); a plus sign and
+  an exponent are read; `−7.5` with U+2212, digits grouped by thin,
+  narrow no-break and no-break spaces, `4.2<br>bar` and a number followed
+  by a zero-width space fail their rows as no number; a cell of a comment
+  or of blanks alone is a missing value; a label keeps the line breaks and
+  tabs inside its text, and `normalize-space()` makes one line of it.
+- Rows that are `hidden`, hidden by a `style` or `aria-hidden` are read,
+  and the text of a hidden element inside a cell is part of the cell's
+  text; attribute selectors and predicates leave them out. The markup
+  inside `noscript` and `iframe` and what is commented out are no
+  elements, an `object`'s fallback is; a `pre`, a `textarea`, a selected
+  `option` and the fallback text of `progress` are read; an `input`'s
+  value is no text for `css` and is `//input/@value` for `xpath`; a
+  script's text is read by a rule that selects the script; a CDATA
+  section is a comment. Elements of `svg` and `math` are selected like any
+  other, and `@xlink:href` is read on the node and on its parent.
+- Over HTML the labels `../@data-id`, `../@xml:lang`, `../../@og:type`,
+  `../@:href`, `../@@click`, `../@x-on:click.prevent`, `../@2x`,
+  `../../@v-on:click` and an `@xml:lang` five parents up are read by name,
+  on the node (`@:href`, `@@click`, `@2x`, `@data-role` for `DATA-ROLE`)
+  and from text nodes (`//td/text()`) too, with `decoder.type: html` and
+  with the decoder left to each answer alike; `@*[name()='og:type']`
+  reads it deeper in an expression. The same page as XHTML is HTML under
+  `application/xhtml+xml`; called `application/xml` it is XML to the
+  collector that leaves the decoder to the answer, which reads `../@m:unit`
+  and `../../@og:type` by the document's prefixes and fails, once a rule,
+  each rule with a label only HTML can read.
+- With `response.namespaces` set and the decoder unset or `auto`, a label
+  `../@2x`, `../@:href`, `../@@click`, `../@x-on:click.prevent`,
+  `../../@og:type` or `../../@v-on:click` is refused at load with the
+  advice to set `decoder.type: html`; with `decoder.type: xml` without
+  it; with `decoder.type: html` it loads and reads the HTML page.
+- Of the forms a value takes — `42`, `3.14`, `-17`, `.5`, `0`, `1,234`,
+  `85 %`, `85%`, `12.5 MB`, `—`, `n/a`, `0x1F`, an empty cell, a row
+  without the cell — a required `css` rule reads the first five, fails
+  seven rows as no number and two as missing; with `required: false` the
+  two are left out and the seven still fail; `value_map` maps the listed
+  texts as written, `scale` multiplying mapped and read values alike; a
+  state map reads `up`, `OK`, `&check;` and `✓` and fails `Up`; `"*"`
+  maps every other text; a label's `value_map` names values and leaves
+  one off by mapping it to `""`; `error_mode: fail` fails the scrape at
+  the first row, `/probe` answering `502` with the stage `metric`. With
+  `xpath` a row without the cell is not selected and nothing misses it.
+- `time_format` over HTML reads a layout in `time_zone`, the ambiguous
+  hour as documented, an optional rule leaving out an empty cell; RFC 1123
+  text; a layout with `PM`; `scale: 1000` as milliseconds; a `datetime`
+  attribute as RFC 3339 with its own offset and its fraction; and fails a
+  `time` element whose text is `never`, naming the text and the format.
+- A page of 2,000 rows, some 390 KB, gives a series a row in page order
+  with `css` and with `xpath`, and with `limits.max_metrics: 2000`; with
+  1999 both fail validation with `metric count 2000 exceeds limit 1999`;
+  `max_response_bytes` of the request and of the limits refuse it with
+  `response size <n> exceeds limit 102400` in the `http` stage; a label
+  over `limits.max_label_value_length` fails validation naming the metric
+  and the label, and with `truncate: true` every value is within the
+  limit, cut on a character boundary and ending in `…`, in both
+  transforms.
+- One page in UTF-8 with and without a byte order mark, with `<meta
+  charset>` and `<meta http-equiv>`, as UTF-16LE and UTF-16BE with their
+  marks, and its rows as windows-1251, KOI8-R, ISO-8859-1, windows-1252
+  called `iso-8859-1`, ISO-8859-2, Shift_JIS, GBK and EUC-KR, declared by
+  the `Content-Type`, by a meta or by neither where it is UTF-8, gives the
+  same Cyrillic, accented, Polish, Japanese, Chinese, Korean and emoji
+  label values with a `css` collector and with an `xpath` collector left
+  to each answer, nothing logged.
+- A byte order mark is read before a `Content-Type` and a
+  `response.charset` naming another encoding; `response.charset` before
+  the `Content-Type` and the meta, a UTF-8 page then coming out as the
+  text its bytes spell in windows-1251; the `Content-Type` before the
+  meta; a `Content-Type` naming UTF-16 leaves nothing of a UTF-8 page to
+  match. A legacy page nothing declares, and one whose `Content-Type`
+  says UTF-8 over a truthful meta, answers `200` with one U+FFFD for each
+  run of invalid bytes and one warning with the count and the first
+  metric; a `Content-Type` naming an unknown charset fails the `decode`
+  stage naming it, and not a collector with `response.charset`.
+- A `css` collector reads every answer as HTML with `decoder.type` unset,
+  `auto` or `html`, and an `xpath` collector with `html`, whatever the
+  `Content-Type`. An `xpath` collector with the decoder unset or `auto`
+  reads a page that starts with a doctype, an `<HTML>` or an XML
+  declaration before its doctype as HTML under `text/html`,
+  `application/xhtml+xml`, `text/plain`, `application/octet-stream` and
+  no `Content-Type`; under `application/xml` and `text/xml` the page
+  fails the decode unless it is XHTML, which is read as XML; under JSON,
+  YAML and Prometheus text types it fails the decode, and under
+  `text/csv` the transform; each failure is logged once with its stage.
+  Only the collector with no `decoder.type` is warned about at load.
+- With the `localfile` request type a `.html` file is read as HTML by its
+  extension and a `.xhtml` file by its doctype, a file named by the
+  collector's `path` and by the probe's `target` alike; a file is read by
+  its meta or its byte order mark, by `response.charset` when it declares
+  nothing, and without either its legacy bytes answer as U+FFFD with the
+  warning.
+- A status page read by one `css` collector with `metrics_prefix`, an
+  HTML `pre_script` that takes thousands separators and units out of the
+  page's text and puts each `time` element's `datetime` in place of its
+  words, `items` with `:has()`, `:not()`, `:empty` and `:contains()`, a
+  `required` label, a label `value_map`, optional rules, `time_format`,
+  `scale`, `truncate` under `limits.max_label_value_length: 120`, and
+  `transform.labels`, `remove_labels` and `rename_labels`, gives 30
+  series, asks for the page once with `Accept: text/html` and logs
+  nothing; without the `pre_script` the rules that read `99.982%`,
+  `1,204,551` and `5 minutes ago` each fail once, and those told to pass
+  by what they cannot read say nothing. An `xpath` collector reads the
+  same page without a script, a status from `substring-after(@class,
+  'status ')`.
+- `examples/config.scrapethissite.html-test.yaml` reads every country of
+  the page with the `css` transform, `items: div.country`, the population
+  and the area as values and the country's name as a `required` label:
+  probed at a stand-in holding thirteen countries in the page's markup it
+  gives 26 series, `1.4E7` read as written, asks for `/pages/simple/`
+  once with `Accept: text/html` and logs nothing; a second probe within
+  `cache.ttl` is answered from memory; a block without its name is no
+  series and is logged once a rule, and a page without the blocks is an
+  answer without series, each rule saying its `items` matched nothing.
+
+## 34.85 The strict reference parser in the workflows
+
+- A test that cannot run the strict reference parser is skipped with the
+  message naming what is missing, and failed with that message, followed by
+  the variable's name, where the parser is required.
+- Every job of `ci.yml`, `release.yml` and `update-docker-deps.yml` that runs
+  the suite installs `test/python/requirements.txt` with pip in a step before
+  it and has `STRICT_OPENMETRICS_PARSER` in its environment; a workflow
+  without either fails the test, naming the job.
+- `test/python/requirements.txt` pins every module to one version and pins
+  `prometheus-client`; `.github/dependabot.yml` has a `pip` update for
+  `/test/python`; `ci.yml`'s `go` filter names `test/python/**`; and the Go
+  test reads the variable the workflows set and names the file they install.
 
 # 35. Documentation requirements
 
@@ -9196,7 +10616,9 @@ resource attributes MUST be preserved:
   series remembered MUST be at most twice `otlp.max_pending_points` (its
   default when unset); past that, the series exported least recently MUST be
   forgotten first, and start again when it comes back. A gauge MUST NOT carry
-  one.
+  one. A cumulative point of one of the exporter's own series MUST instead
+  start at the series' creation time (§ 22.1b), which the exporter knows, and
+  need not be remembered.
 
 Probe results MUST be queued under the exporter-wide resource, a series known
 by its name, type and labels, so a later probe's point for the same series
@@ -9680,7 +11102,8 @@ MUST:
   release of that line, so a patch to an older line never takes them back;
 - run the test suite against the Python the image ships, the Dockerfile's
   `PYTHON_VERSION`, with the Dockerfile's pinned `lxml`, `PyYAML` and
-  `python-dateutil`, as CI does;
+  `python-dateutil`, and with the modules of `test/python/requirements.txt`
+  installed and required, as CI does;
 - build release binaries for the documented target platforms; and
 - create a GitHub Release containing the software archives and a file of
   their SHA-256 checksums, `prometheus-universal-exporter-<version>-sha256sums.txt`
@@ -10270,7 +11693,7 @@ exporter MUST return the redirect response itself, so the collector observes the
 intended signal that the target moved. When it is true the exporter MUST follow
 redirects using the HTTP client's normal limit, each redirect's URL held to
 `allowed_schemes` (§ 3.3) and to `allowed_targets` and `denied_targets`
-(§ 26.1).
+(§ 26.1), and each redirected request carrying what § 42.15c gives it.
 
 `enable_http2` controls whether the target request may negotiate HTTP/2. It MUST
 default to `false`, which is the protocol behaviour the exporter has always had,
@@ -10321,6 +11744,156 @@ These settings replace the earlier `request.redirect_policy` string, which MUST
 NOT be accepted any more. Because the configuration decoder rejects unknown
 fields, a configuration still carrying it fails to load rather than silently
 changing how a collector follows redirects.
+
+### 42.15c What a followed redirect carries
+
+A target that redirects chooses where the next request goes, so the exporter,
+not the HTTP client's defaults, MUST decide what that request carries. The
+rules apply to every followed redirect of an `http` or `graphite` collector's
+request, whether `follow_redirects` is the collector's or was switched on by a
+probe or a static target.
+
+1. The *origin* of a URL is its scheme, its host and its port, a port left out
+   being the scheme's own (80 for `http`, 443 for `https`). Hosts MUST be
+   compared as the URLs write them, without case, and not in a canonical
+   form: the verdict MUST be about the name the request is routed by. A host
+   with a final dot and the same host without one MUST be two hosts, as a
+   resolver takes them for; so MUST two spellings of one address, two zones
+   of one IPv6 address, and a port written otherwise than the other URL
+   writes it, the scheme's own port left out aside. A host the target policy
+   refuses (§ 26.1) is no origin, and a redirect to one MUST NOT be followed:
+   that is every host written with a character outside ASCII, whatever it
+   converts to, so an internationalised name is trusted, and redirected to,
+   in its `xn--` form alone. A redirect MUST be *trusted* when the URL it leads to
+   has the origin of the request's first URL — the target with the
+   collector's path and query applied — or when that URL's host matches an
+   entry of the collector's `request.redirect_trusted_hosts`, and MUST NOT be
+   trusted otherwise: a subdomain of the first host, the same host on another
+   port and the same host over another scheme, the upgrade from `http` to
+   `https` included, are other origins. Each
+   redirect of a chain MUST be judged on its own, against the first URL and
+   the list, whatever the redirects before it were: a chain that leaves the
+   origin for a host that is not trusted and returns MUST carry everything
+   again once it is back.
+2. A trusted redirect MUST carry every header the first request carried: the
+   collector's `request.headers`, the headers forwarded from the probe or set
+   by a static target, and the credentials — `Authorization`, however it was
+   made (`bearer_token`, `basic_auth`, their file forms, a forwarded or a
+   static target's own), and `Cookie` — also where the HTTP client alone
+   would have dropped them for another host. A credential in the userinfo of
+   the target URL belongs to that URL: it MUST NOT be carried to a URL a
+   redirect names with a host of its own, trusted or not, and is kept only
+   across a redirect whose `Location` is a path. A user and password in the
+   `Location` of a trusted redirect are left to the HTTP client, which sends
+   them as basic auth only when the request carries no `Authorization`: the
+   first request's own `Authorization` MUST be the one sent. A `Host` the first request
+   set names a virtual host of the origin: it MUST NOT be sent with a
+   redirect that leaves the origin, trusted or not, and on the origin is
+   kept as the HTTP client keeps it, across a redirect whose `Location` has
+   no scheme. The headers describing a body MUST be left out of a redirect
+   that is sent without the body (rule 5).
+3. A redirect that is not trusted MUST carry, of what the first request
+   carried, only `Accept`, `Accept-Language` and `User-Agent`, with the
+   values the first request had. Every other header MUST be withheld,
+   whatever its name, and so MUST `Authorization`, `Cookie` and a `Host` the
+   first request set. A user and password in the redirect's own `Location`
+   MUST NOT be sent either, as an `Authorization` or otherwise, and MUST NOT
+   remain in the URL a debug report shows. `Accept-Encoding` stays the
+   transport's own (§ 20). The three headers go to every destination, so
+   the documentation MUST say that no token belongs in them. The first URL's
+   path and query are not carried to another host, a `Location` naming the
+   whole URL, and need no rule here.
+4. The exporter MUST NOT add a `Referer` to any redirected request, trusted
+   or not. A `Referer` set in `request.headers` is a header of the
+   collector's: sent on the first request and on trusted redirects, as
+   written, and withheld from the others.
+5. After a `301`, `302` or `303` a request whose method is not `GET` or
+   `HEAD` MUST be sent on as a `GET` without its body, and such a redirect
+   MUST be followed, trusted or not. After a `307` or `308` the request is
+   sent again with its method and its body: to a trusted destination the
+   body MUST be sent again; a redirect that would send the body to a
+   destination that is not trusted MUST be refused before anything is sent
+   there, failing the request with an error that names the redirect's URL,
+   its credentials withheld as a debug report withholds a URL's (§ 42.17),
+   the host, and `request.redirect_trusted_hosts`, and MUST NOT be retried.
+   This MUST hold however the body arose: `request.body`, a `body` probe
+   parameter or a static target's, and the form a `graphite` request posts
+   for long expressions. A redirect without a body MUST be followed, with
+   rule 3's headers when it is not trusted, unless rule 5a refuses it.
+
+   5a. The collector's TLS client certificate (`request.tls.cert_file` and
+   `key_file`) is a credential that every TLS connection of the request
+   presents. When the collector has one, a redirect over `https` to a
+   destination that is not trusted MUST be refused before any connection is
+   made there, with an error that names the redirect's URL, redacted as in
+   rule 5, the destination, the certificate and
+   `request.redirect_trusted_hosts`, and MUST NOT be retried; rule 5's
+   refusal, where both apply, is the one reported. A trusted redirect
+   presents the certificate, and a redirect over `http` that is not trusted
+   presents nothing and MUST be followed. `tls.ca_file`,
+   `tls.insecure_skip_verify` and `tls.server_name` are no credentials and
+   apply to every hop: with `server_name` set, every `https` host a redirect
+   leads to is verified against that name.
+6. `request.redirect_trusted_hosts` is a list of host names, globs of host
+   names (`*.example.com`; `*` matches any run of characters, dots
+   included, and `?` any one) and IP addresses, written as `allowed_targets` writes them (§ 26.1);
+   `"*"` alone trusts every host. An entry MUST be matched against the host
+   of the redirect's URL as it is written there (rule 1), without case, on
+   any port and over any scheme `allowed_schemes` allows: a name or glob
+   with a final dot MUST match only a host written with one, and one without
+   only a host written without; an address entry MUST match a host
+   written as that address, in any of its textual forms and with the same
+   IPv6 zone or none, and nothing else; no entry, `"*"` included, MUST match
+   a host written with a character outside ASCII.
+   No name MUST be resolved to decide trust. At load the exporter MUST
+   refuse an empty entry, a CIDR network, a host with a port, an entry with
+   a character outside ASCII, as `allowed_targets` refuses it (§ 26.1), and
+   anything else that is not a host name, a glob or an address, such as a URL or an
+   IPv6 address with a final dot (`1.2.3.4.` is a name, matched as written), each
+   with a message that says what to write instead and, for a network, does
+   not propose a glob. It MUST also refuse a glob that holds no letter,
+   hyphen or underscore: one of digits, dots and wildcards, such as `10.*`
+   or `192.168.*.*`, which is matched against names and would trust
+   `10.evil.example`, with a message that says so and that addresses are
+   listed one by one; and wildcards alone in any spelling but `"*"` — `**`,
+   `*.`, `[*]`, `*.*`, `?`. The JSON Schema MUST
+   refuse the same, but for an address-like entry that is no address. The
+   documentation MUST say that `*` matches dots, with `*example.com` and
+   `api.example.*` as what not to write. The
+   key MUST be accepted for `http` and `graphite` collectors, with or
+   without `follow_redirects`, and refused for the other request types as
+   any key of another type is. It MUST be the collector's alone: no `/probe`
+   parameter MUST set or extend it — a probe naming `redirect_trusted_hosts`
+   is handled as one naming a parameter the exporter does not know — and a
+   static target's `request` block MUST refuse it. A changed list MUST be a
+   changed collector for the response cache and for static targets
+   (§ 42.13).
+7. Whether a redirect is followed at all MUST remain decided by
+   `allowed_schemes`, `allowed_targets`, `denied_targets` and the client's
+   limit of ten redirects, before anything is sent to where it leads and
+   before rule 5's refusal is considered.
+8. A debug probe (§ 42.17) MUST list each redirected request with the
+   headers it was sent, and under a redirect that is not trusted the names,
+   never the values, of the headers withheld from it and the reason. When
+   the answer whose status fails a probe, in the `http_status` stage, came
+   from a host a redirect
+   led to and from which headers were withheld, the error MUST say that the
+   collector's headers and credentials were not sent to that host and name
+   `request.redirect_trusted_hosts`; an answer from the target itself, from
+   a trusted redirect, or from a host nothing was withheld from MUST be
+   reported as before. A credential in the userinfo of the target URL, when
+   the HTTP client made the first request's `Authorization` of it, MUST
+   count as withheld from a redirect that is not trusted, and be named so in
+   the debug report. Where such a redirect leads to the first URL's own host
+   under another scheme or on another port, this error, the debug report's
+   reason and the refusals of rules 5 and 5a MUST name both origins, each
+   with its scheme and the port it writes, and not the host alone. A request that follows no redirect MUST NOT be made
+   to do any of this work.
+9. These rules MUST NOT change what a request that follows no redirect, or
+   only redirects on its own origin, sends, but for the `Referer` of rule 4;
+   nor the redirects of the OTLP exporter's own requests (§ 42.1), which
+   follow the HTTP client's defaults. A retry MUST start again at the first
+   URL with everything the first request carried.
 
 
 ## 42.15a Environment variable expansion in configuration
@@ -10406,6 +11979,19 @@ one green build is better than triaging one pull request per module. Major
 version updates MUST be excluded: a Go major version lives at a different import
 path and needs code changes, so it is deliberate work rather than an automated
 proposal.
+
+The Python modules that only the tests use — `prometheus-client`, for its
+strict OpenMetrics parser — are no part of the image and MUST be pinned, each
+to one version, in `test/python/requirements.txt`, and updated by Dependabot's
+`pip` updates of that directory. Every workflow that runs the test suite MUST
+install that file before the suite and MUST run the suite with
+`STRICT_OPENMETRICS_PARSER` set, and the tests that give answers to that
+parser MUST then fail, with the message they are otherwise skipped with, where
+`python3` or the module is missing: a run of a workflow MUST NOT pass with
+those tests left out. Without the variable they MUST be skipped there, so the
+suite runs on a machine without the module. CI MUST run the Go suite when that
+file changes. Tests MUST enforce the install step, the variable and the
+Dependabot entry by reading the workflows and the configuration.
 
 The versions pinned in the Dockerfile MUST be updated by a scheduled workflow
 rather than by Dependabot. They are declared as build arguments and interpolated
@@ -10518,7 +12104,8 @@ and MUST answer `200` with a `text/plain` report of it:
   `cache.stale_if_error` would have answered with the last good result, that
   it would have, and its age;
 - every request sent, with retries and redirects, its method, URL, headers
-  and outcome; a `grpc` call with its method, metadata and code; a
+  and outcome, a redirect with the headers it was sent and the names of the
+  ones withheld from it (§ 42.15c); a `grpc` call with its method, metadata and code; a
   `localfile` read as its file;
 - the response's status, headers and body as the target sent them, before
   the body was converted to UTF-8 (§ 6.1a): the `Content-Type` MUST be the

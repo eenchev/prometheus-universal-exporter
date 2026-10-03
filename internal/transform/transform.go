@@ -1272,15 +1272,17 @@ func transformRegex(ctx context.Context, text string, rules []model.MetricRule, 
 			}
 			continue
 		}
-		// Which capture group each label reads is the same for every match,
-		// so it is looked up once for the rule and not once a match.
+		// Which capture group is the value and which each label reads is the
+		// same for every match, so it is looked up once for the rule and not
+		// once a match.
+		value := regexValueGroup(re)
 		captures := labelCaptures(rule.Labels, re.SubexpNames())
 		out.Metrics = growSeries(ctx, out.Metrics, found)
 		for ; ok; match, ok = matches() {
 			if err := interrupted(ctx, rule); err != nil {
 				return nil, err
 			}
-			if err := regexSeries(ctx, out, text, match, captures, rule, c); err != nil {
+			if err := regexSeries(ctx, out, text, match, value, captures, rule, c); err != nil {
 				return nil, err
 			}
 		}
@@ -1320,6 +1322,22 @@ func regexMatches(ctx context.Context, re *regexp.Regexp, text string) (func() (
 	}, len(matches)
 }
 
+// regexValueName names the capture group that is a regex rule's value:
+// (?P<value>\d+). A value that stands after what a label reads is written
+// that way, the station at the start of a report's line before the
+// temperature near its end, where the first group would be the label's.
+const regexValueName = "value"
+
+// regexValueGroup is the number of the capture group that is the value of a
+// regex rule: the one named value, and without one the first, which the
+// configuration requires a regex to have.
+func regexValueGroup(re *regexp.Regexp) int {
+	if index := re.SubexpIndex(regexValueName); index > 0 {
+		return index
+	}
+	return 1
+}
+
 // labelCaptures is, for each label of a regex rule, the capture group it
 // reads, by number or by name, as captureIndex finds it: -1 for a group the
 // expression has not, and for a static label, which reads none.
@@ -1334,17 +1352,22 @@ func labelCaptures(labels []model.LabelRule, names []string) []int {
 	return captures
 }
 
-// regexSeries adds the series of one match to out; captures is the rule's
-// labelCaptures. An error is the scrape's failure; a match the rule's error
-// mode carries on without adds nothing.
-func regexSeries(ctx context.Context, out *model.MetricSet, text string, match []int, captures []int, rule model.MetricRule, c *model.Collector) error {
-	// The first capture group is the value; the configuration refuses a
-	// regex without one. A group that took no part in the match, as an
-	// optional one can, or that captured only blanks, is a missing value
-	// like a match that never happened.
-	if match[2] < 0 || isBlank(text[match[2]:match[3]]) {
+// regexSeries adds the series of one match to out; value is the rule's
+// regexValueGroup and captures its labelCaptures. An error is the scrape's
+// failure; a match the rule's error mode carries on without adds nothing.
+func regexSeries(ctx context.Context, out *model.MetricSet, text string, match []int, value int, captures []int, rule model.MetricRule, c *model.Collector) error {
+	// The capture group named value is the value, or else the first; the
+	// configuration refuses a regex without one. A group that took no part
+	// in the match, as an optional one can, or that captured only blanks, is
+	// a missing value like a match that never happened.
+	start, end := match[2*value], match[2*value+1]
+	if start < 0 || isBlank(text[start:end]) {
 		if requiredRule(rule, c) {
-			missing := model.MarkError(fmt.Errorf("regex for metric %q matched, but its first capture group captured no value", rule.Name), model.ErrMissingValue)
+			group := "first capture group"
+			if value != 1 {
+				group = "capture group named " + regexValueName
+			}
+			missing := model.MarkError(fmt.Errorf("regex for metric %q matched, but its %s captured no value", rule.Name, group), model.ErrMissingValue)
 			if handleMetricError(ctx, c, rule, missing) {
 				return nil
 			}
@@ -1352,7 +1375,7 @@ func regexSeries(ctx context.Context, out *model.MetricSet, text string, match [
 		}
 		return nil
 	}
-	n, err := ruleTextValue(rule, text[match[2]:match[3]])
+	n, err := ruleTextValue(rule, text[start:end])
 	if err != nil {
 		if handleMetricError(ctx, c, rule, err) {
 			return nil

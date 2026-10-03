@@ -10,6 +10,7 @@ make precommit  # fmt-check, lint, gopls-check and vet: what the hook runs
 make test       # go test ./..., then with -race, twice, in a random order
 make vet
 make build      # every request type; REQUEST_TYPES=http builds only those listed
+make test-request-types  # go test once for each request type built on its own
 make helm-test  # helm lint and the template scenarios CI renders, with the pinned helm
 make vulncheck  # govulncheck, for reference; not part of make ci
 make ci         # everything above, in CI order
@@ -68,14 +69,122 @@ standard library imports, and that changes between releases — from 3.12,
 `zoneinfo` loads `sysconfig`, which imports the blocked `threading`, so a
 sandbox change can pass on 3.11 and fail in the image.
 
-One test uses a Python module the image does not ship:
-`TestTheStrictOpenMetricsParserReadsEveryAnswerOfOddValues` gives the
-OpenMetrics answers for metric sets with odd values to the strict parser of
-`prometheus_client`, and is skipped, saying what is missing, where `python3`
-does not have the module (`pip install prometheus-client`). The rules that
-parser checks are also written out in Go beside it
-(`strictOpenMetricsError`) and checked by tests that run everywhere; the
-module confirms that they are the parser's.
+Some tests use a Python module the image does not ship. The tests named
+`TestTheStrictOpenMetricsParser…`, and the self-metrics tests that end in a
+subtest `the strict reference parser`, give the exporter's OpenMetrics answers
+to the strict parser of `prometheus_client`. The module is pinned in
+`test/python/requirements.txt`, the one place for modules only the tests use:
+
+```sh
+python3 -m pip install -r test/python/requirements.txt
+```
+
+Where `python3` does not have the module those tests are skipped, saying what
+is missing, so the suite runs on a machine without it. The workflows that run
+the suite — CI, the release and the Dockerfile update — install the file and
+set `STRICT_OPENMETRICS_PARSER=required` for the job, and with that variable
+set, to anything, a missing module or a missing `python3` fails those tests
+instead: a green run there has run them. Set it locally to check the same. The
+rules that parser checks are also written out in Go beside the tests
+(`strictOpenMetricsError`) and checked by tests that run everywhere; the module
+confirms that they are the parser's. Dependabot proposes new versions of the
+pinned module, and CI runs the suite on a change to the file.
+
+## Tests of a build with only some request types
+
+A build can carry only some request types
+([Choosing request types at build time](CONFIGURATION.md#choosing-request-types-at-build-time)),
+and such a build's tests have to pass as the default build's do.
+`make test-request-types` runs the suite once for each type built on its own,
+CI runs the same, and `make ci` includes it. One of them by hand:
+
+```sh
+go test -tags "$(sh tools/request-type-tags.sh localfile)" ./...
+```
+
+A test that needs a request type says so with a build constraint on its file,
+the one the type's own code carries:
+
+```go
+//go:build !select_request_types || request_type_http
+```
+
+That is every test whose configuration names the type — `type: http`, or
+`testutil.MinimalConfig` and `testutil.Collector`, which are http collectors —
+that starts a stand-in for a target of the type, or that asserts what only a
+build with the type does, such as a probe parameter of http's being refused
+for a collector of another type. A test that needs two types names both,
+`!select_request_types || (request_type_http && request_type_localfile)`, as
+the tests that load `configs/config.example.yaml` do, and one that holds only
+with every type, such as the comparison of the committed schemas with what the
+code generates, carries `!select_request_types` alone. A test is never skipped
+at run time for a type the build lacks: the constraint says what the test
+needs where it can be read, and vetting a single-type build compiles exactly
+the tests that build runs.
+
+Tests that hold whatever the build carries stay in a file without a
+constraint, so every build runs them. Where a file's tests are of both kinds,
+those that need a type are in a file beside it named for the type —
+`cache_test.go` and `cache_http_test.go`,
+`requesttype_grpc_test.go` and `requesttype_grpc_http_test.go` — and a helper
+lives where everything that calls it is compiled: `helpers_test.go` for every
+build, `helpers_http_test.go` for a build with http,
+`helpers_http_or_localfile_test.go` for a build with either. A helper compiled
+into a build in which nothing calls it is what the linter reports as unused
+when it is run with that build's tags
+(`golangci-lint run --build-tags "$(sh tools/request-type-tags.sh grpc)"`).
+
+## Test data
+
+The files under `testdata/` are what the tests read, a directory per format
+and `testdata/chart` for the chart's. A fixture is written in the shape its
+source writes or documents, not captured from it, and the test that reads it
+says what it stands for.
+
+`testdata/csv` holds CSV in the shapes it comes in. The `csvfixtures` tests
+read each file at three levels: the rows it decodes into
+(`internal/decode/csvfixtures_test.go`); the series, the failures and the log
+lines of a collector's rules over it (`internal/transform/csvfixtures_test.go`);
+and whole probes, of an `http` collector at a stand-in that sends the file
+with one `Content-Type` or another and of a `localfile` collector reading the
+file or a directory of them
+(`internal/exporter/csvfixtures_probe_test.go` and
+`csvfixtures_localfile_test.go`), where every series of each answer is
+asserted, in the text format and, where the two differ, OpenMetrics. A table
+of 5,000 rows, for the limits, is generated by the test that reads it.
+
+| File | What it stands for |
+| --- | --- |
+| `status.csv` | The specification's own example: a header and two rows. |
+| `tickets-rfc4180.csv` | A helpdesk's ticket export as RFC 4180 writes it: CRLF line ends, and fields with commas, doubled quotes and line breaks in quotes. |
+| `inventory-semicolon.csv` | A stock list as a spreadsheet saves it with a German or Bulgarian locale: semicolons between the fields, and numbers with a decimal comma in quotes. |
+| `sensors.tsv` | A data logger's tab-separated readings, with empty fields in the middle of rows and at their end, and fields padded with spaces. |
+| `queues-pipe.txt` | A query's result as `psql -A` prints it: fields separated by a pipe, and a footer counting the rows. |
+| `accounts-colon.txt` | Accounts in the form of `/etc/passwd`: no header, fields separated by a colon. |
+| `readings-noheader.csv` | What a data logger appends to its file: no header, a reading a line. |
+| `cities-utf8-bom.csv` | A list of cities with headers and values in Cyrillic, accented Latin, Greek, CJK and emoji, as a spreadsheet's "CSV UTF-8" saves it, with a byte order mark. |
+| `cities-utf16le-bom.csv` | The same list as a spreadsheet's "Unicode text": UTF-16, little-endian, with a byte order mark. |
+| `cities-utf16be.csv` | The same list in UTF-16, big-endian, without a byte order mark. |
+| `oblasti-utf8.csv` | The Bulgarian part of such a list, in UTF-8 without a byte order mark. |
+| `oblasti-windows-1251.csv` | The same Bulgarian list as an older system writes it, in windows-1251. |
+| `communes-iso-8859-1.csv` | The French part of such a list in ISO 8859-1. |
+| `nodes-space-aligned.txt` | A cluster tool's table: columns aligned with spaces, numbers to the right, a note of several words in quotes. |
+| `hosts-trailing-delimiter.csv` | An export that ends every line, the header's too, with the delimiter. |
+| `jobs-short-rows.csv` | A scheduler's report whose writer stops a row at its last value: rows with fewer fields than the header. |
+| `jobs-blank-lines.csv` | The same report with blank lines between the rows and after them, and one line of blanks. |
+| `jobs-no-final-newline.csv` | The same report without a line end after its last row. |
+| `usage-duplicate-columns.csv` | A capacity report whose header names two pairs of columns alike. |
+| `usage-unnamed-column.csv` | A capacity report saved from a spreadsheet with an empty header cell above a column of values. |
+| `numbers.csv` | The ways exports write a number, and what they write in place of one. |
+| `backups-times.csv` | A backup tool's report, each column's time written another way. |
+| `usgs-all-hour.csv` | The USGS earthquake feed's `all_hour.csv`, in its documented columns, for `examples/config.usgs.csv-test.yaml`. |
+| `service-status.csv` | A fleet's status export: a row per service and host, its state in words, counters and gauges. |
+
+Several of them are written in a way an editor would undo — CRLF line ends,
+a byte order mark, UTF-16 and legacy encodings, blanks that end a line, no
+final line end — and a test checks that each still is. A file added to
+`testdata/csv` goes in this table and in the list of
+`internal/decode/csvfixtures_test.go`, which fails until it is in both.
 
 ## The configuration schema
 
@@ -89,6 +198,11 @@ the test suite fails:
 ```sh
 make schemas
 ```
+
+The committed files are the schemas of a build with every request type, which
+is what `make schemas` runs, and the test that compares them with what the
+code generates runs in that build alone: the schema a single-type binary
+prints lists the types it carries, and a test in every build holds it to that.
 
 Allowed values, patterns and descriptions that a struct cannot express are added
 by path, in `configSchemaRules` for the configuration and collector files and
@@ -173,11 +287,40 @@ The default suite covers every example too, without the network. The tests in
 loads, that its scripts satisfy the contract, and that a static target file
 is valid with the configuration in its directory — walk `examples/` at any
 depth, so a new example, a file or a directory like `examples/open-meteo/`,
-is covered without a test naming it. And two examples run against a local
+is covered without a test naming it. And nine examples run against a local
 stand-in answering in their service's documented shape, with every series
-asserted: Filebeat's (`internal/exporter/filebeat_example_test.go`) and
+asserted: Filebeat's (`internal/exporter/filebeat_example_test.go`),
 Open-Meteo's (`internal/exporter/openmeteo_example_test.go`, which also checks
-the query the collector sent and scrapes the example's static targets).
+the query the collector sent and scrapes the example's static targets), and
+the ECB's, the METAR one with its static targets, mempool.space's, the
+Prometheus demo server's, Frankfurter's, with its pre-script, the USGS
+earthquake feed's, with the warning its incomplete row is logged with, and
+scrapethissite.com's countries page
+(`ecb_example_test.go`, `metar_example_test.go`, `mempool_example_test.go`,
+`promdemo_example_test.go`, `frankfurter_example_test.go`,
+`usgs_example_test.go` and `scrapethissite_example_test.go` beside them, on
+the stand-in of `example_standin_test.go` or, for the last, the plain site of
+`htmlfixtures_test.go`). Their fixtures under `testdata/` are
+written in the shape each service documents, not captured from it, so it is
+the external suite that says whether a service still answers that way.
+
+The pages under `testdata/html` are written the same way, each in the shape
+of a page collectors are pointed at: a load balancer's statistics report,
+an appliance's layout tables around its data tables, lists and dashboard
+cards, markup no validator would pass, entities and typographic numbers,
+what is in a page and is not its content, attribute names of JavaScript
+frameworks, the forms a value takes, a hosted status page.
+`internal/exporter/htmlfixtures_test.go` lists every file with what it stands
+for, and a test fails on a file the list does not have and on one no test
+reads. The `htmlfixtures_*_test.go` files beside it read each page with `css`
+and with `xpath` collectors written as a configuration file holds them:
+through the decoder and the transform directly, through `/probe` from a local
+server sending the `Content-Type` a real one would, and from disk with the
+`localfile` request type, naming every series and every log line. The files
+under `testdata/html/charset` are one page in the encodings a target may
+answer in — windows-1251, Shift_JIS, UTF-16 and the rest — and are not UTF-8
+on purpose: an editor that saves them as UTF-8 breaks the tests that read
+them.
 
 Static analysis is configured in `.golangci.yml`, so a local `make lint` and the
 CI run check exactly the same rules. Install the pinned version with `make

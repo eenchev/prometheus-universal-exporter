@@ -1,0 +1,8 @@
+# Python modules the tests use and the image does not ship, pinned.
+#
+# The exporter's OpenMetrics answers are given to prometheus_client's parser,
+# the strict reference parser (internal/exporter/openmetricsstrict_test.go).
+# CI, the release and the Dockerfile update install this file before the
+# suite and set STRICT_OPENMETRICS_PARSER=required, so those tests fail there
+# rather than skip. Locally: pip install -r test/python/requirements.txt
+prometheus-client==0.26.0

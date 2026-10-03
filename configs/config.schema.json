@@ -51,12 +51,12 @@
             "properties": {
               "stale_if_error": {
                 "description": "After ttl, keep a result this much longer to answer a probe whose trip to the target fails, marked by http_exporter_result_stale 1. Omit or 0s to answer the failure.",
-                "pattern": "^[-+]?(0|([0-9]*(\\.[0-9]*)?(ns|us|µs|μs|ms|s|m|h))+)$",
+                "pattern": "^(\\+?(0|(([0-9]+(\\.[0-9]*)?|\\.[0-9]+)(ns|us|µs|μs|ms|s|m|h))+)|-(0|((0+(\\.0*)?|\\.0+)(ns|us|µs|μs|ms|s|m|h))+))$",
                 "type": "string"
               },
               "ttl": {
                 "description": "Answer a repeat of the same probe from memory for this long. Omit or 0s to always go to the target.",
-                "pattern": "^[-+]?(0|([0-9]*(\\.[0-9]*)?(ns|us|µs|μs|ms|s|m|h))+)$",
+                "pattern": "^(\\+?(0|(([0-9]+(\\.[0-9]*)?|\\.[0-9]+)(ns|us|µs|μs|ms|s|m|h))+)|-(0|((0+(\\.0*)?|\\.0+)(ns|us|µs|μs|ms|s|m|h))+))$",
                 "type": "string"
               }
             },
@@ -179,7 +179,7 @@
               },
               "script_timeout": {
                 "description": "How long a Python script may run. Starting the interpreter is not counted. Defaults to 100ms.",
-                "pattern": "^[-+]?(0|([0-9]*(\\.[0-9]*)?(ns|us|µs|μs|ms|s|m|h))+)$",
+                "pattern": "^(\\+?(0|(([0-9]+(\\.[0-9]*)?|\\.[0-9]+)(ns|us|µs|μs|ms|s|m|h))+)|-(0|((0+(\\.0*)?|\\.0+)(ns|us|µs|μs|ms|s|m|h))+))$",
                 "type": "string"
               }
             },
@@ -193,6 +193,17 @@
           "metrics": {
             "items": {
               "additionalProperties": false,
+              "dependentRequired": {
+                "time_zone": [
+                  "time_format"
+                ]
+              },
+              "not": {
+                "required": [
+                  "time_format",
+                  "value_map"
+                ]
+              },
               "properties": {
                 "description": {
                   "type": [
@@ -304,6 +315,18 @@
                 "scale": {
                   "description": "Multiplies the value, mapped or read as a number, such as 0.001 for milliseconds to seconds. Finite and not 0. Not for the python transform; for prometheus, plain samples only.",
                   "type": "number"
+                },
+                "time_format": {
+                  "description": "Reads the text the expression gives as a time; the value is that time in Unix seconds. rfc3339, rfc1123, or a layout: the reference time Mon Jan 2 15:04:05 MST 2006 written as the text writes its times, such as \"2006-01-02 15:04:05\", with a year, a month and a day. scale applies after. Not with value_map, and not for the prometheus and python transforms.",
+                  "type": [
+                    "string",
+                    "number",
+                    "boolean"
+                  ]
+                },
+                "time_zone": {
+                  "description": "With time_format: the zone a text that names none of its own is read in, as an IANA name such as Europe/Sofia. Defaults to UTC.",
+                  "type": "string"
                 },
                 "type": {
                   "enum": [
@@ -434,8 +457,12 @@
                 "type": "array"
               },
               "allowed_targets": {
-                "description": "Hosts, globs such as *.example.com, IP addresses and CIDR networks the collector's requests may reach: a target is allowed when its host matches by name, or every address it resolves to is in an allowed network. Checked before the request, on every redirect and on every connection. http, graphite and grpc.",
+                "description": "Hosts, globs such as *.example.com, IP addresses and CIDR networks the collector's requests may reach: a target is allowed when its host matches by name, or every address it resolves to is in an allowed network. Checked before the request, on every redirect and on every connection. Written in ASCII, as a target's host is: an internationalised name is listed, and requested, in its xn-- form. http, graphite and grpc.",
                 "items": {
+                  "not": {
+                    "pattern": "[^\\x00-\\x7F]",
+                    "type": "string"
+                  },
                   "type": [
                     "string",
                     "number",
@@ -507,8 +534,12 @@
                 ]
               },
               "denied_targets": {
-                "description": "Hosts, globs, IP addresses and CIDR networks the collector's requests may not reach: a target matching by name, or resolving to any address in a denied network, is refused with 403. Wins over allowed_targets.",
+                "description": "Hosts, globs, IP addresses and CIDR networks the collector's requests may not reach: a target matching by name, or resolving to any address in a denied network, is refused with 403. Wins over allowed_targets. Written in ASCII, as allowed_targets is.",
                 "items": {
+                  "not": {
+                    "pattern": "[^\\x00-\\x7F]",
+                    "type": "string"
+                  },
                   "type": [
                     "string",
                     "number",
@@ -541,6 +572,7 @@
                 "type": "array"
               },
               "follow_redirects": {
+                "description": "http and graphite: follow redirect statuses instead of answering with the redirect itself. A redirect that leaves the origin the request was made to — its scheme, host and port — is sent only Accept, Accept-Language and User-Agent, with the values the first request had, so a token must never be put in those three, and never the request body, and is refused over https when the collector has a tls.cert_file, unless its host is in redirect_trusted_hosts. Defaults to false. See docs/REQUESTS.md#what-a-followed-redirect-carries.",
                 "type": "boolean"
               },
               "forward_authorization": {
@@ -576,7 +608,7 @@
               },
               "max_age": {
                 "description": "localfile: refuse a file last modified longer ago than this, so a writer that has stopped fails the scrape instead of exporting its last values forever.",
-                "pattern": "^[-+]?(0|([0-9]*(\\.[0-9]*)?(ns|us|µs|μs|ms|s|m|h))+)$",
+                "pattern": "^(\\+?(0|(([0-9]+(\\.[0-9]*)?|\\.[0-9]+)(ns|us|µs|μs|ms|s|m|h))+)|-(0|((0+(\\.0*)?|\\.0+)(ns|us|µs|μs|ms|s|m|h))+))$",
                 "type": "string"
               },
               "max_files": {
@@ -690,6 +722,14 @@
                 },
                 "type": "object"
               },
+              "redirect_trusted_hosts": {
+                "description": "http and graphite: the hosts, besides the origin the request is made to, that a followed redirect may carry the collector's headers, credentials and request body to, and present its TLS client certificate to: host names, globs such as *.example.com, whose star matches dots too, and single IP addresses, each trusted on every port; \"*\" trusts every host. Matched against the host the redirect names as it is written there, which is never looked up: a final dot is part of the name, and an internationalised name is listed, and matched, in its xn-- form. No probe parameter sets it.",
+                "items": {
+                  "pattern": "^\\s*(\\*|\\[?([0-9]([0-9.]*[0-9])?|[A-Za-z_-]([A-Za-z0-9*?_.-]*[A-Za-z0-9*?_-])?|[0-9*?][A-Za-z0-9*?_.-]*[A-Za-z_-]([A-Za-z0-9*?_.-]*[A-Za-z0-9*?_-])?)\\]?\\.?|\\[?[0-9A-Fa-f.]*:[0-9A-Fa-f.]*:([0-9A-Fa-f:.]*[0-9A-Fa-f:])?(%[A-Za-z0-9_.-]*[A-Za-z0-9_-])?\\]?)\\s*$",
+                  "type": "string"
+                },
+                "type": "array"
+              },
               "retry": {
                 "additionalProperties": false,
                 "properties": {
@@ -701,7 +741,7 @@
                   },
                   "backoff": {
                     "description": "A duration such as 500ms, 30s or 5m.",
-                    "pattern": "^[-+]?(0|([0-9]*(\\.[0-9]*)?(ns|us|µs|μs|ms|s|m|h))+)$",
+                    "pattern": "^(\\+?(0|(([0-9]+(\\.[0-9]*)?|\\.[0-9]+)(ns|us|µs|μs|ms|s|m|h))+)|-(0|((0+(\\.0*)?|\\.0+)(ns|us|µs|μs|ms|s|m|h))+))$",
                     "type": "string"
                   },
                   "codes": {
@@ -855,7 +895,7 @@
                   },
                   "max_age": {
                     "description": "graphite decoder: leave out a series whose newest point is older than this, so a series nobody writes any more is not exported with its last value.",
-                    "pattern": "^[-+]?(0|([0-9]*(\\.[0-9]*)?(ns|us|µs|μs|ms|s|m|h))+)$",
+                    "pattern": "^(\\+?(0|(([0-9]+(\\.[0-9]*)?|\\.[0-9]+)(ns|us|µs|μs|ms|s|m|h))+)|-(0|((0+(\\.0*)?|\\.0+)(ns|us|µs|μs|ms|s|m|h))+))$",
                     "type": "string"
                   },
                   "value": {
@@ -1063,6 +1103,16 @@
         ]
       },
       "description": "OTLP export of probe results, self-metrics and static targets with export_via_otlp. Off until enabled is true; a block that sets any other key must say enabled, true or false. See docs/OTLP.md.",
+      "if": {
+        "properties": {
+          "enabled": {
+            "const": true
+          }
+        },
+        "required": [
+          "enabled"
+        ]
+      },
       "properties": {
         "compression": {
           "description": "Compression of the export requests. Defaults to gzip.",
@@ -1099,7 +1149,7 @@
         },
         "interval": {
           "description": "How often the points waiting are exported. At least 1s, which the exporter checks when the configuration loads; defaults to 30s.",
-          "pattern": "^[-+]?(0|([0-9]*(\\.[0-9]*)?(ns|us|µs|μs|ms|s|m|h))+)$",
+          "pattern": "^[-+]?(0|(([0-9]+(\\.[0-9]*)?|\\.[0-9]+)(ns|us|µs|μs|ms|s|m|h))+)$",
           "type": "string"
         },
         "max_pending_points": {
@@ -1130,7 +1180,7 @@
         },
         "timeout": {
           "description": "How long one export attempt may take. Defaults to 5s. Also bounds the last export at shutdown.",
-          "pattern": "^[-+]?(0|([0-9]*(\\.[0-9]*)?(ns|us|µs|μs|ms|s|m|h))+)$",
+          "pattern": "^[-+]?(0|(([0-9]+(\\.[0-9]*)?|\\.[0-9]+)(ns|us|µs|μs|ms|s|m|h))+)$",
           "type": "string"
         },
         "tls": {
@@ -1174,6 +1224,16 @@
           "description": "Answer /ready with 503 after this many failed exports in a row, until one gets through. 0, the default, never does: an exporter whose exports fail still answers probes.",
           "minimum": 0,
           "type": "integer"
+        }
+      },
+      "then": {
+        "properties": {
+          "interval": {
+            "pattern": "^(\\+?(0|(([0-9]+(\\.[0-9]*)?|\\.[0-9]+)(ns|us|µs|μs|ms|s|m|h))+)|-(0|((0+(\\.0*)?|\\.0+)(ns|us|µs|μs|ms|s|m|h))+))$"
+          },
+          "timeout": {
+            "pattern": "^(\\+?(0|(([0-9]+(\\.[0-9]*)?|\\.[0-9]+)(ns|us|µs|μs|ms|s|m|h))+)|-(0|((0+(\\.0*)?|\\.0+)(ns|us|µs|μs|ms|s|m|h))+))$"
+          }
         }
       },
       "type": "object"
@@ -1239,6 +1299,9 @@
         "self_metrics": {
           "additionalProperties": false,
           "properties": {
+            "created_timestamps": {
+              "type": "boolean"
+            },
             "resource_metrics_enabled": {
               "type": "boolean"
             },

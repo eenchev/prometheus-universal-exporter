@@ -17,13 +17,21 @@ import (
 // it, a boolean as true or false, text without surrounding blanks — and "*"
 // maps any value it does not list, numbers included; without a match and
 // without "*", the value is read as a number as before. scale then multiplies
-// the value, mapped or read.
+// the value, mapped or read. A rule with time_format reads the text as a time
+// instead (timeformat.go), and scale multiplies its seconds.
 
 // valueMapDefault is the value_map key for any value the map does not list.
 const valueMapDefault = "*"
 
 // ruleValue is the value a rule's expression gave, raw, as the series' value.
 func ruleValue(rule model.MetricRule, raw any) (float64, error) {
+	if rule.TimeFormat != "" {
+		text, ok := raw.(string)
+		if !ok {
+			return 0, fmt.Errorf("value is %s, which time_format cannot read: it reads text, such as \"2026-10-03T09:00:00Z\"; select the text of the time, or leave time_format out for a number that is Unix seconds already", model.ShowValue(raw))
+		}
+		return ruleTime(rule, text)
+	}
 	if len(rule.ValueMap) > 0 {
 		key, err := labelText(raw)
 		if err == nil {
@@ -56,6 +64,9 @@ func ruleValue(rule model.MetricRule, raw any) (float64, error) {
 // header for every series. Only a text that is no number, whose error
 // ruleValue words, is handed to it.
 func ruleTextValue(rule model.MetricRule, text string) (float64, error) {
+	if rule.TimeFormat != "" {
+		return ruleTime(rule, text)
+	}
 	trimmed := strings.TrimSpace(text)
 	if len(rule.ValueMap) > 0 {
 		if mapped, ok := rule.ValueMap[trimmed]; ok {

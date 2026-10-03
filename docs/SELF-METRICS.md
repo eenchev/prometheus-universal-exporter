@@ -51,8 +51,10 @@ script error, not a missing key.
 
 A collector that a reload removes stops being reported, here and over OTLP, so
 Prometheus marks its series stale; one added again later under the same name
-starts from zero. A collector a reload changes keeps its counters, but its
-cached results are dropped, since they belong to the old definition.
+starts from zero, and a probe or scrape of the removed collector that was
+still under way and ends later is not counted for it. A collector a reload
+changes keeps its counters, but its cached results are dropped, since they
+belong to the old definition.
 
 Every counter ends in `_total` and nothing else does. The self-metrics path
 and OTLP are built from the same definitions, so a family has the same type,
@@ -457,3 +459,84 @@ rate(http_exporter_python_pool_worker_starts_total[15m])
 # Python cannot start at all
 increase(http_exporter_python_pool_worker_start_failures_total[5m]) > 0
 ```
+
+## Created timestamps
+
+A counter says how much, not since when: after a restart, or when a collector
+is removed and added again, a counter starts from zero, and a scraper that
+sees `5` and then `3` knows it started again, while one that sees `5` and then
+`7` cannot tell a counter that grew by 2 from one that started again and
+counted 7. OpenMetrics has a sample for that, `_created`: the Unix time since
+which a counter, a histogram or a summary series has been counting. The
+exporter knows it of its own series, and writes it when asked to:
+
+```yaml
+web:
+  self_metrics:
+    created_timestamps: true
+```
+
+```text
+# TYPE http_exporter_scrapes counter
+http_exporter_scrapes_total{collector="app_json"} 2
+http_exporter_scrapes_created{collector="app_json"} 1759491000.12
+# TYPE http_exporter_collector_scrape_duration_seconds histogram
+http_exporter_collector_scrape_duration_seconds_bucket{collector="app_json",le="0.005"} 0
+...
+http_exporter_collector_scrape_duration_seconds_sum{collector="app_json"} 0.25
+http_exporter_collector_scrape_duration_seconds_count{collector="app_json"} 2
+http_exporter_collector_scrape_duration_seconds_created{collector="app_json"} 1759491000.12
+```
+
+The sample follows its series, in the series' family and with its labels, and
+only in an [OpenMetrics](CONFIGURATION.md#openmetrics) answer of the
+self-metrics endpoint: the text format has no such sample and is unchanged,
+and so are the answers of `/probe` and the static targets endpoint, whose
+series come from targets that do not say when they started. Like the other
+self-metrics settings it is configuration, so a reload turns it on and off.
+
+It is off by default, as it is in Prometheus' own Go client
+(`EnableOpenMetricsTextCreatedSamples`), because of what Prometheus does with
+the samples:
+
+- Without its created-timestamp feature, Prometheus stores every `_created`
+  line as a series of its own, `http_exporter_scrapes_created{...}` with the
+  time as its value: one more series for each counter, histogram and summary
+  series, which with [verbose](#verbose-per-request-self-metrics) self-metrics
+  is some twenty per tracked request.
+- With `--enable-feature=created-timestamp-zero-ingestion`, a Prometheus that
+  reads created timestamps from the OpenMetrics text format takes the time as
+  the start of the series instead: it writes a sample of `0` at that time
+  before the series' first value, so `rate()` and `increase()` count a new
+  series from zero and see one that started again, and stores no `_created`
+  series. Check that your Prometheus version does this for OpenMetrics text
+  before turning the setting on for it; early versions of the feature read
+  created timestamps only from the protobuf format, which the exporter does
+  not write.
+
+The time is when the series began to count:
+
+| Series | Created |
+| --- | --- |
+| The [collector metrics](#collector-metrics), `http_exporter_rule_failures_total` and the [scrape-time histogram](#scrape-time-histograms) of a collector the exporter started with | The exporter's start. |
+| The same, of a collector a reload added, or removed and brought back | When the collector's counters were made, from zero: at the first probe or the first read of the self-metrics after the reload. |
+| The [per-request](#verbose-per-request-self-metrics) counters | When the first probe of the request began — of several first probes at once, the one that ended first — or when a static target's request was registered. A request dropped — not asked for within the hour, removed with its collector or static target, or with verbose mode switched off — and asked for again counts from zero, since a later time than it showed before. |
+| `http_exporter_config_reloads_total`, the [OTLP](#otlp-export-status) counters, the [Python worker](#python-workers) counters, per collector and of the pool, and the `go_` and `process_` counters and `go_gc_duration_seconds` | The exporter's start. The worker pool keeps a collector's counts when a reload removes it, so they do not start again. |
+
+The exporter's start is the start of its process, the same time
+`process_start_time_seconds` reports — where the platform does not say, the
+moment the exporter was loaded — and the same at every scrape. A series that
+goes on counting across a reload keeps its time, and no series' time changes
+while the series is shown: a slow probe that began before a request's time and
+ends after it adds its counts to the request's series and leaves the time
+alone. When such a probe is the one that brings a dropped request back, the
+request counts since the probe ended, which is later than the time it showed
+before, rather than since the probe began.
+
+One counter has no `_created` sample: `go_memstats_alloc_bytes_total`. Its
+OpenMetrics family would be named `go_memstats_alloc_bytes`, which is the
+gauge beside it, so in OpenMetrics it is written as an `unknown` family (see
+[OpenMetrics](CONFIGURATION.md#openmetrics)), and those have none.
+
+Over [OTLP](OTLP.md) the same time is the start time of the series' points,
+whatever this setting says: OTLP has a field for it, so it costs no series.

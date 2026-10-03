@@ -262,11 +262,17 @@ collectors:
 The expression and label values are interpreted by the selected transform:
 
 - `jq`/`yq`: jq expressions evaluated against decoded data.
-- `regex`: a RE2 expression; the first capture group is the numeric value and
-  labels map to capture-group numbers or names. A regex without a capture group
-  is refused at startup. A match whose first group captured nothing — an
-  optional group that took no part, or one that matched only blanks — is a
-  missing value for that match.
+- `regex`: a RE2 expression; the capture group named `value`,
+  `(?P<value>\d+)`, is the numeric value, or the first capture group when
+  none has that name, and labels map to capture-group numbers or names. A
+  named value can stand after what a label reads, as in
+  `(?m)^(?P<host>\S+) load (?P<value>[\d.]+)$`, where the first group is the
+  `host` label's (`expression: host`, or `"1"`); groups are numbered by their
+  place in the regex whichever of them is the value, and a label may read the
+  value's group too, taking its text as written. A regex without a capture
+  group, or with two named `value`, is refused at startup. A match whose
+  value group captured nothing — an optional group that took no part, or one
+  that matched only blanks — is a missing value for that match.
 - `csv`: the expression is the numeric column name and labels map to column
   names. With `response.csv.header: false` there are no names, and columns
   are named by number, from 1: `expression: "2"` reads the second column. A
@@ -734,14 +740,27 @@ statuspage_component_status{status!="operational"}
 
 [`examples/config.filebeat.json-test.yaml`](../examples/config.filebeat.json-test.yaml)
 reads [Filebeat's monitoring endpoint](https://www.elastic.co/guide/en/beats/filebeat/current/http-endpoint.html),
-`/stats` and `/`, into `filebeat_*` metrics: counters as `_total`, milliseconds
-as seconds, outcomes of one kind as one family with a label
+`/stats`, `/` and `/inputs/`, into `filebeat_*` metrics: counters as `_total`,
+milliseconds and nanoseconds as seconds, outcomes of one kind as one family
+with a label
 (`filebeat_output_events_total{outcome="failed"}`), and `error_mode: ignore` on
 the sections only some Filebeats report, so they are absent rather than failing
 the scrape. With the Kafka output it also reads the Kafka client's own metrics
 from `libbeat.outputs`, which other outputs do not have: bytes sent and
 received, requests in flight, requests sent and their latency as
 `filebeat_output_kafka_request_latency_seconds{quantile="0.99"}` and friends.
+Its third collector, `filebeat_inputs`, reads `/inputs/`, an array with one
+object per running input, with `items: .[]`: a series per input and metric
+with the labels `id` and `input` (the type), such as
+`filebeat_input_pipeline_events_total{id="nginx-access",input="filestream",outcome="published"}`
+for every input, `filebeat_input_files_active` and the file, message, byte and
+event counters for `filestream` inputs, and
+`filebeat_input_processing_time_seconds{quantile="0.99"}` for the inputs that
+measure it. Filebeat reports that time as percentiles of a sample, not as
+buckets, so it is gauges with a `quantile` label rather than a histogram. Every
+rule there is `required: false`, as an input reports the metrics of its type
+and no others and a Filebeat may answer `[]`: what is not reported has no
+series, and nothing is logged.
 
 [`examples/open-meteo/`](../examples/open-meteo/config.yaml) reads the current
 weather of a place from [Open-Meteo](https://open-meteo.com), which needs no
@@ -760,6 +779,103 @@ curl 'http://localhost:8080/probe?collector=open_meteo_current&target=https://ap
 The [`static-targets.yaml`](../examples/open-meteo/static-targets.yaml) beside
 it has the exporter scrape three places itself, every ten minutes; see
 [Static targets](STATIC-TARGETS.md#the-target-file).
+
+[`examples/config.ecb.xml-test.yaml`](../examples/config.ecb.xml-test.yaml)
+reads the [euro foreign exchange reference rates](https://www.ecb.europa.eu/stats/policy_and_exchange_rates/euro_reference_exchange_rates/html/index.en.html)
+the European Central Bank publishes every working day, an XML document with
+every element in a namespace and the data in attributes. The collector gives
+the two namespaces prefixes of its own with
+[`response.namespaces`](#xml-namespaces), selects the `rate` attributes
+themselves, `//e:Cube[@currency]/@rate`, and reads each one's currency from the
+attribute beside it, `../@currency`; a second rule computes its value,
+`count(...)`; and a third reads the day the rates are for, the `time`
+attribute, as a value with
+[`time_format`](#reading-a-date-or-a-time-as-the-value), so no series changes
+its labels from one day to the next:
+
+```sh
+curl 'http://localhost:8080/probe?collector=ecb_reference_rates&target=https://www.ecb.europa.eu'
+```
+
+```text
+ecb_euro_reference_rate{currency="USD"} 1.1712
+ecb_euro_reference_rates{sender="European Central Bank"} 29
+ecb_euro_reference_rates_timestamp_seconds 1.7908992e+09
+```
+
+[`examples/config.scrapethissite.html-test.yaml`](../examples/config.scrapethissite.html-test.yaml)
+reads an HTML page, [Countries of the World](https://www.scrapethissite.com/pages/simple/)
+on scrapethissite.com, a site made for practising scraping, with the `css`
+transform. The page holds one `div.country` per country:
+[`items`](#metrics-per-item) selects those blocks, and the population, the
+area and the country's name are selectors within one block, the name a
+[`required`](#collectors) label, so every country is a series of each
+metric, named by the page itself:
+
+```sh
+curl 'http://localhost:8080/probe?collector=countries_html&target=https://www.scrapethissite.com'
+```
+
+```text
+country_population{country="Andorra"} 84000
+country_area{country="Andorra"} 468
+```
+
+[`examples/metar/`](../examples/metar/config.yaml) reads an airport's latest
+weather report, its METAR, from the text file the US National Weather Service
+keeps for every station in the world — `LBSF 030900Z 12004KT 9999 FEW043
+BKN100 14/08 Q1021 NOSIG` — with the `text` decoder and one regex per metric.
+The station is a [path parameter](REQUESTS.md#path-parameters),
+`{{param_station:LBSF}}`. Every regex but one starts at the report's line with
+the station's code in a group a `station` label reads, and has the number
+further along in the group named `value`; the one for the report's time
+starts at the line before it. A report may end with a forecast (`BECMG
+27015G25KT 3000`) and with remarks, whose groups are written like the
+observation's own, so each rule says where its group stands and does not look
+for it anywhere on the line: the wind directly after the station and the
+time, the visibility directly after the wind, the pressure directly after the
+temperature. A report with no gust, a variable wind or a wind in metres per
+second then gives no such series, and never the forecast's. A report leaves
+out what it has nothing to
+say about and writes some things in one of two ways, so the rules are
+`required: false`, and two rules may give one metric: a temperature is read by
+one rule as `14` and by another, with `scale: -1`, as `M05`, and a pressure in
+inches of mercury (`A3012`) is scaled to hectopascals beside the rule for
+`Q1021`. Knots become metres per second the same way. The line before the
+report, `2026/10/03 09:00`, is when it was made, which
+[`time_format: "2006/01/02 15:04"`](#reading-a-date-or-a-time-as-the-value)
+reads as `metar_observation_timestamp_seconds`:
+
+```sh
+curl 'http://localhost:8080/probe?collector=metar&target=https://tgftp.nws.noaa.gov&param_station=EGLL'
+```
+
+The [`static-targets.yaml`](../examples/metar/static-targets.yaml) beside it
+scrapes three airports every ten minutes, each adding its `city` label to the
+`station` the collector reads from the report.
+
+[`examples/config.mempool.json-test.yaml`](../examples/config.mempool.json-test.yaml)
+reads three endpoints of [mempool.space](https://mempool.space/docs/api/rest)'s
+REST API, which every self-hosted mempool instance serves too, with three
+collectors that share one request through a YAML anchor: the recommended fee
+rates, one series per key of the answer with
+[`items: to_entries[]`](#metrics-per-item) and the keys renamed by a label's
+[`value_map`](#mapping-text-to-values-and-scaling-them); the backlog of
+unconfirmed transactions, its fees scaled from satoshis to bitcoin; and the
+height of the newest block, an answer that is a number and nothing else, read
+as text by a regex.
+
+[`examples/config.promdemo.prometheus-test.yaml`](../examples/config.promdemo.prometheus-test.yaml)
+passes a Prometheus server's own `/metrics` through, the project's
+[public demo server](https://prometheus.demo.prometheus.io) or any other. It
+has no metrics rules: [`include` and `exclude`](#collector-wide-labels) keep
+some two dozen families out of everything the server exposes, a histogram and
+a summary whole among them, and `rename` gives the `process_*` and `go_*`
+families, names every Go program exposes, names of the server's own:
+
+```sh
+curl 'http://localhost:8080/probe?collector=prometheus_server&target=https://prometheus.demo.prometheus.io'
+```
 
 [`examples/config.grafanastatus.json-test.yaml`](../examples/config.grafanastatus.json-test.yaml)
 is a complete collector for [status.grafana.com](https://status.grafana.com),
@@ -878,6 +994,124 @@ two such rules giving one label different `value_map`s are refused at load,
 since the same value would read as two names in one series. Give them one
 `value_map`, or different names.
 
+### Reading a date or a time as the value
+
+A date or a time in a response — when a report was made, a job last ran, a
+certificate ends — is worth a series whose value is that moment in Unix
+seconds: `time() - app_last_backup_timestamp_seconds` is then how long ago it
+was. `time_format` says the text an expression gives is a time and how it is
+written:
+
+```yaml
+- name: app_last_backup_timestamp_seconds
+  expression: .backup.finished_at        # "2026-10-03 09:00:07"
+  time_format: "2006-01-02 15:04:05"
+  time_zone: Europe/Sofia
+```
+
+`time_format` is a name, in either case, or a layout:
+
+- `rfc3339` reads `2026-10-03T09:00:00Z` and `2026-10-03T12:00:00.25+03:00`,
+  with or without a fraction of a second;
+- `rfc1123` reads the date of an HTTP header, `Sat, 03 Oct 2026 09:00:00 GMT`,
+  and the same with a numeric zone, `+0300`;
+- a layout is the reference time, `Mon Jan 2 15:04:05 MST 2006`, written the
+  way the text writes its times — the convention of Go's `time` package,
+  which Promtail and Telegraf take their layouts in too. Each part of the
+  reference time has a number of its own, so the layout says where each part
+  stands:
+
+| Part | Written in a layout as |
+| --- | --- |
+| Year | `2006`, or `06` for two digits |
+| Month | `01`, `1`, `Jan` or `January` |
+| Day | `02`, `2`, or `002` for the day of the year |
+| Weekday | `Mon` or `Monday` |
+| Hour | `15`, or `03` or `3` with `PM` |
+| Minute | `04` |
+| Second | `05`, which reads a fraction after the seconds too, of any length or none; `05.999999999` does the same, and `05.000` reads exactly three digits |
+| Zone | `Z07:00` (`Z` or `+03:00`), `-0700`, `-07:00`, or `MST` for an abbreviation |
+
+| Text | `time_format` |
+| --- | --- |
+| `2026-10-03` | `"2006-01-02"` |
+| `2026/10/03 09:00` | `"2006/01/02 15:04"` |
+| `03.10.2026 09:00:07` | `"02.01.2006 15:04:05"` |
+| `Oct 3, 2026 9:00 PM` | `"Jan 2, 2006 3:04 PM"` |
+| `20261003T090007Z` | `"20060102T150405Z07:00"` |
+
+Quote a layout, so YAML hands it over as the text it is. The dots, the
+slashes, a `T` between the date and the time and any other text that is none
+of the parts above stand for themselves. A part is a part wherever it stands,
+though, and whatever was meant by it: the digits `1` to `5` and `01` to `06`,
+inside a longer number too, `15`, `2006` and `002`; the names `Jan`,
+`January`, `Mon` and `Monday`; `PM`, `pm` and `MST`; `-07` and `Z07`; and
+zeros or nines after a dot or a comma. In `"Q4 2006-01-02"` the `4` is the
+minute, so the text may have any number there; the `3` of `"… UTC+3"` is an
+hour, and the layout is refused for having no `PM` beside it. When the text
+has such digits or words around its time, have the rule's expression give the
+time alone, as a regex's capture group does, and write the layout for that.
+
+A fraction of a second needs nothing in the layout: seconds written `05` read
+`07`, `07.5` and `07,123456` alike. Write `05` or, to the same effect,
+`05.999999999`. Zeros after the seconds stand for exactly that many digits:
+`05.000` reads `07.123` and neither `07` nor `07.5`. A year of two digits,
+`06`, is one of 1969 to 2068: `69` to `99` are in the 1900s.
+
+A layout is written without blanks before or after it, as the text is read
+without its own, and the hour of a 12-hour clock needs `PM` (or `pm`) in the
+layout: `"2006-01-02 03:04:05"` would read no afternoon, so it is refused;
+write `15` for a 24-hour clock.
+
+The value is the time in Unix seconds, a fraction of a second kept, and
+[`scale`](#mapping-text-to-values-and-scaling-them) applies after: `1000`
+gives milliseconds. A time already written as a number of Unix seconds needs
+no `time_format`, and one in milliseconds only `scale: 0.001`.
+
+A text that names its zone or its offset from UTC is read by it, when the
+layout has the zone as one of its parts: `Z07:00`, `-0700`, `-07:00` or `MST`.
+One that does not is read in `time_zone`, an IANA name such as `Europe/Sofia`
+or `America/New_York`, by the offset that zone has on that day, summer time
+included; without `time_zone` it is read as UTC. A zone typed into the layout
+as the text has it — the `Z` of `"2006-01-02T15:04:05Z"`, a `UTC` or a `GMT`
+— is text to match and no zone, so such a text is read in `time_zone` as
+well: write `Z07:00` or `MST` in its place. The zones are built into the
+binary, so they are known in an image or on a host that has no zone files. An
+abbreviation in the text (`MST` in the layout) is read as one of
+`time_zone`'s own — `EET` and `EEST` with `Europe/Sofia` — or as `UTC` or
+`GMT`; `GMT+3` and `GMT-5`, `GMT` with a whole number of hours, are that many
+hours ahead of UTC and behind it. Any other abbreviation fails the rule, since
+an abbreviation alone does not say an offset.
+
+On the night the clocks change, a local time without a zone of its own is one
+of two moments, or none. It is then read as Go's `time.Date` reads it, by the
+offset before the change or the one after, with no promise of which: in
+`Europe/Sofia`, `2026-10-25 03:30`, which the clocks show twice, is read as
+the second, in winter time (01:30 UTC), and `2026-03-29 03:30`, which they
+skip, as an hour after 02:30 (01:30 UTC). A source that writes UTC or its
+offset has no such hour.
+
+The text is read without its surrounding blanks, like `value_map`'s. It works
+in every transform with rules: a regex capture, a CSS element's or XPath
+node's text, a CSV cell, a jq or yq string. A jq or yq value that is not text
+— a number, an object — fails the rule, saying `time_format` reads text. An
+empty or absent text is a missing value, as for any rule. Text that is no time
+in the format fails the rule, under its
+[`error_mode`](#when-a-metric-cannot-be-extracted), naming the text and the
+format: `metric "app_last_backup_timestamp_seconds": value "never" is not a
+time in time_format "2006-01-02 15:04:05"; write the layout as the text writes
+the reference time, Mon Jan 2 15:04:05 MST 2006`.
+
+`time_format` and `value_map` do not go together, since each turns the text
+into the value, and neither a `python` nor a `prometheus` rule takes
+`time_format`. A layout must have a year, a month and a day: `15:04` alone is
+no moment, and `yyyy-mm-dd` or `%Y-%m-%d`, layouts of other conventions, hold
+no part of the reference time at all. A sample date, `2026-10-03`, or the
+name of another format, `iso8601`, is read as a layout too, its digits as
+parts, and refused for what that layout lacks or cannot read, in words that
+end with what a layout is. All of this is
+[checked when the configuration loads](#checked-when-the-configuration-loads).
+
 ### Conditional metrics and labels
 
 There is no `when` key: each transform already says in its own language which
@@ -920,6 +1154,8 @@ those that hold what the condition looks for:
 **Regex.** The pattern is the condition: only text it matches becomes a
 series. `(?m)^(\d+) (\w+) up$` reads the lines of services that are up, the
 first group the value and the second the `service` label (`expression: "2"`).
+Where the label comes first in the line, name the value's group:
+`(?m)^(?P<service>\w+) up (?P<value>\d+)$`, with `expression: service`.
 
 **CSV.** A rule reads every row. To keep only some, filter them in a
 [pre-script](PYTHON.md), which leaves the rows it keeps in `data`:
@@ -1001,6 +1237,7 @@ Each type accepts its own keys. For `http`, `type` is the only required one —
 | `retry` | none | See [Target requests](REQUESTS.md#retries). |
 | `max_response_bytes` | 10 MiB | Response size cap, on the decompressed answer; one whose `Content-Length` is over it is refused before it is read ([Target requests](REQUESTS.md#compression-and-the-response-size)). With `limits.max_response_bytes` set too, the smaller wins; either alone may be above 10 MiB. It bounds the body; the response's headers are bounded apart, at 1 MiB. |
 | `follow_redirects`, `enable_http2` | off | See [Target requests](REQUESTS.md#redirects-and-http2). |
+| `redirect_trusted_hosts` | none | Hosts, globs and addresses, besides the request's own origin, that a followed redirect may carry the collector's headers, credentials and body to, and present its TLS client certificate to; see [What a followed redirect carries](REQUESTS.md#what-a-followed-redirect-carries). |
 | `allowed_schemes` | `http`, `https` | Schemes a target may use: `http`, `https` or both. Any other entry stops the exporter at startup. |
 | `accept_status` | every 2xx | Statuses whose answers are decoded, such as `["2xx", 503]`; see [Accepting other statuses](REQUESTS.md#accepting-other-statuses). |
 | `allowed_targets`, `denied_targets` | none | Hosts, globs, addresses and networks its requests may and may not reach; see [Restricting targets](REQUESTS.md#restricting-targets). |
@@ -1014,9 +1251,9 @@ For `graphite`, `targets` is required: the Graphite expressions to render.
 `from` and `until` set the window, `-15min` to `now` by default, and `path`
 defaults to `/render`. Every `http` key about the connection applies —
 `query`, `headers`, credentials, `tls`, `retry`, `max_response_bytes`,
-`follow_redirects`, `enable_http2`, `allowed_schemes`, `accept_status`,
-`allowed_targets` and `denied_targets` — and `method` and
-`body` do not; its table is in [Graphite](GRAPHITE.md#a-collector).
+`follow_redirects`, `redirect_trusted_hosts`, `enable_http2`,
+`allowed_schemes`, `accept_status`, `allowed_targets` and `denied_targets` —
+and `method` and `body` do not; its table is in [Graphite](GRAPHITE.md#a-collector).
 
 For `grpc`, `rpc` is required, the method as `package.Service/Method`, and
 so is `descriptors`, where its message types come from — `reflection`,
@@ -1069,6 +1306,13 @@ A collector whose type the build left out stops the exporter at startup, saying
 the type exists but this build does not include it, and which types it does. The
 startup log line and the [dry run](#dry-run) report list the types the binary
 carries, so a configuration can be checked against the build that will run it.
+To such a build the types it left out do not exist beyond that message: the
+message for a collector without `type` shows a type the build has, the schema
+`--config.schema` prints lists only its types, and a `/probe` parameter that
+only a left-out type accepts is one no request type knows, ignored rather
+than answered `400`. Each type built on its own is a build the test suite is
+run against, by CI and by `make test-request-types`
+([Development](DEVELOPMENT.md#tests-of-a-build-with-only-some-request-types)).
 An http-only build leaves `localfile`, `graphite` and `grpc` out, and a build
 with `REQUEST_TYPES=localfile` reads files and makes no HTTP requests to
 targets at all. `grpc` is the only type with libraries of its own, gRPC and
@@ -1192,7 +1436,15 @@ metric and the label:
   (including `items`, and undefined functions and variables), regular
   expressions, CSS selectors, XPath with the collector's namespaces, and a
   `prometheus` transform's patterns, `include` and `exclude`;
-- a `regex` label must name a capture group the regex has;
+- a `regex` rule must have a capture group, which is its value, and no more
+  than one named `value`; a `regex` label must name a capture group the regex
+  has;
+- a rule's [`time_format`](#reading-a-date-or-a-time-as-the-value) must be
+  `rfc3339`, `rfc1123` or a layout with a year, a month and a day, without
+  blanks around it and with `PM` beside the hour of a 12-hour clock, and its
+  `time_zone` a zone the exporter knows; `time_zone` without `time_format`,
+  `time_format` beside `value_map`, and `time_format` on a `python` or
+  `prometheus` rule are refused;
 - a `prometheus` transform's `rename` targets must be metric names;
   `include`, `exclude` and `rename` apply only to a `prometheus` transform
   without `metrics` rules;
@@ -1267,7 +1519,7 @@ order, one per line, each quoting the expression it is about:
 ```text
 collector "a" metric "x" expression ".foo[": unexpected EOF
 collector "a" metric "bad-name": "bad-name" is not a valid Prometheus metric name; use letters, digits, underscores and colons, not starting with a digit
-collector "b" metric "z" regex "value=\\d+" has no capture group; the first capture group is the value, so wrap the number in one, such as 'requests=(\d+)'
+collector "b" metric "z" regex "value=\\d+" has no capture group; the value is the capture group named value, as in '(?P<value>\d+)', or else the first, so wrap the number in one, such as 'requests=(\d+)'
 ```
 
 A mistake in a collector that a [collector file](#collector-files) defines
@@ -1326,10 +1578,22 @@ you are running; its `request.type` values are the request types that binary
 was built with. The schema describes the canonical spelling and is not the last
 word: startup validation also checks what a schema cannot, such as that an
 expression compiles, that `otlp.interval` is at least `1s` — a duration is
-text to a schema — and that a [size](#sizes) is under 2^63 bytes. Where a
+text to a schema — that a duration is not too long to be held, and that a
+[size](#sizes) is under 2^63 bytes. Where a
 schema can tell, it refuses what the exporter refuses: a
 `response.csv.delimiter` of more than one character, a size with a fraction
-and no unit, a block that sets keys beside a missing `enabled`.
+and no unit, a block that sets keys beside a missing `enabled`, and a
+negative duration, such as `timeout: -5s`, which no key takes. A duration is
+written as Go writes one — `500ms`, `1h30m`, `1.5s` — to the schemas as to
+the exporter: a `+` may lead it, and a `-` only a zero (`-0s`); only in an
+`otlp` block with `enabled: false`, which is kept unchecked, do both take a
+negative one. What is written negative is negative however small: `-0.4ns`,
+which rounds to zero, is refused by both as `-1ns` is. The longest duration
+is 2^63 - 1 nanoseconds, some 292 years (`2562047h47m16.854775807s`): a
+longer one, such as `2562048h`, is well written, so the schemas take it, and
+the exporter refuses it as no duration. Write a duration of zero as `0s`: an
+unquoted `0` is a number to YAML, which the exporter reads as the duration
+and an editor flags.
 
 On a static target there is no HTTP response to carry an error. `fail` there
 means the scrape serves nothing except `http_exporter_target_up` at 0, and
@@ -1712,9 +1976,13 @@ Order is not among these: a histogram's buckets are written in ascending order
 of `le`, with `+Inf` last, and a summary's quantiles in ascending order, in
 both formats, in whatever order the target wrote them.
 
-OpenMetrics can give a counter a `_created` time, when it started counting. The
-exporter writes none: it reads counters from targets and cannot know when they
-started, and OpenMetrics leaves `_created` out when it is not known.
+OpenMetrics can give a counter, a histogram and a summary a `_created` time,
+when it started counting. The exporter writes none for what it reads from
+targets, on `/probe` and the static targets endpoint: it cannot know when a
+target's counter started, and OpenMetrics leaves `_created` out when it is not
+known. It does know that of its own counters, and writes it on the
+self-metrics endpoint when `web.self_metrics.created_timestamps` is set; see
+[Created timestamps](SELF-METRICS.md#created-timestamps).
 
 To keep a Prometheus job on the text format, set its `scrape_protocols`:
 
@@ -2120,6 +2388,21 @@ the grpc collectors each read their files again when they change. A
 collector's own credential and TLS files are read at each request, not when
 the configuration loads, and never reject a reload.
 
+The [static target file](STATIC-TARGETS.md#reloading) is tried again the
+same way. Checking it opens the `request.protoset_file` and
+`request.proto_files` of the grpc collectors whose targets set a
+`request.message`, which the message is checked against, so a reload of the
+target file in the moment such a file is being replaced is rejected for
+that file alone. While the target file is rejected the watch looks at those
+files too, and the tick after one changes reads the target file again,
+although it is as it was; a tick that finds them as they were does nothing
+and logs nothing, and once the target file is in force they are left alone.
+A target file rejected for what it says itself — one that is not YAML, a
+target without a collector — opens no other file, and is read again when it
+changes. A target's own credential files (`request.bearer_token_file`,
+`request.basic_auth_file`) are read at each scrape and never reject a
+reload.
+
 The watch does not relax any reload rule. An invalid configuration, one that
 would disable OTLP while a loaded static target sets `export_via_otlp`, a
 collector name defined twice, and a pre-script that stops producing `data` are
@@ -2128,6 +2411,18 @@ left active and the reason logged, with the rejected file's path as `file`
 (`configuration reload rejected` or `static target reload rejected`). `http_exporter_config_last_reload_successful`
 then reads `0` until a reload succeeds, so a change that did not take can be
 alerted on — see [Configuration reloads](SELF-METRICS.md#configuration-reloads).
+
+With the watch on, the line of a rejected reload also says, as
+`retried_when`, what the watch reads that file again for, and names only
+what applies: the file itself (`the configuration changes`, which counts its
+collector files, or `the static target file changes`); with it a file
+watched while the file is rejected, as above (`the configuration or a file
+it names changes`); and the other of the two files, when this one was
+rejected only because it disagrees with the other as in force — a target
+naming a collector the configuration does not have, say — so that a change
+to either may settle it (`the static target file, a file its check opens or
+the configuration changes`). Without `--config.watch` nothing is read again
+until a reload is asked for, and the line has no `retried_when`.
 
 ## Reloading on demand
 
@@ -2214,7 +2509,13 @@ Metrics a probe would have served
 The report lists:
 
 - **Requests:** every request the trip sent, retries and redirects included,
-  with its headers and how it ended. A `grpc` call is listed with its method,
+  with its headers and how it ended. A redirect is listed with the headers it
+  was sent, and one to a host that is neither the request's origin nor in
+  [`redirect_trusted_hosts`](REQUESTS.md#what-a-followed-redirect-carries)
+  with a line of the headers it was not sent, by name: `not sent:
+  Authorization, X-Api-Key — the redirect leads to a host that is not the
+  origin the request was made to and is not in
+  request.redirect_trusted_hosts`. A `grpc` call is listed with its method,
   metadata and status code. A `localfile` read, which sends nothing, is
   listed as the file it reads.
 - **Response:** the status, the headers and the body, up to 64 KiB, as the

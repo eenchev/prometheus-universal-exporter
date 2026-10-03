@@ -1,0 +1,90 @@
+# Demo collector for the euro foreign exchange reference rates of the European
+# Central Bank, a public XML document that needs no authentication and no API
+# key. The ECB publishes it once every working day, around 16:00 CET.
+#
+#   go run . --config.file=examples/config.ecb.xml-test.yaml
+#   curl 'http://localhost:8080/probe?collector=ecb_reference_rates&target=https://www.ecb.europa.eu'
+#
+# The response looks like:
+#
+#   <gesmes:Envelope xmlns:gesmes="http://www.gesmes.org/xml/2002-08-01"
+#                    xmlns="http://www.ecb.int/vocabulary/2002-08-01/eurofxref">
+#     <gesmes:subject>Reference rates</gesmes:subject>
+#     <gesmes:Sender><gesmes:name>European Central Bank</gesmes:name></gesmes:Sender>
+#     <Cube>
+#       <Cube time='2026-10-02'>
+#         <Cube currency='USD' rate='1.1712'/>
+#         <Cube currency='JPY' rate='173.25'/>
+#       </Cube>
+#     </Cube>
+#   </gesmes:Envelope>
+#
+# Two things make it a good XML example. Every element is in a namespace, the
+# `Cube`s in the document's default one, so a plain `//Cube` finds nothing:
+# response.namespaces gives each namespace a prefix of this collector's own
+# choosing. And the data is in attributes rather than in text, so the rule
+# selects the `rate` attributes themselves and reads each one's currency from
+# the attribute beside it.
+collectors:
+  - name: ecb_reference_rates
+    # One publication a day: a probe within ten minutes of the last is
+    # answered from memory, and while the site is down the last rates are
+    # served, marked stale, for a day.
+    cache:
+      ttl: 10m
+      stale_if_error: 24h
+    request:
+      type: http
+      method: GET
+      path: /stats/eurofxref/eurofxref-daily.xml
+      allowed_schemes: [https]
+      retry:
+        attempts: 1
+        backoff: 2s
+    # The decoder would infer XML from the document's content type; naming it
+    # makes the collector independent of that.
+    decoder:
+      type: xml
+    response:
+      # The prefixes are this collector's, matched by namespace: `e` finds the
+      # elements the document writes without a prefix, and `g` those it writes
+      # as `gesmes:`, whatever prefix the ECB uses for them tomorrow.
+      namespaces:
+        e: http://www.ecb.int/vocabulary/2002-08-01/eurofxref
+        g: http://www.gesmes.org/xml/2002-08-01
+    transform:
+      type: xpath
+    metrics:
+      - name: ecb_euro_reference_rate
+        description: Units of the currency one euro buys, as the ECB last published it
+        type: gauge
+        error_mode: log
+        # One series per rate attribute. A label is relative to the attribute
+        # the rule selected, so ../@currency is the attribute beside it.
+        expression: //e:Cube[@currency]/@rate
+        labels:
+          - name: currency
+            expression: ../@currency
+
+      - name: ecb_euro_reference_rates
+        description: Number of currencies in the published set
+        type: gauge
+        error_mode: log
+        # A rule may compute its value instead of selecting it.
+        expression: count(//e:Cube[@currency])
+        labels:
+          - name: sender
+            expression: //g:Sender/g:name
+
+      - name: ecb_euro_reference_rates_timestamp_seconds
+        description: The day the published rates are for, as the Unix time of its start in UTC
+        type: gauge
+        error_mode: log
+        # The day is a value, not a label: time_format reads the text of the
+        # time attribute, 2026-10-02, as a date written the way "2006-01-02"
+        # writes the reference time, and the value is its Unix seconds. No
+        # series changes its labels from one day to the next, and
+        # time() - ecb_euro_reference_rates_timestamp_seconds is how old the
+        # rates are.
+        expression: //e:Cube/@time
+        time_format: "2006-01-02"

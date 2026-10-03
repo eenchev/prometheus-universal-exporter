@@ -1,0 +1,14 @@
+queue|vhost|consumers|messages_ready|messages_unacked|state
+orders|/shop|4|120|3|running
+orders.dead|/shop|0|17|0|running
+payments|/shop|2|0|1|running
+payments.retry|/shop|1|342|12|flow
+shipping|/shop|3|9|0|running
+emails|/notify|6|4411|64|flow
+emails.bounce|/notify|1|2|0|idle
+sms|/notify|0|88|0|down
+audit|/|1|0|0|idle
+metrics|/|2|51000|500|flow
+search.index|/shop|8|7|8|running
+thumbnails|/media|0|0|0|down
+(12 rows)

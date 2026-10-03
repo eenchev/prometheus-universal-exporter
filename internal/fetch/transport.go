@@ -222,17 +222,26 @@ func HTTPClient(settings TransportSettings, followRedirects bool, timeout time.D
 	if followRedirects {
 		// Go's own limit, and the collector's allowed_schemes, and
 		// allowed_targets and denied_targets, for the URL each redirect
-		// leads to.
+		// leads to. What the redirected request carries is settled first
+		// (redirecttrust.go), so a debug report shows its headers as they
+		// are sent. Everything is taken from the request and its context:
+		// the client, and this function with it, is copied for a request
+		// sent on a connection of its own (onOwnConnection).
 		client.CheckRedirect = func(req *http.Request, via []*http.Request) error {
 			ctx := req.Context()
 			if req.Response != nil {
 				traceOutcome(ctx, req.Response.Status)
 			}
+			hop := settleRedirect(ctx, req, via)
 			traceRequest(ctx, req.Method, req.URL.String(), req.Header, req.Host, true)
+			traceWithheld(ctx, hop.withheld, hop.traceNote())
 			if len(via) >= 10 {
 				return errors.New("stopped after 10 redirects")
 			}
-			return checkRedirect(ctx, req.URL)
+			if err := checkRedirect(ctx, req.URL); err != nil {
+				return err
+			}
+			return hop.refusal(req)
 		}
 	} else {
 		// The response of the redirect itself is returned, so a collector sees

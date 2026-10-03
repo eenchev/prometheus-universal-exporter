@@ -1,0 +1,108 @@
+# HELP go_gc_duration_seconds A summary of the wall-time pause (stop-the-world) duration in garbage collection cycles.
+# TYPE go_gc_duration_seconds summary
+go_gc_duration_seconds{quantile="0"} 3.1211e-05
+go_gc_duration_seconds{quantile="0.5"} 6.4803e-05
+go_gc_duration_seconds{quantile="1"} 0.000412338
+go_gc_duration_seconds_sum 1.208115213
+go_gc_duration_seconds_count 15127
+# HELP go_goroutines Number of goroutines that currently exist.
+# TYPE go_goroutines gauge
+go_goroutines 142
+# HELP go_memstats_alloc_bytes Number of bytes allocated in heap and currently in use. Equals to /memory/classes/heap/objects:bytes.
+# TYPE go_memstats_alloc_bytes gauge
+go_memstats_alloc_bytes 1.48223456e+08
+# HELP net_conntrack_dialer_conn_attempted_total Total number of connections attempted by the given dialer a given name.
+# TYPE net_conntrack_dialer_conn_attempted_total counter
+net_conntrack_dialer_conn_attempted_total{dialer_name="node"} 12
+# HELP process_cpu_seconds_total Total user and system CPU time spent in seconds.
+# TYPE process_cpu_seconds_total counter
+process_cpu_seconds_total 48211.37
+# HELP process_max_fds Maximum number of open file descriptors.
+# TYPE process_max_fds gauge
+process_max_fds 524288
+# HELP process_open_fds Number of open file descriptors.
+# TYPE process_open_fds gauge
+process_open_fds 61
+# HELP process_resident_memory_bytes Resident memory size in bytes.
+# TYPE process_resident_memory_bytes gauge
+process_resident_memory_bytes 3.38137088e+08
+# HELP process_start_time_seconds Start time of the process since unix epoch in seconds.
+# TYPE process_start_time_seconds gauge
+process_start_time_seconds 1.78991234567e+09
+# HELP process_virtual_memory_bytes Virtual memory size in bytes.
+# TYPE process_virtual_memory_bytes gauge
+process_virtual_memory_bytes 2.214592512e+09
+# HELP process_virtual_memory_max_bytes Maximum amount of virtual memory available in bytes.
+# TYPE process_virtual_memory_max_bytes gauge
+process_virtual_memory_max_bytes 1.8446744073709552e+19
+# HELP prometheus_build_info A metric with a constant '1' value labeled by version, revision, branch, goversion from which prometheus was built, and the goos and goarch for the build.
+# TYPE prometheus_build_info gauge
+prometheus_build_info{branch="HEAD",goarch="amd64",goos="linux",goversion="go1.25.1",revision="0a1b2c3d4e5f60718293a4b5c6d7e8f901234567",tags="netgo,builtinassets",version="3.6.0"} 1
+# HELP prometheus_engine_query_duration_seconds Query timings
+# TYPE prometheus_engine_query_duration_seconds summary
+prometheus_engine_query_duration_seconds{slice="inner_eval",quantile="0.5"} 0.000118402
+prometheus_engine_query_duration_seconds{slice="inner_eval",quantile="0.9"} 0.001940117
+prometheus_engine_query_duration_seconds{slice="inner_eval",quantile="0.99"} 0.014862993
+prometheus_engine_query_duration_seconds_sum{slice="inner_eval"} 941.5521
+prometheus_engine_query_duration_seconds_count{slice="inner_eval"} 1.204518e+06
+prometheus_engine_query_duration_seconds{slice="queue_time",quantile="0.5"} 5.31e-06
+prometheus_engine_query_duration_seconds{slice="queue_time",quantile="0.9"} 1.2044e-05
+prometheus_engine_query_duration_seconds{slice="queue_time",quantile="0.99"} 4.8719e-05
+prometheus_engine_query_duration_seconds_sum{slice="queue_time"} 12.8843
+prometheus_engine_query_duration_seconds_count{slice="queue_time"} 1.204518e+06
+# HELP prometheus_http_request_duration_seconds Histogram of latencies for HTTP requests.
+# TYPE prometheus_http_request_duration_seconds histogram
+prometheus_http_request_duration_seconds_bucket{handler="/api/v1/query",le="0.1"} 80412
+prometheus_http_request_duration_seconds_bucket{handler="/api/v1/query",le="0.2"} 80790
+prometheus_http_request_duration_seconds_bucket{handler="/api/v1/query",le="0.4"} 80871
+prometheus_http_request_duration_seconds_bucket{handler="/api/v1/query",le="1"} 80902
+prometheus_http_request_duration_seconds_bucket{handler="/api/v1/query",le="3"} 80911
+prometheus_http_request_duration_seconds_bucket{handler="/api/v1/query",le="8"} 80913
+prometheus_http_request_duration_seconds_bucket{handler="/api/v1/query",le="20"} 80913
+prometheus_http_request_duration_seconds_bucket{handler="/api/v1/query",le="60"} 80913
+prometheus_http_request_duration_seconds_bucket{handler="/api/v1/query",le="120"} 80913
+prometheus_http_request_duration_seconds_bucket{handler="/api/v1/query",le="+Inf"} 80913
+prometheus_http_request_duration_seconds_sum{handler="/api/v1/query"} 1204.337
+prometheus_http_request_duration_seconds_count{handler="/api/v1/query"} 80913
+prometheus_http_request_duration_seconds_bucket{handler="/metrics",le="0.1"} 29871
+prometheus_http_request_duration_seconds_bucket{handler="/metrics",le="0.2"} 29880
+prometheus_http_request_duration_seconds_bucket{handler="/metrics",le="0.4"} 29880
+prometheus_http_request_duration_seconds_bucket{handler="/metrics",le="1"} 29880
+prometheus_http_request_duration_seconds_bucket{handler="/metrics",le="3"} 29880
+prometheus_http_request_duration_seconds_bucket{handler="/metrics",le="8"} 29880
+prometheus_http_request_duration_seconds_bucket{handler="/metrics",le="20"} 29880
+prometheus_http_request_duration_seconds_bucket{handler="/metrics",le="60"} 29880
+prometheus_http_request_duration_seconds_bucket{handler="/metrics",le="120"} 29880
+prometheus_http_request_duration_seconds_bucket{handler="/metrics",le="+Inf"} 29880
+prometheus_http_request_duration_seconds_sum{handler="/metrics"} 418.92
+prometheus_http_request_duration_seconds_count{handler="/metrics"} 29880
+# HELP prometheus_http_requests_total Counter of HTTP requests.
+# TYPE prometheus_http_requests_total counter
+prometheus_http_requests_total{code="200",handler="/api/v1/query"} 80655
+prometheus_http_requests_total{code="400",handler="/api/v1/query"} 258
+prometheus_http_requests_total{code="200",handler="/metrics"} 29880
+# HELP prometheus_ready Whether Prometheus startup was fully completed and the server is ready for normal operation.
+# TYPE prometheus_ready gauge
+prometheus_ready 1
+# HELP prometheus_tsdb_head_chunks Total number of chunks in the head block.
+# TYPE prometheus_tsdb_head_chunks gauge
+prometheus_tsdb_head_chunks 41876
+# HELP prometheus_tsdb_head_samples_appended_total Total number of appended samples.
+# TYPE prometheus_tsdb_head_samples_appended_total counter
+prometheus_tsdb_head_samples_appended_total{type="float"} 2.41883512e+08
+prometheus_tsdb_head_samples_appended_total{type="histogram"} 0
+# HELP prometheus_tsdb_head_series Total number of series in the head block.
+# TYPE prometheus_tsdb_head_series gauge
+prometheus_tsdb_head_series 12409
+# HELP prometheus_tsdb_wal_fsync_duration_seconds Duration of write log fsync.
+# TYPE prometheus_tsdb_wal_fsync_duration_seconds summary
+prometheus_tsdb_wal_fsync_duration_seconds{quantile="0.5"} NaN
+prometheus_tsdb_wal_fsync_duration_seconds{quantile="0.9"} NaN
+prometheus_tsdb_wal_fsync_duration_seconds{quantile="0.99"} NaN
+prometheus_tsdb_wal_fsync_duration_seconds_sum 1.8823
+prometheus_tsdb_wal_fsync_duration_seconds_count 204
+# HELP promhttp_metric_handler_requests_total Total number of scrapes by HTTP status code.
+# TYPE promhttp_metric_handler_requests_total counter
+promhttp_metric_handler_requests_total{code="200"} 29880
+promhttp_metric_handler_requests_total{code="500"} 0
+promhttp_metric_handler_requests_total{code="503"} 0

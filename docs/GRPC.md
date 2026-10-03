@@ -64,7 +64,8 @@ The probe's `target` is the server, `host:port`:
 | `max_response_bytes` | the collector's limit | The largest answer accepted: the message as it arrives, and the JSON it becomes, which writing every zero value can make several times larger. |
 
 `path`, `query`, `headers`, `body`, `method`, `follow_redirects`,
-`enable_http2` and `allowed_schemes` are `http`'s and refused, as any key of
+`redirect_trusted_hosts`, `enable_http2` and `allowed_schemes` are `http`'s
+and refused, as any key of
 another request type is. The method is `rpc`, not `method`, because `method`
 is already the HTTP verb, and a key that meant two things by type would read
 the same and check differently.
@@ -80,7 +81,11 @@ A target is `host:port`, `dns:///host:port`, `grpc://host:port` or
 plaintext, as a bare `http` target is `http://`. `grpcs://`, or any key of
 `request.tls`, makes the call use TLS; `grpc://` with a `tls` block
 contradicts it and is refused. A target with a path, a query or a user in it
-is refused: the method is `rpc`. A static target's target is checked when the
+is refused: the method is `rpc`. Its host is written as an `http` target's
+is, an address or a name in ASCII, an internationalised name in its `xn--`
+form: with any other character the target is refused, `403`, before a
+connection is made ([Restricting targets](REQUESTS.md#restricting-targets)).
+A static target's target is checked when the
 file loads, and a probe's before anything is called, answered `400` when it is
 malformed.
 

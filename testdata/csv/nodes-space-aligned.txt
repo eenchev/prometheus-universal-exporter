@@ -1,0 +1,14 @@
+NODE       ROLE     CPU    MEM  PODS  AGE_DAYS  STATUS    NOTE
+web01      worker    72   61.5    14       212  Ready     "two words"
+web02      worker    31   48.0     9       212  Ready     -
+web03      worker     5   12.25    2        17  Ready     "new node"
+db01       worker    88   93.5     6       401  Ready     "disk pressure"
+db02       worker    64   71.0     6       401  Ready     -
+cache01    worker    12   83.75    3        96  Ready     -
+batch01    worker     0    4.0     0         3  NotReady  "kubelet stopped posting"
+batch02    worker    97   55.5    30        88  Ready     -
+ingress01  edge      23   30.0     4       150  Ready     -
+ingress02  edge      27   31.5     4       150  Ready     "cordoned"
+cp01       control   18   40.0    11       401  Ready     -
+cp02       control   16   39.0    11       401  Ready     -
+cp03       control   21   42.25   11       399  Ready     "etcd leader"

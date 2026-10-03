@@ -19,6 +19,10 @@ import (
 	"strings"
 	"syscall"
 	"time"
+	// The IANA time zones, for a rule's time_zone: carried in the binary, so
+	// a zone is known on a host or in an image that has no zone files. The
+	// host's files are read first where there are any.
+	_ "time/tzdata"
 
 	"github.com/eenchev/prometheus-universal-exporter/internal/config"
 	"github.com/eenchev/prometheus-universal-exporter/internal/exporter"

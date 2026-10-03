@@ -1,3 +1,5 @@
+//go:build !select_request_types || request_type_http
+
 package exporter
 
 import (
@@ -54,15 +56,6 @@ func (p *pathRecorder) last(t *testing.T) string {
 }
 
 const tenantPath = "/api/{{param_tenant}}/v{{param_version:2}}/status"
-
-func pathServer(t *testing.T, collectors ...model.Collector) *Server {
-	t.Helper()
-	cfg := &model.Config{Collectors: collectors}
-	if err := config.Validate(cfg); err != nil {
-		t.Fatal(err)
-	}
-	return NewServer(config.NewManager(cfg, "", slog.Default()), "python3", slog.Default())
-}
 
 func probeWith(t *testing.T, server *Server, target string, params string) *httptest.ResponseRecorder {
 	t.Helper()

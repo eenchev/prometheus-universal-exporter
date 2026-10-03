@@ -7,10 +7,8 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
-	"strings"
 	"testing"
 
-	"github.com/eenchev/prometheus-universal-exporter/internal/config"
 	"gopkg.in/yaml.v3"
 )
 
@@ -86,19 +84,22 @@ func shippedExamples(t *testing.T) exampleTree {
 	return tree
 }
 
-// The list reaches into directories: the Open-Meteo example, a configuration
-// and its static target file in a directory of their own, is on it beside the
-// single-file examples, and so is checked by every test that takes the list —
-// against the schemas, as a configuration that loads, and for its scripts.
+// The list reaches into directories: the Open-Meteo and METAR examples, each a
+// configuration and its static target file in a directory of their own, are on
+// it beside the single-file examples, and so are checked by every test that
+// takes the list — against the schemas, as a configuration that loads, and for
+// its scripts.
 func TestTheExampleListReachesIntoDirectories(t *testing.T) {
 	tree := shippedExamples(t)
-	for _, want := range []string{"examples/config.filebeat.json-test.yaml", "examples/open-meteo/config.yaml"} {
+	for _, want := range []string{"examples/config.filebeat.json-test.yaml", "examples/open-meteo/config.yaml", "examples/metar/config.yaml"} {
 		if !slices.Contains(tree.configs, want) {
 			t.Errorf("%s is not among the example configurations: %v", want, tree.configs)
 		}
 	}
-	if want := "examples/open-meteo/static-targets.yaml"; !slices.Contains(tree.staticTargets, want) {
-		t.Errorf("%s is not among the example static target files: %v", want, tree.staticTargets)
+	for _, want := range []string{"examples/open-meteo/static-targets.yaml", "examples/metar/static-targets.yaml"} {
+		if !slices.Contains(tree.staticTargets, want) {
+			t.Errorf("%s is not among the example static target files: %v", want, tree.staticTargets)
+		}
 	}
 }
 
@@ -120,47 +121,5 @@ func TestAnExampleFileIsAConfigurationOrAStaticTargetFile(t *testing.T) {
 		if got != want || (err == nil) != (want != "") {
 			t.Errorf("%q: kind=%q err=%v, want %q", document, got, err, want)
 		}
-	}
-}
-
-// An example's static target file is valid as an editor checks it, against
-// the published schema, and as the exporter checks it at startup: on its own,
-// and against the configuration in its directory, whose collectors and
-// placeholders its targets name.
-func TestExampleStaticTargetFilesMatchTheSchemaAndTheirConfiguration(t *testing.T) {
-	tree := shippedExamples(t)
-	if len(tree.staticTargets) == 0 {
-		t.Fatal("no example static target file found; this must not pass by finding nothing")
-	}
-	schema := loadSchemaFile(t, staticTargetsSchemaFile)
-	for _, path := range tree.staticTargets {
-		t.Run(path, func(t *testing.T) {
-			if errs := validateAgainstSchema(schema, readYAMLDocument(t, path)); len(errs) > 0 {
-				t.Errorf("%s does not match the schema:\n%s", path, strings.Join(errs, "\n"))
-			}
-			var beside []string
-			for _, candidate := range tree.configs {
-				if filepath.Dir(candidate) == filepath.Dir(path) {
-					beside = append(beside, candidate)
-				}
-			}
-			if len(beside) != 1 {
-				t.Fatalf("%s needs exactly one configuration in its directory to be checked against, found %v", path, beside)
-			}
-			cfg, err := config.Load(beside[0])
-			if err != nil {
-				t.Fatal(err)
-			}
-			file, err := config.LoadStaticTargets(path)
-			if err != nil {
-				t.Fatal(err)
-			}
-			if err := config.ValidateStaticTargets(file); err != nil {
-				t.Fatalf("%s: %v", path, err)
-			}
-			if err := config.ValidateStaticTargetsAgainst(file, cfg); err != nil {
-				t.Fatalf("%s does not match %s: %v", path, beside[0], err)
-			}
-		})
 	}
 }

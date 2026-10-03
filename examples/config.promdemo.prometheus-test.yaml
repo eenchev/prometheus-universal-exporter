@@ -1,0 +1,70 @@
+# Demo collector for a Prometheus server's own /metrics, read from the public
+# demo server the Prometheus project runs, which needs no authentication. Any
+# Prometheus server answers the same way, so the collector works against
+# yours by changing the target.
+#
+#   go run . --config.file=examples/config.promdemo.prometheus-test.yaml
+#   curl 'http://localhost:8080/probe?collector=prometheus_server&target=https://prometheus.demo.prometheus.io'
+#
+# The response is already in the Prometheus text format, more than a thousand
+# series of it:
+#
+#   # HELP prometheus_tsdb_head_series Total number of series in the head block.
+#   # TYPE prometheus_tsdb_head_series gauge
+#   prometheus_tsdb_head_series 12409
+#
+# So there is nothing to extract, and the collector has no metrics rules: a
+# prometheus transform without them passes the series through as they are,
+# histograms and summaries whole, with their HELP and TYPE. What this example
+# shows is the other thing such a collector is for: taking the two dozen
+# families worth keeping out of a target that exposes far more than is
+# wanted, and renaming the ones that would otherwise be mistaken for another
+# program's.
+collectors:
+  - name: prometheus_server
+    # A repeated scrape within fifteen seconds is answered from memory.
+    cache:
+      ttl: 15s
+    request:
+      type: http
+      method: GET
+      path: /metrics
+      allowed_schemes: [https]
+      retry:
+        attempts: 1
+        backoff: 2s
+    # The transform reads the Prometheus format and nothing else, so the
+    # decoder would be chosen without this; naming it does no harm.
+    decoder:
+      type: prometheus
+    transform:
+      type: prometheus
+      # A family is kept when its name matches one of these and none of
+      # exclude. The patterns are regular expressions looked for anywhere in
+      # the name, so each is anchored. A histogram or a summary is named by
+      # its family: its _bucket, _sum and _count series come with it.
+      include:
+        - ^prometheus_build_info$
+        - ^prometheus_ready$
+        - ^prometheus_tsdb_head_(series|chunks|samples_appended_total)$
+        - ^prometheus_http_requests_total$
+        - ^prometheus_http_request_duration_seconds$   # a histogram
+        - ^prometheus_engine_query_duration_seconds$   # a summary
+        - ^process_
+        - ^go_goroutines$
+      exclude:
+        # Of the process_ families, the one that says nothing: the largest
+        # number an address space can hold.
+        - ^process_virtual_memory_max_bytes$
+      # process_* and go_* are names every Go program exposes, the exporter
+      # itself among them. Renamed, the ones read from the server cannot be
+      # taken for anyone else's. A name is matched whole, as the target
+      # writes it.
+      rename:
+        process_cpu_seconds_total: prometheus_process_cpu_seconds_total
+        process_resident_memory_bytes: prometheus_process_resident_memory_bytes
+        process_virtual_memory_bytes: prometheus_process_virtual_memory_bytes
+        process_open_fds: prometheus_process_open_fds
+        process_max_fds: prometheus_process_max_fds
+        process_start_time_seconds: prometheus_process_start_time_seconds
+        go_goroutines: prometheus_goroutines

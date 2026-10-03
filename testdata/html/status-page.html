@@ -1,0 +1,115 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Acme Cloud Status</title>
+  <link rel="alternate" type="application/rss+xml" href="/history.rss">
+  <style>
+    .status.operational { color: #2fcc66; }
+    .status.degraded { color: #f1c40f; }
+    .status.outage { color: #e74c3c; }
+  </style>
+</head>
+<body class="status-page">
+  <header>
+    <h1>Acme Cloud Status</h1>
+    <div id="summary" class="summary degraded" data-indicator="minor">
+      <span class="summary-text">Partial System Degradation</span>
+      <span class="summary-updated">Updated <time datetime="2026-10-03T08:55:00Z">5 minutes ago</time></span>
+    </div>
+    <ul class="uptime">
+      <li><span class="label">Uptime, 90 days</span> <span class="value" id="uptime-90d">99.982%</span></li>
+      <li><span class="label">Requests today</span> <span class="value" id="requests-today">1,204,551</span></li>
+      <li><span class="label">Open incidents</span> <span class="value" id="open-incidents">2</span></li>
+    </ul>
+  </header>
+
+  <main>
+    <table id="components" class="components">
+      <thead>
+        <tr><th>Component</th><th>Region</th><th>Status</th><th>Response time</th><th>Uptime</th></tr>
+      </thead>
+      <tbody>
+        <tr class="group"><th colspan="5" scope="rowgroup">Core</th></tr>
+        <tr class="component" data-component-id="cmp-api" data-group="core">
+          <td class="name">API</td>
+          <td class="region">eu-west-1</td>
+          <td class="status operational">Operational</td>
+          <td class="latency">87 ms</td>
+          <td class="uptime">99.98%</td>
+        </tr>
+        <tr class="component" data-component-id="cmp-auth" data-group="core">
+          <td class="name">Authentication</td>
+          <td class="region">eu-west-1</td>
+          <td class="status degraded">Degraded Performance</td>
+          <td class="latency">1,420 ms</td>
+          <td class="uptime">99.61%</td>
+        </tr>
+        <tr class="component" data-component-id="cmp-db" data-group="core">
+          <td class="name">Database</td>
+          <td class="region">eu-central-1</td>
+          <td class="status operational">Operational</td>
+          <td class="latency">12 ms</td>
+          <td class="uptime">100%</td>
+        </tr>
+        <tr class="group"><th colspan="5" scope="rowgroup">Edge</th></tr>
+        <tr class="component" data-component-id="cmp-cdn" data-group="edge">
+          <td class="name">CDN</td>
+          <td class="region">global</td>
+          <td class="status outage">Major Outage</td>
+          <td class="latency">&mdash;</td>
+          <td class="uptime">97.20%</td>
+        </tr>
+        <tr class="component" data-component-id="cmp-dns" data-group="edge">
+          <td class="name">DNS</td>
+          <td class="region">global</td>
+          <td class="status maintenance">Under Maintenance</td>
+          <td class="latency">31 ms</td>
+          <td class="uptime">99.95%</td>
+        </tr>
+        <tr class="component retired" data-component-id="cmp-ftp" data-group="edge" hidden>
+          <td class="name">FTP</td>
+          <td class="region">global</td>
+          <td class="status"></td>
+          <td class="latency"></td>
+          <td class="uptime"></td>
+        </tr>
+      </tbody>
+    </table>
+
+    <section id="incidents">
+      <h2>Active incidents</h2>
+      <ol class="incidents">
+        <li class="incident impact-major" data-incident-id="inc-2291">
+          <h3 class="title">CDN: elevated error rates in all regions</h3>
+          <span class="impact">major</span>
+          <span class="phase">Identified</span>
+          <time class="started" datetime="2026-10-03T07:42:00Z">Oct 3, 07:42 UTC</time>
+          <p class="update">We have identified a faulty configuration push to the edge nodes as the cause of the elevated 5xx rates and are rolling it back region by region. Customers may continue to see failed requests and stale content for up to thirty more minutes while caches are refilled. The next update follows at 09:30 UTC.</p>
+          <ul class="affected"><li>CDN</li></ul>
+        </li>
+        <li class="incident impact-minor" data-incident-id="inc-2290">
+          <h3 class="title">Slow sign-ins</h3>
+          <span class="impact">minor</span>
+          <span class="phase">Monitoring</span>
+          <time class="started" datetime="2026-10-03T06:15:00Z">Oct 3, 06:15 UTC</time>
+          <p class="update">A fix is deployed.</p>
+          <ul class="affected"><li>Authentication</li><li>API</li></ul>
+        </li>
+      </ol>
+      <h2>Scheduled maintenance</h2>
+      <ol class="maintenances">
+        <li class="incident impact-none" data-incident-id="mnt-0412">
+          <h3 class="title">DNS resolver upgrade</h3>
+          <span class="impact">none</span>
+          <span class="phase">In progress</span>
+          <time class="started" datetime="2026-10-03T08:00:00Z">Oct 3, 08:00 UTC</time>
+          <p class="update"></p>
+        </li>
+      </ol>
+    </section>
+  </main>
+  <footer><p>Powered by statusd 3.4 &middot; <a href="/history">History</a></p></footer>
+</body>
+</html>

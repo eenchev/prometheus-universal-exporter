@@ -16,7 +16,6 @@ import (
 	"unicode"
 
 	"github.com/eenchev/prometheus-universal-exporter/internal/model"
-	"golang.org/x/net/idna"
 )
 
 // A collector's request.allowed_targets and request.denied_targets say which
@@ -82,6 +81,12 @@ var metadataAddrs = []netip.Prefix{
 // than a registered domain: an underscore, and a hyphen first or last.
 var hostGlob = regexp.MustCompile(`^[a-z0-9*?_-]([a-z0-9*?_.-]*[a-z0-9*?_-])?$`)
 
+// OutsideASCIIPattern matches what no entry of request.allowed_targets or
+// request.denied_targets holds, a character outside ASCII, for the
+// configuration's JSON Schema: an entry is written in ASCII, as a host is
+// (canonicalHost). What else an entry has to be is the exporter's to refuse.
+const OutsideASCIIPattern = `[^\x00-\x7F]`
+
 // compileTargetPolicy reads the two lists. With both empty the policy still
 // refuses the cloud metadata addresses.
 func compileTargetPolicy(allowed, denied []string) (*targetPolicy, error) {
@@ -96,6 +101,14 @@ func compileTargetPolicy(allowed, denied []string) (*targetPolicy, error) {
 		{"denied_targets", denied, &p.denyNames, &p.denyNets},
 	} {
 		for _, raw := range list.items {
+			// An entry is held to what a host is (canonicalHost): one with
+			// a character outside ASCII would match no host a request is
+			// made to, or, where lower case turns the character into a
+			// letter, as the Kelvin sign into k, a host other than the one
+			// written.
+			if r, found := outsideASCII(raw); found {
+				return nil, fmt.Errorf("request.%s entry %q has %#U, %s", list.key, raw, r, writtenInASCII)
+			}
 			entry := strings.ToLower(strings.TrimSuffix(strings.TrimSpace(raw), "."))
 			entry = strings.TrimSuffix(strings.TrimPrefix(entry, "["), "]")
 			switch {
@@ -341,6 +354,16 @@ type policyGuard struct {
 	// must keep to as the first URL did: an https-only collector does not
 	// follow a redirect to http:// and read the answer in plain text.
 	schemes []string
+	// trusted is the collector's request.redirect_trusted_hosts, the hosts
+	// besides the first URL's own origin that a redirect may carry the
+	// request's headers, credentials and body to, and lastHop what was
+	// settled for the redirect followed last (redirecttrust.go).
+	trusted []string
+	lastHop redirectHop
+	// clientCertificate says the collector has a TLS client certificate,
+	// which every TLS connection of the request presents: a redirect is
+	// not followed over https to a host that is not trusted.
+	clientCertificate bool
 }
 
 type policyGuardKey struct{}
@@ -348,7 +371,7 @@ type policyGuardKey struct{}
 // withTargetPolicy checks the host of u against the collector's policy and
 // returns a context whose connections and redirects are checked too.
 func withTargetPolicy(ctx context.Context, c *model.Collector, u *url.URL, proxy func(*http.Request) (*url.URL, error)) (context.Context, error) {
-	guard := &policyGuard{policy: policyOf(c), proxy: proxy, hosts: map[string]bool{}, schemes: c.Request.AllowedSchemes}
+	guard := &policyGuard{policy: policyOf(c), proxy: proxy, hosts: map[string]bool{}, schemes: c.Request.AllowedSchemes, trusted: c.Request.RedirectTrustedHosts, clientCertificate: c.Request.TLS.CertFile != ""}
 	if err := guard.check(ctx, u); err != nil {
 		return ctx, err
 	}
@@ -380,46 +403,67 @@ func (g *policyGuard) check(ctx context.Context, u *url.URL) error {
 	return nil
 }
 
-// canonicalHost is host as the transport dials it and the policy matches
-// it: lower case, without a trailing dot, and in ASCII. A host is an IP
+// canonicalHost is host as the policy matches it, which is the name the
+// request is made to: lower case and without a trailing dot. A host is an IP
 // address or a name, and a name is made only of what a name in the DNS, a
 // hosts file or a container network can hold: letters, digits, '.', '-' and
 // '_'. Within those it is dialed as it is written — an underscore, as
 // my_service, a Docker Compose or Kubernetes name, or hyphens where a
 // registered domain may not have them — so it is checked as written and not
-// held to the rules of an internationalised name. A host with other
-// characters is converted, as Go's HTTP transport converts it before it
-// dials (so "１２７.０.０.１" is 127.0.0.1 and "bücher.example"
-// xn--bcher-kva.example); one that does not convert is refused, since what
-// it would reach cannot be told.
+// held to the rules of an internationalised name.
 //
-// Any other character refuses the host. No resolver here would find such a
-// name, but behind a proxy the name is the proxy's to resolve, and a proxy
-// may read it differently from the policy: a '%' above all, which is how a
-// URL's host carries one ("local%2568ost" parses to the host "local%68ost"),
-// since a proxy that decodes it once more asks for localhost, a name the
-// policy never saw. The same goes for 169.254.169.254 with one digit
-// written as an escape.
+// A host with a character outside ASCII is refused, whatever it would
+// convert to, since Go's HTTP client does not send it under one name. It
+// dials, and names in the TLS handshake and in a proxy's CONNECT, the mapped
+// form of the name (idna.Lookup: "ｏrigin.test", with a fullwidth o, is
+// origin.test, and "origin。test" too), and writes the Host header, an
+// HTTP/2 :authority and the request line a proxy reads in the unmapped one
+// (idna.ToASCII: xn--rigin-qr33a.test, xn--origintest-sh3i). A verdict on
+// either form would be a verdict on a name that part of the request is not
+// made to: an allowed name would cover a request a proxy fetches from, or a
+// shared server routes to, a name the lists never allowed, and a denied one
+// would be reached under a spelling the lists do not catch. Over HTTP/2 the
+// two forms do not even meet: the connection is kept under one and looked
+// for under the other, so nothing is sent and the target is dialed again
+// and again. So an internationalised name is written in its ASCII form, the
+// one starting with xn--, which Go sends everywhere as it is written
+// (wirename_test.go shows all of it).
+//
+// Any other character refuses the host too. No resolver here would find
+// such a name, but behind a proxy the name is the proxy's to resolve, and a
+// proxy may read it differently from the policy: a '%' above all, which is
+// how a URL's host carries one ("local%2568ost" parses to the host
+// "local%68ost"), since a proxy that decodes it once more asks for
+// localhost, a name the policy never saw. The same goes for 169.254.169.254
+// with one digit written as an escape.
 func canonicalHost(host string) (string, error) {
 	host = strings.TrimSuffix(strings.TrimPrefix(host, "["), "]")
+	if r, found := outsideASCII(host); found {
+		return "", &TargetRefusedError{Host: host, Reason: fmt.Sprintf("it has %#U, %s", r, writtenInASCII)}
+	}
 	if _, err := netip.ParseAddr(host); err == nil {
 		return strings.ToLower(host), nil
 	}
-	name := host
-	if strings.IndexFunc(host, func(r rune) bool { return r > unicode.MaxASCII }) >= 0 {
-		ascii, err := idna.Lookup.ToASCII(host)
-		if err != nil {
-			return "", &TargetRefusedError{Host: host, Reason: "it is not a host name or address the policy can check: " + err.Error()}
-		}
-		name = ascii
+	if i := strings.IndexFunc(host, notHostCharacter); i >= 0 {
+		return "", &TargetRefusedError{Host: host, Reason: fmt.Sprintf("it has %q, a character that no host name or address has: a host is an IP address, or a name of letters, digits, '.', '-' and '_'", host[i:i+1])}
 	}
-	// The converted form is held to the rule as well, whatever the
-	// conversion let through.
-	if i := strings.IndexFunc(name, notHostCharacter); i >= 0 {
-		return "", &TargetRefusedError{Host: host, Reason: fmt.Sprintf("it has %q, a character that no host name or address has: a host is an IP address, or a name of letters, digits, '.', '-' and '_'", name[i:i+1])}
-	}
-	return strings.ToLower(strings.TrimSuffix(name, ".")), nil
+	return strings.ToLower(strings.TrimSuffix(host, ".")), nil
 }
+
+// outsideASCII finds the first character of s that is not ASCII; a byte that
+// is no UTF-8 is one, and is returned as the replacement character.
+func outsideASCII(s string) (rune, bool) {
+	for _, r := range s {
+		if r > unicode.MaxASCII {
+			return r, true
+		}
+	}
+	return 0, false
+}
+
+// writtenInASCII is what the refusal of a host, or of an entry of a list of
+// hosts, with a character outside ASCII says after naming the character.
+const writtenInASCII = "a character outside ASCII: write an internationalised name in its ASCII form, as xn--bcher-kva.example for bücher.example"
 
 // notHostCharacter says whether r is something no host name is written
 // with (canonicalHost).

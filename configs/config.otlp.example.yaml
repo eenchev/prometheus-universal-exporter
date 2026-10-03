@@ -76,8 +76,15 @@ collectors:
       #   insecure_skip_verify: false
       # Follow HTTP redirect statuses on the target request. Defaults to
       # false, so a redirect is returned as-is and fails the probe rather
-      # than sending the scrape to another host.
+      # than sending the scrape to another host. A followed redirect that
+      # leaves the origin the request was made to (scheme, host and port) is
+      # sent only Accept, Accept-Language and User-Agent, and never the
+      # request body, and is refused over https when tls.cert_file is set,
+      # unless its host is listed in redirect_trusted_hosts: host names,
+      # globs and single IP addresses, trusted on every port.
       # follow_redirects: false
+      # redirect_trusted_hosts:
+      #   - "*.cdn.example.com"
       # Allow the target request to negotiate HTTP/2. Negotiated through ALPN
       # over TLS, so it applies to HTTPS targets. Defaults to false.
       # enable_http2: false

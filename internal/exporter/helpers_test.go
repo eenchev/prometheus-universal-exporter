@@ -3,15 +3,9 @@ package exporter
 import (
 	"context"
 	"log/slog"
-	"net"
 	"net/http"
-	"net/http/httptest"
-	"os"
 	"os/exec"
-	"runtime"
-	"strings"
 	"sync"
-	"sync/atomic"
 	"testing"
 	"time"
 
@@ -22,40 +16,6 @@ import (
 	"github.com/eenchev/prometheus-universal-exporter/internal/testutil"
 	"github.com/eenchev/prometheus-universal-exporter/internal/transform"
 )
-
-// collector_files lists further files of collectors (config/collectorfiles.go). Each
-// holds a collectors list and nothing else, and a collector name is unique
-// across the configuration and every file.
-
-func pathCollector(path string) model.Collector {
-	c := testutil.Collector("tenants", "text")
-	c.Request.Path = path
-	return c
-}
-
-func scriptLimits() model.Limits { return model.Limits{ScriptTimeout: model.Duration(5 * time.Second)} }
-
-// Python scripts run in long-lived workers (transform/pythonworker.go). These tests pin
-// reuse, isolation, timeouts, crashes, output limits and the sandbox.
-
-// requirePython skips a test without python3, and gives it a worker pool of
-// its own (usePythonPool).
-func requirePython(t *testing.T) {
-	t.Helper()
-	if _, err := exec.LookPath("python3"); err != nil {
-		t.Skip("python3 is not available")
-	}
-	usePythonPool(t)
-}
-
-// usePythonPool runs the test against a fresh worker pool and restores the
-// previous one afterwards (transform.IsolatePythonWorkers). Every count a test reads
-// from the pool is then its own, so the tests pass under -count=N and
-// -shuffle=on. Tests do not run in parallel, so swapping the pool is safe.
-func usePythonPool(t *testing.T) {
-	t.Helper()
-	t.Cleanup(transform.IsolatePythonWorkers())
-}
 
 // fixtureType is a second request type registered only for these tests, so
 // the per-type rules can be exercised while http is the only real one. It
@@ -92,139 +52,6 @@ func otlpConfig(endpoint string) model.OTLPConfig {
 	}
 }
 
-func regexCollector(name string) model.Collector {
-	return model.Collector{
-		Name:      name,
-		Request:   model.RequestConfig{Type: fetch.RequestTypeHTTP},
-		Transform: model.TransformConfig{Type: "regex"},
-		Metrics:   []model.MetricRule{{Name: "v", Type: model.GaugeMetricType, Expression: `v=(\d+) (?P<who>\S+)`, Labels: []model.LabelRule{{Name: "who", Expression: "who"}}}},
-	}
-}
-
-// Requests made with the same TLS and HTTP/2 settings share one connection
-// pool (fetch/transport.go).
-
-// countingServer counts the connections made to it.
-//
-// It answers a request only once the client has reported it written
-// (awaitRequestsReported), so that whether the next request reuses the
-// connection depends on the exporter alone: on its keeping the pool, and
-// reading the answer to its end.
-func countingServer(t *testing.T, tlsServer bool) (*httptest.Server, *atomic.Int64) {
-	t.Helper()
-	var conns atomic.Int64
-	server := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		awaitRequestsReported(t)
-		w.Header().Set("Content-Type", "text/plain")
-		_, _ = w.Write([]byte("value=42\n"))
-	}))
-	server.Config.ConnState = func(_ net.Conn, state http.ConnState) {
-		if state == http.StateNew {
-			conns.Add(1)
-		}
-	}
-	if tlsServer {
-		server.StartTLS()
-	} else {
-		server.Start()
-	}
-	t.Cleanup(server.Close)
-	return server, &conns
-}
-
-// awaitRequestsReported waits until every HTTP/1 connection this process
-// has made as a client has reported the request it wrote.
-//
-// Go writes a request in a goroutine of the connection, which then reports
-// the write and waits for the next request. When the answer has been read
-// before that report, the connection waits 50ms for it and is otherwise
-// closed rather than reused (net/http's persistConn.wroteRequest). The bytes
-// are on the wire before the report is made, so a server in the same
-// process can answer in between, and on a machine busy enough to leave the
-// writing goroutine without a CPU for 50ms the next request then opens a
-// second connection, whatever the exporter does. A test that counts
-// connections must not answer in that gap.
-//
-// Nothing in net/http's API tells when the report has been made, but the
-// goroutine dump does: the writing goroutine, persistConn.writeLoop, is back
-// in its select. So this reads the dump until every such goroutine is, and
-// there is at least one, the connection the request came on; should a later
-// Go name them otherwise, it finds none and fails the test saying so rather
-// than letting the gap back in.
-func awaitRequestsReported(t *testing.T) {
-	const writeLoop = "net/http.(*persistConn).writeLoop("
-	var seen string
-	reported := func() bool {
-		stacks := make([]byte, 1<<16)
-		for {
-			n := runtime.Stack(stacks, true)
-			if n < len(stacks) {
-				stacks = stacks[:n]
-				break
-			}
-			stacks = make([]byte, 2*len(stacks))
-		}
-		loops := 0
-		for _, goroutine := range strings.Split(string(stacks), "\n\n") {
-			if !strings.Contains(goroutine, writeLoop) {
-				continue
-			}
-			loops++
-			// The first line is the goroutine's state: "goroutine 52 [select]:".
-			if state, _, _ := strings.Cut(goroutine, "\n"); !strings.Contains(state, "[select") {
-				seen = goroutine
-				return false
-			}
-		}
-		if loops == 0 {
-			seen = "no goroutine in " + writeLoop + ")"
-		}
-		return loops > 0
-	}
-	// The wait is a few microseconds; the bound is only for a write loop
-	// that never comes back, which is a failure of its own.
-	for deadline := time.Now().Add(30 * time.Second); !reported(); time.Sleep(50 * time.Microsecond) {
-		if time.Now().After(deadline) {
-			t.Errorf("the client never reported its request written; last seen:\n%s", seen)
-			return
-		}
-	}
-}
-
-const watchConfigTemplate = "collectors:\n  - name: watched\n    request:\n      type: http\n    transform:\n      type: regex\n" +
-	"    metrics:\n      - name: %s\n        expression: 'value=(\\d+)'\n"
-
-func writeWatchedConfig(t *testing.T, path, metric string) {
-	t.Helper()
-	document := strings.Replace(watchConfigTemplate, "%s", metric, 1)
-	if err := os.WriteFile(path, []byte(document), 0600); err != nil {
-		t.Fatal(err)
-	}
-}
-
-func watchedManager(t *testing.T) (*config.Manager, string) {
-	t.Helper()
-	path := t.TempDir() + "/config.yaml"
-	writeWatchedConfig(t, path, "first_value")
-	cfg, err := config.Load(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	manager := config.NewManager(cfg, path, slog.Default())
-	manager.SetPythonPath("python3")
-	return manager, path
-}
-
-// idleWorkers counts a collector's idle workers.
-func idleWorkers(collector string) int { return transform.PythonWorkers().Snapshot(collector).Idle }
-
-// installConfig puts an already validated cfg in force on server, as an
-// accepted reload would. The server reads its configuration from its manager
-// on every use, so a manager holding cfg stands in for one that reloaded it.
-func installConfig(server *Server, cfg *model.Config) {
-	server.manager = config.NewManager(cfg, "", server.logger)
-}
-
 // parseExposition reads body as the Prometheus text format, the way a
 // collector passing Prometheus text through reads a target.
 func parseExposition(body []byte) error {
@@ -255,4 +82,35 @@ func (s *Server) scrapeStaticTargets(ctx context.Context, budget time.Duration) 
 		}()
 	}
 	wg.Wait()
+}
+
+func pathServer(t *testing.T, collectors ...model.Collector) *Server {
+	t.Helper()
+	cfg := &model.Config{Collectors: collectors}
+	if err := config.Validate(cfg); err != nil {
+		t.Fatal(err)
+	}
+	return NewServer(config.NewManager(cfg, "", slog.Default()), "python3", slog.Default())
+}
+
+// Python scripts run in long-lived workers (transform/pythonworker.go). These tests pin
+// reuse, isolation, timeouts, crashes, output limits and the sandbox.
+
+// requirePython skips a test without python3, and gives it a worker pool of
+// its own (usePythonPool).
+func requirePython(t *testing.T) {
+	t.Helper()
+	if _, err := exec.LookPath("python3"); err != nil {
+		t.Skip("python3 is not available")
+	}
+	usePythonPool(t)
+}
+
+// usePythonPool runs the test against a fresh worker pool and restores the
+// previous one afterwards (transform.IsolatePythonWorkers). Every count a test reads
+// from the pool is then its own, so the tests pass under -count=N and
+// -shuffle=on. Tests do not run in parallel, so swapping the pool is safe.
+func usePythonPool(t *testing.T) {
+	t.Helper()
+	t.Cleanup(transform.IsolatePythonWorkers())
 }

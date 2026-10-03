@@ -55,6 +55,10 @@ type requestTracker struct {
 	// leaves the configuration.
 	static     map[requestKey]bool
 	capReached bool
+	// latestDropped is the latest creation time a request had that is no
+	// longer tracked (dropLocked): a request tracked from now on, which may be
+	// that one again, counts since a later time (adoptLocked).
+	latestDropped time.Time
 	// now is the clock expiry reads; tests replace it.
 	now func() time.Time
 }
@@ -69,8 +73,14 @@ func newRequestTracker() *requestTracker {
 func (t *requestTracker) statsFor(key requestKey) *serverStats {
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	return t.adoptLocked(key, &serverStats{})
+	return t.adoptLocked(key, newServerStats(t.now()))
 }
+
+// newStats returns statistics for a request that is not tracked yet, counting
+// from now: what its _created sample says once it is tracked with them
+// (adoptLocked). A request dropped and asked for again is given new ones, and
+// so a later time.
+func (t *requestTracker) newStats() *serverStats { return newServerStats(t.now()) }
 
 // existing returns the statistics of a request already tracked, marking it
 // used, or nil when the request is not tracked.
@@ -89,9 +99,21 @@ func (t *requestTracker) existing(key requestKey) *serverStats {
 // while it was not yet known whether the target policy would refuse it. When a
 // concurrent probe of the same request got there first, the two are merged.
 // Past the limit nothing is adopted, and the limit is reported as reached.
-func (t *requestTracker) adopt(key requestKey, staged *serverStats) {
+//
+// collector is the statistics of the request's collector the probe counted
+// in. Once a reload has removed that collector they are retired, and nothing
+// is adopted: the collector's requests were forgotten with it (reconcile.go),
+// and a probe that began before then would otherwise show a request of a
+// collector that is gone, and count in the requests of one brought back under
+// the name what it did not do under it. Read under the lock the forgetting
+// takes, after the statistics are retired, so a probe ending in between is
+// either forgotten or not adopted.
+func (t *requestTracker) adopt(key requestKey, staged, collector *serverStats) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
+	if collector != nil && collector.retired.Load() {
+		return
+	}
 	if kept := t.adoptLocked(key, staged); kept != nil && kept != staged {
 		staged.mu.Lock()
 		values := staged.statsValues
@@ -104,6 +126,29 @@ func (t *requestTracker) adopt(key requestKey, staged *serverStats) {
 
 // adoptLocked returns the statistics of key, tracking created for it when it
 // is not tracked yet, or nil past the limit.
+//
+// A request's creation time (selfcreated.go) is settled here, when the
+// request starts being tracked, and never changes afterwards: its _created
+// sample is the same at every scrape, and over OTLP its points keep their
+// start time, where one that moved would read as a series that started again.
+// It is the time the statistics it is tracked with were made at, which for a
+// probe's is when the probe began. What the series counts is what is added to
+// the tracked statistics, when it is added: a probe of a request not tracked
+// yet gathers its counts aside, and they are the series' from the moment the
+// probe is committed (adopt). So:
+//
+//   - The time is not later than anything the series has counted. The probe
+//     committed first brings a time that is before its own counts, and what
+//     another probe adds (absorb) it adds after the request was tracked,
+//     however early that probe began: its earlier time is not taken, which
+//     would move a creation time that has been shown.
+//   - A request dropped and tracked again has a later time than it had. The
+//     probe committed first after the drop may have begun before the dropped
+//     request was tracked, and have run all the while: its counts join the
+//     series now, and the series then counts since now, not since the probe
+//     began. Which requests were dropped is not kept, only the latest time
+//     any of them had (latestDropped): a probe that began after that began
+//     after its own request's time too, and keeps its own.
 func (t *requestTracker) adoptLocked(key requestKey, created *serverStats) *serverStats {
 	now := t.now()
 	if tracked := t.stats[key]; tracked != nil {
@@ -118,8 +163,26 @@ func (t *requestTracker) adoptLocked(key requestKey, created *serverStats) *serv
 		t.capReached = true
 		return nil
 	}
+	created.mu.Lock()
+	if !created.created.After(t.latestDropped) {
+		created.created = now
+	}
+	created.mu.Unlock()
 	t.stats[key] = &trackedRequest{stats: created, used: now}
 	return created
+}
+
+// dropLocked stops tracking a request, and remembers how late a dropped
+// request's creation time has been (adoptLocked).
+func (t *requestTracker) dropLocked(key requestKey) {
+	tracked := t.stats[key]
+	if tracked == nil {
+		return
+	}
+	if created := tracked.stats.snapshot().created; created.After(t.latestDropped) {
+		t.latestDropped = created
+	}
+	delete(t.stats, key)
 }
 
 // setStatic makes the configured static targets' requests exist, and drops the
@@ -131,13 +194,13 @@ func (t *requestTracker) setStatic(keys map[requestKey]bool) {
 	defer t.mu.Unlock()
 	for key := range t.static {
 		if !keys[key] {
-			delete(t.stats, key)
+			t.dropLocked(key)
 		}
 	}
 	t.static = keys
 	for key := range keys {
 		if t.stats[key] == nil {
-			t.adoptLocked(key, &serverStats{})
+			t.adoptLocked(key, newServerStats(t.now()))
 		}
 	}
 	t.settleCapLocked()
@@ -154,7 +217,7 @@ func (t *requestTracker) expire() {
 func (t *requestTracker) expireLocked(now time.Time) {
 	for key, tracked := range t.stats {
 		if !t.static[key] && now.Sub(tracked.used) > VerboseRequestIdleExpiry {
-			delete(t.stats, key)
+			t.dropLocked(key)
 		}
 	}
 	t.settleCapLocked()
@@ -207,6 +270,9 @@ type requestSample struct {
 func (t *requestTracker) Reset() {
 	t.mu.Lock()
 	defer t.mu.Unlock()
+	for key := range t.stats {
+		t.dropLocked(key)
+	}
 	t.stats = map[requestKey]*trackedRequest{}
 	t.static = map[requestKey]bool{}
 	t.capReached = false
@@ -266,7 +332,7 @@ func (s *Server) probeRecorderFor(collector *serverStats, name, labelURL, method
 	if existing := s.requests.existing(key); existing != nil {
 		return statsRecorder{collector: collector, request: existing}
 	}
-	return statsRecorder{collector: collector, request: &serverStats{}, pending: &pendingRequest{tracker: s.requests, key: key}}
+	return statsRecorder{collector: collector, request: s.requests.newStats(), pending: &pendingRequest{tracker: s.requests, key: key}}
 }
 
 // forTrip is the recorder of the trip r's probe starts for every identical
@@ -277,24 +343,27 @@ func (s *Server) probeRecorderFor(collector *serverStats, name, labelURL, method
 // whichever probe started the trip and whichever left before the answer.
 // Gathered with the starter's own, the trip's counts would be forgotten with a
 // starter that left, while the trip went on to answer the probes that joined
-// it.
+// it. The trip is committed before the probe that started it, and its counts
+// are of that probe's time: a request it starts being tracked counts since
+// the probe began.
 func (r statsRecorder) forTrip() statsRecorder {
 	if r.pending == nil {
 		return r
 	}
-	return statsRecorder{collector: r.collector, request: &serverStats{}, pending: &pendingRequest{tracker: r.pending.tracker, key: r.pending.key}}
+	return statsRecorder{collector: r.collector, request: newServerStats(r.request.snapshot().created), pending: &pendingRequest{tracker: r.pending.tracker, key: r.pending.key}}
 }
 
 // commit ends a probe, or a shared trip: a new request whose target was not
 // refused starts being tracked with what was recorded; a refused one is
 // forgotten, and so is one whose probe or trip was abandoned, which its
-// caller passes as refused. Updates made after commit are not guaranteed to
-// reach the request.
+// caller passes as refused, and one whose collector a reload removed
+// meanwhile (adopt). Updates made after commit are not guaranteed to reach
+// the request.
 func (r statsRecorder) commit(refused bool) {
 	if r.pending == nil || refused {
 		return
 	}
-	r.pending.tracker.adopt(r.pending.key, r.request)
+	r.pending.tracker.adopt(r.pending.key, r.request, r.collector)
 }
 
 // update applies the same change to both sets of statistics.
@@ -326,7 +395,9 @@ func (r statsRecorder) scraped(at time.Time) {
 // that reached the target, replace these. The duration is a probe's: a trip
 // gathered apart from the probes sharing it (forTrip) has none to give. It is
 // needed when two probes of a request not tracked yet ran at once, and when a
-// probe joins the trip that answered it (requestTracker.adopt).
+// probe joins the trip that answered it (requestTracker.adopt). The creation
+// time stays these counters' own, whichever of the two began earlier: what is
+// absorbed is counted from now (adoptLocked).
 func (v *statsValues) absorb(o statsValues) {
 	for _, pair := range [][2]*uint64{
 		{&v.probes, &o.probes}, {&v.success, &o.success}, {&v.decodeOK, &o.decodeOK},
@@ -374,19 +445,6 @@ func (s *Server) seedStaticRequests() {
 		keys[requestKey{Collector: c.Name, URL: label, Method: fetch.RequestMethodFor(c, overrides)}] = true
 	}
 	s.requests.setStatic(keys)
-}
-
-// verboseRequestSeriesNames are the self-metric families the verbose mode
-// republishes per request: the per-collector families that have a per-request
-// value, which leaves out http_exporter_cache_entries.
-func verboseRequestSeriesNames() []string {
-	var names []string
-	for _, d := range selfMetricDescriptors {
-		if d.Value != nil {
-			names = append(names, d.Name)
-		}
-	}
-	return names
 }
 
 // requestLabels builds the label set of one tracked request. The method label

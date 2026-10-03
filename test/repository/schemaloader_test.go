@@ -5,6 +5,7 @@ package repository
 import (
 	"fmt"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 	"unicode/utf8"
@@ -157,12 +158,190 @@ func TestSchemaAndExporterAgreeOnTheOTLPInterval(t *testing.T) {
 	for written, accepted := range map[string]bool{"1s": true, "30s": true, "1m": true, "1h30m": true, "1.5s": true, "soon": false, "5": false, "1d": false, "[1s]": false} {
 		agree(t, schema, "otlp.interval: "+written, otlp(true, written), accepted)
 	}
-	for _, written := range []string{"500ms", "999ms", "1ns", "-1s"} {
+	for _, written := range []string{"500ms", "999ms", "1ns"} {
 		loadersAlone(t, schema, "otlp.interval: "+written, otlp(true, written), "otlp.interval "+written+" is under the least, 1s")
 		agree(t, schema, "otlp.interval: "+written+", switched off", otlp(false, written), true)
 	}
+	// A negative interval is refused by both, and kept by both in a block
+	// that is switched off.
+	agree(t, schema, "otlp.interval: -1s", otlp(true, "-1s"), false)
+	agree(t, schema, "otlp.interval: -1s, switched off", otlp(false, "-1s"), true)
 	if description, _ := schema["properties"].(map[string]any)["otlp"].(map[string]any)["properties"].(map[string]any)["interval"].(map[string]any)["description"].(string); !strings.Contains(description, "At least 1s, which the exporter checks when the configuration loads") {
 		t.Errorf("the description of otlp.interval does not say who checks its least: %q", description)
+	}
+}
+
+// durationKey is a duration key of one of the three files that have a
+// schema: check gives, for a duration as written, what that file's schema
+// finds wrong with the document setting the key to it, and the error of the
+// exporter loading the document.
+type durationKey struct {
+	name  string
+	check func(t *testing.T, written string) ([]string, error)
+}
+
+// schemaProblems are the problems a schema finds in a document.
+func schemaProblems(t *testing.T, schema map[string]any, document string) []string {
+	t.Helper()
+	var doc any
+	if err := yaml.Unmarshal([]byte(document), &doc); err != nil {
+		t.Fatalf("not YAML: %v\n%s", err, document)
+	}
+	value := normalizeYAML(doc)
+	return append(validateAgainstSchema(schema, value), strictProblems(schema, value, "")...)
+}
+
+// lastWords is an error without the path of the file it is about, which
+// differs from one temporary directory to the next.
+func lastWords(err error) string {
+	text := err.Error()
+	return text[strings.LastIndex(text, ".yaml")+1:]
+}
+
+// A duration is refused by a schema exactly when the exporter refuses it for
+// how it is written: no key takes a negative duration, and the schemas took
+// any sign, so an editor showed timeout: -5s as valid in a file the exporter
+// then refused. Each duration below is put, in each of the three files, in
+// a key of each kind — one that takes zero, one whose zero is its default
+// and whose least is 1s, and the target file's interval, which is required —
+// through that file's committed schema and its loader. A + is taken by both
+// before any duration and a - before a zero only; how long a duration must
+// be stays the exporter's to check, a duration being text to a schema. A
+// block that is switched off holds any duration, to both.
+func TestSchemaAndExporterAgreeOnDurations(t *testing.T) {
+	configSchema, collectorFileSchema, targetsSchema := loadSchema(t), loadSchemaFile(t, collectorFileSchemaFile), loadSchemaFile(t, staticTargetsSchemaFile)
+	inConfig := func(document func(written string) string) func(*testing.T, string) ([]string, error) {
+		return func(t *testing.T, written string) ([]string, error) {
+			t.Helper()
+			return verdicts(t, configSchema, document(written))
+		}
+	}
+	// A collector file is loaded as the configuration listing it is.
+	inCollectorFile := func(t *testing.T, written string) ([]string, error) {
+		t.Helper()
+		document := strings.Replace(testutil.CollectorsDocument("demo"), "      path: /status\n", "      path: /status\n      retry:\n        backoff: "+written+"\n", 1)
+		dir := t.TempDir()
+		testutil.WriteIn(t, dir, "collectors.yaml", document)
+		_, err := config.Load(testutil.WriteIn(t, dir, "config.yaml", "collector_files: [collectors.yaml]\n"))
+		return schemaProblems(t, collectorFileSchema, document), err
+	}
+	cfg, err := config.Load(testutil.WriteFile(t, "config.yaml", testutil.MinimalConfig))
+	if err != nil {
+		t.Fatal(err)
+	}
+	inTargets := func(document func(written string) string) func(*testing.T, string) ([]string, error) {
+		return func(t *testing.T, written string) ([]string, error) {
+			t.Helper()
+			file, err := config.LoadStaticTargets(testutil.WriteFile(t, "targets.yaml", document(written)))
+			if err == nil {
+				err = config.ValidateStaticTargets(file)
+			}
+			if err == nil {
+				err = config.ValidateStaticTargetsAgainst(file, cfg)
+			}
+			return schemaProblems(t, targetsSchema, document(written)), err
+		}
+	}
+	otlp := func(key string, enabled bool) func(string) string {
+		return func(written string) string {
+			return fmt.Sprintf("otlp:\n  enabled: %v\n  endpoint: http://collector.invalid:4318/v1/metrics\n  %s: %s\n", enabled, key, written) + testutil.MinimalConfig
+		}
+	}
+	target := func(setting string) func(string) string {
+		return func(written string) string {
+			return "interval: 1m\ntargets:\n  - name: a\n    collector: demo\n    target: http://a.example\n" + setting + written + "\n"
+		}
+	}
+	takesZero := []durationKey{
+		{"the configuration's collectors[].cache.ttl", inConfig(func(written string) string {
+			return strings.Replace(testutil.MinimalConfig, "    request:\n", "    cache:\n      ttl: "+written+"\n    request:\n", 1)
+		})},
+		{"the configuration's otlp.timeout", inConfig(otlp("timeout", true))},
+		{"a collector file's collectors[].request.retry.backoff", inCollectorFile},
+		{"the target file's targets[].request.retry.backoff", inTargets(target("    request:\n      retry:\n        backoff: "))},
+	}
+	zeroIsTheDefault := []durationKey{
+		{"the configuration's otlp.interval", inConfig(otlp("interval", true))},
+		{"the target file's targets[].interval", inTargets(target("    interval: "))},
+	}
+	required := []durationKey{
+		{"the target file's interval", inTargets(func(written string) string {
+			return "interval: " + written + "\ntargets:\n  - name: a\n    collector: demo\n    target: http://a.example\n"
+		})},
+	}
+	switchedOff := []durationKey{
+		{"otlp.timeout, switched off", inConfig(otlp("timeout", false))},
+		{"otlp.interval, switched off", inConfig(otlp("interval", false))},
+	}
+	every := slices.Concat(takesZero, zeroIsTheDefault, required)
+
+	// expect fails unless every key gets the verdicts: accepted by both,
+	// refused by both, or, with a message, past the schema and refused by
+	// the exporter with it.
+	expect := func(keys []durationKey, durations []string, accepted bool, message string) {
+		t.Helper()
+		for _, key := range keys {
+			for _, written := range durations {
+				problems, err := key.check(t, written)
+				switch {
+				case message != "":
+					if len(problems) != 0 || err == nil || !strings.Contains(err.Error(), message) {
+						t.Errorf("%s: %s: want it past the schema and refused by the exporter with %q; the schema says %v, the exporter %v", key.name, written, message, problems, err)
+					}
+				case (len(problems) == 0) != accepted || (err == nil) != accepted:
+					t.Errorf("%s: %s: want accepted %v by both; the schema says %v, the exporter %v", key.name, written, accepted, problems, err)
+				}
+			}
+		}
+	}
+	aSecondOrMore := []string{"1s", "5s", "+5s", "'+1m'", "1h30m", "1.5h", "5.s", "1m0.5s", "+1h0m0s"}
+	zero := []string{"0s", "'0'", "+0s", "-0s", "'+0'", "'-0'", "0h0m", "-0h0m0s", "-0.0s", "-.0s", "-0.m"}
+	underASecond := []string{".5s", "+.5s", "500ms", "0.999s", "1ns", "1us", "1µs", "1μs", "0h0m0.1s"}
+	negative := []string{"-5s", "'-5s'", "-1ns", "-1h30m", "-0h1m", "-.5s", "-1.5h", "-0m0.001s"}
+	notADuration := []string{"5", "'5'", "'-5'", "''", "s", ".s", "+s", "-s", "'-'", "1d", "5 s", "' 5s'", "'5s '", "--5s", "+-5s", "1s1", "5S", "soon", "0.0", "00", "true", "[5s]", "{s: 5}"}
+	// Written negative, and so small that Go rounds them to zero.
+	negativeUnderANanosecond := []string{"-0.4ns", "-.5ns", "-0.0000000001s", "-0s0s0s0.1ns"}
+	// Longer than a duration can be, 2^63 - 1 nanoseconds.
+	tooLong := []string{"2562048h", "9223372036854775808ns", strings.Repeat("9", 30) + "h"}
+
+	expect(every, aSecondOrMore, true, "")
+	expect(every, negative, false, "")
+	// However small, what is written negative is negative: the exporter
+	// read these as the zero they round to, and took them where the schema
+	// did not. It now refuses each in the words it has for -1ns there.
+	expect(every, negativeUnderANanosecond, false, "")
+	for _, key := range every {
+		_, asNegative := key.check(t, "-1ns")
+		for _, written := range negativeUnderANanosecond {
+			if _, err := key.check(t, written); err == nil || asNegative == nil || lastWords(err) != lastWords(asNegative) {
+				t.Errorf("%s: %s is refused with %v, and -1ns with %v", key.name, written, err, asNegative)
+			}
+		}
+	}
+	expect(every, notADuration, false, "")
+	expect(slices.Concat(takesZero, zeroIsTheDefault), zero, true, "")
+	expect(takesZero, underASecond, true, "")
+	// How long a duration must be is the exporter's alone to say.
+	expect(zeroIsTheDefault, underASecond, false, "is under the least, 1s")
+	expect(required, underASecond, false, "is under the least, 1s")
+	expect(required, zero, false, "interval is required")
+	// Switched off, a block is kept unchecked: whatever is a duration.
+	expect(switchedOff, slices.Concat(aSecondOrMore, zero, underASecond, negative, negativeUnderANanosecond), true, "")
+	expect(switchedOff, notADuration, false, "")
+	// The one disagreement on how a duration is written, which is documented
+	// (docs/CONFIGURATION.md, Editor support): a duration too long to be
+	// held is well written, so no pattern can refuse it, and is no duration
+	// to the exporter. The longest one is taken by both.
+	expect(slices.Concat(every, switchedOff), tooLong, false, "is not a duration")
+	expect(switchedOff, []string{"2562047h47m16.854775807s"}, true, "")
+
+	// YAML reads an unquoted 0 as a number, which no schema takes for a
+	// duration; the exporter reads it as the duration it spells. 0s is how
+	// a duration of zero is written.
+	for _, key := range takesZero {
+		if problems, err := key.check(t, "0"); len(problems) == 0 || err != nil {
+			t.Errorf("%s: 0, unquoted: the schema says %v, the exporter %v", key.name, problems, err)
+		}
 	}
 }
 

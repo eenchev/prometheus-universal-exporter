@@ -1,0 +1,94 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>queue-worker · overview</title>
+  <link rel="stylesheet" href="/static/app.css">
+</head>
+<body>
+  <header class="top">
+    <h1>queue-worker <small class="env">production</small></h1>
+    <nav><ul class="nav"><li><a href="/">Overview</a></li><li><a href="/jobs">Jobs</a></li><li class="active"><a href="/queues">Queues</a></li></ul></nav>
+  </header>
+
+  <section id="build">
+    <h2>Build</h2>
+    <dl class="kv">
+      <dt>Version</dt>
+      <dd>4.18.2</dd>
+      <dt>Revision</dt>
+      <dd><code>9f3c1e7</code></dd>
+      <dt>Uptime (s)</dt>
+      <dd>1053067</dd>
+      <dt>Workers</dt>
+      <dd>16</dd>
+      <dt>Open files</dt>
+      <dd>212</dd>
+      <dd class="note">of 65536 allowed</dd>
+      <dt>Last error</dt>
+      <dd></dd>
+    </dl>
+  </section>
+
+  <section id="limits">
+    <h2>Limits</h2>
+    <dl class="kv grouped">
+      <div class="pair"><dt>max_jobs</dt><dd>500</dd></div>
+      <div class="pair"><dt>max_retries</dt><dd>5</dd></div>
+      <div class="pair"><dt>timeout_seconds</dt><dd>30</dd></div>
+      <div class="pair disabled"><dt>rate_limit</dt><dd>off</dd></div>
+    </dl>
+  </section>
+
+  <section id="queues">
+    <h2>Queues</h2>
+    <ul class="stats">
+      <li data-queue="default"><span class="k">default</span><span class="v">128</span></li>
+      <li data-queue="mailers"><span class="k">mailers</span><span class="v">7</span></li>
+      <li data-queue="low" class="paused"><span class="k">low</span><span class="v">2043</span><span class="badge">paused</span></li>
+      <li data-queue="dead" class="dead"><span class="k">dead</span><span class="v">0</span></li>
+      <li class="sep" role="separator"></li>
+      <li data-queue="scheduled"><span class="k">scheduled</span> <em>(next in 12s)</em> <span class="v">31</span></li>
+    </ul>
+    <ol class="top-jobs">
+      <li>ReportJob: 4012</li>
+      <li>ThumbnailJob: 2977</li>
+      <li>MailJob: 811</li>
+    </ol>
+  </section>
+
+  <section id="cards">
+    <h2>Dashboard</h2>
+    <div class="grid">
+      <div class="card" data-metric="processed" data-unit="jobs">
+        <div class="card-title">Processed</div>
+        <div class="card-value">1284551</div>
+        <div class="card-trend up">+2.1</div>
+      </div>
+      <div class="card" data-metric="failed" data-unit="jobs">
+        <div class="card-title">Failed</div>
+        <div class="card-value">412</div>
+        <div class="card-trend down">-0.4</div>
+      </div>
+      <div class="card warning" data-metric="latency" data-unit="ms">
+        <div class="card-title">Latency</div>
+        <div class="card-value">87.5</div>
+        <div class="card-trend up">+12.0</div>
+      </div>
+      <div class="card" data-metric="memory" data-unit="bytes">
+        <div class="card-title">Memory</div>
+        <div class="card-value">734003200</div>
+      </div>
+      <div class="card placeholder">
+        <div class="card-title">Coming soon</div>
+      </div>
+      <div class="card stale" data-metric="redis_ops" data-unit="ops" hidden>
+        <div class="card-title">Redis ops</div>
+        <div class="card-value">0</div>
+      </div>
+    </div>
+  </section>
+  <footer><p>Generated in <span id="render-ms">3.2</span> ms</p></footer>
+</body>
+</html>

@@ -33,6 +33,12 @@ const (
 // Metric is one series: a name, labels and a value. A histogram or a summary
 // carries its buckets or quantiles in Histogram or Summary instead of Value.
 // Timestamp, when set, is in milliseconds since the Unix epoch.
+//
+// Created is when a counter, a histogram or a summary began to count, in
+// milliseconds since the Unix epoch, and 0 when that is not known. Only the
+// exporter's own series have it (exporter/selfcreated.go): what is read from
+// a target does not say when it started, so every series of a probe has 0,
+// which nothing is written for.
 type Metric struct {
 	Name      string            `json:"name"`
 	Help      string            `json:"help,omitempty"`
@@ -42,6 +48,7 @@ type Metric struct {
 	Timestamp *int64            `json:"timestamp,omitempty"`
 	Histogram *Histogram        `json:"-"`
 	Summary   *Summary          `json:"-"`
+	Created   int64             `json:"-"`
 }
 
 // Histogram is the value of a histogram series. NoSum and NoCount say that

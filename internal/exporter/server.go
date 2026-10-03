@@ -72,7 +72,6 @@ type Server struct {
 	cache      *responseCache
 	requests   *requestTracker
 	flights    *probeFlights
-	durations  *scrapeDurations
 	// trips bounds each collector's trips to its targets (triplimit.go).
 	trips *tripLimiter
 	// lifecycle enables POST /-/reload (lifecycle.go).
@@ -99,8 +98,15 @@ type Server struct {
 // NewServer returns a server using the configuration m holds and running
 // Python scripts with the interpreter at p.
 func NewServer(m *config.Manager, p string, l *slog.Logger) *Server {
-	s := &Server{manager: m, pythonPath: p, logger: l, stats: map[string]*serverStats{}, otlpPending: map[string]*otlpBatch{}, cache: newResponseCache(), requests: newRequestTracker(), flights: newProbeFlights(), durations: newScrapeDurations(), trips: newTripLimiter(), otlp: &otlpStatus{}, otlpStarts: newOTLPStartTimes(), failures: newFailureLog(), fingerprints: &fingerprintMemo{}, timeoutOffset: DefaultTimeoutOffset, defaultProbeTimeout: DefaultProbeTimeout, answerWriteTimeout: AnswerWriteTimeout}
+	s := &Server{manager: m, pythonPath: p, logger: l, stats: map[string]*serverStats{}, otlpPending: map[string]*otlpBatch{}, cache: newResponseCache(), requests: newRequestTracker(), flights: newProbeFlights(), trips: newTripLimiter(), otlp: &otlpStatus{}, otlpStarts: newOTLPStartTimes(), failures: newFailureLog(), fingerprints: &fingerprintMemo{}, timeoutOffset: DefaultTimeoutOffset, defaultProbeTimeout: DefaultProbeTimeout, answerWriteTimeout: AnswerWriteTimeout}
 	s.seenConfig.Store(m.Get())
+	// The collectors the exporter starts with count from its start; one a
+	// reload adds, from when its statistics are made (selfcreated.go).
+	if cfg := m.Get(); cfg != nil {
+		for i := range cfg.Collectors {
+			s.stats[cfg.Collectors[i].Name] = newServerStats(exporterStart())
+		}
+	}
 	return s
 }
 
@@ -157,7 +163,7 @@ func (s *Server) statsFor(name string) *serverStats {
 	if x := s.stats[name]; x != nil {
 		return x
 	}
-	x := &serverStats{}
+	x := newServerStats(time.Now())
 	s.stats[name] = x
 	return x
 }

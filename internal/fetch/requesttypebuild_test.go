@@ -9,6 +9,8 @@ import (
 	"sort"
 	"strings"
 	"testing"
+
+	"github.com/eenchev/prometheus-universal-exporter/internal/model"
 )
 
 // Request types are chosen at build time. A default build carries every type;
@@ -133,24 +135,6 @@ func TestBuildTagsSelectTheRequestTypeFiles(t *testing.T) {
 	}
 }
 
-// Tests run in a default build, which carries every type.
-func TestADefaultBuildRegistersEveryRequestType(t *testing.T) {
-	known := append([]string(nil), knownRequestTypes...)
-	sort.Strings(known)
-	if got := BuiltRequestTypes(); !reflect.DeepEqual(got, known) {
-		t.Fatalf("built %v, want every known type %v", got, known)
-	}
-}
-
-func TestRegisteringARequestTypeTwicePanics(t *testing.T) {
-	defer func() {
-		if recover() == nil {
-			t.Fatal("a duplicate registration must panic")
-		}
-	}()
-	registerRequestType(&RequestType{Name: RequestTypeHTTP})
-}
-
 // A type's own tests are compiled only with the type, so every single-type
 // selection vets with its tests, as CI does.
 func TestRequestTypeTestFilesCarryTheirTypesConstraint(t *testing.T) {
@@ -162,6 +146,26 @@ func TestRequestTypeTestFilesCarryTheirTypesConstraint(t *testing.T) {
 		want := "//go:build !select_request_types || request_type_" + name
 		if got := buildConstraint(t, file); got != want {
 			t.Errorf("%s: constraint %q, want %q", file, got, want)
+		}
+	}
+}
+
+// The message for a missing request.type shows a type to write, and it is one
+// this build carries: http where the build has it, and otherwise the first of
+// its own, so following the message never ends at "this build of the exporter
+// does not include it".
+func TestAMissingRequestTypeIsToldATypeThisBuildHas(t *testing.T) {
+	want := BuiltRequestTypes()[0]
+	if RequestTypes[RequestTypeHTTP] != nil {
+		want = RequestTypeHTTP
+	}
+	err := ValidateRequest(&model.Collector{Name: "untyped"})
+	if err == nil || !strings.Contains(err.Error(), "(add `type: "+want+"` to its request block)") {
+		t.Fatalf("err=%v, want it to show type: %s", err, want)
+	}
+	for _, name := range knownRequestTypes {
+		if RequestTypes[name] == nil && strings.Contains(err.Error(), "type: "+name) {
+			t.Errorf("the message shows %s, which this build does not include: %v", name, err)
 		}
 	}
 }

@@ -53,6 +53,11 @@ func validateHTTPRequest(x *model.Collector) error {
 	if err := checkAllowedSchemes(x.Request.AllowedSchemes); err != nil {
 		return fmt.Errorf("collector %q %w", x.Name, err)
 	}
+	for _, entry := range x.Request.RedirectTrustedHosts {
+		if _, _, err := parseTrustedHost(entry); err != nil {
+			return fmt.Errorf("collector %q %w", x.Name, err)
+		}
+	}
 	if HasPathParams(x.Request.Path) {
 		placeholders, err := parsePathParams(x.Request.Path)
 		if err != nil {

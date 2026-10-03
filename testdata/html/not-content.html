@@ -1,0 +1,70 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>build-farm agents</title>
+<style>
+  /* .count::after { content: "999"; } */
+  .count { font-weight: bold; }
+  td.n:before { content: "7777"; }
+</style>
+<script>
+  var initial = {"agents": 4, "busy": 1};
+  document.write('<span class="count" id="written">123</span>');
+</script>
+<script type="application/json" id="state">{"agents": 4, "busy": 1, "queue": 17}</script>
+<script type="application/ld+json">{"@context": "https://schema.org", "@type": "WebPage", "name": "build-farm"}</script>
+</head>
+<body>
+<h1>Agents: <span class="count" id="agents">4</span></h1>
+
+<noscript><p class="warn">Enable JavaScript to see live numbers. Last known: <span class="count" id="fallback">3</span></p></noscript>
+
+<template id="row-template">
+  <tr class="agent"><td class="name">{{name}}</td><td class="n">0</td></tr>
+</template>
+
+<table id="agents-table">
+  <tr class="agent"><td class="name">linux-01</td><td class="n">12</td></tr>
+  <tr class="agent" hidden><td class="name">linux-02</td><td class="n">0</td></tr>
+  <tr class="agent" style="display:none"><td class="name">mac-01</td><td class="n">3</td></tr>
+  <tr class="agent" style="visibility: hidden;"><td class="name">mac-02</td><td class="n">4</td></tr>
+  <tr class="agent" aria-hidden="true"><td class="name">win-01</td><td class="n">5</td></tr>
+  <tr class="agent"><td class="name">win-02</td><td class="n">6<script>/* tracking */ var n = 6;</script></td></tr>
+  <tr class="agent"><td class="name">bsd-01</td><td class="n"><style>.n { color: red }</style>8</td></tr>
+  <tr class="agent"><td class="name">bsd-02<span style="display:none"> (retired)</span></td><td class="n">9<span hidden>000</span></td></tr>
+</table>
+
+<pre id="motd">
+queue depth:   17
+  oldest job:  342 s
+</pre>
+<pre id="depth">17
+</pre>
+
+<p id="cdata">Raw: <![CDATA[ 41 ]]> end</p>
+<p id="escaped">&lt;b&gt;15&lt;/b&gt;</p>
+<textarea id="notes" rows="2">
+22</textarea>
+<input type="hidden" id="csrf" name="csrf" value="31337">
+<select id="mode"><option value="1">auto</option><option value="2" selected>manual</option></select>
+<p>Progress: <progress id="progress" value="70" max="100">70</progress> <meter id="disk" value="0.6">60</meter></p>
+
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" id="gauge" viewBox="0 0 100 40" width="100" height="40">
+  <title>CPU gauge</title>
+  <a xlink:href="/agents/linux-01" xlink:title="linux-01"><text x="10" y="20" class="reading" data-agent="linux-01">63</text></a>
+  <a xlink:href="/agents/win-02" xlink:title="win-02"><text x="60" y="20" class="reading" data-agent="win-02">18</text></a>
+  <use xlink:href="#needle" x="50" y="5"/>
+  <linearGradient id="grad" gradientUnits="userSpaceOnUse"><stop offset="5"/></linearGradient>
+</svg>
+
+<math xmlns="http://www.w3.org/1998/Math/MathML" id="ratio" display="inline">
+  <mfrac><mn class="num">3</mn><mn class="den">4</mn></mfrac>
+  <mi xlink:href="#agents" definitionURL="http://example.net/def">x</mi>
+</math>
+
+<iframe id="frame" src="/embedded/status.html" title="embedded"><p>Your browser does not support frames: <span id="in-frame">55</span></p></iframe>
+<object data="/chart.svg"><span id="in-object">66</span></object>
+<!-- <span id="commented">77</span> -->
+</body>
+</html>

@@ -217,6 +217,10 @@ type Options struct {
 	// ReflectionDelay holds each reflection stream this long before it is
 	// served.
 	ReflectionDelay time.Duration
+	// ReflectionHold holds each reflection stream until it is closed, for a
+	// test that has to do something while the question is in flight and
+	// cannot say how long that takes on a busy machine.
+	ReflectionHold <-chan struct{}
 	// Addr is the host:port to listen on; empty takes a free port. A test
 	// restarting a server on the address a stopped one had sets it.
 	Addr string
@@ -285,6 +289,13 @@ func Start(t testing.TB, opts Options) *Server {
 			if opts.ReflectionDelay > 0 {
 				select {
 				case <-time.After(opts.ReflectionDelay):
+				case <-stream.Context().Done():
+					return stream.Context().Err()
+				}
+			}
+			if opts.ReflectionHold != nil {
+				select {
+				case <-opts.ReflectionHold:
 				case <-stream.Context().Done():
 					return stream.Context().Err()
 				}

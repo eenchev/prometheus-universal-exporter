@@ -1,0 +1,11 @@
+host,,used,free
+web01,rack-1,412,612
+web02,rack-1,380,644
+web03,rack-2,120,904
+db01,rack-3,1900,148
+db02,rack-3,1750,298
+cache01,rack-2,860,164
+batch01,,40,984
+batch02,rack-4,560,464
+ingress01,rack-1,300,724
+ingress02,rack-2,310,714

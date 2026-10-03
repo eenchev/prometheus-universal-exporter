@@ -609,6 +609,12 @@ type Manager struct {
 	expandEnv       bool
 	// expandStaticTargetsEnv is expandEnv for the static target file.
 	expandStaticTargetsEnv bool
+	// targetsRetryFiles and targetsRetryStamp are retryFiles and retryStamp
+	// for the static target file: the files that checking the file last
+	// read against the configuration opens (targetsNamedFiles), kept while
+	// that file is refused.
+	targetsRetryFiles []string
+	targetsRetryStamp string
 	// configWaits and targetsWaits say that file's last reload was refused
 	// only because the other file, as in force, disagrees with it, so a
 	// change to the other file reads it again (apply).
@@ -837,9 +843,10 @@ const (
 
 // reloadChanged reloads what the watch finds changed: the configuration, when
 // the file or one of its collector files changed, or, after a refused
-// reload, a file it names; and the static target file, when it changed; and
-// with either, the other when it waits for it. It is one tick of the watch:
-// whatever changed since the last, there is one reload.
+// reload, a file it names; and the static target file, when it changed, or,
+// after a refused reload, a file its check opens; and with either, the other
+// when it waits for it. It is one tick of the watch: whatever changed since
+// the last, there is one reload.
 func (m *Manager) reloadChanged() {
 	m.reloadMu.Lock()
 	defer m.reloadMu.Unlock()
@@ -868,13 +875,16 @@ func (m *Manager) configChanged() bool {
 }
 
 // targetsChanged reports whether the static target file changed since it was
-// last read.
+// last read, or, while the file last read is refused, a file its check
+// opened (targetsRetryFiles): as for the configuration, nothing is logged for
+// a tick that finds them as they were.
 func (m *Manager) targetsChanged() bool {
 	if m.targetPath == "" {
 		return false
 	}
 	st, err := os.Stat(m.targetPath)
-	return err == nil && (!st.ModTime().Equal(m.targetsLastMod) || st.Size() != m.targetsLastSize)
+	return err == nil && (!st.ModTime().Equal(m.targetsLastMod) || st.Size() != m.targetsLastSize ||
+		len(m.targetsRetryFiles) > 0 && filesStamp(m.targetsRetryFiles) != m.targetsRetryStamp)
 }
 
 // Reload reloads the configuration, and the static target file when there
@@ -917,6 +927,11 @@ func (m *Manager) apply(trigger string, doConfig, doTargets bool) error {
 	}
 	if targets != nil {
 		pairTargets = targets
+		// The files the checks below open for the file just read are
+		// stamped before they are read, as the configuration's are, and kept
+		// if it is refused: one of them back in place is then a change.
+		m.targetsRetryFiles = targetsNamedFiles(targets, pairConfig, m.Get())
+		m.targetsRetryStamp = filesStamp(m.targetsRetryFiles)
 	}
 	if agree(pairTargets, pairConfig) == nil {
 		m.install(trigger, cfg, targets)
@@ -1010,6 +1025,9 @@ func (m *Manager) loadTargets() (*model.StaticTargetFile, error) {
 	if st, err := os.Stat(m.targetPath); err == nil {
 		m.targetsLastMod, m.targetsLastSize = st.ModTime(), st.Size()
 	}
+	// Reading the file on its own opens no other: one refused here is read
+	// again when it changes, and for nothing else.
+	m.targetsRetryFiles, m.targetsRetryStamp = nil, ""
 	f, err := LoadStaticTargets(m.targetPath, m.staticTargetsLoadOptions()...)
 	if err == nil {
 		err = ValidateStaticTargets(f)
@@ -1067,6 +1085,7 @@ func (m *Manager) installedConfig(trigger string, c *model.Config) {
 // held.
 func (m *Manager) installedTargets(trigger string, f *model.StaticTargetFile) {
 	m.targetsWaits = false
+	m.targetsRetryFiles, m.targetsRetryStamp = nil, ""
 	m.Reloads.record(ReloadFileStaticTargets, true)
 	m.logger.Info("static targets reloaded", "trigger", trigger, "targets", len(f.Targets))
 }
@@ -1080,9 +1099,7 @@ func (m *Manager) rejectConfig(trigger string, err error, waits bool) error {
 	// error's line number means nothing without it. Problems that are all
 	// in one collector file are logged against that file.
 	attrs := []any{"trigger", trigger, "file", problemFile(err, m.path), "error", err}
-	if waits {
-		attrs = append(attrs, "retried_when", "the static target file changes")
-	}
+	attrs = m.retriedWhen(attrs, "the configuration", "a file it names", len(m.retryFiles) > 0, "the static target file", waits)
 	m.logger.Error("configuration reload rejected", attrs...)
 	m.Reloads.record(reloadFileConfig, false)
 	return fmt.Errorf("configuration %s: %w", m.path, err)
@@ -1092,12 +1109,34 @@ func (m *Manager) rejectConfig(trigger string, err error, waits bool) error {
 func (m *Manager) rejectTargets(trigger string, err error, waits bool) error {
 	m.targetsWaits = waits
 	attrs := []any{"trigger", trigger, "file", m.targetPath, "error", err}
-	if waits {
-		attrs = append(attrs, "retried_when", "the configuration changes")
-	}
+	attrs = m.retriedWhen(attrs, "the static target file", "a file its check opens", len(m.targetsRetryFiles) > 0, "the configuration", waits)
 	m.logger.Error("static target reload rejected", attrs...)
 	m.Reloads.record(ReloadFileStaticTargets, false)
 	return fmt.Errorf("static target file %s: %w", m.targetPath, err)
+}
+
+// retriedWhen adds to a refused file's line what the watch reads the file
+// again for, as retried_when: the file itself changing, which for the
+// configuration counts its collector files; a file stamped for it while it
+// is refused (retryFiles, targetsRetryFiles), when there is one; and the
+// other file, when this one waits for it. Each is named only when it holds,
+// so the line never reads as if one change alone helped, nor promises a
+// retry for a file nothing looks at. Without the watch nothing is read again
+// until a reload is asked for, and the line says nothing.
+func (m *Manager) retriedWhen(attrs []any, file, stamped string, hasStamped bool, other string, waits bool) []any {
+	if !m.WatchEnabled() {
+		return attrs
+	}
+	when := file
+	switch {
+	case hasStamped && waits:
+		when += ", " + stamped + " or " + other
+	case hasStamped:
+		when += " or " + stamped
+	case waits:
+		when += " or " + other
+	}
+	return append(attrs, "retried_when", when+" changes")
 }
 
 // checkPythonLibrary rejects a declared library the image does not install.

@@ -462,9 +462,13 @@ func parseMediaRange(entry string) (string, map[string]string) {
 // In both formats a histogram's buckets and a summary's quantiles are
 // written in ascending order (ascendingBuckets).
 //
-// No _created series is written: the exporter reads counters from targets
-// and does not know when they started, and OpenMetrics leaves _created out
-// when it is not known.
+// A _created sample follows a counter, a histogram or a summary series that
+// has a creation time (model.Metric.Created), in the family that keeps its
+// type; one written as unknown has no such sample. Only the exporter's own
+// series have that time, and only when the self-metrics are asked to write
+// it (selfcreated.go): the exporter reads counters from targets and does not
+// know when they started, and OpenMetrics leaves _created out when it is not
+// known.
 func appendOpenMetrics(b []byte, s *model.MetricSet) []byte {
 	var e expositionWriter
 	for _, f := range planOpenMetrics(s) {
@@ -501,6 +505,9 @@ func appendOpenMetrics(b []byte, s *model.MetricSet) []byte {
 				b = e.appendOpenMetricsSummary(b, f.name, m)
 			default:
 				b = e.appendOpenMetricsSample(b, f.sample, m.Labels, "", "", m.Value, m)
+			}
+			if m.Created != 0 && p.kind == omWhole {
+				b = e.appendOpenMetricsCreated(b, f, m)
 			}
 		}
 	}
@@ -844,6 +851,31 @@ func (e *expositionWriter) appendOpenMetricsQuantiles(b []byte, name string, m m
 		b = e.appendOpenMetricsSample(b, name, m.Labels, "quantile", openMetricsFloat(x.Quantile), x.Value, m)
 	}
 	return b
+}
+
+// appendOpenMetricsCreated writes the _created sample of a series with a
+// creation time, after the series' other samples: the family's name with
+// _created, which a counter, a histogram and a summary family claim
+// (planOpenMetrics), the series' labels, and the time in seconds. Families of
+// other types have no such sample, and nothing is written for them, nor for
+// a histogram with a label of its own named le or a summary with one named
+// quantile, which model.MetricSet.Validate refuses: the sample would carry
+// the label, and so be no part of the series its buckets or quantiles are.
+func (e *expositionWriter) appendOpenMetricsCreated(b []byte, f *omFamily, m model.Metric) []byte {
+	switch f.typ {
+	case "counter", "histogram", "summary":
+	default:
+		return b
+	}
+	if own := model.SeriesOwnLabel(m); own != "" && hasLabel(m, own) {
+		return b
+	}
+	b = append(b, f.name...)
+	b = append(b, "_created"...)
+	b = e.appendLabels(b, m.Labels, "", "")
+	b = append(b, ' ')
+	b = strconv.AppendFloat(b, float64(m.Created)/1000, 'f', -1, 64)
+	return appendOpenMetricsTimestamp(b, m)
 }
 
 // openMetricsFloat writes an le or quantile value as OpenMetrics' canonical

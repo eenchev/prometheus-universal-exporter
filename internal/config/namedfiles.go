@@ -60,6 +60,31 @@ func namedFiles(configs ...*model.Config) []string {
 	return files
 }
 
+// targetsNamedFiles are the files that checking a static target file
+// against the configurations opens, each once: the descriptor files of the
+// collectors named by its targets that set a request.message, which a grpc
+// collector's message type is read from to check the target's
+// (fetch.CheckTargetRequest). A reload of the target file can thus be
+// refused for a file that neither it nor the watch of a configuration in
+// force looks at, and is tried again when that file changes
+// (Manager.targetsRetryFiles). The files a target itself names, its
+// credential files, are read at a scrape, not at the load, and refuse no
+// target file.
+func targetsNamedFiles(f *model.StaticTargetFile, configs ...*model.Config) []string {
+	var checked model.Config
+	for _, c := range configs {
+		if c == nil {
+			continue
+		}
+		for i := range f.Targets {
+			if collector := model.CollectorByName(c, f.Targets[i].Collector); collector != nil && f.Targets[i].Request.Message != "" {
+				checked.Collectors = append(checked.Collectors, *collector)
+			}
+		}
+	}
+	return namedFiles(&checked)
+}
+
 // filesStamp describes files as they are on disk now: for each, the file its
 // path leads to, with its modification time, size and permissions, or that
 // there is none. The path is followed as reading it would be, so a file

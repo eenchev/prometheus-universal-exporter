@@ -55,18 +55,15 @@ collectors:
       # `target` and `collector`) and must leave its result in `data` again —
       # the exporter refuses to start if a pre-script never assigns it.
       #
-      # Two things are easier here than in jq: turning the rates object into a
-      # list, so each metric is a plain `.rates[]` walk rather than a
-      # `to_entries` dance, and parsing the date, which jq can only do through
-      # strptime/mktime. Everything below stays declarative as a result.
+      # One thing is easier here than in jq: turning the rates object into a
+      # list with each rate's inverse beside it, so each metric is a plain
+      # `.rates[]` walk rather than a `to_entries` dance. Everything below
+      # stays declarative as a result. The date needs no Python: it is passed
+      # on as the text it is, and the rule that reads it has a time_format.
       pre_script: |
-        from datetime import datetime, timezone
-
-        published = datetime.strptime(data["date"], "%Y-%m-%d").replace(tzinfo=timezone.utc)
-
         data = {
             "base": data["base"],
-            "observed_at": published.timestamp(),
+            "date": data["date"],
             # Sorted, so the value and its label are paired in a stable order
             # every scrape.
             "rates": [
@@ -109,8 +106,11 @@ collectors:
         description: Unix timestamp of the day the published rates refer to
         type: gauge
         error_mode: log
-        # Parsed by the pre-script, so this is a plain field read.
-        expression: .observed_at
+        # The date is text, "2026-09-18". time_format says how it is written,
+        # with the reference time Mon Jan 2 15:04:05 MST 2006 in its place,
+        # and the value is the Unix time of that day's start in UTC.
+        expression: .date
+        time_format: "2006-01-02"
         labels:
           - name: base
             expression: .base

@@ -5,6 +5,7 @@ import (
 	"slices"
 	"sort"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/eenchev/prometheus-universal-exporter/internal/config"
@@ -50,6 +51,8 @@ type statsValues struct {
 	// lastScrape is only kept per request; the per-collector series has no
 	// timestamp of its own.
 	lastScrape time.Time
+	// created is when these counters began to count (selfcreated.go).
+	created time.Time
 }
 
 type serverStats struct {
@@ -59,6 +62,14 @@ type serverStats struct {
 	// could not produce and carried on without, under error_mode log or
 	// ignore. Only the per-collector statistics keep it.
 	ruleFailures map[string]uint64
+	// durations is the collector's scrape-time histogram of verbose mode
+	// (verbosemetrics.go). Only the per-collector statistics keep it.
+	durations durationHistogram
+	// retired is set when a reload removed the collector these statistics
+	// were of (reconcile.go): what a trip that began before then still
+	// counts in them is no longer shown, and starts no request being tracked
+	// (requestTracker.adopt).
+	retired atomic.Bool
 }
 
 // ruleFailureCount returns how many series of metric have failed.
@@ -136,6 +147,20 @@ type selfMetricDescriptor struct {
 	Value func(statsValues) float64
 }
 
+// created is the creation time of the family's series of the counters v:
+// theirs for a counter, and none for a gauge.
+func (d selfMetricDescriptor) created(v statsValues) int64 {
+	if d.Type != model.CounterMetricType {
+		return 0
+	}
+	return createdMillis(v.created)
+}
+
+// newServerStats returns counters that began to count at created.
+func newServerStats(created time.Time) *serverStats {
+	return &serverStats{statsValues: statsValues{created: created}}
+}
+
 // exporterMetricHelp describes the exporter-wide families, which carry no
 // collector's counters.
 var exporterMetricHelp = map[string]string{
@@ -182,21 +207,28 @@ func selfMetricNames() []string {
 // set OTLP exports, by the same code as collector output, so the two cannot
 // disagree about a family's type or help, and every family is one contiguous
 // block with one HELP and one TYPE line.
+//
+// The series' creation times are written, as OpenMetrics' _created samples,
+// only with web.self_metrics.created_timestamps (selfcreated.go).
 func (s *Server) metricsHandler(w http.ResponseWriter, r *http.Request) {
 	set := s.selfMetricSet()
+	if !s.manager.Get().Web.SelfMetrics.CreatedTimestamps {
+		withoutCreated(&set)
+	}
 	writeMetricSet(w, r, &set)
 }
 
 // collectorStats returns the counters of every configured collector, sorted
-// by name. A collector a reload removed is not among them: its series stop,
-// and Prometheus marks them stale (reconcile.go).
-func (s *Server) collectorStats() (names []string, values map[string]statsValues) {
+// by name, and the statistics they were read from. A collector a reload
+// removed is not among them: its series stop, and Prometheus marks them stale
+// (reconcile.go).
+func (s *Server) collectorStats() (names []string, values map[string]statsValues, stats map[string]*serverStats) {
 	s.reconcile()
 	s.statsMu.Lock()
-	stats := make(map[string]*serverStats)
+	stats = make(map[string]*serverStats)
 	for _, c := range s.manager.Get().Collectors {
 		if s.stats[c.Name] == nil {
-			s.stats[c.Name] = &serverStats{}
+			s.stats[c.Name] = newServerStats(time.Now())
 		}
 		stats[c.Name] = s.stats[c.Name]
 		names = append(names, c.Name)
@@ -207,7 +239,7 @@ func (s *Server) collectorStats() (names []string, values map[string]statsValues
 	for _, name := range names {
 		values[name] = stats[name].snapshot()
 	}
-	return names, values
+	return names, values, stats
 }
 
 // selfMetricSet is every self-metric, grouped by family: each per-collector
@@ -215,7 +247,7 @@ func (s *Server) collectorStats() (names []string, values map[string]statsValues
 // per-request ones; then the exporter-wide families; then the verbose-only and
 // runtime families.
 func (s *Server) selfMetricSet() model.MetricSet {
-	names, values := s.collectorStats()
+	names, values, stats := s.collectorStats()
 	cacheEntries := s.cache.Stats(time.Now())
 	requests, requestFamilies := s.verboseRequests()
 	// The families that belong to a collector rather than to a request.
@@ -240,7 +272,7 @@ func (s *Server) selfMetricSet() model.MetricSet {
 			} else {
 				value = collectorOnly[d.Name](name)
 			}
-			out = append(out, model.Metric{Name: d.Name, Help: d.Help, Type: d.Type, Value: value, Labels: map[string]string{"collector": name}})
+			out = append(out, model.Metric{Name: d.Name, Help: d.Help, Type: d.Type, Value: value, Labels: map[string]string{"collector": name}, Created: d.created(values[name])})
 		}
 		if d.Value == nil {
 			continue
@@ -249,7 +281,7 @@ func (s *Server) selfMetricSet() model.MetricSet {
 			if typed && !slices.Contains(only, requestTypes[sample.Key.Collector]) {
 				continue
 			}
-			out = append(out, model.Metric{Name: d.Name, Help: d.Help, Type: d.Type, Value: d.Value(sample.Values), Labels: requestLabels(sample.Key)})
+			out = append(out, model.Metric{Name: d.Name, Help: d.Help, Type: d.Type, Value: d.Value(sample.Values), Labels: requestLabels(sample.Key), Created: d.created(sample.Values)})
 		}
 	}
 	out = append(out, buildInfoMetric())
@@ -259,11 +291,16 @@ func (s *Server) selfMetricSet() model.MetricSet {
 	out = append(out, s.ruleFailureMetrics()...)
 	out = append(out, s.staticTargetCountMetrics()...)
 	out = append(out, s.tripTotalMetrics()...)
-	out = append(out, s.manager.ReloadMetrics()...)
-	out = append(out, s.otlpStatusMetrics()...)
+	// The reload counters are the configuration manager's and the OTLP ones
+	// the server's, neither of which a reload replaces, and the go_ and
+	// process_ ones the runtime's and the kernel's: all count since the
+	// exporter started.
+	started := exporterStart()
+	out = append(out, countingSince(s.manager.ReloadMetrics(), started)...)
+	out = append(out, countingSince(s.otlpStatusMetrics(), started)...)
 	out = append(out, requestFamilies...)
-	out = append(out, s.verboseCollectorMetrics()...)
-	out = append(out, s.runtimeMetrics()...)
+	out = append(out, s.verboseCollectorMetrics(stats)...)
+	out = append(out, countingSince(s.runtimeMetrics(), started)...)
 	return model.MetricSet{Metrics: out}
 }
 
@@ -283,6 +320,9 @@ func (s *Server) ruleFailureMetrics() []model.Metric {
 	var out []model.Metric
 	for _, c := range s.manager.Get().Collectors {
 		stats := s.statsFor(c.Name)
+		// The failures are counted in the collector's statistics, and for as
+		// long as those are kept, whenever the rule was added.
+		created := createdMillis(stats.snapshot().created)
 		seen := map[string]bool{}
 		for _, rule := range c.Metrics {
 			if rule.Name == "" || seen[rule.Name] {
@@ -291,7 +331,7 @@ func (s *Server) ruleFailureMetrics() []model.Metric {
 			seen[rule.Name] = true
 			out = append(out, model.Metric{
 				Name: "http_exporter_rule_failures_total", Help: exporterMetricHelp["http_exporter_rule_failures_total"], Type: model.CounterMetricType,
-				Value: float64(stats.ruleFailureCount(rule.Name)), Labels: map[string]string{"collector": c.Name, "metric": rule.Name},
+				Value: float64(stats.ruleFailureCount(rule.Name)), Labels: map[string]string{"collector": c.Name, "metric": rule.Name}, Created: created,
 			})
 		}
 	}

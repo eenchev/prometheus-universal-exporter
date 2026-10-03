@@ -140,6 +140,18 @@ func supportedRequestTypes() string {
 	return strings.Join(BuiltRequestTypes(), ", ")
 }
 
+// suggestedRequestType is the type the message for a missing request.type
+// shows: http, the one most collectors want, or, in a build that left http
+// out, the first of the types it does carry, so that what the message says
+// to write is never a type this build goes on to refuse.
+func suggestedRequestType() string {
+	built := BuiltRequestTypes()
+	if len(built) == 0 || slices.Contains(built, RequestTypeHTTP) {
+		return RequestTypeHTTP
+	}
+	return built[0]
+}
+
 // ValidateRequest checks a collector's request block: the type is present and
 // known, every key set belongs to that type, and the type's own rules hold.
 // The keys are checked before the type validates, so a default the type fills
@@ -147,7 +159,7 @@ func supportedRequestTypes() string {
 func ValidateRequest(c *model.Collector) error {
 	c.Request.Type = strings.ToLower(strings.TrimSpace(c.Request.Type))
 	if c.Request.Type == "" {
-		return fmt.Errorf("collector %q has no request.type; it is required, and the supported types are: %s (add `type: http` to its request block)", c.Name, supportedRequestTypes())
+		return fmt.Errorf("collector %q has no request.type; it is required, and the supported types are: %s (add `type: %s` to its request block)", c.Name, supportedRequestTypes(), suggestedRequestType())
 	}
 	rt, ok := RequestTypes[c.Request.Type]
 	if !ok && slices.Contains(knownRequestTypes, c.Request.Type) {

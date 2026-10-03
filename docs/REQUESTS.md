@@ -33,6 +33,12 @@ collector does not allow stops the exporter instead of failing every scrape.
 entry — `htps`, `ftp`, `https://`, one with a space around it, an empty one —
 would refuse every target, and stops the exporter at startup instead.
 
+The target's host is an IP address or a name written in ASCII: letters,
+digits, `.`, `-` and `_`. An internationalised name is written in its `xn--`
+form, `xn--bcher-kva.example` for `bücher.example`; a target whose host has
+any other character is refused, `403`, before anything is sent
+([Restricting targets](#restricting-targets) says why).
+
 `request.path` is optional. Without it, and without a `path` probe parameter,
 the target is requested exactly as given: `http://legacy.example:8080` requests
 `/`, and `http://legacy.example:8080/api/status` requests `/api/status`. A target
@@ -377,12 +383,169 @@ the collector sees the 3xx status and — with the default `on_fetch_error: fail
 the probe fails. That is deliberate: a target that has moved is worth noticing
 rather than quietly scraping somewhere else. Set it to `true` for endpoints that
 legitimately redirect, such as an API whose documented host forwards to another.
-A followed redirect keeps to the collector's `allowed_schemes` as the first URL
-did: a collector that allows only `https` refuses a redirect to `http://` —
-`redirect to http://… refused: target scheme "http" is not allowed;
+
+Whether a redirect is followed at all is decided before anything is sent to
+where it leads, as for the first URL. It keeps to the collector's
+`allowed_schemes`: a collector that allows only `https` refuses a redirect to
+`http://` — `redirect to http://… refused: target scheme "http" is not allowed;
 request.allowed_schemes allows https` — rather than read the answer in plain
 text. It keeps to [`allowed_targets` and `denied_targets`](#restricting-targets)
-too.
+too, and a request is stopped at its tenth redirect, which fails the probe.
+
+### What a followed redirect carries
+
+A target that redirects chooses where the next request goes, so what that
+request carries depends on where it leads. The *origin* of a request is the
+scheme, host and port of its first URL — the target with the collector's
+`path` — a port left out being the scheme's own, 80 or 443. A redirect is
+*trusted* when it stays on that origin, or when its host is listed in
+`request.redirect_trusted_hosts`:
+
+| The redirect leads to | Headers and credentials | Request body |
+| --- | --- | --- |
+| the origin the request was made to | everything the first request carried | sent again after a `307` or `308` |
+| a host in `redirect_trusted_hosts`, on any port | everything the first request carried | sent again after a `307` or `308` |
+| anywhere else: another host, a subdomain, another port, another scheme | only `Accept`, `Accept-Language` and `User-Agent` | never: a redirect that would send it is refused |
+
+The commonest redirect of all, from `http://` to `https://` on one host,
+leads to another origin, and gets none of the collector's credentials unless
+the host is listed.
+
+The host is compared as the URL writes it, without case, since that is the
+name the request is routed by: nothing is tidied first. `api.example.com.`,
+with a final dot, is another host than `api.example.com` — a resolver looks a
+rooted name up apart, past the hosts file and the search domains — `127.0.0.1`
+is not `localhost`, and a port written `:080` is not port 80. A redirect to a
+host written with a character outside ASCII, `bücher.example` or a look-alike
+of the origin's own name, is not followed at all, as a target written so is
+[refused](#restricting-targets); an internationalised name is trusted, and
+reached, in its `xn--` form, so list it that way and have the target redirect
+to it that way.
+
+"Everything" is the collector's `headers`, the headers
+[forwarded](AUTHENTICATION.md#reaching-the-target) from the probe, the
+`Authorization` its credentials make and a `Cookie`. Anywhere else gets none
+of them, whatever a header is called — an API key in a header of its own is a
+credential as much as `Authorization` is — and no `Host` the collector set.
+The exporter never adds a `Referer`, which would tell the next host the URL
+it came from; one set in `request.headers` is a header of the collector's
+like any other.
+
+`Accept`, `Accept-Language` and `User-Agent` go to every redirect
+destination, with the values the first request had. Never put a token, or
+anything else that identifies the collector, in those three: not in
+`request.headers`, and not by forwarding a probe's header into them. The
+first URL's path and the collector's `query` are not carried to another host
+— a `Location` names the whole URL of the next request — but the first host
+sees them, and it is the first host that chooses the `Location`.
+
+Each redirect of a chain is judged on its own against the first URL and the
+list, so a request that is sent away to a host that is not trusted and then
+back to its origin carries everything again once it is back.
+
+A `301`, `302` or `303` turns a `POST`, `PUT`, `PATCH` or `DELETE` into a
+`GET` without a body, and without the `Content-Type` and the other headers
+that describe one; that redirect has nothing to keep back and is followed. A
+`307` or `308` has the request sent again as it was. With a body — the
+collector's `body`, a `body` probe parameter, or the form a
+[`graphite`](GRAPHITE.md) collector posts for long expressions — it is
+followed only to a trusted destination; otherwise the probe fails:
+
+```text
+redirect to https://other.example/x refused: it would send the request body to other.example, which is not the origin the request was made to and is not listed in request.redirect_trusted_hosts
+```
+
+The collector's TLS client certificate, [`tls.cert_file` and
+`tls.key_file`](#tls), is a credential too, and every TLS connection the
+collector makes presents it. A redirect over `https` to a destination that is
+not trusted is therefore refused before a connection is made there, and, like
+the refusal of a body, not retried:
+
+```text
+redirect to https://other.example/x refused: it would present the collector's TLS client certificate to other.example, which is not the origin the request was made to and is not listed in request.redirect_trusted_hosts
+```
+
+A trusted destination is presented the certificate, and a redirect over plain
+`http`, where there is nothing to present, is followed. The other `tls`
+settings are no credentials and hold for every hop of a request: `ca_file`
+and `insecure_skip_verify` decide how each host a redirect leads to is
+verified, and a `server_name` written for the target is also the name every
+`https` host of a redirect is verified against, so a redirect to another
+`https` host fails verification unless that host holds a certificate for
+that name.
+
+List the hosts a target is known to redirect to, and that may be given the
+collector's credentials:
+
+```yaml
+request:
+  type: http
+  follow_redirects: true
+  bearer_token_file: /etc/exporter/api-token
+  redirect_trusted_hosts:
+    - api-eu.example.com   # a host name
+    - "*.cdn.example.com"  # a glob: * and ? match any characters, dots too
+    - 192.0.2.10           # an address, for a redirect that names the address
+```
+
+An entry is a host name, a glob of one or an IP address, written as
+[`allowed_targets`](#restricting-targets) writes them and without a scheme, a
+port or a path; `"*"` alone trusts every host, wherever the target sends the
+request. A listed host is trusted on every port and over every scheme `allowed_schemes` allows, so a
+collector whose credentials must not travel in plain text allows only
+`https`. Entries are compared with the host the redirect's URL names, as it
+is written there and without case: nothing is looked up, so an address does
+not trust a name that resolves to it, and a network cannot be listed. An
+entry with a final dot matches the host written with one, and no other; an
+address with a zone, `fe80::1%eth0`, matches that zone alone. An entry is
+written in ASCII, as `allowed_targets` writes its own: one with a character
+outside it stops the load, and no entry, `"*"` included, matches a host
+written with one, which no redirect is followed to.
+
+A star matches dots too, so a glob can trust more than it seems to:
+`*example.com` matches `evilexample.com` — write `*.example.com` — and
+`api.example.*` matches `api.example.evil.net`, so do not put the star last.
+A glob is matched against host names, not addresses: `10.*` would trust
+`10.evil.example`, so a glob made of digits, dots and wildcards alone is
+refused, and addresses are listed one by one. Wildcards alone are refused
+too, in any spelling but `"*"`: `**`, `*.*`.
+
+An empty entry, a network, a port and a URL are refused when the
+configuration loads — `request.redirect_trusted_hosts entry
+"api.example.com:8443" has a port; a host is trusted on every port, so give
+the host alone: api.example.com`. The list is the collector's alone: no probe
+parameter and no static target sets or extends it, and it applies whenever
+redirects are followed, also when a probe switched that on with
+`follow_redirects=true`.
+
+A credential written into the target URL itself, `https://user:password@host/`,
+belongs to that URL: it follows a redirect whose `Location` is a path, which
+stays on the URL's host, and no redirect that names a host, trusted or not.
+A user and password that a `Location` writes into its own URL are the
+target's word, not the collector's: a destination that is not trusted is
+sent none of it, and a trusted one is sent them as basic auth only when the
+request has no `Authorization` of its own, which otherwise is the one sent.
+A `Host` in `request.headers` names a virtual host of the origin: it is kept
+across a redirect to a path, and sent to no other host, listed or not.
+
+When a host that was not sent the collector's headers answers with a status
+that fails the probe, most often `401` or `403`, the error says so and names
+the setting: `received HTTP status 401 from other.example, where a redirect
+led: the collector's headers and credentials were not sent to that host,
+which is not the origin the request was made to; list it in
+request.redirect_trusted_hosts if it is to be sent them`. A credential in
+the target URL counts as one that was not sent. Where the redirect led to
+the target's own host under another scheme or on another port, the messages
+name both origins, since the host alone would not show the difference:
+`received HTTP status 401 from https://api.example.com, where a redirect
+led: the collector's headers and credentials were not sent there, since
+https://api.example.com is not the origin the request was made to,
+http://api.example.com; list api.example.com in
+request.redirect_trusted_hosts if it is to be sent them`. A
+[debug probe](CONFIGURATION.md#debugging-a-probe) lists every redirect with
+the headers it was sent and, under one that was not trusted, the names of the
+headers that were not, a credential of the target URL as `Authorization (the
+target URL's credentials)`.
 
 `enable_http2` decides whether the target request may negotiate HTTP/2. HTTP/2
 is negotiated through ALPN over TLS, so this only affects HTTPS targets;
@@ -402,7 +565,8 @@ the target is contacted, so a typo cannot quietly fall back to a default. An
 absent parameter leaves the collector's setting in force, and both parameters
 are part of the response cache key, so a scrape asking for different transport
 behaviour never reads another scrape's cached result. Static targets accept
-both in their own `request` block.
+both in their own `request` block. `redirect_trusted_hosts` is not
+overridable: a probe naming it is answered as though it had not.
 
 These replace the earlier undocumented `request.redirect_policy`. A
 configuration still setting it now fails to load with an unknown-field error
@@ -438,7 +602,12 @@ holding it, in `allowed_targets`; a name that resolves to it is not enough.
 
 Each entry is a host name, a glob of one, an IP address or a CIDR network,
 without a scheme, port or path; a name is letters, digits, dots, hyphens and
-underscores, so `my_service` and `*.svc_local` can be listed. A target is refused when its host is denied
+underscores, so `my_service` and `*.svc_local` can be listed. An entry is
+written in ASCII, an internationalised name in its `xn--` form
+(`xn--bcher-kva.example` for `bücher.example`): one with any other character
+stops the load, `request.allowed_targets entry "bücher.example" has U+00FC
+'ü', a character outside ASCII: write an internationalised name in its ASCII
+form, as xn--bcher-kva.example for bücher.example`. A target is refused when its host is denied
 by name, or any address it resolves to is in a denied network; and, when
 `allowed_targets` is set, unless its host is allowed by name, or every address
 it resolves to is in an allowed network. `denied_targets` wins. Names are
@@ -456,14 +625,36 @@ dialed as written, so it is checked as written, in lower case and without a
 final dot: `my_service`,
 `db--primary.internal` and `-edge.internal` are not names a registrar would
 sell, but they are names Docker Compose, Kubernetes and a hosts file hand
-out, and they are reached and matched like any other. A name with characters
-outside ASCII is checked as its ASCII form (`bücher.example` as
-`xn--bcher-kva.example`), and one written in full-width characters as the
-characters they stand for (`１２７.０.０.１` is `127.0.0.1`); one that has no
-such form is refused. A host with any other character is refused, with `403`
-and before anything is sent or looked up, whatever the lists are: `target
-intern%61l.example refused: it has "%", a character that no host name or
-address has`. No name is written with a `%`, a `,` or a `;`, and such a host
+out, and they are reached and matched like any other. The name the lists
+judge is so the name the request is made to: it is what is looked up and
+dialed, what the `Host` header (the `:authority` of HTTP/2) and the TLS
+handshake name, and what a proxy reads in the request line or the `CONNECT`,
+apart from capitals and a final dot, which are the same name. Only the
+collector's own word replaces it: a `Host` header it sets or forwards, and
+`tls.server_name`.
+
+A host with a character outside ASCII is refused, with `403` and before
+anything is sent or looked up, whatever the lists are and with none set:
+`target bücher.example refused: it has U+00FC 'ü', a character outside ASCII:
+write an internationalised name in its ASCII form, as xn--bcher-kva.example
+for bücher.example`. Write an internationalised name in its `xn--` form, in
+the target and in the lists alike. The HTTP client does not send a host
+written outside ASCII under one name: it dials, and names in the TLS
+handshake, the form the name maps to — `ｏrigin.test`, with a full-width `ｏ`,
+and `origin。test`, with an ideographic full stop, are both `origin.test` —
+and writes the `Host` header and the request line a proxy reads in the
+unmapped one, `xn--rigin-qr33a.test` and `xn--origintest-sh3i`. A list that
+allows `origin.test` would so let a request through that a proxy fetches
+from, or a server of many sites answers from, a name nobody allowed, and one
+that denies a name would be passed under another spelling of it; over HTTP/2
+the client would not send such a request at all, and dial the target again
+and again instead. A host written in full-width digits (`１２７.０.０.１`) is
+refused the same way, and so is a redirect to any such host, and a `grpc`
+target naming one.
+
+A host with any other character that no name has is refused in the same way:
+`target intern%61l.example refused: it has "%", a character that no host name
+or address has`. No name is written with a `%`, a `,` or a `;`, and such a host
 is not harmless behind a [proxy](#proxies), which may read it differently
 from the lists: a URL carries a `%` in its host as `%25`, so
 `http://intern%2561l.example/` names the host `intern%61l.example`, which
@@ -671,7 +862,12 @@ request:
 `server_name` is the name the target's certificate is checked against, and
 sent as SNI, when the target is addressed by something the certificate does
 not name — an IP address, a Service's cluster name — as with a
-[`Host` header](#the-host-header). Unset, it is the target's host.
+[`Host` header](#the-host-header). Unset, it is the target's host. It holds
+for every host a [followed redirect](#what-a-followed-redirect-carries)
+leads to as well, as `ca_file` and `insecure_skip_verify` do; the client
+certificate is presented to the target's origin and to the hosts in
+`redirect_trusted_hosts`, and a redirect over `https` to any other host is
+refused.
 
 A client certificate needs both `cert_file` and `key_file`; one without the
 other stops the exporter at startup. The files themselves are read at the first

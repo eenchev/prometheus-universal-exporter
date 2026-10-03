@@ -1,6 +1,7 @@
 package repository
 
 import (
+	"maps"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -248,10 +249,21 @@ func TestWorkflowsRunTheSuiteWithTheImagesPythonAndTheirTools(t *testing.T) {
 						r, _ := s["run"].(string)
 						return strings.Contains(r, `"lxml==$(arg LXML_VERSION)"`) && strings.Contains(r, `"PyYAML==$(arg PYYAML_VERSION)"`) && strings.Contains(r, `"python-dateutil==$(arg PYTHON_DATEUTIL_VERSION)"`)
 					}),
+					// The strict OpenMetrics parser the suite runs its
+					// answers through is no part of the image, and without
+					// it those tests are skipped unless the job says it is
+					// required.
+					"installs the modules only the tests use (pip install -r " + pythonTestRequirements + ")": hasStep(before, func(s map[string]any) bool {
+						r, _ := s["run"].(string)
+						return strings.Contains(r, "pip install") && strings.Contains(r, "-r "+pythonTestRequirements)
+					}),
 				} {
 					if !found {
 						t.Errorf("%s job %q runs the suite (%s) but no step before it %s", name, job, strings.TrimSpace(run), what)
 					}
+				}
+				if workflowJobEnv(t, path, job)[strictParserEnv] == "" {
+					t.Errorf("%s job %q runs the suite (%s) without %s in its env, so the tests of the strict reference parser are skipped, not failed, when the module is missing", name, job, strings.TrimSpace(run), strictParserEnv)
 				}
 				if strings.Contains(run, "make ci") && !hasStep(before, func(s map[string]any) bool {
 					r, _ := s["run"].(string)
@@ -296,6 +308,103 @@ func workflowSteps(t *testing.T, path string) map[string][]map[string]any {
 		steps[name] = job.Steps
 	}
 	return steps
+}
+
+// pythonTestRequirements pins the Python modules the tests use and the image
+// does not ship, and strictParserEnv is the variable that makes the tests of
+// the strict reference parser fail where the module is missing
+// (internal/exporter/openmetricsstrict_test.go).
+const (
+	pythonTestRequirements = "test/python/requirements.txt"
+	strictParserEnv        = "STRICT_OPENMETRICS_PARSER"
+)
+
+// workflowJobEnv returns the environment a job's steps run with: the
+// workflow's env with the job's over it.
+func workflowJobEnv(t *testing.T, path, job string) map[string]string {
+	t.Helper()
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var document struct {
+		Env  map[string]string `yaml:"env"`
+		Jobs map[string]struct {
+			Env map[string]string `yaml:"env"`
+		} `yaml:"jobs"`
+	}
+	if err := yaml.Unmarshal(raw, &document); err != nil {
+		t.Fatal(err)
+	}
+	env := map[string]string{}
+	maps.Copy(env, document.Env)
+	maps.Copy(env, document.Jobs[job].Env)
+	return env
+}
+
+// The modules the tests alone use are pinned to one version each, so a run
+// today and a run next month check the answers with the same parser;
+// Dependabot proposes the new versions, and CI runs the suite when the file
+// changes. The variable the workflows set is the one the test reads.
+func TestThePythonModulesOfTheTestsArePinnedAndKeptCurrent(t *testing.T) {
+	raw, err := os.ReadFile(pythonTestRequirements)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pinned := regexp.MustCompile(`^[A-Za-z0-9._-]+==[0-9][0-9A-Za-z.]*$`)
+	modules := 0
+	for _, line := range strings.Split(string(raw), "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		modules++
+		if !pinned.MatchString(line) {
+			t.Errorf("%s: %q is not a module pinned to one version, name==version", pythonTestRequirements, line)
+		}
+	}
+	if !regexp.MustCompile(`(?m)^prometheus-client==`).Match(raw) || modules == 0 {
+		t.Errorf("%s no longer pins prometheus-client, whose strict OpenMetrics parser the suite runs", pythonTestRequirements)
+	}
+
+	dependabot, err := os.ReadFile(".github/dependabot.yml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var updates struct {
+		Updates []struct {
+			Ecosystem string `yaml:"package-ecosystem"`
+			Directory string `yaml:"directory"`
+		} `yaml:"updates"`
+	}
+	if err := yaml.Unmarshal(dependabot, &updates); err != nil {
+		t.Fatal(err)
+	}
+	directory := "/" + filepath.ToSlash(filepath.Dir(pythonTestRequirements))
+	if !slices.ContainsFunc(updates.Updates, func(u struct {
+		Ecosystem string `yaml:"package-ecosystem"`
+		Directory string `yaml:"directory"`
+	}) bool {
+		return u.Ecosystem == "pip" && u.Directory == directory
+	}) {
+		t.Errorf(".github/dependabot.yml has no pip update for %s, so the pinned modules are never proposed newer", directory)
+	}
+
+	ci, err := os.ReadFile(".github/workflows/ci.yml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(ci), "- '"+filepath.ToSlash(filepath.Dir(pythonTestRequirements))+"/**'") {
+		t.Errorf("ci.yml's go filter does not name %s/**, so a new version of a module is merged without the suite having run with it", filepath.Dir(pythonTestRequirements))
+	}
+
+	test, err := os.ReadFile("internal/exporter/openmetricsstrict_test.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(test), `const strictParserEnv = "`+strictParserEnv+`"`) || !strings.Contains(string(test), pythonTestRequirements) {
+		t.Errorf("internal/exporter/openmetricsstrict_test.go no longer reads %s or no longer names %s, which the workflows set and install", strictParserEnv, pythonTestRequirements)
+	}
 }
 
 func hasStep(steps []map[string]any, match func(map[string]any) bool) bool {

@@ -2,7 +2,6 @@ package exporter
 
 import (
 	"sort"
-	"sync"
 	"time"
 
 	"github.com/eenchev/prometheus-universal-exporter/internal/model"
@@ -36,29 +35,23 @@ import (
 // fast local endpoint to the slowest scrape a Prometheus timeout allows.
 var scrapeDurationBuckets = []float64{0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10, 30, 60}
 
+// durationHistogram is one collector's histogram. It is part of the
+// collector's statistics (serverStats), whose lock guards it, and not kept by
+// the collector's name: a trip records its duration where it records its
+// counters, so a trip that ends after a reload removed its collector, and
+// dropped those statistics, cannot be observed in the histogram of a collector
+// brought back under the name, which would then hold an observation older
+// than its creation time (selfcreated.go).
 type durationHistogram struct {
-	counts []uint64 // per bucket, not cumulative
+	counts []uint64 // per bucket, not cumulative; made by the first observation
 	sum    float64
 	count  uint64
 }
 
-type scrapeDurations struct {
-	mu         sync.Mutex
-	collectors map[string]*durationHistogram
-}
-
-func newScrapeDurations() *scrapeDurations {
-	return &scrapeDurations{collectors: map[string]*durationHistogram{}}
-}
-
-func (d *scrapeDurations) observe(collector string, elapsed time.Duration) {
+func (h *durationHistogram) observe(elapsed time.Duration) {
 	seconds := elapsed.Seconds()
-	d.mu.Lock()
-	defer d.mu.Unlock()
-	h := d.collectors[collector]
-	if h == nil {
-		h = &durationHistogram{counts: make([]uint64, len(scrapeDurationBuckets))}
-		d.collectors[collector] = h
+	if h.counts == nil {
+		h.counts = make([]uint64, len(scrapeDurationBuckets))
 	}
 	h.sum += seconds
 	h.count++
@@ -70,32 +63,36 @@ func (d *scrapeDurations) observe(collector string, elapsed time.Duration) {
 	}
 }
 
-// histogram returns a collector's histogram with cumulative buckets; a
-// collector not scraped yet has an empty one.
-func (d *scrapeDurations) histogram(collector string) *model.Histogram {
-	d.mu.Lock()
-	defer d.mu.Unlock()
-	out := &model.Histogram{}
-	h := d.collectors[collector]
+// histogram returns the histogram with cumulative buckets; a collector not
+// scraped yet has an empty one.
+func (h *durationHistogram) histogram() *model.Histogram {
+	out := &model.Histogram{Sum: h.sum, Count: h.count}
 	var cumulative uint64
 	for i, bound := range scrapeDurationBuckets {
-		if h != nil {
+		if h.counts != nil {
 			cumulative += h.counts[i]
 		}
 		out.Buckets = append(out.Buckets, model.Bucket{UpperBound: bound, CumulativeCount: cumulative})
 	}
-	if h != nil {
-		out.Sum, out.Count = h.sum, h.count
-	}
 	return out
 }
 
-// observeTargetScrape records a trip to the target, when verbose self-metrics
-// are on.
-func (s *Server) observeTargetScrape(collector string, elapsed time.Duration) {
-	if s.verboseSelfMetrics() {
-		s.durations.observe(collector, elapsed)
+// tripHistogram is the scrape-time histogram of a collector's statistics.
+func (s *serverStats) tripHistogram() *model.Histogram {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.durations.histogram()
+}
+
+// observeTargetScrape records a trip to the target in the statistics the trip
+// counts in, when verbose self-metrics are on.
+func (s *Server) observeTargetScrape(stats *serverStats, elapsed time.Duration) {
+	if stats == nil || !s.verboseSelfMetrics() {
+		return
 	}
+	stats.mu.Lock()
+	stats.durations.observe(elapsed)
+	stats.mu.Unlock()
 }
 
 const (
@@ -140,8 +137,10 @@ func pythonPoolMetrics() []model.Metric {
 }
 
 // verboseCollectorMetrics builds the verbose-only families above for the
-// configured collectors. It returns nothing unless verbose self-metrics are on.
-func (s *Server) verboseCollectorMetrics() []model.Metric {
+// configured collectors, whose statistics are stats: a collector's histogram
+// is part of those, and counts since they do (selfcreated.go). It returns
+// nothing unless verbose self-metrics are on.
+func (s *Server) verboseCollectorMetrics(stats map[string]*serverStats) []model.Metric {
 	if !s.verboseSelfMetrics() {
 		return nil
 	}
@@ -157,9 +156,17 @@ func (s *Server) verboseCollectorMetrics() []model.Metric {
 	sort.Strings(names)
 	var out []model.Metric
 	for _, name := range names {
+		// The configuration is read again here, and a reload may have added a
+		// collector since stats were taken: its statistics are made now, as
+		// its first probe would make them, so its histogram has at once the
+		// creation time it keeps.
+		collector := stats[name]
+		if collector == nil {
+			collector = s.statsFor(name)
+		}
 		out = append(out, model.Metric{
 			Name: "http_exporter_collector_scrape_duration_seconds", Help: targetScrapeDurationHelp, Type: model.HistogramMetricType,
-			Labels: map[string]string{"collector": name}, Histogram: s.durations.histogram(name),
+			Labels: map[string]string{"collector": name}, Histogram: collector.tripHistogram(), Created: createdMillis(collector.snapshot().created),
 		})
 	}
 	var workers, starts, failures, stops, runs []model.Metric
@@ -192,9 +199,11 @@ func (s *Server) verboseCollectorMetrics() []model.Metric {
 	}
 	// Grouped by family, so each family's HELP and TYPE come once, before its
 	// series.
-	for _, family := range [][]model.Metric{workers, starts, failures, stops, runs} {
-		out = append(out, family...)
+	// The worker pool keeps a collector's counts, and its own, for the life
+	// of the process, also across a reload that removes the collector, so
+	// these count since the exporter started.
+	for _, family := range [][]model.Metric{workers, starts, failures, stops, runs, pythonPoolMetrics()} {
+		out = append(out, countingSince(family, exporterStart())...)
 	}
-	out = append(out, pythonPoolMetrics()...)
 	return append(out, model.Metric{Name: "http_exporter_trips_waiting", Help: tripsWaitingHelp, Type: model.GaugeMetricType, Labels: map[string]string{}, Value: float64(s.trips.waitingCount())})
 }

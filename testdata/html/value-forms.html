@@ -1,0 +1,40 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Nightly jobs</title>
+</head>
+<body>
+<table id="forms">
+  <thead><tr><th>Form</th><th>Value</th><th>State</th></tr></thead>
+  <tbody>
+    <tr id="integer"><td class="form">integer</td><td class="v">42</td><td class="s">up</td></tr>
+    <tr id="decimal"><td class="form">decimal</td><td class="v">3.14</td><td class="s">down</td></tr>
+    <tr id="negative"><td class="form">negative</td><td class="v">-17</td><td class="s">OK</td></tr>
+    <tr id="leading-dot"><td class="form">leading dot</td><td class="v">.5</td><td class="s">FAIL</td></tr>
+    <tr id="thousands"><td class="form">thousands separator</td><td class="v">1,234</td><td class="s">&check;</td></tr>
+    <tr id="percent"><td class="form">percent</td><td class="v">85 %</td><td class="s">✓</td></tr>
+    <tr id="percent-tight"><td class="form">percent, no blank</td><td class="v">85%</td><td class="s">✗</td></tr>
+    <tr id="unit"><td class="form">unit</td><td class="v">12.5 MB</td><td class="s">Up</td></tr>
+    <tr id="dash"><td class="form">em dash</td><td class="v">—</td><td class="s">—</td></tr>
+    <tr id="na"><td class="form">n/a</td><td class="v">n/a</td><td class="s">n/a</td></tr>
+    <tr id="empty"><td class="form">empty</td><td class="v"></td><td class="s"></td></tr>
+    <tr id="absent"><td class="form">no cell</td></tr>
+    <tr id="zero"><td class="form">zero</td><td class="v">0</td><td class="s">unknown</td></tr>
+    <tr id="hex"><td class="form">hexadecimal</td><td class="v">0x1F</td><td class="s">up</td></tr>
+  </tbody>
+</table>
+
+<table id="jobs">
+  <thead><tr><th>Job</th><th>Last run</th><th>Next run</th><th>Duration</th></tr></thead>
+  <tbody>
+    <tr><td class="job">backup</td><td class="last"><time datetime="2026-10-03T02:00:07Z">3 Oct 2026, 02:00</time></td><td class="next">2026-10-04 02:00:00</td><td class="ms">412</td></tr>
+    <tr><td class="job">rotate-logs</td><td class="last"><time datetime="2026-10-03T05:30:00+03:00">today 05:30</time></td><td class="next">2026-10-03 23:30:00</td><td class="ms">38</td></tr>
+    <tr><td class="job">reindex</td><td class="last"><time datetime="2026-10-02T21:15:00.25Z">yesterday</time></td><td class="next">2026-10-25 03:30:00</td><td class="ms">90500</td></tr>
+    <tr><td class="job">prune</td><td class="last"><time>never</time></td><td class="next"></td><td class="ms">0</td></tr>
+  </tbody>
+</table>
+<p>Generated <time id="generated" datetime="2026-10-03T09:00:00Z">Sat, 03 Oct 2026 09:00:00 GMT</time>;
+certificate expires <span id="cert">Jan 15, 2027 11:59 PM</span>; last deploy <span id="deploy">03.10.2026 08:15:42</span>.</p>
+</body>
+</html>

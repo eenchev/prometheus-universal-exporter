@@ -74,6 +74,9 @@ its series started: the first export of the series, and again after a reset,
 when its count went down, as the OpenTelemetry Collector's Prometheus receiver
 does. The exporter cannot know when a target began counting, so this is the
 earliest it can vouch for; a series not exported for an hour starts again.
+The exporter's own counters, histograms and summaries are the exception: it
+knows when each began to count, and their points start at that time (see
+[Created timestamps](SELF-METRICS.md#created-timestamps)).
 The start times remembered are bounded too, at twice
 [`otlp.max_pending_points`](#delivery) (200000 by default), so series whose labels
 keep changing cannot grow them without limit; past it the series exported

@@ -1,3 +1,5 @@
+//go:build !select_request_types
+
 package fetch
 
 import (

@@ -18,6 +18,10 @@ permissions:
 jobs:
   update:
     runs-on: ubuntu-latest
+    # The tests that need the strict reference parser fail without it
+    # instead of being skipped (internal/exporter/openmetricsstrict_test.go).
+    env:
+      STRICT_OPENMETRICS_PARSER: required
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-go@v7
@@ -69,6 +73,14 @@ jobs:
             "lxml==$(arg LXML_VERSION)" \
             "PyYAML==$(arg PYYAML_VERSION)" \
             "python-dateutil==$(arg PYTHON_DATEUTIL_VERSION)"
+      # The OpenMetrics answers are also given to prometheus_client's parser,
+      # the strict reference parser, which the image does not ship. It is
+      # installed for the tests alone, at the version test/python pins, and
+      # the job's STRICT_OPENMETRICS_PARSER has those tests fail, should the
+      # module be missing, where they would otherwise be skipped.
+      - name: Install the Python modules only the tests use
+        if: steps.changes.outputs.updated == 'true'
+        run: python3 -m pip install --disable-pip-version-check -r test/python/requirements.txt
       - name: Run the full suite against the new versions
         run: make ci
         if: steps.changes.outputs.updated == 'true'

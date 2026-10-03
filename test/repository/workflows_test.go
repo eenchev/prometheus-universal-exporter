@@ -323,9 +323,10 @@ func TestTheVulnerabilityCheckNeverFails(t *testing.T) {
 	}
 }
 
-// CI vets and builds each request type on its own, so its loop names every
-// internal/fetch/requesttype_<name>.go.
-func TestCIBuildsEveryRequestTypeOnItsOwn(t *testing.T) {
+// requestTypesInTheTree names every internal/fetch/requesttype_<name>.go,
+// sorted.
+func requestTypesInTheTree(t *testing.T) []string {
+	t.Helper()
 	files, err := filepath.Glob("internal/fetch/requesttype_*.go")
 	if err != nil {
 		t.Fatal(err)
@@ -342,14 +343,67 @@ func TestCIBuildsEveryRequestTypeOnItsOwn(t *testing.T) {
 		types = append(types, name)
 	}
 	sort.Strings(types)
-	match := regexp.MustCompile(`(?m)^\s*for type in ([a-z ]+); do\s*$`).FindStringSubmatch(read(t, ".github/workflows/ci.yml"))
-	if match == nil {
+	return types
+}
+
+// requestTypeLoop matches a shell loop over the request types, as ci.yml and
+// the Makefile write it.
+var requestTypeLoop = regexp.MustCompile(`(?m)\bfor type in ([a-z ]+); do\b`)
+
+// CI vets, builds and tests each request type on its own, so each of its
+// loops names every internal/fetch/requesttype_<name>.go.
+func TestCIBuildsEveryRequestTypeOnItsOwn(t *testing.T) {
+	types := requestTypesInTheTree(t)
+	matches := requestTypeLoop.FindAllStringSubmatch(read(t, ".github/workflows/ci.yml"), -1)
+	if matches == nil {
 		t.Fatal("ci.yml has no loop over the request types")
 	}
-	listed := strings.Fields(match[1])
+	for _, match := range matches {
+		listed := strings.Fields(match[1])
+		sort.Strings(listed)
+		if !slices.Equal(listed, types) {
+			t.Fatalf("ci.yml builds the request types %v on their own, but the tree has %v", listed, types)
+		}
+	}
+}
+
+// A build with one request type is one the exporter ships, so CI runs the
+// tests of each, under the condition of its other Go steps, and
+// `make test-request-types`, which `make ci` includes, runs the same command
+// over the same types: a test that needs a type its build lacks fails there,
+// not in somebody's single-type build.
+func TestCIAndMakeTestEveryRequestTypeOnItsOwn(t *testing.T) {
+	const tags, command = `tags="$(sh tools/request-type-tags.sh "$type")"`, `go test -count=1 -tags "$tags" ./...`
+	steps := workflowSteps(t, ".github/workflows/ci.yml")["test"]
+	index := stepIndex(steps, "for type in ", tags, command)
+	if index < 0 {
+		t.Fatalf("ci.yml has no step that runs %s for each request type", command)
+	}
+	if condition := steps[index]["if"]; condition != "steps.changes.outputs.go == 'true'" {
+		t.Errorf("ci.yml tests each request type under the condition %q, not that of its Go steps", condition)
+	}
+	makefile := read(t, "Makefile")
+	target := regexp.MustCompile(`(?m)^test-request-types:\n((?:\t.*\n)+)`).FindStringSubmatch(makefile)
+	if target == nil {
+		t.Fatal("the Makefile has no test-request-types target")
+	}
+	recipe := strings.ReplaceAll(target[1], "$$", "$")
+	for _, want := range []string{tags, command} {
+		if !strings.Contains(recipe, want) {
+			t.Errorf("make test-request-types does not run %s, as ci.yml does:\n%s", want, recipe)
+		}
+	}
+	loop := requestTypeLoop.FindStringSubmatch(recipe)
+	if loop == nil {
+		t.Fatalf("make test-request-types has no loop over the request types:\n%s", recipe)
+	}
+	listed := strings.Fields(loop[1])
 	sort.Strings(listed)
-	if !slices.Equal(listed, types) {
-		t.Fatalf("ci.yml builds the request types %v on their own, but the tree has %v", listed, types)
+	if types := requestTypesInTheTree(t); !slices.Equal(listed, types) {
+		t.Errorf("make test-request-types tests the request types %v, but the tree has %v", listed, types)
+	}
+	if !regexp.MustCompile(`(?m)^ci:.*\btest-request-types\b`).MatchString(makefile) {
+		t.Error("make ci does not include test-request-types")
 	}
 }
 

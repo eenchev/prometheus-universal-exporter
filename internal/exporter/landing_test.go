@@ -1,3 +1,5 @@
+//go:build !select_request_types || request_type_http
+
 package exporter
 
 import (
@@ -15,52 +17,6 @@ import (
 
 // The HTML pages: the landing page at / (landing.go) and the collectors page
 // at /collectors (collectorspage.go).
-
-func landingServer(t *testing.T, cfg *model.Config) *Server {
-	t.Helper()
-	server := newStaticServer(t, cfg, nil)
-	server.logger = testutil.QuietLogger(t)
-	return server
-}
-
-func getPath(server *Server, method, path string) *httptest.ResponseRecorder {
-	recorder := httptest.NewRecorder()
-	server.Handler().ServeHTTP(recorder, httptest.NewRequest(method, path, nil))
-	return recorder
-}
-
-// getPage fetches a page, which must be HTML that is not cached.
-func getPage(t *testing.T, server *Server, path string) string {
-	t.Helper()
-	response := getPath(server, http.MethodGet, path)
-	if response.Code != http.StatusOK {
-		t.Fatalf("%s answered %d", path, response.Code)
-	}
-	if got := response.Header().Get("Content-Type"); got != "text/html; charset=utf-8" {
-		t.Fatalf("%s Content-Type=%q", path, got)
-	}
-	if got := response.Header().Get("Cache-Control"); got != "no-store" {
-		t.Fatalf("%s Cache-Control=%q", path, got)
-	}
-	// No other site may frame the pages: the collectors page takes target
-	// credentials.
-	if got := response.Header().Get("X-Frame-Options"); got != "DENY" {
-		t.Fatalf("%s X-Frame-Options=%q", path, got)
-	}
-	if got := response.Header().Get("Content-Security-Policy"); !strings.Contains(got, "frame-ancestors 'none'") || !strings.Contains(got, "connect-src 'self'") {
-		t.Fatalf("%s Content-Security-Policy=%q", path, got)
-	}
-	return response.Body.String()
-}
-
-func requireContains(t *testing.T, page string, wants ...string) {
-	t.Helper()
-	for _, want := range wants {
-		if !strings.Contains(page, want) {
-			t.Errorf("the page lacks %q:\n%s", want, page)
-		}
-	}
-}
 
 func weatherConfig() *model.Config {
 	return &model.Config{Collectors: []model.Collector{testutil.Collector("weather", "text")}}
@@ -236,14 +192,6 @@ func TestABlankTargetCredentialIsNotSent(t *testing.T) {
 		`scheme.value === "bearer" && field("token").value !== ""`,
 		`scheme.value === "basic" && (field("username").value !== "" || field("password").value !== "")`,
 	)
-}
-
-// A localfile target names a file or a directory under the collector's root.
-func TestTheCollectorsPageHintsALocalfileTarget(t *testing.T) {
-	c := testutil.Collector("textfile", "text")
-	c.Request = model.RequestConfig{Type: "localfile", Root: t.TempDir(), Path: "batch.prom"}
-	page := getPage(t, landingServer(t, &model.Config{Collectors: []model.Collector{c}}), "/collectors")
-	requireContains(t, page, `placeholder="a file or directory under its root (optional)"`)
 }
 
 // The pages link relatively, so they keep working behind a reverse proxy that

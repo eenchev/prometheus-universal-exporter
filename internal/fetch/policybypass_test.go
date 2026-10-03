@@ -16,9 +16,10 @@ import (
 	"github.com/eenchev/prometheus-universal-exporter/internal/model"
 )
 
-// A host is checked as the transport dials it: written in full-width
-// characters it is the address or name they stand for, and refused as that
-// is.
+// A host written in full-width characters is refused where the address or
+// name they stand for is: it was checked as that one, the name the transport
+// dials, and is now refused for its characters, whatever the lists are
+// (canonicalHost).
 func TestFullWidthHostsAreCheckedAsTheyAreDialed(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write([]byte("reached")) }))
 	defer server.Close()
@@ -36,13 +37,15 @@ func TestFullWidthHostsAreCheckedAsTheyAreDialed(t *testing.T) {
 			}
 		}
 	}
-	if host, err := canonicalHost("１６９.２５４.１６９.２５４"); err != nil || host != "169.254.169.254" {
-		t.Errorf("canonicalHost = %q, %v", host, err)
+	if host, err := canonicalHost("１６９.２５４.１６９.２５４"); !errors.Is(err, ErrTargetRefused) {
+		t.Errorf("canonicalHost = %q, %v, want it refused", host, err)
 	}
 }
 
-// An internationalised name is checked as its ASCII form, which is what the
-// transport dials: a name that resolves into a denied network is refused.
+// A name that resolves into a denied network is refused, and so is an
+// internationalised name that would: written outside ASCII it is refused
+// before it is dialed, where it was checked as the ASCII form the transport
+// dials.
 func TestInternationalisedNamesAreCheckedAsTheyAreDialed(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write([]byte("ok")) }))
 	defer server.Close()
@@ -62,10 +65,10 @@ func TestInternationalisedNamesAreCheckedAsTheyAreDialed(t *testing.T) {
 	tr.DialContext = policyDialer(fakeDNS)
 	tr.Proxy = nil
 	_, port, _ := net.SplitHostPort(backend)
-	for _, host := range []string{"ascii.example", "bücher.example"} {
+	for host, dials := range map[string]int{"ascii.example": 1, "xn--bcher-kva.example": 1, "bücher.example": 0} {
 		tr.CloseIdleConnections()
-		if _, err := FetchCollector(context.Background(), "http://"+host+":"+port+"/", strict, RequestOverrides{}, nil); !errors.Is(err, ErrTargetRefused) {
-			t.Errorf("%s was not refused (dialed %v): %v", host, dialed, err)
+		if _, err := FetchCollector(context.Background(), "http://"+host+":"+port+"/", strict, RequestOverrides{}, nil); !errors.Is(err, ErrTargetRefused) || len(dialed) != dials {
+			t.Errorf("%s was not refused after %d dials (dialed %v): %v", host, dials, dialed, err)
 		}
 		dialed = nil
 	}

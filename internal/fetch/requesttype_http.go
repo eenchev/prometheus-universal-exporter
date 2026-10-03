@@ -21,7 +21,7 @@ func init() {
 			"basic_auth", "basic_auth_file", "bearer_token", "bearer_token_file",
 			"forward_authorization", "forward_headers",
 			"tls", "retry", "max_response_bytes",
-			"follow_redirects", "enable_http2", "allowed_schemes",
+			"follow_redirects", "redirect_trusted_hosts", "enable_http2", "allowed_schemes",
 			"allowed_targets", "denied_targets", "accept_status",
 		},
 		Overrides: []string{

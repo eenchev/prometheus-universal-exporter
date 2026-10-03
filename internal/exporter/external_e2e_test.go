@@ -1,3 +1,5 @@
+//go:build !select_request_types || request_type_http
+
 package exporter
 
 import (
@@ -55,7 +57,8 @@ type externalCase struct {
 	// wantMetrics must all be present in the response.
 	wantMetrics []string
 	// wantLabel is a label that must appear on the first metric, so a response
-	// that decodes but loses its per-row or per-entry structure is caught.
+	// that decodes but loses its per-row or per-entry structure is caught. For
+	// a metric without labels it is the name and the blank before the value.
 	wantLabel string
 }
 
@@ -133,6 +136,66 @@ var externalCases = []externalCase{
 			"weather_observation_timestamp_seconds",
 		},
 		wantLabel: `latitude=`,
+	},
+	{
+		name:        "ecb/xml",
+		config:      "../../examples/config.ecb.xml-test.yaml",
+		collector:   "ecb_reference_rates",
+		target:      "https://www.ecb.europa.eu",
+		wantMetrics: []string{"ecb_euro_reference_rate", "ecb_euro_reference_rates", "ecb_euro_reference_rates_timestamp_seconds"},
+		wantLabel:   `currency="USD"`,
+	},
+	{
+		// The default station, Sofia. What a report holds varies with the
+		// weather; its time, a temperature, a pressure and a wind are in
+		// every one, each with the station the report names.
+		name:        "metar/text",
+		config:      "../../examples/metar/config.yaml",
+		collector:   "metar",
+		target:      "https://tgftp.nws.noaa.gov",
+		wantMetrics: []string{"metar_observation_timestamp_seconds", "metar_temperature_celsius", "metar_pressure_hectopascals", "metar_wind_speed_meters_per_second"},
+		wantLabel:   `station="LBSF"`,
+	},
+	{
+		name:        "mempool/fees",
+		config:      "../../examples/config.mempool.json-test.yaml",
+		collector:   "bitcoin_fees",
+		target:      "https://mempool.space",
+		wantMetrics: []string{"bitcoin_recommended_fee_sats_per_vbyte"},
+		wantLabel:   `target="next_block"`,
+	},
+	{
+		name:        "mempool/backlog",
+		config:      "../../examples/config.mempool.json-test.yaml",
+		collector:   "bitcoin_mempool",
+		target:      "https://mempool.space",
+		wantMetrics: []string{"bitcoin_mempool_transactions", "bitcoin_mempool_virtual_bytes", "bitcoin_mempool_fees_bitcoin"},
+		wantLabel:   `bitcoin_mempool_transactions `,
+	},
+	{
+		name:        "mempool/height",
+		config:      "../../examples/config.mempool.json-test.yaml",
+		collector:   "bitcoin_chain",
+		target:      "https://mempool.space",
+		wantMetrics: []string{"bitcoin_block_height"},
+		wantLabel:   `bitcoin_block_height `,
+	},
+	{
+		name:      "prometheus-demo/prometheus",
+		config:    "../../examples/config.promdemo.prometheus-test.yaml",
+		collector: "prometheus_server",
+		target:    "https://prometheus.demo.prometheus.io",
+		wantMetrics: []string{
+			"prometheus_build_info",
+			"prometheus_ready",
+			"prometheus_tsdb_head_series",
+			"prometheus_http_requests_total",
+			"prometheus_http_request_duration_seconds_bucket",
+			"prometheus_engine_query_duration_seconds_count",
+			"prometheus_process_resident_memory_bytes",
+			"prometheus_goroutines",
+		},
+		wantLabel: `handler=`,
 	},
 }
 

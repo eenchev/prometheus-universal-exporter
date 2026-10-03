@@ -17,7 +17,7 @@ HELM_VERSION := v4.3.0
 # Kept in step with .github/workflows/govulncheck.yml by a test.
 GOVULNCHECK_VERSION := v1.8.0
 
-.PHONY: build test test-external vet fmt fmt-check lint lint-version lint-install gopls-check gopls-version gopls-install helm-version helm-install hooks precommit vulncheck helm-test schemas
+.PHONY: build test test-request-types test-external vet fmt fmt-check lint lint-version lint-install gopls-check gopls-version gopls-install helm-version helm-install hooks precommit vulncheck helm-test schemas
 # REQUEST_TYPES builds only the listed request types, comma-separated, for
 # example `make build REQUEST_TYPES=http`. Empty, the default, builds every type.
 # See "Choosing request types at build time" in docs/CONFIGURATION.md.
@@ -31,6 +31,18 @@ test:
 	@# Twice, in a random order, so a test that depends on the order tests run
 	@# in, or on running only once, is caught.
 	go test -race -count=2 -shuffle=on ./...
+
+# The tests of each request type built on its own, as ci.yml runs them: a
+# build with REQUEST_TYPES=http is one the exporter ships, so its tests have
+# to pass as the default build's do. Once and without -race, which `test`
+# covers with every type. A test keeps the loop naming every type in the tree
+# and running what ci.yml runs.
+test-request-types:
+	@set -e; for type in graphite grpc http localfile; do \
+		tags="$$(sh tools/request-type-tags.sh "$$type")"; \
+		echo "go test -count=1 -tags $$tags ./..."; \
+		go test -count=1 -tags "$$tags" ./...; \
+	done
 
 # Opt-in: probes real third-party endpoints, so it is deliberately not part of
 # `make ci`. See docs/DEVELOPMENT.md.
@@ -364,4 +376,4 @@ helm-test: helm-version
 		fi; \
 	done
 
-ci: fmt-check lint gopls-check test vet build helm-test
+ci: fmt-check lint gopls-check test vet build test-request-types helm-test

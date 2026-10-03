@@ -114,16 +114,17 @@ func TestAnASCIIHostIsCheckedAsItIsWritten(t *testing.T) {
 		"db--primary":      "db--primary",
 		"[FD00:EC2::254]":  "fd00:ec2::254",
 		"169.254.169.254.": "169.254.169.254",
-		"bücher.example":   "xn--bcher-kva.example",
-		"１２７.０.０.１":        "127.0.0.1",
 	} {
 		if got, err := canonicalHost(host); err != nil || got != want {
 			t.Errorf("canonicalHost(%q) = %q, %v, want %q", host, got, err, want)
 		}
 	}
-	// A name with other characters still has to have an ASCII form.
-	if _, err := canonicalHost("bü_cher.example"); !errors.Is(err, ErrTargetRefused) {
-		t.Errorf("a name with no ASCII form: %v", err)
+	// A name with other characters is refused, whether it has an ASCII form
+	// or none.
+	for _, host := range []string{"bücher.example", "１２７.０.０.１", "bü_cher.example"} {
+		if _, err := canonicalHost(host); !errors.Is(err, ErrTargetRefused) {
+			t.Errorf("canonicalHost(%q): %v, want it refused", host, err)
+		}
 	}
 }
 

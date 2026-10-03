@@ -496,6 +496,10 @@ func (t *probeTrace) report(p debugProbe, verdict string, answer *model.MetricSe
 		}
 		fmt.Fprintf(&b, "  %d. %s %s%s -> %s\n", i+1, req.Method, fetch.RedactURLString(req.URL, fetch.MaskQueryValues), via, outcome)
 		writeHeaders(&b, req.Header, "     ")
+		if len(req.Withheld) > 0 {
+			// The names only: the values were not sent, and are not shown.
+			fmt.Fprintf(&b, "     not sent: %s — %s\n", strings.Join(req.Withheld, ", "), req.WithheldWhy)
+		}
 	}
 
 	b.WriteString("\nResponse\n")

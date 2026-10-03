@@ -287,7 +287,14 @@ script that changes one of the two changes the other as well, or leaves a
 histogram whose two numbers differ, which the text format writes as they are
 and [OpenMetrics](CONFIGURATION.md#openmetrics) as `unknown` families. One
 left with neither is exported with the buckets it has, without a `+Inf`
-bucket and without a `_count`.
+bucket and without a `_count`. A histogram left with nothing at all — no
+`buckets`, no `sum` and no `count` — or a summary with no `quantiles`, no
+`sum` and no `count`, fails the scrape rather than being exported as a
+`# TYPE` line with no sample: that is what a misspelled key leaves, and the
+error names the series, the keys such a series has and the keys this one has
+(`the histogram made has no buckets, no sum and no count; a histogram series
+has the keys "buckets", "sum" and "count", and this one has the keys
+"bucket", "cnt", "name", "type"`).
 
 A CSV row a pre-script changed may hold numbers and `None`: a label read from
 a number is written as `metric(...)` writes one, `1234567` as `1234567`, and

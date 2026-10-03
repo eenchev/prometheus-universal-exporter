@@ -66,11 +66,19 @@ for item in payload['scripts']:
     try:
         tree=ast.parse(item['source'], mode='exec')
     except SyntaxError as e:
-        problems.append("%s has a Python syntax error on line %s: %s" % (label, e.lineno, e.msg))
+        problems.append({'collector':item['collector'],'message':"%s has a Python syntax error on line %s: %s" % (label, e.lineno, e.msg)})
         continue
     if item['requires_data'] and not produces_data(tree):
-        problems.append("%s must produce its result in a variable named 'data'; assign to data or mutate it in place. Reading it, such as data['x'] or data.items(), does not count: the transform would run against the untouched response" % label)
+        problems.append({'collector':item['collector'],'message':"%s must produce its result in a variable named 'data'; assign to data or mutate it in place. Reading it, such as data['x'] or data.items(), does not count: the transform would run against the untouched response" % label})
 print(json.dumps({'problems':problems}))`
+
+// PythonScriptProblem is one fault the check found in a collector's Python:
+// the message, which names the collector, and the collector's name on its
+// own, for a caller that has to say where the collector is defined.
+type PythonScriptProblem struct {
+	Collector string `json:"collector"`
+	Message   string `json:"message"`
+}
 
 type pythonScript struct {
 	Collector    string `json:"collector"`
@@ -114,15 +122,21 @@ func ValidatePythonScripts(pythonPath string, c *model.Config) error {
 		return err
 	}
 	if len(problems) > 0 {
-		return fmt.Errorf("invalid collector Python scripts:\n  %s", strings.Join(problems, "\n  "))
+		messages := make([]string, len(problems))
+		for i, problem := range problems {
+			messages[i] = problem.Message
+		}
+		return fmt.Errorf("invalid collector Python scripts:\n  %s", strings.Join(messages, "\n  "))
 	}
 	return nil
 }
 
 // CheckPythonScripts is ValidatePythonScripts with the faults kept apart: err
 // is the interpreter itself failing, and problems are the individual script
-// faults, each naming its collector. --dry-run reports the latter one by one.
-func CheckPythonScripts(pythonPath string, c *model.Config) ([]string, error) {
+// faults, in the order of the collectors, each naming its collector in its
+// message and beside it. --dry-run reports the latter one by one. The
+// interpreter is run once, whatever it finds.
+func CheckPythonScripts(pythonPath string, c *model.Config) ([]PythonScriptProblem, error) {
 	scripts := CollectorScripts(c)
 	if len(scripts) == 0 {
 		return nil, nil
@@ -153,7 +167,7 @@ func CheckPythonScripts(pythonPath string, c *model.Config) ([]string, error) {
 		return nil, fmt.Errorf("checking collector Python scripts needs a working interpreter at %q: %w", pythonPath, err)
 	}
 	var result struct {
-		Problems []string `json:"problems"`
+		Problems []PythonScriptProblem `json:"problems"`
 	}
 	if err := json.Unmarshal(stdout.Bytes(), &result); err != nil {
 		return nil, fmt.Errorf("checking collector Python scripts: %w", err)

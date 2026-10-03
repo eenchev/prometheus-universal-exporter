@@ -13,9 +13,9 @@ import (
 // that a collector file defines names that file, as a validation error of
 // that collector does (inCollectorFile), at startup, in --dry-run and on
 // reload: that file, not the configuration listing it, is the one to edit.
-// The check reports its problems as text that names the collector, which is
-// not read back out of it; the collectors of each file are checked on their
-// own instead, so a problem is in the file whose collectors were checked.
+// The check gives each problem with the name of its collector, and the file
+// is the one that collector was read from, so the interpreter runs once
+// however many collector files there are and whatever it finds.
 
 // ValidatePythonScripts refuses a configuration whose Python cannot work,
 // reporting every problem (model.Problems), each naming the collector file
@@ -38,29 +38,8 @@ func CheckPythonScripts(pythonPath string, c *model.Config) (problems []error, e
 	if err != nil || len(found) == 0 {
 		return nil, err
 	}
-	// Only a configuration with a problem, and with collector files, is
-	// checked a second time, file by file: one that is sound costs one run
-	// of the interpreter however many files it has.
-	if len(c.LoadedCollectorFiles) == 0 {
-		for _, problem := range found {
-			problems = append(problems, errors.New(problem))
-		}
-		return problems, nil
-	}
-	for _, file := range append([]string{""}, c.LoadedCollectorFiles...) {
-		var defined model.Config
-		for i := range c.Collectors {
-			if collectorFileOf(c, c.Collectors[i].Name) == file {
-				defined.Collectors = append(defined.Collectors, c.Collectors[i])
-			}
-		}
-		found, err := transform.CheckPythonScripts(pythonPath, &defined)
-		if err != nil {
-			return nil, err
-		}
-		for _, problem := range found {
-			problems = append(problems, inCollectorFile(file, errors.New(problem)))
-		}
+	for _, problem := range found {
+		problems = append(problems, inCollectorFile(collectorFileOf(c, problem.Collector), errors.New(problem.Message)))
 	}
 	return problems, nil
 }

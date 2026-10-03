@@ -3,6 +3,7 @@ package decode
 import (
 	"math"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 
@@ -199,48 +200,107 @@ func TestPromParseRefusesAHistogramOrSummaryThatIsNotOneSeries(t *testing.T) {
 // A sample that belongs to a histogram or a summary family by its name and
 // is none of the samples such a family has — one named as the histogram
 // itself, a bucket without an le label, one named as the summary without a
-// quantile label — has a value with no place in the series. It was read and
-// left out without a word, so a target's "h 5" under "# TYPE h histogram"
-// vanished. It is a malformed line, and fails the decode as one does: the
-// error names the line and says which samples the family has. That holds in
-// a family the collector's rules do not keep, whose lines are checked as any
-// are, and beside valid samples of the same series.
-func TestPromParseRefusesASampleThatIsNoPartOfItsHistogramOrSummary(t *testing.T) {
-	for _, test := range []struct{ body, want string }{
+// quantile label — has a value with no place in the series. Failing the
+// decode over such a line, as the parser did for a while, lost every family
+// of a target whose client library writes one, and reading past it without a
+// word, as it did before that, lost the line unseen. The line is left out
+// and the rest is read: the report counts the lines left out and names the
+// first, its line and the samples the family has. A family the collector's
+// rules do not keep has nothing left out of it, and no report.
+func TestPromParseLeavesOutAndCountsASampleThatIsNoPartOfItsHistogramOrSummary(t *testing.T) {
+	for _, test := range []struct {
+		body    string
+		series  []string
+		leftOut int
+		first   string
+	}{
 		{
 			"# TYPE h histogram\nh 5\n",
-			"text format parsing error in line 2: expected h_bucket with an le label, h_sum or h_count as a sample of the histogram h, got h",
+			nil, 1,
+			"line 2: expected h_bucket with an le label, h_sum or h_count as a sample of the histogram h, got h",
 		},
 		{
 			"g 1\n# TYPE h histogram\nh{a=\"1\"} 5\nother 1\n",
-			"text format parsing error in line 3: expected h_bucket with an le label, h_sum or h_count as a sample of the histogram h, got h",
+			[]string{"g", "other"}, 1,
+			"line 3: expected h_bucket with an le label, h_sum or h_count as a sample of the histogram h, got h",
 		},
 		{
-			"# TYPE h histogram\nh_bucket{le=\"+Inf\"} 2\nh_count 2\nh 5\n",
-			"text format parsing error in line 4: expected h_bucket with an le label, h_sum or h_count as a sample of the histogram h, got h",
+			"# TYPE h histogram\nh_bucket{le=\"+Inf\"} 2\nh_count 2\nh 5\ng 1\n",
+			[]string{"h", "g"}, 1,
+			"line 4: expected h_bucket with an le label, h_sum or h_count as a sample of the histogram h, got h",
 		},
 		{
-			"# TYPE h histogram\nh_bucket{le=\"+Inf\"} 2\nh_bucket{op=\"get\"} 2\n",
-			"text format parsing error in line 3: expected h_bucket with an le label, h_sum or h_count as a sample of the histogram h, got h_bucket without an le label",
+			"# TYPE h histogram\nh_bucket{le=\"+Inf\"} 2\nh_bucket{op=\"get\"} 2\nh_bucket{op=\"put\"} 3\n",
+			[]string{"h"}, 2,
+			"line 3: expected h_bucket with an le label, h_sum or h_count as a sample of the histogram h, got h_bucket without an le label",
 		},
 		{
 			"# TYPE \"my.h\" histogram\n{\"my.h\"} 5\n",
-			"text format parsing error in line 2: expected my.h_bucket with an le label, my.h_sum or my.h_count as a sample of the histogram my.h, got my.h",
+			nil, 1,
+			"line 2: expected my.h_bucket with an le label, my.h_sum or my.h_count as a sample of the histogram my.h, got my.h",
 		},
 		{
 			"# TYPE s summary\ns 5\n",
-			"text format parsing error in line 2: expected s with a quantile label, s_sum or s_count as a sample of the summary s, got s without a quantile label",
+			nil, 1,
+			"line 2: expected s with a quantile label, s_sum or s_count as a sample of the summary s, got s without a quantile label",
 		},
 		{
 			"# TYPE s summary\ns{quantile=\"0.5\"} 1\ns_count 2\ns{op=\"get\"} 5\n",
-			"text format parsing error in line 4: expected s with a quantile label, s_sum or s_count as a sample of the summary s, got s without a quantile label",
+			[]string{"s"}, 1,
+			"line 4: expected s with a quantile label, s_sum or s_count as a sample of the summary s, got s without a quantile label",
 		},
 	} {
-		for _, options := range []promOptions{{}, {openMetrics: true}, {keep: func(name string) bool { return name == "g" }}} {
-			_, err := parseExposition([]byte(test.body), options)
-			if err == nil || err.Error() != test.want {
-				t.Errorf("%q (OpenMetrics %v, filtered %v): err=%v, want %q", test.body, options.openMetrics, options.keep != nil, err, test.want)
+		for _, openMetrics := range []bool{false, true} {
+			metrics, report, err := parseExpositionReporting([]byte(test.body), promOptions{openMetrics: openMetrics})
+			var names []string
+			for _, m := range metrics {
+				names = append(names, m.Name)
 			}
+			if err != nil || !slices.Equal(names, test.series) {
+				t.Errorf("%q (OpenMetrics %v): err=%v, series %q, want %q", test.body, openMetrics, err, names, test.series)
+			}
+			if report == nil || report.LeftOutLines != test.leftOut || report.FirstLeftOut != test.first {
+				t.Errorf("%q (OpenMetrics %v): report %+v, want %d left out, the first %q", test.body, openMetrics, report, test.leftOut, test.first)
+			}
+		}
+		metrics, report, err := parseExpositionReporting([]byte(test.body), promOptions{keep: func(name string) bool { return name == "g" }})
+		if err != nil || report != nil || len(metrics) > 1 {
+			t.Errorf("%q, keeping g alone: err=%v, report %+v, %d series", test.body, err, report, len(metrics))
+		}
+	}
+}
+
+// The series beside a line that was left out are whole: the histogram has
+// its buckets, its _sum and its _count, with the labels of its own samples,
+// and the line left out neither made a series nor took a label of one.
+func TestPromParseKeepsTheSeriesOfAFamilyALineWasLeftOutOf(t *testing.T) {
+	body := "# TYPE h histogram\nh{op=\"get\",quantile=\"0.5\"} 0.05\nh_bucket{op=\"get\",le=\"1\"} 2\nh_bucket{op=\"get\",le=\"+Inf\"} 3\nh_sum{op=\"get\"} 0.5\nh_count{op=\"get\"} 3\n"
+	metrics, report, err := parseExpositionReporting([]byte(body), promOptions{})
+	if err != nil || len(metrics) != 1 || report == nil || report.LeftOutLines != 1 {
+		t.Fatalf("%v %#v %+v", err, metrics, report)
+	}
+	h := metrics[0].Histogram
+	if !reflect.DeepEqual(metrics[0].Labels, map[string]string{"op": "get"}) || h == nil || h.Sum != 0.5 || h.Count != 3 || h.NoSum || h.NoCount ||
+		!reflect.DeepEqual(h.Buckets, []model.Bucket{{UpperBound: 1, CumulativeCount: 2}, {UpperBound: math.Inf(1), CumulativeCount: 3}}) {
+		t.Fatalf("%#v %+v", metrics[0], h)
+	}
+}
+
+// An exposition with no such line has no report, and a line that cannot be
+// read at all still fails the parse where it stands, in a histogram family
+// as in any: a value that is no number, an le that is none.
+func TestPromParseStillFailsOnALineThatCannotBeRead(t *testing.T) {
+	if _, report, err := parseExpositionReporting([]byte("# TYPE h histogram\nh_bucket{le=\"+Inf\"} 2\nh_count 2\ng 1\n"), promOptions{}); err != nil || report != nil {
+		t.Fatalf("%v %+v", err, report)
+	}
+	for _, test := range []struct{ body, want string }{
+		{"# TYPE h histogram\nh five\n", `text format parsing error in line 2: expected float as value, got "five"`},
+		{"# TYPE h histogram\nh 5\nh_bucket{le=\"x\"} 1\n", `text format parsing error in line 3: expected float as value for 'le' label, got "x"`},
+		{"# TYPE s summary\ns 5\ns{quantile=\"0.5\" 1\n", `text format parsing error in line 3: unexpected "1" after the value of label "quantile"`},
+	} {
+		_, report, err := parseExpositionReporting([]byte(test.body), promOptions{})
+		if err == nil || err.Error() != test.want || report != nil {
+			t.Errorf("%q: err=%v, report %+v, want %q", test.body, err, report, test.want)
 		}
 	}
 }

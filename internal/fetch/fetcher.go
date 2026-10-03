@@ -617,6 +617,9 @@ func fetch(ctx context.Context, target string, c *model.Collector, overrides Req
 	}
 	start := time.Now()
 	limit := responseLimit(c)
+	// protocolErrors counts the attempts that ended with their HTTP/2
+	// connection closed for a protocol error before the answer's headers.
+	protocolErrors := 0
 	for attempt := 0; attempt <= retryAttempts; attempt++ {
 		var reqBody io.Reader
 		if requestBody != "" {
@@ -668,10 +671,30 @@ func fetch(ctx context.Context, target string, c *model.Collector, overrides Req
 			// Over HTTP/2 the same answer mostly ends as a connection the
 			// client closed for a protocol error, which says nothing of
 			// headers and has other causes too, so it cannot be called a
-			// limit. It is not retried either: what broke the protocol
-			// once is sent again, and the error says where to look.
+			// limit. Go hands that one error to every request that was
+			// waiting on the connection, so the first may be for another
+			// request's answer: it is retried, once, as one of the
+			// collector's retries, and the retry is sent on a connection
+			// of its own (onOwnConnection): the request whose answer
+			// closed the first one is retried at the same moment, and on
+			// a connection the two shared again it would close that one
+			// too. A second is therefore for this request's own answer:
+			// what broke the protocol twice is not sent again, so the
+			// request ends there, and the error says where to look.
 			if http2ProtocolError(err) {
-				return nil, fmt.Errorf("HTTP request failed: %w: the HTTP/2 connection was closed over what the target sent, which is not retried; an answer whose headers are larger than %d bytes, the most the exporter reads of a response's headers, ends this way over HTTP/2, so look at the size of the target's response headers first", err, maxResponseHeaderBytes)
+				protocolErrors++
+				if protocolErrors == 1 && attempt < retryAttempts && requestContext.Err() == nil {
+					if waitErr := waitRetry(requestContext, retryBackoff); waitErr != nil {
+						return nil, fmt.Errorf("HTTP request failed: %w (the wait before retrying was cut short: %w)", err, waitErr)
+					}
+					client = onOwnConnection(client)
+					continue
+				}
+				closed := "in answer to this request or to another on the same connection, and the request had no retry left to be sent again on a new one"
+				if protocolErrors > 1 {
+					closed = "as the connection before it was, so the request is not retried again"
+				}
+				return nil, fmt.Errorf("HTTP request failed: %w: the HTTP/2 connection was closed over what the target sent, %s; an answer whose headers are larger than %d bytes, the most the exporter reads of a response's headers, ends this way over HTTP/2, so look at the size of the target's response headers first", err, closed, maxResponseHeaderBytes)
 			}
 			// A refused target is refused again on every attempt.
 			if attempt < retryAttempts && requestContext.Err() == nil && !errors.Is(err, ErrTargetRefused) {

@@ -914,7 +914,7 @@ func TestChartMonitorTemplatesRefuseAPortThatIsNoName(t *testing.T) {
 	const (
 		serviceNumber = `monitors entry "apps" has port 9115, a port number; a monitor of type service takes the name of a Service port, so name the port in the selected Services' spec.ports and set port to that name`
 		podNumber     = `monitors entry "apps" has port 9115, a port number; a monitor of type pod takes the name of a container port, so name the port in the selected pods' spec.containers[].ports and set port to that name`
-		serviceName   = `; a monitor of type service takes the name of a Service port: 1 to 63 lower-case letters, digits and hyphens, at least one of them a letter, with no hyphen first or last`
+		serviceName   = `; a monitor of type service takes the name of a Service port: 1 to 63 lower-case letters, digits and hyphens, with no hyphen first or last, and, by this chart's own rule, at least one letter, since it takes digits alone for a port number`
 		podName       = `; a monitor of type pod takes the name of a container port: 1 to 15 lower-case letters, digits and hyphens, at least one of them a letter, with no hyphen first or last and no two in a row`
 	)
 	sixteen := strings.Repeat("a", 16)

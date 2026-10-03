@@ -1426,6 +1426,12 @@ type xpathNodes[N comparable] struct {
 	attribute func(node N, name string) (string, bool)
 	child     func(node N, name string) (N, bool)
 	firstText func(node N) (N, bool)
+	// selectedAttribute is the value of node when node is an attribute a
+	// rule selected, as `//@id` selects them, and the document hands it
+	// over as an attribute, which XML does: the label text() is that value
+	// (xpathLabels). HTML hands one over as an element that holds the value
+	// as its text, where text() is read as at any element.
+	selectedAttribute func(node N) (string, bool)
 }
 
 // linked is a link of a tree as xpathNodes gives one: no node is none.
@@ -1440,7 +1446,9 @@ func linked[N comparable](node N) (N, bool) {
 // from which its navigator cannot start — it panics, saying it does not know
 // the node's type — so the navigator starts on the element and is moved to
 // the attribute of that name and value. From there `.` is the attribute's
-// value, `name()` its name and `..` its element, as XPath has them.
+// value, `name()` its name and `..` its element, as XPath has them, and
+// `text()` selects nothing: the label text() is given the value without the
+// engine (xpathLabels).
 func xmlNavigator(node *xmlquery.Node) xpath.NodeNavigator {
 	if node.Type != xmlquery.AttributeNode || node.Parent == nil {
 		return xmlquery.CreateXPathNavigator(node)
@@ -1534,6 +1542,12 @@ var xmlNodes = xpathNodes[*xmlquery.Node]{
 		}
 		return nil, false
 	},
+	selectedAttribute: func(node *xmlquery.Node) (string, bool) {
+		if node.Type != xmlquery.AttributeNode {
+			return "", false
+		}
+		return node.InnerText(), true
+	},
 }
 
 // htmlAttribute is the value of node's attribute of a name as the document
@@ -1610,6 +1624,7 @@ var htmlNodes = xpathNodes[*html.Node]{
 		}
 		return nil, false
 	},
+	selectedAttribute: func(*html.Node) (string, bool) { return "", false },
 }
 
 // selectedTexts gives the text of each node a rule selected. A node's text is
@@ -1785,6 +1800,12 @@ func addComputedXPathSeries[N comparable](ctx context.Context, out *model.Metric
 		}
 		return ruleFailure(c, rule, problem)
 	}
+	if unreadable := unreadableXPathLabel(nodes, rule, plan); unreadable != nil {
+		if handleMetricError(ctx, c, rule, unreadable) {
+			return nil
+		}
+		return ruleFailure(c, rule, unreadable)
+	}
 	labels := xpathLabels(nodes, root, plan)
 	if missing := missingRequiredLabel(rule, labels); missing != nil {
 		if handleMetricError(ctx, c, rule, missing) {
@@ -1839,6 +1860,14 @@ func xpathRule[N comparable](ctx context.Context, out *model.MetricSet, root N, 
 			return ruleFailure(c, rule, missing)
 		}
 		return nil
+	}
+	// A label that cannot be read in this kind of document is the rule's
+	// failure, once, rather than a label left off each of its series.
+	if unreadable := unreadableXPathLabel(nodes, rule, plan); unreadable != nil {
+		if handleMetricError(ctx, c, rule, unreadable) {
+			return nil
+		}
+		return ruleFailure(c, rule, unreadable)
 	}
 	out.Metrics = growSeries(ctx, out.Metrics, len(selected))
 	texts := selectedTexts[N]{nodes: nodes, selected: selected}

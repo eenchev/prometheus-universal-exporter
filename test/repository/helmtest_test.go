@@ -7,6 +7,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -41,8 +42,10 @@ type shellPiece struct {
 // command separators — `;` and the end of a line, `&&`, `||` and `&`, each
 // kept as what it is, since a check is only worth what follows it lets it be —
 // pipes and command substitutions. Redirections are dropped, and so are
-// comments. It knows the quoting rules and nothing of the grammar, which is
-// enough for scripts as plain as these.
+// comments; a here-string is kept, as `<<<` and the word after it, since what
+// it hands a command is what the command reads, and of a here-document the
+// `<<`, since the lines after it are not commands. It knows the quoting rules and
+// nothing of the grammar, which is enough for scripts as plain as these.
 func lexShell(script string) []shellToken {
 	return lexShellAt(script, 0)
 }
@@ -158,6 +161,9 @@ func lexShellAt(script string, base int) []shellToken {
 		case c == '&' && !strings.HasPrefix(script[i:], "&>"):
 			op("&")
 			i++
+		case strings.HasPrefix(script[i:], "<<<"):
+			op("<<<")
+			i += 3
 		case c == '>' || c == '<' || c == '&':
 			// `>/dev/null`, `>&2`, `2>&1` and `>> "$GITHUB_OUTPUT"`: a file
 			// descriptor written before the operator belongs to it.
@@ -165,6 +171,16 @@ func lexShellAt(script string, base int) []shellToken {
 				word, inWord = nil, false
 			}
 			flush()
+			if strings.HasPrefix(script[i:], "<<") {
+				// A here-document: its delimiter is skipped as a
+				// redirection's target is, and the operator kept, since
+				// the lines that follow are then no commands.
+				op("<<")
+				i += len("<<")
+				if i < len(script) && script[i] == '-' {
+					i++
+				}
+			}
 			for i < len(script) && (script[i] == '>' || script[i] == '<' || script[i] == '&') {
 				i++
 			}
@@ -224,6 +240,34 @@ func (token shellToken) expand(variables map[string]string) string {
 	return b.String()
 }
 
+var wholeVariable = regexp.MustCompile(`^\$(?:[A-Za-z_][A-Za-z0-9_]*|\{[A-Za-z_][A-Za-z0-9_]*\})$`)
+
+// variableName returns the name of the variable a word is, `$name` or
+// `${name}`, and nothing for any other word.
+func variableName(word string) string {
+	if !wholeVariable.MatchString(word) {
+		return ""
+	}
+	return strings.Trim(word, "${}")
+}
+
+// printedVariable returns the name of the variable a command prints whole, a
+// line of it after the other, which is how a kept render is handed to what
+// reads it: `echo "$name"`, or `printf '%s\n' "$name"`, which is the same
+// text. Both readers of the helm checks ask it, so that a check one of them
+// weighs is a check the other lists.
+func printedVariable(words []string) string {
+	if len(words) == 3 && words[0] == "printf" && words[1] == `%s\n` {
+		return variableName(words[2])
+	}
+	if len(words) == 2 && words[0] == "echo" {
+		return variableName(words[1])
+	}
+	return ""
+}
+
+var literalAssignment = regexp.MustCompile(`^([A-Za-z_][A-Za-z0-9_]*)=(.*)$`)
+
 // shellCommand is one command of a script, a pipeline included, with the
 // operator that ends it: `;` for that or the end of a line, `&&`, `||` or `&`.
 type shellCommand struct {
@@ -277,7 +321,9 @@ func helmChecks(script string, variables map[string]string) map[string]bool {
 
 // runHelmCommands walks the commands of a script, a `for` loop's body once for
 // each of its words, and records every check it recognises. captured holds the
-// helm command line behind each `name="$(helm ...)"`.
+// helm command line behind each `name="$(helm ...)"`. A variable given a
+// value written out (`chart=charts/x`) is replaced by it in the commands
+// after, so a command line means the same with the value in a variable.
 func runHelmCommands(commands [][]shellToken, variables, captured map[string]string, checks map[string]bool) {
 	for i := 0; i < len(commands); i++ {
 		command := commands[i]
@@ -335,6 +381,10 @@ func runHelmCommands(commands [][]shellToken, variables, captured map[string]str
 			}
 			continue
 		}
+		if match := literalAssignment.FindStringSubmatch(words[0]); match != nil && len(command) == 1 {
+			variables[match[1]] = match[2]
+			continue
+		}
 		// A pipeline: helm, or the echo of a kept render, and what reads it.
 		stage, rest := words, []string(nil)
 		for j, token := range command {
@@ -347,8 +397,8 @@ func runHelmCommands(commands [][]shellToken, variables, captured map[string]str
 		switch {
 		case len(stage) > 0 && stage[0] == "helm":
 			line = helmCommandLine(stage)
-		case len(stage) == 2 && stage[0] == "echo" && strings.HasPrefix(stage[1], "$") && captured[stage[1][1:]] != "":
-			line = captured[stage[1][1:]]
+		case captured[printedVariable(stage)] != "":
+			line = captured[printedVariable(stage)]
 		default:
 			continue
 		}
@@ -494,25 +544,32 @@ const chartStepCondition = "steps.changes.outputs.chart == 'true'"
 // ciChartBlocks returns the shell of every step of the workflow that runs
 // helm, a block for each step. GitHub runs a step that names no shell, or
 // names bash or sh, in a shell started with -e; a `shell:` written as a
-// command says itself whether it is. A step, or its job, with
-// continue-on-error fails nothing, and neither does a step whose `if` is not
-// the chart steps' own.
+// command says itself whether it is, and one that is not — the step's, the
+// job's default or the workflow's — is reported where it is written. A step,
+// or its job, with continue-on-error fails nothing, and neither does a step
+// whose `if` is not the chart steps' own, or a job with an `if` at all: the
+// chart steps' condition reads a step's output, which no job can.
 func ciChartBlocks(t *testing.T, workflow string) []helmBlock {
 	t.Helper()
 	type defaults struct {
 		Run struct {
-			Shell string `yaml:"shell"`
+			Shell yaml.Node `yaml:"shell"`
 		} `yaml:"run"`
 	}
 	var parsed struct {
 		Defaults defaults `yaml:"defaults"`
 		Jobs     map[string]struct {
 			Defaults        defaults  `yaml:"defaults"`
+			If              yaml.Node `yaml:"if"`
 			ContinueOnError yaml.Node `yaml:"continue-on-error"`
 			Steps           []struct {
+				ID   string `yaml:"id"`
+				With struct {
+					Filters string `yaml:"filters"`
+				} `yaml:"with"`
 				Name            string    `yaml:"name"`
 				Run             yaml.Node `yaml:"run"`
-				Shell           string    `yaml:"shell"`
+				Shell           yaml.Node `yaml:"shell"`
 				If              yaml.Node `yaml:"if"`
 				ContinueOnError yaml.Node `yaml:"continue-on-error"`
 			} `yaml:"steps"`
@@ -523,7 +580,16 @@ func ciChartBlocks(t *testing.T, workflow string) []helmBlock {
 	}
 	job := parsed.Jobs["test"]
 	var blocks []helmBlock
+	// chartChanges says whether a step read so far, with the id the chart
+	// steps' condition names, gives the output it asks for whenever a file
+	// of the chart changed.
+	chartChanges := false
 	for _, step := range job.Steps {
+		if step.ID == "changes" {
+			var filters map[string][]string
+			_ = yaml.Unmarshal([]byte(step.With.Filters), &filters)
+			chartChanges = slices.Contains(filters["chart"], "charts/**")
+		}
 		if !regexp.MustCompile(`(?m)(^|[\s(])helm (lint|template|package|install)\b`).MatchString(step.Run.Value) {
 			continue
 		}
@@ -537,14 +603,17 @@ func ciChartBlocks(t *testing.T, workflow string) []helmBlock {
 			// A block scalar's text starts on the line after its indicator.
 			block.line++
 		}
-		shell := step.Shell
-		if shell == "" {
-			shell = job.Defaults.Run.Shell
+		shell, owner := step.Shell, block.where
+		if shell.Kind == 0 {
+			shell, owner = job.Defaults.Run.Shell, "the job test"
 		}
-		if shell == "" {
-			shell = parsed.Defaults.Run.Shell
+		if shell.Kind == 0 {
+			shell, owner = parsed.Defaults.Run.Shell, "the workflow"
 		}
-		block.errexit = shellEndsOnFailure(shell)
+		block.errexit = shellEndsOnFailure(shell.Value)
+		if !block.errexit {
+			block.lost = append(block.lost, helmFinding(file, shell.Line, owner, "the shell is not bash or sh started with -e, as GitHub starts the shell of a step that names none, so a failing check does not end a chart step; leave `shell:` out, or write it as `bash -e {0}`", "shell: "+shell.Value))
+		}
 		if node := step.ContinueOnError; node.Kind != 0 && node.Value != "false" {
 			block.lost = append(block.lost, helmFinding(file, node.Line, block.where, "the step has continue-on-error, so the job passes when it fails", "continue-on-error: "+node.Value))
 		}
@@ -554,14 +623,25 @@ func ciChartBlocks(t *testing.T, workflow string) []helmBlock {
 		if node := step.If; node.Kind != 0 && node.Value != chartStepCondition {
 			block.lost = append(block.lost, helmFinding(file, node.Line, block.where, "the step does not run whenever the chart changed, as the chart steps do with `if: "+chartStepCondition+"`", "if: "+node.Value))
 		}
+		if node := step.If; node.Value == chartStepCondition && !chartChanges {
+			block.lost = append(block.lost, helmFinding(file, node.Line, block.where, "the step runs when steps.changes.outputs.chart is true, and no step before it with the id `changes` sets that for a change under charts/**: the `filters` of that step need a `chart` list that holds 'charts/**'", "if: "+node.Value))
+		}
+		if node := job.If; node.Kind != 0 {
+			block.lost = append(block.lost, helmFinding(file, node.Line, "the job test", "the job has an `if`, so the chart steps do not run whenever the chart changed; the one condition they have is each step's `if: "+chartStepCondition+"`, which a job cannot have", "if: "+node.Value))
+		}
 		blocks = append(blocks, block)
 	}
 	return blocks
 }
 
+var shellFlags = regexp.MustCompile(`^-[euxo]+$`)
+
 // shellEndsOnFailure reports whether a workflow step's shell ends at a
 // command that fails: GitHub's own bash and sh do, started as `bash -e {0}`
 // and `sh -e {0}`, and a shell given as a command does when it has the flag.
+// Such a command is bash or sh, the options GitHub itself gives them and the
+// script, `{0}`, last; with any other word — `-n`, which runs nothing, or `-c`
+// and a command of its own — it is not a shell the checks are known to run in.
 func shellEndsOnFailure(shell string) bool {
 	words := strings.Fields(shell)
 	if len(words) == 0 || shell == "bash" || shell == "sh" {
@@ -571,12 +651,25 @@ func shellEndsOnFailure(shell string) bool {
 		// Another program's flags are its own, and its script is not shell.
 		return false
 	}
-	for _, word := range words[1:] {
-		if strings.HasPrefix(word, "-") && !strings.HasPrefix(word, "--") && strings.Contains(word, "e") {
-			return true
+	ends := false
+	for i := 1; i < len(words); i++ {
+		word := words[i]
+		switch {
+		case word == "{0}" && i == len(words)-1, word == "--noprofile", word == "--norc":
+		case shellFlags.MatchString(word):
+			ends = ends || strings.Contains(word, "e")
+			if strings.Contains(word, "o") {
+				// -o takes the name of its option from the next word.
+				if i++; i == len(words) || !slices.Contains([]string{"errexit", "nounset", "pipefail", "xtrace"}, words[i]) {
+					return false
+				}
+				ends = ends || words[i] == "errexit"
+			}
+		default:
+			return false
 		}
 	}
-	return false
+	return ends && words[len(words)-1] == "{0}"
 }
 
 // readHelmLists reads the two files the helm checks are written in.
@@ -807,13 +900,37 @@ func chartCasesMissing(local, ci map[string]bool) []string {
 	var findings []string
 	for _, check := range want {
 		if !local[check] {
-			findings = append(findings, "`make helm-test` does not make this check of the chart:\n"+check)
+			findings = append(findings, "`make helm-test` does not make this check of the chart"+chartCaseAdvice(check, local))
 		}
 		if !ci[check] {
-			findings = append(findings, "ci.yml does not make this check of the chart:\n"+check)
+			findings = append(findings, "ci.yml does not make this check of the chart"+chartCaseAdvice(check, ci))
 		}
 	}
 	return findings
+}
+
+// chartCaseAdvice says, of a chart case a list lacks, why the list has to
+// make it and what to write: the check as the comparison reads it, and beside
+// it the check the list makes with every word of it and more — an option
+// added to its helm command, say — when there is one, the nearest first,
+// since that is then the check that was meant.
+func chartCaseAdvice(check string, made map[string]bool) string {
+	advice := ", which the Go tests make and are skipped without helm, so both lists have to make it too, with this command line and this pattern (chartCasesMissing in test/repository/helmtest_test.go lists them; a case changed on purpose is changed there and in both lists):\n" + check
+	words := strings.Fields(check)
+	nearest, extra := "", 0
+	for _, other := range sortedKeys(made) {
+		otherWords := strings.Fields(other)
+		if otherWords[0] != words[0] || (nearest != "" && len(otherWords)-len(words) >= extra) {
+			continue
+		}
+		if !slices.ContainsFunc(words, func(word string) bool { return !slices.Contains(otherWords, word) }) {
+			nearest, extra = other, len(otherWords)-len(words)
+		}
+	}
+	if nearest != "" {
+		advice += "\nthe list makes this one, which is another check to the comparison:\n" + nearest
+	}
+	return advice
 }
 
 // The chart refuses and renders things that only the Go tests looked at: the

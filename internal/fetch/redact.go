@@ -112,21 +112,28 @@ func RedactURLString(raw string, how URLRedaction) string {
 //
 //   - a pair after a ; is a pair of its own, so the token of
 //     a=1;token=SECRET is masked, as a server that splits there reads it;
+//   - a name is also everything from the last & to the first = after it,
+//     its ; included, as a server that splits at & alone reads it, so the
+//     values of token;id=SECRET, pass;word=SECRET and key;=SECRET are
+//     masked, though no piece between two ; reads as a credential's pair;
 //   - once a value has been masked, what follows it up to the next & is the
 //     rest of that value to a server that splits at & alone, so there the
 //     values of later pairs are masked too, and a piece without = whole:
 //     token=SE;CRET shows neither half.
 //
-// A name is compared as a server reads it, its escapes decoded (queryName),
-// so %74oken=SECRET is masked as token=SECRET is; it is shown as written.
+// A name is compared as a server reads it, its escapes decoded, and as it
+// was written too (credentialQueryName), so %74oken=SECRET is masked as
+// token=SECRET is; it is shown as written.
 func maskQuery(raw string, all bool) string {
 	if raw == "" {
 		return ""
 	}
 	var b strings.Builder
 	b.Grow(len(raw))
-	// masked says a value has been masked since the last &.
-	masked := false
+	// masked says a value has been masked since the last &, and wholeName
+	// that the name a server splitting at & alone reads there, which ends at
+	// the first = after that &, is a credential's.
+	masked, wholeName := false, credentialUpToEquals(raw)
 	for len(raw) > 0 {
 		piece, separator := raw, ""
 		if end := strings.IndexAny(raw, "&;"); end >= 0 {
@@ -135,7 +142,9 @@ func maskQuery(raw string, all bool) string {
 		raw = raw[len(piece)+len(separator):]
 		name, _, hasValue := strings.Cut(piece, "=")
 		switch {
-		case hasValue && (all || masked || CredentialName(queryName(name))):
+		// The first piece with a = after an & holds the = that ends the
+		// whole name, so wholeName is asked of that piece's value.
+		case hasValue && (all || masked || wholeName || credentialQueryName(name)):
 			b.WriteString(name)
 			b.WriteString("=" + Redacted)
 			masked = true
@@ -146,10 +155,32 @@ func maskQuery(raw string, all bool) string {
 		}
 		b.WriteString(separator)
 		if separator == "&" {
-			masked = false
+			masked, wholeName = false, credentialUpToEquals(raw)
 		}
 	}
 	return b.String()
+}
+
+// credentialUpToEquals says whether what a query holds before its first =,
+// when that = comes before any &, reads as a credential's name: the name of
+// the query's first pair to a server that splits pairs at & alone.
+func credentialUpToEquals(raw string) bool {
+	if end := strings.IndexByte(raw, '&'); end >= 0 {
+		raw = raw[:end]
+	}
+	name, _, hasValue := strings.Cut(raw, "=")
+	// A name without a ; is the name the piece itself is asked for.
+	return hasValue && strings.Contains(name, ";") && credentialQueryName(name)
+}
+
+// credentialQueryName says whether a query pair's name reads as a
+// credential's: as a server reads it, its escapes decoded (queryName), or as
+// it was written, where that is something else. A server that gives up on a
+// malformed escape reads the name as it was written, and %ZZ%eauth has auth
+// in it only that way.
+func credentialQueryName(raw string) bool {
+	name := queryName(raw)
+	return CredentialName(name) || name != raw && CredentialName(raw)
 }
 
 // queryName is the name of a query pair as a server reads it: its escapes

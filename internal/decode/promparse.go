@@ -55,17 +55,33 @@ import (
 // a lock is read between the two now and then, and one such series must not
 // fail every family of the scrape. What cannot be one series is an error
 // naming it: a second _sum or _count, and two buckets with one bound or two
-// values of one quantile. So is a sample line that is no part of its family,
-// as any malformed line is: a sample of a histogram that is neither a bucket
-// with an le label, a _sum nor a _count, such as one named as the family
-// itself, and a sample named as its summary family without a quantile label.
-// expfmt made an empty series of such a line, and it is refused rather than
-// left out without a word.
+// values of one quantile.
+//
+// A sample line that is no part of its family is left out, and counted
+// (PrometheusReport): a sample of a histogram that is neither a bucket with
+// an le label, a _sum nor a _count, such as one named as the family itself,
+// and a sample named as its summary family without a quantile label. Client
+// libraries write such lines, and Prometheus ingests them: Micrometer writes
+// a timer's percentiles as x{quantile="0.95"} under "# TYPE x histogram", and
+// VictoriaMetrics' library its buckets as x_bucket{vmrange="..."}. Failing
+// the decode over one lost every family of such a target. The line cannot be
+// passed on either: its series would be a second family named as the
+// histogram, which an exposition cannot hold. expfmt made an empty series of
+// it.
 //
 // Families come back in the order they were first seen, and series in the
 // order of their first sample, so a decode is deterministic.
 func parsePrometheusText(body []byte) ([]model.Metric, error) {
 	return parseExposition(body, promOptions{})
+}
+
+// PrometheusReport is what the prometheus decoder left out of an exposition.
+type PrometheusReport struct {
+	// LeftOutLines counts the sample lines left out as no part of their
+	// histogram or summary family, in the families that are kept, and
+	// FirstLeftOut says which was first and what was expected in its place.
+	LeftOutLines int
+	FirstLeftOut string
 }
 
 // promOptions says how to read an exposition, and which of its series to
@@ -105,6 +121,13 @@ type promOptions struct {
 //     is kept, and are put in the families' order at the end only when they
 //     were not read in it, which is rare.
 func parseExposition(body []byte, options promOptions) ([]model.Metric, error) {
+	metrics, _, err := parseExpositionReporting(body, options)
+	return metrics, err
+}
+
+// parseExpositionReporting is parseExposition, and reports the sample lines
+// it left out when there are any.
+func parseExpositionReporting(body []byte, options promOptions) ([]model.Metric, *PrometheusReport, error) {
 	p := promParser{byName: map[string]*promFamily{}, options: options}
 	if options.keep == nil {
 		// Without a filter every sample line may be a series, and most
@@ -130,18 +153,18 @@ func parseExposition(body []byte, options promOptions) ([]model.Metric, error) {
 		p.number = number
 		if err := p.line(line); err != nil {
 			if errors.Is(err, model.ErrLimitExceeded) {
-				return nil, err
+				return nil, nil, err
 			}
-			return nil, fmt.Errorf("text format parsing error in line %d: %w", number, err)
+			return nil, nil, fmt.Errorf("text format parsing error in line %d: %w", number, err)
 		}
 		if !more {
 			break
 		}
 	}
 	if err := p.settle(); err != nil {
-		return nil, fmt.Errorf("text format parsing error: %w", err)
+		return nil, nil, fmt.Errorf("text format parsing error: %w", err)
 	}
-	return p.metrics(), nil
+	return p.metrics(), p.report, nil
 }
 
 // promSeriesEstimate is the most series the parser makes room for before it
@@ -217,6 +240,8 @@ type promParser struct {
 	eof bool
 	// number is the line being read.
 	number int
+	// report is what was left out, and nil while nothing was.
+	report *PrometheusReport
 
 	// What follows is used again for every line, so that a line costs no
 	// allocation of its own.
@@ -521,15 +546,15 @@ func (p *promParser) add(f *promFamily, role int, value float64, timestamp int64
 			return fmt.Errorf("expected a whole number as the count for %q, got %v", f.name, value)
 		}
 	}
+	if !f.kept {
+		// Checked as a kept sample is, and dropped: nothing of it is held.
+		return nil
+	}
 	if special != "" && role == promRoleNone && !hasBound {
 		// A summary or histogram sample that is neither _sum, _count, a
 		// quantile nor a bucket holds nothing a series of the family has: its
-		// value has no place. That is a malformed line, as a value that is no
-		// number is, and is refused as one, also in a family that is not kept.
-		return p.strayError(f)
-	}
-	if !f.kept {
-		// Checked as a kept sample is, and dropped: nothing of it is held.
+		// value has no place. It makes no series and is left out, counted.
+		p.leaveOut(f)
 		return nil
 	}
 	if special == "" {
@@ -623,18 +648,29 @@ func (p *promParser) add(f *promFamily, role int, value float64, timestamp int64
 	return nil
 }
 
-// strayError is the error of the sample being read, which belongs to the
-// histogram or summary family f by its name and is none of the samples such a
-// family has: it names the sample and what was expected in its place.
-func (p *promParser) strayError(f *promFamily) error {
+// leaveOut counts the sample being read, which belongs to the histogram or
+// summary family f by its name and is none of the samples such a family has,
+// as left out. Of the first such line the report names the line, the sample
+// and what was expected in its place; the others are only counted, as an
+// exposition has one such line for every series of the family.
+func (p *promParser) leaveOut(f *promFamily) {
+	if p.report == nil {
+		p.report = &PrometheusReport{FirstLeftOut: fmt.Sprintf("line %d: %s", p.number, p.stray(f))}
+	}
+	p.report.LeftOutLines++
+}
+
+// stray says what the sample being read is and what the family f has in its
+// place.
+func (p *promParser) stray(f *promFamily) string {
 	if f.typ == model.SummaryMetricType {
-		return fmt.Errorf("expected %[1]s with a quantile label, %[1]s_sum or %[1]s_count as a sample of the summary %[1]s, got %[2]s without a quantile label", f.name, p.sampleName)
+		return fmt.Sprintf("expected %[1]s with a quantile label, %[1]s_sum or %[1]s_count as a sample of the summary %[1]s, got %[2]s without a quantile label", f.name, p.sampleName)
 	}
 	got := string(p.sampleName)
 	if got == f.name+"_bucket" {
 		got += " without an le label"
 	}
-	return fmt.Errorf("expected %[1]s_bucket with an le label, %[1]s_sum or %[1]s_count as a sample of the histogram %[1]s, got %[2]s", f.name, got)
+	return fmt.Sprintf("expected %[1]s_bucket with an le label, %[1]s_sum or %[1]s_count as a sample of the histogram %[1]s, got %[2]s", f.name, got)
 }
 
 // settle checks every histogram and summary read, once all their samples

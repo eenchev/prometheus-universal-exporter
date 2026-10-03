@@ -26,7 +26,7 @@ import (
 // would be missing from the static targets endpoint for up to that interval
 // after a start or a reload, which looks the same as a target nobody
 // configured. Its cadence then starts at the next point of it at least one
-// whole interval after that first scrape began. The first scrape has its
+// whole interval after that first scrape was due. The first scrape has its
 // interval to end in, as every scrape has, so it has ended when the cadence
 // starts, and the first turn of the cadence starts on time with an interval
 // of its own. Started sooner, half an interval on, the cadence's first turn
@@ -34,6 +34,18 @@ import (
 // was left what remained of its turn: less than the scrape takes, so a
 // healthy target whose scrapes take most of their interval was cut short and
 // reported down once after every start and every reload that changed it.
+//
+// The interval is measured from when the first scrape was due, and not from
+// when the loop came to start it, a moment later. With an interval of
+// firstScrapeWindow or less the first scrape is due at a point of the
+// cadence itself, so the second scrape comes one interval after it. Measured
+// from the moment the loop woke, always a little past that point, the next
+// point was a hair less than an interval away and was passed over: every
+// such target was scraped a second time only two intervals after the first,
+// after every start and every reload that changed it. Only a first scrape
+// that was put off, because a scrape begun on the target's old definition
+// still ran, has the interval measured from when it began: that can be the
+// old scrape's whole interval after it was due.
 //
 // A scrape is bounded by its interval, and two scrapes of a target never run
 // at once. A turn that comes while the target's last scrape still runs —
@@ -47,7 +59,8 @@ import (
 // is really lost: the scrape it waited for had not ended when the turn after
 // it came, or no scrape slot came free within the interval. That budget, less
 // than an interval by the little the scrape before it ran over, is one of the
-// steady cadence only: the first scrape never runs into the cadence.
+// steady cadence: the first scrape runs into the cadence only by the moment
+// the loop was late in starting it.
 
 // scheduleCheckInterval is the longest the scheduler sleeps, so a reloaded
 // target file takes effect within it.
@@ -57,6 +70,14 @@ const scheduleCheckInterval = time.Second
 // first scraped, spread by name; a target whose interval is shorter uses its
 // interval.
 const firstScrapeWindow = 10 * time.Second
+
+// lateFirstScrapeShare is the share of its interval, one in so many, by
+// which the loop may be late in making a target's first scrape and the
+// cadence still be counted from when that scrape was due. A loop that sleeps
+// until a time wakes a little after it, far inside this; one later than
+// this was held up, and the cadence is counted from when the scrape began,
+// so that it has ended, within its interval, when the cadence starts.
+const lateFirstScrapeShare = 10
 
 // targetSchedule is when each static target is next due.
 type targetSchedule struct {
@@ -78,8 +99,11 @@ type staticTargetState struct {
 	interval  time.Duration
 	next      time.Time
 	// cadence is where the target's regular cadence starts, until its first,
-	// earlier scrape has been made; zero after.
+	// earlier scrape has been made; zero after. putOff says that first
+	// scrape came due while a scrape of the target still ran, and waits for
+	// it.
 	cadence time.Time
+	putOff  bool
 	// running is set while a scrape of the target is in flight. A target
 	// a reload changed starts a new state that shares it, so
 	// a scrape begun on the old definition still keeps the next one from
@@ -197,16 +221,28 @@ func (s *targetSchedule) plan(cfg *model.Config, targets []model.StaticTarget, n
 			// skipped, which would put it off to its cadence, but stays
 			// due, and is made as soon as that scrape ends: the loop
 			// plans again when it does, and at every check.
-			look = now.Add(scheduleCheckInterval)
+			look, state.putOff = now.Add(scheduleCheckInterval), true
 		case !state.cadence.IsZero():
 			// The first scrape, with the whole interval to end in: the
 			// cadence takes over a whole interval on or later, when this
 			// scrape has ended, so its first turn waits for nothing and has
-			// a whole interval too.
+			// a whole interval too. The interval is counted from when the
+			// scrape was due, which now is always a little past: counted
+			// from now, the point of the cadence one interval after a first
+			// scrape made at such a point was never far enough. A scrape
+			// that was put off began when it is made, and so did one the
+			// loop came to more than a tenth of the interval late, as
+			// after a stall of the process: counted from a time that far
+			// back, the cadence would start while this scrape still ran,
+			// or in the past.
+			began := state.next
+			if state.putOff || now.Sub(state.next) > interval/lateFirstScrapeShare {
+				began = now
+			}
 			due = append(due, dueTarget{target: target, state: state, config: cfg, deadline: now.Add(interval)})
 			state.next = state.cadence
 			state.cadence = time.Time{}
-			for state.next.Sub(now) < interval {
+			for state.next.Sub(began) < interval {
 				state.next = state.next.Add(interval)
 			}
 			look = state.next
@@ -227,9 +263,9 @@ func (s *targetSchedule) plan(cfg *model.Config, targets []model.StaticTarget, n
 			// starts as its turn comes, as it nearly always does; one that
 			// had to wait for the last scrape to end has what is left of
 			// its turn, so it ends before the turn after it and the
-			// cadence holds. The scrape waited for is one of the cadence,
-			// which ran over its turn by little: the first scrape has ended
-			// before the cadence starts.
+			// cadence holds. The scrape waited for ran over its turn by
+			// little: one of the cadence, or the first scrape, by as much
+			// as the loop was late in starting it.
 			deadline := state.until
 			if came {
 				deadline = now.Add(interval)

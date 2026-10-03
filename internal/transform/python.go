@@ -295,7 +295,8 @@ func executePython(ctx context.Context, pythonPath, script string, d *decode.Dec
 // has none, as one the target wrote without it, and is checked as one read
 // from the target is (model.Histogram.Settle): a histogram's count and the
 // +Inf entry of its buckets are each read as the script left them, also when
-// they differ or when it left neither.
+// they differ or when it left neither. One left with nothing at all, no
+// buckets or quantiles, no sum and no count, is refused (emptySeriesError).
 func prometheusFromPython(data any) (model.MetricSet, error) {
 	document, ok := data.(map[string]any)
 	list, listed := document["metrics"].([]any)
@@ -398,6 +399,9 @@ func prometheusSeries(series map[string]any) (model.Metric, error) {
 			}
 			m.Histogram.Buckets = append(m.Histogram.Buckets, model.Bucket{UpperBound: le, CumulativeCount: cumulative})
 		}
+		if len(buckets) == 0 && noSum && noCount {
+			return m, emptySeriesError("histogram", name, "buckets", series)
+		}
 		if err := m.Histogram.Settle(); err != nil {
 			return m, fmt.Errorf("the histogram %s %w", name, err)
 		}
@@ -417,6 +421,9 @@ func prometheusSeries(series map[string]any) (model.Metric, error) {
 			}
 			m.Summary.Quantiles = append(m.Summary.Quantiles, model.Quantile{Quantile: quantile, Value: value})
 		}
+		if len(quantiles) == 0 && noSum && noCount {
+			return m, emptySeriesError("summary", name, "quantiles", series)
+		}
 		if err := m.Summary.Settle(); err != nil {
 			return m, fmt.Errorf("the summary %s %w", name, err)
 		}
@@ -428,6 +435,26 @@ func prometheusSeries(series map[string]any) (model.Metric, error) {
 		m.Value = value
 	}
 	return m, nil
+}
+
+// emptySeriesError is the error of a histogram or a summary a pre-script left
+// with nothing: none of its parts, its buckets or quantiles, no sum and no
+// count. The decoder never reads such a series from a target, and it would be
+// exported as a TYPE line with no sample under it. It is what a misspelled
+// key leaves, "bucket" for "buckets", so the error says which keys such a
+// series has and which this one has, the first of them when they are many.
+func emptySeriesError(kind, name, parts string, series map[string]any) error {
+	const shown = 12
+	keys := model.SortedKeys(series)
+	more := ""
+	if len(keys) > shown {
+		more = fmt.Sprintf(" and %d more", len(keys)-shown)
+		keys = keys[:shown]
+	}
+	for i, key := range keys {
+		keys[i] = model.QuoteValue(key)
+	}
+	return fmt.Errorf("the %[1]s %[2]s has no %[3]s, no sum and no count; a %[1]s series has the keys %[3]q, \"sum\" and \"count\", and this one has the keys %[4]s%[5]s", kind, name, parts, strings.Join(keys, ", "), more)
 }
 
 // executePythonPreScript runs a pre-script and returns the data it left.

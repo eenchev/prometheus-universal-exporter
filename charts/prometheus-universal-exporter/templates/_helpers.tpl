@@ -532,7 +532,7 @@ http
 {{- fail (printf "monitors entry %q has port %q; a monitor of type pod takes the name of a container port: 1 to 15 lower-case letters, digits and hyphens, at least one of them a letter, with no hyphen first or last and no two in a row" $name $text) -}}
 {{- end -}}
 {{- else if not (and $named (le (len $text) 63)) -}}
-{{- fail (printf "monitors entry %q has port %q; a monitor of type service takes the name of a Service port: 1 to 63 lower-case letters, digits and hyphens, at least one of them a letter, with no hyphen first or last" $name $text) -}}
+{{- fail (printf "monitors entry %q has port %q; a monitor of type service takes the name of a Service port: 1 to 63 lower-case letters, digits and hyphens, with no hyphen first or last, and, by this chart's own rule, at least one letter, since it takes digits alone for a port number" $name $text) -}}
 {{- end -}}
 {{- $text -}}
 {{- end -}}

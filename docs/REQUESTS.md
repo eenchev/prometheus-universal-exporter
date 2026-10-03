@@ -133,19 +133,30 @@ sends more fails the scrape as a limit does — `the response headers are larger
 than 1048576 bytes, the most the exporter reads of a response's headers` —
 and is not retried, since it would send them again.
 
-Over HTTP/2 ([`enable_http2`](#redirects-and-http2)) the bound is the same and
-so is the single attempt, but the error is that one only when the headers
+Over HTTP/2 ([`enable_http2`](#redirects-and-http2)) the bound is the same,
+but the error is that one, with its single attempt, only when the headers
 arrive whole before they are found too large, as headers that repeat one value
 do. Headers that pass the bound while more are still arriving make Go's HTTP/2
 client close the connection, and what it reports then says nothing of headers
 and is what it reports for any answer that breaks the protocol. The exporter
-cannot tell the two apart, so it does not call it a limit: the scrape fails
-as a failed request, `connection error: PROTOCOL_ERROR: the HTTP/2 connection
-was closed over what the target sent, which is not retried; an answer whose
-headers are larger than 1048576 bytes, the most the exporter reads of a
-response's headers, ends this way over HTTP/2, so look at the size of the
-target's response headers first`. A request still waiting for its answer on
-that connection fails the same way; the next request opens a new one.
+cannot tell the two apart, so it does not call it a limit, and every request
+still waiting for its answer on that connection is handed the same error,
+whatever its own answer would have been. So a request that draws it is
+retried once, as one of its [`retry.attempts`](#retries), on a connection made
+for it alone and closed after its answer: a request that only shared the
+connection gets its answer there, also when the request whose headers closed
+the connection is retried at the same moment. One that
+draws the error a second time is not retried again, however many attempts are
+left, and its scrape fails as a failed request: `connection error:
+PROTOCOL_ERROR: the HTTP/2 connection was closed over what the target sent,
+as the connection before it was, so the request is not retried again; an
+answer whose headers are larger than 1048576 bytes, the most the exporter
+reads of a response's headers, ends this way over HTTP/2, so look at the size
+of the target's response headers first`. With `retry.attempts: 0`, the
+default, there is no retry, as for any failure, and the error says that the
+connection was closed `in answer to this request or to another on the same
+connection`: a collector that shares a target with one whose headers may be
+over the bound needs `retry.attempts` of at least 1 to get past it.
 
 ## Path parameters
 
@@ -556,11 +567,13 @@ request:
 ```
 
 The exporter retries transport failures and transient HTTP responses (`408`,
-`425`, `429`, and `5xx`). Other HTTP statuses are returned immediately. Three
+`425`, `429`, and `5xx`). Other HTTP statuses are returned immediately. Two
 failures are not retried, since the same request would fail the same way: a
-target the collector's lists [refuse](#restricting-targets), response headers
-over [their bound](#compression-and-the-response-size), and an HTTP/2
-connection closed for a protocol error before the answer's headers were read.
+target the collector's lists [refuse](#restricting-targets) and response
+headers over [their bound](#compression-and-the-response-size). An HTTP/2
+connection closed for a protocol error before the answer's headers were read
+is retried once, on a new connection, since the error may be for another
+request's answer on the connection; the second such error ends the request.
 A
 connection that breaks while the body is being read — reset, or closed before
 the length it promised — counts as a transport failure and is retried too,

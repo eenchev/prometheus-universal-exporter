@@ -256,11 +256,21 @@ func idleWorker(t *testing.T, c *model.Collector) *pythonWorker {
 // step under a limit the worker was already past - as it is where the
 // operator's MALLOC_ARENA_MAX lets glibc reserve an arena for it - and end
 // there, before its first line, where nothing it does can catch that.
+//
+// The worker here is past its limit from the start, eight arenas under 32MiB,
+// which is what makes the thread's first step fail when it comes late.
+// Whether an interpreter that far past its limit can finish starting at all
+// is the C library's to say: where it finds no memory for the rest of the
+// launcher and ends with a MemoryError, as on GitHub's runners, there is no
+// ready worker to look at, and the test says so and is skipped.
 func TestThePythonParentWatchRunsBeforeTheMemoryLimit(t *testing.T) {
 	requireProcStatus(t)
 	t.Setenv(pythonArenaVariable, "8")
 	for range 5 {
 		worker, err := startPythonWorker(context.Background(), pythonWorkerSpec("python3", limitedCollector("early", `metric(name="v", value=1)`, 32<<20)))
+		if err != nil && strings.Contains(err.Error(), "MemoryError") {
+			t.Skipf("a worker of eight arenas does not start under 32MiB here, so there is none to look at: %v", err)
+		}
 		if err != nil {
 			t.Fatal(err)
 		}

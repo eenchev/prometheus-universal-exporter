@@ -227,9 +227,10 @@ request:
 `backoff` defaults to zero and MUST NOT be exponential. The exporter SHOULD
 retry transport failures and transient HTTP statuses `408`, `425`, `429`, and
 `500` through `599`. Other HTTP statuses MUST be returned without retrying.
-A refused target (§ 26.1), response headers over their bound and an HTTP/2
-connection closed for a protocol error before the response's headers were
-read (§ 4) MUST NOT be retried.
+A refused target (§ 26.1) and response headers over their bound (§ 4) MUST
+NOT be retried. An HTTP/2 connection closed for a protocol error before the
+response's headers were read (§ 4) MUST be retried once, as one of
+`attempts`, and MUST NOT be retried again when the retry ends the same way.
 A connection that breaks while the body is read — a reset, a body shorter than
 its `Content-Length` — MUST be retried as a transport failure is, unless the
 probe's deadline is what ended the read, and a debug report MUST show the
@@ -375,17 +376,28 @@ the request type builds itself (§ 5.1, `graphite`) MUST be dropped, every
 other pair left as written.
 
 A response's status line and headers MUST be bounded at 1 MiB, apart from
-the body's bound (§ 20). A response over it MUST fail the request and MUST
-NOT be retried. Over HTTP/1 the failure MUST be a limit error that says the
-headers were too large. Over HTTP/2 it MUST be that same limit error where
+the body's bound (§ 20). A response over it MUST fail the request. Over
+HTTP/1 the failure MUST be a limit error that says the headers were too
+large, and MUST NOT be retried. Over HTTP/2 it MUST be that same limit
+error, not retried either, where
 the client reports the headers as too large, which it does for a header list
 it reads to its end; a header list still arriving when it passes the bound
 makes the client close the connection with the protocol error it reports for
-any answer that breaks HTTP/2, which cannot be told from one. A request
+any answer that breaks HTTP/2, which cannot be told from one, and every
+request waiting on that connection is handed the same error. A request
 whose HTTP/2 connection is closed for a protocol error before its response's
-headers are read MUST therefore fail as a transport failure, not a limit
-error, MUST NOT be retried, and its error MUST say that response headers over
-the bound end this way.
+headers are read MUST therefore be retried once, within the collector's
+`retry` settings (one of `retry.attempts`, after `retry.backoff`, and not
+at all with `attempts: 0`), and the retry MUST be sent on a connection of
+its own, one made for it, which no other request is put on and which is
+closed once the answer is read, so that a request which only shared the
+connection with the answer that closed it is answered, also when the request
+that drew that answer is retried at the same moment: the two retries MUST
+NOT meet on one connection again. A request that draws the error a second
+time MUST NOT be retried again, whatever `retry.attempts` leaves. Where the
+request ends with that error it MUST fail as a transport failure, not a
+limit error, and its error MUST say that response headers over the bound end
+this way.
 
 Rendering a target for a log line or an error body MUST never fail, whatever
 the probe sent. A target that cannot be parsed MUST be withheld rather than
@@ -1385,7 +1397,10 @@ The implementation MUST document XPath behavior and namespaces.
 A rule MAY select attributes, as `//job/@size`. Its labels MUST then be
 evaluated from each attribute as XPath has it — `.` its value, `name()` its
 name, `..` its element — and MUST NOT end the scrape with an error of the
-XPath library's own.
+XPath library's own. One label is not as XPath has it: `text()` MUST give
+the attribute's value, as it always did and as it does over HTML, although
+to XPath an attribute has no text node; configurations tell the series of
+such a rule apart by it, and without it they are duplicates of one.
 
 An XPath expression that computes a value rather than selecting nodes — a
 number, a string or a boolean, as `count(//job)`, `string(/s/@load)` or
@@ -1420,9 +1435,11 @@ where that is what it means:
   `*`, `,`, `$`, quote or blank — `@xml:lang`, `@og:type`, `@v-on:click`,
   `@:href`, `@@click`, `@2x`, `@data-id` — whatever `response.namespaces`
   holds. The same name after one or more `../` steps MUST be read from that
-  ancestor by the name as written, and an attribute the HTML parser gives a
-  namespace, as `xlink:href` inside `svg`, MUST be found by its name as
-  written too.
+  ancestor by the name as written, whether the node the rule selected is an
+  element or not — a text node, as `//td/text()` selects them, has an
+  element for its parent like any other — and an attribute the HTML parser
+  gives a namespace, as `xlink:href` inside `svg`, MUST be found by its name
+  as written too.
 - Over XML, a plain name, `^@[A-Za-z_][\w.-]*$`, as `@name` or `@data-id`;
   and, while `response.namespaces` is not set, a plain name with a plain
   prefix, `@m:unit`, the prefix being the document's own.
@@ -1434,8 +1451,24 @@ map lacks it and it is not `xml`; over either a union, a predicate, a
 comparison, a step after the attribute — MUST be compiled and evaluated as
 XPath with the collector's namespaces, and checked at load (§ 24.2); it MUST
 NOT be taken for an attribute's name, which leaves the label off without a
-word. For a collector whose decoder is left to each response, a label MUST
-be accepted at load when the document of either kind would read it.
+word. For a collector whose decoder is left to each response, unset or
+`auto`, and which does not set `response.namespaces`, a label MUST
+be accepted at load when the document of either kind would read it. One that
+sets `response.namespaces` reads XML, the one kind of document namespaces
+mean anything in: with the decoder left to each response its labels MUST be
+checked at load as those of an `xml` decoder are, so that a label with a
+prefix the map lacks, `@x:unit` or `../@x:kind`, and a name only HTML can
+have, `@1x`, `@a:b:c` or `../@:kind`, are refused with the message the `xml`
+decoder gives; where the label is one attribute's name as an HTML document
+would read it, the message MUST go on to say that `response.namespaces` has
+the labels checked as XML's and that `decoder.type: html` is the setting for
+a target that answers HTML. An `html` decoder's labels MUST be checked as HTML's whatever
+`response.namespaces` holds. On the scrape, a label that cannot be read in
+the kind of document that arrived — XML, for a name only HTML can have, where
+the load accepted it for HTML — MUST NOT be left off: the rule MUST fail,
+handled by its `error_mode` as any failure of the rule is, with a message
+naming the label, the kind of document and why it cannot be read there. A
+rule that selects no node makes no series and MUST NOT fail for it.
 
 The XML decoder MUST refuse a document whose elements nest more than 512
 deep, the bound the HTML parser has for its own, as a `decode` failure saying
@@ -1554,8 +1587,17 @@ nor the one closing it, MUST still fail it, with the error it has in a body
 without such a field, whatever the other fields of the body hold: it MUST NOT
 be read on over the rows after it. `response.csv.trim_space` MUST trim the
 whitespace on both sides of every field, with a header row and without one,
-and MUST NOT take a delimiter that is itself whitespace, a tab above all, for
-whitespace of the field after it: an empty field MUST keep its column.
+and a field whose first character after whitespace is a quote MUST be read
+as a quoted field, the delimiters inside it kept. With a delimiter that is
+itself whitespace and not a space, a tab above all, it MUST NOT take the
+delimiter for whitespace of the field after it: an empty field MUST keep its
+column, while whitespace other than the delimiter between the start of a
+field and its opening quote MUST still be skipped, whitespace inside a
+quoted field MUST be left as written, and an error MUST name the line and
+column the body has it in. With a space as the delimiter the whitespace a
+field starts with MUST be skipped, spaces included, so that a run of spaces
+is one delimiter and columns aligned with spaces are read; an empty field
+cannot be written between spaces then.
 
 `response.csv.delimiter` MUST be exactly one character, and one the CSV
 reader can split on: not a double quote, a carriage return, a line feed or
@@ -1684,15 +1726,27 @@ It deliberately differs from expfmt where expfmt was wrong for a scrape target:
   kept with both numbers as they were read, the `+Inf` bucket's own count
   beside the `_count`, or with neither, and § 21 says how each output writes
   it.
-- It rejects, naming the line and the samples the family has, a sample line
-  that belongs to a histogram or summary family by its name and is none of
-  its samples: under a histogram `h`, a sample named `h`, or `h_bucket`
-  without an `le` label; under a summary `s`, a sample `s` without a
-  `quantile` label. The value of such a line has no place in a series, so it
-  MUST NOT be dropped silently, and it MUST NOT make a series; it is a
-  malformed line, refused as a value that is no number is, also in a family
-  the collector's rules do not keep. An OpenMetrics `_created` sample is no
-  such line, and is read and dropped (below).
+- It leaves out a sample line that belongs to a histogram or summary family
+  by its name and is none of its samples: under a histogram `h`, a sample
+  named `h`, or `h_bucket` without an `le` label; under a summary `s`, a
+  sample `s` without a `quantile` label. Client libraries write such lines
+  and Prometheus ingests them (Micrometer's `x{quantile="0.95"}` under
+  `# TYPE x histogram`, VictoriaMetrics' `x_bucket{vmrange="..."}`), so the
+  line MUST NOT fail the decode: every other sample of the family and every
+  other family MUST be read as if the line were not there. The value of such
+  a line has no place in a series, so it MUST NOT make a series, of its
+  family or of a second family of the same name, which an exposition cannot
+  hold; and it MUST NOT be dropped silently. The lines left out of the
+  families that are kept MUST be reported with the decoded series, as their
+  number and, for the first, its line, the sample and the samples the family
+  has (`line N: expected h_bucket with an le label, h_sum or h_count as a
+  sample of the histogram h, got h`); they MUST be counted in
+  `http_exporter_decoder_lines_skipped_total` and logged at warn level, once
+  for a scrape with that first line and the number, repeats suppressed and
+  the end logged as the failure log does (§ 25.1), per collector, target and
+  file. A line that is malformed as syntax MUST still fail the parse. An
+  OpenMetrics `_created` sample is no such line, and is read and dropped
+  uncounted (below).
 - It MUST NOT reject a value the text format allows because OpenMetrics does
   not allow it a series of its type: a counter or a `_sum` that is NaN or
   negative, buckets or quantiles out of order, bucket counts that fall, a
@@ -1913,7 +1967,12 @@ naming the series. A histogram's `count` and the `count` of the `+Inf` entry
 of its `buckets` MUST each reach the script as the target wrote it, also when
 they differ, and MUST each be read back as the script left it: a `count` that
 is not the `+Inf` bucket's, and a histogram left with neither, MUST be passed
-on as a target's is (§ 14.1), not refused. NaN and the infinities
+on as a target's is (§ 14.1), not refused. A histogram left with no
+`buckets`, no `sum` and no `count`, and a summary left with no `quantiles`,
+no `sum` and no `count`, which the decoder never reads from a target and a
+misspelled key leaves, MUST fail the scrape, naming the series, the keys
+such a series has and the keys it has; it MUST NOT be exported as a TYPE
+line without a sample. NaN and the infinities
 MUST reach a script as Python floats, and MUST come back as floats, in a
 pre-script's `data` and in `metric(...)`, although JSON, which the exporter
 and its workers exchange, has no form for them. The numbers of a worker's
@@ -2676,6 +2735,11 @@ Python MUST be checked with the configured interpreter and MUST fail to start
 when that interpreter is unusable, with an error naming its path and why it
 failed, followed by what it wrote to stderr only when it wrote anything. A configuration containing no Python MUST NOT
 invoke an interpreter at all, so a deployment that uses none is unaffected.
+One check of a configuration MUST start the interpreter once, whether its
+scripts are sound or faulty and however many collector files it reads: the
+collector file a faulty script is reported against (§ 5.0) MUST be found by
+the name of the script's collector, not by checking each file's scripts
+again.
 
 A pre-script that returns a mapping or a sequence produces structured data. When
 the collector's transform reads structured data — `jq` or `yq` — the exporter
@@ -8120,7 +8184,8 @@ Tests MUST show:
   documents' own and ones that rebind the prefixes and bind the empty one,
   and two HTML documents; at elements, text, comments, processing
   instructions, the document and the nodes made of attributes, where an
-  engine's panic is the walk's too: 417,924 labels. Every walked expression
+  engine's panic is the walk's too and `text()` is the attribute's value
+  rather than the engine's nothing: 417,924 labels. Every walked expression
   is recognised as walked and no near miss is, and `nodeText` equals the
   node's text at every node.
 - An XPath rule mixing a static label, the node's attribute, walked labels,
@@ -8210,10 +8275,11 @@ Tests MUST show:
 
 ## 34.78 Review of the branch: tab-separated values, long whole numbers, selected attributes and names shared between static targets
 
-- Tab-separated and space-separated values with `trim_space` on and off keep
-  an empty field in its column — `web02`, an empty note and `31` as host,
-  note and cpu, and an empty first field — and comma-separated values are
-  trimmed as before, a quoted field after blanks included.
+- Values separated by a tab, a no-break space or a vertical tab, with
+  `trim_space` on and off, keep an empty field in its column — `web02`, an
+  empty note and `31` as host, note and cpu, and an empty first field — and
+  comma-separated values are trimmed as before, a quoted field after blanks
+  included.
 - A JSON whole number of 4,096 digits, sign included, is an integer; one of a
   digit more, negative or not, two million digits among them, is its text,
   by the decoder and by the normalisation of a
@@ -8271,9 +8337,10 @@ Tests MUST show:
   whole (one value repeated) fail with the limit error that says the response
   headers are larger than 1048576 bytes, the target asked once; 1.2 MiB of
   headers in 150 different fields fail as a transport failure, not a limit
-  error, that says `PROTOCOL_ERROR`, that it is not retried and that headers
-  larger than 1048576 bytes end this way over HTTP/2, the target asked once;
-  and the request after it is answered on a new connection.
+  error, that says `PROTOCOL_ERROR`, that the request is not retried again
+  and that headers larger than 1048576 bytes end this way over HTTP/2, the
+  target asked twice, on two connections; and the request after it
+  is answered on a new connection.
 - Only a connection error whose code is `PROTOCOL_ERROR` is taken for the
   HTTP/2 client closing its connection, wrapped or not: one with another
   code, an error that only reads `connection error: PROTOCOL_ERROR`, a reset
@@ -8326,10 +8393,13 @@ Tests MUST show:
   `@data-id`, `@größe`, `@x-on:click.prevent`, `@:href`, `@@click` and `@2x`
   give the attribute of that name, untrimmed, and one that is absent no
   label — what main's reading by key gives for each — with `decoder.type`
-  `html` and `auto`, and whatever `response.namespaces` holds.
+  `html` whatever `response.namespaces` holds, and with `auto` without
+  `response.namespaces`, or with it for the names an `xml` decoder accepts;
+  the others are then refused at load as an `xml` decoder refuses them.
 - Over HTML `../@og:type`, `../@v-on:click`, `../@data-id` and an `@xml:lang`
   five parents up give the ancestor's attribute, with and without
-  `response.namespaces`; from a text node the rule selects, nothing.
+  `response.namespaces`; from a text node the rule selects they are read
+  from its parents as well.
 - Over HTML `@xlink:href` on an element inside `svg`, and `../@xlink:href`
   from its child, give the attribute the parser splits into a namespace and
   a key; `@href` and `@id` still do.
@@ -8398,15 +8468,17 @@ Tests MUST show:
 - A sample named as its histogram family, with labels or without, before or
   after the family's valid samples, a `_bucket` sample without an `le`
   label, a sample of a quoted UTF-8 histogram name, and a sample named as its
-  summary family without a `quantile` label each fail the parse naming the
-  line, the sample and the samples the family has, as the text format, as
-  OpenMetrics and in a family the rules do not keep.
+  summary family without a `quantile` label are each left out, the series
+  beside them read, and reported as the number of lines left out and the
+  first of them, naming the line, the sample and the samples the family has,
+  as the text format and as OpenMetrics; in a family the rules do not keep
+  nothing is reported.
 - An OpenMetrics `_created` sample of a histogram or a summary is still read
   and dropped, and in the text format `h_total` and `h_created` beside a
   histogram `h` are families of their own.
-- The differential test of the parser allows, by name, the one difference
-  from the parser it was: a sample that is no part of its histogram or
-  summary family is refused where the older parser read past the line.
+- The differential test of the parser allows no difference from the parser
+  it was: a sample that is no part of its histogram or summary family is
+  read past by both.
 - The text format writes a histogram's `+Inf` bucket with the bucket's own
   count and its `_count` with the count, also when they differ and when the
   `+Inf` bucket was read first; OpenMetrics writes such a family as `unknown`
@@ -8558,6 +8630,198 @@ Tests MUST show:
   `enabled`, and both accept it with `enabled: false`; an empty block,
   `enabled: false` alone, a block switched on, the switch merged in and a
   setting merged in without it get the same verdict from both.
+
+## 34.80 Third review: stray histogram samples, the cadence's start, namespaced labels, selected attributes, blank delimiters, shared HTTP/2 connections, masked names and the Python check
+
+- A sample that is no part of its histogram or summary family — `h 5`, a
+  labelled `h`, `h_bucket` without `le`, a sample of a quoted UTF-8 name,
+  `s 5`, a summary sample without `quantile` — is left out and the rest of
+  the body read, as the text format and as OpenMetrics: the parse reports how
+  many lines were left out and the first of them (`line 2: expected h_bucket
+  with an le label, h_sum or h_count as a sample of the histogram h, got h`),
+  two such lines are counted as two with the first named, and a family the
+  rules do not keep reports nothing.
+- A histogram beside a line that was left out of it has its own labels, its
+  buckets, its `_sum` and its `_count`: the line made no series and took no
+  label of one.
+- An exposition without such a line has no report; a value that is no
+  number, an `le` that is none and a label set left open still fail the
+  parse naming the line, also after a line that was left out.
+- The differential test of the parser, on its table and on random
+  expositions, again allows no difference from the parser it was.
+- Through a probe, what Micrometer writes for a timer with percentiles and a
+  histogram (`# TYPE x histogram`, `x{...,quantile="0.5",}` lines before the
+  buckets, a `_max` gauge, two series) is answered `200` with every bucket,
+  `_sum` and `_count` of both series, the `_max` gauge and the gauge beside
+  them, and no `quantile` line; `http_exporter_decoder_lines_skipped_total`
+  is 4 after one scrape and 8 after two, one warning `sample lines left out`
+  is logged for the two scrapes, naming line 6, what was expected and
+  `left_out: 4`, the decode is not counted as failed, and a scrape of the
+  target without the percentile lines logs the end and counts nothing.
+- Through a probe, what VictoriaMetrics' library writes with metadata (a HELP
+  line without text, `# TYPE x histogram`, `x_bucket{vmrange="..."}` lines) is
+  answered `200`, in the text format and in OpenMetrics, with the histogram's
+  `_sum`, `_count` and a `+Inf` bucket of its count, the gauge and the
+  counter beside it, and no `vmrange` line; the two bucket lines are counted
+  and one warning names the first as `x_bucket without an le label`.
+- Through a probe, `h 5` under a histogram and `s 5` under a summary beside a
+  gauge are answered `200` with the gauge alone and no TYPE line of `h` or
+  `s`; two lines are counted and one warning names line 2.
+- A directory's file with such a line is read without it, the file beside it
+  as before; the line is counted for the collector and the one warning names
+  the file.
+- A prometheus pre-script that leaves a histogram with misspelled keys
+  (`bucket`, `cnt`), a histogram with `buckets: []`, `sum: None` and
+  `count: None`, or a summary with misspelled keys fails naming the series,
+  the keys such a series has and the keys it has (`data["metrics"][1]: the
+  histogram made has no buckets, no sum and no count; a histogram series has
+  the keys "buckets", "sum" and "count", and this one has the keys "bucket",
+  "cnt", "labels", "name", "type"`), at most twelve keys and how many more; a
+  histogram of a sum, a count or buckets alone and a summary of a count or
+  quantiles alone are read back.
+- Through a transform the misspelling script fails as a script's failure and
+  the one spelling the keys is read back with its bucket and count; through a
+  probe it is answered `502` with that message in the text format and in
+  OpenMetrics, and no `# TYPE made` line is written.
+- Values separated by a tab or a no-break space under `trim_space` read a
+  quoted field written after spaces as a quoted field with the delimiter
+  inside it kept (`a`, `q<tab>1`, `x`), at the start of a line too, keep an
+  empty field in its column, leave blanks and a doubled quote inside a quoted
+  field as written, and read a bare quote in an unquoted field as written;
+  without `trim_space` a blank before a quote is the field's own.
+- Values separated by spaces under `trim_space` are read as before the
+  columns were kept: a run of spaces is one delimiter, columns aligned with
+  spaces and a quoted field with two spaces in it are read, and a row with an
+  empty field is read a column short; without `trim_space` every space is a
+  delimiter.
+- An error of tab-separated values under `trim_space` — a stray quote or an
+  open quoted field after one or two runs of blanks on its line, on a later
+  line, in a field of two lines, and beside a row read leniently for a bare
+  quote — names the line and column of the body, the same as the reader gave
+  when it skipped the blanks itself.
+- Of some 60,000 bodies of tab-separated and em-space-separated values
+  without an empty field — quoted fields after blanks, with delimiters, line
+  breaks and doubled quotes, open and stray quotes, bare quotes, CRLF and no
+  final line end — each is read under `trim_space`, fields trimmed, as the
+  reader read it when it skipped leading blanks itself, or refused with the
+  same error at the same line and column.
+- Taking the blanks before quotes out of a body returns one without any as
+  the same bytes, leaves the body it was given unchanged, and records each
+  run taken out with its place.
+- Given a time 1 ms, a twentieth and a tenth of the interval after a static
+  target's first scrape was due, for intervals of 1 s, 5 s, 10 s, 11 s and
+  60 s and 200 target names, the schedule makes the first scrape with a whole
+  interval and has the second due one interval after the first was due for
+  the intervals of ten seconds or less, and one interval to two after it, at
+  the name's offset, for the longer ones; nothing is due before the second,
+  which made as late has a whole interval, and the third is due one interval
+  after the second was.
+- Against the two rules before it, copied into the test — the cadence
+  starting half an interval, and a whole interval, after the moment the
+  first scrape was made — for intervals from 1 s to an hour and 200 names: a
+  loop on time, and one more than a tenth of the interval late, starts the
+  cadence where the whole-interval rule did; one late by less
+  starts it, for an interval of ten seconds or less, one interval after
+  the first scrape was due, where the half-interval rule put it while the
+  loop was under half an interval late and one interval sooner than the
+  whole-interval rule, and for a longer interval where the whole-interval
+  rule put it, or one interval sooner where a point of the cadence lies less
+  than the lateness past one interval after the first scrape was due.
+- Given a time more than a tenth of the interval after the first scrape was
+  due — a millisecond more, half the interval, all but a millisecond of it,
+  one interval, five, five and a half — for the same intervals and names, the
+  first scrape is made with a whole interval and the second is due one
+  interval to two after the first was made, at the name's offset; nothing is
+  due 10 ms after the first scrape nor just before the second, and the second
+  has a whole interval with the third due one interval after it.
+- With the scrape loop and the clock as they are, a static target with an
+  interval of one second that answers at once is scraped a second time
+  no more than one interval and a half after the first, within two
+  and a half intervals of the start.
+- With `response.namespaces` set and `decoder.type` unset or `auto`, the
+  labels `@x:unit`, `../@x:kind`, `@x:unit | @unit` and `string(@x:unit)`,
+  whose prefix the map lacks, and `@1x`, `../@1x`, `@a:b:c`, `../@a:b:c`,
+  `@:unit`, `../@:kind` and `@x:` are refused at load with the message an
+  `xml` decoder gives, `prefix x not defined` for the first four, followed,
+  for all but the two that are expressions, by the word on
+  `response.namespaces` and `decoder.type: html`, which an `xml` decoder's
+  message does not have; `@y:unit`,
+  `@unit`, `../@y:kind`, `../@kind`, `../@xml:lang`, `string(@y:unit)`,
+  `@y:unit | @unit` and `@y:nosuch` load and give an XML answer's values
+  with the decoder unset, `auto` and `xml`; with an `html` decoder `@x:unit`
+  still loads and is read from HTML by its name.
+- Without `response.namespaces` and with `decoder.type` unset or `auto`,
+  `@1x`, `@a:b:c` and `../@:kind` load and are read from an HTML answer. Over
+  an XML answer, for a rule that selects nodes and one that computes a
+  value: under `fail` the transform fails as the rule's failure, saying the
+  label's XPath `cannot be read in the XML document that arrived`, why, and
+  to set `decoder.type`; under `log` and `ignore` the rule gives no series,
+  one failure is counted for it, marked as logged under `log` alone, and the
+  rule after it gives its series. A rule that selects no node does not fail.
+- Over XML a rule selecting attributes (`//i/@w`, `//@id`, `//@*`) gives the
+  label `text()` each attribute's value, trimmed — what `.` gives, and what
+  main read, evaluated in the test from the node xmlquery makes of the
+  attribute — so the series are not duplicates of one; an attribute without
+  a value is no series. Over HTML the same rules give the same labels.
+- Over HTML, from a text node a rule selects (`//td/text()`), `../@2x`,
+  `../@:href`, `../@x-on:click.prevent`, `../@plain`, `../../@og:type`,
+  `../../@v-on:click`, `../../@data-id` and an `@xml:lang` six parents up
+  give the ancestor's attribute, and an attribute the ancestor lacks no
+  label.
+- Over HTTP/2, a healthy request held in flight on the connection that
+  another request's 1.2 MiB of headers close is handed the same
+  `PROTOCOL_ERROR` and, with `retry.attempts: 2`, is retried once and
+  answered: the target is asked for it twice, for the faulty request (with
+  `retry_attempts` 0) once, on two connections in all, the one the two
+  shared and a new one for the retry.
+- A request whose own headers pass the bound while arriving is asked twice
+  with `retry.attempts: 2`, the second time on another connection (a
+  different client address), and then fails as a transport failure saying
+  `PROTOCOL_ERROR`, that the connection was closed as the one before it was,
+  so the request is not retried again, and that headers larger than 1048576
+  bytes end this way over HTTP/2; with `retry.attempts: 0` it is asked once
+  and the error says the connection was closed in answer to this request or
+  to another on the same connection and that no retry was left. Headers just
+  over the bound that arrive whole are still the limit error, asked once.
+- With `retry.attempts: 3` for both, the healthy request whose retry takes
+  100 ms is answered while the request that closed the connection is retried
+  as well: each is asked twice, on three connections in all, the one the two
+  shared and one for each retry; neither retry's connection is kept, so two
+  more requests open one connection more, which the pool keeps.
+- A query value under a name with a `;` in it is masked in a displayed
+  target when the whole text from the last `&` to the first `=` reads as a
+  credential's name: `token;id=S3CRET`, `pass;word=S3CRET`,
+  `session;x=S3CRET`, `auth;user=S3CRET`, `key;=S3CRET`, `token;=S3CRET`,
+  `%74oken;id=S3CRET`, `TOKEN;ID=S3CRET`, `x;y;token;z=S3CRET`,
+  `sig;%ZZ=S3CRET`, after an `&` (`a=1&token;id=S3CRET&b=2`,
+  `a&pass;word=S3CRET`, `a;b=1&key;c=S3CRET`) and with the later pairs up to
+  the next `&` (`token;a;b=S3CRET;c=S3CRET` is
+  `token;a;b=<redacted>;c=<redacted>`); a name that reads as a credential's
+  only as it was written, beside a malformed escape (`%ZZ%eauth=S3CRET`), is
+  masked too.
+- Over 120 queries — every credential name, upper case, escapes, malformed
+  escapes, `+`, empty pairs, `;` in every place, look-alike letters, nested
+  URLs — no value that either earlier masking withheld (the one that split
+  at `&` alone, and the one that split at `&` and `;` with the name the piece
+  before its `=`) is shown in a displayed target or a report; a report is
+  what it was for every one, and a displayed target differs only for the
+  queries of the bullet above; every `&` and `;` sent is in what is shown;
+  `api;version=2`, `a=1;pass;word=x`, `to;ken=x` and `page;sort=name&limit=5`
+  are displayed as sent; the one text shown that a report used to leave out
+  is a piece without `=` (`token;S3CRET`), which is a name.
+- The Python check starts the interpreter once (a wrapper counting its
+  starts) for a configuration with 50 collector files: with sound scripts;
+  with a syntax error in one file, reported as `collector file <path>:
+  collector c25 pre_script has a Python syntax error on line 1`; and with
+  faults in two collector files and in the configuration's own collector,
+  reported in the order of the collectors, the configuration's own with no
+  file and each other with its file, the file of one being its collector
+  file and of all of them the configuration. An interpreter that is not
+  there is one error naming no collector file.
+- The interpreter's check gives each problem with its collector's name
+  beside the message, in the order of the collectors (`first`, `last`, the
+  sound one between them absent), and the error of the whole is `invalid
+  collector Python scripts:` followed by the messages, as before.
 
 # 35. Documentation requirements
 
@@ -9805,9 +10069,22 @@ a definition no longer in force made it, for up to an
 interval. A target that did not change, of a collector whose definition did
 not change, MUST keep its place in the schedule through a reload. Its scrapes MUST then keep a fixed cadence, which SHOULD be offset
 within its interval by a stable hash of its name so targets are spread over
-it, starting no sooner than one whole interval after the first scrape began
-and sooner than two: the first scrape, which has its interval to end in, MUST
-have ended when the cadence starts, so that the first turn of the cadence
+it, starting at its first point no sooner than one whole interval after the
+first scrape was due and sooner than two; with an interval of ten seconds or
+less the first scrape is due at a point of the cadence, so the second scrape
+MUST be due one interval after it. The interval MUST be counted from the
+time the first scrape was due and not from the moment the scheduler came to
+start it, which is always a little later: counted from that moment, the
+point one interval on is never far enough, and every such target is scraped
+a second time only two intervals after the first. Only for a first scrape
+that was put off, because a scrape begun on the target's old definition
+still ran, and for one the scheduler came to start more than a tenth of the
+interval after it was due, as after the process was held up, MUST the
+interval be counted from when the first scrape began: counted from a time
+that far back the cadence would start while the first scrape may still run,
+or in the past, and a second scrape be cut short, lost, or made at once.
+The first scrape, which has its interval to end in, has then
+ended when the cadence starts, so that the first turn of the cadence
 waits for no scrape and has a whole interval, and a target whose scrapes take
 most of their interval is not cut short after a start or a reload. A scrape
 MUST be bounded by its interval, and two scrapes of one target MUST NOT run
@@ -9815,8 +10092,8 @@ at once. A turn that comes while the target's last scrape still runs — a
 scrape that used its whole interval ends just after the next turn has come —
 MUST NOT be given up: it MUST wait for that scrape, start as soon as it has
 ended, without waiting for a further interval, and end by the turn after it
-— a budget of the steady cadence only, which the first scrape never runs
-into —
+— a budget of the steady cadence, which the first scrape runs into by no
+more than the scheduler started it late, a tenth of the interval at most —
 so a target that never answers is scraped once per interval, each scrape
 failing, and one that answers again is seen within one interval. A turn MUST
 be skipped, and logged as `static target scrape skipped`, only when it is
@@ -10303,12 +10580,18 @@ masked where it stands, not parsed and written again: every pair MUST keep
 its place and its spelling, a bare key MUST stay one, and a pair with a
 malformed escape MUST be shown, its value masked or not by the rule for its
 name. Pairs MUST be told apart at `&` and at `;` alike, so the token of
-`a=1;token=SECRET` is masked; and after a masked value, up to the next `&`,
+`a=1;token=SECRET` is masked; the text from an `&`, or from the start, to
+the first `=` after it MUST be taken for a name too, its `;` included, as a
+server that splits at `&` alone reads it, and the value after that `=`
+masked when either name reads as a credential's (`token;id=SECRET` is shown
+as `token;id=<redacted>`, `key;=SECRET` as `key;=<redacted>`); and after a
+masked value, up to the next `&`,
 the value of every later pair MUST be masked and a piece without `=` masked
 whole, since that is the rest of the value to a server that splits at `&`
 alone (`token=SE;CRET` is shown as `token=<redacted>;<redacted>`). A pair's
 name MUST be compared with its escapes decoded, a malformed one left as it
-is (`%74oken` is `token`), and shown as written. One rule MUST say whether a name — a header's,
+is (`%74oken` is `token`), and, where that differs from it, as it was
+written too; it MUST be shown as written. One rule MUST say whether a name — a header's,
 a query parameter's or a field's in logged text — reads as a credential's: it
 contains, in any case, `auth`, `cookie`, `token`, `secret`, `password`,
 `passwd`, `passphrase`, `passcode`, `key`, `session`, `signature`,

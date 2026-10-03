@@ -247,6 +247,7 @@ func (s *Server) collect(ctx context.Context, j collectJob) collected {
 		trace.record(func(t *probeTrace) { t.decoded = decoded.Kind })
 		rec.update(func(x *serverStats) { x.decodeOK++ })
 		s.noteGraphite(ctx, decoded, c, rec, j.display, j.target, "")
+		s.notePrometheus(ctx, decoded, c, rec, j.display, j.target, "")
 		mark = time.Now()
 		scriptCtx, timer := transform.WithScriptTimer(ctx)
 		var repaired utf8Repairs

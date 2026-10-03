@@ -375,15 +375,24 @@ A `port` is a port's name and never its number, as the Prometheus Operator's
 `port` field is, which looks the value up among the ports' names: a number
 rendered as a name matches no port and leaves the monitor without targets.
 So a `port` MUST be lower-case letters, digits and `-` with at least one
-letter and no `-` first or last, of at most 63 characters for `type: service`,
-as Kubernetes names a Service port, and of at most 15 with no `--` for
-`type: pod`, as it names a container port; a name of digits alone, which
-Kubernetes allows a Service port, is not taken, since it cannot be told from
-a number given by mistake. The values schema MUST enforce this, and the
-templates MUST enforce it themselves when the schema is skipped, failing with
-a message that names the monitor and, for a number — written as one or as a
-string of digits — says to name the port on the Services or the pods and give
-that name. The chart MUST NOT render a port number: a PodMonitor's
+letter and no `-` first or last, of at most 63 characters for `type: service`
+and of at most 15 with no `--` for `type: pod`. The lengths and the
+characters are Kubernetes' rules for the name of a Service port and of a
+container port, and the letter is its rule for a container port only: for
+`type: service` the letter is the chart's own rule, made so that a number
+written as a name (`"9115"`) is not rendered as a port name that matches
+nothing. Kubernetes itself allows a Service port to be named in digits alone
+(`name: "8080"`); the chart does not take such a name, since it cannot be told
+from a number given by mistake, so a Service whose port is named in digits
+alone cannot be monitored through this value until its port has a name with a
+letter. The chart documentation and the description of `port` in the values
+schema MUST say that the letter is the chart's rule for a Service port and
+not Kubernetes', and what follows for such a Service. The values schema MUST
+enforce the grammar, and the templates MUST enforce it themselves when the
+schema is skipped, failing with a message that names the monitor and, for a
+number — written as one or as a string of digits — says to name the port on
+the Services or the pods and give that name. The chart MUST NOT render a port
+number: a PodMonitor's
 `portNumber` is unknown to the CRDs of Prometheus Operator releases before
 0.79, and `targetPort` is deprecated on a PodMonitor and on a ServiceMonitor
 is a container port of the pods behind the Service, not the Service's own.
@@ -663,19 +672,46 @@ Every check of either MUST fail its run when what it checks does not hold:
   command whose failure ends its shell: the last command of its recipe line
   or step, or one under `set -e` — which a workflow step's shell has from
   GitHub unless a `shell:` takes it away, and a recipe line has only by saying
-  so — and MUST NOT be followed by `||`, `&&` or `&`;
+  so — and MUST NOT be followed by `||`, `&&` or `&`. It MAY be followed by
+  `|| exit N`, or by `|| { ...; exit N; }` on one line or several, with an
+  `N` that is not zero: the failure then ends the shell where it happened;
 - a render that must be refused, and a text that must be absent from a render,
   MUST be the whole condition of an `if` whose `then` branch ends the shell
   with a status that is not zero;
 - helm MUST NOT be piped into a command that passes on a render of nothing,
   nor into a condition, and a render kept in a variable MUST be kept from the
-  one helm command; and
-- no recipe line of the checks MAY start with make's `-`, and no chart step, or
-  its job, MAY have `continue-on-error` or an `if` other than the one that
-  runs the chart steps when the chart changed.
+  one helm command, and read as `echo "$name"` or `printf '%s\n' "$name"`
+  piped into `grep -q` and a pattern, `python3 -c` or the manifest check;
+- a check MUST be made on every run of its block: it MUST stand at the top
+  of the block, in the body of a `for name in value ...; do` loop over one or
+  more values written out, or be the condition of an `if` that stands there.
+  It MUST NOT stand in a branch of an `if`, whatever the condition — there is
+  no guard a check MAY stand behind — nor after `&&` or `||`, nor in any
+  other loop; and an `exit`, whatever its status, MUST be the one in the
+  `then` branch of a check's `if` or after a check's `||`, since any other
+  ends the block before the checks after it;
+- a block of checks MUST NOT define a function or an alias, read commands
+  from a file, set `PATH`, use `hash`, `return`, `exec`, `break` or
+  `continue`, turn `-e` off, set a shell option other than `-e`, `-u`, `-x`,
+  `-v` and `pipefail`, or set a `trap` other than a clean-up that only
+  removes files, `trap 'rm -rf "$dir"' EXIT`; and
+- no recipe line of the checks MAY start with make's `-`; the Makefile MUST
+  NOT set `.IGNORE`, `.ONESHELL`, `.SHELLFLAGS`, `MAKEFLAGS`, `PATH` or a
+  `SHELL` other than sh or bash, nor give the `helm-test` target a second
+  rule; no chart step, or its job, MAY have `continue-on-error`; a chart step
+  MUST NOT have an `if` other than the one that runs the chart steps when the
+  chart changed, which a step with the id `changes` MUST give for `charts/**`
+  as its `chart` filter, and the job MUST NOT have an `if`; and a `shell:` of
+  a chart step, of its job's defaults or of the workflow's MUST be bash or sh
+  started with `-e`.
 
 A test MUST read both lists as the shell runs them and fail, naming the file,
 the line and the recipe or step, on a check that breaks one of these rules.
+Where a render is looked at in a way the test does not take for a check — a
+here-string, `[[ ]]`, a `grep` of a file or with other options than `-q` —
+the finding MUST name that way and say what to write instead, and a check
+whose failure does end its shell MUST NOT be reported as one that cannot
+fail.
 
 If feasible, use a Kubernetes schema/testing tool such as `kubeconform` or an equivalent to validate rendered manifests.
 
@@ -981,7 +1017,15 @@ are skipped and the text checks of the templates still run:
    Services' `spec.ports` or the pods' `spec.containers[].ports`, anything
    else with the grammar of the type's port names; `grpc`, `metrics-2` and
    `a` MUST still render, a null `port` MUST render `http`, and the `port`
-   of an entry that is not enabled MUST NOT fail rendering.
+   of an entry that is not enabled MUST NOT fail rendering. A test MUST
+   check that the chart README, the description of `port` in the values
+   schema and this specification each say that the letter is the chart's
+   own rule for a Service port, that Kubernetes allows such a port a name
+   of digits alone and that a Service with one cannot be monitored through
+   `port` until the port has a name with a letter; that none presents the
+   letter as how a Service port is named; and that the schema's pattern
+   still refuses `8080`, `9115` and `80-80` and takes `http`, `8080-tcp`
+   and `9-a`.
 30. Configuration files as given: files whose first line is indented, blank
    or starts with a tab, without a final line break, holding document
    markers, blank and whitespace-only lines and trailing spaces inside, or
@@ -1064,10 +1108,14 @@ are skipped and the text checks of the templates still run:
    a shell started without `-e` at the line it is written on, make's `@`,
    `+` and `-` off it, and a step as a shell started with `-e` unless its
    `shell:`, its job's or the workflow's default is a command without the
-   flag. Each of these changes, made to a copy of the Makefile's or the
+   flag, without the script (`{0}`) last, or with a word that GitHub's own
+   command for bash and sh does not have, `-n` or `-c` among them. Each of
+   these changes, made to a copy of the Makefile's or the
    workflow's text and never to the files, MUST be reported with the file
    and what is wrong: a `then` branch that lost its `exit 1`, that exits
-   with 0, or that exits only when its message fails; a check followed by
+   with 0, with 256, which a shell takes for 0, or that exits only when its
+   message fails; a check followed by `|| exit 256` or by
+   `|| { ...; exit 256; }`; a check followed by
    `|| true` or `|| :`; a recipe line that lost its `set -eu`, that turns it
    off again with `set +e`, that goes on after a check without it, or that
    starts with `-` or `@-`; `.IGNORE` in the Makefile; `continue-on-error`
@@ -1076,8 +1124,44 @@ are skipped and the text checks of the templates still run:
    another command; a render piped into a condition, piped into `cat`, or
    kept from `helm ... || true`; a render read with `grep -qv` or with an
    empty pattern; an `if` piped into another command; a refusal written
-   behind `!`; and a rejection replaced by `if false`, a case rendering
-   another value and a pattern weakened in one list only. The parent chart MUST hold a
+   behind `!`; a rejection replaced by `if false`, a case rendering another
+   value and a pattern weakened in one list only; an `exit 0`, a `return` or
+   an `exec` before the checks of a block, and a `continue` or a `break`
+   before the check of a loop; the checks of a block wrapped in `if false`, in
+   an `if` on a variable, in the `else` of `if true`, in a `while`, or in a
+   loop over nothing or over a variable; a check moved into the `then` branch
+   of a refusal or behind `true ||`; a refusal behind `false &&`, or whose
+   `exit 1` is inside an `if false`; a `trap` that exits with 0 on `EXIT` or
+   on `ERR`, and the clean-up trap with an `exit 0` added; `helm` or `python3`
+   made a function and `grep` an alias; a `PATH` set in a block or in the
+   Makefile; `hash -p` naming another program as `helm`; a file of commands
+   read in; the checks of a block made the lines of a here-document, which
+   the shell runs none of; `set +e` before a step's last check, and `set -n`; a check
+   followed by `|| exit 0`, by `|| { ...; }` with no exit or with `exit 0`, or
+   by `|| { ...; exit 1; } | cat`; an `if` on the job; a `chart` filter that
+   no longer names `charts/**`; a `shell:` without `-e` as the workflow's or
+   the job's default, and `bash -n -e {0}` on a step; and in the Makefile a
+   `SHELL` that is not a shell, `MAKEFLAGS`, and a second rule, or a variable
+   of its own, for `helm-test`. Edits that take nothing from a check MUST be
+   made the same way, and each MUST either leave the test with no finding — a
+   comment or a line of progress, two refusals in the other order, a refusal
+   in a loop over values, a helm command continued onto another line,
+   `set -euo pipefail`, `printf '%s\n' "$out"` for `echo "$out"` in one list
+   or in both, `"${out}"`, `exit 2`, a check followed by `|| exit 1` or by
+   `|| { echo "..." >&2; exit 1; }` on one line or on several, a blank line,
+   another message, a render kept without quotes or in a variable of another
+   name, the chart's path in a variable, `test -n "$out"`, `&>/dev/null`, and
+   an `if` with no check and no `exit` in it — or be refused by a finding that
+   names the way it is written and what to write instead: `grep -c`,
+   `grep -qF` and `grep -q -e`, `[[ "$out" == *X* ]]`, a here-string, a render
+   written to a file and the file read, a kept render printed as `printf`'s
+   format, a refusal behind `!`, a variable renamed where the render is kept
+   and not where it is read, and `--debug` on a refusal the Go tests make too,
+   whose finding MUST show the check that is wanted beside the one that is
+   made. No such edit MAY be called a check that can never fail. Both readers
+   of the lists MUST take the same ways of writing a check: each of the
+   accepted ones MUST be read as the same list of checks as the plain
+   script's, with as many checks weighed. The parent chart MUST hold a
    `Chart.yaml` and a `values.yaml` and nothing else, name the chart as its
    one dependency by a relative `file://` path that reaches it, at the
    chart's version and with the condition

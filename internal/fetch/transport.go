@@ -242,6 +242,24 @@ func HTTPClient(settings TransportSettings, followRedirects bool, timeout time.D
 	return client, nil
 }
 
+// onOwnConnection is client with a pool of its own that keeps nothing: its
+// request is sent on a connection made for it, which no other request can be
+// put on and which is closed when the answer has been read. The retry after
+// an HTTP/2 protocol error is sent this way (fetch says why). The
+// connection is made as the client's others are, through the same proxy,
+// with the same TLS settings and checked against the same target policy.
+func onOwnConnection(client *http.Client) *http.Client {
+	shared, ok := client.Transport.(*http.Transport)
+	if !ok {
+		return client
+	}
+	transport := shared.Clone()
+	transport.DisableKeepAlives = true
+	own := *client
+	own.Transport = transport
+	return &own
+}
+
 func tlsConfig(t model.TLSConfig) (*tls.Config, error) {
 	// The exporter deliberately exposes request.tls.insecure_skip_verify and the
 	// matching per-scrape override as a documented, opt-in setting for targets

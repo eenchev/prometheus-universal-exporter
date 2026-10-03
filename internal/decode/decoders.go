@@ -27,6 +27,9 @@ type Decoded struct {
 	// Graphite reports what the graphite decoder left out; nil for the
 	// others.
 	Graphite *GraphiteReport
+	// Prometheus reports the sample lines the prometheus decoder left out;
+	// nil when it left out none, and for the others.
+	Prometheus *PrometheusReport
 }
 
 // HTMLDecoded is a parsed HTML document and the body it was parsed from.
@@ -282,7 +285,7 @@ func decodePrometheus(r *fetch.HTTPResponse, c *model.Collector) (*Decoded, erro
 		options.keep = prometheusKeeps(c)
 		options.limit = c.Limits.MaxMetrics
 	}
-	metrics, err := parseExposition(r.Body, options)
+	metrics, report, err := parseExpositionReporting(r.Body, options)
 	if errors.Is(err, model.ErrLimitExceeded) {
 		return nil, err
 	}
@@ -293,7 +296,7 @@ func decodePrometheus(r *fetch.HTTPResponse, c *model.Collector) (*Decoded, erro
 		}
 		return nil, fmt.Errorf("decoding %s: %w", format, err)
 	}
-	return &Decoded{Kind: "prometheus", Data: model.MetricSet{Metrics: metrics}, Raw: r.Body}, nil
+	return &Decoded{Kind: "prometheus", Data: model.MetricSet{Metrics: metrics}, Raw: r.Body, Prometheus: report}, nil
 }
 
 // prometheusKeeps says which metric names a prometheus transform passes on,

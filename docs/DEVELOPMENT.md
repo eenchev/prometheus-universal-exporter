@@ -242,27 +242,63 @@ is how the two files run their shell:
 - make runs each recipe line, with the lines continued onto it, in a shell of
   its own started without `-e`, and the line's result is its last command's.
   So a line of more than one command starts with `set -eu`, and no line
-  starts with make's `-`, which ignores a failure. GitHub starts a step's
-  shell as `bash -e`, so a step needs no `set -e`; a step with a `shell:` of
-  its own that lacks the flag, with `continue-on-error`, or with an `if` other
-  than the chart steps' is reported.
+  starts with make's `-`, which ignores a failure. The Makefile leaves make's
+  way of running a recipe alone: `.IGNORE`, `.ONESHELL`, `.SHELLFLAGS`,
+  `MAKEFLAGS`, a `PATH`, a `SHELL` other than sh or bash, and a second rule
+  for `helm-test` are reported. GitHub starts a step's shell as `bash -e`, so
+  a step needs no `set -e`; a `shell:` — the step's, the job's default or the
+  workflow's — that is not bash or sh started with `-e`, `continue-on-error`
+  on a step or on the job, a step's `if` other than the chart steps', any
+  `if` on the job, and a `changes` step whose `chart` filter no longer holds
+  `charts/**` are reported.
 - A render that must succeed, or a line that must be found, is a command of
   its own: nothing follows it with `||`, `&&` or `&`, each of which takes its
-  failure away, under `set -e` too.
+  failure away, under `set -e` too. The one exception hands the failure to an
+  `exit`, which ends the shell there: `check || exit 1`, or
+  `check || { echo "..." >&2; exit 1; }`, on one line or on several.
 - A render that must be refused, or a text that must be absent, is the one
   condition of an `if` whose `then` branch runs `exit 1`:
   `if helm template ... >/dev/null 2>&1; then echo "..." >&2; exit 1; fi`.
   Without the `exit 1` the check prints its message and passes.
+- A check is made on every run of its block. It stands at the top of the
+  block, in the body of a `for name in value ...; do` loop whose values are
+  written out, or is the condition of an `if` that stands there, and nowhere
+  else: there is no guard a check may stand behind. One in a branch of an
+  `if` — `if false`, `if [ -n "$SKIP" ]`, the `then` of a refusal — after
+  `&&` or `||`, or in a loop over a variable, a command or nothing is
+  reported. So is an `exit`, of any status, that is not a check's own: an
+  early `exit 0` ends the block before its checks.
+- Nothing in a block changes what its commands are or how it ends: a
+  function or an `alias` (either can stand in for `helm`, `grep`, `python3`
+  or `exit`), `.` or `source`, a `PATH`, `hash`, `return`, `exec`, `break`,
+  `continue`, `set +e`, a `set` option other than `-e`, `-u`, `-x`, `-v` and
+  `pipefail`, and a `trap` are reported. The one trap allowed is the
+  clean-up both lists have, `trap 'rm -rf "$tree"' EXIT`: an `rm` alone, on
+  `EXIT`.
 - helm is piped only into `grep -q` as a command of its own or into
   `tools/check-manifests.py`, both of which fail on a render of nothing; a
-  kept render holds the one helm command, and is read with `grep -q` and a
-  pattern, `python3 -c` or `tools/check-manifests.py`.
+  kept render holds the one helm command, and is read as `echo "$out" |` or
+  `printf '%s\n' "$out" |` into `grep -q` and a pattern, `python3 -c` or
+  `tools/check-manifests.py`. Another way of looking at a render — a
+  here-string, `[[ "$out" == *X* ]]`, a `grep` of a file, `grep -c`, `-F` or
+  `-e` — is no check to the comparison, and is reported by name with the
+  line to write instead: `echo "$out" | grep -q -- 'X'`.
 
-The reader reports what it does not understand (`!`, `while`, `case`, a
-subshell) rather than passing it. `TestAHelmCheckMadeToothlessIsNoticed`
-makes each such change — a `|| true`, a dropped `exit 1` or `set -eu`, a
-leading `-`, `continue-on-error` and the like — to a copy of the Makefile's
-or the workflow's text in memory, and fails if the reader does not report it.
+The reader reports what it does not understand (`!`, `elif`, `while`, `case`,
+a subshell, `{` anywhere but after a check's `||`) rather than passing it.
+`TestAHelmCheckMadeToothlessIsNoticed` makes each such change — a `|| true`,
+a dropped `exit 1` or `set -eu`, a leading `-`, `continue-on-error`, an early
+`exit 0`, an `if false` around the checks, a `trap 'exit 0' EXIT`, a `helm`
+function, an `if` on the job and the like — to a copy of the Makefile's or
+the workflow's text in memory, and fails if the reader does not report it.
+`TestAHarmlessEditOfAHelmCheckIsTakenOrToldHowToBeWritten` does the same with
+edits that take nothing from a check, and fails if one is refused without a
+finding that names it and says what to write, or is called a check that can
+never fail. A finding that a list "does not make this check of the chart"
+is about one of the cases the Go tests make too (`chartCasesMissing` in
+`test/repository/helmtest_test.go` lists them, each with its command line):
+both lists make it with exactly that command line, so a case changed on
+purpose is changed there and in both lists.
 
 The files those cases render are in `testdata/chart`: a static target
 document, `indented-first-line.yaml`, and `parent`, a chart whose one

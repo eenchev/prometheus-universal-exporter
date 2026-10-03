@@ -187,17 +187,27 @@ starts in:
   bound 1`);
 - a second `_sum` or `_count` sample of the series.
 
-A sample line that is no part of its family fails the decode too, as any
-malformed line does, naming the line and what was expected there: under
-`# TYPE h histogram`, a sample named `h` itself, or an `h_bucket` without an
-`le` label, has a value no histogram series has a place for
-(`text format parsing error in line 2: expected h_bucket with an le label,
-h_sum or h_count as a sample of the histogram h, got h`), and so has a
-sample named as its summary without a `quantile` label. The value is not
-dropped without a word. This is a line the format does not allow, as a value
-that is no number is, rather than a series whose numbers disagree, which is
-why it fails where the histograms above are passed on. OpenMetrics'
-`_created` samples are read and left out, as before.
+A sample line that is no part of its family does not fail the decode: it is
+left out, and the rest of the answer is served. Under `# TYPE h histogram`, a
+sample named `h` itself, or an `h_bucket` without an `le` label, has a value
+no histogram series has a place for, and so has a sample named as its summary
+without a `quantile` label. Client libraries write such lines and Prometheus
+ingests them: Micrometer's older Prometheus registry writes a timer's
+percentiles as `x{quantile="0.95"}` under `# TYPE x histogram`, and
+VictoriaMetrics' metrics library writes its buckets as
+`x_bucket{vmrange="..."}`. The line cannot be passed on as a series of its
+own, which would be a second family under a name the histogram `x` writes
+its own lines with, so its value is not exported: the histogram is, with the
+buckets, `_sum` and `_count` it has, and every other family. The lines left
+out of the families the collector passes on are counted in
+[`http_exporter_decoder_lines_skipped_total`](SELF-METRICS.md) and logged at
+warn level once for a scrape, not once for a line, with the first of them and
+what was expected in its place (`sample lines left out ... line 2: expected
+h_bucket with an le label, h_sum or h_count as a sample of the histogram h,
+got h`); while every scrape leaves the same line out the warning is repeated
+sparingly, as a failure's is. A line that cannot be read at all, such as a
+value that is no number, still fails the decode. OpenMetrics' `_created`
+samples are read and left out, as before, and are not counted.
 
 A body is read as OpenMetrics when its `Content-Type` is
 `application/openmetrics-text`, or, when the `Content-Type` does not say
@@ -269,9 +279,15 @@ The expression and label values are interpreted by the selected transform:
   quoted field left open, or with a quote in it that is not doubled, still
   fails the scrape, whatever the other rows hold, rather than be read on over
   the rows after it. `response.csv.trim_space: true` trims the blanks on both
-  sides of every field, with a header row and without one; with a tab or
-  another blank as the delimiter an empty field stays where it is, and the
-  fields after it in their columns. A response with no
+  sides of every field, with a header row and without one, and lets a quoted
+  field begin after blanks: `a,  "x, y"` is read as `a` and `x, y`. With a
+  tab, or another blank that is not a space, as the delimiter an empty field
+  stays where it is, and the fields after it in their columns, and a quoted
+  field written after spaces is still a quoted field, a tab inside it kept.
+  With a space as the delimiter a run of spaces is one delimiter, which is
+  how columns aligned with spaces are read (`web01   72  "two words"` is
+  three fields); an empty field cannot be written between spaces then, so
+  use another delimiter for data that has empty fields. A response with no
   rows — a header alone, or nothing at all — has no value for any rule, so a
   required rule is [missing its value](#when-a-metric-cannot-be-extracted).
 - `css`: the expression selects the HTML element whose text is numeric. Without
@@ -284,6 +300,9 @@ The expression and label values are interpreted by the selected transform:
   for an attribute of the node itself. A rule may select attributes, as
   `//job/@size` does: a label is then relative to the attribute, `.` its
   value, `name()` its name and `../@name` another attribute of its element.
+  The label `text()` gives the attribute's value too, as `.` does, so the
+  series of such a rule can be told apart by it: to XPath an attribute has no
+  text beneath it, but the value is what this label has always given.
   Over XML, prefixes in them mean what
   [`response.namespaces`](#xml-namespaces) says. HTML has no namespaces: a
   label that is `@` and one attribute name, on the node or after `../` steps,
@@ -428,7 +447,8 @@ straight from the node, by the name as the document writes it:
   `@og:type`, `@v-on:click`, `@x-on:click.prevent`, `@:href`, `@@click` for
   the attribute `@click`, `@2x`. A colon is a character of the name, and
   `response.namespaces` plays no part. An attribute of a parent is read the
-  same way, `../@og:type`, and so is one HTML gives a namespace inside `svg`
+  same way, `../@og:type`, also where the rule selects text nodes, as
+  `//td/text()` does, and so is one HTML gives a namespace inside `svg`
   or `math`, `@xlink:href`. Names are as the HTML parser keeps them, in
   lower case. Deeper in an expression XPath cannot say such a name; write
   `@*[name()='og:type']` there.
@@ -439,8 +459,18 @@ operator: no `/`, `|`, `[`, `]`, `(`, `)`, `=`, `<`, `>`, `!`, `+`, `*`, `,`,
 other label, and is checked when the configuration loads: `@id | @name` for
 the first of two attributes that is there, `@state = 'ok'` for `true` or
 `false`; one that is neither a name nor XPath, such as `@[attr]`, is refused
-there. With `decoder.type` left at `auto` a label is accepted when either
-kind of document would read it.
+there. With `decoder.type` left unset or at `auto` a label is accepted when
+either kind of document would read it. If the answer is then of the kind that
+cannot — XML, for a label like `@2x` or `@:href`, names only HTML can
+have — the label is not left off: the metric fails, by its
+[`error_mode`](#when-a-metric-cannot-be-extracted), saying which label cannot
+be read in which kind of document. Setting `response.namespaces` says the
+collector reads XML: its labels are then checked as with `decoder.type: xml`
+even while the decoder is unset or `auto`, so a prefix the map does not
+have, as in `@m:unit` or `../@m:kind`, is refused when the configuration
+loads, and so is a name only HTML can have; the error says to set
+`decoder.type: html` if the target answers HTML, where such a label is an
+attribute's name as written and `response.namespaces` plays no part.
 
 ### Collector-wide labels
 
@@ -1355,7 +1385,10 @@ required to produce `data`.
 
 The check needs the interpreter from `--python.path`, so a configuration that
 contains any Python fails to start if that interpreter is unusable. A
-configuration with no Python scripts never invokes one.
+configuration with no Python scripts never invokes one. The interpreter is
+started once for a check — at startup, for `--dry-run` and at each reload —
+whatever it finds and however many [collector files](#collector-files) the
+configuration reads.
 
 ## Reusing settings with YAML anchors
 

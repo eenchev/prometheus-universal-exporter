@@ -103,7 +103,14 @@ func CheckMetricRule(x *model.Collector, r *model.MetricRule) error {
 				continue
 			}
 			if _, err := expr.CompileXPath(label.Expression, namespaces); err != nil {
-				fail(fmt.Errorf("%s label %q XPath %q: %w", where, label.Name, label.Expression, err))
+				// A label only HTML reads, of a collector taken to read XML
+				// for its namespaces alone: the way out is not in the
+				// XPath error.
+				hint := ""
+				if x.Decoder.Type != "xml" && x.Decoder.Type != "html" && len(namespaces) > 0 && xpathLabelReadByName(label.Expression, "html", nil) {
+					hint = "; response.namespaces is set, so the labels are checked as those of an XML document: if the target answers HTML, where this label is an attribute's name as written, set decoder.type to html"
+				}
+				fail(fmt.Errorf("%s label %q XPath %q: %w%s", where, label.Name, label.Expression, err, hint))
 			}
 		}
 	case x.Transform.Type == "prometheus":
@@ -121,8 +128,15 @@ func CheckMetricRule(x *model.Collector, r *model.MetricRule) error {
 // a document of the collector's decoder: HTML, XML, or, for a decoder left
 // to each response, either, since the one that reads it by name may be the
 // one that arrives.
+//
+// With response.namespaces set, a decoder left to each response is taken to
+// read XML, the one kind of document namespaces mean anything in: its labels
+// are checked as those of an xml decoder are. Checked as either kind's, a
+// label with a prefix the namespaces do not map — @x:unit, ../@x:kind — was
+// accepted as the name of an HTML attribute, and then left off every series
+// of an XML answer without a word, where the load had refused it before.
 func xpathLabelReadByName(expression, decoder string, namespaces map[string]string) bool {
-	if decoder != "xml" {
+	if decoder == "html" || (decoder != "xml" && len(namespaces) == 0) {
 		if _, own := ownAttributeLabel(expression, true, namespaces); own {
 			return true
 		}

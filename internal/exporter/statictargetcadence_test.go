@@ -207,6 +207,215 @@ func TestTheFirstTurnOfACadenceHasAWholeIntervalWhateverTheFirstScrapeTook(t *te
 	}
 }
 
+// Every target with an interval of ten seconds or less was scraped a second
+// time only two intervals after the first, after every start and every
+// reload that changed it. Its first scrape is due at a point of its cadence,
+// and the cadence was started a whole interval after the moment the loop
+// came to make that scrape: a moment past the point, as a loop that sleeps
+// until a time always wakes after it, so the point one interval on was a
+// hair too soon and was passed over. The tests gave the schedule the very
+// time it had asked for and never saw it. The interval is now counted from
+// when the first scrape was due: with the loop a millisecond late, or a
+// tenth of the interval, the second scrape of such a target is due one
+// interval after the first was, and that of a target with a longer
+// interval, whose first scrape is made early, at the first point of its
+// cadence one interval or more after it.
+func TestTheCadenceIsCountedFromWhenTheFirstScrapeWasDueWhileTheLoopIsALittleLate(t *testing.T) {
+	start := time.Unix(1_000_000, 0)
+	for _, interval := range []time.Duration{time.Second, 5 * time.Second, 10 * time.Second, 11 * time.Second, time.Minute} {
+		for _, late := range []time.Duration{time.Millisecond, interval / 20, interval / lateFirstScrapeShare} {
+			for i := range 200 {
+				name := fmt.Sprintf("app_%d", i)
+				schedule := newTargetSchedule()
+				targets := []model.StaticTarget{scheduled(name, interval)}
+				_, _, first := schedule.plan(nil, targets, start)
+				made := first.Add(late)
+				due, skipped, second := schedule.plan(nil, targets, made)
+				if len(due) != 1 || len(skipped) != 0 || !due[0].deadline.Equal(made.Add(interval)) {
+					t.Fatalf("%s every %s, the loop %s late: the first scrape: due=%d skipped=%d, want it made with a whole interval", name, interval, late, len(due), len(skipped))
+				}
+				gap := second.Sub(first)
+				if interval <= firstScrapeWindow && gap != interval {
+					t.Fatalf("%s every %s, the loop %s late: the second scrape is due %s after the first was, want one interval", name, interval, late, gap)
+				}
+				if gap < interval || gap >= 2*interval || second.Sub(start)%interval != scheduleOffset(name, interval) {
+					t.Fatalf("%s every %s, the loop %s late: the second scrape is due %s after the first was, at %s into the interval; want one interval to two, at %s", name, interval, late, gap, second.Sub(start)%interval, scheduleOffset(name, interval))
+				}
+				// The first scrape ended at once. Nothing is due before the
+				// second, which is made as late and has a whole interval;
+				// the third is due one interval after the second was.
+				if due, skipped, _ := schedule.plan(nil, targets, second.Add(-time.Nanosecond)); len(due) != 0 || len(skipped) != 0 {
+					t.Fatalf("%s every %s, the loop %s late: before the second scrape: due=%d skipped=%d", name, interval, late, len(due), len(skipped))
+				}
+				made = second.Add(late)
+				due, skipped, third := schedule.plan(nil, targets, made)
+				if len(due) != 1 || len(skipped) != 0 || !due[0].deadline.Equal(made.Add(interval)) || !third.Equal(second.Add(interval)) {
+					t.Fatalf("%s every %s, the loop %s late: the second scrape: due=%d skipped=%d, the third due %s after it was", name, interval, late, len(due), len(skipped), third.Sub(second))
+				}
+			}
+		}
+	}
+}
+
+// Where the cadence starts, against the two rules before this one, each
+// counted from the moment the loop made the first scrape: half an interval
+// on or later, before the last round of fixes, and a whole interval on or
+// later, after it. A loop that is on time starts it where the whole-interval
+// rule did, and so does one held up for more than a tenth of the interval.
+// One late by less starts the cadence of an interval of ten seconds or
+// less one interval after the first scrape was due, which is where the
+// half-interval rule put it while the loop was less than half an interval
+// late, and one interval sooner than the whole-interval rule did. For a
+// longer interval it starts where the whole-interval rule put it, but for
+// the targets with a point of their cadence less than the loop's lateness
+// past one interval after the first scrape was due, whose cadence starts at
+// that point, one interval sooner. They are not few: the first scrape and
+// the cadence are placed by one hash, modulo ten seconds and modulo the
+// interval, so with an interval of a minute one target in six has its first
+// scrape due at a point of its cadence, and was scraped a second time two
+// minutes later.
+func TestTheCadenceStartsWhereTheEarlierRulesStartedItButForTheLoopsLateness(t *testing.T) {
+	// earlier is the cadence's first point at least a span after the first
+	// scrape was made, as both earlier rules started it.
+	earlier := func(cadence, made time.Time, interval, span time.Duration) time.Time {
+		for cadence.Sub(made) < span {
+			cadence = cadence.Add(interval)
+		}
+		return cadence
+	}
+	start := time.Unix(1_000_000, 0)
+	for _, interval := range []time.Duration{time.Second, 5 * time.Second, 10 * time.Second, 11 * time.Second, time.Minute, time.Hour} {
+		for _, late := range []time.Duration{0, time.Millisecond, 500 * time.Millisecond, interval - time.Millisecond} {
+			for i := range 200 {
+				name := fmt.Sprintf("app_%d", i)
+				schedule := newTargetSchedule()
+				targets := []model.StaticTarget{scheduled(name, interval)}
+				_, _, first := schedule.plan(nil, targets, start)
+				made := first.Add(late)
+				_, _, second := schedule.plan(nil, targets, made)
+				cadence := start.Add(scheduleOffset(name, interval))
+				half, whole := earlier(cadence, made, interval, interval/2), earlier(cadence, made, interval, interval)
+				// A loop held up for more than a tenth of the interval
+				// keeps the whole-interval rule.
+				want := whole
+				switch onTime := late <= interval/lateFirstScrapeShare; {
+				case !onTime:
+				case interval <= firstScrapeWindow:
+					want = first.Add(interval)
+					if late > 0 && !whole.Equal(first.Add(2*interval)) || late < interval/2 && !half.Equal(want) {
+						t.Fatalf("%s every %s, the loop %s late: the rules before started the cadence %s and %s after the first scrape was due", name, interval, late, half.Sub(first), whole.Sub(first))
+					}
+				case whole.Add(-interval).Sub(first) >= interval:
+					want = whole.Add(-interval)
+				}
+				if !second.Equal(want) {
+					t.Fatalf("%s every %s, the loop %s late: the cadence starts %s after the first scrape was due, want %s; the whole-interval rule started it %s after", name, interval, late, second.Sub(first), want.Sub(first), whole.Sub(first))
+				}
+			}
+		}
+	}
+}
+
+// A loop held up for more than a tenth of the interval — a stalled process, a
+// throttled one — makes the first scrape late, and the scrape has its whole
+// interval from then. Counted from when the scrape was due, the cadence
+// started while it could still run, cutting the second scrape short or
+// losing it, or in the past, so that a second scrape followed the first at
+// once. It is counted from when the scrape began, as it was before.
+func TestTheCadenceOfAFirstScrapeMadeFarTooLateIsCountedFromWhenItBegan(t *testing.T) {
+	start := time.Unix(1_000_000, 0)
+	for _, interval := range []time.Duration{time.Second, 5 * time.Second, 10 * time.Second, 11 * time.Second, time.Minute} {
+		for _, late := range []time.Duration{interval/lateFirstScrapeShare + time.Millisecond, interval / 2, interval - time.Millisecond, interval, 5 * interval, 11*interval/2 + time.Millisecond} {
+			for i := range 200 {
+				name := fmt.Sprintf("app_%d", i)
+				schedule := newTargetSchedule()
+				targets := []model.StaticTarget{scheduled(name, interval)}
+				_, _, first := schedule.plan(nil, targets, start)
+				made := first.Add(late)
+				due, skipped, second := schedule.plan(nil, targets, made)
+				if len(due) != 1 || len(skipped) != 0 || !due[0].deadline.Equal(made.Add(interval)) {
+					t.Fatalf("%s every %s, the loop %s late: the first scrape: due=%d skipped=%d, want it made with a whole interval", name, interval, late, len(due), len(skipped))
+				}
+				// The second scrape is due once the first has had its
+				// interval, at the target's point of the cadence.
+				gap := second.Sub(made)
+				if gap < interval || gap >= 2*interval || second.Sub(start)%interval != scheduleOffset(name, interval) {
+					t.Fatalf("%s every %s, the loop %s late: the second scrape is due %s after the first was made, at %s into the interval; want one interval to two, at %s", name, interval, late, gap, second.Sub(start)%interval, scheduleOffset(name, interval))
+				}
+				// The first scrape ended at once: nothing follows it
+				// before the second is due, which then has a whole
+				// interval and is not lost.
+				for _, at := range []time.Time{made.Add(10 * time.Millisecond), second.Add(-time.Nanosecond)} {
+					if due, skipped, _ := schedule.plan(nil, targets, at); len(due) != 0 || len(skipped) != 0 {
+						t.Fatalf("%s every %s, the loop %s late: %s after the first scrape: due=%d skipped=%d, want nothing", name, interval, late, at.Sub(made), len(due), len(skipped))
+					}
+				}
+				due, skipped, third := schedule.plan(nil, targets, second)
+				if len(due) != 1 || len(skipped) != 0 || !due[0].deadline.Equal(second.Add(interval)) || !third.Equal(second.Add(interval)) {
+					t.Fatalf("%s every %s, the loop %s late: the second scrape: due=%d skipped=%d, the third due %s after it", name, interval, late, len(due), len(skipped), third.Sub(second))
+				}
+			}
+		}
+	}
+}
+
+// The same with the loop and the clock as they are: a healthy target with an
+// interval of a second, which answers at once, is scraped a second time
+// about a second after the first, where it was two seconds.
+func TestTheLoopScrapesAShortIntervalASecondTimeOneIntervalAfterTheFirst(t *testing.T) {
+	const interval = time.Second
+	var mu sync.Mutex
+	var started []time.Time
+	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		mu.Lock()
+		started = append(started, time.Now())
+		mu.Unlock()
+		_, _ = w.Write([]byte("value=1\n"))
+	}))
+	t.Cleanup(target.Close)
+	cfg := &model.Config{Collectors: []model.Collector{testutil.Collector("text", "text")}}
+	if err := config.Validate(cfg); err != nil {
+		t.Fatal(err)
+	}
+	manager := config.NewManager(cfg, "", testutil.QuietLogger(t))
+	manager.SetTargets("", &model.StaticTargetFile{Interval: model.Duration(interval), Targets: []model.StaticTarget{
+		{Name: soonScraped(t, interval, 1)[0], Collector: "text", Target: target.URL, Interval: model.Duration(interval)},
+	}})
+	server := NewServer(manager, "python3", testutil.QuietLogger(t))
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		server.StaticScrapeLoop(ctx)
+	}()
+	t.Cleanup(func() {
+		cancel()
+		server.AbortStaticScrapes()
+		<-done
+	})
+	// Two intervals and a half are room for the second scrape where it
+	// belongs, and too little for one made two intervals after the first.
+	deadline := time.Now().Add(5 * interval / 2)
+	for {
+		mu.Lock()
+		scrapes := len(started)
+		mu.Unlock()
+		if scrapes >= 2 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("%d scrapes within two and a half intervals of the start, want the second one interval after the first", scrapes)
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	mu.Lock()
+	gap := started[1].Sub(started[0])
+	mu.Unlock()
+	if gap > 3*interval/2 {
+		t.Errorf("the second scrape came %s after the first, want about the interval of %s", gap, interval)
+	}
+}
+
 // A target that never answers is tried once per interval, each scrape ending
 // with its interval and the next starting as it ends, rather than every
 // second interval; and no scrape is logged as skipped, since no turn is lost.

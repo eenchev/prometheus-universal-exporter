@@ -1,6 +1,7 @@
 package transform
 
 import (
+	"fmt"
 	"maps"
 	"strings"
 
@@ -40,9 +41,11 @@ import (
 // with the document's own prefix where response.namespaces is not set.
 //
 // The walk gives what the engine gives, which is the engine's reading and
-// not always XPath's. It is taken only from an element, only for a name
-// without a prefix, and repeats what the engine's navigators do
-// (antchfx/xmlquery and htmlquery, as pinned in go.mod):
+// not always XPath's. It is taken only from an element — and, to an
+// attribute of a parent in HTML, from any node, a text node's parent being
+// an element like any other — only for a name without a prefix, and repeats
+// what the engine's navigators do (antchfx/xmlquery and htmlquery, as
+// pinned in go.mod):
 //
 //   - a name without a prefix matches by local name where the node has no
 //     prefix, whatever namespace it is in, a default namespace included,
@@ -60,7 +63,9 @@ import (
 // One walk is not the engine's: in HTML an attribute of a parent whose name
 // the engine cannot say — ../@og:type, which it reads as a prefix no HTML
 // attribute has, ../@2x, which it does not parse — is read by that name as
-// written, as the node's own is.
+// written, as the node's own is. And one label is neither a walk nor the
+// engine's: text() at an attribute a rule selected is the attribute's value
+// (xpathLabels).
 //
 // TestXPathLabelFastPathsAgreeWithTheEngine holds the two to that, node by
 // node, over documents made to tell them apart.
@@ -74,8 +79,8 @@ const (
 	// xpathLabelOwnAttribute is @name, read from the node by the name as
 	// written (ownAttributeLabel).
 	xpathLabelOwnAttribute
-	// xpathLabelNone is an expression that does not compile, which leaves
-	// the label off.
+	// xpathLabelNone is an expression that does not compile for the kind of
+	// document that arrived, which fails the rule (unreadableXPathLabel).
 	xpathLabelNone
 	// xpathLabelEngine is any expression the engine evaluates.
 	xpathLabelEngine
@@ -94,7 +99,8 @@ const (
 // and program the compiled expression of every label that may need the
 // engine, which a walk needs too for a node that is no element, and which
 // is nil for a walk the engine cannot make; selector is the copy of it the
-// rule took (engine).
+// rule took (engine). Of a label that does not compile, text is the
+// expression and err why it does not.
 type xpathLabel struct {
 	name     string
 	kind     xpathLabelKind
@@ -102,6 +108,7 @@ type xpathLabel struct {
 	ups      int
 	program  *expr.XPathProgram
 	selector *xpath.Expr
+	err      error
 }
 
 // xmlNamespace is the namespace XML binds the prefix xml to, in every
@@ -192,12 +199,34 @@ func planXPathLabels(rule model.MetricRule, namespaces map[string]string, html b
 			// program is nil for the walk the engine cannot make.
 			label.program, label.kind, label.ups, label.text = program, kind, ups, name
 		case err != nil:
-			label.kind = xpathLabelNone
+			label.kind, label.text, label.err = xpathLabelNone, labelRule.Expression, err
 		default:
 			label.program, label.kind = program, xpathLabelEngine
 		}
 	}
 	return labels
+}
+
+// unreadableXPathLabel is the failure of a rule that has a label which
+// cannot be read in the kind of document that arrived, nil when every label
+// can. The load refuses a label no document of the collector's could give,
+// so this is a collector whose decoder is left to each response, with a
+// label only HTML can give — an attribute by a name XPath cannot say, as
+// @1x, @a:b:c and ../@:kind are — and an XML answer. Such a label was left
+// off without a word, and the rule's series were exported without it: now
+// the rule fails, by its error_mode as it does for any label it cannot
+// give, and says which label and why.
+func unreadableXPathLabel[N comparable](nodes xpathNodes[N], rule model.MetricRule, plan []xpathLabel) error {
+	for i := range plan {
+		if label := &plan[i]; label.kind == xpathLabelNone {
+			document := "XML"
+			if nodes.html {
+				document = "HTML"
+			}
+			return fmt.Errorf("metric %q label %q: %s %q cannot be read in the %s document that arrived (%w); set decoder.type to the kind of document the target answers with, or write the label so that it can be read in both", rule.Name, label.name, nodes.kind, label.text, document, label.err)
+		}
+	}
+	return nil
 }
 
 // engine is the label's compiled expression, the rule's own copy of it for
@@ -273,11 +302,16 @@ func plainXPathName(name string) bool {
 
 // fastXPathLabel reads at node a label that is read by walking the tree.
 // walked is false for a node the walk is not taken from, which is every
-// node but an element: the engine reads the label there. Otherwise found
+// node but an element, except for an attribute of a parent in HTML: the
+// engine reads the label there. Otherwise found
 // says the walk reached what the label reads, and text is its text, as the
 // engine's first match and nodes.text would give it.
 func fastXPathLabel[N comparable](nodes xpathNodes[N], node N, label *xpathLabel) (text string, found, walked bool) {
-	if !nodes.element(node) {
+	// In HTML an attribute of a parent is walked to from any node, a text
+	// node as //td/text() selects them included: the parent is an element
+	// whatever the node is, and its attribute is read by its name as
+	// written, which for a name like og:type only the walk can do.
+	if !nodes.element(node) && (!nodes.html || label.kind != xpathLabelAttribute) {
 		return "", false, false
 	}
 	at := node
@@ -345,9 +379,18 @@ func xpathLabels[N comparable](nodes xpathNodes[N], node N, plan []xpathLabel) m
 			text, found, walked := fastXPathLabel(nodes, node, label)
 			switch {
 			case !walked:
-				// A walk the engine cannot make is taken from an element
-				// or not at all.
-				if label.program != nil {
+				// At an attribute a rule selected, as //@id selects them,
+				// text() is the attribute's value. To XPath an attribute
+				// has no text node beneath it and text() selects nothing
+				// there, but the value is what the label always gave, and
+				// what a configuration with it relies on to tell its
+				// series apart: read as XPath has it, every series of the
+				// rule lost the label and they became duplicates of one.
+				// Any other walk the engine cannot make is taken where
+				// fastXPathLabel takes it or not at all.
+				if value, attribute := nodes.selectedAttribute(node); attribute && label.kind == xpathLabelText {
+					labels[label.name] = strings.TrimSpace(value)
+				} else if label.program != nil {
 					engineXPathLabel(nodes, node, label, labels)
 				}
 			case found:

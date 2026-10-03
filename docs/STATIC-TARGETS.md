@@ -174,9 +174,17 @@ it is on the endpoint
 promptly even with an interval of an hour. After that it keeps a cadence at a
 point within its interval set by its name, so targets sharing an interval are
 spread over it rather than all scraped at once: the cadence starts at the first
-such point at least one whole interval after the first scrape began — between
+such point at least one whole interval after the first scrape was due — between
 one interval and two after it — and then comes every interval, however long a
-scrape takes. The first scrape has its interval to end in, as every scrape
+scrape takes. With an interval of ten seconds or less the first scrape is
+itself due at such a point, so the second scrape comes one interval after it.
+The interval is counted from the time the first scrape was due, not from the
+moment the exporter came to start it, which is always a little later; only for
+a changed target whose first scrape had to wait for a scrape begun on its old
+definition, and for a first scrape started more than a tenth of the interval
+late, as after the process was held up, is it counted from when the first
+scrape began. The first scrape
+has its interval to end in, as every scrape
 has, so it has ended when the cadence starts, and a target whose scrapes take
 most of their interval — 26 seconds of 30 — is not cut short and reported
 down after a start or a reload. A scrape
@@ -191,9 +199,10 @@ Two scrapes of a target never run at once. A scrape that uses its whole
 interval — as every scrape of a target that never answers does — ends just
 after the target's next turn has come. That turn is not given up: it waits
 for the scrape, starts as soon as it has ended, and must itself end by the
-turn after it, so it has slightly less than the interval. That only happens
-on the steady cadence, where the scrape before ran over by little; the first
-scrape never runs into the cadence. A target that hangs
+turn after it, so it has slightly less than the interval. The scrape before
+it ran over by little: a scrape of the steady cadence, or the first scrape,
+which runs into the cadence by no more than the moment it was started late.
+A target that hangs
 is therefore tried once per interval, each failure logged as
 `static target scrape failed`, and is seen to answer again within one
 interval. A turn is skipped, with a `static target scrape skipped` warning,

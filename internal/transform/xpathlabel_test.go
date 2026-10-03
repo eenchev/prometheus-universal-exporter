@@ -189,6 +189,12 @@ func agreeAtEveryNode[N comparable](t *testing.T, nodes xpathNodes[N], root N, n
 		plan := planXPathLabels(rule, namespaces, nodes.html)
 		for at, node := range all {
 			want, wantPanic := labelsOrPanic(func() map[string]string { return engineXPathLabels(nodes, node, rule, namespaces) })
+			// One label is not the engine's: text() at an attribute a rule
+			// selected is the attribute's value, where the engine, as
+			// XPath has it, selects nothing (xpathLabels).
+			if value, attribute := nodes.selectedAttribute(node); attribute && expression == "text()" {
+				want = map[string]string{"l": strings.TrimSpace(value)}
+			}
 			got, gotPanic := labelsOrPanic(func() map[string]string { return xpathLabels(nodes, node, plan) })
 			if !reflect.DeepEqual(got, want) || gotPanic != wantPanic {
 				t.Fatalf("label %q at node %d of %s (namespaces %v): %q (panic %q), the engine gives %q (panic %q)", expression, at, document, namespaces, got, gotPanic, want, wantPanic)

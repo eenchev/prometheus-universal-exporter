@@ -19,43 +19,6 @@ import (
 // These tests compare it with the parser it was (promoracle_test.go): on the
 // same body, read the same way, the two return the same series in the same
 // order, or the same error, word for word.
-//
-// One difference was made since, and is allowed here by name
-// (straySampleLine): the parser refuses a sample of a histogram or a summary
-// family that is none of the samples such a family has, which the parser it
-// was read and left out without a word.
-
-// straySampleLine is the line of the error the parser has for a sample of a
-// histogram or summary family that is neither a bucket, a quantile, a _sum
-// nor a _count (promParser.strayError), when err is that error.
-func straySampleLine(err error) (line int, stray bool) {
-	if err == nil {
-		return 0, false
-	}
-	rest, found := strings.CutPrefix(err.Error(), "text format parsing error in line ")
-	number, message, cut := strings.Cut(rest, ": ")
-	ofFamily := strings.Contains(message, " as a sample of the histogram ") || strings.Contains(message, " as a sample of the summary ")
-	if !found || !cut || !strings.HasPrefix(message, "expected ") || !ofFamily {
-		return 0, false
-	}
-	line, convErr := strconv.Atoi(number)
-	return line, convErr == nil
-}
-
-// readPastLine reports whether a parse got past a line: it was accepted, or
-// its error is of a later line or of none, as a limit's and a series' are.
-func readPastLine(err error, line int) bool {
-	if err == nil {
-		return true
-	}
-	rest, found := strings.CutPrefix(err.Error(), "text format parsing error in line ")
-	if !found {
-		return true
-	}
-	number, _, _ := strings.Cut(rest, ": ")
-	at, convErr := strconv.Atoi(number)
-	return convErr == nil && at > line
-}
 
 // sameFloat reports whether two floats are the same bit for bit, so that a
 // NaN is itself and -0 is not 0.
@@ -150,17 +113,9 @@ func compareExposition(t *testing.T, body []byte, reading promReading) bool {
 	// The parser is given a copy it could spoil, to show that it does not.
 	given := bytes.Clone(body)
 	got, err := parseExposition(given, reading.options(&asked))
-	line, stray := straySampleLine(err)
 	switch {
 	case !bytes.Equal(given, body):
 		t.Errorf("%q (%s): the parser changed the body it read", clip(body), reading)
-	case stray:
-		// The one difference: the parser it was read the line, dropped the
-		// sample and went on, so whatever it made of the body, it got past
-		// the line the parser now stops at.
-		if !readPastLine(oldErr, line) {
-			t.Errorf("%q (%s): err=%v, was %v, which is of a line before it", clip(body), reading, err, oldErr)
-		}
 	case (err == nil) != (oldErr == nil) || err != nil && err.Error() != oldErr.Error():
 		t.Errorf("%q (%s): err=%v, was %v", clip(body), reading, err, oldErr)
 	case errors.Is(err, model.ErrLimitExceeded) != errors.Is(oldErr, model.ErrLimitExceeded):

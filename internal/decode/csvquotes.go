@@ -6,6 +6,7 @@ import (
 	"errors"
 	"io"
 	"unicode"
+	"unicode/utf8"
 )
 
 // readCSV reads every record of a CSV body.
@@ -20,18 +21,39 @@ import (
 // that reading is then held against the body (checkQuotedField): one that is
 // not written as the strict reader requires fails the decode with the error
 // the strict reader gives it, whatever the other rows hold.
-func readCSV(body []byte, delimiter rune, trimLeadingSpace bool) ([][]string, error) {
+//
+// trimSpace has the reader skip the white space a field starts with, which
+// lets a quoted field begin after blanks; the fields are trimmed on both
+// sides once read (decodeCSV). With a delimiter that is white space itself
+// the reader takes a delimiter at the start of a field for such a blank:
+//
+//   - A space is left to it, as it always was: a run of spaces is then one
+//     delimiter, which is how columns aligned with spaces are read, and an
+//     empty field cannot be written.
+//   - A tab, or another blank that is no space, is not: the delimiter after
+//     an empty field would be skipped, and every later field of the row move
+//     a column to the left. The reader then skips nothing, and the blanks
+//     that stand between the start of a field and the quote of a quoted one
+//     are taken out of the body before it is read (withoutBlanksBeforeQuotes),
+//     so such a field is still read as a quoted one, the delimiters in it
+//     kept. An error's column is given as the body has it (originalColumn).
+func readCSV(body []byte, delimiter rune, trimSpace bool) ([][]string, error) {
+	if !trimSpace || delimiter == ' ' || !unicode.IsSpace(delimiter) {
+		return readCSVBody(body, delimiter, trimSpace)
+	}
+	body, removed := withoutBlanksBeforeQuotes(body, delimiter)
+	rows, err := readCSVBody(body, delimiter, false)
+	return rows, originalColumn(err, body, removed)
+}
+
+// readCSVBody is readCSV of a body the reader is to read as it is, skipping
+// the white space fields start with or not.
+func readCSVBody(body []byte, delimiter rune, trimLeadingSpace bool) ([][]string, error) {
 	reader := func() *csv.Reader {
 		cr := csv.NewReader(bytes.NewReader(body))
 		cr.Comma = delimiter
 		cr.FieldsPerRecord = -1
-		// Not when the delimiter is itself white space, a tab above all:
-		// the reader would take the delimiter after an empty field for a
-		// leading blank of the next one, and every later field of the row
-		// would move a column to the left. The fields are trimmed on both
-		// sides once read (decodeCSV), which is all trim_space asks for;
-		// here it only lets a quoted field begin after blanks.
-		cr.TrimLeadingSpace = trimLeadingSpace && !unicode.IsSpace(delimiter)
+		cr.TrimLeadingSpace = trimLeadingSpace
 		return cr
 	}
 	rows, err := reader().ReadAll()
@@ -66,6 +88,99 @@ func readCSV(body []byte, delimiter rune, trimLeadingSpace bool) ([][]string, er
 		}
 		rows = append(rows, record)
 	}
+}
+
+// csvRemoved says that n bytes were taken out of a body before the byte that
+// is at offset at in what is left.
+type csvRemoved struct{ at, n int }
+
+// withoutBlanksBeforeQuotes returns body without the white space, other than
+// the delimiter and a line feed, that stands between the start of a field and
+// a quote, and what it took out, in rising order; a body that has none is
+// returned as it is. `a<tab>  "b<tab>c"` becomes `a<tab>"b<tab>c"`, which
+// the reader reads as two fields, the second a quoted one.
+//
+// It follows the fields as the reader does: a field starts at the start of
+// the body, after a delimiter and after a line feed; one that starts with a
+// quote, once the blanks are gone, runs to its closing quote, a doubled quote
+// being a quote in it, over delimiters and line ends; any other runs to the
+// next delimiter or line feed, whatever quotes it holds. So blanks inside a
+// quoted field, and before a quote inside a field, are left alone. In a
+// quoted field that is not written as the reader requires the two may part;
+// the reader fails on that field (readCSVBody), before what follows it is of
+// any consequence.
+func withoutBlanksBeforeQuotes(body []byte, delimiter rune) ([]byte, []csvRemoved) {
+	var (
+		out     []byte
+		removed []csvRemoved
+		// kept is how much of body is in out, or would be were one made.
+		kept int
+	)
+	for i := 0; i < len(body); {
+		// A field starts at i.
+		start := i
+		for i < len(body) {
+			r, width := utf8.DecodeRune(body[i:])
+			if r == delimiter || r == '\n' || !unicode.IsSpace(r) {
+				break
+			}
+			i += width
+		}
+		quoted := i < len(body) && body[i] == '"'
+		if quoted && i > start {
+			if out == nil {
+				out = make([]byte, 0, len(body))
+			}
+			out = append(out, body[kept:start]...)
+			kept = i
+			removed = append(removed, csvRemoved{at: len(out), n: i - start})
+		}
+		if quoted {
+			for i++; i < len(body); i++ {
+				if body[i] != '"' {
+					continue
+				}
+				if i+1 < len(body) && body[i+1] == '"' {
+					i++
+					continue
+				}
+				i++
+				break
+			}
+		}
+		// The rest of the field, to the delimiter or line feed that ends it.
+		for i < len(body) {
+			r, width := utf8.DecodeRune(body[i:])
+			i += width
+			if r == delimiter || r == '\n' {
+				break
+			}
+		}
+	}
+	if out == nil {
+		return body, nil
+	}
+	return append(out, body[kept:]...), removed
+}
+
+// originalColumn gives the error of reading a body that
+// withoutBlanksBeforeQuotes shortened the column it has in the body as it
+// was: what was taken out of the error's line before it is counted again.
+// The lines are the same in both.
+func originalColumn(err error, body []byte, removed []csvRemoved) error {
+	var parse *csv.ParseError
+	if len(removed) == 0 || !errors.As(err, &parse) {
+		return err
+	}
+	lines := lineOffsets{body: body, line: 1}
+	start := lines.offset(parse.Line)
+	at := start + parse.Column - 1
+	for _, r := range removed {
+		if r.at >= start && r.at <= at {
+			parse.Column += r.n
+		}
+	}
+	return err
 }
 
 // lineOffsets finds where the lines of a body start, for lines asked for in

@@ -17,8 +17,9 @@ func listingCollector(key, entries string) string {
 // ASCII, a network in full-width digits and a space outside ASCII beside the
 // entry, and take alike the name in its xn-- form, a glob of one, an
 // address, a network, an entry YAML reads as a number and spaces around an
-// entry. What else an entry has to be — a name, a glob, an address or a
-// network, with no scheme, port or path — the exporter alone checks.
+// entry. An entry of nothing at all is refused by both. What else an entry
+// has to be — a name, a glob, an address or a network, with no scheme, port
+// or path — the exporter alone checks.
 // redirect_trusted_hosts, whose schema already took ASCII alone, is refused
 // by the exporter too where lower case or trimming had made ASCII of the
 // entry.
@@ -38,7 +39,8 @@ func TestSchemaAndExporterAgreeOnEntriesOutsideASCII(t *testing.T) {
 		}
 		loadersAlone(t, schema, key+": a character no name has", listingCollector(key, `["a,b"]`), `request.`+key+` entry "a,b" is not a host name`)
 		loadersAlone(t, schema, key+": a URL", listingCollector(key, `["https://api.example.com"]`), `request.`+key+` entry "https://api.example.com" is not a CIDR network`)
-		loadersAlone(t, schema, key+": an empty entry", listingCollector(key, `[""]`), `request.`+key+` has an empty entry`)
+		agree(t, schema, key+": an empty entry", listingCollector(key, `[""]`), false)
+		loadersAlone(t, schema, key+": an entry of blanks", listingCollector(key, `[" "]`), `request.`+key+` has an empty entry`)
 	}
 	for written, accepted := range map[string]bool{
 		`[xn--bcher-kva.example]`: true, `["XN--*.example"]`: true,

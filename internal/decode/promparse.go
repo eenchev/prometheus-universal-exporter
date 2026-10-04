@@ -657,7 +657,9 @@ func (p *promParser) add(f *promFamily, role int, value float64, timestamp int64
 // exposition has one such line for every series of the family.
 func (p *promParser) leaveOut(f *promFamily) {
 	if p.report == nil {
-		p.report = &PrometheusReport{FirstLeftOut: model.Errorf("line %d: %s", model.Position(p.number), p.stray(f))}
+		// Bounded as a decode error is (failurebound.go): it names the family
+		// and the sample, whose names are as long as the target makes them.
+		p.report = &PrometheusReport{FirstLeftOut: boundedFailure(model.Errorf("line %d: %s", model.Position(p.number), p.stray(f)))}
 	}
 	p.report.LeftOutLines++
 }

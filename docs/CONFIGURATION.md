@@ -115,7 +115,12 @@ fails the scrape saying so, and so does a second YAML document after `---`
 than everything after the first being dropped unseen. A key written twice in
 one mapping of a YAML body fails the scrape too, `line 3: mapping key "a"
 already defined at line 1`, rather than the later value replacing the earlier
-unseen: the error names the first ten such problems and counts the rest. A
+unseen: the error names the first ten such problems and counts the rest. An
+error quotes no more than the start of a part of the document, followed by
+the length of the whole — the first 64 bytes of a key written twice (`mapping
+key "aaaa..."... (100000 bytes) already defined at line 1`), and the first 256
+of a key that is a sequence or a mapping, of a value that does not fit its tag
+and of an anchor's name — so it stays short whatever the document holds. A
 YAML body costs time and memory in proportion to its size whatever it holds —
 a mapping of 200,000 keys decodes in about the time it takes to parse, and a
 key written 100,000 times is refused as quickly — so `max_response_bytes`
@@ -135,7 +140,11 @@ selectors and XPath (including bare element selectors such as `h1`), text
 supports regular expressions, and Prometheus input is parsed before
 filtering/renaming. An XML document may nest its elements 512 deep, as an HTML
 document may; a deeper one fails the scrape in the `decode` stage, saying so,
-whatever its size.
+whatever its size. Whichever decoder reads a body, the error of one it cannot
+decode is at most 2,000 bytes: a longer one, as of a line of a megabyte that
+is no sample and is quoted whole, is cut there and ends with the length it
+had, `... (1000100 bytes)`; so is the warning for the first line a decoder
+leaves out, a carbon line that is skipped or a sample line left out.
 
 ### Character encodings
 
@@ -2096,7 +2105,11 @@ text to a schema — that a duration is not too long to be held, and that a
 [size](#sizes) is under 2^63 bytes. Where a
 schema can tell, it refuses what the exporter refuses: a
 `response.csv.delimiter` of more than one character, a size with a fraction
-and no unit, a block that sets keys beside a missing `enabled`, and a
+and no unit, a block that sets keys beside a missing `enabled`, a
+`value_map` key that is empty or has blanks around it, a `required` label
+whose `value_map` maps a value to `""`, a rule without a `name` under any
+transform but `prometheus` and `python`, a `grpc` collector that calls
+another service than `grpc.health.v1.Health` without `descriptors`, and a
 negative duration, such as `timeout: -5s`, which no key takes. A duration is
 written as Go writes one — `500ms`, `1h30m`, `1.5s` — to the schemas as to
 the exporter: a `+` may lead it, and a `-` only a zero (`-0s`); only in an
@@ -2105,9 +2118,42 @@ negative one. What is written negative is negative however small: `-0.4ns`,
 which rounds to zero, is refused by both as `-1ns` is. The longest duration
 is 2^63 - 1 nanoseconds, some 292 years (`2562047h47m16.854775807s`): a
 longer one, such as `2562048h`, is well written, so the schemas take it, and
-the exporter refuses it as no duration. Write a duration of zero as `0s`: an
-unquoted `0` is a number to YAML, which the exporter reads as the duration
-and an editor flags.
+the exporter refuses it as no duration. A duration of zero is written `0s`
+or `0`: an unquoted `0` is a number to YAML, which the exporter reads as the
+duration it spells, with a sign too (`+0`, `-0`), and the schemas take the
+number 0 beside the text. No other number is a duration, to either:
+`timeout: 30` lacks its unit and is refused, not read as 30 of anything. A
+schema is handed the number and not how it was written, so a zero written
+another way — `0.0`, `00`, `0x0` — passes the schemas as the 0 it is, and
+the exporter, which reads what is written, refuses it as no duration. These
+two, a duration too long to be held and a zero that is a number but is not
+written `0`, are all the schemas and the exporter differ on in how a
+duration is written.
+
+An optional key written as the empty string is the key left out, to the
+exporter and to the schemas alike. Where the key takes one of a set of
+values or text of a pattern, `""` is its default: `decoder.type: ""` is
+`auto`, `name_escaping: ""` is `fail`, `request.method: ""` is `GET`, an
+error policy or a rule's `error_mode` written `""` is the one it defaults
+to, a rule's `type: ""` is `gauge`, or under a `prometheus` transform the
+type of the series it passes through, `otlp.compression: ""` is `gzip`, and
+`metrics_prefix: ""`, `response.graphite.value: ""`,
+`response.graphite.invalid_lines: ""` and a static target's `name: ""` and
+`request.method: ""` are those keys left out. A key that belongs to another
+request type, such as `rpc`, `descriptors` or `method`, is left out when it
+is written `""`, and so takes no part in what that type refuses. A rule
+about a key goes by the key being written: a label has a `value` or an
+`expression`, and the one written `""` is the one it does not have. A key
+that is required is as missing written `""` as left out, and refused by
+both: `transform.type`, `request.type`, a collector's `name`, a label's
+`name`, a rule's `name` under the transforms that need one, a `grpc`
+collector's `rpc`, a `localfile` collector's `root` and a static target's
+`collector`. What is not text has no empty form: `""` is no duration and no
+size, and both refuse it; and both refuse an empty entry of
+`collector_files`, `request.accept_status`, `request.allowed_targets`,
+`request.denied_targets`, `request.redirect_trusted_hosts` and the Python
+libraries, and an empty key of a `value_map`, of `request.metadata` and of a
+static target's `params` and `labels`.
 
 On a static target there is no HTTP response to carry an error. `fail` there
 means the scrape serves nothing except `http_exporter_target_up` at 0, and

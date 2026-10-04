@@ -965,7 +965,8 @@ func keysWrittenTwice(random *rand.Rand, names []string, count int) string {
 // in a list of several, and after mappings with a key written twice of
 // their own; a key of 30 kB written three and four times; and a list of
 // 3000 small mappings that each write a key twice. The library's error is
-// the oracle, for documents it can still decode.
+// the oracle, for documents it can still decode, a key of more than 64
+// bytes cut in it as in the refusal (yamlcut.go).
 func TestKeysWrittenTwiceInALargeYAMLMappingAreRefusedAsTheLibraryRefusedThem(t *testing.T) {
 	names := []string{"a", "b", "c", `"x already defined at line 7"`, `"line 5: x"`, `"a\n  line 9: boo"`, `"#"`, "3", "'it''s'", "[s]", "{m: 1}", "~", "true", "2024-06-01", "!!str 5", `"quoted \"q\""`, "d", "e"}
 	var documents []string

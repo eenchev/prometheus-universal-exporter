@@ -16,8 +16,13 @@
     },
     "interval": {
       "description": "How often a target that sets no interval is scraped, such as 1m. Required; at least 1s.",
+      "maximum": 0,
+      "minimum": 0,
       "pattern": "^(\\+?(0|(([0-9]+(\\.[0-9]*)?|\\.[0-9]+)(ns|us|µs|μs|ms|s|m|h))+)|-(0|((0+(\\.0*)?|\\.0+)(ns|us|µs|μs|ms|s|m|h))+))$",
-      "type": "string"
+      "type": [
+        "string",
+        "integer"
+      ]
     },
     "targets": {
       "description": "The targets. Each is scraped on its own interval with one collector of the configuration.",
@@ -27,6 +32,7 @@
         "properties": {
           "collector": {
             "description": "The collector of the configuration that scrapes this target.",
+            "minLength": 1,
             "type": [
               "string",
               "number",
@@ -39,8 +45,13 @@
           },
           "interval": {
             "description": "How often this target is scraped, whatever Prometheus scrapes the endpoint on and otlp.interval exports on. At least 1s, and no shorter than request.timeout; defaults to the file's interval.",
+            "maximum": 0,
+            "minimum": 0,
             "pattern": "^(\\+?(0|(([0-9]+(\\.[0-9]*)?|\\.[0-9]+)(ns|us|µs|μs|ms|s|m|h))+)|-(0|((0+(\\.0*)?|\\.0+)(ns|us|µs|μs|ms|s|m|h))+))$",
-            "type": "string"
+            "type": [
+              "string",
+              "integer"
+            ]
           },
           "labels": {
             "additionalProperties": {
@@ -52,6 +63,7 @@
             },
             "description": "Added to every metric the target produces, without overwriting a label the collector extracted. static_target is set by the endpoint, and job and instance by Prometheus when it scrapes the endpoint, so none of the three can be used.",
             "propertyNames": {
+              "minLength": 1,
               "not": {
                 "enum": [
                   "static_target",
@@ -64,7 +76,7 @@
           },
           "name": {
             "description": "Unique name, in logs and the static_target label. Defaults to \u003ccollector\u003e_\u003cindex\u003e.",
-            "pattern": "^[a-zA-Z_][a-zA-Z0-9_]*$",
+            "pattern": "^$|^[a-zA-Z_][a-zA-Z0-9_]*$",
             "type": "string"
           },
           "otlp": {
@@ -246,7 +258,8 @@
                   "PUT",
                   "PATCH",
                   "DELETE",
-                  "HEAD"
+                  "HEAD",
+                  ""
                 ],
                 "type": "string"
               },
@@ -269,9 +282,14 @@
                     "type": "integer"
                   },
                   "backoff": {
-                    "description": "A duration such as 500ms, 30s or 5m.",
+                    "description": "A duration such as 500ms, 30s or 5m. Zero may be written 0, the one number that needs no unit.",
+                    "maximum": 0,
+                    "minimum": 0,
                     "pattern": "^(\\+?(0|(([0-9]+(\\.[0-9]*)?|\\.[0-9]+)(ns|us|µs|μs|ms|s|m|h))+)|-(0|((0+(\\.0*)?|\\.0+)(ns|us|µs|μs|ms|s|m|h))+))$",
-                    "type": "string"
+                    "type": [
+                      "string",
+                      "integer"
+                    ]
                   },
                   "codes": {
                     "description": "grpc: replaces the collector's request.retry.codes for this target.",
@@ -300,8 +318,13 @@
               },
               "timeout": {
                 "description": "How long a scrape of this target may take. At most the target's interval.",
+                "maximum": 0,
+                "minimum": 0,
                 "pattern": "^(\\+?(0|(([0-9]+(\\.[0-9]*)?|\\.[0-9]+)(ns|us|µs|μs|ms|s|m|h))+)|-(0|((0+(\\.0*)?|\\.0+)(ns|us|µs|μs|ms|s|m|h))+))$",
-                "type": "string"
+                "type": [
+                  "string",
+                  "integer"
+                ]
               },
               "until": {
                 "description": "graphite: replaces the collector's request.until for this target.",

@@ -305,7 +305,7 @@ func normalizeYAML(v any) any {
 
 // validateAgainstSchema checks the part of JSON Schema the generated schema
 // uses: type, properties, additionalProperties, propertyNames, required,
-// items, minItems, enum, pattern and minimum. It is enough to test the schema without a
+// items, minItems, enum, pattern, minimum and maximum. It is enough to test the schema without a
 // third-party validator.
 func validateAgainstSchema(schema map[string]any, value any) []string {
 	var errs []string
@@ -377,6 +377,11 @@ func validateAgainstSchema(schema map[string]any, value any) []string {
 		if minimum, ok := schema["minimum"].(float64); ok {
 			if n, ok := value.(float64); ok && n < minimum {
 				errs = append(errs, fmt.Sprintf("%s: %v is below %v", path, n, minimum))
+			}
+		}
+		if maximum, ok := schema["maximum"].(float64); ok {
+			if n, ok := value.(float64); ok && n > maximum {
+				errs = append(errs, fmt.Sprintf("%s: %v is above %v", path, n, maximum))
 			}
 		}
 		switch x := value.(type) {

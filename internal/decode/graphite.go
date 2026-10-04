@@ -238,7 +238,9 @@ func parseCarbonLines(body []byte, now time.Time, skip bool, report *GraphiteRep
 				return nil, err
 			}
 			if report.SkippedLines == 0 {
-				report.FirstSkipped = err
+				// Bounded as a decode error is (failurebound.go): it may
+				// quote the whole line.
+				report.FirstSkipped = boundedFailure(err)
 			}
 			report.SkippedLines++
 			continue

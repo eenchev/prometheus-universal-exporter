@@ -1228,6 +1228,27 @@ collector, and a probe that repaired any MUST log a warning with the count and
 the first metric, suggesting `response.charset`. A label map a transform shares
 among metrics MUST NOT be changed in place.
 
+The error of a body that cannot be decoded MUST be no longer than 2,000
+bytes, whichever decoder read the body and whatever it holds: a decoder names
+what it could not read with that part of the body — a token that is no
+number, an element that was not closed, a line that is no carbon line — which
+is the target's to make as long as the body, and the error is logged as one
+line, answered to the scraper and shown in a debug report. A longer error
+MUST be cut to its start and end with the length it had (`... (1000100
+bytes)`), 2,000 bytes together, the cut between two characters; one within
+the bound MUST be the decoder's own error, untouched. The text the failure is
+recognised by (§ 25.1) MUST be bounded alike, cut where it is itself over
+2,000 bytes whatever the error's length, with the mark in place of the
+length. The cut error MUST NOT hold the text it was cut from, nor the error
+that held it, so that whoever keeps the error, as the failure log keeps what
+it is recognised by, keeps no more than that; that the error is a limit that
+was exceeded (§ 20) MUST be kept, and what else it was to `errors.As` MAY be
+lost. A decoder SHOULD cut the part itself where it knows it, keeping what
+the error says after it, as the YAML decoder does (§ 10). The error a decoder
+reports of the first line it left out of a body it decoded, a carbon line
+that is skipped or a sample line of the exposition that is left out, which is
+logged as a warning and remembered as a failure is, MUST be bounded alike.
+
 ---
 
 ## 7. Common internal data model
@@ -1434,7 +1455,46 @@ The YAML decoder MUST:
   and count the others (`... and 719390 more problems`): the error's text
   MUST NOT grow with the square of the document, and the text of the whole
   list MUST NOT be made. A list of ten problems or fewer MUST read as the
-  YAML library wrote it.
+  YAML library wrote it, but for a key that is cut (next).
+- Quote no more than the start of a part of the document in an error,
+  however long the part is, and say how long it was. The YAML library writes
+  into its errors, whole, a key written twice (or the name of the anchor an
+  alias key stands for), the Go syntax of a key that is a sequence or a
+  mapping with all it holds (`invalid map key: []interface {}{1, 2, 3}`), a
+  scalar that does not fit its tag (``cannot decode !!str `...` as a
+  !!int``), and the name of an anchor that is not known or that holds itself;
+  a key of 200,000 numbers is an error of 1.4 MB. Of a key written twice the
+  problem MUST show the first 64 bytes, quoted, and then the key's length, as
+  a value is cut in any error (§ 18.1): `line 5: mapping key "aaaa..."...
+  (100000 bytes) already defined at line 1`, so that ten problems of long
+  keys are all ten read, in under 1,500 bytes where the keys are plain text;
+  a key of 64 bytes or fewer MUST read as the library wrote it. Of the part
+  another error holds, the error MUST show the first 256 bytes as the library
+  wrote them, what closes the part, the part's length, and then what the
+  library says after it (``cannot decode !!str `aaaa...`... (1000000 bytes)
+  as a !!int``, `unknown anchor 'aaaa...'... (1000000 bytes) referenced`,
+  `invalid map key: []interface {}{1, 2, ..., 62, 63... (1488909 bytes)`); a
+  part of 256 bytes or fewer MUST read as the library wrote it. The words of
+  a panic (below) MUST be cut alike, to 256 bytes, the exporter's own still
+  ending with what it says of the defect.
+  Every cut MUST fall between two characters. This holds on every way a
+  document is refused: by the library, by the refusal of keys written twice
+  made without it, which MUST NOT quote a whole key to cut it, by the walk
+  in the library's words, and by a panic; an error in none of these forms is
+  bounded as every decoder's is (§ 6). The part is read from the library's
+  text in the one form the library writes it in and nowhere else: a key
+  between `mapping key ` and the last ` already defined at line `, a scalar
+  between the first backquote and the last `` ` as a ``, an anchor's name
+  between its quotes; the scanner's and the parser's errors (`yaml: line N:
+  ...`) quote nothing of the document, and `cannot unmarshal` holds seven
+  bytes of a scalar. The error returned MUST NOT hold the long text or the
+  library's error: it is a new error of the short text, still a list of
+  problems to `errors.As` where the library's was. The failure MUST be
+  recognised (§ 25.1) by the same text with the mark in place of each length,
+  so a key or a part that starts the same and is longer or shorter is the
+  same failure, and one that starts otherwise another; two keys written twice
+  that start with the same 64 bytes, both cut, are one problem to the log,
+  which is accepted: the error tells them apart by their lines.
 - Decode a document, and refuse one, in time and memory linear in its size,
   whatever it holds: a mapping of any number of keys MUST NOT cost time that
   grows with the square of that number, as comparing every two of its keys
@@ -4764,7 +4824,14 @@ MUST take what the exporter reads as a duration that is not negative, and
 beyond that only a duration too long to be held: numbers with units, each
 number with a digit before or after its point, or a bare `0`; a `+` before
 any of them; and a `-` only before a zero written with no other digit, such
-as `-0s`. No key takes a negative duration, so `timeout: -5s` MUST be
+as `-0s`. YAML reads an unquoted `0`, `+0` or `-0` as a number: the exporter
+MUST read it as the duration zero it spells, and a duration key of the
+schemas MUST take the whole number 0 beside the text, and no other number,
+through the one description every duration key shares, which a test MUST
+check of every duration key of the three schemas, found by its type. A
+number that is not zero has no unit and MUST be refused by both:
+`timeout: 30` is no duration, not 30 of anything. No key takes a negative
+duration, so `timeout: -5s` MUST be
 refused by the schema as it is at the load. A duration written with a `-`
 and a digit other than zero is negative however small: the exporter MUST
 read one that rounds to zero, such as `-0.4ns`, as negative, so that each
@@ -4775,13 +4842,71 @@ it with `enabled: true`. A duration too long to be held — more than
 2^63 - 1 nanoseconds, some 292 years, such as `2562048h` — is written as
 one, which is all a pattern can tell: the schemas take it, it stays the
 exporter's to refuse, as no duration, the test MUST hold both to that, and
-the documentation of the schemas MUST say so. What else a schema cannot
+the documentation of the schemas MUST say so. A zero that YAML reads as a
+number and that is not written `0` — `0.0`, `00`, `0x0`, `0e0` — reaches a
+schema as the number 0, which it takes, while the exporter reads what is
+written and MUST refuse it as no duration; the test MUST hold both to that
+by name too, and the documentation MUST say it. These two MUST be the only
+differences in how a duration is written. What else a schema cannot
 tell MUST be said in the
 key's description and stay the exporter's to refuse: the least
 `otlp.interval`, 1s, since a duration is a string to a schema and a disabled
 block may hold any; the range of a size; and a size written as an unquoted
 number with an exponent or a fraction of zero (`1e3`, `1.0`), which a schema
 sees as the whole number it equals.
+
+A key written as the empty string MUST be the key left out, to the exporter
+and to the schemas alike, and CONFIGURATION.md MUST say so once, where it
+describes the schemas. An optional key that the schemas hold to a set of
+values or to a pattern MUST take `""` beside them, in one form each — `""`
+last among the allowed values, and `^$|` before the pattern — and the
+exporter MUST load it as the key left out: `decoder.type`, `name_escaping`,
+`request.method`, `request.descriptors`, `request.rpc`, the three
+`error_handling` policies, a rule's `type`, `error_mode` and `name`,
+`metrics_prefix`, `response.graphite.value`,
+`response.graphite.invalid_lines`, `otlp.compression`, and a static target's
+`name` and `request.method`. A rule of the schemas about a key MUST go by
+the key being written with a value other than `""`, not by its being there:
+a label MUST have exactly one of `value` and `expression` so written; a
+`grpc` collector MUST have `rpc` so written, and `descriptors` unless its
+`rpc` names a method of `grpc.health.v1.Health`; a `localfile` collector
+MUST have `root` so written; and every rule of a collector whose transform
+is neither `prometheus` nor `python` MUST have `name` so written. The rule
+of a block that `enabled` switches on (§ 42.1) goes by the keys the block
+has, to both, so a key written `""` there still needs `enabled`. A key the
+exporter requires MUST be refused by both written `""`, as it is left out:
+`transform.type`, `request.type`, a collector's and a label's `name`, and a
+static target's `collector`. A duration and a size have no empty form, and
+MUST be refused by both written `""`; so MUST an empty entry of
+`collector_files`, `request.accept_status`, `request.allowed_targets`,
+`request.denied_targets`, `request.redirect_trusted_hosts`,
+`transform.libraries` and `transform.required_libs`, and an empty key of a
+`value_map`, of `request.metadata` and of a static target's `params` and
+`labels`.
+
+The schemas MUST refuse of a `value_map`, a rule's and a label's, what the
+exporter refuses of its keys and values (§ 18.1): a key that is empty or
+has a blank before or after it, a blank being what `strings.TrimSpace`
+takes off, by a pattern Go and JavaScript read alike; a rule's value that
+is no number; and a value of `""` in the map of a `required` label. `"*"`
+is a key like any other to a schema. A key written twice and a key YAML
+reads as no key at all are YAML's and the exporter's to refuse, a validator
+being handed the mapping made of them; and where a `value_map` may stand —
+not on a static label, in a `python` or `prometheus` rule or in a rule
+without a name — stays the exporter's to refuse.
+
+A test MUST hold every key that a schema holds to allowed values, a pattern
+or a length to one verdict from the committed schema and from the loader,
+four ways: left out, written `""`, with a value both take and with one both
+refuse, in the configuration, in a collector file and in the target file;
+a key taken both left out and written `""` MUST load as the same thing both
+ways. The keys MUST come from tables, one for each request type, in a file
+with that type's build constraint, and a test of the build with every type
+MUST fail when a schema holds a key to such a rule that no table has. The
+tables MUST also say what the schemas said of each case before `""` was the
+key left out to them, and the test MUST hold a schema as it was — the
+committed one with those changes taken out — to that, so that every case
+the changes are not about is shown to get the verdict it got.
 
 ---
 
@@ -4889,7 +5014,10 @@ failure when it grows by an item. No more than ten different problems MUST be
 told apart; past ten the failure is recognised by the first ten and by there
 being more, however many. An error on a document's first line, for which the
 library writes no line, MUST be the same failure as the same error on a later
-line.
+line. The length a decode error gives of a part it cut, or of itself (`...
+(100000 bytes)`, § 6 and § 10), is a size like any other and MUST NOT tell
+one failure from another: what was cut is recognised by the start that is
+shown.
 Neither MUST what
 a failed fetch has of the one connection or attempt: the address a connection
 was made from, of every network error in the failure and in the text of a
@@ -9890,8 +10018,11 @@ Tests MUST show:
   included, from both the schema and the loader, and what is no duration
   from neither; `otlp.interval: -1s` is refused by both with
   `enabled: true`.
-- An unquoted `0` is refused by the schema, to which it is a number, and
-  read by the loader as the duration zero.
+- An unquoted `0`, `+0` or `-0` is taken by the schema, as the number 0, and
+  read by the loader as the duration zero, in a key that takes zero, in one
+  whose zero is its default and in a switched-off `otlp` block; in the
+  target file's `interval` it passes the schema and is refused by the loader
+  as `interval is required`.
 - Over some 9700 texts — a sign, two signs or none, and one or two numbers
   with units, well written and not — and `-0.4ns`, `-0.0000000001s`,
   `-0s0s0s0.1ns` and their like without the sign, a duration key's pattern
@@ -10170,7 +10301,7 @@ Tests MUST show:
 - A duration too long to be held — `2562048h`, `9223372036854775808ns`,
   thirty nines and `h` — passes each schema, in a key of each kind and in a
   switched-off `otlp` block, and is refused by the loader as `is not a
-  duration`: the documented disagreement. Both patterns take those texts and
+  duration`: a documented disagreement. Both patterns take those texts and
   `+2562048h`; the longest duration, `2562047h47m16.854775807s`, is taken by
   both.
 - A zone the text writes as `GMT` and a signed whole number of hours is read
@@ -10602,9 +10733,9 @@ Tests MUST show:
 - The configuration schema and the exporter agree on `allowed_targets` and
   `denied_targets` entries outside ASCII, which both refuse, and on names,
   globs, `xn--` names, addresses, networks, an entry YAML reads as a number
-  and an entry with spaces around it, which both accept; an entry with a
-  comma, a URL and an empty entry pass the schema and are the exporter's to
-  refuse. Both refuse a `redirect_trusted_hosts` entry outside ASCII, the
+  and an entry with spaces around it, which both accept; an empty entry is
+  refused by both, and an entry with a comma, a URL and an entry of blanks
+  pass the schema and are the exporter's to refuse. Both refuse a `redirect_trusted_hosts` entry outside ASCII, the
   Kelvin sign and a no-break space beside the entry included.
 - A `grpc` target whose host has a character outside ASCII is refused in
   each of its forms (`host:port`, `dns:///`, `grpc://`, `grpcs://`), behind a
@@ -12989,7 +13120,8 @@ Tests MUST show:
   refused without the library, the last with its 45 problems where the
   library lists them 31 times.
 - Keys written twice in a document the library is not given are refused
-  with the library's error to the letter, recognised by the same text: one
+  with the library's error to the letter, a key of more than 64 bytes cut in
+  both alike (§ 34.94), recognised by the same text: one
   key written 46 to 60, 100, 200 and 400 times; 200 mappings of 129 to 400
   pairs whose keys are drawn from one to fifteen names (some holding the
   library's own words, a quote, a line break, the mark; some sequences and
@@ -13203,6 +13335,207 @@ Tests MUST show:
   a thousand plain items — 419 kB that the YAML library decodes in a stack
   of over 4 MB, a call a link — is refused for its depth in a stack of under
   1 MB, the library not given it.
+
+## 34.94 The schemas and the loader on empty values, value maps and durations, and decode errors of a bounded length
+
+- An optional key that a schema holds to allowed values or a pattern is taken
+  by the committed schema and by the loader alike when it is written `""`,
+  as it is left out, and loads as the same collector, `otlp` block or target
+  both ways: `decoder.type`, `name_escaping`, `request.method`, the three
+  `error_handling` policies, a rule's `type` and `error_mode`,
+  `metrics_prefix`, `otlp.compression`, `response.graphite.value`,
+  `response.graphite.invalid_lines`, and a static target's `name` and
+  `request.method`; each is taken by both with a value of its own and
+  refused by both with one that is none (`jsonl`, `escape`, `FETCH`,
+  `panic`, `timer`, `grafana_`, `zstd`, `median`, `drop`, `bad-name`). The
+  schema as it was refused each written `""`.
+- `request.rpc: ""` and `request.descriptors: ""` in an `http` collector, and
+  `request.method: ""` in a `grpc`, a `graphite` and a `localfile` collector,
+  are taken by both as the key of another type left out.
+- A key the exporter requires is refused by both written `""`, as it is left
+  out: a collector's `name`, `transform.type`, `request.type`, a label's
+  `name`, a `grpc` collector's `rpc`, with a slash before it or without, a
+  `localfile` collector's `root` and a static target's `collector`; the
+  schema as it was took `root: ""` and `collector: ""`.
+- A rule's `name` left out or written `""` is refused by both under a `jq`
+  transform, where the schema as it was took the rule without a name, and
+  taken by both in a `prometheus` and in a `python` rule, where the schema
+  as it was refused `""`; `bad-name` is refused by both in all three.
+- A `grpc` collector's `descriptors` left out or written `""` is taken by
+  both when it calls `grpc.health.v1.Health/Check` and refused by both when
+  it calls `acme.queue.v1.QueueService/GetStats`, where the schema as it was
+  took the collector without it; `reflection` is taken and `files` refused
+  by both for either.
+- A label's `value` or `expression` written `""` is the one left out, to
+  both: alone it is refused as a label with neither, beside the other it is
+  taken and loads as the label without it, and a value beside an expression
+  is refused by both; both written `""` are refused, a value of one blank
+  and a value YAML reads as a number are taken.
+- An `otlp` block with `compression: ""` and no `enabled` is refused by both,
+  and taken with `enabled: false`; a `jq` rule with `type`, `error_mode`,
+  `description`, `items`, `time_format` and `time_zone` all written `""` is
+  taken by both.
+- An empty entry of `collector_files`, `request.accept_status`,
+  `request.allowed_targets`, `request.denied_targets`,
+  `request.redirect_trusted_hosts`, `transform.libraries` and
+  `transform.required_libs`, and an empty key of `request.metadata` and of a
+  static target's `request.metadata`, `params` and `labels`, is refused by
+  both; the schema as it was took the empty entry of the two target lists
+  and the empty key of `labels`. An entry of blanks in the two target lists
+  passes the schema and is refused by the loader as an empty entry.
+- `""` is refused by both as a duration and as a size, in every duration key
+  and in `limits.max_output_bytes`, `limits.max_response_bytes`,
+  `limits.max_script_memory`, `request.max_response_bytes` and
+  `request.max_total_bytes`.
+- In every duration key of the three files — `cache.ttl`,
+  `cache.stale_if_error`, `limits.script_timeout`, `request.retry.backoff`,
+  `request.max_age`, `response.graphite.max_age`, `otlp.timeout` and
+  `otlp.interval`, switched on and off, and the target file's `interval`,
+  `targets[].interval`, `targets[].request.timeout` and
+  `targets[].request.retry.backoff` — both take `0`, `+0` and `-0`
+  unquoted, `"0"`, `0s`, `"0s"`, `"30s"` and `30s`, and both refuse `30`,
+  `1.5`, `-5` and `true`; the schema as it was refused the three unquoted
+  zeros. In the target file's required `interval` a zero passes the schema
+  and is refused by the loader as `interval is required`.
+- A zero YAML reads as a number that is not written `0` — `0.0`, `00`,
+  `0x0`, `0e0`, `-0.0`, `0_0` — passes the schema in every duration key and
+  is refused by the loader as `is not a duration`: the second documented
+  disagreement on how a duration is written, beside a duration too long to
+  be held.
+- Every duration key of the three generated schemas, found by its type, is
+  text of the duration pattern, the signed one in `otlp.timeout` and
+  `otlp.interval`, or the whole number 0; a collector's `name` stays text
+  alone and a size the whole numbers and text it was.
+- A `value_map` key that is empty or has a blank before or after it — a
+  space, a tab, a line break, and each of the 25 characters
+  `strings.TrimSpace` takes off, before the key and after it — is refused by
+  both in a rule's map, and the empty key and a key with a space or a tab
+  around it in a label's; `"*"`, a key with blanks inside it, and a key that
+  begins with U+200B or U+180E or ends with U+FEFF are taken by both.
+- A rule's `value_map` values `.nan`, `.inf`, `-.inf`, `0x10`, `1_000` and
+  `1.5e3` are taken by both, and `NaN`, `Inf`, `+Inf`, `"1"`, `one`, `true`
+  and a list refused by both, as is a map that is a list or a word.
+- A label's `value_map` takes text, numbers and booleans as values from
+  both, and `""` unless the label is `required: true`, which both refuse,
+  with `"*"` mapped to `""` too; a `value_map` on a static label, in a
+  `python` or a `prometheus` rule and in a rule without a name passes the
+  schema and is refused by the loader in its words.
+- The pattern of a `value_map` key takes a key exactly when
+  `strings.TrimSpace` leaves it as it is, over some 118,000 keys — each
+  character up to U+3000 and one in 97 past it, alone, before `up`, after
+  it, inside it, and around a key with a line break — and holds no escape
+  but `\t`, `\n`, `\v`, `\f`, `\r`, `\s`, `\S` and `\x` with two digits.
+- An optional key's pattern takes the empty text and what the key's own
+  pattern takes, and nothing else, and its allowed values are the key's own
+  and `""`, the list the exporter checks values against left as it was.
+- Every key a schema holds to allowed values, a pattern or a length, some
+  fifty of them, is a row of a table of its request type; the collector
+  file's schema holds the keys the configuration's holds of its collectors.
+- The committed schemas with the changes taken out give, for every row left
+  out, written `""`, written well and written badly, the verdict the row
+  says the schema gave before, which is the verdict of now but for the
+  cases above; and every shipped configuration and target file, the
+  examples among them, matches its schema as it is and as it was.
+- The repository's schema validator refuses a number above `maximum`, takes
+  one at it, and bounds no text by it.
+- A YAML mapping key that is a sequence of 200,000 numbers is refused with
+  `yaml: invalid map key: `, the first 256 bytes of what the library wrote of
+  the key and `... (1488909 bytes)`, under 300 bytes where it was 1.4 MB:
+  beside a key that is no text, beside a mapping of 200 keys, where the walk
+  hands the pair to the library, and for a key that is a mapping of 20,000
+  keys, which the walk refuses itself. It is recognised by the same text
+  ending `... (# bytes)`, so a key of 150,000 numbers that starts the same
+  is the same failure, with its own length in the error, and a key that
+  starts with another number is another.
+- A YAML key of 100 kB written three times, in the explicit `? key` form, is
+  refused with three problems that each show the first 64 bytes of the key,
+  quoted as `model.QuoteValue` quotes a value, `... (100000 bytes)` and the
+  line it was first written on; written six times, with ten such problems
+  and `... and 5 more problems` in under 1,500 bytes; both still a list of
+  problems to `errors.As`, recognised by one problem with the mark for the
+  length and the lines. A key of 50 kB that starts the same, alone or in the
+  same document, a key of 65 bytes that starts the same and one of 200 bytes
+  the library itself refuses are that failure; a key that starts otherwise,
+  and the first 64 bytes as a key, which is not cut, are others.
+- The library's list of problems and the refusal made without the library
+  read and are recognised alike for a key of 63, 64, 65, 200 and 30,000
+  bytes written three times, of plain text, of two-byte characters, of
+  quotes and of control characters: cut past 64 bytes of the key itself,
+  whatever its quoting comes to, and as the library wrote it up to there.
+- A YAML value of a megabyte tagged `!!int`, a block of text tagged
+  `!!float`, and the name of an anchor of a megabyte that is not known, that
+  holds itself, and that the walk finds in itself are refused with the first
+  256 bytes of the part, what closes it, its length and what the library
+  says after it (``cannot decode !!str `aaaa`... (1000000 bytes) as a
+  !!int``), recognised by the same with `(# bytes)`; a value that holds the
+  words `` ` as a !!bool `` is cut where the value ends; a part of 1, 255
+  and 256 bytes reads and is recognised as it was, and one of 257 is cut.
+- A cut falls between two characters: a key written twice, a value that does
+  not fit its tag and an error over 2,000 bytes, each of characters of two,
+  three and four bytes after none to three single bytes, are cut before the
+  character the bound falls in, the key exactly as `model.QuoteValue` cuts
+  it; the error and what it is recognised by are valid UTF-8. A text that is
+  no UTF-8 where it is cut is cut at the bound.
+- A YAML error with no long part reads, is recognised and is the kind of
+  error to `errors.As` that it was, and a document that decodes decodes into
+  what it did: against the decoder as it was before any error was cut, over
+  the YAML files of the repository whole and cut off in their first sixty
+  lines, the documents written for the errors and for the forms of a merge,
+  a key and an alias, 6,000 drawn at random and 150 mappings of 129 pairs or
+  more with keys written several times, of names that hold the library's own
+  words and of names of 64 bytes, each decoded with a mapping large past 0,
+  1, 2, 4 and 128 keys: some 33,000 decodings, 2,500 lists of problems
+  (2,000 of them refused without the library) and 11,000 other errors, each
+  also the decoder's own error once bounded. The few errors with a long part
+  say how long it was.
+- The error of a YAML document refused for a long part holds nothing of the
+  document: with the error held and the document let go of, the heap is
+  under 16 kB larger than before, through `decodeYAML` and through `Decode`,
+  for a key of 200,000 numbers, a key of 100 kB written three times, a key
+  of 21 kB that the library lists three problems of, a value of a megabyte
+  tagged `!!int` and an anchor of a megabyte.
+- The words of a panic of 10,000 bytes while a YAML document is decoded are
+  said by their first 256 bytes and `... (10000 bytes)`, the library's and
+  the exporter's own alike, the exporter's still ending with what it says of
+  the defect, and recognised with `(# bytes)`; a panic of 256 bytes or
+  fewer, of a text, an error, a number or nothing, and a runtime error read
+  and are recognised as they were.
+- The error of a body that cannot be decoded is exactly 2,000 bytes,
+  starting as it did and ending with the length it had, where a token of 1
+  MiB made it over a megabyte: an XML element closed by another and an
+  entity; a CSV column named twice; a Prometheus sample's value and
+  timestamp, a label's name and value, a metric's type and a second `HELP`;
+  a carbon line of too many fields, its value and a tag; a Graphite render
+  series' name and a point; and ten problems of YAML keys of control
+  characters. Each is recognised by a text of 2,000 bytes or fewer with the
+  mark for the length and for the line, the same for a token half as long on
+  another line. A JSON error stays under 100 bytes.
+- A decode error within the bound is the decoder's own: for 28 mistaken
+  bodies of the JSON, YAML, XML, CSV, Prometheus and Graphite decoders, an
+  unsupported decoder and the series limit, `Decode` returns the text, the
+  recognised text, the type and the `ErrLimitExceeded` mark that the decoder
+  made, and bounding the decoder's error gives back the very error.
+- An error of exactly 2,000 bytes is left as it is and one of 2,001 is cut to
+  2,000, ending `... (2001 bytes)`, recognised by 2,000 bytes ending `... (#
+  bytes)`; the cut error neither is nor wraps the long one or what that
+  wrapped, and a limit that was exceeded stays one. An error over the bound
+  only by the digits of its line is cut, and is recognised by its text whole
+  with the mark for the line, as it is on a line of fewer digits. No error
+  is no error.
+- Through `/probe`, a YAML document with a key of 200,000 numbers is
+  answered 502 with `collector document decode failed: YAML decode: yaml:
+  invalid map key: ...63... (1488909 bytes)` in under 400 bytes, and logs
+  under a kilobyte, one line of the decode stage with that error; the key
+  grown shorter, to 150,000 numbers, is logged as a repeat at debug level
+  with its own length, and a key that starts otherwise as a new failure; a
+  debug probe's report names the failure in the same short line.
+- The first line a decoder leaves out of a body it decodes is reported in an
+  error bounded like a decode error: a carbon line of 1 MiB skipped under
+  `invalid_lines: skip`, and a sample of a histogram whose name is 1 MiB long
+  and that is none of its samples, are reported in exactly 2,000 bytes that
+  start as they did and end with the length, recognised by 2,000 bytes or
+  fewer with the mark for the length and the line, the same half as long a
+  line further; a short line is reported as it was.
 
 # 35. Documentation requirements
 

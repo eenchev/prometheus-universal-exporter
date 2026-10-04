@@ -44,6 +44,22 @@
       "items": {
         "additionalProperties": false,
         "description": "How to reach a kind of target and turn its response into metrics.",
+        "if": {
+          "properties": {
+            "transform": {
+              "properties": {
+                "type": {
+                  "not": {
+                    "enum": [
+                      "prometheus",
+                      "python"
+                    ]
+                  }
+                }
+              }
+            }
+          }
+        },
         "properties": {
           "cache": {
             "additionalProperties": false,
@@ -51,13 +67,23 @@
             "properties": {
               "stale_if_error": {
                 "description": "After ttl, keep a result this much longer to answer a probe whose trip to the target fails, marked by http_exporter_result_stale 1. Omit or 0s to answer the failure.",
+                "maximum": 0,
+                "minimum": 0,
                 "pattern": "^(\\+?(0|(([0-9]+(\\.[0-9]*)?|\\.[0-9]+)(ns|us|µs|μs|ms|s|m|h))+)|-(0|((0+(\\.0*)?|\\.0+)(ns|us|µs|μs|ms|s|m|h))+))$",
-                "type": "string"
+                "type": [
+                  "string",
+                  "integer"
+                ]
               },
               "ttl": {
                 "description": "Answer a repeat of the same probe from memory for this long. Omit or 0s to always go to the target.",
+                "maximum": 0,
+                "minimum": 0,
                 "pattern": "^(\\+?(0|(([0-9]+(\\.[0-9]*)?|\\.[0-9]+)(ns|us|µs|μs|ms|s|m|h))+)|-(0|((0+(\\.0*)?|\\.0+)(ns|us|µs|μs|ms|s|m|h))+))$",
-                "type": "string"
+                "type": [
+                  "string",
+                  "integer"
+                ]
               }
             },
             "type": "object"
@@ -80,7 +106,8 @@
                   "html",
                   "prometheus",
                   "text",
-                  "graphite"
+                  "graphite",
+                  ""
                 ],
                 "type": "string"
               }
@@ -98,7 +125,8 @@
                 "enum": [
                   "fail",
                   "log",
-                  "ignore"
+                  "ignore",
+                  ""
                 ],
                 "type": "string"
               },
@@ -107,7 +135,8 @@
                 "enum": [
                   "fail",
                   "log",
-                  "ignore"
+                  "ignore",
+                  ""
                 ],
                 "type": "string"
               },
@@ -116,7 +145,8 @@
                 "enum": [
                   "fail",
                   "log",
-                  "ignore"
+                  "ignore",
+                  ""
                 ],
                 "type": "string"
               }
@@ -179,8 +209,13 @@
               },
               "script_timeout": {
                 "description": "How long a Python script may run. Starting the interpreter is not counted. Defaults to 100ms.",
+                "maximum": 0,
+                "minimum": 0,
                 "pattern": "^(\\+?(0|(([0-9]+(\\.[0-9]*)?|\\.[0-9]+)(ns|us|µs|μs|ms|s|m|h))+)|-(0|((0+(\\.0*)?|\\.0+)(ns|us|µs|μs|ms|s|m|h))+))$",
-                "type": "string"
+                "type": [
+                  "string",
+                  "integer"
+                ]
               }
             },
             "type": "object"
@@ -231,7 +266,8 @@
                   "enum": [
                     "fail",
                     "log",
-                    "ignore"
+                    "ignore",
+                    ""
                   ],
                   "type": "string"
                 },
@@ -255,13 +291,37 @@
                   "items": {
                     "additionalProperties": false,
                     "description": "Set value for a static label, or expression to read it from the response.",
+                    "if": {
+                      "properties": {
+                        "required": {
+                          "const": true
+                        }
+                      },
+                      "required": [
+                        "required"
+                      ]
+                    },
                     "oneOf": [
                       {
+                        "properties": {
+                          "value": {
+                            "not": {
+                              "const": ""
+                            }
+                          }
+                        },
                         "required": [
                           "value"
                         ]
                       },
                       {
+                        "properties": {
+                          "expression": {
+                            "not": {
+                              "const": ""
+                            }
+                          }
+                        },
                         "required": [
                           "expression"
                         ]
@@ -270,7 +330,6 @@
                     "properties": {
                       "expression": {
                         "description": "Reads the label from the response, in the transform's language, like the metric's expression.",
-                        "minLength": 1,
                         "type": [
                           "string",
                           "number",
@@ -291,7 +350,6 @@
                       },
                       "value": {
                         "description": "A static label value, exported as written.",
-                        "minLength": 1,
                         "type": [
                           "string",
                           "number",
@@ -307,19 +365,34 @@
                           ]
                         },
                         "description": "Turns the value the label's expression gives into another, such as {\"1\": running}; \"*\" maps any value it does not list, and a value mapped to \"\" leaves the label off. Without a match and without \"*\", the value is kept.",
+                        "propertyNames": {
+                          "minLength": 1,
+                          "pattern": "^([^\\t\\n\\v\\f\\r \\x85\\xA0  - \u2028\u2029  　]([\\s\\S]*[^\\t\\n\\v\\f\\r \\x85\\xA0  - \u2028\u2029  　])?)?$"
+                        },
                         "type": "object"
                       }
                     },
                     "required": [
                       "name"
                     ],
+                    "then": {
+                      "properties": {
+                        "value_map": {
+                          "additionalProperties": {
+                            "not": {
+                              "const": ""
+                            }
+                          }
+                        }
+                      }
+                    },
                     "type": "object"
                   },
                   "type": "array"
                 },
                 "name": {
                   "description": "The metric name, before metrics_prefix.",
-                  "pattern": "^[a-zA-Z_:][a-zA-Z0-9_:]*$",
+                  "pattern": "^$|^[a-zA-Z_:][a-zA-Z0-9_:]*$",
                   "type": "string"
                 },
                 "required": {
@@ -348,7 +421,8 @@
                     "counter",
                     "histogram",
                     "summary",
-                    "untyped"
+                    "untyped",
+                    ""
                   ],
                   "type": "string"
                 },
@@ -357,6 +431,10 @@
                     "type": "number"
                   },
                   "description": "Turns the text the expression gives into the value, such as {up: 1, down: 0}; \"*\" maps any value it does not list, numbers included. Without a match and without \"*\", the value is read as a number. Not for the prometheus and python transforms.",
+                  "propertyNames": {
+                    "minLength": 1,
+                    "pattern": "^([^\\t\\n\\v\\f\\r \\x85\\xA0  - \u2028\u2029  　]([\\s\\S]*[^\\t\\n\\v\\f\\r \\x85\\xA0  - \u2028\u2029  　])?)?$"
+                  },
                   "type": "object"
                 }
               },
@@ -378,7 +456,7 @@
           },
           "metrics_prefix": {
             "description": "Joined with _ to the front of every metric the collector exports, such as grafana for grafana_statuspage_status. Letters and digits, in parts joined by single underscores.",
-            "pattern": "^[a-zA-Z][a-zA-Z0-9]*(?:_[a-zA-Z0-9]+)*$",
+            "pattern": "^$|^[a-zA-Z][a-zA-Z0-9]*(?:_[a-zA-Z0-9]+)*$",
             "type": "string"
           },
           "name": {
@@ -391,7 +469,8 @@
             "enum": [
               "fail",
               "underscores",
-              "values"
+              "values",
+              ""
             ],
             "type": "string"
           },
@@ -427,9 +506,37 @@
                   ]
                 },
                 "then": {
+                  "if": {
+                    "properties": {
+                      "rpc": {
+                        "not": {
+                          "pattern": "^/?grpc\\.health\\.v1\\.Health/"
+                        }
+                      }
+                    }
+                  },
+                  "properties": {
+                    "rpc": {
+                      "not": {
+                        "const": ""
+                      }
+                    }
+                  },
                   "required": [
                     "rpc"
-                  ]
+                  ],
+                  "then": {
+                    "properties": {
+                      "descriptors": {
+                        "not": {
+                          "const": ""
+                        }
+                      }
+                    },
+                    "required": [
+                      "descriptors"
+                    ]
+                  }
                 }
               },
               {
@@ -444,6 +551,13 @@
                   ]
                 },
                 "then": {
+                  "properties": {
+                    "root": {
+                      "not": {
+                        "const": ""
+                      }
+                    }
+                  },
                   "required": [
                     "root"
                   ]
@@ -485,6 +599,7 @@
               "allowed_targets": {
                 "description": "Hosts, globs such as *.example.com, IP addresses and CIDR networks the collector's requests may reach: a target is allowed when its host matches by name, or every address it resolves to is in an allowed network. Checked before the request, on every redirect and on every connection. Written in ASCII, as a target's host is: an internationalised name is listed, and requested, in its xn-- form. http, graphite and grpc.",
                 "items": {
+                  "minLength": 1,
                   "not": {
                     "pattern": "[^\\x00-\\x7F]",
                     "type": "string"
@@ -562,6 +677,7 @@
               "denied_targets": {
                 "description": "Hosts, globs, IP addresses and CIDR networks the collector's requests may not reach: a target matching by name, or resolving to any address in a denied network, is refused with 403. Wins over allowed_targets. Written in ASCII, as allowed_targets is.",
                 "items": {
+                  "minLength": 1,
                   "not": {
                     "pattern": "[^\\x00-\\x7F]",
                     "type": "string"
@@ -579,7 +695,8 @@
                 "enum": [
                   "reflection",
                   "protoset",
-                  "proto"
+                  "proto",
+                  ""
                 ],
                 "type": "string"
               },
@@ -634,8 +751,13 @@
               },
               "max_age": {
                 "description": "localfile: refuse a file last modified longer ago than this, so a writer that has stopped fails the scrape instead of exporting its last values forever.",
+                "maximum": 0,
+                "minimum": 0,
                 "pattern": "^(\\+?(0|(([0-9]+(\\.[0-9]*)?|\\.[0-9]+)(ns|us|µs|μs|ms|s|m|h))+)|-(0|((0+(\\.0*)?|\\.0+)(ns|us|µs|μs|ms|s|m|h))+))$",
-                "type": "string"
+                "type": [
+                  "string",
+                  "integer"
+                ]
               },
               "max_files": {
                 "description": "localfile with request.files: the most files one scrape reads, in name order; the rest are skipped and logged. Defaults to 100.",
@@ -696,7 +818,8 @@
                   "put",
                   "patch",
                   "delete",
-                  "head"
+                  "head",
+                  ""
                 ],
                 "type": "string"
               },
@@ -766,9 +889,14 @@
                     "type": "integer"
                   },
                   "backoff": {
-                    "description": "A duration such as 500ms, 30s or 5m.",
+                    "description": "A duration such as 500ms, 30s or 5m. Zero may be written 0, the one number that needs no unit.",
+                    "maximum": 0,
+                    "minimum": 0,
                     "pattern": "^(\\+?(0|(([0-9]+(\\.[0-9]*)?|\\.[0-9]+)(ns|us|µs|μs|ms|s|m|h))+)|-(0|((0+(\\.0*)?|\\.0+)(ns|us|µs|μs|ms|s|m|h))+))$",
-                    "type": "string"
+                    "type": [
+                      "string",
+                      "integer"
+                    ]
                   },
                   "codes": {
                     "description": "grpc: the gRPC status codes that are retried, by name, such as [UNAVAILABLE, ABORTED]. Defaults to [UNAVAILABLE]; OK is refused.",
@@ -794,7 +922,7 @@
               },
               "rpc": {
                 "description": "grpc, required: the method called, package.Service/Method, such as grpc.health.v1.Health/Check. See docs/GRPC.md.",
-                "pattern": "^/?([A-Za-z_][A-Za-z0-9_]*\\.)*[A-Za-z_][A-Za-z0-9_]*/[A-Za-z_][A-Za-z0-9_]*$",
+                "pattern": "^$|^/?([A-Za-z_][A-Za-z0-9_]*\\.)*[A-Za-z_][A-Za-z0-9_]*/[A-Za-z_][A-Za-z0-9_]*$",
                 "type": "string"
               },
               "targets": {
@@ -915,14 +1043,20 @@
                     "description": "graphite decoder: what a carbon line that cannot be read does: fail the decode, the default, or skip, leaving it out, counted in http_exporter_decoder_lines_skipped_total and logged.",
                     "enum": [
                       "fail",
-                      "skip"
+                      "skip",
+                      ""
                     ],
                     "type": "string"
                   },
                   "max_age": {
                     "description": "graphite decoder: leave out a series whose newest point is older than this, so a series nobody writes any more is not exported with its last value.",
+                    "maximum": 0,
+                    "minimum": 0,
                     "pattern": "^(\\+?(0|(([0-9]+(\\.[0-9]*)?|\\.[0-9]+)(ns|us|µs|μs|ms|s|m|h))+)|-(0|((0+(\\.0*)?|\\.0+)(ns|us|µs|μs|ms|s|m|h))+))$",
-                    "type": "string"
+                    "type": [
+                      "string",
+                      "integer"
+                    ]
                   },
                   "value": {
                     "description": "graphite decoder: how a series' points become its value: last, the newest point, by default, or max, min, avg or sum.",
@@ -931,7 +1065,8 @@
                       "max",
                       "min",
                       "avg",
-                      "sum"
+                      "sum",
+                      ""
                     ],
                     "type": "string"
                   }
@@ -1084,6 +1219,24 @@
           "request",
           "transform"
         ],
+        "then": {
+          "properties": {
+            "metrics": {
+              "items": {
+                "properties": {
+                  "name": {
+                    "not": {
+                      "const": ""
+                    }
+                  }
+                },
+                "required": [
+                  "name"
+                ]
+              }
+            }
+          }
+        },
         "type": "object"
       },
       "type": "array"
@@ -1144,7 +1297,8 @@
           "description": "Compression of the export requests. Defaults to gzip.",
           "enum": [
             "gzip",
-            "none"
+            "none",
+            ""
           ],
           "type": "string"
         },
@@ -1175,8 +1329,13 @@
         },
         "interval": {
           "description": "How often the points waiting are exported. At least 1s, which the exporter checks when the configuration loads; defaults to 30s.",
+          "maximum": 0,
+          "minimum": 0,
           "pattern": "^[-+]?(0|(([0-9]+(\\.[0-9]*)?|\\.[0-9]+)(ns|us|µs|μs|ms|s|m|h))+)$",
-          "type": "string"
+          "type": [
+            "string",
+            "integer"
+          ]
         },
         "max_pending_points": {
           "description": "The most data points kept waiting for export while the endpoint fails; past it the oldest are dropped and counted. Defaults to 100000.",
@@ -1206,8 +1365,13 @@
         },
         "timeout": {
           "description": "How long one export attempt may take. Defaults to 5s. Also bounds the last export at shutdown.",
+          "maximum": 0,
+          "minimum": 0,
           "pattern": "^[-+]?(0|(([0-9]+(\\.[0-9]*)?|\\.[0-9]+)(ns|us|µs|μs|ms|s|m|h))+)$",
-          "type": "string"
+          "type": [
+            "string",
+            "integer"
+          ]
         },
         "tls": {
           "additionalProperties": false,

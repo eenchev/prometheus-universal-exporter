@@ -84,6 +84,19 @@ value (`read tcp `, `grpc: received message larger than max (`), never the
 value's shape alone. And reading an error must not be what fails a probe:
 `sameFetchFailure` hands the error on as it came if anything in it panics.
 
+A decode error is bounded at the one place every decoder's error leaves by
+(`boundedFailure` in `internal/decode/failurebound.go`, called by
+`decode.Decode`): past 2,000 bytes the text, and what it is recognised by, are
+cut and end with the length, the mark in the recognised text. That is the
+last resort, which loses what the error says after the long part. An error
+that names a value of the body quotes it with `model.QuoteValue`, which cuts
+it to 64 bytes, not with `%q`; where a library made the text, the part is cut
+where the error enters, in the library's one form, as `yamlPartCut` and
+`yamlKeyCut` do (`internal/decode/yamlcut.go`). A cut text is made anew
+(`head + mark`), never a slice of the long one, and the new error does not
+wrap the long one: either would keep the whole text alive for as long as the
+failure log remembers the failure.
+
 The failure log counts, for each trip, the failures of rules it remembers
 (`ruleFailures` in `internal/exporter/failurelog.go`), so that a scrape with
 none remembered asks once and makes no rule's key, whose size is that of the
@@ -291,6 +304,16 @@ tables through both the committed schema and `config.Load` and fails when
 they disagree. What a schema cannot tell — a least duration, the range of a
 size — goes in the key's description and in that file's table of what the
 exporter alone refuses.
+
+A key the schema holds to allowed values, a pattern or a length also gets a
+row in the table of its request type, `test/repository/schemakeys_http_test.go`
+and its neighbours for `grpc`, `graphite` and `localfile`: the document, the
+place of the key, a value both take and one both refuse, and whether both
+take the file without the key and with the key written `""`. An optional key
+takes `""` as the key left out — `optionalEnum` and `optionalPattern` say so
+in the schema — and a rule about a key is made of `writtenKey`, which goes by
+the key being written, not by its being there. A test of the build with every
+request type fails until a constrained key has its row.
 
 ## Measuring speed
 

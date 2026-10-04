@@ -8,7 +8,6 @@ import (
 	"slices"
 	"strings"
 	"testing"
-	"unicode/utf8"
 
 	"github.com/eenchev/prometheus-universal-exporter/internal/config"
 	"github.com/eenchev/prometheus-universal-exporter/internal/model"
@@ -23,38 +22,6 @@ import (
 // the schema went on accepting the first two, so an editor showed as valid a
 // configuration that did not start. Each document here goes through both, the
 // committed schema and config.Load, and both must say what the table says.
-
-// strictProblems checks what the validator of schema_test.go lets through
-// and a validator of JSON Schema does not: maxLength, the length of a string
-// in characters, so a character of several bytes is one; and a key left
-// empty, which is null and none of the types a key of the schema takes.
-func strictProblems(schema map[string]any, value any, path string) []string {
-	var problems []string
-	switch x := value.(type) {
-	case nil:
-		if types, typed := schema["type"]; typed {
-			problems = append(problems, fmt.Sprintf("%s: null is not %v", path, types))
-		}
-	case string:
-		if most, ok := schema["maxLength"].(float64); ok && float64(utf8.RuneCountInString(x)) > most {
-			problems = append(problems, fmt.Sprintf("%s: %q is longer than %v", path, x, most))
-		}
-	case map[string]any:
-		properties, _ := schema["properties"].(map[string]any)
-		for key, item := range x {
-			if sub, ok := properties[key].(map[string]any); ok {
-				problems = append(problems, strictProblems(sub, item, path+"."+key)...)
-			}
-		}
-	case []any:
-		if items, ok := schema["items"].(map[string]any); ok {
-			for i, item := range x {
-				problems = append(problems, strictProblems(items, item, fmt.Sprintf("%s[%d]", path, i))...)
-			}
-		}
-	}
-	return problems
-}
 
 // verdicts are what the schema and the exporter say of a configuration: the
 // problems the schema finds, and the error of loading it.
@@ -180,17 +147,6 @@ type durationKey struct {
 	check func(t *testing.T, written string) ([]string, error)
 }
 
-// schemaProblems are the problems a schema finds in a document.
-func schemaProblems(t *testing.T, schema map[string]any, document string) []string {
-	t.Helper()
-	var doc any
-	if err := yaml.Unmarshal([]byte(document), &doc); err != nil {
-		t.Fatalf("not YAML: %v\n%s", err, document)
-	}
-	value := normalizeYAML(doc)
-	return append(validateAgainstSchema(schema, value), strictProblems(schema, value, "")...)
-}
-
 // lastWords is an error without the path of the file it is about, which
 // differs from one temporary directory to the next.
 func lastWords(err error) string {
@@ -207,7 +163,11 @@ func lastWords(err error) string {
 // through that file's committed schema and its loader. A + is taken by both
 // before any duration and a - before a zero only; how long a duration must
 // be stays the exporter's to check, a duration being text to a schema. A
-// block that is switched off holds any duration, to both.
+// block that is switched off holds any duration, to both. An unquoted 0,
+// which YAML reads as a number, is the duration zero to both, with a sign
+// or without, and no other number is a duration to either. The two things
+// both cannot say alike are named as such at the end: a duration too long to
+// be held, and a zero that is a number to YAML and is not written 0.
 func TestSchemaAndExporterAgreeOnDurations(t *testing.T) {
 	configSchema, collectorFileSchema, targetsSchema := loadSchema(t), loadSchemaFile(t, collectorFileSchemaFile), loadSchemaFile(t, staticTargetsSchemaFile)
 	inConfig := func(document func(written string) string) func(*testing.T, string) ([]string, error) {
@@ -298,7 +258,7 @@ func TestSchemaAndExporterAgreeOnDurations(t *testing.T) {
 	zero := []string{"0s", "'0'", "+0s", "-0s", "'+0'", "'-0'", "0h0m", "-0h0m0s", "-0.0s", "-.0s", "-0.m"}
 	underASecond := []string{".5s", "+.5s", "500ms", "0.999s", "1ns", "1us", "1µs", "1μs", "0h0m0.1s"}
 	negative := []string{"-5s", "'-5s'", "-1ns", "-1h30m", "-0h1m", "-.5s", "-1.5h", "-0m0.001s"}
-	notADuration := []string{"5", "'5'", "'-5'", "''", "s", ".s", "+s", "-s", "'-'", "1d", "5 s", "' 5s'", "'5s '", "--5s", "+-5s", "1s1", "5S", "soon", "0.0", "00", "true", "[5s]", "{s: 5}"}
+	notADuration := []string{"5", "'5'", "'-5'", "''", "s", ".s", "+s", "-s", "'-'", "1d", "5 s", "' 5s'", "'5s '", "--5s", "+-5s", "1s1", "5S", "soon", "'0.0'", "'00'", "30", "-5", "1.5", "0.5", "true", "[5s]", "{s: 5}"}
 	// Written negative, and so small that Go rounds them to zero.
 	negativeUnderANanosecond := []string{"-0.4ns", "-.5ns", "-0.0000000001s", "-0s0s0s0.1ns"}
 	// Longer than a duration can be, 2^63 - 1 nanoseconds.
@@ -328,21 +288,24 @@ func TestSchemaAndExporterAgreeOnDurations(t *testing.T) {
 	// Switched off, a block is kept unchecked: whatever is a duration.
 	expect(switchedOff, slices.Concat(aSecondOrMore, zero, underASecond, negative, negativeUnderANanosecond), true, "")
 	expect(switchedOff, notADuration, false, "")
-	// The one disagreement on how a duration is written, which is documented
-	// (docs/CONFIGURATION.md, Editor support): a duration too long to be
-	// held is well written, so no pattern can refuse it, and is no duration
-	// to the exporter. The longest one is taken by both.
+	// YAML reads an unquoted 0 as a number, and the exporter reads it as the
+	// duration it spells, with a sign too: the schemas take the number 0
+	// beside the text, where they refused it as no text.
+	unquotedZero := []string{"0", "+0", "-0"}
+	expect(slices.Concat(takesZero, zeroIsTheDefault, switchedOff), unquotedZero, true, "")
+	expect(required, unquotedZero, false, "interval is required")
+
+	// The two disagreements on how a duration is written, each named here
+	// and documented (docs/CONFIGURATION.md, Editor support), and no other.
+	// A duration too long to be held is well written, so no pattern can
+	// refuse it, and is no duration to the exporter; the longest one is
+	// taken by both.
 	expect(slices.Concat(every, switchedOff), tooLong, false, "is not a duration")
 	expect(switchedOff, []string{"2562047h47m16.854775807s"}, true, "")
-
-	// YAML reads an unquoted 0 as a number, which no schema takes for a
-	// duration; the exporter reads it as the duration it spells. 0s is how
-	// a duration of zero is written.
-	for _, key := range takesZero {
-		if problems, err := key.check(t, "0"); len(problems) == 0 || err != nil {
-			t.Errorf("%s: 0, unquoted: the schema says %v, the exporter %v", key.name, problems, err)
-		}
-	}
+	// And a zero YAML reads as a number that is not written 0: a schema is
+	// handed the number, 0, which it takes, and the exporter reads what is
+	// written, which has no unit and is not 0.
+	expect(slices.Concat(every, switchedOff), zerosOfAnotherSpelling, false, "is not a duration")
 }
 
 // A block that enabled switches on — otlp, web.basic_auth — is refused by

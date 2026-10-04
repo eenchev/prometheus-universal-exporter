@@ -160,8 +160,16 @@ func isNameByte(c byte) bool {
 }
 
 // Decode converts r's body to UTF-8 and decodes it with the decoder c's
-// configuration, the response's content type or its content selects.
+// configuration, the response's content type or its content selects. The
+// error of a body that cannot be decoded is no longer than maxFailureBytes,
+// whatever the body holds and whichever decoder read it (failurebound.go).
 func Decode(r *fetch.HTTPResponse, c *model.Collector) (*Decoded, error) {
+	decoded, err := decodeBody(r, c)
+	return decoded, boundedFailure(err)
+}
+
+// decodeBody is Decode, with the error as the decoder made it.
+func decodeBody(r *fetch.HTTPResponse, c *model.Collector) (*Decoded, error) {
 	// The body is converted to UTF-8 before anything reads it (textencoding.go).
 	named, err := convertToUTF8(r, c)
 	if err != nil {
@@ -574,14 +582,27 @@ func yamlFunction(name string) (in, function string) {
 // numbers, and another than a runtime error raised elsewhere. No line is in
 // what a failure is recognised by: the file and the function are the place
 // whichever build it is.
+//
+// The words of a panic are whatever was raised, which may be long: no more
+// than their first yamlPartBytes bytes are said, with how long they were, so
+// that what the error says after them is still read.
 func yamlPanicked(failed any, at yamlPlace) error {
 	said := fmt.Sprint(failed)
 	_, ours := failed.(runtime.Error)
+	// same is the words as the failure is recognised by them: the words
+	// themselves, unless they were cut.
+	same := said
+	if head := headOf(said, yamlPartBytes); head < len(said) {
+		said, same = said[:head]+cutMark(len(said), false), said[:head]+cutMark(len(said), true)
+	}
 	if at.library {
 		const library = "the YAML library failed on the document: "
 		err := errors.New(library + said)
 		if ours {
 			return model.SameFailureAs(err, fmt.Sprintf("%sruntime error (%s %s)", library, at.file, at.function))
+		}
+		if same != said {
+			return model.SameFailureAs(err, library+same)
 		}
 		return err
 	}
@@ -590,7 +611,7 @@ func yamlPanicked(failed any, at yamlPlace) error {
 	if ours {
 		return model.SameFailureAs(err, fmt.Sprintf(exporter, at.file, at.function, "runtime error"))
 	}
-	return model.SameFailureAs(err, fmt.Sprintf(exporter+report, at.file, at.function, said))
+	return model.SameFailureAs(err, fmt.Sprintf(exporter+report, at.file, at.function, same))
 }
 
 // yamlFailure gives an error of the YAML library the text the failure is
@@ -619,12 +640,21 @@ func yamlPanicked(failed any, at yamlPlace) error {
 // as another failure to the log. So such an error is recognised by its
 // problem alone, `yaml: problem`, which is what the first line's reads as
 // already: the words `line N: ` are left out, not replaced.
+//
+// An error that holds a part of the document in full holds no more than the
+// start of it (yamlPartCut), and a problem with a key written twice no more
+// than the start of the key (yamlKeyCut); every other error reads as the
+// library wrote it.
 func yamlFailure(err error) error {
 	if problems, ok := err.(*yaml.TypeError); ok { //nolint:errorlint // the library returns its list of problems as it is, wrapped in nothing
 		return yamlProblems(problems)
 	}
 	const library = "yaml: "
 	text := err.Error()
+	if short, same, cut := yamlPartCut(text); cut {
+		// A new error, of the short text alone: the library's holds the whole.
+		return model.SameFailureAs(errors.New(short), same)
+	}
 	problem, ok := strings.CutPrefix(text, library)
 	if !ok {
 		return err
@@ -656,24 +686,45 @@ const yamlProblemsShown = 10
 // grows by an item. No more than yamlProblemsShown different problems are
 // told apart: past that the recognised text ends, as the error does, with
 // the mark for how many more there are.
+//
+// A problem with a key written twice holds the key, of which no more than
+// the start is shown (yamlKeyCut), so that ten problems of a long key are
+// all ten read; the error is then a list of the problems so cut, and the
+// library's, which holds the keys whole, is let go of.
 func yamlProblems(problems *yaml.TypeError) error {
 	var err error = problems
 	// moved is whether the failure is recognised by another text than its
 	// own: the count of the problems left out is no part of it.
 	moved := len(problems.Errors) > yamlProblemsShown
+	shown := problems.Errors
 	if moved {
 		more := "problems"
 		if len(problems.Errors) == yamlProblemsShown+1 {
 			more = "problem"
 		}
 		// A copy, so that the library's list can be let go of.
-		shown := append(slices.Clone(problems.Errors[:yamlProblemsShown]), fmt.Sprintf("... and %d more %s", len(problems.Errors)-yamlProblemsShown, more))
+		shown = append(slices.Clone(problems.Errors[:yamlProblemsShown]), fmt.Sprintf("... and %d more %s", len(problems.Errors)-yamlProblemsShown, more))
 		err = &yaml.TypeError{Errors: shown}
+	}
+	for i := range min(len(problems.Errors), yamlProblemsShown) {
+		short, cut := yamlKeyCut(problems.Errors[i], false)
+		if !cut {
+			continue
+		}
+		if !moved {
+			// A copy here too: the library's list holds the keys whole.
+			shown, moved = slices.Clone(shown), true
+			err = &yaml.TypeError{Errors: shown}
+		}
+		shown[i] = short
 	}
 	same := make([]string, 0, min(len(problems.Errors), yamlProblemsShown+1))
 	var masked []byte
 listed:
 	for _, problem := range problems.Errors {
+		if short, cut := yamlKeyCut(problem, true); cut {
+			problem = short
+		}
 		masked = appendWithoutYAMLLines(masked[:0], problem)
 		for _, known := range same {
 			if known == string(masked) {

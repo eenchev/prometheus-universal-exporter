@@ -499,8 +499,10 @@ func (l *yamlLearnt) refusal(root *yaml.Node) error {
 
 // yamlWrittenTwice is the library's problem with a key written twice
 // (decode.go, mapping): the later key's line, its text, the earlier key's
-// line.
-const yamlWrittenTwice = "line %d: mapping key %#v already defined at line %d"
+// line. The text is the key as yamlKeyText quotes it, which is as the library
+// does (%#v) but for a key that is cut: the problem of a long key is made
+// short, without the whole key being quoted first.
+const yamlWrittenTwice = "line %d: mapping key %s already defined at line %d"
 
 // yamlRefusal makes the error for a document with keys written twice that
 // the library is not given: what yamlProblems makes of the library's list,
@@ -535,8 +537,17 @@ type yamlRefusal struct {
 	first []string
 	// kinds is the keys written twice, in the order of their first problem,
 	// to one past yamlProblemsShown, and same what each is recognised by.
-	kinds []string
+	kinds []yamlKind
 	same  []string
+}
+
+// yamlKind is what a key written twice is recognised by: its text, or the
+// start of it that its problem shows and that it was cut. Two keys of the
+// same start that are both cut are one kind, as their problems read the same
+// without their lines and lengths.
+type yamlKind struct {
+	head string
+	cut  bool
 }
 
 // done reports whether nothing more of the document is needed.
@@ -581,7 +592,7 @@ func (r *yamlRefusal) list(n *yaml.Node, left map[yamlKey]uint32) {
 		// no more than as many passes over the mapping.
 		for j := i + 2; j < len(keys) && later > 0 && len(r.first) < yamlProblemsShown; j += 2 {
 			if keys[j].Kind == key.kind && keys[j].Value == key.value {
-				r.first = append(r.first, fmt.Sprintf(yamlWrittenTwice, keys[j].Line, keys[j].Value, keys[i].Line))
+				r.first = append(r.first, fmt.Sprintf(yamlWrittenTwice, keys[j].Line, yamlKeyText(keys[j].Value, false), keys[i].Line))
 				later--
 			}
 		}
@@ -594,18 +605,20 @@ func (r *yamlRefusal) kind(key *yaml.Node) {
 	if len(r.kinds) > yamlProblemsShown {
 		return
 	}
+	head := headOf(key.Value, yamlKeyBytes)
+	kind := yamlKind{head: key.Value[:head], cut: head < len(key.Value)}
 	for _, known := range r.kinds {
-		if known == key.Value {
+		if known == kind {
 			return
 		}
 	}
-	r.kinds = append(r.kinds, key.Value)
+	r.kinds = append(r.kinds, kind)
 	if len(r.kinds) > yamlProblemsShown {
 		r.same = append(r.same, "... and "+model.MovingMark+" more problems")
 		return
 	}
 	// The problem as the library words it, read for its lines as any other.
-	r.same = append(r.same, withoutYAMLLines(fmt.Sprintf(yamlWrittenTwice, key.Line, key.Value, key.Line)))
+	r.same = append(r.same, withoutYAMLLines(fmt.Sprintf(yamlWrittenTwice, key.Line, yamlKeyText(key.Value, true), key.Line)))
 }
 
 // failure is the error of the problems read, of which there are so many.

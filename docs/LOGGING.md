@@ -109,6 +109,12 @@ it, is a repeat like any other. The YAML library lists a key written several tim
 as a problem for each two of them, which for a key written 1200 times is
 719,400; the error names the first ten problems and counts the others, `...
 and 719390 more problems`, in the log and in the answer to the scraper.
+A decode error that quotes a part of the body quotes no more than its start
+and says how long the whole was — `mapping key "aaaa..."... (100000 bytes)` in
+a YAML error, and `... (1000100 bytes)` where the error of any decoder is cut
+at 2,000 bytes — and that length, a size like any other, is left out of what
+is compared: the same mistake with a longer or a shorter part that starts the
+same is a repeat.
 Of a [runtime error of the XPath engine](CONFIGURATION.md#when-the-xpath-engine-fails-on-an-expression)
 what follows `runtime error:` is left out as well, since the numbers there
 come from the response; so it is of a runtime error while a YAML document is

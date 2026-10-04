@@ -3,6 +3,7 @@ package config
 import (
 	"encoding/json"
 	"reflect"
+	"slices"
 	"strings"
 
 	"github.com/eenchev/prometheus-universal-exporter/internal/fetch"
@@ -130,6 +131,15 @@ var (
 // 2562048h, which the exporter refuses as no duration (documented with the
 // schemas, docs/CONFIGURATION.md). signedDurationPattern is any duration, the
 // negative ones too: what a block that is switched off holds, unchecked.
+//
+// A pattern is of text, and YAML reads an unquoted 0 as a number. The
+// exporter reads a duration from the scalar as it is written, whatever YAML
+// takes it for, so 0, +0 and -0 are the zero they spell and every other
+// number, lacking a unit, is no duration: timeout: 30 is refused, not read
+// as 30 of anything. durationSchema therefore takes, beside the text, the
+// whole number 0 and no other number. What it cannot tell is how that zero
+// was written: 0.0 and 00 are the number 0 to a schema and no duration to
+// the exporter.
 const (
 	durationNumber        = `([0-9]+(\.[0-9]*)?|\.[0-9]+)`
 	durationZero          = `(0+(\.0*)?|\.0+)`
@@ -138,17 +148,64 @@ const (
 	signedDurationPattern = `^[-+]?(0|(` + durationNumber + durationUnit + `)+)$`
 )
 
+// durationSchema is the one description every duration key has: text that
+// durationPattern takes, or the number 0. A rule of a key may give it another
+// pattern, as the otlp block's does, and leaves the number as it is.
+func durationSchema() map[string]any {
+	return map[string]any{"type": []string{"string", "integer"}, "pattern": durationPattern, "minimum": 0, "maximum": 0, "description": "A duration such as 500ms, 30s or 5m. Zero may be written 0, the one number that needs no unit."}
+}
+
+// An optional key that takes one of a set of values, or text of a pattern,
+// is to the exporter the key left out when it is written "": name_escaping:
+// "" is the default, as name_escaping left out is. The schemas say the same
+// in one form each, so that an editor does not flag what the exporter takes:
+// optionalEnum is the values and "", and optionalPattern the pattern or
+// nothing at all. A key the exporter requires, such as transform.type, has
+// neither: written "", it is as missing as left out, to both.
+func optionalEnum(values []string) []string {
+	return append(slices.Clone(values), "")
+}
+
+func optionalPattern(pattern string) string {
+	return "^$|" + pattern
+}
+
+// writtenKey is the rule that an object has the key and that it is not "":
+// what required alone cannot say, which goes by the key being there,
+// whatever its value. Every rule about a key that may be written "" — one
+// that requires it, or that forbids it beside another — is made of it, so
+// that key: "" is the key left out to the rule as it is to the exporter.
+func writtenKey(key string) map[string]any {
+	return map[string]any{"required": []string{key}, "properties": map[string]any{key: map[string]any{"not": map[string]any{"const": ""}}}}
+}
+
+// surroundingBlank is a regular expression class of the characters
+// strings.TrimSpace takes off a text, written so that Go and JavaScript read
+// it alike: the two below U+0100 that are no ASCII as escapes, the rest as
+// themselves.
+const surroundingBlank = `\t\n\v\f\r \x85\xA0` + "\u1680\u2000-\u200A\u2028\u2029\u202F\u205F\u3000"
+
+// valueMapKeys is what the exporter refuses of a value_map's keys, a metric
+// rule's and a label's alike (transform.checkValueRules): the empty key, and
+// one with blanks around it, since a value is looked up without them and
+// would never be found. "*" is a key like any other to a schema. A key
+// written twice, and one YAML reads as no key at all (null, ~), are not a
+// schema's to see: a validator is handed the mapping YAML made of them.
+func valueMapKeys() map[string]any {
+	return map[string]any{"minLength": 1, "pattern": "^([^" + surroundingBlank + "]([\\s\\S]*[^" + surroundingBlank + "])?)?$"}
+}
+
 // schemaFor describes t, found at path, with rules adding what the type
 // cannot say (configSchemaRules, staticTargetsSchemaRules).
 func schemaFor(t reflect.Type, path string, rules map[string]map[string]any) map[string]any {
 	var schema map[string]any
 	switch t {
 	case durationType:
-		schema = map[string]any{"type": "string", "pattern": durationPattern, "description": "A duration such as 500ms, 30s or 5m."}
+		schema = durationSchema()
 	case byteSizeType:
 		schema = map[string]any{"type": []string{"integer", "string"}, "minimum": 0, "pattern": model.ByteSizePattern, "description": "A size: a whole number of bytes, or a number with a unit such as 512KiB, 10MB or 1.5GiB. Under 2^63 bytes, which the exporter checks when the configuration loads."}
 	case metricTypeType:
-		schema = map[string]any{"type": "string", "enum": []string{string(model.GaugeMetricType), string(model.CounterMetricType), string(model.HistogramMetricType), string(model.SummaryMetricType), string(model.UntypedMetricType)}}
+		schema = map[string]any{"type": "string", "enum": optionalEnum([]string{string(model.GaugeMetricType), string(model.CounterMetricType), string(model.HistogramMetricType), string(model.SummaryMetricType), string(model.UntypedMetricType)})}
 	default:
 		switch t.Kind() {
 		case reflect.Pointer:
@@ -189,7 +246,9 @@ func schemaFor(t reflect.Type, path string, rules map[string]map[string]any) map
 		if _, restricted := rule["enum"]; restricted {
 			schema["type"] = "string"
 		}
-		if _, restricted := rule["pattern"]; restricted {
+		// A duration keeps its own types under another pattern: the number
+		// 0 is one whatever the text may be.
+		if _, restricted := rule["pattern"]; restricted && t != durationType {
 			schema["type"] = "string"
 		}
 	}
@@ -222,7 +281,7 @@ func joinSchemaPath(path, key string) string {
 // configSchemaRules adds, by path, what the struct cannot say. A path is the
 // chain of keys, with [] for a list item and .* for any map value.
 func configSchemaRules() map[string]map[string]any {
-	errorPolicy := map[string]any{"enum": []string{model.ErrorPolicyFail, model.ErrorPolicyLog, model.ErrorPolicyIgnore}, "description": "fail stops the probe, log carries on and logs why, ignore carries on quietly. Defaults to fail."}
+	errorPolicy := map[string]any{"enum": optionalEnum([]string{model.ErrorPolicyFail, model.ErrorPolicyLog, model.ErrorPolicyIgnore}), "description": "fail stops the probe, log carries on and logs why, ignore carries on quietly. Defaults to fail."}
 	libraries := map[string]any{"enum": model.SortedKeys(transform.PythonLibraries), "description": "A bundled Python library the script uses. Declared libraries are imported when the interpreter starts."}
 	return map[string]map[string]any{
 		"": {
@@ -235,12 +294,10 @@ func configSchemaRules() map[string]map[string]any {
 		"collectors":        {"description": "The collectors. A probe names one with its collector parameter. A name must be unique across this list and every collector file."},
 		"collector_files":   {"description": "Further files of collectors, as paths or glob patterns such as collectors.d/*.yaml, relative to this file. A collector file holds a collectors list and nothing else. See docs/CONFIGURATION.md#collector-files."},
 		"collector_files[]": {"type": "string", "minLength": 1},
-		"collectors[]": {
-			"required":    []string{"name", "request", "transform"},
-			"description": "How to reach a kind of target and turn its response into metrics.",
-		},
+		// What a collector must have, and each of its rules a name.
+		"collectors[]":                              collectorSchemaRule(),
 		"collectors[].name":                         {"pattern": `^[a-zA-Z_][a-zA-Z0-9_]*$`, "description": "Unique name, used as the collector parameter of /probe."},
-		"collectors[].metrics_prefix":               {"pattern": transform.MetricsPrefixRE.String(), "description": "Joined with _ to the front of every metric the collector exports, such as grafana for grafana_statuspage_status. Letters and digits, in parts joined by single underscores."},
+		"collectors[].metrics_prefix":               {"pattern": optionalPattern(transform.MetricsPrefixRE.String()), "description": "Joined with _ to the front of every metric the collector exports, such as grafana for grafana_statuspage_status. Letters and digits, in parts joined by single underscores."},
 		"collectors[].cache":                        {"description": "The collector's response cache. See docs/CONFIGURATION.md#response-caching."},
 		"collectors[].cache.ttl":                    {"description": "Answer a repeat of the same probe from memory for this long. Omit or 0s to always go to the target."},
 		"collectors[].cache.stale_if_error":         {"description": "After ttl, keep a result this much longer to answer a probe whose trip to the target fails, marked by http_exporter_result_stale 1. Omit or 0s to answer the failure."},
@@ -248,7 +305,7 @@ func configSchemaRules() map[string]map[string]any {
 		"collectors[].coalesce":                     {"description": "Share one request to the target among identical probes that arrive while it is in flight. Defaults to true."},
 		"collectors[].request":                      requestSchemaRule(),
 		"collectors[].request.type":                 {"enum": fetch.BuiltRequestTypes(), "description": "Required. How the collector reaches its data."},
-		"collectors[].request.method":               {"enum": []string{"GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "get", "post", "put", "patch", "delete", "head"}, "description": "HTTP method. Defaults to GET."},
+		"collectors[].request.method":               {"enum": optionalEnum([]string{"GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "get", "post", "put", "patch", "delete", "head"}), "description": "HTTP method. Defaults to GET."},
 		"collectors[].request.body":                 {"description": "http: the request body. May contain {{param_name}} placeholders, written as |json, |number, |form, |xml or |raw: {{param_service|json}}. See docs/REQUESTS.md#in-the-body-headers-and-query."},
 		"collectors[].request.path":                 {"description": "http and graphite: joined onto the target URL; it cannot hold ? or #, and query parameters go under request.query. localfile: the file, relative to request.root and joined after the target. May contain {{param_name}} or {{param_name:default}} path parameters, filled by param_<name> probe parameters."},
 		"collectors[].request.root":                 {"description": "localfile, required: the absolute directory the collector may read files under. No read reaches outside it, through .. or a symbolic link. See docs/LOCALFILE.md."},
@@ -262,20 +319,20 @@ func configSchemaRules() map[string]map[string]any {
 		"collectors[].request.retry.attempts":       {"maximum": fetch.MaxRetryAttempts, "description": "How many times a failed request is retried, from 0, the default, to 10."},
 		"collectors[].request.retry.non_idempotent": {"description": "http and graphite: retry a request whose method is not idempotent, such as POST, which sending again may repeat. Unset, only GET, HEAD, OPTIONS, TRACE, PUT and DELETE requests are retried."},
 		"collectors[].request.retry.codes":          {"items": map[string]any{"type": "string"}, "description": "grpc: the gRPC status codes that are retried, by name, such as [UNAVAILABLE, ABORTED]. Defaults to [UNAVAILABLE]; OK is refused."},
-		"collectors[].request.rpc":                  {"pattern": `^/?([A-Za-z_][A-Za-z0-9_]*\.)*[A-Za-z_][A-Za-z0-9_]*/[A-Za-z_][A-Za-z0-9_]*$`, "description": "grpc, required: the method called, package.Service/Method, such as grpc.health.v1.Health/Check. See docs/GRPC.md."},
+		"collectors[].request.rpc":                  {"pattern": optionalPattern(`^/?([A-Za-z_][A-Za-z0-9_]*\.)*[A-Za-z_][A-Za-z0-9_]*/[A-Za-z_][A-Za-z0-9_]*$`), "description": "grpc, required: the method called, package.Service/Method, such as grpc.health.v1.Health/Check. See docs/GRPC.md."},
 		"collectors[].request.message":              {"description": "grpc: the request message in the protobuf JSON mapping. Defaults to {}. May contain {{param_name}} placeholders, written as |json for a string, |number for a number, or |raw. The message probe parameter replaces it."},
 		"collectors[].request.metadata":             {"propertyNames": map[string]any{"pattern": "^[0-9a-z_.-]+$"}, "description": "grpc: request metadata. Keys are lower-case; -bin keys and the ones gRPC reserves are refused. Values may contain {{param_name}} placeholders."},
-		"collectors[].request.descriptors":          {"enum": []string{"reflection", "protoset", "proto"}, "description": "grpc, required but for grpc.health.v1.Health: where the message types come from. reflection asks the server's reflection service; protoset reads protoset_file; proto compiles proto_files."},
+		"collectors[].request.descriptors":          {"enum": optionalEnum([]string{"reflection", "protoset", "proto"}), "description": "grpc, required but for grpc.health.v1.Health: where the message types come from. reflection asks the server's reflection service; protoset reads protoset_file; proto compiles proto_files."},
 		"collectors[].request.protoset_file":        {"description": "grpc with descriptors: protoset: a FileDescriptorSet with its imports, as protoc --descriptor_set_out --include_imports or buf build -o writes it. Read again when it changes."},
 		"collectors[].request.proto_files":          {"description": "grpc with descriptors: proto: the .proto files that define the service, compiled when the configuration loads and again when one changes."},
 		"collectors[].request.proto_import_paths":   {"description": "grpc with descriptors: proto: the directories imports are resolved in, as protoc -I. Defaults to the directory of each file. The well-known types are built in."},
 		"collectors[].response.graphite.value": {
-			"enum":        model.GraphiteValues,
+			"enum":        optionalEnum(model.GraphiteValues),
 			"description": "graphite decoder: how a series' points become its value: last, the newest point, by default, or max, min, avg or sum.",
 		},
 		"collectors[].response.graphite.max_age": {"description": "graphite decoder: leave out a series whose newest point is older than this, so a series nobody writes any more is not exported with its last value."},
 		"collectors[].response.graphite.invalid_lines": {
-			"enum":        model.GraphiteInvalidLines,
+			"enum":        optionalEnum(model.GraphiteInvalidLines),
 			"description": "graphite decoder: what a carbon line that cannot be read does: fail the decode, the default, or skip, leaving it out, counted in http_exporter_decoder_lines_skipped_total and logged.",
 		},
 		// What checkCSVDelimiter refuses: more than one character, which a
@@ -288,7 +345,7 @@ func configSchemaRules() map[string]map[string]any {
 			"description": "csv decoder: the one character between fields, any but a double quote and a line break. Defaults to a comma. For a tab, write \"\\t\" in double quotes, where YAML reads \\t as the tab character.",
 		},
 		"collectors[].decoder.type": {
-			"enum":        model.DecoderTypes,
+			"enum":        optionalEnum(model.DecoderTypes),
 			"description": "How to decode the response. Defaults to auto, which the transform or the Content-Type decides.",
 		},
 		"collectors[].transform.type": {
@@ -303,30 +360,27 @@ func configSchemaRules() map[string]map[string]any {
 		"collectors[].error_handling.on_fetch_error":     errorPolicy,
 		"collectors[].error_handling.on_decode_error":    errorPolicy,
 		"collectors[].error_handling.on_transform_error": errorPolicy,
-		"collectors[].metrics[].name":                    {"pattern": `^[a-zA-Z_:][a-zA-Z0-9_:]*$`, "description": "The metric name, before metrics_prefix."},
+		"collectors[].metrics[].name":                    {"pattern": optionalPattern(`^[a-zA-Z_:][a-zA-Z0-9_:]*$`), "description": "The metric name, before metrics_prefix."},
 		"collectors[].metrics[].items":                   {"description": "jq, yq and css only: selects the things the metric is about, such as table rows. The expression and labels are then evaluated once per item: for jq and yq with the item as . and the whole document as $root, for css as selectors within the item."},
 		"collectors[].metrics[].expression":              {"description": "Where the value comes from, in the transform's language: jq, a regex, a CSS selector, an XPath expression, a CSV column or a source metric pattern."},
 		"collectors[].metrics[].error_mode": {
-			"enum":        []string{model.ErrorModeFail, model.ErrorModeLog, model.ErrorModeIgnore},
+			"enum":        optionalEnum([]string{model.ErrorModeFail, model.ErrorModeLog, model.ErrorModeIgnore}),
 			"description": "What happens when this metric cannot be extracted. Defaults to log.",
 		},
 		"collectors[].metrics[].required":      {"description": "When false, a missing value is skipped without an error. Defaults to true."},
 		"collectors[].metrics[].labels[].name": {"pattern": `^[a-zA-Z_][a-zA-Z0-9_]*$`},
-		"collectors[].metrics[].labels[]": {
-			"required":    []string{"name"},
-			"oneOf":       []any{map[string]any{"required": []string{"value"}}, map[string]any{"required": []string{"expression"}}},
-			"description": "Set value for a static label, or expression to read it from the response.",
-		},
-		"collectors[].metrics[].labels[].value":      {"minLength": 1, "description": "A static label value, exported as written."},
-		"collectors[].metrics[].labels[].expression": {"minLength": 1, "description": "Reads the label from the response, in the transform's language, like the metric's expression."},
+		// A name, and one of value and expression.
+		"collectors[].metrics[].labels[]":            labelSchemaRule(),
+		"collectors[].metrics[].labels[].value":      {"description": "A static label value, exported as written."},
+		"collectors[].metrics[].labels[].expression": {"description": "Reads the label from the response, in the transform's language, like the metric's expression."},
 		"collectors[].metrics[].labels[].truncate":   {"description": "Cut a value longer than limits.max_label_value_length to fit, ending in …, instead of failing the scrape."},
 		"collectors[].metrics[].labels[].required":   {"description": "expression labels only: a series the expression gives no value, or an empty one, fails the metric under its error_mode instead of being exported without the label. Defaults to false."},
 		"collectors[].request.accept_codes":          {"items": map[string]any{"type": "string"}, "description": "grpc: the gRPC status codes other than OK whose calls are answers rather than failures, by name, such as [NOT_FOUND]. Such a call is not retried; its rules see an empty object, the code as $status and the status message as $headers[\"grpc-message\"]."},
 		"collectors[].request.accept_status":         {"items": map[string]any{"type": []string{"integer", "string"}, "minimum": 100, "maximum": 599, "pattern": "^[1-5][xX][xX]$|^[1-5][0-9][0-9]$"}, "description": "The HTTP statuses whose answers are decoded, such as [200, 503] or [\"2xx\", 503]; every 2xx when left out. Any other status fails the scrape in the http_status stage. An accepted status is not retried. http and graphite."},
 		"collectors[].request.allowed_targets":       {"description": "Hosts, globs such as *.example.com, IP addresses and CIDR networks the collector's requests may reach: a target is allowed when its host matches by name, or every address it resolves to is in an allowed network. Checked before the request, on every redirect and on every connection. Written in ASCII, as a target's host is: an internationalised name is listed, and requested, in its xn-- form. http, graphite and grpc."},
 		"collectors[].request.denied_targets":        {"description": "Hosts, globs, IP addresses and CIDR networks the collector's requests may not reach: a target matching by name, or resolving to any address in a denied network, is refused with 403. Wins over allowed_targets. Written in ASCII, as allowed_targets is."},
-		"collectors[].metrics[].labels[].value_map":  {"description": "Turns the value the label's expression gives into another, such as {\"1\": running}; \"*\" maps any value it does not list, and a value mapped to \"\" leaves the label off. Without a match and without \"*\", the value is kept."},
-		"collectors[].metrics[].value_map":           {"description": "Turns the text the expression gives into the value, such as {up: 1, down: 0}; \"*\" maps any value it does not list, numbers included. Without a match and without \"*\", the value is read as a number. Not for the prometheus and python transforms."},
+		"collectors[].metrics[].labels[].value_map":  {"propertyNames": valueMapKeys(), "description": "Turns the value the label's expression gives into another, such as {\"1\": running}; \"*\" maps any value it does not list, and a value mapped to \"\" leaves the label off. Without a match and without \"*\", the value is kept."},
+		"collectors[].metrics[].value_map":           {"propertyNames": valueMapKeys(), "description": "Turns the text the expression gives into the value, such as {up: 1, down: 0}; \"*\" maps any value it does not list, numbers included. Without a match and without \"*\", the value is read as a number. Not for the prometheus and python transforms."},
 		"collectors[].metrics[].scale":               {"description": "Multiplies the value, mapped or read as a number, such as 0.001 for milliseconds to seconds. Finite and not 0. Not for the python transform; for prometheus, plain samples only."},
 		"collectors[].metrics[].time_format":         {"description": "Reads the text the expression gives as a time; the value is that time in Unix seconds. rfc3339, rfc1123, or a layout: the reference time Mon Jan 2 15:04:05 MST 2006 written as the text writes its times, such as \"2006-01-02 15:04:05\", with a year, a month and a day. scale applies after. Not with value_map, and not for the prometheus and python transforms."},
 		"collectors[].metrics[].time_zone":           {"type": "string", "description": "With time_format: the zone a text that names none of its own is read in, as an IANA name such as Europe/Sofia. Defaults to UTC."},
@@ -340,13 +394,13 @@ func configSchemaRules() map[string]map[string]any {
 		"otlp.endpoint":                              {"description": "OTLP/HTTP metrics endpoint, such as http://otel-collector:4318/v1/metrics."},
 		"web.basic_auth.username_file":               {"description": "Read the username from this file instead of username, such as a mounted Secret. Read again when it changes."},
 		"web.basic_auth.password_file":               {"description": "Read the password from this file instead of password, such as a mounted Secret. Read again when it changes."},
-		"collectors[].name_escaping":                 {"enum": []string{transform.NameEscapingFail, transform.NameEscapingUnderscores, transform.NameEscapingValues}, "description": "What to do with a metric or label name that is not a classic Prometheus name, such as http.server.duration: fail the scrape (the default), replace what a classic name may not have with underscores, or use Prometheus's reversible values encoding (U__…). See docs/CONFIGURATION.md#utf-8-names."},
+		"collectors[].name_escaping":                 {"enum": optionalEnum([]string{transform.NameEscapingFail, transform.NameEscapingUnderscores, transform.NameEscapingValues}), "description": "What to do with a metric or label name that is not a classic Prometheus name, such as http.server.duration: fail the scrape (the default), replace what a classic name may not have with underscores, or use Prometheus's reversible values encoding (U__…). See docs/CONFIGURATION.md#utf-8-names."},
 		"collectors[].response.charset":              {"description": "The encoding of the response when the target does not declare it or declares it wrongly, and of local files: a WHATWG name such as windows-1252, iso-8859-2, windows-1251 or shift_jis. See docs/CONFIGURATION.md#character-encodings."},
 		"otlp.max_pending_points":                    {"description": "The most data points kept waiting for export while the endpoint fails; past it the oldest are dropped and counted. Defaults to 100000."},
 		"otlp.unready_after_failures":                {"description": "Answer /ready with 503 after this many failed exports in a row, until one gets through. 0, the default, never does: an exporter whose exports fail still answers probes."},
 		"otlp.probe_attributes":                      {"description": "Add collector and target attributes to the points a probe queues, so probes of different targets or collectors answering the same series are exported apart. Off, the default, the later probe's point replaces the earlier's."},
 		"collectors[].request.tls.server_name":       {"description": "The name the target's certificate is checked against, and sent as SNI, when the target is addressed by something else, such as an IP address. Unset, the target's host."},
-		"otlp.compression":                           {"enum": []string{model.OTLPCompressionGzip, model.OTLPCompressionNone}, "description": "Compression of the export requests. Defaults to gzip."},
+		"otlp.compression":                           {"enum": optionalEnum([]string{model.OTLPCompressionGzip, model.OTLPCompressionNone}), "description": "Compression of the export requests. Defaults to gzip."},
 		// A disabled block may hold any duration, so the two keys take a
 		// signed one, and otlpSchemaRule refuses a negative one of a block
 		// that is switched on.
@@ -369,9 +423,10 @@ func configSchemaRules() map[string]map[string]any {
 		// pattern can say; that it is a name, a glob, an address or a network
 		// is the exporter's to check (fetch/targetpolicy.go). The pattern is
 		// of what an entry may not hold, under not, so that an entry YAML
-		// reads as a number is still taken, as the exporter takes it.
-		"collectors[].request.allowed_targets[]": {"not": map[string]any{"type": "string", "pattern": fetch.OutsideASCIIPattern}},
-		"collectors[].request.denied_targets[]":  {"not": map[string]any{"type": "string", "pattern": fetch.OutsideASCIIPattern}},
+		// reads as a number is still taken, as the exporter takes it. An
+		// entry of nothing at all, "", is refused here as there.
+		"collectors[].request.allowed_targets[]": {"minLength": 1, "not": map[string]any{"type": "string", "pattern": fetch.OutsideASCIIPattern}},
+		"collectors[].request.denied_targets[]":  {"minLength": 1, "not": map[string]any{"type": "string", "pattern": fetch.OutsideASCIIPattern}},
 	}
 }
 
@@ -399,29 +454,65 @@ func otlpSchemaRule() map[string]any {
 // its value, and so took time_zone: "" for a zone and time_format: "" for a
 // format.
 func metricRuleSchemaRule() map[string]any {
-	set := func(key string) map[string]any {
-		return map[string]any{"required": []string{key}, "properties": map[string]any{key: map[string]any{"not": map[string]any{"const": ""}}}}
-	}
-	timeFormatBesideValueMap := set("time_format")
+	timeFormatBesideValueMap := writtenKey("time_format")
 	timeFormatBesideValueMap["required"] = []string{"time_format", "value_map"}
 	return map[string]any{
-		"if":   set("time_zone"),
-		"then": set("time_format"),
+		"if":   writtenKey("time_zone"),
+		"then": writtenKey("time_format"),
 		"not":  timeFormatBesideValueMap,
 	}
 }
 
+// collectorSchemaRule requires what a collector must have, and of its rules
+// a name, as the exporter does (validateMetricRule): every transform but
+// prometheus, whose rule may pass series through under their own names, and
+// python, whose script names them. A name written "" is no name, to both,
+// so it is the rule and not the key's pattern that refuses it, and only
+// where a name is needed.
+func collectorSchemaRule() map[string]any {
+	namesItsOwn := []string{"prometheus", "python"}
+	return map[string]any{
+		"required":    []string{"name", "request", "transform"},
+		"description": "How to reach a kind of target and turn its response into metrics.",
+		"if":          map[string]any{"properties": map[string]any{"transform": map[string]any{"properties": map[string]any{"type": map[string]any{"not": map[string]any{"enum": namesItsOwn}}}}}},
+		"then":        map[string]any{"properties": map[string]any{"metrics": map[string]any{"items": writtenKey("name")}}},
+	}
+}
+
+// labelSchemaRule is a label's: a name, and exactly one of value and
+// expression, either of which written "" is the key left out, as it is to
+// the exporter (validateMetricRule), so a label with expression and value:
+// "" reads the response and one with both "" has neither. A required label
+// takes no value_map that maps a value to "", which would leave the label
+// off (transform.checkLabelValueMaps).
+func labelSchemaRule() map[string]any {
+	return map[string]any{
+		"required":    []string{"name"},
+		"oneOf":       []any{writtenKey("value"), writtenKey("expression")},
+		"if":          map[string]any{"properties": map[string]any{"required": map[string]any{"const": true}}, "required": []string{"required"}},
+		"then":        map[string]any{"properties": map[string]any{"value_map": map[string]any{"additionalProperties": map[string]any{"not": map[string]any{"const": ""}}}}},
+		"description": "Set value for a static label, or expression to read it from the response.",
+	}
+}
+
 // requestSchemaRule requires type, and for each built request type with
-// required keys of its own, those keys when the type is chosen.
+// required keys of its own, those keys when the type is chosen. A required
+// key of text written "" is as missing as left out, to the exporter and so
+// here (writtenKey). A grpc collector also says where its message types come
+// from, descriptors, unless it calls the health service, whose types are
+// built in (fetch.validateDescriptorKeys).
 func requestSchemaRule() map[string]any {
 	rule := map[string]any{"required": []string{"type"}, "description": "How the collector reaches its data. See docs/REQUESTS.md, docs/LOCALFILE.md for localfile, docs/GRAPHITE.md for graphite and docs/GRPC.md for grpc."}
+	grpc := writtenKey("rpc")
+	grpc["if"] = map[string]any{"properties": map[string]any{"rpc": map[string]any{"not": map[string]any{"pattern": `^/?grpc\.health\.v1\.Health/`}}}}
+	grpc["then"] = writtenKey("descriptors")
 	var conditions []any
 	for _, name := range fetch.BuiltRequestTypes() {
-		required := map[string]string{fetch.RequestTypeLocalFile: "root", fetch.RequestTypeGraphite: "targets", fetch.RequestTypeGRPC: "rpc"}[name]
-		if required != "" {
+		required := map[string]map[string]any{fetch.RequestTypeLocalFile: writtenKey("root"), fetch.RequestTypeGraphite: {"required": []string{"targets"}}, fetch.RequestTypeGRPC: grpc}[name]
+		if required != nil {
 			conditions = append(conditions, map[string]any{
 				"if":   map[string]any{"properties": map[string]any{"type": map[string]any{"const": name}}, "required": []string{"type"}},
-				"then": map[string]any{"required": []string{required}},
+				"then": required,
 			})
 		}
 	}
@@ -442,8 +533,8 @@ func staticTargetsSchemaRules() map[string]map[string]any {
 		"concurrency":         {"minimum": 0, "description": "How many targets are scraped at once. A target due while all are busy waits for a slot within its interval, and is skipped if none frees. Omit or 0 for the default, 8."},
 		"targets":             {"minItems": 1, "description": "The targets. Each is scraped on its own interval with one collector of the configuration."},
 		"targets[]":           {"required": []string{"collector"}, "description": "One target: a collector of the configuration, the address it reads, and what this target overrides."},
-		"targets[].name":      {"pattern": targetNameRE.String(), "description": "Unique name, in logs and the static_target label. Defaults to <collector>_<index>."},
-		"targets[].collector": {"description": "The collector of the configuration that scrapes this target."},
+		"targets[].name":      {"pattern": optionalPattern(targetNameRE.String()), "description": "Unique name, in logs and the static_target label. Defaults to <collector>_<index>."},
+		"targets[].collector": {"minLength": 1, "description": "The collector of the configuration that scrapes this target."},
 		"targets[].target":    {"description": "What the collector reads: a URL for an http collector, the Graphite server's URL for a graphite one, host:port or a grpc:// or grpcs:// URL of it for a grpc one, a file under request.root for a localfile one."},
 		"targets[].interval":  {"description": "How often this target is scraped, whatever Prometheus scrapes the endpoint on and otlp.interval exports on. At least 1s, and no shorter than request.timeout; defaults to the file's interval."},
 		"targets[].params": {
@@ -451,12 +542,12 @@ func staticTargetsSchemaRules() map[string]map[string]any {
 			"description":   "Values of the collector's {{param_<name>}} placeholders, as a probe's param_<name> parameters give them. Each must be used by a placeholder.",
 		},
 		"targets[].labels": {
-			"propertyNames": map[string]any{"not": map[string]any{"enum": []string{StaticTargetLabel, "job", "instance"}}},
+			"propertyNames": map[string]any{"minLength": 1, "not": map[string]any{"enum": []string{StaticTargetLabel, "job", "instance"}}},
 			"description":   "Added to every metric the target produces, without overwriting a label the collector extracted. static_target is set by the endpoint, and job and instance by Prometheus when it scrapes the endpoint, so none of the three can be used.",
 		},
 		"targets[].export_via_otlp":              {"description": "Also deliver this target's results over OTLP, on otlp.interval, besides serving them on the static targets endpoint. Needs otlp.enabled. Defaults to false."},
 		"targets[].request":                      {"description": "Overrides of the collector's request for this target, as the /probe parameters override it for a probe."},
-		"targets[].request.method":               {"enum": []string{"GET", "POST", "PUT", "PATCH", "DELETE", "HEAD"}},
+		"targets[].request.method":               {"enum": optionalEnum([]string{"GET", "POST", "PUT", "PATCH", "DELETE", "HEAD"})},
 		"targets[].request.path":                 {"description": "Replaces the collector's request.path. It cannot hold {{param_...}} placeholders."},
 		"targets[].request.timeout":              {"description": "How long a scrape of this target may take. At most the target's interval."},
 		"targets[].request.targets":              {"description": "graphite: replaces the collector's request.targets for this target. It cannot hold {{param_...}} placeholders."},

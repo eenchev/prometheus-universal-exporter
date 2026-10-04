@@ -7,6 +7,8 @@ import (
 	"math"
 	"math/big"
 	"strconv"
+
+	"github.com/eenchev/prometheus-universal-exporter/internal/model"
 )
 
 // A jq or yq label expression gives a value of any JSON type, and the label is
@@ -43,7 +45,7 @@ func labelText(v any) (string, error) {
 	case map[string]any:
 		return "", errors.New("is an object, not a single value; select one of its fields")
 	case []any:
-		return "", fmt.Errorf("is an array of %d values, not a single value; select one, or join them with join(\",\")", len(x))
+		return "", model.Errorf("is an array of %d values, not a single value; select one, or join them with join(\",\")", model.Size(len(x)))
 	default:
 		return fmt.Sprint(x), nil
 	}

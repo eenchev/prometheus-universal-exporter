@@ -39,41 +39,42 @@ func newUSGS(t *testing.T) (*standIn, *Server) {
 // as the example's comments promise of an incomplete row: one warning for
 // the rule, with the number of rows it could not read, and the probe is
 // answered. The columns the rules do not read may be empty without a word.
-// The feed is asked for once, at the example's path. The series are compared
-// whatever their order.
+// The feed is asked for once, at the example's path. The magnitudes are
+// answered together and the depths after them, each in the order of the
+// feed's events, as the text format wants a metric's series.
 func TestTheUSGSExampleReadsTheFeedAndReportsAnIncompleteRow(t *testing.T) {
 	logs := testutil.CaptureLogs(t)
 	service, server := newUSGS(t)
 
-	sameLines(t, "series", probeStandIn(t, server, service, "earthquakes", ""), []string{
-		`earthquake_depth_kilometers{id="ak0269cwqv8m",network="ak"} 118.6`,
-		`earthquake_depth_kilometers{id="ak0269cx1f2k",network="ak"} 45.2`,
-		`earthquake_depth_kilometers{id="ci41097608",network="ci"} 8.11`,
-		`earthquake_depth_kilometers{id="ci41097632",network="ci"} 3.04`,
-		`earthquake_depth_kilometers{id="hv74481052",network="hv"} 0.12`,
-		`earthquake_depth_kilometers{id="nc75242386",network="nc"} 6.35`,
-		`earthquake_depth_kilometers{id="nc75242391",network="nc"} 1.71`,
-		`earthquake_depth_kilometers{id="pr71532588",network="pr"} 7.56`,
-		`earthquake_depth_kilometers{id="tx2026tkqgzb",network="tx"} 5.9814`,
-		`earthquake_depth_kilometers{id="us7000rb4q",network="us"} 112.853`,
-		`earthquake_depth_kilometers{id="uu80091472",network="uu"} -1.38`,
-		`earthquake_depth_kilometers{id="uw62204187",network="uw"} 0.47`,
-		`earthquake_magnitude{id="ak0269cwqv8m",magnitude_type="ml",network="ak",review_status="automatic"} 3.1`,
+	linesInOrder(t, "series", probeStandIn(t, server, service, "earthquakes", ""), []string{
+		`earthquake_magnitude{id="pr71532588",magnitude_type="md",network="pr",review_status="reviewed"} 2.09`,
+		`earthquake_magnitude{id="nc75242391",magnitude_type="md",network="nc",review_status="automatic"} 0.82`,
 		`earthquake_magnitude{id="ak0269cx1f2k",magnitude_type="ml",network="ak",review_status="automatic"} 1.6`,
-		`earthquake_magnitude{id="ci41097608",magnitude_type="ml",network="ci",review_status="automatic"} 1.02`,
 		`earthquake_magnitude{id="ci41097632",magnitude_type="ml",network="ci",review_status="automatic"} 0.54`,
 		`earthquake_magnitude{id="hv74481052",magnitude_type="md",network="hv",review_status="automatic"} 1.87`,
-		`earthquake_magnitude{id="nc75242386",magnitude_type="md",network="nc",review_status="automatic"} 1.33`,
-		`earthquake_magnitude{id="nc75242391",magnitude_type="md",network="nc",review_status="automatic"} 0.82`,
-		`earthquake_magnitude{id="pr71532588",magnitude_type="md",network="pr",review_status="reviewed"} 2.09`,
-		`earthquake_magnitude{id="tx2026tkqgzb",magnitude_type="ml",network="tx",review_status="automatic"} 2.3`,
 		`earthquake_magnitude{id="us7000rb4q",magnitude_type="mb",network="us",review_status="reviewed"} 4.6`,
+		`earthquake_magnitude{id="nc75242386",magnitude_type="md",network="nc",review_status="automatic"} 1.33`,
+		`earthquake_magnitude{id="tx2026tkqgzb",magnitude_type="ml",network="tx",review_status="automatic"} 2.3`,
 		`earthquake_magnitude{id="uw62204187",magnitude_type="ml",network="uw",review_status="reviewed"} 0.31`,
+		`earthquake_magnitude{id="ak0269cwqv8m",magnitude_type="ml",network="ak",review_status="automatic"} 3.1`,
+		`earthquake_magnitude{id="ci41097608",magnitude_type="ml",network="ci",review_status="automatic"} 1.02`,
+		`earthquake_depth_kilometers{id="pr71532588",network="pr"} 7.56`,
+		`earthquake_depth_kilometers{id="nc75242391",network="nc"} 1.71`,
+		`earthquake_depth_kilometers{id="ak0269cx1f2k",network="ak"} 45.2`,
+		`earthquake_depth_kilometers{id="ci41097632",network="ci"} 3.04`,
+		`earthquake_depth_kilometers{id="hv74481052",network="hv"} 0.12`,
+		`earthquake_depth_kilometers{id="us7000rb4q",network="us"} 112.853`,
+		`earthquake_depth_kilometers{id="nc75242386",network="nc"} 6.35`,
+		`earthquake_depth_kilometers{id="tx2026tkqgzb",network="tx"} 5.9814`,
+		`earthquake_depth_kilometers{id="uu80091472",network="uu"} -1.38`,
+		`earthquake_depth_kilometers{id="uw62204187",network="uw"} 0.47`,
+		`earthquake_depth_kilometers{id="ak0269cwqv8m",network="ak"} 118.6`,
+		`earthquake_depth_kilometers{id="ci41097608",network="ci"} 8.11`,
 	})
 	if asked := service.requests(); !slices.Equal(asked, []string{usgsPath}) {
 		t.Errorf("the stand-in was asked %v, want %s once", asked, usgsPath)
 	}
-	loggedOnly(t, logs, `WARN earthquakes earthquake_magnitude: 1 failed: CSV column "mag" is missing`)
+	loggedOnly(t, logs, `WARN earthquakes earthquake_magnitude: 1 failed: CSV column "mag" is empty in row 9`)
 }
 
 // A second probe within the minute of cache.ttl is answered from memory,

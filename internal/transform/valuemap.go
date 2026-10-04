@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"maps"
 	"math"
-	"strconv"
 	"strings"
 
 	"github.com/eenchev/prometheus-universal-exporter/internal/model"
@@ -76,7 +75,7 @@ func ruleTextValue(rule model.MetricRule, text string) (float64, error) {
 			return scaled(rule, mapped), nil
 		}
 	}
-	if n, err := strconv.ParseFloat(trimmed, 64); err == nil {
+	if n, err := model.ParseFloat(trimmed); err == nil {
 		return scaled(rule, n), nil
 	}
 	return ruleValue(rule, text)

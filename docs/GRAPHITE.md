@@ -283,7 +283,9 @@ Each line is `<path> <value> <timestamp>`, the timestamp in Unix seconds. A
 line without one, or with `-1`, is taken as written now, as carbon takes it. A
 timestamp in milliseconds — anything from 10¹¹, the year 5138 in seconds — is
 refused, naming the line, rather than read as a time thousands of years away
-that no `max_age` would ever call stale.
+that no `max_age` would ever call stale. The value and the timestamp are
+numbers [as a rule reads them](CONFIGURATION.md#what-counts-as-a-number):
+`1_000` and `0x1p-2` are not, and a line with one is not a carbon line.
 Lines of one path, and the same tags in any order, are one series with a point
 per line, so a file that is appended to gives `last` its newest line. Blank
 lines and lines starting with `#` are skipped; any other line that is not a

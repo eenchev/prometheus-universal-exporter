@@ -17,7 +17,7 @@ import (
 func TestAPanicInSharedWorkIsContained(t *testing.T) {
 	testutil.CaptureLogs(t)
 	flights := newProbeFlights()
-	result, shared, err := flights.do(context.Background(), "key", func(context.Context) *probeResult {
+	result, shared, err := flights.do(context.Background(), flightKey{probe: "key"}, func(context.Context) *probeResult {
 		panic("boom")
 	})
 	if err != nil || shared || result.status != http.StatusInternalServerError || !strings.Contains(string(result.body), "internal error: boom") || result.ok {

@@ -69,14 +69,54 @@ func sameLines(t *testing.T, what string, got, want []string) {
 	}
 }
 
+// linesInOrder reports how the lines got differ from the ones wanted, which
+// are in the order an answer is to have them: when the two hold the same
+// lines, the first that is out of its place.
+func linesInOrder(t *testing.T, what string, got, want []string) {
+	t.Helper()
+	if slices.Equal(got, want) {
+		return
+	}
+	if sortedGot, sortedWant := slices.Sorted(slices.Values(got)), slices.Sorted(slices.Values(want)); !slices.Equal(sortedGot, sortedWant) {
+		t.Errorf("%s:\n%s\nwant\n%s", what, strings.Join(sortedGot, "\n"), strings.Join(sortedWant, "\n"))
+		return
+	}
+	for i := range got {
+		if got[i] != want[i] {
+			t.Errorf("%s: the lines are the ones wanted, in another order: line %d is\n%s\nwant\n%s\nof\n%s", what, i+1, got[i], want[i], strings.Join(got, "\n"))
+			return
+		}
+	}
+}
+
 // answersSeries holds a text exposition against the series and the TYPE
 // lines wanted: every sample line and every TYPE line of it, each TYPE line
-// once. The lines are compared whatever their order.
+// once, in the order wanted, which is the order the collector's rules make
+// them in: a metric after another, each with its series together in the
+// order of the rows they are read from.
 func answersSeries(t *testing.T, body string, series, types []string) {
 	t.Helper()
 	samples, declared := sampleLines(body)
-	sameLines(t, "series", samples, series)
-	sameLines(t, "TYPE lines", declared, types)
+	linesInOrder(t, "series", samples, series)
+	linesInOrder(t, "TYPE lines", declared, types)
+}
+
+// contiguousFamilies reports a family of a text exposition whose sample
+// lines are not together under one TYPE line.
+func contiguousFamilies(t *testing.T, body string) {
+	t.Helper()
+	seen, last := map[string]bool{}, ""
+	for _, line := range strings.Split(strings.TrimSpace(body), "\n") {
+		if strings.HasPrefix(line, "#") {
+			continue
+		}
+		name := line[:strings.IndexAny(line, "{ ")]
+		if name != last && seen[name] {
+			t.Errorf("the series of %s are not together:\n%s", name, body)
+			return
+		}
+		seen[name], last = true, name
+	}
 }
 
 // ruleFailureLogs reads what a probe logged: the failures of rules, each as

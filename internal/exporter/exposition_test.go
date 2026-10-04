@@ -65,7 +65,9 @@ func TestExpositionTimestampsAndCharset(t *testing.T) {
 
 // The writer renders every kind of series exactly: help and label escaping,
 // sorted labels, le and quantile over a label of that name, the +Inf bucket
-// from the count, special floats and timestamps on every line.
+// from the count, special floats and timestamps on every line. A series of
+// a metric that the set has after another metric's is written with its
+// metric's, under the one HELP and TYPE.
 func TestExpositionText(t *testing.T) {
 	at := int64(1700000000000)
 	set := &model.MetricSet{Metrics: []model.Metric{
@@ -80,6 +82,7 @@ func TestExpositionText(t *testing.T) {
 	want := "# HELP g a \\\\ b\\nc\n# TYPE g gauge\n" +
 		"g{a=\"1\",z=\"q\\\"x\\\\y\\nz\"} 1.5\n" +
 		"g NaN\n" +
+		"g{k=\"\"} -Inf\n" +
 		"# TYPE c counter\nc +Inf 1700000000000\n" +
 		"# HELP h hist\n# TYPE h histogram\n" +
 		"h_bucket{b=\"x\",le=\"0.5\"} 1 1700000000000\n" +
@@ -87,8 +90,7 @@ func TestExpositionText(t *testing.T) {
 		"h_sum{b=\"x\",le=\"own\"} 2.25 1700000000000\n" +
 		"h_count{b=\"x\",le=\"own\"} 3 1700000000000\n" +
 		"# TYPE s summary\n" +
-		"s{quantile=\"0.99\"} -1e-07\ns_sum 1e+21\ns_count 4\n" +
-		"g{k=\"\"} -Inf\n"
+		"s{quantile=\"0.99\"} -1e-07\ns_sum 1e+21\ns_count 4\n"
 	recorder := httptest.NewRecorder()
 	writeMetricSet(recorder, nil, set)
 	if got := recorder.Body.String(); got != want {

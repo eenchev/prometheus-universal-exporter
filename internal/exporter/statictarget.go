@@ -14,14 +14,27 @@ import (
 )
 
 // scrapeTarget scrapes one static target with cfg, the configuration that was
-// in force together with it (config.Manager's InForce).
+// in force together with it (config.Manager's InForce), for a caller that
+// has just read the two. When cfg is no longer in force the scrape is made
+// all the same, and counted nowhere that is shown: without the generation
+// cfg was read at, nothing says whether its collector has been in the
+// configuration ever since (scrapeTargetSince).
 func (s *Server) scrapeTarget(ctx context.Context, cfg *model.Config, target model.StaticTarget) {
+	s.scrapeTargetSince(ctx, cfg, s.generationOf(cfg), target)
+}
+
+// scrapeTargetSince scrapes one static target with cfg, the configuration
+// that was in force together with it, read at generation
+// (Server.followedInForce): the scrape may begin long after, when it has
+// waited for a slot, and counts in its collector's statistics only when no
+// reload has removed the collector meanwhile (statsSince).
+func (s *Server) scrapeTargetSince(ctx context.Context, cfg *model.Config, generation uint64, target model.StaticTarget) {
 	collector := model.CollectorByName(cfg, target.Collector)
 	if collector == nil {
 		s.logger.Error("static target references unknown collector", "target", target.Name, "collector", target.Collector)
 		return
 	}
-	s.scrapeStaticTarget(ctx, target, cfg, collector)
+	s.scrapeStaticTarget(ctx, target, cfg, generation, collector)
 }
 
 // scrapeStaticTarget collects one target through the same fetch, decode, and
@@ -29,7 +42,7 @@ func (s *Server) scrapeTarget(ctx context.Context, cfg *model.Config, target mod
 // publishes the result with the target's health metrics: as its latest result
 // on the static targets endpoint, and, with export_via_otlp, queued for OTLP
 // under the target's own resource (statictargetsendpoint.go).
-func (s *Server) scrapeStaticTarget(ctx context.Context, target model.StaticTarget, cfg *model.Config, c *model.Collector) {
+func (s *Server) scrapeStaticTarget(ctx context.Context, target model.StaticTarget, cfg *model.Config, generation uint64, c *model.Collector) {
 	start := time.Now()
 	// A static target scrape runs on a goroutine of the scrape loop, where a panic
 	// would take the whole exporter down rather than one scrape, as a probe's
@@ -55,13 +68,19 @@ func (s *Server) scrapeStaticTarget(ctx context.Context, target model.StaticTarg
 	// The request is identified before anything is counted, so every counter
 	// this collection raises lands on the target's own series as well as on the
 	// collector's.
-	rec := s.recorderFor(s.statsFor(c.Name), c.Name, requestURL, method)
+	rec := s.recorderFor(s.statsSince(generation, c.Name), c.Name, requestURL, method)
+	// What the scrape caches and the failure log remembers of it goes nowhere
+	// once a reload has removed or changed the collector read at generation
+	// (configRead), and neither does the result it publishes, which is held
+	// to the target as well (targetStands), as is what the failure log
+	// remembers (logStands).
+	rec.read = s.readTargetAt(generation, target.Name)
 	count := rec.update
 	count(func(st *serverStats) { st.probes++ })
 
 	// Repeats of the same failure are logged sparingly (failurelog.go).
 	log := collectLog{
-		key:    failureKey(c.Name, "static target "+target.Name, ""),
+		key:    failureKey(c.Name, staticTargetKey(target.Name), ""),
 		failed: "static target scrape failed", continuing: "static target stage failed; continuing", recovery: "static target recovered",
 		attrs: []any{"target", target.Name, "collector", c.Name, "address", address},
 	}
@@ -76,9 +95,17 @@ func (s *Server) scrapeStaticTarget(ctx context.Context, target model.StaticTarg
 		failedOnPanic = nil
 		elapsed := time.Since(start)
 		count(func(st *serverStats) { st.lastDuration = elapsed.Seconds() })
+		// A scrape of a target, or of a collector, that a reload has removed,
+		// changed or brought back since the scrape read them is another
+		// target's under the name: its outcome is not that target's, and its
+		// result would replace the one that target's own scrape published.
+		lastSuccess, stands := s.recordStaticTargetOutcome(rec.read, target, up == 1, time.Now())
+		if !stands {
+			s.logger.Debug("static target scrape ended after a reload removed or changed its target or its collector; its result is not published", "target", target.Name, "collector", c.Name, "superseded", true)
+			return
+		}
 		// A new slice, so the health metrics are never appended into one the
 		// result shares with a set that was cached.
-		lastSuccess := s.recordStaticTargetOutcome(target.Name, up == 1, time.Now())
 		health := staticTargetHealthMetrics(target, c, up, elapsed.Seconds(), lastSuccess).Metrics
 		published := model.MetricSet{Metrics: make([]model.Metric, 0, len(result.Metrics)+len(health))}
 		published.Metrics = append(append(published.Metrics, result.Metrics...), health...)
@@ -88,7 +115,7 @@ func (s *Server) scrapeStaticTarget(ctx context.Context, target model.StaticTarg
 		if model.StaleIfError(c) <= 0 || len(result.Metrics) == 0 {
 			fetched = time.Time{}
 		}
-		s.publishStaticResult(target, identity, published, fetched, at)
+		s.publishStaticResult(rec.read, target, identity, published, fetched, at)
 	}
 	// cacheKey is set once the request is known; a failure before it has no
 	// cached result to fall back on.
@@ -117,7 +144,7 @@ func (s *Server) scrapeStaticTarget(ctx context.Context, target model.StaticTarg
 
 	headers, err := fetch.TargetHeaders(&target)
 	if err != nil {
-		s.logCollectFailure(log, "credentials", err)
+		s.logCollectFailure(rec.read, log, "credentials", err)
 		failed()
 		return
 	}
@@ -148,7 +175,7 @@ func (s *Server) scrapeStaticTarget(ctx context.Context, target model.StaticTarg
 			return
 		}
 		count(func(st *serverStats) { countRejection(st, err) })
-		s.logCollectFailure(log, "concurrency", err)
+		s.logCollectFailure(rec.read, log, "concurrency", err)
 		failed()
 		return
 	}
@@ -174,7 +201,7 @@ func (s *Server) scrapeStaticTarget(ctx context.Context, target model.StaticTarg
 	}
 	// Under error_handling log or ignore a failed stage leaves the target up
 	// with nothing of the collector's to export, as it answers a probe 200
-	// with an empty body.
+	// with an empty exposition.
 	count(func(st *serverStats) { st.success++ })
 	if !trip.carriedOn {
 		result = withTargetLabels(trip.answer, target.Labels)

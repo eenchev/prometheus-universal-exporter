@@ -90,23 +90,39 @@ type Server struct {
 	fingerprints *fingerprintMemo
 	// stopping is set when a shutdown begins; /ready answers 503 from then.
 	stopping atomic.Bool
-	// seenConfig is the configuration the per-collector state was last
-	// reconciled with (reconcile.go).
-	seenConfig atomic.Pointer[model.Config]
+	// followed is the configuration the per-collector state was last
+	// reconciled with, with the static target file in force with it, and its
+	// generation (reconcile.go). It is replaced under statsMu, together with
+	// the state it describes, and under staticMu.
+	followed atomic.Pointer[followedConfig]
+	// since says, for each collector of the followed configuration, the
+	// generation it has been there from, under statsMu: the statistics kept
+	// for it are those of that stay, and no others' (statsSince).
+	since map[string]uint64
 }
 
 // NewServer returns a server using the configuration m holds and running
 // Python scripts with the interpreter at p.
 func NewServer(m *config.Manager, p string, l *slog.Logger) *Server {
 	s := &Server{manager: m, pythonPath: p, logger: l, stats: map[string]*serverStats{}, otlpPending: map[string]*otlpBatch{}, cache: newResponseCache(), requests: newRequestTracker(), flights: newProbeFlights(), trips: newTripLimiter(), otlp: &otlpStatus{}, otlpStarts: newOTLPStartTimes(), failures: newFailureLog(), fingerprints: &fingerprintMemo{}, timeoutOffset: DefaultTimeoutOffset, defaultProbeTimeout: DefaultProbeTimeout, answerWriteTimeout: AnswerWriteTimeout}
-	s.seenConfig.Store(m.Get())
 	// The collectors the exporter starts with count from its start; one a
 	// reload adds, from when its statistics are made (selfcreated.go).
-	if cfg := m.Get(); cfg != nil {
+	cfg, targets := m.InForce()
+	s.statsMu.Lock()
+	first := s.followLocked(cfg, targets, nil)
+	if cfg != nil {
 		for i := range cfg.Collectors {
-			s.stats[cfg.Collectors[i].Name] = newServerStats(exporterStart())
+			stats := newServerStats(exporterStart())
+			stats.since = first.generation
+			s.stats[cfg.Collectors[i].Name] = stats
 		}
 	}
+	s.statsMu.Unlock()
+	// The state kept per collector follows a reload when it is made
+	// (reconcile.go). Asked for once statsMu is released: the manager tells
+	// under the lock that serializes reloads, and the following takes statsMu
+	// under that one.
+	m.OnInstall(s.followReload)
 	return s
 }
 
@@ -157,14 +173,57 @@ func (s *Server) selfMetricsEndpoint() string {
 	return s.selfMetricsPath
 }
 
+// probeConfigReadHook, set by tests, is called with a probe's collector when
+// the probe has read the configuration and is about to take the collector's
+// statistics, so a test can put a reload between the two.
+var probeConfigReadHook atomic.Pointer[func(string)]
+
+// statsFor returns the statistics of the collector name of the configuration
+// in force: for a reader of them, and for a caller that names a collector of
+// the configuration as it is now. A probe or scrape, which may have read its
+// collector some time ago, says when (statsSince).
 func (s *Server) statsFor(name string) *serverStats {
+	return s.statsSince(s.reconcile().generation, name)
+}
+
+// statsSince returns the statistics a probe or scrape of the collector name
+// counts in, when it read the collector in the configuration followed at
+// generation (reconcile). They are the collector's own while it has been in
+// every configuration followed from that one on, and are made at its first
+// use. A collector a reload has removed since has none, though it may be
+// back under the name: its statistics were dropped, and those now kept under
+// the name, or made at the next use of it, are of the collector brought back,
+// which starts from zero and counts nothing begun before its return. The
+// caller is then given statistics of its own, retired from the start, that
+// no answer shows and nothing inherits.
+//
+// A caller that asked later, by name alone, could not tell the collector it
+// read from one brought back since, and one whose collector was dropped
+// between its reading of the configuration and its asking would make
+// statistics for a collector that is gone: its request would be shown until
+// it expired, and a collector brought back would inherit what it counted.
+func (s *Server) statsSince(generation uint64, name string) *serverStats {
 	s.statsMu.Lock()
 	defer s.statsMu.Unlock()
-	if x := s.stats[name]; x != nil {
+	return s.statsSinceLocked(generation, name)
+}
+
+// statsSinceLocked is statsSince under statsMu.
+func (s *Server) statsSinceLocked(generation uint64, name string) *serverStats {
+	x := s.stats[name]
+	if x != nil && x.since <= generation {
 		return x
 	}
-	x := newServerStats(time.Now())
-	s.stats[name] = x
+	if x == nil {
+		if since, named := s.since[name]; named && since <= generation {
+			x = newServerStats(time.Now())
+			x.since = since
+			s.stats[name] = x
+			return x
+		}
+	}
+	x = newServerStats(time.Now())
+	x.retired.Store(true)
 	return x
 }
 
@@ -227,8 +286,10 @@ func (s *Server) probeHandler(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "the collector parameter is required: /probe?collector=<name>&target=<target>", http.StatusBadRequest)
 		return
 	}
-	s.reconcile()
-	cfg := s.manager.Get()
+	// The configuration is read with its generation, which says below which
+	// statistics the probe counts in (statsSince).
+	followed := s.reconcile()
+	cfg := followed.config
 	var c *model.Collector
 	for i := range cfg.Collectors {
 		if cfg.Collectors[i].Name == name {
@@ -303,8 +364,15 @@ func (s *Server) probeHandler(w http.ResponseWriter, r *http.Request) {
 		s.serveDebugProbe(w, r, p)
 		return
 	}
-	st := s.statsFor(name)
+	if hook := probeConfigReadHook.Load(); hook != nil {
+		(*hook)(name)
+	}
+	st := s.statsSince(followed.generation, name)
 	rec := s.probeRecorderFor(st, name, requestURL, method)
+	// What the probe writes under the collector's name at its end goes
+	// nowhere once a reload has removed or changed the collector read here
+	// (configRead).
+	rec.read = s.readAt(followed.generation)
 	rec.update(func(x *serverStats) { x.probes++ })
 	// finish counts the probe's outcome and ends its per-request record: a
 	// probe the target policy refused, or whose caller went away, leaves no
@@ -369,9 +437,11 @@ func (s *Server) probeHandler(w http.ResponseWriter, r *http.Request) {
 	// (forTrip), which may leave while the trip goes on for the others. What
 	// it counted is the request's when it ends, before any probe is answered
 	// by it, unless the target policy refused it or it was cancelled because
-	// every probe left, without the policy's verdict.
+	// every probe left, without the policy's verdict. It is shared by the
+	// probes of this stay of the collector only (flightKey): the trip writes
+	// under the collector's name as the probe that started it may.
 	trip := rec.forTrip()
-	result, shared, err := s.flights.do(r.Context(), key, func(ctx context.Context) *probeResult {
+	result, shared, err := s.flights.do(r.Context(), flightKey{probe: key, defined: followed.defined[name]}, func(ctx context.Context) *probeResult {
 		result := upstream(ctx, trip)
 		trip.commit(result.refused || result.abandoned)
 		return result
@@ -457,7 +527,7 @@ func (s *Server) probeUpstream(ctx context.Context, p upstreamProbe) *probeResul
 	}
 	staleKey := failureKey(name, p.failureKeyTarget(), "\x00stale")
 	if result.ok {
-		s.failures.recovered(s.logger, staleKey, "probe answered with a fresh result again", p.logAttrs()...)
+		s.failures.recoveredFor(p.rec.read, s.logger, staleKey, "probe answered with a fresh result again", p.logAttrs()...)
 		return result
 	}
 	now := time.Now()
@@ -473,7 +543,7 @@ func (s *Server) probeUpstream(ctx context.Context, p upstreamProbe) *probeResul
 		x.staleServed++
 		x.emitted += uint64(len(cached.Metrics))
 	})
-	s.failures.failed(s.logger, slog.LevelWarn, staleKey, "probe failed; answered with the last successful result (cache.stale_if_error)", "stale", nil, append(p.logAttrs(), "result_age", now.Sub(fetched).Round(time.Second).String())...)
+	s.failures.failedFor(p.rec.read, s.logger, slog.LevelWarn, staleKey, "probe failed; answered with the last successful result (cache.stale_if_error)", "stale", nil, append(p.logAttrs(), "result_age", now.Sub(fetched).Round(time.Second).String())...)
 	out := newProbeRecorder()
 	out.metrics = &answer
 	s.queueProbeOTLP(answer, c, p.logTarget, fetched)
@@ -510,7 +580,7 @@ func (s *Server) probeTrip(ctx context.Context, p upstreamProbe) *probeResult {
 	limit := maxConcurrentProbes(c)
 	if full := s.trips.tryAcquire(name, limit); full != nil {
 		rec.update(func(x *serverStats) { countRejection(x, full) })
-		s.failures.failed(s.logger, slog.LevelWarn, failureKey(name, p.failureKeyTarget(), ""), "probe rejected: too many probes in progress", "concurrency", nil, append(p.logAttrs(), "reason", full.message)...)
+		s.failures.failedFor(rec.read, s.logger, slog.LevelWarn, failureKey(name, p.failureKeyTarget(), ""), "probe rejected: too many probes in progress", "concurrency", nil, append(p.logAttrs(), "reason", full.message)...)
 		http.Error(out, full.message+"; this probe was not sent", http.StatusServiceUnavailable)
 		return out.result(false)
 	}
@@ -558,12 +628,34 @@ func (s *Server) probeTrip(ctx context.Context, p upstreamProbe) *probeResult {
 		failure.unauthorized = result.unauthorized
 		return failure
 	case result.carriedOn:
-		// Answered 200 with nothing: the stage's policy said to carry on.
+		// The stage's policy said to carry on: answered as a probe whose
+		// rules produced no series is, by the same writer (writeMetricSet).
+		// An exposition is identified by its Content-Type, and an
+		// OpenMetrics one ends in # EOF: an answer with neither is in no
+		// format a scraper could read, which carrying on is there to
+		// prevent.
+		answer := carriedOnAnswer(c)
+		out.metrics = &answer
 		return out.result(true)
 	}
 	out.metrics = &result.answer
 	s.queueProbeOTLP(result.answer, c, logTarget, result.fetched)
 	return out.result(true)
+}
+
+// carriedOnAnswer is what a probe of c that carried on past a failed stage,
+// under error_handling log or ignore, is answered with: what a trip that went
+// through whole and produced no series is answered with, so nothing of the
+// collector's, and the freshness series of a collector with
+// cache.stale_if_error, which every answer of such a collector has: the
+// answer is no stale result, and the trip was just made. Unlike that trip's
+// result it is neither cached nor exported over OTLP: no result was read from
+// the target, and a failed stage is never kept as a good one.
+func carriedOnAnswer(c *model.Collector) model.MetricSet {
+	now := time.Now()
+	// No series, so none whose name the freshness series could clash with.
+	answer, _ := withFreshness(model.MetricSet{}, c, false, now, now)
+	return answer
 }
 
 // unforwardableHeaders are never forwarded, whatever request.forward_headers
@@ -663,9 +755,9 @@ func (s *Server) noteUTF8Repairs(ctx context.Context, repaired utf8Repairs, rec 
 	key := failureKey(c.Name, keyTarget, "\x00utf8")
 	changed, first := repaired.count, repaired.first
 	if changed == 0 {
-		s.tripRecovered(ctx, key, "output is valid UTF-8 again", "collector", c.Name, "target", target)
+		s.tripRecovered(ctx, rec.read, key, "output is valid UTF-8 again", "collector", c.Name, "target", target)
 		return
 	}
 	rec.update(func(x *serverStats) { x.invalidUTF8 += changed })
-	s.tripFailed(ctx, slog.LevelWarn, key, "label values or help text were not valid UTF-8; the invalid bytes were replaced with U+FFFD. If the target uses another encoding without declaring it, set response.charset", "utf8", nil, "collector", c.Name, "target", target, "values", changed, "first_metric", first)
+	s.tripFailed(ctx, rec.read, slog.LevelWarn, key, "label values or help text were not valid UTF-8; the invalid bytes were replaced with U+FFFD. If the target uses another encoding without declaring it, set response.charset", "utf8", nil, "collector", c.Name, "target", target, "values", changed, "first_metric", first)
 }

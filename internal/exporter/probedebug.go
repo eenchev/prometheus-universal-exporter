@@ -200,8 +200,10 @@ func (t *probeTrace) converted(c *model.Collector, decoded *decode.Decoded) {
 }
 
 // tripFailed logs a failure of a trip: to the failure log, or for a debug
-// probe to its report alone.
-func (s *Server) tripFailed(ctx context.Context, level slog.Level, key, msg, stage string, err error, attrs ...any) {
+// probe to its report alone. read is the configuration the trip read its
+// collector in: the failure log remembers nothing of a collector that no
+// longer stands (failedFor).
+func (s *Server) tripFailed(ctx context.Context, read configRead, level slog.Level, key, msg, stage string, err error, attrs ...any) {
 	if t := probeTraceFrom(ctx); t != nil {
 		if err != nil {
 			attrs = append(attrs, "error", err)
@@ -209,16 +211,16 @@ func (s *Server) tripFailed(ctx context.Context, level slog.Level, key, msg, sta
 		t.logger.Log(ctx, level, msg, attrs...)
 		return
 	}
-	s.failures.failed(s.logger, level, key, msg, stage, err, attrs...)
+	s.failures.failedFor(read, s.logger, level, key, msg, stage, err, attrs...)
 }
 
 // tripRecovered is tripFailed's recovery: a debug probe has nothing to
 // recover from, and says nothing.
-func (s *Server) tripRecovered(ctx context.Context, key, msg string, attrs ...any) {
+func (s *Server) tripRecovered(ctx context.Context, read configRead, key, msg string, attrs ...any) {
 	if probeTraceFrom(ctx) != nil {
 		return
 	}
-	s.failures.recovered(s.logger, key, msg, attrs...)
+	s.failures.recoveredFor(read, s.logger, key, msg, attrs...)
 }
 
 // tripDebug logs at debug level, to a debug probe's report when it is one.
@@ -346,7 +348,9 @@ func (s *Server) debugVerdict(result collected, p debugProbe) (string, *model.Me
 	case result.failed():
 		verdict = fmt.Sprintf("502: collector %s %s failed: %v", name, result.stage, result.err)
 	case result.carriedOn:
-		return "200 with no series: a stage failed and error_handling carried on", nil
+		// What probeTrip answers: nothing of the collector's.
+		answer := carriedOnAnswer(p.collector)
+		return "200 with no series of the collector's: a stage failed and error_handling carried on", &answer
 	default:
 		answer := result.answer
 		return fmt.Sprintf("200 with %d series", len(answer.Metrics)), &answer
@@ -622,7 +626,10 @@ func writeBody(b *bytes.Buffer, body []byte, convertedFrom string) {
 }
 
 // writeTransform renders the series each metric got, the rules that got
-// none, and the rules that carried on without some.
+// none, and the rules that carried on without some: each rule by itself,
+// under its metric name, and with its expression, and its items when it has
+// any, where several of the collector's rules export the name
+// (sharedRuleNames). A prometheus rule without a name is shown as that.
 func writeTransform(b *bytes.Buffer, c *model.Collector, set *model.MetricSet, failures []transform.RuleFailure, decoded string) {
 	if decoded != "" {
 		fmt.Fprintf(b, "  %s transform of a %s response\n", c.Transform.Type, decoded)
@@ -662,8 +669,22 @@ func writeTransform(b *bytes.Buffer, c *model.Collector, set *model.MetricSet, f
 	}
 	if len(failures) > 0 {
 		b.WriteString("  Rules that carried on without some series\n")
+		var shared sharedRuleNames
 		for _, f := range failures {
-			line := fmt.Sprintf("    %s: %d failed", f.Metric, f.Failures)
+			rule := f.Metric
+			if rule == "" {
+				// A prometheus rule may have no name, and a line that
+				// began with nothing would not read as a rule's.
+				rule = "rule without a name"
+			}
+			if shared.has(c, f.Metric) {
+				rule += fmt.Sprintf(" (expression %q", f.Expression)
+				if f.Items != "" {
+					rule += fmt.Sprintf(", items %q", f.Items)
+				}
+				rule += ")"
+			}
+			line := fmt.Sprintf("    %s: %d failed", rule, f.Failures)
 			if f.Missing > 0 {
 				line += fmt.Sprintf(", %d of them missing values", f.Missing)
 			}

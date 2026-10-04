@@ -193,12 +193,26 @@
           "metrics": {
             "items": {
               "additionalProperties": false,
-              "dependentRequired": {
-                "time_zone": [
-                  "time_format"
+              "if": {
+                "properties": {
+                  "time_zone": {
+                    "not": {
+                      "const": ""
+                    }
+                  }
+                },
+                "required": [
+                  "time_zone"
                 ]
               },
               "not": {
+                "properties": {
+                  "time_format": {
+                    "not": {
+                      "const": ""
+                    }
+                  }
+                },
                 "required": [
                   "time_format",
                   "value_map"
@@ -345,6 +359,18 @@
                   "description": "Turns the text the expression gives into the value, such as {up: 1, down: 0}; \"*\" maps any value it does not list, numbers included. Without a match and without \"*\", the value is read as a number. Not for the prometheus and python transforms.",
                   "type": "object"
                 }
+              },
+              "then": {
+                "properties": {
+                  "time_format": {
+                    "not": {
+                      "const": ""
+                    }
+                  }
+                },
+                "required": [
+                  "time_format"
+                ]
               },
               "type": "object"
             },

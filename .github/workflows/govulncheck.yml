@@ -2,6 +2,12 @@
 # only: the job never fails, so a newly published advisory cannot block a merge.
 # Findings go to the run's summary page and show as a warning on the run.
 #
+# What is scanned is what ships and what the workflows run: the exporter (the
+# package at the root) and the repository's tools, each with all it imports.
+# The packages only tests use are left out, so a vulnerability that only a
+# test's stand-in server can reach raises no warning here. The Makefile names
+# the same packages for `make vulncheck`, and a test keeps the two equal.
+#
 # It is a workflow of its own rather than a job in ci.yml so that it can also
 # run on a schedule: an advisory is published against code that has not
 # changed, and a run on every push alone would see it only at the next push.
@@ -32,7 +38,7 @@ jobs:
       - name: Check for known vulnerabilities
         run: |
           set +e
-          govulncheck ./... > "$RUNNER_TEMP/govulncheck.txt" 2>&1
+          govulncheck . ./tools/... > "$RUNNER_TEMP/govulncheck.txt" 2>&1
           status=$?
           set -e
           cat "$RUNNER_TEMP/govulncheck.txt"

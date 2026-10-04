@@ -231,6 +231,22 @@ const serverStatusCollectors = `collectors:
       - name: bytes_in_total
         type: counter
         expression: "//table[@id='backends']/tfoot/tr/td[@class='bin']/@data-value"
+      # A rule that selects the attribute of every row names each by its
+      # row: the labels are read from the attribute, whose parent is its
+      # cell.
+      - name: backend_bytes_out_total
+        type: counter
+        expression: "//table[@id='backends']/tbody/tr/td[@class='bout']/@data-value"
+        labels:
+          - name: server
+            expression: ../../@data-server
+            required: true
+          - name: backend
+            expression: ../../@data-backend
+          - name: written
+            expression: ..
+          - name: attribute
+            expression: "concat(name(..), '/@', name())"
       - name: bytes_out_total
         type: counter
         expression: "sum(//table[@id='backends']/tbody/tr/td[@class='bout']/@data-value)"
@@ -277,8 +293,10 @@ const serverStatusCollectors = `collectors:
 // their state with :has(), and fails, once a rule, on what is no number. xpath
 // reads the same rows with the labels from attributes of the row, a state read
 // from a class and named by the label's value_map, a predicate on the class,
-// the exact byte counts from the attributes, and computes single values out of
-// their units and out of running text, which css cannot. A selector does not
+// the exact byte counts from the attributes — one rule selects the attribute
+// of every row and names each by its row, through the attribute's cell — and
+// computes single values out of their units and out of running text, which
+// css cannot. A selector does not
 // read attributes, so the byte counts are not for css.
 func TestTheServerStatusFixtureIsReadByCSSAndXPath(t *testing.T) {
 	readHTMLFixture(t, "server-status.html", "text/html; charset=utf-8", serverStatusCollectors, []htmlReading{
@@ -333,6 +351,10 @@ func TestTheServerStatusFixtureIsReadByCSSAndXPath(t *testing.T) {
 				`backend_weight{server="web02"} 100`,
 				`backends_up 2`,
 				`bytes_in_total 5.731516212e+09`,
+				`backend_bytes_out_total{attribute="td/@data-value",backend="web",server="web01",written="26.0 GB"} 2.7917287424e+10`,
+				`backend_bytes_out_total{attribute="td/@data-value",backend="web",server="web02",written="57.0 GB"} 6.1203283968e+10`,
+				`backend_bytes_out_total{attribute="td/@data-value",backend="web",server="web03",written="0"} 0`,
+				`backend_bytes_out_total{attribute="td/@data-value",backend="api",server="api01",written="89.5 MB"} 9.3884518e+07`,
 				`bytes_out_total 8.921445591e+10`,
 				`session_limit_total 4000`,
 				`usage_ratio 0.01`,
@@ -344,7 +366,7 @@ func TestTheServerStatusFixtureIsReadByCSSAndXPath(t *testing.T) {
 				`worker_cpu_seconds{slot="2-2"} 0`,
 			},
 			logs: []string{
-				`ERROR metric extraction failed metric=backend_session_limit failures=4 error=value "1,000" is not a number; map text to numbers with value_map`,
+				`ERROR metric extraction failed metric=backend_session_limit failures=4 error=metric "backend_session_limit" node 0: value "1,000" is not a number; map text to numbers with value_map`,
 			},
 		},
 	})
@@ -1278,7 +1300,7 @@ func TestTheEntitiesAndWhitespaceFixtureIsReadByCSSAndXPath(t *testing.T) {
 				`sensor_inlet_pressure_bar 4.2`,
 			},
 			logs: []string{
-				`ERROR metric extraction failed metric=sensor_reading failures=9 error=value "−7.5" is not a number; map text to numbers with value_map`,
+				`ERROR metric extraction failed metric=sensor_reading failures=9 error=metric "sensor_reading" node 5: value "−7.5" is not a number; map text to numbers with value_map`,
 			},
 		},
 	})
@@ -1296,19 +1318,38 @@ const notContentCollectors = `collectors:
       # A hidden row, one a style hides and one hidden from assistive
       # technology are rows of the document like any other, and so is the
       # text of a hidden element inside a cell: bsd-02 shows 9 and reads 9000.
+      # The script and the style inside the cells of win-02 and bsd-01 are
+      # no part of the cells' text, and the rows of the two templates, which
+      # have the class too, are no rows of the document.
       - name: farm_agent_jobs
-        items: '#agents-table tr.agent:not(:has(script)):not(:has(style))'
+        items: 'tr.agent'
         expression: td.n
         labels:
           - name: agent
             expression: td.name
       # Attribute selectors leave out what the page hides.
       - name: farm_agent_jobs_shown
-        items: '#agents-table tr.agent:not([hidden]):not([style*="display:none"]):not([aria-hidden="true"]):not(:has(script)):not(:has(style))'
+        items: '#agents-table tr.agent:not([hidden]):not([style*="display:none"]):not([aria-hidden="true"])'
         expression: td.n
         labels:
           - name: agent
             expression: td.name
+      # A template is there, empty, and nothing is inside it.
+      - name: farm_template
+        expression: 'template#agent-row'
+        required: false
+      - name: farm_template_rows
+        items: 'template *'
+        expression: td.n
+        required: false
+      # A script a rule selects is read: the state the page was rendered
+      # from, and the text of the head without its scripts and its style.
+      - name: farm_state
+        expression: 'script#state'
+        value_map: {'{"agents": 4, "busy": 1, "queue": 17}': 17}
+      - name: farm_head
+        expression: head
+        value_map: {build-farm agents: 1}
       # The markup inside noscript and iframe is their text, and what is in
       # a comment is nowhere: none of the three has elements to select.
       - name: farm_noscript_fallback
@@ -1358,8 +1399,9 @@ const notContentCollectors = `collectors:
     transform:
       type: xpath
     metrics:
+      # Every row of the page: those of the templates are not in the document.
       - name: farm_agent_jobs
-        expression: "//table[@id='agents-table']//tr[not(.//script) and not(.//style)]/td[@class='n']"
+        expression: "//tr[@class='agent']/td[@class='n']"
         labels:
           - name: agent
             expression: "../td[@class='name']"
@@ -1369,6 +1411,26 @@ const notContentCollectors = `collectors:
             expression: ../@style
           - name: aria_hidden
             expression: ../@aria-hidden
+      # Both templates, the one among the table's rows too, are empty.
+      - name: farm_templates
+        expression: "//template/@id"
+        value_map: {"*": 1}
+        labels:
+          - name: id
+            expression: .
+          - name: nodes
+            expression: count(../node())
+          - name: in
+            expression: name(../..)
+      # A cell with a script: the exporter reads the cell without it, and a
+      # function of XPath, written in an expression, with it.
+      - name: farm_tracked_cell
+        expression: "//td[script]"
+        labels:
+          - name: whole
+            expression: string(.)
+          - name: script
+            expression: script
       # A value that is an attribute is selected as one.
       - name: farm_form_token
         expression: "//input[@id='csrf']/@value"
@@ -1427,8 +1489,10 @@ const notContentCollectors = `collectors:
 // Hidden elements are in the document and are read, and attribute selectors or
 // predicates leave them out. The markup inside noscript and iframe is text and
 // not elements, and what is commented out is not there. Values that are
-// attributes are for xpath. The rows that hold a script or a style in a cell
-// are left out here by the rules themselves.
+// attributes are for xpath. A script or a style inside a cell is no part of
+// the cell's text, and is read by the rule that selects it; the content of
+// the templates, one of them among the table's rows, is not in the document,
+// and a template is an empty element.
 func TestTheNotContentFixtureIsReadByCSSAndXPath(t *testing.T) {
 	readHTMLFixture(t, "not-content.html", "text/html; charset=utf-8", notContentCollectors, []htmlReading{
 		{
@@ -1440,10 +1504,16 @@ func TestTheNotContentFixtureIsReadByCSSAndXPath(t *testing.T) {
 				`farm_agent_jobs{agent="mac-01"} 3`,
 				`farm_agent_jobs{agent="mac-02"} 4`,
 				`farm_agent_jobs{agent="win-01"} 5`,
+				`farm_agent_jobs{agent="win-02"} 6`,
+				`farm_agent_jobs{agent="bsd-01"} 8`,
 				`farm_agent_jobs{agent="bsd-02 (retired)"} 9000`,
 				`farm_agent_jobs_shown{agent="linux-01"} 12`,
 				`farm_agent_jobs_shown{agent="mac-02"} 4`,
+				`farm_agent_jobs_shown{agent="win-02"} 6`,
+				`farm_agent_jobs_shown{agent="bsd-01"} 8`,
 				`farm_agent_jobs_shown{agent="bsd-02 (retired)"} 9000`,
+				`farm_state 17`,
+				`farm_head 1`,
 				`farm_in_object 66`,
 				`farm_queue_depth 17`,
 				`farm_notes 22`,
@@ -1464,7 +1534,12 @@ func TestTheNotContentFixtureIsReadByCSSAndXPath(t *testing.T) {
 				`farm_agent_jobs{agent="mac-01",hidden="false",style="display:none"} 3`,
 				`farm_agent_jobs{agent="mac-02",hidden="false",style="visibility: hidden;"} 4`,
 				`farm_agent_jobs{agent="win-01",aria_hidden="true",hidden="false"} 5`,
+				`farm_agent_jobs{agent="win-02",hidden="false"} 6`,
+				`farm_agent_jobs{agent="bsd-01",hidden="false"} 8`,
 				`farm_agent_jobs{agent="bsd-02 (retired)",hidden="false"} 9000`,
+				`farm_templates{id="row-template",in="body",nodes="0"} 1`,
+				`farm_templates{id="agent-row",in="table",nodes="0"} 1`,
+				`farm_tracked_cell{script="/* tracking */ var n = 6;",whole="6/* tracking */ var n = 6;"} 6`,
 				`farm_form_token 31337`,
 				`farm_progress_percent 70`,
 				`farm_disk_ratio 0.6`,
@@ -1870,25 +1945,16 @@ const valueFormCollectors = `collectors:
           - name: job
             expression: "../td[@class='job']"
       # The machine's time is the datetime attribute: RFC 3339, its own
-      # zone in it, a fraction of a second kept.
+      # zone in it, a fraction of a second kept. One rule selects the
+      # attribute of every row that has one, and names each by the job of
+      # its row, three elements up from the attribute.
       - name: job_last_run_timestamp_seconds
-        expression: "//table[@id='jobs']/tbody/tr[td[@class='job'] = 'backup']//time/@datetime"
+        expression: "//table[@id='jobs']/tbody/tr//time/@datetime"
         time_format: rfc3339
         labels:
           - name: job
-            value: backup
-      - name: job_last_run_timestamp_seconds
-        expression: "//table[@id='jobs']/tbody/tr[td[@class='job'] = 'rotate-logs']//time/@datetime"
-        time_format: rfc3339
-        labels:
-          - name: job
-            value: rotate-logs
-      - name: job_last_run_timestamp_seconds
-        expression: "//table[@id='jobs']/tbody/tr[td[@class='job'] = 'reindex']//time/@datetime"
-        time_format: rfc3339
-        labels:
-          - name: job
-            value: reindex
+            expression: "../../../td[@class='job']"
+            required: true
       # A time element without the attribute has only its words.
       - name: job_last_run_timestamp_seconds
         expression: "//table[@id='jobs']/tbody/tr[td[@class='job'] = 'prune']//time"
@@ -1912,7 +1978,8 @@ const valueFormCollectors = `collectors:
 // text; scale multiplies; a label's value_map names or drops a value;
 // error_mode: fail fails the scrape at the first such row. With xpath a row
 // without the cell is not selected, so nothing is missing it. time_format
-// reads a layout in a zone, RFC 1123, and the datetime attribute as RFC 3339.
+// reads a layout in a zone, RFC 1123, and the datetime attribute as RFC 3339:
+// one xpath rule reads the attribute of every row, named by the row's job.
 func TestTheValueFormsFixtureIsReadByCSSAndXPath(t *testing.T) {
 	readHTMLFixture(t, "value-forms.html", "text/html; charset=utf-8", valueFormCollectors, []htmlReading{
 		{
@@ -2027,9 +2094,9 @@ func TestTheValueFormsFixtureIsReadByCSSAndXPath(t *testing.T) {
 				`page_generated_timestamp_seconds 1.791018e+09`,
 			},
 			logs: []string{
-				`ERROR metric extraction failed metric=form_value failures=8 error=value "1,234" is not a number; map text to numbers with value_map`,
-				`ERROR metric extraction failed metric=form_up failures=1 error=value "0x1F" is not a number; map text to numbers with value_map`,
-				`ERROR metric extraction failed metric=job_last_run_timestamp_seconds failures=1 error=value "never" is not a time in time_format "rfc3339", which reads times such as 2006-01-02T15:04:05Z and 2006-01-02T15:04:05.999+02:00`,
+				`ERROR metric extraction failed metric=form_value failures=8 error=metric "form_value" node 4: value "1,234" is not a number; map text to numbers with value_map`,
+				`ERROR metric extraction failed metric=form_up failures=1 error=metric "form_up" node 2: value "0x1F" is not a number; map text to numbers with value_map`,
+				`ERROR metric extraction failed metric=job_last_run_timestamp_seconds failures=1 error=metric "job_last_run_timestamp_seconds" node 0: value "never" is not a time in time_format "rfc3339", which reads times such as 2006-01-02T15:04:05Z and 2006-01-02T15:04:05.999+02:00`,
 			},
 		},
 	})

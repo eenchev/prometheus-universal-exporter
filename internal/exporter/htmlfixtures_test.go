@@ -79,6 +79,11 @@ var htmlFixtures = map[string]string{
 	"charset/depots-shift_jis-meta.html":          "the Japanese row as Shift_JIS with a meta charset",
 	"charset/depots-gbk-meta.html":                "the Chinese row as GBK with a meta charset",
 	"charset/depots-euc-kr-meta.html":             "the Korean row as EUC-KR with a meta charset",
+	"charset/depots-utf8-commented-meta.html":     "the UTF-8 page with a meta charset after a commented-out meta that names windows-1251",
+	"charset/depots-utf8-description-meta.html":   "the UTF-8 page declaring nothing, with a description that speaks of charset=windows-1251",
+	"charset/depots-windows-1251-decoys.html":     "the Cyrillic rows as windows-1251 with a meta http-equiv after a comment, a title, a description, a refresh and a link that each hold a charset",
+	"charset/depots-windows-1251-xmldecl.xhtml":   "the Cyrillic rows as XHTML in windows-1251, which its XML declaration alone says",
+	"charset/depots-meta-over-xmldecl.xhtml":      "the same with a meta that names windows-1251, against an XML declaration that names koi8-r",
 }
 
 // htmlFixture reads a fixture of testdata/html, which htmlFixtures lists.

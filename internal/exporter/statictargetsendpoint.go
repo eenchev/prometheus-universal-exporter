@@ -75,9 +75,20 @@ func (s *Server) staticTargetsEndpoint() string {
 // targets of one collector, without labels or an OTLP identity of their own,
 // arrive under the same resource with the same series, and without it the
 // later target's values would replace the earlier's in the pending export.
-func (s *Server) publishStaticResult(target model.StaticTarget, identity otlpResourceIdentity, set model.MetricSet, fetched time.Time, at scrapeTime) {
-	// A reload may have removed the target while its scrape was in flight;
-	// its result then goes nowhere, over OTLP included.
+//
+// read is the configuration the scrape read the target and its collector in.
+// A reload may have removed the target while its scrape was in flight, or
+// changed it or its collector, or removed either and brought it back: the
+// result then goes nowhere, over OTLP included (targetStands). Published, it
+// would stand for a target with another definition, and where that target's
+// own first scrape had ended sooner, replace its result until the next turn.
+// That is asked under the lock the result is stored under, which the
+// followed configuration is replaced under (storeFollowed): a scrape that
+// read what a reload retired stores before any scrape that read what the
+// reload put in force has begun, or not at all.
+func (s *Server) publishStaticResult(read configRead, target model.StaticTarget, identity otlpResourceIdentity, set model.MetricSet, fetched time.Time, at scrapeTime) {
+	// The target is in force by name too: a reload not yet followed has
+	// removed it.
 	if !s.staticTargetInForce(target.Name) {
 		return
 	}
@@ -87,6 +98,10 @@ func (s *Server) publishStaticResult(target model.StaticTarget, identity otlpRes
 	// stored series are never changed after this: readers share them.
 	labelled := withStaticTargetLabel(set, target.Name)
 	s.staticMu.Lock()
+	if !read.targetStands(target.Collector, target.Name) {
+		s.staticMu.Unlock()
+		return
+	}
 	if s.staticResults == nil {
 		s.staticResults = map[string]model.MetricSet{}
 		s.staticFetched = map[string]time.Time{}
@@ -509,19 +524,25 @@ func (s *Server) staticTargetCountMetrics() []model.Metric {
 	}
 }
 
-// recordStaticTargetOutcome notes a scrape of the target named name, at now,
-// and returns when it last succeeded: now for a success, else the earlier
-// success, zero if there was none.
-func (s *Server) recordStaticTargetOutcome(name string, ok bool, now time.Time) time.Time {
+// recordStaticTargetOutcome notes a scrape of target, at now, and returns when
+// the target last succeeded: now for a success, else the earlier success,
+// zero if there was none. stands is whether the target and its collector are
+// still those the scrape read, as read says (targetStands); when they are
+// not, nothing is noted: the scrape is not one of the target now under the
+// name.
+func (s *Server) recordStaticTargetOutcome(read configRead, target model.StaticTarget, ok bool, now time.Time) (lastSuccess time.Time, stands bool) {
 	s.staticMu.Lock()
 	defer s.staticMu.Unlock()
+	if !read.targetStands(target.Collector, target.Name) {
+		return time.Time{}, false
+	}
 	if s.staticLastSuccess == nil {
 		s.staticLastSuccess = map[string]time.Time{}
 	}
 	if ok {
-		s.staticLastSuccess[name] = now
+		s.staticLastSuccess[target.Name] = now
 	}
-	return s.staticLastSuccess[name]
+	return s.staticLastSuccess[target.Name], true
 }
 
 // unixSeconds is t as Unix seconds, 0 for the zero time, which would otherwise

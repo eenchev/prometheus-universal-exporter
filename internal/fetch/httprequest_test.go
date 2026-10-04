@@ -7,6 +7,7 @@ import (
 	"encoding/pem"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -92,5 +93,18 @@ func TestAStaticTargetsRetryOverridesKeyByKey(t *testing.T) {
 	var none *model.TargetRetryConfig
 	if got := none.Over(collector); !reflect.DeepEqual(got, collector) {
 		t.Fatalf("no retry of its own: %+v", got)
+	}
+}
+
+// A path with a query or a fragment is refused, in a probe's path parameter
+// too. TestALocalFilePathMayHoldAQueryAndAFragment has a localfile path,
+// which may hold either.
+func TestAPathHoldsNoQuery(t *testing.T) {
+	c := httpCollector(t, nil)
+	if err := CheckOverrideParams(c, url.Values{"path": {"/s?a=1"}}); err == nil || !strings.Contains(err.Error(), `probe parameter path "/s?a=1" has a ? in it`) {
+		t.Fatalf("err=%v", err)
+	}
+	if err := CheckOverrideParams(c, url.Values{"path": {"/s"}}); err != nil {
+		t.Fatal(err)
 	}
 }

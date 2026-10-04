@@ -1,6 +1,7 @@
 package decode
 
 import (
+	"fmt"
 	"math"
 	"reflect"
 	"slices"
@@ -259,7 +260,7 @@ func TestPromParseLeavesOutAndCountsASampleThatIsNoPartOfItsHistogramOrSummary(t
 			if err != nil || !slices.Equal(names, test.series) {
 				t.Errorf("%q (OpenMetrics %v): err=%v, series %q, want %q", test.body, openMetrics, err, names, test.series)
 			}
-			if report == nil || report.LeftOutLines != test.leftOut || report.FirstLeftOut != test.first {
+			if report == nil || report.LeftOutLines != test.leftOut || fmt.Sprint(report.FirstLeftOut) != test.first {
 				t.Errorf("%q (OpenMetrics %v): report %+v, want %d left out, the first %q", test.body, openMetrics, report, test.leftOut, test.first)
 			}
 		}

@@ -38,6 +38,26 @@ declaration, other markup as XML, JSON by its opening bracket, Prometheus text b
 dot) as Graphite series, and anything else as text. If the decoded response cannot be used by the selected transform, the
 probe fails with a clear mapping error.
 
+What a response says it is, with the decoder left to it:
+
+| `Content-Type` | Extension of a `localfile` file | Decoder |
+| --- | --- | --- |
+| `application/json`, any type ending in `+json` | `.json` | `json` |
+| `application/yaml`, `application/x-yaml`, `text/yaml` | `.yaml`, `.yml` | `yaml` |
+| `application/xml`, `text/xml` | `.xml` | `xml` |
+| `text/csv` | `.csv` | `csv` |
+| `text/html` | `.html`, `.htm` | `html` |
+| `application/openmetrics-text`, `text/plain; version=0.0.4` | `.prom` | `prometheus` |
+| `text/x-graphite` | `.graphite`, `.carbon` | `graphite` |
+| any other, and none | any other, and none | by the content |
+
+The type is read without its parameters and in any case, as the extension is.
+Nothing but `text/csv` and `.csv` says CSV, and no content does: a body sent
+as `application/csv` or `text/tab-separated-values`, and a file named `.tsv`
+or `.txt`, is text, so a `python` script or a pre-script of a `jq` collector
+is given one string where it expected rows. Set `decoder.type: csv` for
+those. A `csv` transform reads CSV whatever the response says.
+
 Each transform reads what certain decoders produce:
 
 | Transform | Decoders it reads |
@@ -92,7 +112,25 @@ for yq-compatible transformations). A JSON body is one value and a YAML body
 one document: NDJSON, or anything else after the JSON value but whitespace,
 fails the scrape saying so, and so does a second YAML document after `---`
 (a leading `---`, and a trailing one with nothing after it, are fine), rather
-than everything after the first being dropped unseen. XML supports XPath, HTML supports CSS
+than everything after the first being dropped unseen. A key written twice in
+one mapping of a YAML body fails the scrape too, `line 3: mapping key "a"
+already defined at line 1`, rather than the later value replacing the earlier
+unseen: the error names the first ten such problems and counts the rest. A
+YAML body costs time and memory in proportion to its size whatever it holds —
+a mapping of 200,000 keys decodes in about the time it takes to parse, and a
+key written 100,000 times is refused as quickly — so `max_response_bytes`
+bounds what a target's answer can cost. A document nested, through the targets
+of its aliases, deeper than a YAML document may be written (more than 10,000
+levels, counting each alias as the depth of what it points at) is refused
+before it is decoded, since the YAML library would decode it on a stack as
+deep as the chain is long and could exhaust the process. A document the YAML
+library itself
+fails on fails the scrape in the `decode` stage like any other that cannot be
+decoded (`the YAML library failed on the document: ...`); should the exporter's
+own code fail while it decodes one, the error says so and where (`the exporter
+failed on the YAML document (yamlkeys.go:605 decode.(*yamlMap).set): ...; this
+is a defect of the exporter and not of the document, please report it`), which
+is what to report. XML supports XPath, HTML supports CSS
 selectors and XPath (including bare element selectors such as `h1`), text
 supports regular expressions, and Prometheus input is parsed before
 filtering/renaming. An XML document may nest its elements 512 deep, as an HTML
@@ -105,12 +143,45 @@ Everything the exporter answers is UTF-8, as Prometheus requires; it refuses
 a whole scrape over one label value that is not. A response in another
 encoding is converted before it is decoded. The encoding comes from, in this
 order: a byte order mark (UTF-8, UTF-16LE or UTF-16BE); the collector's
-`response.charset`; the `charset` of the `Content-Type` header; and, for HTML,
-a `<meta charset>` near the top of the page or, for XML, the encoding of the
-XML declaration. As in a browser, a `<meta charset>` naming UTF-16 is read as
-UTF-8, since a page whose `<meta>` could be read is not UTF-16, and
+`response.charset`; the `charset` of the `Content-Type` header; and what the
+document declares in itself: for XML, the encoding of the XML declaration;
+for a document decoded as HTML, a `<meta>` in its first 1024 bytes and, in a
+page without one that declares an encoding, the encoding of an XML
+declaration the document starts with, as XHTML has one. Where the two
+disagree the `<meta>` is the one read, as in a browser. The XML declaration
+of an HTML document counts only at its very first byte: after a blank or an
+empty line it is none.
+
+A `<meta>` is found as a browser finds one (the HTML standard's prescan), in
+a tag and not in the words `charset=`: it is a `<meta>` tag with a `charset`
+attribute, or with `http-equiv="Content-Type"` and a `content` attribute
+holding `charset=…`, in any case, quoted or not, and the first tag that
+declares an encoding is the one read. A `<meta>` inside a comment, the
+`content` of any other `<meta>` — a description that mentions
+`charset=windows-1251`, the address of a refresh — and the word in another
+element's attributes or in a title declare nothing, and neither does a
+declaration that is not whole within the first 1024 bytes. As in a browser, a
+`<meta>` or an XML declaration of an HTML document naming UTF-16 is read as
+UTF-8, since a page whose declaration could be read is not UTF-16, and
 `x-user-defined` as `windows-1252`; a byte order mark or header naming UTF-16
 is taken as it says.
+
+A `<meta>` naming an encoding the exporter does not know declares nothing, as
+in a browser: the next `<meta>` is looked at, then the XML declaration, and a
+page that declares nothing is taken for UTF-8. The same holds for the XML
+declaration of an HTML document. The name is the whole value of the
+attribute, so `<meta charset=utf-8/>` names `utf-8/`, which is no encoding: a
+UTF-8 page is read all the same, but a windows-1251 page whose tag is
+`<meta charset=windows-1251/>` has declared nothing, and is read as UTF-8 and
+repaired, with the warning below. Quote the value or leave a blank before
+`/>`.
+
+The `charset` of a `Content-Type` is read from a header that is not well
+formed too: one with a parameter that has no value (`text/html;
+charset=windows-1251; q`), and two values a proxy joined with a comma
+(`text/html; charset=windows-1251, text/html`), of which the first is read. A
+header without a type and a subtype, a `charset` without a value, and one
+whose value opens a quote that is not closed (`charset="; q`) name nothing.
 
 ```yaml
   - name: legacy_status
@@ -127,7 +198,8 @@ none. Names follow the WHATWG Encoding Standard, as in a browser: `utf-8`,
 `windows-1252`, `iso-8859-2`, `windows-1251`, `koi8-r`, `shift_jis`, `gbk`,
 `euc-kr` and the rest; `iso-8859-1` and `latin1` are read as `windows-1252`,
 as browsers do. An unknown name in `response.charset` fails to load; an
-unknown name declared by a target fails the `decode` stage, naming it.
+unknown name in the `Content-Type` header, or in the XML declaration of a
+document decoded as XML, fails the `decode` stage, naming it.
 Transforms and Python scripts see the converted body, and its `Content-Type`
 says `charset=utf-8`. A [debug report](#debugging-a-probe) shows the response
 as the target sent it, and says what its body was converted from.
@@ -136,7 +208,12 @@ What still is not valid UTF-8 after that — a target that says UTF-8 and is
 not — no longer fails the scrape: the invalid bytes in label values and help
 text are replaced with `�` (U+FFFD), counted in
 `http_exporter_invalid_utf8_total`, and logged as a warning naming the first
-metric. Setting `response.charset` fixes it at the source.
+metric. Setting `response.charset` fixes it at the source. Each run of
+invalid bytes becomes one `�`, however long it is, so names that differ only
+in such bytes are repaired into the same text: a page of Cyrillic names in
+windows-1251 that declares nothing gives every one-word name the label `�`,
+and the series, now duplicates of one, fail the scrape (`duplicate metric
+series`) after the warning. The remedy is the same.
 
 Prometheus input is the text exposition format, version 0.0.4, or
 OpenMetrics 1.0 text, read by the exporter's own parser. It follows the
@@ -280,35 +357,109 @@ The expression and label values are interpreted by the selected transform:
   leaving a column that holds values unnamed, fails the scrape, naming the
   column, rather than one silently hiding the other; rename one, or read the
   columns by number with `header: false`. An unnamed column empty in every
-  row, as a delimiter ending each line leaves, is left out. A quote inside a
+  row, as a delimiter ending each line leaves, is left out. A row with more
+  fields than the header has columns fails the scrape as well when any of
+  the extra fields holds a value, naming the line and the column — `CSV line
+  5 has a value in column 5, which the header does not name` — since the
+  value has no name to be read by: a text with a comma and no quotes around
+  it, a delimiter that is not the file's, or a quoted field of tab-separated
+  values read without `trim_space` put a row's values in the wrong columns,
+  and this is the one sign of it. Extra fields that are all empty, as a
+  delimiter ending the line leaves, are left out; a row with fewer fields
+  than the header has empty values in the columns it lacks; and with
+  `header: false` rows may be of any lengths. A line ends at a line feed, at
+  a carriage return with a line feed after it and at a carriage return
+  alone, in one file too; inside a quoted field a line feed and a carriage
+  return alone are the field's text, and a carriage return with a line feed
+  after it is read as the line feed alone. A quote inside a
   field that does not start with one, as in `5" disk`, is read as written; a
   quoted field left open, or with a quote in it that is not doubled, still
   fails the scrape, whatever the other rows hold, rather than be read on over
-  the rows after it. `response.csv.trim_space: true` trims the blanks on both
+  the rows after it. The error of a field left open names the line the file
+  ends on, in a file whose lines end with a carriage return alone as in one
+  of line feeds: the carriage returns after the quote that is never closed
+  end lines too. `response.csv.trim_space: true` trims the blanks on both
   sides of every field, with a header row and without one, and lets a quoted
-  field begin after blanks: `a,  "x, y"` is read as `a` and `x, y`. With a
+  field begin after blanks and end before them: `a,  "x, y"  ,b` is read as
+  `a`, `x, y` and `b`. Without it the blanks after a closing quote fail the
+  scrape as a stray quote does. With a
   tab, or another blank that is not a space, as the delimiter an empty field
   stays where it is, and the fields after it in their columns, and a quoted
   field written after spaces is still a quoted field, a tab inside it kept.
   With a space as the delimiter a run of spaces is one delimiter, which is
   how columns aligned with spaces are read (`web01   72  "two words"` is
-  three fields); an empty field cannot be written between spaces then, so
-  use another delimiter for data that has empty fields. A response with no
+  three fields), the spaces after a closing quote being the delimiter too;
+  an empty field is written as a pair of quotes then, `web01  ""  72`, since
+  no blank can stand for it. That is under `trim_space`: without it every
+  space is a delimiter of its own, and aligned columns fail at the header,
+  for the column a run of spaces leaves unnamed. A response with no
   rows — a header alone, or nothing at all — has no value for any rule, so a
   required rule is [missing its value](#when-a-metric-cannot-be-extracted).
+  [Reading CSV: what to expect](#reading-csv-what-to-expect) lists what the
+  files tools write do to a rule.
 - `css`: the expression selects the HTML element whose text is numeric. Without
   [`items`](#metrics-per-item) a metric is one value, so the expression must
   match at most one element. Several values, and labels read from the page,
   need `items`: select the rows with it, and the value and the labels as cells
-  of each row.
+  of each row. A selector reads the text of the element it selects and never
+  an attribute: a value or a label that stands in one, as in `data-value` or
+  in the `datetime` of a `<time>`, is for `xpath`.
+  [The text of an HTML element](#the-text-of-an-html-element) says what that
+  text is, and [Reading HTML: what to expect](#reading-html-what-to-expect)
+  what a page does to a selector.
 - `xpath`: the expression selects XML/HTML nodes whose text is numeric; labels
-  are XPath expressions relative to each node, such as `../@name`, or `@name`
-  for an attribute of the node itself. A rule may select attributes, as
+  are XPath expressions evaluated at each node, such as `../@name`, or `@name`
+  for an attribute of the node itself. An absolute path in a label starts at
+  the document, as it does in a rule's expression, wherever it stands:
+  `/status/@site`, `//status/@site`, `concat(/status/@site, '-', @id)` and
+  `../x[@ref=//y/@id]` read what they say at every node the rule selects.
+  So `//name` in a label is the first `name` of the document, the same for
+  every series; a `name` beneath the node is `.//name`, and its child `name`.
+  A label that cannot depend on the node is evaluated once for the rule and
+  the response, and every series is given its value: one that is one absolute
+  path and nothing else, as `//status/@site` or `//row[v > 1]/name`, or one
+  call of `count`, `sum`, `string`, `number`, `boolean`, `not`,
+  `normalize-space`, `string-length`, `name`, `local-name`, `round`, `floor`
+  or `ceiling` with one such path for its argument, as `count(//row)`. Every
+  other expression with an absolute path in it is evaluated at each of those
+  nodes, and walks the document from the top at each — `concat(/status/@site,
+  '-', @id)`, and also `count(//row) + 1`, `//a | //b` and `(//name)[1]`,
+  which no node changes: over thousands of nodes that is seconds of a probe,
+  so give the part that is the same everywhere a label of its own in one of
+  the two shapes, and reach what stands close by with `..` or `ancestor::`.
+  An expression is read to its end or refused at startup. The XPath engine
+  stops where one complete expression ends and says nothing of what follows,
+  so `sum(//a))` would be `sum(//a)` and `//a 'x'` would be `//a`: such an
+  expression is refused, with the place — `XPath "sum(//a))": the ")" at byte
+  9 closes nothing`, or `what stands from byte 5 on, "'x'", is no part of the
+  expression before it`. A second predicate after an expression in
+  parentheses, a function call or a literal is refused the same way, since
+  the engine reads one predicate there and no more — `(//a)[@x][1]` would be
+  `(//a)[@x]` — and the refusal shows the form the engine reads, the
+  expression and its first predicate in parentheses of their own:
+  `((//a)[@x])[1]`. An expression longer than a few hundred bytes may be
+  refused without the place. Also refused are an expression with a NUL
+  character in it, which the engine takes for its end, and one whose
+  parentheses, predicates and function arguments stand more than 198 deep
+  within one another, the deepest that can be seen to be read to its end.
+  A rule may select attributes, as
   `//job/@size` does: a label is then relative to the attribute, `.` its
   value, `name()` its name and `../@name` another attribute of its element.
   The label `text()` gives the attribute's value too, as `.` does, so the
   series of such a rule can be told apart by it: to XPath an attribute has no
-  text beneath it, but the value is what this label has always given.
+  text beneath it, but the value is what this label has always given. Only
+  that bare label is the value. An attribute has no nodes beneath it, over
+  HTML as over XML, so on such a rule `./text()`, `text()[1]`, `node()`,
+  `self::*`, `descendant::text()`, `normalize-space(text())`,
+  `string(text())` and `substring(text(), 1, 2)` give nothing,
+  `contains(text(), '1')` is false and `count(text())` is 0: write them of
+  `.`, as in `normalize-space(.)` or `substring(., 1, 2)`.
+  This holds over HTML as over XML: `//td/@data-value` with the labels
+  `../@data-server` and `../../@id` is one series for each cell, named by its
+  cell and its row, and `//time/@datetime` with a
+  [`time_format`](#reading-a-date-or-a-time-as-the-value) and the label
+  `../../../td[1]` reads the moment of every row of a table. Over HTML the
+  text of a node is [the text of an HTML element](#the-text-of-an-html-element).
   Over XML, prefixes in them mean what
   [`response.namespaces`](#xml-namespaces) says. HTML has no namespaces: a
   label that is `@` and one attribute name, on the node or after `../` steps,
@@ -320,9 +471,20 @@ The expression and label values are interpreted by the selected transform:
   `/status/@state = 'ok'` — is one series of that value, a comparison `1` or
   `0`; a label may compute its text too, as in `normalize-space(@name)`. A
   computed value that is not a number, such as `number('n/a')`, is the rule's
-  missing value. A label read from an element's text, or computed as a string,
+  missing value: a NaN an expression computes is the XPath engine saying it
+  could not read a number, where `NaN` written in a cell is the value the
+  source gives, and is exported
+  ([What counts as a number](#what-counts-as-a-number)). `sum()` needs every
+  node it adds up to be a number: over a cell of `n/a` or `1,234` the sum has
+  no value, and the rule is missing its value, with an error naming the text
+  ([Adding up nodes with `sum()`](#adding-up-nodes-with-sum)). A label read
+  from an element's text or from an attribute, or computed as a string,
   is trimmed of leading and trailing whitespace, as a `css` label is, so the
-  indentation of pretty-printed XML is no part of it.
+  indentation of pretty-printed XML is no part of it. The whitespace inside
+  the text is kept, line breaks and tabs included; `normalize-space(.)` makes
+  single spaces of it, which `css` has no way to. An attribute read by its
+  name on the node itself, `@title`, is trimmed like one read through a path,
+  `../@title`, and one that holds nothing but blanks gives no label.
 - `prometheus`: the expression matches source metric names; it can remap the
   name, description, type, and selected labels. Without `type` a series keeps
   its own. A rule that matches no metric of the response has no value, so a
@@ -360,9 +522,15 @@ select one of its fields, or make one value of an array with
 `.tags | join(",")`.
 
 A label expression that gives a series no value — a selector or path that
-matches nothing, a missing attribute, column or capture group, a null — leaves
-the label off that series, as does an empty value, which Prometheus treats the
-same way. When a series is wrong without the label, mark it `required`:
+matches nothing, a missing attribute or capture group, an empty CSV cell, a
+null — leaves the label off that series, as does an empty value, which
+Prometheus treats the same way. A `csv` label that names a column the
+response does not have at all is not that: no row could give it, so the rule
+fails, once for the response and whether the rule or the label is `required`
+or not, as its [`error_mode`](#when-a-metric-cannot-be-extracted) says, with
+the label, the column and the columns the response does have
+([Reading CSV: what to expect](#reading-csv-what-to-expect)). When a series
+is wrong without the label, mark it `required`:
 
 ```yaml
 labels:
@@ -379,6 +547,52 @@ and, under `ignore` and `log`, in `http_exporter_rule_failures_total`, and it
 applies whatever `required` and `error_handling.allow_missing_keys` say
 about the value. `required` applies to `expression` labels, and not to
 the python transform, whose labels come from its script.
+
+### Reading CSV: what to expect
+
+CSV is written by spreadsheets, databases and scripts, each in its own way.
+What a `csv` rule makes of the shapes that are not the plain one:
+
+| The file | What happens | What to do |
+| --- | --- | --- |
+| Has a header line, and is read with `header: false` | The first line is a row of data like the others, so every rule fails on it, on every scrape: `value "used" is not a number`. | There is no setting that skips lines. Read the columns by name, or drop the row in a pre-script: `data = data[1:]`. |
+| Lacks a column a rule names | The rule's value: `CSV column "used" is not in the response, whose columns are "Used", "Host"; column names are matched exactly`, a missing value of every row. A label: the rule fails, once, with `metric "used" label "zone": CSV column "zone" is not in the response, …`, and makes no series. | See below. |
+| Has an empty cell in a column a rule names | A missing value of that row, `CSV column "used" is empty in row 3`, the rows counted from 1 without the header's line. A label read from it is left off that series. | `required: false` where that is expected. |
+| Has rows shorter than the header | The columns a row lacks are empty in it, so missing values. | `required: false` where that is expected. |
+| Has blank lines, or a last line without a line end | A blank line is no row, and the last line is read like the others. | Nothing. |
+| Has a line of blanks | It is a row, missing every value. | `required: false`, or drop it in a pre-script. |
+| Ends its lines with a carriage return alone, as a spreadsheet's "CSV (Macintosh)" and some instruments do | Each is a line end, as LF and CRLF are, and a file may end some lines one way and some another. Inside a quoted field a carriage return is the field's text, and one with a line feed after it is read as the line feed alone. | Nothing. |
+| Is tab-separated, with a field that starts with `"` | Quoting cannot be turned off: such a field is a quoted field and runs to its closing quote, over tabs and line ends, and one never closed fails the decode. A quote later in a field is text. | Write the quote doubled inside quotes, `"""big"" disk"`, or have the export put the field in quotes. |
+| Has columns aligned with spaces | With `delimiter: " "` alone every space is a delimiter and the header fails as an unnamed column. | `trim_space: true`, which makes one delimiter of a run of spaces; an empty field is then written `""`. |
+| Writes numbers for people: `1,5`, `85%`, `yes` | Text that is no number fails its rule. | [What counts as a number](#what-counts-as-a-number). |
+
+A column the response does not have is one no row has: with a header row,
+one the header does not name; with `header: false`, a number past the end of
+the longest row; and of the rows a `pre_script` left, a key none of them
+has. A row that lacks a column other rows have holds an empty cell there. A
+column the header does not have is the one to look into, since nothing is
+wrong with the rule: the header was split by another delimiter than
+`response.csv.delimiter`; it is written `host, used` and read without
+`trim_space`, so the column is named ` used`; the name is in another case
+(`Used`); the file starts with a `sep=;` line, which is then the header; or
+the file is in an encoding nothing declares, so the names are not the text
+the rule has ([Character encodings](#character-encodings)). The message
+lists the columns the response does have, the first twelve of them, in order
+of their names but for a name that is the rule's in another case or with
+blanks around it, which comes first, so that a table of fifty columns shows
+it too; and they show which it is: one column named
+`host;used`, a name with a blank before it, `Used`, `sep=;`. A value's
+column that is not there is the rule's missing value, so `required: false`
+silences it, whatever the cause. A label's is not: the rule fails, required
+or not, since every series of it would lack the label.
+
+A `pre_script` of a `csv` transform is given the rows and leaves the rows:
+`data` is a list, each row a dict by the header's names, or with
+`header: false` a list of the row's fields. It may drop rows, change cells
+and add columns. Anything else it leaves in `data`, and a row that is
+neither a dict nor a list, fails the scrape with a message that says what
+the script left ([Python](PYTHON.md#what-data-is)), counted as a script
+error in `http_exporter_script_errors_total`.
 
 ### XML namespaces
 
@@ -455,9 +669,12 @@ straight from the node, by the name as the document writes it:
   `response.namespaces` plays no part. An attribute of a parent is read the
   same way, `../@og:type`, also where the rule selects text nodes, as
   `//td/text()` does, and so is one HTML gives a namespace inside `svg`
-  or `math`, `@xlink:href`. Names are as the HTML parser keeps them, in
-  lower case. Deeper in an expression XPath cannot say such a name; write
-  `@*[name()='og:type']` there.
+  or `math`, `@xlink:href`. Names are as the HTML parser keeps them: in
+  lower case, whatever the page wrote, except inside `svg` and `math`, where
+  the parser keeps the capitals those languages have, as in `@viewBox`
+  ([Reading HTML: what to expect](#reading-html-what-to-expect)). Deeper in
+  an expression XPath cannot say such a name; write `@*[name()='og:type']`
+  there.
 
 A name is everything after the `@` when it holds nothing XPath takes for an
 operator: no `/`, `|`, `[`, `]`, `(`, `)`, `=`, `<`, `>`, `!`, `+`, `*`, `,`,
@@ -674,12 +891,80 @@ selector must match at most one element, a row without the value cell is that
 row's missing metric, and a label selector matching nothing leaves the label
 off.
 
+Write a selector that holds a `#` in quotes, as above. In YAML a `#` after a
+blank starts a comment, so `expression: body #proxy` without them is the
+selector `body`, which loads and reads the whole page, and `expression:
+#proxy` is no expression at all.
+
+#### The text of an HTML element
+
+Rules over HTML are written against what a browser's inspector shows, and
+`css` and `xpath` read the text of an element accordingly. It is the text of
+everything inside the element, comments left out, trimmed of the whitespace
+around it, with two exceptions:
+
+- **Scripts and styles.** Text inside a `<script>` or a `<style>` is no part
+  of the text of an element around it: `<td>6<script>track(6)</script></td>`
+  reads `6`. A rule or a label that selects the `<script>` or the `<style>`
+  itself, or a text node inside one, reads its text, so `script#state` and
+  `//script[@type='application/ld+json']` still give the data a page keeps in
+  a script.
+- **Templates.** The content of a `<template>` is not part of the document,
+  as it is not in a browser: selectors, `items`, XPath expressions and labels
+  match nothing inside one, so a placeholder row such as
+  `<tr><td>{{name}}</td></tr>` is no row of its table. The `template` element
+  itself is there, empty. A declarative shadow root is the exception: a
+  browser renders the content of a `<template>` that has a `shadowrootmode`
+  attribute (or the older `shadowroot`), so it is kept, and read as ordinary
+  elements inside the `template` element, which `p.shadow` and `//p` find.
+
+Everything else in a page is read as it is written: an element hidden by an
+attribute or a style is in the document and has its text, the markup inside
+`<noscript>` and `<iframe>` is their text and holds no elements to select,
+the fallback inside an `<object>` is elements like any other, and `<pre>`
+and `<textarea>` keep their text. Leave out what a rule should not read with
+the selector, as in `tr:not([hidden])` or `//tr[not(@hidden)]`.
+
+This is the exporter's reading of the node a rule or a label selects. What an
+expression itself asks of the library is the library's: the XPath functions
+and comparisons — `string(.)`, `normalize-space(.)`, `sum(//td)`,
+`td = '6'` — work on XPath's string value, and `:contains()` looks in all the
+text of an element, a script's and a style's included: to `sum(//td)` the
+cell above is `6track(6)`, which is no number, and the sum has
+[no value](#adding-up-nodes-with-sum). An XML document has no
+scripts, styles or templates, only elements of those names, which are read
+like any other.
+
+#### Reading HTML: what to expect
+
+A page is read as a browser's parser builds it, which is not always as its
+source reads, and `css` and `xpath` differ in what they can say:
+
+| The page, or the rule | What happens | What to do |
+| --- | --- | --- |
+| A table without `<tbody>` | The parser puts the rows in a `tbody` the page did not write, so `table > tr` and `/table/tr` match nothing — and `count(//table/tr)` is a quiet `0`. | `table tr` or `table > tbody > tr`; `//table//tr` or `//table/tbody/tr`. |
+| `css` with `items`: the item is the value, as in `<li>12</li>` | The expression and the labels match beneath the item only, so `items: li` with `expression: li` is a missing value for every item. There is no selector for the item itself: `:scope` and a selector starting with `>` are refused when the configuration loads. | `xpath`, where the rule selects the nodes themselves: `//ul[@id='queues']/li`. |
+| `css` with `items`: a label that stands above the rows, a heading over the table | It is beneath no row, so the label is left off without a word. | Make the item the element that holds both, where each holds one value; otherwise `xpath`, with `ancestor::div/h2`. |
+| A row without the cell a rule reads | Under `css` `items` the row is an item whose value is missing, reported as the rule's `error_mode` and `required` say. An `xpath` rule selects the cells, so the row is never selected and nothing is reported. | `xpath` for rows that may lack the cell; `css` to be told of them. |
+| Upper case in the page: `<TD ID="Load">` | Element and attribute names are lower case: `//TD` and `@ID` match nothing in XPath, while a selector's element name matches in any case. Values keep their case: `#load` does not match `id="Load"`. | Write names in lower case, and ids and classes as the page has them. |
+| An inline `svg` or `math` | Their names keep their capitals: `//linearGradient` and `@viewBox` match and the lower-case forms do not. A selector lowers the names it is given, so `css` finds neither such an element nor such an attribute by name. An attribute with a prefix, `xlink:href`, is `href` to an expression: `@*[local-name()='href']`, not `name()='xlink:href'`; a label that is the one name, `@xlink:href`, reads it. | `xpath` with the names as the standard writes them; in `css`, an id, a class or the place: `svg > *:first-child`. |
+| Label text over several lines | The blanks around it are trimmed and those inside it kept, line breaks and tabs included, in an element's text and in an attribute's value alike. | `normalize-space(.)` in `xpath`; `css` has no such function. |
+
 ### Long label values
 
 Label values are capped by `limits.max_label_value_length`, 500 bytes by
 default, and a value over the cap fails the whole scrape rather than one series:
-a silently shortened value would be a surprise. A label that carries free text
-can ask to be cut instead:
+a silently shortened value would be a surprise. The failure names the metric,
+the label, the value's length in bytes and the cap, and the two ways out:
+`metric "statuspage_incident" label "message" value is 812 bytes, longer than
+limits.max_label_value_length 500; a label one of the collector's rules gives
+can be cut to fit with truncate: true on that label, or raise
+limits.max_label_value_length`. The metric and the label are named as the
+scrape exposes them, under the collector's `metrics_prefix` and the name
+`transform.rename_labels` gave the label, and the label may be one no rule
+gives — a directory collector's `file`, a label of a series a `prometheus`
+transform passes through as it is — for which the limit is the way out. A
+label that carries free text can ask to be cut instead:
 
 ```yaml
 labels:
@@ -694,7 +979,21 @@ every transform, a `prometheus` rule without a `name` included, before any
 `metrics_prefix` is added and before `transform.rename_labels`, so a label
 keeps its `truncate: true` under the name a rename gives it. Text that is not
 the UTF-8 it claims is [repaired](#character-encodings) first, so a value cut
-to the cap stays within it.
+to the cap stays within it. A `python` script's labels are cut the same way
+when a rule of the collector names the script's metric and the label:
+`metrics: [{name: up, labels: [{name: note, expression: note, truncate:
+true}]}]` cuts the `note` label of the `up` series the script makes (the
+rule makes no series itself, and its `expression` is not read). Without such
+a rule the script cuts them, or the limit is raised.
+
+The other limits on a series say the same when a scrape fails for them: more
+labels than `limits.max_labels_per_metric` (20 by default) as `metric "M" has
+24 labels, more than limits.max_labels_per_metric 20; drop labels it does not
+need or raise limits.max_labels_per_metric`, a help text over
+`limits.max_help_length` as `metric "M" help is 2100 bytes, longer than
+limits.max_help_length 2000; shorten it or raise limits.max_help_length`, and
+a name over `limits.max_metric_name_length` as `invalid metric name "M":
+longer than limits.max_metric_name_length 200`.
 
 ### Turning a status into metrics
 
@@ -949,7 +1248,70 @@ first 64 bytes when it is longer — `metric "state": value "n/a" is not a
 number; map text to numbers with value_map` — and an object or an array by
 what it is rather than its whole content — `value is an object with 2 keys,
 not a number`, `an array of 3 items`, `null` — which usually means the
-expression stops one field short. `true` and `false` are read as `1` and `0`.
+expression stops one field short. A jq or yq boolean, `true` or `false`, is
+read as `1` or `0`; the words as text, in a CSV cell or an HTML element, are
+[not numbers](#what-counts-as-a-number).
+
+#### What counts as a number
+
+Text is a number when it is written as one: an integer or a decimal, with or
+without digits on either side of the point (`42`, `-17`, `007`, `3.14`, `.5`,
+`5.`), an exponent (`1.5e3`, `2E-3`), a leading `+` or `-`, and `NaN`, `Inf`
+and `Infinity` in any case, the last two with a sign or without. Blanks around
+it do not matter, and an integer too long for a float is read as the nearest
+one: `9007199254740993` is `9007199254740992`. A number too small for a float
+is `0` (`1e-400`), and one too large is not rounded to infinity but fails its
+rule (`value "1e400" is beyond the range of a 64-bit float`). That holds for a
+CSV cell, a regex capture, the text of a CSS element or an XPath node, and a
+jq or yq string alike.
+
+Anything else is text, and fails its rule as `value "..." is not a number`:
+a thousands separator (`1,234`, `1 234`, `1_000`), a decimal comma (`1,5`), a
+percent sign or a unit (`85%`, `12.5 MB`), a currency, hexadecimal, octal and
+binary (`0x1F`, `0x1p-2`, `0o17`, `0b101`), digits that are not ASCII, and the
+words exports write in place of a value: `N/A`, `-`, `null`, and `true`,
+`false`, `yes`, `no`, `on` and `off` written as text (a JSON or YAML boolean
+is `1` or `0`). An empty cell is not a
+failure of this kind but a [missing value](#when-a-metric-cannot-be-extracted).
+The remedies are `value_map`, for the texts that stand for a value (`"N/A": 0`,
+`"yes": 1`, `"1_000": 1000`), and a `pre_script`, which can rewrite a column
+before the rules read it — take the `%` off, turn `1.234,56` into `1234.56`.
+`value_map` reads only the texts it lists, so it suits a handful of words and
+not a column of decimal commas, which is two lines of a pre-script:
+
+```yaml
+transform:
+  type: csv
+  pre_script: |
+    for row in data:
+        row["price"] = row["price"].replace(".", "").replace(",", ".")
+```
+
+Two kinds of value are numbers before the exporter reads any text, and are
+the number their maker made:
+
+- A number an XPath function or operator computes — `number(//v)`,
+  `sum(//v)`, `//v * 1` — is converted by the XPath engine, which reads
+  `1_000` as 1000 and `0x1p-2` as 0.25. Select the node itself, `//v`, to
+  have its text read as above.
+- An unquoted value of a YAML response is a number by YAML's own syntax:
+  `v: 1_000` is 1000, `v: 0x10` is 16 and `v: 017` is 15. Only a quoted
+  YAML string, like a JSON string, is text to a rule.
+
+The numbers of the configuration itself are YAML's: `scale: 1_000` is 1000
+there.
+
+`NaN`, `Inf` and `Infinity` are numbers where a response writes them, as the
+text of a cell or an element: that is the value the source gives, and it is
+exported, so `//v` over `<v>NaN</v>` is a series whose value is NaN. A NaN
+an XPath expression computes is another thing: `number(//v)` over
+`<v>n/a</v>` is the XPath engine saying it could not read a number, and is
+the rule's [missing value](#when-a-metric-cannot-be-extracted), with
+`metric "v" XPath "number(//v)" computed NaN, not a number`. The two differ
+because the first is what the source says and the second is what the engine
+says of text that was no number. A `sum()` over nodes one of which is `NaN`
+comes to NaN and is computed, a missing value too; one over infinities of
+one sign is that infinity, and is exported.
 
 `scale` multiplies the value, mapped or read as a number — `0.001` for
 milliseconds to seconds, `100` for a fraction to a percentage. A scale that is
@@ -993,6 +1355,68 @@ Rules of one `name` make one metric, so a label they share must map alike:
 two such rules giving one label different `value_map`s are refused at load,
 since the same value would read as two names in one series. Give them one
 `value_map`, or different names.
+
+#### Adding up nodes with `sum()`
+
+The XPath engine's `sum()` leaves out of the sum, without a word, every node
+it cannot read as a number, and a number with blanks around it — the cell of
+a table printed one cell to a line — is one it cannot read: the sum of a
+column was a wrong number, often `0`, and no error. XPath itself has the sum
+of text that is no number NaN. So the exporter reads the nodes of a `sum()`
+itself, and a sum has a value only when every node it adds up is a number:
+
+- An expression that is one `sum(...)` and nothing else, as
+  `sum(//td[@class='bytes'])`, is added up by the exporter: each node's
+  text without the blanks around it, read as the engine reads a number. A
+  node that is not a number — `n/a`, `1,234`, `12 MB`, an empty cell —
+  leaves the rule [missing its value](#when-a-metric-cannot-be-extracted),
+  by `required` and `error_mode` as any missing value:
+  `metric "bytes" HTML XPath "sum(//td[@class='bytes'])" cannot be computed:
+  it adds up text that is not a number, first "n/a" (2 of 14 nodes)` (over
+  XML it says `XPath`). Leave
+  such nodes out with a predicate, as in
+  `sum(//td[@class='bytes'][number(.) = number(.)])`, or select the nodes
+  with a rule of their own — where `value_map` or a `pre_script` makes
+  numbers of the text — and add the series up in PromQL.
+- Where `sum()` is a part of a larger expression, as in
+  `sum(//v) div count(//v)` or `round(sum(//v))`, the engine computes it
+  with the rest and reads each node as it stands. The rule is missing its
+  value when the engine would leave a node out, and there blanks around a
+  number count: `metric "mean" XPath "sum(//v) div count(//v)" cannot be
+  computed: sum(//v) leaves out text it cannot read as a number, first
+  " 12 " (1 of 3 nodes), and blanks around a number count`. XPath 1.0
+  cannot trim each node of a set — `normalize-space()` takes one — so
+  select the nodes with a rule of their own and add the series up in
+  PromQL, or rewrite the text in a `pre_script`.
+- A label is held to the same: `sum(../td)` is the sum of all its cells,
+  and one with a cell that is no number is a label that cannot be read. A
+  label has no missing value, so its series fails, as the metric's
+  `error_mode` says, with an error that names the metric, the node and the
+  label, and the series of the other nodes are made.
+
+This reaches the calls of `sum()` that are evaluated where the expression
+is: outside every predicate. A `sum()` inside a predicate, as in
+`//row[sum(v) > 10]`, is evaluated by the engine for each node the
+predicate is asked of, and still leaves out what it cannot read. An
+argument that is a number or a string and no node-set is the engine's as
+well: `sum(count(//v))` is that number, and a string, as in
+`sum(string(//v))` or `sum(translate(//v, ',', ''))`, is the number it reads
+as, with no blanks around it. A string that is no number is one the engine
+fails on, which is
+[the rule's failure](#when-the-xpath-engine-fails-on-an-expression):
+`metric "v" XPath "sum(string(//v))" cannot be evaluated: the XPath engine
+failed on it: sum() function argument type must be a node-set or number`.
+Use `number(...)` for one value that may be no number, which is then the
+rule's missing value. A prefix before the name is passed over, as the
+engine passes over it: `fn:sum(//v)` is `sum(//v)`, alone and as a part of
+a larger expression.
+
+The nodes of a sum are read whether or not the engine would come to
+evaluate it, as on the right of an `or` whose left is true. Where the
+engine fails on reading them, as it does on a predicate it cannot evaluate
+over the response, the sum is left to the engine: the rule has its value
+when the engine never comes to the call, and fails when it does. A sum
+whose nodes are all numbers without blanks is the number it always was.
 
 ### Reading a date or a time as the value
 
@@ -1111,6 +1535,14 @@ name of another format, `iso8601`, is read as a layout too, its digits as
 parts, and refused for what that layout lacks or cannot read, in words that
 end with what a layout is. All of this is
 [checked when the configuration loads](#checked-when-the-configuration-loads).
+
+Either key written empty, `time_format: ""` or `time_zone: ""`, is the key
+left out, as an optional key of free text is throughout the configuration: a
+rule with `time_format: ""` reads its value as a number, and may have a
+`value_map`; `time_zone: ""` is UTC beside a `time_format` and nothing
+without one; and `time_format: ""` beside a `time_zone` that names a zone is
+refused as `time_zone` without `time_format`. The
+[schema](#editor-support) says the same of each.
 
 ### Conditional metrics and labels
 
@@ -1349,9 +1781,17 @@ thousand-row table that misses its value on every row logs its first error
 with `"failures":1000`, not a thousand lines. A rule that fails the same way on
 every scrape of a target is logged once and then only as a
 [repeat](LOGGING.md#repeated-failures), with its recovery logged when it works
-again. Either way the series a rule carried on
-without are counted per rule in `http_exporter_rule_failures_total{collector,
-metric}`, so a rule that keeps failing can be graphed and alerted on.
+again; the same way, wherever in the response: the row, node or item its
+first error names, and a size the error measured, may be another on every
+scrape. Several rules of one metric name — one for each column or path its
+series come from — are each logged, remembered and recovered by themselves,
+and their lines say which rule it is with its `expression`, and its `items`,
+beside the `metric` ([Logging](LOGGING.md)); rules alike in name, expression
+and items are one rule, logged if either of them has `log`. Either way the
+series a rule carried on
+without are counted in `http_exporter_rule_failures_total{collector,
+metric}`, by the rule's metric name and so for the rules of one name
+together, so a rule that keeps failing can be graphed and alerted on.
 
 `fail` is for a metric the scrape is meaningless without. A single failing rule
 with `fail` fails the whole probe, even when every other metric was extracted
@@ -1391,9 +1831,68 @@ without a row. Text that is there but is not a number, such as `"up"`, is not
 absent: it is a failure to read the value, which `required: false` does not
 excuse.
 
+What is absent is left out in silence where a rule or a label is not
+required, and that hides a column, a field or a cell the response never had
+as well as one that is empty this time. A `csv` rule that is required tells
+the two apart, `CSV column "x" is not in the response` and `CSV column "x"
+is empty in row 3`, and a `csv` label naming a column the response does not
+have fails its rule, required or not, rather than being left off every
+series ([Reading CSV: what to expect](#reading-csv-what-to-expect) lists
+what takes a column away); a rule that is not required still says nothing of
+a value's column that is gone. While writing a collector leave its rules
+required, so that a column that is gone is reported, and read the header the
+target sends in a [debug probe](#debugging-a-probe).
+
+The error of a `css` or an `xpath` rule names its metric first, and, where
+the failure belongs to one of the things the rule selected, which: an item
+of a `css` rule's `items`, a node of those an `xpath` rule selected, each
+counted from 0 in the order of the page.
+`metric "host_load" value is missing for node 3: HTML XPath
+"//td[@class='load']" selected a node without a value` is the fourth cell
+(over XML the expression is named `XPath`), `metric "host_load"
+node 3: value "n/a" is not a number` its text, and `metric "host_load" label
+"host" is missing for node 3` a required label; a `css` rule says `item 3`
+in the same places. It reads the same in the log, in a debug probe and in
+the answer of a failed probe.
+
 A probe that runs out of time inside a rule is not that rule's failure, and
 no mode applies to it: the probe fails as a whole (see
 [Probe deadlines](#probe-deadlines)).
+
+#### When the XPath engine fails on an expression
+
+The XPath engine accepts some expressions at startup that it then cannot
+evaluate, once a response holds what they stumble over:
+`//a[contains(@x, 5)]` as soon as an `a` has an `x` — the second argument
+must be a string, `'5'` — `sum(string(//v))` over text that is no number,
+`substring(//v, '1')`, `replace(//v, '(', '')`, `//a = true()`. That is the
+failure of the rule whose expression or label it is, by its `error_mode`
+like any other: the rule gives no series for that response, those of the
+nodes before the one the engine failed at included, the other rules give
+theirs, and the failure is counted and logged for the rule as every failure
+is: as one failure of the rule, the engine's, whatever nodes of the rule
+failed before the engine did — their failures are not counted beside it,
+in `http_exporter_rule_failures_total` or as missing values, and it is the
+engine's failure that is logged. The error names the metric, the
+expression — a label's, with the label's name — and what the engine said:
+
+```text
+metric "marked" XPath "//a[contains(@x, 5)]" cannot be evaluated: the XPath engine failed on it: contains() function argument type must be string
+metric "job_up" label "kind": XPath "substring(../@kind, '1')" cannot be evaluated: the XPath engine failed on it: substring() function first argument type must be number
+```
+
+What follows `failed on it:` are the engine's own words. Where they start
+with `runtime error:`, as for `//a = true()`, the fault is in the engine or
+in the exporter and not in an argument: write the expression another way,
+as `count(//a) > 0`. What follows `runtime error:` may change with the
+response — `substring(//v, 2, 10)` over a text shorter than that fails with
+`slice bounds out of range [:3] with length 2`, and with other numbers over
+another text — so the log takes such a failure for the same one whatever
+follows, and holds back its repeats. With `--log.level=debug` the stack of
+a runtime error is logged, in a line `the XPath engine failed with a runtime
+error` with the collector and the metric, under every `error_mode`, `ignore`
+included, as it is in a debug probe's report, which shows the lines of
+every level; it is in no error text and in no line of another level.
 
 ### When a stage of the probe fails
 
@@ -1415,14 +1914,29 @@ error_handling:
 | `log` | carries on without that stage's output | yes, at warning level |
 | `ignore` | carries on without that stage's output | only at debug level |
 
+A probe that carries on is answered `200` with an empty exposition in the
+format the scrape asked for, exactly what a probe whose rules produced no
+series is answered: the text format's `Content-Type`, or OpenMetrics' own and
+its closing `# EOF`, compressed when the scrape accepts gzip. An exposition is
+identified by its `Content-Type`, so the answer says what it is though it
+holds nothing of the collector's, and the scrape succeeds, which is what
+carrying on is for. The failure is still counted in the collector's
+[self-metrics](SELF-METRICS.md), and the probe counts as a success. Nothing
+is kept in the [response cache](#response-caching) or exported over OTLP.
+Carrying on is not a failure, so with
+[`cache.stale_if_error`](#serving-the-last-good-result-when-the-target-fails)
+the last good result does not stand in for it: the answer holds the two
+freshness series every answer of such a collector has, with
+`http_exporter_result_stale 0`, and nothing else.
+
 A [static target](STATIC-TARGETS.md) follows the same policies.
 Under `fail` its scrape fails: `http_exporter_target_up` is `0` and, with
 [`cache.stale_if_error`](#serving-the-last-good-result-when-the-target-fails),
 the last good result is exported in its place. Under `log` and `ignore` the
 scrape carries on as a probe does: the target is up, with nothing of the
-collector's to export, and the scrape counts as a success. A metric rule with
-`error_mode: fail` fails the scrape whatever `on_transform_error` says, on a
-probe and a static target alike.
+collector's to export, only its health series, and the scrape counts as a
+success. A metric rule with `error_mode: fail` fails the scrape whatever
+`on_transform_error` says, on a probe and a static target alike.
 
 ### Checked when the configuration loads
 
@@ -1895,6 +2409,15 @@ format, version 0.0.4, otherwise. Prometheus 2 and 3 ask for OpenMetrics first,
 so they get it; `curl`, a browser and anything that does not ask get the text
 format, as before. Nothing needs configuring. The answer's `Content-Type` says
 which it is, and it carries `Vary: Accept`.
+
+In both formats the series of a metric are written together, under one `HELP`
+and `TYPE`: the metrics in the order each first appears, and a metric's series
+in the order they were made — a `csv` rule's in the order of the rows.
+Nothing is sorted. That holds whatever order the series come in: two rules of
+one name with another rule between them, a script that emits a series of each
+metric row after row, and a `prometheus` collector whose rules or `rename`
+give two of a target's metrics one name are all answered with each metric's
+series as one group, as the text format requires.
 
 The two formats hold the same series, written the way each requires, with one
 difference in names: an OpenMetrics counter's samples always end in `_total`.
@@ -2374,27 +2897,39 @@ and the load opens, and those of the configuration in force:
 
 - `otlp.tls.ca_file`, `cert_file` and `key_file`, when `otlp` is enabled;
 - `web.basic_auth.username_file` and `password_file`, when it is enabled;
-- a grpc collector's `request.protoset_file` and `request.proto_files` (not
-  the files those import, which the configuration does not name).
+- a grpc collector's `request.protoset_file` and `request.proto_files`, and
+  the files those `.proto` files import, through however many files, which
+  the configuration does not name and the compile reads all the same: each
+  where the `proto_import_paths` resolved it, and a missing one in every
+  place it was looked for, so a reload rejected for an import that is not
+  there is tried again when the file appears. The place in an earlier import
+  path where a file was looked for before it was found counts too, since a
+  file appearing there is the one compiled from then on; a file of the same
+  name in a later import path is never read, and is not looked at. Neither
+  are the well-known files (`google/protobuf/*.proto`), which are built in.
 
 When one of them appears, disappears or changes — its modification time, its
 size, its permissions, or, through a symbolic link, the file the path leads
 to, which is how Kubernetes swaps in a new version of a Secret — the next
 tick reloads, once however many of them changed, and a reload that then
 succeeds is logged like any other. A tick that finds them as they were does
-nothing and logs nothing. Once the configuration is in force the watch
-leaves these files alone: the export, the exporter's own authentication and
-the grpc collectors each read their files again when they change. A
+nothing and logs nothing: it reads no file and compiles none. Once the
+configuration is in force the watch leaves these files alone: the export, the
+exporter's own authentication and the grpc collectors each read their files
+again when they change, a grpc collector the files its `.proto` files import
+with them (see [.proto sources](GRPC.md#proto-sources)). A
 collector's own credential and TLS files are read at each request, not when
 the configuration loads, and never reject a reload.
 
 The [static target file](STATIC-TARGETS.md#reloading) is tried again the
 same way. Checking it opens the `request.protoset_file` and
 `request.proto_files` of the grpc collectors whose targets set a
-`request.message`, which the message is checked against, so a reload of the
-target file in the moment such a file is being replaced is rejected for
-that file alone. While the target file is rejected the watch looks at those
-files too, and the tick after one changes reads the target file again,
+`request.message`, and the files those `.proto` files import, which the
+message is checked against, so a reload of the target file in the moment
+such a file is being replaced is rejected for that file alone. While the
+target file is rejected the watch looks at those files too, the imported
+ones as for the configuration, and the tick after one changes reads the
+target file again,
 although it is as it was; a tick that finds them as they were does nothing
 and logs nothing, and once the target file is in force they are left alone.
 A target file rejected for what it says itself — one that is not YAML, a
@@ -2417,7 +2952,9 @@ With the watch on, the line of a rejected reload also says, as
 what applies: the file itself (`the configuration changes`, which counts its
 collector files, or `the static target file changes`); with it a file
 watched while the file is rejected, as above (`the configuration or a file
-it names changes`); and the other of the two files, when this one was
+it names changes`, and `the configuration, a file it names or a file one of
+those imports changes` when a `.proto` file it names imports others); and
+the other of the two files, when this one was
 rejected only because it disagrees with the other as in force — a target
 naming a collector the configuration does not have, say — so that a change
 to either may settle it (`the static target file, a file its check opens or
@@ -2464,6 +3001,51 @@ are dropped, and its [static targets](STATIC-TARGETS.md#reloading) are scraped
 again within ten seconds. The configuration and the static target file take
 effect together, in one step: nothing ever runs with the new one of the two
 and the old other.
+
+A probe or a static target scrape that had read its collector before the
+reload goes on with the collector it read, and is answered. When the reload
+removed that collector, or changed its definition, what such a late probe or
+scrape leaves under the collector's name goes nowhere: its result is not
+cached, so a collector brought back under the name is not answered with it
+within `cache.ttl` or `cache.stale_if_error`, and it does not count in the
+`limits.max_cache_entries` of the collector now under the name; and its
+failure or its success is not taken for a failure or a
+[recovery](LOGGING.md#repeated-failures) of that collector, the failure being
+logged at debug level only, marked `"superseded":true`. A collector the reload
+left as it was caches and logs as it did, whichever configuration its probe
+had read.
+
+That holds from the moment the reload is made: the reload itself, whether
+`/-/reload`, `SIGHUP` or the watch made it, drops the cached results of the
+collectors it removed or changed and forgets their remembered failures before
+it returns, so `/-/reload` answers when that is done. A failure that ends in
+the instant before is one from before the reload, logged as such and forgotten
+with the rest. A changed collector's remembered failures are forgotten as a
+removed one's are, so the first failure of the new definition is logged in
+full as a first failure, and a static target that failed under the old
+definition and succeeds under the new one is not logged as recovered. A
+static target that the reload removed from the static target file, or changed
+there, is treated as one whose collector changed, though the collector is as
+it was: its remembered failures are forgotten, the failure of a scrape that
+had read it before the reload is logged at debug level only, marked
+`"superseded":true`, and the success of such a scrape is no recovery of the
+target now under the name.
+
+A static target's scrape that had read its target before a reload removed or
+changed the target, or its collector, publishes nothing on the
+[static targets endpoint](STATIC-TARGETS.md#the-static-targets-endpoint) or over OTLP, even when a target is
+back under the name as it was: the endpoint keeps what it has of the target
+now under the name until that target's own first scrape replaces it. That
+scrape is made within ten seconds of the reload, or as soon as the earlier
+scrape has ended, also when reloads in quick succession changed the target,
+or its collector, and changed it back, or removed it and brought it back. A
+target the reload left as it was, with its collector, is published as before.
+
+Identical probes in flight [share one trip](#identical-probes-share-one-request) only
+within one stay of their collector: a probe of a collector that reloads
+changed and changed back, or removed and brought back, while an earlier probe
+was at the target makes a trip of its own, and its result is cached and its
+failure logged as any probe's of a collector in force.
 
 ## Debugging a probe
 
@@ -2530,7 +3112,10 @@ The report lists:
 - **Stages:** each stage with how long it took and how it ended. A stage whose
   `error_handling` carried on says so.
 - **Transform:** the series each metric got, the rules that got none, and the
-  rules that carried on without some of their series, with the first error.
+  rules that carried on without some of their series, each by itself with
+  how many and its first error, and with its expression where several rules
+  export its metric name. A `prometheus` rule without a name is listed as
+  `rule without a name`.
 - **Logs:** everything the trip logged at any level, whatever `--log.level`
   is, including what a Python script printed.
 - **Metrics:** the exposition a probe would have served, and before the

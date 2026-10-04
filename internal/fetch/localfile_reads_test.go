@@ -5,6 +5,7 @@ package fetch
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -336,6 +337,18 @@ func TestLocalDirectorySizeLimits(t *testing.T) {
 	for file, want := range map[string]string{"b-huge.prom": "more than the collector's limit of 1000 for one file", "d.prom": "past request.max_total_bytes"} {
 		if err := errs[file]; err == nil || !strings.Contains(err.Error(), want) || !errors.Is(err, model.ErrLimitExceeded) {
 			t.Errorf("%s: err=%v, want a limit error saying %q", file, err, want)
+		} else if same := model.SameFailureText(err); same == err.Error() || !strings.Contains(same, want) {
+			// The sizes measured are no part of what the failure is to
+			// the log; the file and the limit are.
+			t.Errorf("%s: the failure %v is recognised by %q", file, err, same)
+		}
+	}
+	// Neither of the two sizes the total's failure measured is: the file's,
+	// and that of the files taken before it, a.prom and c.prom.
+	own, others := fmt.Sprintf("is %d bytes", len(small)), fmt.Sprintf("after %d bytes of other files", 2*len(small))
+	if err := errs["d.prom"]; err != nil {
+		if same := model.SameFailureText(err); !strings.Contains(err.Error(), own) || !strings.Contains(err.Error(), others) || strings.Contains(same, own) || strings.Contains(same, others) {
+			t.Errorf("the failure %v, which says %q and %q, is recognised by %q, want by neither size", err, own, others, same)
 		}
 	}
 	mu.Lock()

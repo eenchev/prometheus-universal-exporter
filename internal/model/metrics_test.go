@@ -53,7 +53,7 @@ func TestMetricSetValidationRejectsDuplicateAndInconsistentSeries(t *testing.T) 
 		{
 			name: "label limit",
 			set:  MetricSet{Metrics: []Metric{{Name: "value", Type: GaugeMetricType, Value: 1, Labels: map[string]string{"one": "1", "two": "2"}}}},
-			want: "too many labels",
+			want: `metric "value" has 2 labels, more than limits.max_labels_per_metric 1; drop labels it does not need or raise limits.max_labels_per_metric`,
 		},
 	}
 	for _, test := range tests {

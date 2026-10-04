@@ -236,14 +236,20 @@ func TestGoSendsAHostOutsideASCIIUnderTwoNames(t *testing.T) {
 			}
 			continue
 		}
-		// The server may not have got to the last handshakes when the
-		// client gives up, so their number is at most that of the dials
-		// let through; each is for the mapped name.
-		handshakes := len(names) >= 1 && len(names) <= 3
+		// How often it dials before the test stops it is the client's
+		// timing, as is how many handshakes the server has got to by
+		// then: what holds is that it dials more than once, each time the
+		// mapped name, asks each handshake for that name, and sends
+		// nothing.
+		redials := len(dialed) >= 2
+		for _, address := range dialed {
+			redials = redials && address == tc.dialed+":8080"
+		}
+		handshakes := len(names) >= 1 && len(names) <= len(dialed)
 		for _, name := range names {
 			handshakes = handshakes && name == asked
 		}
-		if err == nil || len(dialed) != 4 || len(hosts) != 0 || !handshakes {
+		if err == nil || !redials || len(hosts) != 0 || !handshakes {
 			t.Errorf("%q over HTTP/2: err=%v, Go dialed %q, asked the handshakes for %q and sent %q, want it to dial %s until stopped and send nothing", tc.host, err, dialed, names, hosts, tc.dialed)
 		}
 	}

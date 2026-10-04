@@ -82,6 +82,11 @@ func TestTheResponseLimitReportsTheRealSize(t *testing.T) {
 	if !errors.Is(err, model.ErrLimitExceeded) || !strings.Contains(err.Error(), "response size 5000 exceeds limit 100") {
 		t.Fatalf("err=%v", err)
 	}
+	// The size the target declared is no part of what the failure is to
+	// the log; the limit is.
+	if same := model.SameFailureText(err); strings.Contains(same, "5000") || !strings.Contains(same, "exceeds limit 100") {
+		t.Fatalf("the failure is recognised by %q", same)
+	}
 	// A HEAD answer has no body, whatever size it says the body would be.
 	head := httpCollector(t, func(c *model.Collector) {
 		c.Request.MaxResponseBytes = 100

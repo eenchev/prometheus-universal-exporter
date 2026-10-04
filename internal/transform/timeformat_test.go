@@ -663,7 +663,7 @@ func TestTimeFormatInEveryTransform(t *testing.T) {
 		"csv": {"csv", "csv", "text/csv", "job,at,day\nbackup,03.10.2026 09:00:00,2026-10-02\nsync,03.10.2026 09:00:30,2026-10-03\n", []model.MetricRule{
 			{Name: "last_run", Expression: "at", TimeFormat: "02.01.2006 15:04:05", Labels: []model.LabelRule{{Name: "job", Expression: "job"}}},
 			{Name: "day", Expression: "day", TimeFormat: day, TimeZone: "UTC", Labels: []model.LabelRule{{Name: "job", Expression: "job"}}},
-		}, []string{`last_run{job="backup"} 1791018000`, `day{job="backup"} 1790899200`, `last_run{job="sync"} 1791018030`, `day{job="sync"} 1790985600`}},
+		}, []string{`last_run{job="backup"} 1791018000`, `last_run{job="sync"} 1791018030`, `day{job="backup"} 1790899200`, `day{job="sync"} 1790985600`}},
 		"jq": {"json", "jq", "application/json", `{"date": "2026-10-02", "jobs": [{"name": "backup", "at": "Sat, 03 Oct 2026 09:00:00 GMT"}, {"name": "sync", "at": "Sat, 03 Oct 2026 12:00:00 +0300"}]}`, []model.MetricRule{
 			{Name: "day", Expression: ".date", TimeFormat: day},
 			{Name: "last_run", Items: ".jobs[]", Expression: ".at", TimeFormat: "rfc1123", Labels: []model.LabelRule{{Name: "job", Expression: ".name"}}},
@@ -722,7 +722,7 @@ func TestAnUnreadableTimeIsHandledByTheErrorMode(t *testing.T) {
 	}{
 		"regex":     {"text", "regex", "text/plain", "at: 2026-10-03\nat: soon\nat: 2026-10-05\n", `(?m)^at: (.+)$`, "", `metric "at": value "soon" is not a time in time_format "2006-01-02"`, 2},
 		"css":       {"html", "css", "text/html", `<ul><li><b>2026-10-03</b></li><li><b>soon</b></li><li><b></b></li></ul>`, "b", "li", `metric "at" item 1: value "soon" is not a time in time_format "2006-01-02"`, 1},
-		"xpath":     {"xml", "xpath", "application/xml", `<r><at>2026-10-03</at><at>soon</at><at/></r>`, "//at", "", `metric "at": value "soon" is not a time in time_format "2006-01-02"`, 1},
+		"xpath":     {"xml", "xpath", "application/xml", `<r><at>2026-10-03</at><at>soon</at><at/></r>`, "//at", "", `metric "at" node 1: value "soon" is not a time in time_format "2006-01-02"`, 1},
 		"csv":       {"csv", "csv", "text/csv", "at\n2026-10-03\nsoon\n\"\"\n", "at", "", `metric "at": value "soon" is not a time in time_format "2006-01-02"`, 1},
 		"jq":        {"json", "jq", "application/json", `{"at": ["2026-10-03", "soon", "", null]}`, ".at[]", "", `metric "at": value "soon" is not a time in time_format "2006-01-02"`, 1},
 		"jq number": {"json", "jq", "application/json", `{"at": ["2026-10-03", 1791018000]}`, ".at[]", "", `metric "at": value is 1791018000, which time_format cannot read: it reads text`, 1},
@@ -749,7 +749,10 @@ func TestAnUnreadableTimeIsHandledByTheErrorMode(t *testing.T) {
 }
 
 // formerRuleValue and formerRuleTextValue are the two as they were before
-// time_format, for the differential test below.
+// time_format, for the differential test below. Both read a number as
+// model.Number does, which has since stopped reading Go's own forms of one,
+// 1_000 and 0x1p-2 (TestTextIsReadAsANumberAsBeforeButForGoSyntax in
+// internal/model).
 func formerRuleValue(rule model.MetricRule, raw any) (float64, error) {
 	if len(rule.ValueMap) > 0 {
 		key, err := labelText(raw)
@@ -787,7 +790,7 @@ func formerRuleTextValue(rule model.MetricRule, text string) (float64, error) {
 			return scaled(rule, mapped), nil
 		}
 	}
-	if n, err := strconv.ParseFloat(trimmed, 64); err == nil {
+	if n, err := model.ParseFloat(trimmed); err == nil {
 		return scaled(rule, n), nil
 	}
 	return formerRuleValue(rule, text)

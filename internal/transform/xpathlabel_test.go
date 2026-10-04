@@ -19,7 +19,9 @@ import (
 // the commonest read by walking the tree: every label that is not static or
 // a plain attribute compiled, evaluated by the engine at the node, and the
 // first node it selects read with nodes.text. It is the oracle the walks
-// are held to.
+// are held to. Two things it reads as they are read now: the node's own
+// attribute without the blanks around it, and an absolute path from the
+// document.
 func engineXPathLabels[N comparable](nodes xpathNodes[N], node N, rule model.MetricRule, namespaces map[string]string) map[string]string {
 	labels := map[string]string{}
 	for _, label := range rule.Labels {
@@ -27,21 +29,29 @@ func engineXPathLabels[N comparable](nodes xpathNodes[N], node N, rule model.Met
 		case label.Static():
 			labels[label.Name] = label.Value
 		case strings.HasPrefix(label.Expression, "@") && plainXPathName(label.Expression[1:]):
-			labels[label.Name] = nodes.attr(node, strings.TrimPrefix(label.Expression, "@"))
+			labels[label.Name] = strings.TrimSpace(nodes.attr(node, strings.TrimPrefix(label.Expression, "@")))
 		default:
 			// A prefixed attribute read by its name as written, as it is
 			// in XML without response.namespaces, is not the engine's to
-			// read: by name it is the value untrimmed, and empty where
-			// there is none, as a plain one is.
+			// read: by name it is the value, and empty where there is
+			// none, as a plain one is.
 			// TestAPrefixedAttributeByNameIsTheEnginesAtAnElement holds
 			// the two together where they meet.
 			if name, byName := ownAttributeLabel(label.Expression, nodes.html, namespaces); byName {
-				labels[label.Name] = nodes.attr(node, name)
+				labels[label.Name] = strings.TrimSpace(nodes.attr(node, name))
 				continue
 			}
 			program, err := expr.CompileXPath(label.Expression, namespaces)
 			if err != nil {
 				continue
+			}
+			// An expression that is one absolute path gives at every node
+			// what it gives at the document, where the library's navigator
+			// has the document for its root: the engine is asked there.
+			if absoluteXPathLabels[label.Expression] {
+				for parent, ok := nodes.parent(node); ok; parent, ok = nodes.parent(node) {
+					node = parent
+				}
 			}
 			selector := program.Get()
 			if value, computed := xpathValue(nodes, node, selector); computed {
@@ -138,6 +148,11 @@ var xpathEngineExpressions = []string{
 	"string(region)", "string(../@id)", "normalize-space(.)", "normalize-space(text())", "count(region)", "name()", "local-name(..)", "concat(../@id, '-', region)", "region = 'eu-1'",
 	"region | value", "../@id | @id", "td[2]", "../td[1]", "span[2]", "li[@data-id]", "b/..",
 }
+
+// absoluteXPathLabels are the expressions of xpathEngineExpressions that are
+// one absolute path and nothing else, which the oracle evaluates at the
+// document (engineXPathLabels).
+var absoluteXPathLabels = map[string]bool{"//region": true, "//@id": true, "/items/@id": true, "/items/item/region": true}
 
 // treeNodes are every node of a document, the root included, and the nodes
 // the engine makes of its attributes, which a rule that selects attributes

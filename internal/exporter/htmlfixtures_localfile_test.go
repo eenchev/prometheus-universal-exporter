@@ -169,11 +169,12 @@ func TestHTMLFixturesAreReadFromLocalFiles(t *testing.T) {
 	}
 }
 
-// A file declares no encoding. A page that says its own in a meta, or
-// starts with a byte order mark, is read by it; one that says nothing is
-// read by response.charset, and without that its legacy bytes are no UTF-8:
-// the scrape answers with U+FFFD in their place and a warning that says to
-// set response.charset.
+// A file declares no encoding. A page that says its own in a meta, also
+// one that comes after things that only look like one, or in the XML
+// declaration it starts with, or starts with a byte order mark, is read by
+// it; one that says nothing is read by response.charset, and without that
+// its legacy bytes are no UTF-8: the scrape answers with U+FFFD in their
+// place and a warning that says to set response.charset.
 func TestHTMLFilesAreReadInTheirOwnEncodingOrResponseCharset(t *testing.T) {
 	logs := testutil.CaptureLogs(t)
 	server := htmlFileServer(t)
@@ -182,6 +183,8 @@ func TestHTMLFilesAreReadInTheirOwnEncodingOrResponseCharset(t *testing.T) {
 		`depot_pallets{city="Санкт-Петербург",depot="Склад №2 «Север»"} 75`,
 	}
 	sameFileSeries(t, htmlFileSeries(t, server, "depots_file", "charset/depots-windows-1251-meta.html"), cyrillic)
+	sameFileSeries(t, htmlFileSeries(t, server, "depots_file", "charset/depots-windows-1251-decoys.html"), cyrillic)
+	sameFileSeries(t, htmlFileSeries(t, server, "depots_file", "charset/depots-windows-1251-xmldecl.xhtml"), cyrillic)
 	sameFileSeries(t, htmlFileSeries(t, server, "depots_file_windows_1251", "charset/depots-windows-1251.html"), cyrillic)
 	sameFileSeries(t, htmlFileSeries(t, server, "depots_file", "charset/depots-shift_jis-meta.html"), []string{
 		`depot_pallets{city="東京",depot="東京倉庫"} 210`,

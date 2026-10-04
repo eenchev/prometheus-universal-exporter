@@ -597,9 +597,14 @@ type Manager struct {
 	// are kept while that configuration is refused: one of them changing is
 	// then a change the watch sees, so a reload refused because a
 	// certificate was being replaced is tried again when it is in place,
-	// although the configuration itself is as it was.
+	// although the configuration itself is as it was. When it is refused,
+	// the files that its .proto files import join them (retryImported):
+	// retryConfigs are the configurations the files were taken from, and
+	// retryImports says such files are among them.
 	retryFiles     []string
 	retryStamp     string
+	retryConfigs   []*model.Config
+	retryImports   bool
 	targetPath     string
 	targetsLastMod time.Time
 	// targetsLastSize is lastSize for the static target file.
@@ -612,9 +617,12 @@ type Manager struct {
 	// targetsRetryFiles and targetsRetryStamp are retryFiles and retryStamp
 	// for the static target file: the files that checking the file last
 	// read against the configuration opens (targetsNamedFiles), kept while
-	// that file is refused.
-	targetsRetryFiles []string
-	targetsRetryStamp string
+	// that file is refused, when the files those import join them, and
+	// targetsRetryChecked the collectors they were taken from
+	// (targetsChecked).
+	targetsRetryFiles   []string
+	targetsRetryStamp   string
+	targetsRetryChecked *model.Config
 	// configWaits and targetsWaits say that file's last reload was refused
 	// only because the other file, as in force, disagrees with it, so a
 	// change to the other file reads it again (apply).
@@ -623,6 +631,9 @@ type Manager struct {
 	Reloads *reloadStatus
 	// reloadMu serializes reloads, whatever triggers them.
 	reloadMu sync.Mutex
+	// installed are told of every reload that put something in force
+	// (OnInstall), under reloadMu.
+	installed []func()
 }
 
 // inForce is the configuration and the static target file in force. The two
@@ -718,6 +729,17 @@ func (m *Manager) Get() *model.Config { return m.current.Load().config }
 func (m *Manager) InForce() (*model.Config, *model.StaticTargetFile) {
 	pair := m.current.Load()
 	return pair.config, pair.targets
+}
+
+// OnInstall asks for told to be called whenever a reload has put a
+// configuration, a static target file or both in force, once they are in
+// force and before the reload returns or another begins: what is kept for a
+// configuration elsewhere follows it then, rather than when it is next used.
+// told must not reload.
+func (m *Manager) OnInstall(told func()) {
+	m.reloadMu.Lock()
+	defer m.reloadMu.Unlock()
+	m.installed = append(m.installed, told)
 }
 
 // SetWatchInterval enables the configuration watch and sets how often the
@@ -843,9 +865,9 @@ const (
 
 // reloadChanged reloads what the watch finds changed: the configuration, when
 // the file or one of its collector files changed, or, after a refused
-// reload, a file it names; and the static target file, when it changed, or,
-// after a refused reload, a file its check opens; and with either, the other
-// when it waits for it. It is one tick of the watch: whatever changed since
+// reload, a file it names or one of those imports; and the static target
+// file, when it changed, or, after a refused reload, a file its check opens;
+// and with either, the other when it waits for it. It is one tick of the watch: whatever changed since
 // the last, there is one reload.
 func (m *Manager) reloadChanged() {
 	m.reloadMu.Lock()
@@ -930,7 +952,8 @@ func (m *Manager) apply(trigger string, doConfig, doTargets bool) error {
 		// The files the checks below open for the file just read are
 		// stamped before they are read, as the configuration's are, and kept
 		// if it is refused: one of them back in place is then a change.
-		m.targetsRetryFiles = targetsNamedFiles(targets, pairConfig, m.Get())
+		m.targetsRetryChecked = targetsChecked(targets, pairConfig, m.Get())
+		m.targetsRetryFiles = namedFiles(m.targetsRetryChecked)
 		m.targetsRetryStamp = filesStamp(m.targetsRetryFiles)
 	}
 	if agree(pairTargets, pairConfig) == nil {
@@ -1006,9 +1029,11 @@ func (m *Manager) loadConfig() (*model.Config, error) {
 	// and with them those of the one being read as soon as it says which.
 	inForce := namedFiles(m.Get())
 	m.retryFiles, m.retryStamp = inForce, filesStamp(inForce)
+	m.retryConfigs, m.retryImports = []*model.Config{m.Get()}, false
 	c, err := load(m.path, m.loadOptions(), func(candidate *model.Config) {
 		m.retryFiles = namedFiles(m.Get(), candidate)
 		m.retryStamp = filesStamp(m.retryFiles)
+		m.retryConfigs = []*model.Config{m.Get(), candidate}
 	})
 	if err != nil {
 		return nil, err
@@ -1027,7 +1052,7 @@ func (m *Manager) loadTargets() (*model.StaticTargetFile, error) {
 	}
 	// Reading the file on its own opens no other: one refused here is read
 	// again when it changes, and for nothing else.
-	m.targetsRetryFiles, m.targetsRetryStamp = nil, ""
+	m.targetsRetryFiles, m.targetsRetryStamp, m.targetsRetryChecked = nil, "", nil
 	f, err := LoadStaticTargets(m.targetPath, m.staticTargetsLoadOptions()...)
 	if err == nil {
 		err = ValidateStaticTargets(f)
@@ -1042,7 +1067,7 @@ func (m *Manager) loadTargets() (*model.StaticTargetFile, error) {
 // in force, in one step: no reader sees the configuration of this reload
 // with the targets of the last, or the reverse, which could name a collector
 // the other no longer has. What follows from each is done once both are in
-// force. reloadMu is held.
+// force, and then those who asked are told (OnInstall). reloadMu is held.
 func (m *Manager) install(trigger string, c *model.Config, f *model.StaticTargetFile) {
 	pair := *m.current.Load()
 	if c != nil {
@@ -1058,6 +1083,9 @@ func (m *Manager) install(trigger string, c *model.Config, f *model.StaticTarget
 	if f != nil {
 		m.installedTargets(trigger, f)
 	}
+	for _, told := range m.installed {
+		told()
+	}
 }
 
 // installedConfig records and logs that c was put in force, and lets what is
@@ -1066,7 +1094,7 @@ func (m *Manager) installedConfig(trigger string, c *model.Config) {
 	m.configWaits = false
 	// In force, the configuration is not read again for a file it names:
 	// what uses a certificate or a credential file reads it again itself.
-	m.retryFiles, m.retryStamp = nil, ""
+	m.retryFiles, m.retryStamp, m.retryConfigs, m.retryImports = nil, "", nil, false
 	m.Reloads.record(reloadFileConfig, true)
 	// Interpreters of scripts this reload removed or changed are stopped now
 	// rather than after the idle timeout.
@@ -1085,7 +1113,7 @@ func (m *Manager) installedConfig(trigger string, c *model.Config) {
 // held.
 func (m *Manager) installedTargets(trigger string, f *model.StaticTargetFile) {
 	m.targetsWaits = false
-	m.targetsRetryFiles, m.targetsRetryStamp = nil, ""
+	m.targetsRetryFiles, m.targetsRetryStamp, m.targetsRetryChecked = nil, "", nil
 	m.Reloads.record(ReloadFileStaticTargets, true)
 	m.logger.Info("static targets reloaded", "trigger", trigger, "targets", len(f.Targets))
 }
@@ -1095,11 +1123,19 @@ func (m *Manager) installedTargets(trigger string, f *model.StaticTargetFile) {
 // that changes. reloadMu is held.
 func (m *Manager) rejectConfig(trigger string, err error, waits bool) error {
 	m.configWaits = waits
+	m.retryFiles, m.retryStamp, m.retryImports = retryImported(m.retryFiles, m.retryStamp, m.retryConfigs...)
 	// The file is named, as a collector file's error names its own: a YAML
 	// error's line number means nothing without it. Problems that are all
 	// in one collector file are logged against that file.
 	attrs := []any{"trigger", trigger, "file", problemFile(err, m.path), "error", err}
-	attrs = m.retriedWhen(attrs, "the configuration", "a file it names", len(m.retryFiles) > 0, "the static target file", waits)
+	var stamped []string
+	if len(m.retryFiles) > 0 {
+		stamped = append(stamped, "a file it names")
+	}
+	if m.retryImports {
+		stamped = append(stamped, "a file one of those imports")
+	}
+	attrs = m.retriedWhen(attrs, "the configuration", stamped, "the static target file", waits)
 	m.logger.Error("configuration reload rejected", attrs...)
 	m.Reloads.record(reloadFileConfig, false)
 	return fmt.Errorf("configuration %s: %w", m.path, err)
@@ -1108,33 +1144,58 @@ func (m *Manager) rejectConfig(trigger string, err error, waits bool) error {
 // rejectTargets is rejectConfig for the static target file.
 func (m *Manager) rejectTargets(trigger string, err error, waits bool) error {
 	m.targetsWaits = waits
+	// The files its check opens are those the collectors name and those
+	// that these import.
+	m.targetsRetryFiles, m.targetsRetryStamp, _ = retryImported(m.targetsRetryFiles, m.targetsRetryStamp, m.targetsRetryChecked)
 	attrs := []any{"trigger", trigger, "file", m.targetPath, "error", err}
-	attrs = m.retriedWhen(attrs, "the static target file", "a file its check opens", len(m.targetsRetryFiles) > 0, "the configuration", waits)
+	var stamped []string
+	if len(m.targetsRetryFiles) > 0 {
+		stamped = append(stamped, "a file its check opens")
+	}
+	attrs = m.retriedWhen(attrs, "the static target file", stamped, "the configuration", waits)
 	m.logger.Error("static target reload rejected", attrs...)
 	m.Reloads.record(ReloadFileStaticTargets, false)
 	return fmt.Errorf("static target file %s: %w", m.targetPath, err)
 }
 
+// retryImported adds to the files stamped for a refused file, and to their
+// stamp, the files that the .proto files among them import, as the load or
+// the check that refused it found them (importedFiles): one refused because
+// an imported file was missing or did not compile is tried again when that
+// file appears or changes. imports says there are such files. When one of
+// them changed after it was read, the stamp is one no files have, and the
+// next tick reads the refused file again.
+func retryImported(files []string, stamp string, configs ...*model.Config) (all []string, stamped string, imports bool) {
+	imported, importedStamp, settled := importedFiles(files, configs...)
+	if len(imported) == 0 {
+		return files, stamp, false
+	}
+	all = append(slices.Clip(files), imported...)
+	if !settled {
+		return all, "", true
+	}
+	return all, stamp + importedStamp, true
+}
+
 // retriedWhen adds to a refused file's line what the watch reads the file
 // again for, as retried_when: the file itself changing, which for the
-// configuration counts its collector files; a file stamped for it while it
-// is refused (retryFiles, targetsRetryFiles), when there is one; and the
-// other file, when this one waits for it. Each is named only when it holds,
-// so the line never reads as if one change alone helped, nor promises a
-// retry for a file nothing looks at. Without the watch nothing is read again
-// until a reload is asked for, and the line says nothing.
-func (m *Manager) retriedWhen(attrs []any, file, stamped string, hasStamped bool, other string, waits bool) []any {
+// configuration counts its collector files; each kind of file stamped for it
+// while it is refused (retryFiles, targetsRetryFiles), when there are such;
+// and the other file, when this one waits for it. Each is named only when it
+// holds, so the line never reads as if one change alone helped, nor promises
+// a retry for a file nothing looks at. Without the watch nothing is read
+// again until a reload is asked for, and the line says nothing.
+func (m *Manager) retriedWhen(attrs []any, file string, stamped []string, other string, waits bool) []any {
 	if !m.WatchEnabled() {
 		return attrs
 	}
-	when := file
-	switch {
-	case hasStamped && waits:
-		when += ", " + stamped + " or " + other
-	case hasStamped:
-		when += " or " + stamped
-	case waits:
-		when += " or " + other
+	whens := append([]string{file}, stamped...)
+	if waits {
+		whens = append(whens, other)
+	}
+	when := whens[0]
+	if last := len(whens) - 1; last > 0 {
+		when = strings.Join(whens[:last], ", ") + " or " + whens[last]
 	}
 	return append(attrs, "retried_when", when+" changes")
 }

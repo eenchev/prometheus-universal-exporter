@@ -26,6 +26,7 @@ var csvFixtures = map[string]string{
 	"status.csv":                   "the specification's own example: a header and two rows",
 	"tickets-rfc4180.csv":          "a helpdesk's ticket export as RFC 4180 writes it: CRLF line ends, and fields with commas, doubled quotes and line breaks in quotes",
 	"inventory-semicolon.csv":      "a stock list as a spreadsheet saves it with a German or Bulgarian locale: semicolons, and numbers with a decimal comma in quotes",
+	"stock-padded-quotes.csv":      "a stock list as a report writer lays it out: semicolons, every text in quotes and padded with blanks after the closing quote to its column's width, numbers to the right",
 	"sensors.tsv":                  "a data logger's tab-separated readings, with empty fields in the middle of rows and at their end, and fields padded with spaces",
 	"queues-pipe.txt":              "a query's result as psql -A prints it: fields separated by a pipe, and a footer counting the rows",
 	"accounts-colon.txt":           "accounts in the form of /etc/passwd: no header, fields separated by a colon",
@@ -41,12 +42,15 @@ var csvFixtures = map[string]string{
 	"jobs-short-rows.csv":          "a scheduler's report whose writer stops a row at its last value: rows with fewer fields than the header",
 	"jobs-blank-lines.csv":         "the same report with blank lines between the rows and after them, and one line of blanks",
 	"jobs-no-final-newline.csv":    "the same report without a line end after its last row",
+	"jobs-unquoted-comma.csv":      "the same report with a job whose name has a comma and no quotes around it: a row with a value past the header's last column",
 	"usage-duplicate-columns.csv":  "a capacity report whose header names two pairs of columns alike",
 	"usage-unnamed-column.csv":     "a capacity report saved from a spreadsheet with an empty header cell above a column of values",
 	"numbers.csv":                  "the ways exports write a number, and what they write in place of one",
 	"backups-times.csv":            "a backup tool's report, each column's time written another way",
 	"usgs-all-hour.csv":            "the USGS earthquake feed's all_hour.csv, in its documented columns",
 	"service-status.csv":           "a fleet's status export: a row per service and host, its state in words, counters and gauges",
+	"volumes-cr.csv":               "a storage report as a spreadsheet's \"CSV (Macintosh)\" saves it: every line ends with a carriage return alone, and a note in quotes has one inside it",
+	"scale-mixed-line-ends.txt":    "a balance's log that several tools appended to: no header, semicolons, texts in quotes padded with blanks, and lines that end with a carriage return alone, with CRLF and with a line feed",
 }
 
 func readCSVFixture(t *testing.T, name string) []byte {
@@ -102,11 +106,23 @@ func TestEveryCSVFixtureIsListedAndDocumented(t *testing.T) {
 // normalises line ends or encodings would undo: the RFC 4180 export ends
 // every line with CRLF, the byte order marks are there, the lists in other
 // encodings are the same text as their UTF-8 twins, one report has no final
-// line end, and the padded fields keep their blanks.
+// line end, the padded fields keep their blanks, one report ends every line
+// with a carriage return alone, and the balance's log ends its lines in
+// three ways.
 func TestTheCSVFixturesAreWrittenAsTheirNamesSay(t *testing.T) {
 	tickets := readCSVFixture(t, "tickets-rfc4180.csv")
 	if crlf, lf := bytes.Count(tickets, []byte("\r\n")), bytes.Count(tickets, []byte("\n")); crlf != lf || crlf != 16 {
 		t.Errorf("tickets-rfc4180.csv has %d CRLF line ends and %d line feeds, want 16 of each", crlf, lf)
+	}
+	if volumes := readCSVFixture(t, "volumes-cr.csv"); bytes.Count(volumes, []byte("\r")) != 7 || bytes.Contains(volumes, []byte("\n")) || !bytes.Contains(volumes, []byte("\"full soon\rsee ticket 4411\"\r")) || !bytes.HasSuffix(volumes, []byte(",\r")) {
+		t.Errorf("volumes-cr.csv is %q, want six lines that end with a carriage return alone, one inside quotes and no line feed", volumes)
+	}
+	scale := readCSVFixture(t, "scale-mixed-line-ends.txt")
+	if alone, crlf, lf := bytes.Count(scale, []byte("\r"))-bytes.Count(scale, []byte("\r\n")), bytes.Count(scale, []byte("\r\n")), bytes.Count(scale, []byte("\n"))-bytes.Count(scale, []byte("\r\n")); alone != 4 || crlf != 2 || lf != 1 {
+		t.Errorf("scale-mixed-line-ends.txt has %d carriage returns alone, %d CRLF and %d line feeds alone, want 4, 2 and 1", alone, crlf, lf)
+	}
+	if !bytes.Contains(scale, []byte(";\"stable\"   \r2026")) || !bytes.Contains(scale, []byte("\"stable\"\n\r2026")) {
+		t.Errorf("scale-mixed-line-ends.txt no longer holds its blanks before a carriage return, or its empty line: %q", scale)
 	}
 	for name, mark := range map[string]string{"cities-utf8-bom.csv": "\xef\xbb\xbf", "cities-utf16le-bom.csv": "\xff\xfe"} {
 		if !bytes.HasPrefix(readCSVFixture(t, name), []byte(mark)) {
@@ -146,6 +162,9 @@ func TestTheCSVFixturesAreWrittenAsTheirNamesSay(t *testing.T) {
 		"jobs-blank-lines.csv": "\n   \n",
 		"numbers.csv":          "\nblanks around,  42  \n",
 		"sensors.tsv":          "\nth-04\t office \t 21.5\t40 \t 12 \tbattery low\n",
+		// Blanks after a closing quote, up to the delimiter and to the end
+		// of the line.
+		"stock-padded-quotes.csv": "\n\"Mutter M4\"               ;\"Hamburg\"  ;    30000;            5000;\"\"                        \n",
 	} {
 		if !bytes.Contains(readCSVFixture(t, name), []byte(padded)) {
 			t.Errorf("%s no longer holds %q", name, padded)
@@ -166,6 +185,9 @@ func TestTheCSVFixturesAreWrittenAsTheirNamesSay(t *testing.T) {
 //     middle of a row and at its end; trim_space takes the blanks around a
 //     field and lets a quoted field start after blanks, and without it both
 //     are read as written.
+//   - trim_space takes the blanks after a quoted field too, up to the
+//     delimiter and to the end of the line, the header's among them, with
+//     a doubled quote, the delimiter and a line break in such a field.
 //   - A row with fewer fields than the header has empty text in the columns
 //     it lacks, as the footer of a psql result has.
 //   - Without a header row a row is the list of its fields, an empty one
@@ -181,6 +203,10 @@ func TestTheCSVFixturesAreWrittenAsTheirNamesSay(t *testing.T) {
 //   - Blank lines are no rows, between the rows and after them; a line of
 //     blanks is a row whose first column holds them; a last line without a
 //     line end is read like any other.
+//   - A carriage return alone ends a row, as CRLF and a line feed do, in a
+//     file that ends every line with it and in one whose lines end in all
+//     three ways; inside a quoted field it is the field's text, and under
+//     trim_space the blanks between a closing quote and it are trimmed.
 func TestTheCSVFixturesDecodeIntoTheirRows(t *testing.T) {
 	const jobsColumns = "job,state,duration_seconds,records"
 	const citiesColumns = "città,Land,température,влажност,状態,sky"
@@ -303,19 +329,29 @@ func TestTheCSVFixturesDecodeIntoTheirRows(t *testing.T) {
 			0: []any{"host", "", "used", "free"},
 			7: []any{"batch01", "", "40", "984"},
 		}},
-		{fixture: "numbers.csv", contentType: "text/csv", rows: 55, columns: "form,value", want: map[int]any{
+		{fixture: "numbers.csv", contentType: "text/csv", rows: 57, columns: "form,value", want: map[int]any{
 			11: map[string]any{"form": "blanks around", "value": "  42  "},
 			12: map[string]any{"form": "quoted", "value": "42"},
 			13: map[string]any{"form": "quoted with blanks", "value": " 42 "},
-			26: map[string]any{"form": "thousands comma", "value": "1,234"},
-			41: map[string]any{"form": "empty", "value": ""},
-			42: map[string]any{"form": "blanks", "value": "   "},
-			43: map[string]any{"form": "quoted empty", "value": ""},
+			26: map[string]any{"form": "digit separators", "value": "1_000"},
+			27: map[string]any{"form": "hexadecimal float", "value": "0x1p-2"},
+			28: map[string]any{"form": "thousands comma", "value": "1,234"},
+			43: map[string]any{"form": "empty", "value": ""},
+			44: map[string]any{"form": "blanks", "value": "   "},
+			45: map[string]any{"form": "quoted empty", "value": ""},
 		}},
-		{fixture: "numbers.csv", contentType: "text/csv", response: model.ResponseConfig{CSV: model.CSVConfig{TrimSpace: true}}, rows: 55, columns: "form,value", want: map[int]any{
+		{fixture: "numbers.csv", contentType: "text/csv", response: model.ResponseConfig{CSV: model.CSVConfig{TrimSpace: true}}, rows: 57, columns: "form,value", want: map[int]any{
 			11: map[string]any{"form": "blanks around", "value": "42"},
 			13: map[string]any{"form": "quoted with blanks", "value": "42"},
-			42: map[string]any{"form": "blanks", "value": ""},
+			44: map[string]any{"form": "blanks", "value": ""},
+		}},
+		{fixture: "stock-padded-quotes.csv", contentType: "text/csv", response: model.ResponseConfig{CSV: model.CSVConfig{Delimiter: ";", TrimSpace: true}}, rows: 10, columns: "Artikel;Lager;Bestand;Mindestbestand;Hinweis", want: map[int]any{
+			0: map[string]any{"Artikel": "Schraube M4x20", "Lager": "Hamburg", "Bestand": "12500", "Mindestbestand": "2000", "Hinweis": "ok"},
+			2: map[string]any{"Artikel": "Mutter M4", "Lager": "Hamburg", "Bestand": "30000", "Mindestbestand": "5000", "Hinweis": ""},
+			4: map[string]any{"Artikel": "Unterlegscheibe; 4,3", "Lager": "München", "Bestand": "44000", "Mindestbestand": "10000", "Hinweis": "ok"},
+			7: map[string]any{"Artikel": `Dübel 8x40 "Fischer"`, "Lager": "Leipzig", "Bestand": "9600", "Mindestbestand": "1500", "Hinweis": "ok"},
+			8: map[string]any{"Artikel": "Winkelverbinder 90", "Lager": "Leipzig", "Bestand": "1240", "Mindestbestand": "400", "Hinweis": "Lager 2;\nRegal 7"},
+			9: map[string]any{"Artikel": "Kabelbinder 200 mm", "Lager": "Hamburg", "Bestand": "52000", "Mindestbestand": "8000", "Hinweis": "ok"},
 		}},
 		{fixture: "backups-times.csv", contentType: "text/csv", rows: 12, columns: "job,started_local,finished,verified_de,next_run_us,snapshot,uploaded,expires,started_unix,finished_ms,size_bytes", want: map[int]any{
 			0: map[string]any{"job": "db-main", "started_local": "2026-10-03 09:00:07", "finished": "2026-10-03T06:12:40Z", "verified_de": "03.10.2026 09:15", "next_run_us": "Oct 4, 2026 9:00 AM",
@@ -332,6 +368,21 @@ func TestTheCSVFixturesDecodeIntoTheirRows(t *testing.T) {
 		{fixture: "service-status.csv", contentType: "text/csv", rows: 16, columns: "service,host,dc,env,state,restarts_total,requests_total,errors_total,latency_ms,queue_depth,version,internal_id", want: map[int]any{
 			5: map[string]any{"service": "checkout", "host": "web03", "dc": "ams2", "env": "prod", "state": "down", "restarts_total": "22", "requests_total": "1804120", "errors_total": "90211", "latency_ms": "",
 				"queue_depth": "340", "version": "5.2.0", "internal_id": "8c1102"},
+		}},
+		{fixture: "volumes-cr.csv", contentType: "text/csv", rows: 5, columns: "volume,pool,used_percent,free_gib,note", want: map[int]any{
+			0: map[string]any{"volume": "data01", "pool": "fast", "used_percent": "72.5", "free_gib": "220", "note": ""},
+			1: map[string]any{"volume": "data02", "pool": "fast", "used_percent": "31", "free_gib": "552", "note": "resized, twice"},
+			2: map[string]any{"volume": "logs01", "pool": "slow", "used_percent": "88", "free_gib": "48", "note": "full soon\rsee ticket 4411"},
+			3: map[string]any{"volume": "scratch", "pool": "slow", "used_percent": "", "free_gib": "1024", "note": "not mounted"},
+			4: map[string]any{"volume": "backup", "pool": "cold", "used_percent": "64.25", "free_gib": "5120", "note": ""},
+		}},
+		{fixture: "scale-mixed-line-ends.txt", contentType: "text/plain", response: model.ResponseConfig{CSV: model.CSVConfig{Delimiter: ";", Header: noHeader, TrimSpace: true}}, rows: 6, columns: "4", want: map[int]any{
+			0: []any{"2026-10-03T09:00:00Z", "A1", "12.5", "stable"},
+			1: []any{"2026-10-03T09:01:00Z", "A1", "12.75", "stable"},
+			2: []any{"2026-10-03T09:02:00Z", "A2", "7.25", "tare; zeroed"},
+			3: []any{"2026-10-03T09:03:00Z", "A2", "7.5", "stable"},
+			4: []any{"2026-10-03T09:04:00Z", "A1", "", "door open"},
+			5: []any{"2026-10-03T09:05:00Z", "B7", "0.5", "unstable"},
 		}},
 	} {
 		t.Run(strings.TrimSpace(tc.fixture+" "+tc.contentType+" "+responseSettings(tc.response)), func(t *testing.T) {
@@ -395,11 +446,19 @@ func responseSettings(r model.ResponseConfig) string {
 // column of values under an empty header cell, and columns aligned with
 // spaces read without trim_space, where every space is a delimiter of its
 // own and the header's second run of them leaves a column of values unnamed.
-// A charset the Content-Type names and the exporter does not know fails it
-// too, naming it. Read by number, without a header row, the first two decode
-// (TestTheCSVFixturesDecodeIntoTheirRows).
+// So does a row with a value past the header's last column, naming its line
+// too: one with a comma in a name that has no quotes, and the first row
+// with a comma in a text of a file read with a comma where its delimiter is
+// another, whose header is then one column; the empty fields before the
+// value are no part of the complaint. A charset the
+// Content-Type names and the exporter does not know fails it too, naming it.
+// Read by number, without a header row, the first two decode
+// (TestTheCSVFixturesDecodeIntoTheirRows), and so does the row that is too
+// long (TestACSVFixtureWithALongRowIsReadByNumber).
 func TestCSVFixturesWhoseHeaderCannotNameTheColumnsFailTheDecode(t *testing.T) {
 	const byNumber = "; name it, or set response.csv.header: false and read the columns by number"
+	const pastTheHeader = ", which the header does not name; name the column in the header, or set response.csv.header: false and read the columns by number; " +
+		"if the line is split where it should not be, check response.csv.delimiter and response.csv.trim_space"
 	for _, tc := range []struct {
 		fixture, contentType string
 		csv                  model.CSVConfig
@@ -410,6 +469,10 @@ func TestCSVFixturesWhoseHeaderCannotNameTheColumnsFailTheDecode(t *testing.T) {
 		{"usage-unnamed-column.csv", "text/csv", model.CSVConfig{}, "CSV header leaves column 2 unnamed, and it holds values" + byNumber},
 		{"usage-unnamed-column.csv", "text/csv", model.CSVConfig{TrimSpace: true}, "CSV header leaves column 2 unnamed, and it holds values" + byNumber},
 		{"nodes-space-aligned.txt", "text/plain", model.CSVConfig{Delimiter: " "}, "CSV header leaves column 3 unnamed, and it holds values" + byNumber},
+		{"jobs-unquoted-comma.csv", "text/csv", model.CSVConfig{}, "CSV line 5 has a value in column 5" + pastTheHeader},
+		{"jobs-unquoted-comma.csv", "text/csv", model.CSVConfig{TrimSpace: true}, "CSV line 5 has a value in column 5" + pastTheHeader},
+		{"inventory-semicolon.csv", "text/csv", model.CSVConfig{}, "CSV line 2 has a value in column 2" + pastTheHeader},
+		{"accounts-colon.txt", "text/plain", model.CSVConfig{}, "CSV line 10 has a value in column 4" + pastTheHeader},
 		{"oblasti-windows-1251.csv", "text/csv; charset=cp-bulgarian", model.CSVConfig{},
 			`unsupported charset "cp-bulgarian"; use a name from the WHATWG Encoding Standard, such as utf-8, windows-1252, iso-8859-2, windows-1251, shift_jis or gbk`},
 	} {
@@ -417,5 +480,42 @@ func TestCSVFixturesWhoseHeaderCannotNameTheColumnsFailTheDecode(t *testing.T) {
 		if err == nil || err.Error() != tc.want {
 			t.Errorf("%s with %+v:\ngot  %v (decoded %v)\nwant %s", tc.fixture, tc.csv, err, d != nil, tc.want)
 		}
+	}
+}
+
+// Read without a header row, the report with a row longer than its header
+// decodes: there is no column a row may not have then, and the row is the
+// list of its five fields beside the others' four.
+func TestACSVFixtureWithALongRowIsReadByNumber(t *testing.T) {
+	d, err := decodeCSVFixture(t, "jobs-unquoted-comma.csv", "text/csv", model.ResponseConfig{CSV: model.CSVConfig{Header: boolPtr(false)}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	rows := d.Data.([]any)
+	if len(rows) != 11 {
+		t.Fatalf("%d rows, want the header's line and ten more", len(rows))
+	}
+	for i, row := range rows {
+		want := 4
+		if i == 4 {
+			want = 5
+		}
+		if len(row.([]any)) != want {
+			t.Errorf("row %d has %d fields, want %d: %q", i, len(row.([]any)), want, row)
+		}
+	}
+	if want := []any{"reindex", " full", "failed", "7.5", "0"}; !reflect.DeepEqual(rows[4], want) {
+		t.Errorf("the long row is %q, want %q", rows[4], want)
+	}
+}
+
+// Without trim_space the blanks after a closing quote are no part of a
+// field and none of the delimiter: the list padded with them fails the
+// decode at its first field, as a stray quote, naming the line and the
+// column of the quote.
+func TestACSVFixturePaddedAfterItsQuotesNeedsTrimSpace(t *testing.T) {
+	d, err := decodeCSVFixture(t, "stock-padded-quotes.csv", "text/csv", model.ResponseConfig{CSV: model.CSVConfig{Delimiter: ";"}})
+	if want := `CSV decode: parse error on line 1, column 9: extraneous or missing " in quoted-field`; err == nil || err.Error() != want {
+		t.Errorf("got %v (decoded %v), want %s", err, d != nil, want)
 	}
 }

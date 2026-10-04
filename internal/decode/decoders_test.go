@@ -180,6 +180,76 @@ func TestCSVUnnamedColumnsWithValuesAreRefused(t *testing.T) {
 	}
 }
 
+// A row with a value past the header's last column fails the decode, naming
+// the line the value is on and its column, where the value was dropped
+// without a word: a row split by a delimiter the header's line has none of,
+// and a quoted field of tab-separated values read without trim_space, showed
+// only as values in the wrong columns. The line is the body's own, blank
+// lines and the lines of a quoted field counted, also in a body read
+// leniently for a bare quote and one read under trim_space. A header ending
+// in a delimiter names no column there either, and its column of values is
+// refused first, as it was.
+func TestCSVRowsWithAValuePastTheHeaderAreRefused(t *testing.T) {
+	const advice = ", which the header does not name; name the column in the header, or set response.csv.header: false and read the columns by number; " +
+		"if the line is split where it should not be, check response.csv.delimiter and response.csv.trim_space"
+	for _, tc := range []struct {
+		delimiter string
+		trim      bool
+		body      string
+		want      string
+	}{
+		{"", false, "a,b\n1,2,3\n", "CSV line 2 has a value in column 3" + advice},
+		{"", false, "a,b\n1,2\n3,4,,x,y\n", "CSV line 3 has a value in column 4" + advice},
+		{"", false, "a,b\n\n\"x\ny\",2\n\n1,2,3\n", "CSV line 6 has a value in column 3" + advice},
+		{"", false, "a,b\n1,\"x\ny\",\"\",\"z\nw\"\n", "CSV line 3 has a value in column 4" + advice},
+		{"", false, "a,b\n5\" disk,1\nx,2,3\n", "CSV line 3 has a value in column 3" + advice},
+		{"", false, "a,b\n1,2, \n", "CSV line 2 has a value in column 3" + advice},
+		{"", true, "a,b\n \"1\" ,2 , , 3 \n", "CSV line 2 has a value in column 4" + advice},
+		{"", false, "host;cpu\nweb01;72,5\n", "CSV line 2 has a value in column 2" + advice},
+		{"\t", false, "host\tnote\nweb01\tok\nweb02\t \"x\ty\"\n", "CSV line 3 has a value in column 3" + advice},
+		{"\t", true, " \"host\" \t\"note\"\n\n \"web01\" \t \"x\ty\" \t7\n", "CSV line 3 has a value in column 3" + advice},
+		{" ", true, "host  cpu\nweb01  72  two words\n", "CSV line 2 has a value in column 3" + advice},
+		{"", false, "a,b,\n1,2,,4\n", "CSV line 2 has a value in column 4" + advice},
+		{"", false, "a,b,\n1,2,3,4\n", "CSV header leaves column 3 unnamed, and it holds values; name it, or set response.csv.header: false and read the columns by number"},
+	} {
+		if got, err := csvRows(t, tc.delimiter, tc.trim, tc.body); err == nil || err.Error() != tc.want {
+			t.Errorf("delimiter %q, trim_space %v, %q:\ngot  %v (rows %s)\nwant %s", tc.delimiter, tc.trim, tc.body, err, got, tc.want)
+		}
+	}
+}
+
+// Fields past the header's last column that hold nothing are what a
+// delimiter ending a line leaves, and are left out as they were, one row
+// having them and another not: empty ones, an empty quoted one, and under
+// trim_space one of blanks. A row shorter than the header still has empty
+// text in the columns it lacks. Without a header row there is no column a
+// row may not have: rows of any lengths decode into lists as long as they
+// are.
+func TestCSVEmptyFieldsPastTheHeaderAndShortRowsAreRead(t *testing.T) {
+	for _, tc := range []struct {
+		trim       bool
+		body, want string
+	}{
+		{false, "a,b\n1,2,\n3,4,,\n5,6\n7\n", `[{"a":"1","b":"2"},{"a":"3","b":"4"},{"a":"5","b":"6"},{"a":"7","b":""}]`},
+		{false, "a,b\n1,2,\"\",\n", `[{"a":"1","b":"2"}]`},
+		{true, "a,b\n1,2, ,\t\n3 , 4 ,\" \" \n", `[{"a":"1","b":"2"},{"a":"3","b":"4"}]`},
+		{false, "a,b,\n1,2,,\n3,4\n", `[{"a":"1","b":"2"},{"a":"3","b":"4"}]`},
+	} {
+		if got, err := csvRows(t, "", tc.trim, tc.body); err != nil || got != tc.want {
+			t.Errorf("trim_space %v, %q: %v, rows %s, want %s", tc.trim, tc.body, err, got, tc.want)
+		}
+	}
+	c := model.Collector{Request: model.RequestConfig{Type: fetch.RequestTypeHTTP}, Decoder: model.DecoderConfig{Type: "csv"},
+		Response: model.ResponseConfig{CSV: model.CSVConfig{Header: boolPtr(false)}}}
+	d, err := Decode(&fetch.HTTPResponse{Body: []byte("a,b\n1,2,3\n4\n5,6,,x,\n"), Headers: make(http.Header)}, &c)
+	if err != nil {
+		t.Fatalf("without a header row: %v", err)
+	}
+	if got, want := asJSON(t, d.Data), `[["a","b"],["1","2","3"],["4"],["5","6","","x",""]]`; got != want {
+		t.Errorf("without a header row: rows %s, want %s", got, want)
+	}
+}
+
 // Automatic detection recognises HTML after whitespace, comments and an XML
 // declaration, in any case, and parses it as HTML, which a <br> would fail
 // as XML; other markup is still XML.

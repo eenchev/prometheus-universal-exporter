@@ -2,8 +2,10 @@ package decode
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"reflect"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -277,7 +279,7 @@ func TestGraphiteSkipsInvalidCarbonLines(t *testing.T) {
 	if got := asJSON(t, d.Data.(map[string]any)["series"]); !strings.Contains(got, `"path":"a.b"`) || !strings.Contains(got, `"path":"e.f"`) || strings.Contains(got, "c.d") {
 		t.Fatalf("series %s", got)
 	}
-	if d.Graphite.SkippedLines != 2 || d.Graphite.FirstSkipped != `carbon line 3: the value "one" is not a number` {
+	if d.Graphite.SkippedLines != 2 || fmt.Sprint(d.Graphite.FirstSkipped) != `carbon line 3: the value "one" is not a number` {
 		t.Fatalf("report %+v", *d.Graphite)
 	}
 	// The default fails on the first.
@@ -302,5 +304,143 @@ func TestGraphiteRenderJSONInfinities(t *testing.T) {
 		`{"path":"c.d","points":[[5,1727000000]],"segments":["c","d"],"tags":{"name":"c.d"},"time":1727000000,"value":5}]`
 	if got := asJSON(t, series); got != want {
 		t.Fatalf("got  %s\nwant %s", got, want)
+	}
+}
+
+// A carbon line's value and timestamp are numbers as a rule reads them: one
+// with digits separated by underscores, or in hexadecimal floating-point,
+// which Go reads as numbers (1_000 as 1000, 0x1p-2 as 0.25), is no number,
+// and its line fails the decode, naming the line and the text, as a word in
+// its place does; under invalid_lines: skip it is left out and counted. A
+// path and a tag may hold underscores and an x as before. A body with such a
+// line of three fields is still taken for carbon lines by its content, so
+// the line is named rather than the body read as text.
+func TestGraphiteCarbonNumbersAreNotInGoSyntax(t *testing.T) {
+	graphiteNowIs(t, time.Unix(2000, 0))
+	for line, want := range map[string]string{
+		"a.b 1_000 1000":         `the value "1_000" is not a number`,
+		"a.b 0x1p-2 1000":        `the value "0x1p-2" is not a number`,
+		"a.b 0X1P4 1000":         `the value "0X1P4" is not a number`,
+		"a.b -0x1p0":             `the value "-0x1p0" is not a number`,
+		"a.b 1e1_0 1000":         `the value "1e1_0" is not a number`,
+		"a.b 5 1_000":            `the timestamp "1_000" is not a number of Unix seconds`,
+		"a.b 5 0x1p10":           `the timestamp "0x1p10" is not a number of Unix seconds`,
+		"a.b 5 -0x1p0":           `the timestamp "-0x1p0" is not a number of Unix seconds`,
+		"a.b 5 100_000_000_000":  `the timestamp "100_000_000_000" is not a number of Unix seconds`,
+		"a.b 1_000 1_700_000_00": `the value "1_000" is not a number`,
+	} {
+		c := &model.Collector{Decoder: model.DecoderConfig{Type: "graphite"}}
+		body := []byte("x_1.max_0x;host=x_2 1 1990\n" + line + "\ne.f 3 1990\n")
+		if _, err := Decode(&fetch.HTTPResponse{Body: body, Headers: http.Header{}}, c); err == nil || err.Error() != "carbon line 2: "+want {
+			t.Errorf("%q: err=%v, want carbon line 2: %s", line, err, want)
+		}
+		c.Response.Graphite.InvalidLines = "skip"
+		d, err := Decode(&fetch.HTTPResponse{Body: body, Headers: http.Header{}}, c)
+		if err != nil {
+			t.Errorf("%q, skipped: %v", line, err)
+			continue
+		}
+		wantSeries := `[{"path":"x_1.max_0x","points":[[1,1990]],"segments":["x_1","max_0x"],"tags":{"host":"x_2","name":"x_1.max_0x"},"time":1990,"value":1},` +
+			`{"path":"e.f","points":[[3,1990]],"segments":["e","f"],"tags":{"name":"e.f"},"time":1990,"value":3}]`
+		if got := asJSON(t, d.Data.(map[string]any)["series"]); got != wantSeries || d.Graphite.SkippedLines != 1 || fmt.Sprint(d.Graphite.FirstSkipped) != "carbon line 2: "+want {
+			t.Errorf("%q, skipped: series %s, report %+v", line, got, *d.Graphite)
+		}
+		if got := detectFormat(&fetch.HTTPResponse{Body: body, Headers: http.Header{}}); got != "graphite" && len(strings.Fields(line)) == 3 {
+			t.Errorf("%q: the body is taken for %s, want graphite", line, got)
+		}
+	}
+}
+
+// formerParseCarbonLine is parseCarbonLine as it was, reading the value and
+// the timestamp as Go writes numbers.
+func formerParseCarbonLine(line string, now time.Time) (string, map[string]string, graphitePoint, error) {
+	fields := strings.Fields(line)
+	if len(fields) != 2 && len(fields) != 3 {
+		return "", nil, graphitePoint{}, fmt.Errorf("%q has %d fields; want <path> <value> <timestamp>", line, len(fields))
+	}
+	path, tags, err := parseGraphitePath(fields[0])
+	if err != nil {
+		return "", nil, graphitePoint{}, err
+	}
+	value, err := strconv.ParseFloat(fields[1], 64)
+	if err != nil {
+		return "", nil, graphitePoint{}, fmt.Errorf("the value %q is not a number", fields[1])
+	}
+	at := float64(now.Unix())
+	if len(fields) == 3 {
+		stamp, err := strconv.ParseFloat(fields[2], 64)
+		switch {
+		case err != nil:
+			return "", nil, graphitePoint{}, fmt.Errorf("the timestamp %q is not a number of Unix seconds", fields[2])
+		case stamp >= carbonMillisecondsAbove:
+			return "", nil, graphitePoint{}, fmt.Errorf("the timestamp %q is in milliseconds, it seems; carbon lines take Unix seconds", fields[2])
+		case stamp != -1:
+			at = stamp
+		}
+	}
+	return path, tags, graphitePoint{value, at}, nil
+}
+
+// Whatever a carbon line holds, it is read as it was — the same path, tags
+// and point, or the same error — unless its value or its timestamp is in
+// Go's syntax, with an underscore or an x: over some eighty thousand lines
+// of every kind of path, with every way of writing a number and what is
+// none as the value and as the timestamp, a line without either is read the
+// same, and so is one whose value was no number before; a line whose value
+// Go read with an underscore or as hexadecimal fails for its value, and one
+// whose timestamp Go read so for its timestamp.
+func TestGraphiteCarbonLinesAreReadAsBeforeButForGoSyntax(t *testing.T) {
+	now := time.Unix(2000, 0)
+	numbers := []string{"42", "-1.5", ".5", "5.", "007", "1e3", "1E-3", "+7", "-1", "0", "NaN", "nan", "Inf", "-inf", "+Infinity", "1e400", "1e-400",
+		"1700000000", "1700000000.5", "99999999999", "1e11", "100000000000", "one", "yesterday", "1,5", "1e", "x", "_", "0b101", "0o17", "0x1F", "0x", "９",
+		"1_000", "1_0e1_0", "1_000.5", "_1", "1_", "1__0", "0x1p-2", "0X1P4", "0x_1p0", "0x1p99999", "1_700_000_000", "100_000_000_000", "-0x1p0", "0x1p40", "1_0e400"}
+	for _, sign := range []string{"", "+", "-"} {
+		for _, mantissa := range []string{"1", "1_0", "0x1", "0X1", "1.5", "1_0.5", "0x1.8", "1__0"} {
+			for _, exponent := range []string{"e3", "e1_0", "p2", "p-2", "P1_0", "p99999"} {
+				numbers = append(numbers, sign+mantissa+exponent)
+			}
+		}
+	}
+	paths := []string{"a.b", "a_b.c_d", "max.x;host=x_1", "0x1p-2", "hex.0X10;tag=_", "movingAverage(cpu_x.load;env=prod,'5min')", ";env=prod", "a.b;env"}
+	goSyntax := func(text string) bool { return strings.ContainsAny(text, "_xX") }
+	same, values, stamps := 0, 0, 0
+	for i, path := range paths {
+		// Every timestamp for two of the paths, and one of each kind for the
+		// others.
+		timestamps := []string{"", "1000", "-1", "1_000", "0x1p10", "yesterday"}
+		if i < 2 {
+			timestamps = append([]string{""}, numbers...)
+		}
+		for _, value := range numbers {
+			for _, stamp := range timestamps {
+				line := strings.TrimSpace(path + " " + value + " " + stamp)
+				wantPath, wantTags, wantPoint, wantErr := formerParseCarbonLine(line, now)
+				gotPath, gotTags, gotPoint, err := parseCarbonLine(line, now)
+				got := fmt.Sprint(gotPath, gotTags, gotPoint, err)
+				_, valueErr := strconv.ParseFloat(value, 64)
+				_, stampErr := strconv.ParseFloat(stamp, 64)
+				_, _, pathErr := parseGraphitePath(path)
+				switch {
+				case pathErr == nil && goSyntax(value) && valueErr == nil:
+					values++
+					if want := fmt.Sprint("", map[string]string(nil), graphitePoint{}, fmt.Errorf("the value %q is not a number", value)); got != want {
+						t.Fatalf("%q: %s, want %s", line, got, want)
+					}
+				case pathErr == nil && valueErr == nil && goSyntax(stamp) && stampErr == nil:
+					stamps++
+					if want := fmt.Sprint("", map[string]string(nil), graphitePoint{}, fmt.Errorf("the timestamp %q is not a number of Unix seconds", stamp)); got != want {
+						t.Fatalf("%q: %s, want %s", line, got, want)
+					}
+				default:
+					same++
+					if want := fmt.Sprint(wantPath, wantTags, wantPoint, wantErr); got != want {
+						t.Fatalf("%q: %s, was %s", line, got, want)
+					}
+				}
+			}
+		}
+	}
+	if same < 50000 || values < 20000 || stamps < 3000 {
+		t.Fatalf("%d lines are read as before, %d fail for a value in Go's syntax and %d for a timestamp: they do not cover all three", same, values, stamps)
 	}
 }

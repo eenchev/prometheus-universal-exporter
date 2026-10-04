@@ -76,6 +76,21 @@ func (t *requestTracker) statsFor(key requestKey) *serverStats {
 	return t.adoptLocked(key, newServerStats(t.now()))
 }
 
+// statsOf is statsFor for a request of the collector whose statistics are
+// collector. Once a reload has removed that collector it returns nil, and the
+// caller records nothing for the request: the collector's requests were
+// forgotten with it, and one of a collector brought back under the name is
+// not what a scrape of the removed one counts in. Read under the lock, as
+// adopt reads it.
+func (t *requestTracker) statsOf(key requestKey, collector *serverStats) *serverStats {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if collector != nil && collector.retired.Load() {
+		return nil
+	}
+	return t.adoptLocked(key, newServerStats(t.now()))
+}
+
 // newStats returns statistics for a request that is not tracked yet, counting
 // from now: what its _created sample says once it is tracked with them
 // (adoptLocked). A request dropped and asked for again is given new ones, and
@@ -87,12 +102,29 @@ func (t *requestTracker) newStats() *serverStats { return newServerStats(t.now()
 func (t *requestTracker) existing(key requestKey) *serverStats {
 	t.mu.Lock()
 	defer t.mu.Unlock()
+	return t.existingLocked(key)
+}
+
+func (t *requestTracker) existingLocked(key requestKey) *serverStats {
 	tracked := t.stats[key]
 	if tracked == nil {
 		return nil
 	}
 	tracked.used = t.now()
 	return tracked.stats
+}
+
+// existingOf is existing for a request of the collector whose statistics are
+// collector. gone says that a reload has removed that collector: a request
+// tracked under its name is then one of a collector brought back, and not
+// this caller's to count in. Read under the lock, as adopt reads it.
+func (t *requestTracker) existingOf(key requestKey, collector *serverStats) (stats *serverStats, gone bool) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if collector != nil && collector.retired.Load() {
+		return nil, true
+	}
+	return t.existingLocked(key), false
 }
 
 // adopt starts tracking a request with the statistics a probe gathered for it
@@ -296,6 +328,11 @@ type statsRecorder struct {
 	// adopts once the probe is known not to have been refused by the target
 	// policy.
 	pending *pendingRequest
+	// read is the configuration the probe or scrape read its collector in,
+	// which says whether what it writes under the collector's name when it
+	// ends is still the collector's (configRead). Its caller sets it; left
+	// unset, the collector always stands.
+	read configRead
 }
 
 type pendingRequest struct {
@@ -305,16 +342,17 @@ type pendingRequest struct {
 
 // recorderFor pairs a collector's statistics with those of one request. The
 // request side is absent while verbose self-metrics are off, when the URL could
-// not be resolved, and once the series limit has been reached. It is for the
-// requests the configuration names, static targets: they take their slot at
-// once.
+// not be resolved, once the series limit has been reached, and for a scrape
+// whose collector a reload has removed (requestTracker.statsOf). It is for
+// the requests the configuration names, static targets: they take their slot
+// at once.
 func (s *Server) recorderFor(collector *serverStats, name, labelURL, method string) statsRecorder {
 	if labelURL == "" || !s.verboseSelfMetrics() {
 		return statsRecorder{collector: collector}
 	}
 	return statsRecorder{
 		collector: collector,
-		request:   s.requests.statsFor(requestKey{Collector: name, URL: labelURL, Method: method}),
+		request:   s.requests.statsOf(requestKey{Collector: name, URL: labelURL, Method: method}, collector),
 	}
 }
 
@@ -323,13 +361,19 @@ func (s *Server) recorderFor(collector *serverStats, name, labelURL, method stri
 // gathered aside and only takes one of the VerboseRequestSeriesLimit slots when
 // commit finds its target was not refused by allowed_targets or
 // denied_targets, so probes of targets the collector may not reach cannot fill
-// the slots and keep a legitimate target from being tracked.
+// the slots and keep a legitimate target from being tracked. A probe whose
+// collector a reload has removed has no request side: what is tracked under
+// its request's name by then is a request of the collector brought back.
 func (s *Server) probeRecorderFor(collector *serverStats, name, labelURL, method string) statsRecorder {
 	if labelURL == "" || !s.verboseSelfMetrics() {
 		return statsRecorder{collector: collector}
 	}
 	key := requestKey{Collector: name, URL: labelURL, Method: method}
-	if existing := s.requests.existing(key); existing != nil {
+	existing, gone := s.requests.existingOf(key, collector)
+	if gone {
+		return statsRecorder{collector: collector}
+	}
+	if existing != nil {
 		return statsRecorder{collector: collector, request: existing}
 	}
 	return statsRecorder{collector: collector, request: s.requests.newStats(), pending: &pendingRequest{tracker: s.requests, key: key}}
@@ -350,7 +394,7 @@ func (r statsRecorder) forTrip() statsRecorder {
 	if r.pending == nil {
 		return r
 	}
-	return statsRecorder{collector: r.collector, request: newServerStats(r.request.snapshot().created), pending: &pendingRequest{tracker: r.pending.tracker, key: r.pending.key}}
+	return statsRecorder{collector: r.collector, request: newServerStats(r.request.snapshot().created), pending: &pendingRequest{tracker: r.pending.tracker, key: r.pending.key}, read: r.read}
 }
 
 // commit ends a probe, or a shared trip: a new request whose target was not

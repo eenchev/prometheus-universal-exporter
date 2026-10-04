@@ -25,6 +25,7 @@
 </template>
 
 <table id="agents-table">
+  <template id="agent-row"><tr class="agent"><td class="name">{{name}}</td><td class="n">{{jobs}}<script>render();</script></td></tr></template>
   <tr class="agent"><td class="name">linux-01</td><td class="n">12</td></tr>
   <tr class="agent" hidden><td class="name">linux-02</td><td class="n">0</td></tr>
   <tr class="agent" style="display:none"><td class="name">mac-01</td><td class="n">3</td></tr>

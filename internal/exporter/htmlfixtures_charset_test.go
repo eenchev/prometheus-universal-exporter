@@ -3,6 +3,7 @@
 package exporter
 
 import (
+	"bytes"
 	"net/http"
 	"strings"
 	"testing"
@@ -17,10 +18,14 @@ import (
 // encoding can write as windows-1251, KOI8-R, ISO-8859-1, windows-1252
 // calling itself iso-8859-1, ISO-8859-2, Shift_JIS, GBK and EUC-KR. The
 // names are Cyrillic, accented Latin, Polish, Japanese, Chinese, Korean and
-// emoji, and whatever the encoding, the labels are those names.
+// emoji, and whatever the encoding, the labels are those names. It holds
+// the page, too, with what only looks like a declaration before its own —
+// a meta in a comment, a description that speaks of a charset — and as
+// XHTML whose XML declaration names the encoding.
 //
 // The encoding comes from the first of: a byte order mark, the collector's
-// response.charset, the charset of the Content-Type, and a meta of the page
+// response.charset, the charset of the Content-Type, and what the page
+// declares: a meta and, without one, the XML declaration it starts with
 // (docs/CONFIGURATION.md, "Character encodings").
 
 const charsetCollectors = `collectors:
@@ -118,13 +123,15 @@ func readAsWindows1251(t *testing.T, series []string) []string {
 }
 
 // Every fixture, with every way a target has of saying its encoding, gives
-// the depots their names: declared by the Content-Type, by a meta charset
-// or a meta http-equiv in either case, quoted or not, by a byte order mark,
-// or by nothing where the page is UTF-8. iso-8859-1 is read as
-// windows-1252, as browsers read it, so the euro sign and the quotation
-// marks of the page that calls itself iso-8859-1 are read. The css
-// collector, whose decoder is HTML, and the xpath collector, which is left
-// to each answer, read the same, and nothing is logged.
+// the depots their names: declared by the Content-Type, also by one that is
+// not well formed, by a meta charset or a meta http-equiv in either case,
+// quoted or not, also after things that only look like one, by the XML
+// declaration of an XHTML page, by a byte order mark, or by nothing where
+// the page is UTF-8. iso-8859-1 is read as windows-1252, as browsers read
+// it, so the euro sign and the quotation marks of the page that calls
+// itself iso-8859-1 are read. The css collector, whose decoder is HTML, and
+// the xpath collector, which is left to each answer, read the same, and
+// nothing is logged.
 func TestTheCharsetFixturesGiveTheSameNamesInEveryEncoding(t *testing.T) {
 	for _, test := range []struct {
 		fixture, contentType string
@@ -153,6 +160,19 @@ func TestTheCharsetFixturesGiveTheSameNamesInEveryEncoding(t *testing.T) {
 		{"depots-shift_jis-meta.html", "text/html", []string{"ja"}},
 		{"depots-gbk-meta.html", "application/xhtml+xml", []string{"zh"}},
 		{"depots-euc-kr-meta.html", "text/html", []string{"ko"}},
+		{"depots-utf8-commented-meta.html", "text/html", everyDepot},
+		{"depots-utf8-commented-meta.html", "", everyDepot},
+		{"depots-utf8-description-meta.html", "text/html", everyDepot},
+		{"depots-utf8-description-meta.html", "application/octet-stream", everyDepot},
+		{"depots-windows-1251-decoys.html", "text/html", []string{"bg", "ru"}},
+		{"depots-windows-1251-decoys.html", "", []string{"bg", "ru"}},
+		{"depots-windows-1251.html", "text/html; charset=windows-1251; q", []string{"bg", "ru"}},
+		{"depots-windows-1251.html", "text/html; charset=windows-1251, text/html", []string{"bg", "ru"}},
+		{"depots-windows-1251-xmldecl.xhtml", "text/html", []string{"bg", "ru"}},
+		{"depots-windows-1251-xmldecl.xhtml", "application/xhtml+xml", []string{"bg", "ru"}},
+		{"depots-windows-1251-xmldecl.xhtml", "", []string{"bg", "ru"}},
+		{"depots-meta-over-xmldecl.xhtml", "application/xhtml+xml", []string{"bg", "ru"}},
+		{"depots-meta-over-xmldecl.xhtml", "text/html", []string{"bg", "ru"}},
 	} {
 		t.Run(test.fixture+" as "+test.contentType, func(t *testing.T) {
 			logs := testutil.CaptureLogs(t)
@@ -279,8 +299,220 @@ func TestAnUndeclaredLegacyEncodingIsRepairedAndReported(t *testing.T) {
 	}
 }
 
-// An encoding nobody knows fails the decode, naming it and what a name
-// looks like, whichever transform reads the page.
+// A meta is a declaration as a browser finds one, in a tag and not in the
+// words "charset=". The UTF-8 page whose head has a commented-out meta
+// naming windows-1251 before its own, and the one whose description speaks
+// of charset=windows-1251, were read as windows-1251, their names coming
+// out as the text their bytes spell there, with nothing logged; they are
+// read as UTF-8. The windows-1251 page whose meta comes after a comment, a
+// title, a description, a refresh and a link that each hold a charset is
+// read by its meta. A Content-Type is still read before any of them.
+func TestWhatOnlyLooksLikeAMetaDoesNotNameTheEncoding(t *testing.T) {
+	logs := testutil.CaptureLogs(t)
+	server := htmlServer(htmlCollectors(t, charsetCollectors))
+	site := newHTMLSite(t, map[string]htmlPage{
+		"/commented":   {"text/html", htmlFixture(t, "charset/depots-utf8-commented-meta.html")},
+		"/description": {"text/html", htmlFixture(t, "charset/depots-utf8-description-meta.html")},
+		"/decoys":      {"text/html", htmlFixture(t, "charset/depots-windows-1251-decoys.html")},
+		"/misnamed":    {"text/html; charset=windows-1251", htmlFixture(t, "charset/depots-utf8-commented-meta.html")},
+	})
+	for path, want := range map[string][]string{
+		"/commented":   depotRows(everyDepot...),
+		"/description": depotRows(everyDepot...),
+		"/decoys":      depotRows("bg", "ru"),
+		"/misnamed":    readAsWindows1251(t, depotRows(everyDepot...)),
+	} {
+		for _, collector := range []string{"depots_css", "depots_xpath"} {
+			status, series, failure := probeHTML(t, server, site, collector, path)
+			if status != http.StatusOK {
+				t.Fatalf("%s at %s: status=%d body=%s", collector, path, status, failure)
+			}
+			sameSeries(t, series, want)
+		}
+	}
+	sameLogLines(t, logs, nil)
+}
+
+// The charset of a Content-Type is read from a header that is not well
+// formed as well: one with a parameter that has no value, and two values a
+// proxy joined with a comma, of which the first is read. The windows-1251
+// page that declares nothing was read as UTF-8 under them and repaired; it
+// gives its names, with nothing logged. A header of that kind without a
+// charset, with one in its second value only, or with one whose quote is
+// not closed, the rest of the header after which was taken for a name
+// nobody knows and failed the decode, names nothing, and the page is
+// repaired and reported as under any header that names nothing; and one
+// naming an encoding nobody knows fails the decode.
+func TestACharsetIsReadFromAContentTypeThatIsNotWellFormed(t *testing.T) {
+	logs := testutil.CaptureLogs(t)
+	server := htmlServer(htmlCollectors(t, charsetCollectors))
+	page := htmlFixture(t, "charset/depots-windows-1251.html")
+	site := newHTMLSite(t, map[string]htmlPage{
+		"/no-value":     {"text/html; charset=windows-1251; q", page},
+		"/joined":       {"text/html; charset=windows-1251, text/html", page},
+		"/quoted":       {`text/html; q; Charset="CP1251" ; x, text/plain; charset=koi8-r`, page},
+		"/twice":        {"text/html; charset=windows-1251; charset=utf-8", page},
+		"/over-a-page":  {"text/html; charset=windows-1251; q", htmlFixture(t, "charset/depots-meta-over-xmldecl.xhtml")},
+		"/nothing":      {"text/html; q", page},
+		"/second-value": {"text/html, text/html; charset=windows-1251", page},
+		"/no-type":      {"; charset=windows-1251", page},
+		"/unclosed":     {`text/html; charset="; q`, page},
+		"/unknown":      {"text/html; charset=klingon; q", page},
+	})
+	for _, path := range []string{"/no-value", "/joined", "/quoted", "/twice", "/over-a-page"} {
+		for _, collector := range []string{"depots_css", "depots_xpath"} {
+			status, series, failure := probeHTML(t, server, site, collector, path)
+			if status != http.StatusOK {
+				t.Fatalf("%s at %s: status=%d body=%s", collector, path, status, failure)
+			}
+			sameSeries(t, series, depotRows("bg", "ru"))
+		}
+	}
+	sameLogLines(t, logs, nil)
+
+	for _, path := range []string{"/nothing", "/second-value", "/no-type", "/unclosed"} {
+		for _, collector := range []string{"depots_css", "depots_xpath"} {
+			status, series, failure := probeHTML(t, server, site, collector, path)
+			if status != http.StatusOK {
+				t.Fatalf("%s at %s: status=%d body=%s", collector, path, status, failure)
+			}
+			sameSeries(t, series, []string{
+				"depot_pallets{city=\"�\",depot=\"� �\"} 120",
+				"depot_pallets{city=\"�-�\",depot=\"� �2 �\"} 75",
+			})
+			sameLogLines(t, logs, []string{
+				`WARN label values or help text were not valid UTF-8; the invalid bytes were replaced with U+FFFD. If the target uses another encoding without declaring it, set response.charset values=4 first_metric=depot_pallets`,
+			})
+		}
+	}
+
+	const why = `unsupported charset "klingon"; use a name from the WHATWG Encoding Standard, such as utf-8, windows-1252, iso-8859-2, windows-1251, shift_jis or gbk`
+	for _, collector := range []string{"depots_css", "depots_xpath"} {
+		status, _, failure := probeHTML(t, server, site, collector, "/unknown")
+		if want := "collector " + collector + " decode failed: " + why; status != http.StatusBadGateway || failure != want {
+			t.Errorf("%s: status=%d body=%s, want 502 %s", collector, status, failure, want)
+		}
+		sameLogLines(t, logs, []string{"ERROR probe failed stage=decode error=" + why})
+	}
+}
+
+// An XHTML page in windows-1251 says so in its XML declaration and nowhere
+// else. Read as HTML — by the css collector under any Content-Type, and by
+// the xpath collector, left to each answer, under text/html,
+// application/xhtml+xml and no Content-Type — it was not converted, and its
+// names were repaired; it gives its names by its declaration, as it did and
+// does when it is called application/xml and read as XML. A meta of the
+// same page is believed over the declaration, as a browser believes it:
+// the page whose declaration names koi8-r and whose meta names
+// windows-1251, which it is written in, gives its names, where the
+// declaration was read first and the names came out as the text their
+// bytes spell in koi8-r. A Content-Type naming an encoding is read before
+// the declaration: one that says UTF-8 leaves the page's bytes to be
+// repaired and reported.
+func TestAnXMLDeclarationNamesTheEncodingOfAnXHTMLPage(t *testing.T) {
+	logs := testutil.CaptureLogs(t)
+	server := htmlServer(htmlCollectors(t, charsetCollectors))
+	page := htmlFixture(t, "charset/depots-windows-1251-xmldecl.xhtml")
+	site := newHTMLSite(t, map[string]htmlPage{
+		"/html":      {"text/html", page},
+		"/xhtml":     {"application/xhtml+xml", page},
+		"/untyped":   {"", page},
+		"/xml":       {"application/xml", page},
+		"/text-xml":  {"text/xml", page},
+		"/with-meta": {"text/html", htmlFixture(t, "charset/depots-meta-over-xmldecl.xhtml")},
+		"/named":     {"application/xhtml+xml; charset=windows-1251", page},
+		"/misnamed":  {"application/xhtml+xml; charset=utf-8", page},
+	})
+	for _, path := range []string{"/html", "/xhtml", "/untyped", "/xml", "/text-xml", "/with-meta", "/named"} {
+		for _, collector := range []string{"depots_css", "depots_xpath"} {
+			status, series, failure := probeHTML(t, server, site, collector, path)
+			if status != http.StatusOK {
+				t.Fatalf("%s at %s: status=%d body=%s", collector, path, status, failure)
+			}
+			sameSeries(t, series, depotRows("bg", "ru"))
+		}
+	}
+	sameLogLines(t, logs, nil)
+
+	for _, collector := range []string{"depots_css", "depots_xpath"} {
+		status, series, failure := probeHTML(t, server, site, collector, "/misnamed")
+		if status != http.StatusOK {
+			t.Fatalf("%s: status=%d body=%s", collector, status, failure)
+		}
+		sameSeries(t, series, []string{
+			"depot_pallets{city=\"�\",depot=\"� �\"} 120",
+			"depot_pallets{city=\"�-�\",depot=\"� �2 �\"} 75",
+		})
+		sameLogLines(t, logs, []string{
+			`WARN label values or help text were not valid UTF-8; the invalid bytes were replaced with U+FFFD. If the target uses another encoding without declaring it, set response.charset values=4 first_metric=depot_pallets`,
+		})
+	}
+}
+
+// A meta whose charset is no encoding's name declares nothing, as in a
+// browser, and the page is read all the same; the decode failed over it,
+// naming it. The UTF-8 page whose meta is self-closed without a blank, so
+// that its bare value is "utf-8/", is the UTF-8 a page is taken for
+// anyway and gives its names, nothing logged. The windows-1251 page that
+// writes its meta that way, or with a semicolon after the name, has
+// declared nothing: it is read as UTF-8, repaired and reported, as the page
+// without a meta is. A meta that names an encoding after one that names
+// none is the one read.
+func TestAMetaNamingNoEncodingDeclaresNothing(t *testing.T) {
+	logs := testutil.CaptureLogs(t)
+	server := htmlServer(htmlCollectors(t, charsetCollectors))
+	rewritten := func(fixture, meta, with string) []byte {
+		page := htmlFixture(t, fixture)
+		if bytes.Count(page, []byte(meta)) != 1 {
+			t.Fatalf("%s does not hold %s once", fixture, meta)
+		}
+		return bytes.Replace(page, []byte(meta), []byte(with), 1)
+	}
+	site := newHTMLSite(t, map[string]htmlPage{
+		"/utf8-slash":    {"text/html", rewritten("charset/depots-utf8-meta.html", `<meta charset="utf-8">`, `<meta charset=utf-8/>`)},
+		"/utf8-unknown":  {"text/html", rewritten("charset/depots-utf8-meta.html", `<meta charset="utf-8">`, `<meta charset="klingon">`)},
+		"/second-meta":   {"text/html", rewritten("charset/depots-windows-1251-meta.html", `<meta charset="windows-1251">`, `<meta charset="klingon"><meta charset="windows-1251">`)},
+		"/1251-slash":    {"text/html", rewritten("charset/depots-windows-1251-meta.html", `<meta charset="windows-1251">`, `<meta charset=windows-1251/>`)},
+		"/1251-semi":     {"text/html", rewritten("charset/depots-windows-1251-meta.html", `<meta charset="windows-1251">`, `<meta charset="windows-1251;">`)},
+		"/1251-spaced":   {"text/html", rewritten("charset/depots-windows-1251-meta.html", `<meta charset="windows-1251">`, `<meta charset=windows-1251 />`)},
+		"/xmldecl-wrong": {"text/html", rewritten("charset/depots-meta-over-xmldecl.xhtml", `encoding="koi8-r"`, `encoding="latin-1"`)},
+	})
+	for path, want := range map[string][]string{
+		"/utf8-slash":    depotRows(everyDepot...),
+		"/utf8-unknown":  depotRows(everyDepot...),
+		"/second-meta":   depotRows("bg", "ru"),
+		"/1251-spaced":   depotRows("bg", "ru"),
+		"/xmldecl-wrong": depotRows("bg", "ru"),
+	} {
+		for _, collector := range []string{"depots_css", "depots_xpath"} {
+			status, series, failure := probeHTML(t, server, site, collector, path)
+			if status != http.StatusOK {
+				t.Fatalf("%s at %s: status=%d body=%s", collector, path, status, failure)
+			}
+			sameSeries(t, series, want)
+		}
+	}
+	sameLogLines(t, logs, nil)
+
+	for _, path := range []string{"/1251-slash", "/1251-semi"} {
+		for _, collector := range []string{"depots_css", "depots_xpath"} {
+			status, series, failure := probeHTML(t, server, site, collector, path)
+			if status != http.StatusOK {
+				t.Fatalf("%s at %s: status=%d body=%s", collector, path, status, failure)
+			}
+			sameSeries(t, series, []string{
+				"depot_pallets{city=\"�\",depot=\"� �\"} 120",
+				"depot_pallets{city=\"�-�\",depot=\"� �2 �\"} 75",
+			})
+			sameLogLines(t, logs, []string{
+				`WARN label values or help text were not valid UTF-8; the invalid bytes were replaced with U+FFFD. If the target uses another encoding without declaring it, set response.charset values=4 first_metric=depot_pallets`,
+			})
+		}
+	}
+}
+
+// An encoding nobody knows that the Content-Type names fails the decode,
+// naming it and what a name looks like, whichever transform reads the page.
 func TestAnUnknownCharsetFailsTheDecode(t *testing.T) {
 	logs := testutil.CaptureLogs(t)
 	server := htmlServer(htmlCollectors(t, charsetCollectors))

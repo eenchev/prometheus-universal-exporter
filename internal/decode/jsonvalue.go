@@ -3,7 +3,6 @@ package decode
 import (
 	"bytes"
 	"errors"
-	"fmt"
 	"io"
 	"math/big"
 	"strconv"
@@ -55,18 +54,47 @@ var errJSONTrailingData = errors.New("trailing data after the JSON value (NDJSON
 // decodeJSON decodes body, which must be one JSON value.
 func decodeJSON(body []byte) (any, error) {
 	d := jsonDecoder{data: body}
+	return d.document()
+}
+
+// sniffJSON decodes body as decodeJSON does, for the detection of a format
+// (detectFormat), and reports whether body is the JSON the detection takes
+// for JSON: one value, with no number in it beyond a float64. The detection
+// asked encoding/json's Unmarshal, which reads every number into a float64
+// and refuses the document over one that none holds, 1e400 or a whole
+// number past 1.8e308, and what it took for JSON then it takes for JSON
+// now. The value is what decodeJSON returns for body, so the decode that
+// follows a detection need not read the body a second time.
+func sniffJSON(body []byte) (any, bool) {
+	d := jsonDecoder{data: body, sniffing: true}
+	v, err := d.document()
+	return v, err == nil && !d.beyondFloat
+}
+
+// JSONValue reads the JSON value body starts with as the json decoder reads
+// a document, and returns it and what of body follows it. depth is how many
+// arrays and objects the value lies inside already, which count towards how
+// deep it may nest. It is how the answer of a Python worker is read
+// (transform/pythonanswer.go): what a pre-script leaves in data is a value
+// inside the answer, and is read as a response's JSON is.
+func JSONValue(body []byte, depth int) (value any, rest []byte, err error) {
+	d := jsonDecoder{data: body, depth: depth}
+	d.space()
+	d.sizeCache()
+	if value, err = d.value(); err != nil {
+		return nil, nil, err
+	}
+	return value, body[d.pos:], nil
+}
+
+// document reads the decoder's body, which must be one JSON value.
+func (d *jsonDecoder) document() (any, error) {
+	body := d.data
 	d.space()
 	if d.pos == len(body) {
 		return nil, io.EOF
 	}
-	// The cache of short strings (remembered) is sized by the body, so that
-	// a small answer does not pay for a table larger than itself: a slot is
-	// 32 bytes, and there is one for every 64 bytes of body, 512 at most.
-	slots := uint32(16)
-	for slots < 512 && int(slots)*64 < len(body) {
-		slots *= 2
-	}
-	d.cache, d.cacheMask = make([]jsonCached, slots), slots-1
+	d.sizeCache()
 	v, err := d.value()
 	if err != nil {
 		return nil, err
@@ -76,6 +104,18 @@ func decodeJSON(body []byte) (any, error) {
 		return nil, errJSONTrailingData
 	}
 	return v, nil
+}
+
+// sizeCache makes the cache of short strings (remembered), sized by the
+// body, so that a small answer does not pay for a table larger than itself:
+// a slot is 32 bytes, and there is one for every 64 bytes of body, 512 at
+// most.
+func (d *jsonDecoder) sizeCache() {
+	slots := uint32(16)
+	for slots < 512 && int(slots)*64 < len(d.data) {
+		slots *= 2
+	}
+	d.cache, d.cacheMask = make([]jsonCached, slots), slots-1
 }
 
 // jsonDecoder is the state of one decodeJSON.
@@ -100,6 +140,10 @@ type jsonDecoder struct {
 	// slots, and cacheMask is one less.
 	cache     []jsonCached
 	cacheMask uint32
+	// sniffing says the body is read to detect its format (sniffJSON), and
+	// beyondFloat then that it holds a number no float64 does.
+	sniffing    bool
+	beyondFloat bool
 }
 
 // jsonCached is a short string the document held, and that string as an any
@@ -177,15 +221,17 @@ func (d *jsonDecoder) invalid(pos int, where string) error {
 	if pos >= len(d.data) {
 		return io.ErrUnexpectedEOF
 	}
-	return fmt.Errorf("invalid character %s %s, %s", quoteJSONByte(d.data[pos]), where, d.position(pos))
+	line, column := d.position(pos)
+	return model.Errorf("invalid character %s %s, at line %d, column %d", quoteJSONByte(d.data[pos]), where, line, column)
 }
 
 // position says where pos is, for an error: its line and, counted in bytes
 // from 1, its column, which in a document written on one line is how far
-// into the document it is.
-func (d *jsonDecoder) position(pos int) string {
+// into the document it is. It is no part of what the failure is to the log
+// (model.SameFailureText).
+func (d *jsonDecoder) position(pos int) (line, column model.Position) {
 	before := d.data[:pos]
-	return fmt.Sprintf("at line %d, column %d", 1+bytes.Count(before, []byte("\n")), pos-bytes.LastIndexByte(before, '\n'))
+	return model.Position(1 + bytes.Count(before, []byte("\n"))), model.Position(pos - bytes.LastIndexByte(before, '\n'))
 }
 
 // quoteJSONByte quotes c for an error as encoding/json does: in single
@@ -243,7 +289,8 @@ func (d *jsonDecoder) literal(word string) error {
 // enter counts one more array or object around what is read next.
 func (d *jsonDecoder) enter() error {
 	if d.depth++; d.depth > jsonMaxDepth {
-		return fmt.Errorf("arrays and objects nested more than %d deep, %s", jsonMaxDepth, d.position(d.pos))
+		line, column := d.position(d.pos)
+		return model.Errorf("arrays and objects nested more than %d deep, at line %d, column %d", jsonMaxDepth, line, column)
 	}
 	return nil
 }
@@ -398,6 +445,7 @@ func (d *jsonDecoder) number() (any, error) {
 		if f, err := strconv.ParseFloat(string(text), 64); err == nil {
 			return f, nil
 		}
+		d.beyondFloat = true
 		return string(text), nil
 	}
 	// Eighteen digits are below 2^63 whatever they are, so they are added
@@ -417,6 +465,14 @@ func (d *jsonDecoder) number() (any, error) {
 	}
 	if n, err := strconv.ParseInt(string(text), 10, 64); err == nil {
 		return int(n), nil
+	}
+	// A whole number of up to 308 digits is below the largest float64; a
+	// longer one is asked about only by a detection, which alone needs to
+	// know.
+	if d.sniffing && len(digits) > 308 {
+		if _, err := strconv.ParseFloat(string(text), 64); err != nil {
+			d.beyondFloat = true
+		}
 	}
 	// Beyond model.MaxWholeNumberDigits the digits are kept as text: a
 	// *big.Int of them would take time growing with their square.

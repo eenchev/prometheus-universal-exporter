@@ -106,7 +106,18 @@ func init() {
 		Display:            grpcDisplay,
 		Stage:              "grpc",
 		Fetch:              fetchGRPC,
+		ReadFiles:          grpcReadFiles,
 	})
+}
+
+// grpcReadFiles is what compiling a collector's proto_files looked at
+// (fileSets.protoLooked). A descriptor set is one file, which the request
+// names, and reflection reads none.
+func grpcReadFiles(c *model.Collector) (paths []string, read string) {
+	if len(c.Request.ProtoFiles) == 0 || strings.ToLower(strings.TrimSpace(c.Request.Descriptors)) != descriptorsProto {
+		return nil, ""
+	}
+	return descriptorFiles.protoLooked(c.Request.ProtoFiles, c.Request.ProtoImportPaths)
 }
 
 // validateGRPCRequest holds the grpc type's rules: the method's shape, the

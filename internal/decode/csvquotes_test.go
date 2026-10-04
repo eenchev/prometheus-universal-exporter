@@ -3,6 +3,7 @@ package decode
 import (
 	"bytes"
 	"encoding/csv"
+	"errors"
 	"net/http"
 	"slices"
 	"strings"
@@ -287,37 +288,45 @@ func TestCSVErrorsOfTabSeparatedValuesNameTheBodysColumns(t *testing.T) {
 // read it when it skipped the blanks fields start with (readCSVBody with
 // the reader's own trimming, which is how readCSV read every body before the
 // columns were kept), fields trimmed, or refuses it with the same error at
-// the same line and column — but for a body with an empty field, the one
-// case the two are meant to differ in, which is left out here: one where a
-// field starts, after blanks or without, with the delimiter.
+// the same line and column — but for the two cases they are meant to differ
+// in. A body with an empty field is left out here: one where a field starts,
+// after blanks or without, with the delimiter. And a quoted field with
+// blanks after its closing quote, which the reader refuses, is read as the
+// reader reads the body without those blanks, an error's column counted in
+// the body as it is written.
 func TestCSVTrimSpaceReadsTabSeparatedValuesAsTheReaderDidButForEmptyFields(t *testing.T) {
-	atoms := []string{`a`, `b c`, ` lead`, `trail `, `"q"`, ` "q"`, `  "a|b"`, `"x""y"`, " \u00a0\"x \"\" y\"", "\"two\nlines\"", " \"two\n \"\"l|nes\"", `"open`, ` "open`, `"st"ray"`, ` "st"ray"`, `5" disk`, ` 5" disk`, `"sp" `, `x "mid"`, ` "a| |""b"`, "\r\"cr\"", ` " "`}
-	trimmed := func(rows [][]string) [][]string {
-		for _, row := range rows {
-			for i := range row {
-				row[i] = strings.TrimSpace(row[i])
-			}
+	atoms := []string{`a`, `b c`, ` lead`, `trail `, `"q"`, ` "q"`, `  "a|b"`, `"x""y"`, " \u00a0\"x \"\" y\"", "\"two\nlines\"", " \"two\n \"\"l|nes\"", `"open`, ` "open`, `"st"ray"`, ` "st"ray"`, `5" disk`, ` 5" disk`, `"sp" `, `x "mid"`, ` "a| |""b"`, "\f\"ff\"", ` " "`}
+	// without is an atom as the reader is given it: `"sp" ` is the one atom
+	// with blanks after a closing quote, and a delimiter or a line end
+	// follows every atom.
+	without := func(atom string) string {
+		if atom == `"sp" ` {
+			return `"sp"`
 		}
-		return rows
+		return atom
 	}
-	compared, refused := 0, 0
+	compared, refused, closed := 0, 0, 0
 	for _, delimiter := range []rune{'\t', '\u2003'} {
 		for _, first := range atoms {
 			for _, second := range atoms {
 				for _, third := range atoms {
 					for _, ending := range []string{"\n", "\r\n", ""} {
 						body := []byte(strings.ReplaceAll(first+"|"+second+"\n"+third+"|z"+ending, "|", string(delimiter)))
-						want, wantErr := readCSVBody(body, delimiter, true)
+						clean := []byte(strings.ReplaceAll(without(first)+"|"+without(second)+"\n"+without(third)+"|z"+ending, "|", string(delimiter)))
+						if len(clean) != len(body) {
+							closed++
+						}
+						want, wantErr := readCSVBody(clean, delimiter, true)
 						got, err := readCSV(bytes.Clone(body), delimiter, true)
 						compared++
 						if wantErr != nil {
 							refused++
-							if err == nil || err.Error() != wantErr.Error() {
+							if wantErr = errorInWrittenBody(wantErr, body, clean); err == nil || err.Error() != wantErr.Error() {
 								t.Fatalf("delimiter %q, %q: err=%v, was %v", delimiter, body, err, wantErr)
 							}
 							continue
 						}
-						if err != nil || !slices.EqualFunc(trimmed(got), trimmed(want), slices.Equal[[]string]) {
+						if err != nil || !slices.EqualFunc(trimmedFields(got), trimmedFields(want), slices.Equal[[]string]) {
 							t.Fatalf("delimiter %q, %q: %v, read as %q, was %q", delimiter, body, err, got, want)
 						}
 					}
@@ -325,26 +334,202 @@ func TestCSVTrimSpaceReadsTabSeparatedValuesAsTheReaderDidButForEmptyFields(t *t
 			}
 		}
 	}
-	if compared < 60000 || refused < 10000 || refused > compared-10000 {
-		t.Fatalf("%d bodies were compared, %d of them refused", compared, refused)
+	if compared < 60000 || refused < 10000 || refused > compared-10000 || closed < 5000 {
+		t.Fatalf("%d bodies were compared, %d of them refused and %d with blanks after a closing quote", compared, refused, closed)
 	}
 }
 
-// Taking the blanks before quotes out of a body leaves one without any as
+// trimmedFields is rows with every field trimmed, as decodeCSV trims them
+// under trim_space.
+func trimmedFields(rows [][]string) [][]string {
+	for _, row := range rows {
+		for i := range row {
+			row[i] = strings.TrimSpace(row[i])
+		}
+	}
+	return rows
+}
+
+// errorInWrittenBody is the error the reader gave for clean, which is the
+// body written without some of its blanks, with the column the place has in
+// written: the bytes of clean are those of written in their order, so the
+// byte the error is at is found by going through both. The lines are the
+// same in the two.
+func errorInWrittenBody(err error, written, clean []byte) error {
+	var parse *csv.ParseError
+	if !errors.As(err, &parse) {
+		return err
+	}
+	lineStart := func(body []byte, line int) int {
+		start := 0
+		for ; line > 1; line-- {
+			start += bytes.IndexByte(body[start:], '\n') + 1
+		}
+		return start
+	}
+	at := lineStart(clean, parse.Line) + parse.Column - 1
+	i := 0
+	for j := 0; j < at; i++ {
+		if written[i] == clean[j] {
+			j++
+		}
+	}
+	// The blanks taken out just before the place are before it in the
+	// written body too.
+	for i < len(written) && (at == len(clean) || written[i] != clean[at]) {
+		i++
+	}
+	moved := *parse
+	moved.Column = i - lineStart(written, parse.Line) + 1
+	return &moved
+}
+
+// Taking the blanks around quotes out of a body leaves one without any as
 // it is, the same bytes and no copy, and says of the others what it took
-// out and where.
-func TestCSVBlanksBeforeQuotesAreTakenOutOfACopy(t *testing.T) {
-	plain := []byte("a\t\"q\"\t x \n\"b \"\"\t\"\tc\n")
-	if out, removed := withoutBlanksBeforeQuotes(plain, '\t'); &out[0] != &plain[0] || len(out) != len(plain) || removed != nil {
-		t.Fatalf("%q %v", out, removed)
+// out and where: the blanks before a field's opening quote only when asked
+// to, as for a tab, and those between a closing quote and the delimiter or
+// the line's end always, the carriage return of a line's end left where it
+// is.
+func TestCSVBlanksAroundQuotesAreTakenOutOfACopy(t *testing.T) {
+	for _, plain := range []string{
+		"a\t\"q\"\t x \n\"b \"\"\t\"\tc\n",
+		"a\tb \t c\n",
+		"\"q\"\r\n\"r\"\r",
+		"\"q\" x\t\"r\" \"s\"\n",
+	} {
+		body := []byte(plain)
+		if out, removed := withoutBlanksAroundQuotes(body, '\t', true); &out[0] != &body[0] || len(out) != len(body) || removed != nil {
+			t.Errorf("%q: %q %v", plain, out, removed)
+		}
 	}
 	body := []byte("  \"a\"\t \"b \t \"\"c\"\n\u00a0\"d\"\tx \"e\"\t \n")
 	before := bytes.Clone(body)
-	out, removed := withoutBlanksBeforeQuotes(body, '\t')
+	out, removed := withoutBlanksAroundQuotes(body, '\t', true)
 	if want := "\"a\"\t\"b \t \"\"c\"\n\"d\"\tx \"e\"\t \n"; string(out) != want || !bytes.Equal(body, before) {
 		t.Fatalf("%q, want %q; the body is now %q", out, want, body)
 	}
 	if want := []csvRemoved{{at: 0, n: 2}, {at: 4, n: 1}, {at: 14, n: 2}}; !slices.Equal(removed, want) {
 		t.Fatalf("%v, want %v", removed, want)
+	}
+	// After a closing quote, and before an opening one only when asked to.
+	body = []byte(" \"a\" ,\"b\"\u00a0\r\n\"c \"\"\" \t,x \"d\" ,\"e\" \r")
+	for leading, want := range map[bool]struct {
+		out     string
+		removed []csvRemoved
+	}{
+		false: {" \"a\",\"b\"\r\n\"c \"\"\",x \"d\" ,\"e\"\r", []csvRemoved{{at: 4, n: 1}, {at: 8, n: 2}, {at: 16, n: 2}, {at: 27, n: 1}}},
+		true:  {"\"a\",\"b\"\r\n\"c \"\"\",x \"d\" ,\"e\"\r", []csvRemoved{{at: 0, n: 1}, {at: 3, n: 1}, {at: 7, n: 2}, {at: 15, n: 2}, {at: 26, n: 1}}},
+	} {
+		out, removed := withoutBlanksAroundQuotes(bytes.Clone(body), ',', leading)
+		if string(out) != want.out || !slices.Equal(removed, want.removed) {
+			t.Errorf("before opening quotes %v: %q %v, want %q %v", leading, out, removed, want.out, want.removed)
+		}
+	}
+}
+
+// trim_space trims the blanks after a quoted field too, between its closing
+// quote and the delimiter or the end of the line, which failed the decode as
+// a stray quote: with a comma, a semicolon and a tab as the delimiter, before
+// a line feed, a CRLF and the end of the body, after a field with a doubled
+// quote, a delimiter and a line break in it, a CRLF there read as a line
+// feed, and in a header. The blanks
+// inside the quotes are the field's until its text is trimmed. Without
+// trim_space such a field fails the decode as it did.
+func TestCSVTrimSpaceTrimsTheBlanksAfterAQuotedField(t *testing.T) {
+	const rows = `[{"cpu":"1","host":"web01"},{"cpu":"2","host":"say \"hi\", twice"},{"cpu":"3","host":"two\nlines"},{"cpu":"x","host":"last"}]`
+	for _, delimiter := range []string{",", ";", "\t", "|"} {
+		for _, ending := range []string{"\n", "\r\n"} {
+			for _, final := range []string{ending, ""} {
+				body := strings.NewReplacer(",", delimiter, "\n", ending).Replace(
+					"\"host\" ,cpu\n\"web01\" ,1\n\"say \"\"hi\"\", twice\"  ,\"2\"\u00a0\n\"two\nlines\"\u00a0 ,3\n last ,\" x \" ") + final
+				want := rows
+				if delimiter != "," {
+					// The comma inside the quotes is text there, and the
+					// delimiter's own would be too.
+					want = strings.Replace(rows, `\"hi\", twice`, `\"hi\"`+delimiter+` twice`, 1)
+					want = strings.ReplaceAll(want, "\t", `\t`)
+				}
+				got, err := csvRows(t, delimiter, true, body)
+				if err != nil || got != want {
+					t.Errorf("delimiter %q, line ends %q, last %q: %v\nrows %s\nwant %s", delimiter, ending, final, err, got, want)
+				}
+				if _, err := csvRows(t, delimiter, false, body); err == nil || !strings.Contains(err.Error(), `extraneous or missing " in quoted-field`) {
+					t.Errorf("delimiter %q without trim_space: %v, want the stray quote of line 1", delimiter, err)
+				}
+			}
+		}
+	}
+	// Without a header row too, and the repro of the bug: one blank.
+	c := model.Collector{Request: model.RequestConfig{Type: fetch.RequestTypeHTTP}, Decoder: model.DecoderConfig{Type: "csv"},
+		Response: model.ResponseConfig{CSV: model.CSVConfig{Header: boolPtr(false), TrimSpace: true}}}
+	d, err := Decode(&fetch.HTTPResponse{Body: []byte("host,cpu\n\"web01\" ,1\n"), Headers: make(http.Header)}, &c)
+	if err != nil || asJSON(t, d.Data) != `[["host","cpu"],["web01","1"]]` {
+		t.Errorf("without a header row: %v, %v", err, d)
+	}
+}
+
+// What follows a closing quote other than blanks and then the delimiter or
+// the line's end is still refused under trim_space, at the line and column
+// the body has it in, the blanks taken out before it on its line counted:
+// text after the blanks, a second quoted part, and a stray quote or an open
+// field later on the line or on a later one. The column is the reader's: of
+// the quote it stops at, or past the end of the line a field is left open
+// on.
+func TestCSVTrimSpaceStillRefusesTextAfterAClosingQuote(t *testing.T) {
+	for _, tc := range []struct {
+		delimiter rune
+		body      string
+		want      string
+	}{
+		{',', "a,b\n\"q\" x,1\n", `parse error on line 2, column 3: extraneous or missing " in quoted-field`},
+		{',', "a,b\n\"q\" \"r\",1\n", `parse error on line 2, column 3: extraneous or missing " in quoted-field`},
+		{',', "\"a\"  ,\"b\" ,\"st\"ray\"\n", `parse error on line 1, column 15: extraneous or missing " in quoted-field`},
+		{';', "\"a\" ;b\n\"c\"\u00a0;\"d\"  ;  \"st\"ray\"\n", `parse error on line 2, column 18: extraneous or missing " in quoted-field`},
+		{',', "\"a\" ,\"two\nlines\"  ,\"open\n", `record on line 1; parse error on line 2, column 16: extraneous or missing " in quoted-field`},
+		{'\t', " \"a\" \t\"b\"  \t \"st\"ray\"\n", `parse error on line 1, column 17: extraneous or missing " in quoted-field`},
+		{'\t', "5\" disk\t\"a\" \n\"b\" \t\"st\"ray\"\n", `parse error on line 2, column 9: extraneous or missing " in quoted-field`},
+		{' ', "\"a\"\t \"b\"\t\"c\"\n", `parse error on line 1, column 8: extraneous or missing " in quoted-field`},
+	} {
+		if _, err := readCSV([]byte(tc.body), tc.delimiter, true); err == nil || err.Error() != tc.want {
+			t.Errorf("delimiter %q, %q: err=%v, want %s", tc.delimiter, tc.body, err, tc.want)
+		}
+	}
+}
+
+// With a space as the delimiter the spaces after a closing quote are the
+// delimiter, and a run of them one delimiter, as before: nothing is taken
+// from them, and a quoted field at the end of a line with spaces after it is
+// followed by an empty field, as an unquoted one is. A tab or another blank
+// that is no space is trimmed there as everywhere.
+func TestCSVTrimSpaceLeavesTheSpacesAfterAQuoteToTheSpaceDelimiter(t *testing.T) {
+	for body, want := range map[string]string{
+		"host note cpu\nweb01 \"two  words\"   72\n":             `[{"cpu":"72","host":"web01","note":"two  words"}]`,
+		"host note cpu\n\"web01\"   \"two  words\" \"72\"\n":     `[{"cpu":"72","host":"web01","note":"two  words"}]`,
+		"host note cpu\n\"web01\"\t \"x\"\t\t72\n":               `[{"cpu":"","host":"web01","note":"x\"\t\t72"}]`,
+		"host note cpu\n\"web01\"\t \"two  words\"\u00a0\t 72\n": `[{"cpu":"72","host":"web01","note":"two  words"}]`,
+		"host note cpu\n\"web01\" \"x\"\t\n":                     `[{"cpu":"","host":"web01","note":"x"}]`,
+	} {
+		got, err := csvRows(t, " ", true, body)
+		if strings.Contains(body, "\t\t72") {
+			// Blanks that the delimiter does not follow are no blanks after
+			// the field: the reader refuses it as it did.
+			if err == nil || !strings.Contains(err.Error(), `parse error on line 2, column 12: extraneous or missing " in quoted-field`) {
+				t.Errorf("%q: %v, rows %s", body, err, got)
+			}
+			continue
+		}
+		if err != nil || got != want {
+			t.Errorf("%q: %v, rows %s, want %s", body, err, got, want)
+		}
+	}
+	// A quoted last field with spaces after it: the same rows, and the same
+	// refusal of the empty column those spaces make under an empty header
+	// name, as before blanks after a closing quote were trimmed.
+	for _, body := range []string{"a b\n\"1\" \"2\" \n", "a b \n1 \"2\"  \n"} {
+		got, err := readCSV([]byte(body), ' ', true)
+		was, wasErr := readCSVBody([]byte(body), ' ', true)
+		if err != nil || wasErr != nil || !slices.EqualFunc(got, was, slices.Equal[[]string]) {
+			t.Errorf("%q: read as %q, %v; the reader alone reads %q, %v", body, got, err, was, wasErr)
+		}
 	}
 }

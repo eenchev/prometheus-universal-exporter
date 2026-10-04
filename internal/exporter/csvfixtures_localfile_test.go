@@ -61,6 +61,28 @@ collectors:
           - name: job
             expression: job
 
+  # A log without a header, its lines ended in three ways.
+  - name: scale
+    request:
+      type: localfile
+      root: ROOT
+      path: scale-mixed-line-ends.txt
+    response:
+      csv:
+        delimiter: ";"
+        header: false
+        trim_space: true
+    transform:
+      type: csv
+    metrics:
+      - name: scale_weight_kilograms
+        expression: "3"
+        labels:
+          - name: scale
+            expression: "2"
+          - name: at
+            expression: "1"
+
   # A script, which reads what the decoder gives it: with the decoder left
   # to each file, that is rows only for a file named .csv.
   - name: script_auto
@@ -176,80 +198,110 @@ func TestCSVFixtureFilesAreReadByPathAndByTarget(t *testing.T) {
 	server := csvFileServer(t, nil, nil)
 
 	answersSeries(t, probeCSVFile(t, server, "collector=hosts"), []string{
-		`host_cpu_percent{host="batch01"} 0`,
-		`host_cpu_percent{host="batch02"} 97`,
-		`host_cpu_percent{host="cache01"} 12`,
-		`host_cpu_percent{host="db01"} 88`,
-		`host_cpu_percent{host="db02"} 64`,
-		`host_cpu_percent{host="ingress01"} 23`,
-		`host_cpu_percent{host="ingress02"} 27`,
 		`host_cpu_percent{host="web01"} 72`,
 		`host_cpu_percent{host="web02"} 31`,
 		`host_cpu_percent{host="web03"} 5`,
-		`host_disk_percent{host="batch01"} 22`,
-		`host_disk_percent{host="batch02"} 60`,
-		`host_disk_percent{host="cache01"} 5`,
-		`host_disk_percent{host="db01"} 79`,
-		`host_disk_percent{host="db02"} 81`,
-		`host_disk_percent{host="ingress01"} 14`,
-		`host_disk_percent{host="ingress02"} 14`,
-		`host_disk_percent{host="web01"} 40`,
-		`host_disk_percent{host="web02"} 38`,
-		`host_disk_percent{host="web03"} 11`,
-		`host_memory_percent{host="batch01"} 4`,
-		`host_memory_percent{host="batch02"} 55`,
-		`host_memory_percent{host="cache01"} 84`,
-		`host_memory_percent{host="db01"} 93`,
-		`host_memory_percent{host="db02"} 71`,
-		`host_memory_percent{host="ingress01"} 30`,
-		`host_memory_percent{host="ingress02"} 31`,
+		`host_cpu_percent{host="db01"} 88`,
+		`host_cpu_percent{host="db02"} 64`,
+		`host_cpu_percent{host="cache01"} 12`,
+		`host_cpu_percent{host="batch01"} 0`,
+		`host_cpu_percent{host="batch02"} 97`,
+		`host_cpu_percent{host="ingress01"} 23`,
+		`host_cpu_percent{host="ingress02"} 27`,
 		`host_memory_percent{host="web01"} 61`,
 		`host_memory_percent{host="web02"} 48`,
 		`host_memory_percent{host="web03"} 12`,
+		`host_memory_percent{host="db01"} 93`,
+		`host_memory_percent{host="db02"} 71`,
+		`host_memory_percent{host="cache01"} 84`,
+		`host_memory_percent{host="batch01"} 4`,
+		`host_memory_percent{host="batch02"} 55`,
+		`host_memory_percent{host="ingress01"} 30`,
+		`host_memory_percent{host="ingress02"} 31`,
+		`host_disk_percent{host="web01"} 40`,
+		`host_disk_percent{host="web02"} 38`,
+		`host_disk_percent{host="web03"} 11`,
+		`host_disk_percent{host="db01"} 79`,
+		`host_disk_percent{host="db02"} 81`,
+		`host_disk_percent{host="cache01"} 5`,
+		`host_disk_percent{host="batch01"} 22`,
+		`host_disk_percent{host="batch02"} 60`,
+		`host_disk_percent{host="ingress01"} 14`,
+		`host_disk_percent{host="ingress02"} 14`,
 	}, []string{"# TYPE host_cpu_percent gauge", "# TYPE host_memory_percent gauge", "# TYPE host_disk_percent gauge"})
 	types := []string{"# TYPE job_duration_seconds gauge", "# TYPE job_records gauge"}
 	answersSeries(t, probeCSVFile(t, server, "collector=report&target=jobs-no-final-newline.csv"), []string{
 		`job_duration_seconds{job="backup-db",state="ok"} 412.5`,
 		`job_duration_seconds{job="backup-files",state="ok"} 1290`,
-		`job_duration_seconds{job="export-billing",state="ok"} 96.75`,
-		`job_duration_seconds{job="prune-cache",state="ok"} 0.5`,
-		`job_duration_seconds{job="reindex",state="failed"} 7.5`,
-		`job_duration_seconds{job="renew-certs",state="skipped"} 0`,
 		`job_duration_seconds{job="rotate-logs",state="ok"} 3.25`,
-		`job_duration_seconds{job="send-reports",state="ok"} 31`,
+		`job_duration_seconds{job="reindex",state="failed"} 7.5`,
 		`job_duration_seconds{job="sync-ldap",state="ok"} 12`,
+		`job_duration_seconds{job="export-billing",state="ok"} 96.75`,
 		`job_duration_seconds{job="vacuum",state="ok"} 48`,
+		`job_duration_seconds{job="send-reports",state="ok"} 31`,
+		`job_duration_seconds{job="prune-cache",state="ok"} 0.5`,
+		`job_duration_seconds{job="renew-certs",state="skipped"} 0`,
 		`job_records{job="backup-db"} 18250`,
 		`job_records{job="backup-files"} 96412`,
-		`job_records{job="export-billing"} 5120`,
-		`job_records{job="prune-cache"} 221`,
-		`job_records{job="reindex"} 0`,
-		`job_records{job="renew-certs"} 0`,
 		`job_records{job="rotate-logs"} 14`,
-		`job_records{job="send-reports"} 64`,
+		`job_records{job="reindex"} 0`,
 		`job_records{job="sync-ldap"} 830`,
+		`job_records{job="export-billing"} 5120`,
 		`job_records{job="vacuum"} 0`,
+		`job_records{job="send-reports"} 64`,
+		`job_records{job="prune-cache"} 221`,
+		`job_records{job="renew-certs"} 0`,
 	}, types)
 	loggedOnly(t, logs)
 
 	answersSeries(t, probeCSVFile(t, server, "collector=report&target=jobs-short-rows.csv"), []string{
 		`job_duration_seconds{job="backup-db",state="ok"} 412.5`,
 		`job_duration_seconds{job="backup-files",state="ok"} 1290`,
-		`job_duration_seconds{job="export-billing",state="ok"} 96.75`,
-		`job_duration_seconds{job="prune-cache",state="ok"} 0.5`,
 		`job_duration_seconds{job="rotate-logs",state="ok"} 3.25`,
 		`job_duration_seconds{job="sync-ldap",state="ok"} 12`,
+		`job_duration_seconds{job="export-billing",state="ok"} 96.75`,
 		`job_duration_seconds{job="vacuum",state="ok"} 48`,
+		`job_duration_seconds{job="prune-cache",state="ok"} 0.5`,
 		`job_records{job="backup-db"} 18250`,
-		`job_records{job="export-billing"} 5120`,
-		`job_records{job="prune-cache"} 221`,
 		`job_records{job="rotate-logs"} 14`,
 		`job_records{job="sync-ldap"} 830`,
+		`job_records{job="export-billing"} 5120`,
 		`job_records{job="vacuum"} 0`,
+		`job_records{job="prune-cache"} 221`,
 	}, types)
 	loggedOnly(t, logs,
-		`WARN report job_duration_seconds: 3 failed: CSV column "duration_seconds" is missing`,
-		`WARN report job_records: 4 failed: CSV column "records" is missing`,
+		`WARN report job_duration_seconds: 3 failed: CSV column "duration_seconds" is empty in row 4`,
+		`WARN report job_records: 4 failed: CSV column "records" is empty in row 2`,
+	)
+}
+
+// A file whose lines end with a carriage return alone, with CRLF and with a
+// line feed is read by a localfile collector as a response is: a series of
+// each line that holds a value, and the line without one logged by its row.
+// The same report with a carriage return after every line, named by the
+// probe's target, is read as its rows by rules that find none of their
+// columns in it, which the log says of each with the columns the file has.
+func TestCSVFixtureFilesWithLinesEndedByACarriageReturnAreRead(t *testing.T) {
+	logs := testutil.CaptureLogs(t)
+	server := csvFileServer(t, nil, nil)
+
+	answersSeries(t, probeCSVFile(t, server, "collector=scale"), []string{
+		`scale_weight_kilograms{at="2026-10-03T09:00:00Z",scale="A1"} 12.5`,
+		`scale_weight_kilograms{at="2026-10-03T09:01:00Z",scale="A1"} 12.75`,
+		`scale_weight_kilograms{at="2026-10-03T09:02:00Z",scale="A2"} 7.25`,
+		`scale_weight_kilograms{at="2026-10-03T09:03:00Z",scale="A2"} 7.5`,
+		`scale_weight_kilograms{at="2026-10-03T09:05:00Z",scale="B7"} 0.5`,
+	}, []string{"# TYPE scale_weight_kilograms gauge"})
+	loggedOnly(t, logs, `WARN scale scale_weight_kilograms: 1 failed: CSV column "3" is empty in row 5`)
+	logs.Reset()
+
+	if body := probeCSVFile(t, server, "collector=report&target=volumes-cr.csv"); body != "" {
+		t.Errorf("a report without the rules' columns answered\n%s", body)
+	}
+	const has = `whose columns are "free_gib", "note", "pool", "used_percent", "volume"; column names are matched exactly`
+	loggedOnly(t, logs,
+		`WARN report job_duration_seconds: 5 failed: CSV column "duration_seconds" is not in the response, `+has,
+		`WARN report job_records: 5 failed: CSV column "records" is not in the response, `+has,
 	)
 }
 
@@ -275,24 +327,6 @@ func TestCSVFixtureFilesAScriptIsGivenRowsByTheExtensionOrTheDecoder(t *testing.
 	loggedOnly(t, logs)
 }
 
-// contiguousFamilies reports a family of a text exposition whose sample
-// lines are not together under one TYPE line.
-func contiguousFamilies(t *testing.T, body string) {
-	t.Helper()
-	seen, last := map[string]bool{}, ""
-	for _, line := range strings.Split(strings.TrimSpace(body), "\n") {
-		if strings.HasPrefix(line, "#") {
-			continue
-		}
-		name := line[:strings.IndexAny(line, "{ ")]
-		if name != last && seen[name] {
-			t.Errorf("the series of %s are not together:\n%s", name, body)
-			return
-		}
-		seen[name], last = true, name
-	}
-}
-
 // A directory of reports of one shape, read with request.files: every
 // file's rows become series labelled with its name, each family's together
 // under one TYPE line, beside each file's modification time and scrape
@@ -300,73 +334,79 @@ func contiguousFamilies(t *testing.T, body string) {
 // such a report are read as each alone is: blank lines are no rows, the
 // last line needs no line end, and what a line of blanks and rows shorter
 // than the header are missing is logged for each file, with its name, while
-// no file fails.
+// none of them fails. A report with a row longer than its header fails its
+// decode, as it does read alone: it is left out, with a scrape error of 1
+// and a warning naming the file, the line and the column, and the others
+// are answered.
 func TestCSVFixtureFilesADirectoryOfReportsIsReadFileByFile(t *testing.T) {
 	logs := testutil.CaptureLogs(t)
-	server := csvFileServer(t, []string{"jobs-blank-lines.csv", "jobs-no-final-newline.csv", "jobs-short-rows.csv", "numbers.csv"}, nil)
+	server := csvFileServer(t, []string{"jobs-blank-lines.csv", "jobs-no-final-newline.csv", "jobs-short-rows.csv", "numbers.csv", "jobs-unquoted-comma.csv"}, nil)
 
 	body := probeCSVFile(t, server, "collector=reports")
 	answersSeries(t, body, []string{
 		`job_duration_seconds{file="jobs-blank-lines.csv",job="backup-db",state="ok"} 412.5`,
 		`job_duration_seconds{file="jobs-blank-lines.csv",job="backup-files",state="ok"} 1290`,
-		`job_duration_seconds{file="jobs-blank-lines.csv",job="export-billing",state="ok"} 96.75`,
-		`job_duration_seconds{file="jobs-blank-lines.csv",job="prune-cache",state="ok"} 0.5`,
-		`job_duration_seconds{file="jobs-blank-lines.csv",job="reindex",state="failed"} 7.5`,
-		`job_duration_seconds{file="jobs-blank-lines.csv",job="renew-certs",state="skipped"} 0`,
 		`job_duration_seconds{file="jobs-blank-lines.csv",job="rotate-logs",state="ok"} 3.25`,
-		`job_duration_seconds{file="jobs-blank-lines.csv",job="send-reports",state="ok"} 31`,
+		`job_duration_seconds{file="jobs-blank-lines.csv",job="reindex",state="failed"} 7.5`,
 		`job_duration_seconds{file="jobs-blank-lines.csv",job="sync-ldap",state="ok"} 12`,
+		`job_duration_seconds{file="jobs-blank-lines.csv",job="export-billing",state="ok"} 96.75`,
 		`job_duration_seconds{file="jobs-blank-lines.csv",job="vacuum",state="ok"} 48`,
+		`job_duration_seconds{file="jobs-blank-lines.csv",job="send-reports",state="ok"} 31`,
+		`job_duration_seconds{file="jobs-blank-lines.csv",job="prune-cache",state="ok"} 0.5`,
+		`job_duration_seconds{file="jobs-blank-lines.csv",job="renew-certs",state="skipped"} 0`,
 		`job_duration_seconds{file="jobs-no-final-newline.csv",job="backup-db",state="ok"} 412.5`,
 		`job_duration_seconds{file="jobs-no-final-newline.csv",job="backup-files",state="ok"} 1290`,
-		`job_duration_seconds{file="jobs-no-final-newline.csv",job="export-billing",state="ok"} 96.75`,
-		`job_duration_seconds{file="jobs-no-final-newline.csv",job="prune-cache",state="ok"} 0.5`,
-		`job_duration_seconds{file="jobs-no-final-newline.csv",job="reindex",state="failed"} 7.5`,
-		`job_duration_seconds{file="jobs-no-final-newline.csv",job="renew-certs",state="skipped"} 0`,
 		`job_duration_seconds{file="jobs-no-final-newline.csv",job="rotate-logs",state="ok"} 3.25`,
-		`job_duration_seconds{file="jobs-no-final-newline.csv",job="send-reports",state="ok"} 31`,
+		`job_duration_seconds{file="jobs-no-final-newline.csv",job="reindex",state="failed"} 7.5`,
 		`job_duration_seconds{file="jobs-no-final-newline.csv",job="sync-ldap",state="ok"} 12`,
+		`job_duration_seconds{file="jobs-no-final-newline.csv",job="export-billing",state="ok"} 96.75`,
 		`job_duration_seconds{file="jobs-no-final-newline.csv",job="vacuum",state="ok"} 48`,
+		`job_duration_seconds{file="jobs-no-final-newline.csv",job="send-reports",state="ok"} 31`,
+		`job_duration_seconds{file="jobs-no-final-newline.csv",job="prune-cache",state="ok"} 0.5`,
+		`job_duration_seconds{file="jobs-no-final-newline.csv",job="renew-certs",state="skipped"} 0`,
 		`job_duration_seconds{file="jobs-short-rows.csv",job="backup-db",state="ok"} 412.5`,
 		`job_duration_seconds{file="jobs-short-rows.csv",job="backup-files",state="ok"} 1290`,
-		`job_duration_seconds{file="jobs-short-rows.csv",job="export-billing",state="ok"} 96.75`,
-		`job_duration_seconds{file="jobs-short-rows.csv",job="prune-cache",state="ok"} 0.5`,
 		`job_duration_seconds{file="jobs-short-rows.csv",job="rotate-logs",state="ok"} 3.25`,
 		`job_duration_seconds{file="jobs-short-rows.csv",job="sync-ldap",state="ok"} 12`,
+		`job_duration_seconds{file="jobs-short-rows.csv",job="export-billing",state="ok"} 96.75`,
 		`job_duration_seconds{file="jobs-short-rows.csv",job="vacuum",state="ok"} 48`,
+		`job_duration_seconds{file="jobs-short-rows.csv",job="prune-cache",state="ok"} 0.5`,
 		`job_records{file="jobs-blank-lines.csv",job="backup-db"} 18250`,
 		`job_records{file="jobs-blank-lines.csv",job="backup-files"} 96412`,
-		`job_records{file="jobs-blank-lines.csv",job="export-billing"} 5120`,
-		`job_records{file="jobs-blank-lines.csv",job="prune-cache"} 221`,
-		`job_records{file="jobs-blank-lines.csv",job="reindex"} 0`,
-		`job_records{file="jobs-blank-lines.csv",job="renew-certs"} 0`,
 		`job_records{file="jobs-blank-lines.csv",job="rotate-logs"} 14`,
-		`job_records{file="jobs-blank-lines.csv",job="send-reports"} 64`,
+		`job_records{file="jobs-blank-lines.csv",job="reindex"} 0`,
 		`job_records{file="jobs-blank-lines.csv",job="sync-ldap"} 830`,
+		`job_records{file="jobs-blank-lines.csv",job="export-billing"} 5120`,
 		`job_records{file="jobs-blank-lines.csv",job="vacuum"} 0`,
+		`job_records{file="jobs-blank-lines.csv",job="send-reports"} 64`,
+		`job_records{file="jobs-blank-lines.csv",job="prune-cache"} 221`,
+		`job_records{file="jobs-blank-lines.csv",job="renew-certs"} 0`,
 		`job_records{file="jobs-no-final-newline.csv",job="backup-db"} 18250`,
 		`job_records{file="jobs-no-final-newline.csv",job="backup-files"} 96412`,
-		`job_records{file="jobs-no-final-newline.csv",job="export-billing"} 5120`,
-		`job_records{file="jobs-no-final-newline.csv",job="prune-cache"} 221`,
-		`job_records{file="jobs-no-final-newline.csv",job="reindex"} 0`,
-		`job_records{file="jobs-no-final-newline.csv",job="renew-certs"} 0`,
 		`job_records{file="jobs-no-final-newline.csv",job="rotate-logs"} 14`,
-		`job_records{file="jobs-no-final-newline.csv",job="send-reports"} 64`,
+		`job_records{file="jobs-no-final-newline.csv",job="reindex"} 0`,
 		`job_records{file="jobs-no-final-newline.csv",job="sync-ldap"} 830`,
+		`job_records{file="jobs-no-final-newline.csv",job="export-billing"} 5120`,
 		`job_records{file="jobs-no-final-newline.csv",job="vacuum"} 0`,
+		`job_records{file="jobs-no-final-newline.csv",job="send-reports"} 64`,
+		`job_records{file="jobs-no-final-newline.csv",job="prune-cache"} 221`,
+		`job_records{file="jobs-no-final-newline.csv",job="renew-certs"} 0`,
 		`job_records{file="jobs-short-rows.csv",job="backup-db"} 18250`,
-		`job_records{file="jobs-short-rows.csv",job="export-billing"} 5120`,
-		`job_records{file="jobs-short-rows.csv",job="prune-cache"} 221`,
 		`job_records{file="jobs-short-rows.csv",job="rotate-logs"} 14`,
 		`job_records{file="jobs-short-rows.csv",job="sync-ldap"} 830`,
+		`job_records{file="jobs-short-rows.csv",job="export-billing"} 5120`,
 		`job_records{file="jobs-short-rows.csv",job="vacuum"} 0`,
+		`job_records{file="jobs-short-rows.csv",job="prune-cache"} 221`,
 		// 2026-10-03T09:00:00Z, and a minute and two after it.
 		`localfile_mtime_seconds{file="jobs-blank-lines.csv"} 1.791018e+09`,
 		`localfile_mtime_seconds{file="jobs-no-final-newline.csv"} 1.79101806e+09`,
 		`localfile_mtime_seconds{file="jobs-short-rows.csv"} 1.79101812e+09`,
+		// The file after numbers.csv, which no pattern matches.
+		`localfile_mtime_seconds{file="jobs-unquoted-comma.csv"} 1.79101824e+09`,
 		`localfile_scrape_error{file="jobs-blank-lines.csv"} 0`,
 		`localfile_scrape_error{file="jobs-no-final-newline.csv"} 0`,
 		`localfile_scrape_error{file="jobs-short-rows.csv"} 0`,
+		`localfile_scrape_error{file="jobs-unquoted-comma.csv"} 1`,
 		`localfile_files_skipped 0`,
 	}, []string{
 		"# TYPE job_duration_seconds gauge", "# TYPE job_records gauge",
@@ -379,12 +419,17 @@ func TestCSVFixtureFilesADirectoryOfReportsIsReadFileByFile(t *testing.T) {
 	if err := parseExposition([]byte(body)); err != nil {
 		t.Errorf("the answer does not parse: %v", err)
 	}
-	loggedOnly(t, logs,
-		`WARN reports job_duration_seconds in jobs-blank-lines.csv: 1 failed: CSV column "duration_seconds" is missing`,
-		`WARN reports job_records in jobs-blank-lines.csv: 1 failed: CSV column "records" is missing`,
-		`WARN reports job_duration_seconds in jobs-short-rows.csv: 3 failed: CSV column "duration_seconds" is missing`,
-		`WARN reports job_records in jobs-short-rows.csv: 4 failed: CSV column "records" is missing`,
-	)
+	failures, others := ruleFailureLogs(t, logs)
+	sameLines(t, "logged rule failures", failures, []string{
+		`WARN reports job_duration_seconds in jobs-blank-lines.csv: 1 failed: CSV column "duration_seconds" is empty in row 5`,
+		`WARN reports job_records in jobs-blank-lines.csv: 1 failed: CSV column "records" is empty in row 5`,
+		`WARN reports job_duration_seconds in jobs-short-rows.csv: 3 failed: CSV column "duration_seconds" is empty in row 4`,
+		`WARN reports job_records in jobs-short-rows.csv: 4 failed: CSV column "records" is empty in row 2`,
+	})
+	if len(others) != 1 || !strings.Contains(others[0], `"level":"WARN"`) || !strings.Contains(others[0], `"file":"jobs-unquoted-comma.csv","stage":"decode"`) ||
+		!strings.Contains(others[0], "CSV line 5 has a value in column 5, which the header does not name") {
+		t.Errorf("also logged %v, want the one warning of the file with a row longer than its header", others)
+	}
 }
 
 // A directory of lists in three encodings is read by one collector: a file
@@ -399,40 +444,40 @@ func TestCSVFixtureFilesADirectoryInSeveralEncodingsIsReadByMarkAndCharset(t *te
 
 	body := probeCSVFile(t, server, "collector=lists")
 	answersSeries(t, body, []string{
-		`city_temperature_celsius{city="Kraków",file="cities-utf16le-bom.csv"} 7.5`,
-		`city_temperature_celsius{city="Kraków",file="cities-utf8-bom.csv"} 7.5`,
-		`city_temperature_celsius{city="Québec, QC",file="cities-utf16le-bom.csv"} 5`,
-		`city_temperature_celsius{city="Québec, QC",file="cities-utf8-bom.csv"} 5`,
-		`city_temperature_celsius{city="Reykjavík",file="cities-utf16le-bom.csv"} 3`,
-		`city_temperature_celsius{city="Reykjavík",file="cities-utf8-bom.csv"} 3`,
-		`city_temperature_celsius{city="São Paulo",file="cities-utf16le-bom.csv"} 23`,
-		`city_temperature_celsius{city="São Paulo",file="cities-utf8-bom.csv"} 23`,
-		`city_temperature_celsius{city="Zürich",file="cities-utf16le-bom.csv"} 9.25`,
-		`city_temperature_celsius{city="Zürich",file="cities-utf8-bom.csv"} 9.25`,
-		`city_temperature_celsius{city="Đà Nẵng",file="cities-utf16le-bom.csv"} 29.5`,
-		`city_temperature_celsius{city="Đà Nẵng",file="cities-utf8-bom.csv"} 29.5`,
-		`city_temperature_celsius{city="İstanbul",file="cities-utf16le-bom.csv"} 16`,
-		`city_temperature_celsius{city="İstanbul",file="cities-utf8-bom.csv"} 16`,
-		`city_temperature_celsius{city="Αθήνα",file="cities-utf16le-bom.csv"} 21`,
-		`city_temperature_celsius{city="Αθήνα",file="cities-utf8-bom.csv"} 21`,
-		`city_temperature_celsius{city="Пловдив",file="cities-utf16le-bom.csv"} 17`,
-		`city_temperature_celsius{city="Пловдив",file="cities-utf8-bom.csv"} 17`,
 		`city_temperature_celsius{city="София",file="cities-utf16le-bom.csv"} 14.5`,
-		`city_temperature_celsius{city="София",file="cities-utf8-bom.csv"} 14.5`,
-		`city_temperature_celsius{city="北京",file="cities-utf16le-bom.csv"} 12`,
-		`city_temperature_celsius{city="北京",file="cities-utf8-bom.csv"} 12`,
+		`city_temperature_celsius{city="Пловдив",file="cities-utf16le-bom.csv"} 17`,
+		`city_temperature_celsius{city="Zürich",file="cities-utf16le-bom.csv"} 9.25`,
+		`city_temperature_celsius{city="São Paulo",file="cities-utf16le-bom.csv"} 23`,
+		`city_temperature_celsius{city="Kraków",file="cities-utf16le-bom.csv"} 7.5`,
+		`city_temperature_celsius{city="Αθήνα",file="cities-utf16le-bom.csv"} 21`,
 		`city_temperature_celsius{city="東京",file="cities-utf16le-bom.csv"} 19`,
+		`city_temperature_celsius{city="北京",file="cities-utf16le-bom.csv"} 12`,
+		`city_temperature_celsius{city="Reykjavík",file="cities-utf16le-bom.csv"} 3`,
+		`city_temperature_celsius{city="Đà Nẵng",file="cities-utf16le-bom.csv"} 29.5`,
+		`city_temperature_celsius{city="İstanbul",file="cities-utf16le-bom.csv"} 16`,
+		`city_temperature_celsius{city="Québec, QC",file="cities-utf16le-bom.csv"} 5`,
+		`city_temperature_celsius{city="София",file="cities-utf8-bom.csv"} 14.5`,
+		`city_temperature_celsius{city="Пловдив",file="cities-utf8-bom.csv"} 17`,
+		`city_temperature_celsius{city="Zürich",file="cities-utf8-bom.csv"} 9.25`,
+		`city_temperature_celsius{city="São Paulo",file="cities-utf8-bom.csv"} 23`,
+		`city_temperature_celsius{city="Kraków",file="cities-utf8-bom.csv"} 7.5`,
+		`city_temperature_celsius{city="Αθήνα",file="cities-utf8-bom.csv"} 21`,
 		`city_temperature_celsius{city="東京",file="cities-utf8-bom.csv"} 19`,
-		`city_temperature_celsius{city="Банско, ски зона",file="oblasti-windows-1251.csv"} -2.5`,
-		`city_temperature_celsius{city="Благоевград",file="oblasti-windows-1251.csv"} 15`,
-		`city_temperature_celsius{city="Бургас",file="oblasti-windows-1251.csv"} 19`,
-		`city_temperature_celsius{city="Варна",file="oblasti-windows-1251.csv"} 18.25`,
-		`city_temperature_celsius{city="Велико Търново",file="oblasti-windows-1251.csv"} 11.75`,
-		`city_temperature_celsius{city="Плевен",file="oblasti-windows-1251.csv"} 12`,
-		`city_temperature_celsius{city="Пловдив",file="oblasti-windows-1251.csv"} 17`,
-		`city_temperature_celsius{city="Русе",file="oblasti-windows-1251.csv"} 13`,
+		`city_temperature_celsius{city="北京",file="cities-utf8-bom.csv"} 12`,
+		`city_temperature_celsius{city="Reykjavík",file="cities-utf8-bom.csv"} 3`,
+		`city_temperature_celsius{city="Đà Nẵng",file="cities-utf8-bom.csv"} 29.5`,
+		`city_temperature_celsius{city="İstanbul",file="cities-utf8-bom.csv"} 16`,
+		`city_temperature_celsius{city="Québec, QC",file="cities-utf8-bom.csv"} 5`,
 		`city_temperature_celsius{city="София",file="oblasti-windows-1251.csv"} 14.5`,
+		`city_temperature_celsius{city="Пловдив",file="oblasti-windows-1251.csv"} 17`,
+		`city_temperature_celsius{city="Варна",file="oblasti-windows-1251.csv"} 18.25`,
+		`city_temperature_celsius{city="Бургас",file="oblasti-windows-1251.csv"} 19`,
+		`city_temperature_celsius{city="Русе",file="oblasti-windows-1251.csv"} 13`,
 		`city_temperature_celsius{city="Стара Загора",file="oblasti-windows-1251.csv"} 16.5`,
+		`city_temperature_celsius{city="Плевен",file="oblasti-windows-1251.csv"} 12`,
+		`city_temperature_celsius{city="Велико Търново",file="oblasti-windows-1251.csv"} 11.75`,
+		`city_temperature_celsius{city="Благоевград",file="oblasti-windows-1251.csv"} 15`,
+		`city_temperature_celsius{city="Банско, ски зона",file="oblasti-windows-1251.csv"} -2.5`,
 		`localfile_mtime_seconds{file="cities-utf16le-bom.csv"} 1.791018e+09`,
 		`localfile_mtime_seconds{file="cities-utf8-bom.csv"} 1.79101806e+09`,
 		`localfile_mtime_seconds{file="oblasti-windows-1251.csv"} 1.79101812e+09`,

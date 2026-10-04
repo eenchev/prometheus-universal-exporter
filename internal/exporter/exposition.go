@@ -80,24 +80,26 @@ func writeMetricSet(w http.ResponseWriter, r *http.Request, s *model.MetricSet) 
 // output. It writes with strconv's append functions rather than fmt, and
 // keeps one slice for sorting every series' label names, so rendering
 // allocates little beyond the text itself.
+//
+// The text format wants the lines of a metric in one group, under its HELP
+// and TYPE, and nearly every set has them so: the series are written in the
+// set's order, and a name that differs from the one before it is looked up
+// once. One that was written already, with another metric's series since,
+// says the set has a metric's series apart, as a script may emit them, a
+// target a pass-through reads may write them, and two rules of one name with
+// another rule between them make them. What was written is then dropped and
+// the set written again metric by metric (appendGroupedMetricSet), which
+// costs only such a set anything.
 func appendMetricSet(b []byte, s *model.MetricSet) []byte {
 	var e expositionWriter
 	described := map[string]bool{}
-	last := ""
+	start, last := len(b), ""
 	for _, m := range s.Metrics {
-		if m.Name != last && !described[m.Name] {
-			if m.Help != "" {
-				b = append(b, "# HELP "...)
-				b = append(b, m.Name...)
-				b = append(b, ' ')
-				b = appendEscaped(b, m.Help, false)
-				b = append(b, '\n')
+		if m.Name != last {
+			if described[m.Name] {
+				return e.appendGroupedMetricSet(b[:start], s)
 			}
-			b = append(b, "# TYPE "...)
-			b = append(b, m.Name...)
-			b = append(b, ' ')
-			b = append(b, m.Type...)
-			b = append(b, '\n')
+			b = appendFamilyLines(b, m)
 			described[m.Name] = true
 		}
 		last = m.Name
@@ -111,6 +113,81 @@ func appendMetricSet(b []byte, s *model.MetricSet) []byte {
 		}
 	}
 	return b
+}
+
+// appendFamilyLines writes the HELP line, if the metric has help, and the
+// TYPE line of the metric m is the first series of.
+func appendFamilyLines(b []byte, m model.Metric) []byte {
+	if m.Help != "" {
+		b = append(b, "# HELP "...)
+		b = append(b, m.Name...)
+		b = append(b, ' ')
+		b = appendEscaped(b, m.Help, false)
+		b = append(b, '\n')
+	}
+	b = append(b, "# TYPE "...)
+	b = append(b, m.Name...)
+	b = append(b, ' ')
+	b = append(b, m.Type...)
+	return append(b, '\n')
+}
+
+// appendGroupedMetricSet is appendMetricSet for a set that has a metric's
+// series apart: the metrics in the order each first appears in the set, each
+// with its series together in the order the set has them, under the HELP and
+// TYPE of its first. Nothing is sorted, so a set that has every metric's
+// series together is written as appendMetricSet writes it.
+func (e *expositionWriter) appendGroupedMetricSet(b []byte, s *model.MetricSet) []byte {
+	last := ""
+	for _, i := range seriesByFamily(s) {
+		m := s.Metrics[i]
+		if m.Name != last {
+			b = appendFamilyLines(b, m)
+		}
+		last = m.Name
+		switch {
+		case m.Histogram != nil:
+			b = e.appendHistogram(b, m)
+		case m.Summary != nil:
+			b = e.appendSummary(b, m)
+		default:
+			b = e.appendSample(b, m.Name, "", m.Labels, "", "", m.Value, m)
+		}
+	}
+	return b
+}
+
+// seriesByFamily is the places of a set's series, metric by metric: the
+// metrics in the order each first appears, and the series of each in the
+// order the set has them.
+func seriesByFamily(s *model.MetricSet) []int {
+	// family is which metric a name is, in the order they first appear, and
+	// starts where each metric's series begin in the order returned: the
+	// number of its series while they are counted, and then the sum of those
+	// before it.
+	family := map[string]int{}
+	var starts []int
+	for _, m := range s.Metrics {
+		f, known := family[m.Name]
+		if !known {
+			f = len(starts)
+			family[m.Name] = f
+			starts = append(starts, 0)
+		}
+		starts[f]++
+	}
+	total := 0
+	for f, count := range starts {
+		starts[f] = total
+		total += count
+	}
+	order := make([]int, len(s.Metrics))
+	for i, m := range s.Metrics {
+		f := family[m.Name]
+		order[starts[f]] = i
+		starts[f]++
+	}
+	return order
 }
 
 // expositionWriter holds what rendering reuses from series to series.

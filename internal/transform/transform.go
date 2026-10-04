@@ -1,7 +1,6 @@
 package transform
 
 import (
-	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -24,6 +23,7 @@ import (
 	"github.com/eenchev/prometheus-universal-exporter/internal/fetch"
 	"github.com/eenchev/prometheus-universal-exporter/internal/model"
 	"golang.org/x/net/html"
+	"golang.org/x/net/html/atom"
 )
 
 // Transform turns a decoded response into the collector's metrics, named as
@@ -325,11 +325,21 @@ func (f *ruleFailures) add(rule model.MetricRule, err error, logged bool) {
 // addCounted counts count failures of rule at once, missing of them missing
 // values and first the first, as a rule that held them back reports them
 // (heldFailures).
+//
+// Two rules alike in name, expression and items are one rule here, whatever
+// their error modes: it is logged when either has log, as the report has it
+// (RuleReport.add). So when a rule under log joins what a twin under ignore
+// gathered, the entry becomes that of the rule under log, with this failure
+// as the first to show; the mode of whichever twin failed first does not
+// decide for both.
 func (f *ruleFailures) addCounted(rule model.MetricRule, first error, count, missing uint64, logged bool) {
 	for _, known := range f.rules {
 		if known.rule.Name == rule.Name && known.rule.Expression == rule.Expression && known.rule.Items == rule.Items {
 			known.count += count
 			known.missing += missing
+			if logged && !known.logged {
+				known.rule, known.first, known.logged = rule, first, true
+			}
 			return
 		}
 	}
@@ -337,14 +347,15 @@ func (f *ruleFailures) addCounted(rule model.MetricRule, first error, count, mis
 }
 
 // finish writes one line per log rule that failed, in the order they first
-// failed, and adds every failure to report when the caller asked for one.
+// failed, and adds every failure to report when the caller asked for one,
+// each under the rule it is of.
 func (f *ruleFailures) finish(c *model.Collector, report *RuleReport) {
 	for _, failed := range f.rules {
 		if failed.logged {
 			logRuleFailure(f.ctx, c, failed.rule, failed.first, failed.count)
 		}
 		if report != nil {
-			report.add(failed.rule.Name, failed.count, failed.missing, failed.first, failed.logged)
+			report.add(failed.rule.Name, failed.rule.Expression, failed.rule.Items, failed.count, failed.missing, failed.first, failed.logged)
 		}
 	}
 }
@@ -407,15 +418,25 @@ func (r *RuleReport) UTF8Repairs() (uint64, string) {
 	return r.utf8Repaired, r.utf8First
 }
 
-// RuleFailure is how many series of one metric failed, and how many of those
+// RuleFailure is how many series of one rule failed, and how many of those
 // because the response did not contain the value.
+//
+// A collector may have several rules of one metric name, one for each column
+// or path its series come from, and each fails for reasons of its own: so a
+// rule is told apart as the transform tells it apart while it gathers the
+// failures (ruleFailures), by its name, its expression and its items, and
+// each has an entry of its own. Two rules alike in all three are one rule.
 type RuleFailure struct {
-	Metric            string
+	// Metric is the rule's name, empty for a prometheus rule without one.
+	Metric string
+	// Expression and Items are the rule's, which with Metric tell it from
+	// the collector's other rules.
+	Expression, Items string
 	Failures, Missing uint64
 	// First is the first of the failures, as a debug probe shows it.
 	First error
-	// Logged says a rule of the metric has error_mode log, so its failures
-	// are to be logged, First being the first of those.
+	// Logged says the rule has error_mode log, or a rule alike in all three
+	// has, so its failures are to be logged, First being the first of them.
 	Logged bool
 }
 
@@ -428,11 +449,11 @@ func WithRuleReport(ctx context.Context) (context.Context, *RuleReport) {
 	return context.WithValue(ctx, ruleReportKey{}, report), report
 }
 
-func (r *RuleReport) add(metric string, failures, missing uint64, first error, logged bool) {
+func (r *RuleReport) add(metric, expression, items string, failures, missing uint64, first error, logged bool) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	for i := range r.failures {
-		if r.failures[i].Metric == metric {
+		if r.failures[i].Metric == metric && r.failures[i].Expression == expression && r.failures[i].Items == items {
 			r.failures[i].Failures += failures
 			r.failures[i].Missing += missing
 			if logged && !r.failures[i].Logged {
@@ -441,10 +462,11 @@ func (r *RuleReport) add(metric string, failures, missing uint64, first error, l
 			return
 		}
 	}
-	r.failures = append(r.failures, RuleFailure{Metric: metric, Failures: failures, Missing: missing, First: first, Logged: logged})
+	r.failures = append(r.failures, RuleFailure{Metric: metric, Expression: expression, Items: items, Failures: failures, Missing: missing, First: first, Logged: logged})
 }
 
-// Failures returns the failures reported, one entry per metric name.
+// Failures returns the failures reported, one entry per rule, in the order
+// the rules first failed.
 func (r *RuleReport) Failures() []RuleFailure {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -510,7 +532,7 @@ func applyPreScript(ctx context.Context, d *decode.Decoded, r *fetch.HTTPRespons
 	}
 	if d.Kind == "html" {
 		raw := fmt.Append(nil, data)
-		doc, parseErr := goquery.NewDocumentFromReader(bytes.NewReader(raw))
+		doc, parseErr := decode.ParseHTML(raw)
 		if parseErr != nil {
 			return nil, fmt.Errorf("HTML pre-script output: %w", parseErr)
 		}
@@ -887,7 +909,7 @@ func (l *jqLabel) pair(index int) (paired jqPaired, ok bool) {
 	}
 	text, err := labelText(value)
 	if err != nil {
-		l.noText = fmt.Errorf("label %q value %d %w", l.name, index, err)
+		l.noText = model.Errorf("label %q value %d %w", l.name, model.Position(index), err)
 		return jqPaired{}, false
 	}
 	return jqPaired{text: text, has: true}, true
@@ -909,7 +931,7 @@ func (l *jqLabel) problem(series int) error {
 		}
 		if value != nil && l.taken <= series && l.noText == nil {
 			if _, err := labelText(value); err != nil {
-				l.noText = fmt.Errorf("label %q value %d %w", l.name, l.taken-1, err)
+				l.noText = model.Errorf("label %q value %d %w", l.name, model.Position(l.taken-1), err)
 			}
 		}
 	}
@@ -919,7 +941,7 @@ func (l *jqLabel) problem(series int) error {
 	case series == 0:
 		return nil
 	case l.taken != series:
-		return fmt.Errorf("label %q gave %d values for %d series, so they cannot be paired; give one value, or one per series, or set items to evaluate labels per element", l.name, l.taken, series)
+		return model.Errorf("label %q gave %d values for %d series, so they cannot be paired; give one value, or one per series, or set items to evaluate labels per element", l.name, model.Size(l.taken), model.Size(series))
 	}
 	return l.noText
 }
@@ -993,14 +1015,14 @@ func transformJQItems(ctx context.Context, out *model.MetricSet, data any, rule 
 		}
 		value, err := evaluateJQOne(ctx, item, data, rule.Expression)
 		if err != nil {
-			if carryOn, failure := fail(fmt.Errorf("metric %q item %d expression: %w", rule.Name, index, err)); !carryOn {
+			if carryOn, failure := fail(model.Errorf("metric %q item %d expression: %w", rule.Name, model.Position(index), err)); !carryOn {
 				return failure
 			}
 			continue
 		}
 		if blankValue(value) {
 			if requiredRule(rule, c) {
-				if carryOn, failure := fail(model.MarkError(fmt.Errorf("metric %q value is missing for item %d", rule.Name, index), model.ErrMissingValue)); !carryOn {
+				if carryOn, failure := fail(model.MarkError(model.Errorf("metric %q value is missing for item %d", rule.Name, model.Position(index)), model.ErrMissingValue)); !carryOn {
 					return failure
 				}
 			}
@@ -1008,7 +1030,7 @@ func transformJQItems(ctx context.Context, out *model.MetricSet, data any, rule 
 		}
 		n, err := ruleValue(rule, value)
 		if err != nil {
-			if carryOn, failure := fail(fmt.Errorf("metric %q item %d: %w", rule.Name, index, err)); !carryOn {
+			if carryOn, failure := fail(model.Errorf("metric %q item %d: %w", rule.Name, model.Position(index), err)); !carryOn {
 				return failure
 			}
 			continue
@@ -1022,13 +1044,13 @@ func transformJQItems(ctx context.Context, out *model.MetricSet, data any, rule 
 			}
 			labelValue, err := evaluateJQOne(ctx, item, data, label.Expression)
 			if err != nil {
-				labelErr = fmt.Errorf("metric %q item %d label %q: %w", rule.Name, index, label.Name, err)
+				labelErr = model.Errorf("metric %q item %d label %q: %w", rule.Name, model.Position(index), label.Name, err)
 				break
 			}
 			if labelValue != nil {
 				text, err := labelText(labelValue)
 				if err != nil {
-					labelErr = fmt.Errorf("metric %q item %d label %q %w", rule.Name, index, label.Name, err)
+					labelErr = model.Errorf("metric %q item %d label %q %w", rule.Name, model.Position(index), label.Name, err)
 					break
 				}
 				labels[label.Name] = text
@@ -1036,7 +1058,7 @@ func transformJQItems(ctx context.Context, out *model.MetricSet, data any, rule 
 		}
 		if labelErr == nil {
 			if missing := missingRequiredLabel(rule, labels); missing != nil {
-				labelErr = fmt.Errorf("%w for item %d", missing, index)
+				labelErr = model.Errorf("%w for item %d", missing, model.Position(index))
 			}
 		}
 		if labelErr != nil {
@@ -1206,7 +1228,7 @@ func evaluateJQOne(ctx context.Context, input, root any, expression string) (any
 		count++
 	}
 	if count > 1 {
-		return nil, fmt.Errorf("expression %q produced %d values for one item; it must produce at most one", expression, count)
+		return nil, model.Errorf("expression %q produced %d values for one item; it must produce at most one", expression, model.Size(count))
 	}
 	return first, nil
 }
@@ -1440,6 +1462,10 @@ type xpathNodes[N comparable] struct {
 	// reads, for selectedTexts to read the text of nested nodes once.
 	parent, first, next func(node N) (N, bool)
 	leaf                func(node N) (string, bool)
+	// apart reports whether node's text is no part of the text of a node
+	// around it, as that of a script and a style element of HTML is not
+	// (htmlText); nil where every node's is, which is XML.
+	apart func(node N) bool
 	// What a label read by walking the tree needs (fastXPathLabel), each as
 	// the engine's navigator of the document has it: whether node is an
 	// element, the one kind of node a walk starts from; the value of
@@ -1450,10 +1476,8 @@ type xpathNodes[N comparable] struct {
 	child     func(node N, name string) (N, bool)
 	firstText func(node N) (N, bool)
 	// selectedAttribute is the value of node when node is an attribute a
-	// rule selected, as `//@id` selects them, and the document hands it
-	// over as an attribute, which XML does: the label text() is that value
-	// (xpathLabels). HTML hands one over as an element that holds the value
-	// as its text, where text() is read as at any element.
+	// rule selected, as `//@id` selects them: the label text() is that
+	// value (xpathLabels).
 	selectedAttribute func(node N) (string, bool)
 }
 
@@ -1598,23 +1622,143 @@ func htmlAttribute(node *html.Node, name string) (string, bool) {
 	return "", false
 }
 
+// htmlSelected is the node an expression selected, where the engine stands
+// at it. An attribute, as `//td/@data-value` selects them, is a node made
+// for it as htmlquery makes one — an element by its type, named as the
+// attribute, which holds the value as its text — and has the element it is
+// an attribute of for its parent, which htmlquery's has not. Without the
+// parent nothing but its own value and name could be read from a selected
+// attribute: a label `../@data-server`, `../../@id` or `name(..)` was left
+// off every series of the rule, which were then duplicates of one, where
+// the same rule over XML told them apart.
+func htmlSelected(at *htmlquery.NodeNavigator) *html.Node {
+	if at.NodeType() != xpath.AttributeNode {
+		return at.Current()
+	}
+	value := &html.Node{Type: html.TextNode, Data: at.Value()}
+	return &html.Node{Parent: at.Current(), Type: html.ElementNode, Data: at.LocalName(), FirstChild: value, LastChild: value}
+}
+
+// selectedHTMLAttribute reports whether node is one htmlSelected made of an
+// attribute, and no element of the document: it has its element for a
+// parent and is no child of it, which no node of a parsed document is. A
+// node htmlquery made of an attribute, as the first node a label's
+// expression selects from an element is, has no parent and is read as the
+// element it looks like, for its text.
+func selectedHTMLAttribute(node *html.Node) bool {
+	return node.Type == html.ElementNode && node.Parent != nil && node.PrevSibling == nil && node.Parent.FirstChild != node
+}
+
+// htmlNavigator is where the XPath engine starts from for node, as
+// xmlNavigator is for XML: for an attribute a rule selected, the attribute
+// on its element, found by its name and value, from where `.` is the
+// attribute's value, `name()` its name and `..` its element, as XPath has
+// them. Any other node is started from as htmlquery starts.
+func htmlNavigator(node *html.Node) xpath.NodeNavigator {
+	if !selectedHTMLAttribute(node) {
+		return htmlquery.CreateXPathNavigator(node)
+	}
+	value := ""
+	if node.FirstChild != nil {
+		value = node.FirstChild.Data
+	}
+	at := htmlquery.CreateXPathNavigator(node.Parent)
+	for at.MoveToNextAttribute() {
+		if at.LocalName() == node.Data && at.Value() == value {
+			return at
+		}
+	}
+	// The element no longer has the attribute, which nothing here brings
+	// about: its element stands in for it.
+	return htmlquery.CreateXPathNavigator(node.Parent)
+}
+
+// htmlTextApart reports whether node is a script or a style element, whose
+// text is no part of the text of an element around it (htmlText).
+func htmlTextApart(node *html.Node) bool {
+	return node.Type == html.ElementNode && (node.DataAtom == atom.Script || node.DataAtom == atom.Style)
+}
+
+// htmlText is the text of an HTML node as the css and xpath transforms read
+// it: that of every text node beneath it, comments left out, and without
+// what stands inside a script or a style element beneath it, which is code
+// and no content. goquery's Text and htmlquery's InnerText, which read it
+// before, took those in: a cell that held a number and an inline script was
+// "6var n = 6;", and no number. The node itself may be a script or a style,
+// or a text node inside one: a rule that selects one reads its text, the
+// JSON a page was rendered from or a figure in an inline script. A page
+// without a script or a style in what is read costs no more than it did:
+// one walk of what is beneath the node, and for an element that holds one
+// text node and nothing else, as the cell of a value or of a label nearly
+// always is, that text as it stands, without building the same string anew.
+func htmlText(node *html.Node) string {
+	if only := node.FirstChild; only != nil && only.NextSibling == nil && only.Type == html.TextNode {
+		return only.Data
+	}
+	var text strings.Builder
+	writeHTMLText(&text, node)
+	return text.String()
+}
+
+func writeHTMLText(text *strings.Builder, node *html.Node) {
+	switch node.Type {
+	case html.TextNode:
+		text.WriteString(node.Data)
+		return
+	case html.CommentNode:
+		return
+	}
+	for child := node.FirstChild; child != nil; child = child.NextSibling {
+		if !htmlTextApart(child) {
+			writeHTMLText(text, child)
+		}
+	}
+}
+
 var htmlNodes = xpathNodes[*html.Node]{
 	kind: "HTML XPath",
 	html: true,
-	all:  htmlquery.QuerySelectorAll,
+	// As htmlquery.QuerySelectorAll selects, with each node made by
+	// htmlSelected.
+	all: func(root *html.Node, e *xpath.Expr) []*html.Node {
+		var selected []*html.Node
+		it := e.Select(htmlquery.CreateXPathNavigator(root))
+		for it.MoveNext() {
+			selected = append(selected, htmlSelected(it.Current().(*htmlquery.NodeNavigator)))
+		}
+		return selected
+	},
 	one: func(node *html.Node, e *xpath.Expr) (*html.Node, bool) {
-		found := htmlquery.QuerySelector(node, e)
-		return found, found != nil
+		if !selectedHTMLAttribute(node) {
+			found := htmlquery.QuerySelector(node, e)
+			return found, found != nil
+		}
+		// From an attribute, as htmlquery.QuerySelector selects from any
+		// other node.
+		it := e.Select(htmlNavigator(node))
+		if !it.MoveNext() {
+			return nil, false
+		}
+		return htmlSelected(it.Current().(*htmlquery.NodeNavigator)), true
 	},
 	attr: func(node *html.Node, name string) string {
+		if selectedHTMLAttribute(node) {
+			// A selected attribute has none of its own: asked for by its
+			// own name it gives its value, as xmlquery's does and as
+			// htmlquery's did while it had no parent.
+			if name == node.Data {
+				return htmlText(node)
+			}
+			return ""
+		}
 		if value := htmlquery.SelectAttr(node, name); value != "" {
 			return value
 		}
 		value, _ := htmlAttribute(node, name)
 		return value
 	},
-	text:     htmlquery.InnerText,
-	navigate: func(node *html.Node) xpath.NodeNavigator { return htmlquery.CreateXPathNavigator(node) },
+	text:     htmlText,
+	navigate: htmlNavigator,
 	parent:   func(node *html.Node) (*html.Node, bool) { return linked(node.Parent) },
 	first:    func(node *html.Node) (*html.Node, bool) { return linked(node.FirstChild) },
 	next:     func(node *html.Node) (*html.Node, bool) { return linked(node.NextSibling) },
@@ -1627,6 +1771,12 @@ var htmlNodes = xpathNodes[*html.Node]{
 		}
 		return "", false
 	},
+	apart: htmlTextApart,
+	// A selected attribute is an element to the walks of fastXPathLabel, as
+	// it was while it had no parent: its text is its value, it has nothing
+	// beneath it but that, and its parent is its element, so each walk
+	// reads from it what the engine reads from the attribute, without the
+	// engine (TestXPathLabelFastPathsAgreeWithTheEngine).
 	element: func(node *html.Node) bool { return node.Type == html.ElementNode },
 	// htmlquery's navigator finds attributes on an element alone, by key,
 	// and knows no prefix or namespace of an attribute or an element.
@@ -1647,7 +1797,12 @@ var htmlNodes = xpathNodes[*html.Node]{
 		}
 		return nil, false
 	},
-	selectedAttribute: func(*html.Node) (string, bool) { return "", false },
+	selectedAttribute: func(node *html.Node) (string, bool) {
+		if !selectedHTMLAttribute(node) {
+			return "", false
+		}
+		return htmlText(node), true
+	},
 }
 
 // selectedTexts gives the text of each node a rule selected. A node's text is
@@ -1722,7 +1877,9 @@ func (s *selectedTexts[N]) within(node, ancestor N) bool {
 }
 
 // walk reads the text of top, itself selected, and of every selected node
-// beneath it, in one pass over what is beneath it.
+// beneath it, in one pass over what is beneath it. A node whose text is no
+// part of the text around it (xpathNodes.apart) is passed over with all that
+// is selected within it, which text then reads each on its own.
 func (s *selectedTexts[N]) walk(top N) {
 	type span struct{ at, start, end int }
 	var text strings.Builder
@@ -1735,7 +1892,9 @@ func (s *selectedTexts[N]) walk(top N) {
 			text.WriteString(own)
 		} else {
 			for child, ok := s.nodes.first(node); ok; child, ok = s.nodes.next(child) {
-				read(child)
+				if s.nodes.apart == nil || !s.nodes.apart(child) {
+					read(child)
+				}
 			}
 		}
 		if selected {
@@ -1755,7 +1914,8 @@ func transformXPath(ctx context.Context, root *xmlquery.Node, rules []model.Metr
 
 // transformHTMLXPath runs XPath over the document the html decoder already
 // parsed: goquery and htmlquery both build it with html.Parse, so the
-// document's root node is what htmlquery would have parsed from the body.
+// document's root node is what htmlquery would have parsed from the body,
+// but for the content of its templates (decode.ParseHTML).
 func transformHTMLXPath(ctx context.Context, doc *goquery.Document, rules []model.MetricRule, c *model.Collector) (*model.MetricSet, error) {
 	return transformXPathNodes(ctx, doc.Nodes[0], htmlNodes, rules, c, nil)
 }
@@ -1792,19 +1952,20 @@ func xpathText(value any) string {
 }
 
 // addComputedXPathSeries makes the one series of a rule whose expression
-// computes a value. A number that is not one — sum() over text, NaN — and an
-// empty or non-numeric string are the rule's missing value.
+// computes a value. A number that is not one — number() of text, NaN — and
+// an empty or non-numeric string are the rule's missing value, as is a sum()
+// over text that is no number, which never comes here (xpathSumRule).
 func addComputedXPathSeries[N comparable](ctx context.Context, out *model.MetricSet, nodes xpathNodes[N], root N, rule model.MetricRule, c *model.Collector, plan []xpathLabel, value any) error {
 	var number float64
 	var problem error
 	switch v := value.(type) {
 	case float64:
 		if math.IsNaN(v) {
-			problem = model.MarkError(fmt.Errorf("%s %q computed NaN, not a number", nodes.kind, rule.Expression), model.ErrMissingValue)
+			problem = model.MarkError(fmt.Errorf("metric %q %s %q computed NaN, not a number", rule.Name, nodes.kind, rule.Expression), model.ErrMissingValue)
 		}
 	case string:
 		if isBlank(v) {
-			problem = model.MarkError(fmt.Errorf("%s %q computed an empty string", nodes.kind, rule.Expression), model.ErrMissingValue)
+			problem = model.MarkError(fmt.Errorf("metric %q %s %q computed an empty string", rule.Name, nodes.kind, rule.Expression), model.ErrMissingValue)
 		}
 	}
 	if problem == nil {
@@ -1830,6 +1991,14 @@ func addComputedXPathSeries[N comparable](ctx context.Context, out *model.Metric
 		return ruleFailure(c, rule, unreadable)
 	}
 	labels := xpathLabels(nodes, root, plan)
+	if summed := summedXPathLabels(plan); summed != nil {
+		if unreadable := readSummedXPathLabels(nodes, root, rule, plan, summed, -1, labels); unreadable != nil {
+			if handleMetricError(ctx, c, rule, unreadable) {
+				return nil
+			}
+			return ruleFailure(c, rule, unreadable)
+		}
+	}
 	if missing := missingRequiredLabel(rule, labels); missing != nil {
 		if handleMetricError(ctx, c, rule, missing) {
 			return nil
@@ -1848,18 +2017,15 @@ func transformXPathNodes[N comparable](ctx context.Context, root N, nodes xpathN
 	for _, rule := range rules {
 		program, err := expr.CompileXPath(rule.Expression, namespaces)
 		if err != nil {
+			err = fmt.Errorf("metric %q %s %q: %w", rule.Name, nodes.kind, rule.Expression, err)
 			if handleMetricError(ctx, c, rule, err) {
 				continue
 			}
-			return nil, ruleFailure(c, rule, fmt.Errorf("%s %q: %w", nodes.kind, rule.Expression, err))
+			return nil, ruleFailure(c, rule, err)
 		}
-		// How each label is read is decided here, once for the rule, and
-		// not at each of its nodes (planXPathLabels).
-		expression, plan := program.Get(), planXPathLabels(rule, namespaces, nodes.html)
-		err = xpathRule(ctx, out, root, nodes, rule, c, plan, expression)
-		releaseXPathLabels(plan)
-		program.Put(expression)
-		if err != nil {
+		// A panic of the engine while the rule is evaluated is the rule's
+		// failure (xpathfailure.go).
+		if err := evaluateXPathRule(ctx, out, root, nodes, rule, c, namespaces, program); err != nil {
 			return nil, err
 		}
 	}
@@ -1868,15 +2034,24 @@ func transformXPathNodes[N comparable](ctx context.Context, root N, nodes xpathN
 
 // xpathRule adds the series of one rule, whose compiled expression and
 // labels' plan it is given, to out. An error is the scrape's failure; a
-// series the rule's error mode carries on without is left out.
-func xpathRule[N comparable](ctx context.Context, out *model.MetricSet, root N, nodes xpathNodes[N], rule model.MetricRule, c *model.Collector, plan []xpathLabel, expression *xpath.Expr) error {
+// series the rule's error mode carries on without is left out. A failure
+// names the metric first, and the node it belongs to by its place among the
+// nodes the rule selected, from 0, as a css rule's names its item. sums are
+// the calls of sum() the exporter reads the nodes of (xpathsum.go), nil for
+// an expression without one.
+func xpathRule[N comparable](ctx context.Context, out *model.MetricSet, root N, nodes xpathNodes[N], rule model.MetricRule, c *model.Collector, plan []xpathLabel, expression *xpath.Expr, sums *expr.XPathSums) error {
+	if sums != nil {
+		if done, err := xpathSumRule(ctx, out, nodes, root, rule, c, plan, sums); done {
+			return err
+		}
+	}
 	if value, computed := xpathValue(nodes, root, expression); computed {
 		return addComputedXPathSeries(ctx, out, nodes, root, rule, c, plan, value)
 	}
 	selected := nodes.all(root, expression)
 	if len(selected) == 0 {
 		if requiredRule(rule, c) {
-			missing := model.MarkError(fmt.Errorf("%s %q matched no nodes", nodes.kind, rule.Expression), model.ErrMissingValue)
+			missing := model.MarkError(fmt.Errorf("metric %q %s %q matched no nodes", rule.Name, nodes.kind, rule.Expression), model.ErrMissingValue)
 			if handleMetricError(ctx, c, rule, missing) {
 				return nil
 			}
@@ -1894,6 +2069,7 @@ func xpathRule[N comparable](ctx context.Context, out *model.MetricSet, root N, 
 	}
 	out.Metrics = growSeries(ctx, out.Metrics, len(selected))
 	texts := selectedTexts[N]{nodes: nodes, selected: selected}
+	summed := summedXPathLabels(plan)
 	for i, node := range selected {
 		// A node costs what is beneath it to read, and a label what its
 		// expression walks, so the deadline is asked after before each.
@@ -1904,7 +2080,7 @@ func xpathRule[N comparable](ctx context.Context, out *model.MetricSet, root N, 
 		text := texts.text(i)
 		if isBlank(text) {
 			if requiredRule(rule, c) {
-				missing := model.MarkError(fmt.Errorf("%s %q selected a node without a value", nodes.kind, rule.Expression), model.ErrMissingValue)
+				missing := model.MarkError(model.Errorf("metric %q value is missing for node %d: %s %q selected a node without a value", rule.Name, model.Position(i), nodes.kind, rule.Expression), model.ErrMissingValue)
 				if handleMetricError(ctx, c, rule, missing) {
 					continue
 				}
@@ -1914,12 +2090,22 @@ func xpathRule[N comparable](ctx context.Context, out *model.MetricSet, root N, 
 		}
 		value, err := ruleTextValue(rule, text)
 		if err != nil {
+			err = model.Errorf("metric %q node %d: %w", rule.Name, model.Position(i), err)
 			if handleMetricError(ctx, c, rule, err) {
 				continue
 			}
-			return ruleFailure(c, rule, fmt.Errorf("metric %q: %w", rule.Name, err))
+			return ruleFailure(c, rule, err)
+		}
+		if summed != nil {
+			if unreadable := readSummedXPathLabels(nodes, node, rule, plan, summed, i, labels); unreadable != nil {
+				if handleMetricError(ctx, c, rule, unreadable) {
+					continue
+				}
+				return ruleFailure(c, rule, unreadable)
+			}
 		}
 		if missing := missingRequiredLabel(rule, labels); missing != nil {
+			missing = model.Errorf("%w for node %d", missing, model.Position(i))
 			if handleMetricError(ctx, c, rule, missing) {
 				continue
 			}
@@ -1953,15 +2139,16 @@ func transformCSS(ctx context.Context, doc *goquery.Document, rules []model.Metr
 		}
 		matcher, err := expr.CompileCSS(rule.Expression)
 		if err != nil {
+			err = fmt.Errorf("metric %q CSS selector %q: %w", rule.Name, rule.Expression, err)
 			if handleMetricError(ctx, c, rule, err) {
 				continue
 			}
-			return nil, ruleFailure(c, rule, fmt.Errorf("CSS selector %q: %w", rule.Expression, err))
+			return nil, ruleFailure(c, rule, err)
 		}
 		selection := doc.FindMatcher(matcher)
 		if selection.Length() == 0 {
 			if requiredRule(rule, c) {
-				missing := model.MarkError(fmt.Errorf("CSS selector %q matched no nodes", rule.Expression), model.ErrMissingValue)
+				missing := model.MarkError(fmt.Errorf("metric %q CSS selector %q matched no nodes", rule.Name, rule.Expression), model.ErrMissingValue)
 				if handleMetricError(ctx, c, rule, missing) {
 					continue
 				}
@@ -1973,16 +2160,16 @@ func transformCSS(ctx context.Context, doc *goquery.Document, rules []model.Metr
 		// validation refuses expression labels, which need items. Several
 		// elements would be several series no label tells apart.
 		if selection.Length() > 1 {
-			err := fmt.Errorf("metric %q CSS selector %q matched %d elements, but without items a css metric is one value; set items to the elements, such as '#servers tr:has(td)', and select the value and each label within one", rule.Name, rule.Expression, selection.Length())
+			err := model.Errorf("metric %q CSS selector %q matched %d elements, but without items a css metric is one value; set items to the elements, such as '#servers tr:has(td)', and select the value and each label within one", rule.Name, rule.Expression, model.Size(selection.Length()))
 			if handleMetricError(ctx, c, rule, err) {
 				continue
 			}
 			return nil, ruleFailure(c, rule, err)
 		}
-		text := strings.TrimSpace(selection.Text())
+		text := strings.TrimSpace(htmlText(selection.Nodes[0]))
 		if isBlank(text) {
 			if requiredRule(rule, c) {
-				missing := model.MarkError(fmt.Errorf("CSS selector %q matched an element without a value", rule.Expression), model.ErrMissingValue)
+				missing := model.MarkError(fmt.Errorf("metric %q value is missing: CSS selector %q matched an element without a value", rule.Name, rule.Expression), model.ErrMissingValue)
 				if handleMetricError(ctx, c, rule, missing) {
 					continue
 				}
@@ -2057,9 +2244,9 @@ func transformCSSItems(ctx context.Context, out *model.MetricSet, doc *goquery.D
 		case 0:
 			return "", false, nil
 		case 1:
-			return strings.TrimSpace(found.Text()), true, nil
+			return strings.TrimSpace(htmlText(found.Nodes[0])), true, nil
 		default:
-			return "", false, fmt.Errorf("metric %q item %d: CSS selector %q matched %d elements; within an item it must match at most one", rule.Name, index, selector, found.Length())
+			return "", false, model.Errorf("metric %q item %d: CSS selector %q matched %d elements; within an item it must match at most one", rule.Name, model.Position(index), selector, model.Size(found.Length()))
 		}
 	}
 	for index := range items.Length() {
@@ -2076,13 +2263,13 @@ func transformCSSItems(ctx context.Context, out *model.MetricSet, doc *goquery.D
 			if found {
 				why = "matched an element without a value"
 			}
-			err = model.MarkError(fmt.Errorf("metric %q value is missing for item %d: CSS selector %q %s", rule.Name, index, rule.Expression, why), model.ErrMissingValue)
+			err = model.MarkError(model.Errorf("metric %q value is missing for item %d: CSS selector %q %s", rule.Name, model.Position(index), rule.Expression, why), model.ErrMissingValue)
 		}
 		var value float64
 		if err == nil {
 			value, err = ruleTextValue(rule, text)
 			if err != nil {
-				err = fmt.Errorf("metric %q item %d: %w", rule.Name, index, err)
+				err = model.Errorf("metric %q item %d: %w", rule.Name, model.Position(index), err)
 			}
 		}
 		labels := make(map[string]string, len(rule.Labels))
@@ -2106,7 +2293,7 @@ func transformCSSItems(ctx context.Context, out *model.MetricSet, doc *goquery.D
 		}
 		if err == nil {
 			if missing := missingRequiredLabel(rule, labels); missing != nil {
-				err = fmt.Errorf("%w for item %d", missing, index)
+				err = model.Errorf("%w for item %d", missing, model.Position(index))
 			}
 		}
 		if err != nil {
@@ -2140,10 +2327,210 @@ func csvRow(raw any) map[string]any {
 	return nil
 }
 
+// csvNotRows is the failure of a csv transform that was given something
+// other than rows, which says what it was given and by whom. The csv decoder
+// gives rows whatever the body holds, and a response another decoder read is
+// refused before it gets here (validateTransformInput), so on a scrape it is
+// a pre-script that left something else in data: the message said `CSV
+// transform requires a header-based CSV response`, which blamed the response.
+// It is the script's failure then, and marked as one, as what a pre-script
+// of a css or xpath transform leaves that is no markup is (applyPreScript).
+func csvNotRows(c *model.Collector, data any) error {
+	if strings.TrimSpace(c.Transform.PreScript) != "" {
+		return model.MarkError(fmt.Errorf("python pre-script of a csv transform left data as %s; it must leave a list of rows, each row a dict by column name or a list by column number", showScriptValue(data)), model.ErrScriptFailed)
+	}
+	return fmt.Errorf("csv transform reads the rows the csv decoder gives, and the decoded response is %s; set decoder.type to csv", model.ShowValue(data))
+}
+
+// csvNotARow is the failure of a csv transform at a row, counted from 1,
+// that is neither a dict nor a list, as a pre-script may leave one: every
+// column of it was missing, as if the response lacked them. A pre-script's
+// is marked as the script's failure, as csvNotRows' is.
+func csvNotARow(c *model.Collector, number int, row any) error {
+	if strings.TrimSpace(c.Transform.PreScript) != "" {
+		return model.MarkError(model.Errorf("python pre-script of a csv transform left row %d as %s; a row must be a dict by column name or a list by column number", model.Position(number), showScriptValue(row)), model.ErrScriptFailed)
+	}
+	return model.Errorf("csv transform reads rows that are a mapping by column name or a list by column number, and row %d of the decoded response is %s", model.Position(number), model.ShowValue(row))
+}
+
+// csvColumnsShown is how many of a response's column names an error lists.
+const csvColumnsShown = 12
+
+// csvColumns answers whether the rows of one response have a column, which
+// tells a column the response does not have from a cell that is empty: the
+// first is a rule that names what is not there, a header in another case or
+// split by another delimiter, and reads the same on every scrape; the second
+// is the data's. A response has a column when any row of it does: with a
+// header row every row has every column the header names, the ones a short
+// row lacks being empty in it; without one, a row has the columns up to its
+// own length; and the rows a pre-script left have the keys it gave each.
+//
+// Nothing is looked for until a row lacks a column a rule names, and then
+// the rows are gone through once for that column and the answer kept.
+type csvColumns struct {
+	rows []any
+	// has is whether the response has a column, for each one asked after;
+	// absent the error of each that it does not have.
+	has    map[string]bool
+	absent map[string]csvAbsentColumn
+	// shown is what the response's columns are, as an error says it, made
+	// when one first does, of names, the names of the rows read by name, in
+	// order, and numbered, what the rows read by number have; listed says
+	// those two were gathered.
+	shown    string
+	names    []string
+	numbered string
+	listed   bool
+}
+
+// csvAbsentColumn is the error of a column no row has: as a label's failure
+// has it, and marked as the missing value it is of a rule that reads its
+// value from the column.
+type csvAbsentColumn struct{ err, missing error }
+
+// inResponse reports whether any row has the column.
+func (k *csvColumns) inResponse(column string) bool {
+	if has, asked := k.has[column]; asked {
+		return has
+	}
+	// A row without a header row has its columns by number, from 1, written
+	// as the transform names them (csvRow).
+	number := 0
+	if n, err := strconv.Atoi(column); err == nil && n > 0 && strconv.Itoa(n) == column {
+		number = n
+	}
+	has := false
+	for _, raw := range k.rows {
+		switch row := raw.(type) {
+		case map[string]any:
+			_, has = row[column]
+		case []any:
+			has = number > 0 && number <= len(row)
+		}
+		if has {
+			break
+		}
+	}
+	if k.has == nil {
+		k.has = map[string]bool{}
+	}
+	k.has[column] = has
+	return has
+}
+
+// notInResponse is the error of a column no row has, which names the columns
+// the rows do have: one error for each column, however many rows ask.
+func (k *csvColumns) notInResponse(column string) csvAbsentColumn {
+	if absent, made := k.absent[column]; made {
+		return absent
+	}
+	err := fmt.Errorf("CSV column %q is not in the response, %s", column, k.describe(column))
+	absent := csvAbsentColumn{err: err, missing: model.MarkError(err, model.ErrMissingValue)}
+	if k.absent == nil {
+		k.absent = map[string]csvAbsentColumn{}
+	}
+	k.absent[column] = absent
+	return absent
+}
+
+// describe says which columns the rows have, to a rule that asked for
+// column: the names of rows read by name, the first csvColumnsShown of them,
+// and how many columns the longest of the rows read by number has. The
+// names are in order, but for those that are column except for the case of
+// their letters or the blanks around them, which come first: the list is
+// cut, and in a wide table the name that says what is wrong — used, to a
+// rule that names Used — would be among those left out. The rows are gone
+// through once, and the text of a column that has no such name is made
+// once.
+func (k *csvColumns) describe(column string) string {
+	if !k.listed {
+		named, longest := map[string]struct{}{}, 0
+		for _, raw := range k.rows {
+			switch row := raw.(type) {
+			case map[string]any:
+				for name := range row {
+					if _, seen := named[name]; !seen {
+						named[name] = struct{}{}
+						k.names = append(k.names, name)
+					}
+				}
+			case []any:
+				longest = max(longest, len(row))
+			}
+		}
+		slices.Sort(k.names)
+		switch {
+		case longest == 1:
+			k.numbered = "longest row has 1 column, read by number as 1"
+		case longest > 1:
+			k.numbered = fmt.Sprintf("longest row has %d columns, read by number from 1 to %d", longest, longest)
+		}
+		k.listed = true
+	}
+	for _, name := range k.names {
+		if csvNearColumn(name, column) {
+			return csvColumnsText(k.names, k.numbered, column)
+		}
+	}
+	if k.shown == "" {
+		k.shown = csvColumnsText(k.names, k.numbered, column)
+	}
+	return k.shown
+}
+
+// csvNearColumn reports whether name is column but for the case of its
+// letters and the blanks around it.
+func csvNearColumn(name, column string) bool {
+	return strings.EqualFold(strings.TrimSpace(name), strings.TrimSpace(column))
+}
+
+// csvColumnsText puts a response's columns into words: the first
+// csvColumnsShown of names, those near column first (csvNearColumn), and
+// numbered, what its rows read by number have.
+func csvColumnsText(names []string, numbered, column string) string {
+	if len(names) == 0 {
+		if numbered == "" {
+			return "which has no columns"
+		}
+		return "whose " + numbered
+	}
+	var text strings.Builder
+	text.WriteString("whose columns are ")
+	if len(names) == 1 {
+		text.Reset()
+		text.WriteString("whose only column is ")
+	}
+	shown := 0
+	for _, near := range []bool{true, false} {
+		for _, name := range names {
+			if shown == csvColumnsShown {
+				break
+			}
+			if csvNearColumn(name, column) != near {
+				continue
+			}
+			if shown > 0 {
+				text.WriteString(", ")
+			}
+			text.WriteString(model.QuoteValue(name))
+			shown++
+		}
+	}
+	if more := len(names) - csvColumnsShown; more > 0 {
+		fmt.Fprintf(&text, " and %d more", more)
+	}
+	if numbered != "" {
+		text.WriteString(", and whose ")
+		text.WriteString(numbered)
+	}
+	text.WriteString("; column names are matched exactly")
+	return text.String()
+}
+
 func transformCSV(ctx context.Context, data any, rules []model.MetricRule, c *model.Collector) (*model.MetricSet, error) {
 	rows, ok := data.([]any)
 	if !ok {
-		return nil, errors.New("CSV transform requires a header-based CSV response")
+		return nil, csvNotRows(c, data)
 	}
 	out := &model.MetricSet{}
 	// A response without a row has no value for any rule, as a regex that
@@ -2164,9 +2551,28 @@ func transformCSV(ctx context.Context, data any, rules []model.MetricRule, c *mo
 	}
 	// Room for a series of every row for each rule whose column the response
 	// has, which the first row tells of rows read by header name.
+	//
+	// The rows are read one after another, each by every rule, so what fails
+	// first, what is logged and where the series limit stops are as the rows'
+	// order makes them. The series are kept rule by rule, though, each rule's
+	// together in the order of the rows: the exposition formats want a
+	// metric's series together, and a set that has them apart costs the
+	// writer a second pass on every probe (appendMetricSet in
+	// internal/exporter). So with several rules each rule with a column has a
+	// part of the room, as long as the rows are many, one part after another
+	// in the rules' order: next[r] is where rule r's next series goes and
+	// ends[r] where its part ends. The parts are closed up afterwards over
+	// what the rows left empty. Without room for the parts within the series
+	// limit there are none, and a rule without a part, whose column only a
+	// later row has, as a pre-script may leave them, adds its series after
+	// the parts; both leave the series in the order of the rows, as one rule
+	// has them anyway.
+	var next, ends []int
+	parts := 0
 	if len(rows) > 0 {
 		columns := len(rules)
-		if first, named := rows[0].(map[string]any); named {
+		first, named := rows[0].(map[string]any)
+		if named {
 			columns = 0
 			for i := range rules {
 				if _, exists := first[rules[i].Expression]; exists {
@@ -2174,18 +2580,51 @@ func transformCSV(ctx context.Context, data any, rules []model.MetricRule, c *mo
 				}
 			}
 		}
-		out.Metrics = growSeries(ctx, out.Metrics, len(rows)*columns)
+		if room := seriesRoom(ctx); len(rules) > 1 && columns > 0 && (room < 0 || room >= len(rows)*columns) {
+			parts = len(rows) * columns
+			out.Metrics = make([]model.Metric, parts)
+			next, ends = make([]int, len(rules)), make([]int, len(rules))
+			at := 0
+			for i := range rules {
+				next[i] = at
+				if _, exists := first[rules[i].Expression]; exists || !named {
+					at += len(rows)
+				}
+				ends[i] = at
+			}
+		} else {
+			out.Metrics = growSeries(ctx, out.Metrics, len(rows)*columns)
+		}
 	}
-	for _, raw := range rows {
+	responseColumns := csvColumns{rows: rows}
+	// unreadable is the rules that have failed for a label whose column the
+	// response does not have, which fail once and make no series.
+	var unreadable []bool
+	for at, raw := range rows {
 		if ctx.Err() != nil {
 			return nil, interruptedAt(ctx, "")
 		}
 		row := csvRow(raw)
-		for _, rule := range rules {
+		if row == nil {
+			if _, named := raw.(map[string]any); !named {
+				return nil, csvNotARow(c, at+1, raw)
+			}
+		}
+		for r, rule := range rules {
+			if unreadable != nil && unreadable[r] {
+				continue
+			}
 			value, exists := row[rule.Expression]
 			if !exists || blankValue(value) {
 				if requiredRule(rule, c) {
-					missing := model.MarkError(fmt.Errorf("CSV column %q is missing", rule.Expression), model.ErrMissingValue)
+					// A column no row has, or a cell that is empty in this
+					// row, the header's line not counted among the rows.
+					var missing error
+					if !exists && !responseColumns.inResponse(rule.Expression) {
+						missing = responseColumns.notInResponse(rule.Expression).missing
+					} else {
+						missing = model.MarkError(model.Errorf("CSV column %q is empty in row %d", rule.Expression, model.Position(at+1)), model.ErrMissingValue)
+					}
 					if handleMetricError(ctx, c, rule, missing) {
 						continue
 					}
@@ -2215,6 +2654,18 @@ func transformCSV(ctx context.Context, data any, rules []model.MetricRule, c *mo
 						break
 					}
 					labels[label.Name] = text
+				} else if !exists && !responseColumns.inResponse(label.Expression) {
+					// A column no row has is the rule's failure, once for
+					// the response, as a label that cannot be read is in
+					// the xpath transform (unreadableXPathLabel), and not a
+					// label left off every series without a word. A cell
+					// that is empty leaves the label off.
+					labelErr = fmt.Errorf("metric %q label %q: %w", rule.Name, label.Name, responseColumns.notInResponse(label.Expression).err)
+					if unreadable == nil {
+						unreadable = make([]bool, len(rules))
+					}
+					unreadable[r] = true
+					break
 				}
 			}
 			if labelErr != nil {
@@ -2232,7 +2683,31 @@ func transformCSV(ctx context.Context, data any, rules []model.MetricRule, c *mo
 			if err := takeSeries(ctx); err != nil {
 				return nil, err
 			}
-			out.Metrics = append(out.Metrics, model.Metric{Name: rule.Name, Help: rule.Description, Type: rule.Type, Value: n, Labels: labels})
+			series := model.Metric{Name: rule.Name, Help: rule.Description, Type: rule.Type, Value: n, Labels: labels}
+			if parts > 0 && next[r] < ends[r] {
+				out.Metrics[next[r]] = series
+				next[r]++
+				continue
+			}
+			out.Metrics = append(out.Metrics, series)
+		}
+	}
+	if parts > 0 {
+		// Each part's series moved down to where the part before it ended,
+		// then the series added after the parts, and what is left over
+		// cleared, so that it keeps no labels alive.
+		filled, start := 0, 0
+		for r := range next {
+			if filled != start {
+				copy(out.Metrics[filled:], out.Metrics[start:next[r]])
+			}
+			filled += next[r] - start
+			start = ends[r]
+		}
+		if filled < parts {
+			filled += copy(out.Metrics[filled:], out.Metrics[parts:])
+			clear(out.Metrics[filled:])
+			out.Metrics = out.Metrics[:filled]
 		}
 	}
 	return noSeriesIsNil(out), nil

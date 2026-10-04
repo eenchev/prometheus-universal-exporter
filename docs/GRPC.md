@@ -206,8 +206,18 @@ them. Left out, each file's own directory is one, which suits files that
 import each other by their bare names. The well-known types are built in,
 and imports are resolved only on the local filesystem, not from a registry
 such as Buf's. A file that does not compile fails the configuration with the
-compiler's message, naming the file and line; the files are compiled again
-when one of them, or a file they import, changes on disk.
+compiler's message, naming the file and line. The files are compiled again,
+at the next call and without a reload, when one of them changes on disk, or
+a file they import, through however many files, or when a file appears
+earlier in the import paths than the one that was compiled, which is then
+the one read, as `protoc` would. A file of the same name later in the import
+paths is never read.
+
+With [`--config.watch`](CONFIGURATION.md#watching-the-configuration), a
+reload rejected because one of these files did not compile, was missing or
+lacked what the configuration or a static target's message uses is tried
+again when that file changes or appears, an imported one as well as one the
+configuration names.
 
 ### Health checks
 

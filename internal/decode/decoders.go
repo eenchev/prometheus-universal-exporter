@@ -2,11 +2,14 @@ package decode
 
 import (
 	"bytes"
-	"encoding/json"
+	"encoding/csv"
 	"errors"
 	"fmt"
 	"io"
+	"path/filepath"
 	"regexp"
+	"runtime"
+	"slices"
 	"strings"
 
 	"github.com/PuerkitoBio/goquery"
@@ -41,50 +44,86 @@ type HTMLDecoded struct {
 // detectFormat picks the decoder for a collector whose decoder.type is auto,
 // by the response's content type, and then by its content.
 func detectFormat(r *fetch.HTTPResponse) string {
+	kind, _ := detectFormatKeeping(r)
+	return kind
+}
+
+// sniffedJSON is what a detection that read the body as JSON, to see
+// whether it is JSON, made of it: the value, and the body it is the value
+// of. Decode returns it rather than reading the same body a second time.
+type sniffedJSON struct {
+	body  []byte
+	value any
+}
+
+// of returns the value when body is the body it was read from, the same
+// bytes in the same place, and says whether it is.
+func (s *sniffedJSON) of(body []byte) (any, bool) {
+	if s == nil || len(body) == 0 || len(body) != len(s.body) || &body[0] != &s.body[0] {
+		return nil, false
+	}
+	return s.value, true
+}
+
+// detectFormatKeeping is detectFormat, and what the detection read of a
+// body it took for JSON by its content.
+func detectFormatKeeping(r *fetch.HTTPResponse) (string, *sniffedJSON) {
 	rawCT := strings.ToLower(r.Headers.Get("Content-Type"))
 	ct := strings.TrimSpace(strings.Split(rawCT, ";")[0])
 	switch {
 	case ct == "application/json" || strings.HasSuffix(ct, "+json"):
-		return "json"
+		return "json", nil
 	case ct == "application/yaml" || ct == "text/yaml" || ct == "application/x-yaml":
-		return "yaml"
+		return "yaml", nil
 	case ct == "application/xml" || ct == "text/xml":
-		return "xml"
+		return "xml", nil
 	case ct == "text/csv":
-		return "csv"
+		return "csv", nil
 	case ct == "text/html":
-		return "html"
+		return "html", nil
 	case ct == "application/openmetrics-text" || ct == "text/plain" && strings.Contains(rawCT, "version=0.0.4"):
-		return "prometheus"
+		return "prometheus", nil
 	case ct == fetch.GraphiteContentType:
-		return "graphite"
+		return "graphite", nil
 	}
 	b := bytes.TrimSpace(r.Body)
 	// JSON first: a JSON document may hold "# HELP " in a string, while
 	// Prometheus exposition, which starts with a comment or a name, never
 	// parses as JSON.
+	//
+	// Whether it parses is found by decoding it, with the decoder the json
+	// decoder is (sniffJSON), and what that made is kept: the body was
+	// parsed here by encoding/json, the result thrown away, and then
+	// decoded, so a JSON answer without a JSON Content-Type was read twice.
 	if len(b) > 0 && (b[0] == '{' || b[0] == '[') {
-		var x any
-		if json.Unmarshal(b, &x) == nil {
-			return "json"
+		if value, ok := sniffJSON(b); ok {
+			// The value is the body's when the decoder reads the body as
+			// it read b: when nothing but the whitespace of JSON was
+			// trimmed. A form feed or a no-break space before or after the
+			// document is none, and the decode that follows refuses the
+			// body over it, saying where it is.
+			if len(bytes.Trim(r.Body, " \t\r\n")) == len(b) {
+				return "json", &sniffedJSON{body: r.Body, value: value}
+			}
+			return "json", nil
 		}
 	}
 	if bytes.Contains(b, []byte("# TYPE ")) || bytes.Contains(b, []byte("# HELP ")) {
-		return "prometheus"
+		return "prometheus", nil
 	}
 	// An HTML page is markup too, and rarely well-formed XML, so it is
 	// recognised by its doctype or root element before anything starting
 	// with < is taken for XML.
 	if looksLikeHTML(b) {
-		return "html"
+		return "html", nil
 	}
 	if bytes.HasPrefix(b, []byte("<")) {
-		return "xml"
+		return "xml", nil
 	}
 	if looksLikeCarbon(b) {
-		return "graphite"
+		return "graphite", nil
 	}
-	return "text"
+	return "text", nil
 }
 
 // looksLikeHTML reports whether markup starts with an HTML doctype or an
@@ -129,8 +168,9 @@ func Decode(r *fetch.HTTPResponse, c *model.Collector) (*Decoded, error) {
 		return nil, err
 	}
 	kind := c.Decoder.Type
+	var sniffed *sniffedJSON
 	if kind == "" || kind == "auto" {
-		kind = detectFormat(r)
+		kind, sniffed = detectFormatKeeping(r)
 	}
 	if !named {
 		if err := convertFromDocument(r, kind); err != nil {
@@ -139,7 +179,11 @@ func Decode(r *fetch.HTTPResponse, c *model.Collector) (*Decoded, error) {
 	}
 	switch kind {
 	case "json":
-		// Read in one pass into the values the transforms use (jsonvalue.go).
+		// Read in one pass into the values the transforms use (jsonvalue.go),
+		// which a detection by content has done already.
+		if v, read := sniffed.of(r.Body); read {
+			return &Decoded{Kind: kind, Data: v, Raw: r.Body}, nil
+		}
 		v, err := decodeJSON(r.Body)
 		if err != nil {
 			return nil, fmt.Errorf("JSON decode: %w", err)
@@ -160,7 +204,7 @@ func Decode(r *fetch.HTTPResponse, c *model.Collector) (*Decoded, error) {
 		}
 		return &Decoded{Kind: kind, Data: n, Raw: r.Body}, nil
 	case "html":
-		d, err := goquery.NewDocumentFromReader(bytes.NewReader(r.Body))
+		d, err := ParseHTML(r.Body)
 		if err != nil {
 			return nil, fmt.Errorf("HTML decode: %w", err)
 		}
@@ -188,6 +232,12 @@ func decodeCSV(r *fetch.HTTPResponse, c *model.Collector) (*Decoded, error) {
 	}
 	rows, err := readCSV(r.Body, delim, cfg.TrimSpace)
 	if err != nil {
+		// The line and the column the reader names are where in the body
+		// it stopped, which is no part of what the failure is to the log.
+		var parse *csv.ParseError
+		if errors.As(err, &parse) {
+			err = model.SameFailureAs(err, strings.Replace(err.Error(), parse.Error(), "parse error: "+parse.Err.Error(), 1))
+		}
 		return nil, fmt.Errorf("CSV decode: %w", err)
 	}
 	if len(rows) == 0 {
@@ -220,7 +270,17 @@ func decodeCSV(r *fetch.HTTPResponse, c *model.Collector) (*Decoded, error) {
 			}
 			column[heads[i]] = i
 		}
-		for _, row := range rows[1:] {
+		for n, row := range rows[1:] {
+			// A field past the header's last column has no name to be read
+			// by, and went unseen: a delimiter the header's line was split
+			// by and the rows' were not, or a quote read as text, showed
+			// only as values in the wrong columns. Empty fields there are
+			// what a delimiter ending the line leaves.
+			if len(row) > len(heads) {
+				if i := len(heads) + firstValue(row[len(heads):], cfg.TrimSpace); i < len(row) {
+					return nil, model.Errorf("CSV line %d has a value in column %d, which the header does not name; name the column in the header, or set response.csv.header: false and read the columns by number; if the line is split where it should not be, check response.csv.delimiter and response.csv.trim_space", model.Position(csvFieldLine(r.Body, delim, cfg.TrimSpace, n+1, i)), model.Position(i+1))
+				}
+			}
 			m := map[string]any{}
 			for i, k := range heads {
 				if k == "" {
@@ -253,6 +313,21 @@ func decodeCSV(r *fetch.HTTPResponse, c *model.Collector) (*Decoded, error) {
 		}
 	}
 	return &Decoded{Kind: "csv", Data: out, Raw: r.Body}, nil
+}
+
+// firstValue is the place of the first of fields that holds a value, which
+// blanks alone are not under trim, or how many fields there are when none
+// does.
+func firstValue(fields []string, trim bool) int {
+	for i, v := range fields {
+		if trim {
+			v = strings.TrimSpace(v)
+		}
+		if v != "" {
+			return i
+		}
+	}
+	return len(fields)
 }
 
 // columnIsEmpty reports whether column i holds nothing in any of rows.
@@ -362,14 +437,37 @@ func prometheusKeeps(c *model.Collector) func(string) bool {
 // with trailing data is, rather than every document after the first being
 // dropped unseen. A leading --- and an empty document after the first, as a
 // trailing --- makes, are not a second document.
+//
+// The document is decoded by the YAML library, but for one with a mapping of
+// very many keys or with many keys written twice, which the library takes
+// time and memory that grow with the square of the document for: those are
+// decoded, and refused, in time and memory linear in it (yamlkeys.go).
+//
+// The library panics on some documents it should refuse: a merge into a
+// mapping that has a sequence or a mapping for a key, `<<: {[x]: 1}` beside a
+// key that is no text, hashes what cannot be hashed. The panic took the probe
+// with it, answered as an internal error with a stack in the log on every
+// scrape; it is the decode's failure instead (yamlPanicked), and so is a
+// panic of the exporter's own code here, which says that it is one and
+// where.
 func decodeYAML(body []byte) (any, error) {
+	return yamlReading{large: yamlLargeMapping}.decode(body)
+}
+
+// decode is decodeYAML, as r decodes the document parsed.
+func (r yamlReading) decode(body []byte) (v any, err error) {
+	defer func() {
+		if failed := recover(); failed != nil {
+			v, err = nil, yamlPanicked(failed, yamlPanicPlace())
+		}
+	}()
 	decoder := yaml.NewDecoder(bytes.NewReader(body))
 	var root yaml.Node
 	if err := decoder.Decode(&root); errors.Is(err, io.EOF) {
 		// An empty document.
 		return nil, nil
 	} else if err != nil {
-		return nil, err
+		return nil, yamlFailure(err)
 	}
 	for {
 		var next yaml.Node
@@ -378,18 +476,259 @@ func decodeYAML(body []byte) (any, error) {
 			break
 		}
 		if err != nil {
-			return nil, err
+			return nil, yamlFailure(err)
 		}
 		if !emptyYAMLDocument(&next) {
 			return nil, errors.New("the body holds more than one YAML document (separated by ---); multi-document YAML is not supported")
 		}
 	}
 	timestampsAsText(&root, map[*yaml.Node]bool{})
-	var v any
-	if err := root.Decode(&v); err != nil {
-		return nil, err
+	return r.value(&root)
+}
+
+// yamlPlace is where a panic was raised: the file, without its directory,
+// the line and the function, with its package's name, and whether that is
+// the YAML library's.
+type yamlPlace struct {
+	file     string
+	line     int
+	function string
+	library  bool
+}
+
+// yamlLibrary is the YAML library's package, and yamlRaisesAgain the
+// function of it that recovers every panic of a decoding and raises again
+// one that is not the library's own error (yaml.go, handleErr).
+const (
+	yamlLibrary     = "gopkg.in/yaml.v3"
+	yamlRaisesAgain = "yaml.v3.handleErr"
+)
+
+// yamlPanicPlace is where the panic that is being recovered was raised. It
+// is for the deferred function that recovers it, during which what
+// panicked is still on the stack: under that function is the runtime, which
+// called it, and under the runtime what was running.
+//
+// The place is the innermost function there of the YAML library or of the
+// exporter. The standard library's are passed over — the runtime's own, which
+// raises a runtime error, reflect's, which the library sets a map through,
+// and any other one of the two called — and so is the library's function
+// that passes a panic on, under which is what raised it. So a panic is the
+// library's when the library was running, and the exporter's own, a defect
+// here, when the exporter was.
+func yamlPanicPlace() yamlPlace {
+	for size := 64; ; size *= 8 {
+		callers := make([]uintptr, size)
+		callers = callers[:runtime.Callers(1, callers)]
+		frames := runtime.CallersFrames(callers)
+		raised := false
+		for more := len(callers) > 0; more; {
+			var frame runtime.Frame
+			frame, more = frames.Next()
+			in, function := yamlFunction(frame.Function)
+			switch first, _, _ := strings.Cut(in, "/"); {
+			case !strings.Contains(first, "."):
+				// The standard library's: first of them the runtime's panic.
+				raised = true
+			case raised && function != yamlRaisesAgain:
+				return yamlPlace{file: filepath.Base(frame.File), line: frame.Line, function: function, library: in == yamlLibrary}
+			}
+		}
+		if len(callers) < size {
+			// Not on the stack, which this function's caller is.
+			return yamlPlace{file: "an unknown file", function: "an unknown function"}
+		}
 	}
-	return v, nil
+}
+
+// yamlFunction is the path of the package of a function named as the
+// runtime names it, `gopkg.in/yaml%2ev3.(*decoder).mapping`, and the
+// function's name with its package's, `yaml.v3.(*decoder).mapping`. The
+// package's path ends at the first dot after its last slash, and the name of
+// a method or of a function with type arguments may hold both after a
+// bracket; a dot in the last part of the path is written %2e.
+func yamlFunction(name string) (in, function string) {
+	path := name
+	if bracket := strings.IndexAny(name, "(["); bracket >= 0 {
+		path = name[:bracket]
+	}
+	last := strings.LastIndexByte(path, '/') + 1
+	dot := strings.IndexByte(path[last:], '.')
+	if dot < 0 {
+		dot = len(path) - last
+	}
+	return strings.ReplaceAll(name[:last+dot], "%2e", "."), strings.ReplaceAll(name[last:], "%2e", ".")
+}
+
+// yamlPanicked is the error for a document the decoding panicked on with
+// failed, at a place: in the words of the panic and without a stack.
+//
+// A panic of the YAML library is the library failing on the document. A
+// panic of the exporter's own code is a defect of the exporter, and says so,
+// with the place for whoever is to find it: the document may be a good one,
+// and nothing the operator changes in it is known to help.
+//
+// A runtime error's words can hold numbers of the document, an index or a
+// length, so such a failure is recognised (model.SameFailureAs) by its text
+// up to there and by the place, and is one failure to the log whatever the
+// numbers, and another than a runtime error raised elsewhere. No line is in
+// what a failure is recognised by: the file and the function are the place
+// whichever build it is.
+func yamlPanicked(failed any, at yamlPlace) error {
+	said := fmt.Sprint(failed)
+	_, ours := failed.(runtime.Error)
+	if at.library {
+		const library = "the YAML library failed on the document: "
+		err := errors.New(library + said)
+		if ours {
+			return model.SameFailureAs(err, fmt.Sprintf("%sruntime error (%s %s)", library, at.file, at.function))
+		}
+		return err
+	}
+	const exporter, report = "the exporter failed on the YAML document (%s %s): %s", "; this is a defect of the exporter and not of the document, please report it"
+	err := fmt.Errorf(exporter+report, fmt.Sprintf("%s:%d", at.file, at.line), at.function, said)
+	if ours {
+		return model.SameFailureAs(err, fmt.Sprintf(exporter, at.file, at.function, "runtime error"))
+	}
+	return model.SameFailureAs(err, fmt.Sprintf(exporter+report, at.file, at.function, said))
+}
+
+// yamlFailure gives an error of the YAML library the text the failure is
+// recognised by (model.SameFailureAs): its text without the lines it names,
+// which are where in the body it happened and no part of what the failure is
+// to the log. The message is unchanged, but for a list of problems longer
+// than yamlProblemsShown (yamlProblems).
+//
+// The library keeps the line nowhere but in the text it writes, so here, and
+// only here, the text is read for it, in the forms the library itself writes
+// (gopkg.in/yaml.v3 v3.0.1, decode.go): a scanner's or a parser's error is
+// `yaml: line N: problem`; a *yaml.TypeError lists its problems, each `line N:
+// problem`, and the one such problem a document decoded into plain values
+// has, a key written twice, ends with the line of the first, `already
+// defined at line N`. Every other error of the library has no line: an
+// unknown anchor, an anchor that holds itself, excessive aliasing, a merge
+// of something that is no mapping, a tagged value that does not fit its
+// tag. A text in none of these forms is recognised by the whole of it, as
+// it was.
+//
+// The library counts lines from nought and writes no line at all for one
+// that is nought (decode.go, fail): a scanner's or a parser's error on the
+// document's first line is `yaml: problem`, where on any other it is `yaml:
+// line N: problem`. Were the line only marked, as it is in a list of
+// problems, a failure that moved to the first line, or from it, would read
+// as another failure to the log. So such an error is recognised by its
+// problem alone, `yaml: problem`, which is what the first line's reads as
+// already: the words `line N: ` are left out, not replaced.
+func yamlFailure(err error) error {
+	if problems, ok := err.(*yaml.TypeError); ok { //nolint:errorlint // the library returns its list of problems as it is, wrapped in nothing
+		return yamlProblems(problems)
+	}
+	const library = "yaml: "
+	text := err.Error()
+	problem, ok := strings.CutPrefix(text, library)
+	if !ok {
+		return err
+	}
+	if same := withoutYAMLLines(problem); same != problem {
+		return model.SameFailureAs(err, library+strings.TrimPrefix(same, "line "+model.MovingMark+": "))
+	}
+	return err
+}
+
+// yamlProblemsShown is how many of a document's problems its error lists;
+// the rest are counted.
+const yamlProblemsShown = 10
+
+// yamlProblems is the error for a document the YAML library refused with a
+// list of problems, and what that failure is recognised by.
+//
+// The library lists a key written k times as k(k-1)/2 problems, one for
+// each two of them, so the list grows with the square of the document: 1200
+// lines of `a: 1`, 6 kB, are 719,400 problems and 40 MB of text, which would
+// be logged as one line and answered to the scraper. So the error lists the
+// first yamlProblemsShown problems, as the library words them, and says how
+// many more there were; a list no longer than that is the library's own
+// error, untouched. The text of the whole list is never made.
+//
+// The failure is recognised by its problems without their lines, each
+// written once however many times it is listed: a list of items that each
+// write a key twice has one problem an item, and is the same failure when it
+// grows by an item. No more than yamlProblemsShown different problems are
+// told apart: past that the recognised text ends, as the error does, with
+// the mark for how many more there are.
+func yamlProblems(problems *yaml.TypeError) error {
+	var err error = problems
+	// moved is whether the failure is recognised by another text than its
+	// own: the count of the problems left out is no part of it.
+	moved := len(problems.Errors) > yamlProblemsShown
+	if moved {
+		more := "problems"
+		if len(problems.Errors) == yamlProblemsShown+1 {
+			more = "problem"
+		}
+		// A copy, so that the library's list can be let go of.
+		shown := append(slices.Clone(problems.Errors[:yamlProblemsShown]), fmt.Sprintf("... and %d more %s", len(problems.Errors)-yamlProblemsShown, more))
+		err = &yaml.TypeError{Errors: shown}
+	}
+	same := make([]string, 0, min(len(problems.Errors), yamlProblemsShown+1))
+	var masked []byte
+listed:
+	for _, problem := range problems.Errors {
+		masked = appendWithoutYAMLLines(masked[:0], problem)
+		for _, known := range same {
+			if known == string(masked) {
+				continue listed
+			}
+		}
+		if len(same) == yamlProblemsShown {
+			same = append(same, "... and "+model.MovingMark+" more problems")
+			break
+		}
+		moved = moved || string(masked) != problem
+		same = append(same, string(masked))
+	}
+	if !moved && len(same) == len(problems.Errors) {
+		return err
+	}
+	return model.SameFailureAs(err, (&yaml.TypeError{Errors: same}).Error())
+}
+
+// withoutYAMLLines is a problem of the YAML library with the mark of a
+// position (model.MovingMark) in place of the line it starts with, as in
+// `line 12: did not find expected key`, and of the line a key written twice
+// ends with. A problem that starts with no line is returned as it is.
+func withoutYAMLLines(problem string) string {
+	return string(appendWithoutYAMLLines(nil, problem))
+}
+
+// appendWithoutYAMLLines adds to text what withoutYAMLLines makes of
+// problem. A list of problems is read through it into one buffer, so that a
+// problem listed many times costs no text of its own.
+func appendWithoutYAMLLines(text []byte, problem string) []byte {
+	const starts, ends = "line ", " already defined at line "
+	rest, ok := strings.CutPrefix(problem, starts)
+	if !ok {
+		return append(text, problem...)
+	}
+	digits := 0
+	for digits < len(rest) && rest[digits] >= '0' && rest[digits] <= '9' {
+		digits++
+	}
+	if digits == 0 || !strings.HasPrefix(rest[digits:], ": ") {
+		return append(text, problem...)
+	}
+	rest = rest[digits:]
+	text = append(append(text, starts...), model.MovingMark...)
+	// The line a key written twice ends with: the digits the problem ends
+	// with, after the words for it.
+	first := len(rest)
+	for first > 0 && rest[first-1] >= '0' && rest[first-1] <= '9' {
+		first--
+	}
+	if first < len(rest) && strings.HasSuffix(rest[:first], ends) && strings.HasPrefix(rest, ": mapping key ") {
+		return append(append(text, rest[:first]...), model.MovingMark...)
+	}
+	return append(text, rest...)
 }
 
 // emptyYAMLDocument reports whether a document holds nothing, not even an

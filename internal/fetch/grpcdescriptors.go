@@ -7,12 +7,14 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"slices"
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/bufbuild/protocompile"
@@ -48,8 +50,11 @@ import (
 //
 // protoset and proto are read when the configuration loads, so a missing
 // method or a message that does not fit fails the configuration, and read
-// again at a call when one of their files has changed. The health service's
-// types are compiled into the exporter, so it needs none of the three.
+// again at a call when one of their files has changed: the descriptor set,
+// a .proto file, or a file one imports. The watch of the configuration
+// looks at the same files while a reload is refused (ReadFiles). The health
+// service's types are compiled into the exporter, so it needs none of the
+// three.
 
 // reflectionTTL is how long a reflection answer is used before the server is
 // asked again.
@@ -149,20 +154,40 @@ type fileSets struct {
 	slots map[string]*fileSetSlot
 }
 
-// fileSetSlot is one set's lock and what it last read.
+// fileSetSlot is one set's lock and what it last read: entry when that could
+// be read, and failed, without files, when it could not. A set that could
+// not be read is read again by whoever needs its files (get); failed only
+// says what that reading looked at (looked).
 type fileSetSlot struct {
-	mu    sync.Mutex
-	entry *fileSetEntry
+	mu     sync.Mutex
+	entry  *fileSetEntry
+	failed *fileSetEntry
 }
 
 type fileSetEntry struct {
-	// paths are every file the set was read from, and stamp how they were.
+	// paths are every path the reading looked at: the files it read, and the
+	// places it looked for a file at and found none. stamp is how each was
+	// just before it was looked at, so a file changed while the set was read
+	// is not as stamped, and the set is read again.
 	paths []string
 	stamp string
 	files *protoregistry.Files
 }
 
+// current reports whether the paths the reading looked at are as they were.
+func (e *fileSetEntry) current() bool {
+	return e != nil && e.stamp == filesStamp(e.paths)
+}
+
 var descriptorFiles = &fileSets{slots: map[string]*fileSetSlot{}}
+
+// descriptorFileRead, set by tests, is called with the path of a descriptor
+// file that has just been read, or opened to be, so a test can change the
+// file at that moment.
+var descriptorFileRead func(path string)
+
+// protoCompiles counts the compiles of .proto files, for tests.
+var protoCompiles atomic.Int64
 
 // filesStamp describes files as they are on disk now.
 func filesStamp(paths []string) string {
@@ -182,9 +207,16 @@ func filesStamp(paths []string) string {
 	return b.String()
 }
 
-// get returns the set kept under key when its files are as they were, and
-// reads it with read otherwise.
-func (s *fileSets) get(key string, read func() (*protoregistry.Files, []string, error)) (*protoregistry.Files, error) {
+// pathStamp is the stamp of one path: the stamp of several is theirs, one
+// after the other.
+func pathStamp(path string) string { return filesStamp([]string{path}) }
+
+// fileSetRead is what reading a set gives: the files, every path the reading
+// looked at, and how each was just before it was (fileSetEntry).
+type fileSetRead func() (files *protoregistry.Files, paths []string, stamp string, err error)
+
+// slot returns the slot kept under key, locked.
+func (s *fileSets) slot(key string) *fileSetSlot {
 	s.mu.Lock()
 	slot := s.slots[key]
 	if slot == nil {
@@ -193,36 +225,93 @@ func (s *fileSets) get(key string, read func() (*protoregistry.Files, []string, 
 	}
 	s.mu.Unlock()
 	slot.mu.Lock()
-	defer slot.mu.Unlock()
-	if entry := slot.entry; entry != nil && entry.stamp == filesStamp(entry.paths) {
-		return entry.files, nil
-	}
-	files, paths, err := read()
+	return slot
+}
+
+// readLocked reads the set of a locked slot and keeps what that gave.
+func (slot *fileSetSlot) readLocked(read fileSetRead) (*fileSetEntry, error) {
+	files, paths, stamp, err := read()
 	if err != nil {
-		slot.entry = nil
+		slot.entry, slot.failed = nil, &fileSetEntry{paths: paths, stamp: stamp}
+		return slot.failed, err
+	}
+	slot.entry, slot.failed = &fileSetEntry{paths: paths, stamp: stamp, files: files}, nil
+	return slot.entry, nil
+}
+
+// get is getStamped for a reading that does not say how its files were
+// before it read them: they are stamped when it has.
+func (s *fileSets) get(key string, read func() (*protoregistry.Files, []string, error)) (*protoregistry.Files, error) {
+	return s.getStamped(key, func() (*protoregistry.Files, []string, string, error) {
+		files, paths, err := read()
+		return files, paths, filesStamp(paths), err
+	})
+}
+
+// getStamped returns the set kept under key when its files are as they
+// were, and reads it with read otherwise.
+func (s *fileSets) getStamped(key string, read fileSetRead) (*protoregistry.Files, error) {
+	slot := s.slot(key)
+	defer slot.mu.Unlock()
+	if slot.entry.current() {
+		return slot.entry.files, nil
+	}
+	entry, err := slot.readLocked(read)
+	if err != nil {
 		return nil, err
 	}
-	slot.entry = &fileSetEntry{paths: paths, stamp: filesStamp(paths), files: files}
-	return files, nil
+	return entry.files, nil
+}
+
+// looked returns the paths the last reading of the set kept under key looked
+// at, and their stamp, which tells that reading from another. The set is
+// read now when it was never read, or when one of those paths is no longer as
+// it was; whether it can be read makes no difference to the answer.
+func (s *fileSets) looked(key string, read fileSetRead) (paths []string, stamp string) {
+	slot := s.slot(key)
+	defer slot.mu.Unlock()
+	for _, entry := range []*fileSetEntry{slot.entry, slot.failed} {
+		if entry.current() {
+			return entry.paths, entry.stamp
+		}
+	}
+	entry, _ := slot.readLocked(read)
+	return entry.paths, entry.stamp
 }
 
 // protoset reads a FileDescriptorSet.
 func (s *fileSets) protoset(path string) (*protoregistry.Files, error) {
-	return s.get("protoset\x00"+path, func() (*protoregistry.Files, []string, error) {
+	return s.getStamped("protoset\x00"+path, func() (*protoregistry.Files, []string, string, error) {
+		paths := []string{path}
+		stamp := filesStamp(paths)
 		raw, err := os.ReadFile(path)
+		if hook := descriptorFileRead; hook != nil {
+			hook(path)
+		}
 		if err != nil {
-			return nil, nil, fmt.Errorf("reading protoset_file: %w", err)
+			return nil, paths, stamp, fmt.Errorf("reading protoset_file: %w", err)
 		}
 		set := &descriptorpb.FileDescriptorSet{}
 		if err := proto.Unmarshal(raw, set); err != nil {
-			return nil, nil, fmt.Errorf("protoset_file %s is not a FileDescriptorSet: %w", path, err)
+			return nil, paths, stamp, fmt.Errorf("protoset_file %s is not a FileDescriptorSet: %w", path, err)
 		}
 		files, err := registryOf(set.GetFile())
 		if err != nil {
-			return nil, nil, fmt.Errorf("protoset_file %s: %w; write it with the files it imports, as protoc --include_imports or buf build does", path, err)
+			return nil, paths, stamp, fmt.Errorf("protoset_file %s: %w; write it with the files it imports, as protoc --include_imports or buf build does", path, err)
 		}
-		return files, []string{path}, nil
+		return files, paths, stamp, nil
 	})
+}
+
+// standardImports resolves the well-known files that are built in, and
+// nothing else.
+var standardImports = protocompile.WithStandardImports(protocompile.ResolverFunc(func(string) (protocompile.SearchResult, error) {
+	return protocompile.SearchResult{}, fs.ErrNotExist
+}))
+
+// protoKey is the key the set of .proto files is kept under.
+func protoKey(paths, importPaths []string) string {
+	return "proto\x00" + strings.Join(paths, "\x00") + "\x01" + strings.Join(importPaths, "\x00")
 }
 
 // proto compiles .proto files. Unless import paths are given, each file's
@@ -230,43 +319,99 @@ func (s *fileSets) protoset(path string) (*protoregistry.Files, error) {
 // each file must be under one, and is compiled by its path from it, as
 // protoc -I does.
 func (s *fileSets) proto(paths, importPaths []string) (*protoregistry.Files, error) {
-	key := "proto\x00" + strings.Join(paths, "\x00") + "\x01" + strings.Join(importPaths, "\x00")
-	return s.get(key, func() (*protoregistry.Files, []string, error) {
-		names, dirs, err := protoNames(paths, importPaths)
-		if err != nil {
-			return nil, nil, err
+	return s.getStamped(protoKey(paths, importPaths), func() (*protoregistry.Files, []string, string, error) {
+		return compileProto(paths, importPaths)
+	})
+}
+
+// protoLooked is what the last compile of the .proto files looked at
+// (looked): the files themselves, the files they import, through however
+// many files, as the import paths resolved them, and the places in an
+// earlier import path where such a file was looked for and not found.
+func (s *fileSets) protoLooked(paths, importPaths []string) (looked []string, stamp string) {
+	return s.looked(protoKey(paths, importPaths), func() (*protoregistry.Files, []string, string, error) {
+		return compileProto(paths, importPaths)
+	})
+}
+
+// compileProto compiles .proto files, and says what it looked at: every
+// path it opened or tried to open, the named files first and the others in
+// order, each stamped just before it was. A file is looked for in each import
+// path in turn, as protoc does, so the place in an earlier import path where
+// it was not found is one of them: a file that appears there is the one
+// compiled from then on. The places a well-known file, google/protobuf/*.proto,
+// was not found at are not: those files are built in. A file in a later
+// import path than the one it was found in is never looked at.
+func compileProto(paths, importPaths []string) (*protoregistry.Files, []string, string, error) {
+	protoCompiles.Add(1)
+	stamps := map[string]string{}
+	for _, path := range paths {
+		stamps[path] = pathStamp(path)
+	}
+	var mu sync.Mutex
+	var found []string
+	// looked is the paths and their stamps, whatever became of the compile.
+	looked := func() ([]string, string) {
+		mu.Lock()
+		defer mu.Unlock()
+		slices.Sort(found)
+		all := append(slices.Clone(paths), found...)
+		var stamp strings.Builder
+		for _, path := range all {
+			stamp.WriteString(stamps[path])
 		}
-		var mu sync.Mutex
-		read := append([]string(nil), paths...)
-		resolver := &protocompile.SourceResolver{
+		return all, stamp.String()
+	}
+	names, dirs, err := protoNames(paths, importPaths)
+	if err != nil {
+		all, stamp := looked()
+		return nil, all, stamp, err
+	}
+	resolver := protocompile.ResolverFunc(func(name string) (protocompile.SearchResult, error) {
+		// What this one name was looked for at, in order.
+		var tried, was []string
+		source := &protocompile.SourceResolver{
 			ImportPaths: dirs,
 			Accessor: func(path string) (io.ReadCloser, error) {
+				tried, was = append(tried, path), append(was, pathStamp(path))
 				f, err := os.Open(path)
-				if err == nil {
-					mu.Lock()
-					if !slices.Contains(read, path) {
-						read = append(read, path)
-					}
-					mu.Unlock()
+				if hook := descriptorFileRead; hook != nil && err == nil {
+					hook(path)
 				}
 				return f, err
 			},
 		}
-		compiler := protocompile.Compiler{Resolver: protocompile.WithStandardImports(resolver)}
-		compiled, err := compiler.Compile(context.Background(), names...)
+		result, err := source.FindFileByPath(name)
 		if err != nil {
-			return nil, nil, fmt.Errorf("compiling proto_files: %w", err)
-		}
-		files := new(protoregistry.Files)
-		for _, f := range compiled {
-			if err := registerFileTree(files, f); err != nil {
-				return nil, nil, err
+			// The well-known files are built in, and a name the import
+			// paths do not have is looked for among them, as
+			// protocompile.WithStandardImports does.
+			if standard, standardErr := standardImports.FindFileByPath(name); standardErr == nil {
+				return standard, nil
 			}
 		}
+		// A named file keeps the stamp it was given before the compile began.
 		mu.Lock()
-		defer mu.Unlock()
-		return files, read, nil
+		for i, path := range tried {
+			if _, known := stamps[path]; !known {
+				found, stamps[path] = append(found, path), was[i]
+			}
+		}
+		mu.Unlock()
+		return result, err
 	})
+	compiled, err := (&protocompile.Compiler{Resolver: resolver}).Compile(context.Background(), names...)
+	all, stamp := looked()
+	if err != nil {
+		return nil, all, stamp, fmt.Errorf("compiling proto_files: %w", err)
+	}
+	files := new(protoregistry.Files)
+	for _, f := range compiled {
+		if err := registerFileTree(files, f); err != nil {
+			return nil, all, stamp, err
+		}
+	}
+	return files, all, stamp, nil
 }
 
 // protoNames gives each .proto file the name it is compiled by, and the

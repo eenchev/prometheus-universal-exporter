@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"math"
 	"math/big"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -48,6 +49,16 @@ type pythonOutput struct {
 	Metrics []any  `json:"metrics"`
 	Data    any    `json:"data"`
 	Log     string `json:"log"`
+	// read says readPythonAnswer read the answer (pythonanswer.go), which
+	// leaves no Metrics: series are the metrics as the series they stand
+	// for, up to the first that is none, whose error seriesErr is, and
+	// count is how many the script emitted. normalized says Data is what
+	// model.Normalize makes of it already.
+	read       bool
+	series     []model.Metric
+	seriesErr  error
+	count      int
+	normalized bool
 }
 
 // pythonMetric is a metric as a script emitted it. metric(...) makes its
@@ -70,7 +81,7 @@ type pythonMetric struct {
 func pythonMetricFrom(index int, raw any) (pythonMetric, error) {
 	entry, ok := raw.(map[string]any)
 	if !ok {
-		return pythonMetric{}, fmt.Errorf("metrics[%d] is %s, not a metric; call metric(...), or append a mapping with a name and a value", index, showScriptValue(raw))
+		return pythonMetric{}, model.Errorf("metrics[%d] is %s, not a metric; call metric(...), or append a mapping with a name and a value", model.Position(index), showScriptValue(raw))
 	}
 	return pythonMetric{Name: entry["name"], Help: entry["help"], Type: entry["type"], Value: entry["value"], Labels: entry["labels"], Timestamp: entry["timestamp"]}, nil
 }
@@ -184,6 +195,7 @@ func (m pythonMetric) metric() (model.Metric, error) {
 			}
 			text, err := labelText(pythonFloats(value))
 			if err != nil {
+				label, err = firstUnreadableLabel(labels, pythonFloats)
 				return out, fmt.Errorf("metric %q label %q %w", name, label, err)
 			}
 			out.Labels[label] = text
@@ -266,6 +278,27 @@ func executePython(ctx context.Context, pythonPath, script string, d *decode.Dec
 	if err != nil {
 		return nil, err
 	}
+	return pythonSeries(ctx, out)
+}
+
+// pythonSeries is the metrics of a python transform's answer as series,
+// counted against limits.max_metrics.
+func pythonSeries(ctx context.Context, out *pythonOutput) (*model.MetricSet, error) {
+	if out.read {
+		// Read into series already, and counted (pythonanswer.go): a script
+		// that emitted too many fails as one past limits.max_metrics before
+		// what is wrong with one of its metrics is said, as below.
+		if err := takeSeriesN(ctx, out.count); err != nil {
+			return nil, err
+		}
+		if out.seriesErr != nil {
+			return nil, model.MarkError(fmt.Errorf("python transform: %w", out.seriesErr), model.ErrScriptFailed)
+		}
+		if out.series == nil {
+			out.series = []model.Metric{}
+		}
+		return &model.MetricSet{Metrics: out.series}, nil
+	}
 	// The answer is bounded by limits.max_output_bytes already; counted
 	// before its metrics are converted, a script that emitted too many fails
 	// as one past limits.max_metrics, not as whatever the conversion finds.
@@ -307,11 +340,11 @@ func prometheusFromPython(data any) (model.MetricSet, error) {
 	for i, raw := range list {
 		series, ok := raw.(map[string]any)
 		if !ok {
-			return model.MetricSet{}, fmt.Errorf("data[\"metrics\"][%d] is not a mapping", i)
+			return model.MetricSet{}, model.Errorf("data[\"metrics\"][%d] is not a mapping", model.Position(i))
 		}
 		m, err := prometheusSeries(series)
 		if err != nil {
-			return model.MetricSet{}, fmt.Errorf("data[\"metrics\"][%d]: %w", i, err)
+			return model.MetricSet{}, model.Errorf("data[\"metrics\"][%d]: %w", model.Position(i), err)
 		}
 		set.Metrics = append(set.Metrics, m)
 	}
@@ -336,6 +369,7 @@ func prometheusSeries(series map[string]any) (model.Metric, error) {
 			}
 			text, err := labelText(value)
 			if err != nil {
+				key, err = firstUnreadableLabel(labels, func(value any) any { return value })
 				return m, fmt.Errorf("%s label %q %w", name, key, err)
 			}
 			m.Labels[key] = text
@@ -463,7 +497,15 @@ func executePythonPreScript(ctx context.Context, pythonPath, script string, d *d
 	if err != nil {
 		return nil, err
 	}
-	return pythonFloats(model.Normalize(out.Data)), nil
+	return pythonData(out), nil
+}
+
+// pythonData is what a pre-script's answer says it left in data.
+func pythonData(out *pythonOutput) any {
+	if out.normalized {
+		return pythonFloats(out.Data)
+	}
+	return pythonFloats(model.Normalize(out.Data))
 }
 
 func runPython(ctx context.Context, pythonPath, mode, what, script string, d *decode.Decoded, r *fetch.HTTPResponse, c *model.Collector) (*pythonOutput, error) {
@@ -474,11 +516,17 @@ func runPython(ctx context.Context, pythonPath, mode, what, script string, d *de
 	if timeout <= 0 {
 		timeout = 100 * time.Millisecond
 	}
-	payload, err := pythonRequest(mode, script, d, r, c)
+	// The request is written into a buffer kept for the next one, which is
+	// free again once the worker has been handed it.
+	encoder := pythonEncoders.Get().(*pythonEncoder)
+	payload, err := encoder.request(mode, script, d, r, c)
 	if err != nil {
 		return nil, model.MarkError(err, model.ErrScriptFailed)
 	}
 	line, ran, err := PythonWorkers().run(ctx, pythonWorkerSpec(pythonPath, c), payload, timeout)
+	if cap(encoder.buf) <= pythonEncoderKept {
+		pythonEncoders.Put(encoder)
+	}
 	if timer := scriptTimerFrom(ctx); timer != nil && ran > 0 {
 		timer.add(ran)
 	}
@@ -493,23 +541,10 @@ func runPython(ctx context.Context, pythonPath, mode, what, script string, d *de
 }
 
 // pythonRequest is the request line that has a worker run script: the
-// response, with its body once, and the data, unless it is the body.
+// response, with its body once, and the data, unless it is the body
+// (pythonrequest.go).
 func pythonRequest(mode, script string, d *decode.Decoded, r *fetch.HTTPResponse, c *model.Collector) ([]byte, error) {
-	input := pythonInput{Mode: mode, Script: script, Target: r.Target, Collector: c.Name, Response: pythonResponse{StatusCode: r.Status(), Headers: r.Headers, Body: string(r.Body)}}
-	if data := pythonScriptData(d); dataIsBody(data, input.Response.Body) {
-		input.DataIsBody = true
-	} else {
-		input.Data = withNonFiniteMarkers(data)
-	}
-	payload, err := json.Marshal(input)
-	if err != nil {
-		return nil, err
-	}
-	// Only a request that holds a marker is rewritten, which copies it.
-	if bytes.Contains(payload, nonFiniteJSONMarker) {
-		payload = []byte(nonFiniteJSON.Replace(string(payload)))
-	}
-	return payload, nil
+	return new(pythonEncoder).request(mode, script, d, r, c)
 }
 
 // dataIsBody reports whether a script's data is the response's body as text,
@@ -545,7 +580,7 @@ func pythonResult(c *model.Collector, what string, timeout time.Duration, line [
 		if !deadline.started {
 			return nil, fmt.Errorf("python %s did not run: its probe or scrape ran out of time while the response was handed to the worker: %w", what, context.DeadlineExceeded)
 		}
-		return nil, fmt.Errorf("python %s was stopped after %s because its probe or scrape ran out of time, not because of limits.script_timeout (%s): %w", what, deadline.ran.Round(time.Millisecond), timeout, context.DeadlineExceeded)
+		return nil, model.Errorf("python %s was stopped after %s because its probe or scrape ran out of time, not because of limits.script_timeout (%s): %w", what, model.Elapsed(deadline.ran.Round(time.Millisecond)), timeout, context.DeadlineExceeded)
 	case errors.Is(err, errPythonOutputTooLarge):
 		PythonWorkers().recordRun(c.Name, pythonRunOutputLimit)
 		return nil, fmt.Errorf("python %s output exceeds limit", what)
@@ -553,23 +588,29 @@ func pythonResult(c *model.Collector, what string, timeout time.Duration, line [
 		PythonWorkers().recordRun(c.Name, pythonRunFailed)
 		return nil, fmt.Errorf("python %s failed: %w", what, err)
 	}
-	// Numbers are read as the JSON decoder reads a response's: as
-	// json.Number, which model.Normalize makes an int, or a *big.Int past
-	// int64, so an ID a pre-script passes through keeps every digit rather
-	// than being rounded to the nearest float64 above 2^53.
-	var out pythonOutput
-	decoder := json.NewDecoder(bytes.NewReader(line))
-	decoder.UseNumber()
-	if err := decoder.Decode(&out); err != nil {
-		PythonWorkers().recordRun(c.Name, pythonRunFailed)
-		return nil, fmt.Errorf("python %s output: %w", what, err)
+	// An answer as a worker writes it is read without encoding/json
+	// (pythonanswer.go); any other line is read as every line was.
+	out, read := readPythonAnswer(line)
+	if !read {
+		// Numbers are read as the JSON decoder reads a response's: as
+		// json.Number, which model.Normalize makes an int, or a *big.Int
+		// past int64, so an ID a pre-script passes through keeps every
+		// digit rather than being rounded to the nearest float64 above
+		// 2^53.
+		out = &pythonOutput{}
+		decoder := json.NewDecoder(bytes.NewReader(line))
+		decoder.UseNumber()
+		if err := decoder.Decode(out); err != nil {
+			PythonWorkers().recordRun(c.Name, pythonRunFailed)
+			return nil, fmt.Errorf("python %s output: %w", what, err)
+		}
 	}
 	if !out.OK {
 		PythonWorkers().recordRun(c.Name, pythonRunScriptError)
 		return nil, fmt.Errorf("python %s failed: %s", what, strings.TrimSpace(out.Error))
 	}
 	PythonWorkers().recordRun(c.Name, pythonRunOK)
-	return &out, nil
+	return out, nil
 }
 
 // ScriptTimer adds up how long a probe's Python ran.
@@ -678,4 +719,28 @@ func pythonPrometheusData(set model.MetricSet) map[string]any {
 		metrics = append(metrics, series)
 	}
 	return map[string]any{"metrics": metrics}
+}
+
+// firstUnreadableLabel is the first, by name, of a series' labels a script
+// gave whose value is no text, and why it is none. The labels are a map,
+// gone through in no order: of two that are no text the failure named
+// whichever came first, another on the next scrape, which the log took for a
+// new failure each time (model.SameFailureText). So once one fails they are
+// gone through again in the order of their names; read is what the value is
+// read as before it is made text.
+func firstUnreadableLabel(labels map[string]any, read func(any) any) (string, error) {
+	names := make([]string, 0, len(labels))
+	for name := range labels {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	for _, name := range names {
+		if labels[name] == nil {
+			continue
+		}
+		if _, err := labelText(read(labels[name])); err != nil {
+			return name, err
+		}
+	}
+	return "", nil
 }

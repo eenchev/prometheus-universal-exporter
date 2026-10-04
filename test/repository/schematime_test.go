@@ -3,6 +3,7 @@
 package repository
 
 import (
+	"reflect"
 	"strings"
 	"testing"
 
@@ -25,7 +26,10 @@ func timedCollector(transform, keys string) string {
 // exporter alike: both take a name or a layout, written as text or, for a
 // layout of digits alone, as YAML's number, with time_zone and scale beside
 // it; both refuse time_zone without time_format, time_format beside
-// value_map, and a value that is no text. What a schema cannot tell — a
+// value_map, and a value that is no text; and to both either key written ""
+// is the key left out, so time_zone: "" needs no time_format, and
+// time_format: "" is none beside time_zone or value_map. What a schema
+// cannot tell — a
 // layout that is none, one without a date, one with a 12-hour clock's hour
 // and no PM or with blanks around it, a sample date, a zone nobody knows, a
 // transform that sets its values itself — is the exporter's to refuse, in
@@ -55,9 +59,38 @@ func TestSchemaAndExporterAgreeOnTimeFormat(t *testing.T) {
 		"        time_format: ['2006-01-02']\n":                                           false,
 		"        time_format: {layout: '2006-01-02'}\n":                                   false,
 		"        time_fromat: '2006-01-02'\n":                                             false,
+		// Either key written "" is the key left out, to both.
+		"        time_format: \"\"\n":                                                      true,
+		"        time_zone: \"\"\n":                                                        true,
+		"        time_format: ''\n        time_zone: ''\n":                                 true,
+		"        time_format: rfc3339\n        time_zone: \"\"\n":                          true,
+		"        time_format: \"\"\n        scale: 1000\n":                                 true,
+		"        time_format: \"\"\n        value_map: {never: 0}\n":                       true,
+		"        time_zone: \"\"\n        value_map: {never: 0}\n":                         true,
+		"        time_format: ''\n        time_zone: ''\n        value_map: {never: 0}\n":  true,
+		"        time_format: \"\"\n        time_zone: Europe/Sofia\n":                     false,
+		"        time_format: ''\n        time_zone: UTC\n        value_map: {never: 0}\n": false,
+		"        time_format: rfc3339\n        time_zone: ''\n        value_map: {a: 1}\n": false,
 	} {
 		agree(t, schema, strings.TrimSpace(keys), timedCollector("jq", keys), accepted)
 	}
+	// A transform that takes no time_format takes one left out, written ""
+	// too.
+	for _, transform := range []string{"python", "prometheus"} {
+		agree(t, schema, transform+`: time_format: ""`, timedCollector(transform, "        time_format: \"\"\n        time_zone: \"\"\n"), true)
+	}
+	// The rule loaded is the rule without the keys.
+	without, err := config.Load(testutil.WriteFile(t, "config.yaml", timedCollector("jq", "")))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, keys := range []string{"        time_format: \"\"\n", "        time_zone: \"\"\n", "        time_format: ''\n        time_zone: ''\n"} {
+		with, err := config.Load(testutil.WriteFile(t, "config.yaml", timedCollector("jq", keys)))
+		if err != nil || !reflect.DeepEqual(with.Collectors[0].Metrics[0], without.Collectors[0].Metrics[0]) {
+			t.Errorf("%s: loaded as %+v, %v, want the rule without the keys, %+v", strings.TrimSpace(keys), with, err, without.Collectors[0].Metrics[0])
+		}
+	}
+	loadersAlone(t, schema, `time_zone: " "`, timedCollector("jq", "        time_format: rfc3339\n        time_zone: \" \"\n"), `time_zone " " is not a time zone the exporter knows`)
 	for _, alone := range []struct{ transform, keys, message string }{
 		{"jq", "        time_format: yyyy-mm-dd\n", `collector "timed" metric "at" time_format "yyyy-mm-dd" is neither the name rfc3339 or rfc1123 nor a layout`},
 		{"jq", "        time_format: '%Y-%m-%d'\n", `time_format "%Y-%m-%d" is neither the name rfc3339 or rfc1123 nor a layout`},

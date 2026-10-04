@@ -258,6 +258,24 @@ func CompileCSS(selector string) (cascadia.Selector, error) { return cssSelector
 // change what a prefix in the expression means.
 var xpathPrograms = newExprCache(func(key string) (*XPathProgram, error) {
 	expression, namespaces := splitXPathKey(key)
+	program, err := newXPathProgram(expression, namespaces)
+	if err != nil {
+		return nil, err
+	}
+	// What the engine would read only the start of is refused, where the
+	// engine itself says nothing (xpathwhole.go).
+	if err := checkXPathWhole(expression, namespaces); err != nil {
+		return nil, err
+	}
+	// The calls of sum() the exporter reads the nodes of are found here,
+	// once for the expression (xpathsum.go).
+	program.sums = findXPathSums(expression, namespaces)
+	return program, nil
+})
+
+// newXPathProgram compiles expression with its namespace bindings into a
+// program of its own, which no cache holds.
+func newXPathProgram(expression string, namespaces map[string]string) (*XPathProgram, error) {
 	compile := func() (*xpath.Expr, error) {
 		if len(namespaces) == 0 {
 			return xpath.Compile(expression)
@@ -276,7 +294,7 @@ var xpathPrograms = newExprCache(func(key string) (*XPathProgram, error) {
 	}
 	program.pool.Put(first)
 	return program, nil
-})
+}
 
 // XPathProgram is a compiled XPath expression that many goroutines may use at
 // once. Unlike a jq program, an *xpath.Expr may not be shared: Evaluate runs
@@ -288,6 +306,9 @@ var xpathPrograms = newExprCache(func(key string) (*XPathProgram, error) {
 // document.
 type XPathProgram struct {
 	pool sync.Pool
+	// sums are the expression's calls of sum() in its own context, nil for
+	// an expression without one (Sums).
+	sums *XPathSums
 }
 
 // Get takes a compiled copy of the expression for the caller alone, until it
@@ -300,11 +321,16 @@ func (p *XPathProgram) Put(e *xpath.Expr) { p.pool.Put(e) }
 // CompileXPath compiles an XPath expression with the given namespace
 // bindings, once per distinct expression and bindings.
 func CompileXPath(expression string, namespaces map[string]string) (*XPathProgram, error) {
+	// A NUL in the expression is refused before the key is made, which it
+	// would be taken apart at (xpathwhole.go).
+	if err := checkXPathNUL(expression); err != nil {
+		return nil, err
+	}
 	return xpathPrograms.get(xpathKey(expression, namespaces))
 }
 
-// The key is the expression, then each binding, separated by NUL, which
-// neither an expression nor a namespace can contain.
+// The key is the expression, then each binding, separated by NUL, which an
+// expression that comes here does not contain, and no namespace can.
 func xpathKey(expression string, namespaces map[string]string) string {
 	if len(namespaces) == 0 {
 		return expression

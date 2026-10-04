@@ -1,0 +1,11 @@
+job,state,duration_seconds,records
+backup-db,ok,412.5,18250
+backup-files,ok,1290,96412
+rotate-logs,ok,3.25,14
+reindex, full,failed,7.5,0
+sync-ldap,ok,12,830
+export-billing,ok,96.75,5120
+vacuum,ok,48,0
+send-reports,ok,31,64
+prune-cache,ok,0.5,221
+renew-certs,skipped,0,0

@@ -3,6 +3,7 @@ package repository
 import (
 	"maps"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"regexp"
 	"slices"
@@ -567,5 +568,91 @@ func TestTheVulnerabilityCheckerVersionIsPinnedConsistently(t *testing.T) {
 		if got := string(install[1]); got != pinned {
 			t.Fatalf("govulncheck.yml installs govulncheck %s but the Makefile runs %s", got, pinned)
 		}
+	}
+}
+
+// The vulnerability check scans what ships and what the workflows run: every
+// command of the module, with all it imports. `./...` also took in the
+// packages only tests use, so an advisory for the gRPC server, which the
+// exporter never is and only the tests' stand-in starts, was reported
+// against the exporter. The Makefile and the workflow name the same
+// packages, no command is left out of them, and what is left out is the
+// list below and nothing else: a package added to the module is either
+// scanned or put on that list by someone who decided so.
+func TestTheVulnerabilityCheckScansWhatShips(t *testing.T) {
+	makefile, err := os.ReadFile("Makefile")
+	if err != nil {
+		t.Fatal(err)
+	}
+	match := regexp.MustCompile(`(?m)^VULNCHECK_PACKAGES[ \t]*:?=[ \t]*(.+)$`).FindSubmatch(makefile)
+	if match == nil {
+		t.Fatal("the Makefile no longer names VULNCHECK_PACKAGES")
+	}
+	patterns := strings.Fields(string(match[1]))
+	if !regexp.MustCompile(`(?m)^\tgo run golang\.org/x/vuln/cmd/govulncheck@\$\(GOVULNCHECK_VERSION\) \$\(VULNCHECK_PACKAGES\)$`).Match(makefile) {
+		t.Error("`make vulncheck` no longer runs govulncheck over $(VULNCHECK_PACKAGES)")
+	}
+
+	workflow, err := os.ReadFile(".github/workflows/govulncheck.yml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	run := regexp.MustCompile(`(?m)^\s*govulncheck ([^>\n]*?)\s*>`).FindSubmatch(workflow)
+	if run == nil {
+		t.Fatal("govulncheck.yml no longer runs govulncheck with its output kept")
+	}
+	if got := strings.Fields(string(run[1])); !slices.Equal(got, patterns) {
+		t.Errorf("govulncheck.yml scans %v and `make vulncheck` scans %v; a local run should report what CI reports", got, patterns)
+	}
+	if slices.Contains(patterns, "./...") {
+		t.Errorf("the vulnerability check scans ./..., which takes in the packages only tests use")
+	}
+
+	if _, err := exec.LookPath("go"); err != nil {
+		t.Skip("no go command")
+	}
+	list := func(args ...string) []string {
+		t.Helper()
+		out, err := exec.Command("go", append([]string{"list"}, args...)...).Output()
+		if err != nil {
+			t.Fatalf("go list %v: %v", args, err)
+		}
+		return strings.Fields(string(out))
+	}
+	const module = "github.com/eenchev/prometheus-universal-exporter"
+	scanned := map[string]bool{}
+	for _, pkg := range list(append([]string{"-deps"}, patterns...)...) {
+		scanned[pkg] = true
+	}
+	for _, line := range strings.Split(strings.TrimSpace(string(func() []byte {
+		out, err := exec.Command("go", "list", "-f", "{{.Name}} {{.ImportPath}}", "./...").Output()
+		if err != nil {
+			t.Fatalf("go list ./...: %v", err)
+		}
+		return out
+	}())), "\n") {
+		name, pkg, _ := strings.Cut(line, " ")
+		if name == "main" && !scanned[pkg] {
+			t.Errorf("%s is a command of the module and the vulnerability check does not scan it; add it to VULNCHECK_PACKAGES and to govulncheck.yml", pkg)
+		}
+	}
+	// What only tests use, each with why it is no part of what ships.
+	leftOut := map[string]string{
+		module + "/internal/grpctest": "the stand-in gRPC server of the grpc tests",
+		module + "/internal/testutil": "helpers of the tests",
+		module + "/test/repository":   "the repository's own tests, a package of tests only",
+	}
+	for _, pkg := range list("./...") {
+		_, listed := leftOut[pkg]
+		switch {
+		case !scanned[pkg] && !listed:
+			t.Errorf("%s is neither scanned by the vulnerability check nor on the list of packages only tests use; if it ships, a scanned package must import it, and if it does not, put it on the list with the reason", pkg)
+		case scanned[pkg] && listed:
+			t.Errorf("%s is on the list of packages only tests use (%s), but a scanned package imports it, so it ships", pkg, leftOut[pkg])
+		}
+		delete(leftOut, pkg)
+	}
+	for pkg := range leftOut {
+		t.Errorf("%s is on the list of packages only tests use and is no package of the module any more", pkg)
 	}
 }

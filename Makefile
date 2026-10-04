@@ -123,9 +123,16 @@ hooks:
 precommit: fmt-check lint gopls-check vet
 
 # Known vulnerabilities the code reaches. For reference, like the CI workflow,
-# and not part of `make ci`.
+# and not part of `make ci`. What is scanned is what ships and what the
+# workflows run: the exporter and the repository's tools, each with all it
+# imports. The packages only tests use, such as the stand-in gRPC server of
+# internal/grpctest, are left out: a vulnerability only a test can reach is
+# none of the exporter's. A test keeps the packages equal to the workflow's
+# and the list of what is left out complete.
+VULNCHECK_PACKAGES := . ./tools/...
+
 vulncheck:
-	go run golang.org/x/vuln/cmd/govulncheck@$(GOVULNCHECK_VERSION) ./...
+	go run golang.org/x/vuln/cmd/govulncheck@$(GOVULNCHECK_VERSION) $(VULNCHECK_PACKAGES)
 
 helm-version:
 	@command -v helm >/dev/null 2>&1 || { \

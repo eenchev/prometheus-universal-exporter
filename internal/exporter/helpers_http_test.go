@@ -41,7 +41,7 @@ func verboseRequestSeriesNames() []string {
 // publishStaticTarget is publishStaticResult for a result a test publishes
 // itself: one without the age series, scraped at no time in particular.
 func (s *Server) publishStaticTarget(target model.StaticTarget, identity otlpResourceIdentity, set model.MetricSet) {
-	s.publishStaticResult(target, identity, set, time.Time{}, scrapeTime{})
+	s.publishStaticResult(configRead{}, target, identity, set, time.Time{}, scrapeTime{})
 }
 
 // staticTargetResults returns the latest result of each target in force, by
@@ -182,8 +182,11 @@ func watchedManager(t *testing.T) (*config.Manager, string) {
 func idleWorkers(collector string) int { return transform.PythonWorkers().Snapshot(collector).Idle }
 
 // installConfig puts an already validated cfg in force on server, as an
-// accepted reload would. The server reads its configuration from its manager
-// on every use, so a manager holding cfg stands in for one that reloaded it.
+// accepted reload would, the static target file in force staying so. The
+// server reads its configuration from its manager on every use, so a manager
+// holding cfg stands in for one that reloaded it.
 func installConfig(server *Server, cfg *model.Config) {
-	server.manager = config.NewManager(cfg, "", server.logger)
+	manager := config.NewManager(cfg, "", server.logger)
+	manager.SetTargets("", server.manager.StaticTargetFile())
+	server.manager = manager
 }

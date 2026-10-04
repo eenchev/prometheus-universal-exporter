@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 	"unicode"
@@ -52,16 +53,17 @@ type collectLog struct {
 	attrs                        []any
 }
 
-// logCollectFailure logs a failure of stage at error level.
-func (s *Server) logCollectFailure(l collectLog, stage string, err error, extra ...any) {
-	s.logTripFailure(context.Background(), l, stage, err, extra...)
+// logCollectFailure logs a failure of stage at error level, for a caller
+// that read its collector as read says (tripFailed).
+func (s *Server) logCollectFailure(read configRead, l collectLog, stage string, err error, extra ...any) {
+	s.logTripFailure(context.Background(), read, l, stage, err, extra...)
 }
 
 // logTripFailure is logCollectFailure for a trip, which a debug probe's
 // report takes instead of the log (probedebug.go).
-func (s *Server) logTripFailure(ctx context.Context, l collectLog, stage string, err error, extra ...any) {
+func (s *Server) logTripFailure(ctx context.Context, read configRead, l collectLog, stage string, err error, extra ...any) {
 	attrs := append(append(append([]any{}, l.attrs...), "stage", stage), extra...)
-	s.tripFailed(ctx, slog.LevelError, l.key, l.failed, stage, err, attrs...)
+	s.tripFailed(ctx, read, slog.LevelError, l.key, l.failed, stage, err, attrs...)
 }
 
 // collected is how a trip ended.
@@ -151,13 +153,13 @@ func (s *Server) collect(ctx context.Context, j collectJob) collected {
 		}
 		switch policy {
 		case model.ErrorPolicyLog:
-			s.tripFailed(ctx, slog.LevelWarn, j.log.key, j.log.continuing, stage, err, attrs...)
+			s.tripFailed(ctx, rec.read, slog.LevelWarn, j.log.key, j.log.continuing, stage, err, attrs...)
 			return collected{carriedOn: true}
 		case model.ErrorPolicyIgnore:
 			s.tripDebug(ctx, j.log.continuing, append(attrs, "error", err)...)
 			return collected{carriedOn: true}
 		}
-		s.logTripFailure(ctx, j.log, stage, err, extra...)
+		s.logTripFailure(ctx, rec.read, j.log, stage, err, extra...)
 		return collected{stage: stage, err: err}
 	}
 
@@ -180,7 +182,7 @@ func (s *Server) collect(ctx context.Context, j collectJob) collected {
 		if errors.Is(err, fetch.ErrTargetRefused) {
 			rec.update(func(x *serverStats) { x.refused++ })
 			trace.step(stageTargetPolicy, "refused", time.Since(mark), err.Error())
-			s.logTripFailure(ctx, j.log, stageTargetPolicy, err)
+			s.logTripFailure(ctx, rec.read, j.log, stageTargetPolicy, err)
 			return collected{stage: stageTargetPolicy, err: err, refused: true}
 		}
 		var extra []any
@@ -295,7 +297,7 @@ func (s *Server) collect(ctx context.Context, j collectJob) collected {
 					return collected{stage: "metric", err: err, aborted: true}
 				}
 				trace.step("transform", "failed", time.Since(mark), "metric "+failure.Metric+": "+err.Error())
-				s.logTripFailure(ctx, j.log, "metric", err, "metric", failure.Metric)
+				s.logTripFailure(ctx, rec.read, j.log, "metric", err, "metric", failure.Metric)
 				return collected{stage: "metric", err: err, metric: failure.Metric}
 			}
 			return stageFailed("transform", err, c.ErrorHandling.OnTransformError)
@@ -316,13 +318,14 @@ func (s *Server) collect(ctx context.Context, j collectJob) collected {
 	}
 	trace.step("validation", "ok", time.Since(mark), "")
 	rec.update(func(x *serverStats) { x.emitted += uint64(len(set.Metrics)) })
-	s.tripRecovered(ctx, j.log.key, j.log.recovery, j.log.attrs...)
+	s.tripRecovered(ctx, rec.read, j.log.key, j.log.recovery, j.log.attrs...)
 	// A directory read the deadline cut short answers this probe with what
 	// it read, but is not kept: the files it did not reach are fine as far
 	// as anyone knows, and a cached copy would serve them failed. A debug
-	// probe's result is not kept either.
+	// probe's result is not kept either, nor that of a collector a reload
+	// removed or changed since the trip read it (PutFor).
 	if trace == nil && (response.Directory == nil || !response.Directory.CutShort) {
-		s.cache.Put(j.cacheKey, c.Name, *set, model.CacheTTL(c), model.StaleIfError(c), c.Limits.MaxCacheEntries, now)
+		s.cache.PutFor(rec.read, j.cacheKey, c.Name, *set, model.CacheTTL(c), model.StaleIfError(c), c.Limits.MaxCacheEntries, now)
 	}
 	return collected{set: set, answer: answer, fetched: now}
 }
@@ -345,7 +348,7 @@ func (s *Server) transformRecorded(ctx context.Context, d *decode.Decoded, r *fe
 	repaired.count, repaired.first = report.UTF8Repairs()
 	failures := report.Failures()
 	probeTraceFrom(ctx).record(func(t *probeTrace) { t.failures = append(t.failures, failures...) })
-	s.logRuleFailures(ctx, c, failures, l, err == nil)
+	s.logRuleFailures(ctx, rec.read, c, failures, l, err == nil)
 	if len(failures) == 0 {
 		return set, repaired, err
 	}
@@ -370,36 +373,110 @@ func (s *Server) transformRecorded(ctx context.Context, d *decode.Decoded, r *fe
 // logRuleFailures logs the rules under error_mode log that carried on without
 // some series, at warning level since the scrape was answered. A rule failing
 // on every scrape of a target is one failing thing (failurelog.go), told
-// apart by collector, target and metric, so it is logged once and then only
+// apart by collector, target and rule, so it is logged once and then only
 // as a repeat or when it changes, and its recovery is logged when a complete
 // transform produces its series again; one that failed as a whole may not
 // have reached the rule. The rules of fail need nothing here: they fail the
 // scrape, whose failure names the metric.
-func (s *Server) logRuleFailures(ctx context.Context, c *model.Collector, failures []transform.RuleFailure, l collectLog, complete bool) {
+//
+// Each rule is logged, remembered and recovered by itself, and not with the
+// collector's other rules of its metric name (ruleFailureKey): one that
+// starts to fail beside one that has been failing is a new failure, and one
+// that works again recovers while the other is still remembered. Where
+// several rules export the name, the lines say which rule it is
+// (sharedRuleNames). Rules alike in name, expression and items are one rule,
+// logged when either is under log (transform.RuleFailure).
+func (s *Server) logRuleFailures(ctx context.Context, read configRead, c *model.Collector, failures []transform.RuleFailure, l collectLog, complete bool) {
 	failing := map[string]bool{}
+	var shared sharedRuleNames
 	for _, f := range failures {
 		if !f.Logged {
 			continue
 		}
-		failing[f.Metric] = true
-		attrs := append(append([]any{}, l.attrs...), "metric", f.Metric, "error_mode", model.ErrorModeLog, "failures", f.Failures)
-		s.tripFailed(ctx, slog.LevelWarn, ruleFailureKey(l.key, f.Metric), "metric extraction failed", "metric", f.First, attrs...)
+		key := ruleFailureKey(l.key, f.Metric, f.Expression, f.Items)
+		failing[key] = true
+		attrs := append(append([]any{}, l.attrs...), "metric", f.Metric)
+		attrs = append(shared.telling(attrs, c, f.Metric, f.Expression, f.Items), "error_mode", model.ErrorModeLog, "failures", f.Failures)
+		s.tripFailed(ctx, read, slog.LevelWarn, key, "metric extraction failed", "metric", f.First, attrs...)
 	}
-	if !complete {
+	// A scrape of a trip none of whose rules has a failure remembered, as
+	// nearly every one is, has no rule to recover: it makes no key, whose
+	// cost grows with the rules' expressions, and asks the log once.
+	if !complete || !s.failures.remembersRules(l.key) {
 		return
 	}
 	for _, rule := range c.Metrics {
-		if rule.ErrorMode == model.ErrorModeLog && !failing[rule.Name] {
-			attrs := append(append([]any{}, l.attrs...), "metric", rule.Name)
-			s.tripRecovered(ctx, ruleFailureKey(l.key, rule.Name), "metric extraction recovered", attrs...)
+		if rule.ErrorMode != model.ErrorModeLog {
+			continue
 		}
+		// Nearly every rule recovers from nothing, and no line is made for
+		// it then, nor is it asked which names the rules share.
+		key := ruleFailureKey(l.key, rule.Name, rule.Expression, rule.Items)
+		if failing[key] || !s.failures.remembers(key) {
+			continue
+		}
+		attrs := append(append([]any{}, l.attrs...), "metric", rule.Name)
+		s.tripRecovered(ctx, read, key, "metric extraction recovered", shared.telling(attrs, c, rule.Name, rule.Expression, rule.Items)...)
 	}
 }
 
-// ruleFailureKey is the failure log's key for a metric's rules on the trip or
-// file key is for.
-func ruleFailureKey(key, metric string) string {
-	return key + "\x00rule\x00" + metric
+// ruleFailureKey is the failure log's key for a rule on the trip or file key
+// is for. The rule is told apart as the transform tells it apart
+// (transform.RuleFailure): by its metric name, its expression and its items.
+//
+// The expression is written after its length, so where it ends is not read
+// from what it holds: a jq or css expression may have a NUL in a comment or
+// a string, and with only a NUL between them an expression and items that
+// hold one would read as those of another rule, whose failures and
+// recoveries would then be this rule's. A metric name holds no NUL.
+func ruleFailureKey(key, metric, expression, items string) string {
+	var length [20]byte
+	return key + ruleKeyMarker + metric + "\x00" + string(strconv.AppendInt(length[:0], int64(len(expression)), 10)) + "\x00" + expression + "\x00" + items
+}
+
+// sharedRuleNames are the metric names several rules of a collector export,
+// whose failures are told apart in the log and in a debug probe's report by
+// naming the rule's expression, and its items when it has any, beside the
+// metric. They are worked out when first asked for, which a scrape whose
+// rules neither fail nor recover never does.
+//
+// A name is shared by what the collector's rules are, and not by which of
+// them failed on a scrape, so a rule's lines read the same on every scrape.
+// Rules alike in name, expression and items are one rule, and share nothing.
+type sharedRuleNames struct {
+	names map[string]bool
+}
+
+// has reports whether several rules of c export name.
+func (n *sharedRuleNames) has(c *model.Collector, name string) bool {
+	if n.names == nil {
+		n.names = map[string]bool{}
+		first := make(map[string]*model.MetricRule, len(c.Metrics))
+		for i := range c.Metrics {
+			rule := &c.Metrics[i]
+			switch known, seen := first[rule.Name]; {
+			case !seen:
+				first[rule.Name] = rule
+			case known.Expression != rule.Expression || known.Items != rule.Items:
+				n.names[rule.Name] = true
+			}
+		}
+	}
+	return n.names[name]
+}
+
+// telling returns a log line's attributes with what tells the rule from the
+// others of its name added, when c has others: attrs as they are for a name
+// only one rule exports.
+func (n *sharedRuleNames) telling(attrs []any, c *model.Collector, name, expression, items string) []any {
+	if !n.has(c, name) {
+		return attrs
+	}
+	attrs = append(attrs, "expression", expression)
+	if items != "" {
+		attrs = append(attrs, "items", items)
+	}
+	return attrs
 }
 
 // fetchedNote is a response as a debug probe's stages show it.

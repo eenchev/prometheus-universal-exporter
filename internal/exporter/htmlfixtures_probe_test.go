@@ -87,7 +87,9 @@ const decoderCollectors = `collectors:
 // that calls its page something else is believed: as XML a page fails to
 // parse unless it is XHTML, which is then read as XML; as JSON, YAML or
 // Prometheus text it fails the decode; as CSV it decodes, to something
-// XPath cannot read. Each failure names its stage and is logged once.
+// XPath cannot read, unless a line of it has a comma more than its first
+// line, a value past the header's last column, which fails the decode. Each
+// failure names its stage and is logged once.
 //
 // Only the collector that sets no decoder.type where its transform implies
 // none is warned about when the configuration loads.
@@ -102,13 +104,16 @@ func TestHTMLIsReadByTheDecoderTheCollectorSetsOrTheAnswerNames(t *testing.T) {
 	pages := []struct {
 		fixture, title string
 		// asXML and asYAML are how the page fails when it is called XML and
-		// YAML; a page that is well-formed XML does not fail as XML.
-		asXML, asYAML string
+		// YAML; a page that is well-formed XML does not fail as XML. asCSV
+		// is how its decode fails when it is called CSV, if it does.
+		asXML, asYAML, asCSV string
 	}{
 		{
 			fixture: "server-status.html", title: "Statistics Report for lb01.example.net",
 			asXML:  "XML decode: XML syntax error on line 16: element <meta> closed by </head>",
 			asYAML: "YAML decode: yaml: line 8: mapping values are not allowed in this context",
+			asCSV: "CSV line 8 has a value in column 2, which the header does not name; name the column in the header, or set response.csv.header: false and read the columns by number; " +
+				"if the line is split where it should not be, check response.csv.delimiter and response.csv.trim_space",
 		},
 		{
 			fixture: "sloppy.html", title: "PDU-7 Outlet Status",
@@ -145,6 +150,9 @@ func TestHTMLIsReadByTheDecoderTheCollectorSetsOrTheAnswerNames(t *testing.T) {
 		}
 		if page.asYAML != "" {
 			contentTypes["application/yaml"] = outcome{"decode", page.asYAML}
+		}
+		if page.asCSV != "" {
+			contentTypes["text/csv"] = outcome{"decode", page.asCSV}
 		}
 		for _, contentType := range slices.Sorted(maps.Keys(contentTypes)) {
 			left := contentTypes[contentType]

@@ -721,7 +721,7 @@ func fetch(ctx context.Context, target string, c *model.Collector, overrides Req
 		// body it does not have, so it is not held against it.
 		if method != http.MethodHead && resp.ContentLength > limit {
 			_ = resp.Body.Close()
-			return nil, model.MarkError(fmt.Errorf("response size %d exceeds limit %d", resp.ContentLength, limit), model.ErrLimitExceeded)
+			return nil, model.MarkError(model.Errorf("response size %d exceeds limit %d", model.Size(resp.ContentLength), limit), model.ErrLimitExceeded)
 		}
 		// The Content-Length is the length of the body as it is read here:
 		// Go takes it off an answer it decompresses itself, the only kind

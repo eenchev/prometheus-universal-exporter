@@ -28,6 +28,30 @@ every scrape of a target is logged once, then as a repeat, and
 `"stage":"metric"`, the `metric` and the target, as for any other failed
 probe. `ignore` writes nothing.
 
+Each rule is logged, remembered and recovered by itself. A collector may have
+several rules of one metric name — one for each column or path the metric's
+series come from — and each has its own lines: a rule that starts to fail
+while another of its name has been failing for days is logged in full, and
+one that works again is logged as recovered while the other goes on as a
+repeat. So that they can be told apart, the lines of a name that several
+rules of the collector export also carry the rule's `expression`, and its
+`items` when it has any, after `metric`:
+
+```json
+{"level":"WARN","msg":"metric extraction failed","collector":"storage","target":"http://nas:8080","url":"http://nas:8080","metric":"disk_bytes","expression":"//disk/free","error_mode":"log","failures":1,"error":"metric \"disk_bytes\" node 2: value \"n/a\" is not a number; map text to numbers with value_map"}
+{"level":"INFO","msg":"metric extraction recovered","collector":"storage","target":"http://nas:8080","url":"http://nas:8080","metric":"disk_bytes","expression":"//disk/free","stage":"metric","failed_for":"2m0s","failures":2}
+```
+
+The lines of a name only one rule exports have neither attribute. Whether a
+name is shared is decided by the rules the collector has, not by which of
+them failed, so a rule's lines read the same on every scrape. Rules alike in
+name, expression and items are one rule to the log, as they are to the
+transform, which counts their failures together: it is logged if either of
+them has `error_mode: log`, whichever comes first. A `prometheus` rule without
+a name has an empty `metric`. An empty `expression` on a line is the
+`prometheus` rule that has none and matches the sample of its own name, where
+another rule of that name has an expression.
+
 `config_watch_interval` appears only when `--config.watch` is on, since that is
 what bounds how stale a running configuration can be; with the watch off there
 is no interval to report.
@@ -45,7 +69,8 @@ scrape interval. Logging each of them would bury everything else, and the
 [self-metrics](SELF-METRICS.md) already count every one exactly. So a failure is
 logged in full the first time, and while the same thing keeps failing the same
 way — the same collector, target (and file, for a
-[directory](LOCALFILE.md#reading-a-directory)), stage and error — it is
+[directory](LOCALFILE.md#reading-a-directory), and rule, for a rule that
+carried on), stage and error — it is
 logged again only every five minutes, at its own level, with how many times it
 happened since the last line and since when:
 
@@ -59,6 +84,75 @@ A different stage or error is a new failure and is logged at once, and the
 first success after a failure is logged at info level with how long it failed
 and how many times. The repeats in between are still written at debug level,
 marked `"repeat":true`, so `--log.level=debug` shows every one.
+
+The same error is the same failure, not the same text. An error says where in
+the response it happened and what it measured — `CSV column "used" is empty
+in row 3`, `metric "m" value is missing for node 7`, a decoder's line and
+column, `value is 612 bytes, longer than limits.max_label_value_length 500`,
+a file `last modified 2h0m0s ago` — and in a response that changes from scrape
+to scrape those differ every time. They are left out of what is compared: an
+empty cell in row 3 and then in row 7, or a label 612 bytes long and then 640,
+is one failure that keeps happening, logged once and then as a repeat, and its
+recovery counts every scrape of it. Each line still shows the error in full,
+with the row and the size it had on that scrape, and so does the answer to the
+scraper. Everything else an error says still tells failures apart: another
+column, metric or label, another limit, and another value — `value "n/a" is
+not a number` and then `value "N/A" is not a number` are two failures. A YAML
+document that cannot be parsed is held to the same: the line its error names,
+`yaml: line 12: did not find expected key`, and the two lines a key written
+twice names, are left out of what is compared, and a problem the error lists
+more than once counts once: a list with the same mistake in every item is one
+failure however many items it has. An error on a document's first line names
+no line at all (`yaml: did not find expected key`); it is the same failure as
+the one that names a line, so a mistake that moves to the first line, or from
+it, is a repeat like any other. The YAML library lists a key written several times
+as a problem for each two of them, which for a key written 1200 times is
+719,400; the error names the first ten problems and counts the others, `...
+and 719390 more problems`, in the log and in the answer to the scraper.
+Of a [runtime error of the XPath engine](CONFIGURATION.md#when-the-xpath-engine-fails-on-an-expression)
+what follows `runtime error:` is left out as well, since the numbers there
+come from the response; so it is of a runtime error while a YAML document is
+decoded, which is told from another by the file and the function it was
+raised in, not by its line.
+Where several labels of one series are over a limit, or are no label names,
+the error names the first of them by name, so it is the same error on every
+scrape.
+
+A fetch that fails names the connection it failed on, and that is left out
+too, so that a target which resets every connection is one failure and not a
+new one on every probe: the address and port the connection was made from, as
+in `read tcp 10.0.0.1:53412->10.0.0.2:80: read: connection reset by peer`,
+which is another port each time; the stream an HTTP/2 stream error or a
+`GOAWAY` names; the time an expired certificate was held against, `current
+time … is after …`; the offset at which a compressed answer turned out
+corrupt; and, in what a gRPC call failed with, that address, that time and the
+size of an answer over the limit, `grpc: received message larger than max
+(5007 vs. 1000)`, where the gRPC client itself wrote them — after `read tcp`
+or `write tcp`, after `x509: certificate has expired or is not yet valid:
+current time`, and in those words of the size. What the server answered a call
+with is left as it is: `replica 10.0.0.7:5432->10.0.0.9:5432 is lagging` and
+the same of another replica are two failures, unless the server's message
+holds those very words of the client's. The address the connection went to
+stays, and so does the name
+server a lookup failed at: a connection refused after one that was reset, or
+the same failure at another address, is a new failure.
+
+A probe or scrape that ends after a
+[reload](CONFIGURATION.md#reloading-on-demand) removed its collector, or
+changed its definition, failed or succeeded for a collector that is gone: its
+failure is written at debug level only, marked `"superseded":true`, and
+neither it nor its success changes what is remembered of the collector now
+under the name. The reload forgets what was remembered of a collector it
+removed or changed when it is made, so the first failure of a changed
+collector is logged in full, and its first success after the reload is not
+logged as a recovery from a failure of the old definition. A static target
+that the reload removed from the static target file, or changed there, is
+held to the same, its collector as it was: what was remembered of it is
+forgotten, and a scrape that had read it before the reload changes nothing
+of what is remembered of the target now under the name. A static target's
+scrape whose result is not published, because the reload removed or changed
+its target or its collector, says so at debug level, marked
+`"superseded":true` too.
 
 A target that answers with an error status usually says why in the body, so
 the line for a `http_status` failure adds `response_body`: the start of the

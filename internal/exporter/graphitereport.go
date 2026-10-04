@@ -2,7 +2,6 @@ package exporter
 
 import (
 	"context"
-	"errors"
 	"log/slog"
 
 	"github.com/eenchev/prometheus-universal-exporter/internal/decode"
@@ -40,8 +39,8 @@ func (s *Server) noteGraphite(ctx context.Context, d *decode.Decoded, c *model.C
 	}
 	key := failureKey(c.Name, keyTarget, file) + "\x00carbon lines"
 	if report.SkippedLines > 0 {
-		s.tripFailed(ctx, slog.LevelWarn, key, "carbon lines skipped", "decode", errors.New(report.FirstSkipped), append(attrs, "skipped", report.SkippedLines)...)
+		s.tripFailed(ctx, rec.read, slog.LevelWarn, key, "carbon lines skipped", "decode", report.FirstSkipped, append(attrs, "skipped", report.SkippedLines)...)
 		return
 	}
-	s.tripRecovered(ctx, key, "carbon lines read whole again", attrs...)
+	s.tripRecovered(ctx, rec.read, key, "carbon lines read whole again", attrs...)
 }

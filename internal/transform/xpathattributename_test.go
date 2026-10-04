@@ -65,9 +65,10 @@ func mainsAttributeLabel(t *testing.T, page, rule, label string) string {
 // for XPath, they named a prefix no HTML attribute has: the label was
 // silently left off, and `@:href`, `@@click` and `@2x` no longer loaded.
 // Every @ followed by one attribute name is read by the name as written,
-// what main read it as, whatever response.namespaces holds. Only a collector
-// that sets response.namespaces and leaves its decoder to each response has
-// its labels checked as XML's when it loads
+// what main read it as, whatever response.namespaces holds, and without the
+// blanks around its value, which main kept and no other label has. Only a
+// collector that sets response.namespaces and leaves its decoder to each
+// response has its labels checked as XML's when it loads
 // (TestNamespacesMakeADecoderLeftToEachResponseCheckItsLabelsAsXML): a name
 // XML cannot have is refused there, and one it can is read from HTML by the
 // name as written all the same.
@@ -107,8 +108,8 @@ func TestAnHTMLAttributeLabelIsReadByItsNameAsWritten(t *testing.T) {
 						continue
 					}
 				}
-				if got := labelOf(t, c, "text/html", attributePage); got != tc.want {
-					t.Errorf("%s at %s (decoder %s, %s) = %q, want %q as on main", tc.label, tc.rule, decoder, name, got, tc.want)
+				if got, want := labelOf(t, c, "text/html", attributePage), strings.TrimSpace(tc.want); got != want {
+					t.Errorf("%s at %s (decoder %s, %s) = %q, want %q: what main read, without the blanks around it", tc.label, tc.rule, decoder, name, got, want)
 				}
 			}
 		}
@@ -483,8 +484,8 @@ func TestALabelTheDocumentThatArrivedCannotGiveFailsTheRule(t *testing.T) {
 
 // A prefixed attribute read by name, as it is without response.namespaces,
 // is what the XPath engine reads there too, at every element of documents
-// with prefixes of every kind: the value, untrimmed where the engine trims
-// it, and empty where the engine finds none.
+// with prefixes of every kind: the value, trimmed as the engine's is, and
+// empty where the engine finds none.
 func TestAPrefixedAttributeByNameIsTheEnginesAtAnElement(t *testing.T) {
 	compared, found := 0, 0
 	for i, document := range append([]string{attributeFeed}, xpathLabelDocuments...) {
@@ -511,7 +512,7 @@ func TestAPrefixedAttributeByNameIsTheEnginesAtAnElement(t *testing.T) {
 					engine = strings.TrimSpace(xmlNodes.text(attribute))
 				}
 				got := xpathLabels(xmlNodes, node, plan)["l"]
-				if strings.TrimSpace(got) != engine {
+				if got != engine {
 					t.Fatalf("%s at element %d of document %d: %q by name, %q by the engine", expression, at, i, got, engine)
 				}
 				compared++

@@ -26,6 +26,37 @@ func fileCollector(name, root, path string) model.Collector {
 	}
 }
 
+// A file last modified longer ago than request.max_age is refused saying how
+// long ago, and that age is no part of what the failure is to the log: read
+// two hours old and three, the file fails with two texts, each naming its
+// age, that are recognised by one, which names the file and the limit.
+func TestAFileOlderThanMaxAgeIsOneFailureAtAnyAge(t *testing.T) {
+	root := t.TempDir()
+	file := testutil.WriteIn(t, root, "a.prom", "v 1\n")
+	c := fileCollector("files", root, "a.prom")
+	c.Request.MaxAge = model.Duration(time.Hour)
+	var failures []error
+	for _, age := range []string{"2h0m", "3h0m"} {
+		old, err := time.ParseDuration(age)
+		if err != nil {
+			t.Fatal(err)
+		}
+		modified := time.Now().Add(-old)
+		if err := os.Chtimes(file, modified, modified); err != nil {
+			t.Fatal(err)
+		}
+		_, err = fetchLocalFile(context.Background(), "", &c, RequestOverrides{}, nil)
+		if err == nil || !strings.Contains(err.Error(), "was last modified "+age) || !strings.Contains(err.Error(), "ago, longer than request.max_age 1h0m0s") {
+			t.Fatalf("a file %s old: err=%v, want it refused for its age, which it names", age, err)
+		}
+		failures = append(failures, err)
+	}
+	a, b := model.SameFailureText(failures[0]), model.SameFailureText(failures[1])
+	if failures[0].Error() == failures[1].Error() || a != b || !strings.Contains(a, file) || !strings.Contains(a, "longer than request.max_age 1h0m0s") {
+		t.Errorf("the failures\n%v\n%v\nare recognised by\n%s\n%s\nwant two texts recognised by one, which names the file and the limit", failures[0], failures[1], a, b)
+	}
+}
+
 // Transforms see the file as a response: its content type from the
 // extension, its size and its modification time.
 func TestLocalFileResponseHeaders(t *testing.T) {
@@ -106,5 +137,33 @@ func TestLocalFileURLTargetIsPercentDecoded(t *testing.T) {
 		if _, err := FetchCollector(context.Background(), target, c, RequestOverrides{}, nil); err == nil {
 			t.Errorf("%q was read", target)
 		}
+	}
+}
+
+// localFileTargetDir is the one place a target is interpreted.
+func TestLocalFileTargetInterpretation(t *testing.T) {
+	c := fileCollector("files", "/srv/metrics", "")
+	for target, want := range map[string]string{
+		"": "", "app.prom": "app.prom", "./app.prom": "app.prom", "a/b/../c": "a/c",
+		"/srv/metrics": "", "/srv/metrics/": "", "/srv/metrics/a/b.prom": "a/b.prom", "file:///srv/metrics/a.prom": "a.prom",
+	} {
+		got, err := localFileTargetDir(&c, target)
+		if err != nil || got != filepath.FromSlash(want) {
+			t.Errorf("%q: got %q, %v; want %q", target, got, err, want)
+		}
+	}
+	for _, target := range []string{"..", "../x", "/srv/metricsx/a", "/srv", "/etc/passwd", "file://srv/metrics", "a\x00b"} {
+		if _, err := localFileTargetDir(&c, target); err == nil {
+			t.Errorf("%q was accepted", target)
+		}
+	}
+}
+
+// A localfile path may hold a ? and a #, being a file's name, where the path
+// of an http request may hold neither (TestAPathHoldsNoQuery).
+func TestALocalFilePathMayHoldAQueryAndAFragment(t *testing.T) {
+	file := model.Collector{Name: "f", Request: model.RequestConfig{Type: RequestTypeLocalFile, Root: t.TempDir(), Path: "odd?name#1.prom"}}
+	if err := ValidateRequest(&file); err != nil {
+		t.Fatalf("a localfile path with ? and #: %v", err)
 	}
 }

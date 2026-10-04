@@ -2,6 +2,7 @@ package fetch
 
 import (
 	"net/url"
+	"reflect"
 	"regexp"
 	"strconv"
 	"strings"
@@ -366,9 +367,14 @@ func RedactURLErrors(err error) error {
 	return &redactedError{text: strings.NewReplacer(pairs...).Replace(err.Error()), err: err}
 }
 
-// walkErrors calls visit with err and every error it wraps.
+// walkErrors calls visit with err and every error it wraps. An error that is
+// a nil pointer of its type is not visited, nor asked what it wraps: there is
+// nothing in it to read, and reading it panics.
 func walkErrors(err error, visit func(error)) {
 	if err == nil {
+		return
+	}
+	if v := reflect.ValueOf(err); v.Kind() == reflect.Pointer && v.IsNil() {
 		return
 	}
 	visit(err)

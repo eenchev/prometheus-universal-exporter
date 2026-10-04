@@ -68,8 +68,14 @@ type serverStats struct {
 	// retired is set when a reload removed the collector these statistics
 	// were of (reconcile.go): what a trip that began before then still
 	// counts in them is no longer shown, and starts no request being tracked
-	// (requestTracker.adopt).
+	// (requestTracker.adopt). The statistics given to a probe or scrape whose
+	// collector was removed before it took any are retired from the start
+	// (Server.statsSince).
 	retired atomic.Bool
+	// since is the generation of the configuration the collector these
+	// statistics are kept for has been there from (Server.statsSince). It is
+	// set before they are kept and does not change.
+	since uint64
 }
 
 // ruleFailureCount returns how many series of metric have failed.
@@ -223,14 +229,14 @@ func (s *Server) metricsHandler(w http.ResponseWriter, r *http.Request) {
 // removed is not among them: its series stop, and Prometheus marks them stale
 // (reconcile.go).
 func (s *Server) collectorStats() (names []string, values map[string]statsValues, stats map[string]*serverStats) {
-	s.reconcile()
+	followed := s.reconcile()
 	s.statsMu.Lock()
 	stats = make(map[string]*serverStats)
-	for _, c := range s.manager.Get().Collectors {
-		if s.stats[c.Name] == nil {
-			s.stats[c.Name] = newServerStats(time.Now())
-		}
-		stats[c.Name] = s.stats[c.Name]
+	for _, c := range followed.config.Collectors {
+		// A collector first heard of here has its statistics made now; one
+		// another reload removed since the configuration was read is shown
+		// in this answer with none kept for it (statsSince).
+		stats[c.Name] = s.statsSinceLocked(followed.generation, c.Name)
 		names = append(names, c.Name)
 	}
 	s.statsMu.Unlock()

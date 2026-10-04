@@ -391,11 +391,23 @@ func otlpSchemaRule() map[string]any {
 // metricRuleSchemaRule is what the exporter refuses of a metric rule's
 // time_format and time_zone that a schema can tell (transform.CheckMetricRule):
 // time_zone without time_format, and time_format beside value_map, each of
-// which turns the text into the value.
+// which turns the text into the value. Either key written "" is the key left
+// out, to the exporter and so here, as an optional key of free text is
+// throughout the configuration: a time_zone of "" asks for no time_format,
+// and a time_format of "" is none, beside time_zone and beside value_map.
+// dependentRequired and required alone go by the key being written, whatever
+// its value, and so took time_zone: "" for a zone and time_format: "" for a
+// format.
 func metricRuleSchemaRule() map[string]any {
+	set := func(key string) map[string]any {
+		return map[string]any{"required": []string{key}, "properties": map[string]any{key: map[string]any{"not": map[string]any{"const": ""}}}}
+	}
+	timeFormatBesideValueMap := set("time_format")
+	timeFormatBesideValueMap["required"] = []string{"time_format", "value_map"}
 	return map[string]any{
-		"dependentRequired": map[string]any{"time_zone": []string{"time_format"}},
-		"not":               map[string]any{"required": []string{"time_format", "value_map"}},
+		"if":   set("time_zone"),
+		"then": set("time_format"),
+		"not":  timeFormatBesideValueMap,
 	}
 }
 

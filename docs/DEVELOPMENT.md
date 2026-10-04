@@ -46,6 +46,54 @@ test that validates a whole configuration lives in `internal/config`, and one
 that probes through a running `Server` lives in `internal/exporter`, even when
 what it checks is a transform or a request type.
 
+An error whose text names where in the response it happened — a row, a node,
+an item, a line — or a size or a duration it measured is made with
+`model.Errorf`, the number given as a `model.Position`, a `model.Size` or a
+`model.Elapsed`: `model.Errorf("CSV column %q is empty in row %d", column,
+model.Position(row))`. The text reads as `fmt.Errorf`'s would; the type says
+which part of it moves from scrape to scrape, so that the
+[failure log](LOGGING.md#repeated-failures) takes the failure for the same
+wherever it happens (`model.SameFailureText`, `internal/model/samefailure.go`).
+Made with `fmt.Errorf`, such an error is a new failure to the log on every
+scrape it moves. A number the configuration gave, and a value read from the
+response, are written as they are.
+
+`model.Errorf` makes its text when the text is asked for, not when the error
+is made, so that a rule failing on every row costs no text for the rows that
+are only counted. Give it values that stay what they are — strings, numbers,
+errors — and never a byte slice, a builder or a buffer that is written to
+again: make the string first. It wraps what `fmt.Errorf` would, the errors
+its format names with `%w`. Where a failure names one of several things kept
+in a map, as the labels of a series are, name the first by name, so that the
+text is the same on every scrape.
+
+An error whose text a library made cannot say so by how it is made, so it is
+given the text it is recognised by where it enters the exporter, with
+`model.SameFailureAs`: a CSV, an XML and a YAML syntax error in
+`internal/decode`, and whatever a failed fetch has of the one connection or
+attempt in `internal/fetch/samefailure.go`, at the one place every request
+type's error leaves the package. The value is taken from the error's type
+where the type has it (`(*net.OpError).Source`, a stream's number). Where a
+library keeps it only in its text — a YAML line, a gRPC status message — that
+text is read for the one form the library writes, in that place alone, and a
+text of another form is left whole: add a form there with a test that
+provokes the real failure, never a search for numbers. A gRPC status message
+is the target's as often as the client's, and a value the target sent must
+tell failures apart, so a form there is the library's words in full up to the
+value (`read tcp `, `grpc: received message larger than max (`), never the
+value's shape alone. And reading an error must not be what fails a probe:
+`sameFetchFailure` hands the error on as it came if anything in it panics.
+
+The failure log counts, for each trip, the failures of rules it remembers
+(`ruleFailures` in `internal/exporter/failurelog.go`), so that a scrape with
+none remembered asks once and makes no rule's key, whose size is that of the
+rule's expression. A count at zero beside a remembered failure would leave a
+recovery unlogged: an entry is made in `putLocked` and dropped in
+`dropLocked` and nowhere else, which
+`TestTheRuleFailuresCountedAreTheEntriesThereAre` holds every operation to.
+What the log costs a scrape is measured with
+`go test -run '^$' -bench 'LogRuleFailures' ./internal/exporter/`.
+
 ## Repeatable tests
 
 Every test must pass however many times it runs and in whatever order, which
@@ -122,6 +170,19 @@ at run time for a type the build lacks: the constraint says what the test
 needs where it can be read, and vetting a single-type build compiles exactly
 the tests that build runs.
 
+A test of one type that contrasts it with another is two tests, so that the
+type's own build runs what is about the type. `TestGRPCValidation` holds what
+a grpc collector's request must be and runs wherever grpc is built; the row
+that was its contrast, an http collector refused `retry.codes`, is a test of
+its own in a file with the constraint that row needs. That is the other type
+alone where the row only configures the other type
+(`TestTheKeysOfOtherTypesDoNotApplyToHTTP`), and the two together only where
+the assertion holds with both built and not otherwise, as a `method` probe
+parameter refused for a graphite collector does: without http in the build
+`method` is a parameter no type knows
+(`TestAGraphiteProbeRefusesAProbeParameterOfHTTPs`). One row that needs a
+second type never puts the whole test behind a constraint of two.
+
 Tests that hold whatever the build carries stay in a file without a
 constraint, so every build runs them. Where a file's tests are of both kinds,
 those that need a type are in a file beside it named for the type —
@@ -150,14 +211,25 @@ with one `Content-Type` or another and of a `localfile` collector reading the
 file or a directory of them
 (`internal/exporter/csvfixtures_probe_test.go` and
 `csvfixtures_localfile_test.go`), where every series of each answer is
-asserted, in the text format and, where the two differ, OpenMetrics. A table
+asserted, in the order it is answered, in the text format and, where the two
+differ, OpenMetrics. A table
 of 5,000 rows, for the limits, is generated by the test that reads it.
+
+What the user documentation tells a reader to expect of a file or a page
+([Reading CSV](CONFIGURATION.md#reading-csv-what-to-expect),
+[Reading HTML](CONFIGURATION.md#reading-html-what-to-expect)) is held line
+by line, over small bodies written in the test, by
+`internal/transform/csvfixtures_expect_test.go` and
+`internal/exporter/htmlfixtures_expect_test.go`, and the table of what a
+`Content-Type` names by `internal/decode/detectformat_test.go`: a line added
+to either table gets its case there.
 
 | File | What it stands for |
 | --- | --- |
 | `status.csv` | The specification's own example: a header and two rows. |
 | `tickets-rfc4180.csv` | A helpdesk's ticket export as RFC 4180 writes it: CRLF line ends, and fields with commas, doubled quotes and line breaks in quotes. |
 | `inventory-semicolon.csv` | A stock list as a spreadsheet saves it with a German or Bulgarian locale: semicolons between the fields, and numbers with a decimal comma in quotes. |
+| `stock-padded-quotes.csv` | A stock list as a report writer lays it out: semicolons between the fields, every text in quotes and padded with blanks after the closing quote to its column's width, numbers to the right. Read with `trim_space`. |
 | `sensors.tsv` | A data logger's tab-separated readings, with empty fields in the middle of rows and at their end, and fields padded with spaces. |
 | `queues-pipe.txt` | A query's result as `psql -A` prints it: fields separated by a pipe, and a footer counting the rows. |
 | `accounts-colon.txt` | Accounts in the form of `/etc/passwd`: no header, fields separated by a colon. |
@@ -173,15 +245,18 @@ of 5,000 rows, for the limits, is generated by the test that reads it.
 | `jobs-short-rows.csv` | A scheduler's report whose writer stops a row at its last value: rows with fewer fields than the header. |
 | `jobs-blank-lines.csv` | The same report with blank lines between the rows and after them, and one line of blanks. |
 | `jobs-no-final-newline.csv` | The same report without a line end after its last row. |
+| `jobs-unquoted-comma.csv` | The same report with a job whose name has a comma and no quotes around it: a row with a value past the header's last column, which fails the decode. |
 | `usage-duplicate-columns.csv` | A capacity report whose header names two pairs of columns alike. |
 | `usage-unnamed-column.csv` | A capacity report saved from a spreadsheet with an empty header cell above a column of values. |
 | `numbers.csv` | The ways exports write a number, and what they write in place of one. |
 | `backups-times.csv` | A backup tool's report, each column's time written another way. |
 | `usgs-all-hour.csv` | The USGS earthquake feed's `all_hour.csv`, in its documented columns, for `examples/config.usgs.csv-test.yaml`. |
 | `service-status.csv` | A fleet's status export: a row per service and host, its state in words, counters and gauges. |
+| `volumes-cr.csv` | A storage report as a spreadsheet's "CSV (Macintosh)" saves it: every line ends with a carriage return alone, and a note in quotes has one inside it. |
+| `scale-mixed-line-ends.txt` | A balance's log that several tools appended to: no header, semicolons between the fields, texts in quotes padded with blanks, and lines that end with a carriage return alone, with CRLF and with a line feed. Read with `trim_space`. |
 
 Several of them are written in a way an editor would undo — CRLF line ends,
-a byte order mark, UTF-16 and legacy encodings, blanks that end a line, no
+carriage returns alone, a byte order mark, UTF-16 and legacy encodings, blanks that end a line, no
 final line end — and a test checks that each still is. A file added to
 `testdata/csv` goes in this table and in the list of
 `internal/decode/csvfixtures_test.go`, which fails until it is in both.
@@ -228,21 +303,77 @@ go test -run '^$' -bench 'Probe' -benchtime 2s ./internal/exporter/
 ```
 
 `jq_cached` is answered from the cache, so it measures writing an answer
-alone, and `/gzip` writing it compressed. Measure a change to the pipeline
-with these before and after, on a machine doing nothing else: `ns/op` moves
-with whatever else runs, while `B/op` and `allocs/op` do not, and say most
-about a change that saves allocation. A profile says where the time goes:
+alone, and `/gzip` writing it compressed. `jq_detected` and `jq_sniffed` are
+`jq_items` with `decoder.type` left to the response: named by its
+`Content-Type`, and found from the content of a body served as `text/plain`.
+`python` runs a script that emits one series for each item, and `prescript` a
+pre-script that passes the items on to `jq` rules, so the two measure handing
+a document to a Python worker and reading its answer back. Measure a change
+to the pipeline with these before and after, on a machine doing nothing else:
+`ns/op` moves with whatever else runs, while `B/op` and `allocs/op` do not,
+and say most about a change that saves allocation. A profile says where the
+time goes:
 
 ```sh
 go test -run '^$' -bench 'Probe/prom/n=5000$' -benchtime 2s -cpuprofile cpu.out ./internal/exporter/
 go tool pprof -top cpu.out
 ```
 
+Two results of these benchmarks, as measured on two shared cores (the times
+are the range of three runs, old and new in turn; bytes and allocations
+hardly move from run to run):
+
+| Benchmark | Before | After |
+| --- | --- | --- |
+| `jq_sniffed/n=100` | 2.2–3.9 ms, 386 kB, 5,362 allocations | 1.4 ms, 265 kB, 1,741 allocations |
+| `jq_sniffed/n=5000` | 84–97 ms, 20.3 MB, 260,777 allocations | 39–41 ms, 13.3 MB, 80,496 allocations |
+| `python/n=100` | 5.4–5.9 ms, 474 kB, 5,082 allocations | 2.6–3.1 ms, 216 kB, 1,548 allocations |
+| `python/n=5000` | 158–181 ms, 28.0 MB, 241,103 allocations | 95–103 ms, 13.3 MB, 65,945 allocations |
+| `prescript/n=100` | 4.2–5.0 ms, 403 kB, 4,089 allocations | 3.0–4.7 ms, 267 kB, 1,996 allocations |
+| `prescript/n=5000` | 118–128 ms, 22.6 MB, 200,470 allocations | 70–79 ms, 14.2 MB, 95,515 allocations |
+
+`jq_sniffed` was a body read twice: the detection parsed it with
+`encoding/json` to see that it is JSON, threw the result away, and the json
+decoder read it again. The detection now reads it with the json decoder and
+the decode returns what that made, so `jq_sniffed` costs what `jq_items` and
+`jq_detected` cost (36–41 ms at 5,000 items).
+
+`python` was four times `jq_items`, and nearly all of the difference was the
+hand-over, not the script. At 5,000 items the exporter spent 20 to 24 ms
+writing the request with `json.Marshal` (a copy of the document to mark its
+NaNs, then reflection and a sort of every object's keys), and 26 to 28 ms
+reading the answer with `encoding/json` into a map for each metric and then
+into series. The worker spent 58 ms of processor time: 15 ms reading the
+request with `json.loads`, 12 ms in the script, nearly all of it in its
+5,000 calls of `metric(...)`, 22 ms walking the answer to replace NaN and the
+infinities, and 8 ms writing it with `json.dumps`. Now the exporter writes
+the same request line itself in about 5 ms and reads the answer into series
+in about 5 ms; the worker writes an answer of plain values without the walk,
+after looking through it in 4 ms, and `metric(...)` takes a label that is a
+string as it is, 8.5 ms for the 5,000 calls: 37 ms of processor time in the
+worker. What is left there is `json.loads` of the request, 15 ms, and
+`json.dumps` of the answer, 8 ms.
+
+The lines the exporter and a worker exchange are the lines they were, byte
+for byte, so `limits.max_output_bytes` bounds what it bounded and a script
+is given what it was given. Two shortcuts were measured and not taken,
+because a script would see them. Handing a worker the bytes of a JSON
+response in place of the decoded document would save writing `data`, but
+the worker would then read another document: its keys in the target's order
+rather than sorted, `1.0` as a float rather than the int the exporter's
+`1` becomes, `1e400` as `inf` rather than the text the json decoder keeps.
+And a request in a binary form Python loads faster than JSON (`pickle`
+reads this one in 7 ms, `marshal` in 6) would change the protocol the
+specification fixes, one JSON document per line.
+
 What was made fast stays fast by tests, not by the benchmarks: the decoders,
 the transforms, the duplicate check and the body read each have a test that
 bounds their allocations per series or per body, and a test that compares
 them with the plainer code they replaced, kept beside the tests, over a
-table and tens of thousands of generated inputs. The allocation bounds are
+table and tens of thousands of generated inputs. The hand-over to Python is
+compared the same way, down to the worker's script as it was
+(`internal/transform/pythonoracle_test.go`), which a second pool of workers
+runs beside the current one. The allocation bounds are
 skipped under `-race`, which changes what is allocated; `make ci` runs the
 tests without it as well.
 
@@ -320,7 +451,11 @@ server sending the `Content-Type` a real one would, and from disk with the
 under `testdata/html/charset` are one page in the encodings a target may
 answer in — windows-1251, Shift_JIS, UTF-16 and the rest — and are not UTF-8
 on purpose: an editor that saves them as UTF-8 breaks the tests that read
-them.
+them. Some of them hold what only looks like a declaration of the encoding
+before their own — a `<meta>` in a comment, a description that mentions a
+charset — and the `.xhtml` ones start with an XML declaration, which is the
+only declaration of one and names another encoding than the `<meta>` of the
+other.
 
 Static analysis is configured in `.golangci.yml`, so a local `make lint` and the
 CI run check exactly the same rules. Install the pinned version with `make
@@ -480,6 +615,18 @@ not complete (the vulnerability database unreachable, say) warns too. Keep it
 out of the branch protection's required checks. `make vulncheck` runs the same
 pinned version locally, and a test keeps the Makefile and the workflow in step
 and checks that the step cannot fail the job.
+
+What is scanned is what ships and what the workflows run: the exporter, the
+package at the root, and the repository's tools (`. ./tools/...`), each with
+everything it imports. The packages only tests use — `internal/grpctest`, the
+stand-in gRPC server of the grpc tests, `internal/testutil` and
+`test/repository` — are left out, so an advisory for code that only a test
+reaches, such as the gRPC server the exporter never is, raises no warning; the
+price is that such an advisory is not reported at all. A test
+(`TestTheVulnerabilityCheckScansWhatShips`) keeps the Makefile's and the
+workflow's packages equal, fails for a command of the module they do not
+cover, and holds the list of what is left out: a new package is either
+imported by something scanned or added to that list with its reason.
 
 `make test` also validates the GitHub Actions workflows: `test/repository/workflows_test.go`
 decodes every file under `.github/workflows` with a parser that rejects

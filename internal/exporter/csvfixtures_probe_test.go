@@ -478,6 +478,37 @@ collectors:
         labels:
           - name: form
             expression: form
+  - name: numbers
+    request:
+      type: http
+      path: /numbers.csv
+    transform:
+      type: csv
+    metrics:
+      - name: number
+        expression: value
+        labels:
+          - name: form
+            expression: form
+  # The numbers of a configuration are YAML's, which writes 1_000 for 1000
+  # and 0x10 for 16; a response's are not.
+  - name: numbers_mapped
+    request:
+      type: http
+      path: /numbers.csv
+    limits:
+      max_metrics: 1_000
+    transform:
+      type: csv
+    metrics:
+      - name: number
+        expression: value
+        error_mode: ignore
+        scale: 1_0
+        value_map: {"1_000": 1_000, "0x1p-2": 0x10}
+        labels:
+          - name: form
+            expression: form
   - name: readings_by_sensor
     request:
       type: http
@@ -493,6 +524,75 @@ collectors:
         labels:
           - name: sensor
             expression: "2"
+
+  # A list whose texts are in quotes and padded with blanks after them.
+  - name: stock
+    request:
+      type: http
+      path: /stock-padded-quotes.csv
+    response:
+      csv:
+        delimiter: ";"
+        trim_space: true
+    transform:
+      type: csv
+    metrics: &stock
+      - name: stock_items
+        expression: Bestand
+        labels:
+          - name: item
+            expression: Artikel
+          - name: site
+            expression: Lager
+          - name: note
+            expression: Hinweis
+      - name: stock_items_minimum
+        expression: Mindestbestand
+        labels:
+          - name: item
+            expression: Artikel
+  - name: stock_untrimmed
+    request:
+      type: http
+      path: /stock-padded-quotes.csv
+    response:
+      csv:
+        delimiter: ";"
+    transform:
+      type: csv
+    metrics: *stock
+
+  # A report with a row longer than its header.
+  - name: jobs
+    request:
+      type: http
+      path: /jobs-unquoted-comma.csv
+    transform:
+      type: csv
+    metrics: &jobs
+      - name: job_duration_seconds
+        expression: duration_seconds
+        labels:
+          - name: job
+            expression: job
+  - name: jobs_script
+    request:
+      type: http
+      path: /jobs-unquoted-comma.csv
+    transform:
+      type: csv
+      pre_script: |
+        data = [row for row in data if row["state"] == "ok"]
+    metrics: *jobs
+  - name: jobs_logged
+    request:
+      type: http
+      path: /jobs-unquoted-comma.csv
+    error_handling:
+      on_decode_error: log
+    transform:
+      type: csv
+    metrics: *jobs
   - name: usage
     request:
       type: http
@@ -519,6 +619,93 @@ collectors:
         labels:
           - name: host
             expression: host
+
+  # A report whose lines end with a carriage return alone.
+  - name: volumes
+    request:
+      type: http
+      path: /volumes-cr.csv
+    transform:
+      type: csv
+    metrics:
+      - name: volume_used_percent
+        expression: used_percent
+        labels:
+          - name: volume
+            expression: volume
+          - name: pool
+            expression: pool
+          - name: note
+            expression: note
+      - name: volume_free_gibibytes
+        expression: free_gib
+        labels: &volume
+          - name: volume
+            expression: volume
+  # The same report read by rules that name what its header does not have:
+  # a label's column in another case, on a rule that is not required, and a
+  # value's column.
+  - name: volumes_misnamed
+    request:
+      type: http
+      path: /volumes-cr.csv
+    transform:
+      type: csv
+    metrics:
+      - name: volume_used_percent
+        expression: used_percent
+        required: false
+        labels:
+          - name: volume
+            expression: volume
+          - name: pool
+            expression: Pool
+      - name: volume_free_gigabytes
+        expression: free_gb
+        labels: *volume
+      - name: volume_free_gibibytes
+        expression: free_gib
+        labels: *volume
+  - name: volumes_strict
+    request:
+      type: http
+      path: /volumes-cr.csv
+    transform:
+      type: csv
+    metrics:
+      - name: volume_free_gibibytes
+        expression: free_gib
+        labels: *volume
+      - name: volume_used_percent
+        expression: used_percent
+        error_mode: fail
+        labels:
+          - name: volume
+            expression: volume
+          - name: pool
+            expression: Pool
+  # A balance's log, its lines ended in three ways.
+  - name: scale
+    request:
+      type: http
+      path: /scale-mixed-line-ends.txt
+    response:
+      csv:
+        delimiter: ";"
+        header: false
+        trim_space: true
+    transform:
+      type: csv
+    metrics:
+      - name: scale_weight_kilograms
+        expression: "3"
+        labels:
+          - name: scale
+            expression: "2"
+          - name: state
+            expression: "4"
+          - name: at
+            expression: "1"
 `
 
 // The content types a target may send a CSV file with, and none at all.
@@ -549,17 +736,17 @@ func TestCSVFixtureProbeACSVCollectorReadsCSVWhateverTheContentType(t *testing.T
 	server := csvFixtureServer(t, csvProbeConfig)
 	want := []string{
 		`ticket_age_hours{customer="Acme, Inc.",id="10231",queue="billing",subject="Invoice 2026-0917 charged twice"} 52.5`,
-		`ticket_age_hours{customer="Acme, Inc.",id="10237",queue="accounts",subject="Password reset for \"j.doe\", locked out"} 0.25`,
-		`ticket_age_hours{customer="Globex",id="10242",queue="network"} 3`,
-		`ticket_age_hours{customer="Globex, Ltd.",id="10234",queue="hardware",subject="Rack 12, unit 4: fan alarm"} 1.5`,
-		`ticket_age_hours{customer="Hooli, LLC",id="10236",queue="network",subject="Wi-Fi guest portal certificate expired"} 6.75`,
-		`ticket_age_hours{customer="Initech",id="10233",queue="hardware",subject="Printer says \"PC LOAD LETTER\""} 211.25`,
-		`ticket_age_hours{customer="Initech",id="10235",queue="network",subject="VPN drops every 30 min\n(since the firewall change)"} 18`,
-		`ticket_age_hours{customer="Initech",id="10241",queue="billing",subject="Quote for 5\" tablets, 20 units"} 96`,
 		`ticket_age_hours{customer="Müller & Söhne GmbH",id="10232",queue="billing",subject="Refund for order #5541, second request"} 30`,
-		`ticket_age_hours{customer="Stark Industries",id="10239",queue="software",subject="Crash on export: \"index out of range\"\nSteps:\n1. open report, 2. click \"Export\""} 12`,
+		`ticket_age_hours{customer="Initech",id="10233",queue="hardware",subject="Printer says \"PC LOAD LETTER\""} 211.25`,
+		`ticket_age_hours{customer="Globex, Ltd.",id="10234",queue="hardware",subject="Rack 12, unit 4: fan alarm"} 1.5`,
+		`ticket_age_hours{customer="Initech",id="10235",queue="network",subject="VPN drops every 30 min\n(since the firewall change)"} 18`,
+		`ticket_age_hours{customer="Hooli, LLC",id="10236",queue="network",subject="Wi-Fi guest portal certificate expired"} 6.75`,
+		`ticket_age_hours{customer="Acme, Inc.",id="10237",queue="accounts",subject="Password reset for \"j.doe\", locked out"} 0.25`,
 		`ticket_age_hours{customer="Umbrella Corp",id="10238",queue="accounts",subject="New starter needs access"} 73`,
+		`ticket_age_hours{customer="Stark Industries",id="10239",queue="software",subject="Crash on export: \"index out of range\"\nSteps:\n1. open report, 2. click \"Export\""} 12`,
 		`ticket_age_hours{customer="Wayne Enterprises, Inc.",id="10240",queue="software",subject="Licence renewal"} 340`,
+		`ticket_age_hours{customer="Initech",id="10241",queue="billing",subject="Quote for 5\" tablets, 20 units"} 96`,
+		`ticket_age_hours{customer="Globex",id="10242",queue="network"} 3`,
 		`ticket_replies{id="10231"} 4`,
 		`ticket_replies{id="10232"} 2`,
 		`ticket_replies{id="10233"} 7`,
@@ -691,88 +878,88 @@ func TestCSVFixtureProbeAStatusExportWithEverySettingOfACollector(t *testing.T) 
 
 	body := answered(t, probeCSV(t, server, service, "fleet", false))
 	answersSeries(t, body, []string{
-		`fleet_service_errors_total{datacenter="Amsterdam",instance="srch01",service="search",source="status_export"} 2051`,
-		`fleet_service_errors_total{datacenter="Amsterdam",instance="web03",service="api",source="status_export"} 20417`,
-		`fleet_service_errors_total{datacenter="Amsterdam",instance="web03",service="auth",source="status_export"} 2209`,
-		`fleet_service_errors_total{datacenter="Amsterdam",instance="web03",service="checkout",source="status_export"} 90211`,
-		`fleet_service_errors_total{datacenter="Frankfurt",instance="web01",service="api",source="status_export"} 912`,
-		`fleet_service_errors_total{datacenter="Frankfurt",instance="web01",service="auth",source="status_export"} 4410`,
-		`fleet_service_errors_total{datacenter="Frankfurt",instance="web01",service="checkout",source="status_export"} 118`,
-		`fleet_service_errors_total{datacenter="Frankfurt",instance="web02",service="api",source="status_export"} 845`,
-		`fleet_service_errors_total{datacenter="Frankfurt",instance="web02",service="auth",source="status_export"} 4302`,
-		`fleet_service_errors_total{datacenter="Sofia",instance="job01",service="mailer",source="status_export"} 37`,
-		`fleet_service_errors_total{datacenter="Sofia",instance="job02",service="mailer",source="status_export"} 0`,
-		`fleet_service_errors_total{datacenter="Sofia",instance="srch02",service="search",source="status_export"} 1988`,
-		`fleet_service_info{instance="job01",service="mailer",source="status_export",state="up",version="0.8.4"} 1`,
-		`fleet_service_info{instance="job02",service="mailer",source="status_export",state="starting",version="0.8.4"} 1`,
-		`fleet_service_info{instance="srch01",service="search",source="status_export",state="up",version="1.9.3"} 1`,
-		`fleet_service_info{instance="srch02",service="search",source="status_export",state="up",version="1.9.3"} 1`,
-		`fleet_service_info{instance="web01",service="api",source="status_export",state="up",version="2.14.1"} 1`,
-		`fleet_service_info{instance="web01",service="auth",source="status_export",state="up",version="3.3.1"} 1`,
-		`fleet_service_info{instance="web01",service="checkout",source="status_export",state="up",version="5.2.0"} 1`,
-		`fleet_service_info{instance="web02",service="api",source="status_export",state="up",version="2.14.1"} 1`,
-		`fleet_service_info{instance="web02",service="auth",source="status_export",state="up",version="3.3.1"} 1`,
-		`fleet_service_info{instance="web03",service="api",source="status_export",state="degraded",version="2.14.0"} 1`,
-		`fleet_service_info{instance="web03",service="auth",source="status_export",version="3.3.1"} 1`,
-		`fleet_service_info{instance="web03",service="checkout",source="status_export",state="down",version="5.2.0"} 1`,
-		`fleet_service_latency_seconds{datacenter="Amsterdam",instance="srch01",service="search",source="status_export"} 0.01875`,
-		`fleet_service_latency_seconds{datacenter="Amsterdam",instance="web03",service="api",source="status_export"} 0.412`,
-		`fleet_service_latency_seconds{datacenter="Amsterdam",instance="web03",service="auth",source="status_export"} 0.009`,
-		`fleet_service_latency_seconds{datacenter="Frankfurt",instance="web01",service="api",source="status_export"} 0.0415`,
-		`fleet_service_latency_seconds{datacenter="Frankfurt",instance="web01",service="auth",source="status_export"} 0.0075`,
-		`fleet_service_latency_seconds{datacenter="Frankfurt",instance="web01",service="checkout",source="status_export"} 0.12`,
-		`fleet_service_latency_seconds{datacenter="Frankfurt",instance="web02",service="api",source="status_export"} 0.039`,
-		`fleet_service_latency_seconds{datacenter="Frankfurt",instance="web02",service="auth",source="status_export"} 0.00725`,
-		`fleet_service_latency_seconds{datacenter="Sofia",instance="job01",service="mailer",source="status_export"} 0.95`,
-		`fleet_service_latency_seconds{datacenter="Sofia",instance="srch02",service="search",source="status_export"} 0.019`,
-		`fleet_service_queue_depth{datacenter="Amsterdam",instance="srch01",service="search",source="status_export"} 4`,
-		`fleet_service_queue_depth{datacenter="Amsterdam",instance="web03",service="api",source="status_export"} 57`,
-		`fleet_service_queue_depth{datacenter="Amsterdam",instance="web03",service="auth",source="status_export"} 0`,
-		`fleet_service_queue_depth{datacenter="Amsterdam",instance="web03",service="checkout",source="status_export"} 340`,
-		`fleet_service_queue_depth{datacenter="Frankfurt",instance="web01",service="api",source="status_export"} 0`,
-		`fleet_service_queue_depth{datacenter="Frankfurt",instance="web01",service="auth",source="status_export"} 0`,
-		`fleet_service_queue_depth{datacenter="Frankfurt",instance="web01",service="checkout",source="status_export"} 1`,
-		`fleet_service_queue_depth{datacenter="Frankfurt",instance="web02",service="api",source="status_export"} 2`,
-		`fleet_service_queue_depth{datacenter="Frankfurt",instance="web02",service="auth",source="status_export"} 0`,
-		`fleet_service_queue_depth{datacenter="Sofia",instance="job01",service="mailer",source="status_export"} 12`,
-		`fleet_service_queue_depth{datacenter="Sofia",instance="job02",service="mailer",source="status_export"} 0`,
-		`fleet_service_queue_depth{datacenter="Sofia",instance="srch02",service="search",source="status_export"} 3`,
-		`fleet_service_requests_total{datacenter="Amsterdam",instance="srch01",service="search",source="status_export"} 7.741209e+06`,
-		`fleet_service_requests_total{datacenter="Amsterdam",instance="web03",service="api",source="status_export"} 9.120455e+06`,
-		`fleet_service_requests_total{datacenter="Amsterdam",instance="web03",service="auth",source="status_export"} 1.201055e+07`,
-		`fleet_service_requests_total{datacenter="Amsterdam",instance="web03",service="checkout",source="status_export"} 1.80412e+06`,
-		`fleet_service_requests_total{datacenter="Frankfurt",instance="web01",service="api",source="status_export"} 1.8250411e+07`,
-		`fleet_service_requests_total{datacenter="Frankfurt",instance="web01",service="auth",source="status_export"} 2.5550921e+07`,
-		`fleet_service_requests_total{datacenter="Frankfurt",instance="web01",service="checkout",source="status_export"} 2.210934e+06`,
-		`fleet_service_requests_total{datacenter="Frankfurt",instance="web02",service="api",source="status_export"} 1.801123e+07`,
-		`fleet_service_requests_total{datacenter="Frankfurt",instance="web02",service="auth",source="status_export"} 2.5190077e+07`,
-		`fleet_service_requests_total{datacenter="Sofia",instance="job01",service="mailer",source="status_export"} 402118`,
-		`fleet_service_requests_total{datacenter="Sofia",instance="job02",service="mailer",source="status_export"} 0`,
-		`fleet_service_requests_total{datacenter="Sofia",instance="srch02",service="search",source="status_export"} 7.702113e+06`,
-		`fleet_service_restarts_total{datacenter="Amsterdam",instance="srch01",service="search",source="status_export"} 5`,
-		`fleet_service_restarts_total{datacenter="Amsterdam",instance="web03",service="api",source="status_export"} 14`,
-		`fleet_service_restarts_total{datacenter="Amsterdam",instance="web03",service="auth",source="status_export"} 1`,
-		`fleet_service_restarts_total{datacenter="Amsterdam",instance="web03",service="checkout",source="status_export"} 22`,
-		`fleet_service_restarts_total{datacenter="Frankfurt",instance="web01",service="api",source="status_export"} 3`,
-		`fleet_service_restarts_total{datacenter="Frankfurt",instance="web01",service="auth",source="status_export"} 0`,
-		`fleet_service_restarts_total{datacenter="Frankfurt",instance="web01",service="checkout",source="status_export"} 0`,
-		`fleet_service_restarts_total{datacenter="Frankfurt",instance="web02",service="api",source="status_export"} 1`,
-		`fleet_service_restarts_total{datacenter="Frankfurt",instance="web02",service="auth",source="status_export"} 0`,
-		`fleet_service_restarts_total{datacenter="Sofia",instance="job01",service="mailer",source="status_export"} 2`,
-		`fleet_service_restarts_total{datacenter="Sofia",instance="job02",service="mailer",source="status_export"} 7`,
-		`fleet_service_restarts_total{datacenter="Sofia",instance="srch02",service="search",source="status_export"} 5`,
-		`fleet_service_up{datacenter="Amsterdam",instance="srch01",service="search",source="status_export"} 1`,
-		`fleet_service_up{datacenter="Amsterdam",instance="web03",service="api",source="status_export"} 0.5`,
-		`fleet_service_up{datacenter="Amsterdam",instance="web03",service="auth",source="status_export"} -1`,
-		`fleet_service_up{datacenter="Amsterdam",instance="web03",service="checkout",source="status_export"} 0`,
 		`fleet_service_up{datacenter="Frankfurt",instance="web01",service="api",source="status_export"} 1`,
-		`fleet_service_up{datacenter="Frankfurt",instance="web01",service="auth",source="status_export"} 1`,
-		`fleet_service_up{datacenter="Frankfurt",instance="web01",service="checkout",source="status_export"} 1`,
 		`fleet_service_up{datacenter="Frankfurt",instance="web02",service="api",source="status_export"} 1`,
-		`fleet_service_up{datacenter="Frankfurt",instance="web02",service="auth",source="status_export"} 1`,
+		`fleet_service_up{datacenter="Amsterdam",instance="web03",service="api",source="status_export"} 0.5`,
+		`fleet_service_up{datacenter="Frankfurt",instance="web01",service="checkout",source="status_export"} 1`,
+		`fleet_service_up{datacenter="Amsterdam",instance="web03",service="checkout",source="status_export"} 0`,
+		`fleet_service_up{datacenter="Amsterdam",instance="srch01",service="search",source="status_export"} 1`,
+		`fleet_service_up{datacenter="Sofia",instance="srch02",service="search",source="status_export"} 1`,
 		`fleet_service_up{datacenter="Sofia",instance="job01",service="mailer",source="status_export"} 1`,
 		`fleet_service_up{datacenter="Sofia",instance="job02",service="mailer",source="status_export"} 0.5`,
-		`fleet_service_up{datacenter="Sofia",instance="srch02",service="search",source="status_export"} 1`,
+		`fleet_service_up{datacenter="Frankfurt",instance="web01",service="auth",source="status_export"} 1`,
+		`fleet_service_up{datacenter="Frankfurt",instance="web02",service="auth",source="status_export"} 1`,
+		`fleet_service_up{datacenter="Amsterdam",instance="web03",service="auth",source="status_export"} -1`,
+		`fleet_service_restarts_total{datacenter="Frankfurt",instance="web01",service="api",source="status_export"} 3`,
+		`fleet_service_restarts_total{datacenter="Frankfurt",instance="web02",service="api",source="status_export"} 1`,
+		`fleet_service_restarts_total{datacenter="Amsterdam",instance="web03",service="api",source="status_export"} 14`,
+		`fleet_service_restarts_total{datacenter="Frankfurt",instance="web01",service="checkout",source="status_export"} 0`,
+		`fleet_service_restarts_total{datacenter="Amsterdam",instance="web03",service="checkout",source="status_export"} 22`,
+		`fleet_service_restarts_total{datacenter="Amsterdam",instance="srch01",service="search",source="status_export"} 5`,
+		`fleet_service_restarts_total{datacenter="Sofia",instance="srch02",service="search",source="status_export"} 5`,
+		`fleet_service_restarts_total{datacenter="Sofia",instance="job01",service="mailer",source="status_export"} 2`,
+		`fleet_service_restarts_total{datacenter="Sofia",instance="job02",service="mailer",source="status_export"} 7`,
+		`fleet_service_restarts_total{datacenter="Frankfurt",instance="web01",service="auth",source="status_export"} 0`,
+		`fleet_service_restarts_total{datacenter="Frankfurt",instance="web02",service="auth",source="status_export"} 0`,
+		`fleet_service_restarts_total{datacenter="Amsterdam",instance="web03",service="auth",source="status_export"} 1`,
+		`fleet_service_requests_total{datacenter="Frankfurt",instance="web01",service="api",source="status_export"} 1.8250411e+07`,
+		`fleet_service_requests_total{datacenter="Frankfurt",instance="web02",service="api",source="status_export"} 1.801123e+07`,
+		`fleet_service_requests_total{datacenter="Amsterdam",instance="web03",service="api",source="status_export"} 9.120455e+06`,
+		`fleet_service_requests_total{datacenter="Frankfurt",instance="web01",service="checkout",source="status_export"} 2.210934e+06`,
+		`fleet_service_requests_total{datacenter="Amsterdam",instance="web03",service="checkout",source="status_export"} 1.80412e+06`,
+		`fleet_service_requests_total{datacenter="Amsterdam",instance="srch01",service="search",source="status_export"} 7.741209e+06`,
+		`fleet_service_requests_total{datacenter="Sofia",instance="srch02",service="search",source="status_export"} 7.702113e+06`,
+		`fleet_service_requests_total{datacenter="Sofia",instance="job01",service="mailer",source="status_export"} 402118`,
+		`fleet_service_requests_total{datacenter="Sofia",instance="job02",service="mailer",source="status_export"} 0`,
+		`fleet_service_requests_total{datacenter="Frankfurt",instance="web01",service="auth",source="status_export"} 2.5550921e+07`,
+		`fleet_service_requests_total{datacenter="Frankfurt",instance="web02",service="auth",source="status_export"} 2.5190077e+07`,
+		`fleet_service_requests_total{datacenter="Amsterdam",instance="web03",service="auth",source="status_export"} 1.201055e+07`,
+		`fleet_service_errors_total{datacenter="Frankfurt",instance="web01",service="api",source="status_export"} 912`,
+		`fleet_service_errors_total{datacenter="Frankfurt",instance="web02",service="api",source="status_export"} 845`,
+		`fleet_service_errors_total{datacenter="Amsterdam",instance="web03",service="api",source="status_export"} 20417`,
+		`fleet_service_errors_total{datacenter="Frankfurt",instance="web01",service="checkout",source="status_export"} 118`,
+		`fleet_service_errors_total{datacenter="Amsterdam",instance="web03",service="checkout",source="status_export"} 90211`,
+		`fleet_service_errors_total{datacenter="Amsterdam",instance="srch01",service="search",source="status_export"} 2051`,
+		`fleet_service_errors_total{datacenter="Sofia",instance="srch02",service="search",source="status_export"} 1988`,
+		`fleet_service_errors_total{datacenter="Sofia",instance="job01",service="mailer",source="status_export"} 37`,
+		`fleet_service_errors_total{datacenter="Sofia",instance="job02",service="mailer",source="status_export"} 0`,
+		`fleet_service_errors_total{datacenter="Frankfurt",instance="web01",service="auth",source="status_export"} 4410`,
+		`fleet_service_errors_total{datacenter="Frankfurt",instance="web02",service="auth",source="status_export"} 4302`,
+		`fleet_service_errors_total{datacenter="Amsterdam",instance="web03",service="auth",source="status_export"} 2209`,
+		`fleet_service_latency_seconds{datacenter="Frankfurt",instance="web01",service="api",source="status_export"} 0.0415`,
+		`fleet_service_latency_seconds{datacenter="Frankfurt",instance="web02",service="api",source="status_export"} 0.039`,
+		`fleet_service_latency_seconds{datacenter="Amsterdam",instance="web03",service="api",source="status_export"} 0.412`,
+		`fleet_service_latency_seconds{datacenter="Frankfurt",instance="web01",service="checkout",source="status_export"} 0.12`,
+		`fleet_service_latency_seconds{datacenter="Amsterdam",instance="srch01",service="search",source="status_export"} 0.01875`,
+		`fleet_service_latency_seconds{datacenter="Sofia",instance="srch02",service="search",source="status_export"} 0.019`,
+		`fleet_service_latency_seconds{datacenter="Sofia",instance="job01",service="mailer",source="status_export"} 0.95`,
+		`fleet_service_latency_seconds{datacenter="Frankfurt",instance="web01",service="auth",source="status_export"} 0.0075`,
+		`fleet_service_latency_seconds{datacenter="Frankfurt",instance="web02",service="auth",source="status_export"} 0.00725`,
+		`fleet_service_latency_seconds{datacenter="Amsterdam",instance="web03",service="auth",source="status_export"} 0.009`,
+		`fleet_service_queue_depth{datacenter="Frankfurt",instance="web01",service="api",source="status_export"} 0`,
+		`fleet_service_queue_depth{datacenter="Frankfurt",instance="web02",service="api",source="status_export"} 2`,
+		`fleet_service_queue_depth{datacenter="Amsterdam",instance="web03",service="api",source="status_export"} 57`,
+		`fleet_service_queue_depth{datacenter="Frankfurt",instance="web01",service="checkout",source="status_export"} 1`,
+		`fleet_service_queue_depth{datacenter="Amsterdam",instance="web03",service="checkout",source="status_export"} 340`,
+		`fleet_service_queue_depth{datacenter="Amsterdam",instance="srch01",service="search",source="status_export"} 4`,
+		`fleet_service_queue_depth{datacenter="Sofia",instance="srch02",service="search",source="status_export"} 3`,
+		`fleet_service_queue_depth{datacenter="Sofia",instance="job01",service="mailer",source="status_export"} 12`,
+		`fleet_service_queue_depth{datacenter="Sofia",instance="job02",service="mailer",source="status_export"} 0`,
+		`fleet_service_queue_depth{datacenter="Frankfurt",instance="web01",service="auth",source="status_export"} 0`,
+		`fleet_service_queue_depth{datacenter="Frankfurt",instance="web02",service="auth",source="status_export"} 0`,
+		`fleet_service_queue_depth{datacenter="Amsterdam",instance="web03",service="auth",source="status_export"} 0`,
+		`fleet_service_info{instance="web01",service="api",source="status_export",state="up",version="2.14.1"} 1`,
+		`fleet_service_info{instance="web02",service="api",source="status_export",state="up",version="2.14.1"} 1`,
+		`fleet_service_info{instance="web03",service="api",source="status_export",state="degraded",version="2.14.0"} 1`,
+		`fleet_service_info{instance="web01",service="checkout",source="status_export",state="up",version="5.2.0"} 1`,
+		`fleet_service_info{instance="web03",service="checkout",source="status_export",state="down",version="5.2.0"} 1`,
+		`fleet_service_info{instance="srch01",service="search",source="status_export",state="up",version="1.9.3"} 1`,
+		`fleet_service_info{instance="srch02",service="search",source="status_export",state="up",version="1.9.3"} 1`,
+		`fleet_service_info{instance="job01",service="mailer",source="status_export",state="up",version="0.8.4"} 1`,
+		`fleet_service_info{instance="job02",service="mailer",source="status_export",state="starting",version="0.8.4"} 1`,
+		`fleet_service_info{instance="web01",service="auth",source="status_export",state="up",version="3.3.1"} 1`,
+		`fleet_service_info{instance="web02",service="auth",source="status_export",state="up",version="3.3.1"} 1`,
+		`fleet_service_info{instance="web03",service="auth",source="status_export",version="3.3.1"} 1`,
 	}, []string{
 		"# TYPE fleet_service_up gauge",
 		"# TYPE fleet_service_restarts_total counter",
@@ -924,52 +1111,52 @@ func TestCSVFixtureProbeAnEncodingIsNamedByTheResponseOrTheCollector(t *testing.
 	service := newCSVStandIn(t)
 	server := csvFixtureServer(t, csvProbeConfig)
 	oblasti := []string{
-		`city_humidity_percent{city="Банско, ски зона"} 91`,
-		`city_humidity_percent{city="Благоевград"} 60`,
-		`city_humidity_percent{city="Бургас"} 69`,
-		`city_humidity_percent{city="Варна"} 71`,
-		`city_humidity_percent{city="Велико Търново"} 80`,
-		`city_humidity_percent{city="Плевен"} 77`,
-		`city_humidity_percent{city="Пловдив"} 55`,
-		`city_humidity_percent{city="Русе"} 74`,
-		`city_humidity_percent{city="София"} 62`,
-		`city_humidity_percent{city="Стара Загора"} 58`,
-		`city_temperature_celsius{city="Банско, ски зона",province="Благоевград",state="сняг"} -2.5`,
-		`city_temperature_celsius{city="Благоевград",province="Благоевград",state="слънчево"} 15`,
-		`city_temperature_celsius{city="Бургас",province="Бургас",state="дъжд"} 19`,
-		`city_temperature_celsius{city="Варна",province="Варна",state="облачно"} 18.25`,
-		`city_temperature_celsius{city="Велико Търново",province="Велико Търново",state="дъжд"} 11.75`,
-		`city_temperature_celsius{city="Плевен",province="Плевен",state="облачно"} 12`,
-		`city_temperature_celsius{city="Пловдив",province="Пловдив",state="слънчево"} 17`,
-		`city_temperature_celsius{city="Русе",province="Русе",state="мъгла"} 13`,
 		`city_temperature_celsius{city="София",province="София-град",state="слънчево"} 14.5`,
+		`city_temperature_celsius{city="Пловдив",province="Пловдив",state="слънчево"} 17`,
+		`city_temperature_celsius{city="Варна",province="Варна",state="облачно"} 18.25`,
+		`city_temperature_celsius{city="Бургас",province="Бургас",state="дъжд"} 19`,
+		`city_temperature_celsius{city="Русе",province="Русе",state="мъгла"} 13`,
 		`city_temperature_celsius{city="Стара Загора",province="Стара Загора",state="слънчево"} 16.5`,
+		`city_temperature_celsius{city="Плевен",province="Плевен",state="облачно"} 12`,
+		`city_temperature_celsius{city="Велико Търново",province="Велико Търново",state="дъжд"} 11.75`,
+		`city_temperature_celsius{city="Благоевград",province="Благоевград",state="слънчево"} 15`,
+		`city_temperature_celsius{city="Банско, ски зона",province="Благоевград",state="сняг"} -2.5`,
+		`city_humidity_percent{city="София"} 62`,
+		`city_humidity_percent{city="Пловдив"} 55`,
+		`city_humidity_percent{city="Варна"} 71`,
+		`city_humidity_percent{city="Бургас"} 69`,
+		`city_humidity_percent{city="Русе"} 74`,
+		`city_humidity_percent{city="Стара Загора"} 58`,
+		`city_humidity_percent{city="Плевен"} 77`,
+		`city_humidity_percent{city="Велико Търново"} 80`,
+		`city_humidity_percent{city="Благоевград"} 60`,
+		`city_humidity_percent{city="Банско, ски зона"} 91`,
 	}
 	cities := []string{
-		`city_humidity_percent{city="Kraków"} 90`,
-		`city_humidity_percent{city="Québec, QC"} 74`,
-		`city_humidity_percent{city="Reykjavík"} 85`,
-		`city_humidity_percent{city="São Paulo"} 81`,
-		`city_humidity_percent{city="Zürich"} 78`,
-		`city_humidity_percent{city="Đà Nẵng"} 88`,
-		`city_humidity_percent{city="İstanbul"} 66`,
-		`city_humidity_percent{city="Αθήνα"} 48`,
-		`city_humidity_percent{city="Пловдив"} 55`,
-		`city_humidity_percent{city="София"} 62`,
-		`city_humidity_percent{city="北京"} 35`,
-		`city_humidity_percent{city="東京"} 70`,
-		`city_temperature_celsius{city="Kraków",country="Polska",sky="🌫",state="霧"} 7.5`,
-		`city_temperature_celsius{city="Québec, QC",country="Canada",sky="🌧",state="雨"} 5`,
-		`city_temperature_celsius{city="Reykjavík",country="Ísland",sky="❄️",state="雪"} 3`,
-		`city_temperature_celsius{city="São Paulo",country="Brasil",sky="🌧",state="雨"} 23`,
+		`city_temperature_celsius{city="София",country="България",sky="☀️",state="晴れ"} 14.5`,
+		`city_temperature_celsius{city="Пловдив",country="България",sky="🌤",state="晴れ"} 17`,
 		`city_temperature_celsius{city="Zürich",country="Schweiz",sky="☁️",state="曇り"} 9.25`,
+		`city_temperature_celsius{city="São Paulo",country="Brasil",sky="🌧",state="雨"} 23`,
+		`city_temperature_celsius{city="Kraków",country="Polska",sky="🌫",state="霧"} 7.5`,
+		`city_temperature_celsius{city="Αθήνα",country="Ελλάδα",sky="☀️",state="晴れ"} 21`,
+		`city_temperature_celsius{city="東京",country="日本",sky="☁️",state="曇り"} 19`,
+		`city_temperature_celsius{city="北京",country="中国",sky="🌤",state="晴れ"} 12`,
+		`city_temperature_celsius{city="Reykjavík",country="Ísland",sky="❄️",state="雪"} 3`,
 		`city_temperature_celsius{city="Đà Nẵng",country="Việt Nam",sky="⛈",state="雷雨"} 29.5`,
 		`city_temperature_celsius{city="İstanbul",country="Türkiye",sky="🌥",state="曇り"} 16`,
-		`city_temperature_celsius{city="Αθήνα",country="Ελλάδα",sky="☀️",state="晴れ"} 21`,
-		`city_temperature_celsius{city="Пловдив",country="България",sky="🌤",state="晴れ"} 17`,
-		`city_temperature_celsius{city="София",country="България",sky="☀️",state="晴れ"} 14.5`,
-		`city_temperature_celsius{city="北京",country="中国",sky="🌤",state="晴れ"} 12`,
-		`city_temperature_celsius{city="東京",country="日本",sky="☁️",state="曇り"} 19`,
+		`city_temperature_celsius{city="Québec, QC",country="Canada",sky="🌧",state="雨"} 5`,
+		`city_humidity_percent{city="София"} 62`,
+		`city_humidity_percent{city="Пловдив"} 55`,
+		`city_humidity_percent{city="Zürich"} 78`,
+		`city_humidity_percent{city="São Paulo"} 81`,
+		`city_humidity_percent{city="Kraków"} 90`,
+		`city_humidity_percent{city="Αθήνα"} 48`,
+		`city_humidity_percent{city="東京"} 70`,
+		`city_humidity_percent{city="北京"} 35`,
+		`city_humidity_percent{city="Reykjavík"} 85`,
+		`city_humidity_percent{city="Đà Nẵng"} 88`,
+		`city_humidity_percent{city="İstanbul"} 66`,
+		`city_humidity_percent{city="Québec, QC"} 74`,
 	}
 	types := []string{"# TYPE city_temperature_celsius gauge", "# TYPE city_humidity_percent gauge"}
 	for _, tc := range []struct {
@@ -999,9 +1186,11 @@ func TestCSVFixtureProbeAnEncodingIsNamedByTheResponseOrTheCollector(t *testing.
 		t.Errorf("a windows-1251 body that nothing names the encoding of answered\n%s", body)
 	}
 	target := service.URL
+	// The header's names as windows-1251 writes them, read as UTF-8.
+	const unnamed = `whose columns are "\xe2\xeb\xe0\xe6\xed\xee\xf1\xf2", "\xe3\xf0\xe0\xe4", "\xee\xe1\xeb\xe0\xf1\xf2", "\xf1\xfa\xf1\xf2\xee\xff\xed\xe8\xe5", "\xf2\xe5\xec\xef\xe5\xf0\xe0\xf2\xf3\xf0\xe0"; column names are matched exactly`
 	loggedOnly(t, logs,
-		`WARN oblasti city_temperature_celsius: 10 failed: CSV column "температура" is missing`,
-		`WARN oblasti city_humidity_percent: 10 failed: CSV column "влажност" is missing`,
+		`WARN oblasti city_temperature_celsius: 10 failed: CSV column "температура" is not in the response, `+unnamed,
+		`WARN oblasti city_humidity_percent: 10 failed: CSV column "влажност" is not in the response, `+unnamed,
 	)
 	logs.Reset()
 
@@ -1020,7 +1209,8 @@ func TestCSVFixtureProbeAnEncodingIsNamedByTheResponseOrTheCollector(t *testing.
 // A table of 5000 rows, some 280 KiB, is read whole: a series of each rule
 // for every row, 10000 of them, which is the default of limits.max_metrics,
 // each with its row's labels and value, the counter a counter and the
-// milliseconds scaled to seconds. A third rule makes 15000 of the same
+// milliseconds scaled to seconds, each rule's series together in the order
+// of the rows. A third rule makes 15000 of the same
 // table, which is past the limit and fails the probe in the validation
 // stage, saying so; with limits.max_metrics raised to 15000 the probe
 // answers them all. The same table past limits.max_response_bytes fails the
@@ -1033,17 +1223,18 @@ func TestCSVFixtureProbeALargeFileIsReadWholeWithinItsLimits(t *testing.T) {
 	if size := len(generatedCSV(rows)); size < 250<<10 || size > 320<<10 {
 		t.Fatalf("the generated table is %d bytes, want some 280 KiB", size)
 	}
-	var two, three []string
+	// Each rule's series together, in the order of the rules, and each in
+	// the order of the rows.
+	var requests, latency, restarts []string
 	for i := range rows {
 		labels := fmt.Sprintf(`{host="%s",region="r%d"}`, generatedHost(i), i%7)
-		two = append(two,
-			"host_requests_total"+labels+" "+strconv.FormatFloat(float64(generatedRequests(i)), 'g', -1, 64),
-			// Milliseconds over 1000, as scale: 0.001 divides them.
-			"host_latency_seconds"+labels+" "+strconv.FormatFloat(float64(generatedLatency(i))/1000, 'g', -1, 64),
-		)
-		three = append(three, "host_restarts_total"+labels+" "+strconv.Itoa(i%3))
+		requests = append(requests, "host_requests_total"+labels+" "+strconv.FormatFloat(float64(generatedRequests(i)), 'g', -1, 64))
+		// Milliseconds over 1000, as scale: 0.001 divides them.
+		latency = append(latency, "host_latency_seconds"+labels+" "+strconv.FormatFloat(float64(generatedLatency(i))/1000, 'g', -1, 64))
+		restarts = append(restarts, "host_restarts_total"+labels+" "+strconv.Itoa(i%3))
 	}
-	three = append(three, two...)
+	two := slices.Concat(requests, latency)
+	three := slices.Concat(two, restarts)
 	types := []string{"# TYPE host_requests_total counter", "# TYPE host_latency_seconds gauge"}
 
 	answersSeries(t, answered(t, probeCSV(t, server, service, "large", false)), two, types)
@@ -1084,7 +1275,7 @@ func TestCSVFixtureProbeALongLabelFailsTheProbeOrIsCut(t *testing.T) {
 	const limit, rows = 40, 60
 
 	response := probeCSV(t, server, service, "long_label", false)
-	if want := "collector long_label validation failed: metric \"host_note\" label \"note\" is too long\n"; response.Code != http.StatusBadGateway || response.Body.String() != want {
+	if want := "collector long_label validation failed: metric \"host_note\" label \"note\" value is 41 bytes, longer than limits.max_label_value_length 40; a label one of the collector's rules gives can be cut to fit with truncate: true on that label, or raise limits.max_label_value_length\n"; response.Code != http.StatusBadGateway || response.Body.String() != want {
 		t.Errorf("without truncate: status=%d body=%s, want 502 and %s", response.Code, response.Body.String(), want)
 	}
 	logs.Reset()
@@ -1133,7 +1324,8 @@ func TestCSVFixtureProbeALongLabelFailsTheProbeOrIsCut(t *testing.T) {
 //   - a header naming a column twice fails the probe in the decode stage,
 //     naming the column and both places; under on_decode_error: log a
 //     header leaving a column of values unnamed is logged, and the probe
-//     answers without the collector's series.
+//     is answered an empty exposition, as the text format with its
+//     Content-Type and as OpenMetrics with its own and # EOF.
 func TestCSVFixtureProbeRowsARuleCannotReadAreLoggedOrFailTheProbe(t *testing.T) {
 	logs := testutil.CaptureLogs(t)
 	service := newCSVStandIn(t)
@@ -1141,58 +1333,58 @@ func TestCSVFixtureProbeRowsARuleCannotReadAreLoggedOrFailTheProbe(t *testing.T)
 
 	service.answerAs("text/plain")
 	answersSeries(t, answered(t, probeCSV(t, server, service, "queues", false)), []string{
-		`queue_consumers{queue="audit",vhost="/"} 1`,
-		`queue_consumers{queue="emails",vhost="/notify"} 6`,
-		`queue_consumers{queue="emails.bounce",vhost="/notify"} 1`,
-		`queue_consumers{queue="metrics",vhost="/"} 2`,
-		`queue_consumers{queue="orders",vhost="/shop"} 4`,
-		`queue_consumers{queue="orders.dead",vhost="/shop"} 0`,
-		`queue_consumers{queue="payments",vhost="/shop"} 2`,
-		`queue_consumers{queue="payments.retry",vhost="/shop"} 1`,
-		`queue_consumers{queue="search.index",vhost="/shop"} 8`,
-		`queue_consumers{queue="shipping",vhost="/shop"} 3`,
-		`queue_consumers{queue="sms",vhost="/notify"} 0`,
-		`queue_consumers{queue="thumbnails",vhost="/media"} 0`,
-		`queue_messages_ready{queue="audit",vhost="/"} 0`,
-		`queue_messages_ready{queue="emails",vhost="/notify"} 4411`,
-		`queue_messages_ready{queue="emails.bounce",vhost="/notify"} 2`,
-		`queue_messages_ready{queue="metrics",vhost="/"} 51000`,
 		`queue_messages_ready{queue="orders",vhost="/shop"} 120`,
 		`queue_messages_ready{queue="orders.dead",vhost="/shop"} 17`,
 		`queue_messages_ready{queue="payments",vhost="/shop"} 0`,
 		`queue_messages_ready{queue="payments.retry",vhost="/shop"} 342`,
-		`queue_messages_ready{queue="search.index",vhost="/shop"} 7`,
 		`queue_messages_ready{queue="shipping",vhost="/shop"} 9`,
+		`queue_messages_ready{queue="emails",vhost="/notify"} 4411`,
+		`queue_messages_ready{queue="emails.bounce",vhost="/notify"} 2`,
 		`queue_messages_ready{queue="sms",vhost="/notify"} 88`,
+		`queue_messages_ready{queue="audit",vhost="/"} 0`,
+		`queue_messages_ready{queue="metrics",vhost="/"} 51000`,
+		`queue_messages_ready{queue="search.index",vhost="/shop"} 7`,
 		`queue_messages_ready{queue="thumbnails",vhost="/media"} 0`,
-		`queue_messages_unacked{queue="audit",vhost="/"} 0`,
-		`queue_messages_unacked{queue="emails",vhost="/notify"} 64`,
-		`queue_messages_unacked{queue="emails.bounce",vhost="/notify"} 0`,
-		`queue_messages_unacked{queue="metrics",vhost="/"} 500`,
 		`queue_messages_unacked{queue="orders",vhost="/shop"} 3`,
 		`queue_messages_unacked{queue="orders.dead",vhost="/shop"} 0`,
 		`queue_messages_unacked{queue="payments",vhost="/shop"} 1`,
 		`queue_messages_unacked{queue="payments.retry",vhost="/shop"} 12`,
-		`queue_messages_unacked{queue="search.index",vhost="/shop"} 8`,
 		`queue_messages_unacked{queue="shipping",vhost="/shop"} 0`,
+		`queue_messages_unacked{queue="emails",vhost="/notify"} 64`,
+		`queue_messages_unacked{queue="emails.bounce",vhost="/notify"} 0`,
 		`queue_messages_unacked{queue="sms",vhost="/notify"} 0`,
+		`queue_messages_unacked{queue="audit",vhost="/"} 0`,
+		`queue_messages_unacked{queue="metrics",vhost="/"} 500`,
+		`queue_messages_unacked{queue="search.index",vhost="/shop"} 8`,
 		`queue_messages_unacked{queue="thumbnails",vhost="/media"} 0`,
-		`queue_state{queue="audit",vhost="/"} 1`,
-		`queue_state{queue="emails",vhost="/notify"} 0.5`,
-		`queue_state{queue="emails.bounce",vhost="/notify"} 1`,
-		`queue_state{queue="metrics",vhost="/"} 0.5`,
+		`queue_consumers{queue="orders",vhost="/shop"} 4`,
+		`queue_consumers{queue="orders.dead",vhost="/shop"} 0`,
+		`queue_consumers{queue="payments",vhost="/shop"} 2`,
+		`queue_consumers{queue="payments.retry",vhost="/shop"} 1`,
+		`queue_consumers{queue="shipping",vhost="/shop"} 3`,
+		`queue_consumers{queue="emails",vhost="/notify"} 6`,
+		`queue_consumers{queue="emails.bounce",vhost="/notify"} 1`,
+		`queue_consumers{queue="sms",vhost="/notify"} 0`,
+		`queue_consumers{queue="audit",vhost="/"} 1`,
+		`queue_consumers{queue="metrics",vhost="/"} 2`,
+		`queue_consumers{queue="search.index",vhost="/shop"} 8`,
+		`queue_consumers{queue="thumbnails",vhost="/media"} 0`,
 		`queue_state{queue="orders",vhost="/shop"} 1`,
 		`queue_state{queue="orders.dead",vhost="/shop"} 1`,
 		`queue_state{queue="payments",vhost="/shop"} 1`,
 		`queue_state{queue="payments.retry",vhost="/shop"} 0.5`,
-		`queue_state{queue="search.index",vhost="/shop"} 1`,
 		`queue_state{queue="shipping",vhost="/shop"} 1`,
+		`queue_state{queue="emails",vhost="/notify"} 0.5`,
+		`queue_state{queue="emails.bounce",vhost="/notify"} 1`,
 		`queue_state{queue="sms",vhost="/notify"} 0`,
+		`queue_state{queue="audit",vhost="/"} 1`,
+		`queue_state{queue="metrics",vhost="/"} 0.5`,
+		`queue_state{queue="search.index",vhost="/shop"} 1`,
 		`queue_state{queue="thumbnails",vhost="/media"} 0`,
 	}, []string{"# TYPE queue_messages_ready gauge", "# TYPE queue_messages_unacked gauge", "# TYPE queue_consumers gauge", "# TYPE queue_state gauge"})
 	loggedOnly(t, logs,
-		`WARN queues queue_messages_ready: 1 failed: CSV column "messages_ready" is missing`,
-		`WARN queues queue_state: 1 failed: CSV column "state" is missing`,
+		`WARN queues queue_messages_ready: 1 failed: CSV column "messages_ready" is empty in row 13`,
+		`WARN queues queue_state: 1 failed: CSV column "state" is empty in row 13`,
 	)
 	logs.Reset()
 
@@ -1225,13 +1417,216 @@ func TestCSVFixtureProbeRowsARuleCannotReadAreLoggedOrFailTheProbe(t *testing.T)
 	}
 	logs.Reset()
 
-	response = probeCSV(t, server, service, "usage_unnamed", false)
-	if samples, _ := sampleLines(response.Body.String()); response.Code != http.StatusOK || len(samples) != 0 {
-		t.Errorf("under on_decode_error: log: status=%d body=%s, want 200 and no series", response.Code, response.Body.String())
+	if body := answered(t, probeCSV(t, server, service, "usage_unnamed", false)); body != "" {
+		t.Errorf("under on_decode_error: log: body=%s, want an empty exposition", body)
 	}
 	failures, others = ruleFailureLogs(t, logs)
 	if len(failures) != 0 || len(others) != 1 || !strings.Contains(others[0], `"level":"WARN"`) ||
 		!strings.Contains(others[0], "CSV header leaves column 2 unnamed, and it holds values; name it, or set response.csv.header: false and read the columns by number") {
 		t.Errorf("logged %v and %v, want the one warning of the header's unnamed column", failures, others)
+	}
+	response = probeCSV(t, server, service, "usage_unnamed", true)
+	if response.Code != http.StatusOK || response.Header().Get("Content-Type") != "application/openmetrics-text; version=1.0.0; charset=utf-8" || response.Body.String() != "# EOF\n" {
+		t.Errorf("under on_decode_error: log, as OpenMetrics: status=%d as %s body=%q, want 200 and # EOF alone", response.Code, response.Header().Get("Content-Type"), response.Body.String())
+	}
+}
+
+// Texts in quotes with blanks after the closing quote, as a report writer
+// pads its columns, are read under trim_space: every row's series, with the
+// texts as labels, a delimiter, a doubled quote and a line break in them
+// kept and an empty one leaving its label off, and the numbers written to
+// the right read. Without trim_space the probe fails in the decode stage at
+// the header's first field, naming its line and column.
+func TestCSVFixtureProbeTextsPaddedAfterTheirQuotesAreReadWithTrimSpace(t *testing.T) {
+	logs := testutil.CaptureLogs(t)
+	service := newCSVStandIn(t)
+	server := csvFixtureServer(t, csvProbeConfig)
+
+	answersSeries(t, answered(t, probeCSV(t, server, service, "stock", false)), []string{
+		`stock_items{item="Schraube M4x20",note="ok",site="Hamburg"} 12500`,
+		`stock_items{item="Schraube M6x40",note="ok",site="Hamburg"} 8400`,
+		`stock_items{item="Mutter M4",site="Hamburg"} 30000`,
+		`stock_items{item="Mutter M6",note="ok",site="München"} 18250`,
+		`stock_items{item="Unterlegscheibe; 4,3",note="ok",site="München"} 44000`,
+		`stock_items{item="Unterlegscheibe 6,4",note="nachbestellt am 01.10.",site="München"} 0`,
+		`stock_items{item="Gewindestange M8",note="ok",site="Leipzig"} 320`,
+		`stock_items{item="Dübel 8x40 \"Fischer\"",note="ok",site="Leipzig"} 9600`,
+		`stock_items{item="Winkelverbinder 90",note="Lager 2;\nRegal 7",site="Leipzig"} 1240`,
+		`stock_items{item="Kabelbinder 200 mm",note="ok",site="Hamburg"} 52000`,
+		`stock_items_minimum{item="Schraube M4x20"} 2000`,
+		`stock_items_minimum{item="Schraube M6x40"} 2000`,
+		`stock_items_minimum{item="Mutter M4"} 5000`,
+		`stock_items_minimum{item="Mutter M6"} 5000`,
+		`stock_items_minimum{item="Unterlegscheibe; 4,3"} 10000`,
+		`stock_items_minimum{item="Unterlegscheibe 6,4"} 10000`,
+		`stock_items_minimum{item="Gewindestange M8"} 100`,
+		`stock_items_minimum{item="Dübel 8x40 \"Fischer\""} 1500`,
+		`stock_items_minimum{item="Winkelverbinder 90"} 400`,
+		`stock_items_minimum{item="Kabelbinder 200 mm"} 8000`,
+	}, []string{"# TYPE stock_items gauge", "# TYPE stock_items_minimum gauge"})
+	loggedOnly(t, logs)
+
+	response := probeCSV(t, server, service, "stock_untrimmed", false)
+	const stray = "collector stock_untrimmed decode failed: CSV decode: parse error on line 1, column 9: extraneous or missing \" in quoted-field\n"
+	if response.Code != http.StatusBadGateway || response.Body.String() != stray {
+		t.Errorf("without trim_space: status=%d body=%s\nwant 502 and %s", response.Code, response.Body.String(), stray)
+	}
+	if failures, others := ruleFailureLogs(t, logs); len(failures) != 0 || len(others) != 1 || !strings.Contains(others[0], `"stage":"decode"`) {
+		t.Errorf("logged %v and %v, want the one failed probe, in the decode stage", failures, others)
+	}
+}
+
+// A row with a value past the header's last column, a job's name with a
+// comma and no quotes here, fails the probe in the decode stage, naming the
+// line and the column: its values would be read a column to the left of
+// where they stand. A pre-script is not asked: the response is decoded
+// before it runs. Under on_decode_error: log the failure is logged as a
+// warning and the probe answers without the collector's series.
+func TestCSVFixtureProbeARowLongerThanTheHeaderFailsTheDecode(t *testing.T) {
+	requirePython(t)
+	logs := testutil.CaptureLogs(t)
+	service := newCSVStandIn(t)
+	server := csvFixtureServer(t, csvProbeConfig)
+	const long = "CSV line 5 has a value in column 5, which the header does not name; name the column in the header, or set response.csv.header: false and read the columns by number; " +
+		"if the line is split where it should not be, check response.csv.delimiter and response.csv.trim_space"
+
+	for _, collector := range []string{"jobs", "jobs_script"} {
+		response := probeCSV(t, server, service, collector, false)
+		if want := "collector " + collector + " decode failed: " + long + "\n"; response.Code != http.StatusBadGateway || response.Body.String() != want {
+			t.Errorf("%s: status=%d body=%s\nwant 502 and %s", collector, response.Code, response.Body.String(), want)
+		}
+		failures, others := ruleFailureLogs(t, logs)
+		if len(failures) != 0 || len(others) != 1 || !strings.Contains(others[0], `"msg":"probe failed"`) || !strings.Contains(others[0], `"stage":"decode"`) || !strings.Contains(others[0], long) {
+			t.Errorf("%s: logged %v and %v, want the one failed probe, in the decode stage", collector, failures, others)
+		}
+		logs.Reset()
+	}
+
+	response := probeCSV(t, server, service, "jobs_logged", false)
+	if samples, _ := sampleLines(response.Body.String()); response.Code != http.StatusOK || len(samples) != 0 {
+		t.Errorf("under on_decode_error: log: status=%d body=%s, want 200 and no series", response.Code, response.Body.String())
+	}
+	if failures, others := ruleFailureLogs(t, logs); len(failures) != 0 || len(others) != 1 || !strings.Contains(others[0], `"level":"WARN"`) || !strings.Contains(others[0], long) {
+		t.Errorf("logged %v and %v, want the one warning of the row", failures, others)
+	}
+}
+
+// A cell written in one of the two forms of a number that are Go's alone,
+// 1_000 and 0x1p-2, is no number through a probe: the rule makes no series
+// of either row, and counts both among its failures. The numbers of the
+// configuration are another matter, read as YAML writes numbers: a rule's
+// scale of 1_0 is 10, its value_map gives the two texts the values 1_000
+// and 0x10, a thousand and sixteen, and a series limit of 1_000 holds.
+func TestCSVFixtureProbeACellInGoNumberSyntaxIsNoNumber(t *testing.T) {
+	logs := testutil.CaptureLogs(t)
+	service := newCSVStandIn(t)
+	server := csvFixtureServer(t, csvProbeConfig)
+
+	body := answered(t, probeCSV(t, server, service, "numbers", false))
+	samples, _ := sampleLines(body)
+	if len(samples) != 24 || !strings.Contains(body, "number{form=\"integer\"} 42\n") || !strings.Contains(body, "number{form=\"leading plus\"} 7\n") {
+		t.Errorf("the rule made %d series, want the 24 rows that hold a number:\n%s", len(samples), body)
+	}
+	for _, form := range []string{"digit separators", "hexadecimal float", "hex integer"} {
+		if strings.Contains(body, `form="`+form+`"`) {
+			t.Errorf("the row %q was read as a number:\n%s", form, body)
+		}
+	}
+	// 30 texts that are no numbers and 3 empty cells.
+	loggedOnly(t, logs, `WARN numbers number: 33 failed: value "0x1F" is not a number; map text to numbers with value_map`)
+	logs.Reset()
+
+	body = answered(t, probeCSV(t, server, service, "numbers_mapped", false))
+	for _, want := range []string{
+		"number{form=\"digit separators\"} 10000\n",
+		"number{form=\"hexadecimal float\"} 160\n",
+		"number{form=\"integer\"} 420\n",
+		"number{form=\"no integer part\"} 5\n",
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("the answer does not hold %s%s", want, body)
+		}
+	}
+	if samples, _ := sampleLines(body); len(samples) != 26 {
+		t.Errorf("the rule with the two texts in its value_map made %d series, want 26", len(samples))
+	}
+	loggedOnly(t, logs)
+}
+
+// A file whose lines end with a carriage return alone is read through a
+// probe as its rows: a series of every row for each rule, a carriage return
+// inside a quoted field in the label read from it, and the one empty cell
+// logged with the row it is in. A log whose lines end with a carriage
+// return alone, with CRLF and with a line feed, read without a header row
+// under trim_space, gives a series of each of its lines, the empty line
+// between them no row.
+func TestCSVFixtureProbeLinesEndedByACarriageReturnAreRows(t *testing.T) {
+	logs := testutil.CaptureLogs(t)
+	service := newCSVStandIn(t)
+	server := csvFixtureServer(t, csvProbeConfig)
+
+	answersSeries(t, answered(t, probeCSV(t, server, service, "volumes", false)), []string{
+		`volume_used_percent{pool="fast",volume="data01"} 72.5`,
+		`volume_used_percent{note="resized, twice",pool="fast",volume="data02"} 31`,
+		"volume_used_percent{note=\"full soon\rsee ticket 4411\",pool=\"slow\",volume=\"logs01\"} 88",
+		`volume_used_percent{pool="cold",volume="backup"} 64.25`,
+		`volume_free_gibibytes{volume="data01"} 220`,
+		`volume_free_gibibytes{volume="data02"} 552`,
+		`volume_free_gibibytes{volume="logs01"} 48`,
+		`volume_free_gibibytes{volume="scratch"} 1024`,
+		`volume_free_gibibytes{volume="backup"} 5120`,
+	}, []string{"# TYPE volume_used_percent gauge", "# TYPE volume_free_gibibytes gauge"})
+	loggedOnly(t, logs, `WARN volumes volume_used_percent: 1 failed: CSV column "used_percent" is empty in row 4`)
+	logs.Reset()
+
+	service.answerAs("text/plain")
+	answersSeries(t, answered(t, probeCSV(t, server, service, "scale", false)), []string{
+		`scale_weight_kilograms{at="2026-10-03T09:00:00Z",scale="A1",state="stable"} 12.5`,
+		`scale_weight_kilograms{at="2026-10-03T09:01:00Z",scale="A1",state="stable"} 12.75`,
+		`scale_weight_kilograms{at="2026-10-03T09:02:00Z",scale="A2",state="tare; zeroed"} 7.25`,
+		`scale_weight_kilograms{at="2026-10-03T09:03:00Z",scale="A2",state="stable"} 7.5`,
+		`scale_weight_kilograms{at="2026-10-03T09:05:00Z",scale="B7",state="unstable"} 0.5`,
+	}, []string{"# TYPE scale_weight_kilograms gauge"})
+	loggedOnly(t, logs, `WARN scale scale_weight_kilograms: 1 failed: CSV column "3" is empty in row 5`)
+}
+
+// A rule with a label that names a column the response does not have fails,
+// through a probe, where the label was left off its series without a word:
+// under log the rule is logged once, whatever the number of rows and though
+// it is not required, with the label, the column and the columns the
+// response has, and the probe answers the other rules' series and none of
+// its own; under fail the probe fails with that error, in the metric stage,
+// and answers nothing of the rule before it. A value's column the response
+// does not have is logged with the same columns, once for the rule with the
+// number of rows.
+func TestCSVFixtureProbeALabelOfAColumnTheResponseLacksFailsItsRule(t *testing.T) {
+	logs := testutil.CaptureLogs(t)
+	service := newCSVStandIn(t)
+	server := csvFixtureServer(t, csvProbeConfig)
+	const has = `whose columns are "free_gib", "note", "pool", "used_percent", "volume"; column names are matched exactly`
+	// The column that is the one asked for in another case comes first.
+	const label = `metric "volume_used_percent" label "pool": CSV column "Pool" is not in the response, whose columns are "pool", "free_gib", "note", "used_percent", "volume"; column names are matched exactly`
+
+	answersSeries(t, answered(t, probeCSV(t, server, service, "volumes_misnamed", false)), []string{
+		`volume_free_gibibytes{volume="data01"} 220`,
+		`volume_free_gibibytes{volume="data02"} 552`,
+		`volume_free_gibibytes{volume="logs01"} 48`,
+		`volume_free_gibibytes{volume="scratch"} 1024`,
+		`volume_free_gibibytes{volume="backup"} 5120`,
+	}, []string{"# TYPE volume_free_gibibytes gauge"})
+	loggedOnly(t, logs,
+		`WARN volumes_misnamed volume_used_percent: 1 failed: `+label,
+		`WARN volumes_misnamed volume_free_gigabytes: 5 failed: CSV column "free_gb" is not in the response, `+has,
+	)
+	logs.Reset()
+
+	response := probeCSV(t, server, service, "volumes_strict", false)
+	wantJSON := `{"status":"error","stage":"metric","collector":"volumes_strict","metric":"volume_used_percent","target":"` + service.URL +
+		`","error":` + strconv.Quote(label) + "}\n"
+	if response.Code != http.StatusBadGateway || response.Header().Get("Content-Type") != "application/json; charset=utf-8" || response.Body.String() != wantJSON {
+		t.Errorf("under fail: status=%d as %s body=%s\nwant 502 and %s", response.Code, response.Header().Get("Content-Type"), response.Body.String(), wantJSON)
+	}
+	if failures, others := ruleFailureLogs(t, logs); len(failures) != 0 || len(others) != 1 || !strings.Contains(others[0], `"msg":"probe failed"`) || !strings.Contains(others[0], `"stage":"metric"`) {
+		t.Errorf("logged %v and %v, want the one failed probe, in the metric stage", failures, others)
 	}
 }

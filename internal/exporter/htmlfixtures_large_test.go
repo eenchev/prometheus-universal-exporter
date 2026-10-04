@@ -227,7 +227,7 @@ func TestALargePageIsReadWholeAndHeldToTheLimits(t *testing.T) {
 		{collector: "fleet_css_small_request", stage: "http", failure: tooLarge},
 		{collector: "fleet_xpath_small_limit", stage: "http", failure: tooLarge},
 		{collector: "fleet_css_notes", series: fleetSeries(true, 0)},
-		{collector: "fleet_css_long_notes", stage: "validation", failure: `metric "fleet_cpu_percent" label "note" is too long`},
+		{collector: "fleet_css_long_notes", stage: "validation", failure: `metric "fleet_cpu_percent" label "note" value is 67 bytes, longer than limits.max_label_value_length 40; a label one of the collector's rules gives can be cut to fit with truncate: true on that label, or raise limits.max_label_value_length`},
 		{collector: "fleet_css_cut_notes", series: fleetSeries(true, 40)},
 		{collector: "fleet_xpath_cut_notes", series: fleetSeries(true, 40)},
 	} {

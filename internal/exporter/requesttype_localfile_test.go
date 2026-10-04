@@ -338,3 +338,14 @@ func TestADebugProbeOfALocalFileCollector(t *testing.T) {
 		}
 	}
 }
+
+// timeout is a probe parameter every request type takes, a file's too.
+// TestLocalFileRejectsHTTPProbeParameters has those of http, which a file
+// refuses.
+func TestALocalFileProbeTakesATimeout(t *testing.T) {
+	root := t.TempDir()
+	testutil.WriteIn(t, root, "app.prom", promFile)
+	server := fileServer(t, fileCollector("files", root, "app.prom"))
+	// timeout is shared.
+	probeFile(t, server, "collector=files&timeout=5s").must(t, http.StatusOK)
+}

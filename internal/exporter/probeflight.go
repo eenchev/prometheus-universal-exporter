@@ -27,6 +27,15 @@ import (
 // covers the probes that arrive while it is still running, and it works for a
 // collector without a cache too.
 //
+// Identical also means of the same stay of the collector (flightKey). A trip
+// writes under the collector's name what the probe that started it may: its
+// result in the cache, its failure in the failure log, only while the
+// collector that probe read stands (configRead). A probe of the collector in
+// force that joined the trip of a probe which read the collector before a
+// reload changed it and another changed it back — the same definition, so
+// the same key — would have its result left uncached and its failure
+// unlogged, though its own collector stands. It makes a trip of its own.
+//
 // The shared work belongs to no single caller. It runs detached from the probe
 // that started it, so that probe's client going away does not fail the others,
 // and it is cancelled only when every probe waiting on it has gone. Its
@@ -99,20 +108,31 @@ type probeFlight struct {
 	cancel  context.CancelFunc
 }
 
+// flightKey is what probes share a trip by: probe, the key the response
+// cache uses (probeCacheKey), and defined, the generation their collector has
+// had its definition from in the configuration each read
+// (followedConfig.defined). Probes of one stay of a collector have the same,
+// whichever configuration they read it in; a collector a reload removed and
+// brought back, or changed and changed back, has another.
+type flightKey struct {
+	probe   string
+	defined uint64
+}
+
 type probeFlights struct {
 	mu      sync.Mutex
-	flights map[string]*probeFlight
+	flights map[flightKey]*probeFlight
 }
 
 func newProbeFlights() *probeFlights {
-	return &probeFlights{flights: map[string]*probeFlight{}}
+	return &probeFlights{flights: map[flightKey]*probeFlight{}}
 }
 
 // do runs work for key, or joins the run already in flight for it. shared
 // reports whether the result came from another caller's run. err is only this
 // caller's own context ending while it waited; the work's failures are in the
 // result.
-func (f *probeFlights) do(ctx context.Context, key string, work func(context.Context) *probeResult) (result *probeResult, shared bool, err error) {
+func (f *probeFlights) do(ctx context.Context, key flightKey, work func(context.Context) *probeResult) (result *probeResult, shared bool, err error) {
 	f.mu.Lock()
 	flight, joining := f.flights[key]
 	if joining {
@@ -144,7 +164,7 @@ func (f *probeFlights) do(ctx context.Context, key string, work func(context.Con
 	}
 }
 
-func (f *probeFlights) run(ctx context.Context, key string, flight *probeFlight, work func(context.Context) *probeResult) {
+func (f *probeFlights) run(ctx context.Context, key flightKey, flight *probeFlight, work func(context.Context) *probeResult) {
 	defer func() {
 		// The work runs on its own goroutine, where a panic would take the
 		// whole exporter down rather than one request as it would in a handler.

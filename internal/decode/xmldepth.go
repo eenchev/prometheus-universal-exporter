@@ -2,9 +2,13 @@ package decode
 
 import (
 	"bytes"
+	"encoding/xml"
+	"errors"
 	"fmt"
+	"strings"
 
 	"github.com/antchfx/xmlquery"
+	"github.com/eenchev/prometheus-universal-exporter/internal/model"
 )
 
 // MaxXMLDepth is how deep the elements of an XML document may nest. It is the
@@ -20,6 +24,12 @@ const MaxXMLDepth = 512
 func ParseXML(body []byte) (*xmlquery.Node, error) {
 	root, err := xmlquery.Parse(bytes.NewReader(body))
 	if err != nil {
+		// The line a syntax error names is where in the body it is, which
+		// is no part of what the failure is to the log.
+		var syntax *xml.SyntaxError
+		if errors.As(err, &syntax) {
+			err = model.SameFailureAs(err, strings.Replace(err.Error(), syntax.Error(), "XML syntax error: "+syntax.Msg, 1))
+		}
 		return nil, err
 	}
 	// The parser has no bound to give, so the tree is measured once it is

@@ -99,6 +99,30 @@ type RequestType struct {
 	// takes codes, and not non_idempotent, which is about HTTP methods.
 	// Unset, it is the other way round.
 	StatusCodes bool
+	// ReadFiles says which paths checking a collector's request looked at on
+	// disk, the files the request names and those that reading them led to,
+	// and gives a mark of that reading (ReadFiles). Unset, checking a
+	// request reads no file but those it names.
+	ReadFiles func(c *model.Collector) (paths []string, read string)
+}
+
+// ReadFiles returns the paths that checking a collector's request looked at
+// on disk when the files the request names lead to others: for a grpc
+// collector with descriptors: proto, its .proto files, the files those
+// import, and the places an imported file was looked for at and not found.
+// The watch of the configuration stamps them while a reload is refused, so
+// a reload refused for an imported file is tried again when that file
+// changes or appears, as one refused for a file the configuration names is.
+//
+// The files are read now when they were never read, or changed since they
+// were. read is a mark of the reading the paths are of: the same mark from a
+// later call says nothing the reading looked at has changed between the
+// reading and that call.
+func ReadFiles(c *model.Collector) (paths []string, read string) {
+	if rt := requestTypeOf(c); rt != nil && rt.ReadFiles != nil {
+		return rt.ReadFiles(c)
+	}
+	return nil, ""
 }
 
 // RequestTypes is the registry of the types built into this binary. Each type
@@ -315,8 +339,9 @@ func FetchCollector(ctx context.Context, target string, c *model.Collector, over
 	}
 	response, err := rt.Fetch(ctx, target, c, overrides, forwarded)
 	// However a type's fetch failed, the error goes to logs, probe answers
-	// and debug reports without the credentials a URL in it carries.
-	return response, RedactURLErrors(err)
+	// and debug reports without the credentials a URL in it carries, and is
+	// the same failure to the log whichever connection it happened on.
+	return response, sameFetchFailure(RedactURLErrors(err))
 }
 
 // ErrMissingTarget is CheckTarget's answer to a target left out by a type

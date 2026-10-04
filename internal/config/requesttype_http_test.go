@@ -6,9 +6,11 @@ import (
 	"net/http"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/eenchev/prometheus-universal-exporter/internal/fetch"
 	"github.com/eenchev/prometheus-universal-exporter/internal/model"
+	"github.com/eenchev/prometheus-universal-exporter/internal/testutil"
 )
 
 func TestRequestTypeIsRequired(t *testing.T) {
@@ -111,5 +113,23 @@ func TestAKeyThatBelongsToAnotherTypeIsRejected(t *testing.T) {
 	// The same key is fine for http, which owns it.
 	if err := Validate(&model.Config{Collectors: []model.Collector{typedCollector(fetch.RequestTypeHTTP)}}); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// The localfile keys do not apply to http: an http collector that sets one
+// is refused by the key's name, in a build without localfile too.
+// TestLocalFileValidation has what a localfile collector's request must be.
+func TestLocalFileKeysDoNotApplyToHTTP(t *testing.T) {
+	root := t.TempDir()
+	for key, change := range map[string]func(*model.Collector){
+		"root":    func(c *model.Collector) { c.Request.Root = root },
+		"max_age": func(c *model.Collector) { c.Request.MaxAge = model.Duration(time.Minute) },
+	} {
+		c := testutil.Collector("web", "text")
+		change(&c)
+		err := Validate(&model.Config{Collectors: []model.Collector{c}})
+		if err == nil || !strings.Contains(err.Error(), "request."+key+`, which does not apply to request.type "http"`) {
+			t.Errorf("%s on http: err=%v", key, err)
+		}
 	}
 }

@@ -37,7 +37,7 @@ configured:
 | `http_exporter_collector_config_valid` | gauge | `1` for every loaded collector. A rejected reload keeps the previous collectors at `1`; it shows in `http_exporter_config_last_reload_successful`. |
 | `http_exporter_trips_in_flight` | gauge | Without a `collector` label: trips to targets in progress, probes and static target scrapes of every collector together, which `--probe.max-concurrent` bounds. A fair signal for scaling out on. |
 | `http_exporter_trips_max_concurrent` | gauge | Without a `collector` label: `--probe.max-concurrent`, `0` for no limit. |
-| `http_exporter_rule_failures_total` | counter | Labelled `collector` and `metric`: the series a metric rule could not produce and the probe carried on without, under `error_mode` `log` or `ignore`. Every rule has its series from zero. A rule under `fail` fails the probe instead, counted in `http_exporter_transform_errors_total`. |
+| `http_exporter_rule_failures_total` | counter | Labelled `collector` and `metric`: the series a metric rule could not produce and the probe carried on without, under `error_mode` `log` or `ignore`. Every rule with a name has its series from zero; a `prometheus` rule without a name has none: no series is exported with an empty `metric`, and what such a rule did not find moves only `http_exporter_missing_keys_total`. Rules that export one metric name share its series, which counts the failures of all of them, while the [log](LOGGING.md) tells them apart. A rule under `fail` fails the probe instead, counted in `http_exporter_transform_errors_total`. |
 
 A failure rate, for example:
 
@@ -51,10 +51,13 @@ script error, not a missing key.
 
 A collector that a reload removes stops being reported, here and over OTLP, so
 Prometheus marks its series stale; one added again later under the same name
-starts from zero, and a probe or scrape of the removed collector that was
-still under way and ends later is not counted for it. A collector a reload
-changes keeps its counters, but its cached results are dropped, since they
-belong to the old definition.
+starts from zero, and a probe or scrape of the removed collector that began
+before the reload, however far it had come by then, is not counted for it. A
+collector a reload changes keeps its counters, but its cached results are
+dropped, since they belong to the old definition. A probe or scrape that
+began before the reload caches nothing under the name of a collector the
+reload removed or changed, so `http_exporter_cache_entries` counts only the
+results of the collector as it is.
 
 Every counter ends in `_total` and nothing else does. The self-metrics path
 and OTLP are built from the same definitions, so a family has the same type,

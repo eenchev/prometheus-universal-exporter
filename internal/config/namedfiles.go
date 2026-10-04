@@ -7,6 +7,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/eenchev/prometheus-universal-exporter/internal/fetch"
 	"github.com/eenchev/prometheus-universal-exporter/internal/model"
 )
 
@@ -29,9 +30,10 @@ import (
 //     grpc collector's method and message are checked against.
 //
 // A collector's own credential and TLS files are not among them: they are
-// read at a request, not at the load, so they refuse no configuration. Nor
-// are the files a .proto file imports, which the configuration does not
-// name. A nil configuration names none.
+// read at a request, not at the load, so they refuse no configuration. The
+// files a .proto file imports, which the configuration does not name, are
+// known only once the load has read the files that do the importing
+// (importedFiles). A nil configuration names none.
 func namedFiles(configs ...*model.Config) []string {
 	var files []string
 	add := func(paths ...string) {
@@ -60,6 +62,52 @@ func namedFiles(configs ...*model.Config) []string {
 	return files
 }
 
+// readFiles is fetch.ReadFiles; a test counts its calls.
+var readFiles = fetch.ReadFiles
+
+// importedFiles are the paths that reading the descriptor files of the
+// configurations' collectors looked at and that are not among named: the
+// files that the .proto files of a grpc collector's request.proto_files
+// import, through however many files, as its import paths resolved them, and
+// the places such a file was looked for at and not found (fetch.ReadFiles).
+// A load is refused for those as it is for a file the configuration names —
+// an imported file that does not compile, or is missing — so they are stamped
+// with the named files while it is refused.
+//
+// Which they are is known only when the load has read the files that import
+// them, so they cannot be stamped before it reads them, as the named files
+// are. They are stamped here, after it, and settled says the stamp is as
+// good as one taken before: nothing the reading looked at changed between
+// the reading and the stamp. When something did, the caller reloads at the
+// next tick whatever it finds, as it would for an edit made while a named
+// file was being read.
+func importedFiles(named []string, configs ...*model.Config) (files []string, stamp string, settled bool) {
+	look := func() (files, reads []string) {
+		for _, c := range configs {
+			if c == nil {
+				continue
+			}
+			for i := range c.Collectors {
+				paths, read := readFiles(&c.Collectors[i])
+				reads = append(reads, read)
+				for _, path := range paths {
+					if !slices.Contains(named, path) && !slices.Contains(files, path) {
+						files = append(files, path)
+					}
+				}
+			}
+		}
+		return files, reads
+	}
+	files, reads := look()
+	if len(files) == 0 {
+		return nil, "", true
+	}
+	stamp = filesStamp(files)
+	_, again := look()
+	return files, stamp, slices.Equal(reads, again)
+}
+
 // targetsNamedFiles are the files that checking a static target file
 // against the configurations opens, each once: the descriptor files of the
 // collectors named by its targets that set a request.message, which a grpc
@@ -71,6 +119,14 @@ func namedFiles(configs ...*model.Config) []string {
 // credential files, are read at a scrape, not at the load, and refuse no
 // target file.
 func targetsNamedFiles(f *model.StaticTargetFile, configs ...*model.Config) []string {
+	return namedFiles(targetsChecked(f, configs...))
+}
+
+// targetsChecked are the collectors whose descriptor files the check of a
+// static target file against the configurations opens, as a configuration
+// of their own: the files they name are targetsNamedFiles, and the files
+// those import are watched with them (importedFiles).
+func targetsChecked(f *model.StaticTargetFile, configs ...*model.Config) *model.Config {
 	var checked model.Config
 	for _, c := range configs {
 		if c == nil {
@@ -82,7 +138,7 @@ func targetsNamedFiles(f *model.StaticTargetFile, configs ...*model.Config) []st
 			}
 		}
 	}
-	return namedFiles(&checked)
+	return &checked
 }
 
 // filesStamp describes files as they are on disk now: for each, the file its

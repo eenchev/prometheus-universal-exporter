@@ -12,6 +12,11 @@ package exporter
 // n is the number of items the target answers with; a collector makes one
 // series of each, jq_items two. jq_cached is answered from the cache, so it
 // measures writing an answer alone, and /gzip writing it compressed.
+// jq_detected and jq_sniffed are jq_items with the decoder left to the
+// response: named by its Content-Type, and found from its content under
+// text/plain, where the body is read to see that it is JSON. prescript is
+// jq_items after a pre-script that passes the items on, so it measures
+// handing a document to a Python worker and reading one back.
 
 import (
 	"fmt"
@@ -33,6 +38,40 @@ collectors:
   - name: jq_items
     request: {type: http, path: /json}
     decoder: {type: json}
+    transform: {type: jq}
+    limits: {max_metrics: 100000, max_response_bytes: 64MiB}
+    metrics:
+      - name: item_value
+        items: .items[]
+        expression: .value
+        labels:
+          - {name: id, expression: .id}
+          - {name: region, expression: .region}
+          - {name: kind, expression: .kind}
+      - name: item_size_bytes
+        items: .items[]
+        expression: .size
+        labels:
+          - {name: id, expression: .id}
+  - name: jq_detected
+    request: {type: http, path: /json}
+    transform: {type: jq}
+    limits: {max_metrics: 100000, max_response_bytes: 64MiB}
+    metrics:
+      - name: item_value
+        items: .items[]
+        expression: .value
+        labels:
+          - {name: id, expression: .id}
+          - {name: region, expression: .region}
+          - {name: kind, expression: .kind}
+      - name: item_size_bytes
+        items: .items[]
+        expression: .size
+        labels:
+          - {name: id, expression: .id}
+  - name: jq_sniffed
+    request: {type: http, path: /json-as-text}
     transform: {type: jq}
     limits: {max_metrics: 100000, max_response_bytes: 64MiB}
     metrics:
@@ -125,6 +164,21 @@ collectors:
       script: |
         for item in data["items"]:
             metric("item_value", value=item["value"], labels={"id": item["id"], "region": item["region"]})
+  - name: prescript
+    request: {type: http, path: /json}
+    decoder: {type: json}
+    limits: {max_metrics: 100000, max_response_bytes: 64MiB, max_output_bytes: 16MiB, script_timeout: 10s}
+    transform:
+      type: jq
+      pre_script: |
+        data = {"items": [{"id": item["id"], "region": item["region"], "value": item["value"]} for item in data["items"]]}
+    metrics:
+      - name: item_value
+        items: .items[]
+        expression: .value
+        labels:
+          - {name: id, expression: .id}
+          - {name: region, expression: .region}
 `
 
 func probeBenchBodies(n int) map[string]string {
@@ -162,13 +216,13 @@ func probeBenchBodies(n int) map[string]string {
 		}
 		fmt.Fprintf(&prom, "http_request_duration_seconds_sum{handler=\"/h%d\"} 12.5\nhttp_request_duration_seconds_count{handler=\"/h%d\"} 100\n", i, i)
 	}
-	return map[string]string{"/json": js.String(), "/prom": prom.String(), "/text": text.String(), "/csv": csv.String(), "/xml": xml.String(), "/html": html.String()}
+	return map[string]string{"/json": js.String(), "/json-as-text": js.String(), "/prom": prom.String(), "/text": text.String(), "/csv": csv.String(), "/xml": xml.String(), "/html": html.String()}
 }
 
 func probeBenchServer(b *testing.B, n int) (*Server, string) {
 	b.Helper()
 	bodies := probeBenchBodies(n)
-	types := map[string]string{"/json": "application/json", "/prom": "text/plain; version=0.0.4", "/text": "text/plain", "/csv": "text/csv", "/xml": "application/xml", "/html": "text/html"}
+	types := map[string]string{"/json": "application/json", "/json-as-text": "text/plain", "/prom": "text/plain; version=0.0.4", "/text": "text/plain", "/csv": "text/csv", "/xml": "application/xml", "/html": "text/html"}
 	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", types[r.URL.Path])
 		_, _ = io.WriteString(w, bodies[r.URL.Path])
@@ -190,7 +244,7 @@ func BenchmarkProbe(b *testing.B) {
 	for _, n := range []int{100, 5000} {
 		server, target := probeBenchServer(b, n)
 		handler := server.Handler()
-		for _, collector := range []string{"jq_items", "jq_cached", "prom", "prom_rules", "regex", "csv", "xpath", "css", "python"} {
+		for _, collector := range []string{"jq_items", "jq_detected", "jq_sniffed", "jq_cached", "prom", "prom_rules", "regex", "csv", "xpath", "css", "python", "prescript"} {
 			for _, gz := range []bool{false, true} {
 				if gz && collector != "prom" && collector != "jq_cached" {
 					continue

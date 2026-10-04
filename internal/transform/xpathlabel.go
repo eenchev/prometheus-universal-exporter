@@ -38,7 +38,9 @@ import (
 // The node's own attribute is read by its name as the document writes it
 // (ownAttributeLabel), which in HTML, where there are no namespaces, is any
 // name at all, a colon included, and in XML a name without a prefix, or
-// with the document's own prefix where response.namespaces is not set.
+// with the document's own prefix where response.namespaces is not set. Its
+// value is trimmed of the blanks around it, as every other label is: kept
+// as written, `@title` had them where `../@title` had not.
 //
 // The walk gives what the engine gives, which is the engine's reading and
 // not always XPath's. It is taken only from an element — and, to an
@@ -100,15 +102,25 @@ const (
 // engine, which a walk needs too for a node that is no element, and which
 // is nil for a walk the engine cannot make; selector is the copy of it the
 // rule took (engine). Of a label that does not compile, text is the
-// expression and err why it does not.
+// expression and err why it does not. rooted says the engine's expression
+// may reach the document's root, with an absolute path in it, and is
+// evaluated from a navigator that has the document for its root
+// (rootedXPathNodes). evaluating says the engine is evaluating the label,
+// which it still says after the engine panicked on it: the rule's failure
+// then names the label (xpathEngineFailure). constant is set for a label
+// whose expression cannot depend on the node, and holds what it was read as
+// (xpathconstant.go).
 type xpathLabel struct {
-	name     string
-	kind     xpathLabelKind
-	text     string
-	ups      int
-	program  *expr.XPathProgram
-	selector *xpath.Expr
-	err      error
+	name       string
+	kind       xpathLabelKind
+	text       string
+	ups        int
+	program    *expr.XPathProgram
+	selector   *xpath.Expr
+	err        error
+	rooted     bool
+	evaluating bool
+	constant   *xpathConstant
 }
 
 // xmlNamespace is the namespace XML binds the prefix xml to, in every
@@ -201,7 +213,10 @@ func planXPathLabels(rule model.MetricRule, namespaces map[string]string, html b
 		case err != nil:
 			label.kind, label.text, label.err = xpathLabelNone, labelRule.Expression, err
 		default:
-			label.program, label.kind = program, xpathLabelEngine
+			label.program, label.kind, label.rooted = program, xpathLabelEngine, xpathReachesRoot(labelRule.Expression)
+			if label.rooted && xpathConstantLabel(labelRule.Expression) {
+				label.constant = &xpathConstant{}
+			}
 		}
 	}
 	return labels
@@ -371,7 +386,7 @@ func xpathLabels[N comparable](nodes xpathNodes[N], node N, plan []xpathLabel) m
 		case xpathLabelStatic:
 			labels[label.name] = label.text
 		case xpathLabelOwnAttribute:
-			labels[label.name] = nodes.attr(node, label.text)
+			labels[label.name] = strings.TrimSpace(nodes.attr(node, label.text))
 		case xpathLabelNone:
 		case xpathLabelEngine:
 			engineXPathLabel(nodes, node, label, labels)
@@ -403,17 +418,44 @@ func xpathLabels[N comparable](nodes xpathNodes[N], node N, plan []xpathLabel) m
 
 // engineXPathLabel reads a label at node with the XPath engine, into
 // labels: the value its expression computes, or the text of the first node
-// it selects.
+// it selects. An absolute path in the expression starts at the document
+// (rootedXPathNodes). A label that cannot depend on the node is evaluated
+// at the first node it is asked for at, and has that value at the others
+// (xpathconstant.go).
 func engineXPathLabel[N comparable](nodes xpathNodes[N], node N, label *xpathLabel, labels map[string]string) {
-	selector := label.engine()
-	if value, computed := xpathValue(nodes, node, selector); computed {
-		if text := strings.TrimSpace(xpathText(value)); text != "" {
-			labels[label.name] = text
+	if once := label.constant; once != nil {
+		if !once.read {
+			once.text, once.found = evaluateXPathLabel(nodes, node, label)
+			once.read = true
 		}
-	} else if found, ok := nodes.one(node, selector); ok {
+		if once.found {
+			labels[label.name] = once.text
+		}
+		return
+	}
+	if text, found := evaluateXPathLabel(nodes, node, label); found {
+		labels[label.name] = text
+	}
+}
+
+// evaluateXPathLabel evaluates a label at node with the XPath engine. found
+// is false for a label that is left off: one whose expression computes
+// nothing but blanks, or selects no node.
+func evaluateXPathLabel[N comparable](nodes xpathNodes[N], node N, label *xpathLabel) (text string, found bool) {
+	if label.rooted {
+		nodes = rootedXPathNodes(nodes)
+	}
+	selector := label.engine()
+	label.evaluating = true
+	if value, computed := xpathValue(nodes, node, selector); computed {
+		text = strings.TrimSpace(xpathText(value))
+		found = text != ""
+	} else if selected, ok := nodes.one(node, selector); ok {
 		// Trimmed, as a css label is: the text of an element in
 		// pretty-printed markup starts and ends with the
 		// indentation around it, which is no part of the value.
-		labels[label.name] = strings.TrimSpace(nodeText(nodes, found))
+		text, found = strings.TrimSpace(nodeText(nodes, selected)), true
 	}
+	label.evaluating = false
+	return text, found
 }

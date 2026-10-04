@@ -46,7 +46,17 @@ func newReloadable(t *testing.T, conf string, targets string) *reloadable {
 	if targets != "" {
 		r.targets = filepath.Join(dir, "targets.yaml")
 		r.write(r.targets, targets)
+		// Read and checked as the exporter reads the file it starts with
+		// (main.go), so the targets in force have what the check fills in,
+		// their interval among it, and the same file read again by a reload
+		// leaves every target as it was.
 		file, err := config.LoadStaticTargets(r.targets)
+		if err == nil {
+			err = config.ValidateStaticTargets(file)
+		}
+		if err == nil {
+			err = config.ValidateStaticTargetsAgainst(file, cfg)
+		}
 		if err != nil {
 			t.Fatal(err)
 		}

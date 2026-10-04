@@ -56,14 +56,14 @@ func (s *Server) collectDirectory(ctx context.Context, read *fetch.DirectoryRead
 	// logged like repeated failures (failurelog.go).
 	listingKey, skippedKey := failureKey(c.Name, keyTarget, "\x00listing"), failureKey(c.Name, keyTarget, "\x00skipped")
 	if read.Truncated {
-		s.tripFailed(ctx, slog.LevelWarn, listingKey, "directory has more entries than one scrape lists; only the first were considered", "listing", nil, "collector", c.Name, "target", logTarget, "directory", read.Path, "listed", read.Listed, "max_files", c.Request.MaxFiles)
+		s.tripFailed(ctx, rec.read, slog.LevelWarn, listingKey, "directory has more entries than one scrape lists; only the first were considered", "listing", nil, "collector", c.Name, "target", logTarget, "directory", read.Path, "listed", read.Listed, "max_files", c.Request.MaxFiles)
 	} else {
-		s.tripRecovered(ctx, listingKey, "directory is listed whole again", "collector", c.Name, "target", logTarget, "directory", read.Path)
+		s.tripRecovered(ctx, rec.read, listingKey, "directory is listed whole again", "collector", c.Name, "target", logTarget, "directory", read.Path)
 	}
 	if len(read.Skipped) > 0 {
-		s.tripFailed(ctx, slog.LevelWarn, skippedKey, "directory has more matching files than request.max_files; the rest were skipped", "max_files", nil, "collector", c.Name, "target", logTarget, "directory", read.Path, "matched", read.Matched, "max_files", c.Request.MaxFiles, "skipped", len(read.Skipped), "first_skipped", read.Skipped[0])
+		s.tripFailed(ctx, rec.read, slog.LevelWarn, skippedKey, "directory has more matching files than request.max_files; the rest were skipped", "max_files", nil, "collector", c.Name, "target", logTarget, "directory", read.Path, "matched", read.Matched, "max_files", c.Request.MaxFiles, "skipped", len(read.Skipped), "first_skipped", read.Skipped[0])
 	} else {
-		s.tripRecovered(ctx, skippedKey, "directory is within request.max_files again", "collector", c.Name, "target", logTarget, "directory", read.Path)
+		s.tripRecovered(ctx, rec.read, skippedKey, "directory is within request.max_files again", "collector", c.Name, "target", logTarget, "directory", read.Path)
 	}
 	// One script timer covers every file: the gauge is the Python this probe
 	// ran, whichever files ran it.
@@ -82,10 +82,10 @@ func (s *Server) collectDirectory(ctx context.Context, read *fetch.DirectoryRead
 		fileKey := failureKey(c.Name, keyTarget, file.Name)
 		if failure != nil {
 			failed[file.Name] = true
-			s.tripFailed(ctx, slog.LevelWarn, fileKey, "file of a directory failed; its series are left out and the other files' are answered", failure.stage, failure.err, "collector", c.Name, "target", logTarget, "file", file.Name, "stage", failure.stage)
+			s.tripFailed(ctx, rec.read, slog.LevelWarn, fileKey, "file of a directory failed; its series are left out and the other files' are answered", failure.stage, failure.err, "collector", c.Name, "target", logTarget, "file", file.Name, "stage", failure.stage)
 			continue
 		}
-		s.tripRecovered(ctx, fileKey, "file of a directory recovered", "collector", c.Name, "target", logTarget, "file", file.Name)
+		s.tripRecovered(ctx, rec.read, fileKey, "file of a directory recovered", "collector", c.Name, "target", logTarget, "file", file.Name)
 		for _, m := range set.Metrics {
 			if _, seen := families[m.Name]; !seen {
 				order = append(order, m.Name)

@@ -225,8 +225,8 @@ transform path as `/probe`, so collector limits, the response cache and
 [`error_handling`](CONFIGURATION.md#when-a-stage-of-the-probe-fails) all
 apply. A static target scrape and an identical `/probe` request share cache
 entries, and under `log` or `ignore` a failed stage leaves the target up with
-nothing of the collector's to serve, as it answers a probe `200` with an empty
-body. With [`cache.stale_if_error`](CONFIGURATION.md#serving-the-last-good-result-when-the-target-fails),
+nothing of the collector's to serve, only its health series, as it answers a
+probe `200` with an empty exposition. With [`cache.stale_if_error`](CONFIGURATION.md#serving-the-last-good-result-when-the-target-fails),
 a failed scrape serves the target's last good result, marked by
 `http_exporter_result_stale` 1, while its `http_exporter_target_up` is `0`.
 Its `http_exporter_result_age_seconds` is how old the data is when the
@@ -473,13 +473,26 @@ request — although the target file is as it was: the endpoint serves what the
 new definition makes within ten seconds, not what the old one made until the
 target's next turn. A target that did not change, of a collector that did not
 change, keeps its cadence; a
-target removed while its scrape runs publishes nothing.
+target removed while its scrape runs publishes nothing, and neither does one
+the reload changed, or whose collector it changed or removed: that scrape read
+a definition that is gone, and its result would stand for the target now
+under the name. That holds when a later reload has put the target back as it
+was, too, so the result of a scrape begun before the reloads never replaces
+that of the target's first scrape after them. The target put back, or changed
+back, starts again like one that changed, however soon the second reload
+follows the first: it is first scraped within ten seconds, once the scrape
+begun before the reloads has ended, so it is not missing from the endpoint
+until its next turn. Its failures are logged anew as well: what the
+[failure log](LOGGING.md#repeated-failures) remembered of a target the reload
+removed or changed is forgotten, and a scrape begun before the reload neither
+adds to it nor is logged as the target's recovery.
 
 A rejected reload is tried again when the file changes. With
 `--config.watch` it is also tried again, the file untouched, when a file its
 check opened changes: the descriptor files (`request.protoset_file`,
-`request.proto_files`) of a grpc collector whose target sets a
-`request.message`. A reload that ran while such a file was being replaced
+`request.proto_files`, and the files those `.proto` files import) of a grpc
+collector whose target sets a `request.message`. A reload that ran while such
+a file was being replaced
 thus goes through at the tick after it is in place (see
 [Watching the configuration](CONFIGURATION.md#watching-the-configuration)).
 A target's credential files are read at each scrape, so one that is missing
@@ -491,7 +504,8 @@ that use it — puts both in force in one step, and every scrape uses the
 configuration its target was read with, so no scrape runs a target of one
 reload against the collectors of another. A scrape already waiting or running
 when the reload comes finishes on the pair it started with; its target is
-then scraped again as above if the reload changed it or its collector.
+then scraped again as above if the reload changed it or its collector, and
+what the earlier scrape made is not published.
 
 On `SIGTERM` or `SIGINT` the targets keep being scraped through
 `--web.shutdown-delay`, while their endpoint is still served. Then no scrape

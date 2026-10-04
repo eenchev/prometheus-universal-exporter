@@ -9,7 +9,9 @@ import (
 	"github.com/eenchev/prometheus-universal-exporter/internal/testutil"
 )
 
-// Probe parameters of http do not apply to a file.
+// Probe parameters of http do not apply to a file, where the build has
+// http: in a build without it they are parameters no request type knows.
+// TestALocalFileProbeTakesATimeout has the parameter the types share.
 func TestLocalFileRejectsHTTPProbeParameters(t *testing.T) {
 	root := t.TempDir()
 	testutil.WriteIn(t, root, "app.prom", promFile)
@@ -17,8 +19,6 @@ func TestLocalFileRejectsHTTPProbeParameters(t *testing.T) {
 	for _, parameter := range []string{"method=POST", "header_x_tenant=a", "retry_attempts=2", "insecure_skip_verify=true", "body=x"} {
 		probeFile(t, server, "collector=files&"+parameter).must(t, http.StatusBadRequest, `request.type is "localfile"`)
 	}
-	// timeout is shared.
-	probeFile(t, server, "collector=files&timeout=5s").must(t, http.StatusOK)
 }
 
 // An http collector still needs a target.

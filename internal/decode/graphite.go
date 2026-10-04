@@ -62,9 +62,11 @@ type GraphiteReport struct {
 	// answered twice.
 	NoPoints, Stale, Duplicates int
 	// SkippedLines counts the carbon lines skipped under invalid_lines:
-	// skip, and FirstSkipped says which was first and why.
+	// skip, and FirstSkipped says which was first and why: an error, so that
+	// the log takes it for the same when only the line it names differs
+	// (model.SameFailureText).
 	SkippedLines int
-	FirstSkipped string
+	FirstSkipped error
 }
 
 // LeftOut is how many series were left out.
@@ -160,7 +162,7 @@ func parseGraphiteRender(body []byte, report *GraphiteReport) ([]*graphiteSeries
 			s.path, s.tags, err = entry.Target, nil, nil
 		}
 		if err != nil {
-			return nil, fmt.Errorf("graphite render JSON: series %d: %w", i, err)
+			return nil, model.Errorf("graphite render JSON: series %d: %w", model.Position(i), err)
 		}
 		// The render API's own tags, when it gives them, are the series'
 		// tags as Graphite knows them, and a function such as alias() may
@@ -178,7 +180,7 @@ func parseGraphiteRender(body []byte, report *GraphiteReport) ([]*graphiteSeries
 		}
 		for j, point := range entry.Datapoints {
 			if len(point) != 2 {
-				return nil, fmt.Errorf("graphite render JSON: series %q point %d has %d elements, not [value, timestamp]", entry.Target, j, len(point))
+				return nil, model.Errorf("graphite render JSON: series %q point %d has %d elements, not [value, timestamp]", entry.Target, model.Position(j), len(point))
 			}
 			if point[0] == nil {
 				continue
@@ -186,7 +188,7 @@ func parseGraphiteRender(body []byte, report *GraphiteReport) ([]*graphiteSeries
 			value, okValue := jsonFloat(point[0])
 			at, okTime := jsonFloat(point[1])
 			if !okValue || !okTime {
-				return nil, fmt.Errorf("graphite render JSON: series %q point %d is %v, not [value, timestamp] as numbers", entry.Target, j, point)
+				return nil, model.Errorf("graphite render JSON: series %q point %d is %v, not [value, timestamp] as numbers", entry.Target, model.Position(j), point)
 			}
 			s.points = append(s.points, graphitePoint{value, at})
 		}
@@ -231,12 +233,12 @@ func parseCarbonLines(body []byte, now time.Time, skip bool, report *GraphiteRep
 		}
 		path, tags, point, err := parseCarbonLine(line, now)
 		if err != nil {
-			err = fmt.Errorf("carbon line %d: %w", number+1, err)
+			err = model.Errorf("carbon line %d: %w", model.Position(number+1), err)
 			if !skip {
 				return nil, err
 			}
 			if report.SkippedLines == 0 {
-				report.FirstSkipped = err.Error()
+				report.FirstSkipped = err
 			}
 			report.SkippedLines++
 			continue
@@ -253,7 +255,11 @@ func parseCarbonLines(body []byte, now time.Time, skip bool, report *GraphiteRep
 	return out, nil
 }
 
-// parseCarbonLine reads one carbon line.
+// parseCarbonLine reads one carbon line. Its value and its timestamp are
+// numbers as a rule reads the text of one (model.ParseFloat): digits
+// separated by underscores, 1_000, and hexadecimal floating-point, 0x1p-2,
+// which are Go's way of writing a number, are none, and the line is no
+// carbon line.
 func parseCarbonLine(line string, now time.Time) (string, map[string]string, graphitePoint, error) {
 	fields := strings.Fields(line)
 	if len(fields) != 2 && len(fields) != 3 {
@@ -263,13 +269,13 @@ func parseCarbonLine(line string, now time.Time) (string, map[string]string, gra
 	if err != nil {
 		return "", nil, graphitePoint{}, err
 	}
-	value, err := strconv.ParseFloat(fields[1], 64)
+	value, err := model.ParseFloat(fields[1])
 	if err != nil {
 		return "", nil, graphitePoint{}, fmt.Errorf("the value %q is not a number", fields[1])
 	}
 	at := float64(now.Unix())
 	if len(fields) == 3 {
-		stamp, err := strconv.ParseFloat(fields[2], 64)
+		stamp, err := model.ParseFloat(fields[2])
 		switch {
 		case err != nil:
 			return "", nil, graphitePoint{}, fmt.Errorf("the timestamp %q is not a number of Unix seconds", fields[2])

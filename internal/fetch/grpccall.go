@@ -229,7 +229,7 @@ func callGRPC(ctx context.Context, target string, c *model.Collector, overrides 
 			// The limit bounds the message as it arrived, and the JSON it
 			// became, which writing every zero value can make much larger.
 			if int64(len(body)) > limit {
-				return nil, &CallAnswerError{Err: model.MarkError(fmt.Errorf("the answer is %d bytes as JSON, over the response limit of %d; raise request.max_response_bytes or limits.max_response_bytes", len(body), limit), model.ErrLimitExceeded)}
+				return nil, &CallAnswerError{Err: model.MarkError(model.Errorf("the answer is %d bytes as JSON, over the response limit of %d; raise request.max_response_bytes or limits.max_response_bytes", model.Size(len(body)), limit), model.ErrLimitExceeded)}
 			}
 			ok := 0
 			return &HTTPResponse{StatusCode: http.StatusOK, GRPCCode: &ok, Headers: grpcHeaders(header, trailer), Body: body, Target: target, Collector: c.Name, Duration: time.Since(start)}, nil

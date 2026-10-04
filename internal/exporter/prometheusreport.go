@@ -2,7 +2,6 @@ package exporter
 
 import (
 	"context"
-	"errors"
 	"log/slog"
 
 	"github.com/eenchev/prometheus-universal-exporter/internal/decode"
@@ -35,11 +34,11 @@ func (s *Server) notePrometheus(ctx context.Context, d *decode.Decoded, c *model
 	key := failureKey(c.Name, keyTarget, file) + "\x00sample lines"
 	report := d.Prometheus
 	if report == nil {
-		s.tripRecovered(ctx, key, "every sample line is part of its family again", attrs...)
+		s.tripRecovered(ctx, rec.read, key, "every sample line is part of its family again", attrs...)
 		return
 	}
 	rec.update(func(x *serverStats) {
 		x.linesSkipped += uint64(report.LeftOutLines) //nolint:gosec // G115: a count, never negative
 	})
-	s.tripFailed(ctx, slog.LevelWarn, key, "sample lines left out", "decode", errors.New(report.FirstLeftOut), append(attrs, "left_out", report.LeftOutLines)...)
+	s.tripFailed(ctx, rec.read, slog.LevelWarn, key, "sample lines left out", "decode", report.FirstLeftOut, append(attrs, "left_out", report.LeftOutLines)...)
 }

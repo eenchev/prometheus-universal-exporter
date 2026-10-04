@@ -79,9 +79,11 @@ func parsePrometheusText(body []byte) ([]model.Metric, error) {
 type PrometheusReport struct {
 	// LeftOutLines counts the sample lines left out as no part of their
 	// histogram or summary family, in the families that are kept, and
-	// FirstLeftOut says which was first and what was expected in its place.
+	// FirstLeftOut says which was first and what was expected in its place:
+	// an error, so that the log takes it for the same when only the line it
+	// names differs (model.SameFailureText).
 	LeftOutLines int
-	FirstLeftOut string
+	FirstLeftOut error
 }
 
 // promOptions says how to read an exposition, and which of its series to
@@ -155,7 +157,7 @@ func parseExpositionReporting(body []byte, options promOptions) ([]model.Metric,
 			if errors.Is(err, model.ErrLimitExceeded) {
 				return nil, nil, err
 			}
-			return nil, nil, fmt.Errorf("text format parsing error in line %d: %w", number, err)
+			return nil, nil, model.Errorf("text format parsing error in line %d: %w", model.Position(number), err)
 		}
 		if !more {
 			break
@@ -655,7 +657,7 @@ func (p *promParser) add(f *promFamily, role int, value float64, timestamp int64
 // exposition has one such line for every series of the family.
 func (p *promParser) leaveOut(f *promFamily) {
 	if p.report == nil {
-		p.report = &PrometheusReport{FirstLeftOut: fmt.Sprintf("line %d: %s", p.number, p.stray(f))}
+		p.report = &PrometheusReport{FirstLeftOut: model.Errorf("line %d: %s", model.Position(p.number), p.stray(f))}
 	}
 	p.report.LeftOutLines++
 }
@@ -696,7 +698,7 @@ func (p *promParser) settle() error {
 			err = s.summary.Settle()
 		}
 		if err != nil {
-			return fmt.Errorf("the %s, which starts in line %d, %w", describePromSeries(s.family, s), s.line, err)
+			return model.Errorf("the %s, which starts in line %d, %w", describePromSeries(s.family, s), model.Position(s.line), err)
 		}
 	}
 	return nil

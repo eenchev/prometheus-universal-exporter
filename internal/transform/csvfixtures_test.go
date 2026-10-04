@@ -85,17 +85,20 @@ func seriesLine(m model.Metric) string {
 }
 
 // csvFixtureResult is what transforming a fixture gave: the series, sorted,
-// each rule's failures as "<metric>: <n> failed, <n> missing, logged: <the
-// first error>" (or "not logged"), sorted, and the transform's error.
+// and in the order the transform has them, each rule's failures as
+// "<metric>: <n> failed, <n> missing, logged: <the first error>" (or "not
+// logged"), sorted, and the transform's error.
 type csvFixtureResult struct {
-	series, failures []string
-	err              error
+	series, inOrder, failures []string
+	err                       error
 }
 
 // transformCSVFixture decodes a fixture as a response with the Content-Type
 // given, if any, and transforms it. It holds the log against the report: a
 // line for each rule that failed under log, with the number of its failures
-// and the first of them, and no other line.
+// and the first of them, and no other line. It holds what the csv transform
+// makes of the rows against what it made of them when it kept its series row
+// by row, too (csvTransformsAsBefore): the same but for their order.
 func transformCSVFixture(t *testing.T, c model.Collector, contentType, fixture string) csvFixtureResult {
 	t.Helper()
 	return transformCSVBody(t, c, contentType, readCSVFixture(t, fixture))
@@ -103,7 +106,6 @@ func transformCSVFixture(t *testing.T, c model.Collector, contentType, fixture s
 
 func transformCSVBody(t *testing.T, c model.Collector, contentType string, body []byte) csvFixtureResult {
 	t.Helper()
-	logs := testutil.CaptureLogs(t)
 	r := &fetch.HTTPResponse{StatusCode: http.StatusOK, Body: body, Headers: http.Header{}}
 	if contentType != "" {
 		r.Headers.Set("Content-Type", contentType)
@@ -112,6 +114,13 @@ func transformCSVBody(t *testing.T, c model.Collector, contentType string, body 
 	if err != nil {
 		t.Fatalf("decode: %v", err)
 	}
+	// A pre-script's rows are not the decoded ones.
+	if c.Transform.Type == "csv" && c.Transform.PreScript == "" {
+		if ruleByRule, _, run := csvTransformsAsBefore(t, d.Data, c); !ruleByRule {
+			t.Errorf("the series are not rule by rule:\n%s", strings.Join(run.series, "\n"))
+		}
+	}
+	logs := testutil.CaptureLogs(t)
 	ctx, report := WithRuleReport(t.Context())
 	set, err := Transform(ctx, d, r, &c, "python3")
 	result := csvFixtureResult{err: err}
@@ -123,6 +132,7 @@ func transformCSVBody(t *testing.T, c model.Collector, contentType string, body 
 			result.series = append(result.series, seriesLine(m))
 		}
 	}
+	result.inOrder = slices.Clone(result.series)
 	slices.Sort(result.series)
 	var logged []string
 	for _, failure := range report.Failures() {
@@ -193,6 +203,10 @@ func (r csvFixtureResult) holds(t *testing.T, series []string, failures ...strin
 //     quoted fields, and an empty field leaves its label off.
 //   - Semicolons: whole numbers are read; a number with a decimal comma is
 //     text that is no number, and fails its rule naming it.
+//   - Texts in quotes with blanks after them, under trim_space: the labels
+//     are the texts, a delimiter, a doubled quote and a line break of theirs
+//     kept, an empty one leaving its label off, and the numbers written to
+//     the right are read.
 //   - Tabs: an empty field is a missing value, logged for a required rule,
 //     left out without a word for one that is not required, and counted
 //     without a log line under ignore; trim_space trims the labels, and
@@ -200,7 +214,8 @@ func (r csvFixtureResult) holds(t *testing.T, series []string, failures ...strin
 //   - A psql footer is a row without the columns the rules read: a missing
 //     value of each, which required: false leaves out without a word.
 //   - Without a header row the columns are numbers, from 1, and a number
-//     past the row's last field is a missing value.
+//     past the longest row's last field is a column the response does not
+//     have, a missing value of every row.
 //   - Bodies in UTF-8 with a byte order mark, UTF-16 and legacy encodings
 //     give the same series as their UTF-8 text, whether the byte order mark,
 //     the Content-Type or response.charset names the encoding; with nothing
@@ -211,6 +226,10 @@ func (r csvFixtureResult) holds(t *testing.T, series []string, failures ...strin
 //     the header is missing the values of the columns it lacks; blank lines
 //     are no rows, a line of blanks is a row missing every value, and a last
 //     line without a line end is read like the others.
+//   - Lines that end with a carriage return alone are rows, in a file that
+//     ends every line so and in one that ends some with CRLF and a line
+//     feed; a carriage return in a quoted field is in the label read from
+//     it, and an empty cell is named by its row.
 func TestCSVFixturesBecomeTheSeriesOfTheirRows(t *testing.T) {
 	optional, hundredth := false, 0.01
 	semicolons := model.ResponseConfig{CSV: model.CSVConfig{Delimiter: ";"}}
@@ -243,6 +262,9 @@ func TestCSVFixturesBecomeTheSeriesOfTheirRows(t *testing.T) {
 		{Name: "city_temperature_celsius", Expression: "température", Labels: columns("city", "città", "country", "Land", "state", "状態", "sky", "sky")},
 		{Name: "city_humidity_percent", Expression: "влажност", Labels: columns("city", "città")},
 	}
+	// The header of the Bulgarian list as windows-1251 writes it, read as
+	// UTF-8: the names an error shows of a body whose encoding nothing names.
+	const unnamedOblasti = `whose columns are "\xe2\xeb\xe0\xe6\xed\xee\xf1\xf2", "\xe3\xf0\xe0\xe4", "\xee\xe1\xeb\xe0\xf1\xf2", "\xf1\xfa\xf1\xf2\xee\xff\xed\xe8\xe5", "\xf2\xe5\xec\xef\xe5\xf0\xe0\xf2\xf3\xf0\xe0"; column names are matched exactly`
 	oblasti := []model.MetricRule{
 		{Name: "city_temperature_celsius", Expression: "температура", Labels: columns("city", "град", "province", "област", "state", "състояние")},
 		{Name: "city_humidity_percent", Expression: "влажност", Labels: columns("city", "град")},
@@ -511,23 +533,49 @@ func TestCSVFixturesBecomeTheSeriesOfTheirRows(t *testing.T) {
 			`stock_price_euros: 12 failed, 0 missing, logged: value "0,04" is not a number; map text to numbers with value_map`,
 			`stock_shelf_used_ratio: 4 failed, 0 missing, logged: value "62,5" is not a number; map text to numbers with value_map`,
 		}},
+		{name: "texts in quotes, padded with blanks after them", fixture: "stock-padded-quotes.csv", contentType: "text/csv",
+			response: model.ResponseConfig{CSV: model.CSVConfig{Delimiter: ";", TrimSpace: true}}, rules: []model.MetricRule{
+				{Name: "stock_items", Expression: "Bestand", Labels: columns("item", "Artikel", "site", "Lager", "note", "Hinweis")},
+				{Name: "stock_items_minimum", Expression: "Mindestbestand", Labels: columns("item", "Artikel", "site", "Lager")},
+			}, series: []string{
+				`stock_items{item="Schraube M4x20",note="ok",site="Hamburg"} 12500`,
+				`stock_items{item="Schraube M6x40",note="ok",site="Hamburg"} 8400`,
+				`stock_items{item="Mutter M4",site="Hamburg"} 30000`,
+				`stock_items{item="Mutter M6",note="ok",site="München"} 18250`,
+				`stock_items{item="Unterlegscheibe; 4,3",note="ok",site="München"} 44000`,
+				`stock_items{item="Unterlegscheibe 6,4",note="nachbestellt am 01.10.",site="München"} 0`,
+				`stock_items{item="Gewindestange M8",note="ok",site="Leipzig"} 320`,
+				`stock_items{item="Dübel 8x40 \"Fischer\"",note="ok",site="Leipzig"} 9600`,
+				`stock_items{item="Winkelverbinder 90",note="Lager 2;\nRegal 7",site="Leipzig"} 1240`,
+				`stock_items{item="Kabelbinder 200 mm",note="ok",site="Hamburg"} 52000`,
+				`stock_items_minimum{item="Schraube M4x20",site="Hamburg"} 2000`,
+				`stock_items_minimum{item="Schraube M6x40",site="Hamburg"} 2000`,
+				`stock_items_minimum{item="Mutter M4",site="Hamburg"} 5000`,
+				`stock_items_minimum{item="Mutter M6",site="München"} 5000`,
+				`stock_items_minimum{item="Unterlegscheibe; 4,3",site="München"} 10000`,
+				`stock_items_minimum{item="Unterlegscheibe 6,4",site="München"} 10000`,
+				`stock_items_minimum{item="Gewindestange M8",site="Leipzig"} 100`,
+				`stock_items_minimum{item="Dübel 8x40 \"Fischer\"",site="Leipzig"} 1500`,
+				`stock_items_minimum{item="Winkelverbinder 90",site="Leipzig"} 400`,
+				`stock_items_minimum{item="Kabelbinder 200 mm",site="Hamburg"} 8000`,
+			}},
 		{name: "tabs", fixture: "sensors.tsv", contentType: "text/tab-separated-values", response: tabs, rules: sensors(model.ErrorModeLog), series: wantSensors, failures: []string{
-			`sensor_temperature_celsius: 2 failed, 2 missing, logged: CSV column "temperature" is missing`,
-			`sensor_battery_percent: 3 failed, 3 missing, logged: CSV column "battery" is missing`,
+			`sensor_temperature_celsius: 2 failed, 2 missing, logged: CSV column "temperature" is empty in row 2`,
+			`sensor_battery_percent: 3 failed, 3 missing, logged: CSV column "battery" is empty in row 3`,
 		}},
 		{name: "tabs, trimmed", fixture: "sensors.tsv", contentType: "text/tab-separated-values", response: tabsTrimmed, rules: sensors(model.ErrorModeLog), series: wantSensorsTrimmed, failures: []string{
-			`sensor_temperature_celsius: 2 failed, 2 missing, logged: CSV column "temperature" is missing`,
-			`sensor_battery_percent: 3 failed, 3 missing, logged: CSV column "battery" is missing`,
+			`sensor_temperature_celsius: 2 failed, 2 missing, logged: CSV column "temperature" is empty in row 2`,
+			`sensor_battery_percent: 3 failed, 3 missing, logged: CSV column "battery" is empty in row 3`,
 		}},
 		{name: "tabs, the battery under ignore", fixture: "sensors.tsv", contentType: "text/tab-separated-values", response: tabsTrimmed, rules: sensors(model.ErrorModeIgnore), series: wantSensorsTrimmed, failures: []string{
-			`sensor_temperature_celsius: 2 failed, 2 missing, logged: CSV column "temperature" is missing`,
-			`sensor_battery_percent: 3 failed, 3 missing, not logged: CSV column "battery" is missing`,
+			`sensor_temperature_celsius: 2 failed, 2 missing, logged: CSV column "temperature" is empty in row 2`,
+			`sensor_battery_percent: 3 failed, 3 missing, not logged: CSV column "battery" is empty in row 3`,
 		}},
 		{name: "a psql result with its footer", fixture: "queues-pipe.txt", contentType: "text/plain", response: pipes, rules: queues(nil), series: wantQueues, failures: []string{
-			`queue_messages_ready: 1 failed, 1 missing, logged: CSV column "messages_ready" is missing`,
-			`queue_messages_unacked: 1 failed, 1 missing, logged: CSV column "messages_unacked" is missing`,
-			`queue_consumers: 1 failed, 1 missing, logged: CSV column "consumers" is missing`,
-			`queue_state: 1 failed, 1 missing, logged: CSV column "state" is missing`,
+			`queue_messages_ready: 1 failed, 1 missing, logged: CSV column "messages_ready" is empty in row 13`,
+			`queue_messages_unacked: 1 failed, 1 missing, logged: CSV column "messages_unacked" is empty in row 13`,
+			`queue_consumers: 1 failed, 1 missing, logged: CSV column "consumers" is empty in row 13`,
+			`queue_state: 1 failed, 1 missing, logged: CSV column "state" is empty in row 13`,
 		}},
 		{name: "a psql result, its rules not required", fixture: "queues-pipe.txt", contentType: "text/plain", response: pipes, rules: queues(&optional), series: wantQueues},
 		{name: "colons and no header", fixture: "accounts-colon.txt", contentType: "text/plain", response: colons, rules: []model.MetricRule{
@@ -616,7 +664,7 @@ func TestCSVFixturesBecomeTheSeriesOfTheirRows(t *testing.T) {
 			`reading_temperature_celsius{at="2026-10-03T09:15:00Z",sensor="th-03"} 18.22`,
 			`reading_temperature_celsius{at="2026-10-03T09:15:00Z",sensor="th-04"} 21.83`,
 		}, failures: []string{
-			`reading_pressure_hectopascals: 16 failed, 16 missing, logged: CSV column "6" is missing`,
+			`reading_pressure_hectopascals: 16 failed, 16 missing, logged: CSV column "6" is not in the response, whose longest row has 5 columns, read by number from 1 to 5`,
 		}},
 		{name: "UTF-8 with a byte order mark", fixture: "cities-utf8-bom.csv", contentType: "text/csv", rules: cities, series: wantCities},
 		{name: "UTF-8 with a byte order mark, and a Content-Type naming another encoding", fixture: "cities-utf8-bom.csv", contentType: "text/csv; charset=windows-1252", rules: cities, series: wantCities},
@@ -629,8 +677,8 @@ func TestCSVFixturesBecomeTheSeriesOfTheirRows(t *testing.T) {
 		{name: "windows-1251 by response.charset", fixture: "oblasti-windows-1251.csv", response: charset("windows-1251"), rules: oblasti, series: wantOblasti},
 		{name: "windows-1251 by response.charset, and a Content-Type saying UTF-8", fixture: "oblasti-windows-1251.csv", contentType: "text/csv; charset=utf-8", response: charset("windows-1251"), rules: oblasti, series: wantOblasti},
 		{name: "windows-1251 that nothing names", fixture: "oblasti-windows-1251.csv", contentType: "text/csv", rules: oblasti, failures: []string{
-			`city_temperature_celsius: 10 failed, 10 missing, logged: CSV column "температура" is missing`,
-			`city_humidity_percent: 10 failed, 10 missing, logged: CSV column "влажност" is missing`,
+			`city_temperature_celsius: 10 failed, 10 missing, logged: CSV column "температура" is not in the response, ` + unnamedOblasti,
+			`city_humidity_percent: 10 failed, 10 missing, logged: CSV column "влажност" is not in the response, ` + unnamedOblasti,
 		}},
 		{name: "ISO 8859-1 by the Content-Type", fixture: "communes-iso-8859-1.csv", contentType: "text/csv; charset=ISO-8859-1", rules: []model.MetricRule{
 			{Name: "city_temperature_celsius", Expression: "température", Labels: columns("city", "commune", "department", "département", "state", "état")},
@@ -782,14 +830,42 @@ func TestCSVFixturesBecomeTheSeriesOfTheirRows(t *testing.T) {
 			`job_records{job="sync-ldap"} 830`,
 			`job_records{job="vacuum"} 0`,
 		}, failures: []string{
-			`job_duration_seconds: 3 failed, 3 missing, logged: CSV column "duration_seconds" is missing`,
-			`job_records: 4 failed, 4 missing, logged: CSV column "records" is missing`,
+			`job_duration_seconds: 3 failed, 3 missing, logged: CSV column "duration_seconds" is empty in row 4`,
+			`job_records: 4 failed, 4 missing, logged: CSV column "records" is empty in row 2`,
 		}},
 		{name: "blank lines and a line of blanks", fixture: "jobs-blank-lines.csv", contentType: "text/csv", rules: jobs, series: wantJobs, failures: []string{
-			`job_duration_seconds: 1 failed, 1 missing, logged: CSV column "duration_seconds" is missing`,
-			`job_records: 1 failed, 1 missing, logged: CSV column "records" is missing`,
+			`job_duration_seconds: 1 failed, 1 missing, logged: CSV column "duration_seconds" is empty in row 5`,
+			`job_records: 1 failed, 1 missing, logged: CSV column "records" is empty in row 5`,
 		}},
 		{name: "no line end after the last row", fixture: "jobs-no-final-newline.csv", contentType: "text/csv", rules: jobs, series: wantJobs},
+		{name: "lines that end with a carriage return alone", fixture: "volumes-cr.csv", contentType: "text/csv", rules: []model.MetricRule{
+			{Name: "volume_used_percent", Expression: "used_percent", Labels: columns("volume", "volume", "pool", "pool", "note", "note")},
+			{Name: "volume_free_gibibytes", Expression: "free_gib", Labels: columns("volume", "volume")},
+		}, series: []string{
+			`volume_used_percent{pool="fast",volume="data01"} 72.5`,
+			`volume_used_percent{note="resized, twice",pool="fast",volume="data02"} 31`,
+			"volume_used_percent{note=\"full soon\rsee ticket 4411\",pool=\"slow\",volume=\"logs01\"} 88",
+			`volume_used_percent{pool="cold",volume="backup"} 64.25`,
+			`volume_free_gibibytes{volume="data01"} 220`,
+			`volume_free_gibibytes{volume="data02"} 552`,
+			`volume_free_gibibytes{volume="logs01"} 48`,
+			`volume_free_gibibytes{volume="scratch"} 1024`,
+			`volume_free_gibibytes{volume="backup"} 5120`,
+		}, failures: []string{
+			`volume_used_percent: 1 failed, 1 missing, logged: CSV column "used_percent" is empty in row 4`,
+		}},
+		{name: "lines that end in three ways, and no header", fixture: "scale-mixed-line-ends.txt", contentType: "text/plain",
+			response: model.ResponseConfig{CSV: model.CSVConfig{Delimiter: ";", Header: &optional, TrimSpace: true}}, rules: []model.MetricRule{
+				{Name: "scale_weight_kilograms", Expression: "3", Labels: columns("scale", "2", "state", "4", "at", "1")},
+			}, series: []string{
+				`scale_weight_kilograms{at="2026-10-03T09:00:00Z",scale="A1",state="stable"} 12.5`,
+				`scale_weight_kilograms{at="2026-10-03T09:01:00Z",scale="A1",state="stable"} 12.75`,
+				`scale_weight_kilograms{at="2026-10-03T09:02:00Z",scale="A2",state="tare; zeroed"} 7.25`,
+				`scale_weight_kilograms{at="2026-10-03T09:03:00Z",scale="A2",state="stable"} 7.5`,
+				`scale_weight_kilograms{at="2026-10-03T09:05:00Z",scale="B7",state="unstable"} 0.5`,
+			}, failures: []string{
+				`scale_weight_kilograms: 1 failed, 1 missing, logged: CSV column "3" is empty in row 5`,
+			}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			c := csvFixtureCollector(t, tc.response, tc.rules...)
@@ -802,7 +878,9 @@ func TestCSVFixturesBecomeTheSeriesOfTheirRows(t *testing.T) {
 // without a header row, as the decode's error says. The header's line is
 // then a row like the others, and its names are text where the rules read
 // numbers: a failure of each rule on every scrape. A pre-script that drops
-// the first row leaves the rows of values alone.
+// the first row leaves the rows of values alone. A row longer than the
+// header is read by number too, and gives the wrong values: the decode
+// refuses it with a header row because nothing else would say so.
 func TestCSVFixtureColumnsWithoutNamesAreReadByNumber(t *testing.T) {
 	header := false
 	noHeader := model.ResponseConfig{CSV: model.CSVConfig{Header: &header}}
@@ -832,6 +910,38 @@ func TestCSVFixtureColumnsWithoutNamesAreReadByNumber(t *testing.T) {
 		`host_memory_used_megabytes{host="web02"} 380`,
 		`host_memory_used_megabytes{host="web03"} 120`,
 	}
+	// A report with a row longer than its header, read by number: the row's
+	// values are a column to the right of where the rules read, and the
+	// state stands where the duration is expected, which fails its rule.
+	jobs := csvFixtureCollector(t, noHeader,
+		model.MetricRule{Name: "job_duration_seconds", Expression: "3", Labels: columns("job", "1")},
+		model.MetricRule{Name: "job_records", Expression: "4", Labels: columns("job", "1")},
+	)
+	transformCSVFixture(t, jobs, "text/csv", "jobs-unquoted-comma.csv").holds(t, []string{
+		`job_duration_seconds{job="backup-db"} 412.5`,
+		`job_duration_seconds{job="backup-files"} 1290`,
+		`job_duration_seconds{job="rotate-logs"} 3.25`,
+		`job_duration_seconds{job="sync-ldap"} 12`,
+		`job_duration_seconds{job="export-billing"} 96.75`,
+		`job_duration_seconds{job="vacuum"} 48`,
+		`job_duration_seconds{job="send-reports"} 31`,
+		`job_duration_seconds{job="prune-cache"} 0.5`,
+		`job_duration_seconds{job="renew-certs"} 0`,
+		`job_records{job="backup-db"} 18250`,
+		`job_records{job="backup-files"} 96412`,
+		`job_records{job="rotate-logs"} 14`,
+		`job_records{job="reindex"} 7.5`,
+		`job_records{job="sync-ldap"} 830`,
+		`job_records{job="export-billing"} 5120`,
+		`job_records{job="vacuum"} 0`,
+		`job_records{job="send-reports"} 64`,
+		`job_records{job="prune-cache"} 221`,
+		`job_records{job="renew-certs"} 0`,
+	},
+		`job_duration_seconds: 2 failed, 0 missing, logged: value "duration_seconds" is not a number; map text to numbers with value_map`,
+		`job_records: 1 failed, 0 missing, logged: value "records" is not a number; map text to numbers with value_map`,
+	)
+
 	c := csvFixtureCollector(t, noHeader, rules...)
 	transformCSVFixture(t, c, "text/csv", "usage-duplicate-columns.csv").holds(t, want,
 		`host_memory_used_megabytes: 1 failed, 0 missing, logged: value "used" is not a number; map text to numbers with value_map`,
@@ -967,6 +1077,8 @@ var numberForms = map[string]string{
 	"hex integer":          `value "0x1F" is not a number; map text to numbers with value_map`,
 	"octal":                `value "0o17" is not a number; map text to numbers with value_map`,
 	"binary":               `value "0b101" is not a number; map text to numbers with value_map`,
+	"digit separators":     `value "1_000" is not a number; map text to numbers with value_map`,
+	"hexadecimal float":    `value "0x1p-2" is not a number; map text to numbers with value_map`,
 	"thousands comma":      `value "1,234" is not a number; map text to numbers with value_map`,
 	"thousands blank":      `value "1 234" is not a number; map text to numbers with value_map`,
 	"thousands apostrophe": `value "1'234" is not a number; map text to numbers with value_map`,
@@ -1058,9 +1170,10 @@ func numberOutcome(t *testing.T, rule model.MetricRule, row any) string {
 //   - everything else is text that is no number and fails the rule, named
 //     in its error: separators of thousands, a decimal comma, a percent
 //     sign, a currency, a unit, hexadecimal, octal and binary integers,
-//     digits and a minus sign that are not ASCII, the words exports write
-//     for no value, and true and false, yes and no, on and off. A number
-//     beyond a float64's range says so.
+//     digits separated by underscores and hexadecimal floating-point, which
+//     only Go writes, digits and a minus sign that are not ASCII, the words
+//     exports write for no value, and true and false, yes and no, on and
+//     off. A number beyond a float64's range says so.
 func TestCSVFixtureNumbersAreReadAsWrittenOrFailTheirRule(t *testing.T) {
 	for _, trim := range []bool{false, true} {
 		forms, rows := numberRows(t, trim)
@@ -1319,9 +1432,9 @@ func TestCSVFixtureTimesAreReadByTheirColumnsFormats(t *testing.T) {
 	},
 		`backup_started_timestamp_seconds: 1 failed, 0 missing, logged: value "in progress" is not a time in time_format "2006-01-02 15:04:05"`+layout,
 		`backup_verified_timestamp_seconds: 1 failed, 0 missing, logged: value "never" is not a time in time_format "02.01.2006 15:04"`+layout,
-		`backup_finished_timestamp_seconds: 1 failed, 1 missing, logged: CSV column "finished" is missing`,
-		`backup_finished_milliseconds: 1 failed, 1 missing, logged: CSV column "finished" is missing`,
-		`backup_uploaded_timestamp_seconds: 1 failed, 1 missing, logged: CSV column "uploaded" is missing`,
-		`backup_finished_unix_seconds: 1 failed, 1 missing, logged: CSV column "finished_ms" is missing`,
+		`backup_finished_timestamp_seconds: 1 failed, 1 missing, logged: CSV column "finished" is empty in row 8`,
+		`backup_finished_milliseconds: 1 failed, 1 missing, logged: CSV column "finished" is empty in row 8`,
+		`backup_uploaded_timestamp_seconds: 1 failed, 1 missing, logged: CSV column "uploaded" is empty in row 8`,
+		`backup_finished_unix_seconds: 1 failed, 1 missing, logged: CSV column "finished_ms" is empty in row 8`,
 	)
 }

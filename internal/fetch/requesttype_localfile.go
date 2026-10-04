@@ -397,7 +397,7 @@ func fetchLocalFile(ctx context.Context, target string, c *model.Collector, over
 func checkMaxAge(c *model.Collector, full string, modified time.Time) error {
 	if maxAge := time.Duration(c.Request.MaxAge); maxAge > 0 {
 		if age := time.Since(modified); age > maxAge {
-			return fmt.Errorf("file %s was last modified %s ago, longer than request.max_age %s; whatever writes it has stopped", full, age.Round(time.Second), maxAge)
+			return model.Errorf("file %s was last modified %s ago, longer than request.max_age %s; whatever writes it has stopped", full, model.Elapsed(age.Round(time.Second)), maxAge)
 		}
 	}
 	return nil

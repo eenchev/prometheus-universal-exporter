@@ -631,10 +631,15 @@ type.
   build constraint on its file, `!select_request_types || request_type_<name>`,
   with `(request_type_<a> && request_type_<b>)` in place of the one type
   where it needs two, and `!select_request_types` alone where it holds only
-  with every type; it MUST NOT be skipped at run time instead. A test that
-  holds whatever the build carries MUST stay without a constraint, so every
-  selection runs it, and a test helper MUST be compiled exactly where
-  something that calls it is.
+  with every type; it MUST NOT be skipped at run time instead. A test of one
+  type MUST NOT carry a constraint of two for the sake of a row or an
+  assertion that contrasts the type with another: what needs the type alone
+  MUST be a test in a file with the type's constraint, which the type's own
+  selection runs, and the contrast a test of its own in a file with the
+  constraint it needs — the other type alone, or the two together where it
+  holds only with both built. A test that holds whatever the build carries
+  MUST stay without a constraint, so every selection runs it, and a test
+  helper MUST be compiled exactly where something that calls it is.
 - A build that left a type out MUST behave as if the type did not exist,
   apart from the message above for a collector that names it: a `/probe`
   parameter that only left-out types accept is a parameter no type accepts
@@ -934,7 +939,11 @@ keys:
   well-known types built in, imports resolved only in the import paths, each
   file named by its path from the import path it is under, and a compile
   error MUST name the file and line. Both MUST be read again at a call when a
-  file they were read from changed on disk.
+  file they were read from changed on disk: the descriptor set; a `.proto`
+  file named, or one imported, through however many files; and a file that
+  has appeared in an import path before the one a file was found in, which
+  MUST be the one compiled from then on. A file MUST be stamped before it is
+  read, so that one replaced while the files were being read is read again.
 - With `reflection`, the target's `grpc.reflection.v1` service MUST be asked,
   and `v1alpha` when the server does not implement v1, for the file defining
   the service and every file it imports, asking by name for any the answer
@@ -1097,9 +1106,13 @@ whitespace, comments and an XML declaration, MUST be recognised as HTML before
 other markup is taken for XML, and a body whose every line other than blank and `#`
 lines is `<path> <number> <number>`, with some path holding a dot or a `;`
 and none a brace or quote, MUST be recognised as carbon lines, after JSON,
-HTML and XML and before text. A local file ending in `.graphite` or `.carbon`
-MUST be given the Content-Type `text/x-graphite`, which MUST select the
-`graphite` decoder. Such a
+HTML and XML and before text. A body that starts with `{` or `[` MUST be
+taken for JSON when it is one JSON value none of whose numbers lies beyond a
+64-bit float (`1e400`), and for what else it may be otherwise; a body so
+taken for JSON MUST be read once, the decoder returning what the detection
+made of it rather than reading the body a second time. A local file ending
+in `.graphite` or `.carbon` MUST be given the Content-Type `text/x-graphite`,
+which MUST select the `graphite` decoder. Such a
 collector MUST be reported as a configuration warning, naming it and how it
 decodes, at startup, on every reload and in the `--dry-run` report; it MUST NOT
 fail the load. An explicit `decoder.type`, `auto` included, MUST NOT be
@@ -1136,6 +1149,16 @@ text/plain; version=0.0.4 -> potentially prometheus
 application/openmetrics-text -> prometheus, read as OpenMetrics (§ 14.1)
 ```
 
+The type MUST be compared without its parameters and in any case; a type
+ending in `+json` is JSON and `application/x-yaml` is YAML. Only `text/csv`
+names CSV: a body of any other type — `application/csv` and
+`text/tab-separated-values` among them — or of none MUST be read by its
+content, and no content is taken for CSV, since nothing in a CSV body tells
+it from text. Such a body is text to a transform that reads what the decoder
+gives it, and CSV to a `csv` transform, which names its decoder itself. The
+documentation MUST tabulate the types, and the extensions of a `localfile`
+file (§ 5.1), that name each decoder.
+
 Ambiguous formats SHOULD be rejected or require explicit configuration rather than guessed incorrectly.
 
 ### 6.1a Character encodings
@@ -1143,19 +1166,59 @@ Ambiguous formats SHOULD be rejected or require explicit configuration rather th
 A response MUST be converted to UTF-8 before its format is detected or it is
 decoded, from the first of: a byte order mark (UTF-8, UTF-16LE, UTF-16BE),
 which MUST be removed; the collector's `response.charset`; the `charset`
-parameter of `Content-Type`; and, only when none of those named one, a
-`<meta charset>` or `<meta http-equiv="Content-Type">` in the first 1024 bytes
-of HTML, or the encoding of an XML declaration. Encoding names MUST be looked
-up as the WHATWG Encoding Standard defines them. As the WHATWG HTML prescan
-does, a `<meta>` naming UTF-16 (`utf-16`, `utf-16le`, `utf-16be`) MUST be read
-as UTF-8 and one naming `x-user-defined` as `windows-1252`; a byte order mark,
-`response.charset` and the `Content-Type` header MUST be taken as they say. An unknown
-`response.charset` MUST fail to load; an unknown declared name MUST fail the
+parameter of `Content-Type`; and, only when none of those named one, what the
+document declares in itself: for a document decoded as XML, the encoding of
+its XML declaration; for a document decoded as HTML, a `<meta>` in its first
+1024 bytes and, when no `<meta>` there declares an encoding, the encoding of
+an XML declaration the document starts with, as the WHATWG HTML standard
+orders them. An XML declaration and a `<meta>` of one HTML document that
+disagree MUST be read as the `<meta>` says. The XML declaration of a document
+decoded as HTML MUST stand at the first byte of the document: after
+whitespace or anything else it MUST declare nothing. A document decoded by
+any other decoder declares nothing.
+
+A `<meta>` MUST be found as the WHATWG HTML standard's prescan ("prescan a
+byte stream to determine its encoding") finds it: a comment MUST be passed
+over; only a `<meta` tag counts, with a `charset` attribute, or with a
+`content` attribute from which the standard's "extracting a character
+encoding from a meta element" yields a name together with an `http-equiv`
+attribute whose value is `content-type`; attribute names and that value MUST
+be matched in any case, values MAY be quoted either way or bare, with
+whitespace around `=`, and the first attribute of a name is the one that
+counts; a `charset` attribute MUST be taken over a `content`; a `content`
+without `http-equiv="content-type"` MUST declare nothing; every other tag
+MUST be passed over with its attributes; and the first `<meta>` that
+declares an encoding MUST be the one read. A declaration that is not whole
+within the first 1024 bytes MUST declare nothing. As in the prescan, a
+`<meta>` naming what is no encoding's name — the name is the whole value of
+the attribute, so the `utf-8/` of `<meta charset=utf-8/>` is none — MUST be
+passed over, the next `<meta>` being looked at, and the XML declaration of a
+document decoded as HTML naming no encoding MUST declare nothing: neither
+MUST fail the scrape. The documentation MUST say what this makes of a page
+in a legacy encoding whose `<meta>` is written that way.
+
+The `charset` parameter of a `Content-Type` that is not well formed MUST
+still be read: the first `charset` parameter, its name in any case and its
+value quoted or a bare token, among the `;`-separated parameters of the first
+of the header's comma-separated values. A header that does not start with a
+type and a subtype, and a `charset` whose value is empty, is no token or
+opens a quote that nothing closes, MUST name nothing, without an error.
+
+Encoding names MUST be looked up as the WHATWG Encoding Standard defines
+them. As the WHATWG HTML prescan does, a `<meta>`, and likewise the XML
+declaration of a document decoded as HTML, naming UTF-16 (`utf-16`,
+`utf-16le`, `utf-16be`) MUST be read as UTF-8 and one naming `x-user-defined`
+as `windows-1252`; a byte order mark, `response.charset` and the
+`Content-Type` header MUST be taken as they say. An unknown
+`response.charset` MUST fail to load; an unknown name in the `Content-Type`
+header, or in the XML declaration of a document decoded as XML, MUST fail the
 `decode` stage naming it. The converted body MUST be what decoders, transforms
-and Python scripts see, with `charset=utf-8` in its `Content-Type`, and an XML
-declaration naming another encoding MUST be rewritten to UTF-8 so the XML
-parser does not convert it again. Converting MUST NOT change the bytes of the
-body that was fetched: a debug report (§ 42.17) shows them.
+and Python scripts see, with `charset=utf-8` in its `Content-Type` — in one
+that is not well formed, in the place of the `charset` value that was read,
+the rest of the header kept — and an XML declaration naming another encoding
+MUST be rewritten to UTF-8 so the XML parser does not convert it again.
+Converting MUST NOT change the bytes of the body that was fetched: a debug
+report (§ 42.17) shows them.
 
 After every transform, label values and help texts that are not valid UTF-8
 MUST have their invalid bytes replaced with U+FFFD rather than failing the
@@ -1366,6 +1429,104 @@ The YAML decoder MUST:
   labels can use both.
 - Support yq transformations.
 - Handle missing keys according to collector error policy.
+- Name no more than the first ten problems of a document it refuses with a
+  list of them, as a key written k times is a problem for each two of them,
+  and count the others (`... and 719390 more problems`): the error's text
+  MUST NOT grow with the square of the document, and the text of the whole
+  list MUST NOT be made. A list of ten problems or fewer MUST read as the
+  YAML library wrote it.
+- Decode a document, and refuse one, in time and memory linear in its size,
+  whatever it holds: a mapping of any number of keys MUST NOT cost time that
+  grows with the square of that number, as comparing every two of its keys
+  does, and a key written many times MUST NOT cost memory for each two of
+  them. The limits on a response's size (§ 20) thereby bound what decoding
+  it costs. A mapping of many keys MUST NOT make the rest of its document
+  cost a call of the YAML library for each item of a sequence beside it:
+  the items are handed to the library together, no more than 128 at a time.
+  And looking through a document before it is decoded MUST NOT take a stack
+  deeper than the document is nested, however its aliases follow one
+  another: anchors that each hold an alias of the one before MUST NOT be a
+  call each. Decoding a document MAY take the stack the library's own
+  decoding takes, which follows an alias into what it stands for; that stack
+  is as deep as the document is nested plus the length of its alias chains,
+  which the library bounds by neither its limit on nesting nor its limit on
+  how much the aliases may expand to, so it is bounded here instead (below).
+- Refuse a document nested, through the targets of its aliases, deeper than
+  the parser lets a document be written — the parser bounds nesting at 10,000
+  (`max_indents`, `max_flow_level`) — before anything decodes it, on every way
+  a document is decoded, the library's own included: the depth of a node is 1
+  plus the deepest of the nodes it holds, an alias counting as its target's
+  depth plus 1, as the library's decoding recurses, and a merge key's value is
+  a node it holds. The depth MUST be found in the one look through the
+  document already taken, memoised and in a stack no deeper than the document
+  is nested, so that an alias chain is no stack of its own, and MUST terminate
+  on an anchor that holds itself, which keeps the refusal it has (`anchor 'a'
+  value contains itself`). This refuses a chain of anchors that each hold an
+  alias of the one before (`a0: &a0 [x]`, `a1: &a1 [*a0]`, ...) more than
+  10,000 links deep, which the library decodes today, a stack of one level a
+  link that a chain within `max_response_bytes` could grow past Go's own limit
+  and fail the process fatally; that the exporter refuses such a document
+  where the library decodes it is the accepted cost, a further way it MAY
+  treat a document otherwise than the library does (below).
+- Refuse a key written twice in one mapping, in the YAML library's words
+  (`line 3: mapping key "a" already defined at line 1`, a problem for each
+  two of them, named and counted as above), and decode every other document
+  into the values, of the types, that the YAML library decodes it into,
+  failing in the library's words where it fails. A document whose mappings
+  have no more than 128 keys each, and whose keys written twice, if any, are
+  problems of no more than 64 kB of text, counted as 64 bytes and the key
+  for each — a key of one or two bytes written 45 times, one of three bytes
+  written 44 times — MUST be decoded, and refused, by the library itself,
+  unless it is nested through its aliases past the bound above, which refuses
+  any document whatever its mappings. Only a document past one of these MAY be
+  treated otherwise than the library treats it, and only in this:
+  - Nested through its aliases past the bound above, it is refused for its
+    depth before it is decoded, where the library, which bounds the stack of
+    its own decoding by neither nesting nor aliasing, would decode it.
+  - With keys written twice, its error is of the keys written twice alone,
+    each mapping's listed once, where it is written. The library reported
+    another error instead where it met one that ends the decoding, listed a
+    problem of another kind among them, listed a mapping's problems again
+    for each alias of it and after its other keys' when it is merged, and
+    did not read a value that a merge leaves out, so that a document with a
+    key written twice nowhere else was decoded: that document is refused.
+  - A merge into a mapping one of whose keys, or of a merged mapping's, is
+    a sequence or a mapping MUST be refused, as the library refuses it: the
+    library reads such a key once more for the merge, and fails on what is
+    wrong in it (`invalid map key`, `cannot decode ... as a !!int`, `anchor
+    ... value contains itself`) or outright. The error MAY be another than
+    the library's: that of the key (`invalid map key`, or among text keys
+    `cannot unmarshal !!seq into string`), of a later value, or of the merge
+    (`map merge requires map or sequence of maps as the value`), whichever
+    is met first.
+  - A document is refused for what its aliases expand to (`document
+    contains excessive aliasing`) at the share of aliased nodes the library
+    refuses it at, counted for a part of the document at a time where the
+    library counts node by node: a document at that share itself MAY be
+    decoded where the library refused it, or refused where it decoded it.
+    A document well under that share MUST NOT be refused for the aliases of
+    one part of it: what the library is handed at a time, counted with the
+    node made to hold it, MUST stay under what the library refuses alone.
+- Fail the decode, and nothing more, of a document the decoding panics on.
+  The YAML library panics on a merge into a mapping that has a key that is
+  no text where a merged mapping has a sequence or a mapping for a key: the
+  error MUST give the library's own words (`the YAML library failed on the
+  document: runtime error: hash of unhashable type []interface {}`) and no
+  stack. A panic of the exporter's own code MUST NOT be put on the library:
+  whose it is MUST be told by the innermost function of the library or of
+  the exporter that was running when it was raised, the standard library's
+  passed over, and the exporter's own MUST say that it is a defect of the
+  exporter, and where, the file, the line and the function (`the exporter
+  failed on the YAML document (yamlkeys.go:605 decode.(*yamlMap).set):
+  interface conversion: interface {} is int, not string; this is a defect
+  of the exporter and not of the document, please report it`), and no
+  stack. A runtime error MUST be recognised by the log (§ 25.1) by its text
+  up to the words `runtime error` and by the file and the function it was
+  raised in (`the YAML library failed on the document: runtime error
+  (decode.go yaml.v3.(*decoder).mapping)`), so that two runtime errors
+  raised in two functions are two failures and one whose numbers change is
+  one; the line MUST NOT be part of what any of these is recognised by. The
+  panic MUST NOT leave the decoder.
 
 Example:
 
@@ -1416,13 +1577,130 @@ Example:
 
 The implementation MUST document XPath behavior and namespaces.
 
+A label's expression MUST be evaluated at each node its rule selects — an
+element, a text node or an attribute — and an absolute path in it, one that
+starts with `/` or `//`, MUST start at the document, as XPath has it and as
+the same path does in a rule's expression, over XML and over HTML and
+wherever it stands in the expression: at its start, in an argument, in a
+predicate, in an operand or in a union. `/status/@site`, `//status/@site`,
+`concat(/status/@site, '-', @id)` and `../x[@ref=//y/@id]` MUST read what
+they say at every selected node; such a label MUST NOT be read as a path
+beneath the selected node, which matches nothing and leaves the label off
+without a word. `//name` in a label MUST be the first `name` of the
+document, and the documentation MUST say that one beneath the node is
+`.//name`. A label without an absolute path MUST be read as it was and
+MUST NOT cost more for it: whether a label may reach the root MUST be
+decided once for the rule, from its expression, and where that cannot be
+told for certain the label MUST be taken to reach it.
+
+A label whose expression cannot depend on the selected node MUST be
+evaluated once for the rule and the response, and its value given to every
+series of the rule; it MUST NOT be evaluated at each node, which walks the
+document as many times as the rule selects nodes. That MUST be taken of two
+shapes alone, whitespace around them aside, and decided once for the rule,
+from the expression: (a) one absolute location path, `/` or `//` and steps,
+with no operator, union, comma, parenthesis or function call outside its
+predicates, inside which anything may stand, since a predicate is evaluated
+relative to the path's own nodes; and (b) one call of `count`, `sum`,
+`string`, `number`, `boolean`, `not`, `normalize-space`, `string-length`,
+`name`, `local-name`, `round`, `floor` or `ceiling` with one such path for
+its only argument. Every other expression MUST be evaluated at each node,
+whether it depends on the node or not. What a label read once gives MUST be
+exactly what its evaluation at the node gave, at every node, over XML and
+over HTML and for a rule that selects elements, text nodes or attributes:
+its text, trimmed; no label where it selects nothing or computes blanks; a
+required label that is missing; the sum the exporter adds up; and the
+failure of a sum over text that is no number, which MUST name each node as
+before. A rule without such a label MUST cost what it cost. The
+documentation MUST say which labels are evaluated once, and that any other
+label with an absolute path in it walks the document at every node.
+
+An XPath expression MUST be read to its end by the engine or be refused
+where it is compiled, which is at load for a rule's expression and for a
+label's, and in the configuration check. The engine's parser stops where
+one complete expression ends and ignores what follows, so that an
+expression with something after it is evaluated as its start. A closing
+`)` or `]` outside a string that closes nothing MUST be refused with its
+place, as `XPath "sum(//a))": the ")" at byte 9 closes nothing`, and
+anything else that follows a complete expression — `//a 'x'`, `1 2`,
+`//a/sum(b)` — with the byte where what would be ignored starts. A
+predicate that would be ignored, the second after an expression in
+parentheses, a function call or a literal, of which the engine's parser
+reads one, MUST be refused as that, and the error MUST show the form the
+engine reads where one more pair of parentheses makes it: `(//a)[@x][1]`
+with `((//a)[@x])[1]`. An expression with a NUL byte in it, which the
+engine's scanner takes for the end of the text, MUST be refused with the
+byte's place before anything is made of it, the key of the compiled
+expressions included. The rule has no exception for depth: an expression
+nested as deep as the engine's parser reads — 199 levels of parentheses,
+predicates and function arguments — cannot be seen in one more pair of
+parentheses, and MUST be refused as too deeply nested, with or without
+something after it. An expression the engine reads to its end MUST NOT be
+refused otherwise, a bracket in a string and an expression nested 198 deep
+included. The search for the byte where what would be ignored starts MUST
+be bounded, in the bytes of expression it compiles, by a constant: an
+expression of up to 250 bytes MUST be refused with the place, and a longer
+one MAY be refused without it, so that an expression of 100 KB is refused
+in the time it takes to compile it.
+
+The XPath engine compiles expressions it then panics on, by what a response
+holds: `sum('abc')`, `sum(string(//a))` over text, `//a[contains(@x, 5)]`
+once an `a` has an `x`, `substring(//a, '1')`, `//a = true()`. A panic while
+a rule is evaluated — its expression, a label of it, the nodes of a sum in
+either — MUST be that rule's failure, handled by its `error_mode` like any
+other failure of the rule, and MUST NOT leave the transform: the other
+rules MUST give their series, `on_transform_error` MUST NOT be asked, the
+failure MUST be counted, logged and held back on repeats as a rule's
+failure is, and under `fail` the probe MUST answer as it does any rule's
+failure. The rule MUST give no series for that response, and those it made
+before the panic MUST be given back to `limits.max_metrics`. The rule
+fails once, as a whole: under `log` and `ignore` the failures of its nodes
+gathered in that transform before the panic MUST be replaced by the
+engine's, so that the rule is reported with one failure and no missing
+value, counted so in the self-metrics, and logged with the engine's
+failure and not with that of the first node, which the log would hold back
+as the repeat of an earlier scrape's. The error MUST
+name the metric, the expression — a label's, with the label's name, when a
+label was being evaluated — and the engine's own words, without a stack:
+`metric "m" XPath "sum('abc')" cannot be evaluated: the XPath engine failed
+on it: sum() function argument type must be a node-set or number`. A
+runtime error, of the engine or of the exporter's own code, MUST be
+recovered the same way and MUST read `runtime error: ...` there. What
+follows `runtime error:` moves with the response, as the bounds of
+`substring(//a, 2, 10)` over texts of different lengths do, so such a
+failure MUST be recognised by the log by its text up to and including
+`runtime error:`, while its text is logged and answered in full; a panic
+with the engine's own message MUST be recognised by its whole text. The
+stack of a runtime error MUST be logged once for the failure at debug
+level, under every `error_mode`, where the rule's failures are logged, and
+MUST NOT be in the error's text or in a line of another level. The panic
+MUST be recovered once for the rule and not at each node or label, so that
+a rule the engine does not panic on allocates what it allocated, and a
+compiled expression the engine panicked on MUST NOT be used again. This
+holds over HTML as over XML.
+
 A rule MAY select attributes, as `//job/@size`. Its labels MUST then be
 evaluated from each attribute as XPath has it — `.` its value, `name()` its
 name, `..` its element — and MUST NOT end the scrape with an error of the
 XPath library's own. One label is not as XPath has it: `text()` MUST give
 the attribute's value, as it always did and as it does over HTML, although
 to XPath an attribute has no text node; configurations tell the series of
-such a rule apart by it, and without it they are duplicates of one.
+such a rule apart by it, and without it they are duplicates of one. Only the
+bare label is so read. Any other expression that asks for a node beneath the
+attribute — `./text()`, `text()[1]`, `node()`, `self::*`,
+`descendant::text()`, or a function of one, as `normalize-space(text())`,
+`string(text())` or `substring(text(), 1, 2)` — MUST give no label,
+`contains(text(), '1')` MUST be false and `count(text())` 0, over HTML as
+over XML, and the documentation MUST say to write them of `.`.
+
+This MUST hold over HTML as over XML. An attribute an HTML rule selects, as
+`//td/@data-value` or `//time/@datetime`, MUST have its element for its
+parent: `../@name` — by the name as written, as below, `../@og:type` and
+`../@2x` included — `../../@id`, `name(..)`, a path through `..` such as
+`../../td[1]`, and an expression such as `concat(../@a, '-', .)` MUST read
+what they read of the same document as XML, so that the series of the rule
+are told apart by its element and the elements around it. A rule that selects
+elements or text nodes MUST read what it read before attributes had parents.
 
 An XPath expression that computes a value rather than selecting nodes — a
 number, a string or a boolean, as `count(//job)`, `string(/s/@load)` or
@@ -1432,9 +1710,64 @@ string that is not a number MUST be the rule's missing value. A label
 expression that computes a value MUST give its text, a number written
 shortest. This holds for XPath over HTML too.
 
-A label read from an element's text, or computed as a string, MUST be trimmed
-of leading and trailing whitespace, as a CSS label is, so the indentation of
-pretty-printed XML is no part of it.
+A `sum()` over nodes MUST have a value only when every node it adds up is a
+number, and MUST NOT be exported as the sum of the others, which is what the
+XPath engine computes: it leaves out, without a word, each node whose text
+it cannot read as a number, a number with whitespace around it among them.
+This holds for the calls evaluated in the expression's own context, outside
+every predicate, which MUST be found once, when the expression is compiled,
+and not at each node; a rule and a label without such a call MUST cost what
+they cost, to the allocation.
+
+- An expression that is one `sum(...)` and nothing else, whitespace around
+  it aside, MUST be added up by the exporter: every node the argument
+  selects, in the engine's order, its text trimmed of whitespace and read
+  as the engine reads a number, so that a sum of numbers written without
+  whitespace is the float the engine gives, bit for bit, and one of numbers
+  with whitespace around them is their sum. A node that is not a number
+  MUST leave the rule without a value: its missing value, as a computed NaN
+  is, by `required` and `error_mode`, with an error naming the metric, the
+  expression, the first such text, quoted as a value in an error is, and
+  how many of the nodes are such.
+- A `sum()` that is a part of a larger expression (`sum(//v) div
+  count(//v)`, `round(sum(//v))`) is the engine's to compute. Its nodes
+  MUST be read first as the engine reads them, untrimmed: where the engine
+  would leave one out, the rule MUST be missing its value, and the error
+  MUST name the sum and the text and say that whitespace around a number
+  counts there.
+- A label whose expression has such a `sum()` MUST be held to the same. A
+  label has no missing value, so its series MUST fail as one with a label
+  that cannot be read does, by the rule's `error_mode` and whatever
+  `required` says, with an error naming the metric, the node, the label and
+  the text, and the series of the rule's other nodes MUST be made.
+- A `sum()` inside a predicate, and one whose argument is a number or a
+  string and no node-set, are the engine's as before, and the nodes of a
+  sum are read whether or not the engine would come to evaluate it; the
+  documentation MUST say so. A string argument is the number it reads as,
+  and one that is no number makes the engine panic, which is the rule's
+  failure as above; the documentation MUST say what a string argument
+  gives.
+- A panic of the engine while the nodes of a `sum()` are read MUST NOT
+  fail the rule by itself: that sum MUST be left to the engine, which gives
+  the expression its value where it does not come to the call, as on the
+  right of an `or` whose left is true, and fails the rule where it does.
+- A prefix before the name MUST be passed over, as the engine passes over
+  it: `fn:sum(//v)` alone MUST be added up by the exporter as `sum(//v)`
+  is, and in a larger expression it is a part like any other.
+
+Text that is `NaN`, `Inf` or `Infinity` is a number where a document writes
+it (§ 18.1) and MUST be exported, and a `sum()` MUST add it up; a NaN an
+expression computes — `number('n/a')`, a sum that comes to NaN — stays the
+rule's missing value. The documentation MUST say why the two differ: the
+first is the value the source gives, the second the engine saying it read
+no number. All of this holds over HTML as over XML.
+
+A label read from an element's text or from an attribute, or computed as a
+string, MUST be trimmed of leading and trailing whitespace, as a CSS label
+is, so the indentation of pretty-printed XML is no part of it. This holds
+for the node's own attribute, `@title`, as for one read through a path,
+`../@title`, over XML and over HTML; an attribute of blanks alone is an empty
+value, which leaves the label off (§ 18.1).
 
 `response.namespaces` MUST map prefixes to namespace URIs for every XPath
 expression of the collector, its metrics' and its labels' alike. A prefixed
@@ -1557,10 +1890,52 @@ MUST match at most one element, a match of several failing the rule under its
 `error_mode` with an error pointing at `items`, and only static `value` labels
 are allowed, an expression label being refused at load. With `items`, the
 expression and each expression label are selectors within one selected
-element, such as a table row. Use XPath when a label must be read from a
-sibling or an ancestor of that element.
+element, such as a table row: they MUST be matched against what is beneath
+the item and nothing else, so neither the item itself nor an element around
+it is a match. Use XPath when a value is the item itself, or when a label
+must be read from a sibling or an ancestor of that element. A CSS selector
+MUST read the text of the element it selects and never an attribute; a value
+or a label that is an attribute is XPath's to read, and the documentation
+MUST say so.
 
 XPath equivalent SHOULD be supported.
+
+Rules over HTML are written against what a browser shows of a page, so the
+text of an HTML element, wherever the `css` and `xpath` transforms read it —
+a value, a label, a cell of an item, the first node a label's XPath selects —
+MUST be the text of every text node beneath the element, comments left out,
+without the text that stands inside a `script` or a `style` element beneath
+it, in `svg` too. A rule or a label that selects a `script` or a `style`
+element itself, or a text node inside one, MUST read that text: a page's
+data in `<script type="application/ld+json">` stays readable. Where selected
+nodes nest (§ 11), each MUST still read the text it has alone.
+
+The content of a `template` element MUST NOT be part of the document the
+transforms read, as it is not part of a browser's: it MUST be detached when
+the page is parsed, a page a pre-script leaves included, so that CSS
+selectors, `items`, XPath expressions and labels match no node inside a
+template and its content is no part of the text of an element around it. The
+`template` element itself MUST remain, empty, with its attributes. An element
+named `template` inside `svg` or `math` is no HTML template and MUST keep its
+content. A declarative shadow root — an HTML `template` with a
+`shadowrootmode` attribute, whatever its value, or the earlier `shadowroot`
+attribute — is content a browser attaches to the element around it and
+renders: its content MUST be kept, as children of the `template` element
+that selectors and expressions match like any other, a `template` inside it
+being emptied as above.
+
+Nothing else is left out: an element hidden by an attribute or a style, the
+markup inside `noscript` and `iframe`, which the parser keeps as their text,
+an `object`'s fallback, a `textarea` and a `pre` MUST be read as the parser
+gives them. What an expression itself asks of its library is the library's
+and is not rewritten: XPath's functions and comparisons work on the string
+value of a node and the `:contains()` of a selector looks in all its text,
+scripts and styles included; the documentation MUST say that this differs
+from the exporter's own reading of a selected node. An XML document has no
+scripts, styles or templates: elements of those names there MUST be read like
+any other. A page without a script, a style or a template MUST NOT cost a
+rule more allocations to read than it did, nor its parse more than one
+further pass over the nodes of the document.
 
 ---
 
@@ -1602,7 +1977,36 @@ reads the rows directly. A header naming one column twice MUST fail the
 decode naming the column, rather than one column silently overwriting the
 other. A column with an empty header name that holds a value in any row MUST
 fail the decode naming its number; one empty in every row, as a trailing
-delimiter leaves, MUST be left out of the rows. A quote inside a field that
+delimiter leaves, MUST be left out of the rows. With a header row, a row with
+more fields than the header in which any field past the header's last holds
+a value — one that is not empty, nor, under `response.csv.trim_space`,
+whitespace alone — MUST fail the decode naming the line of the body that
+value is on and its column number (`CSV line 5 has a value in column 5,
+which the header does not name`), rather than the value being dropped: it
+has no name to be read by, and a delimiter that is not the body's or a
+quoted field not read as one shows in nothing else. Fields past the header's
+last that all hold nothing MUST be left out, as a trailing delimiter's
+column is; a row with fewer fields than the header MUST have empty text in
+the columns it lacks; and without a header row rows MAY have any number of
+fields each, and the first line of the body MUST be a row like the others:
+there is no setting that skips lines. A line MUST end at a line feed, with a
+carriage return before it or without one, and at a carriage return that no
+line feed follows, as a spreadsheet's "CSV (Macintosh)" ends its lines: a
+body MAY end some lines one way and some another, and the lines an error
+names MUST count each. Inside a quoted field a carriage return MUST be the
+field's text, as a line feed is, but for one with a line feed after it, which
+MUST be read as the line feed alone, and under `response.csv.trim_space` one
+that ends a line MUST NOT be taken for whitespace before the field after
+it. A quoted field left open has no end to be inside of: the body MUST be
+refused with the error the same body gives with line feeds in place of the
+carriage returns after that field's quote — the line the body ends on and
+the column there, not the field's line and the length of the rest of the
+body. A body without a carriage return that ends a line MUST be read from the
+bytes it arrived in, without a copy. An empty line MUST be no row; a
+line of whitespace alone MUST be a row, which holds no value; and a last
+line without a line end MUST be read like the others. Quoting is no
+setting: a field that starts with a quote MUST be read as a quoted field
+whatever the delimiter, a tab included. A quote inside a field that
 does not start with one MUST be read as written rather than failing the
 decode; a quoted field left open, or holding a quote that is neither doubled
 nor the one closing it, MUST still fail it, with the error it has in a body
@@ -1610,7 +2014,12 @@ without such a field, whatever the other fields of the body hold: it MUST NOT
 be read on over the rows after it. `response.csv.trim_space` MUST trim the
 whitespace on both sides of every field, with a header row and without one,
 and a field whose first character after whitespace is a quote MUST be read
-as a quoted field, the delimiters inside it kept. With a delimiter that is
+as a quoted field, the delimiters inside it kept. Whitespace between a
+quoted field's closing quote and the delimiter or the end of the line after
+it MUST be trimmed as well, whatever the delimiter, a doubled quote, a
+delimiter and a line break inside the field kept as they are; anything else
+after a closing quote MUST still fail the decode, and without `trim_space`
+so MUST whitespace there. With a delimiter that is
 itself whitespace and not a space, a tab above all, it MUST NOT take the
 delimiter for whitespace of the field after it: an empty field MUST keep its
 column, while whitespace other than the delimiter between the start of a
@@ -1619,7 +2028,10 @@ quoted field MUST be left as written, and an error MUST name the line and
 column the body has it in. With a space as the delimiter the whitespace a
 field starts with MUST be skipped, spaces included, so that a run of spaces
 is one delimiter and columns aligned with spaces are read; an empty field
-cannot be written between spaces then.
+is written there as a quoted field with nothing in it (`""`), which MUST be
+read as one. A space after a closing quote is the delimiter there, and only
+other whitespace is trimmed after it. Without `trim_space` every space MUST
+be a delimiter of its own, as any other delimiter is.
 
 `response.csv.delimiter` MUST be exactly one character, and one the CSV
 reader can split on: not a double quote, a carriage return, a line feed or
@@ -1868,8 +2280,11 @@ The `graphite` decoder MUST read Graphite series from either of:
 - carbon plaintext lines, `<path> <value> [<timestamp>]` one a line, blank and
   `#` lines skipped. A missing timestamp, or `-1`, MUST be the time of the
   decode. A timestamp of 10¹¹ or more MUST be refused as one in milliseconds,
-  naming the line. Lines of one path and one set of tags, in any order, MUST
-  be one series with a point per line.
+  naming the line. A value or a timestamp with an underscore (`1_000`) or in
+  hexadecimal form (`0x1p-2`) MUST NOT be read as a number, as text a rule
+  reads is not (§ 18.1): its line is not a carbon line, in a body still
+  recognised as carbon lines by its content (§ 6). Lines of one path and
+  one set of tags, in any order, MUST be one series with a point per line.
 
 For a `graphite` collector the answer MUST be render JSON: any other, empty
 included, MUST fail the decode saying the Graphite server did not answer with
@@ -2229,6 +2644,25 @@ typical script.
 - The response's body MUST be sent to a worker once: `response.text`,
   `response.body` and, where the script's `data` is the body as text, `data`
   MUST be one string in the worker, not a copy each in the request.
+- The hand-over MUST NOT show in what a script is given, nor in what its
+  answer is read as, however the lines are written and read. A request MUST
+  carry `data` as the decoder made it: an object's keys in the order of their
+  bytes, which is the order a script iterates a dict in, a float that is whole
+  (`1.0`) as a whole number, a number the `json` decoder kept as text as text,
+  and a byte that is not UTF-8 as U+FFFD. The bytes of a JSON response MUST
+  NOT be handed to a worker in place of the decoded document, which a script
+  would read as another: its keys in the target's order, `1.0` as a float,
+  `1e400` as `inf`. A worker's answer MUST be the line it is when every value
+  of it is walked for NaN and the infinities; a worker MAY write without that
+  walk an answer of dicts, lists, tuples, strings, booleans, `None` and finite
+  numbers, each of exactly that type, nested no deeper than half the
+  interpreter's recursion limit less ten, and MUST walk any other, so that
+  `limits.max_output_bytes` bounds what it bounded and an answer nested too
+  deep to walk fails as it did. An answer MUST be read into the series, the
+  data or the error it holds whichever way it is read: an entry of `metrics`
+  that is not what `metric(...)` appends MUST be checked as § 16.2 says, a
+  metric past `limits.max_metrics` MUST be refused before one that is wrong,
+  and a line that is no answer MUST fail the run.
 - A worker MUST say, with a line of its own before it runs the script, that
   it has read and parsed the request. `limits.script_timeout` MUST bound the
   run of a script from that line on: not the start of the interpreter, which
@@ -2536,7 +2970,14 @@ zone (`Local` included, which differs from host to host), `time_format`
 beside `value_map`, and `time_format` on a `python` or a `prometheus` rule
 MUST be refused at load, the last two in the words `value_map` is refused
 there. A rule without `time_format` MUST read its value exactly as before,
-at the cost of one comparison.
+at the cost of one comparison. `time_format` or `time_zone` written as the
+empty string MUST be the key left out, as an optional key of free text is
+elsewhere in the configuration, to the exporter and to the published schemas
+(§ 24.3) alike: `time_zone: ""` MUST be accepted without `time_format` and
+be UTC beside one, `time_format: ""` MUST be accepted beside `value_map` and
+on a `python` or `prometheus` rule, and `time_format: ""` beside a
+`time_zone` that names a zone MUST be refused as `time_zone` without
+`time_format`.
 
 A rule MUST NOT take a condition of its own (a `when` key): which values
 become series is said in each transform's language — jq and yq `select` and
@@ -2553,6 +2994,31 @@ extracted — its expression or a label expression errors, its value is absent
 while the metric is required, a required label is absent (§ 18.1), or its
 value is not a number.
 
+Text an expression gives — a regex capture, the text of a CSS element or an
+XPath node, a CSV cell, a jq or yq string — MUST be read as a number when it
+is written as a decimal number: digits with or without a point, digits on
+either side of the point or on one, an exponent after `e` or `E`, and a
+leading `+` or `-`; or as `NaN`, or `Inf` or `Infinity` with or without a
+sign, in any case; with whitespace around it or without. An integer of more
+digits than a float holds exactly MUST be read as the nearest float, and a
+decimal number nearer to zero than a float holds (`1e-400`) as 0; one
+beyond the largest float (`1e400`) MUST NOT be read as infinity and fails
+its rule, as below. Text the exporter itself reads as a value MUST NOT be
+read as a number when it has an underscore (`1_000`) or is in hexadecimal
+form (`0x1p-2`, `0x1F`), though the language the exporter is written in
+reads the first as 1000 and the second as 0.25: it is text that is not a
+number, as it is to the Prometheus decoder (§ 14) and in a carbon line
+(§ 15a), and so is every other
+text — a thousands separator, a decimal comma, a unit, a word. The numbers
+of the configuration (`scale`, the values of `value_map`, limits) are YAML's
+and are not affected, and a value a Python script gives `metric(...)` is the
+number the script made. So is a number an XPath function or operator
+computes (`number(//v)`, `sum(//v)`, `//v * 1`), which the XPath engine
+converts, reading `1_000` as 1000 and `0x1p-2` as 0.25, and an unquoted
+scalar of a YAML response that YAML's syntax makes a number (`1_000`, `0x10`,
+`017`), which the YAML decoder reads, as 1000, 16 and 15: neither is text an
+expression gives, and CONFIGURATION.md MUST say so of both.
+
 An error saying a value is not a number MUST name the value as a person reads
 it, never in Go's syntax or with Go's parser's wording: text quoted, cut to its
 first 64 bytes with its full length when it is longer (`value "n/a" is not a
@@ -2568,10 +3034,23 @@ items`, `null`). A boolean MUST be read as `1` or `0`. What it does:
   rule, and otherwise behave exactly as `ignore`. A rule that fails for several
   series in one scrape — rows of a table, items — MUST be recorded once for that
   scrape, with its first error and the number of series that failed, not once
-  per series. Every series a rule carries on without, under `ignore` or `log`,
+  per series. Rules MUST be told apart by their metric name, their expression
+  and their `items`, and each MUST be recorded by itself: several rules of
+  one metric name MUST NOT be recorded as one, with the error of the first;
+  rules alike in all three are one rule, which MUST be recorded as `log`
+  records it when either of them has `log`, whichever comes first. Two rules
+  that differ in any of the three MUST NOT be taken for one whatever their
+  expression and `items` hold, a NUL in a comment or a string of a jq or css
+  expression included. Every series a rule carries on
+  without, under `ignore` or `log`,
   MUST be counted in `http_exporter_rule_failures_total{collector, metric}`, a
-  series present from zero for every rule, and in
-  `http_exporter_missing_keys_total` when the value was missing.
+  series present from zero for every rule that has a name, which the rules of
+  one metric name share and which counts the failures of all of them, and in
+  `http_exporter_missing_keys_total` when the value was missing. A
+  `prometheus` rule without a name is the exception: it has no
+  `http_exporter_rule_failures_total` series, none being exported with an
+  empty `metric`, and what it did not find is counted in
+  `http_exporter_missing_keys_total` only.
 - `fail` MUST record the error as `log` does and MUST then fail the whole scrape
   at that metric. No metric from that scrape MUST be served, including metrics
   that were extracted successfully, so a response is either complete or an
@@ -2580,6 +3059,21 @@ items`, `null`). A boolean MUST be read as `1` or `0`. What it does:
 Under `ignore` and `log`, a metric-level error MUST NOT fail unrelated metrics in
 the same collector. Modes apply per rule: a rule with `fail` that succeeds MUST
 NOT fail the scrape because another rule, under `ignore` or `log`, did not.
+
+The error of a `css` and of an `xpath` rule MUST name the metric first, as
+`metric "<name>"`, and, where the failure belongs to one item of a css
+rule's `items` or to one of the nodes an xpath rule selected, MUST name it
+by its place among them, counted from 0, as `item 3` and `node 3`: a value
+that is missing (`metric "m" value is missing for node 3: XPath "//v"
+selected a node without a value`), a value that is not a number or not a
+time (`metric "m" node 3: value "n/a" is not a number; map text to numbers
+with value_map`) and a required label that is missing (`metric "m" label
+"host" is missing for node 3`). An expression or a selector that matched
+nothing, one that does not compile when a response arrives, and an XPath
+expression that computed NaN or an empty string MUST name the metric and
+the expression (`metric "m" XPath "//v" matched no nodes`, `metric "m" CSS
+selector "td.v" matched no nodes`). The error MUST read the same under
+`fail`, `log` and `ignore`.
 
 A metric that is not required — `required: false`, or a collector with
 `allow_missing_keys` — is not failing when its value is absent, and no mode
@@ -2649,7 +3143,7 @@ label MUST be interpreted by the same transform as the metric expression:
 | `regex` | RE2 expression with at least one capture group; the capture group named `value`, or else capture group 1, is the numeric value | capture-group number or named capture group |
 | `csv` | numeric column name | column names |
 | `css` | CSS selector for numeric text; without `items`, matching at most one element | selectors relative to the selected element |
-| `xpath` | XPath selecting numeric text | relative XPath or `@attribute` |
+| `xpath` | XPath selecting numeric text | XPath evaluated at each selected node, an absolute path in it from the document, or `@attribute` |
 | `prometheus` | regular expression matching source metric names | destination label name to source label name |
 
 A `regex` rule's value MUST be the text of the capture group named `value`
@@ -2682,7 +3176,9 @@ A label MAY set `truncate: true`. A value longer than
 character boundary, ending in `…`, the mark counted within the limit; without
 it, such a value MUST fail the scrape as before (§ 21), since a silently
 shortened value would surprise. Truncation MUST apply to the labels of declared
-metrics from every transform, a `prometheus` rule without a name included, and
+metrics from every transform, a `prometheus` rule without a name included and
+the series of a `python` script that a rule names (the rule makes no series;
+it declares the script's metric and the label to cut), and
 MUST happen before `transform.rename_labels` and before `metrics_prefix`
 (§ 5.0a) is added, so a renamed label is still cut, and after invalid UTF-8
 is repaired, so the repair cannot grow a cut value past the limit.
@@ -2701,9 +3197,11 @@ label, and a list, tuple, set or dict refused with an error naming the label,
 as MUST be `labels` that is not a mapping.
 
 An expression label that gives a series no value — a selector or path matching
-nothing, a missing attribute, column, capture group or source label, a null —
-or an empty value MUST be left off that series, in every transform, so the
-text exposition and OTLP agree. An `expression` label MAY set
+nothing, a missing attribute, capture group or source label, an empty CSV
+cell, a null — or an empty value MUST be left off that series, in every
+transform, so the text exposition and OTLP agree. A `csv` label naming a
+column the response does not have is no such label: it MUST fail its rule
+(§ 42.2). An `expression` label MAY set
 `required: true`. A series missing a required label MUST then be a missing
 value of its metric: handled by the metric's `error_mode`, where `ignore` and
 `log` drop that series alone and `fail` fails the scrape with an error naming
@@ -2871,9 +3369,30 @@ ignore   carry on, logging the failure only at debug level
 ```
 
 The policies MUST apply alike to a probe and to a static target's scrape
-(§ 42.14). A probe carrying on answers `200` with no collector metrics; a
+(§ 42.14). A probe carrying on MUST be answered exactly as a probe whose trip
+went through whole and produced no series is answered, by the same writer:
+`200` with an empty exposition in the format the request asks for (§ 21) —
+the text format's `Content-Type`, or the OpenMetrics one of the version asked
+for and `# EOF` — with `X-Content-Type-Options: nosniff` and `Vary: Accept`,
+compressed as any answer of `/probe` is (§ 23), and to `HEAD` the same
+headers. An exposition is identified by its `Content-Type`: the answer MUST
+NOT be sent without one, or as OpenMetrics without `# EOF`. That MUST hold
+for every stage the policies cover, under `log` and `ignore` alike, and
+probes sharing the trip (§ 42.13a) MUST each get the format they asked for.
+While the collector sets `cache.stale_if_error` the answer MUST hold the two
+freshness gauges every answer of the collector has (§ 42.13.1),
+`http_exporter_result_stale` 0 and `http_exporter_result_age_seconds` 0, and
+nothing else. A trip that carried on is no result: it MUST NOT be stored in
+the response cache, where an earlier result MUST stay as it was, and MUST NOT
+be queued for OTLP; and it is no failure: it MUST NOT be answered with a
+stale result, the failed stage MUST be counted in the self-metrics as under
+`fail`, and the probe MUST count in `http_exporter_scrape_success_total`. A
+debug probe (§ 42.17) MUST report the stage as failed and carried on past,
+and that a probe would have been answered `200` with no series of the
+collector's. A
 static target scrape carrying on produces `http_exporter_target_up` 1 and no
-collector metrics, counts as a success, and is logged at warning level under
+collector metrics — its health series alone, without the freshness gauges —
+counts as a success, and is logged at warning level under
 `log` as `static target stage failed; continuing` — through the failure log
 (§ 25.1), and without logging the target as recovered, since the stage still
 failed. A metric rule with `error_mode: fail` (§ 18.1) MUST fail the scrape of
@@ -3089,12 +3608,51 @@ label has `truncate: true`, a `value_map` maps the value to a shorter one, or
 `remove_labels` drops it. A `python` transform's rules make no series, so only
 its `transform.labels` are checked.
 
+A scrape that fails validation for a limit of its series MUST say which and
+what to change: the metric, what is over the limit and by how much, the limit
+and its key, and the remedy. A label value over the limit MUST read `metric
+"M" label "L" value is N bytes, longer than limits.max_label_value_length
+MAX; a label one of the collector's rules gives can be cut to fit with
+truncate: true on that label, or raise limits.max_label_value_length`: the
+check knows no collector, the names are those the scrape exposes (after
+`metrics_prefix` and `transform.rename_labels`), and the label MAY be one no
+rule gives, as a directory's `file`, so the message MUST NOT tell the operator
+to set a key that may not exist; more labels than the limit, `metric "M" has
+N labels, more than limits.max_labels_per_metric MAX; drop labels it does not
+need or raise limits.max_labels_per_metric`; and a help text over it, `metric
+"M" help is N bytes, longer than limits.max_help_length MAX; shorten it or
+raise limits.max_help_length`. Lengths MUST be in bytes, as the limits are.
+
 Metric names SHOULD be normalized only when explicitly configured; silent surprising renaming is undesirable. A collector's `metrics_prefix` (§ 5.0a) is such explicit configuration, and validation applies to the prefixed names.
 
 The exposition MUST be served as `text/plain; version=0.0.4; charset=utf-8`,
 with `X-Content-Type-Options: nosniff`: label values and help come from
 scraped targets, and a browser MUST show any markup in them as text rather
 than render it.
+
+Every answer — `/probe`, fresh or from the cache, the static targets
+endpoint and the self-metrics, in the text format and in OpenMetrics — MUST
+have the series of a family together, under one `HELP` and one `TYPE`, those
+of the family's first series: the families in the order each first appears,
+and a family's series in the order they were made. Series MUST NOT be
+sorted. That MUST hold whatever order a collector's series come in — rules
+of one name with another rule between them, a script that emits a family's
+series apart, a `prometheus` collector whose rules, `transform.rename` or
+`name_escaping` give two source families one name — and a set that has
+every family's series together MUST be written in its own order, at no cost
+for the check beyond a comparison a series. A `csv` collector with several
+rules MUST read its rows in order, each by every rule, so that the first
+failure of a rule, the logged failures and the series limit are those of
+that order,
+and SHOULD keep its series rule by rule, each rule's in the order of the
+rows; it MUST do so when `limits.max_metrics` has room for a series of every
+row for every rule and every row has the columns of the first, as decoded
+rows do and rows a pre-script left may not. What is found in the finished
+set is found in the order the series are kept in: the duplicate series
+validation names (§ 21) and the first metric of a warning of repaired UTF-8
+(§ 6) are then those of the earliest rule that has one, whatever row it
+is on. OTLP MUST carry all the points
+of a family in one metric (§ 42).
 
 `/probe`, the self-metrics and the static targets endpoint MUST answer in
 OpenMetrics 1.0.0 instead, as `application/openmetrics-text; version=1.0.0;
@@ -3832,18 +4390,38 @@ without the configuration being touched. Such a file MUST be stamped before
 the load reads it, as what its path leads to: its modification time, size
 and permissions, the file a symbolic link resolves to, or that there is
 none, so a swapped `..data` link is a change even when the new file has the
-time and size of the old. A tick that finds nothing changed MUST NOT read
-the configuration and MUST NOT log; however many files changed since the
-last tick, a tick MUST make one reload, logged as any other. Once the
+time and size of the old.
+
+The files that a collector's `.proto` files import, which the configuration
+does not name, MUST count among them too, through however many files: every
+path the compile of the `proto_files` looked at on disk — a file it read,
+where the import paths resolved it, and a place where it looked for a file
+and found none, which for a missing import is every import path and for a
+file found in a later import path each one before it. A reload refused for
+an imported file that did not compile, was missing, or lacked what the
+configuration uses MUST thus be tried again at the tick after that file
+changes or appears. A file of the same name in a later import path than the
+one it was found in, and the places where a well-known file
+(`google/protobuf/*.proto`) that is built in was looked for, MUST NOT be
+among them. Which files are imported is known only once the load has read
+the files that import them, so they MUST be stamped once it has, and a file
+that changed between the load's reading of it and that stamp MUST reload at
+the next tick, as a change made while a named file was being read does.
+
+A tick that finds nothing changed MUST NOT read the configuration, MUST NOT
+compile a `.proto` file and MUST NOT log; however many files changed since
+the last tick, a tick MUST make one reload, logged as any other. Once the
 configuration is in force these files MUST NOT reload it: what uses them
-reads them again itself.
+reads them again itself, a grpc collector the files its `.proto` files
+import with those it names (§ 5.1, `grpc`).
 
 The static target file MUST be held to the same. While the target file last
 read is refused, whatever triggered that reload, the files that checking it
 against the configuration opens MUST count among the files whose change
 reloads it: the `request.protoset_file` and `request.proto_files` of the
 collectors named by its targets that set a `request.message`, in the
-configuration it was checked against and in the one in force. They MUST be
+configuration it was checked against and in the one in force, and the files
+those `.proto` files import, as for the configuration. They MUST be
 stamped before the check reads them, as above; a tick that finds them as
 they were MUST NOT read the target file and MUST NOT log; and once the
 target file is in force they MUST NOT reload it. A target file refused
@@ -3878,18 +4456,86 @@ The exporter MUST reload when asked, not only when the watch finds a change:
   staying in force.
 
 After any reload, whatever its trigger, the per-collector state MUST follow the
-new configuration before it is next used: a removed collector's self-metric
-series, per-request series, scrape-time histogram, cached results and
-remembered failures MUST be dropped, so its series stop being exposed and
+new configuration when the reload is made: on the path that reloads, before
+the reload returns or `/-/reload` answers, and never on a probe's. Where it
+has not been, it MUST follow before it is next used. A removed collector's
+self-metric series, per-request series, scrape-time histogram, cached results
+and remembered failures MUST be dropped, so its series stop being exposed and
 exported and Prometheus marks them stale, and a collector added again under
-the name MUST start from zero. A probe or static target scrape of the removed
-collector that had begun to count before its state was dropped, and ends
-afterwards, MUST NOT be counted in the counters, the scrape-time histogram or
-a per-request series of a collector added again under the name, and MUST NOT
-start a per-request series of the removed collector. A collector whose
-definition changed MUST keep its counters and MUST have its cached results
-dropped, since their keys carry the old definition; an unchanged collector
+the name MUST start from zero. A probe or static target scrape that read the
+removed collector in a configuration from before the reload, however far it
+had come when the collector's state was dropped — waiting for a scrape slot,
+about to count, at its target, or ending — MUST NOT be counted in the
+counters, the scrape-time histogram or a per-request series of a collector
+added again under the name, MUST NOT start a per-request series of the
+removed collector, and MUST NOT leave statistics under the removed
+collector's name for a collector added again to take over. A probe or scrape
+of a collector the reload kept MUST be counted for it wherever it was at the
+reload. A collector whose definition changed MUST keep its counters, MUST
+have its cached results dropped, since their keys carry the old definition,
+and MUST have its remembered failures forgotten (§ 25.1), as a removed
+collector's are, so that the first failure of the new definition is logged as
+a first failure and not as a repeat of the old one's; an unchanged collector
 MUST keep everything.
+
+What a probe or static target scrape writes under its collector's name when
+it ends MUST go nowhere once the collector it read is no longer the one in
+force: a reload followed since has removed the collector, or changed its
+definition, whether or not a collector is back under the name with the
+definition it had. Its result MUST NOT be cached, for `cache.ttl` or for
+`cache.stale_if_error`, so that it neither answers a collector brought back
+under the name nor counts in the `limits.max_cache_entries` of the one now
+there; its failure MUST NOT be remembered (§ 25.1) and MUST be logged at debug
+level only, marked `"superseded":true`; and its success MUST NOT be logged as,
+or count as, a recovery. The probe MUST still be answered with what it
+collected. Whether the collector is still the one read MUST be decided by the
+generations of the configurations followed, as for the statistics, and MUST
+be asked under the lock of the cache, and of the failure log, with the
+followed configuration replaced under those locks as the reload's drop is
+made, so that nothing is written after the drop that the drop was to remove;
+it MUST NOT take another lock on a probe's path. A probe or scrape of a
+collector that every configuration followed since has had unchanged MUST
+cache and log as it did, whichever configuration it read; one made with a
+configuration that is not in force by a caller that does not say when it read
+it MUST write nothing either. A failure that ends before the reload is
+followed is one from before the reload: it MAY be logged and remembered, and
+MUST be forgotten when the reload is followed.
+
+The result a static target's scrape publishes (§ 42.14a), with the outcome
+noted for its last success, MUST be held to the same, and to the target: it
+MUST go nowhere, over OTLP included, once a reload followed since has removed
+or changed the scrape's collector, or has removed the target or changed
+anything in its definition, whether or not a target is back under the name as
+it was. The static target file in force MUST therefore be followed with the
+configuration, a reload of either alone included. So a scrape begun before
+such a reload MUST NOT replace the result of the first scrape of the target
+now under the name, however the two end. A scrape of a target that every
+reload since has left as it was, with its collector, MUST publish as it did.
+
+What a static target's scrape, and the schedule of its turns (§ 42.14a),
+tells the failure log (§ 25.1) MUST be held to the target as well as to the
+collector, as the result is: once a reload followed since has removed the
+target or changed anything in its definition, its collector as it was, a
+failure MUST NOT be remembered and MUST be logged at debug level only, marked
+`"superseded":true`, and a success MUST NOT be logged as, or count as, a
+recovery of the target now under the name. Following a reload MUST forget
+what is remembered under the name of a static target the reload removed or
+changed, as it forgets a changed collector's, under the lock of the failure
+log with the followed configuration replaced under it, so that the first
+failure of the new definition is logged as a first failure and not as a
+repeat of the old one's. What is remembered of a target the reload left as
+it was MUST stay, and so MUST what the static targets endpoint remembers of
+a metric it left out and what a trip remembers under the address it went to,
+which a probe of that address shares.
+
+A probe MUST NOT join a trip in flight (§ 42.13a) that was started by a probe
+of another stay of its collector — one that read the collector before a
+reload changed it and another changed it back, or before it was removed and
+brought back — although the two have the same key: the trip writes under the
+collector's name only what the probe that started it may, so the probe that
+joined would have its result left uncached and its failure unremembered while
+its own collector stands. It MUST make a trip of its own. Probes of one stay
+MUST share as before, whichever configurations they read the collector in.
 
 Both MUST reload the configuration, with its collector files, and the
 static target file when there is one, whether or not they changed, under the
@@ -3902,10 +4548,12 @@ rejected reload's line MUST also say, as `retried_when`, what the watch reads
 that file again for, naming each of these that holds and nothing else: the
 file itself changing, which for the configuration counts its collector
 files; a file watched for it while it is refused (§ 24.1), when there is
-one; and the other of the two files, when the file was rejected only because
-it disagrees with the other as in force, which a change to the other MUST
-then read again. Without the watch nothing is read again until a reload is
-asked for, and the line MUST NOT carry `retried_when`. Reloads MUST be
+one, the files a configuration names and the files those import each named
+when there are such; and the other of the two files, when the file was
+rejected only because it disagrees with the other as in force, which a
+change to the other MUST then read again. Without the watch nothing is read
+again until a reload is asked for, and the line MUST NOT carry
+`retried_when`. Reloads MUST be
 serialized, so two triggers at once never interleave. The Helm chart MUST expose the flag as a
 value (SPECIFICATION-CHART.md § 33.10).
 
@@ -4171,9 +4819,27 @@ that scrape's failure lines do (`target` and `url` for a probe, `target` and
 `address` for a static target, and `file` for a file of a directory). A rule
 under `error_mode: log` MUST be logged at warning level, since the scrape was
 answered, as `metric extraction failed`, and MUST go through the failure log
-(§ 25.1), keyed by collector, target and metric, so a rule failing on every
+(§ 25.1), keyed by collector, target and rule, so a rule failing on every
 scrape is logged once and then as a repeat, and `metric extraction recovered`
-is logged once it produces its series again. A rule under `error_mode: fail`
+is logged once it produces its series again. The rule is told apart as § 18.1
+tells it, by its metric name, its expression and its `items`: of several
+rules of one metric name each MUST be logged, remembered and recovered by
+itself, so that one starting to fail beside one that has been failing is
+logged in full, and one that produces its series again is logged as
+recovered while the other is still remembered. Where several rules of the
+collector that differ in expression or `items` export the metric name, the
+rule's lines — the failure, its repeats and its recovery — MUST carry the
+rule's `expression`, and its `items` when it has any, after `metric`;
+whether they do MUST follow from the collector's rules and not from which of
+them failed on a scrape. A scrape of a target, or a directory's file, none
+of whose rules has a failure remembered — as nearly every scrape is — MUST
+cost the failure log one lookup: it MUST NOT make the key of each rule, whose
+size is that of the rule's expression, to ask whether that rule recovered.
+The lines of a metric name only one rule exports
+MUST carry neither. A `prometheus` rule without a name MUST be logged with
+an empty `metric`, and one with a name and no expression, which matches by
+its name, with an empty `expression` where its name is shared. A rule under
+`error_mode: fail`
 MUST NOT have a line of its own: the scrape's failure, which carries `metric`,
 is its one line. A logging path MUST NOT be what fails a scrape, so an absent collector
 MUST degrade to an empty name rather than panicking.
@@ -4188,12 +4854,68 @@ interval MUST be omitted rather than reported as a value that has no effect.
 
 A failure MUST be logged in full the first time. While the same thing keeps
 failing the same way — the same collector, target, file of a directory where
-there is one, stage and error text — a repeat MUST be logged at debug level
+there is one, rule where the failure is a rule's (§ 25), stage and failure —
+a repeat MUST be logged at debug level
 only, marked `"repeat":true`, except that once five minutes have passed since
 the last line at the failure's own level it MUST be logged at that level again
 with `repeated`, the occurrences since that line, and `failing_since`, when the
-failure began. A different stage or error MUST be logged at once as a new
-failure. The first success after a failure MUST be logged at info level with
+failure began. A different stage or failure MUST be logged at once as a new
+failure.
+
+The same failure is the same error text, its position in the response and its
+measured sizes apart: the row, node, item, series, point, line or column an
+error names, the place of a value among a label's, and a length, a count or a
+duration measured of the response — a value's bytes, the labels of a series,
+the elements a selector matched, a file's age — MUST NOT tell one failure from
+another, so a failure that moves in a changing response is logged once, summed
+up in `repeated`, and recovered from with every occurrence counted. Every line,
+a repeat too, and the answer to the scraper MUST carry the error in full, with
+the position and the size it had on that scrape. What else the text says MUST
+still tell failures apart: a name, a limit, a value read from the response
+(`value "n/a" is not a number` and `value "N/A" is not a number` are two
+failures). Which part of a text is a position or a size MUST be said by the
+error where it is made and MUST survive the errors that wrap it; no text is
+searched for numbers. An error whose text a library made is recognised by its
+text as it is, but for a CSV and an XML syntax error, whose line and column
+are known apart from the message, and for the errors below, of which a value
+the library keeps only in its text MAY be read from that text, in the one
+form the library writes it in and nowhere else; a text not of that form MUST
+be recognised whole. The line a YAML error names — `yaml: line N:`, each
+`line N:` of its list of problems, and the `already defined at line N` of a
+key written twice — MUST NOT tell one failure from another, and neither MUST
+how many times a problem is listed: problems that read the same without their
+lines are one, so a list with the same problem in every item is the same
+failure when it grows by an item. No more than ten different problems MUST be
+told apart; past ten the failure is recognised by the first ten and by there
+being more, however many. An error on a document's first line, for which the
+library writes no line, MUST be the same failure as the same error on a later
+line.
+Neither MUST what
+a failed fetch has of the one connection or attempt: the address a connection
+was made from, of every network error in the failure and in the text of a
+name server exchange that failed; the stream of an HTTP/2 stream error and
+the last stream of a `GOAWAY`; the time an expired or not yet valid
+certificate was held against; the offset at which compressed data was found
+corrupt; and, in the message of a gRPC status, that address, that time and
+the size of a message over a limit, each only where it stands after the words
+the client's own library leads up to it with: `read` or `write`, a TCP or UDP
+network, and the address before `->`; `x509: certificate has expired or is
+not yet valid: current time`; and `grpc: received message larger than max (`
+or `grpc: message after decompression larger than max (`. A status message is
+the target's as often as the client's: a value the target sent in it — an
+address before `->`, a time, a size over a limit of its own — MUST still tell
+failures apart, and MUST NOT be taken for the client's by its shape; only a
+message that holds those very words has the value after them left out. The
+same holds for the text of a name server exchange. Reading an error for
+these parts MUST NOT fail the probe: an error of a shape that is not the
+expected one, or one that panics when read, MUST be recognised by the whole of
+its text. The address a connection went to, the
+name server asked, the error code, the certificate's own time and the limit
+MUST still tell failures apart. Of several
+labels of a series that cannot be exposed, and of several labels a script gave
+whose values are no text, the failure MUST name the first by
+name, the same on every scrape, and not whichever the labels' map gave first.
+The first success after a failure MUST be logged at info level with
 the stage, `failed_for` and `failures`. This MUST apply to failed probes and
 stages continuing under `log`, a rule failing under `error_mode: fail` or
 `log`, probes
@@ -4202,7 +4924,10 @@ directory, a directory over `max_files` or its listing bound, and repaired
 invalid UTF-8. At most 10,000 failures MUST be remembered; when full, those not
 reported for an hour MUST be forgotten, at most once a minute, and a new one
 that finds no room MUST be logged every time. The failures of a collector a
-reload removed MUST be forgotten.
+reload removed or changed MUST be forgotten when the reload is made, and a
+failure or success reported after the reload by a probe or scrape of a
+collector the reload removed or changed MUST change nothing that is
+remembered (§ 24.1a).
 
 Every probe failure should include enough context to identify:
 
@@ -8423,7 +9148,8 @@ Tests MUST show:
   `../name`, `../../name`, `../../../name`, `../@name`, `../../@name`,
   `../../../@name`) and 80 near misses the engine goes on reading (blanks,
   prefixes, predicates, axes by name, second steps, functions, unions,
-  wildcards, node tests), over three XML documents made to tell the two
+  wildcards, node tests; the four that are an absolute path as the engine
+  gives them at the document), over three XML documents made to tell the two
   apart (several children of a name, a processing instruction named like an
   element, comments, CDATA, a directive, blank and mixed text, names that are
   node tests and operators, a default namespace, one that changes, prefixed
@@ -8639,8 +9365,9 @@ Tests MUST show:
   standard error: the watch runs before the limit is installed.
 - Over HTML the labels `@xml:lang`, `@lang`, `@v-on:click`, `@og:type`,
   `@data-id`, `@größe`, `@x-on:click.prevent`, `@:href`, `@@click` and `@2x`
-  give the attribute of that name, untrimmed, and one that is absent no
-  label — what main's reading by key gives for each — with `decoder.type`
+  give the attribute of that name, without the blanks around it, and one
+  that is absent no label — what main's reading by key gives for each,
+  trimmed — with `decoder.type`
   `html` whatever `response.namespaces` holds, and with `auto` without
   `response.namespaces`, or with it for the names an `xml` decoder accepts;
   the others are then refused at load as an `xml` decoder refuses them.
@@ -8669,7 +9396,7 @@ Tests MUST show:
   refused at load with `prefix x not defined`.
 - A prefixed attribute read by name gives, at every element of four XML
   documents and for six prefixed names, the value the XPath engine gives,
-  untrimmed where the engine trims and empty where it finds none.
+  trimmed as the engine's is and empty where it finds none.
 - A `scale` of `1.5e-9`, `7e-11`, `3e-10`, `0.3333333333`, `0.9999999995`,
   `0.3`, `7.5e-10`, `2.78e-13`, `0.50000000099`, the smallest and the
   largest float multiplies (2e9 by `1.5e-9` is 3, 3e10 by `0.3333333333` is
@@ -8952,7 +9679,9 @@ Tests MUST show:
   breaks and doubled quotes, open and stray quotes, bare quotes, CRLF and no
   final line end — each is read under `trim_space`, fields trimmed, as the
   reader read it when it skipped leading blanks itself, or refused with the
-  same error at the same line and column.
+  same error at the same line and column; one with blanks after a quoted
+  field's closing quote, which that reader refused, is read as it reads the
+  body without those blanks.
 - Taking the blanks before quotes out of a body returns one without any as
   the same bytes, leaves the body it was given unchanged, and records each
   run taken out with its place.
@@ -10027,12 +10756,12 @@ Tests MUST show:
   probe's target; with `decoder.type: auto` a script is given the rows of
   a `.csv` file and the text of a `.tsv` or `.txt` one, and with
   `decoder.type: csv` and the file's delimiter the rows of that too.
-- A directory of three reports read with `request.files` answers every
+- A directory of reports read with `request.files` answers every
   file's series with its `file` label, each family together, beside
   `localfile_mtime_seconds` and `localfile_scrape_error` for each file
   and `localfile_files_skipped`; a file the patterns do not match is not
   read; what a line of blanks and short rows are missing is logged per
-  file and rule, and no file fails.
+  file and rule, and none of those three files fails.
 - A directory holding lists in UTF-8 and UTF-16 with byte order marks and
   one in windows-1251 is read whole with `response.charset:
   windows-1251`; two rules of one metric that are not required each read
@@ -10198,7 +10927,8 @@ Tests MUST show:
   no `Content-Type`; under `application/xml` and `text/xml` the page
   fails the decode unless it is XHTML, which is read as XML; under JSON,
   YAML and Prometheus text types it fails the decode, and under
-  `text/csv` the transform; each failure is logged once with its stage.
+  `text/csv` the transform, or the decode when a line of the page has
+  more fields than its first; each failure is logged once with its stage.
   Only the collector with no `decoder.type` is warned about at load.
 - With the `localfile` request type a `.html` file is read as HTML by its
   extension and a `.xhtml` file by its doctype, a file named by the
@@ -10242,6 +10972,2237 @@ Tests MUST show:
   `prometheus-client`; `.github/dependabot.yml` has a `pip` update for
   `/test/python`; `ci.yml`'s `go` filter names `test/python/**`; and the Go
   test reads the variable the workflows set and names the file they install.
+
+## 34.86 The vulnerability check scans what ships
+
+- `make vulncheck` runs govulncheck over the Makefile's `VULNCHECK_PACKAGES`,
+  `govulncheck.yml` scans the same packages, and they are not `./...`.
+- Every command of the module — the exporter and `tools/depupdate` — is among
+  what those packages and their imports cover.
+- The module's packages that are not covered are exactly
+  `internal/grpctest`, `internal/testutil` and `test/repository`; a package
+  that is neither covered nor on that list, one on the list that a covered
+  package imports, and one on the list that is no package any more each fail
+  the test.
+
+## 34.87 The bugs the CSV and HTML fixtures found
+
+- The text format writes a set that has a family's series apart with them
+  together: the families in the order each first appears, each under one
+  `HELP` and one `TYPE`, those of its first series, and its series in the
+  set's order, a histogram's and a summary's lines among them; nothing is
+  sorted, text already in the buffer is kept, and the set is not changed.
+- A set with every family's series together is written byte for byte as
+  it was, and one with them apart as the set with them together is: of two
+  thousand generated sets of every type of series, with and without help,
+  labels and timestamps. Writing a set of 5000 series in 20 families
+  allocates no more than it did.
+- One set with two families' series apart is given out with each family's
+  together by the text format, by OpenMetrics, by the static targets
+  endpoint's merge and by OTLP, whose metric holds every point of its
+  family, each in the order the families first appear.
+- Through `/probe`, every source of series that can have a family's apart
+  answers them together, in the text format and in OpenMetrics alike: a
+  `csv` collector with two rules; two rules of one name with another rule
+  between them in a `csv`, a `jq`, a `regex` and an `xpath` collector; a
+  `csv` collector at its series limit and one whose pre-script leaves rows
+  with columns of their own; a `python` script that emits a series of each
+  metric row after row, with the collector's prefix and labels; a
+  `prometheus` collector whose rules, whose `transform.rename` and whose
+  `name_escaping` give two of a target's metrics one name; and a
+  pass-through of a target that has a metric's samples apart. A cached
+  answer is the same answer, and nothing is logged.
+- A `csv` collector's series are kept rule by rule, each rule's in the
+  order of the rows; a row a rule makes nothing of leaves no gap, and the
+  rules' failures are the ones they were.
+- Of three thousand generated tables — rows by header name, by number and
+  as a pre-script leaves them, cells with numbers, text, blanks and
+  nothing, one to four rules of every error mode, required and not, with
+  value maps, required labels and two rules of one name, and a series
+  limit below, at and above what the table makes — the `csv` transform
+  fails every one as it failed, on the same cell of the same rule and at
+  the series limit with the same count, reports the same failures in the
+  same order, logs the same lines and has the same series of every rule
+  in the order of the rows, the words of a missing value and the rules
+  with a label whose column no row has apart (§ 34.90); they are rule by
+  rule whenever the series
+  limit has room for a series of every row for every rule and the rows
+  all have the columns of the first. Every CSV fixture's rows give what
+  they gave too, rule by rule.
+- A `csv` rule whose column no row has makes no series; one whose column
+  only later rows have has its series after the other rules'; a table
+  with more rows than the series limit has room for is read in the order
+  of the rows, answered when enough of its cells are empty and refused
+  with the limit's own error when not; a table without rows has no series.
+- The probes of the CSV fixtures and of
+  `examples/config.usgs.csv-test.yaml` hold every series in the order it
+  is answered: a rule's after the rule's before it, each in the order of
+  the rows, and the `TYPE` lines in the order of the rules.
+- A row with a value past the header's last column fails the decode in
+  the words `CSV line N has a value in column M, which the header does not
+  name`, with what to change: with a comma, a tab and a space as the
+  delimiter, with `trim_space` and without, the line counted in the body
+  as written over blank lines and the lines of a quoted field, in a body
+  read leniently for a bare quote, the column the first past the header
+  that holds a value. A header's own unnamed column of values is refused
+  first, as it was.
+- Fields past the header's last that hold nothing — empty, an empty
+  quoted one, and under `trim_space` one of whitespace — are left out, in
+  one row and not another; a row shorter than the header has empty text
+  in the columns it lacks; without a header row, rows of any lengths
+  decode into lists as long as they are.
+- `testdata/csv/jobs-unquoted-comma.csv`, a report with a job's name
+  written with a comma and no quotes, fails the decode naming line 5 and
+  column 5, and so does a file read with a comma where its delimiter is
+  another, at the first row with a comma in a text. Read without a header
+  row it decodes, the long row a list of five fields, and its rules read
+  the wrong values. Through `/probe` the collector answers `502` in the
+  `decode` stage, logged once, also with a `pre_script`, and `200` without
+  series and a warning under `on_decode_error: log`; in a directory read
+  with `request.files` the file is left out with a
+  `localfile_scrape_error` of 1 and a warning naming it, the line and the
+  column, beside the other files' series.
+- An HTML page a target calls `text/csv` fails an `xpath` collector that
+  leaves the decoder to the answer in the `decode` stage when a line of
+  it has more fields than its first, and in the `transform` stage
+  otherwise.
+- Every CSV fixture, read with each delimiter the fixtures use, with and
+  without `trim_space` and a header row, and some six thousand generated
+  bodies of fields of every kind decode as they did — the same rows or the
+  same error — but for a body with a value past the header's last column,
+  read with a header row, and one with whitespace after a quote, read
+  under `trim_space`.
+- `trim_space` trims the whitespace between a quoted field's closing
+  quote and the delimiter or the line's end: with a comma, a semicolon, a
+  tab and a pipe as the delimiter, before a line feed, a CRLF and the end
+  of the body, after a field with a doubled quote, the delimiter and a
+  line break in it, in a header and without a header row. Without
+  `trim_space` such a body fails the decode as a stray quote, as it did.
+- Under `trim_space`, text after a closing quote's whitespace, a second
+  quoted part and a stray quote or an open field later in the body are
+  still refused, at the line and the column the body has them in, the
+  whitespace taken out before them on their line counted.
+- With a space as the delimiter the spaces after a closing quote are the
+  delimiter, a run of them one, and a quoted last field with spaces after
+  it is read as the reader alone reads it; a tab or a no-break space
+  after the quote is trimmed when the delimiter or the line's end follows
+  it, and refused when text does.
+- A body without whitespace around its quotes is read from the same
+  bytes, without a copy, the carriage return of a CRLF after a closing
+  quote being no such whitespace; what is taken out of another is told
+  with its place, before an opening quote only where the reader does not
+  skip it itself.
+- Whatever a body of quoted and unquoted fields holds — some 87,000 of
+  them under a comma, a semicolon, a tab, a space and a no-break space,
+  with `trim_space` on and off — one the former reader read is read into
+  the same fields and one it refused is refused in the same words at the
+  same line and column, unless it is read under `trim_space` and has
+  whitespace after a quote, or a carriage return alone ends a record of
+  it. The 60,000 tab-separated bodies of § 34.80
+  read as the reader reads them without that whitespace, an error's
+  column counted in the body as written.
+- `testdata/csv/stock-padded-quotes.csv`, a list with every text in
+  quotes and padded with blanks after the closing quote, decodes under
+  `trim_space` into its rows, a doubled quote, the delimiter and a line
+  break in its texts kept, and gives its series through a transform and
+  through `/probe`, an empty text leaving its label off; without
+  `trim_space` it fails the decode at line 1, column 9, and the probe
+  answers `502` in the `decode` stage.
+- Of some thirty thousand texts — every sign before every way of writing
+  digits, a point, an exponent, a base, an underscore, `NaN` and the
+  infinities in any case, and what is no number, with whitespace around
+  them and without — every one without an underscore that is not
+  hexadecimal is read as the same number, bit for bit, or fails in the
+  same words as before; one with an underscore or in hexadecimal that was
+  read as a number, or found beyond a float's range, is text that is not
+  a number, in the words every such text gets.
+- Integers, decimals with or without digits on either side of the point,
+  exponents, a leading sign, whitespace around the text, `NaN` and the
+  infinities in any case are read, as text and as a JSON number; `1_000`,
+  `1e1_0`, `0x1p-2`, `0X1P-2` and `0x1p99999` are not, nor `0x1F`, `0o17`,
+  `0b101`, `1,234`, `85%`, `12.5 MB`, `true` and `+nan`; a number beyond a
+  float's range still says so. Reading a number allocates nothing.
+- `1_000` and `0x1p-2` fail a rule of every transform that reads text — a
+  regex capture, the text of a CSS element, an XPath node, attribute and
+  computed string, a CSV cell, a jq and a yq string — naming the value
+  and `value_map`; a `value_map` that lists the text maps it, one that
+  does not says the text is neither in it nor a number, and a label keeps
+  such a text as written.
+- A `python` transform's `metric(...)` takes the number Python makes of
+  `"1_000"`; a row a pre-script leaves is read by the rules, `1_000` as
+  text no number and the number the script made of it one.
+- `testdata/csv/numbers.csv` has rows for digits separated by underscores
+  and for a hexadecimal float, which fail their rule like the other texts
+  that are no numbers; through `/probe` the file gives 24 series and one
+  log line counting its 33 failures. The numbers of a configuration are
+  YAML's: a rule's `scale: 1_0` is 10, a `value_map` of `1_000` and `0x10`
+  gives 1000 and 16, and `limits.max_metrics: 1_000` holds.
+- A probe that carries on past a failed stage — a fetch that fails before
+  or with a status, a decode, a transform — under `log` and `ignore` is
+  answered `200` with an empty exposition in the format asked for, in every
+  header and byte what a probe whose rules produced no series is answered:
+  the text format's `Content-Type`, or the OpenMetrics one of version 1.0.0
+  or 0.0.1 and `# EOF`, `nosniff`, `Vary` on `Accept-Encoding` and `Accept`,
+  gzip for a scrape that accepts it, and to `HEAD` the same headers without
+  the body; the failed stage is counted, logged at warning level under `log`
+  and not above debug under `ignore`, never as a failed or a recovered
+  probe, and every such probe counts as a success.
+- A csv collector with `on_decode_error: log` whose target names a column
+  twice is answered `200` with the text format's `Content-Type` and no
+  series over a real connection, where it was answered without a
+  `Content-Type`; the CSV fixture's unnamed column under `on_decode_error:
+  log` is answered the text format's `Content-Type` and, as OpenMetrics, its
+  own and `# EOF` alone.
+- With `cache.stale_if_error` a probe that carries on is answered the two
+  freshness gauges at 0 and nothing else, as a probe without series is, in
+  each format, plain and compressed; it is not answered the last good
+  result, which stays stored, counts no stale answer, queues nothing for
+  OTLP, and the target is asked again on every probe.
+- With `cache.ttl` a probe that carries on leaves no cache entry: the next
+  probe goes to the target and its result is the one stored.
+- Probes sharing one trip that carried on each get the empty exposition in
+  the format they asked for, and the target is asked once.
+- A debug probe of a collector that carries on shows the stage as failed
+  and carried on past, says a probe would have answered `200` with no
+  series of the collector's, and lists what it would have served: none, or
+  the freshness gauges with `cache.stale_if_error`.
+- A static target whose scrape carried on, at any stage under `log` or
+  `ignore`, with or without `cache.stale_if_error`, is up and has only its
+  three health series on the endpoint, in the text format and in
+  OpenMetrics.
+- A `localfile` probe that carries on past a file it cannot read, decode or
+  transform is answered as a probe of an empty file is, in both formats,
+  plain and compressed; a file of a directory that fails is left out alone
+  whatever `error_handling` says and the answer keeps its format, and a
+  directory that cannot be read is answered an empty exposition under `log`
+  and `ignore` and `502` under `fail`.
+- Only the answer of a trip that carried on changed: against the earlier
+  `probeTrip` as an oracle, over collectors that succeed, produce nothing,
+  fail a rule, fail a stage, are refused by the target policy, exceed a
+  limit or answer from the cache, and every status and body of a generated
+  table, the status, headers and body of every format, plain and
+  compressed, the trip's verdicts and the self-metrics' counters are the
+  same; a probe answered with series, one without, one a rule under `fail`
+  fails with its JSON error and one a stage fails under `fail` are answered
+  the same headers and bytes as before over a real connection.
+- Over HTML a rule that selects attributes, `//td/@data-value`, with the
+  labels `../@data-server`, `../../@id`, `name(..)` and `name()` gives one
+  series a cell, each with all four labels, as the same bytes give with
+  `decoder.type: xml`; the set passes validation, where the series were
+  duplicates of one.
+- Every label form reads at a selected HTML attribute what it reads at the
+  same attribute over XML — `.`, `text()`, `string(.)`, `name()`,
+  `@own-name`, `../@other`, `../../@id`, `name(..)`, `..`, `../../td[2]`,
+  `ancestor::tr/@id`, `concat(../@a, '-', .)`, `. * 2`, `count(../@*)`,
+  and what an attribute has none of (`td`, `*`, `node()`) — for rules
+  selecting with `//el/@attr`, `//@attr`, `//@*`, `//el/@*[...]`, a union
+  of attributes, and attributes beside their elements.
+- From a selected HTML attribute the names only HTML has are read by name
+  as written on its element and on the elements around it: `../@og:type`,
+  `../@2x`, `../@:href`, `../@@click`, `../@x-on:click.prevent`,
+  `../../@v-on:click`, and an `@xml:lang` four parents up; a required
+  label read through the element, `value_map` and `scale` work on such a
+  rule as on any other.
+- `//table//time/@datetime` with `time_format: rfc3339` and the label
+  `../../../td[@class='job']` reads the moment of every row that has the
+  attribute, named by its row; a `time` without it is not selected.
+- Attributes of `html` and `body`, an attribute written twice (the first
+  is kept), two attributes of an svg element that are both `href` to the
+  engine, attributes of `math`, and an attribute without a value are
+  selected without a panic, each read with its own value and its element.
+- Rules that select elements or text nodes make the same series, label for
+  label, through the HTML accessors as they are and as they were, over
+  every fixture page with its scripts, styles and template content taken
+  out; rules that select attributes keep their series, their values and
+  the labels `.`, `text()`, `name()` and `@own-name`, and gain the labels
+  read through the element; the label `node()` at a selected attribute,
+  which gave the value, selects nothing, as it does over XML.
+- A table whose rows hold `6<script>var n = 6;</script>` and
+  `<style>.n{color:red}</style>7`, with a `template` row of placeholders,
+  is read as 5, 6 and 7 by `css` with `items` and by `xpath`, with no
+  failure and no item for the template's row.
+- Text inside a `script` or a `style` is left out of the text of an
+  element around it wherever text is read — a css value, a css label, the
+  cells of an item, an xpath value, the xpath labels `.`, `..`, `../span`
+  and `text()`, in `svg` too, and where nested nodes are selected
+  together — and a cell that holds a script alone is a missing value.
+- A rule or a label that selects a `script` or a `style` itself, or a text
+  node inside one (`script#count`, `//script[@id='count']/text()`, `svg
+  style`), reads its text; XPath functions and comparisons written in an
+  expression (`string(.)`, `normalize-space(.)`, `li[b = '12']`) and the
+  `:contains()` of a selector read the text with the script's.
+- The content of a `template` that is no declarative shadow root is not
+  in the document: `p.item`, `#rows tr`, `template *`,
+  `//template//node()` and a label `template/p` match
+  nothing inside one, the text of the element around it is without it,
+  `count(//template)` still counts the elements, a selected `template` is
+  an element without a value, and a `template` inside `svg` keeps its
+  content. The page a pre-script leaves is parsed the same way.
+- `decode.ParseHTML` gives the parser's document with the children of its
+  HTML `template` elements removed, the elements and their attributes
+  kept, over every fixture page, none of which has a declarative shadow
+  root; the `html` decoder parses that way.
+- The markup inside `noscript` and `iframe` stays the text of the element
+  around them, and a hidden element, a `textarea`, a `pre` and an
+  `object`'s fallback are read as before; in an XML document elements
+  named `script`, `style` and `template` are read like any other.
+- The text of every node of every fixture page is what goquery and
+  htmlquery read once the scripts and styles are taken out of the page,
+  and with them in it the text of the text nodes that have no script or
+  style between them and the node; only elements around a script or a
+  style read otherwise than before.
+- `css` and `xpath` rules that select no script, style or template make of
+  every fixture page the series they make of the page with its scripts,
+  styles and template content taken out of the markup.
+- Per series over a page of 2,000 rows, a `css` rule with `items`
+  allocates 9 times where it allocated 11 (cells of one text node), 11.5
+  as before for cells with elements; an `xpath` rule over HTML 45 as
+  before, and a rule selecting attributes 6 as before.
+- The fixture collectors read naturally what they worked around: one
+  `xpath` rule reads the `data-value` attribute of every row of the
+  statistics table with labels from its row, one reads every row's
+  `datetime` named by its job, and the build farm's rows with a script or
+  a style in a cell are read by plain selectors (`tr.agent`,
+  `//tr[@class='agent']/td[@class='n']`) as 6 and 8, the rows of its two
+  templates being no rows.
+- A `<meta>` declares the encoding of an HTML document with a `charset`
+  attribute, or with `http-equiv="Content-Type"` and a `content` holding
+  `charset=`, in any case, quoted either way or bare, with whitespace
+  around `=`, its attributes in any order and on any line, after a
+  doctype, comments, scripts, other elements and text; a `charset`
+  attribute is read over a `content`, the first attribute of a name over
+  a second, and the first `<meta>` that declares an encoding over a later
+  one.
+- A `<meta>` in a comment, the `content` of a `<meta>` without
+  `http-equiv="Content-Type"` — a description, a refresh, another
+  `http-equiv` — the word `charset` in another attribute's name or value,
+  in another element, in a title, a script's text, a doctype or a
+  processing instruction, an element whose name only starts with `meta`,
+  and a `charset` naming nothing declare nothing.
+- A `<meta>` that ends within the first 1024 bytes is read wherever it
+  stands in them; one that starts after them, one whose value they cut
+  off, quoted or bare, and one a page ends in the middle of declare
+  nothing.
+- A UTF-8 page with a commented-out `<meta>` naming windows-1251 before
+  its own, or with a description that speaks of `charset=windows-1251`,
+  is read as UTF-8, and a windows-1251 page whose `<meta http-equiv>`
+  comes after a comment, a title, a description, a refresh and a link
+  that each hold a charset by that `<meta>`, with a `css` collector and
+  with an `xpath` collector through `/probe`, and from a local file,
+  nothing logged; a `Content-Type` naming an encoding is still read
+  before them.
+- A `<meta>` naming an unknown encoding, in its `charset` or its
+  `content`, declares nothing and fails nothing, and neither does a bare
+  value run into the slash of a self-closed tag (`charset=utf-8/`) or a
+  value with a semicolon or a blank in it.
+- A `<meta>` in a JSON, YAML, CSV or text body and in a document decoded
+  as XML means nothing: the body and its `Content-Type` are left as they
+  were, and no conversion is reported.
+- An XHTML page in windows-1251 whose only declaration is the encoding of
+  its XML declaration is converted when it is decoded as HTML — with the
+  decoder `html` under any `Content-Type` and none, and with `auto` under
+  `text/html`, `application/xhtml+xml`, `text/plain` and none — as it is
+  when it is read as XML under `application/xml` and `text/xml`; the
+  declaration then says UTF-8, the `Content-Type` `charset=utf-8`, and a
+  debug report's source encoding is windows-1251; through `/probe` a
+  `css` and an `xpath` collector give its names, nothing logged, and so
+  does a `.xhtml` file read with `localfile`.
+- The XML declaration of a document decoded as HTML is read after a byte
+  order mark, `response.charset` and the `Content-Type` charset, and
+  after a `<meta>` of the same document that names another encoding; one
+  that names no encoding leaves the `<meta>` to say it; one that is not
+  at the start of the document is none; one naming UTF-16 is read as
+  UTF-8; one naming an unknown encoding declares nothing. Under
+  a `Content-Type` that says UTF-8 the windows-1251 XHTML page answers
+  `200` with U+FFFD and the warning.
+- A `Content-Type` that `mime.ParseMediaType` refuses still names the
+  encoding with the first `charset` parameter of its first
+  comma-separated value: after or before a parameter without a value,
+  before a second value joined with a comma, written twice, with
+  whitespace around `=`, quoted, with something after the closing quote,
+  in any case. The body is converted as under the same header without what is
+  wrong with it, by every decoder, and the header the transform sees
+  keeps its shape with `utf-8` in the place of the charset that was read,
+  also when a byte order mark or `response.charset` named the encoding.
+- A header whose first value has no `charset`, one with a `charset` whose
+  value is empty, is no token or opens a quote that is not closed, and
+  one that does not start with a type
+  and a subtype name nothing: nothing fails, the body and the header are
+  left as they were, and through `/probe` a windows-1251 page under such
+  a header answers `200` with U+FFFD and the warning; such a header
+  naming an unknown encoding fails the `decode` stage naming it.
+- The decoder is chosen by a `Content-Type` that is not well formed as it
+  was: by the type before the first semicolon, for HTML, JSON, CSV, XML,
+  YAML, Prometheus text and plain text.
+- Against the detection as it was, kept as an oracle: every file under
+  `testdata`, under nineteen well-formed `Content-Type` values and none,
+  read as HTML, XML, JSON, CSV and text and by `auto`, with and without
+  `response.charset`, gives the same body under the same `Content-Type`
+  for the same decoder, or the same error, except the fixtures of the
+  three cases and files starting with an XML declaration that names an
+  encoding, read as HTML with nothing before the document naming one;
+  every `<meta>` form, known name and place of a generated table, under each
+  `Content-Type`, with a byte order mark and with `response.charset`,
+  and a `<meta>` at every offset of the first 1024 bytes that holds it
+  whole, is read as it was; the bodies of the earlier encoding tests are
+  read as they were; every well-formed `Content-Type` of a generated
+  table names what it named; and each choice that changed is listed with
+  what was chosen and what is.
+- The search of a head for a `<meta>` allocates nothing but the name it
+  returns.
+
+## 34.88 One read of a detected JSON body, the hand-over to Python, a removed collector's statistics, imported .proto files, and the tests and documents of each type and format
+
+- A JSON body whose decoder is detected from its content, under no
+  `Content-Type`, `text/plain` or `application/octet-stream`, with
+  `decoder.type` unset or `auto`, is read once: decoding 1,000 items costs the
+  allocations it costs with `decoder.type: json` and at most 8 more (1
+  measured, 9,856 in all; 45,877 when the detection parsed the body with
+  `encoding/json` first and the decoder read it again).
+- The detection with the json decoder agrees with the detection as it was,
+  kept as an oracle (`encoding/json`'s `Unmarshal` of the trimmed body), over
+  a table of bodies crossed with 15 `Content-Type`s, the transforms `jq`,
+  `yq`, `xpath` and `python`, and the decoder unset and `auto`: the same
+  decoder, the same decoded value of the same types, the same error text. The
+  table holds JSON objects and arrays, scalars, JSON after a byte order mark
+  and in UTF-16, JSON between whitespace that is JSON's and that is not (form
+  feed, vertical tab, no-break space, U+0085, U+2028), two dozen kinds of
+  nearly-JSON, NDJSON, YAML that is and is not JSON, XML, HTML, CSV,
+  exposition, carbon lines, text, an empty body, keys written twice, bytes
+  that are not UTF-8, halves of surrogate pairs, and arrays and objects nested
+  9,999, 10,000 and 10,001 deep.
+- A body with a number no 64-bit float holds — `1e400`, `-1e400`, a whole
+  number of 309 digits above 1.797e308, of 400 and of 4,097 digits — is not
+  taken for JSON by its content, as it never was, and is JSON under a JSON
+  `Content-Type`; the largest float written out in full, `1e-400` and a whole
+  number of 308 digits are taken for JSON.
+- A body the detection takes for JSON after whitespace that JSON does not have
+  still fails the decode naming the byte and its place (`invalid character
+  '\f' looking for beginning of value, at line 1, column 1`), and one followed
+  by such whitespace as trailing data.
+- 2,000 random JSON documents, each as it is, between random whitespace and
+  corrupted three times, 10,000 bodies under no `Content-Type` and under
+  `text/plain`, are detected and decoded as before; 2,885 of them as JSON.
+- The Probe benchmarks have `jq_detected` and `jq_sniffed`, `jq_items` with
+  the decoder left to a response served as `application/json` and as
+  `text/plain`, and `prescript`, a pre-script passing 100 and 5,000 items on
+  to jq rules.
+- The request line a worker is sent is, byte for byte, the line `json.Marshal`
+  wrote, for a table of 41 texts — plain, escaped, not UTF-8, U+2028, markers
+  of floats that are not finite and near-markers — each as data, a key, a
+  header name and value, the body, the target, the script, the mode and the
+  collector's name; 36 floats, whole, at both ends of the exponent form, NaN
+  and the infinities; integers of more than a thousand digits; nil and empty lists and
+  objects, which are both written empty; the data of each decoder; a status
+  that is HTTP's, a gRPC code and none; and data that is the body, sent once.
+- Data of a type no decoder makes (`int64`, `json.Number`, `[]string`, a
+  struct) and data nested deeper than 1,000 is written by `json.Marshal` as it
+  was, and refused as it was at the depth the Go release refuses (10,000 with
+  the release tested).
+- 10,000 random requests, half with values of types no decoder makes, written
+  one after another by one encoder, are each the line `json.Marshal` wrote or
+  fail with its error.
+- A request for 2,000 items is written in at most 4 allocations by an encoder
+  used before (0 measured) and at most 64 by a new one; `json.Marshal` took
+  24,015, twelve an item.
+- A worker's answer is read into what `encoding/json` read it into, kept as an
+  oracle with the conversion that followed it, for a table of 135 lines:
+  answers as a worker writes them; metrics appended by hand with each argument
+  missing, `null`, of the wrong type, a numeric string, a boolean, beyond a
+  float, a marker of NaN; labels with numbers, booleans, `null`, lists and
+  dicts as values, and a name written twice with and without `null`; keys of
+  the script's own, keys written twice and keys written with an escape;
+  entries of `metrics` that are no dict; answers without the spaces
+  `json.dumps` writes and with more; top-level keys missing, twice, in another
+  case, of the wrong type; lines cut short, with trailing data, with invalid
+  numbers and strings; and, beside the table, data and metrics nested 9,997 to
+  10,001 deep. The same series in the same order with the same types, help,
+  labels and timestamps, the same data with the same types, the same error
+  text and marks, the same count against `max_metrics` under limits of 1 and
+  2, and the same outcome counted for the run.
+- 5,000 random answers and two corruptions of each, 15,000 lines, are read as
+  before: 4,019 of the answers without `encoding/json`, 6,376 of the lines as
+  no answer, 1,560 as a script's error, 1,997 refused for a metric or the
+  limit.
+- An answer of 2,000 series with two labels is read in at most 6 allocations a
+  series (3 measured; 26 through `encoding/json` and maps).
+- With real workers, one running the worker script as it was and one as it is,
+  a script that names every value of `data` by path, type and `repr` answers
+  the same line for the response of each decoder (json, yaml, xml, html, csv
+  with and without a header, prometheus, text, graphite): no int arrives as a
+  float, no key in another place, no byte is lost.
+- 116 transform scripts answer the same line, byte for byte, from both
+  workers, and the line is read into the same series or error: `metric(...)`
+  with every form of value, label, name, type, help and timestamp it takes and
+  refuses; metrics appended by hand and changed after `metric(...)` made them;
+  NaN and the infinities; `OrderedDict`, `defaultdict`, named tuples, list,
+  tuple, dict, float and int subclasses; syntax errors, exceptions in nested
+  calls and chained, `fail`, `sys.exit`, blocked imports; printed output short
+  and past 4 KiB; 3,000 metrics.
+- 32 pre-scripts leave the same line for the response of each of 10 decoder
+  inputs: `data` unchanged, removed, replaced by each scalar, by numbers of
+  every size including `10**4000` and `10**5000`, by dicts with keys that are
+  no strings, by sets, bytes and objects, changed in place, and the series of
+  a prometheus scrape edited.
+- An answer nested too deep fails with the same `RecursionError` at the same
+  depth from both workers: at depths around 490, where the worker stops
+  looking through an answer itself, and around 997, where the walk fails, for
+  lists, dicts and tuples, as metrics and as data, and under recursion limits
+  of 60, 100 and 3,000 a script set; an answer that holds itself and one whose
+  values are one list many times end the same.
+- An answer exactly `max_output_bytes` long is taken and one a byte longer
+  ends the run with the output limit's error, from both workers; a script that
+  does not end is ended by its timeout from both.
+- A worker writes a plain answer of 101 metrics without one call of `wire`,
+  and an answer with a NaN with a call for each value; `metric(...)` asks
+  `label_text` only for the labels that are no plain string (5 of 8).
+- A probe held where it has read the configuration and not yet taken its
+  collector's statistics, whose collector a reload then removes and whose
+  state a read of the self-metrics drops, is answered `200` and counted
+  nowhere that is shown, without verbose mode and with it: the removed
+  collector has no series, a per-request one included, and the collector
+  brought back has its counters, its histogram's count and
+  `http_exporter_request_series_tracked` at 0 and every `_created` no
+  earlier than the reload that brought it back; when the held probe goes on
+  only after the collector brought back was probed, those hold that one
+  probe and its request series is at 1.
+- Wherever a probe of the removed collector was held — sent only once the
+  collector is gone, which is answered `400`; having read the configuration;
+  waiting for its target; reading its target's answer, half of it sent —
+  the collector brought back starts from zero, created no earlier than its
+  return, with no request tracked, in both modes.
+- A static target scrape that the scrape loop held before it took a slot,
+  whose collector and target a reload removed meanwhile, reaches its target
+  once and is counted nowhere shown; collector and target brought back show
+  counters, histogram and the target's per-request series at 0, created no
+  earlier than the return.
+- `scrapeTarget` with a configuration that is no longer in force counts
+  nowhere shown, and with the one in force counts once.
+- Over all 256 sequences of four reloads among configurations that remove,
+  add and change the collectors beside one that stays, and change its own
+  definition, a caller of every earlier generation, the reader of the
+  self-metrics and a caller by name are given the very statistics the old
+  lookup by name gives, never retired ones.
+- A caller that read a collector before a reload removed it is given
+  retired statistics that are kept under no name, also when the collector
+  is back and whether or not it has been used; a caller of no generation
+  likewise; a caller that read the collector brought back is given
+  statistics made for it at that generation, which a later reload that
+  keeps the collector leaves it; a name the configuration does not have is
+  kept no statistics.
+- Over all 64 sequences of three steps — a probe, a reload that removes the
+  collector beside it, one that brings that back and adds another, a probe
+  held across such a reload after it read the configuration — the `_total`
+  and `_count` series of a collector that stays, per-request ones included,
+  are those of a server that made the same probes and was never reloaded.
+- With four probers running through twelve removals and returns of a
+  collector, every probe of the collector that stays is answered `200` and
+  counted, and the other, removed and brought back once more after the
+  probes ended, starts from zero; the race detector finds nothing.
+- A file two imports away from the one a grpc collector names, edited to add
+  a field, is compiled at the next reading, where a message setting the
+  field is accepted that was refused before; nothing is compiled while
+  nothing changes; broken, it fails the reading naming `base.proto:3:`, and
+  mended it is read again.
+- What a compile of `proto_files` looked at is the named file, the imports
+  of two levels where the second of three import paths resolved them, and
+  each one's place in the first import path; no place under the third, and
+  none for `google/protobuf/timestamp.proto`. A file of the third import
+  path changing is no other reading and compiles nothing. An import gone
+  from the second path is found in the third; with two import paths it is
+  refused naming it, the failed reading says both places it looked, saying
+  so compiles nothing, a caller that needs the files compiles once more,
+  and the file written into the first import path is compiled.
+- A file appearing in an earlier import path than the one compiled is
+  compiled at the next reading, and that reading has another mark.
+- A `.proto` file replaced just after the compile opened it is read again
+  at the next look, with one compile, and its new field accepted; a
+  descriptor set rewritten just after it was read is read again and refused
+  as no descriptor set.
+- A collector reading a descriptor set, asking reflection, calling the
+  health service, of no or an unknown request type, with `proto_files` its
+  `descriptors` do not use, or with none named reads no file beyond those it
+  names, and compiles nothing to say so.
+- Over thirteen sets of files — the queue service with and without import
+  paths, two levels of imports, an empty import path first, a file outside
+  the import paths, files beside each other, two named, two directories, a
+  file that does not compile, a missing import, a well-known file on disk,
+  a file that is not there, none — the compile gives the same descriptors
+  or the same error as the old one, looks at every file the old one opened
+  and besides only at places where no file is, the named files first and
+  the others in order, at no place of a built-in well-known file, and its
+  stamp is the text the old stamp function gives.
+- A reload refused for an imported file two levels down that does not
+  compile is logged once, naming `base.proto:3:`, with `retried_when` `the
+  configuration, a file it names or a file one of those imports changes`;
+  the files watched are the named file and the two imported ones; three
+  ticks read nothing, look at no descriptor file and log nothing; the file
+  mended, the next tick logs `configuration reloaded`; and in force the
+  file changing reloads nothing and no file is watched.
+- A configuration whose message sets a field the imported file lacks is
+  refused, and is in force at the tick after the file has the field.
+- A reload asked for by `SIGHUP` and refused for a missing import, named in
+  the error, watches the import's place in both import paths and no place
+  of a well-known file, and the tick after the file appears in either
+  import path reloads.
+- Refused for a broken import found in the second of three import paths, a
+  reload watches no file of the third; files of the third changing leave
+  three ticks quiet; and a sound file appearing in the first import path
+  reloads at the next tick.
+- An imported file rewritten between the load's reading and the stamp is
+  one more refused reload at the next tick, the ticks after it quiet, and
+  mended it reloads.
+- A static target file refused because a file its collector's `.proto` file
+  imports does not compile is logged once with `retried_when` `the static
+  target file, a file its check opens or the configuration changes`, watches
+  the named file and the two imported ones, and leaves three ticks quiet;
+  mended without the field its message sets it is refused once more, naming
+  the field; with the field it is in force at the next tick, the
+  configuration not read; and in force the file changing reloads nothing.
+- Over 400 generated configurations that compile no `.proto` file, alone
+  and in pairs, the files named are those of the old list in its order, no
+  imported file joins the files stamped for a refused reload, whose stamp
+  is unchanged, and the files of a target file's check are the old ones.
+- `retried_when` reads as the old function wrote it for each file, with or
+  without a stamped file, waiting for the other file or not, is absent
+  without the watch, and with imported files reads `the configuration, a
+  file it names or a file one of those imports changes` and `the
+  configuration, a file it names, a file one of those imports or the static
+  target file changes`.
+- A test of one request type no longer carries a constraint of two for a row
+  or an assertion that contrasts the type with another: under each
+  single-type selection the type's own validation, probe and decoder-setting
+  tests run — `TestLocalFileValidation`, `TestLocalDirectoryValidation`,
+  `TestLocalFileTargetInterpretation` under localfile;
+  `TestGraphiteDecoderSettings`, `TestGraphiteRequestValidation`,
+  `TestGraphiteStaticTargetRequest`, `TestGraphiteWindowProbeParameters`,
+  `TestAGraphiteCollectorProbe` under graphite; `TestGRPCValidation`,
+  `TestGRPCAcceptedCodes`, `TestGRPCProbeParameters`,
+  `TestGRPCProbeFailures` and the code gauge's `-1` before the first call
+  under grpc; `TestAPathHoldsNoQuery` and
+  `TestRequestMaxResponseBytesCanRaiseTheLimit` under http — and the default
+  build runs every row and assertion it ran before.
+- An http collector that sets a key of another type — graphite's `targets`,
+  a static target's `from`, grpc's `retry.codes` and `accept_codes`,
+  localfile's `files`, `root` and `max_age` — is refused by the key's name
+  in a build with http alone as in the default build, and an http probe
+  without a target is refused there.
+- A probe parameter that only another type takes is refused for a collector
+  where the build has both types, and only there: `method` for a graphite
+  and for a localfile collector, `path` for a grpc one with no call made,
+  `from` for an http one, and `body`, `from`, `method` and `path` named
+  together for a grpc collector in a build with all three.
+- The settings of the graphite decoder load for a localfile collector, the
+  decoder named or left to the file, in a build with localfile alone; a
+  localfile path may hold a `?` and a `#`; a localfile probe takes
+  `timeout`; and a negative `request.max_response_bytes` is refused for a
+  graphite collector in a build with graphite alone.
+- With the decoder left to the response, each `Content-Type` the
+  documentation tabulates names its decoder, without its parameters and in
+  any case, a type ending in `+json` JSON; a CSV body sent as
+  `application/csv`, `text/tab-separated-values`,
+  `application/vnd.ms-excel`, `text/comma-separated-values`,
+  `application/octet-stream`, `text/plain` or without a type is text.
+- A CSV body whose lines end with a carriage return alone has its rows, as
+  one that ends some lines with it and others with CRLF and a line feed
+  has; inside a quoted field a carriage return is in the label read from
+  it. A line of blanks is a row missing its value, with `trim_space` and
+  without.
+- With a space as the delimiter and without `trim_space`, columns aligned
+  with spaces fail the decode at the header for the unnamed column that
+  holds values; with `trim_space`, and between single spaces without it, an
+  empty field written `""` is an empty field and leaves its label off.
+- A file with a header line read with `header: false` fails each rule once
+  a scrape on that line (`value "used" is not a number`) and gives the
+  other rows their series; a pre-script `data = data[1:]` leaves no
+  failure.
+- An empty cell fails its rule with `CSV column "x" is empty in row N` and
+  a column the header does not have with `CSV column "x" is not in the
+  response` and the columns it has — after a delimiter that is not the
+  file's, a header written `host, used` read without `trim_space`, a name
+  in another case, a `sep=;` line before the header — while a rule with
+  `required: false` reports neither, and a label naming an absent column
+  fails its rule once, required or not; a `sep=;` line read with the
+  delimiter it names fails the decode for its unnamed second column.
+- A pre-script of a `csv` transform is given a list of dicts with a header
+  row and a list of lists without one; a column it adds is read, a row it
+  leaves as a list is read by number, and a row that is neither fails the
+  transform by its number; a dict, `None`, a string or a number left in
+  `data` fails the transform with what the script left.
+- In tab-separated values a field that starts with a quote is a quoted
+  field over the tabs inside it, one left open fails the decode, a quote
+  later in a field is text, and a text that starts with a quote is read
+  from a quoted field with its quotes doubled.
+- Under `css` `items`, `:scope` and a selector that starts with `>` are
+  refused when the configuration loads; a label selector for a heading
+  above the rows leaves the label off, and an item that holds the heading
+  and the cells reads both; `xpath` reads the heading through
+  `ancestor::` and gives each `li` of a list of bare values its series.
+- Inside `svg` and `math` of an HTML page `//linearGradient`, `@viewBox`,
+  `@gradientUnits` and `@definitionURL` match and their lower-case forms
+  do not; `@*[name()='xlink:href']` finds nothing and
+  `@*[local-name()='href']` the attribute, while the labels
+  `../@xlink:href` and `../../@viewBox` read theirs; `css` finds
+  `linearGradient` in no case and no element by `[gradientUnits]` or
+  `[viewBox]`, and selects it by its id, its class and its place.
+- A label read from an HTML element's text keeps the line breaks, the
+  indentation and the tabs inside it, by `css` and by `xpath`, which makes
+  single spaces of them with `normalize-space()`; the label `@title` is
+  read without the blanks around the attribute's value, as `../@title` and
+  `normalize-space(@title)` are.
+- A table row without the cell a rule reads is a missing value of a `css`
+  rule with `items`, logged with the row's place, and is not selected by an
+  `xpath` rule, which reports only the cell that is there and empty.
+- A `css` expression written `body #proxy` without quotes loads as the
+  selector `body` and fails on the whole page's text; in quotes it reads
+  the element, `span#proxy` needs no quotes, and `expression: #proxy` is
+  refused as a rule without an expression.
+- A page of one-word Cyrillic names in windows-1251 that declares no
+  encoding fails the probe in validation with `duplicate metric series`,
+  after the warning that two label values were repaired, each name being
+  one U+FFFD; with `response.charset: windows-1251` it answers both names.
+
+## 34.89 Follow-ups to the fixture bugs: the order of declarations, metas that name nothing, shadow roots, the CSV pre-pass and Graphite's numbers
+
+- A page decoded as HTML whose `<meta>` and XML declaration disagree is read
+  by its `<meta>`: a UTF-8 page with `<meta charset="utf-8">` under a
+  declaration saying ISO-8859-1 reads `café`, a windows-1251 page with a
+  `<meta http-equiv>` saying so under a declaration saying UTF-8 or koi8-r
+  gives its names, with decoder `html` and `auto`; the fixture
+  `depots-meta-over-xmldecl.xhtml` gives its names through `/probe` under
+  `text/html` and `application/xhtml+xml` with a `css` and an `xpath`
+  collector, nothing logged.
+- The XML declaration of a page decoded as HTML names its encoding only
+  where no `<meta>` declares one — none, a description, or a `<meta>`
+  naming no encoding — and only at the first byte of the document: after a
+  blank, empty lines or a comment it is none. One naming what is no
+  encoding (`klingon`, `latin-1`) declares nothing and fails nothing, with
+  and without a `<meta>` after it. Read as XML, a declaration after blanks
+  is still read and one naming an unknown encoding still fails the decode.
+- A `<meta>` whose charset is no encoding's name — an unknown name, the
+  `utf-8/` of `<meta charset=utf-8/>`, a name followed by a semicolon, a
+  comma or a blank, a bare value run into the next tag — is passed over,
+  in its `charset` and in its `content`: the next `<meta>` that names an
+  encoding is read, then the XML declaration, and otherwise nothing is
+  declared; a `charset` attribute naming nothing known still hides the
+  `content` of its tag. Nothing fails, the body and its `Content-Type` are
+  left as they came, and no conversion is reported.
+- Through `/probe`, a UTF-8 page whose `<meta>` is `charset=utf-8/` or
+  names `klingon` gives every depot its name, nothing logged; a
+  windows-1251 page with a `<meta>` naming `klingon` before its own gives
+  its names; with `<meta charset=windows-1251/>` or `charset="windows-1251;"`
+  it answers `200` with U+FFFD and the warning, and with a blank before the
+  slash it gives its names. An unknown charset in the `Content-Type` still
+  fails the `decode` stage naming it.
+- A `Content-Type` charset whose value opens a quote that nothing closes
+  (`charset="; q`, `charset="windows-1251`, `charset="windows-1251; q`)
+  names nothing: nothing fails, the body and the header are left as they
+  were, and through `/probe` a windows-1251 page under `text/html;
+  charset="; q` answers `200` with U+FFFD and the warning. A quoted value
+  with something after its closing quote is still read.
+- A declarative shadow root — a `template` with a `shadowrootmode`
+  attribute, of any value or none, or with the `shadowroot` attribute —
+  keeps its content when the page is parsed: `p.shadow`, an
+  item of `#host > template`, `//p` with the labels `name(..)` and
+  `../@shadowrootmode`, and the text of the element around it read it; a
+  `template` inside a shadow root is emptied, and one whose attribute only
+  resembles those (`data-shadowrootmode`, `shadowrootmodes`,
+  `class="shadowroot"`) is emptied as before.
+- At a selected attribute, over HTML and over XML alike, the labels
+  `./text()`, `text()[1]`, `node()`, `self::*`, `descendant::text()`,
+  `normalize-space(text())`, `string(text())` and `substring(text(), 1, 2)`
+  give no label, `contains(text(), '1')` is `false`, `count(text())` and
+  `count(node())` are 0, and `.`, `text()`, `normalize-space(.)`,
+  `substring(., 1, 1)`, `contains(., '1')` and `concat(name(), '=', .)`
+  read the value.
+- Against the detection as it was before the prescan, kept as an oracle:
+  every file under `testdata` is read as it was but for the fixtures of a
+  commented-out `<meta>`, a description, the decoys and the XML
+  declarations that are a page's only declaration, the fixture whose
+  `<meta>` and XML declaration disagree being read as it was; every
+  `<meta>` form and place of a generated table naming a known encoding is
+  read as it was, and one naming an unknown encoding (`klingon`,
+  `x:y.z+1_2`, `utf8x`, `windows-125`), which failed the decode naming it,
+  leaves the body as it came where the document is asked and is read as it
+  was everywhere else; a `<meta>` after an XML declaration that says
+  otherwise, names UTF-8 or names nothing known, an XML declaration that
+  names nothing known or stands after a blank, empty lines or a comment,
+  and a `<meta>` after one whose value never was a name are chosen as they
+  were, under eight `Content-Type` values, four decoders, with and without
+  `response.charset` and a byte order mark; and a `Content-Type` whose
+  charset quote is not closed names nothing, as it did.
+- Against the functions as they were before these corrections, kept as
+  oracles: `contentTypeCharset` gives the same name at the same place for
+  some 18,000 headers — those of the tests, a generated table and 20,000
+  put together at random — and differs only for the 2,500 whose charset
+  value opens a quote that nothing closes; `documentCharset` gives the
+  same for every file under `testdata` read as HTML, XML, JSON and text but
+  the fixture whose `<meta>` and XML declaration disagree, and for the
+  4,000 of 12,348 generated pages — seven things before an XML
+  declaration, nine declarations, fourteen first and second metas — that
+  are outside the decided cases, each page declaring then and now what its
+  parts say; and `ParseHTML` gives the same document for every fixture
+  page and for templates of every other kind, in a table, a select, the
+  head, `svg` and `math`, differing only for a page with a declarative
+  shadow root.
+- Reading a body under `trim_space` whose quoted fields have whitespace
+  after the closing quote allocates, beyond what reading the same body
+  written without that whitespace does, one copy of the body: for a padded
+  report, a line of padded texts and an empty quoted field and a blank
+  over and over, of 64 KiB and of 512 KiB alike, at most two allocations
+  and a body and a quarter of bytes more, where the list of what was taken
+  out cost thirty allocations and up to some twenty times the body; a body
+  without such whitespace is read where it lies.
+- An error after sixteen thousand runs of whitespace taken out of its line
+  — of one byte and of three, on the first line and a later one, before
+  opening quotes as well under a tab, and beside a bare quote — names the
+  column the body has it in, the one counted from the list of what was
+  taken out, which is made only once the reader has failed.
+- A carbon line whose value or timestamp has an underscore or is in
+  hexadecimal form (`1_000`, `1e1_0`, `0x1p-2`, `0X1P4`, `-0x1p0`,
+  `100_000_000_000`) fails the decode naming the line and the text, as
+  `the value "1_000" is not a number` or `the timestamp "1_000" is not a
+  number of Unix seconds`, the value's first; under `invalid_lines: skip`
+  it is left out and counted, the lines around it read, a path and a tag
+  with underscores and an `x` among them; a body with such a line of three
+  fields is still detected as carbon lines.
+- Of some eighty thousand carbon lines — paths plain, tagged, named after
+  a function and malformed, with every way of writing a number and what is
+  none as the value and as the timestamp — every one is read as it was,
+  the same path, tags and point or the same error, unless Go read its
+  value or its timestamp with an underscore or as hexadecimal: those fail
+  for the value, or for the timestamp when the value is a number.
+- A number an XPath function or operator computes — `number()`, `sum()`,
+  `* 1`, `+ 0`, of an element and of an attribute, over XML and over HTML
+  — is the XPath engine's: 1000 for `1_000`, 10.5 for `1_0.5`, 0.25 for
+  `0x1p-2` and -16 for `-0X1P+4`, while the same node selected as it is
+  fails its rule as text that is no number. An unquoted YAML scalar is
+  YAML's number to a `yq` and a `jq` rule: `1_000` 1000, `1_000.5` 1000.5,
+  `+1_0` 10, `0x10` 16, `0o17` and `017` 15, `0b101` 5; quoted, single or
+  double, each is text that is no number, `017` the decimal 17, and an
+  unquoted `0x1p-2` is text too.
+- Of two `csv` rules that each have a series twice, validation names the
+  first rule's metric though the second rule's pair is complete a row
+  earlier, and of two that each have a label value that is not UTF-8 the
+  repair's first metric is the first rule's though the second's value is
+  on an earlier row: the finished set is checked in the order it is kept
+  in, rule by rule.
+
+## 34.90 Absolute paths and sums in XPath, what XPath and limit failures name, CSV line ends and absent columns, late writers after a reload, and an empty time_format
+
+- An absolute path in an `xpath` label starts at the document: on rules that
+  select elements, text nodes and attributes (`//job`, `//job/text()`,
+  `//job/@id`), over XML and over the same markup as HTML, the labels
+  `//status/@site`, `/status/@site` (over HTML `/html/body/status/@site`), one
+  with a blank before it, `//x`, `concat(/status/@site, '-', @id)`,
+  `../x[@ref=//y/@id]`, `@nothing | //queue/@name`, `(//job)[2]/@id`,
+  `count(//job)`, `/status/@load + 1` and `@id = //job[1]/@id` read what they
+  say on every series, beside `ancestor::status/@site`, which read it before;
+  a rule that computes a value reads such labels at the document as it did.
+- `//n` in a label is the document's first `n` on every series and `/n`, which
+  the top has no child of, gives no label, while `..//n` and `../n` read
+  beneath the node's parent, over XML and HTML.
+- With `response.namespaces` the label `/n:status/@site` matches by the
+  namespace its prefix is bound to, `//job/@id` an element in no namespace,
+  and `/status/@site` nothing.
+- Whether a label reaches the root is told from its expression: for 322
+  expressions, 321 of which compile — an absolute path at the start, after
+  every operator, opening bracket and comma with and without a blank, in
+  arguments, predicates, unions and groups; `and`, `or`, `div`, `mod` and `*`
+  as operators and as names (`div div/status`, `* */status`, `../div/span`,
+  `*/job`); slashes in strings; steps after names, brackets, dots, node tests,
+  axes and blanks (`job /@id`) — the verdict is the engine's own, which asks
+  its navigator for the root at some node of a document exactly for those said
+  to reach it; and of 20,000 expressions strung together at random from a
+  fixed seed, 6,930 of which compile, none of the 1,082 the engine takes to
+  the root is said not to reach it. An operator after a no-break space, which
+  the parser does not read as one, is said to reach it, to be on the safe
+  side.
+- A label without an absolute path is what it was, with `xpathLabels` as it
+  was for an oracle, at every node of the three label documents with and
+  without `response.namespaces`, four random XML documents, the fixtures of
+  `testdata/xml` and the pages of `testdata/html` — elements, text, comments,
+  the document and the nodes made of attributes — as it is planned and when it
+  is evaluated from the navigator with the document for its root alike; none
+  is planned to reach the root; the node's own attribute is what it was
+  without the blanks around it; and 20 labels that are one absolute path give
+  at every node, in a document of more than 300 nodes at 300 of them, what
+  they gave at the document: 685,159 labels of 140 expressions over XML and 94
+  over HTML.
+- `concat(absolute, '|', relative)` and the two the other way round, for five
+  absolute and seven relative paths, is at every node of a document the
+  absolute path as read at the document and the relative one as read at the
+  node.
+- A label the engine evaluates that has no absolute path allocates what it
+  did, for seven expressions over XML and HTML, and `/status/@site` at a
+  selected node at most two allocations more than at the document.
+- The node's own attribute as a label is trimmed, over XML and HTML: `@title`
+  of `"  nightly   run  "` is `nightly   run`, as the same attribute read
+  through a path and `string(@title)` are, a prefixed `@x:kind` of `" batch "`
+  is `batch`, an attribute of blanks alone gives no label like one the node
+  has not, and at an attribute a rule selected, `//job/@size` of `" 5 "`, the
+  labels `@size`, `.` and `text()` are `5`, as its value is.
+- An `xpath` rule that is one `sum(...)` adds up every node its argument
+  selects with the blanks around each text trimmed: a column printed one
+  cell to a line, where the engine added the cells without blanks alone
+  (8.5), is 52.5, over XML and over HTML; a sum of no nodes is 0, and
+  `scale` applies to the sum.
+- A cell of `n/a`, `1,234`, `12 MB`, `1e400` or nothing leaves such a rule
+  missing its value: under `fail` the probe's failure is `metric "bytes"
+  XPath "sum(//td[@class='bytes'])" cannot be computed: it adds up text
+  that is not a number, first "n/a" (1 of 6 nodes); ...`, a missing value;
+  under `log` and `ignore` no series and one missing value reported with
+  that text; not required, no series and nothing reported. Two such cells
+  are `2 of 6 nodes` and the first is named, and the predicate the message
+  gives, `[number(.) = number(.)]`, leaves them out and the rule has its
+  value again.
+- Over HTML a sum reads a cell as XPath has its text, a script inside it
+  included: `sum(//td)` over `<td>6<script>track(6)</script></td>` has no
+  value, naming `"6track(6)"`, where `//td` reads 6.
+- A `sum()` that is a part of a larger expression (`sum(//v) div
+  count(//v)`, `round(sum(//v))`, `(sum(//v))`, `sum(sum(//v))`, a
+  comparison, `string(sum(//v))`, two sums) has the value the engine
+  computes over numbers, and is missing its value over text and over a
+  number with blanks around it: `metric "m" XPath "round(sum(//v))" cannot
+  be computed: sum(//v) leaves out text it cannot read as a number, first
+  " 6 " (1 of 3 nodes), and blanks around a number count; ...`, under
+  `fail`, reported under `log`, silent when not required, and also where
+  the engine would not come to the sum (`count(//v) > 0 or sum(//v) >
+  100`).
+- A `sum()` inside a predicate, over blanks and text, and one whose
+  argument is a number or a string (`sum(3)`, `sum('3')`,
+  `sum(count(//v))`) give what the engine gives.
+- Nodes of `NaN`, `Inf` and `-Infinity` selected by a rule are exported as
+  NaN, +Inf and -Inf; a `sum()` over `+Inf` and ` 1 ` is +Inf; a sum that
+  comes to NaN, one with a `div`, and `number()` of text are the missing
+  value `metric "m" XPath "..." computed NaN, not a number`.
+- A label that is one `sum()` is the sum of all its nodes, those with
+  blanks included (`total="42"`), read from an element and from an
+  attribute a rule selected; one with a node that is no number fails its
+  series as `metric "last" node 1 label "total": XPath
+  "sum(../td[@class='bytes'])" cannot be computed: ...`, not a missing
+  value, under `fail` whether or not the rule is required, and under `log`
+  the series of the other nodes are made. A label a `sum()` is a part of
+  fails every series whose nodes have blanks, and the label of a computed
+  value fails as `metric "rows" label "n": ...`, without a node.
+- The calls of `sum()` in an expression's own context are found when it
+  compiles, once per cached expression: the whole expression with blanks
+  around and inside the call, parts of a larger expression, nested calls,
+  only the first argument, with the expression's namespaces; none inside a
+  predicate or a string, none for `checksum(`, `my-sum(`, `sum2(`, a step,
+  an attribute or a variable named `sum`, or unbalanced brackets, and a
+  prefix before the name, as in `fn:sum(`, is passed over.
+- Over generated documents of numbers written without blanks — integers,
+  decimals, exponents, signs, `1_000`, `0x1p-2`, infinities — read as XML
+  and as HTML, every sum the exporter adds up, from the document and from
+  elements, text nodes and attributes a rule selects, is the engine's sum
+  to the bit (some forty thousand), and rules and labels with sums make
+  the series and failures the transform made before.
+- Over every HTML and XML fixture, rules without a `sum()` of their own
+  context — selecting elements, text and attributes, computing values,
+  required and not, with labels of every shape and a required one — make
+  the same series and fail for as many, as many of them missing, as the
+  transform did before; a rule without a sum has no sums on its compiled
+  expression or its labels' plan and allocates exactly what it allocated.
+- Every failure of an `xpath` rule names the metric first, over XML and
+  over HTML, and reads the same under `fail` and `log`: `metric "m" XPath
+  "//td[": ...` for an expression that does not compile, `metric "m" XPath
+  "..." matched no nodes`, `metric "m" value is missing for node 1: XPath
+  "..." selected a node without a value`, `metric "m" node 1: value "n/a"
+  is not a number; ...`, `metric "m" label "host" is missing for node 1`,
+  `... computed NaN, not a number`, `... computed an empty string`; the
+  `css` rule failing the same way says `item 1`, and a `css` rule without
+  `items` names its metric too (`metric "m" CSS selector "td.none" matched
+  no nodes`, `metric "m" value is missing: CSS selector "p#none" matched an
+  element without a value`, `metric "m" CSS selector "td[": ...`).
+- Eight scrapes at once of a collector whose rules and labels are sums,
+  whole and parts, each make the same series, and the race detector finds
+  nothing: the compiled argument of a sum is shared as its expression is,
+  a copy to each scrape.
+- A CSV body whose lines end with a carriage return alone decodes into its
+  rows, with a header row and without one, under a comma, a tab, a
+  semicolon and a delimiter beyond ASCII, with a carriage return after the
+  last line or without; it was a header and no rows.
+- A body may end some lines with a carriage return alone and others with
+  CRLF or a line feed; an empty line is no row whichever way it ends, and
+  of two carriage returns before a line feed the first ends the row.
+- Inside a quoted field a carriage return is the field's text, beside a
+  doubled quote and, under `trim_space`, in a field whose quote follows
+  blanks; a quote inside a field that does not start with one opens no
+  quoted field, so a carriage return after it ends the record.
+- Under `trim_space` a carriage return that ends a record is no blank
+  before the field after it: the field before it is empty and a quoted
+  field after it starts its own row, with a comma, a tab and a space as
+  the delimiter; the blanks between a closing quote and it are trimmed.
+- An error's line counts the lines a carriage return ends: a stray quote,
+  a quoted field left open, blanks after a closing quote, and `CSV line N
+  has a value in column M` name line 3 of a body whose first two lines end
+  with one, under `trim_space` too; a carriage return inside a quoted
+  field is no line, where a line feed there is one.
+- Of some 45,000 generated bodies — fields in quotes with carriage returns,
+  line feeds, delimiters and doubled quotes, blanks around quotes, bare and
+  stray quotes, under five delimiters, with `trim_space` and without, their
+  lines ended five ways — each is read as the reader as it was read the
+  same body with line feeds in place of the lone carriage returns: the
+  same rows, or the same error at the same line and column, and the same
+  line for every field. A body without a carriage return that ends a
+  record is read as it was, and is not copied.
+- Every fixture of `testdata/csv` is read as it was, under six delimiters,
+  with `trim_space` and without, and without a copy of its body; the two
+  written with lone carriage returns are read as the former reader read
+  them with line feeds.
+- Looking for a carriage return that ends a record allocates nothing for
+  a body of line feeds, of CRLF, with a carriage return as its last byte
+  or with carriage returns only inside quoted fields, each handed on as it
+  is; a body that has one is copied once; and reading a body of CRLF
+  lines allocates what it did.
+- `testdata/csv/volumes-cr.csv`, every line ended by a carriage return
+  alone and one inside a quoted note, and
+  `testdata/csv/scale-mixed-line-ends.txt`, without a header and with
+  lines ended three ways, are written as their names say, decode into
+  their rows, give their series through a transform, and are answered
+  through `/probe` by an `http` and a `localfile` collector, the empty
+  cell of each logged by its row.
+- A `csv` label naming a column the response does not have fails its rule
+  once for the response, whatever the number of rows, with the metric,
+  the label, the column and the columns the response has; the rule makes
+  no series and the other rules make theirs. A rule and a label that are
+  not required fail alike, the failure is no missing value, `ignore`
+  counts it without a log line and `fail` fails the transform with it as
+  the rule's.
+- A rule that finds no value in any row does not read its labels and
+  reports the value; a label read from an empty cell, a column a short
+  row lacks, a key only some of a pre-script's rows have, `None`, or a
+  column number within the longest row and past this one's end is left
+  off its series.
+- Without a header row a label's number past the longest row's end, `0`,
+  a number with a leading zero or a sign, and a name are columns the
+  response does not have.
+- A rule's value tells a column the response does not have, `CSV column
+  "x" is not in the response` with the columns it has, the same error for
+  every row, from a cell that is empty, `CSV column "x" is empty in row
+  N`, the rows counted from 1 without the header's line; both are counted
+  as missing values, handled by `error_mode`, and say nothing for a rule
+  that is not required.
+- The columns an error lists are the response's names in order (a name
+  near the one asked for first, § 34.91), twelve of
+  them and the number of the rest, a name over 64 bytes cut with its
+  length; the one column a wrong delimiter leaves; for rows read by
+  number how many the longest has; both for rows of the two kinds; and
+  `which has no columns` for rows that hold nothing.
+- The rows are gone through for a column only when a row lacks one a rule
+  names, once for that column, and one error is made for it: 200 rows
+  that lack a value's or a label's column cost some twenty allocations,
+  not one a row, and rows that have every column cost none.
+- A pre-script of a `csv` transform that leaves a dict, `None`, a string,
+  a number or a boolean in `data` fails the transform with `python
+  pre-script of a csv transform left data as …`, the value named as an
+  error names one, and what the transform reads; a row that is neither a
+  dict nor a list fails it with the row's number and what it is, and none
+  of the rows before it is answered. Rows that are dicts, lists and empty
+  are rows.
+- Through `/probe`, a label of a column the response lacks is logged once
+  as a warning with `failures` 1 for a rule that is not required, the
+  other rules' series answered; under `error_mode: fail` the probe is
+  answered `502` with the JSON error in the `metric` stage; and a value's
+  column the response lacks is logged once with the number of rows.
+- Of 3,200 generated tables the `csv` transform gives what the transform
+  as it was gave, the words of a missing value apart, for the some 1,700
+  with no label of a column no row has; for the rest, the same error and the
+  same series as the former transform reading a rule that makes nothing
+  in place of each rule with such a label.
+- A probe held where it has read the configuration, whose collector a reload
+  then removes, is answered from its one trip and leaves nothing under the
+  collector's name: no cached result, for `cache.ttl` and for
+  `cache.stale_if_error`, and, failing, no failure remembered and none logged
+  above debug level. That holds when the reload was followed before the probe
+  went on, and when it is followed only after, the drop then removing what
+  the probe wrote. The collector brought back as it was is answered by its
+  own first trip, a 502 when that trip fails under `stale_if_error`, and its
+  first failure is remembered as a first failure.
+- When the removed collector is back as it was and has failed before such a
+  probe ends, the probe's success logs no recovery and leaves the failure
+  remembered and nothing cached; the next probe of the collector brought back
+  makes its own trip and is the one recovery logged.
+- A probe that read a definition a reload replaced under the same name is
+  answered with the old definition's series and caches nothing: with
+  `limits.max_cache_entries: 1`, the old `cache.ttl` a day and the new one a
+  minute, the new collector's first probe goes to the target and its second
+  is answered from its own entry, which the old result would have had evicted
+  in its place. The old probe's failure is remembered nowhere and logged at
+  debug level only, and the new collector's first failure is the one entry,
+  logged once in full.
+- A static target scrape made with a configuration read before a reload
+  removed its collector, or changed it, caches nothing and has no failure
+  remembered, whether it says at which generation it read the configuration
+  or names a configuration no longer in force; with the configuration in
+  force it caches its result, or has its failure remembered, as ever.
+- With four probers of a caching collector, each probe a request of its own,
+  running while twelve reloads remove the collector and bring it back, nothing
+  is cached under its name when a removal is followed, nor once the probes
+  that were in flight have ended, and nothing is remembered of it; brought
+  back, its probes cache again. It runs under the race detector.
+- Over all 216 sequences of three steps — a probe that succeeds, one that
+  fails, a reload that removes the collector beside it, one that brings that
+  back and adds another, and a probe, succeeding or failing, held across such
+  a reload — a collector the reloads leave unchanged has the cached results,
+  the remembered failures and the counters, cache hits and misses among
+  them, of a server that made the same probes and was never reloaded.
+- Over all 256 sequences of four reloads among configurations that remove,
+  add and change collectors, with a cached result, a remembered failure and
+  statistics under every collector's name before each, following the reload
+  leaves the cached results, remembered failures, statistics and generations
+  the reload left before the followed configuration recorded from when each
+  definition has been there (the former function kept as an oracle), but for
+  the failures of a changed collector, which are now forgotten; and to
+  a caller of every earlier generation a collector stands exactly when it has
+  been in every configuration since with the definition it had, to a caller
+  that names no configuration always, and to one of no generation never.
+- A label value over `limits.max_label_value_length` fails validation with
+  `metric "host_note" label "note" value is 11 bytes, longer than
+  limits.max_label_value_length 10; a label one of the collector's rules
+  gives can be cut to fit with truncate: true on that label, or raise
+  limits.max_label_value_length`, the length in
+  bytes (seven `é` are 14); more labels than `limits.max_labels_per_metric`
+  with `metric "host_note" has 3 labels, more than
+  limits.max_labels_per_metric 2; drop labels it does not need or raise
+  limits.max_labels_per_metric`; a help text over `limits.max_help_length`
+  with `metric "host_note" help is 9 bytes, longer than
+  limits.max_help_length 8; shorten it or raise limits.max_help_length`. A
+  name over `limits.max_metric_name_length` reads as it did, naming the
+  limit and its key; each of the four at its limit is accepted, and limits
+  left at 0 hold nothing back.
+- Over 20,000 generated sets of series under generated limits, validation
+  accepts a set exactly when it did and refuses it with the error it did (the
+  former function kept as an oracle), but for those three failures, which
+  have the new wording.
+- The schema and the exporter give one verdict on `time_format` and
+  `time_zone` written `""`, which to both is the key left out: both accept
+  `time_format: ""` alone, beside `scale`, beside `value_map`, and on a
+  `python` or `prometheus` rule; `time_zone: ""` alone, beside `value_map`,
+  and beside a `time_format`; and both empty together. Both refuse
+  `time_format: ""` beside a `time_zone` that names a zone, with or without
+  `value_map`, and a `time_format` beside `value_map` whose `time_zone` is
+  `""`. A rule with either key written `""` loads as the rule without it, and
+  a `time_zone` of one blank passes the schema and is refused by the exporter
+  as no zone it knows.
+- A label `sum(//size)` on a rule that selects nodes adds up the document's
+  `size` elements, the label being evaluated from the document for its
+  absolute path: over two of them it is their sum, and where the engine
+  computes the sum (`sum(//size) div 2`) a `size` with blanks around its
+  number fails the series naming the label and the text, where the nodes
+  beneath the selected one, none, gave 0 and no failure.
+
+## 34.91 Follow-ups to § 34.90: an engine that fails, expressions not read to their end, labels read once, failures the log recognises, and what follows a reload
+
+- A panic of the XPath engine while a rule is evaluated is that rule's
+  failure: for fourteen expressions the engine compiles and panics on over a
+  table of three cells — `sum('abc')`, `sum(string(//td))`, a sum of a
+  `translate()`, `//td[contains(@x, 5)]` alone, in a sum the exporter adds up
+  and in one the engine computes, `starts-with(1, 'a')` and `ends-with(., 1)`
+  in predicates, `replace(//td, '(', '')`, `substring(//td, '1')`,
+  `substring('abc', 0 div 0)`, `//td = true()`, `true() = //td` and
+  `(//td)[sum('x')]` — over XML and over HTML, under `ignore` and `log` the
+  rules before and after it give their series and one failure, no missing
+  value, is reported for the rule, logged under `log` alone, and under `fail`
+  the transform fails with the rule's `MetricFailure` and no series; the error
+  is `metric "broken" XPath "sum('abc')" cannot be evaluated: the XPath engine
+  failed on it: sum() function argument type must be a node-set or number`,
+  `HTML XPath` over HTML, and for the engine's own runtime errors ends
+  `runtime error: invalid memory address or nil pointer dereference` and
+  `runtime error: slice bounds out of range [...]`.
+- A label the engine panics on fails its rule with `metric "broken" label
+  "kind": XPath "contains(@x, 5)" cannot be evaluated: the XPath engine failed
+  on it: contains() function argument type must be string`, for seven labels —
+  read at each node, read once for the rule, on the one series of a computed
+  value and of a sum — among a static label and labels before and after it;
+  the rule gives no series, the one of the cell before the cell the engine
+  failed at included, and the rules around it give theirs.
+- The series a rule made before the engine failed are given back to
+  `limits.max_metrics`: with a limit of two, the two series of the rules
+  around a rule that lost one are exported.
+- A panic while the nodes of a `sum()` are read does not fail the rule by
+  itself: `count(//a) > 0 or sum(//a[contains(@x, 5)]) > 0` is 1 and
+  `count(//zz) > 0 and sum(...) > 0` is 0, as the engine alone has them, as a
+  rule's expression and as a label (`true`, `false`), while `count(//zz) > 0
+  or sum(...) > 0`, the sum alone and the sum added to another, where the
+  engine comes to the call, are the rule's failure in the engine's words.
+- Good answers after ones the engine failed on are read right: eight probes
+  at once, each alternating thirty times between an answer the engine panics
+  on and one it reads, get the failure for the one and the right series for
+  the other, for a sum the exporter adds up, one the engine computes, selected
+  nodes, a label read once and a label read at each node.
+- A runtime error says it is one in the rule's failure: a failed type
+  assertion reads `runtime error: interface conversion: interface {} is
+  float64, not string`, an index out of range as the runtime words it, and a
+  panic with a string or an error its text.
+- The recovery costs a rule the engine does not panic on no allocation: for
+  rules without labels, with labels read by a walk and by the engine, computed
+  values and sums, and a sum in a label, over 200 rows, the transform
+  allocates exactly what it allocates with each rule evaluated without the
+  deferred call.
+- The failures the documentation quotes read as quoted, for a rule
+  (`//a[contains(@x, 5)]`, `sum(string(//v))`) and for a label
+  (`substring(../@kind, '1')`), and the ways out it names have values:
+  `//a[contains(@x, '5')]`, `count(//a) > 0`, `sum(translate(//a, ',', ''))`
+  over a number, and `number(//v)` over text as a missing value.
+- Through `/probe`, for a collector whose probes are shared and one with
+  `coalesce: false`, with `on_transform_error: ignore`: an answer the engine
+  panics on gives 200 with the other rules' series under `log` and `ignore`
+  and 502 with the JSON error of stage `metric`, the metric and the engine's
+  words under `fail`, three times over; a static target under `log` is up
+  with the other rules' series and one under `fail` is down;
+  `http_exporter_rule_failures_total` counts the rule at every probe that
+  carried on, the static target's scrape included, and
+  `http_exporter_transform_errors_total` stays 0; the log has one `metric
+  extraction failed` line for each collector under `log` and each static
+  target, one `probe failed` line for each under `fail`, none under `ignore`,
+  and no line with a stack, a panic or an internal error.
+- An XPath expression the engine would read only the start of is refused
+  where it is compiled: `sum(//a))`, `//a)`, `sum(//a)] + 1` and four more
+  with `the ")" at byte 9 closes nothing` and the like, a bracket in a string
+  being text; `//a 'x'`, `1 2`, `//a b`, `//a , //b`, `//a ! b`, `//a (b)`,
+  `//a/sum(b)`, `child::sum(b)`, `sum(//a)sum(//a)`, `1 div2`, `/ /a` and five
+  more with `what stands from byte 5 on, "'x'", is no part of the expression
+  before it, ...`, the byte counted past multi-byte characters; with and
+  without namespaces.
+- An expression the engine reads to its end compiles as it did: 38
+  expressions with brackets in strings, blanks between steps, predicates
+  after a blank, sequences, a prefixed function and one nested 198
+  parentheses deep, which the engine compiles in one pair more and refuses
+  in two for its depth and not for a token.
+- The engine's refusal of a token after an expression in parentheses is told
+  from its other refusals by its wording, which eight expressions that do not
+  compile for other reasons do not have.
+- Of 60,000 expressions strung together at random from a fixed seed, every
+  one that compiles is refused exactly when a closing bracket closes nothing
+  in it or the engine refuses it in parentheses; every one read whole is
+  refused with ` )` and with ` 'x'` after it; and every one refused
+  evaluates, over a document, to what the start its error names evaluates
+  to, values, nodes and panics alike, but where a `prefix:*` follows a name
+  test, which the engine's parser then reads as `*`.
+- At load, a rule's and a label's expression of that kind are refused with
+  `collector "checked" metric "m" [label "l" ]XPath "...": ...`, over an xml,
+  an html and an undecided decoder and with `response.namespaces`; `--dry-run`
+  reports it under `config` and exits 1, as startup does.
+- A `sum()` written with a prefix, which the engine passes over, is the whole
+  expression when it stands alone: `fn:sum(//a)` and ` x-1.y:sum( //a ) ` are
+  found as the whole sum, `fn:sum(//a) + 1`, two prefixed sums and
+  `fn:round(fn:sum(//a))` as parts, and a prefix inside the argument
+  (`sum(//x:a)`, `sum(//a/child::b)`) changes nothing; of 80,000 expressions
+  at random from a fixed seed every one that compiles has the sums it had
+  before, but those that are a prefix, a colon and one `sum(...)`.
+- `fn:sum(//v)` over ` 2 ` and `4` is 6, as `sum(//v)` is, where it was
+  missing its value for the blanks; over text it is missing its value in the
+  words of the sum the exporter adds up; `fn:sum(//v) + 0` is what it was,
+  the engine's value over numbers and no value over blanks; and as a label it
+  is `total="6"`.
+- A label is taken not to depend on the node for one absolute path and for
+  one call of `count`, `sum`, `string`, `number`, `boolean`, `not`,
+  `normalize-space`, `string-length`, `name`, `local-name`, `round`, `floor`
+  or `ceiling` over one: 62 such expressions, with predicates, axes, node
+  tests, prefixes, blanks and names like `div` and `and` as steps, are, and 67
+  others are not — relative paths, operators, unions, commas, parentheses,
+  other functions, two arguments, a prefixed function, a number, a string;
+  the rule's plan has it for a label the engine evaluates and for no static,
+  own-attribute or walked label.
+- A label read once is the label read at every node: for 77 expressions, at up
+  to 50 nodes of each document in document order and at 12 from the last back
+  — elements, text, comments, the document and the nodes made of attributes —
+  over the label tests' documents, ten random ones and the fixtures of
+  `testdata/xml` with and without `response.namespaces`, and the pages and
+  fixtures of `testdata/html`, the labels, a sum's failure and a panic are
+  what the per-node evaluation gives (some 150,000 labels over 32 documents).
+- No expression taken to be constant depends on the node: of 150,000
+  expressions strung together at random from a fixed seed, each of the 1,334
+  that are taken to be constant and compile has one value, failure or panic
+  at 25 nodes of five documents, read the slow way at each.
+- A rule with a label read once gives the series, the reported failures and
+  the error it gives with the label read at every node: for eleven sets of
+  labels — a path, one that selects nothing, a required one missing and one
+  blank, a blank one, calls, sums the exporter adds up, a sum over text with
+  and without `required`, two sums, and constant labels beside ones of the
+  node — on rules selecting elements, text nodes, attributes, computing a
+  count and a sum, and matching nothing, under `log`, `fail` and `ignore`,
+  over XML and HTML; a sum over text fails the series of each node as before.
+- A label that cannot depend on the node is evaluated once: over 400 rows a
+  rule with `count(//row)`, `//last/@id`, `/status/@site`, `sum(//v)` or
+  `name(/*)` for a label allocates what the rule with a static label does,
+  give or take one evaluation, and gives the value on the last row, while
+  `count(//row) + count(*)` is evaluated at each.
+- A rule failing on every scrape with its empty cell in row 3, 3, 7, 7, 3
+  and 5 of a table is one failure to the log, for a `csv`, an `xpath`, a
+  `css` (items) and a `jq` (items) rule alike: under `error_mode: log` one
+  `metric extraction failed` warning and then repeats at debug level with
+  `"repeat":true`; five minutes on, failing in row 9, the warning again with
+  `repeated` 6 and `failing_since`; and `metric extraction recovered` with
+  `failures` 7. Under `error_mode: fail` the same of `probe failed` at error
+  level and `probe recovered`. Every line, and every answer of a failed
+  probe, names the row, node or item of that scrape.
+- Text that is no number in node 2 and then in node 6 is one failure, and
+  other text in node 6 a new one, logged in full; a probe failing for a rule
+  and then for the target's status fails in another stage, logged in full.
+- A label value over `limits.max_label_value_length` that is a byte longer
+  on every scrape is logged in full once over six scrapes, as one of the
+  same length is, each answer and each line naming the length of that
+  scrape.
+- A file older than `request.max_age` on every scrape, by two, three and
+  five hours, is logged in full once and twice as a repeat, each line and
+  answer with the age it had.
+- A carbon line skipped under `invalid_lines: skip` and a sample line left
+  out of its family, found a line further down the file on the next scrape,
+  are logged as repeats naming the new line; another line skipped in its
+  place is a new failure.
+- Over 20,000 generated failures and recoveries whose errors name no place
+  and no size — plain, wrapped, marked with a kind, joined, none at all,
+  minutes and hours apart — the failure log writes line for line what it
+  wrote when it compared texts (the former function kept as an oracle).
+- `model.Errorf` reads word for word as `fmt.Errorf` does for the same
+  format and arguments, positions, sizes and durations under any verb,
+  width or argument index, and is and wraps what that is and wraps; it
+  allocates no more than `fmt.Errorf`, with an error wrapped too.
+- `model.SameFailureText` is the same for two failures that differ in a
+  row, a node, a size or an age, also through errors that wrap them, mark
+  their kind or join several, and for a position within a position; it
+  differs for another value, metric, file or limit, and for a number
+  nobody marked (`received HTTP status 500` and `503`). An error without
+  such a part, and one whose wrapper rewrote its text, is recognised by its
+  text; none by the empty text; a library's error by the text it is given.
+- Each transform failure that names a place or a count is recognised as
+  one wherever it happened, of two responses that read differently: a csv
+  cell empty in a row; an xpath node without a value, that is no number,
+  without a required label, and with a label whose `sum()` adds up text; a
+  css item without a value, that is no number, with several values (item
+  and count), without a required label, and several elements without
+  `items`; a jq item without a value, that is no number, whose expression
+  fails or gives several values, whose label fails, is a list (item and
+  length) or is required and absent; a jq label's value by its place, and
+  label values that do not pair with the series (both counts); a script's
+  entry that is no metric, a pre-script's series that is none, and a row
+  that is none, a pre-script's and a decoder's. Another value in the same
+  node is another failure.
+- Each decoder failure that names a place is recognised as one wherever it
+  is, and another failure as another: JSON's line and column, of an invalid
+  character and of nesting too deep; `CSV line N has a value in column M`;
+  a CSV quote error's line and column; an XML syntax error's line; a
+  Prometheus line and the line a series starts in; a carbon line; a
+  Graphite series and point by number. The first carbon line skipped and
+  the first sample line left out are reported as errors recognised
+  wherever their line is.
+- A response's declared size over the limit, a gRPC answer's size as JSON,
+  and a directory file's size over the per-file limit and over
+  `request.max_total_bytes` are recognised without the sizes, with the file
+  and the limit.
+- A label value over the limit reads `metric "M" label "L" value is N
+  bytes, longer than limits.max_label_value_length MAX; a label one of the
+  collector's rules gives can be cut to fit with truncate: true on that
+  label, or raise limits.max_label_value_length`, also for a directory
+  collector's `file` label, which no rule gives, and names the series as
+  exposed: `app_status` and `detail` under `metrics_prefix: app` and
+  `rename_labels: {other: detail}`.
+- A `python` collector that declares `metrics: [{name: up, labels: [{name:
+  note, expression: note, truncate: true}]}]` has the script's `note` label
+  cut to the limit, ending in `…`, the script's other labels as they were;
+  without the rule the scrape fails naming the label.
+- A csv pre-script that leaves a dict in `data`, or a row that is neither a
+  dict nor a list, is a script failure: `errors.Is(err,
+  model.ErrScriptFailed)`, and through `/probe`
+  `http_exporter_script_errors_total` and
+  `http_exporter_transform_errors_total` are 1 each, as for a css
+  pre-script that leaves a dict; what a decoder gave that is no rows is not
+  a script's, and a pre-script that leaves rows counts nothing.
+- `CSV column "Used" is not in the response` lists `"used"` first of 22
+  columns, then eleven others and `and 10 more`, where it was among those
+  cut; a name with blanks around it and several such names come first in
+  their order, the only column and rows read by number read as before, and
+  a column asked for after others gets its own list.
+- Over 3,000 generated responses asked for a column they lack, the list of
+  one with no name near the one asked for is word for word what it was (the
+  former function kept as an oracle), and one with such a name holds the
+  same names, those first, and ends as it did.
+- A limit's failure is recognised without the size it measured and with the
+  metric, the label and the limit: a label value of 11 and of 40 bytes, 3
+  and 4 labels, a help text of 11 and of 40 bytes, and 11 and 250 series
+  are each one failure, and another label, metric or limit another; a
+  Python run the probe's deadline stopped is recognised without how long it
+  ran.
+- A probe of the collector in force does not join the trip of a probe that
+  read the collector in an earlier stay, with the same definition and so the
+  same key: with the earlier probe at its target while reloads, each
+  followed, change the collector and change it back, or remove it and bring
+  it back, the later probe makes a trip of its own, the target's second
+  request, and none is counted as coalesced. Its result is the one entry
+  cached, which answers the next probe within `cache.ttl`; failing, its
+  failure is remembered once and logged in full once.
+- Over all 256 sequences of four steps made while a probe is at its target —
+  an identical probe arriving, a reload that adds a collector beside theirs,
+  one that removes it, and the same configuration loaded anew, each reload
+  followed — the target is asked once, every probe is answered by that trip
+  and counted as coalesced but the first, and one result is cached, as on a
+  server that was never reloaded.
+- A reload made through the configuration manager is followed by the reload
+  itself: with a cached result and a remembered failure under a collector it
+  keeps, one it removes and one it changes, the followed configuration is the
+  one in force, one generation on, the removed and the changed collector have
+  nothing cached and nothing remembered and the kept one has both, before
+  anything has asked for the state.
+- The manager tells once for each reload that puts something in force, when
+  it is in force: a reload of both files, a watch tick that finds only the
+  static target file changed, with the configuration in force as it was, and
+  one that finds only the configuration changed, with the targets as they
+  were. A tick that finds nothing changed and a reload refused whole tell
+  nothing; a reload whose configuration is refused tells for the static
+  target file put in force alone.
+- A static target scrape that read its collector before a reload changed it,
+  and fails after the reload with nothing having asked for the state since,
+  is not remembered and not logged above debug level; the first failure of
+  the new definition is remembered once and logged in full once.
+- A server that is not told of a reload follows it at the next use of the
+  state: a failure that ends before then is remembered, following the reload
+  forgets it with the changed collector's cached results, and the first
+  failure of the new definition is remembered as a first failure and logged
+  in full, as the old definition's was.
+- A static target scrape that ends after reloads removed its target and its
+  collector and brought both back, the collector with another rule, publishes
+  nothing: the endpoint keeps the series of the target brought back, whose
+  first scrape had ended sooner, and that target's last success is its own.
+  A result such a scrape comes to publish all the same is not stored.
+- With the collector as it was, a scrape that read a target before a reload
+  changed the target, or before one removed it and another brought it back as
+  it was, publishes nothing, and so does one whose collector a reload changed
+  with the target as it was; a scrape of a target that reloads left as it
+  was, the same files read anew or a target added beside it, publishes its
+  result as before.
+- A reload of the static target file alone, made by the watch, puts no other
+  configuration in force and is followed when it is made: one generation on,
+  the collector defined from the start and the changed target from that
+  generation; a scrape that read the target before publishes nothing, and one
+  of the target in force is published with its new label.
+- Over all 1296 sequences of four static target files that remove, add and
+  change targets, each followed, a target stands for a scrape of every
+  earlier generation exactly when every file since has it as it was then, to
+  a scrape that names no configuration always, and never for a collector
+  that is not configured.
+- Over every pair of such files followed one after the other, a scrape of
+  each target with the configuration and the file in force is published
+  exactly when a target of its name is in force, as before (the former test
+  kept as an oracle).
+- A static target scrape that read its collector before reloads removed it
+  and brought it back as it was writes nothing to the failure log, and logs
+  nothing above debug level, at each place where an http collector's trip
+  writes there: a stage carried on under `error_handling` log, a metric rule
+  under `error_mode: log`, label values that are not valid UTF-8, sample
+  lines the prometheus decoder leaves out, a credential file that cannot be
+  read, and no slot of `max_concurrent_probes` within the scrape's time. The
+  same scrape with the configuration in force is remembered once and logged
+  once. Where the place has an end of its own, the late scrape's success
+  leaves the failure of the collector in force remembered and logs no
+  recovery, and that collector's own next success is the one recovery logged.
+- The same holds at the places of a localfile collector's trip: a directory
+  with more entries than one scrape lists, one with more matching files than
+  `request.max_files`, a file of a directory that fails, and carbon lines the
+  graphite decoder skips under `response.graphite.invalid_lines: skip`.
+- A probe held where it has read the configuration while reloads remove its
+  collector and bring it back writes nothing to the failure log where only a
+  probe does: rejected for `max_concurrent_probes`, it is answered 503 and
+  neither remembered nor logged above debug level; failing and answered with
+  the stale result of the collector in force, it is not remembered as
+  answered stale; and succeeding, it ends neither the failure nor the stale
+  answers of the collector in force, whose own next success logs the fresh
+  result once.
+- In the scrape loop, a scrape that waited for its slot while reloads removed
+  its target and collector and brought both back, and begins after the first
+  scrape of the target brought back, leaves that target's published result
+  and last success as they were, ends no run of skipped scrapes of that
+  target, whose skipped scrape stays remembered with no recovery logged, and
+  caches nothing under the collector brought back.
+- In the scrape loop, a scrape that finds no slot within its interval after a
+  reload removed its target and its collector is not remembered as skipped,
+  and is logged at debug level only, marked `"superseded":true`; its target
+  is never asked.
+- With four probers of three collectors, the scrape loop over a static target
+  of each and reads of the self-metrics and the static targets endpoint
+  running while eight rounds of reloads remove one collector and bring it
+  back, change another and change it back, and load the same files anew: at
+  the end the untouched collector is defined from the first generation and
+  has results cached, the removed one has nothing cached or remembered, every
+  result cached under the changed one, and the result its static target has
+  published, is of its definition in force. It runs under the race detector.
+- A `sum()` that fails is recognised by the log whatever its node counts:
+  over `<v>1</v><v>x</v>` and over the same with two more nodes, one of them
+  another `x`, the failures read `first "x" (1 of 2 nodes)` and `(2 of 4
+  nodes)` and are recognised by one text, as the whole expression, as a part
+  of one, and as a label's; over `y` in place of `x` the text is another.
+- Of two labels of a series that cannot be exposed — two values over
+  `limits.max_label_value_length`, two names that are no label names, one of
+  each — the failure names the first by name on each of two hundred
+  validations, where the map's order named now one and now the other.
+- Of several labels a script gave a series whose values are lists and no
+  text, the failure names the first by name on each of two hundred readings,
+  of a `python` transform's metric and of a pre-script's series alike, and a
+  label that is None is none of them.
+- `model.Errorf` wraps what `fmt.Errorf` would: an error written with `%v`
+  or `%s` is in the text and not in the chain, alone among the arguments
+  too, and so is one after `%%w`; two `%w` wrap both. An error that is a nil
+  pointer of its type is recognised by what `fmt` writes of it, alone and
+  wrapped, and the asking does not panic.
+- An engine failure takes the place of the nodes that failed before it: a
+  rule `load` over `//td` with a label `contains(@x, 5)`, between two rules
+  that count their own failures, over a table with a cell without a value
+  and one that is no number, reports two failures, one a missing value, with
+  `value is missing for node 1`; once a later cell has an `x` the engine
+  fails, and the rule reports one failure, no missing value, with `metric
+  "load" label "marked": XPath "contains(@x, 5)" cannot be evaluated: the
+  XPath engine failed on it: ...`, under `log` and under `ignore`, over XML
+  and HTML, the rules around it reporting what they did; the two texts are
+  recognised apart; under `fail` the first node's failure ends the scrape on
+  both days.
+- Through `/probe`: the table with the empty cell is probed twice, then
+  twice with the attribute the label stumbles over; the probes answer 200,
+  the last two without a series of the rule; the log has two `metric
+  extraction failed` lines for the rule, the cell without a value and then
+  the engine's failure, each with `failures` 1;
+  `http_exporter_rule_failures_total` counts the rule once at each of the
+  four probes and `http_exporter_missing_keys_total` only the first two,
+  under `log` and under `ignore`, and under `ignore` nothing is logged;
+  under `fail` each probe answers 502 for the cell without a value.
+- A runtime error of the engine is one failure whatever its numbers:
+  `substring(//a, 2, 10)` over `ab` and over `abcde` fails with `runtime
+  error: slice bounds out of range [:3] with length 2` and `[:6] with length
+  5`, read in full, and both are recognised by the text up to and including
+  `runtime error:`, as a rule's expression and as a label's, under `log` and
+  under `fail`; so is a failed type assertion; a panic with the engine's own
+  message, and an error the engine raised whose text starts with `runtime
+  error:`, are recognised by their whole text.
+- The failure of a rule the engine panicked on reads as it read, for eleven
+  panics — strings, errors, a number, nil and four runtime errors — as the
+  rule's expression and as each of three labels, over XML and HTML, and but
+  for the runtime errors is recognised by the same text.
+- The stack of a runtime error is logged at debug level only: one line `the
+  XPath engine failed with a runtime error` with the collector, the metric,
+  the failure and a stack that has the engine's frames, under `ignore`, `log`
+  and `fail`, whether the transform or its caller logs the rules' failures;
+  the failure's text has no stack, a logger at info level gets no such line,
+  and a failure the engine raised itself has none at debug level either.
+- Through `/probe`: a rule `substring(//a, 2, 10)` under `log` and under
+  `ignore`, probed over texts of three lengths, answers 200 with the other
+  rule's series and neither a stack nor the error; the log at info level has
+  one `metric extraction failed` line, the first text's, no line with a
+  stack and none for the collector under `ignore`; a debug probe of that
+  collector shows the line with the stack.
+- A second predicate after an expression in parentheses, a function call or
+  a literal is refused with the form that works: `(//a)[@x][1]` with `what
+  stands from byte 10 on, "[1]", would be ignored: the XPath engine reads
+  only one predicate after an expression in parentheses, a function call or
+  a literal; for a second one, put the expression and its first predicate in
+  parentheses of their own, as "((//a)[@x])[1]"`, and so `(//a)[1][@x]`,
+  `'x'[1][2]`, `count(//a)[1][2]`, with blanks, a line break, a multi-byte
+  name and a path or a union after the predicate, the form shown compiling
+  each time; with a third predicate or something else amiss after the second
+  the form is `as in "((//a)[@x])[1]"`; `//a/(b)[1]` is refused with `the
+  XPath engine reads no predicate after parentheses within a path; ... as in
+  "//a/(b[1])"`; and `/[1]` and `/ [` as before, with `is no part of the
+  expression before it`.
+- A NUL byte in an XPath expression is refused where it is compiled: `//td`,
+  a NUL and ` | //zz 'junk' )`, which compiled as `//td`, a NUL alone, one
+  after a multi-byte name and `//p:td` followed by the bytes of a namespace
+  binding are refused with `it has a NUL character at byte 5, which the
+  XPath engine takes for the end of the expression; take it out`, with and
+  without namespaces, and nothing of them is kept compiled.
+- An expression nested as deep as the engine's parser reads is refused:
+  199 pairs of parentheses, 199 predicates and 199 calls within one another,
+  alone, with `'x'` after them — which compiled, and was ignored — and with
+  `| //b`, with `it is nested too deeply: parentheses, predicates and
+  function arguments may stand 198 deep within one another; write it less
+  deep`; 198 deep compiles, alone and in a union, and is refused with the
+  place of an `'x'` after it; 200 deep is the engine's own refusal, whose
+  wording the check knows it by.
+- At load, a rule's and a label's expression with a NUL, with a second
+  predicate after parentheses and with `'x'` after 199 parentheses are
+  refused with `collector "attributes" metric "m" [label "l" ]XPath "...":
+  ...`, over XML, HTML and with `response.namespaces`, and the forms the
+  refusals name load.
+- The search for the refused place is bounded: with `'x'` after `//a` at the
+  start, an expression of 100 KB is refused without the place after no
+  compilation of a start of it, one of 20 KB after one, one of 2 KB after
+  sixteen, never more than 32 KB of expression compiled in all, and one of
+  207 bytes after 203, with `what stands from byte 5 on`; one of 250 bytes
+  is refused with the place; `'x'` after 2 KB is refused with its place and
+  after 100 KB without; 100 KB read whole compile.
+- The check answers other expressions as it did: for 57 hand-written
+  expressions, read whole and refused, with and without namespaces, and for
+  every one of the 60,000 strung together at random that compiles, its
+  answer is, to the letter, that of the check before these follow-ups, but
+  where what would be ignored is a bracket after a predicate or after
+  parentheses, which is refused at the same byte with the new words.
+- A static target whose scrape is in flight while reloads change it and
+  change it back, change its collector and change it back, or remove it and
+  bring it back with a read of the endpoint between, all before the schedule
+  looks again, is started again at that look though it is defined as the
+  schedule has it: its first scrape is due within ten seconds, waits for the
+  scrape in flight, which publishes nothing, is made when that one has ended
+  and publishes, so the endpoint has the target; no further scrape is due
+  before the cadence's turn, an interval on.
+- In the scrape loop, an hourly target whose first scrape waits for its slot
+  while two reloads change the target and change it back has that scrape go
+  to the target and publish nothing, and is scraped anew at once: the
+  endpoint has the second answer after two requests, not nothing for an
+  hour.
+- Over 25 generated runs of 80 looks at uneven times, with a reload of the
+  configuration or of the static target file before some looks, among two
+  definitions of a collector and seven files that add, remove and change
+  targets, and scrapes that end one to four looks after they began, the
+  schedule that knows the generations gives the scrapes due with their
+  deadlines, the turns skipped and the time of the next look exactly as the
+  schedule did before (the former `plan` kept as an oracle): a target a
+  reload changed once is started once, one no reload changed is not started
+  again, and the first scrape after the start is as it was.
+- Over all 196 runs of two reloads among those configurations and files,
+  each followed, what a probe that read any earlier generation tells the
+  failure log is held to its collector alone, as it was; a scrape of a
+  static target that every file since has as it was is held to the same; and
+  a scrape of a target that some file since lacks or has otherwise is held
+  to nothing.
+- A static target that a reload of the static target file points elsewhere,
+  its collector as it was, has its remembered failure forgotten by the
+  reload; the first failure of the new definition, failing the same way, is
+  remembered as a first failure and logged in full. A scrape of the old
+  definition that succeeds while the new one fails logs no recovery and
+  leaves the failure remembered; one that fails after the new one recovered
+  is not remembered and is logged at debug level only, marked
+  `"superseded":true`, and the next good scrape of the target logs no second
+  recovery.
+- Following a reload forgets what the failure log remembers under the names
+  of the static targets it removed or changed — a failed scrape and a
+  skipped turn — whether the static target file was reloaded alone, the
+  configuration refused; with the configuration and no collector changed; or
+  with another collector changed. What it remembers of a target left as it
+  was stays, and so do what the static targets endpoint remembers of a
+  metric it left out, of any of the targets, and a failure remembered under
+  the targets' address.
+- A turn the schedule gave up, reported with a generation read before a
+  reload removed the target, changed the target, or changed its collector,
+  is not remembered and is logged at debug level only, marked
+  `"superseded":true`; after a reload that left both as they were it is
+  remembered once and logged as `static target scrape skipped`.
+- In the scrape loop, a scrape that waited for its slot while a reload of
+  the static target file alone removed its target and another brought it
+  back, the collector as it was throughout, ends no run of skipped scrapes
+  of the target brought back and leaves that target's published result and
+  last success as they were, as where the collector was removed and brought
+  back too.
+- In the scrape loop, a scrape that finds no slot within its interval after
+  a reload removed its target from the static target file alone, its
+  collector still configured, is not remembered as skipped and is logged at
+  debug level only, marked `"superseded":true`, as where the collector was
+  removed with it. The scrape is held until the reload is made, so a late
+  reload makes the test slower and changes nothing it shows: with the reload
+  made 1.1 and 3.3 seconds late, turns of the target skipped meanwhile, it
+  passes.
+- The tests' reloadable server reads and checks the static target file it
+  starts with as the exporter does, so the same file read again by a reload
+  leaves every target as it was: a scrape that read a target at the start
+  publishes after such a reload with no reload before it.
+- A jq label value that is a list, found when the label is read to its end
+  after a value of the rule had failed the scrape, at place 1 of two and at
+  place 2 of three, gives two texts, each naming its place and its size,
+  recognised by one.
+- A series a pre-script of a prometheus transform left without a name, the
+  second of two and the only one, gives two texts, each naming its place,
+  recognised by one.
+- A file of a directory refused for `request.max_total_bytes` is recognised
+  by a text with neither of the two sizes the failure names, its own and
+  that of the files taken before it.
+- A file two hours old and then three, read under `request.max_age: 1h`,
+  is refused with two texts, each naming its age, recognised by one text,
+  which names the file and the limit.
+
+## 34.92 A rule's failures by rule, YAML and connection failures the log recognises, and a quote left open in a CR-ended CSV
+
+- Two rules of one metric name are two entries of the rule report: two
+  XPaths, one jq expression over two `items`, and an XPath engine failure in
+  the second rule of a name each give an entry per rule with its expression,
+  its `items`, its own count of failed series and missing values, its own
+  first error and whether it is logged, in the order the rules first failed;
+  rules alike in name, expression and `items` give one entry; two transforms
+  reporting to one context add up rule by rule.
+- Over 300 generated sequences of rule failures, what the report holds of a
+  metric name adds up to what its one entry held before: failures, missing
+  values, whether any is logged and the order of the names; the first error
+  the name had is the first error of one of its rules; a name only one rule
+  has is reported exactly as it was.
+- Through `/probe`, an xpath collector with two rules of `disk_bytes`: while
+  the rule over `//disk/used` fails on every scrape, logged once as a
+  warning and then, in another node too, as a repeat at debug level, the
+  rule over `//disk/free` starts to fail and is logged in full as a warning
+  with its own error; each line carries the rule's `expression` after
+  `metric`; the second rule's recovery is logged with its `expression` and
+  its own `failures` while the first stays a repeat; five minutes on the
+  first rule's line has `repeated` 5 and `failing_since` its first failure;
+  its recovery counts its 6 failures; a scrape on which nothing fails logs
+  nothing. Every line is compared attribute for attribute.
+- A metric name only one rule exports, in a collector whose other rules
+  share a name, logs the lines it logged, compared to the letter with the
+  attributes in order: the failure, the repeat, the line five minutes on and
+  the recovery, without `expression` or `items`.
+- Over 60 generated collectors none of whose names is exported by two rules
+  that differ — every error mode, rules alike in name, expression and
+  `items` among them — and 40 generated scrapes each, with transforms that
+  are not complete and minutes or hours passing between them, the log reads
+  line for line as the former logging, kept as an oracle, wrote it, and so
+  do the logs of a debug probe's report; warnings, repeats, `repeated` lines
+  and recoveries are all among the lines compared.
+- A scrape of thirty rules that neither fail nor recover allocates no more
+  for the log than it did.
+- For 12 generated csv collectors whose rules share metric names, under
+  `log` and `ignore`, and 6 generated tables each with cells that are empty
+  or no number, `http_exporter_rule_failures_total` of each name and
+  `http_exporter_missing_keys_total` are after every scrape what the cells
+  of the rules' columns come to and what the report came to while it had one
+  entry for each name.
+- A debug probe's report lists each rule that carried on by itself: the two
+  rules of a shared name as `disk_bytes (expression "//disk/used"): 2 failed,
+  2 of them missing values; first: ...` and `disk_bytes (expression
+  "//disk/free"): 1 failed; first: ...`, a jq rule with `items` as
+  `queue_jobs (expression ".jobs", items ".fast[]"): ...`, and the rule of a
+  name of its own as `disk_inodes: 1 failed, ...`; the report's log lines
+  carry `expression` and `items` the same way, and none for a rule under
+  `ignore`.
+- Two rules of one name under `ignore` that fail are counted under the name
+  (5 failures, 4 missing values over three scrapes) and logged at no level,
+  neither as failing nor as recovered; a debug probe's report shows each of
+  them and its log has no line.
+- An XPath engine failure of the second rule of a metric name is logged in
+  full, as a warning, with the rule's `expression` and the engine's words,
+  though the first rule of the name has failed on every scrape before and is
+  a repeat; the probe answers 200 with the first rule's series; the
+  engine's failure is then a repeat, and when the engine reads the answer
+  again the second rule's recovery is logged with `failures` 2 while the
+  first rule is still a repeat; `http_exporter_rule_failures_total` of the
+  name counts both rules' failures, 7.
+- A static target's scrape logs each rule of a metric name by itself with
+  its `expression` and the target's name: the second rule's failure in full
+  beside the first's repeat, and the first rule's recovery beside the
+  second's repeat.
+- A directory read with two `prometheus` rules without a name logs each
+  rule for each file by itself, with an empty `metric` and the rule's
+  `expression`: a rule that starts to match nothing in a file beside one
+  that has matched nothing there is logged in full, both recover by
+  themselves, another file's lines stay repeats, a named rule of the same
+  collector has no `expression`, the missing values are counted, and no
+  `http_exporter_rule_failures_total` series has an empty `metric`.
+- A YAML document that fails the same way on another line is one failure to
+  the log: of a parser's error, a scanner's, a flow sequence left open and an
+  error in a second document, two bodies name two lines, as `yaml: line 3:
+  …` and `yaml: line 7: …`, and are recognised by `yaml: …`, the line left out; a key
+  written twice, which names the line of the first too, and two such keys
+  in one error are recognised without either line; another problem, or
+  another key, is another failure.
+- The YAML errors without a line — an unknown anchor, which is another
+  failure for another name, an anchor that holds itself, excessive aliasing,
+  a merge of no mapping, a value that does not fit its tag, a control
+  character, a map key that is no scalar — are recognised by their text as it
+  is, and are the same error values they were.
+- Only the YAML library's own forms are read for a line: `line 12: …` and
+  the `already defined at line N` a `mapping key` problem ends with. No
+  digits, no colon, a blank missing after it, the words in the middle of a
+  text or inside a quoted key, and an error that is not the library's, are
+  left whole; of a list of problems each is read on its own.
+- Some 1,450 YAML documents — the YAML fixture, every example and the
+  configurations under `configs`, whole and cut off after and in the middle
+  of each of their first sixty lines, and the documents of the tests —
+  decode into what they did or are refused in the words they were (the
+  former decoder kept as an oracle); a refusal is recognised otherwise than
+  before only when it names a line, and every one that names a line is.
+- Through `/probe`, a YAML target whose document fails on line 3, 3, 7, 7,
+  3 and 5 is logged in full once, at error level, and five times as a repeat
+  at debug level; five minutes on, failing on line 9, the line has
+  `repeated` 6 and `failing_since`; the recovery has `failures` 7. Every
+  line and every answer names the line of that scrape. Another problem is
+  logged in full, the same on another line as a repeat, and a key written
+  twice in full once and as a repeat on other lines.
+- A failed fetch is recognised without the address its connection was made
+  from: `read tcp 10.0.0.1:53412->10.0.0.2:80: read: connection reset by
+  peer` and the same from port 53413 are recognised by `read tcp
+  #->10.0.0.2:80: …`, alone, behind a request's `Get "…":`, while the body
+  was read behind a retry's wait, of a connection with no address it went
+  to, and of the two connections a SOCKS proxy's error names; a refused
+  connection, another address it went to and another error are other
+  failures. The error reads as it did and is to `errors.Is` and
+  `errors.As` what it was, and a wrapper added later keeps the text it is
+  recognised by.
+- The same address in the text a resolver keeps of a failed exchange with
+  its name server (`lookup … on …: read udp 10.0.0.5:41234->…: i/o
+  timeout`) is left out, for a constructed error and for the Go resolver's
+  own against a name server that refuses the question; `no such host` is
+  recognised as it is.
+- An HTTP/2 stream error is recognised without its stream and a `GOAWAY`
+  without its last stream, keeping the error code and the debug text; an
+  expired certificate without the time it was held against, keeping the
+  time it was valid to; corrupt compressed data without its offset.
+- In a gRPC status message the address a connection was made from, IPv4 and
+  IPv6, the time an expired certificate was held against and the size of a
+  message over the limit (`larger than max (# vs. 1000)`, also after
+  decompression and when asking the reflection service) are left out; the
+  address it went to, the certificate's time and the limit still tell
+  failures apart.
+- An error with nothing of one connection is handed on as the same value
+  and recognised as before: nil, a refused connection, an unresolved name,
+  an end of file, a deadline, an unknown authority, a certificate invalid
+  for another reason, a gRPC status naming no connection, a stage error,
+  types that are named or shaped like a stream error but are none, and an
+  error of the exporter's own with a size, which keeps its mark beside a
+  connection's.
+- Only a library's own form is read from a text, after that library's own
+  words: before `->` an IP address with a port, not a host name, a bare
+  number, a Unix socket or an address without a port, and only after `read`
+  or `write` and a TCP or UDP network; a certificate's detail that starts
+  with `current time`, a time and `is after` or `is before`, and in a status
+  message only after `x509: certificate has expired or is not yet valid:`;
+  after `grpc: received message larger than max (`, and the same of a
+  message after decompression, digits, `vs.` and the limit.
+- Against local listeners (http): a target that resets every connection, in
+  place of the answer, in the middle of the body and during the TLS
+  handshake, fails two fetches with two texts, each with its port, and one
+  recognised text; with a credential in the query both are redacted; a
+  refused connection is recognised by its whole text. An HTTP/2 target that
+  aborts every stream, before the answer and in its body, and one that
+  answers with `GOAWAY` naming stream 1 and then 3, give two texts and one
+  recognised text each; so does corrupt gzip at two offsets, and a SOCKS
+  proxy that resets, whose error names two connections. An expired
+  certificate is recognised with the mark for the current time.
+- A graphite collector's fetch against a server that resets every
+  connection gives two texts and one recognised text.
+- A grpc collector's call against a server that resets during the TLS
+  handshake gives two texts and one recognised text, still a
+  `CallStatusError` with its code; answers over the response limit of two
+  sizes are one failure and still a limit error; an expired certificate is
+  recognised without the time; a refused connection by its whole text.
+- Through `/probe`, a target that resets every connection is logged in full
+  once, at error level, and five times as a repeat at debug level, though
+  the six errors name more than one port; five minutes on the line has
+  `repeated` 6 and `failing_since`; the recovery has `failures` 7. Every
+  line and answer has the error in full with that probe's port. A reset
+  after the recovery is logged in full, and a refused connection after it
+  is logged in full too, then as a repeat.
+- A quoted CSV field left open in a body whose lines end with a carriage
+  return alone fails with the error of the same body with line feeds:
+  `h,k\ra,b\rc,"d\re,f\rg,h\r` gives `record on line 3; parse error on
+  line 5, column 5`, where it gave line 3 and, as the column, the distance
+  to the end of the body. So it is without a carriage return at the end, on
+  the last line, when the body's only lone carriage return is its last
+  byte, with a doubled quote after the open one, after a bare quote, mixed
+  with CRLF and line feeds, and under `trim_space` with blanks before the
+  quote, with commas and tabs.
+- Of some 22,000 generated bodies with a field left open — after lines
+  with quoted fields holding carriage returns, doubled quotes, blanks and a
+  bare quote, followed by lines ended four ways, under five delimiters, with
+  `trim_space` and without — each is refused as the reader as it was
+  refuses the same body with line feeds in place of the lone carriage
+  returns: the same words, lines and columns.
+- Of some 72,000 readings — generated bodies, fields left open among them,
+  and every fixture of `testdata/csv` under six delimiters — each is handed
+  to the reader byte for byte as before unless the reader refuses it,
+  before and now; none is accepted now that was refused, or refused that
+  was accepted, and the accepted have the rows they had.
+- A body with a field left open is copied once for its carriage returns,
+  whether the field is on the first line or after lines already copied
+  for; a body whose only lone carriage return is its last byte, after
+  closed quoted fields, is still handed on without a copy.
+- A field left open on line 3 and on line 7 of a carriage return body is
+  one failure to the log, recognised by `CSV decode: parse error:
+  extraneous or missing " in quoted-field`.
+- A scrape of a trip none of whose rules has a failure remembered makes no
+  rule's key: for thirty rules under `log` with expressions of 2 KB it
+  allocates nothing for the log, before any rule failed, while a rule of
+  another target is remembered, and again once the trip's own rule has
+  failed, repeated and been logged as recovered.
+- Over 80 generated collectors whose rules share metric names, differ in
+  expression and `items` and have twins, under every error mode, and 60
+  generated scrapes each of two targets and a directory's file in turn, with
+  transforms that are not complete and minutes or hours passing, the log
+  reads line for line as it did while a scrape asked the failure log about
+  every rule and a rule's key had no length in it (kept as an oracle):
+  warnings, repeats, `repeated` lines, recoveries, and lines with
+  `expression`, `items` and `file` are all among the lines compared.
+- The failure log's count of the rule failures it remembers for a trip is
+  the entries recounted, over four generated sequences of thousands of
+  steps: failures of rules and of trips, the same again and with another
+  error; of a collector a reload retired; recoveries; forgetting a key;
+  seconds, minutes and more than an hour passing, where the sweep drops an
+  entry and where one an hour old between two sweeps is dropped and
+  remembered anew; a reload forgetting a collector's or a static target's
+  entries; the log filled to its 10,000 entries and stepped on while full;
+  and the sweep of everything, after which nothing is counted. What a scrape
+  is told of each trip is whether an entry of a rule of it exists. Rules
+  whose expression or `items` hold a NUL, or the marker of a rule's key, are
+  among them.
+- Two rules have one failure log key only when they are alike in name,
+  expression and `items`: `items: ".i[] #\0.j[]"` with `expression: ".a #"`
+  and `items: ".j[]"` with `expression: ".a #\0.i[] #"` have two; of 20,000
+  generated rules with NULs in expression and `items` no two that differ
+  share a key, though they did; 20,000 without a NUL are told apart exactly
+  as they were.
+- Through `/probe`, two jq rules of one metric name that differ only in
+  `items`: while the rule over `.fast[]` fails, the rule over `.slow[]`
+  starts to fail with the same words and is logged in full, as a warning,
+  with its `items`; the first recovers, logged with its `items`, while the
+  second stays a repeat; the second recovers by itself with `failures` 3;
+  every line is compared attribute for attribute. The sequence fails when
+  `items` is left out of the key.
+- Two rules alike in name, expression and `items`, one under `ignore` and
+  one under `log`, are one rule that is logged, in either order (the first
+  twin's mode decided before, so `ignore` then `log` logged nothing; older
+  than the per-rule report): csv, jq and xpath transforms report one entry,
+  logged, with the failures of both, and write one line with `error_mode`
+  `log`; both under `ignore` are counted and not logged. Through `/probe`
+  the twin's failure is one warning with `failures` 2 and no `expression`,
+  its repeat is held back, its recovery is logged, and
+  `http_exporter_rule_failures_total` counts both twins' failures.
+- Over 300 generated sequences of failures of rules with twins, the
+  transform gathers what it gathered — the same rules in the same order with
+  the same counts, first errors, modes and whether they are logged (the
+  former merging kept as an oracle) — but for a rule under `ignore` that a
+  twin under `log` joined, which is logged with the twin's first failure.
+- A debug probe's report shows a `prometheus` rule without a name as `rule
+  without a name (expression "^app_jobs"): 1 failed, ...` where the
+  collector has several, and as `rule without a name: 1 failed, ...` where
+  it has one; a named rule's line is as it was, and a named rule without an
+  expression beside one of its name that has one is shown as `app_workers
+  (expression "")` and logged with `"expression":""`.
+- A YAML document's problems are named to the tenth and counted: a key
+  written five times, ten problems, fails in the library's own words; with
+  an eleventh the error ends `... and 1 more problem`, with a twelfth `...
+  and 2 more problems`, and a key written six times names ten of its fifteen;
+  1200 lines of one key, which the library lists 719,400 problems for in 40
+  MB, fail in under a kilobyte ending `... and 719390 more problems`,
+  recognised by one line. The error is still a list of problems to
+  `errors.As`, and the library's own list is not changed.
+- A YAML failure is recognised by what its problems are, not how many times
+  each is listed: a list of two, three and twelve items that each write `a`
+  twice, and `a` written twice, three and six times, are all recognised by
+  `line #: mapping key "a" already defined at line #`; an item that writes
+  `b` twice adds a line, in the order the problems come, the same for more
+  items of either; nine and ten different problems are told apart, eleven,
+  twelve and twenty-two of eleven kinds are recognised by the first ten and
+  `... and # more problems`, and ten kinds listed twenty times by the ten.
+  Problems without a line collapse the same way, and eleven different ones
+  read `... and 1 more problem` and are recognised with the mark.
+- Decoding a key written 400 times (79,800 problems), reading the error
+  and asking what it is recognised by allocate no more than a tenth over
+  what the YAML library alone allocates for it: the text of the whole list
+  is never made.
+- Forty YAML documents written to be mistaken (keys holding the library's
+  words for a line, the mark, a line break; errors with no line; errors on
+  the first line and later) and 2,100 drawn at random from the lines of a
+  mapping, of a list and of both are refused in the words they were (the
+  decoder before YAML errors were read, kept as an oracle) unless they have
+  more than ten problems, whose first ten are then the library's and the
+  rest counted, and recognised as before the problems were collapsed (that
+  reading kept as an oracle, but for a scanner's or a parser's error, now
+  recognised without the words for its line) unless a problem is listed more
+  than once, when there is one line for each different problem; some 1,050, 700 and 140 of
+  them. Each of some 340 problem texts is read for its lines as it was.
+- Through `/probe`, a YAML target whose list has two, then three, then
+  twelve items that each write a key twice is logged in full once and then
+  as repeats at debug level, the twelve named to the tenth with `... and 2
+  more problems` in the line and the answer; an item with another problem
+  is logged in full, and more of the first after it as a repeat; a key
+  written 1200 times is answered and logged in under a kilobyte, the same
+  key written 900 times is its repeat, and the recovery counts both.
+- A value the target sent in a gRPC status message tells failures apart:
+  `replica 10.0.0.7:5432->10.0.0.9:5432 is lagging`, the same with IPv6
+  addresses, `route 10.0.0.7:80->backend failed`, a quoted pair of
+  addresses, `lease: current time … is after …`, `clock skew; current time …
+  is before …`, `upstream: batch larger than max (7 vs. 1000)`, a grpc-go
+  server's `trying to send message larger than max (…)` and `a larger than
+  max; b larger than max (…)` are each handed on as the same value and
+  recognised by their whole text, another for another value. A server's
+  message that holds the client library's own words in full — `read tcp
+  …->…`, `x509: certificate has expired or is not yet valid: current time
+  …`, `grpc: received message larger than max (…` — has the value left out.
+- Against a real gRPC server (grpc) that answers every call with `replica
+  10.0.0.N:5432->10.0.0.9:5432 is lagging`, N counting up, two calls fail
+  with two texts, each recognised by itself; a reset during the TLS
+  handshake, an answer over the limit and an expired certificate are still
+  recognised with the mark.
+- Three thousand texts as the client's libraries write them — net's error
+  of a read and a write on tcp, tcp4, tcp6, udp, udp4 and udp6 connections,
+  IPv4, IPv6 and with a zone, on a Unix socket and of a dial; crypto/x509's
+  detail and error of an expired certificate; grpc-go's four texts of a
+  message over the limit — alone and behind the words gRPC, the resolver and
+  the reflection client put before them, are read exactly as they were when
+  a value was taken wherever its shape stood (the three former readings
+  kept as oracles), as a status message and as a name server exchange's
+  text; the three server messages above were read for their shape then and
+  are left whole now.
+- An error shaped otherwise than the HTTP/2 client's is left alone without
+  a panic: a type named for a stream error or a GOAWAY whose number comes
+  from an embedded pointer that is nil (which panicked), from an embedded
+  struct, is under another name, 64 bits wide, a text, not exported, or
+  whose type is a pointer or a number, is handed on as the same value and
+  recognised by its whole text, and is no HTTP/2 protocol error. So is an
+  error that is a nil pointer of its type — `*net.OpError`, `*net.DNSError`,
+  `*url.Error`, the call's status, alone and wrapped — which redacting a
+  URL and reading the failure both panicked on, and which `errors.As` still
+  finds; and an error that panics when asked what it wraps is handed on as
+  it came. The client's own shape is still read.
+- A YAML error on a document's first line, for which the library writes no
+  line, is the failure it is on any other line: of a parser's error, a
+  scanner's and a quote left open, the document that fails on its first line
+  reads `yaml: problem` and the one that fails on a later line `yaml: line N:
+  problem`, both are recognised by `yaml: problem`, and a document that
+  fails another way by another text. Through `/probe`, a mistake on line 3,
+  then on line 1, then on line 4 is logged in full once and as a repeat
+  after, and its recovery counts all three.
+
+## 34.93 YAML decoded in time and memory linear in the document, and a document the library panics on
+
+- A YAML document decodes into what the YAML library alone decodes it into,
+  values with their types and the maps' among them, and is refused in the
+  library's words, recognised by the same text, whatever counts as a large
+  mapping — one past no key, past one, two, four and 128 keys: the YAML
+  files of the repository whole and cut off after each of their first sixty
+  lines and in the middle of it, the documents of the YAML error tests,
+  some eighty written for the forms of a merge, a key and an alias, and
+  30,000 drawn at random of nested mappings and sequences in flow and block
+  style, anchors and aliases (some holding themselves), merges of an alias,
+  a mapping, a sequence of both, a scalar and a sequence of scalars, merges
+  within merged mappings, the merge key tagged and a quoted `"<<"`, tags
+  that fit and that do not, sets and ordered maps, null in every spelling
+  as key and value, keys that are numbers, booleans, null, dates, aliases,
+  sequences and mappings, timestamps and texts of several lines; one drawn
+  document in five once more beside a mapping of 129 keys. The library is
+  handed no mapping of more keys than counts as large. Only a merge into a
+  mapping with a sequence or a mapping as a key, which the library fails
+  outright on or refuses for what is in that key, is refused with an error
+  that may be another than the library's.
+- A YAML document is the library's to decode unless it has a mapping of more
+  than 128 keys or keys written twice whose problems come to more than 64
+  kB: a mapping of 128 keys, mappings of 128 keys nested in one, a key of
+  one and of two bytes written 45 times, one of three bytes written 44 times
+  and a key of 30 kB written twice are decoded and refused by the library as
+  they were; a mapping of 129 keys is decoded in parts; a key of one byte
+  written 46 times, one of three bytes written 45 times, a key of 30 kB
+  written three times, a key written twice in or beside a mapping of 129
+  keys, and a mapping of ten keys written twice that 30 aliases stand for are
+  refused without the library, the last with its 45 problems where the
+  library lists them 31 times.
+- Keys written twice in a document the library is not given are refused
+  with the library's error to the letter, recognised by the same text: one
+  key written 46 to 60, 100, 200 and 400 times; 200 mappings of 129 to 400
+  pairs whose keys are drawn from one to fifteen names (some holding the
+  library's own words, a quote, a line break, the mark; some sequences and
+  mappings), alone, under a key, in a list of several and after mappings
+  with keys written twice of their own, so that one, a few, ten and more
+  than ten different problems are recognised; a key of 30 kB written three
+  and four times; and a list of 3000 small mappings that each write a key
+  twice. The library is handed nothing.
+- A YAML key written 1200, 100,000 and 209,715 times (a 1 MiB body) is
+  refused with the first ten problems in the library's words and `... and
+  719390`, `4999949990` and `21990085745 more problems`, recognised by the
+  one problem, allocating no more than 250 bytes for each byte of the body,
+  which is what parsing it costs; the library allocated 137 MB for the 6 kB
+  of the first. Once the document is parsed, refusing it allocates under 16
+  kB in under 100 allocations for 1200 lines and for 100,000 alike.
+- A YAML mapping of 20,000 keys is handed to the library 128 keys at a
+  time, in 157 parts and never a mapping of more, whether its values are
+  numbers, small mappings and lists, aliases of a mapping or mappings of 300
+  keys themselves, and looking through it for keys written twice compares
+  fewer pairs of keys than it has nodes; it decodes into the values the
+  library makes of it.
+- Looking through a YAML document whose mappings have 24 keys or fewer
+  allocates nothing and compares fewer pairs of keys than twice its nodes,
+  and decoding it allocates what the library alone allocates; 500 mappings
+  of 40 keys are looked through with one table of keys for them all.
+- Beside a large YAML mapping, aliases are refused as the library refuses
+  them and in its words: nine levels of nine aliases (`document contains
+  excessive aliasing`); a sequence of a thousand numbers with 120 to 160
+  aliases, refused from the number the library refuses it from; the same
+  with 200 aliases, and a sequence of 150 with 400, which the library
+  refuses alone and decodes beside a mapping of 3000 keys, are decoded; and
+  an anchor that holds itself in a large mapping, in a list in one, as a
+  merge and as a key of one, beside one, after one and apart from one
+  (`anchor 'a' value contains itself`), with no mapping of more than 128
+  keys handed to the library on the way.
+- A merge into a YAML mapping of 300 keys, of a mapping of 300 keys and of
+  several, is what the library makes of it: a key the mapping has keeps its
+  value wherever the merge key is written, the earlier of two merged
+  mappings gives a key they share, a merged mapping's own merge applies
+  after its keys, a mapping merged twice changes nothing, a quoted `"<<"`
+  is a key and is left out when merged, a null key merged among text keys
+  is left out, the value of a key that is left out is not decoded so its
+  mistake does not fail the document, and a scalar, a sequence with a
+  scalar and an alias of a sequence are refused in the library's words.
+- A document the YAML library panics on — `a: 1`, `2: 3` and `<<: {[x]: 1}`,
+  and a merged mapping with a mapping for a key — is refused with `the YAML
+  library failed on the document: runtime error: hash of unhashable type
+  ...` and recognised by that text up to `runtime error` and by the
+  library's function that raised it (`runtime error (decode.go
+  yaml.v3.(*decoder).mapping)`); through `/probe`
+  it is a 502 of the decode stage on each of two scrapes, logged in full
+  once and as a repeat after, with no stack and no panic in the log, where
+  it was a 500 with a stack on every scrape.
+- What the problems of a YAML document come to is added up in a stack no
+  deeper than the document is nested: 40,000 anchors written in a mapping
+  with a key written twice, each a sequence of an alias of the one before,
+  the last aliased outside it (an 860 kB body), are looked through in under
+  1 MB of stack and the document is decoded in under 2 MB, where a call for
+  each anchor took 8 MB, and 64 MB for 400,000; the problems come to the one
+  key written twice.
+- What the problems of a YAML document come to is what a call for each node
+  and for what each alias stands for made of it, for the document and for
+  each anchor, whatever counts as a large mapping: over the YAML files of
+  the repository, the documents of the YAML error tests, those written for
+  merges, keys and aliases, eleven written for the order anchors are met in
+  (anchors in a mapping with a key written twice aliased from outside it in
+  their order, against it and many times; an anchor holding an alias of what
+  holds it, of itself and of a mapping written twice), and 30,000 drawn at
+  random.
+- A panic of the exporter's own code while a YAML document is decoded is the
+  decode's failure and is not put on the library: `the exporter failed on
+  the YAML document (<file>:<line> <function>): <what was raised>; this is a
+  defect of the exporter and not of the document, please report it`, one
+  line and no stack, for a panic of a text, of an error, of a runtime error
+  (an index out of range), of a key that is no text set in a map of text
+  keys (`yamlkeys.go:<line> decode.(*yamlMap).set`, `interface conversion:
+  ...`) and for one raised in a function of the standard library that the
+  exporter called, which is not the place named. It is recognised without
+  the line, a runtime error by `the exporter failed on the YAML document
+  (<file> <function>): runtime error`, so the two runtime errors are two
+  failures.
+- A panic while YAML is decoded is recognised by its place: the library's
+  runtime error by `the YAML library failed on the document: runtime error
+  (decode.go yaml.v3.(*decoder).mapping)`, another when it is raised in
+  `(*decoder).merge`, the same when it is raised forty lines further or
+  with another index; the library's panic of a text or of an error by all
+  of its text, as it was; the exporter's by its text without the line.
+- The package and the name of a function are told from the name the runtime
+  gives it: `gopkg.in/yaml%2ev3.(*decoder).mapping` is
+  `yaml.v3.(*decoder).mapping` of `gopkg.in/yaml.v3`, and a function, a
+  method, a function within one, one with type arguments that hold a path,
+  and the standard library's with and without a directory are told alike.
+- The items of a YAML sequence beside a large mapping are handed to the
+  library 128 at a time: 20,000 numbers, one-key mappings, lists of three
+  and aliases of a text, each list ended by a mapping of 129 keys, in 157
+  parts and the mapping's two, with a large mapping in the middle of the
+  list or after every hundred items decoded between the parts; each decodes
+  into what the library alone makes of it, in no more than a tenth more
+  allocations, and a tenth more memory (three quarters more for the
+  numbers, whose list is copied), where a call of the library for each item
+  took three times the allocations. A large mapping beside 5000 items of
+  small mappings under a key, in a document without an alias, costs no more
+  than a twentieth over the library alone: nothing is kept of the sequences
+  and mappings the library is handed.
+- A YAML sequence whose items are the walk's and the library's in every
+  order is what the library makes of it: sequences of one to six items in
+  each of the ways the items can be either — the library's drawn from
+  numbers, texts, null written and not written, tagged values, small
+  mappings and lists, a set, an ordered map, aliases, a merge and a key
+  listed as a problem; the walk's from a mapping of 129 keys, an alias of
+  it and collections that hold it; now and then an item the document is
+  refused for (`!!int foo`, an anchor that holds itself) — decoded with a
+  mapping large past one, two, four and 128 keys, and sequences of 126 to
+  130, 255 to 258 and 385 items with an item of the walk's at each place a
+  part of 128 begins or ends at, at two such places and at none.
+- What an item of a YAML sequence fails with comes before the refusal of a
+  later item's aliases: with 209 aliases of a sequence of 997 numbers, a
+  number and an alias of a sequence of 900, the list is decoded without the
+  last alias and refused with it (`document contains excessive aliasing`);
+  with `!!int foo` in place of the number it is refused with `cannot decode
+  !!str `foo` as a !!int`, as by the library alone.
+- Aliases in the parts of a large YAML mapping are counted as the library
+  counts them, with the node made to hold a part: beside 600 numbers, a
+  mapping of 129 keys and one to seven (and 130) more whose values are
+  aliases of a list of 150 to 1001 numbers, the same aliases as the items
+  of a list ended by a large mapping, the alias alone in a mapping and in a
+  list beside a large mapping (1001 nodes with the node made for the pair
+  at 995 to 997 numbers), and the alias as a key of a mapping of 129 keys —
+  of a list, refused as `invalid map key` and not for its aliases at 998
+  numbers, and of a list tagged `!!str`, listed as a problem, among the
+  mapping's keys and in a merged mapping — are each what the library alone
+  makes of the whole document, where a part of exactly 1000 counted nodes
+  was refused for its aliases.
+- The keys of a YAML mapping with a merge are counted once more, as the
+  library decodes them once more: after a mapping of 129 keys with a merge
+  a list of aliases of a thousand numbers is refused from the 154th alias
+  on, and after one of 127 keys with a merge beside a large mapping, which
+  the library is handed whole, from the 182nd, as the library alone refuses
+  them.
+- The problems of a YAML mapping the library does not read are not counted
+  among those the error says there are more of: beside a mapping of 129
+  keys, a key written six times in a mapping that holds one with a key
+  written five times is refused with `... and 5 more problems` (15, not
+  25), a third mapping within adds none and one after them adds its own
+  (`6 more`), the value of a key that is a mapping written twice adds none
+  (`5 more`), and all of them in one document are `36 more`: the library's
+  error to the letter.
+- A YAML mapping at the bound of 128 keys is what the library makes of it
+  whatever is at the places a part begins and ends at: mappings of 127,
+  128, 129, 255, 256, 257 and 385 pairs beside a mapping of 129 keys, with
+  a merge key (of an alias, a mapping, a sequence of both, a mapping of 129
+  keys, tagged `!!merge`, a merge within the merged), a null key, a key
+  that is no text, an alias key, an alias value and a value the walk
+  decodes as the first and second pair of a part, its last two and the
+  mapping's last, alone and with a pair of another kind at the next such
+  place: 588 documents, the library handed no mapping of more than 128 keys.
+- A merge into a YAML mapping with a sequence or a mapping as a key is
+  refused where the library fails on what is in that key or fails outright,
+  with an error that may be another: `{? !!str {k: {? !!null [a] : x}} : x,
+  <<: x}` (the library's `invalid map key`, here `map merge requires map or
+  sequence of maps as the value`), `{? !!str [a] : x, <<: x}`, `{? !!str
+  [!!int foo] : x, <<: {b: 1}}` (the library's `cannot decode`, here the
+  key listed as a problem), an anchor in such a key that holds itself, a
+  merged value that does not fit its tag, and four more, whatever counts as
+  a large mapping; any other document decoded in parts is the library's to
+  the letter.
+- No document of the differential test, nor of the test of aliases beside a
+  large YAML mapping, is handed to the library in more than 10,000 parts:
+  the most is 603, and nine levels of nine aliases beside a mapping of 200
+  keys are refused after 55, where aliases that were not refused would be
+  387 million nodes; the tests fail at the bound, before the memory is gone.
+- A YAML document nested, through the targets of its aliases, deeper than the
+  parser lets one be written (10,000, the depth of a node 1 plus the deepest
+  it holds, an alias its target's plus 1) is refused before anything decodes
+  it, with `the document is nested more than 10000 deep through its aliases,
+  deeper than a YAML document may be written`: a single alias of a sequence
+  and of a mapping nested to the bound is decoded into what the library makes
+  of it, and one level over the bound the library still decodes it but the
+  exporter refuses it for its depth; the same for a merge of a mapping nested
+  over the bound, whose value the library decodes through.
+- A hidden chain of anchors that each hold an alias of the one before, through
+  a sequence, a mapping and a merge key, is refused as the library refuses it
+  up to the bound — for its aliases, the library decoding such a chain by
+  re-reading each anchor in place — and for its depth one link over the bound.
+- A YAML document whose depth through its aliases is over the bound is refused
+  for its depth on every way it would be decoded, the library's own included,
+  since that is where the deepest stack is.
+- A deeply nested YAML document without aliases (9,990 sequences) is not
+  looked through for its depth, being nested no deeper than the parser let it
+  be written, and is decoded as the library decodes it.
+- A self-containing YAML anchor, alone (`a: &a [*a]`, `a: &a {k: *a}`) and at
+  the end of a chain, has no finite depth: the depth is added up without
+  looping, the anchor met again counting as nothing, and the document keeps
+  the library's `anchor 'a' value contains itself`, not the depth.
+- A YAML document whose aliases expand to too much but that is not nested deep
+  (nine levels of nine aliases each, the ninth power but eighteen deep) keeps
+  the library's `document contains excessive aliasing`, refused for its
+  aliases and not its depth.
+- No document of the differential corpus — the repository's YAML files, the
+  error tests' documents, those written for the forms of a merge, a key and an
+  alias, and the random ones — comes near the depth bound (the deepest is a
+  few dozen deep), so the bound refuses none of them.
+- With the bound in force, decoding the deepest document it accepts (a single
+  alias of a sequence nested to 10,000) grows the goroutine stack by under 8
+  MB, measured on a fresh goroutine and skipped under the race detector, and a
+  chain of 400,000 links — hundreds of megabytes of stack were it decoded — is
+  refused with a stack of a few kilobytes and in time linear in it, the depth
+  added up without a call for each link.
+- A chain of 20,000 anchors written in a mapping with a key written twice,
+  each a sequence of an alias of the one before, aliased once outside, beside
+  a thousand plain items — 419 kB that the YAML library decodes in a stack
+  of over 4 MB, a call a link — is refused for its depth in a stack of under
+  1 MB, the library not given it.
 
 # 35. Documentation requirements
 
@@ -10703,6 +13664,53 @@ With `response.csv.header: false`, a `csv` rule and its labels MUST name
 columns by number, from 1, and a name — or `0`, or a number written with a
 leading zero — MUST be refused at load.
 
+A response has a column when any of its rows does: with a header row, a
+column the header names, which every row then has, empty where the row is
+shorter; without one, a number up to the length of the longest row; and of
+rows a pre-script left, a key any row has. A row that lacks a column other
+rows have holds an empty cell there.
+
+A rule whose value is in a column the response does not have MUST be missing
+its value on every row, with an error that says so and lists the columns the
+response has — the names in order, at most twelve of them and the number of
+the rest, each cut as a quoted value is, or for rows read by number how many
+the longest has (`CSV column "used" is not in the response, whose columns
+are "Used", "Host"; column names are matched exactly`). A name that equals
+the one asked for once the blanks around both are trimmed and case is folded
+MUST come before the others, so that the cut does not hide the name that
+says what is wrong. A cell that is empty
+in a column the response has MUST be a missing value that names the row,
+counted from 1 without the header's line (`CSV column "used" is empty in row
+3`). Both are missing values: `required` and `error_mode` decide, as for any
+other. The rows MUST NOT be gone through for a column until a row lacks one
+a rule names, and then once for that column.
+
+A label read from an empty cell MUST be left off that series. A label naming
+a column the response does not have MUST fail its rule instead, once for the
+response however many rows it has, with an error naming the metric, the
+label, the column and the columns the response has (`metric "used" label
+"zone": CSV column "zone" is not in the response, whose columns are "host",
+"used"; column names are matched exactly`). It is a failure and no missing
+value: a rule that is not required and a label that is not required MUST
+fail alike, the rule's `error_mode` decides what follows, as for a label
+that cannot be read in the `xpath` transform, and the rule MUST make no
+series of that response. A rule that finds no value in any row does not read
+its labels, and reports the value.
+
+A pre-script of a `csv` transform MUST be given the rows as the decoder made
+them and MUST leave rows: `data` a list, of which a row that is a mapping
+MUST be read by its keys and a row that is a list by number, from 1, so a
+script may drop rows, change cells and add columns. Anything but a list left
+in `data` MUST fail the transform, with an error that says what the script
+left and what the transform reads (`python pre-script of a csv transform
+left data as an object with 1 key; it must leave a list of rows, each row a
+dict by column name or a list by column number`), rather than one that
+speaks of the response. A row that is neither a mapping nor a list MUST fail
+the transform too, naming the row's number, from 1, and what it is, rather
+than be read as a row missing every column. Both MUST be script failures,
+counted in `http_exporter_script_errors_total`, as what a pre-script of a
+`css` or `xpath` transform leaves that is no markup is.
+
 CSS remains a first-class transformation for HTML responses. It MUST NOT be
 required for CSV responses and MUST NOT be used as the CSV transformation
 name.
@@ -11074,6 +14082,19 @@ collector MUST be refused at load, naming the field (§ 24.2).
 CI MUST materialize Go module checksums before running tests and MUST run the
 test, race, vet, build, and Helm validation checks.
 
+Known vulnerabilities MUST be reported by a workflow of its own, on every
+push and pull request and on a weekly schedule, for reference: it MUST NOT
+fail, whatever it finds and when the check could not run, and MUST write its
+findings to the run's summary and raise a warning. It MUST scan what ships and
+what the workflows run — every command of the module, the exporter and the
+repository's tools, with all each imports — and MUST NOT scan the packages
+only tests use, so that an advisory for code only a test reaches, as the gRPC
+server of the tests' stand-in is, is not reported against the exporter.
+`make vulncheck` MUST scan the same packages with the same pinned version. A
+test MUST keep the two equal, MUST fail for a command they do not cover, and
+MUST hold the list of the module's packages left out, failing for a package
+that is neither scanned nor on it.
+
 The exporter and the Helm chart MUST be released on independent cycles, from
 separate tags and separate workflows. Releasing one MUST NOT publish the other,
 so a chart fix does not require an exporter release and an exporter release does
@@ -11333,7 +14354,9 @@ rate-limited endpoint.
   definition, the target, every probe parameter that makes the request and
   every forwarded header, credentials included. Probes that could get
   different answers MUST NOT share; probes differing only in parameters the
-  key leaves out MUST. A probe without a key MUST NOT share.
+  key leaves out MUST. A probe without a key MUST NOT share. Nor MUST probes
+  of different stays of a collector that reloads removed and brought back, or
+  changed and changed back, while a trip was in flight (§ 24.1a).
 - It MUST work with the response cache off. With it on, the cache is checked
   first, and the shared request fills it once. The probe that starts a shared
   request MUST check the cache again before going to the target, since one that
@@ -11489,7 +14512,13 @@ the definition of its collector — MUST be first
 scraped within ten seconds, or within its interval if
 that is shorter, so it does not stay absent from the endpoint, or served as
 a definition no longer in force made it, for up to an
-interval. A target that did not change, of a collector whose definition did
+interval. So MUST a target that is defined as it was when the schedule last
+looked, with its collector, where reloads followed since (§ 24.1a) changed
+either and changed it back, or removed either and brought it back: a scrape
+of it in flight read what a reload retired and publishes nothing, so the
+target, in force anew, MUST have a first scrape of its own, made once that
+scrape has ended, and only one. A target that did not change, of a collector
+whose definition did
 not change, MUST keep its place in the schedule through a reload. Its scrapes MUST then keep a fixed cadence, which SHOULD be offset
 within its interval by a stable hash of its name so targets are spread over
 it, starting at its first point no sooner than one whole interval after the
@@ -11530,7 +14559,8 @@ starts after skipped ones MUST end their run in the failure log. A scrape that r
 of its interval MUST fail saying so: that the scrape ran out of its interval's
 budget, not only that a deadline was exceeded. A result
 of a target a reload removed while its scrape was in flight MUST NOT be
-published or exported. The exporter
+published or exported, nor that of a target a reload changed, or whose
+collector it removed or changed, meanwhile (§ 24.1a). The exporter
 MUST scrape at most the document's `concurrency` targets at once, 8 when it is
 unset or 0, and MUST refuse a negative one; a target due while all are busy
 MUST wait for a slot within its interval and be skipped, logged, if none
@@ -11597,7 +14627,9 @@ metrics with its labels, or its stale result, and its health result — at
   logged as ended while its target is still served, and forgotten without a
   line when its target is gone, so a clash that comes back is logged anew.
 - A target not yet scraped MUST be absent, and a target removed from the
-  document MUST leave the endpoint with the reload.
+  document MUST leave the endpoint with the reload. A scrape that read a
+  target, or its collector, before a reload removed or changed it MUST
+  publish nothing (§ 24.1a).
 - Serving the endpoint MUST NOT contact a target: it reads what the targets'
   last scrapes left. A target's result SHOULD be stored already labelled with
   `static_target` when its scrape publishes it, and a read MUST NOT change
@@ -12117,7 +15149,11 @@ and MUST answer `200` with a `text/plain` report of it:
 - each stage, its duration and outcome, saying when `error_handling` carried
   on;
 - the series by metric name, the rules that gave none, and the rules that
-  carried on without some series, with how many and the first error;
+  carried on without some series, each rule by itself with how many and its
+  first error, under its metric name and, where several rules of the
+  collector export that name, its expression and its `items`; a `prometheus`
+  rule without a name MUST be shown as `rule without a name`, not as an
+  empty name;
 - every line the trip logged, at every level whatever `--log.level` is,
   including rule failures and what a Python script printed;
 - the exposition a probe would have served.

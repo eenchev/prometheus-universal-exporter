@@ -173,11 +173,24 @@ func (c *responseCache) lookup(key string, now time.Time, stale bool) (model.Met
 // stale for StaleIfError more. When both are zero the collector does not
 // cache and nothing is stored.
 func (c *responseCache) Put(key, collector string, set model.MetricSet, ttl, staleIfError time.Duration, maxEntries int, now time.Time) {
+	c.PutFor(configRead{}, key, collector, set, ttl, staleIfError, maxEntries, now)
+}
+
+// PutFor is Put for a trip that read its collector as read says. Nothing is
+// stored when the collector no longer stands (configRead): a reload removed
+// it, or changed its definition, since, and dropped its entries; the result
+// is that of a collector that is gone, which a collector brought back under
+// the name with the same definition would be answered with, and which would
+// count in the max_cache_entries of the one now under the name.
+func (c *responseCache) PutFor(read configRead, key, collector string, set model.MetricSet, ttl, staleIfError time.Duration, maxEntries int, now time.Time) {
 	if key == "" || ttl < 0 || staleIfError < 0 || ttl+staleIfError <= 0 {
 		return
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	if !read.stands(collector) {
+		return
+	}
 	freshUntil := now.Add(ttl)
 	c.putLocked(key, &cacheEntry{collector: collector, fetched: now, freshUntil: freshUntil, expires: freshUntil.Add(staleIfError), set: model.CloneMetricSet(set)})
 	c.evictLocked(collector, maxEntries, now)

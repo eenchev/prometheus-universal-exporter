@@ -335,9 +335,9 @@ func readLocalDirectory(c *model.Collector, dir string, progress *directoryProgr
 		case !info.Mode().IsRegular():
 			refused = fmt.Errorf("%s is not a regular file (%s)", fileFull, fileKind(info.Mode()))
 		case info.Size() > limit:
-			refused = model.MarkError(fmt.Errorf("file %s is %d bytes, more than the collector's limit of %d for one file; it was not read", fileFull, info.Size(), limit), model.ErrLimitExceeded)
+			refused = model.MarkError(model.Errorf("file %s is %d bytes, more than the collector's limit of %d for one file; it was not read", fileFull, model.Size(info.Size()), limit), model.ErrLimitExceeded)
 		case reserved+info.Size() > budget:
-			refused = model.MarkError(fmt.Errorf("file %s is %d bytes, which would take this scrape past request.max_total_bytes %d after %d bytes of other files; it was not read", fileFull, info.Size(), budget, reserved), model.ErrLimitExceeded)
+			refused = model.MarkError(model.Errorf("file %s is %d bytes, which would take this scrape past request.max_total_bytes %d after %d bytes of other files; it was not read", fileFull, model.Size(info.Size()), budget, model.Size(reserved)), model.ErrLimitExceeded)
 		}
 		if refused != nil {
 			progress.finish(i, FileRead{Err: refused}, 0)

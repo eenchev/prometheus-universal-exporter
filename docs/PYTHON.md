@@ -296,7 +296,25 @@ error names the series, the keys such a series has and the keys this one has
 has the keys "buckets", "sum" and "count", and this one has the keys
 "bucket", "cnt", "name", "type"`).
 
-A CSV row a pre-script changed may hold numbers and `None`: a label read from
+A pre-script of a `csv` transform gets the rows, [as above](#what-data-is),
+and must leave rows: `data` stays a list, each row a dict, read by its keys
+as by the header's names, or a list, read by number from 1. The script may
+drop rows (`data = data[1:]` for a header line of a file read with
+`header: false`), change cells, and add columns for the rules to name.
+Anything else left in `data` — a dict, a string, `None` — fails the scrape in
+the transform stage, saying what the script left: `python pre-script of a csv
+transform left data as an object with 1 key; it must leave a list of rows,
+each row a dict by column name or a list by column number` (`null` for
+`None`, a string in quotes, a number as written). A row that is neither a
+dict nor a list fails it too, by its number, counted from 1: `python
+pre-script of a csv transform left row 2 as "db1"; a row must be a dict by
+column name or a list by column number`. Both are the script's failure,
+counted in `http_exporter_script_errors_total` as an exception it raised is.
+The rows need not have the same
+keys: a key a row lacks, when another row has it, is an empty cell in that
+row, and a column no row has is one the response does not have
+([Reading CSV](CONFIGURATION.md#reading-csv-what-to-expect)). A CSV row a
+pre-script changed may hold numbers and `None`: a label read from
 a number is written as `metric(...)` writes one, `1234567` as `1234567`, and
 `None` leaves the label off.
 

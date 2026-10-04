@@ -25,6 +25,8 @@ inf lower case,-inf
 hex integer,0x1F
 octal,0o17
 binary,0b101
+digit separators,1_000
+hexadecimal float,0x1p-2
 thousands comma,"1,234"
 thousands blank,1 234
 thousands apostrophe,1'234

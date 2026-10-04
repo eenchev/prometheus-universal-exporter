@@ -93,9 +93,15 @@ type targetSchedule struct {
 type staticTargetState struct {
 	// target is the definition the state was made for, and collector the
 	// fingerprint of its collector's definition (collectorFingerprint); a
-	// reload that changes either starts the target again (plan).
+	// reload that changes either starts the target again (plan). since is
+	// the generation the target's stay had begun at when the state was made
+	// (followedConfig.stay): reloads that changed either and changed it
+	// back, or removed either and brought it back, between two looks of the
+	// schedule leave both as the state has them, and have begun another
+	// stay, which starts the target again too.
 	target    model.StaticTarget
 	collector string
+	since     uint64
 	interval  time.Duration
 	next      time.Time
 	// cadence is where the target's regular cadence starts, until its first,
@@ -107,7 +113,12 @@ type staticTargetState struct {
 	// running is set while a scrape of the target is in flight. A target
 	// a reload changed starts a new state that shares it, so
 	// a scrape begun on the old definition still keeps the next one from
-	// starting beside it, where the older could publish after the newer.
+	// starting beside it, and so does a target that began another stay
+	// with its definition as it was (since). A target a reload removed and
+	// another brought back, the schedule having looked between the two,
+	// has a state that shares nothing with the one forgotten: what keeps a
+	// scrape of the old one from publishing after the new one's is that it
+	// publishes nothing (configRead.targetStands).
 	running *atomic.Bool
 	// awaited, shared as running is, is set when the schedule waits for
 	// the scrape in flight to end, so the loop is woken when it does.
@@ -164,10 +175,28 @@ func newTargetSchedule() *targetSchedule {
 // did not change keeps its cadence through a reload of the configuration.
 // One no longer in targets is forgotten.
 func (s *targetSchedule) plan(cfg *model.Config, targets []model.StaticTarget, now time.Time) (due, skipped []dueTarget, next time.Time) {
+	return s.planFollowed(cfg, targets, nil, now)
+}
+
+// planFollowed is plan for the scrape loop, which reads cfg and targets as
+// followed has them (Server.reconcile), and so knows from which generation
+// each target has been as it is, with its collector as it is (stay). A
+// target whose stay began after its state was made starts again as one a
+// reload changed does, though it is defined as its state has it: reloads
+// changed it, or its collector, and changed it back, or removed it and
+// brought it back, since the schedule last looked. A scrape of it still in
+// flight read the stay that ended and publishes nothing (targetStands), so
+// without a first scrape of its own the target would be missing from the
+// static targets endpoint, its http_exporter_target_up too, until its next
+// turn: for a long interval, an hour. That scrape waits for the one in
+// flight to end, as that of a changed target does. A reload that left the
+// target and its collector as they were began no stay, and starts nothing.
+func (s *targetSchedule) planFollowed(cfg *model.Config, targets []model.StaticTarget, followed *followedConfig, now time.Time) (due, skipped []dueTarget, next time.Time) {
 	// A reload puts another configuration or another list in force; until
-	// one does, every state is that of its target as it is. The collectors'
-	// fingerprints are worked out only for another configuration, and then
-	// once per collector, however many targets share it.
+	// one does, every state is that of its target as it is, and no stay
+	// began. The collectors' fingerprints are worked out only for another
+	// configuration, and then once per collector, however many targets
+	// share it.
 	reloaded := cfg != s.config
 	changed := reloaded || len(targets) != len(s.targets) || len(targets) > 0 && &targets[0] != &s.targets[0]
 	s.config, s.targets = cfg, targets
@@ -194,7 +223,7 @@ func (s *targetSchedule) plan(cfg *model.Config, targets []model.StaticTarget, n
 		}
 		seen[target.Name] = true
 		state := s.states[target.Name]
-		if state == nil || changed && (!reflect.DeepEqual(state.target, target) || reloaded && state.collector != fingerprint(target.Collector)) {
+		if state == nil || changed && (followed.stay(target.Name, target.Collector) > state.since || !reflect.DeepEqual(state.target, target) || reloaded && state.collector != fingerprint(target.Collector)) {
 			running, awaited := &atomic.Bool{}, &atomic.Bool{}
 			if state != nil {
 				running, awaited = state.running, state.awaited
@@ -202,6 +231,7 @@ func (s *targetSchedule) plan(cfg *model.Config, targets []model.StaticTarget, n
 			state = &staticTargetState{
 				target:    target,
 				collector: fingerprint(target.Collector),
+				since:     followed.stay(target.Name, target.Collector),
 				interval:  interval,
 				next:      now.Add(scheduleOffset(target.Name, min(interval, firstScrapeWindow))),
 				cadence:   now.Add(scheduleOffset(target.Name, interval)),
@@ -345,6 +375,18 @@ func shuttingDown(ctx context.Context) bool {
 // begins to wait for a slot, so a test can stop the loop while one waits.
 var slotWaitHook atomic.Pointer[func(string)]
 
+// turnSkipped logs the turn the schedule gave up for d, a target read in
+// force with its collector at generation. Repeats are logged sparingly, as
+// failed scrapes are, and the turn is held to what was read, as the scrape
+// that finds no slot is (logStands). The loop reports the turn in the look
+// that read generation, where only a reload made in that very instant has
+// retired the target: what the turn leaves once one has is shown by a call
+// with a generation read before a reload.
+func (s *Server) turnSkipped(generation uint64, d dueTarget) {
+	s.failures.failedFor(s.readTargetAt(generation, d.target.Name), s.logger, slog.LevelWarn, failureKey(d.target.Collector, staticTargetKey(d.target.Name), "schedule"),
+		"static target scrape skipped", "schedule", errStillRunning, "target", d.target.Name, "collector", d.target.Collector, "interval", d.state.interval.String())
+}
+
 // StaticScrapeLoop scrapes every static target on its interval until ctx
 // ends, and then waits for the scrapes in flight, which run until they end or
 // AbortStaticScrapes cancels them. The results are published for the static
@@ -363,17 +405,19 @@ func (s *Server) StaticScrapeLoop(ctx context.Context) {
 		// The configuration and the targets are read once, as one reload
 		// left them, and each scrape uses the configuration its target was
 		// read with: read apart, a reload between the two could give a
-		// scrape a collector its target was not checked against.
-		cfg, file := s.manager.InForce()
+		// scrape a collector its target was not checked against. generation
+		// says when: a scrape that begins after a reload removed its
+		// collector does not count in a collector brought back under the name
+		// (statsSince).
+		followed := s.followedInForce()
+		cfg, file, generation := followed.config, followed.targets, followed.generation
 		if limit := file.ScrapeConcurrency(); slots == nil || cap(slots) != limit {
 			slots = make(chan struct{}, limit)
 		}
 		now := time.Now()
-		due, skipped, next := schedule.plan(cfg, staticTargetsOf(file), now)
+		due, skipped, next := schedule.planFollowed(cfg, staticTargetsOf(file), followed, now)
 		for _, d := range skipped {
-			// Repeats are logged sparingly, as failed scrapes are.
-			s.failures.failed(s.logger, slog.LevelWarn, failureKey(d.target.Collector, "static target "+d.target.Name, "schedule"),
-				"static target scrape skipped", "schedule", errStillRunning, "target", d.target.Name, "collector", d.target.Collector, "interval", d.state.interval.String())
+			s.turnSkipped(generation, d)
 		}
 		for _, d := range due {
 			d.state.running.Store(true)
@@ -406,7 +450,7 @@ func (s *Server) StaticScrapeLoop(ctx context.Context) {
 					if shuttingDown(scrapeCtx) {
 						return
 					}
-					s.failures.failed(s.logger, slog.LevelWarn, failureKey(d.target.Collector, "static target "+d.target.Name, "schedule"),
+					s.failures.failedFor(s.readTargetAt(generation, d.target.Name), s.logger, slog.LevelWarn, failureKey(d.target.Collector, staticTargetKey(d.target.Name), "schedule"),
 						"static target scrape skipped", "schedule", errNoSlot, "target", d.target.Name, "collector", d.target.Collector, "interval", d.state.interval.String())
 					return
 				}
@@ -418,9 +462,9 @@ func (s *Server) StaticScrapeLoop(ctx context.Context) {
 					return
 				}
 				// A scrape that starts ends a run of skipped ones.
-				s.failures.recovered(s.logger, failureKey(d.target.Collector, "static target "+d.target.Name, "schedule"),
+				s.failures.recoveredFor(s.readTargetAt(generation, d.target.Name), s.logger, failureKey(d.target.Collector, staticTargetKey(d.target.Name), "schedule"),
 					"static target scrapes on schedule again", "target", d.target.Name, "collector", d.target.Collector)
-				s.scrapeTarget(scrapeCtx, d.config, d.target)
+				s.scrapeTargetSince(scrapeCtx, d.config, generation, d.target)
 			}()
 		}
 		wait := scheduleCheckInterval

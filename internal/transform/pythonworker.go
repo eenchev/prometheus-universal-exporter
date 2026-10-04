@@ -718,6 +718,12 @@ type pythonWorker struct {
 }
 
 func startPythonWorker(ctx context.Context, spec pythonSpec) (*pythonWorker, error) {
+	return startPythonWorkerRunning(ctx, spec, pythonWorkerLauncher)
+}
+
+// startPythonWorkerRunning starts a worker that runs launcher, which is
+// pythonWorkerLauncher but in the tests that compare it with what it was.
+func startPythonWorkerRunning(ctx context.Context, spec pythonSpec, launcher string) (*pythonWorker, error) {
 	modules, err := json.Marshal(append([]string{}, spec.Modules...))
 	if err != nil {
 		return nil, err
@@ -737,8 +743,8 @@ func startPythonWorker(ctx context.Context, spec pythonSpec) (*pythonWorker, err
 	// directory writable, it would otherwise try to write one through the
 	// sandboxed _io.FileIO, whose refusal it does not expect, and the import
 	// would fail.
-	cmd := exec.CommandContext(context.WithoutCancel(ctx), spec.Path, "-I", "-B", "-c", pythonWorkerLauncher, string(modules), strconv.FormatInt(spec.MaxMemory, 10)) // #nosec G204 -- the interpreter is the operator's --python.path
-	cmd.ExtraFiles = []*os.File{requestRead, answerWrite}                                                                                                             // descriptors 3 and 4
+	cmd := exec.CommandContext(context.WithoutCancel(ctx), spec.Path, "-I", "-B", "-c", launcher, string(modules), strconv.FormatInt(spec.MaxMemory, 10)) // #nosec G204 -- the interpreter is the operator's --python.path
+	cmd.ExtraFiles = []*os.File{requestRead, answerWrite}                                                                                                 // descriptors 3 and 4
 	cmd.Env = pythonWorkerEnvironment(os.Environ())
 	stderr := &tailBuffer{max: pythonStderrTail}
 	cmd.Stderr = stderr
@@ -1158,8 +1164,49 @@ def script_error(e):
         te.stack=traceback.StackSummary.from_list([f for f in te.stack if f.filename!='<string>'][-5:])
         te=te.__cause__ or te.__context__
     return ''.join(shown.format())
+def plain_check():
+    # Whether an answer can be written as it is, without wire: when it is
+    # dicts, lists and tuples of strings, numbers, booleans and None, every
+    # one of exactly that type, with every float finite, wire changes nothing
+    # that json writes, and walking a whole answer through it, a call for
+    # each value, cost more than the script that made the answer. The answer
+    # is looked through a level at a time, in one loop, with no call for a
+    # value. It must also be nested far less deep than wire could follow
+    # under the recursion limit as it is now, so that an answer wire would
+    # have failed on still fails there: one nested deeper is left to wire, as
+    # is whatever else this does not recognise.
+    recursion_limit=sys.getrecursionlimit
+    scalars=frozenset((int,bool,type(None)))
+    def plain(document):
+        level=[document]
+        for _ in range(recursion_limit()//2-10):
+            below=[]
+            extend=below.extend
+            for v in level:
+                t=type(v)
+                if t is str: continue
+                if t is dict: extend(v.values())
+                elif t is float:
+                    # NaN and the infinities, which less themselves are NaN.
+                    if v-v!=0: return False
+                elif t is list or t is tuple: extend(v)
+                elif t not in scalars: return False
+            if not below: return True
+            level=below
+        return False
+    return plain
+plain=plain_check()
+del plain_check
 def answer(document):
-    answers.write(json.dumps(wire(document),allow_nan=False)+'\n'); answers.flush()
+    # An answer that is plain is written as it is; any other, and one whose
+    # writing fails, goes through wire as every answer did, so that what is
+    # written, or raised, is what it was.
+    text=None
+    try:
+        if plain(document): text=json.dumps(document,allow_nan=False)
+    except Exception: text=None
+    if text is None: text=json.dumps(wire(document),allow_nan=False)
+    answers.write(text+'\n'); answers.flush()
 answer({'ok': True, 'ready': True})
 while True:
     line=requests.readline()
@@ -1181,7 +1228,16 @@ while True:
             if help is not None and not isinstance(help,str): raise ValueError('metric %r help %r is not a string'%(name,help))
             if labels is None: labels={}
             if not isinstance(labels,dict): raise ValueError('metric %r labels must be a mapping of label names to values, not a %s'%(name,labels.__class__.__name__))
-            labels={str(k):t for k,t in ((k,label_text(k,v)) for k,v in labels.items()) if t is not None}
+            # A label that is a string already is its own text, which is
+            # what label_text returns for it: asking for each one, through
+            # a generator, was a third of what a call of metric costs.
+            texts={}
+            for k,t in labels.items():
+                if t.__class__ is not str:
+                    t=label_text(k,t)
+                    if t is None: continue
+                texts[str(k)]=t
+            labels=texts
             value=metric_number(name,'value',value)
             if timestamp is not None:
                 timestamp=metric_number(name,'timestamp',timestamp)

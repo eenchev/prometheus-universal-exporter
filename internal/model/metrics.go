@@ -374,7 +374,7 @@ func sameSeries(a, b *Metric) (same, empty bool) {
 // the scrape has at least that many, and how many more is not worth the
 // memory of finding out.
 func MetricCountError(count, limit int) error {
-	return MarkError(fmt.Errorf("metric count %d exceeds limit %d", count, limit), ErrLimitExceeded)
+	return MarkError(Errorf("metric count %d exceeds limit %d", Size(count), limit), ErrLimitExceeded)
 }
 
 // Validate checks the set against the collector's limits and the rules of
@@ -418,29 +418,14 @@ func (s *MetricSet) validate(l Limits, seen *seriesSet) error {
 		}
 		// Prometheus accepts infinities and NaN, so no value check applies here.
 		if len(m.Labels) > l.MaxLabelsPerMetric && l.MaxLabelsPerMetric > 0 {
-			return fmt.Errorf("metric %q has too many labels", m.Name)
+			return Errorf("metric %q has %d labels, more than limits.max_labels_per_metric %d; drop labels it does not need or raise limits.max_labels_per_metric", m.Name, Size(len(m.Labels)), l.MaxLabelsPerMetric)
 		}
 		var labels uint64
 		for k, v := range m.Labels {
-			if !ValidLabelName(k) {
-				if k != "" && utf8.ValidString(k) {
-					return fmt.Errorf("metric %q has label %q, which is not a classic Prometheus label name; set the collector's name_escaping to underscores or values to export it escaped", m.Name, k)
-				}
-				return fmt.Errorf("metric %q has invalid label name %q", m.Name, k)
-			}
-			if ReservedLabelName(k) {
-				return fmt.Errorf("metric %q has %s", m.Name, reservedLabelError(k))
-			}
-			// A histogram's buckets are told apart by le and a summary's
-			// quantiles by quantile. A series with that label of its own
-			// would be written with it on _sum and _count, which a parser
-			// reads as a bucket or a quantile without a bound, and twice on
-			// every bucket.
-			if own := seriesOwnLabel(m); k == own {
-				return fmt.Errorf("metric %q is a %s and has a label %s of its own, which its %s carry; name the label something else", m.Name, m.Type, own, map[string]string{"le": "buckets", "quantile": "quantiles"}[own])
-			}
-			if l.MaxLabelValueLength > 0 && len(v) > l.MaxLabelValueLength {
-				return fmt.Errorf("metric %q label %q is too long", m.Name, k)
+			// What labelFailure refuses, asked here without a call: a
+			// series that passes pays for the questions alone.
+			if !ValidLabelName(k) || ReservedLabelName(k) || k == seriesOwnLabel(m) || l.MaxLabelValueLength > 0 && len(v) > l.MaxLabelValueLength {
+				return firstLabelFailure(m, &l)
 			}
 			// The labels are gone through once, for these checks and for
 			// the duplicate check below alike (seriesSet).
@@ -449,7 +434,7 @@ func (s *MetricSet) validate(l Limits, seen *seriesSet) error {
 			}
 		}
 		if l.MaxHelpLength > 0 && len(m.Help) > l.MaxHelpLength {
-			return fmt.Errorf("metric %q help is too long", m.Name)
+			return Errorf("metric %q help is %d bytes, longer than limits.max_help_length %d; shorten it or raise limits.max_help_length", m.Name, Size(len(m.Help)), l.MaxHelpLength)
 		}
 		// The series of a family nearly always follow one another, so a
 		// series of the family and type of the one before it has nothing to
@@ -537,7 +522,7 @@ func Number(v any) (float64, error) {
 
 // parseNumber reads text as a number.
 func parseNumber(text string) (float64, error) {
-	f, err := strconv.ParseFloat(text, 64)
+	f, err := ParseFloat(text)
 	switch {
 	case err == nil:
 		return f, nil
@@ -546,6 +531,34 @@ func parseNumber(text string) (float64, error) {
 	default:
 		return 0, fmt.Errorf("value %s is not a number; map text to numbers with value_map", QuoteValue(text))
 	}
+}
+
+// ParseFloat reads the text of a value a response holds as a number, as
+// strconv.ParseFloat does, with its errors, but for the two forms that are
+// Go's way of writing a number and nobody else's: digits separated by
+// underscores, 1_000, and hexadecimal floating-point, 0x1p-2. Read as
+// numbers, a cell holding an identifier such as 1_000 was exported as 1000;
+// the Prometheus decoder refuses both forms as well (decode/promparse.go).
+// They are no numbers, with strconv.ErrSyntax, whether strconv would read
+// them or find them out of range.
+//
+// A text strconv reads, or finds out of range, holds an underscore only as a
+// digit separator and an x only as the mark of a hexadecimal number, so
+// looking for the two letters is enough, and is all a number costs beyond
+// strconv's own reading.
+func ParseFloat(text string) (float64, error) {
+	f, err := strconv.ParseFloat(text, 64)
+	if err != nil && !errors.Is(err, strconv.ErrRange) {
+		return f, err
+	}
+	for i := 0; i < len(text); i++ {
+		// Digits, signs and the point come before X, so they cost one
+		// comparison each.
+		if c := text[i]; c >= 'X' && (c == '_' || c == 'x' || c == 'X') {
+			return 0, strconv.ErrSyntax
+		}
+	}
+	return f, err
 }
 
 // maxQuotedValue is how much of a value an error quotes.
@@ -782,4 +795,50 @@ func SanitizeUTF8(set *MetricSet) (uint64, string) {
 		}
 	}
 	return changed, first
+}
+
+// labelFailure is why a label of a series cannot be exposed, nil when it can:
+// its name, or a value over limits.max_label_value_length.
+func labelFailure(m *Metric, k, v string, l *Limits) error {
+	if !ValidLabelName(k) {
+		if k != "" && utf8.ValidString(k) {
+			return fmt.Errorf("metric %q has label %q, which is not a classic Prometheus label name; set the collector's name_escaping to underscores or values to export it escaped", m.Name, k)
+		}
+		return fmt.Errorf("metric %q has invalid label name %q", m.Name, k)
+	}
+	if ReservedLabelName(k) {
+		return fmt.Errorf("metric %q has %s", m.Name, reservedLabelError(k))
+	}
+	// A histogram's buckets are told apart by le and a summary's
+	// quantiles by quantile. A series with that label of its own
+	// would be written with it on _sum and _count, which a parser
+	// reads as a bucket or a quantile without a bound, and twice on
+	// every bucket.
+	if own := seriesOwnLabel(m); k == own {
+		return fmt.Errorf("metric %q is a %s and has a label %s of its own, which its %s carry; name the label something else", m.Name, m.Type, own, map[string]string{"le": "buckets", "quantile": "quantiles"}[own])
+	}
+	if l.MaxLabelValueLength > 0 && len(v) > l.MaxLabelValueLength {
+		return Errorf("metric %q label %q value is %d bytes, longer than limits.max_label_value_length %d; a label one of the collector's rules gives can be cut to fit with truncate: true on that label, or raise limits.max_label_value_length", m.Name, k, Size(len(v)), l.MaxLabelValueLength)
+	}
+	return nil
+}
+
+// firstLabelFailure is the failure of the first label of a series that has
+// one, by the labels' names in order. The labels are a map, gone through in
+// no order: of two labels that fail, the one a scrape came to first would be
+// named, another on the next scrape, and the log would take each for a new
+// failure (SameFailureText). So once a label fails the labels are gone
+// through again in order, which a series that passes never comes to.
+func firstLabelFailure(m *Metric, l *Limits) error {
+	names := make([]string, 0, len(m.Labels))
+	for k := range m.Labels {
+		names = append(names, k)
+	}
+	sort.Strings(names)
+	for _, k := range names {
+		if err := labelFailure(m, k, m.Labels[k], l); err != nil {
+			return err
+		}
+	}
+	return nil
 }

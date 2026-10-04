@@ -163,6 +163,10 @@ func TestPythonRunCutByTheProbesDeadlineIsNotATimeout(t *testing.T) {
 		strings.Contains(err.Error(), "timed out") || !errors.Is(err, context.DeadlineExceeded) || !errors.Is(err, model.ErrScriptFailed) {
 		t.Fatalf("err=%v", err)
 	}
+	// How long it ran is no part of what the failure is to the log.
+	if same := model.SameFailureText(err); same == err.Error() || !strings.Contains(same, "python transform was stopped after # because its probe or scrape ran out of time") {
+		t.Fatalf("the failure %v is recognised by %q", err, same)
+	}
 	snap := PythonWorkers().Snapshot(c.Name)
 	if snap.Runs[pythonRunDeadline] != 1 || snap.Runs[pythonRunTimeout] != 0 || snap.Stops[pythonStopDeadline] != 1 || snap.Stops[pythonStopTimeout] != 0 {
 		t.Fatalf("runs %v stops %v", snap.Runs, snap.Stops)

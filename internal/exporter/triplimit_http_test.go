@@ -93,13 +93,13 @@ func TestProbesOverTheLimitAreRejected(t *testing.T) {
 	if got := server.trips.count("limited"); got != 2 {
 		t.Fatalf("in flight %d", got)
 	}
-	start := time.Now()
 	rejected := probe("/c")
 	if rejected.Code != http.StatusServiceUnavailable || !strings.Contains(rejected.Body.String(), "max_concurrent_probes") {
 		t.Fatalf("third probe: %d %s", rejected.Code, rejected.Body)
 	}
-	if time.Since(start) > time.Second || target.requests() != 2 {
-		t.Fatal("the rejected probe waited or reached the target")
+	// It did not wait: the two probes it found in progress still are, below.
+	if target.requests() != 2 {
+		t.Fatal("the rejected probe reached the target")
 	}
 	exposition := selfMetrics(t, server)
 	if got := seriesValue(t, exposition, `http_exporter_probes_rejected_total{collector="limited"}`); got != 1 {
@@ -196,12 +196,16 @@ func TestStaticTargetsWaitForASlot(t *testing.T) {
 		t.Fatalf("rejected=%v", got)
 	}
 
-	// The slot frees while the static target scrape waits.
+	// The slot frees while the static target scrape waits: it is freed once
+	// the scrape is seen waiting in line for it, and the scrape has a minute.
+	scraped := make(chan struct{})
 	go func() {
-		time.Sleep(50 * time.Millisecond)
-		target.open()
+		defer close(scraped)
+		server.scrapeStaticTargets(context.Background(), time.Minute)
 	}()
-	server.scrapeStaticTargets(context.Background(), 5*time.Second)
+	testutil.WaitFor(t, "the static target scrape to wait for the slot", func() bool { return server.trips.waitingCount() == 1 })
+	target.open()
+	<-scraped
 	if got := up(); got != 1 {
 		t.Fatalf("up=%v after the slot was freed", got)
 	}
@@ -215,9 +219,7 @@ func TestAProbeOverTheProcessLimitIsRefused(t *testing.T) {
 	server := flightServer(t, c)
 	server.SetMaxConcurrent(1)
 	first := probeAsync(context.Background(), server, probePath("capped", target.server.URL+"/a", ""), nil)
-	for deadline := time.Now().Add(5 * time.Second); target.requests() < 1 && time.Now().Before(deadline); {
-		time.Sleep(time.Millisecond)
-	}
+	testutil.WaitFor(t, "the first probe to reach the target", func() bool { return target.requests() >= 1 })
 	got := probeOnce(t, server, probePath("capped", target.server.URL+"/b", ""), nil)
 	if got.Code != http.StatusServiceUnavailable || !strings.Contains(got.Body.String(), "--probe.max-concurrent") {
 		t.Fatalf("%d %s", got.Code, got.Body)

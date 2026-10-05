@@ -274,7 +274,7 @@ func decodeCSV(r *fetch.HTTPResponse, c *model.Collector) (*Decoded, error) {
 				return nil, fmt.Errorf("CSV header leaves column %d unnamed, and it holds values; name it, or set response.csv.header: false and read the columns by number", i+1)
 			}
 			if first, seen := column[heads[i]]; seen {
-				return nil, fmt.Errorf("CSV header names column %q twice, as columns %d and %d; rename one, or set response.csv.header: false and read the columns by number", heads[i], first+1, i+1)
+				return nil, model.Errorf("CSV header names column %s twice, as columns %d and %d; rename one, or set response.csv.header: false and read the columns by number", model.Quoted(heads[i]), first+1, i+1)
 			}
 			column[heads[i]] = i
 		}

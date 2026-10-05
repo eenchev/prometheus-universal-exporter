@@ -7,7 +7,6 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"errors"
-	"net"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -121,10 +120,7 @@ func TestAGRPCCallsFailureIsRecognisedWithoutWhatBelongsToOneConnection(t *testi
 		}
 	})
 	t.Run("a refused connection", func(t *testing.T) {
-		listener, err := net.Listen("tcp", "127.0.0.1:0")
-		if err != nil {
-			t.Fatal(err)
-		}
+		listener := grpctest.Listen(t)
 		nobody := listener.Addr().String()
 		_ = listener.Close()
 		a, _ := fetchFailures(t, validGRPC(t, protosetCollector(t)), nobody)

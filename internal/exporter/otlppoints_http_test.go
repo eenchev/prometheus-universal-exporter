@@ -85,7 +85,7 @@ func TestOTLPPointsKeepTheTimeTheyWereQueued(t *testing.T) {
 	queueProbeMetric(server, "queued", 1)
 	after := time.Now()
 	time.Sleep(50 * time.Millisecond)
-	server.exportOTLP(t.Context(), time.Second)
+	server.exportOTLP(t.Context(), time.Minute)
 	endpoint.mu.Lock()
 	body := string(endpoint.bodies[len(endpoint.bodies)-1])
 	endpoint.mu.Unlock()

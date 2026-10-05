@@ -4,13 +4,13 @@ import (
 	"context"
 	"errors"
 	"net/http"
-	"runtime"
 	"strings"
 	"testing"
 
 	"github.com/eenchev/prometheus-universal-exporter/internal/decode"
 	"github.com/eenchev/prometheus-universal-exporter/internal/fetch"
 	"github.com/eenchev/prometheus-universal-exporter/internal/model"
+	"github.com/eenchev/prometheus-universal-exporter/internal/testutil/alloctest"
 )
 
 // A response describing far more series than limits.max_metrics allows fails
@@ -85,12 +85,13 @@ func TestTransformsStopAtTheSeriesLimit(t *testing.T) {
 			// At the limit exactly, the scrape passes, making every series.
 			c.Limits.MaxMetrics = manySeries
 			var set *model.MetricSet
-			all := allocated(func() { set, err = Transform(context.Background(), d, r, &c, "") })
+			// Measured once: the refusal is bounded by half of it.
+			_, all := alloctest.Once(1, func() { set, err = Transform(context.Background(), d, r, &c, "") })
 			if err != nil || len(set.Metrics) != manySeries {
 				t.Fatalf("at the limit: %d series, %v", len(set.Metrics), err)
 			}
 			c.Limits.MaxMetrics = seriesLimit
-			limited := allocated(func() { _, err = Transform(context.Background(), d, r, &c, "") })
+			limited := alloctest.BytesAtMost(1, max(all/2, refusalBytes), func() { _, err = Transform(context.Background(), d, r, &c, "") })
 			if err == nil || err.Error() != wantLimitFailed || !errors.Is(err, model.ErrLimitExceeded) {
 				t.Fatalf("err = %v, want %q marked as a limit", err, wantLimitFailed)
 			}
@@ -100,15 +101,6 @@ func TestTransformsStopAtTheSeriesLimit(t *testing.T) {
 			}
 		})
 	}
-}
-
-// allocated is how many bytes run allocates.
-func allocated(run func()) uint64 {
-	var before, after runtime.MemStats
-	runtime.ReadMemStats(&before)
-	run()
-	runtime.ReadMemStats(&after)
-	return after.TotalAlloc - before.TotalAlloc
 }
 
 func promSeries(n int) string {
@@ -153,7 +145,7 @@ func TestPrometheusDecoderStopsAtTheSeriesLimit(t *testing.T) {
 			c := model.Collector{Name: "limited", Decoder: model.DecoderConfig{Type: "prometheus"}, Transform: tc.transform, Metrics: tc.rules, Limits: model.Limits{MaxMetrics: seriesLimit}}
 			r := &fetch.HTTPResponse{Body: body, Headers: http.Header{}}
 			var decodeErr error
-			allocs := testing.AllocsPerRun(2, func() { _, decodeErr = decode.Decode(r, &c) })
+			allocs := alloctest.AllocsAtMost(2, boundedAllocs, func() { _, decodeErr = decode.Decode(r, &c) })
 			if decodeErr == nil || decodeErr.Error() != wantLimitFailed || !errors.Is(decodeErr, model.ErrLimitExceeded) {
 				t.Fatalf("err = %v, want %q marked as a limit", decodeErr, wantLimitFailed)
 			}

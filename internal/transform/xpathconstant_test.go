@@ -15,6 +15,7 @@ import (
 	"github.com/eenchev/prometheus-universal-exporter/internal/decode"
 	"github.com/eenchev/prometheus-universal-exporter/internal/expr"
 	"github.com/eenchev/prometheus-universal-exporter/internal/model"
+	"github.com/eenchev/prometheus-universal-exporter/internal/testutil/alloctest"
 	"golang.org/x/net/html"
 )
 
@@ -426,7 +427,7 @@ func TestAConstantLabelIsEvaluatedOnceForItsRule(t *testing.T) {
 	cost := func(label model.LabelRule) (allocations float64, labels map[string]string) {
 		rules := []model.MetricRule{{Name: "m", Expression: "//row/v", Labels: []model.LabelRule{label}}}
 		c := &model.Collector{Name: "cost", Metrics: rules}
-		allocations = testing.AllocsPerRun(10, func() {
+		allocations, _ = alloctest.Allocations(10, func() {
 			set, err := transformXPathNodes(context.Background(), root, xmlNodes, rules, c, nil)
 			if err != nil || len(set.Metrics) != rows {
 				t.Fatalf("%d series, %v", len(set.Metrics), err)

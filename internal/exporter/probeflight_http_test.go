@@ -82,20 +82,15 @@ func probeAsync(ctx context.Context, server *Server, path string, header http.He
 // target answer.
 func waitForWaiters(t *testing.T, server *Server, n int) {
 	t.Helper()
-	deadline := time.Now().Add(5 * time.Second)
-	for time.Now().Before(deadline) {
+	testutil.WaitFor(t, fmt.Sprintf("%d probes to be in flight", n), func() bool {
 		server.flights.mu.Lock()
+		defer server.flights.mu.Unlock()
 		total := 0
 		for _, flight := range server.flights.flights {
 			total += flight.waiters
 		}
-		server.flights.mu.Unlock()
-		if total == n {
-			return
-		}
-		time.Sleep(time.Millisecond)
-	}
-	t.Fatalf("timed out waiting for %d probes to be in flight", n)
+		return total == n
+	})
 }
 
 func flightServer(t *testing.T, collectors ...model.Collector) *Server {
@@ -254,13 +249,7 @@ func TestProbesWithoutAKeyAreNotShared(t *testing.T) {
 
 	first := probeAsync(context.Background(), server, probePath("unkeyed", target.URL, ""), nil)
 	second := probeAsync(context.Background(), server, probePath("unkeyed", other.URL, ""), nil)
-	deadline := time.Now().Add(5 * time.Second)
-	for target.requests.Load()+other.requests.Load() < 2 {
-		if time.Now().After(deadline) {
-			t.Fatalf("the probes made %d requests, want one each", target.requests.Load()+other.requests.Load())
-		}
-		time.Sleep(time.Millisecond)
-	}
+	testutil.WaitFor(t, "each probe to make its request", func() bool { return target.requests.Load()+other.requests.Load() >= 2 })
 	target.open()
 	other.open()
 	if got := <-first; got.code != http.StatusOK || !strings.Contains(got.body, "demo_value 42") {
@@ -361,16 +350,11 @@ func TestTheRequestIsCancelledWhenEveryProbeHasGone(t *testing.T) {
 	waitForWaiters(t, server, 2)
 	// Leave only once the request has reached the target, so there is a
 	// request there to be cancelled.
-	for deadline := time.Now().Add(5 * time.Second); target.requests.Load() == 0 && time.Now().Before(deadline); {
-		time.Sleep(time.Millisecond)
-	}
+	testutil.WaitFor(t, "the request to reach the target", func() bool { return target.requests.Load() > 0 })
 	leave()
 	<-first
 	<-second
-	deadline := time.Now().Add(5 * time.Second)
-	for target.cancelled.Load() == 0 && time.Now().Before(deadline) {
-		time.Sleep(time.Millisecond)
-	}
+	testutil.WaitFor(t, "the abandoned request to be cancelled", func() bool { return target.cancelled.Load() > 0 })
 	if target.cancelled.Load() != 1 {
 		t.Fatal("the abandoned request was not cancelled")
 	}
@@ -392,10 +376,7 @@ func TestCoalescingCanBeTurnedOff(t *testing.T) {
 	for i := 0; i < 3; i++ {
 		outcomes = append(outcomes, probeAsync(context.Background(), server, probePath("independent", target.URL, ""), nil))
 	}
-	deadline := time.Now().Add(5 * time.Second)
-	for target.requests.Load() < 3 && time.Now().Before(deadline) {
-		time.Sleep(time.Millisecond)
-	}
+	testutil.WaitFor(t, "each of the three probes to make its request", func() bool { return target.requests.Load() >= 3 })
 	target.open()
 	for _, outcome := range outcomes {
 		if got := <-outcome; got.code != http.StatusOK {

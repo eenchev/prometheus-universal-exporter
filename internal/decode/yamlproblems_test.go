@@ -5,12 +5,12 @@ import (
 	"fmt"
 	"math/rand/v2"
 	"net/http"
-	"runtime"
 	"strings"
 	"testing"
 
 	"github.com/eenchev/prometheus-universal-exporter/internal/fetch"
 	"github.com/eenchev/prometheus-universal-exporter/internal/model"
+	"github.com/eenchev/prometheus-universal-exporter/internal/testutil/alloctest"
 	"gopkg.in/yaml.v3"
 )
 
@@ -157,16 +157,6 @@ func TestAYAMLFailureIsRecognisedByItsProblemsNotByHowManyTimesEachIsListed(t *t
 	}
 }
 
-// allocatedBy is how many bytes a call allocates.
-func allocatedBy(call func()) uint64 {
-	var before, after runtime.MemStats
-	runtime.GC()
-	runtime.ReadMemStats(&before)
-	call()
-	runtime.ReadMemStats(&after)
-	return after.TotalAlloc - before.TotalAlloc
-}
-
 // A document with many problems costs what the library makes of it and no
 // more: a key written 400 times, 2 kB, is 79,800 problems, which the library
 // allocates some 13 MB for. Decoding it, reading the error and asking what
@@ -176,7 +166,9 @@ func TestAYAMLDocumentsManyProblemsCostNoMoreThanTheLibraryMadeOfThem(t *testing
 	body := []byte(strings.Repeat("a: 1\n", 400))
 	c := &model.Collector{Name: "doc", Decoder: model.DecoderConfig{Type: "yaml"}, Transform: model.TransformConfig{Type: "yq"}}
 	var library, text int
-	base := allocatedBy(func() {
+	// The library alone is measured once: what decoding takes is bounded
+	// by a tenth over it.
+	_, base := alloctest.Once(1, func() {
 		_, err := decodeYAMLBeforeLinesWereLeftOut(body)
 		var problems *yaml.TypeError
 		if !errors.As(err, &problems) {
@@ -184,7 +176,7 @@ func TestAYAMLDocumentsManyProblemsCostNoMoreThanTheLibraryMadeOfThem(t *testing
 		}
 		library = len(problems.Errors)
 	})
-	now := allocatedBy(func() {
+	now := alloctest.BytesAtMost(1, base+base/10, func() {
 		_, err := Decode(&fetch.HTTPResponse{StatusCode: http.StatusOK, Body: body, Headers: http.Header{}}, c)
 		if err == nil {
 			t.Fatal("the document decoded")

@@ -2,6 +2,7 @@ package transform
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"os"
@@ -36,9 +37,26 @@ func requirePython(t *testing.T) {
 // previous one afterwards (IsolatePythonWorkers). Every count a test reads
 // from the pool is then its own, so the tests pass under -count=N and
 // -shuffle=on. Tests do not run in parallel, so swapping the pool is safe.
+//
+// The pool leaves every script at least a minute, whatever its
+// limits.script_timeout: a script that takes a millisecond has been seen to
+// take more than the default 100ms on a machine with every CPU busy
+// elsewhere, and one that fills 200 MiB more than two seconds. The minute
+// bounds a script that never ends; a test of the timeout itself calls
+// holdScriptsToTheirTimeout.
 func usePythonPool(t *testing.T) {
 	t.Helper()
 	t.Cleanup(IsolatePythonWorkers())
+	PythonWorkers().SetLeastScriptTimeout(time.Minute)
+}
+
+// holdScriptsToTheirTimeout makes limits.script_timeout what ends a script
+// in the test's pool, as it is in the exporter: for the tests of the timeout,
+// whose scripts are stopped by it. It is called after requirePython or
+// usePythonPool.
+func holdScriptsToTheirTimeout(t *testing.T) {
+	t.Helper()
+	PythonWorkers().SetLeastScriptTimeout(0)
 }
 
 func workerCollector(name, script string) *model.Collector {
@@ -122,8 +140,13 @@ metric(name="leaked", value=1 if hasattr(json, "_left_behind") else 0)
 
 // A script that overruns fails with a timeout; its worker is killed and the
 // next scrape gets a working one.
+//
+// The script never ends, so the timeout is what ends the run, however slow
+// the machine; the run after it has a minute, so a slow machine does not
+// fail it by the timeout it is not about.
 func TestPythonWorkerTimeoutKillsTheWorker(t *testing.T) {
 	requirePython(t)
+	holdScriptsToTheirTimeout(t)
 	c := workerCollector("timeout", `
 if data == "value=7":
     while True:
@@ -131,18 +154,73 @@ if data == "value=7":
 metric(name="v", value=1)
 `)
 	c.Limits.ScriptTimeout = model.Duration(200 * time.Millisecond)
-	start := time.Now()
 	_, err := runWorkerScript(t, c)
 	if err == nil || !strings.Contains(err.Error(), "python transform timed out after 200ms") {
 		t.Fatalf("err=%v", err)
 	}
-	if elapsed := time.Since(start); elapsed > 2*time.Second {
-		t.Fatalf("the timeout took %s", elapsed)
+	if snap := PythonWorkers().Snapshot(c.Name); snap.Stops[pythonStopTimeout] != 1 || snap.Idle != 0 || snap.Busy != 0 {
+		t.Fatalf("after the timeout: stops %v, %d workers idle and %d busy, want the one worker stopped for it", snap.Stops, snap.Idle, snap.Busy)
 	}
 	c.Transform.Script = `metric(name="v", value=1)`
+	c.Limits.ScriptTimeout = model.Duration(time.Minute)
 	set, err := runWorkerScript(t, c)
 	if err != nil || workerMetricValue(t, set, "v") != 1 {
 		t.Fatalf("after a timeout: set=%+v err=%v", set, err)
+	}
+	if snap := PythonWorkers().Snapshot(c.Name); snap.Starts != 2 {
+		t.Fatalf("%d workers were started, want the one the timeout killed and another for the next run", snap.Starts)
+	}
+}
+
+// A pool told the least time to give a script gives every script that long,
+// whatever its limits.script_timeout, and says so when a script overruns it;
+// a limit above it stands; and a pool told 0, as the exporter's own is, holds
+// each script to its limit. The tests run scripts under the first, so that a
+// machine too busy to run a script within its limit does not fail a test
+// that is not about the limit (usePythonPool).
+//
+// The workers are stand-ins and the clock the test's own, as below.
+func TestAPoolsLeastScriptTimeIsWhatAScriptHas(t *testing.T) {
+	const limit = 25 * time.Millisecond
+	for _, test := range []struct {
+		name          string
+		least, limit  time.Duration
+		script        time.Duration
+		timesOutAfter string
+	}{
+		{"a script over its limit and within the least time", time.Minute, limit, 30 * time.Second, ""},
+		{"a script over the least time", time.Minute, limit, time.Minute + time.Millisecond, "1m0s"},
+		{"a script within a limit above the least time", time.Minute, 2 * time.Minute, 90 * time.Second, ""},
+		{"a script over a limit above the least time", time.Minute, 2 * time.Minute, 2*time.Minute + time.Millisecond, "2m0s"},
+		{"no least time, a script within its limit", 0, limit, limit - time.Millisecond, ""},
+		{"no least time, a script over its limit", 0, limit, limit + time.Millisecond, "25ms"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				t.Cleanup(IsolatePythonWorkers())
+				if got := time.Duration(PythonWorkers().leastScriptTimeout.Load()); got != 0 {
+					t.Fatalf("a fresh pool gives a script at least %s, want its limit alone", got)
+				}
+				PythonWorkers().SetLeastScriptTimeout(test.least)
+				PythonWorkers().start = func(context.Context, pythonSpec) (*pythonWorker, error) {
+					return heldWorker(t, heldAnswer{0, pythonRequestTaken}, heldAnswer{test.script, `{"ok": true, "metrics": [{"name": "v", "value": 1}]}`}), nil
+				}
+				c := workerCollector("least", `metric(name="v", value=1)`)
+				c.Limits.ScriptTimeout = model.Duration(test.limit)
+				_, err := runWorkerScript(t, c)
+				// The stand-in is left the time to end, as below.
+				time.Sleep(test.script)
+				if test.timesOutAfter == "" {
+					if err != nil {
+						t.Fatalf("a script of %s under a limit of %s in a pool that gives at least %s: %v", test.script, test.limit, test.least, err)
+					}
+					return
+				}
+				if want := "python transform timed out after " + test.timesOutAfter + ": "; err == nil || !strings.Contains(err.Error(), want) {
+					t.Fatalf("a script of %s under a limit of %s in a pool that gives at least %s: %v, want %q", test.script, test.limit, test.least, err, want)
+				}
+			})
+		})
 	}
 }
 
@@ -169,6 +247,7 @@ func TestPythonWorkerStartupIsNotCountedAgainstTheScript(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			synctest.Test(t, func(t *testing.T) {
 				usePythonPool(t)
+				holdScriptsToTheirTimeout(t)
 				PythonWorkers().start = func(context.Context, pythonSpec) (*pythonWorker, error) {
 					time.Sleep(test.startup)
 					return heldWorker(t, heldAnswer{0, pythonRequestTaken}, heldAnswer{test.script, `{"ok": true, "metrics": [{"name": "v", "value": 1}]}`}), nil
@@ -533,29 +612,32 @@ func TestPythonWorkersAreCappedProcessWide(t *testing.T) {
 
 // A run that finds every worker busy waits only as long as its own deadline,
 // and says why it gave up.
+//
+// The worker is busy until the test ends its run: with a script that slept
+// a second, a machine that took longer than that to get the other run to
+// the pool found the worker free.
 func TestPythonWorkerWaitEndsWithTheRun(t *testing.T) {
 	requirePython(t)
 	pool := PythonWorkers()
 	pool.SetMaxWorkers(1)
-	slow := workerCollector("waited_slow", "import time\ntime.sleep(1)\nmetric(name=\"v\", value=1)")
+	slow := workerCollector("waited_slow", "import time\ntime.sleep(3600)\nmetric(name=\"v\", value=1)")
+	busy, endBusy := context.WithCancel(context.Background())
+	defer endBusy()
 	done := make(chan error, 1)
 	go func() {
-		_, err := runWorkerScript(t, slow)
+		_, err := runWorkerText(busy, slow, "value=7")
 		done <- err
 	}()
-	for deadline := time.Now().Add(5 * time.Second); time.Now().Before(deadline); time.Sleep(time.Millisecond) {
-		if pool.Snapshot("waited_slow").Busy == 1 {
-			break
-		}
-	}
+	testutil.WaitFor(t, "the only worker to be busy", func() bool { return pool.Snapshot("waited_slow").Busy == 1 })
 	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
 	defer cancel()
 	other := workerCollector("waited_other", `metric(name="v", value=1)`)
 	if _, _, err := pool.run(ctx, pythonWorkerSpec("python3", other), []byte(`{}`), time.Second); err == nil || !strings.Contains(err.Error(), "--python.max-workers") {
 		t.Fatalf("err=%v", err)
 	}
-	if err := <-done; err != nil {
-		t.Fatal(err)
+	endBusy()
+	if err := <-done; !errors.Is(err, context.Canceled) {
+		t.Fatalf("the run that kept the worker busy ended with %v, want it ended by the test", err)
 	}
 	if ValidateMaxWorkers(-1) == nil || ValidateMaxWorkers(0) != nil {
 		t.Fatal("validation")
@@ -607,33 +689,36 @@ func TestPythonWorkerDeathUnderAMemoryLimitNamesIt(t *testing.T) {
 
 // Runs waiting for a worker under --python.max-workers are served in line,
 // one per worker that frees, and one giving up passes its turn on.
+//
+// The worker is busy until the test ends its run, when the line is as the
+// test wants it: with a script that slept 300ms, a machine that took longer
+// than that to form the line found the worker free halfway.
 func TestPythonWorkerWaitersAreServedInLine(t *testing.T) {
 	requirePython(t)
 	pool := PythonWorkers()
 	pool.SetMaxWorkers(1)
-	slow := workerCollector("line_busy", "import time\ntime.sleep(0.3)\nmetric(name=\"v\", value=1)")
+	slow := workerCollector("line_busy", "import time\ntime.sleep(3600)\nmetric(name=\"v\", value=1)")
+	held, free := context.WithCancel(context.Background())
+	defer free()
 	busy := make(chan error, 1)
 	go func() {
-		_, err := runWorkerScript(t, slow)
+		_, err := runWorkerText(held, slow, "value=7")
 		busy <- err
 	}()
 	waitFor := func(n int) {
-		for deadline := time.Now().Add(5 * time.Second); time.Now().Before(deadline); time.Sleep(time.Millisecond) {
+		t.Helper()
+		testutil.WaitFor(t, fmt.Sprintf("%d runs to wait in line for the one worker", n), func() bool {
 			pool.mu.Lock()
-			queued, live := len(pool.waiting), pool.live
-			pool.mu.Unlock()
-			if queued == n && live == 1 {
-				return
-			}
-		}
-		t.Fatalf("%d waiters never queued", n)
+			defer pool.mu.Unlock()
+			return len(pool.waiting) == n && pool.live == 1
+		})
 	}
 	waitFor(0)
 	served := make(chan string, 3)
 	run := func(name string, ctx context.Context) {
 		c := workerCollector(name, `metric(name="v", value=1)`)
 		go func() {
-			if _, _, err := pool.run(ctx, pythonWorkerSpec("python3", c), []byte(`{"mode":"metrics","script":"metric(name='v', value=1)","data":null,"response":{"status_code":200,"headers":{},"body":"","text":""},"target":"","collector":"`+name+`"}`), 2*time.Second); err == nil {
+			if _, _, err := pool.run(ctx, pythonWorkerSpec("python3", c), []byte(`{"mode":"metrics","script":"metric(name='v', value=1)","data":null,"response":{"status_code":200,"headers":{},"body":"","text":""},"target":"","collector":"`+name+`"}`), time.Minute); err == nil {
 				served <- name
 			}
 		}()
@@ -650,8 +735,9 @@ func TestPythonWorkerWaitersAreServedInLine(t *testing.T) {
 	}
 	quit()
 	waitFor(2)
-	if err := <-busy; err != nil {
-		t.Fatal(err)
+	free()
+	if err := <-busy; !errors.Is(err, context.Canceled) {
+		t.Fatalf("the run that kept the worker busy ended with %v, want it ended by the test", err)
 	}
 	for _, want := range []string{"line_first", "line_third"} {
 		select {
@@ -659,7 +745,7 @@ func TestPythonWorkerWaitersAreServedInLine(t *testing.T) {
 			if got != want {
 				t.Fatalf("%s was served, want %s", got, want)
 			}
-		case <-time.After(5 * time.Second):
+		case <-time.After(time.Minute):
 			t.Fatalf("%s was never served", want)
 		}
 	}

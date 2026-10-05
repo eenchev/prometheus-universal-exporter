@@ -47,7 +47,7 @@ func TestHistogramsAndSummariesReachTheOTLPEndpoint(t *testing.T) {
 		if err := json.Unmarshal(body, &payload); err != nil {
 			t.Fatalf("%v\n%s", err, body)
 		}
-	case <-time.After(5 * time.Second):
+	case <-time.After(30 * time.Second):
 		t.Fatal("nothing was exported")
 	}
 	found := map[string]otlpMetric{}

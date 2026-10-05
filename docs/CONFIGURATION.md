@@ -140,11 +140,21 @@ selectors and XPath (including bare element selectors such as `h1`), text
 supports regular expressions, and Prometheus input is parsed before
 filtering/renaming. An XML document may nest its elements 512 deep, as an HTML
 document may; a deeper one fails the scrape in the `decode` stage, saying so,
-whatever its size. Whichever decoder reads a body, the error of one it cannot
-decode is at most 2,000 bytes: a longer one, as of a line of a megabyte that
-is no sample and is quoted whole, is cut there and ends with the length it
-had, `... (1000100 bytes)`; so is the warning for the first line a decoder
-leaves out, a carbon line that is skipped or a sample line left out.
+whatever its size. The other decoders too quote no more than the start of a
+value of the body they cannot read, its first 64 bytes, followed by the
+value's length, and then say what they have to say of it: `text format
+parsing error in line 7: label value "aaaa..."... (1000000 bytes) contains
+unescaped new-line`, `carbon line 3: "app.web01.requests 42 1727000000 x
+aaaa..."... (1000040 bytes) has 5 fields; want <path> <value> <timestamp>`,
+`CSV header names column "aaaa..."... (70000 bytes) twice, as columns 2 and
+3; rename one, ...`, `XML syntax error on line 2: element <aaaaaaaa... (90000
+bytes)> closed by </b>`. So an error is a line of a few hundred bytes that
+ends with what is wrong and what to change, whatever a value of the body
+holds, and so is the warning for the first line a decoder leaves out, a
+carbon line that is skipped or a sample line left out. The last resort is a
+bound on the whole error, 2,000 bytes: one longer than that — a histogram
+series named by a hundred labels, each shown — is cut there and ends with the
+length it had, `... (6400 bytes)`.
 
 ### Character encodings
 
@@ -514,7 +524,12 @@ labels:
     value: production        # static, on this metric only
 ```
 
-A label setting both, or neither, is refused at startup. For a static label on
+A label setting both, or neither, is refused at startup. So is one whose
+`expression` is nothing but blanks, such as `expression: " "`, with a `value`
+beside it or without: blanks are not the key left out, as `""` is, and they
+read nothing, so the error says to write the expression or, for a constant,
+to set `value` and leave `expression` out. A `value` of blanks is a constant
+like any other, exported as written. For a static label on
 every metric of a collector, use [`transform.labels`](#collector-wide-labels)
 instead.
 
@@ -2106,7 +2121,8 @@ text to a schema — that a duration is not too long to be held, and that a
 schema can tell, it refuses what the exporter refuses: a
 `response.csv.delimiter` of more than one character, a size with a fraction
 and no unit, a block that sets keys beside a missing `enabled`, a
-`value_map` key that is empty or has blanks around it, a `required` label
+`value_map` key that is empty or has blanks around it, a label's
+`expression` of nothing but blanks, a `required` label
 whose `value_map` maps a value to `""`, a rule without a `name` under any
 transform but `prometheus` and `python`, a `grpc` collector that calls
 another service than `grpc.health.v1.Health` without `descriptors`, and a
@@ -2143,7 +2159,12 @@ type of the series it passes through, `otlp.compression: ""` is `gzip`, and
 request type, such as `rpc`, `descriptors` or `method`, is left out when it
 is written `""`, and so takes no part in what that type refuses. A rule
 about a key goes by the key being written: a label has a `value` or an
-`expression`, and the one written `""` is the one it does not have. A key
+`expression`, and the one written `""` is the one it does not have. Blanks
+are not the empty string: a key written as nothing but blanks, such as
+`" "`, is text like any other, which the key takes or refuses as it does its
+other values — a label's `value` of blanks is a constant of blanks, its
+`expression` of blanks is refused, and a pattern of blanks in
+`transform.include` matches the names that have them. A key
 that is required is as missing written `""` as left out, and refused by
 both: `transform.type`, `request.type`, a collector's `name`, a label's
 `name`, a rule's `name` under the transforms that need one, a `grpc`

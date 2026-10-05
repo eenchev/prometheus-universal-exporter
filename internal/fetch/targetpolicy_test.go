@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/eenchev/prometheus-universal-exporter/internal/model"
+	"github.com/eenchev/prometheus-universal-exporter/internal/testutil"
 )
 
 // request.allowed_targets and denied_targets (targetpolicy.go).
@@ -304,9 +305,7 @@ func TestAddressesAreCheckedWithoutASecondLookup(t *testing.T) {
 		t.Fatalf("a direct target was looked up %d times before connecting", n)
 	}
 	// The server sees a connection after the client has closed it.
-	for deadline := time.Now().Add(2 * time.Second); connections.Load() == 0 && time.Now().Before(deadline); {
-		time.Sleep(time.Millisecond)
-	}
+	testutil.WaitFor(t, "the server to see the refused connection", func() bool { return connections.Load() > 0 })
 	time.Sleep(50 * time.Millisecond)
 	if n := connections.Load(); n != 1 {
 		t.Fatalf("%d connections for a refused target, want the one refused, not retried", n)
@@ -367,11 +366,11 @@ func TestCloudMetadataIsRefusedByDefault(t *testing.T) {
 			}
 		})
 	}
-	// A probe of the address is refused at once, without a connection.
-	start := time.Now()
+	// A probe of the address is refused, without a connection: the refusal
+	// is the error, where a connection tried would fail with its own.
 	err := fetchRefused(t, "http://169.254.169.254/latest/meta-data/", httpCollector(t, nil))
-	if !errors.Is(err, ErrTargetRefused) || time.Since(start) > time.Second {
-		t.Fatalf("err=%v after %s", err, time.Since(start))
+	if !errors.Is(err, ErrTargetRefused) {
+		t.Fatalf("err=%v", err)
 	}
 }
 

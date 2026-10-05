@@ -4,6 +4,7 @@ package exporter
 
 import (
 	"fmt"
+	"net/http"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -21,30 +22,56 @@ import (
 // error kinds (model/errors.go).
 
 // http_exporter_script_duration_seconds is the time the probe's Python took,
-// on the collector and, in verbose mode, on the request.
+// on the collector and, in verbose mode, on the request: more than nothing
+// and no more than the probe itself took for a script that ran, at least
+// limits.script_timeout for a script the timeout stopped, and 0 for a
+// collector without Python.
+//
+// The exporter measures the time, from reading the worker's word that it has
+// the request to reading its answer (transform/pythonworker.go), which is
+// what limits.script_timeout is held against. An exporter that reads that
+// word late measures less than the script would say itself: a script that
+// sleeps 50ms was reported at 49ms on a busy machine, so the time a script
+// sleeps is not a floor. The timeout is one, the exporter's own timer ending
+// the wait, and the time the test measures around the probe is a ceiling.
 func TestScriptDurationIsRecorded(t *testing.T) {
 	requirePython(t)
+	holdScriptsToTheirTimeout(t)
 	target := textTarget(t, "value=42\n")
 	slow := pythonCollector("timed_script", "import time\ntime.sleep(0.05)\nmetric(name=\"v\", value=1)\n")
-	server := verboseServer(t, true, slow, testutil.Collector("no_script", "text"))
-	probe := func(collector string) {
-		if recorder := probeOnce(t, server, "/probe?collector="+collector+"&target="+url.QueryEscape(target.URL), nil); recorder.Code != 200 {
+	const timeout = 250 * time.Millisecond
+	stopped := pythonCollector("stopped_script", "while True:\n    pass\n")
+	stopped.Limits.ScriptTimeout = model.Duration(timeout)
+	server := verboseServer(t, true, slow, stopped, testutil.Collector("no_script", "text"))
+	// probe reports how long the probe took, which its script ran within.
+	probe := func(collector string, want int) time.Duration {
+		t.Helper()
+		began := time.Now()
+		recorder := probeOnce(t, server, "/probe?collector="+collector+"&target="+url.QueryEscape(target.URL), nil)
+		took := time.Since(began)
+		if recorder.Code != want {
 			t.Fatalf("%s: %d %s", collector, recorder.Code, recorder.Body)
 		}
+		return took
 	}
-	probe("timed_script")
-	probe("no_script")
+	took := map[string]time.Duration{
+		"timed_script":   probe("timed_script", http.StatusOK),
+		"no_script":      probe("no_script", http.StatusOK),
+		"stopped_script": probe("stopped_script", http.StatusBadGateway),
+	}
 	exposition := selfMetrics(t, server)
-	got := seriesValue(t, exposition, `http_exporter_script_duration_seconds{collector="timed_script"}`)
-	if got < 0.05 || got > 2 {
-		t.Fatalf("script duration %v, want at least the 50ms the script sleeps", got)
+	for collector, least := range map[string]time.Duration{"timed_script": time.Nanosecond, "stopped_script": timeout} {
+		got := seriesValue(t, exposition, `http_exporter_script_duration_seconds{collector="`+collector+`"}`)
+		if got < least.Seconds() || got > took[collector].Seconds() {
+			t.Errorf("%s: script duration %v, want at least %s and at most the %s its probe took", collector, got, least, took[collector])
+		}
+		perRequest := fmt.Sprintf(`http_exporter_script_duration_seconds{collector=%q,http_method="GET",url=%q}`, collector, target.URL)
+		if of := seriesValue(t, exposition, perRequest); of != got {
+			t.Errorf("%s: per-request script duration %v, want the collector's %v", collector, of, got)
+		}
 	}
 	if got := seriesValue(t, exposition, `http_exporter_script_duration_seconds{collector="no_script"}`); got != 0 {
 		t.Fatalf("a collector without Python reports %v", got)
-	}
-	perRequest := fmt.Sprintf(`http_exporter_script_duration_seconds{collector="timed_script",http_method="GET",url=%q}`, target.URL)
-	if got := seriesValue(t, exposition, perRequest); got < 0.05 {
-		t.Fatalf("per-request script duration %v", got)
 	}
 }
 
@@ -108,13 +135,7 @@ func TestAReloadStopsTheWorkersOfChangedScripts(t *testing.T) {
 		defer close(finished)
 		probe(busyName)
 	}()
-	deadline := time.Now().Add(5 * time.Second)
-	for transform.PythonWorkers().Snapshot(busyName).Busy == 0 {
-		if time.Now().After(deadline) {
-			t.Fatal("the slow script never started")
-		}
-		time.Sleep(5 * time.Millisecond)
-	}
+	testutil.WaitFor(t, "the slow script to start", func() bool { return transform.PythonWorkers().Snapshot(busyName).Busy > 0 })
 
 	write(document(`metric(name="new", value=1)`, `metric(name="busy", value=2)`))
 	if err := manager.Reload(config.ReloadTriggerSignal); err != nil {

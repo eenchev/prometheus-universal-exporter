@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/eenchev/prometheus-universal-exporter/internal/model"
+	"github.com/eenchev/prometheus-universal-exporter/internal/testutil/alloctest"
 )
 
 // csvRowsRun is what a csv transform of rows gave, the rules' series each as
@@ -324,11 +325,12 @@ func TestCSVColumnsAreLookedForOnlyWhenARowLacksOne(t *testing.T) {
 		return
 	}
 	cost := func(rules []model.MetricRule) float64 {
-		return testing.AllocsPerRun(5, func() {
+		allocations, _ := alloctest.Allocations(5, func() {
 			if _, err := transformCSV(t.Context(), rows, rules, &c); err != nil {
 				t.Fatal(err)
 			}
 		})
+		return allocations
 	}
 	// Two allocations a series, its labels and their map, and the series'
 	// slice: nothing is kept of columns no row lacks.

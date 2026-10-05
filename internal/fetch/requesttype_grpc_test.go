@@ -20,6 +20,7 @@ import (
 
 	"github.com/eenchev/prometheus-universal-exporter/internal/grpctest"
 	"github.com/eenchev/prometheus-universal-exporter/internal/model"
+	"github.com/eenchev/prometheus-universal-exporter/internal/testutil"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/connectivity"
 	"google.golang.org/grpc/status"
@@ -363,7 +364,12 @@ func TestGRPCAnAnswerWithAnyOfTheServicesOwnTypes(t *testing.T) {
 // again, and grpc-go fails every call at once while it waits: without a
 // probe ending the wait, the first probe after the server returned would
 // fail too.
+//
+// The connection would wait an hour by itself, so the probe after the server
+// returned is answered because it ended that wait, and it has a minute to
+// connect in: a busy machine makes the test slower, and no time is measured.
 func TestGRPCAServerThatComesBackIsReachedAtTheNextProbe(t *testing.T) {
+	connectionsWaitAnHour(t)
 	server := grpctest.Start(t, grpctest.Options{Answer: statsAnswer})
 	addr := server.Addr
 	dir := t.TempDir()
@@ -371,7 +377,7 @@ func TestGRPCAServerThatComesBackIsReachedAtTheNextProbe(t *testing.T) {
 	c.Request.Descriptors, c.Request.ProtosetFile = "protoset", grpctest.WriteProtoset(t, filepath.Join(dir, "queue.pb"), false)
 	checked := validGRPC(t, c)
 	probe := func() error {
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 		defer cancel()
 		_, err := FetchCollector(ctx, addr, checked, RequestOverrides{}, nil)
 		return err
@@ -380,20 +386,26 @@ func TestGRPCAServerThatComesBackIsReachedAtTheNextProbe(t *testing.T) {
 		t.Fatal(err)
 	}
 	server.Stop()
-	// Down for three seconds, probed all along: grpc-go's attempts to
-	// reconnect fail, and each waits longer before the next.
-	for deadline := time.Now().Add(3 * time.Second); time.Now().Before(deadline); time.Sleep(200 * time.Millisecond) {
+	// Down, and probed until the connection is seen refused and waiting to
+	// try again: the first probes may still find the connection the server
+	// has closed, which fails them before another is tried.
+	failed := func() bool {
 		if err := probe(); err == nil {
 			t.Fatal("a probe of a stopped server succeeded")
 		}
+		state, kept := keptConnectionState(addr, checked)
+		return kept && state == connectivity.TransientFailure
+	}
+	testutil.WaitFor(t, "the probes of the stopped server to leave its connection failed and waiting", failed)
+	// And once more, by a probe that finds it so, ends the wait, and is
+	// refused again.
+	if !failed() {
+		t.Fatal("a connection that was refused again is no longer failed and waiting")
 	}
 	grpctest.Start(t, grpctest.Options{Answer: statsAnswer, Addr: addr})
-	start := time.Now()
+	callsWaitForAConnection(t)
 	if err := probe(); err != nil {
 		t.Fatalf("the first probe after the server came back failed: %v", err)
-	}
-	if took := time.Since(start); took > 2*time.Second {
-		t.Fatalf("the first probe after the server came back took %s", took)
 	}
 }
 
@@ -434,9 +446,10 @@ func TestGRPCStatusErrors(t *testing.T) {
 		t.Fatal("OK is 0")
 	}
 
-	// A server that is not there is UNAVAILABLE.
+	// A server that is not there is UNAVAILABLE: the refusal ends the call,
+	// long before the minute it has.
 	server.Stop()
-	_, err = FetchCollector(context.Background(), server.Addr, c, RequestOverrides{Timeout: 2 * time.Second}, nil)
+	_, err = FetchCollector(context.Background(), server.Addr, c, RequestOverrides{Timeout: time.Minute}, nil)
 	if code, _ := GRPCStatusCode(c, err); code != int(codes.Unavailable) {
 		t.Fatalf("%v", err)
 	}
@@ -574,7 +587,8 @@ func TestGRPCTLS(t *testing.T) {
 	}
 	c.Request.TLS.ServerName = "wrong.test"
 	wrong := validGRPC(t, c)
-	_, err := FetchCollector(context.Background(), server.Addr, wrong, RequestOverrides{Timeout: 2 * time.Second}, nil)
+	// The handshake that fails ends the call, long before the minute it has.
+	_, err := FetchCollector(context.Background(), server.Addr, wrong, RequestOverrides{Timeout: time.Minute}, nil)
 	if code, _ := GRPCStatusCode(wrong, err); code != int(codes.Unavailable) {
 		t.Fatalf("a certificate for another name was accepted: %v", err)
 	}
@@ -703,9 +717,7 @@ func TestGRPCAShortProbeDoesNotFailTheSharedReflection(t *testing.T) {
 		shortDone <- err
 	}()
 	// The short probe starts the question; the patient one joins it.
-	for deadline := time.Now().Add(5 * time.Second); server.ReflectionStreams.Load() == 0 && time.Now().Before(deadline); {
-		time.Sleep(time.Millisecond)
-	}
+	waitFor(t, "the short probe's question to reach the server", func() bool { return server.ReflectionStreams.Load() > 0 })
 	patientDone := make(chan error, 1)
 	go func() {
 		_, err := FetchCollector(context.Background(), server.Addr, c, RequestOverrides{}, nil)
@@ -734,7 +746,7 @@ func TestGRPCAShortProbeDoesNotFailTheSharedReflection(t *testing.T) {
 	}
 	lonelyKey := reflectedKey{conn: grpcConnKey{dial: lonely.Addr, policy: policyOf(alone)}, service: grpctest.Service}
 	waitFor(t, "the question the short probe left behind to be answered", func() bool { return !reflectionAnswers.fetchedAt(lonelyKey).IsZero() })
-	if _, err := probeGRPC(lonely.Addr, alone, 5*time.Second, RequestOverrides{}); err != nil {
+	if _, err := probeGRPC(lonely.Addr, alone, time.Minute, RequestOverrides{}); err != nil {
 		t.Fatal(err)
 	}
 	if n := lonely.ReflectionStreams.Load(); n != 1 {
@@ -796,7 +808,7 @@ func TestGRPCDescriptorSetsAreReadApart(t *testing.T) {
 	}()
 	select {
 	case <-done:
-	case <-time.After(5 * time.Second):
+	case <-time.After(time.Minute):
 		t.Fatal("a second set waited for the first set's read")
 	}
 	close(release)

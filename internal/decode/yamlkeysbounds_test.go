@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/eenchev/prometheus-universal-exporter/internal/model"
+	"github.com/eenchev/prometheus-universal-exporter/internal/testutil/alloctest"
 )
 
 // A key written many times is refused in memory linear in the body: the
@@ -23,7 +24,7 @@ func TestAYAMLKeyWrittenManyTimesIsRefusedInMemoryLinearInTheBody(t *testing.T) 
 		}
 		body := []byte(strings.Repeat("a: 1\n", count))
 		var err error
-		allocated := allocatedBy(func() { _, err = decodeYAML(body) })
+		allocated := alloctest.BytesAtMost(1, 250*uint64(len(body)), func() { _, err = decodeYAML(body) })
 		var want strings.Builder
 		want.WriteString("yaml: unmarshal errors:")
 		for line := 2; line <= 11; line++ {

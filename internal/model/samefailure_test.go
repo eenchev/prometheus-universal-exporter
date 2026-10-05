@@ -6,6 +6,8 @@ import (
 	"io"
 	"testing"
 	"time"
+
+	"github.com/eenchev/prometheus-universal-exporter/internal/testutil/alloctest"
 )
 
 // An error made with Errorf reads word for word as fmt.Errorf's of the same
@@ -124,16 +126,16 @@ func (e rewrittenError) Unwrap() error { return e.err }
 func TestErrorfCostsNoMoreThanFmtErrorf(t *testing.T) {
 	var sink error
 	row := 300
-	plain := testing.AllocsPerRun(200, func() {
+	plain, _ := alloctest.Allocations(200, func() {
 		sink = fmt.Errorf("CSV column %q is empty in row %d", "used", row) //nolint:err113 // the measure
 	})
-	marked := testing.AllocsPerRun(200, func() {
+	marked := alloctest.AllocsAtMost(200, plain, func() {
 		sink = Errorf("CSV column %q is empty in row %d", "used", Position(row))
 	})
-	wrapping := testing.AllocsPerRun(200, func() {
+	wrapping, _ := alloctest.Allocations(200, func() {
 		sink = fmt.Errorf("metric %q node %d: %w", "used", row, io.EOF) //nolint:err113 // the measure
 	})
-	markedWrapping := testing.AllocsPerRun(200, func() {
+	markedWrapping := alloctest.AllocsAtMost(200, wrapping, func() {
 		sink = Errorf("metric %q node %d: %w", "used", Position(row), io.EOF)
 	})
 	_ = sink

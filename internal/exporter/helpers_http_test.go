@@ -64,6 +64,15 @@ func pathCollector(path string) model.Collector {
 
 func scriptLimits() model.Limits { return model.Limits{ScriptTimeout: model.Duration(5 * time.Second)} }
 
+// holdScriptsToTheirTimeout makes limits.script_timeout what ends a script
+// in the test's pool, as it is in the exporter: for the tests of the timeout,
+// whose scripts are stopped by it. It is called after requirePython or
+// usePythonPool.
+func holdScriptsToTheirTimeout(t *testing.T) {
+	t.Helper()
+	transform.PythonWorkers().SetLeastScriptTimeout(0)
+}
+
 // Requests made with the same TLS and HTTP/2 settings share one connection
 // pool (fetch/transport.go).
 

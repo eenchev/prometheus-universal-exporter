@@ -467,20 +467,54 @@ func (r answerTypes) FindExtensionByNumber(message protoreflect.FullName, field 
 	return protoregistry.GlobalTypes.FindExtensionByNumber(message, field)
 }
 
+// reconnecting is what reconnectNow needs of a connection, a *grpc.ClientConn.
+type reconnecting interface {
+	GetState() connectivity.State
+	ResetConnectBackoff()
+	WaitForStateChange(ctx context.Context, from connectivity.State) bool
+}
+
+// reconnectWait is how long a call waits for a connection that had failed to
+// be made, and reconnectAgain how often within that wait it ends the
+// connection's own wait again (reconnectNow). They are variables for the
+// tests, which cannot say how long a connection takes on a busy machine.
+var (
+	reconnectWait  = time.Second
+	reconnectAgain = 250 * time.Millisecond
+)
+
 // reconnectNow ends the wait of a connection that is backing off after
 // failing to connect. grpc-go fails every call at once while it waits, so a
 // server that came back would be reported down until the wait ended; a
-// probe, and each retry of one, is the moment to try again, once. The call
-// then waits for that attempt, up to a second and within its deadline,
-// rather than failing at the old state. grpc-go keeps reporting the failure
-// until a connection is made, so a target that refuses again is waited for
-// the whole second: there is nothing to see the refusal by.
-func reconnectNow(ctx context.Context, conn *grpc.ClientConn) {
+// probe, and each retry of one, is the moment to try again. The call then
+// waits for the connection, up to a second and within its deadline, rather
+// than failing at the old state. grpc-go keeps reporting the failure until a
+// connection is made, so a target that refuses again is waited for the whole
+// second: there is nothing to see the refusal by.
+//
+// Nor is there anything to see by whether the connection is waiting or is
+// trying at this moment, and ending the wait of one that is trying does
+// nothing: when that attempt then fails, begun before the server came back,
+// the connection waits again, as long as it would have, and the call would
+// fail with the server up. So the wait is ended again every quarter of the
+// second for as long as the failure is reported; while the target stays down
+// that is at most four attempts to connect in the second where it was one.
+func reconnectNow(ctx context.Context, conn reconnecting) {
 	if conn.GetState() != connectivity.TransientFailure {
 		return
 	}
-	conn.ResetConnectBackoff()
-	wait, cancel := context.WithTimeout(ctx, time.Second)
-	defer cancel()
-	conn.WaitForStateChange(wait, connectivity.TransientFailure)
+	end := time.Now().Add(reconnectWait)
+	for {
+		conn.ResetConnectBackoff()
+		next := time.Now().Add(reconnectAgain)
+		if next.After(end) {
+			next = end
+		}
+		turn, done := context.WithDeadline(ctx, next)
+		changed := conn.WaitForStateChange(turn, connectivity.TransientFailure)
+		done()
+		if changed || ctx.Err() != nil || !time.Now().Before(end) {
+			return
+		}
+	}
 }

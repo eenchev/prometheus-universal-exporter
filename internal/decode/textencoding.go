@@ -67,7 +67,7 @@ var boms = []struct {
 func lookupCharset(name string) (encoding.Encoding, string, error) {
 	enc, err := htmlindex.Get(strings.TrimSpace(name))
 	if err != nil {
-		return nil, "", fmt.Errorf("unsupported charset %q; use a name from the WHATWG Encoding Standard, such as utf-8, windows-1252, iso-8859-2, windows-1251, shift_jis or gbk", name)
+		return nil, "", model.Errorf("unsupported charset %s; use a name from the WHATWG Encoding Standard, such as utf-8, windows-1252, iso-8859-2, windows-1251, shift_jis or gbk", model.Quoted(name))
 	}
 	canonical, _ := htmlindex.Name(enc)
 	return enc, canonical, nil

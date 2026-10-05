@@ -206,13 +206,14 @@ func schemaNode(t *testing.T, schema map[string]any, path string) map[string]any
 }
 
 // schemaAsItWas is a committed schema with what "" being the key left out,
-// the number 0 being a duration and the rules of value_map keys added to it
-// taken out again: the schema before, kept as an oracle, so that the tables
-// show what each change changed and that the schemas say of every other
-// case what they said. The values of an optional key lose their "", its
-// pattern its empty alternative and a duration its number; the rules made of
-// a key being written are the rules of a key being there; and the rules
-// that were not there are gone.
+// the number 0 being a duration, the rules of value_map keys and the rule
+// that a label's expression is not blanks alone added to it taken out
+// again: the schema before, kept as an oracle, so that the tables show what
+// each change changed and that the schemas say of every other case what
+// they said. The values of an optional key lose their "", its pattern its
+// empty alternative and a duration its number; the rules made of a key
+// being written are the rules of a key being there; and the rules that were
+// not there are gone.
 func schemaAsItWas(t *testing.T, file string) map[string]any {
 	t.Helper()
 	schema := loadSchemaFile(t, file)
@@ -259,6 +260,7 @@ func schemaAsItWas(t *testing.T, file string) map[string]any {
 	for _, key := range []string{"value", "expression"} {
 		schemaNode(t, schema, "collectors[].metrics[].labels[]."+key)["minLength"] = float64(1)
 	}
+	delete(schemaNode(t, schema, "collectors[].metrics[].labels[].expression"), "not")
 	for _, key := range []string{"collectors[].metrics[].value_map", "collectors[].metrics[].labels[].value_map"} {
 		delete(schemaNode(t, schema, key), "propertyNames")
 	}

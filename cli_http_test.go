@@ -395,3 +395,40 @@ func TestDryRunReportsRequestPolicies(t *testing.T) {
 		t.Fatalf("exit=%d\n%s", check.code, check.stdout)
 	}
 }
+
+// --dry-run and startup refuse alike a label whose expression is nothing but
+// blanks, beside a value and without one: a csv collector with such a label
+// passed the dry run and started, and read the column of that name where the
+// label was meant to be the constant. The report names the collector, the
+// metric and the label of each, as an error of its own.
+func TestDryRunReportsALabelExpressionOfBlanks(t *testing.T) {
+	config := testutil.WriteFile(t, "config.yaml", `collectors:
+  - name: racks
+    request:
+      type: http
+    transform:
+      type: csv
+    metrics:
+      - name: cpu
+        expression: cpu
+        labels:
+          - name: site
+            value: x
+            expression: "  "
+      - name: memory
+        expression: memory
+        labels:
+          - name: zone
+            expression: " "
+`)
+	check := runCheckCLI(t, "--config.file="+config)
+	result := check.result(t, "config")
+	if check.code != 1 || result.Status != checkFailed || len(result.Errors) != 2 ||
+		!strings.HasSuffix(result.Errors[0], `collector "racks" metric "cpu" label "site" expression "  " is nothing but blanks; write the expression that reads the label from the response, or leave expression out and set value for a constant`) ||
+		!strings.HasSuffix(result.Errors[1], `collector "racks" metric "memory" label "zone" expression " " is nothing but blanks; write the expression that reads the label from the response, or leave expression out and set value for a constant`) {
+		t.Fatalf("exit=%d config=%+v", check.code, result)
+	}
+	if start := runCLI(t, "--config.file="+config); start.code != 1 || !strings.Contains(start.stderr, `label \"site\" expression \"  \" is nothing but blanks`) {
+		t.Fatalf("startup exit=%d\n%s", start.code, start.stderr)
+	}
+}

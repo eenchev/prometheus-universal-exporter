@@ -18,6 +18,7 @@ import (
 	"github.com/eenchev/prometheus-universal-exporter/internal/decode"
 	"github.com/eenchev/prometheus-universal-exporter/internal/expr"
 	"github.com/eenchev/prometheus-universal-exporter/internal/model"
+	"github.com/eenchev/prometheus-universal-exporter/internal/testutil/alloctest"
 )
 
 // enginePanicPage is a document the engine panics on with each of the
@@ -348,14 +349,14 @@ func TestRecoveringAnEnginePanicCostsNoAllocation(t *testing.T) {
 		c := &model.Collector{Name: "cost", Metrics: rules}
 		ctx := LeaveRuleLoggingToCaller(context.Background())
 		var series, unguardedSeries []string
-		guarded := testing.AllocsPerRun(20, func() {
+		guarded, _ := alloctest.Allocations(20, func() {
 			set, err := transformXPathNodes(ctx, root, xmlNodes, rules, c, nil)
 			if err != nil {
 				t.Fatal(err)
 			}
 			series = append(series[:0], set.Metrics[0].Name, set.Metrics[len(set.Metrics)-1].Name)
 		})
-		unguarded := testing.AllocsPerRun(20, func() {
+		unguarded := alloctest.AllocsAtMost(20, guarded, func() {
 			set, err := transformXPathUnguarded(ctx, root, xmlNodes, rules, c)
 			if err != nil {
 				t.Fatal(err)

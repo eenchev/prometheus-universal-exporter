@@ -8,6 +8,8 @@ import (
 	"slices"
 	"strings"
 	"testing"
+
+	"github.com/eenchev/prometheus-universal-exporter/internal/testutil/alloctest"
 )
 
 // keyedSeriesSet is the duplicate check as it was before seriesSet hashed a
@@ -374,7 +376,8 @@ var seriesMapSink map[uint64]int
 // seriesMapAllocations is how many allocations a map made for n series takes,
 // which is all a set of n series may cost apart from a few of its own.
 func seriesMapAllocations(n int) float64 {
-	return testing.AllocsPerRun(10, func() { seriesMapSink = make(map[uint64]int, n) })
+	allocations, _ := alloctest.Allocations(10, func() { seriesMapSink = make(map[uint64]int, n) })
+	return allocations
 }
 
 // Seeing a series allocates nothing: a set and its 2,000 series of 16 labels
@@ -385,7 +388,7 @@ func seriesMapAllocations(n int) float64 {
 // labels would allocate thousands of times. The bound is between the two.
 func TestSeeingASeriesAllocatesNothing(t *testing.T) {
 	metrics := manyLabelSeries(2000, 16)
-	got := testing.AllocsPerRun(10, func() {
+	got, _ := alloctest.Allocations(10, func() {
 		set := newSeriesSet(metrics)
 		for i := range metrics {
 			if duplicate, _ := set.add(i); duplicate {
@@ -407,7 +410,7 @@ func TestValidateAllocatesNothingForASeries(t *testing.T) {
 	limits := Limits{MaxMetrics: 100000, MaxLabelsPerMetric: 30, MaxLabelValueLength: 1000, MaxMetricNameLength: 200}
 	for _, n := range []int{500, 4000} {
 		set := &MetricSet{Metrics: manyLabelSeries(n, 16)}
-		got := testing.AllocsPerRun(10, func() {
+		got, _ := alloctest.Allocations(10, func() {
 			if err := set.Validate(limits); err != nil {
 				t.Fatal(err)
 			}

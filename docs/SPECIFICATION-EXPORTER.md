@@ -969,9 +969,10 @@ keys:
   connection's earlier failure: when the connection is waiting to try again,
   the retry MUST end the wait and connect at once, waiting up to one second
   for the connection before it calls, so that a retry of a refused connection
-  dials the target again. The probe's budget or `timeout` MUST be the call's
-  deadline. An answer over the response limit MUST fail with
-  `RESOURCE_EXHAUSTED` and count as a limit.
+  dials the target again, and MUST end the wait again every quarter of that
+  second while no connection is made, as a call does (below). The probe's
+  budget or `timeout` MUST be the call's deadline. An answer over the
+  response limit MUST fail with `RESOURCE_EXHAUSTED` and count as a limit.
 - Metadata MUST be the collector's, a static target's own over it, the
   credentials as `authorization`, and the forwarded headers lower-cased over
   all of them, a reserved name left out.
@@ -980,13 +981,20 @@ keys:
   without cancelling a call still using the old one. A connection that failed
   to connect MUST wait at most 5 seconds before trying again, and a call that
   finds it waiting MUST end the wait and try at once, within its deadline, so
-  a server that came back is reached at the next probe. A connection that
-  stopped answering without being closed MUST be replaced: when the probe's
-  own deadline ends a call, or the wait for a reflection answer, on a
-  connection that is established, the connection MUST be dropped, so the next
-  call to the target makes a new one. A `DEADLINE_EXCEEDED` the server sent,
-  and a deadline that ends while the connection is still being made, MUST NOT
-  drop it. Dropping MUST NOT cancel the other calls using the connection, nor
+  a server that came back is reached at the next probe. A call cannot tell a
+  connection that is waiting from one that is trying at that moment, whose
+  wait there is none of to end: so for as long as the connection reports its
+  failure, within the second the call waits for it, the call MUST end the
+  wait again every quarter of a second, and an attempt begun before the
+  server came back, which then fails, MUST NOT fail the call with it. A
+  target that stays down is thereby dialed at most four times in that
+  second. A connection that stopped answering without being closed MUST be
+  replaced: when the probe's own deadline ends a call, or the wait for a
+  reflection answer, on a connection that is established, the connection
+  MUST be dropped, so the next call to the target makes a new one. A
+  `DEADLINE_EXCEEDED` the server sent, and a deadline that ends while the
+  connection is still being made, MUST NOT drop it. Dropping MUST NOT cancel
+  the other calls using the connection, nor
   a reflection question in flight on it: it MUST be closed when the last of
   them has ended, and a call made after the drop MUST NOT wait for a
   reflection question asked on the dropped connection. Client keepalive pings
@@ -1228,26 +1236,85 @@ collector, and a probe that repaired any MUST log a warning with the count and
 the first metric, suggesting `response.charset`. A label map a transform shares
 among metrics MUST NOT be changed in place.
 
-The error of a body that cannot be decoded MUST be no longer than 2,000
-bytes, whichever decoder read the body and whatever it holds: a decoder names
-what it could not read with that part of the body — a token that is no
-number, an element that was not closed, a line that is no carbon line — which
-is the target's to make as long as the body, and the error is logged as one
-line, answered to the scraper and shown in a debug report. A longer error
-MUST be cut to its start and end with the length it had (`... (1000100
-bytes)`), 2,000 bytes together, the cut between two characters; one within
-the bound MUST be the decoder's own error, untouched. The text the failure is
+A decoder names what it could not read with that part of the body — a token
+that is no number, a name written twice, an element that was not closed, a
+line that is no carbon line — which is the target's to make as long as the
+body, and the error is logged as one line, answered to the scraper and shown
+in a debug report. So an error in the exporter's own words MUST show no more
+of a value of the body than its first 64 bytes, the cut between two
+characters, followed by the value's length, as a value is quoted in any
+error (§ 18.1), and MUST then say what it said after the value, which is
+what is wrong and what to change: `expected float as value, got
+"aaaa..."... (1000000 bytes)`, `label value "aaaa..."... (1000000 bytes)
+contains unescaped new-line`, `"a b c d aaaa..."... (1000008 bytes) has 5
+fields; want <path> <value> <timestamp>`. A value of 64 bytes or fewer MUST
+read exactly as it did: quoted as Go quotes a text, or as it is where the
+message writes a name without quotes, and a name written so is cut alike,
+its length after its start. This holds for every such error that shows a
+value (a JSON error names one character, and a YAML error, worded as the
+YAML library words it, holds a part of the document by the rules of § 10):
+
+- of the Prometheus and OpenMetrics parser (§ 14.1), a metric's name, a
+  label's name and value, a sample's value and timestamp, what follows a
+  timestamp, a metric's type and a help text; where an error names a
+  histogram or summary series by its labels (`the histogram
+  name{label="value"}`), the family's name and each label's name and value
+  are cut by themselves;
+- of the Graphite decoder (§ 15a), a carbon line, its value and its
+  timestamp, a series' name and a tag, and a point of the render API that is
+  no `[value, timestamp]`, which is shown as it was, `[x 1]`, by the first 64
+  bytes of that;
+- of the CSV decoder (§ 13), a column the header names twice;
+- the name of an encoding that is none, from `response.charset`, a
+  `Content-Type` or an XML declaration;
+- the report of the first line a decoder left out of a body it decoded: a
+  carbon line that is skipped, and the sample and its family of a sample
+  line of an exposition that is left out, which is logged as a warning and
+  remembered as a failure is.
+
+The names the XML parser writes into its errors MUST be cut alike, each to
+its first 64 bytes and its length, in the library's words and with what the
+library says after the name: an element's (`unexpected end element </name>`,
+`element <name> closed by </name>`, `invalid characters between </name and
+>`), a name space prefix's (`element <name> in space prefix closed by
+</name> in space prefix`, `xmlquery: invalid XML document, namespace prefix
+is missing`), an entity's (`invalid character entity &name;`, with ` (no
+semicolon)`), a name that is none (`invalid XML name: name`), and the
+version and the encoding of the XML declaration (`xml: unsupported version
+"1.1"; only version 1.0 is supported`, `xml: opening charset "name":
+unsupported charset: "name"`). The names are read from the library's text in
+the forms the library writes them in and nowhere else, a text of a form to
+its last byte and of the first form it reads as; an error in none of the
+forms, and one whose names are all within 64 bytes, MUST be the library's
+own, untouched. The error with a name cut MUST be a new one that holds
+neither the long text nor the library's error.
+
+No text of the size of the value MUST be made to refuse it: the value is
+neither quoted nor formatted whole and then cut, and the error MUST hold
+nothing of the body but the bytes it shows. Decoding a body that decodes MUST
+cost what it cost. The failure MUST be recognised (§ 25.1) by the error's
+text with the mark in place of each such length, so the same mistake with a
+longer or a shorter value that starts the same is the same failure, and one
+whose value starts otherwise another; a value of 64 bytes or fewer is part of
+what the failure is, as it was.
+
+As the last resort, the error of a body that cannot be decoded MUST be no
+longer than 2,000 bytes, whichever decoder read the body and whatever it
+holds; no error of the exporter's own decoders may reach that bound for one
+long value, and what does is an error long by many values, as a series named
+by a hundred labels, or a library's text of a form that is not known. A
+longer error MUST be cut to its start and end with the length it had (`...
+(6400 bytes)`), 2,000 bytes together, the cut between two characters; one
+within the bound MUST be the decoder's own error, untouched. The text the
+failure is
 recognised by (§ 25.1) MUST be bounded alike, cut where it is itself over
 2,000 bytes whatever the error's length, with the mark in place of the
 length. The cut error MUST NOT hold the text it was cut from, nor the error
 that held it, so that whoever keeps the error, as the failure log keeps what
 it is recognised by, keeps no more than that; that the error is a limit that
 was exceeded (§ 20) MUST be kept, and what else it was to `errors.As` MAY be
-lost. A decoder SHOULD cut the part itself where it knows it, keeping what
-the error says after it, as the YAML decoder does (§ 10). The error a decoder
-reports of the first line it left out of a body it decoded, a carbon line
-that is skipped or a sample line of the exposition that is left out, which is
-logged as a warning and remembered as a failure is, MUST be bounded alike.
+lost. The error a decoder reports of the first line it left out of a body it
+decoded MUST be bounded alike.
 
 ---
 
@@ -1318,7 +1385,10 @@ this order, without cycles:
    targets and OTLP export.
 
 `internal/testutil` MAY hold helpers shared by the tests of several packages
-and MUST NOT be imported outside tests.
+and MUST NOT be imported outside tests; nor may the package within it,
+`internal/testutil/alloctest`, the tests' measure of allocations (§ 34), which
+MUST NOT import a package of the module, so that the tests of every package,
+`model` included, can use it.
 
 A probe and a static target's scrape MUST make their trip to the target —
 fetch, decode, transform, validate, with the collector's `error_handling` —
@@ -2729,7 +2799,10 @@ typical script.
   has its own budget of 10 seconds, and not handing the worker the request,
   which MUST be bounded by the probe's deadline, and by 30 seconds where that
   is later or there is none. A script that overruns MUST fail the run with a
-  timeout error naming the limit, and its worker MUST be killed.
+  timeout error naming the limit, and its worker MUST be killed. A worker
+  pool MAY be told a least time to give every script whatever its limit,
+  which the tests set on the pools they run scripts in (§ 34); the exporter
+  MUST NOT set one, so that the limit is what the collector configures.
 - A run that the probe's or scrape's deadline ends before
   `limits.script_timeout` does MUST be stopped the same way and MUST NOT be
   reported as a timeout of the script: its error MUST say that the probe's
@@ -3194,8 +3267,19 @@ it MUST produce what could be extracted.
 
 Each label entry MUST have `name` and exactly one of `value` and `expression`;
 setting both or neither MUST be rejected at startup. A `value` label is static:
-its value MUST be exported as written and never evaluated. An `expression`
-label MUST be interpreted by the same transform as the metric expression:
+its value MUST be exported as written and never evaluated, a value of nothing
+but blanks included, which is a constant of blanks. An `expression` that is
+written and is nothing but blanks — text that `strings.TrimSpace` leaves
+nothing of — MUST be rejected at load, under every transform and whether
+`value` is set beside it, written `""` or left out, with an error that names
+the collector, the metric and the label, quotes the expression, and says to
+write the expression that reads the label or, for a constant, to leave
+`expression` out and set `value`: blanks are not the key left out, which only
+`""` is (§ 24.3), so such a label is not static and its `value` would never
+be exported, and they are nothing to read a label with. Every other label
+MUST get from the load the verdict and the error it got before this rule. An
+`expression` label MUST be interpreted by the same transform as the metric
+expression:
 
 | Transform | `expression` | `labels` |
 | --- | --- | --- |
@@ -4867,7 +4951,11 @@ exporter MUST load it as the key left out: `decoder.type`, `name_escaping`,
 `response.graphite.invalid_lines`, `otlp.compression`, and a static target's
 `name` and `request.method`. A rule of the schemas about a key MUST go by
 the key being written with a value other than `""`, not by its being there:
-a label MUST have exactly one of `value` and `expression` so written; a
+a label MUST have exactly one of `value` and `expression` so written, and
+its `expression` MUST NOT be text of nothing but blanks (§ 18.1), which the
+schemas MUST refuse by a pattern of the blanks `strings.TrimSpace` takes
+off, under `not`, so that the key keeps the types it takes and `""` stays
+the key left out; a
 `grpc` collector MUST have `rpc` so written, and `descriptors` unless its
 `rpc` names a method of `grpc.health.v1.Health`; a `localfile` collector
 MUST have `root` so written; and every rule of a collector whose transform
@@ -5014,10 +5102,11 @@ failure when it grows by an item. No more than ten different problems MUST be
 told apart; past ten the failure is recognised by the first ten and by there
 being more, however many. An error on a document's first line, for which the
 library writes no line, MUST be the same failure as the same error on a later
-line. The length a decode error gives of a part it cut, or of itself (`...
-(100000 bytes)`, § 6 and § 10), is a size like any other and MUST NOT tell
-one failure from another: what was cut is recognised by the start that is
-shown.
+line. The length a decode error gives of a part or a value it cut, or of
+itself (`... (100000 bytes)`, § 6 and § 10), is a size like any other and
+MUST NOT tell one failure from another: what was cut is recognised by the
+start that is shown, and an error that shows several values, as a series
+named by its labels, by the start of each.
 Neither MUST what
 a failed fetch has of the one connection or attempt: the address a connection
 was made from, of every network error in the failure and in the text of a
@@ -5764,6 +5853,39 @@ behind. Process-wide state a test reads counts from MUST be replaceable per
 test: the Python worker pool MUST be reached through one replaceable reference,
 each test that uses it MUST get a fresh pool, and that pool's workers MUST be
 stopped when the test ends.
+
+What the runtime counts of allocations is process-wide too, and cannot be
+replaced: the goroutines other tests left running and the collector allocate
+while a test measures a function, and can only add to its count. A test that
+bounds or compares allocations or allocated bytes MUST therefore measure them
+through `internal/testutil/alloctest` and MUST NOT call `testing.AllocsPerRun`
+or read the allocation counters of `runtime.MemStats` or of a benchmark's
+result itself. A measurement there MUST run the collector and let the other
+goroutines run before it counts, and MUST be repeated, up to five times, with
+the least taken: until one is within the bound, where the test gives one, and
+five times where it gives none; a single measurement is allowed only for a cost
+the test takes a fraction of to bound another by. The race detector changes
+what is allocated, so each such test MUST be measured under it too, and where
+its bound does not hold there with room to spare the test MUST skip its
+allocation assertions under the race detector and say so in its comment.
+
+Nor MAY a test depend on how fast the machine is. A test MUST wait for the
+event it is about — a condition it polls, a hook, a channel — and not for a
+length of time, under a bound that only ends a hang. Where a test runs
+against one of the exporter's own timeouts, its values MUST be chosen so that
+a slower machine makes the test slower and does not fail it: what must not
+happen is given long, and what must happen has no bound but the hang's. A
+test MUST NOT assert that a measured duration is below a value; it asserts an
+order, a count, or a least duration. The tests that hold the static target
+loop to its interval on the real clock MAY compare a time with a multiple of
+that interval, each beside a test of the same schedule on a clock of its own.
+Two things many tests meet are held to this in one place. The worker pool a
+test runs Python scripts in MUST leave each script at least a minute,
+whatever its `limits.script_timeout`, unless the test is of that timeout and
+says so. And a test server that the exporter calls as a `grpc` target MUST
+listen on a port no such server of the test process had before, since the
+exporter keeps a connection per address and a reflection answer per
+connection, and the kernel gives a freed port out again.
 
 ## 34.1 Test layers
 
@@ -7468,9 +7590,9 @@ See § 5.0a, § 5.1a, § 22.0d, § 23 and § 42.1a.
   size is refused; YAML integers and quoted numbers are read; a list is not.
   Each byte setting takes a unit in a loaded configuration, a malformed one
   fails naming it, and the schema carries the size pattern.
-- A second `SIGINT` during a shutdown held up by a probe in progress ends the
-  process within two seconds, killed by the signal, while the first alone did
-  not end it.
+- A second `SIGINT` during a shutdown held up by a probe in progress, once
+  the shutdown has begun, ends the process, killed by the signal, while the
+  first alone did not end it and the shutdown would have waited ten minutes.
 - Past `otlp.max_pending_points` the points kept from a failed export go
   before those queued since, and the oldest of them first, down to nine
   tenths, counted and logged; after two failed exports in a row, the points
@@ -7512,8 +7634,9 @@ See § 6.1a, § 30 and § 42.5.
 - A declared-UTF-8 body with an invalid byte answers 200 with U+FFFD, parses,
   is counted and logged; a shared label map is not changed in place; files of
   a directory are converted and repaired one by one.
-- `--web.shutdown-timeout` of 1s ends a shutdown held by a probe within
-  seconds, exit 0, logging the timeout; zero and negative values exit 2.
+- `--web.shutdown-timeout` of 1s ends a shutdown held by a probe that never
+  ends, not before the second is over, exit 0, logging the timeout; zero and
+  negative values exit 2.
 - Credentials from `username_file` and `password_file`, and an inline
   username with a password file, admit the right credential and refuse wrong
   ones; a rotated password file takes effect and the old password stops
@@ -7600,7 +7723,7 @@ See § 23 and § 30.
 - A target given a new interval while its scrape runs is skipped, not
   scraped beside it, until that scrape ends; a removed target's result is
   neither kept nor queued.
-- After a `SIGTERM` with `--web.shutdown-delay` of 1s, `/ready` answers `503`
+- After a `SIGTERM` with `--web.shutdown-delay` of 3s, `/ready` answers `503`
   naming the shutdown while a probe is still answered `200`; the process exits
   `0` after the delay, logging it; a negative value exits 2. Without the delay
   nothing changes: the exporter stops at once.
@@ -7621,7 +7744,8 @@ See § 7.1.
 
 - Every package under `internal/` imports only the packages before it in the
   layer order, `internal/testutil` and `internal/grpctest` import only
-  `internal/model`, and no non-test file imports either.
+  `internal/model`, and no non-test file imports either, nor a package
+  within one.
 - Only the shared trip fetches, decodes and transforms, apart from a
   directory's files (§ 5.1), which it decodes and transforms one at a time.
 - A static target's scrape failed by a metric rule with `error_mode: fail`
@@ -7772,9 +7896,11 @@ See § 42.15b, § 16 and § 19.1.
 - The same settings share a pool; `insecure_skip_verify` and HTTP/2 get their
   own; a rotated CA file gets a new pool; a missing one is an error; a pool
   unused for five minutes is dropped; idle connections time out.
-- `http_exporter_script_duration_seconds` reports at least the time a script
-  sleeps, on the collector and the request, and 0 for a collector without
-  Python; the probe's timer adds its runs up.
+- `http_exporter_script_duration_seconds` reports more than nothing and no
+  more than its probe took for a script that ran, and at least
+  `limits.script_timeout` for a script the timeout stopped, on the collector
+  and the request alike, and 0 for a collector without Python; the probe's
+  timer adds its runs up.
 - An idle worker aged past the timeout is stopped by the timer alone and
   counted as `idle`.
 - A reload that changes one script stops its idle worker at once and its busy
@@ -8010,8 +8136,10 @@ sources at run time, so they need neither the network nor `protoc`.
 - An answer of `google.protobuf.Any` values of the service's own type and of
   a built-in type is rendered with each as its message, with reflection, a
   protoset and `.proto` files alike.
-- A server stopped for three seconds of probes and started again on its
-  address is answered at the first probe after, within two seconds.
+- A server stopped, probed until its connection is seen failed and waiting,
+  and once more, and started again on its address is answered at the first
+  probe after, with a connection that would wait an hour to try again by
+  itself.
 
 ## 34.63 Review fixes: limits, headers, caching, schedules, transforms and gRPC tests
 
@@ -8478,15 +8606,16 @@ Tests MUST show:
   `%25`; one that decodes to a path outside `root`, by `%2E%2E` or
   otherwise, or to a NUL byte, is refused as its plain form is.
 - A `grpc` probe with retries whose server is down at the first attempt and
-  back a quarter of a second later is answered by a retry, with `protoset`
+  back once that attempt has failed is answered by a retry, with `protoset`
   descriptors and with `reflection`, where the refused connection fails the
-  reflection question.
+  reflection question; the connection would wait an hour to try again by
+  itself.
 - A `grpc` call and its two retries to a target that hangs up on every
   connection dial it at least three times, make three attempts and fail
   `UNAVAILABLE`.
 - A `grpc` connection silenced without FIN or RST fails the probe that finds
-  it with `DEADLINE_EXCEEDED`; the next probe is answered at once on a
-  second connection, and the dead one is closed.
+  it with `DEADLINE_EXCEEDED`; the next probe is answered on a second
+  connection, and the dead one is closed.
 - A reflection question on a silenced connection fails its probe at the
   deadline; the next probe asks again on a new connection and is answered
   rather than waiting for the question on the dead one.
@@ -11111,7 +11240,8 @@ Tests MUST show:
 - Every command of the module — the exporter and `tools/depupdate` — is among
   what those packages and their imports cover.
 - The module's packages that are not covered are exactly
-  `internal/grpctest`, `internal/testutil` and `test/repository`; a package
+  `internal/grpctest`, `internal/testutil`, `internal/testutil/alloctest`
+  and `test/repository`; a package
   that is neither covered nor on that list, one on the list that a covered
   package imports, and one on the list that is no package any more each fail
   the test.
@@ -13501,15 +13631,13 @@ Tests MUST show:
   fewer, of a text, an error, a number or nothing, and a runtime error read
   and are recognised as they were.
 - The error of a body that cannot be decoded is exactly 2,000 bytes,
-  starting as it did and ending with the length it had, where a token of 1
-  MiB made it over a megabyte: an XML element closed by another and an
-  entity; a CSV column named twice; a Prometheus sample's value and
-  timestamp, a label's name and value, a metric's type and a second `HELP`;
-  a carbon line of too many fields, its value and a tag; a Graphite render
-  series' name and a point; and ten problems of YAML keys of control
-  characters. Each is recognised by a text of 2,000 bytes or fewer with the
-  mark for the length and for the line, the same for a token half as long on
-  another line. A JSON error stays under 100 bytes.
+  starting as it did and ending with the length it had, where many values
+  make it longer (§ 34.95 has the errors of one long value, which no longer
+  reach the bound): a histogram series of an exposition named by 128 labels,
+  each shown, and ten problems of YAML keys of control characters. Each is
+  recognised by a text of 2,000 bytes or fewer with the mark for the length
+  and for the line, the same for half as many labels or a key half as long
+  on another line. A JSON error stays under 100 bytes.
 - A decode error within the bound is the decoder's own: for 28 mistaken
   bodies of the JSON, YAML, XML, CSV, Prometheus and Graphite decoders, an
   unsupported decoder and the series limit, `Decode` returns the text, the
@@ -13530,12 +13658,341 @@ Tests MUST show:
   with its own length, and a key that starts otherwise as a new failure; a
   debug probe's report names the failure in the same short line.
 - The first line a decoder leaves out of a body it decodes is reported in an
-  error bounded like a decode error: a carbon line of 1 MiB skipped under
-  `invalid_lines: skip`, and a sample of a histogram whose name is 1 MiB long
-  and that is none of its samples, are reported in exactly 2,000 bytes that
-  start as they did and end with the length, recognised by 2,000 bytes or
-  fewer with the mark for the length and the line, the same half as long a
-  line further; a short line is reported as it was.
+  error bounded like a decode error, which a line of one long value no
+  longer reaches (§ 34.95): a carbon line of 1 MiB skipped under
+  `invalid_lines: skip`, and a sample of a histogram or of a summary whose
+  name is 1 MiB long and that is none of its samples, are reported whole in
+  under 600 bytes, the line and each name by its first 64 bytes and its
+  length, recognised with the mark for the length and the line, the same
+  half as long a line further; a short line is reported as it was.
+
+## 34.95 A label's expression of blanks, and decoder errors that cut the value they show
+
+- A `csv` collector's label with `value: x` and `expression: "  "` is refused
+  at load with `collector "racks" metric "cpu" label "site" expression "  "
+  is nothing but blanks; write the expression that reads the label from the
+  response, or leave expression out and set value for a constant`; before,
+  it loaded, read the column named by the two blanks and never exported the
+  constant. Without the expression, and with `expression: ""`, the label
+  loads as the constant `x`.
+- Under each of `jq`, `yq`, `xpath`, `css`, `regex`, `csv`, `prometheus` and
+  `python`, a label's expression of two spaces, in double and in single
+  quotes, of one space, of a tab, of a line break between spaces, of a
+  no-break space and of an ideographic space with a space is refused in
+  those words, quoting the expression: beside a value, alone, beside
+  `value: ""`, beside a value of one blank, and with `required: true`.
+- A label that is not such a one loads as it did: a `value` of two spaces,
+  alone and beside `expression: ""`, of a tab and of ` x ` is the constant
+  as written; ` .site ` is the expression as written, and `.site` beside
+  `value: ""`; a label with neither key, and one with both written
+  `""`, is refused as needing a value or an expression; a value, and a value
+  of blanks, beside `.site`, and a value beside an expression of U+FEFF, as
+  setting both; and an expression of U+200B is jq's to refuse.
+- The rule check agrees with a copy of itself as it was, on the error word
+  for word and on the defaults it fills in, for every rule of the 13 shipped
+  configurations under `examples`, `configs` and `testdata` — 147 rules with
+  142 labels, none with an expression of blanks — and for 72,000 generated
+  rules: under each of the eight transforms, a label of five values beside
+  fifteen expressions, nine of them nothing but blanks and three with
+  U+200B or U+FEFF, plain, required, truncated, with a `value_map`, without
+  a name and with a name that is none, alone, before and after a label in
+  order and one with neither key, in a rule in order and in one with a bad
+  `error_mode`, an expression of blanks or no name. The 8,640 rules in
+  which the check gets as far as a label of blanks, and no other, are
+  refused in the new words.
+- The schemas' pattern for a label's expression, under `not`, takes a text
+  exactly when `strings.TrimSpace` leaves nothing of it, over some 165,000
+  texts — each character up to U+3000 and one in 97 past it, alone, twice,
+  after a space, before a line break, and before, after and around other
+  text — and not the empty
+  text, `.l`, ` .l `, `1`, U+200B, U+FEFF or U+180E; it holds no escape but
+  `\t`, `\n`, `\v`, `\f`, `\r` and `\x` with two digits. The rule is on a
+  label's `expression` in the configuration's schema and a collector
+  file's, which keeps the types string, number and boolean, and a label's
+  `value` has no such rule.
+- `--dry-run` of a `csv` collector with two such labels, one beside a value
+  and one alone, exits 1 and reports each as an error of its own, naming
+  its metric and its label, and startup refuses the same file with exit 1.
+- In the tables of keys the schemas hold to a rule, a label's `expression`
+  of two spaces alone is refused by both, in the configuration and in a
+  collector file, where the schema as it was took it; an expression of a
+  tab and a space beside a value, in a `csv` rule, is refused by both, as
+  the schema as it was refused it, and that label is taken by both without
+  the expression and with it written `""`.
+- A table of 42 keys of a rule, its labels and a collector holds the schema
+  and the loader to what each says of the key written as two spaces and
+  written `""`. Both refuse blanks in a label's `expression`, alone, beside
+  a value and beside a value in a `csv` rule, in a label's `value` beside
+  an expression and its `name`, in a key of either `value_map`, in a rule's
+  `name`, `type` and `error_mode`, and in `transform.type`,
+  `request.method`, `metrics_prefix`, `name_escaping` and a collector's
+  `name`. The loader alone refuses them in a rule's `expression`, `items`,
+  `time_format` and `time_zone`, a value of `transform.rename` and of
+  `rename_labels`, a key of `transform.labels`, a `python` transform's
+  `script` and `response.charset`. Both take them in a label's `value`, a
+  value of a label's `value_map` and of `transform.labels`, a rule's
+  `description`, a `prometheus` and a `python` rule's `expression`,
+  `transform.include`, `transform.exclude`, a key of `transform.rename` and
+  of `rename_labels`, `remove_labels`, `pre_script`, a `jq` transform's
+  `script`, `request.path`, and a key and a value of `response.namespaces`.
+  The schema alone refuses `decoder.type` of blanks, which loads as the
+  default. Written `""`, a key that is optional is taken by both; a
+  label's only `value` or `expression`, its `name`, a rule's and a
+  collector's `name`, `transform.type` and a key of a `value_map` are
+  refused by both; and a rule's `expression`, a `python` transform's
+  `script`, a value of `transform.rename` and of `rename_labels` and a key
+  of `transform.labels` by the loader alone.
+- Every error of the Prometheus, the Graphite and the CSV decoder that shows
+  a value of the body, 40 of them, with a token of 1 MiB for the value is the
+  message whole in under 700 bytes, under 300 where it shows one value: the
+  value's first 64 bytes, quoted, `... (1048576 bytes)`, and what the message
+  says after it (`label value "aaaa"... (1048576 bytes) contains unescaped
+  new-line`, `"a b c d aaaa"... (1048584 bytes) has 5 fields; want <path>
+  <value> <timestamp>`, `CSV header names column "aaaa"... (1048576 bytes)
+  twice, as columns 2 and 3; rename one, ...`), where it was the first 2,000
+  bytes of a megabyte without its end. `Decode` returns the decoder's own
+  error, not one cut at the bound. The expositions' errors are a second
+  `HELP` and `TYPE`, a type, a value, a timestamp and what follows it, a
+  metric and a label name that are no UTF-8, a bucket's bound and a quantile,
+  a count below nought and one that is a fraction, a second `_sum` and
+  `_count`, two buckets of one bound and two values of one quantile, a label
+  name without a value, written twice, with a value without quotes, a label
+  set that ends early and one that goes on, a second metric name, a name, a
+  label value and a help text ending in a backslash, a label value left
+  open, and an OpenMetrics type and timestamp; Graphite's a carbon line of
+  too many fields, its value, its timestamp, one in milliseconds, a series
+  without a path and a tag, from carbon lines and from the render API, and a
+  render point of one element, of text and of an object.
+- Each of those failures is recognised by its message with `... (# bytes)`
+  for each length and the mark for the line or the item: a token half as
+  long, a line or an item further, is the same failure with its own length
+  in its text, and a token that starts with another byte is another. A token
+  of three bytes reads and is recognised as it was, and so does one of 64
+  bytes where it is the whole value.
+- A series an error names by its labels (`the histogram name{label="value"},
+  which starts in line 2, has two buckets with the upper bound 1`) has its
+  family's name and each label's name and value cut by itself, and is
+  recognised without their lengths; a name written bare is shown by its
+  first 64 bytes and its length (`second aaaa... (1048576 bytes)_sum sample
+  for the histogram aaaa... (1048576 bytes){...}`).
+- A point of the render API that is no `[value, timestamp]` is shown as `%v`
+  wrote it — text and numbers as they are, null as `<nil>`, an array between
+  brackets, an object as `map[key:value]` with its keys in order — whole up
+  to 64 bytes and by its first 64 bytes and its length past that.
+- The name of an encoding that is none, of 100 kB, in `response.charset` and
+  in a `Content-Type`, and of 65 bytes in an XML declaration, is shown by
+  its first 64 bytes and its length, and the error still ends with the names
+  there are; a name of 64 bytes or fewer, with a blank, a quote or a byte
+  that is no UTF-8, reads as `%q` wrote it.
+- An XML error that names an element, a name space prefix, an entity, a name
+  that is none, the declaration's version or its encoding, or a prefix that
+  is not declared, 13 forms, with a name of 1 MiB is under 300 bytes in the
+  library's words, each name by its first 64 bytes and its length and what
+  the library says after it (`element <aaaa... (1048576 bytes)> closed by
+  </b>`, `invalid character entity &aaaa... (1048578 bytes)`, `xml:
+  unsupported version "aaaa"... (1048576 bytes); only version 1.0 is
+  supported`), recognised with the mark for each length and without the
+  line, the same for a name half as long a line further; the error is no
+  longer the library's, which holds the name. A name of 64, 63 and three
+  bytes is refused with the library's own error, recognised as it was.
+- An XML error of no known form is left as it is: one that ends otherwise
+  than the form, starts otherwise, has a quote that is not closed, or holds
+  only names within 64 bytes; the words ` (no semicolon)` after an entity
+  are no part of its name; a quoted version that holds the words that follow
+  it is cut where its quote ends.
+- 510 XML documents the decoder refuses with no name over 64 bytes — the
+  repository's XML files cut off after every seventh byte, alone and before
+  an end without a start, and 40 documents with each mistake the parser
+  names — are refused with the library's error to the letter, recognised as
+  they were, and are a syntax error to `errors.As` exactly where the
+  library's is.
+- The report of the first line left out is short and whole: a carbon line of
+  1 MiB skipped under `invalid_lines: skip`, and a sample named as its
+  histogram, a bucket without an `le` label and a sample named as its
+  summary, of a family named in 1 MiB, are reported in under 600 bytes with
+  the line or each name by its first 64 bytes and its length and the report's
+  own end (`... has 5 fields; want <path> <value> <timestamp>`, `... got
+  aaaa... (1048583 bytes) without an le label`), recognised with the marks,
+  the same half as long a line further; a short one is reported as it was.
+- Against the decoders as they were, kept as oracles: 30,000 carbon lines
+  drawn at random and 30 written out (21,000 refused, some 8,900 of them
+  with a value over 64 bytes), 20,000 answers of the render API with points
+  of none to three values of any kind, nested (some 18,000 refused, 5,600 of
+  them with a name or a point over 64 bytes), the reports of 1,200 sample
+  lines left out of families named in 1 to 5,000 bytes, bare and quoted
+  (some 220 with a name over 64 bytes), and a CSV header naming twice each
+  of 120 columns
+  with quotes, line breaks, control characters, characters of two to four
+  bytes and bytes that are no UTF-8, of the lengths around 64 bytes: each is
+  read or refused as it was, the error and what it is recognised by to the
+  letter where no value in it is over 64 bytes, and otherwise the error as
+  it was with each such value cut to its first 64 bytes, to a character
+  boundary, and its length.
+- The exposition parser against the parser it was (§ 34.13), over the edge
+  cases, the 48,000 random parses, the fuzz target, and the repository's two
+  expositions whole, cut off after every fifth byte and with a token of each
+  line spoilt (some 9,900 readings): the same series, and the same error to
+  the letter but for a value over 64 bytes, which is cut; every error is
+  recognised by its text without its line and without the lengths of what it
+  cut.
+- `model.Quoted` reads as `model.QuoteValue` for 3,400 values, given as text
+  and as bytes — around 64 bytes, of characters of one to four bytes after
+  none to three single bytes, of quotes, control characters and bytes that
+  are no UTF-8, and 3,000 drawn at random — and as `%q` for those of 64
+  bytes or fewer; `model.Bare` reads as `%s` up to 64 bytes and is cut at
+  the same byte past that; each is recognised by its text with the mark for
+  the length. `model.Errorf` writes one whatever the verb, among positions
+  and wrapped errors, and a text joined of several (`model.ShownAs`) is
+  recognised by what its values are.
+- Refusing a token of 1 MiB makes no text of its size: for each of the 28
+  errors of the exposition parser, parsing the body, reading the error and
+  asking what it is recognised by allocate under 32 kB beyond the copies the
+  parse itself makes of the token (none for 9 of them, 1 to 11 MiB for the
+  others: a family's name, a series' labels, a value unescaped, the text
+  `strconv` is given and the copy its error keeps), where reading the error
+  alone made a megabyte each time, 8 MiB and more in all; a carbon line, its
+  value, its timestamp, a series without a path and a tag of 1 MiB likewise,
+  and the error of a render point holding 3 MiB of text is read in under 32
+  kB. `model.Quoted` and `model.Bare` of 1 MiB allocate at most 6 times for
+  texts under 100 bytes, and a short value shown bare is a copy, not the part
+  of the body it was given.
+- Through `/probe`, an exposition with a label value of 1 MiB left open and
+  carbon lines one of which is 1 MiB long with a field too many are answered
+  502 with the decode error whole in under 400 bytes — `... label value
+  "aaaa"... (1048576 bytes) contains unescaped new-line`, `carbon line 2:
+  "a.b 1 2 3 aaaa"... (1048586 bytes) has 5 fields; want <path> <value>
+  <timestamp>` — and logged in one line of the decode stage with that error,
+  under a kilobyte; the same half as long, two lines further, is logged as a
+  repeat at debug level with its own length and line, and a token that
+  starts otherwise as a new failure.
+- The whole-text bound still holds for an error long by many values: the
+  two bullets of § 34.94 corrected for this change.
+- `BenchmarkProbe`'s prom and csv cases allocate no more for each probe than
+  before (prom 574 against 577 at 100 series, csv 1274 against 1274).
+
+## 34.96 Tests that depend on neither the other goroutines' allocations nor the machine's speed, and a gRPC call that reaches a server that came back
+
+- A test measures what a function allocates through
+  `internal/testutil/alloctest`, which counts a call as
+  `testing.AllocsPerRun` does and the bytes with it: three allocations of
+  64 bytes are 3 and 192 bytes, a megabyte made at once is 1 and 1,048,576,
+  and a function that allocates on every other call allocates, as a whole
+  number, nothing; a measurement with a bound gives the same.
+- What the other goroutines of the process allocate meanwhile is not
+  counted: a function of one allocation that gives up the processor, beside
+  a goroutine that allocates a hundred times each time it is given it, is
+  101 allocations to `testing.AllocsPerRun` and to a single measurement
+  (`Once`), and 1 allocation of 64 bytes to `Allocations`, `AllocsAtMost`
+  and `BytesAtMost`, whether the goroutine is busy during the first four
+  measurements of five or during all but the first; beside one busy
+  throughout, it is the least that was seen.
+- A measurement with a bound stops at the first that is within it: the
+  calls counted and one before them on a quiet machine, three measurements
+  where a goroutine was busy during two, and five where the function costs
+  more than the bound, as for a measurement without a bound; `Once` is one.
+- The collector runs before each measurement, five times for a measurement
+  without a bound and once for one within its bound at once, so a
+  collection the process was about to make - its first, which starts the
+  collector's workers - is not counted with the function.
+- The count is made on one processor, and the processors the process had
+  are given back afterwards, also when the measured function ends its
+  goroutine.
+- `alloctest.RaceDetector` says what the build says of itself: that it was
+  built with `-race`, or was not; the tests of `internal/decode` and
+  `internal/transform` read it and no constant of their own.
+- No test file outside `internal/testutil` calls `testing.AllocsPerRun` or
+  reads `Mallocs`, `Frees` or `TotalAlloc` of `runtime.MemStats`, or
+  `AllocsPerOp` or `AllocedBytesPerOp` of a benchmark's result: every test
+  that bounds or compares allocations or allocated bytes, in
+  `internal/model`, `fetch`, `decode`, `transform` and `exporter`, measures
+  through `alloctest`. The check finds a counter where it is called, taken
+  as a value or read from a variable of any name, and not where it is only
+  named in a comment or a text, nor a measurement through `alloctest`,
+  what the heap holds or a benchmark's `ReportAllocs`.
+- `internal/testutil/alloctest` is held to what holds for
+  `internal/testutil`: no non-test file imports it, and it imports nothing
+  of the module but what `testutil` may; the vulnerability check leaves it
+  out with the other packages only tests use.
+- A `grpc` call that finds its connection trying to connect, not waiting to,
+  reaches a server that came back: the connection's second attempt is held
+  open until the call has ended the connection's wait, and then fails; the
+  target is up from the third attempt on, and the call returns with the
+  connection ready. With the wait ended once the call returned after its
+  whole wait with the connection failed, waiting an hour to try again.
+- Ending the wait again leaves other calls as they were: against the
+  function as it was, a connection that is idle, connecting, ready or shut
+  down is asked nothing, and one that has failed has its wait ended once and
+  is waited for once, when ending it makes the connection and when the
+  call's time is already over, and is left in the same state. A connection
+  that stays failed has its wait ended four times in the second the call
+  waits, a quarter of a second apart, on a clock of the test's own; one made
+  at the second ending is waited for 250ms and one at the fourth 750ms.
+- A `grpc` probe with retries whose server comes back once the first attempt
+  is seen to have failed is answered by a retry, and a server stopped,
+  probed until its connection is seen failed and waiting, and once more, and
+  started again is answered at the first probe after, each with a connection
+  that would wait an hour to try again by itself and a call that has a
+  minute to connect in: with no call ending the wait, both fail
+  `UNAVAILABLE` at once.
+- A test's gRPC server is given no port twice in a process: 3,000 listeners,
+  each closed before the next is asked for, get 3,000 ports, and a server
+  started after them another, where the kernel gives a port out again within
+  a hundred. A server started on the address a stopped one had asks for the
+  address again while it is in use, four times here, and fails the test at
+  once on any other error.
+- A probe's reflection question reaches the test's own server with the
+  call's `authorization` and metadata whatever port the server got; on a
+  port an earlier server of the process had, the exporter answered from the
+  reflection answer it had kept of that one and the question was never
+  asked.
+- Every Python script a test runs has at least a minute, whatever its
+  `limits.script_timeout`, on the process's own worker pool and on each
+  test's fresh one: a script that fills 200 MiB three times under a timeout
+  of two seconds, and pre-scripts under the default of 100ms, run on a
+  machine with every CPU busy elsewhere, where they timed out. A pool with
+  no least time holds a script to its limit as before: one that never ends
+  under 200ms fails with `python transform timed out after 200ms`, its one
+  worker stopped for the timeout, and the next run starts a second worker.
+- On a clock of the test's own, a pool told to give a script at least a
+  minute runs a script of 30s under a limit of 25ms, and fails one of a
+  minute and a millisecond with `timed out after 1m0s`; a limit of two
+  minutes stands above the least time; a pool told 0 fails a script a
+  millisecond over its 25ms and runs one a millisecond under. A fresh pool
+  has no least time, and no file but a test's sets one.
+- A run that finds every Python worker busy, and three that wait in line for
+  one, find it busy for as long as the test holds it: the run that keeps the
+  worker is ended by the test when the line is as it wants it, and ends as
+  cancelled.
+- No test of a deadline, a budget or a timeout measures how long the probe,
+  the fetch, the export or the shutdown took: a probe of a target that never
+  answers is answered with the budget it names, not before 300ms of a 300ms
+  budget; a fetch of an endless body ends with the limit's error before a
+  deadline a minute away; a read over the cap of abandoned reads fails with
+  the cap's error and not its deadline's; an export told to retry after an
+  hour ends before a minute is over, having tried once; an idle connection
+  is closed within the half minute its read waits; a second signal ends the
+  exporter, killed by it, once the log says the shutdown has begun.
+- A retry wait the deadline cuts short keeps the target's `503`, and a
+  refused connection its error, with a deadline two seconds away and a wait
+  of an hour, and the deadline has passed when the fetch returns; a probe
+  whose retry runs out of a 2s budget reports the target's `503`.
+- A static target scrape that waits for a slot gets it when the test frees
+  it, which it does once the scrape is seen waiting in line; trip limiter
+  waiters are each seen in line before the next is started.
+- The exporter a shutdown test runs in a child process is started again on
+  another port when it ends before it listens saying the address is in use,
+  as it does when something else was given the port the test found free.
+- A static target file rewritten at the same length is reloaded by the watch
+  with its time set a second later, as a filesystem that stamps two writes
+  within one tick of its clock alike would not show the change.
+- A deadline that an earlier step has to beat leaves that step a second or
+  more: a rule's failure is kept when the rule after it runs into a deadline
+  a second away; a probe whose budget of a second runs out inside a jq rule
+  answers `502` naming the rule and the budget, under each error mode; the
+  other files of a directory are answered when one read hangs past a
+  deadline of a second; a connection reset a second after the head and the
+  start of the body were written fails the fetch as one reset in the middle
+  of the body.
 
 # 35. Documentation requirements
 

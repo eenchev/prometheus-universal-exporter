@@ -12,6 +12,7 @@ import (
 
 	"github.com/eenchev/prometheus-universal-exporter/internal/fetch"
 	"github.com/eenchev/prometheus-universal-exporter/internal/model"
+	"github.com/eenchev/prometheus-universal-exporter/internal/testutil/alloctest"
 )
 
 // readCSVBeforeCarriageReturns is readCSV as it was before a carriage return
@@ -335,7 +336,7 @@ func TestCSVCarriageReturnsCostABodyWithoutThemNothing(t *testing.T) {
 	for name, tc := range bodies {
 		for _, trim := range []bool{false, true} {
 			var out []byte
-			allocations := testing.AllocsPerRun(5, func() { out = carriageReturnsAsLineEnds(tc.body, ',', trim) })
+			allocations := alloctest.AllocsAtMost(5, tc.copies, func() { out = carriageReturnsAsLineEnds(tc.body, ',', trim) })
 			if allocations != tc.copies {
 				t.Errorf("%s, trim_space %v: %v allocations, want %v", name, trim, allocations, tc.copies)
 			}
@@ -346,8 +347,8 @@ func TestCSVCarriageReturnsCostABodyWithoutThemNothing(t *testing.T) {
 	}
 	crlf := bodies["CRLF"].body
 	for _, trim := range []bool{false, true} {
-		was := testing.AllocsPerRun(3, func() { _, _ = readCSVBeforeCarriageReturns(crlf, ',', trim) })
-		now := testing.AllocsPerRun(3, func() { _, _ = readCSV(crlf, ',', trim) })
+		was, _ := alloctest.Allocations(3, func() { _, _ = readCSVBeforeCarriageReturns(crlf, ',', trim) })
+		now := alloctest.AllocsAtMost(3, was, func() { _, _ = readCSV(crlf, ',', trim) })
 		if now != was {
 			t.Errorf("trim_space %v: reading a body of CRLF lines takes %v allocations, and took %v", trim, now, was)
 		}

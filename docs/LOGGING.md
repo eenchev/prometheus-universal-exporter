@@ -111,10 +111,13 @@ as a problem for each two of them, which for a key written 1200 times is
 and 719390 more problems`, in the log and in the answer to the scraper.
 A decode error that quotes a part of the body quotes no more than its start
 and says how long the whole was — `mapping key "aaaa..."... (100000 bytes)` in
-a YAML error, and `... (1000100 bytes)` where the error of any decoder is cut
-at 2,000 bytes — and that length, a size like any other, is left out of what
-is compared: the same mistake with a longer or a shorter part that starts the
-same is a repeat.
+a YAML error, `expected float as value, got "aaaa..."... (1000000 bytes)` in
+that of an exposition, the first 64 bytes of a value in the other decoders' —
+and keeps what the message says after it, so the line ends with what is wrong
+and what to change. An error still over 2,000 bytes, long by many values
+rather than by one, is cut there and ends `... (6400 bytes)`. Each such
+length, a size like any other, is left out of what is compared: the same
+mistake with a longer or a shorter value that starts the same is a repeat.
 Of a [runtime error of the XPath engine](CONFIGURATION.md#when-the-xpath-engine-fails-on-an-expression)
 what follows `runtime error:` is left out as well, since the numbers there
 come from the response; so it is of a runtime error while a YAML document is

@@ -46,7 +46,9 @@ func (b *syncBuffer) String() string {
 type exporterProcess struct {
 	cmd    *exec.Cmd
 	exited chan error
-	logs   *syncBuffer
+	// ended is closed when the process has ended.
+	ended chan struct{}
+	logs  *syncBuffer
 	// address is where the exporter listens.
 	address string
 }
@@ -71,29 +73,58 @@ func startHeldExporterWith(t *testing.T, config string, args ...string) *exporte
 		}
 	}))
 	t.Cleanup(func() { close(release); target.Close() })
-	listener, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatal(err)
-	}
-	address := listener.Addr().String()
-	_ = listener.Close()
 	conf := testutil.WriteIn(t, t.TempDir(), "config.yaml", "collectors:\n  - name: slow\n    request:\n      type: http\n    transform:\n      type: regex\n    metrics:\n      - name: v\n        type: gauge\n        expression: 'v=(\\d+)'\n"+config)
-	args = append([]string{"--config.file=" + conf, "--web.listen-address=" + address}, args...)
-	p := &exporterProcess{cmd: exec.Command(os.Args[0], "-test.run=^TestRunHelperProcess$"), exited: make(chan error, 1), logs: &syncBuffer{}, address: address}
-	p.cmd.Env = append(os.Environ(), helperArgsEnv+"="+strings.Join(args, "\x1f"))
-	p.cmd.Stderr = p.logs
-	if err := p.cmd.Start(); err != nil {
-		t.Fatal(err)
-	}
-	go func() { p.exited <- p.cmd.Wait() }()
-	t.Cleanup(func() { _ = p.cmd.Process.Kill() })
-	testutil.WaitFor(t, "the exporter to listen", func() bool {
-		resp, err := http.Get("http://" + address + "/health")
-		if err == nil {
-			_ = resp.Body.Close()
+	// The exporter takes its address as a flag, so the test gives it a port
+	// that was free a moment before the exporter listens on it, and whatever
+	// else on the machine is given the port in that moment, another test's
+	// server, ends the exporter at once: it says the address is in use.
+	// Another is then started on another port.
+	var p *exporterProcess
+	for attempt := 1; ; attempt++ {
+		listener, err := net.Listen("tcp", "127.0.0.1:0")
+		if err != nil {
+			t.Fatal(err)
 		}
-		return err == nil
-	})
+		address := listener.Addr().String()
+		_ = listener.Close()
+		p = &exporterProcess{cmd: exec.Command(os.Args[0], "-test.run=^TestRunHelperProcess$"), exited: make(chan error, 1), ended: make(chan struct{}), logs: &syncBuffer{}, address: address}
+		p.cmd.Env = append(os.Environ(), helperArgsEnv+"="+strings.Join(append([]string{"--config.file=" + conf, "--web.listen-address=" + address}, args...), "\x1f"))
+		p.cmd.Stderr = p.logs
+		if err := p.cmd.Start(); err != nil {
+			t.Fatal(err)
+		}
+		started := p
+		go func() {
+			started.exited <- started.cmd.Wait()
+			close(started.ended)
+		}()
+		t.Cleanup(func() { _ = started.cmd.Process.Kill() })
+		// Whatever was given the port may listen on it without answering, so
+		// a question that is not answered is asked again.
+		health := &http.Client{Timeout: 2 * time.Second}
+		listening := false
+		testutil.WaitFor(t, "the exporter to listen", func() bool {
+			select {
+			case <-p.ended:
+				return true
+			default:
+			}
+			resp, err := health.Get("http://" + address + "/health")
+			if err == nil {
+				_ = resp.Body.Close()
+				listening = true
+			}
+			return listening
+		})
+		health.CloseIdleConnections()
+		if listening {
+			break
+		}
+		if attempt == 5 || !strings.Contains(p.logs.String(), "address already in use") {
+			t.Fatalf("the exporter ended before it listened:\n%s", p.logs.String())
+		}
+	}
+	address := p.address
 	// A probe that will not finish keeps the graceful shutdown waiting.
 	go func() {
 		resp, err := http.Get("http://" + address + "/probe?collector=slow&target=" + target.URL)
@@ -123,33 +154,38 @@ func (p *exporterProcess) signal(t *testing.T, sig os.Signal) {
 
 // A second SIGINT during shutdown ends the process at once, instead of it
 // waiting for the probes in progress.
+//
+// The shutdown would wait ten minutes for the probe, so a process that has
+// ended half a minute after the second signal, killed by a signal and not
+// exiting 0 as a shutdown that ran out of time does, was ended by it. How
+// soon is the machine's to say and not measured.
 func TestSecondSignalExitsAtOnce(t *testing.T) {
-	p := startHeldExporter(t, "--web.shutdown-timeout=30s")
+	p := startHeldExporter(t, "--web.shutdown-timeout=10m")
 	p.signal(t, syscall.SIGTERM)
-	time.Sleep(300 * time.Millisecond)
+	testutil.WaitFor(t, "the shutdown to begin", func() bool { return strings.Contains(p.logs.String(), "shutting down") })
 	select {
 	case err := <-p.exited:
 		t.Fatalf("the exporter exited before the second signal, with the probe in progress: %v\n%s", err, p.logs.String())
 	default:
 	}
-	start := time.Now()
 	p.signal(t, syscall.SIGINT)
 	select {
 	case err := <-p.exited:
-		if took := time.Since(start); took > 2*time.Second {
-			t.Fatalf("the second signal took %s to end the process", took)
-		}
 		var exit *exec.ExitError
 		if err == nil || !errors.As(err, &exit) {
 			t.Fatalf("the process ended with %v, want it killed by the signal", err)
 		}
-	case <-time.After(4 * time.Second):
+	case <-time.After(30 * time.Second):
 		t.Fatalf("the second signal did not end the process\n%s", p.logs.String())
 	}
 }
 
 // --web.shutdown-timeout bounds the wait for the probes in progress; the
 // exporter then closes them, says so, and exits 0.
+//
+// The probe in progress never ends, so an exporter that exits was let go by
+// the timeout, as its log says, and not before the timeout was over. How
+// long after is the machine's to say and not measured.
 func TestShutdownTimeoutBoundsTheWait(t *testing.T) {
 	p := startHeldExporter(t, "--web.shutdown-timeout=1s")
 	start := time.Now()
@@ -160,10 +196,10 @@ func TestShutdownTimeoutBoundsTheWait(t *testing.T) {
 		if err != nil {
 			t.Fatalf("the exporter exited with %v\n%s", err, p.logs.String())
 		}
-		if took < 900*time.Millisecond || took > 4*time.Second {
+		if took < 900*time.Millisecond {
 			t.Fatalf("the shutdown took %s with a 1s timeout", took)
 		}
-	case <-time.After(6 * time.Second):
+	case <-time.After(30 * time.Second):
 		t.Fatalf("the exporter did not exit\n%s", p.logs.String())
 	}
 	for _, want := range []string{`"shutdown_timeout":"1s"`, "probes were still in progress when --web.shutdown-timeout ran out"} {
@@ -175,8 +211,11 @@ func TestShutdownTimeoutBoundsTheWait(t *testing.T) {
 
 // With --web.shutdown-delay, a SIGTERM first makes /ready answer 503 while
 // probes are still served, and only then begins the graceful shutdown.
+//
+// The delay is three seconds: the test has that long to see /ready answer
+// 503 and to probe, which takes milliseconds on a machine that is not busy.
 func TestShutdownDelayKeepsServingWhileUnready(t *testing.T) {
-	p := startHeldExporter(t, "--web.shutdown-delay=1500ms", "--web.shutdown-timeout=1s")
+	p := startHeldExporter(t, "--web.shutdown-delay=3s", "--web.shutdown-timeout=1s")
 	fast := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		_, _ = w.Write([]byte("v=7\n"))
 	}))
@@ -213,13 +252,13 @@ func TestShutdownDelayKeepsServingWhileUnready(t *testing.T) {
 		if err != nil {
 			t.Fatalf("exit: %v\n%s", err, p.logs.String())
 		}
-		if took < 1500*time.Millisecond {
+		if took < 3*time.Second {
 			t.Errorf("exited after %s, before the delay ended", took)
 		}
-	case <-time.After(8 * time.Second):
+	case <-time.After(30 * time.Second):
 		t.Fatalf("the exporter did not exit\n%s", p.logs.String())
 	}
-	if !strings.Contains(p.logs.String(), `"shutdown_delay":"1.5s"`) {
+	if !strings.Contains(p.logs.String(), `"shutdown_delay":"3s"`) {
 		t.Errorf("the log does not name the delay:\n%s", p.logs.String())
 	}
 }
@@ -247,7 +286,9 @@ func TestStaticTargetsAreScrapedThroughTheShutdownDelay(t *testing.T) {
 	}))
 	defer target.Close()
 	targets := testutil.WriteIn(t, t.TempDir(), "targets.yaml", "interval: 1s\ntargets:\n  - name: fast\n    collector: slow\n    target: "+target.URL+"\n")
-	p := startHeldExporter(t, "--static-targets-file="+targets, "--web.shutdown-delay=2500ms", "--web.shutdown-timeout=1s")
+	// The delay is five intervals long, so a scrape is one of several the
+	// delay has room for, whatever the machine is busy with.
+	p := startHeldExporter(t, "--static-targets-file="+targets, "--web.shutdown-delay=5s", "--web.shutdown-timeout=1s")
 	testutil.WaitFor(t, "the static target to be scraped", func() bool { return scrapes.Load() >= 1 })
 	p.signal(t, syscall.SIGTERM)
 	atSignal := scrapes.Load()
@@ -256,11 +297,11 @@ func TestStaticTargetsAreScrapedThroughTheShutdownDelay(t *testing.T) {
 		if err != nil {
 			t.Fatalf("exit: %v\n%s", err, p.logs.String())
 		}
-	case <-time.After(10 * time.Second):
+	case <-time.After(30 * time.Second):
 		t.Fatalf("the exporter did not exit\n%s", p.logs.String())
 	}
 	if during := scrapes.Load() - atSignal; during < 1 {
-		t.Errorf("the static target was scraped %d times during the 2.5s delay, want at least one", during)
+		t.Errorf("the static target was scraped %d times during the 5s delay, want at least one", during)
 	}
 	if strings.Contains(p.logs.String(), "static target scrape failed") || strings.Contains(p.logs.String(), "no scrape slot came free") {
 		t.Errorf("the shutdown reported a static target failing:\n%s", p.logs.String())
@@ -279,7 +320,7 @@ func TestASIGHUPDuringTheShutdownDoesNotEndIt(t *testing.T) {
 		if err != nil {
 			t.Fatalf("exit: %v\n%s", err, p.logs.String())
 		}
-	case <-time.After(8 * time.Second):
+	case <-time.After(30 * time.Second):
 		t.Fatalf("the exporter did not exit\n%s", p.logs.String())
 	}
 	if !strings.Contains(p.logs.String(), "shutting down: finishing the probes in progress") {

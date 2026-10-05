@@ -516,6 +516,8 @@ func runPython(ctx context.Context, pythonPath, mode, what, script string, d *de
 	if timeout <= 0 {
 		timeout = 100 * time.Millisecond
 	}
+	// A test's pool may leave every script longer (SetLeastScriptTimeout).
+	timeout = max(timeout, time.Duration(PythonWorkers().leastScriptTimeout.Load()))
 	// The request is written into a buffer kept for the next one, which is
 	// free again once the worker has been handed it.
 	encoder := pythonEncoders.Get().(*pythonEncoder)

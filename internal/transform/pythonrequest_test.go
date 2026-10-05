@@ -13,6 +13,7 @@ import (
 	"github.com/eenchev/prometheus-universal-exporter/internal/decode"
 	"github.com/eenchev/prometheus-universal-exporter/internal/fetch"
 	"github.com/eenchev/prometheus-universal-exporter/internal/model"
+	"github.com/eenchev/prometheus-universal-exporter/internal/testutil/alloctest"
 )
 
 // The request to a worker is written by pythonEncoder (pythonrequest.go)
@@ -304,13 +305,13 @@ func TestPythonRequestAllocatesNothingForEachItem(t *testing.T) {
 	if want, _ := oraclePythonRequest("metrics", "pass", d, r, c); err != nil || string(line) != string(want) {
 		t.Fatalf("%v: %.200q", err, line)
 	}
-	if allocations := testing.AllocsPerRun(5, write); allocations > 4 {
+	if allocations := alloctest.AllocsAtMost(5, 4, write); allocations > 4 {
 		t.Errorf("%.0f allocations for a request of %d items by an encoder used before, want at most 4", allocations, boundSeries)
 	}
-	if allocations := testing.AllocsPerRun(5, func() { _, _ = pythonRequest("metrics", "pass", d, r, c) }); allocations > 64 {
+	if allocations := alloctest.AllocsAtMost(5, 64, func() { _, _ = pythonRequest("metrics", "pass", d, r, c) }); allocations > 64 {
 		t.Errorf("%.0f allocations for a request of %d items by a new encoder, want at most 64", allocations, boundSeries)
 	}
-	if was := testing.AllocsPerRun(2, func() { _, _ = oraclePythonRequest("metrics", "pass", d, r, c) }); was < 8*boundSeries {
+	if was, _ := alloctest.Allocations(2, func() { _, _ = oraclePythonRequest("metrics", "pass", d, r, c) }); was < 8*boundSeries {
 		t.Errorf("json.Marshal wrote the request in %.0f allocations: the bound above compares with nothing", was)
 	}
 }

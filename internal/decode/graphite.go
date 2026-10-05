@@ -180,7 +180,7 @@ func parseGraphiteRender(body []byte, report *GraphiteReport) ([]*graphiteSeries
 		}
 		for j, point := range entry.Datapoints {
 			if len(point) != 2 {
-				return nil, model.Errorf("graphite render JSON: series %q point %d has %d elements, not [value, timestamp]", entry.Target, model.Position(j), len(point))
+				return nil, model.Errorf("graphite render JSON: series %s point %d has %d elements, not [value, timestamp]", model.Quoted(entry.Target), model.Position(j), len(point))
 			}
 			if point[0] == nil {
 				continue
@@ -188,7 +188,7 @@ func parseGraphiteRender(body []byte, report *GraphiteReport) ([]*graphiteSeries
 			value, okValue := jsonFloat(point[0])
 			at, okTime := jsonFloat(point[1])
 			if !okValue || !okTime {
-				return nil, model.Errorf("graphite render JSON: series %q point %d is %v, not [value, timestamp] as numbers", entry.Target, model.Position(j), point)
+				return nil, model.Errorf("graphite render JSON: series %s point %d is %s, not [value, timestamp] as numbers", model.Quoted(entry.Target), model.Position(j), shownPoint(point))
 			}
 			s.points = append(s.points, graphitePoint{value, at})
 		}
@@ -201,6 +201,74 @@ func parseGraphiteRender(body []byte, report *GraphiteReport) ([]*graphiteSeries
 		out = append(out, s)
 	}
 	return out, nil
+}
+
+// shownPoint is a point of the render API's answer that is no [value,
+// timestamp] of numbers, for the error that says so: as fmt's %v writes the
+// point — text and numbers as they are, null as <nil>, an array as its items
+// between brackets and an object as map[key:value ...], its keys in order —
+// and by no more than its start when that is long, as model.Bare shows a
+// name. The whole of it, which may be most of the answer, is not written to
+// find its start and its length.
+func shownPoint(point []any) model.QuotedValue {
+	start := textStart{head: make([]byte, 0, shownPointBytes+1)}
+	start.value(point)
+	if start.whole == len(start.head) {
+		return model.Bare(start.head)
+	}
+	head := start.head[:headOf(string(start.head), shownPointBytes)]
+	return model.ShownAs(string(head)+cutMark(start.whole, false), string(head)+cutMark(start.whole, true))
+}
+
+// shownPointBytes is how much of a point its error shows, which is how much
+// of a value model.QuoteValue shows.
+const shownPointBytes = 64
+
+// textStart is the start of a text written in parts, no more of it than its
+// head has room for, and how long the whole text is.
+type textStart struct {
+	head  []byte
+	whole int
+}
+
+func (s *textStart) text(part string) {
+	s.whole += len(part)
+	s.head = append(s.head, part[:min(len(part), cap(s.head)-len(s.head))]...)
+}
+
+// value writes a value decoded from JSON as fmt's %v does.
+func (s *textStart) value(v any) {
+	switch v := v.(type) {
+	case nil:
+		s.text("<nil>")
+	case string:
+		s.text(v)
+	case json.Number:
+		s.text(string(v))
+	case []any:
+		s.text("[")
+		for i, item := range v {
+			if i > 0 {
+				s.text(" ")
+			}
+			s.value(item)
+		}
+		s.text("]")
+	case map[string]any:
+		s.text("map[")
+		for i, key := range model.SortedKeys(v) {
+			if i > 0 {
+				s.text(" ")
+			}
+			s.text(key)
+			s.text(":")
+			s.value(v[key])
+		}
+		s.text("]")
+	default:
+		// A boolean, and nothing else: no other value is decoded from JSON.
+		s.text(fmt.Sprint(v))
+	}
 }
 
 // jsonFloat reads a render JSON number. graphite-web writes an infinite
@@ -238,8 +306,8 @@ func parseCarbonLines(body []byte, now time.Time, skip bool, report *GraphiteRep
 				return nil, err
 			}
 			if report.SkippedLines == 0 {
-				// Bounded as a decode error is (failurebound.go): it may
-				// quote the whole line.
+				// Bounded as a decode error is (failurebound.go), though it
+				// quotes no more than the start of the line.
 				report.FirstSkipped = boundedFailure(err)
 			}
 			report.SkippedLines++
@@ -265,7 +333,7 @@ func parseCarbonLines(body []byte, now time.Time, skip bool, report *GraphiteRep
 func parseCarbonLine(line string, now time.Time) (string, map[string]string, graphitePoint, error) {
 	fields := strings.Fields(line)
 	if len(fields) != 2 && len(fields) != 3 {
-		return "", nil, graphitePoint{}, fmt.Errorf("%q has %d fields; want <path> <value> <timestamp>", line, len(fields))
+		return "", nil, graphitePoint{}, model.Errorf("%s has %d fields; want <path> <value> <timestamp>", model.Quoted(line), len(fields))
 	}
 	path, tags, err := parseGraphitePath(fields[0])
 	if err != nil {
@@ -273,16 +341,16 @@ func parseCarbonLine(line string, now time.Time) (string, map[string]string, gra
 	}
 	value, err := model.ParseFloat(fields[1])
 	if err != nil {
-		return "", nil, graphitePoint{}, fmt.Errorf("the value %q is not a number", fields[1])
+		return "", nil, graphitePoint{}, model.Errorf("the value %s is not a number", model.Quoted(fields[1]))
 	}
 	at := float64(now.Unix())
 	if len(fields) == 3 {
 		stamp, err := model.ParseFloat(fields[2])
 		switch {
 		case err != nil:
-			return "", nil, graphitePoint{}, fmt.Errorf("the timestamp %q is not a number of Unix seconds", fields[2])
+			return "", nil, graphitePoint{}, model.Errorf("the timestamp %s is not a number of Unix seconds", model.Quoted(fields[2]))
 		case stamp >= carbonMillisecondsAbove:
-			return "", nil, graphitePoint{}, fmt.Errorf("the timestamp %q is in milliseconds, it seems; carbon lines take Unix seconds", fields[2])
+			return "", nil, graphitePoint{}, model.Errorf("the timestamp %s is in milliseconds, it seems; carbon lines take Unix seconds", model.Quoted(fields[2]))
 		case stamp != -1:
 			at = stamp
 		}
@@ -300,7 +368,7 @@ func parseCarbonLine(line string, now time.Time) (string, map[string]string, gra
 func parseGraphitePath(raw string) (string, map[string]string, error) {
 	path, rest, tagged := cutTopLevel(raw)
 	if path == "" {
-		return "", nil, fmt.Errorf("the series %q has no path", raw)
+		return "", nil, model.Errorf("the series %s has no path", model.Quoted(raw))
 	}
 	tags := map[string]string{"name": path}
 	for tagged {
@@ -308,7 +376,7 @@ func parseGraphitePath(raw string) (string, map[string]string, error) {
 		tag, rest, tagged = strings.Cut(rest, ";")
 		name, value, ok := strings.Cut(tag, "=")
 		if !ok || name == "" {
-			return "", nil, fmt.Errorf("the series %q has a tag %q that is not name=value", raw, tag)
+			return "", nil, model.Errorf("the series %s has a tag %s that is not name=value", model.Quoted(raw), model.Quoted(tag))
 		}
 		tags[name] = value
 	}

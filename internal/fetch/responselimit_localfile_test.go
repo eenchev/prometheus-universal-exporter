@@ -7,10 +7,10 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
-	"runtime"
 	"testing"
 
 	"github.com/eenchev/prometheus-universal-exporter/internal/model"
+	"github.com/eenchev/prometheus-universal-exporter/internal/testutil/alloctest"
 )
 
 // A file is read only up to the size limit. The file is sparse, so it takes
@@ -26,14 +26,14 @@ func TestALocalFileIsNotReadPastTheLimit(t *testing.T) {
 	}
 	c := fileCollector("files", root, "huge.prom")
 	c.Request.MaxResponseBytes = 1024
-	var before, after runtime.MemStats
-	runtime.ReadMemStats(&before)
-	_, err := fetchLocalFile(context.Background(), "", &c, RequestOverrides{}, nil)
-	runtime.ReadMemStats(&after)
+	var err error
+	allocated := alloctest.BytesAtMost(1, 256<<20, func() {
+		_, err = fetchLocalFile(context.Background(), "", &c, RequestOverrides{}, nil)
+	})
 	if !errors.Is(err, model.ErrLimitExceeded) {
 		t.Fatalf("err=%v, want a limit error", err)
 	}
-	if allocated := after.TotalAlloc - before.TotalAlloc; allocated > 256<<20 {
+	if allocated > 256<<20 {
 		t.Fatalf("reading a 1 GiB file with a 1 KiB limit allocated %d bytes", allocated)
 	}
 }

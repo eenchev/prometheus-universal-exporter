@@ -22,6 +22,7 @@ import (
 
 	"github.com/eenchev/prometheus-universal-exporter/internal/expr"
 	"github.com/eenchev/prometheus-universal-exporter/internal/model"
+	"github.com/eenchev/prometheus-universal-exporter/internal/testutil/alloctest"
 )
 
 // The XPath engine's sum() leaves out, without a word, every node whose
@@ -747,7 +748,8 @@ func TestARuleWithoutASumCostsWhatItCost(t *testing.T) {
 	defer debug.SetGCPercent(debug.SetGCPercent(-1))
 	cost := func(transform func()) float64 {
 		transform()
-		return testing.AllocsPerRun(20, transform)
+		allocations, _ := alloctest.Allocations(20, transform)
+		return allocations
 	}
 	now := cost(func() { _, _ = transformXPathNodes(context.Background(), asXML, xmlNodes, rules, &c, nil) })
 	before := cost(func() { _, _ = transformXPathNodesBeforeSums(context.Background(), asXML, xmlNodes, rules, &c, nil) })

@@ -13,6 +13,7 @@ import (
 	"unicode/utf16"
 
 	"github.com/eenchev/prometheus-universal-exporter/internal/model"
+	"github.com/eenchev/prometheus-universal-exporter/internal/testutil/alloctest"
 )
 
 // A worker's answer is read by readPythonAnswer (pythonanswer.go) rather
@@ -648,10 +649,10 @@ func TestPythonAnswerAllocatesLittleForEachSeries(t *testing.T) {
 	if len(set.Metrics) != boundSeries || set.Metrics[boundSeries-1].Labels["id"] != fmt.Sprintf("item-%d", boundSeries-1) || set.Metrics[9].Labels["region"] != "eu-2" || set.Metrics[3].Value != 3 || set.Metrics[3].Help != "Value of an item." {
 		t.Fatalf("%d series; %+v", len(set.Metrics), set.Metrics[min(9, len(set.Metrics)-1)])
 	}
-	if each := testing.AllocsPerRun(5, read) / boundSeries; each > 6 {
+	if each := alloctest.AllocsAtMost(5, 6*boundSeries, read) / boundSeries; each > 6 {
 		t.Errorf("%.1f allocations for each series, want at most 6", each)
 	}
-	was := testing.AllocsPerRun(2, func() {
+	was, _ := alloctest.Allocations(2, func() {
 		out, err := oraclePythonAnswer("transform", line)
 		if err == nil {
 			_, err = oraclePythonSeries(context.Background(), out)
@@ -659,8 +660,8 @@ func TestPythonAnswerAllocatesLittleForEachSeries(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-	}) / boundSeries
-	if was < 20 {
+	})
+	if was /= boundSeries; was < 20 {
 		t.Errorf("encoding/json read the answer in %.1f allocations a series: the bound above compares with nothing", was)
 	}
 }

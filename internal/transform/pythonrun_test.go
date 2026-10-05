@@ -150,6 +150,7 @@ func TestPythonScriptDurationDoesNotCountHandingOverTheResponse(t *testing.T) {
 // on the probe's deadline is a timeout, as before.
 func TestPythonRunCutByTheProbesDeadlineIsNotATimeout(t *testing.T) {
 	requirePython(t)
+	holdScriptsToTheirTimeout(t)
 	c := workerCollector("deadline", "import time\nif data == 'slow': time.sleep(30)\nmetric(name='v', value=1)")
 	c.Limits.ScriptTimeout = model.Duration(20 * time.Second)
 	if _, err := runWorkerText(context.Background(), c, "fast"); err != nil {

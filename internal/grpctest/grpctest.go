@@ -13,6 +13,7 @@ import (
 	"crypto/x509/pkix"
 	"encoding/json"
 	"encoding/pem"
+	"errors"
 	"io"
 	"math/big"
 	"net"
@@ -21,6 +22,7 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"syscall"
 	"testing"
 	"time"
 
@@ -221,9 +223,79 @@ type Options struct {
 	// test that has to do something while the question is in flight and
 	// cannot say how long that takes on a busy machine.
 	ReflectionHold <-chan struct{}
-	// Addr is the host:port to listen on; empty takes a free port. A test
+	// Addr is the host:port to listen on; empty takes a free port, one no
+	// server or listener of this package had before (Listen). A test
 	// restarting a server on the address a stopped one had sets it.
 	Addr string
+}
+
+// The ports Listen has given out in this process.
+var (
+	portsMu sync.Mutex
+	ports   = map[int]bool{}
+)
+
+// Listen listens on a free local port that it has given no listener before in
+// this process, for a test's server or for whatever else a test has the
+// exporter call as a gRPC target.
+//
+// The exporter keeps a connection per target address, and a reflection answer
+// per connection, for minutes, and the kernel gives a port out again as soon
+// as it is free. A test whose server got the port a stopped server of an
+// earlier test had was served from what the exporter had kept of that one:
+// its descriptors came from the kept answer, and the test's own reflection
+// service was never asked.
+func Listen(t testing.TB) net.Listener {
+	t.Helper()
+	// A port given out before is held until a new one is found, so the
+	// kernel does not offer it again.
+	var seen []net.Listener
+	defer func() {
+		for _, listener := range seen {
+			_ = listener.Close()
+		}
+	}()
+	for {
+		listener, err := (&net.ListenConfig{}).Listen(context.Background(), "tcp", "127.0.0.1:0")
+		if err != nil {
+			t.Fatal(err)
+		}
+		port := listener.Addr().(*net.TCPAddr).Port
+		portsMu.Lock()
+		given := ports[port]
+		ports[port] = true
+		portsMu.Unlock()
+		if !given {
+			return listener
+		}
+		seen = append(seen, listener)
+	}
+}
+
+// listenAgain listens on an address a test's stopped server had. Whatever
+// else on the machine was given the port in the meantime, another test's
+// client or server, has it for as long as that test runs, so the address is
+// waited for: half a minute bounds a port that never comes free.
+func listenAgain(t testing.TB, addr string) net.Listener {
+	t.Helper()
+	return listenWhenFree(t, func() (net.Listener, error) {
+		return (&net.ListenConfig{}).Listen(context.Background(), "tcp", addr)
+	})
+}
+
+// listenWhenFree asks listen again for as long as it says the address is in
+// use, up to half a minute, and fails the test on any other error.
+func listenWhenFree(t testing.TB, listen func() (net.Listener, error)) net.Listener {
+	t.Helper()
+	for deadline := time.Now().Add(30 * time.Second); ; time.Sleep(10 * time.Millisecond) {
+		listener, err := listen()
+		if err == nil {
+			return listener
+		}
+		if !errors.Is(err, syscall.EADDRINUSE) || time.Now().After(deadline) {
+			t.Fatal(err)
+		}
+	}
 }
 
 // Server is a running test server.
@@ -264,13 +336,11 @@ func (s *Server) Stop() { s.grpc.Stop() }
 func Start(t testing.TB, opts Options) *Server {
 	t.Helper()
 	files := Files(t)
-	addr := opts.Addr
-	if addr == "" {
-		addr = "127.0.0.1:0"
-	}
-	listener, err := (&net.ListenConfig{}).Listen(context.Background(), "tcp", addr)
-	if err != nil {
-		t.Fatal(err)
+	var listener net.Listener
+	if opts.Addr == "" {
+		listener = Listen(t)
+	} else {
+		listener = listenAgain(t, opts.Addr)
 	}
 	s := &Server{Addr: listener.Addr().String(), Health: health.NewServer()}
 	var serverOpts []grpc.ServerOption

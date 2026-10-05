@@ -28,36 +28,31 @@ func decodeFailure(t *testing.T, kind, body string, c model.Collector) (bounded,
 }
 
 // The error of a body that cannot be decoded is no longer than 2,000 bytes,
-// whichever decoder read it and whatever the body holds: an element, an
-// entity, a column's name, a sample's value, a label's name and its value, a
-// metric's type, a carbon line and its value, a series' name and a point of
-// a megabyte each were in the error whole, a megabyte and more of one line
-// in the log and in the answer to the scraper. The error starts as it did,
-// naming the problem, and ends with how long the whole was; it is recognised
-// by a text no longer, which ends with the mark for the length and has the
-// mark for the line, so the same mistake with a token half as long, on
-// another line, is the same failure to the log. A JSON error, which names a
-// character and where, is as short as it was.
+// whichever decoder read it and whatever the body holds. A decoder shows a
+// value of the body by its start (valuecut_test.go), so one long value no
+// longer makes a long error; what does is many values: a histogram series
+// named by 128 labels, each shown, and ten problems of YAML keys of control
+// characters, every byte of whose start is written as four. Such an error is
+// cut at the bound: it starts as it did, naming the problem, and ends with
+// how long the whole was; it is recognised by a text no longer, which ends
+// with the mark for the length and has the mark for the line, so the same
+// mistake with half as many labels or a key half as long, on another line,
+// is the same failure to the log. A JSON error, which names a character and
+// where, is as short as it was.
 func TestADecodeErrorIsNoLongerThanTwoThousandBytesWhateverTheBody(t *testing.T) {
 	for name, tc := range map[string]struct {
 		kind string
 		body func(token string) string
 		says string
 	}{
-		"xml, an element closed by another": {"xml", func(token string) string { return "<a><" + token + "></b></a>" }, "XML decode: XML syntax error on line 1: element <aaaa"},
-		"xml, an entity":                    {"xml", func(token string) string { return "<a>&" + token + ";</a>" }, "XML decode: XML syntax error on line 1: invalid character entity &aaaa"},
-		"csv, a column named twice":         {"csv", func(token string) string { return token + "," + token + "\n1,2\n" }, `CSV header names column "aaaa`},
-		"prometheus, a value":               {"prometheus", func(token string) string { return "m " + token + "\n" }, `decoding Prometheus exposition: text format parsing error in line 1: expected float as value, got "aaaa`},
-		"prometheus, a timestamp":           {"prometheus", func(token string) string { return "m 1 " + token + "\n" }, `decoding Prometheus exposition: text format parsing error in line 1: expected integer as timestamp, got "aaaa`},
-		"prometheus, a label's name":        {"prometheus", func(token string) string { return "m{" + token + "} 1\n" }, `decoding Prometheus exposition: text format parsing error in line 1: expected '=' after label name "aaaa`},
-		"prometheus, a label's value":       {"prometheus", func(token string) string { return "m{a=\"" + token + "\n" }, `decoding Prometheus exposition: text format parsing error in line 1: label value "aaaa`},
-		"prometheus, a metric's type":       {"prometheus", func(token string) string { return "# TYPE m " + token + "\n" }, `decoding Prometheus exposition: text format parsing error in line 1: unknown metric type "aaaa`},
-		"prometheus, a second HELP":         {"prometheus", func(token string) string { return "# HELP " + token + " x\n# HELP " + token + " y\n" }, `decoding Prometheus exposition: text format parsing error in line 2: second HELP line for metric name "aaaa`},
-		"carbon, a line of too many fields": {"graphite", func(token string) string { return "a b c d " + token + "\n" }, `carbon line 1: "a b c d aaaa`},
-		"carbon, a value":                   {"graphite", func(token string) string { return "a " + token + " 1\n" }, `carbon line 1: the value "aaaa`},
-		"carbon, a tag":                     {"graphite", func(token string) string { return "a;" + token + " 1 1\n" }, `carbon line 1: the series "a;aaaa`},
-		"graphite render, a series' name":   {"graphite", func(token string) string { return `[{"target": "` + token + `", "datapoints": [[1]]}]` }, `graphite render JSON: series "aaaa`},
-		"graphite render, a point":          {"graphite", func(token string) string { return `[{"target": "t", "datapoints": [["` + token + `", 1]]}]` }, `graphite render JSON: series "t" point 0 is [aaaa`},
+		"prometheus, a series of many labels": {"prometheus", func(token string) string {
+			var labels strings.Builder
+			for i := range len(token) >> 13 {
+				fmt.Fprintf(&labels, `l%03d="%s",`, i, token[:40])
+			}
+			return "# TYPE h histogram\n" + strings.Repeat("h_bucket{"+labels.String()+`le="1"} 1`+"\n", 2)
+		},
+			`decoding Prometheus exposition: text format parsing error: the histogram h{l000="aaaa`},
 		// Ten problems, each of the start of its key, are over the bound
 		// together where every byte of the key is written as four.
 		"yaml, ten problems of keys of control characters": {"yaml", func(token string) string {
@@ -75,11 +70,11 @@ func TestADecodeErrorIsNoLongerThanTwoThousandBytesWhateverTheBody(t *testing.T)
 		if len(text) != maxFailureBytes || !strings.HasPrefix(text, tc.says) || !strings.HasSuffix(text, mark) || !strings.HasPrefix(made.Error(), strings.TrimSuffix(text, mark)) {
 			t.Errorf("%s: the error is %d bytes, %.200q ... %q, want %d that start %q and end %q", name, len(text), text, text[max(0, len(text)-40):], maxFailureBytes, tc.says, mark)
 		}
-		if len(same) > maxFailureBytes || !strings.Contains(same, "... (# bytes)") || tc.kind != "yaml" && !strings.HasSuffix(same, "... (# bytes)") || strings.Contains(same, "line 1:") || strings.Contains(same, "line 3:") {
+		if len(same) > maxFailureBytes || !strings.Contains(same, "... (# bytes)") || tc.kind != "yaml" && !strings.HasSuffix(same, "... (# bytes)") || strings.Contains(same, "line 2,") || strings.Contains(same, "line 3:") {
 			t.Errorf("%s: the failure is recognised by %d bytes, %.200q ... %q", name, len(same), same, same[max(0, len(same)-40):])
 		}
 		moved := tc.body(long[:1<<19])
-		if tc.kind == "prometheus" || tc.kind == "graphite" && !strings.HasPrefix(moved, "[") {
+		if tc.kind == "prometheus" {
 			moved = "\n" + moved
 		}
 		again, _ := decodeFailure(t, tc.kind, moved, model.Collector{})
@@ -180,17 +175,25 @@ func TestAnErrorOverTheBoundIsCutAndLetGoOf(t *testing.T) {
 }
 
 // The line a decoder leaves out of a body it decodes is reported, and
-// logged as a warning the failure log remembers, in an error bounded like a
-// decode error: a carbon line of a megabyte that is skipped under
-// invalid_lines: skip, and a sample of a histogram whose name is a megabyte
-// long and that is none of its samples, were reported in a megabyte and in
-// five. A short line is reported as it was.
-func TestTheFirstLineADecoderLeavesOutIsReportedInABoundedError(t *testing.T) {
+// logged as a warning the failure log remembers, in an error that is short
+// and whole whatever the line holds: a carbon line of a megabyte that is
+// skipped under invalid_lines: skip is quoted by its first 64 bytes, with
+// its length, and the report still says what is wrong with it; a sample of
+// a histogram or of a summary whose name is a megabyte long, and that is
+// none of its samples, is named by its first 64 bytes wherever the report
+// names it or its family, and the report still says what the sample is
+// without. They were reported in a megabyte and in five, and then, bounded,
+// in their first 2,000 bytes, without their ends. A line half as long, a
+// line further, is the same failure with another length; a short line is
+// reported as it was.
+func TestTheFirstLineADecoderLeavesOutIsReportedByItsStartAndWhole(t *testing.T) {
 	skipping := model.Collector{Decoder: model.DecoderConfig{Type: "graphite"}}
 	skipping.Response.Graphite.InvalidLines = "skip"
 	exposition := model.Collector{Decoder: model.DecoderConfig{Type: "prometheus"}}
-	stray := func(name string) string {
-		return "# TYPE " + name + " histogram\n" + name + "_bucket{le=\"+Inf\"} 1\n" + name + "_sum 1\n" + name + "_count 1\n" + name + "{a=\"b\"} 1\n"
+	stray := func(kind, sample string) func(string) string {
+		return func(name string) string {
+			return "# TYPE " + name + " " + kind + "\n" + name + "_sum 1\n" + name + "_count 1\n\n" + name + sample + "\n"
+		}
 	}
 	first := func(c model.Collector, body string) error {
 		t.Helper()
@@ -207,26 +210,46 @@ func TestTheFirstLineADecoderLeavesOutIsReportedInABoundedError(t *testing.T) {
 		return nil
 	}
 	long := strings.Repeat("a", 1<<20)
-	for name, tc := range map[string]struct {
+	name := func(length int) string { return fmt.Sprintf("%s... (%d bytes)", long[:64], length) }
+	for title, tc := range map[string]struct {
 		c           model.Collector
 		body        func(token string) string
 		says, short string
 	}{
-		"a carbon line": {skipping, func(token string) string { return "a b c d " + token + "\nok 1 1\n" }, `carbon line 1: "a b c d aaaa`,
+		"a carbon line": {skipping, func(token string) string { return "a b c d " + token + "\nok 1 1\n" },
+			`carbon line L: "a b c d ` + long[:56] + `"... (N+8 bytes) has 5 fields; want <path> <value> <timestamp>`,
 			`carbon line 1: "a b c d a" has 5 fields; want <path> <value> <timestamp>`},
-		"a sample of a histogram": {exposition, stray, "line 5: expected aaaa",
+		"a sample named as its histogram": {exposition, stray("histogram", `{a="b"} 1`),
+			"line L+4: expected NAME_bucket with an le label, NAME_sum or NAME_count as a sample of the histogram NAME, got NAME",
 			"line 5: expected a_bucket with an le label, a_sum or a_count as a sample of the histogram a, got a"},
+		"a bucket without an le label": {exposition, stray("histogram", `_bucket{a="b"} 1`),
+			"line L+4: expected NAME_bucket with an le label, NAME_sum or NAME_count as a sample of the histogram NAME, got NAME+7 without an le label",
+			"line 5: expected a_bucket with an le label, a_sum or a_count as a sample of the histogram a, got a_bucket without an le label"},
+		"a sample named as its summary": {exposition, stray("summary", `{a="b"} 1`),
+			"line L+4: expected NAME with a quantile label, NAME_sum or NAME_count as a sample of the summary NAME, got NAME without a quantile label",
+			"line 5: expected a with a quantile label, a_sum or a_count as a sample of the summary a, got a without a quantile label"},
 	} {
+		// want is what the report says of a token of so many bytes, with the
+		// first line of the body where it is.
+		want := func(length int, line string, lengths func(int) string) string {
+			text := strings.NewReplacer("L+4", line, "L", line, "N+8", strings.TrimSuffix(strings.TrimPrefix(lengths(length+8), long[:64]+"... ("), " bytes)"), "NAME+7", lengths(length+7), "NAME", lengths(length)).Replace(tc.says)
+			return text
+		}
+		line := map[bool][2]string{true: {"1", "2"}, false: {"5", "6"}}[strings.HasPrefix(tc.says, "carbon")]
 		err := first(tc.c, tc.body(long))
 		text, same := err.Error(), model.SameFailureText(err)
-		if len(text) != maxFailureBytes || !strings.HasPrefix(text, tc.says) || !strings.HasSuffix(text, " bytes)") || len(same) > maxFailureBytes || !strings.HasSuffix(same, "... (# bytes)") {
-			t.Errorf("%s of a megabyte is reported in %d bytes, %.100q ... %q, recognised by %d bytes", name, len(text), text, text[max(0, len(text)-40):], len(same))
+		if text != want(len(long), line[0], name) || len(text) > 600 {
+			t.Errorf("%s of a megabyte is reported in %d bytes, %q, want %q", title, len(text), text, want(len(long), line[0], name))
 		}
-		if again := first(tc.c, "\n"+tc.body(long[:1<<19])); model.SameFailureText(again) != same || again.Error() == text {
-			t.Errorf("%s half as long, a line further, is recognised by %.100q, want the same failure with another length", name, model.SameFailureText(again))
+		marked := func(int) string { return long[:64] + "... (# bytes)" }
+		if same != want(len(long), "#", marked) {
+			t.Errorf("%s of a megabyte is recognised by %q, want %q", title, same, want(len(long), "#", marked))
+		}
+		if again := first(tc.c, "\n"+tc.body(long[:1<<19])); model.SameFailureText(again) != same || again.Error() != want(1<<19, line[1], name) {
+			t.Errorf("%s half as long, a line further, is reported as %q, recognised by %q, want the same failure with another length", title, again, model.SameFailureText(again))
 		}
 		if err := first(tc.c, tc.body("a")); err.Error() != tc.short {
-			t.Errorf("%s that is short is reported as %q, want %q", name, err, tc.short)
+			t.Errorf("%s that is short is reported as %q, want %q", title, err, tc.short)
 		}
 	}
 }

@@ -11,6 +11,7 @@ import (
 
 	"github.com/eenchev/prometheus-universal-exporter/internal/fetch"
 	"github.com/eenchev/prometheus-universal-exporter/internal/model"
+	"github.com/eenchev/prometheus-universal-exporter/internal/testutil/alloctest"
 )
 
 // carriageReturnsAsLineEndsBeforeOpenQuotes is carriageReturnsAsLineEnds as
@@ -285,7 +286,7 @@ func TestCSVQuoteLeftOpenCostsOneCopy(t *testing.T) {
 	} {
 		for _, trim := range []bool{false, true} {
 			var out []byte
-			allocations := testing.AllocsPerRun(5, func() { out = carriageReturnsAsLineEnds(tc.body, ',', trim) })
+			allocations := alloctest.AllocsAtMost(5, tc.copies, func() { out = carriageReturnsAsLineEnds(tc.body, ',', trim) })
 			if allocations != tc.copies {
 				t.Errorf("%s, trim_space %v: %v allocations, want %v", name, trim, allocations, tc.copies)
 			}

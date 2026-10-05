@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/eenchev/prometheus-universal-exporter/internal/testutil/alloctest"
 	"gopkg.in/yaml.v3"
 )
 
@@ -88,13 +89,14 @@ func TestTheItemsOfAYAMLSequenceBesideALargeMappingAreHandedToTheLibraryTogether
 		if raceDetector {
 			continue
 		}
-		alone := testing.AllocsPerRun(2, func() { yamlByTheLibraryAlone(root) })
-		now := testing.AllocsPerRun(2, func() { yamlWith(root, yamlLargeMapping, nil) })
+		// The library alone is measured once: what decoding takes is
+		// bounded by a tenth and more over it.
+		alone, memoryAlone := alloctest.Once(2, func() { yamlByTheLibraryAlone(root) })
+		now := alloctest.AllocsAtMost(2, 1.1*alone, func() { yamlWith(root, yamlLargeMapping, nil) })
 		if now > 1.1*alone {
 			t.Errorf("%s: decoding the document allocates %.0f times, and the library alone %.0f: more than a tenth over it", name, now, alone)
 		}
-		memoryAlone := allocatedBy(func() { yamlByTheLibraryAlone(root) })
-		memory := allocatedBy(func() { yamlWith(root, yamlLargeMapping, nil) })
+		memory := alloctest.BytesAtMost(1, uint64(tc.memory*float64(memoryAlone)), func() { yamlWith(root, yamlLargeMapping, nil) })
 		if float64(memory) > tc.memory*float64(memoryAlone) {
 			t.Errorf("%s: decoding the document allocates %d bytes, and the library alone %d: more than %.2f times as much", name, memory, memoryAlone, tc.memory)
 		}

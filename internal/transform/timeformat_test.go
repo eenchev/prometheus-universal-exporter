@@ -14,6 +14,7 @@ import (
 
 	"github.com/eenchev/prometheus-universal-exporter/internal/model"
 	"github.com/eenchev/prometheus-universal-exporter/internal/testutil"
+	"github.com/eenchev/prometheus-universal-exporter/internal/testutil/alloctest"
 )
 
 // unix is the Unix seconds of a time written as RFC 3339.
@@ -853,7 +854,7 @@ func TestARuleWithoutTimeFormatReadsItsValueAsBefore(t *testing.T) {
 			break
 		}
 		read()
-		if allocs := testing.AllocsPerRun(100, read); allocs != 0 {
+		if allocs := alloctest.AllocsAtMost(100, 0, read); allocs != 0 {
 			t.Errorf("reading %s allocates %v times, want none", name, allocs)
 		}
 	}

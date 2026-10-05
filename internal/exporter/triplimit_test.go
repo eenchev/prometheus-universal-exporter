@@ -5,6 +5,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/eenchev/prometheus-universal-exporter/internal/testutil"
 )
 
 // max_concurrent_probes bounds a collector's trips to its targets
@@ -80,27 +82,24 @@ func TestTripLimiterHandsSlotsToWaitersInLine(t *testing.T) {
 	_ = limiter.tryAcquire("b", 5)
 	served := make(chan string, 3)
 	wait := func(name, collector string, limit int) {
+		// Each is in line before the next is started, so the line is in the
+		// order they are named here.
+		want := limiter.waitingCount() + 1
 		go func() {
 			if err := limiter.acquire(context.Background(), collector, limit); err == nil {
 				served <- name
 			}
 		}()
-		for deadline := time.Now().Add(5 * time.Second); time.Now().Before(deadline); time.Sleep(time.Millisecond) {
+		testutil.WaitFor(t, name+" to wait in line", func() bool {
 			limiter.mu.Lock()
+			defer limiter.mu.Unlock()
 			n := len(limiter.waiting)
-			queued := n > 0 && limiter.waiting[n-1].collector == collector
-			limiter.mu.Unlock()
-			if queued {
-				return
-			}
-		}
+			return n == want && limiter.waiting[n-1].collector == collector
+		})
 	}
 	wait("a-waiter", "a", 1)
 	wait("c-first", "c", 5)
 	wait("c-second", "c", 5)
-	for deadline := time.Now().Add(5 * time.Second); limiter.waitingCount() != 3 && time.Now().Before(deadline); {
-		time.Sleep(time.Millisecond)
-	}
 	if n := limiter.waitingCount(); n != 3 {
 		t.Fatalf("%d waiting, want 3", n)
 	}

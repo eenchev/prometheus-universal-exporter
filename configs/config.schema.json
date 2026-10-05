@@ -329,7 +329,11 @@
                     ],
                     "properties": {
                       "expression": {
-                        "description": "Reads the label from the response, in the transform's language, like the metric's expression.",
+                        "description": "Reads the label from the response, in the transform's language, like the metric's expression. Not blanks alone: a constant is a value.",
+                        "not": {
+                          "pattern": "^[\\t\\n\\v\\f\\r \\x85\\xA0  - \u2028\u2029  　]+$",
+                          "type": "string"
+                        },
                         "type": [
                           "string",
                           "number",

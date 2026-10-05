@@ -93,8 +93,12 @@ Calls to one target, with one set of TLS settings, share one connection,
 kept between probes and closed after 5 minutes unused, and made again with a
 new certificate when a TLS file changes on disk. When the server goes away,
 the connection tries to reconnect at most every 5 seconds, and a probe that
-finds it waiting tries at once, so a server that comes back is answered at
-the next probe rather than after a growing wait.
+finds it failed tries at once, so a server that comes back is answered at
+the next probe rather than after a growing wait. The probe waits up to a
+second for the connection, and tries again every quarter of that second for
+as long as there is none: an attempt the connection had already begun when
+the probe came, before the server was back, does not make the probe fail
+with it.
 
 A connection can also die without a word: a node that lost power, or a
 firewall or NAT that forgot the connection, sends nothing to close it, and it
@@ -332,7 +336,8 @@ already had: after `backoff`, a connection that could not be made is made
 again at once, and the retry waits up to a second for it before it calls, so a
 server that comes back between two attempts is reached by the next one. While
 the server stays down each retry therefore takes up to a second longer than
-`backoff`, within the probe's budget as always. A collector whose method is
+`backoff`, within the probe's budget as always, and tries to connect up to
+four times in that second. A collector whose method is
 safe to repeat can retry more:
 
 ```yaml

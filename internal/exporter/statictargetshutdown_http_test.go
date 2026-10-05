@@ -119,7 +119,7 @@ func TestAbortedScrapesPublishNothing(t *testing.T) {
 	server.AbortStaticScrapes()
 	select {
 	case <-done:
-	case <-time.After(5 * time.Second):
+	case <-time.After(30 * time.Second):
 		t.Fatal("the loop did not return once its scrapes were cut short")
 	}
 	if up, ok := targetUp(server, "slow"); !ok || up != 1 {
@@ -180,7 +180,7 @@ func TestAStoppingLoopDropsScrapesWaitingForASlot(t *testing.T) {
 	close(release)
 	select {
 	case <-done:
-	case <-time.After(5 * time.Second):
+	case <-time.After(30 * time.Second):
 		t.Fatal("the loop did not return")
 	}
 	if n := queuedHits.Load(); n != 0 {

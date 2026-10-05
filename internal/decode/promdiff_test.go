@@ -106,6 +106,14 @@ func (r promReading) options(asked *[]string) promOptions {
 // compareExposition parses body with the parser and with the oracle, read
 // one way, and reports any difference. It says whether the body was
 // accepted.
+//
+// One difference is allowed, by name: the parser's error shows no more than
+// the first 64 bytes of a value of the body, with its length, where the
+// oracle's quotes the value whole (isCutOf). An error whose values are all
+// within 64 bytes is the oracle's to the letter. The oracle's error says
+// nothing of what it is recognised by, so that is checked against the
+// error's own text: the text without its lines and without the lengths of
+// what it cut (recognisedExposition).
 func compareExposition(t *testing.T, body []byte, reading promReading) bool {
 	t.Helper()
 	var askedOld, asked []string
@@ -116,8 +124,10 @@ func compareExposition(t *testing.T, body []byte, reading promReading) bool {
 	switch {
 	case !bytes.Equal(given, body):
 		t.Errorf("%q (%s): the parser changed the body it read", clip(body), reading)
-	case (err == nil) != (oldErr == nil) || err != nil && err.Error() != oldErr.Error():
+	case (err == nil) != (oldErr == nil) || err != nil && !isCutOf(err.Error(), oldErr.Error()):
 		t.Errorf("%q (%s): err=%v, was %v", clip(body), reading, err, oldErr)
+	case err != nil && !errors.Is(err, model.ErrLimitExceeded) && model.SameFailureText(err) != recognisedExposition(err.Error()):
+		t.Errorf("%q (%s): err=%v is recognised by %q, want %q", clip(body), reading, err, model.SameFailureText(err), recognisedExposition(err.Error()))
 	case errors.Is(err, model.ErrLimitExceeded) != errors.Is(oldErr, model.ErrLimitExceeded):
 		t.Errorf("%q (%s): err=%#v, was %#v", clip(body), reading, err, oldErr)
 	case !reflect.DeepEqual(asked, askedOld):
@@ -128,6 +138,29 @@ func compareExposition(t *testing.T, body []byte, reading promReading) bool {
 		}
 	}
 	return err == nil
+}
+
+// recognisedExposition is what the error of an exposition that reads as text
+// is recognised by: text with the mark in place of the line the parser
+// stopped in, or of the line a series that cannot be one starts in, which is
+// what follows the last `, which starts in line `, and in place of the
+// length of each value that was cut.
+func recognisedExposition(text string) string {
+	const stopped, starts = "text format parsing error in line ", ", which starts in line "
+	from := -1
+	if strings.HasPrefix(text, stopped) {
+		from = len(stopped)
+	} else if at := strings.LastIndex(text, starts); at >= 0 {
+		from = at + len(starts)
+	}
+	if from < 0 {
+		return lengthsMarked(text)
+	}
+	to := from
+	for to < len(text) && text[to] >= '0' && text[to] <= '9' {
+		to++
+	}
+	return lengthsMarked(text[:from] + model.MovingMark + text[to:])
 }
 
 // promReadings are the ways every body of the table is read.

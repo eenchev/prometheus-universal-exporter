@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/eenchev/prometheus-universal-exporter/internal/model"
+	"github.com/eenchev/prometheus-universal-exporter/internal/testutil/alloctest"
 )
 
 // The text format wants the lines of a metric in one group. A set that has
@@ -232,8 +233,8 @@ func TestWritingASetWithItsFamiliesTogetherAllocatesWhatItDid(t *testing.T) {
 		}
 	}
 	buffer := make([]byte, 0, 1<<20)
-	was := testing.AllocsPerRun(20, func() { buffer = formerAppendMetricSet(buffer[:0], set) })
-	now := testing.AllocsPerRun(20, func() { buffer = appendMetricSet(buffer[:0], set) })
+	was, _ := alloctest.Allocations(20, func() { buffer = formerAppendMetricSet(buffer[:0], set) })
+	now := alloctest.AllocsAtMost(20, was, func() { buffer = appendMetricSet(buffer[:0], set) })
 	if now > was {
 		t.Errorf("writing a set of 5000 series in 20 families allocates %v times, and allocated %v", now, was)
 	}

@@ -10,6 +10,7 @@ import (
 	"github.com/eenchev/prometheus-universal-exporter/internal/decode"
 	"github.com/eenchev/prometheus-universal-exporter/internal/fetch"
 	"github.com/eenchev/prometheus-universal-exporter/internal/model"
+	"github.com/eenchev/prometheus-universal-exporter/internal/testutil/alloctest"
 )
 
 // boundSeries is how many items the responses of the allocation bounds
@@ -18,9 +19,10 @@ import (
 const boundSeries = 2000
 
 // transformCost is what one Transform of body by c costs, per series it
-// makes: allocations, and bytes allocated. The response is decoded once, and
-// transformed once before anything is counted, so the expressions are
-// compiled already, as they are on every scrape but a collector's first.
+// makes: allocations, and bytes allocated, as alloctest measures them. The
+// response is decoded once, and transformed once before anything is counted,
+// so the expressions are compiled already, as they are on every scrape but a
+// collector's first.
 func transformCost(t *testing.T, c model.Collector, body string, wantSeries int) (allocs, bytes float64) {
 	t.Helper()
 	c.Name = "bounded"
@@ -35,14 +37,8 @@ func transformCost(t *testing.T, c model.Collector, body string, wantSeries int)
 	if err != nil || len(set.Metrics) != wantSeries {
 		t.Fatalf("%d series, %v; want %d", len(set.Metrics), err, wantSeries)
 	}
-	allocs = testing.AllocsPerRun(5, run) / float64(wantSeries)
-	const runs = 5
-	total := allocated(func() {
-		for range runs {
-			run()
-		}
-	})
-	return allocs, float64(total) / runs / float64(wantSeries)
+	allocs, each := alloctest.Allocations(5, run)
+	return allocs / float64(wantSeries), float64(each) / float64(wantSeries)
 }
 
 // boundItemsJSON is a JSON document of n items, as a jq collector reads.

@@ -8,10 +8,11 @@ import (
 	"io"
 	"math"
 	"math/rand/v2"
-	"runtime"
 	"slices"
 	"sync"
 	"testing"
+
+	"github.com/eenchev/prometheus-universal-exporter/internal/testutil/alloctest"
 )
 
 // bodySource is a body as a connection or a file hands it over: in pieces of
@@ -248,17 +249,12 @@ func TestADeclaredLengthIsOnlyAHint(t *testing.T) {
 }
 
 // allocatedPerRun is how many bytes and how many allocations one call of f
-// takes, over several calls after a first one.
+// takes, over several calls after a first one: the least of the measurements
+// alloctest makes, since what the goroutines of the tests before this one
+// allocate meanwhile is counted with it.
 func allocatedPerRun(f func()) (bytesPerRun uint64, allocations float64) {
-	const runs = 8
-	f()
-	var before, after runtime.MemStats
-	runtime.ReadMemStats(&before)
-	for range runs {
-		f()
-	}
-	runtime.ReadMemStats(&after)
-	return (after.TotalAlloc - before.TotalAlloc) / runs, testing.AllocsPerRun(runs, f)
+	allocations, bytesPerRun = alloctest.Allocations(8, f)
+	return bytesPerRun, allocations
 }
 
 // testBodyStep is a size around which the bodies of the tests are taken, so

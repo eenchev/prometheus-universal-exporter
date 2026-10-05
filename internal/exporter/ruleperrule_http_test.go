@@ -24,6 +24,7 @@ import (
 	"github.com/eenchev/prometheus-universal-exporter/internal/fetch"
 	"github.com/eenchev/prometheus-universal-exporter/internal/model"
 	"github.com/eenchev/prometheus-universal-exporter/internal/testutil"
+	"github.com/eenchev/prometheus-universal-exporter/internal/testutil/alloctest"
 	"github.com/eenchev/prometheus-universal-exporter/internal/transform"
 )
 
@@ -376,8 +377,8 @@ func TestRulesThatNeitherFailNorRecoverCostTheLogNoMoreThanTheyDid(t *testing.T)
 	server, _, _ := ruleLogServer(t, testutil.Collector(c.Name, "text"))
 	l := collectLog{key: failureKey(c.Name, "http://target.example", ""), attrs: []any{"collector", c.Name, "target", "http://target.example", "url", "http://target.example"}}
 	ctx := context.Background()
-	was := testing.AllocsPerRun(50, func() { logRuleFailuresByName(ctx, server, configRead{}, &c, nil, l, true) })
-	now := testing.AllocsPerRun(50, func() { server.logRuleFailures(ctx, configRead{}, &c, nil, l, true) })
+	was, _ := alloctest.Allocations(50, func() { logRuleFailuresByName(ctx, server, configRead{}, &c, nil, l, true) })
+	now := alloctest.AllocsAtMost(50, was, func() { server.logRuleFailures(ctx, configRead{}, &c, nil, l, true) })
 	if now > was {
 		t.Errorf("a scrape of thirty rules that do not fail allocates %v times for the log, and allocated %v", now, was)
 	}
@@ -527,7 +528,7 @@ func TestAScrapeWithNoRuleRememberedMakesNoKey(t *testing.T) {
 	ctx := context.Background()
 	healthy := func(what string) {
 		t.Helper()
-		if allocated := testing.AllocsPerRun(50, func() { server.logRuleFailures(ctx, configRead{}, &c, nil, l, true) }); allocated != 0 {
+		if allocated := alloctest.AllocsAtMost(50, 0, func() { server.logRuleFailures(ctx, configRead{}, &c, nil, l, true) }); allocated != 0 {
 			t.Errorf("%s, a scrape of thirty rules that do not fail allocates %v times for the log, want none", what, allocated)
 		}
 		if lines := ruleLines(t, logs); len(lines) != 0 {

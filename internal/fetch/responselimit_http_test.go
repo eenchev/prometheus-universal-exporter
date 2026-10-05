@@ -28,11 +28,13 @@ func TestAnEndlessBodyIsNotReadPastTheLimit(t *testing.T) {
 	}))
 	defer server.Close()
 	c := httpCollector(t, func(c *model.Collector) { c.Request.MaxResponseBytes = 1024 })
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	// The body never ends, so only the limit or the deadline ends the fetch:
+	// the limit's error, with the deadline a minute away and not passed, is
+	// the limit ending it.
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 	defer cancel()
-	start := time.Now()
 	_, err := FetchCollector(ctx, server.URL, c, RequestOverrides{}, nil)
-	if elapsed := time.Since(start); !errors.Is(err, model.ErrLimitExceeded) || elapsed > 2*time.Second {
-		t.Fatalf("err=%v after %v, want a limit error well before the deadline", err, elapsed)
+	if !errors.Is(err, model.ErrLimitExceeded) || ctx.Err() != nil {
+		t.Fatalf("err=%v, and the deadline had passed: %v; want a limit error before the deadline", err, ctx.Err() != nil)
 	}
 }

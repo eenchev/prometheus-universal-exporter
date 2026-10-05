@@ -213,6 +213,10 @@ type PythonPool struct {
 	// give the pool a stand-in whose start-up takes the time the test says,
 	// rather than what an interpreter takes on the machine as it is loaded.
 	start func(ctx context.Context, spec pythonSpec) (*pythonWorker, error)
+	// leastScriptTimeout, when positive, is the least time a script is given,
+	// whatever its limits.script_timeout (SetLeastScriptTimeout). It is for
+	// the tests, as start is.
+	leastScriptTimeout atomic.Int64
 }
 
 // Why a worker stopped, and how a run ended: bounded sets, so they can be
@@ -278,6 +282,18 @@ func IsolatePythonWorkers() (restore func()) {
 
 func newPythonPool() *PythonPool {
 	return &PythonPool{idle: map[string][]*pythonWorker{}, stats: map[string]*pythonCollectorStats{}, busy: map[string]int{}, obsolete: map[string]bool{}, start: startPythonWorker}
+}
+
+// SetLeastScriptTimeout gives every script the pool runs at least this long,
+// whatever its limits.script_timeout, and 0 holds each to its own again. It
+// is for tests. A script of a millisecond overruns the default 100ms on a
+// machine busy enough, as a test runner is under the race detector with
+// other packages' tests beside it; a test that is not about the timeout then
+// fails by it. Such a test runs against a pool that leaves its scripts a
+// minute, which a slow machine makes slower and never fails, and a test of
+// the timeout itself sets 0.
+func (p *PythonPool) SetLeastScriptTimeout(least time.Duration) {
+	p.leastScriptTimeout.Store(int64(least))
 }
 
 // SetMaxWorkers bounds the workers alive at once, of every collector

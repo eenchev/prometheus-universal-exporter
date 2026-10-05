@@ -13,7 +13,6 @@ import (
 	"sync"
 	"syscall"
 	"testing"
-	"time"
 
 	"github.com/eenchev/prometheus-universal-exporter/internal/config"
 	"github.com/eenchev/prometheus-universal-exporter/internal/testutil"
@@ -194,13 +193,7 @@ func TestSIGHUPReloads(t *testing.T) {
 	if err := syscall.Kill(os.Getpid(), syscall.SIGHUP); err != nil {
 		t.Fatal(err)
 	}
-	deadline := time.Now().Add(5 * time.Second)
-	for len(r.manager.Get().Collectors) != 2 {
-		if time.Now().After(deadline) {
-			t.Fatal("SIGHUP did not reload")
-		}
-		time.Sleep(5 * time.Millisecond)
-	}
+	testutil.WaitFor(t, "SIGHUP to reload", func() bool { return len(r.manager.Get().Collectors) == 2 })
 	cancel()
 	<-done
 }

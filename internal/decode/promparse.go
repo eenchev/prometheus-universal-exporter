@@ -344,7 +344,7 @@ func (p *promParser) comment(s []byte) error {
 	}
 	if string(keyword) == "HELP" {
 		if family.helpSet {
-			return fmt.Errorf("second HELP line for metric name %q", family.name)
+			return model.Errorf("second HELP line for metric name %s", model.Quoted(family.name))
 		}
 		help, err := unescapePromText(string(rest), "help text")
 		if err != nil {
@@ -354,7 +354,7 @@ func (p *promParser) comment(s []byte) error {
 		return nil
 	}
 	if family.typ != "" {
-		return fmt.Errorf("second TYPE line for metric name %q, or TYPE reported after samples", family.name)
+		return model.Errorf("second TYPE line for metric name %s, or TYPE reported after samples", model.Quoted(family.name))
 	}
 	raw := string(rest)
 	t := strings.ToLower(strings.TrimRight(raw, " \t"))
@@ -373,7 +373,7 @@ func (p *promParser) comment(s []byte) error {
 	case "untyped":
 		family.typ = model.UntypedMetricType
 	default:
-		return fmt.Errorf("unknown metric type %q", raw)
+		return model.Errorf("unknown metric type %s", model.Quoted(raw))
 	}
 	return nil
 }
@@ -413,7 +413,7 @@ func (p *promParser) sample(s []byte) error {
 	token, s := cutBlank(s)
 	value, err := parsePromFloat(token)
 	if err != nil {
-		return fmt.Errorf("expected float as value, got %q", token)
+		return model.Errorf("expected float as value, got %s", model.Quoted(token))
 	}
 	if p.options.openMetrics {
 		s = withoutExemplar(s)
@@ -433,12 +433,12 @@ func (p *promParser) sample(s []byte) error {
 		} else {
 			timestamp, err = strconv.ParseInt(string(token), 10, 64)
 			if err != nil {
-				return fmt.Errorf("expected integer as timestamp, got %q", token)
+				return model.Errorf("expected integer as timestamp, got %s", model.Quoted(token))
 			}
 		}
 		timed = true
 		if s = bytes.TrimSpace(s); len(s) != 0 {
-			return fmt.Errorf("spurious string after timestamp: %q", s)
+			return model.Errorf("spurious string after timestamp: %s", model.Quoted(s))
 		}
 	}
 	family, role := p.sampleFamily, p.sampleRole
@@ -464,7 +464,7 @@ func (p *promParser) sample(s []byte) error {
 // string made of bytes without the string being allocated.
 func (p *promParser) family(name []byte) (*promFamily, int, error) {
 	if len(name) == 0 || !utf8.Valid(name) {
-		return nil, 0, fmt.Errorf("invalid metric name %q", name)
+		return nil, 0, model.Errorf("invalid metric name %s", model.Quoted(name))
 	}
 	if alias, ok := p.aliases[string(name)]; ok {
 		return alias.family, alias.role, nil
@@ -526,7 +526,7 @@ func (p *promParser) add(f *promFamily, role int, value float64, timestamp int64
 			}
 			b, err := parsePromFloat(l.value)
 			if err != nil {
-				return fmt.Errorf("expected float as value for '%s' label, got %q", special, l.value)
+				return model.Errorf("expected float as value for '%s' label, got %s", special, model.Quoted(l.value))
 			}
 			bound, hasBound = b, true
 			p.labels = append(p.labels[:i], p.labels[i+1:]...)
@@ -540,12 +540,12 @@ func (p *promParser) add(f *promFamily, role int, value float64, timestamp int64
 		// A count is a whole number of observations, which a uint64 holds
 		// up to 2^64-1; past it the conversion gives a meaningless number.
 		if value < 0 || math.IsNaN(value) || math.IsInf(value, 0) || value >= math.MaxUint64 {
-			return fmt.Errorf("expected a count from 0 to 2^64-1 for %q, got %v", f.name, value)
+			return model.Errorf("expected a count from 0 to 2^64-1 for %s, got %v", model.Quoted(f.name), value)
 		}
 		// Nor is it a fraction: 1.5 observations would be passed on as 1,
 		// a number the target never reported.
 		if value != math.Trunc(value) {
-			return fmt.Errorf("expected a whole number as the count for %q, got %v", f.name, value)
+			return model.Errorf("expected a whole number as the count for %s, got %v", model.Quoted(f.name), value)
 		}
 	}
 	if !f.kept {
@@ -635,11 +635,11 @@ func (p *promParser) add(f *promFamily, role int, value float64, timestamp int64
 	}
 	switch {
 	case role == promRoleSum && !*noSum:
-		return fmt.Errorf("second %s_sum sample for the %s", f.name, describePromSeries(f, series))
+		return model.Errorf("second %s_sum sample for the %s", model.Bare(f.name), describePromSeries(f, series))
 	case role == promRoleSum:
 		*sum, *noSum = value, false
 	case role == promRoleCount && !*noCount:
-		return fmt.Errorf("second %s_count sample for the %s", f.name, describePromSeries(f, series))
+		return model.Errorf("second %s_count sample for the %s", model.Bare(f.name), describePromSeries(f, series))
 	case role == promRoleCount:
 		*count, *noCount = uint64(value), false
 	case series.summary != nil:
@@ -657,24 +657,25 @@ func (p *promParser) add(f *promFamily, role int, value float64, timestamp int64
 // exposition has one such line for every series of the family.
 func (p *promParser) leaveOut(f *promFamily) {
 	if p.report == nil {
-		// Bounded as a decode error is (failurebound.go): it names the family
-		// and the sample, whose names are as long as the target makes them.
-		p.report = &PrometheusReport{FirstLeftOut: boundedFailure(model.Errorf("line %d: %s", model.Position(p.number), p.stray(f)))}
+		// Bounded as a decode error is (failurebound.go), though it shows no
+		// more than the start of the family's name and of the sample's.
+		p.report = &PrometheusReport{FirstLeftOut: boundedFailure(model.Errorf("line %d: %w", model.Position(p.number), p.stray(f)))}
 	}
 	p.report.LeftOutLines++
 }
 
 // stray says what the sample being read is and what the family f has in its
-// place.
-func (p *promParser) stray(f *promFamily) string {
+// place, the two names by their start when they are long.
+func (p *promParser) stray(f *promFamily) error {
+	family, got := model.Bare(f.name), model.Bare(p.sampleName)
 	if f.typ == model.SummaryMetricType {
-		return fmt.Sprintf("expected %[1]s with a quantile label, %[1]s_sum or %[1]s_count as a sample of the summary %[1]s, got %[2]s without a quantile label", f.name, p.sampleName)
+		return model.Errorf("expected %[1]s with a quantile label, %[1]s_sum or %[1]s_count as a sample of the summary %[1]s, got %[2]s without a quantile label", family, got)
 	}
-	got := string(p.sampleName)
-	if got == f.name+"_bucket" {
-		got += " without an le label"
+	// Compared in place: neither name is copied to be compared.
+	if base, bucket := bytes.CutSuffix(p.sampleName, []byte("_bucket")); bucket && string(base) == f.name {
+		return model.Errorf("expected %[1]s_bucket with an le label, %[1]s_sum or %[1]s_count as a sample of the histogram %[1]s, got %[2]s without an le label", family, got)
 	}
-	return fmt.Sprintf("expected %[1]s_bucket with an le label, %[1]s_sum or %[1]s_count as a sample of the histogram %[1]s, got %[2]s", f.name, got)
+	return model.Errorf("expected %[1]s_bucket with an le label, %[1]s_sum or %[1]s_count as a sample of the histogram %[1]s, got %[2]s", family, got)
 }
 
 // settle checks every histogram and summary read, once all their samples
@@ -707,25 +708,35 @@ func (p *promParser) settle() error {
 }
 
 // describePromSeries names a histogram or summary series for an error: its
-// type, its family and its labels, as the exposition writes them.
-func describePromSeries(f *promFamily, s *promSeries) string {
-	var b strings.Builder
-	b.WriteString(string(f.typ))
-	b.WriteByte(' ')
-	b.WriteString(f.name)
+// type, its family and its labels, as the exposition writes them, each name
+// and each value by its start when it is long (model.Bare, model.Quoted). The
+// series is recognised by the same without the lengths of what was cut.
+func describePromSeries(f *promFamily, s *promSeries) model.QuotedValue {
+	var text, same strings.Builder
+	written := func(as string) {
+		text.WriteString(as)
+		same.WriteString(as)
+	}
+	shown := func(value model.QuotedValue) {
+		text.WriteString(value.String())
+		same.WriteString(value.Same())
+	}
+	written(string(f.typ))
+	written(" ")
+	shown(model.Bare(f.name))
 	if len(s.labels) > 0 {
-		b.WriteByte('{')
+		written("{")
 		for i, name := range model.SortedKeys(s.labels) {
 			if i > 0 {
-				b.WriteByte(',')
+				written(",")
 			}
-			b.WriteString(name)
-			b.WriteByte('=')
-			b.WriteString(model.QuoteValue(s.labels[name]))
+			shown(model.Bare(name))
+			written("=")
+			shown(model.Quoted(s.labels[name]))
 		}
-		b.WriteByte('}')
+		written("}")
 	}
-	return b.String()
+	return model.ShownAs(text.String(), same.String())
 }
 
 // keep stores one more series of f, with p.labels as its labels, and fails
@@ -843,10 +854,10 @@ func (p *promParser) readLabels(s []byte, bracesForm bool) ([]byte, []byte, erro
 		rest = skipBlanks(rest)
 		if len(rest) == 0 || rest[0] != '=' {
 			if !bracesForm || len(rest) == 0 || (rest[0] != ',' && rest[0] != '}') {
-				return nil, nil, fmt.Errorf("expected '=' after label name %q", label)
+				return nil, nil, model.Errorf("expected '=' after label name %s", model.Quoted(label))
 			}
 			if len(name) != 0 {
-				return nil, nil, fmt.Errorf("multiple metric names for metric %q", name)
+				return nil, nil, model.Errorf("multiple metric names for metric %s", model.Quoted(name))
 			}
 			name = label
 			if rest[0] == ',' {
@@ -859,14 +870,14 @@ func (p *promParser) readLabels(s []byte, bracesForm bool) ([]byte, []byte, erro
 			return nil, nil, fmt.Errorf("label name %q is reserved", label)
 		}
 		if !utf8.Valid(label) {
-			return nil, nil, fmt.Errorf("invalid label name %q", label)
+			return nil, nil, model.Errorf("invalid label name %s", model.Quoted(label))
 		}
 		if p.duplicateLabel(label) {
-			return nil, nil, fmt.Errorf("duplicate label name %q", label)
+			return nil, nil, model.Errorf("duplicate label name %s", model.Quoted(label))
 		}
 		rest = skipBlanks(rest[1:])
 		if len(rest) == 0 || rest[0] != '"' {
-			return nil, nil, fmt.Errorf("expected '\"' at start of the value of label %q", label)
+			return nil, nil, model.Errorf("expected '\"' at start of the value of label %s", model.Quoted(label))
 		}
 		value, after, err := p.readQuoted(rest[1:], "label value")
 		if err != nil {
@@ -880,13 +891,13 @@ func (p *promParser) readLabels(s []byte, bracesForm bool) ([]byte, []byte, erro
 		after = skipBlanks(after)
 		switch {
 		case len(after) == 0:
-			return nil, nil, fmt.Errorf("unexpected end of label set after label %q", label)
+			return nil, nil, model.Errorf("unexpected end of label set after label %s", model.Quoted(label))
 		case after[0] == ',':
 			s = after[1:]
 		case after[0] == '}':
 			s = after
 		default:
-			return nil, nil, fmt.Errorf("unexpected %q after the value of label %q", firstRune(after), label)
+			return nil, nil, model.Errorf("unexpected %q after the value of label %s", firstRune(after), model.Quoted(label))
 		}
 	}
 }
@@ -959,7 +970,7 @@ func (p *promParser) readQuoted(s []byte, what string) ([]byte, []byte, error) {
 			return b[start:], s[i+1:], nil
 		case '\\':
 			if i+1 == len(s) {
-				return nil, nil, fmt.Errorf("%s %q ends in a lone backslash", what, b[start:])
+				return nil, nil, model.Errorf("%s %s ends in a lone backslash", what, model.Quoted(b[start:]))
 			}
 			i++
 			switch s[i] {
@@ -974,7 +985,7 @@ func (p *promParser) readQuoted(s []byte, what string) ([]byte, []byte, error) {
 			b = append(b, c)
 		}
 	}
-	return nil, nil, fmt.Errorf("%s %q contains unescaped new-line", what, b[start:])
+	return nil, nil, model.Errorf("%s %s contains unescaped new-line", what, model.Quoted(b[start:]))
 }
 
 // unescapePromText unescapes HELP text, which runs to the end of the line.
@@ -990,7 +1001,7 @@ func unescapePromText(s, what string) (string, error) {
 			continue
 		}
 		if i+1 == len(s) {
-			return "", fmt.Errorf("%s %q ends in a lone backslash", what, b.String())
+			return "", model.Errorf("%s %s ends in a lone backslash", what, model.Quoted(b.String()))
 		}
 		i++
 		switch s[i] {

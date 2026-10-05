@@ -59,8 +59,11 @@ func TestAResetConnectionIsRecognisedWhateverPortItWasMadeFrom(t *testing.T) {
 	midBody := connectionTarget(t, func(conn net.Conn) {
 		readRequestHead(conn)
 		_, _ = conn.Write([]byte("HTTP/1.1 200 OK\r\nContent-Length: 100\r\n\r\nvalue 1\n"))
-		// The client has the head and the start of the body before the reset.
-		time.Sleep(100 * time.Millisecond)
+		// The client has the head and the start of the body before the
+		// reset: it is left a second to read them in, since a reset that
+		// arrives first takes what was not yet read with it, and the fetch
+		// then fails as one reset in place of the answer.
+		time.Sleep(time.Second)
 		resetConnection(conn)
 	})
 	handshake := resettingTarget(t)

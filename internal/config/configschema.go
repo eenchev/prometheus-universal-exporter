@@ -195,6 +195,14 @@ func valueMapKeys() map[string]any {
 	return map[string]any{"minLength": 1, "pattern": "^([^" + surroundingBlank + "]([\\s\\S]*[^" + surroundingBlank + "])?)?$"}
 }
 
+// onlyBlanks is text of one blank or more and nothing else: what a label's
+// expression may not be (validateMetricRule). It goes under not, so that the
+// key keeps the types it takes, an unquoted 1 for a capture group among
+// them, and "" stays the key left out.
+func onlyBlanks() map[string]any {
+	return map[string]any{"type": "string", "pattern": "^[" + surroundingBlank + "]+$"}
+}
+
 // schemaFor describes t, found at path, with rules adding what the type
 // cannot say (configSchemaRules, staticTargetsSchemaRules).
 func schemaFor(t reflect.Type, path string, rules map[string]map[string]any) map[string]any {
@@ -372,7 +380,7 @@ func configSchemaRules() map[string]map[string]any {
 		// A name, and one of value and expression.
 		"collectors[].metrics[].labels[]":            labelSchemaRule(),
 		"collectors[].metrics[].labels[].value":      {"description": "A static label value, exported as written."},
-		"collectors[].metrics[].labels[].expression": {"description": "Reads the label from the response, in the transform's language, like the metric's expression."},
+		"collectors[].metrics[].labels[].expression": {"not": onlyBlanks(), "description": "Reads the label from the response, in the transform's language, like the metric's expression. Not blanks alone: a constant is a value."},
 		"collectors[].metrics[].labels[].truncate":   {"description": "Cut a value longer than limits.max_label_value_length to fit, ending in …, instead of failing the scrape."},
 		"collectors[].metrics[].labels[].required":   {"description": "expression labels only: a series the expression gives no value, or an empty one, fails the metric under its error_mode instead of being exported without the label. Defaults to false."},
 		"collectors[].request.accept_codes":          {"items": map[string]any{"type": "string"}, "description": "grpc: the gRPC status codes other than OK whose calls are answers rather than failures, by name, such as [NOT_FOUND]. Such a call is not retried; its rules see an empty object, the code as $status and the status message as $headers[\"grpc-message\"]."},

@@ -374,6 +374,14 @@ func validateMetricRule(x *model.Collector, r *model.MetricRule) error {
 		if err := model.CheckLabelName(label.Name); err != nil {
 			return fmt.Errorf("collector %q metric %q: %w", x.Name, r.Name, err)
 		}
+		// An expression written as nothing but blanks is neither the key left
+		// out, which only "" is, nor anything to read a label with. The label
+		// is not static then (model.LabelRule.Static), so a value beside it
+		// was never exported, while a csv rule read the column of that name
+		// and a prometheus rule the source label of that name.
+		if label.Expression != "" && strings.TrimSpace(label.Expression) == "" {
+			return fmt.Errorf("collector %q metric %q label %q expression %q is nothing but blanks; write the expression that reads the label from the response, or leave expression out and set value for a constant", x.Name, r.Name, label.Name, label.Expression)
+		}
 		hasValue, hasExpression := label.Value != "", strings.TrimSpace(label.Expression) != ""
 		switch {
 		case hasValue && hasExpression:

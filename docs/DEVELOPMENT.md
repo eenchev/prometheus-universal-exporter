@@ -38,7 +38,7 @@ the ones above them in this list:
 | `internal/transform` | The transforms and metric rules, the Python worker pool, and the checks run on rules and scripts at load. |
 | `internal/config` | Loading, validating and reloading the configuration, collector and target files, and their JSON Schemas. |
 | `internal/exporter` | The HTTP server and the one pipeline probes and static targets share (`pipeline.go`): cache, shared probes, limits, self-metrics, readiness, static targets and OTLP export. |
-| `internal/testutil` | Helpers shared by the tests of several packages; imported only by tests. |
+| `internal/testutil` | Helpers shared by the tests of several packages; imported only by tests. The package within it, `internal/testutil/alloctest`, is how a test measures what a function allocates, and imports nothing of the module so that the tests of `internal/model` can use it too. |
 | `internal/grpctest` | An in-process gRPC server for the `grpc` type's tests, with a queue service compiled from `.proto` sources at run time, reflection and TLS; imported only by tests, and behind the type's build tag. |
 
 A package's tests live beside it, unless they need more than it can import: a
@@ -88,14 +88,23 @@ A decode error is bounded at the one place every decoder's error leaves by
 (`boundedFailure` in `internal/decode/failurebound.go`, called by
 `decode.Decode`): past 2,000 bytes the text, and what it is recognised by, are
 cut and end with the length, the mark in the recognised text. That is the
-last resort, which loses what the error says after the long part. An error
-that names a value of the body quotes it with `model.QuoteValue`, which cuts
-it to 64 bytes, not with `%q`; where a library made the text, the part is cut
-where the error enters, in the library's one form, as `yamlPartCut` and
-`yamlKeyCut` do (`internal/decode/yamlcut.go`). A cut text is made anew
-(`head + mark`), never a slice of the long one, and the new error does not
-wrap the long one: either would keep the whole text alive for as long as the
-failure log remembers the failure.
+last resort, which loses what the error says after the long part: no error
+of a decoder's own may reach it for one long value. An error that names a
+value of the body is made with `model.Errorf` and gives the value as
+`model.Quoted(value)`, or as `model.Bare(name)` where the message writes a
+name without quotes, never with `%q`, `%s` or `%v`: the argument formats as
+`model.QuoteValue` cuts a value, to 64 bytes and its length, copies no more
+than those bytes, so the error holds nothing of the body, and is recognised
+with the mark in place of the length. A text of several such values, as a
+series named by its labels, is joined of each value's `String()` and `Same()`
+and given as `model.ShownAs(text, same)`. Where a library made the text, the
+part is cut where the error enters, in the library's one form, as
+`yamlPartCut` and `yamlKeyCut` do (`internal/decode/yamlcut.go`) and
+`xmlNamesCut` does for the names an XML error holds
+(`internal/decode/xmlcut.go`); a text of no known form is left whole, for the
+bound. A cut text is made anew (`head + mark`), never a slice of the long
+one, and the new error does not wrap the long one: either would keep the
+whole text alive for as long as the failure log remembers the failure.
 
 The failure log counts, for each trip, the failures of rules it remembers
 (`ruleFailures` in `internal/exporter/failurelog.go`), so that a scrape with
@@ -119,6 +128,75 @@ from test to test. A test that runs Python calls `requirePython(t)`, which also
 gives it a pool of its own and stops that pool's workers when it ends; a test
 that uses the pool without an interpreter calls `usePythonPool(t)`. Tests
 therefore must not use `t.Parallel`, which the swap assumes.
+
+What the process allocates is shared the same way. `testing.AllocsPerRun` and
+`runtime.MemStats` count the allocations of every goroutine, not those of the
+function a test measures: a test server still closing its connections, a
+timer, a worker of the Python pool and the collector itself — which starts its
+workers at the first collection of the process and empties `sync.Pool` at
+every one — allocate meanwhile, the more so under the race detector, in a
+shuffled run and on a busy machine. A bound of 4 allocations for a function
+that makes 1 has met 12 in CI, and a test that ran first in its process counted
+the collector's workers as its own. The others can only add to a count, never
+take from it, so a test that bounds or compares allocations or allocated bytes
+measures them only through `internal/testutil/alloctest`, which measures
+several times and takes the least, with a collection before each measurement:
+
+- `AllocsAtMost` and `BytesAtMost`, for a test with a bound, stop at the first
+  measurement within it, so a quiet machine pays for one;
+- `Allocations`, for a count that has none — one another is compared with
+  exactly — is the least of five;
+- `Once` is a single measurement, for a cost a test only takes a fraction of to
+  bound another by, which takes too long to measure five times.
+
+A test (`TestAllocationsAreMeasuredOnlyThroughAlloctest`) fails for a test file
+outside `internal/testutil` that calls `testing.AllocsPerRun` or reads the
+allocation counters of `runtime.MemStats` or of a benchmark's result itself.
+
+The race detector changes what is allocated: under it `sync.Pool`, which `fmt`
+and the regexp and XPath engines keep their working memory in, hands back only
+some of what it is given, and some allocations are larger. A bound that is
+tight in a plain build can simply be false there. Measure a new allocation test
+under `-race` too; where its bound does not hold there with room to spare, the
+test skips its allocation assertions when `alloctest.RaceDetector` says the
+detector is on — `t.Skip("the race detector changes what is allocated")`, or a
+return before the counts where the test checks other things as well — and its
+comment says so.
+
+Time is the other thing that breaks it. CI runs the suite under the race
+detector on two cores, with another package's tests beside it, and there a
+millisecond's work has taken seconds. So a test waits for the event it is
+about and never for a length of time: it polls a condition with
+`testutil.WaitFor`, or reads a channel that a hook or its test server closes,
+under a bound of half a minute that only ends a hang. Where a test has to
+run against one of the exporter's own timeouts, choose the values so that a
+slow machine makes the test slower and never fails it: what must not happen
+is given long to not happen in, and what must happen has no bound but the
+hang's. A test does not assert that something took less than some time; it
+asserts an order, a count, or that it took at least so long. A sleep is for
+a test server's own slowness, for a clock that has to read later, or for
+what must not happen to not happen in; it is not a way to let something else
+get ahead. The two tests that hold the static target loop to its interval on
+the real clock (`statictargetcadence_test.go`) are the exception: they
+compare a time with a multiple of the interval, each beside a test of the
+same schedule on a clock of its own.
+
+Two helpers hold that rule for what many tests share. A Python script has a
+minute in every test, whatever its `limits.script_timeout`: `TestMain` in the
+packages that run scripts, and `usePythonPool` on each fresh pool, set it
+(`PythonPool.SetLeastScriptTimeout`), since a script of a millisecond has
+overrun the default 100ms on a busy machine. A test of the timeout itself
+calls `holdScriptsToTheirTimeout(t)`, and its script is one that never ends,
+so the timeout is what stops it however slow the machine. And a test's gRPC
+server never listens on a port another had in the same process
+(`grpctest.Start`, and `grpctest.Listen` for anything else a test has the
+exporter call as a gRPC target): the exporter keeps a connection per address
+and a reflection answer per connection for minutes, and the kernel gives a
+freed port out again, so a server on a reused port was answered for by what
+was kept of the one before it. A test of a server that comes back gives the
+connection an hour to wait by itself and the call a minute to connect in
+(`connectionsWaitAnHour`, `callsWaitForAConnection`), so that only what the
+test is about reconnects, in however long it takes.
 
 The Python tests run `python3` from `PATH`. Every workflow that runs the
 suite — CI, the exporter release and the Dockerfile update — installs the
@@ -314,6 +392,14 @@ takes `""` as the key left out — `optionalEnum` and `optionalPattern` say so
 in the schema — and a rule about a key is made of `writtenKey`, which goes by
 the key being written, not by its being there. A test of the build with every
 request type fails until a constrained key has its row.
+
+A key written as nothing but blanks is not the key written `""`: it is text,
+which the key takes or refuses. What the schema and the exporter say of a
+key both ways is the table of `test/repository/schemablanks_http_test.go`,
+for the keys of a rule, of its labels and of a collector that say what is
+read; a new key of that kind gets a row there, and where blanks could only be
+a mistake that the exporter would go on to read something with, as a
+label's `expression` of blanks was, both refuse them.
 
 ## Measuring speed
 
@@ -642,10 +728,10 @@ and checks that the step cannot fail the job.
 What is scanned is what ships and what the workflows run: the exporter, the
 package at the root, and the repository's tools (`. ./tools/...`), each with
 everything it imports. The packages only tests use — `internal/grpctest`, the
-stand-in gRPC server of the grpc tests, `internal/testutil` and
-`test/repository` — are left out, so an advisory for code that only a test
-reaches, such as the gRPC server the exporter never is, raises no warning; the
-price is that such an advisory is not reported at all. A test
+stand-in gRPC server of the grpc tests, `internal/testutil` with its
+`alloctest`, and `test/repository` — are left out, so an advisory for code
+that only a test reaches, such as the gRPC server the exporter never is, raises
+no warning; the price is that such an advisory is not reported at all. A test
 (`TestTheVulnerabilityCheckScansWhatShips`) keeps the Makefile's and the
 workflow's packages equal, fails for a command of the module they do not
 cover, and holds the list of what is left out: a new package is either

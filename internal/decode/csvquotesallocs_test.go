@@ -3,9 +3,10 @@ package decode
 import (
 	"bytes"
 	"fmt"
-	"runtime"
 	"testing"
 	"unicode"
+
+	"github.com/eenchev/prometheus-universal-exporter/internal/testutil/alloctest"
 )
 
 // csvPaddedBodies are bodies of about size bytes that trim_space takes
@@ -23,28 +24,20 @@ func csvPaddedBodies(size int) map[string][]byte {
 }
 
 // csvReadCost is how many bytes and how many allocations one call of read
-// takes, over several calls after a first one.
+// takes, over several calls after a first one, as alloctest measures them.
 func csvReadCost(t *testing.T, read func() error) (bytesPerRun uint64, allocations float64) {
 	t.Helper()
 	const runs = 3
 	var err error
-	run := func() {
+	allocations, bytesPerRun = alloctest.Allocations(runs, func() {
 		if failed := read(); failed != nil {
 			err = failed
 		}
-	}
-	run()
-	var before, after runtime.MemStats
-	runtime.ReadMemStats(&before)
-	for range runs {
-		run()
-	}
-	runtime.ReadMemStats(&after)
-	allocations = testing.AllocsPerRun(runs, run)
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	return (after.TotalAlloc - before.TotalAlloc) / runs, allocations
+	return bytesPerRun, allocations
 }
 
 // Taking the blanks around quotes out of a body costs one copy of the body

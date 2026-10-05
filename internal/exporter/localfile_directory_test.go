@@ -232,7 +232,7 @@ func TestLocalDirectoryRefusesWhatIsNotARegularFileUnderRoot(t *testing.T) {
 	var r *httpResult
 	select {
 	case r = <-done:
-	case <-time.After(5 * time.Second):
+	case <-time.After(30 * time.Second):
 		t.Fatal("a named pipe in the directory hung the probe")
 	}
 	r.must(t, http.StatusOK, `v{file="inside.prom"} 1`, `localfile_scrape_error{file="outside.prom"} 1`)

@@ -45,9 +45,7 @@ func TestAnAbandonedProbeIsNotAFailure(t *testing.T) {
 	block.Store(true)
 	ctx, cancel := context.WithCancel(context.Background())
 	outcome := probeAsync(ctx, server, probePath("abandoned", target.URL, ""), nil)
-	for deadline := time.Now().Add(5 * time.Second); arrived.Load() < 2 && time.Now().Before(deadline); {
-		time.Sleep(time.Millisecond)
-	}
+	testutil.WaitFor(t, "the second probe to reach the target", func() bool { return arrived.Load() >= 2 })
 	cancel()
 	<-outcome
 	metrics := selfMetrics(t, server)
@@ -85,14 +83,9 @@ func TestAStaticTargetBackOnScheduleIsRecovered(t *testing.T) {
 		_, ok := server.failures.entries[key]
 		return ok
 	}
-	for deadline := time.Now().Add(5 * time.Second); remembered() && time.Now().Before(deadline); {
-		time.Sleep(10 * time.Millisecond)
-	}
+	testutil.WaitFor(t, "the skipped scrapes to be forgotten", func() bool { return !remembered() })
 	cancel()
 	<-done
-	if remembered() {
-		t.Fatal("the skipped scrapes are still remembered")
-	}
 	// The loop has stopped, so the log is read without a writer.
 	if !strings.Contains(logs.String(), "static target scrapes on schedule again") {
 		t.Fatalf("no recovery logged:\n%s", logs)

@@ -53,12 +53,43 @@ func TestNoTestRunsInParallel(t *testing.T) {
 	}
 }
 
+// Only the tests give a Python script more time than its
+// limits.script_timeout: the exporter's own pool has no least time, so the
+// limit a collector configures is the one its scripts run under.
+func TestOnlyTestsGiveScriptsALeastTime(t *testing.T) {
+	call := "." + "SetLeastScriptTimeout("
+	calls := 0
+	err := filepath.WalkDir(".", func(path string, entry fs.DirEntry, err error) error {
+		if err != nil || entry.IsDir() || !strings.HasSuffix(path, ".go") {
+			return err
+		}
+		raw, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		if n := strings.Count(string(raw), call); n > 0 {
+			calls += n
+			if !strings.HasSuffix(path, "_test.go") {
+				t.Errorf("%s calls %s), which gives every script of the pool more time than its limits.script_timeout; only the tests may", path, call)
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if calls == 0 {
+		t.Fatalf("no file calls %s): the test looks for a name that is gone", call)
+	}
+}
+
 // internalLayers is the order of the internal packages: each may import only
 // the ones before it (docs/SPECIFICATION-EXPORTER.md, section 7.1).
 var internalLayers = []string{"model", "expr", "fetch", "decode", "transform", "config", "exporter"}
 
-// testOnly are the internal packages only tests import: testutil, and
-// grpctest, the grpc request type's test server.
+// testOnly are the internal packages only tests import: testutil, with the
+// package within it, alloctest, that measures allocations, and grpctest, the
+// grpc request type's test server.
 var testOnly = map[string]bool{"testutil": true, "grpctest": true}
 
 // The internal packages stay layered, and the test-only ones stay out of the
@@ -87,7 +118,12 @@ func TestInternalPackagesAreLayered(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		for _, file := range files {
+		// A package within one is held to what holds for it.
+		within, err := filepath.Glob(filepath.Join("internal", name, "*", "*.go"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, file := range append(files, within...) {
 			parsed, err := parser.ParseFile(token.NewFileSet(), file, nil, parser.ImportsOnly)
 			if err != nil {
 				t.Fatal(err)
@@ -99,6 +135,7 @@ func TestInternalPackagesAreLayered(t *testing.T) {
 				if !internal {
 					continue
 				}
+				imported, _, _ = strings.Cut(imported, "/")
 				if testOnly[imported] {
 					if !test {
 						t.Errorf("%s imports internal/%s, which only tests may", file, imported)
@@ -124,7 +161,7 @@ func TestInternalPackagesAreLayered(t *testing.T) {
 		}
 		for _, spec := range parsed.Imports {
 			for name := range testOnly {
-				if strings.HasSuffix(spec.Path.Value, `/internal/`+name+`"`) {
+				if strings.HasSuffix(spec.Path.Value, `/internal/`+name+`"`) || strings.Contains(spec.Path.Value, `/internal/`+name+`/`) {
 					t.Errorf("%s imports internal/%s, which only tests may", file, name)
 				}
 			}

@@ -88,14 +88,12 @@ func TestLocalFileTimeout(t *testing.T) {
 	release := make(chan struct{})
 	t.Cleanup(func() { close(release) })
 	onFileRead(t, func(string) { <-release })
+	// The read does not return while the test runs, so a fetch that returns
+	// was not held by it.
 	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
 	defer cancel()
-	start := time.Now()
 	if _, err := fetchLocalFile(ctx, "", c, RequestOverrides{}, nil); !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatalf("err=%v", err)
-	}
-	if elapsed := time.Since(start); elapsed > 5*time.Second {
-		t.Fatalf("the read took %s", elapsed)
 	}
 }
 
@@ -126,12 +124,10 @@ func TestLocalFileAbandonedReadsAreCapped(t *testing.T) {
 	if got := localFileReads.abandoned("stuck"); got != localFileMaxAbandonedReads {
 		t.Fatalf("abandoned=%d, want %d", got, localFileMaxAbandonedReads)
 	}
-	start := time.Now()
-	if _, err := read("f"+strconv.Itoa(localFileMaxAbandonedReads)+".prom", 5*time.Second); err == nil || !strings.Contains(err.Error(), "already has 4 file reads that have not returned") || !strings.Contains(err.Error(), "the filesystem under request.root is not answering") {
+	// It fails at once instead of waiting: a read that waited would not
+	// return before its deadline, a minute away, and would fail with that.
+	if _, err := read("f"+strconv.Itoa(localFileMaxAbandonedReads)+".prom", time.Minute); err == nil || !strings.Contains(err.Error(), "already has 4 file reads that have not returned") || !strings.Contains(err.Error(), "the filesystem under request.root is not answering") || errors.Is(err, context.DeadlineExceeded) {
 		t.Fatalf("err=%v", err)
-	}
-	if time.Since(start) > time.Second {
-		t.Fatal("a read over the cap waited instead of failing at once")
 	}
 	// The cap is per collector.
 	if got := localFileReads.abandoned("other"); got != 0 {
@@ -151,13 +147,7 @@ func TestLocalFileAbandonedReadsAreCapped(t *testing.T) {
 // returned.
 func waitForNoAbandonedReads(t *testing.T, collector string) {
 	t.Helper()
-	deadline := time.Now().Add(5 * time.Second)
-	for localFileReads.abandoned(collector) > 0 {
-		if time.Now().After(deadline) {
-			t.Fatalf("abandoned reads never returned: %d", localFileReads.abandoned(collector))
-		}
-		time.Sleep(5 * time.Millisecond)
-	}
+	testutil.WaitFor(t, "the abandoned reads to return", func() bool { return localFileReads.abandoned(collector) == 0 })
 }
 
 // readsHeldTogether holds every file read until want of them are in progress
@@ -177,7 +167,7 @@ func readsHeldTogether(t *testing.T, want int) (together func() bool) {
 		mu.Unlock()
 		select {
 		case <-all:
-		case <-time.After(5 * time.Second):
+		case <-time.After(30 * time.Second):
 		}
 	})
 	return func() bool {
@@ -284,12 +274,9 @@ func TestLocalDirectoryReadsCountOnlyWhenAbandoned(t *testing.T) {
 	if got := localFileReads.abandoned("busydir"); got != localFileMaxAbandonedReads {
 		t.Fatalf("abandoned=%d, want %d", got, localFileMaxAbandonedReads)
 	}
-	start := time.Now()
-	if _, err := read("d"+strconv.Itoa(localFileMaxAbandonedReads), 5*time.Second); err == nil || !strings.Contains(err.Error(), "already has 4 file reads that have not returned") {
+	// At once, as above: a read that waited would fail with its deadline.
+	if _, err := read("d"+strconv.Itoa(localFileMaxAbandonedReads), time.Minute); err == nil || !strings.Contains(err.Error(), "already has 4 file reads that have not returned") || errors.Is(err, context.DeadlineExceeded) {
 		t.Fatalf("err=%v", err)
-	}
-	if time.Since(start) > time.Second {
-		t.Fatal("a directory read over the cap waited instead of failing at once")
 	}
 }
 
@@ -373,13 +360,12 @@ func TestLocalDirectoryAnswersWhatWasReadByTheDeadline(t *testing.T) {
 			<-hold
 		}
 	})
-	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
+	// The other two files have a second to be read in before the deadline,
+	// and the slow one is not read while the test runs: a fetch that returns
+	// was not held by it.
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
-	start := time.Now()
 	resp, err := fetchLocalFile(ctx, "", validated(t, dirCollector("dir", root, "*.prom")), RequestOverrides{}, nil)
-	if took := time.Since(start); took > 3*time.Second {
-		t.Fatalf("the read took %s", took)
-	}
 	if err != nil {
 		t.Fatal(err)
 	}

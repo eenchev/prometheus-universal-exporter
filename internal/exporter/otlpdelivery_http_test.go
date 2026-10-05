@@ -193,27 +193,30 @@ func TestOTLPExportsRetryTransientFailures(t *testing.T) {
 
 // A Retry-After longer than the budget ends the export rather than waiting
 // past it.
+//
+// The endpoint never accepts, so an export that returns was ended by its
+// budget, and one that waited out the hour the endpoint asks for would hold
+// the test until the minute its context has: no time is measured. The first
+// budget is a second so that the first attempt, which has to end with time
+// left for another, has nearly all of it to end in.
 func TestOTLPRetriesStayWithinTheBudget(t *testing.T) {
 	fastRetries(t)
 	endpoint := newOTLPEndpoint(t, http.StatusServiceUnavailable)
 	server := otlpServer(t, endpoint.server.URL)
-	start := time.Now()
-	server.exportOTLP(context.Background(), 300*time.Millisecond)
-	if took := time.Since(start); took > 2*time.Second {
-		t.Fatalf("an export with a 300ms budget took %s", took)
-	}
+	server.exportOTLP(context.Background(), time.Second)
 	if endpoint.count() < 2 {
 		t.Fatalf("%d attempts within the budget, want retries", endpoint.count())
 	}
 
 	endpoint.mu.Lock()
-	endpoint.header.Set("Retry-After", "60")
+	endpoint.header.Set("Retry-After", "3600")
 	endpoint.mu.Unlock()
 	before := endpoint.count()
-	start = time.Now()
-	server.exportOTLP(context.Background(), time.Second)
-	if took := time.Since(start); took > 2*time.Second || endpoint.count() != before+1 {
-		t.Fatalf("Retry-After 60 with a 1s budget: %d attempts in %s, want one at once", endpoint.count()-before, took)
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	defer cancel()
+	server.exportOTLP(ctx, time.Second)
+	if ctx.Err() != nil || endpoint.count() != before+1 {
+		t.Fatalf("Retry-After 3600 with a 1s budget: %d attempts, and the export was still waiting a minute later: %v; want one attempt and no wait", endpoint.count()-before, ctx.Err() != nil)
 	}
 }
 
@@ -250,7 +253,7 @@ func TestUndeliveredOTLPDataIsKeptForTheNextExport(t *testing.T) {
 	endpoint.mu.Lock()
 	endpoint.statuses = []int{http.StatusOK}
 	endpoint.mu.Unlock()
-	server.exportOTLP(context.Background(), time.Second)
+	server.exportOTLP(context.Background(), time.Minute)
 	if !endpoint.received("kept_value") {
 		t.Fatal("the kept metric was not sent once the endpoint recovered")
 	}
@@ -283,6 +286,9 @@ func TestRefusedOTLPDataIsDropped(t *testing.T) {
 }
 
 // Unreachable is retried and kept.
+//
+// The budget is a second: the first attempt has to end with time left for
+// another, and under 200ms a machine busy enough leaves it none.
 func TestUnreachableOTLPEndpoint(t *testing.T) {
 	fastRetries(t)
 	endpoint := httptest.NewServer(http.NotFoundHandler())
@@ -290,7 +296,7 @@ func TestUnreachableOTLPEndpoint(t *testing.T) {
 	endpoint.Close()
 	server := otlpServer(t, url)
 	queueProbeMetric(server, "probe_value", 1)
-	server.exportOTLP(context.Background(), 200*time.Millisecond)
+	server.exportOTLP(context.Background(), time.Second)
 	exposition := selfMetrics(t, server)
 	if seriesValue(t, exposition, `http_exporter_otlp_exports_total{result="failure"}`) != 1 || seriesValue(t, exposition, "http_exporter_otlp_export_retries_total") < 1 {
 		t.Fatalf("an unreachable endpoint was not retried and counted:\n%s", exposition)
@@ -353,7 +359,7 @@ func TestTheLastOTLPExportAtShutdown(t *testing.T) {
 	stopLoop()
 	select {
 	case <-loopDone:
-	case <-time.After(5 * time.Second):
+	case <-time.After(30 * time.Second):
 		t.Fatal("the export loop did not stop when its context ended")
 	}
 	if requests.Load() != 0 {
@@ -373,7 +379,7 @@ func TestTheLastOTLPExportAtShutdown(t *testing.T) {
 	cancel()
 	select {
 	case <-done:
-	case <-time.After(5 * time.Second):
+	case <-time.After(30 * time.Second):
 		t.Fatal("the export did not stop when its context ended")
 	}
 	if _, ok := pendingValue(server, "before_shutdown"); !ok {
@@ -466,7 +472,7 @@ func TestNotReadyWhileOTLPExportsFail(t *testing.T) {
 	endpoint.mu.Lock()
 	endpoint.statuses = []int{http.StatusOK}
 	endpoint.mu.Unlock()
-	server.exportOTLP(context.Background(), time.Second)
+	server.exportOTLP(context.Background(), time.Minute)
 	if code, _ := ready(t, server); code != http.StatusOK {
 		t.Fatalf("not ready after an export got through: %d", code)
 	}

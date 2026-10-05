@@ -2,7 +2,6 @@ package decode
 
 import (
 	"bytes"
-	"fmt"
 	"math"
 	"strings"
 
@@ -100,7 +99,7 @@ func (p *promParser) openMetricsType(family *promFamily, t, raw string) error {
 			p.newFamily(&promFamily{name: name + suffix, typ: model.GaugeMetricType, helpOf: family})
 		}
 	default:
-		return fmt.Errorf("unknown metric type %q", raw)
+		return model.Errorf("unknown metric type %s", model.Quoted(raw))
 	}
 	return nil
 }
@@ -121,7 +120,7 @@ func openMetricsTimestamp(token []byte) (int64, error) {
 	seconds, err := parsePromFloat(token)
 	ms := math.Round(seconds * 1000)
 	if err != nil || math.IsNaN(ms) || math.IsInf(ms, 0) || ms >= math.MaxInt64 || ms < math.MinInt64 {
-		return 0, fmt.Errorf("expected a number of seconds as timestamp, got %q", token)
+		return 0, model.Errorf("expected a number of seconds as timestamp, got %s", model.Quoted(token))
 	}
 	return int64(ms), nil
 }

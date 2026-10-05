@@ -16,6 +16,7 @@ import (
 
 	"github.com/eenchev/prometheus-universal-exporter/internal/fetch"
 	"github.com/eenchev/prometheus-universal-exporter/internal/model"
+	"github.com/eenchev/prometheus-universal-exporter/internal/testutil/alloctest"
 	"golang.org/x/text/encoding/htmlindex"
 	"golang.org/x/text/encoding/unicode"
 )
@@ -742,10 +743,10 @@ func TestTheCharsetOfAContentTypeIsReadAsItWas(t *testing.T) {
 func TestThePrescanAllocatesOnlyTheNameItReturns(t *testing.T) {
 	head := bytes.Repeat([]byte(`<link rel="stylesheet" href="/a.css?v=1" media="screen">`+"\n"), 16)
 	declared := append(slices.Clone(head), `<meta http-equiv="Content-Type" content="text/html; charset=windows-1251">`...)
-	if allocs := testing.AllocsPerRun(100, func() { _ = metaDeclaredCharset(head) }); allocs != 0 {
+	if allocs := alloctest.AllocsAtMost(100, 0, func() { _ = metaDeclaredCharset(head) }); allocs != 0 {
 		t.Errorf("a head without a meta: %v allocations, want none", allocs)
 	}
-	if allocs := testing.AllocsPerRun(100, func() { _ = metaDeclaredCharset(declared) }); allocs > 1 {
+	if allocs := alloctest.AllocsAtMost(100, 1, func() { _ = metaDeclaredCharset(declared) }); allocs > 1 {
 		t.Errorf("a head with a meta: %v allocations, want one", allocs)
 	}
 }

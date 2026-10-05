@@ -8,6 +8,8 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+
+	"github.com/eenchev/prometheus-universal-exporter/internal/testutil/alloctest"
 )
 
 // formerParseNumber is parseNumber as it was, reading whatever
@@ -156,7 +158,7 @@ func TestTheFormsANumberIsWrittenInAreReadAndGoSyntaxIsNot(t *testing.T) {
 // without it.
 func TestReadingANumberAllocatesNothing(t *testing.T) {
 	for _, text := range []string{"42", "-17.25", "6.02e+23", "123456789012345678901234567890", "NaN", "+Inf"} {
-		if allocs := testing.AllocsPerRun(100, func() {
+		if allocs := alloctest.AllocsAtMost(100, 0, func() {
 			if _, err := ParseFloat(text); err != nil {
 				t.Fatal(err)
 			}

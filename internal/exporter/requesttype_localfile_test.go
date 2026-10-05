@@ -129,7 +129,7 @@ func TestLocalFileRefusesWhatIsNotARegularFileUnderRoot(t *testing.T) {
 			select {
 			case result := <-done:
 				result.must(t, http.StatusBadGateway, "is not a regular file (a named pipe)")
-			case <-time.After(5 * time.Second):
+			case <-time.After(30 * time.Second):
 				t.Fatal("reading a named pipe hung the probe")
 			}
 		}

@@ -14,6 +14,7 @@ import (
 	"github.com/antchfx/xpath"
 	"github.com/eenchev/prometheus-universal-exporter/internal/decode"
 	"github.com/eenchev/prometheus-universal-exporter/internal/model"
+	"github.com/eenchev/prometheus-universal-exporter/internal/testutil/alloctest"
 )
 
 // rootedMarkup is a document whose jobs are told apart by what stands
@@ -564,15 +565,15 @@ func TestALabelWithoutAnAbsolutePathAllocatesWhatItDid(t *testing.T) {
 	for _, expression := range []string{"ancestor::status/@site", "count(../job)", "concat(../@name, '-', @id)", "../x[@ref='b']", "../@name", "@id", "."} {
 		rule := model.MetricRule{Name: "m", Labels: []model.LabelRule{{Name: "l", Expression: expression}}}
 		plan := planXPathLabels(rule, nil, false)
-		now := testing.AllocsPerRun(200, func() { xpathLabels(xmlNodes, job, plan) })
-		before := testing.AllocsPerRun(200, func() { xpathLabelsBefore(xmlNodes, job, plan) })
+		now, _ := alloctest.Allocations(200, func() { xpathLabels(xmlNodes, job, plan) })
+		before := alloctest.AllocsAtMost(200, now, func() { xpathLabelsBefore(xmlNodes, job, plan) })
 		releaseXPathLabels(plan)
 		if now != before {
 			t.Errorf("%s over XML allocates %.0f times, and before %.0f", expression, now, before)
 		}
 		plan = planXPathLabels(rule, nil, true)
-		now = testing.AllocsPerRun(200, func() { xpathLabels(htmlNodes, cell, plan) })
-		before = testing.AllocsPerRun(200, func() { xpathLabelsBefore(htmlNodes, cell, plan) })
+		now, _ = alloctest.Allocations(200, func() { xpathLabels(htmlNodes, cell, plan) })
+		before = alloctest.AllocsAtMost(200, now, func() { xpathLabelsBefore(htmlNodes, cell, plan) })
 		releaseXPathLabels(plan)
 		if now != before {
 			t.Errorf("%s over HTML allocates %.0f times, and before %.0f", expression, now, before)
@@ -581,8 +582,8 @@ func TestALabelWithoutAnAbsolutePathAllocatesWhatItDid(t *testing.T) {
 	rule := model.MetricRule{Name: "m", Labels: []model.LabelRule{{Name: "l", Expression: "/status/@site"}}}
 	plan := planXPathLabels(rule, nil, false)
 	defer releaseXPathLabels(plan)
-	now := testing.AllocsPerRun(200, func() { xpathLabels(xmlNodes, job, plan) })
-	document := testing.AllocsPerRun(200, func() { xpathLabelsBefore(xmlNodes, root, plan) })
+	now, _ := alloctest.Allocations(200, func() { xpathLabels(xmlNodes, job, plan) })
+	document, _ := alloctest.Allocations(200, func() { xpathLabelsBefore(xmlNodes, root, plan) })
 	if now > document+2 {
 		t.Errorf("/status/@site allocates %.0f times at a job, and %.0f at the document", now, document)
 	}

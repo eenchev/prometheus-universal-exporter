@@ -90,11 +90,15 @@ func httpSchemaKeys() []schemaKey {
 		{key: "collectors[].request.descriptors", of: "of an http collector", document: jqCollector, at: request, setting: "      descriptors: %s\n", absent: true, empty: true, emptyWas: refused},
 		// A label has a value or an expression, and the one written "" is
 		// the one left out: alone it is no label, beside the other it is
-		// nothing, and one written beside the other is one too many.
+		// nothing, and one written beside the other is one too many. An
+		// expression of nothing but blanks is neither left out nor one:
+		// both refuse it, alone, which the schema took, and beside a
+		// value, which the exporter took of a csv rule.
 		{key: "collectors[].metrics[].labels[].value", document: jqCollector, at: "            expression: .l\n", setting: "            value: %s\n", valid: "x"},
-		{key: "collectors[].metrics[].labels[].expression", document: jqCollector, at: "            expression: .l\n", setting: "            expression: %s\n", valid: ".l"},
+		{key: "collectors[].metrics[].labels[].expression", document: jqCollector, at: "            expression: .l\n", setting: "            expression: %s\n", valid: ".l", invalid: `"  "`, invalidWas: taken},
 		{key: "collectors[].metrics[].labels[].value", of: "beside an expression", document: jqCollector, at: label, setting: "            value: %s\n", invalid: "x", absent: true, empty: true, emptyWas: refused},
 		{key: "collectors[].metrics[].labels[].expression", of: "beside a value", document: strings.Replace(jqCollector, "expression: .l\n", "value: x\n", 1), at: label, setting: "            expression: %s\n", invalid: ".l", absent: true, empty: true, emptyWas: refused},
+		{key: "collectors[].metrics[].labels[].expression", of: "of blanks beside a value, in a csv rule", document: strings.NewReplacer("type: jq", "type: csv", "expression: .v", "expression: v", "expression: .l\n", "value: x\n").Replace(jqCollector), at: label, setting: "            expression: %s\n", invalid: `"\t "`, absent: true, empty: true, emptyWas: refused},
 		// Free text of at most one character: "" was the default already.
 		{key: "collectors[].response.csv.delimiter", document: csvCollector("';'"), at: "    response:\n      csv:\n        delimiter: ';'\n", setting: "    response:\n      csv:\n        delimiter: %s\n", valid: "';'", invalid: "';;'", absent: true, empty: true},
 		// Entries of lists and keys of mappings: an empty one is refused by

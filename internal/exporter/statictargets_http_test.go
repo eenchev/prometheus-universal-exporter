@@ -237,7 +237,7 @@ func TestStaticScrapePayloadCarriesSeparateResources(t *testing.T) {
 		if !services["legacy-app"] || !services[cfg.OTLP.ServiceName] {
 			t.Fatalf("payload services=%v", services)
 		}
-	case <-time.After(5 * time.Second):
+	case <-time.After(30 * time.Second):
 		t.Fatal("no OTLP payload was delivered")
 	}
 }

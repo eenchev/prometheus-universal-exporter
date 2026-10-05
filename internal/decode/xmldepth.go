@@ -28,7 +28,19 @@ func ParseXML(body []byte) (*xmlquery.Node, error) {
 		// is no part of what the failure is to the log.
 		var syntax *xml.SyntaxError
 		if errors.As(err, &syntax) {
-			err = model.SameFailureAs(err, strings.Replace(err.Error(), syntax.Error(), "XML syntax error: "+syntax.Msg, 1))
+			text, library := err.Error(), syntax.Error()
+			short, same, cut := xmlNamesCut(xmlSyntaxErrors, syntax.Msg)
+			if !cut {
+				return nil, model.SameFailureAs(err, strings.Replace(text, library, "XML syntax error: "+syntax.Msg, 1))
+			}
+			// A name of the document cut to its start (xmlcut.go), in a new
+			// error of the short text alone: the library's holds the name
+			// whole.
+			line := strings.TrimSuffix(library, syntax.Msg)
+			return nil, model.SameFailureAs(errors.New(strings.Replace(text, library, line+short, 1)), strings.Replace(text, library, "XML syntax error: "+same, 1))
+		}
+		if short, same, cut := xmlNamesCut(xmlOtherErrors, err.Error()); cut {
+			return nil, model.SameFailureAs(errors.New(short), same)
 		}
 		return nil, err
 	}

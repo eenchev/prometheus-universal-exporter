@@ -3,8 +3,10 @@ package model
 import (
 	"fmt"
 	"io"
+	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 )
 
 // A failure's text says where in the response it happened — row 3, node 7,
@@ -25,6 +27,11 @@ import (
 // message is searched for numbers: a value the response held, as in `value
 // "n/a" is not a number`, is part of what the failure is, and a number the
 // configuration gave is the same on every scrape.
+//
+// A value of the response that an error shows is shown by its start when it
+// is long (QuotedValue, made by Quoted and Bare), with its length after it:
+// the start is part of what the failure is, and the length, a size measured,
+// is not.
 
 // Position is a number in a failure's text that says where in the response
 // the failure happened: a row, a node, an item, a line, a column.
@@ -43,6 +50,78 @@ func (e Elapsed) String() string { return time.Duration(e).String() }
 // MovingMark stands in a failure's recognised text for each part that says
 // where or how large.
 const MovingMark = "#"
+
+// QuotedValue is a value of the response as a failure's text shows it,
+// given to Errorf: no more of it than its start, with how long it was, so
+// that a value the target made as long as its response leaves the text short
+// and what the text says after the value read. In the text the failure is
+// recognised by, the length is the mark: the same failure with a longer or a
+// shorter value that starts the same is one failure to the log.
+//
+// It is made of the value once, and holds nothing of it but the start it
+// shows: an error keeps its arguments for as long as it is kept.
+type QuotedValue struct {
+	// text is what the failure's text shows of the value, and same what the
+	// failure is recognised by.
+	text, same string
+}
+
+// Quoted is text as QuoteValue quotes it: quoted, and past 64 bytes cut to
+// its first 64, at a character boundary, with its length after the quotes.
+// The whole of a long text is neither quoted nor copied to make it.
+func Quoted[T ~string | ~[]byte](text T) QuotedValue {
+	head := shownBytes(text)
+	return shownStart(strconv.Quote(string(text[:head])), head, len(text))
+}
+
+// Bare is text as it is, for a name the failure's text writes without
+// quotes, cut as Quoted cuts a value: past 64 bytes to its first 64 and its
+// length.
+func Bare[T ~string | ~[]byte](text T) QuotedValue {
+	head := shownBytes(text)
+	// A copy: the text may be a part of the response.
+	return shownStart(strings.Clone(string(text[:head])), head, len(text))
+}
+
+// ShownAs is what a failure's text shows of the response where that is more
+// than one value, as a series named by its labels is: the text made of the
+// values as each is shown (String), and the text it is recognised by, made
+// of what each is recognised by (Same).
+func ShownAs(text, same string) QuotedValue { return QuotedValue{text: text, same: same} }
+
+// shownBytes is how many bytes of a value are shown: all of one no longer
+// than maxQuotedValue, and otherwise that many, or fewer where the value
+// would be cut inside a character, as QuoteValue cuts it.
+func shownBytes[T ~string | ~[]byte](text T) int {
+	if len(text) <= maxQuotedValue {
+		return len(text)
+	}
+	cut := maxQuotedValue
+	for cut > 0 && !utf8.RuneStart(text[cut]) {
+		cut--
+	}
+	return cut
+}
+
+// shownStart is a value of whole bytes shown by start, which is what is
+// shown of its first head bytes.
+func shownStart(start string, head, whole int) QuotedValue {
+	if head == whole {
+		return QuotedValue{text: start, same: start}
+	}
+	return QuotedValue{text: start + "... (" + strconv.Itoa(whole) + " bytes)", same: start + "... (" + MovingMark + " bytes)"}
+}
+
+// String is the value as a failure's text shows it.
+func (q QuotedValue) String() string { return q.text }
+
+// Same is the value as the failure is recognised by it: String, with the
+// mark in place of the length of a value that was cut.
+func (q QuotedValue) Same() string { return q.same }
+
+// Format writes the value as String gives it whatever verb formats it: a %q
+// would quote the quotes.
+func (q QuotedValue) Format(f fmt.State, _ rune) { _, _ = io.WriteString(f, q.text) }
 
 // movingPart is written as MovingMark whatever verb formats it.
 type movingPart struct{}
@@ -68,13 +147,16 @@ func (e *movingError) Error() string { return fmt.Errorf(e.format, e.args...).Er
 func (e *movingError) Unwrap() error { return e.wraps }
 
 // same is the error's text with each Position, Size and Elapsed replaced by
-// the mark, and each error among the arguments by its own recognised text.
+// the mark, each QuotedValue by what it is recognised by, and each error
+// among the arguments by its own recognised text.
 func (e *movingError) same() string {
 	args := make([]any, len(e.args))
 	for i, arg := range e.args {
 		switch arg := arg.(type) {
 		case Position, Size, Elapsed:
 			args[i] = movingPart{}
+		case QuotedValue:
+			args[i] = QuotedValue{text: arg.same, same: arg.same}
 		case error:
 			args[i] = sameText(SameFailureText(arg))
 		default:
@@ -93,9 +175,10 @@ func (s sameText) Error() string { return string(s) }
 // Errorf is fmt.Errorf for a failure whose text says where in the response
 // it happened or how large something measured was: those arguments are
 // given as a Position, a Size or an Elapsed, which are formatted as the
-// numbers and the duration they are. The error reads as fmt.Errorf's does,
-// and wraps what fmt.Errorf's would: the errors the format names with %w,
-// and no error written with another verb.
+// numbers and the duration they are, and a value of the response it shows as
+// a QuotedValue. The error reads as fmt.Errorf's does, and wraps what
+// fmt.Errorf's would: the errors the format names with %w, and no error
+// written with another verb.
 //
 // The text is made when it is read, not here, so the arguments are values
 // that stay what they are: names, numbers, texts and errors.

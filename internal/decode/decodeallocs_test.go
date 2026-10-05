@@ -8,6 +8,7 @@ import (
 
 	"github.com/eenchev/prometheus-universal-exporter/internal/fetch"
 	"github.com/eenchev/prometheus-universal-exporter/internal/model"
+	"github.com/eenchev/prometheus-universal-exporter/internal/testutil/alloctest"
 )
 
 // The json decoder and the parser of Prometheus text are written to
@@ -19,14 +20,14 @@ import (
 // needs and well below what it needed before, both of which are said.
 
 // allocationsFor is the allocations of one decode of body, by collector c,
-// for each of n things in it.
+// for each of n things in it, as alloctest counts them.
 func allocationsFor(t *testing.T, c model.Collector, contentType, body string, n int) float64 {
 	t.Helper()
 	headers := http.Header{"Content-Type": {contentType}}
 	c.Request = model.RequestConfig{Type: fetch.RequestTypeHTTP}
 	raw := []byte(body)
 	var err error
-	allocations := testing.AllocsPerRun(5, func() {
+	allocations, _ := alloctest.Allocations(5, func() {
 		_, err = Decode(&fetch.HTTPResponse{Body: raw, Headers: headers}, &c)
 	})
 	if err != nil {

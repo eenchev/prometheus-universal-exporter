@@ -14,6 +14,7 @@ import (
 	"testing"
 
 	"github.com/eenchev/prometheus-universal-exporter/internal/model"
+	"github.com/eenchev/prometheus-universal-exporter/internal/testutil/alloctest"
 	"gopkg.in/yaml.v3"
 )
 
@@ -929,10 +930,10 @@ func TestRefusingAYAMLKeyWrittenManyTimesAllocatesNoMoreForMoreOfThem(t *testing
 	for _, count := range []int{1200, 100000} {
 		root := parsedYAML(t, strings.Repeat("a: 1\n", count))
 		var got yamlOutcome
-		allocated := allocatedBy(func() {
+		allocated := alloctest.BytesAtMost(1, 16<<10, func() {
 			got = yamlWith(root, yamlLargeMapping, func(*yaml.Node) { t.Error("the document is handed to the library") })
 		})
-		allocations := testing.AllocsPerRun(3, func() { yamlWith(root, yamlLargeMapping, nil) })
+		allocations := alloctest.AllocsAtMost(3, 100, func() { yamlWith(root, yamlLargeMapping, nil) })
 		if got.err == nil || !strings.HasSuffix(got.err.Error(), fmt.Sprintf("\n  ... and %d more problems", count*(count-1)/2-10)) {
 			t.Fatalf("a key written %d times is refused with %.1000v", count, got.err)
 		}
@@ -1138,7 +1139,7 @@ func TestLookingThroughAYAMLDocumentCostsOneWalkOverIt(t *testing.T) {
 	small := typicalYAML(1000)
 	root := parsedYAML(t, small)
 	var learnt yamlLearnt
-	if allocations := testing.AllocsPerRun(10, func() {
+	if allocations := alloctest.AllocsAtMost(10, 0, func() {
 		learnt = yamlLearnt{large: yamlLargeMapping}
 		learnt.learn(root, true)
 		if learnt.way(root) != yamlByLibrary {
@@ -1151,13 +1152,13 @@ func TestLookingThroughAYAMLDocumentCostsOneWalkOverIt(t *testing.T) {
 		t.Errorf("%d pairs of keys were compared in a document of %d nodes", learnt.compared, nodes)
 	}
 	body := []byte(small)
-	alone := testing.AllocsPerRun(5, func() {
+	alone, _ := alloctest.Allocations(5, func() {
 		root, _ := yamlDocumentOf(body)
 		if outcome := yamlByTheLibraryAlone(root); outcome.err != nil {
 			t.Fatal(outcome.err)
 		}
 	})
-	now := testing.AllocsPerRun(5, func() {
+	now := alloctest.AllocsAtMost(5, alone, func() {
 		if _, err := decodeYAML(body); err != nil {
 			t.Fatal(err)
 		}
@@ -1168,7 +1169,7 @@ func TestLookingThroughAYAMLDocumentCostsOneWalkOverIt(t *testing.T) {
 	// Mappings of 40 keys: a table of the keys, made once.
 	wide := strings.Repeat("- {"+manyYAMLPairs(40, "", ", ")+"}\n", 500)
 	root = parsedYAML(t, wide)
-	if allocations := testing.AllocsPerRun(10, func() {
+	if allocations := alloctest.AllocsAtMost(10, 20, func() {
 		learnt = yamlLearnt{large: yamlLargeMapping}
 		learnt.learn(root, true)
 	}); allocations > 20 || learnt.compared != 0 {

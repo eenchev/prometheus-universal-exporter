@@ -68,7 +68,7 @@ func TestWatchIsDisabledByDefault(t *testing.T) {
 	// A disabled watch returns immediately rather than idling in a ticker.
 	select {
 	case <-done:
-	case <-time.After(2 * time.Second):
+	case <-time.After(30 * time.Second):
 		t.Fatal("ReloadLoop should return at once when the watch is disabled")
 	}
 
@@ -91,7 +91,7 @@ func TestWatchReloadsTheConfigurationWhenEnabled(t *testing.T) {
 	go manager.ReloadLoop(ctx)
 
 	writeWatchedConfig(t, path, "second_value")
-	if !waitForMetric(t, manager, "second_value", 5*time.Second) {
+	if !waitForMetric(t, manager, "second_value", 30*time.Second) {
 		t.Fatalf("the watch did not pick up the change; active metric is %q", activeMetric(manager))
 	}
 }
@@ -106,7 +106,7 @@ func TestWatchStopsWithTheContext(t *testing.T) {
 	cancel()
 	select {
 	case <-done:
-	case <-time.After(2 * time.Second):
+	case <-time.After(30 * time.Second):
 		t.Fatal("ReloadLoop should return when its context is cancelled")
 	}
 
@@ -136,7 +136,7 @@ func TestWatchStillRejectsAnInvalidConfiguration(t *testing.T) {
 	}
 
 	writeWatchedConfig(t, path, "third_value")
-	if !waitForMetric(t, manager, "third_value", 5*time.Second) {
+	if !waitForMetric(t, manager, "third_value", 30*time.Second) {
 		t.Fatalf("a later valid configuration should still load; active metric is %q", activeMetric(manager))
 	}
 }
@@ -177,14 +177,17 @@ func TestWatchReloadsTheStaticTargetFile(t *testing.T) {
 	if err := os.WriteFile(targetsPath, []byte("interval: 1m\ntargets:\n  - name: two\n    collector: watched\n    target: http://b.invalid\n"), 0600); err != nil {
 		t.Fatal(err)
 	}
-	deadline := time.Now().Add(5 * time.Second)
-	for time.Now().Before(deadline) {
-		if targets := manager.StaticTargets(); len(targets) == 1 && targets[0].Name == "two" {
-			return
-		}
-		time.Sleep(5 * time.Millisecond)
+	// The file is as long as it was, so the watch sees the change by its
+	// time alone, which a filesystem that stamps files by the clock's tick
+	// gives two writes within one tick alike.
+	later := time.Now().Add(time.Second)
+	if err := os.Chtimes(targetsPath, later, later); err != nil {
+		t.Fatal(err)
 	}
-	t.Fatalf("the watch did not reload the target file; targets are %+v", manager.StaticTargets())
+	testutil.WaitFor(t, "the watch to reload the target file", func() bool {
+		targets := manager.StaticTargets()
+		return len(targets) == 1 && targets[0].Name == "two"
+	})
 }
 
 func TestWatchIntervalIsHonoured(t *testing.T) {

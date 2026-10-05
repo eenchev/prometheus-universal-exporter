@@ -150,11 +150,16 @@ func TestTransformsStopWhenTheContextIsDone(t *testing.T) {
 // A rule that failed before the deadline is still counted when a later rule
 // runs into it: what the report holds is what the rules themselves could not
 // read.
+//
+// The first rule has to have failed when the deadline passes, which nothing
+// tells the test, so the deadline is a second away: at 50ms a machine that
+// leaves the test waiting for a CPU that long ends the transform at the
+// first rule, which fails the test.
 func TestRuleFailuresBeforeTheDeadlineAreKept(t *testing.T) {
 	testutil.CaptureLogs(t)
 	c := model.Collector{Name: "mixed", Decoder: model.DecoderConfig{Type: "json"}, Transform: model.TransformConfig{Type: "jq"},
 		Metrics: []model.MetricRule{{Name: "absent", Expression: ".missing", ErrorMode: model.ErrorModeLog}, {Name: "slow", Expression: endless, ErrorMode: model.ErrorModeLog}}}
-	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
 	_, failures, err := transformWith(ctx, t, c, "application/json", `{"a":1}`)
 	if !errors.Is(err, context.DeadlineExceeded) || !strings.Contains(err.Error(), `"slow"`) {

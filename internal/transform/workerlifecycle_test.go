@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/eenchev/prometheus-universal-exporter/internal/model"
+	"github.com/eenchev/prometheus-universal-exporter/internal/testutil"
 )
 
 // The timer adds up the scripts a probe runs and says whether any ran.
@@ -61,13 +62,7 @@ func TestIdleWorkersAreReapedOnATimer(t *testing.T) {
 		PythonWorkers().ReapLoop(ctx, 10*time.Millisecond)
 		close(done)
 	}()
-	deadline := time.Now().Add(5 * time.Second)
-	for idleWorkers(c.Name) > 0 {
-		if time.Now().After(deadline) {
-			t.Fatal("the idle worker was never reaped")
-		}
-		time.Sleep(5 * time.Millisecond)
-	}
+	testutil.WaitFor(t, "the idle worker to be reaped", func() bool { return idleWorkers(c.Name) == 0 })
 	cancel()
 	<-done
 	if got := PythonWorkers().Snapshot(c.Name).Stops[pythonStopIdle]; got != before+1 {

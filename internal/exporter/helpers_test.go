@@ -110,7 +110,14 @@ func requirePython(t *testing.T) {
 // previous one afterwards (transform.IsolatePythonWorkers). Every count a test reads
 // from the pool is then its own, so the tests pass under -count=N and
 // -shuffle=on. Tests do not run in parallel, so swapping the pool is safe.
+//
+// The pool leaves every script at least a minute, whatever its
+// limits.script_timeout: a script that takes a millisecond has been seen to
+// take more than the default 100ms on a machine with every CPU busy
+// elsewhere. The minute bounds a script that never ends; a test of the
+// timeout itself calls holdScriptsToTheirTimeout.
 func usePythonPool(t *testing.T) {
 	t.Helper()
 	t.Cleanup(transform.IsolatePythonWorkers())
+	transform.PythonWorkers().SetLeastScriptTimeout(time.Minute)
 }

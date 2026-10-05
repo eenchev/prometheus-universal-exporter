@@ -325,9 +325,15 @@ func TestAYAMLFailureWithNoLongPartReadsAndIsRecognisedAsItWas(t *testing.T) {
 		}
 		documents = append(documents, mapping)
 	}
+	// Under the race detector two of the five bounds: none, where the walk
+	// decodes everything, and the real one.
+	bounds := []int{0, 1, 2, 4, yamlLargeMapping}
+	if raceDetector {
+		bounds = []int{0, yamlLargeMapping}
+	}
 	counted := map[string]int{}
 	for _, document := range documents {
-		for _, large := range []int{0, 1, 2, 4, yamlLargeMapping} {
+		for _, large := range bounds {
 			reading := yamlReading{large: large}
 			was, wasErr := decodeYAMLUncut(reading, []byte(document))
 			got, gotErr := reading.decode([]byte(document))

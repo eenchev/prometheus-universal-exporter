@@ -117,16 +117,19 @@ func TestTheHistogramIsNotRecordedWhenNotVerbose(t *testing.T) {
 	}
 }
 
+// pythonCollector runs script on a text response, with a minute for it: a
+// test of the timeout sets its own (holdScriptsToTheirTimeout).
 func pythonCollector(name, script string) model.Collector {
 	return model.Collector{
 		Name: name, Request: model.RequestConfig{Type: fetch.RequestTypeHTTP}, Decoder: model.DecoderConfig{Type: "text"},
 		Transform: model.TransformConfig{Type: "python", Script: script},
-		Limits:    model.Limits{ScriptTimeout: model.Duration(2 * time.Second)},
+		Limits:    model.Limits{ScriptTimeout: model.Duration(time.Minute)},
 	}
 }
 
 func TestPythonWorkerMetrics(t *testing.T) {
 	requirePython(t)
+	holdScriptsToTheirTimeout(t)
 	testutil.CaptureLogs(t)
 	target := textTarget(t, "value=42\n")
 	good := pythonCollector("py_metrics_good", `metric(name="v", value=1)`)

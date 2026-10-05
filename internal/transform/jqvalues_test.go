@@ -3,12 +3,14 @@ package transform
 import (
 	"context"
 	"errors"
+	"math"
 	"strconv"
 	"strings"
 	"testing"
 
 	"github.com/eenchev/prometheus-universal-exporter/internal/model"
 	"github.com/eenchev/prometheus-universal-exporter/internal/testutil"
+	"github.com/eenchev/prometheus-universal-exporter/internal/testutil/alloctest"
 )
 
 // jqValuesCollector is a jq collector of the rules given, bounded to limit
@@ -47,19 +49,20 @@ func TestAJQRuleWithoutItemsStopsAtTheSeriesLimit(t *testing.T) {
 	d, r := decodedBody(t, c, "application/json", body)
 	var set *model.MetricSet
 	var err error
-	all := allocated(func() { set, err = Transform(context.Background(), d, r, &c, "") })
+	// Measured once: the refusals are bounded by an eighth of it.
+	_, all := alloctest.Once(1, func() { set, err = Transform(context.Background(), d, r, &c, "") })
 	if err != nil || len(set.Metrics) != manySeries || set.Metrics[manySeries-1].Labels["id"] != "a" || set.Metrics[0].Labels["kind"] != "fixed" {
 		t.Fatalf("at the limit: %d series, %v", len(set.Metrics), err)
 	}
 
 	c.Limits.MaxMetrics = seriesLimit
-	limited := allocated(func() { _, err = Transform(context.Background(), d, r, &c, "") })
+	limited := alloctest.BytesAtMost(1, all/8, func() { _, err = Transform(context.Background(), d, r, &c, "") })
 	if err == nil || err.Error() != wantLimitFailed || !errors.Is(err, model.ErrLimitExceeded) {
 		t.Fatalf("err = %v, want %q marked as a limit", err, wantLimitFailed)
 	}
 	items := jqValuesCollector(seriesLimit, withItems)
 	var itemsErr error
-	limitedItems := allocated(func() { _, itemsErr = Transform(context.Background(), d, r, &items, "") })
+	_, limitedItems := alloctest.Once(1, func() { _, itemsErr = Transform(context.Background(), d, r, &items, "") })
 	if itemsErr == nil || itemsErr.Error() != err.Error() {
 		t.Fatalf("with items the error is %v, without %v", itemsErr, err)
 	}
@@ -278,32 +281,41 @@ func TestFindingAJQRulesWholeFailureKeepsNoValues(t *testing.T) {
 	const values = 20000
 	body := `{"few": ["a", "b"], "items": [{"v":"x","id":"a"},` + strings.TrimSuffix(repeated(`{"v":1,"id":"a"},`, values-1), ",") + "]}"
 	ids := model.LabelRule{Name: "id", Expression: ".items[].id"}
-	run := func(c model.Collector) (set *model.MetricSet, failures []RuleFailure, bytes uint64, err error) {
+	// run transforms the body by c and says what that allocated, measured
+	// until it is at most most (alloctest); each transform reports to a
+	// report of its own, the last of which is the one returned.
+	run := func(c model.Collector, most uint64) (set *model.MetricSet, failures []RuleFailure, bytes uint64, err error) {
 		d, r := decodedBody(t, c, "application/json", body)
-		ctx, report := WithRuleReport(context.Background())
-		bytes = allocated(func() { set, err = Transform(ctx, d, r, &c, "") })
+		var report *RuleReport
+		bytes = alloctest.BytesAtMost(1, most, func() {
+			var ctx context.Context
+			ctx, report = WithRuleReport(context.Background())
+			set, err = Transform(ctx, d, r, &c, "")
+		})
 		return set, report.Failures(), bytes, err
 	}
 	testutil.CaptureLogs(t)
-	set, failures, all, err := run(jqValuesCollector(0, model.MetricRule{Name: "n", Expression: ".items[].v", ErrorMode: model.ErrorModeIgnore, Labels: []model.LabelRule{ids}}))
+	// Making every series is measured once: the others are bounded by a
+	// fraction of it.
+	set, failures, all, err := run(jqValuesCollector(0, model.MetricRule{Name: "n", Expression: ".items[].v", ErrorMode: model.ErrorModeIgnore, Labels: []model.LabelRule{ids}}), math.MaxUint64)
 	if err != nil || len(set.Metrics) != values-1 || len(failures) != 1 || failures[0].Failures != 1 {
 		t.Fatalf("every series: %d, %+v, %v", len(set.Metrics), failures, err)
 	}
 
 	short := model.MetricRule{Name: "n", Expression: ".items[].v", ErrorMode: model.ErrorModeIgnore, Labels: []model.LabelRule{ids, {Name: "few", Expression: ".few[]"}}}
-	set, failures, unpaired, err := run(jqValuesCollector(0, short))
+	set, failures, unpaired, err := run(jqValuesCollector(0, short), all/4)
 	const want = `label "few" gave 2 values for 20000 series, so they cannot be paired; give one value, or one per series, or set items to evaluate labels per element`
 	if err != nil || len(set.Metrics) != 0 || len(failures) != 1 || failures[0].Failures != 1 || failures[0].First.Error() != want {
 		t.Fatalf("a label that runs out: %+v, %+v, %v", set, failures, err)
 	}
 
 	failing := model.MetricRule{Name: "n", Expression: ".items[].v", ErrorMode: model.ErrorModeFail, Labels: []model.LabelRule{ids}}
-	_, _, single, err := run(jqValuesCollector(0, failing))
+	_, _, single, err := run(jqValuesCollector(0, failing), all/4)
 	if err == nil || err.Error() != `metric "n": value "x" is not a number; map text to numbers with value_map` {
 		t.Fatalf("a first value that is no number: %v", err)
 	}
 	failing.Labels = short.Labels
-	_, _, both, err := run(jqValuesCollector(0, failing))
+	_, _, both, err := run(jqValuesCollector(0, failing), all/4)
 	if err == nil || err.Error() != `metric "n" labels: `+want {
 		t.Fatalf("a first value that is no number and a label that runs out: %v", err)
 	}
@@ -317,11 +329,11 @@ func TestFindingAJQRulesWholeFailureKeepsNoValues(t *testing.T) {
 
 	// Past the limit the rule stops there, as it did.
 	oneShort := model.MetricRule{Name: "n", Expression: ".items[].v", ErrorMode: model.ErrorModeLog, Labels: []model.LabelRule{{Name: "id", Expression: ".items[1:][].id"}}}
-	_, failures, _, err = run(jqValuesCollector(0, oneShort))
+	_, failures, _, err = run(jqValuesCollector(0, oneShort), math.MaxUint64)
 	if err != nil || len(failures) != 1 || failures[0].Failures != 1 || !strings.HasPrefix(failures[0].First.Error(), `label "id" gave 19999 values for 20000 series`) {
 		t.Fatalf("a label one value short: %+v, %v", failures, err)
 	}
-	_, _, limited, err := run(jqValuesCollector(seriesLimit, oneShort))
+	_, _, limited, err := run(jqValuesCollector(seriesLimit, oneShort), all/8)
 	if err == nil || err.Error() != wantLimitFailed || !errors.Is(err, model.ErrLimitExceeded) {
 		t.Fatalf("at the limit: %v", err)
 	}

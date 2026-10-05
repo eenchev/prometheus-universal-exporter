@@ -16,6 +16,7 @@ import (
 
 	"github.com/eenchev/prometheus-universal-exporter/internal/fetch"
 	"github.com/eenchev/prometheus-universal-exporter/internal/model"
+	"github.com/eenchev/prometheus-universal-exporter/internal/testutil/alloctest"
 )
 
 // The errors of the Graphite decoder, of the sample lines the Prometheus
@@ -144,7 +145,8 @@ func textOf(random *rand.Rand, alphabet string, most int) string {
 // with, to the letter where no value in it is over 64 bytes, and otherwise
 // with the value cut to its first 64 bytes and its length; the failure is
 // recognised by the error's text as it was, with the mark for the length of
-// a value that was cut.
+// a value that was cut. Under the race detector 3,000 lines are drawn, the
+// first tenth, of which as large a share is to be refused and cut.
 func TestCarbonLinesAreReadAndRefusedAsTheyWere(t *testing.T) {
 	now := time.Unix(1727000000, 0)
 	lines := []string{
@@ -153,7 +155,8 @@ func TestCarbonLinesAreReadAndRefusedAsTheyWere(t *testing.T) {
 		strings.Repeat("a", 64) + " x", strings.Repeat("a", 65) + " x", "a " + strings.Repeat("9", 70) + "x 1", "a 1 " + strings.Repeat("9", 70), strings.Repeat("é", 40) + ";b 1 1", ";" + strings.Repeat("\xff", 80) + " 1 1",
 	}
 	random := rand.New(rand.NewPCG(18, 1))
-	for range 30000 {
+	drawn := alloctest.UnlessRaced(30000, 3000)
+	for range drawn {
 		fields := make([]string, random.IntN(5))
 		for i := range fields {
 			switch {
@@ -194,7 +197,7 @@ func TestCarbonLinesAreReadAndRefusedAsTheyWere(t *testing.T) {
 			t.Errorf("%q: err=%v, recognised by %q; was %v", line, err, model.SameFailureText(err), was)
 		}
 	}
-	if refused < 10000 || cut < 1000 || refused-cut < 5000 {
+	if refused < drawn/3 || cut < drawn/30 || refused-cut < drawn/6 {
 		t.Errorf("%d lines are refused, %d of them with a value that is cut: the lines should make many of both", refused, cut)
 	}
 	t.Logf("%d lines, %d refused, %d of them with a value that is cut", len(lines), refused, cut)
@@ -234,11 +237,14 @@ func renderValue(random *rand.Rand, depth int) any {
 // refused with to the letter where no value in it is over 64 bytes, a point
 // written as %v writes it, and otherwise with the name and the point cut to
 // their first 64 bytes and their lengths; the failure is recognised by what
-// it was, with the mark for those lengths.
+// it was, with the mark for those lengths. Under the race detector 2,000
+// answers are drawn, the first tenth, of which as large a share is to be
+// read, refused and cut.
 func TestRenderAnswersAreReadAndRefusedAsTheyWere(t *testing.T) {
 	random := rand.New(rand.NewPCG(18, 2))
 	refused, cut, read := 0, 0, 0
-	for range 20000 {
+	drawn := alloctest.UnlessRaced(20000, 2000)
+	for range drawn {
 		target := "t" + textOf(random, "ab.é", []int{5, 5, 60, 90}[random.IntN(4)])
 		if random.IntN(4) == 0 {
 			target = textOf(random, "ab.;=é", []int{5, 60, 90}[random.IntN(3)])
@@ -277,7 +283,7 @@ func TestRenderAnswersAreReadAndRefusedAsTheyWere(t *testing.T) {
 			t.Errorf("%s: err=%v, recognised by %q; was %q, recognised by %q", body, err, model.SameFailureText(err), was, recognised)
 		}
 	}
-	if read < 500 || cut < 2000 || refused-cut < 2000 {
+	if read < drawn/40 || cut < drawn/10 || refused-cut < drawn/10 {
 		t.Errorf("%d answers are read and %d refused, %d of them with a value that is cut: the answers should make many of each", read, refused, cut)
 	}
 	t.Logf("%d answers read, %d refused, %d of them with a value that is cut", read, refused, cut)
@@ -380,6 +386,10 @@ func TestACSVColumnNamedTwiceIsRefusedAsItWas(t *testing.T) {
 // the parser as it was gives (promoracle_test.go): to the letter where no
 // value in the error is over 64 bytes, and with the value cut to its start
 // where one is. Each error is recognised by its text without its line.
+// Under the race detector a file is cut off after every 55 bytes and not
+// every five, and each of its lines is spoilt in two of the six ways, the
+// next two for the next line: a tenth of the readings, which still end a
+// file inside every kind of token and spoil each kind in every third line.
 func TestTheRepositorysExpositionsAreReadAndRefusedAsTheyWere(t *testing.T) {
 	files, err := filepath.Glob("../../testdata/prometheus/*.prom")
 	if err != nil || len(files) < 2 {
@@ -392,12 +402,15 @@ func TestTheRepositorysExpositionsAreReadAndRefusedAsTheyWere(t *testing.T) {
 			t.Fatal(err)
 		}
 		bodies := [][]byte{whole}
-		for cut := 1; cut < len(whole); cut += 5 {
+		for cut := 1; cut < len(whole); cut += alloctest.UnlessRaced(5, 55) {
 			bodies = append(bodies, whole[:cut], append(bytes.Clone(whole[:cut]), '\\'), append(bytes.Clone(whole[:cut]), "\"\n"...))
 		}
 		lines := strings.Split(string(whole), "\n")
 		for i, line := range lines {
-			for _, spoilt := range []string{line + "x", line + " 1 2", strings.Replace(line, `"}`, `}`, 1), strings.Replace(line, "gauge", "nope", 1), strings.Replace(line, "{", "{{", 1), line + "\n" + line} {
+			for way, spoilt := range []string{line + "x", line + " 1 2", strings.Replace(line, `"}`, `}`, 1), strings.Replace(line, "gauge", "nope", 1), strings.Replace(line, "{", "{{", 1), line + "\n" + line} {
+				if raceDetector && (i+way)%3 != 0 {
+					continue
+				}
 				if spoilt != line {
 					bodies = append(bodies, []byte(strings.Join(lines[:i], "\n")+"\n"+spoilt+"\n"+strings.Join(lines[i+1:], "\n")))
 				}
@@ -413,7 +426,7 @@ func TestTheRepositorysExpositionsAreReadAndRefusedAsTheyWere(t *testing.T) {
 			}
 		}
 	}
-	if accepted < 1000 || refused < 1000 {
+	if least := alloctest.UnlessRaced(1000, 100); accepted < least || refused < least {
 		t.Errorf("%d readings are accepted and %d refused: the bodies should make many of both", accepted, refused)
 	}
 	t.Logf("%d readings accepted, %d refused", accepted, refused)

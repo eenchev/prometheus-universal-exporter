@@ -11,10 +11,17 @@ import (
 // A configuration naming a real type that this build left out is told so, and
 // told how to get a build with it; a name that is no type at all is not.
 func TestARequestTypeLeftOutOfTheBuildIsNamedAsSuch(t *testing.T) {
-	saved := fetch.RequestTypes[fetch.RequestTypeHTTP]
+	saved, built := fetch.RequestTypes[fetch.RequestTypeHTTP]
 	delete(fetch.RequestTypes, fetch.RequestTypeHTTP)
 	registerFixtureType(t)
-	t.Cleanup(func() { fetch.RequestTypes[fetch.RequestTypeHTTP] = saved })
+	// A build without http is left without it: put back as a type that
+	// is none, it would be found, and used, by the next test to load an
+	// http collector.
+	t.Cleanup(func() {
+		if built {
+			fetch.RequestTypes[fetch.RequestTypeHTTP] = saved
+		}
+	})
 
 	err := Validate(&model.Config{Collectors: []model.Collector{typedCollector(fetch.RequestTypeHTTP)}})
 	if err == nil {

@@ -20,6 +20,7 @@ import (
 	"github.com/eenchev/prometheus-universal-exporter/internal/config"
 	"github.com/eenchev/prometheus-universal-exporter/internal/model"
 	"github.com/eenchev/prometheus-universal-exporter/internal/testutil"
+	"github.com/eenchev/prometheus-universal-exporter/internal/testutil/alloctest"
 )
 
 // Every stay of a static target has a first scrape of its own, and what a
@@ -271,7 +272,8 @@ func stayVariants() (collectors [][]model.Collector, files [][]model.StaticTarge
 // deadlines, the turns skipped and the time of the next look are those of
 // the schedule as it was. So a target that a reload changed once is started
 // once, one that no reload changed is not started again, and the first
-// scrape after the start comes as it did.
+// scrape after the start comes as it did. Under the race detector it is the
+// first four of the 25 runs, 320 looks that start a hundred scrapes.
 func TestTheScheduleThatLooksAfterEveryReloadPlansAsItDid(t *testing.T) {
 	testutil.CaptureLogs(t)
 	collectors, files := stayVariants()
@@ -280,8 +282,8 @@ func TestTheScheduleThatLooksAfterEveryReloadPlansAsItDid(t *testing.T) {
 		now, was *staticTargetState
 		ends     int
 	}
-	started := 0
-	for run := range 25 {
+	started, runs := 0, alloctest.UnlessRaced(25, 4)
+	for run := range runs {
 		random := rand.New(rand.NewPCG(uint64(run), 12))
 		server, manager := newCacheTestServer(t, collectors[0]...)
 		manager.SetTargets("", &model.StaticTargetFile{Targets: slices.Clone(files[0])})
@@ -329,7 +331,7 @@ func TestTheScheduleThatLooksAfterEveryReloadPlansAsItDid(t *testing.T) {
 			started += len(due)
 		}
 	}
-	if started < 500 {
+	if started < 20*runs {
 		t.Errorf("the runs started %d scrapes, too few to show anything", started)
 	}
 }
@@ -340,7 +342,9 @@ func TestTheScheduleThatLooksAfterEveryReloadPlansAsItDid(t *testing.T) {
 // probe that read any earlier generation is held to its collector alone, as
 // every trip was; a scrape of a target that has been in every file since as
 // it was is held to the same; and a scrape of a target that has not is held
-// to nothing, whatever its collector.
+// to nothing, whatever its collector. Under the race detector it is every
+// third run, 66 of the 196, which have every configuration with every file
+// as the first reload and as the second.
 func TestWhatATripTellsTheFailureLogIsHeldToAsItWasButForATargetThatMoved(t *testing.T) {
 	testutil.CaptureLogs(t)
 	collectors, files := stayVariants()
@@ -357,6 +361,9 @@ func TestWhatATripTellsTheFailureLogIsHeldToAsItWasButForATargetThatMoved(t *tes
 		runs *= len(choices)
 	}
 	for run := range runs {
+		if alloctest.RaceDetector && run%3 != 0 {
+			continue
+		}
 		server, manager := newCacheTestServer(t, collectors[0]...)
 		manager.SetTargets("", &model.StaticTargetFile{Targets: slices.Clone(files[0])})
 		history := [][]model.StaticTarget{files[0]}

@@ -38,7 +38,7 @@ the ones above them in this list:
 | `internal/transform` | The transforms and metric rules, the Python worker pool, and the checks run on rules and scripts at load. |
 | `internal/config` | Loading, validating and reloading the configuration, collector and target files, and their JSON Schemas. |
 | `internal/exporter` | The HTTP server and the one pipeline probes and static targets share (`pipeline.go`): cache, shared probes, limits, self-metrics, readiness, static targets and OTLP export. |
-| `internal/testutil` | Helpers shared by the tests of several packages; imported only by tests. The package within it, `internal/testutil/alloctest`, is how a test measures what a function allocates, and imports nothing of the module so that the tests of `internal/model` can use it too. |
+| `internal/testutil` | Helpers shared by the tests of several packages; imported only by tests. The package within it, `internal/testutil/alloctest`, is how a test measures what a function allocates and how it takes a smaller input under the race detector ("Repeatable tests" below), and imports nothing of the module so that the tests of `internal/model` can use it too. |
 | `internal/grpctest` | An in-process gRPC server for the `grpc` type's tests, with a queue service compiled from `.proto` sources at run time, reflection and TLS; imported only by tests, and behind the type's build tag. |
 
 A package's tests live beside it, unless they need more than it can import: a
@@ -119,8 +119,12 @@ What the log costs a scrape is measured with
 ## Repeatable tests
 
 Every test must pass however many times it runs and in whatever order, which
-`make test` and CI check with `go test -race -count=2 -shuffle=on ./...`. A
-failure there names the seed it used; run it again with `-shuffle=<seed>`.
+`make test` and CI check with
+`go test -race -count=2 -shuffle=on -timeout 20m ./...`. A failure there names
+the seed it used; run it again with `-shuffle=<seed>`. The limit is a
+package's, and the command names it because `go test`'s own ten minutes are
+meant for one run without the race detector; a test keeps the Makefile and
+`ci.yml` running the same command.
 
 State shared across tests is what breaks this. The Python worker pool is one
 such thing: its counts — starts, runs, stops, idle workers — would carry over
@@ -197,6 +201,33 @@ was kept of the one before it. A test of a server that comes back gives the
 connection an hour to wait by itself and the call a minute to connect in
 (`connectionsWaitAnHour`, `callsWaitForAConnection`), so that only what the
 test is about reconnects, in however long it takes.
+
+How long the suite takes under the race detector is held down in the tests
+too. Code runs several times slower there and the command runs every test
+twice, so a test over tens of thousands of generated documents, or a body of
+megabytes, costs minutes there that it does not cost a plain run; two packages
+once took most of the ten minutes `go test` gave them. A test whose time is
+the size of what it works on names both sizes with
+`alloctest.UnlessRaced(plain, raced)` — a count of generated cases, the
+length of a body, the rounds of a loop, one row in so many of a table that is
+multiplied out — or branches on `alloctest.RaceDetector` (`raceDetector` in
+the packages that have the constant). The plain run keeps the size that makes
+the test thorough. The run under the detector takes a smaller one of the same
+kind and checks everything the plain run checks: no test is skipped there and
+no assertion left out, a text or count expected of the larger input is
+computed from the size, and a floor on what a generated corpus held — so many
+documents refused, so many with an alias — is scaled with the corpus and never
+dropped. Where a test is about a bound in the code, the smaller input is
+still past it. A test of concurrency keeps its goroutines and gives up rounds.
+A test that waits on the clock or on a Python process is not made faster this
+way and is left as it is. Aim for a second under the detector; to see where a
+package's time goes:
+
+```sh
+go test -race -count=1 -json ./internal/decode |
+  jq -r 'select(.Action == "pass" and .Test != null and (.Test | contains("/") | not)) | "\(.Elapsed)\t\(.Test)"' |
+  sort -rn | head -20
+```
 
 The Python tests run `python3` from `PATH`. Every workflow that runs the
 suite — CI, the exporter release and the Dockerfile update — installs the
@@ -470,7 +501,12 @@ in about 5 ms; the worker writes an answer of plain values without the walk,
 after looking through it in 4 ms, and `metric(...)` takes a label that is a
 string as it is, 8.5 ms for the 5,000 calls: 37 ms of processor time in the
 worker. What is left there is `json.loads` of the request, 15 ms, and
-`json.dumps` of the answer, 8 ms.
+`json.dumps` of the answer, 8 ms. The look through the answer also counts
+its values, a check for each list and dict that adds half a millisecond at
+5,000 metrics, and has it weighed where the count grows fourfold, as far as
+a sixty-fourth of the count goes: that is what keeps an answer that holds
+one list many times over, or in itself, from being gone through as it is
+written (`weigh` in `pythonworker.go`, and `pythonshared_test.go`).
 
 The lines the exporter and a worker exchange are the lines they were, byte
 for byte, so `limits.max_output_bytes` bounds what it bounded and a script

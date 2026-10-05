@@ -29,8 +29,11 @@ build:
 test:
 	go test ./...
 	@# Twice, in a random order, so a test that depends on the order tests run
-	@# in, or on running only once, is caught.
-	go test -race -count=2 -shuffle=on ./...
+	@# in, or on running only once, is caught. The limit is a package's: go
+	@# test's own ten minutes are for one run without the race detector, and
+	@# this is two with it, on whatever machine CI was given. A test keeps
+	@# ci.yml running the same command.
+	go test -race -count=2 -shuffle=on -timeout 20m ./...
 
 # The tests of each request type built on its own, as ci.yml runs them: a
 # build with REQUEST_TYPES=http is one the exporter ships, so its tests have

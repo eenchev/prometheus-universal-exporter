@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/eenchev/prometheus-universal-exporter/internal/testutil"
+	"github.com/eenchev/prometheus-universal-exporter/internal/testutil/alloctest"
 )
 
 // Identical probes in flight share a trip only when they are of the same stay
@@ -91,7 +92,9 @@ func TestAProbeDoesNotJoinTheTripOfAnEarlierStayOfItsCollector(t *testing.T) {
 // that removes it again, and the same configuration loaded anew — made while
 // the first probe is at its target, the target is asked once, every probe
 // that arrived is answered by that one trip, and its result is cached, as on
-// a server that was never reloaded.
+// a server that was never reloaded. Under the race detector it is every
+// seventh sequence, 37 of the 256, which have every step at every place, and
+// every step after every other.
 func TestProbesOfOneStayShareATripThroughReloads(t *testing.T) {
 	testutil.CaptureLogs(t)
 	shared, beside := cachingCollector("shared", time.Hour), cachingCollector("beside", time.Hour)
@@ -102,6 +105,9 @@ func TestProbesOfOneStayShareATripThroughReloads(t *testing.T) {
 		sequences *= len(steps)
 	}
 	for sequence := range sequences {
+		if alloctest.RaceDetector && sequence%7 != 0 {
+			continue
+		}
 		target := newGatedTarget(t, http.StatusOK, "value=42\n")
 		server, _ := newCacheTestServer(t, shared)
 		path := probePath("shared", target.URL, "")

@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/eenchev/prometheus-universal-exporter/internal/model"
+	"github.com/eenchev/prometheus-universal-exporter/internal/testutil/alloctest"
 )
 
 // failedByText is failureLog.failedFor as it was while a failure was told
@@ -56,7 +57,9 @@ func (f *failureLog) failedByText(logger *slog.Logger, level slog.Level, key, ms
 // is told from another as it was, by its text: over 20,000 failures and
 // recoveries of three things in two stages — errors plain, wrapped, marked
 // with their kind and none at all, minutes and hours apart — the log writes
-// line for line what it wrote when it compared the texts.
+// line for line what it wrote when it compared the texts. Under the race
+// detector it is the first 5,000 of them, with a quarter of the lines, the
+// repeats and the sums of repeats.
 func TestTheFailureLogWritesWhatItDidForErrorsThatNameNoPlace(t *testing.T) {
 	random := rand.New(rand.NewSource(13))
 	now := time.Date(2026, 10, 1, 12, 0, 0, 0, time.UTC)
@@ -89,7 +92,8 @@ func TestTheFailureLogWritesWhatItDidForErrorsThatNameNoPlace(t *testing.T) {
 	}
 	keys := []string{failureKey("web", "http://a", ""), failureKey("web", "http://b", ""), failureKey("files", "", "a.prom")}
 	stages := []string{"http", "transform"}
-	for range 20000 {
+	rounds := alloctest.UnlessRaced(20000, 5000)
+	for range rounds {
 		key := keys[random.Intn(len(keys))]
 		if random.Intn(20) == 0 {
 			is.recovered(isLogger, key, "probe recovered", "collector", "web")
@@ -116,7 +120,7 @@ func TestTheFailureLogWritesWhatItDidForErrorsThatNameNoPlace(t *testing.T) {
 		}
 		t.Fatalf("the log has %d lines, and had %d", len(isLines), len(wasLines))
 	}
-	if lines, repeats, sums := bytes.Count(isOut.Bytes(), []byte("\n")), bytes.Count(isOut.Bytes(), []byte(`"repeat":true`)), bytes.Count(isOut.Bytes(), []byte(`"repeated":`)); lines < 20000 || repeats < 2000 || sums < 200 {
+	if lines, repeats, sums := bytes.Count(isOut.Bytes(), []byte("\n")), bytes.Count(isOut.Bytes(), []byte(`"repeat":true`)), bytes.Count(isOut.Bytes(), []byte(`"repeated":`)); lines < rounds || repeats < rounds/10 || sums < rounds/100 {
 		t.Fatalf("%d lines, %d repeats and %d sums of repeats: the generator shows too little", lines, repeats, sums)
 	}
 }

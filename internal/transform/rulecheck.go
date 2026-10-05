@@ -18,9 +18,45 @@ func jqFamily(transformType string) bool {
 // CheckMetricRule validates one rule's name and compiles its expressions. It
 // reports every mistake it finds in the rule, not just the first
 // (model.JoinProblems), each naming the rule and, where there is one, the
-// expression.
+// expression. The rule is named by its metric name, whatever that is: the
+// loader, which knows the rule's place among its collector's, checks it with
+// CheckMetricRuleAt.
 func CheckMetricRule(x *model.Collector, r *model.MetricRule) error {
-	where := fmt.Sprintf("collector %q metric %q", x.Name, r.Name)
+	return checkMetricRule(x, r, fmt.Sprintf("collector %q metric %q", x.Name, r.Name))
+}
+
+// CheckMetricRuleAt is CheckMetricRule of the rule at index of the
+// collector's metrics, named in each message as RuleWhere names it: a rule
+// that has a name reads as it does from CheckMetricRule, and one that has
+// none is told of by its place.
+func CheckMetricRuleAt(x *model.Collector, index int) error {
+	return checkMetricRule(x, &x.Metrics[index], RuleWhere(x, index))
+}
+
+// RuleWhere is how a message of the load names the rule at index of a
+// collector's metrics: the collector and the rule's metric name, `collector
+// "node" metric "up"`, or, for a rule that has no name to be named by, the
+// collector and the rule's place among its rules, counted from 1 as
+// CheckLabelValueMapsAgree counts them, `collector "node" metrics rule 2`.
+// A rule has no name when name is left out or "", which a prometheus rule
+// may be, or is nothing but blanks, which is no rule's name: `metric ""`
+// said which rule of thirty it was to nobody. A name that is no metric's
+// for another reason is quoted as it is written, and finds its rule.
+func RuleWhere(x *model.Collector, index int) string {
+	return fmt.Sprintf("collector %q %s", x.Name, RuleName(&x.Metrics[index], index))
+}
+
+// RuleName is RuleWhere without the collector: `metric "up"`, or `metrics
+// rule 2` for the rule at index that has no name.
+func RuleName(r *model.MetricRule, index int) string {
+	if strings.TrimSpace(r.Name) == "" {
+		return fmt.Sprintf("metrics rule %d", index+1)
+	}
+	return fmt.Sprintf("metric %q", r.Name)
+}
+
+// checkMetricRule is CheckMetricRule with the rule named by where.
+func checkMetricRule(x *model.Collector, r *model.MetricRule, where string) error {
 	var errs []error
 	fail := func(err error) {
 		if err != nil {
@@ -29,7 +65,7 @@ func CheckMetricRule(x *model.Collector, r *model.MetricRule) error {
 	}
 	if r.Name != "" {
 		if err := checkMetricName(r.Name); err != nil {
-			fail(fmt.Errorf("%s: %w", where, err))
+			fail(fmt.Errorf("%s: %w%s", where, err, patternForAName(x, r.Name)))
 		}
 	}
 	if r.Items != "" && !jqFamily(x.Transform.Type) && x.Transform.Type != "css" {
@@ -120,6 +156,7 @@ func CheckMetricRule(x *model.Collector, r *model.MetricRule) error {
 		}
 	case x.Transform.Type == "prometheus":
 		if pattern := r.Expression; pattern != "" {
+			fail(checkRulePattern(where, pattern))
 			if _, err := expr.CompileRegex(pattern); err != nil {
 				fail(fmt.Errorf("%s expression %q: %w", where, pattern, err))
 			}
@@ -247,6 +284,25 @@ func checkFilterEntry(collector, key, entry string) error {
 	return nil
 }
 
+// checkRulePattern refuses the expression of a prometheus rule, the rule
+// being named by where, that is nothing but blanks. A prometheus rule's
+// expression is a regular expression matched against the names of the
+// target's metrics, anywhere in a name (applyPrometheusTransform,
+// decode.prometheusKeeps), and one of blanks compiles: it matches only the
+// names that hold those blanks, so the rule passed nothing on, which with
+// required: false it did without a word. It is the slip checkFilterEntry
+// refuses of an entry of transform.include, and is refused with the same
+// advice. An expression written "" is the key left out, as an optional key
+// is everywhere: the rule then matches the metric of its name. Under the
+// other transforms the loader refuses an expression of blanks before this
+// check, as a rule that has no expression.
+func checkRulePattern(where, pattern string) error {
+	if strings.TrimSpace(pattern) != "" {
+		return nil
+	}
+	return fmt.Errorf("%s expression %q is nothing but blanks; a prometheus rule's expression is a regular expression matched against a metric's name as the target gives it, anywhere in it, so this one matches only the names that hold these blanks: write the pattern that was meant, or, for one that does mean a blank, '[ ]' or '\\x20' in single quotes, or leave expression out for the rule to pass on the metric its name names", where, pattern)
+}
+
 // checkMetricName applies the rule exposition applies at scrape time, plus
 // the "__" prefix Prometheus reserves, so a name that could never be exported
 // is refused before the first scrape.
@@ -258,6 +314,29 @@ func checkMetricName(name string) error {
 		return fmt.Errorf("%q starts with \"__\", which Prometheus reserves", name)
 	}
 	return nil
+}
+
+// patternForAName is what the load adds to its refusal of a prometheus
+// rule's name that is no metric name and holds a character a regular
+// expression gives a meaning: . * + ? ^ $ | ( ) [ ] { } and the backslash.
+// Under prometheus, where a rule picks the target's metrics by a pattern,
+// name: 'node_.*' or name: '^up$' is almost surely one, written under the
+// wrong key, and "use letters, digits, underscores and colons" sends its
+// author to spoil it. A name that is one, and so holds none of them, a name
+// refused for anything else — a dash, a blank, a leading digit, the "__"
+// Prometheus reserves — and a name of any other transform's rule, which has
+// no pattern to be mistaken for, add nothing.
+//
+// A rule's name is held to the classic names whatever the collector's
+// name_escaping is, which is about the names a response or a script gives:
+// name: http.server.duration is refused under every one, and under
+// prometheus it is told the same, the metric of that name being matched by
+// expression: '^http\.server\.duration$'.
+func patternForAName(x *model.Collector, name string) string {
+	if x.Transform.Type != "prometheus" || model.ValidMetricName(name) || !strings.ContainsAny(name, `.*+?^$|()[]{}\`) {
+		return ""
+	}
+	return "; a pattern to match the target's metric names by is a prometheus rule's expression, not its name, so if this is one, write it as expression, in single quotes, and leave name out, or set name to the one name the series it matches are to be exported under"
 }
 
 // countOf is how many of names are name.

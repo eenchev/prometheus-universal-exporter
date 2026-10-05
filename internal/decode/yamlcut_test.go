@@ -12,6 +12,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/eenchev/prometheus-universal-exporter/internal/model"
+	"github.com/eenchev/prometheus-universal-exporter/internal/testutil/alloctest"
 	"gopkg.in/yaml.v3"
 )
 
@@ -38,10 +39,14 @@ func numbersFrom(from, count int) (sequence, syntax string) {
 // refuses in the library's words. It is recognised by the same text with the
 // mark in place of the length, so a key of 150,000 numbers that starts the
 // same is the same failure to the log, and one that starts with another
-// number is another.
+// number is another. Under the race detector the keys are of 10,000 and of
+// 7,500 numbers and a mapping of 2,000 keys: each is still a hundred times
+// and more the 256 bytes it is cut to, and the mapping still one of more
+// than yamlLargeMapping keys, which the walk decodes.
 func TestAYAMLKeyThatIsACollectionIsRefusedWithItsStartAndItsLength(t *testing.T) {
 	const said = "yaml: invalid map key: "
-	key, syntax := numbersFrom(1, 200000)
+	numbers := alloctest.UnlessRaced(200000, 10000)
+	key, syntax := numbersFrom(1, numbers)
 	want := said + syntax[:yamlPartBytes] + fmt.Sprintf("... (%d bytes)", len(syntax))
 	same := said + syntax[:yamlPartBytes] + "... (# bytes)"
 	for name, document := range map[string]string{
@@ -59,29 +64,33 @@ func TestAYAMLKeyThatIsACollectionIsRefusedWithItsStartAndItsLength(t *testing.T
 			t.Errorf("%s: the failure is recognised by %d bytes, %.400q, want %q", name, len(got), got, same)
 		}
 	}
-	shorter, _ := numbersFrom(1, 150000)
-	other, _ := numbersFrom(2, 200000)
+	shorter, shorterSyntax := numbersFrom(1, numbers*3/4)
+	other, _ := numbersFrom(2, numbers)
 	_, errShorter := decodeYAML([]byte("1: x\n? " + shorter + "\n: x\n"))
 	_, errOther := decodeYAML([]byte("1: x\n? " + other + "\n: x\n"))
 	if errShorter == nil || errOther == nil {
 		t.Fatalf("the documents are refused with %.300v and %.300v", errShorter, errOther)
 	}
-	if got := model.SameFailureText(errShorter); got != same || !strings.HasSuffix(errShorter.Error(), "... (1088909 bytes)") {
-		t.Errorf("a key of 150,000 numbers is refused with %.400q, recognised by %.400q, want its own length and %q", errShorter, got, same)
+	// 1088909 bytes for the 150,000 numbers of a plain run.
+	if got := model.SameFailureText(errShorter); got != same || !strings.HasSuffix(errShorter.Error(), fmt.Sprintf("... (%d bytes)", len(shorterSyntax))) {
+		t.Errorf("a key of %d numbers is refused with %.400q, recognised by %.400q, want its own length and %q", numbers*3/4, errShorter, got, same)
 	}
 	if got := model.SameFailureText(errOther); got == same || len(got) > 300 {
 		t.Errorf("a key that starts with another number is recognised by %d bytes, %.400q, want another text", len(got), got)
 	}
 	// The walk's own refusal, of a key it decodes itself.
-	_, err := decodeYAML([]byte("1: x\n? {" + manyYAMLPairs(20000, "", ", ") + "}\n: x\n"))
+	// Written out, its 20,000 keys are a length of six digits, and the
+	// 2,000 of a run under the race detector one of five.
+	keys, digits := alloctest.UnlessRaced(20000, 2000), alloctest.UnlessRaced(6, 5)
+	_, err := decodeYAML([]byte("1: x\n? {" + manyYAMLPairs(keys, "", ", ") + "}\n: x\n"))
 	if err == nil {
-		t.Fatal("a key that is a mapping of 20,000 keys is decoded")
+		t.Fatalf("a key that is a mapping of %d keys is decoded", keys)
 	}
-	if text := err.Error(); len(text) > 300 || !regexp.MustCompile(`^yaml: invalid map key: map\[string\]interface \{\}\{"key0":0, "key1":1, "key10":10, .*\.\.\. \(\d{6} bytes\)$`).MatchString(text) {
-		t.Errorf("a key that is a mapping of 20,000 keys is refused with %d bytes, %.400q", len(text), text)
+	if text := err.Error(); len(text) > 300 || !regexp.MustCompile(fmt.Sprintf(`^yaml: invalid map key: map\[string\]interface \{\}\{"key0":0, "key1":1, "key10":10, .*\.\.\. \(\d{%d} bytes\)$`, digits)).MatchString(text) {
+		t.Errorf("a key that is a mapping of %d keys is refused with %d bytes, %.400q", keys, len(text), text)
 	}
 	if got := model.SameFailureText(err); len(got) > 300 || !strings.HasSuffix(got, "... (# bytes)") {
-		t.Errorf("a key that is a mapping of 20,000 keys is recognised by %d bytes, %.400q", len(got), got)
+		t.Errorf("a key that is a mapping of %d keys is recognised by %d bytes, %.400q", keys, len(got), got)
 	}
 }
 
@@ -182,17 +191,22 @@ func TestAYAMLKeyWrittenTwiceIsNamedByItsStartAndItsLength(t *testing.T) {
 // is recognised by the same with the mark for the length. A value that
 // itself holds the library's words for what follows is cut where the value
 // ends, and a part of 256 bytes or fewer reads as the library wrote it.
+// Under the race detector the value is of 100 kB, a tenth, which is still
+// fifty times the 2,000 bytes the whole error is bounded at.
 func TestAYAMLValueOrAnchorOfAnyLengthIsNamedByItsStartAndItsLength(t *testing.T) {
-	long := strings.Repeat("a", 1000000)
+	long := strings.Repeat("a", alloctest.UnlessRaced(1000000, 100000))
 	head := long[:yamlPartBytes]
+	// The lengths an error names: 1000000 and, with the line break of a
+	// block, 1000001.
+	length, block := strconv.Itoa(len(long)), strconv.Itoa(len(long)+1)
 	holds := "x` as a !!bool " + long[:500]
 	for name, tc := range map[string]struct{ document, want string }{
-		"a value tagged !!int":               {"a: !!int " + long + "\n", "yaml: cannot decode !!str `" + head + "`... (1000000 bytes) as a !!int"},
-		"a block of text tagged !!float":     {"a: !!float |\n  " + long + "\n", "yaml: cannot decode !!str `" + head + "`... (1000001 bytes) as a !!float"},
+		"a value tagged !!int":               {"a: !!int " + long + "\n", "yaml: cannot decode !!str `" + head + "`... (" + length + " bytes) as a !!int"},
+		"a block of text tagged !!float":     {"a: !!float |\n  " + long + "\n", "yaml: cannot decode !!str `" + head + "`... (" + block + " bytes) as a !!float"},
 		"a value that holds the words":       {"a: !!int \"" + holds + "\"\n", "yaml: cannot decode !!str `" + holds[:yamlPartBytes] + "`... (515 bytes) as a !!int"},
-		"an anchor that is not known":        {"a: *" + long + "\n", "yaml: unknown anchor '" + head + "'... (1000000 bytes) referenced"},
-		"an anchor that holds itself":        {"a: &" + long + " [*" + long + "]\n", "yaml: anchor '" + head + "'... (1000000 bytes) value contains itself"},
-		"an anchor the walk finds in itself": {"a: &" + long + " {" + manyYAMLPairs(129, "", ", ") + "self: *" + long + "}\n", "yaml: anchor '" + head + "'... (1000000 bytes) value contains itself"},
+		"an anchor that is not known":        {"a: *" + long + "\n", "yaml: unknown anchor '" + head + "'... (" + length + " bytes) referenced"},
+		"an anchor that holds itself":        {"a: &" + long + " [*" + long + "]\n", "yaml: anchor '" + head + "'... (" + length + " bytes) value contains itself"},
+		"an anchor the walk finds in itself": {"a: &" + long + " {" + manyYAMLPairs(129, "", ", ") + "self: *" + long + "}\n", "yaml: anchor '" + head + "'... (" + length + " bytes) value contains itself"},
 	} {
 		v, err := decodeYAML([]byte(tc.document))
 		if err == nil {
@@ -303,13 +317,16 @@ func yamlHasNoLongPart(text string) bool {
 // decoded by the library, in parts and refused without the library. An
 // error within the bound on the whole is also the very error the decoder
 // made, untouched by the bound. The few errors with a long part say how
-// long it was.
+// long it was. Under the race detector 300 documents are drawn and 20
+// mappings made, the files are cut off after every twelfth line, and each
+// document is decoded with the first and the last of the bounds: some 1,500
+// decodings, with their own least of each outcome.
 func TestAYAMLFailureWithNoLongPartReadsAndIsRecognisedAsItWas(t *testing.T) {
 	documents := append(append(yamlFixtureDocuments(t), hostileYAMLDocuments()...), yamlWrittenDocuments()...)
 	maker := yamlMaker{random: rand.New(rand.NewPCG(20, 26))} //nolint:gosec // documents for a test
 	generated, mappings := 6000, 150
 	if raceDetector {
-		generated, mappings = 600, 30
+		generated, mappings = 300, 20
 	}
 	for range generated {
 		documents = append(documents, maker.document())
@@ -336,6 +353,9 @@ func TestAYAMLFailureWithNoLongPartReadsAndIsRecognisedAsItWas(t *testing.T) {
 		for _, large := range bounds {
 			reading := yamlReading{large: large}
 			was, wasErr := decodeYAMLUncut(reading, []byte(document))
+			// But for the parser's refusal of a document for its depth, which
+			// has since been given the exporter's words for one.
+			wasErr = yamlDepthRefusalNow(wasErr)
 			got, gotErr := reading.decode([]byte(document))
 			if (gotErr == nil) != (wasErr == nil) {
 				t.Fatalf("%.300q, large past %d keys, is refused with %.500v; it was with %.500v", document, large, gotErr, wasErr)
@@ -374,8 +394,12 @@ func TestAYAMLFailureWithNoLongPartReadsAndIsRecognisedAsItWas(t *testing.T) {
 		}
 	}
 	t.Logf("%d documents: %v", len(documents), counted)
-	for outcome, least := range map[string]int{"decoded": 20000, "refused with a list of problems": 2000, "refused without the library": 500, "refused otherwise": 8000} {
-		if counted[outcome] < least && !raceDetector {
+	leasts := map[string]int{"decoded": 20000, "refused with a list of problems": 2000, "refused without the library": 500, "refused otherwise": 8000}
+	if raceDetector {
+		leasts = map[string]int{"decoded": 600, "refused with a list of problems": 80, "refused without the library": 40, "refused otherwise": 250}
+	}
+	for outcome, least := range leasts {
+		if counted[outcome] < least {
 			t.Errorf("%d documents were %s, fewer than %d: the documents do not cover it", counted[outcome], outcome, least)
 		}
 	}

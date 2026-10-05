@@ -12,6 +12,7 @@ import (
 	"testing"
 
 	"github.com/eenchev/prometheus-universal-exporter/internal/model"
+	"github.com/eenchev/prometheus-universal-exporter/internal/testutil/alloctest"
 )
 
 // The parser of Prometheus and OpenMetrics text was made cheaper
@@ -602,10 +603,13 @@ func (g *promGenerator) corrupt(body []byte) []byte {
 // the one it was return the same series or the same error. The expositions
 // have escapes, quoted UTF-8 names, timestamps, exemplars, \r\n, a last line
 // without an end, histograms and summaries complete and incomplete, series
-// written twice, families written apart, comments and # EOF.
+// written twice, families written apart, comments and # EOF. Under the race
+// detector 1,200 expositions, 4,800 parses: a tenth, drawn as the first
+// tenth is, of which still a quarter at least are accepted and a quarter
+// refused.
 func TestPromParserAgreesWithTheOneItWasOnRandomExpositions(t *testing.T) {
 	g := &promGenerator{random: rand.New(rand.NewPCG(2026, 1003))}
-	const expositions = 12000
+	expositions := alloctest.UnlessRaced(12000, 1200)
 	accepted, refused := 0, 0
 	compare := func(body []byte) {
 		readings := []promReading{

@@ -12,6 +12,7 @@ import (
 
 	"github.com/eenchev/prometheus-universal-exporter/internal/fetch"
 	"github.com/eenchev/prometheus-universal-exporter/internal/model"
+	"github.com/eenchev/prometheus-universal-exporter/internal/testutil/alloctest"
 )
 
 // A response whose decoder is chosen from its content was read twice when it
@@ -169,6 +170,13 @@ func compareDetected(t *testing.T, body []byte, contentTypes, transforms []strin
 // detection made no JSON; keys written twice; nesting at the limit and past
 // it; and bytes that are not UTF-8. Each is decoded by the decoder it was,
 // to the value it was, or refused with the error it was.
+//
+// Under the race detector a body is decoded under each Content-Type for one
+// of the four transforms, the next for the next Content-Type, so that it
+// still meets every Content-Type and every transform; and a body nested to
+// the limit or one short of it is decoded under no Content-Type alone,
+// where the detection has to read it: the two values decoded of one take a
+// third of a second there to compare.
 func TestDetectedBodiesAreDecodedAsBefore(t *testing.T) {
 	digits := func(n int) string { return strings.Repeat("9", n) }
 	// The largest float64, written out, and the whole number after the
@@ -209,18 +217,31 @@ func TestDetectedBodiesAreDecodedAsBefore(t *testing.T) {
 		"{\"v\":\"\xff\xfe\"}", "{\"\xc3\x28\":1}", "[\"\xe2\x82\"]", `["\ud83d\ude00","\ud83d","\ude00\ud83d"]`, "[\"a\x00b\"]", "{\"v\":\"caf\xe9\"}",
 	}
 	kinds := map[string]bool{}
-	for _, body := range bodies {
+	for i, body := range bodies {
+		if raceDetector {
+			for j, contentType := range sniffContentTypes {
+				for kind := range compareDetected(t, []byte(body), []string{contentType}, []string{sniffTransforms[(i+j)%len(sniffTransforms)]}) {
+					kinds[kind] = true
+				}
+			}
+			continue
+		}
 		for kind := range compareDetected(t, []byte(body), sniffContentTypes, sniffTransforms) {
 			kinds[kind] = true
 		}
 	}
 	// Arrays and objects nested as deep as the decoder reads them, and one
 	// deeper, which is no JSON to the detection and text to the decoder.
-	for _, depth := range []int{2, 100, jsonMaxDepth - 1, jsonMaxDepth, jsonMaxDepth + 1} {
+	for _, depth := range []int{2, 100, MaxDepth - 1, MaxDepth, MaxDepth + 1} {
+		contentTypes := []string{"", "application/json"}
+		if raceDetector && depth > 100 && depth <= MaxDepth {
+			// The two that decode, nested thousands deep.
+			contentTypes = contentTypes[:1]
+		}
 		for _, body := range []string{strings.Repeat("[", depth) + strings.Repeat("]", depth), strings.Repeat(`{"a":`, depth) + "1" + strings.Repeat("}", depth), strings.Repeat("[", depth)} {
-			compareDetected(t, []byte(body), []string{"", "application/json"}, []string{"jq"})
+			compareDetected(t, []byte(body), contentTypes, []string{"jq"})
 			want := "text"
-			if depth <= jsonMaxDepth && !strings.HasSuffix(body, "[") {
+			if depth <= MaxDepth && !strings.HasSuffix(body, "[") {
 				want = "json"
 			}
 			if got := detectFormat(sniffResponse([]byte(body), "")); got != want {
@@ -286,11 +307,13 @@ func TestDetectionTakesForJSONWhatItTook(t *testing.T) {
 // put in an array so that each is one the detection reads; each as it is,
 // between whitespace of every kind, and corrupted three times: 10,000
 // bodies, each under no Content-Type and under text/plain, taken for what
-// they were taken for and decoded to what they were decoded to.
+// they were taken for and decoded to what they were decoded to. Under the
+// race detector 200 documents, 1,000 bodies: the first tenth, of which as
+// large a share is to be decoded as JSON and as something else.
 func TestDetectedRandomDocumentsAreDecodedAsBefore(t *testing.T) {
-	documents := 2000
+	documents := alloctest.UnlessRaced(2000, 200)
 	if testing.Short() {
-		documents = 400
+		documents = min(documents, 400)
 	}
 	g := &jsonGenerator{random: rand.New(rand.NewPCG(11, 2026))}
 	margins := []string{"", " ", "\n", "\t\r\n ", "\f", "\v", "\u00a0", "\u0085", "\u2003"}
@@ -325,9 +348,11 @@ func TestDetectedRandomDocumentsAreDecodedAsBefore(t *testing.T) {
 // the allocations it costs a collector whose decoder is json, and a few for
 // what the detection keeps. Read by encoding/json first, to see whether it is
 // JSON, it cost 46 allocations for each of these items where it now costs
-// 10.
+// 10. Under the race detector the body is of a hundred items and not a
+// thousand, which a second reading would still cost thousands of
+// allocations and not the few allowed.
 func TestDetectedJSONIsReadOnce(t *testing.T) {
-	const items = 1000
+	items := alloctest.UnlessRaced(1000, 100)
 	var body strings.Builder
 	body.WriteString(`{"items":[`)
 	for i := range items {

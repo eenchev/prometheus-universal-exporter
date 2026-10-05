@@ -514,9 +514,13 @@ func (m *yamlMaker) document() string {
 }
 
 // yamlFixtureDocuments are the YAML files of the repository, whole and cut
-// off after each of their first sixty lines and in the middle of it.
+// off after each of their first sixty lines and in the middle of it. Under
+// the race detector a file is cut off after every twelfth of those lines,
+// which is still some ten documents of each file that end where no document
+// does, and some three hundred in all.
 func yamlFixtureDocuments(t *testing.T) []string {
 	t.Helper()
+	every := alloctest.UnlessRaced(1, 12)
 	var documents []string
 	for _, pattern := range []string{"../../testdata/yaml/*", "../../testdata/chart/*.yaml", "../../testdata/chart/*/*.yaml", "../../examples/*.yaml", "../../examples/*/*.yaml",
 		"../../configs/*.yaml", "../../charts/*/*.yaml", "../../charts/*/templates/*.yaml"} {
@@ -531,7 +535,7 @@ func yamlFixtureDocuments(t *testing.T) []string {
 			}
 			documents = append(documents, string(raw))
 			lines := strings.SplitAfter(string(raw), "\n")
-			for cut := 1; cut < len(lines) && cut <= 60; cut++ {
+			for cut := 1; cut < len(lines) && cut <= 60; cut += every {
 				whole := strings.Join(lines[:cut], "")
 				documents = append(documents, whole, whole[:len(whole)-len(lines[cut-1])/2])
 			}
@@ -699,13 +703,18 @@ func yamlOtherError(root *yaml.Node, library yamlOutcome) string {
 // the library's error
 // where that is of keys written twice alone and the document has no alias
 // and no merge, and with an error of its keys written twice otherwise.
+//
+// Under the race detector 600 documents are drawn and the files are cut off
+// after every twelfth line, a thousand documents in all, each still decoded
+// with all five bounds: every outcome counted below is still met, and held
+// to the least there is to be of it among so many.
 func TestAYAMLDocumentIsDecodedIntoWhatTheLibraryMakesOfItWhateverIsALargeMapping(t *testing.T) {
 	documents := append(append(yamlFixtureDocuments(t), hostileYAMLDocuments()...), yamlWrittenDocuments()...)
 	written := len(documents)
 	maker := yamlMaker{random: rand.New(rand.NewPCG(16, 17))} //nolint:gosec // documents for a test
 	generated := 30000
 	if raceDetector {
-		generated = 3000
+		generated = 600
 	}
 	for range generated {
 		documents = append(documents, maker.document())
@@ -813,13 +822,24 @@ func TestAYAMLDocumentIsDecodedIntoWhatTheLibraryMakesOfItWhateverIsALargeMappin
 		}
 	}
 	t.Logf("%d documents, of at most %d parts: %v", len(documents), mostHands, counted)
-	for outcome, least := range map[string]int{
+	leasts := map[string]int{
 		"not parsed": 100, "by the library": 30000, "beside a mapping of 129 keys": 5000, "in parts": 50000, "in parts and refused": 5000,
 		"in parts, where the library fails outright": 10, "in parts, refused with another error than the library's": 4,
 		"refused as the library does": 3000, "refused otherwise: the library met another error": 100, "refused otherwise: an alias or a merge": 100,
 		"drawn: error": 3000, "drawn: map[string]interface": 5000, "drawn: map[interface": 2000, "drawn: []interface": 2000,
-	} {
-		if counted[outcome] < least && !raceDetector {
+	}
+	if raceDetector {
+		// The same outcomes, of the fewer documents; those the written
+		// documents make are as many as they were.
+		leasts = map[string]int{
+			"not parsed": 100, "by the library": 1200, "beside a mapping of 129 keys": 80, "in parts": 1400, "in parts and refused": 250,
+			"in parts, where the library fails outright": 10, "in parts, refused with another error than the library's": 4,
+			"refused as the library does": 100, "refused otherwise: the library met another error": 6, "refused otherwise: an alias or a merge": 4,
+			"drawn: error": 80, "drawn: map[string]interface": 100, "drawn: map[interface": 80, "drawn: []interface": 80,
+		}
+	}
+	for outcome, least := range leasts {
+		if counted[outcome] < least {
 			t.Errorf("%d documents were %s, fewer than %d: the documents do not cover it", counted[outcome], outcome, least)
 		}
 	}
@@ -925,9 +945,12 @@ func TestAYAMLDocumentIsTheLibrarysToDecodeUntilAMappingIsLargeOrItsProblemsMany
 // Once a document is parsed, refusing it for a key written many times
 // allocates the same few kilobytes whether the key is written 1200 times or
 // 100,000: the error, a table of the mapping's different keys, and no text
-// for each two of them. The library is handed nothing.
+// for each two of them. The library is handed nothing. Under the race
+// detector, which nothing can be said of allocations under, the key is
+// written 1200 times and 10,000, still past the keys a kept table has room
+// for (yamlKeysKept).
 func TestRefusingAYAMLKeyWrittenManyTimesAllocatesNoMoreForMoreOfThem(t *testing.T) {
-	for _, count := range []int{1200, 100000} {
+	for _, count := range alloctest.UnlessRaced([]int{1200, 100000}, []int{1200, 10000}) {
 		root := parsedYAML(t, strings.Repeat("a: 1\n", count))
 		var got yamlOutcome
 		allocated := alloctest.BytesAtMost(1, 16<<10, func() {
@@ -967,23 +990,28 @@ func keysWrittenTwice(random *rand.Rand, names []string, count int) string {
 // their own; a key of 30 kB written three and four times; and a list of
 // 3000 small mappings that each write a key twice. The library's error is
 // the oracle, for documents it can still decode, a key of more than 64
-// bytes cut in it as in the refusal (yamlcut.go).
+// bytes cut in it as in the refusal (yamlcut.go). Under the race detector,
+// where the library takes half a second to list the 79,800 problems of a
+// key written 400 times, the one key is written 250 times at most, and 40
+// mappings are made, of 129 to 200 pairs: each is still past
+// yamlLargeMapping, and the failures are still recognised by one problem,
+// by each number of them up to ten, and by more.
 func TestKeysWrittenTwiceInALargeYAMLMappingAreRefusedAsTheLibraryRefusedThem(t *testing.T) {
 	names := []string{"a", "b", "c", `"x already defined at line 7"`, `"line 5: x"`, `"a\n  line 9: boo"`, `"#"`, "3", "'it''s'", "[s]", "{m: 1}", "~", "true", "2024-06-01", "!!str 5", `"quoted \"q\""`, "d", "e"}
 	var documents []string
 	for count := 46; count <= 60; count++ {
 		documents = append(documents, strings.Repeat("a: 1\n", count))
 	}
-	documents = append(documents, strings.Repeat("a: 1\n", 100), strings.Repeat("a: 1\n", 200), strings.Repeat("a: 1\n", 400))
-	random := rand.New(rand.NewPCG(46, 60)) //nolint:gosec // documents for a test
-	mappings := 200
+	mappings, spread, most := 200, 272, 400
 	if raceDetector {
-		mappings = 40
+		mappings, spread, most = 40, 72, 250
 	}
+	documents = append(documents, strings.Repeat("a: 1\n", 100), strings.Repeat("a: 1\n", 200), strings.Repeat("a: 1\n", most))
+	random := rand.New(rand.NewPCG(46, 60)) //nolint:gosec // documents for a test
 	for i := range mappings {
 		kinds := 1 + random.IntN(15)
 		from := random.IntN(len(names) - kinds + 1)
-		mapping := keysWrittenTwice(random, names[from:from+kinds], 129+random.IntN(272))
+		mapping := keysWrittenTwice(random, names[from:from+kinds], 129+random.IntN(spread))
 		if i%3 == 0 {
 			// Different keys among them.
 			lines := strings.SplitAfter(mapping, "\n")
@@ -1021,7 +1049,11 @@ func TestKeysWrittenTwiceInALargeYAMLMappingAreRefusedAsTheLibraryRefusedThem(t 
 		recognised[strings.Count(model.SameFailureText(got.err), "\n")]++
 	}
 	// One problem, a few, ten, and ten with the mark for more.
-	if !raceDetector && (recognised[1] < 15 || recognised[10] < 10 || recognised[11] < 50 || len(recognised) < 11) {
+	one, ten, more := 15, 10, 50
+	if raceDetector {
+		one, ten, more = 15, 1, 10
+	}
+	if recognised[1] < one || recognised[10] < ten || recognised[11] < more || len(recognised) < 11 {
 		t.Errorf("the failures are recognised by so many lines: %v; they do not cover one, ten and more", recognised)
 	}
 }
@@ -1076,12 +1108,11 @@ func TestTheProblemsOfAYAMLMappingTheLibraryDoesNotReadAreNotCounted(t *testing.
 // through the document for keys written twice compares no two keys of a
 // mapping of more than twenty-four. The document decodes into what the library
 // makes of it, which for 20,000 keys is checked by its size and its values,
-// since the library alone needs seconds for it.
+// since the library alone needs seconds for it. Under the race detector the
+// mapping is of 2,000 keys, sixteen parts of yamlLargeMapping, and the
+// mappings of 300 keys are forty and not two hundred.
 func TestALargeYAMLMappingIsHandedToTheLibraryAPartAtATime(t *testing.T) {
-	keys := 20000
-	if raceDetector {
-		keys = 4000
-	}
+	keys, mappings := alloctest.UnlessRaced(20000, 2000), alloctest.UnlessRaced(200, 40)
 	inner := "{" + manyYAMLPairs(300, "", ", ") + "}"
 	for name, tc := range map[string]struct {
 		body  string
@@ -1093,7 +1124,7 @@ func TestALargeYAMLMappingIsHandedToTheLibraryAPartAtATime(t *testing.T) {
 		"numbers":            {manyYAMLKeys(keys), keys/yamlLargeMapping + 1, keys - 1},
 		"small mappings":     {manyYAMLPairs(keys, "{a: 1, b: [2, 3]}", "\n"), keys/yamlLargeMapping + 1, map[string]any{"a": 1, "b": []any{2, 3}}},
 		"aliases":            {"one: &one {a: 1, b: 2}\n" + manyYAMLPairs(keys, "*one", "\n"), (keys+1)/yamlLargeMapping + 1, map[string]any{"a": 1, "b": 2}},
-		"mappings of 300":    {manyYAMLPairs(200, inner, "\n"), 200 * (1 + 300/yamlLargeMapping + 1), nil},
+		"mappings of 300":    {manyYAMLPairs(mappings, inner, "\n"), mappings * (1 + 300/yamlLargeMapping + 1), nil},
 		"a list of mappings": {"- " + inner + "\n- [" + inner + ", 5]\n- {a: " + inner + "}\n", 3*(300/yamlLargeMapping+1) + 2, nil},
 	} {
 		root := parsedYAML(t, tc.body)
@@ -1225,9 +1256,11 @@ func TestAliasesBesideALargeYAMLMappingAreRefusedAsTheLibraryRefusesThem(t *test
 		"itself in a mapping after one":     "a: &a [" + large + "}, {b: {c: *a}}]\n",
 		"itself, and a large mapping apart": "big: " + large + "}\na: &a [1, [*a]]\n",
 	}
+	// Under the race detector, where each takes a third of a second, the
+	// first and the last: one the library decodes and one it refuses.
 	step := 4
 	if raceDetector {
-		step = 20
+		step = 40
 	}
 	for count := 120; count <= 160; count += step {
 		documents[fmt.Sprintf("%d aliases beside 129 keys", count)] = manyYAMLKeys(129) + thousand + aliases(count)

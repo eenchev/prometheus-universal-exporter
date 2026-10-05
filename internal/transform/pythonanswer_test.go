@@ -12,6 +12,7 @@ import (
 	"testing"
 	"unicode/utf16"
 
+	"github.com/eenchev/prometheus-universal-exporter/internal/decode"
 	"github.com/eenchev/prometheus-universal-exporter/internal/model"
 	"github.com/eenchev/prometheus-universal-exporter/internal/testutil/alloctest"
 )
@@ -539,12 +540,49 @@ func TestPythonAnswerIsReadAsItWas(t *testing.T) {
 		`{"ok": true, "data": {"a": 1, "a": 2}}`, `{"ok": true, "data": 1e400}`, `{"ok": true, "data": [` + strings.Repeat("9", 5000) + `]}`, `[]`, `"text"`, `5`, `null`, `{}`, ``, ` `, `{`, `{"ok"`, `{"ok":`, `not json`, "\x00",
 	}
 	// An answer nested as deep as encoding/json reads, and deeper, as data
-	// and as a metric's key.
+	// and as a metric's key. Data is read one level deeper than it was, and
+	// that is the one difference: encoding/json read an answer 10,000 deep
+	// in all, so the data inside it 9,999 deep, and what a pre-script leaves
+	// is read as deep as a decoder makes a value (decode.MaxDepth), which is
+	// how deep a script may be given one. Past that the line is read by
+	// encoding/json as it was, and refused as it was.
+	//
+	// Under the race detector, where reading a line nested this deep takes
+	// tenths of a second, a line is left out at the depths between 5 and
+	// the deepest at which it is read, which is less deep by the levels the
+	// line has around what is nested: each is read nested 5 deep, as deep as
+	// it is read at all, and at every depth past that, where it is refused.
+	left := func(depth, around int) bool { return raceDetector && depth > 5 && depth+around < pythonAnswerDepth }
 	outcomes := map[answerOutcome]int{}
-	for _, depth := range []int{5, pythonAnswerDepth - 3, pythonAnswerDepth - 2, pythonAnswerDepth - 1, pythonAnswerDepth, pythonAnswerDepth + 1} {
+	for _, depth := range []int{5, pythonAnswerDepth - 3, pythonAnswerDepth - 2, pythonAnswerDepth - 1, decode.MaxDepth, decode.MaxDepth + 1, decode.MaxDepth + 2} {
 		nested := strings.Repeat("[", depth) + strings.Repeat("]", depth)
-		for _, line := range []string{`{"ok": true, "log": "", "data": ` + nested + `}`, metric(`{"name": "a", "value": 1, "junk": ` + nested + `}`), metric(nested)} {
+		for at, line := range []string{metric(`{"name": "a", "value": 1, "junk": ` + nested + `}`), metric(nested)} {
+			// Three levels around the junk of a metric, two around a metric.
+			if left(depth, 3-at) {
+				continue
+			}
 			outcomes[compareAnswer(t, []byte(line), 0)]++
+		}
+		line := []byte(`{"ok": true, "log": "", "data": ` + nested + `}`)
+		if depth < pythonAnswerDepth || depth > decode.MaxDepth {
+			if !left(depth, 1) {
+				outcomes[compareAnswer(t, line, 0)]++
+			}
+			continue
+		}
+		if _, err := oraclePythonAnswer("pre-script", line); err == nil || !strings.Contains(err.Error(), "exceeded max depth") {
+			t.Fatalf("data nested %d deep was read by encoding/json (%v): the reader is compared with nothing", depth, err)
+		}
+		out, err := pythonResult(&model.Collector{Name: "answer"}, "pre-script", oracleTimeout, line, nil)
+		if err != nil || !out.read {
+			t.Fatalf("data nested %d deep: %.200v, want it read", depth, err)
+		}
+		innermost, levels := pythonData(out), 0
+		for list, ok := innermost.([]any); ok && len(list) == 1; list, ok = innermost.([]any) {
+			innermost, levels = list[0], levels+1
+		}
+		if list, ok := innermost.([]any); !ok || len(list) != 0 || levels != depth-1 {
+			t.Fatalf("data nested %d deep is read as lists nested %d deep around %.80v", depth, levels+1, innermost)
 		}
 	}
 	for _, line := range lines {
@@ -562,10 +600,11 @@ func TestPythonAnswerIsReadAsItWas(t *testing.T) {
 // 5,000 random answers, each as it is and corrupted twice, 15,000 lines in
 // all, under limits of series that some of them pass: each is read as it
 // was. Most of the answers are read without encoding/json, and most of the
-// corrupted ones are no answer.
+// corrupted ones are no answer. Under the race detector the answers are 600,
+// of which the lines of each kind are to be the same parts.
 func TestRandomPythonAnswersAreReadAsTheyWere(t *testing.T) {
 	usePythonPool(t)
-	answers := 5000
+	answers := alloctest.UnlessRaced(5000, 600)
 	if testing.Short() {
 		answers = 2000
 	}

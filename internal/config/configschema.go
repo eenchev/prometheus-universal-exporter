@@ -382,14 +382,15 @@ func configSchemaRules() map[string]map[string]any {
 		"collectors[].error_handling.on_fetch_error":     errorPolicy,
 		"collectors[].error_handling.on_decode_error":    errorPolicy,
 		"collectors[].error_handling.on_transform_error": errorPolicy,
+		"collectors[].metrics":                           {"description": "The metric rules. No two of them may be the same rule, alike in name, expression, items, labels, value_map and time_format: each would make every series the other makes, and every scrape would fail on a duplicate series. The exporter checks that when the configuration loads. A python collector's rules make no series and are not held to it."},
 		"collectors[].metrics[].name":                    {"pattern": optionalPattern(`^[a-zA-Z_:][a-zA-Z0-9_:]*$`), "description": "The metric name, before metrics_prefix."},
 		"collectors[].metrics[].items":                   {"description": "jq, yq and css only: selects the things the metric is about, such as table rows. The expression and labels are then evaluated once per item: for jq and yq with the item as . and the whole document as $root, for css as selectors within the item."},
 		"collectors[].metrics[].expression":              {"description": "Where the value comes from, in the transform's language: jq, a regex, a CSS selector, an XPath expression, a CSV column or a source metric pattern."},
 		"collectors[].metrics[].error_mode": {
 			"enum":        optionalEnum([]string{model.ErrorModeFail, model.ErrorModeLog, model.ErrorModeIgnore}),
-			"description": "What happens when this metric cannot be extracted. Defaults to log.",
+			"description": "What happens when this metric cannot be extracted. Defaults to log. Not for the python transform, whose script fails the scrape itself, with fail(...).",
 		},
-		"collectors[].metrics[].required":      {"description": "When false, a missing value is skipped without an error. Defaults to true."},
+		"collectors[].metrics[].required":      {"description": "When false, a missing value is skipped without an error. Defaults to true. Not for the python transform, whose rules read no value."},
 		"collectors[].metrics[].labels[].name": {"pattern": `^[a-zA-Z_][a-zA-Z0-9_]*$`},
 		// A name, and one of value and expression.
 		"collectors[].metrics[].labels[]":            labelSchemaRule(),
@@ -511,25 +512,48 @@ func metricRuleSchemaRule() map[string]any {
 }
 
 // collectorSchemaRule requires what a collector must have, and of its rules
-// a name, as the exporter does (validateMetricRule): every transform but
-// prometheus, whose rule may pass series through under their own names, and
-// python, whose script names them. A name written "" is no name, to both,
-// so it is the rule and not the key's pattern that refuses it, and only
-// where a name is needed.
+// a name, as the exporter does (validateMetricRule, checkPythonRule): every
+// transform but prometheus, whose rule may pass series through under their
+// own names. A name written "" is no name, to both, so it is the rule and
+// not the key's pattern that refuses it, and only where a name is needed.
 //
-// A label of a python rule sets no value, as the exporter refuses one
-// (checkPythonRuleLabels): the script sets its labels itself. A value
-// written "" is the key left out there as everywhere.
+// A rule of a python collector names a series the script makes, and says
+// nothing the script says itself (checkPythonRule): no type, description,
+// required or error_mode. Each of its labels names a label of that series to
+// cut, so it sets truncate: true and no value (checkPythonRuleLabels). A
+// text key written "" is the key left out there as everywhere; required is
+// a boolean, written when it is there.
+//
+// A prometheus rule's expression is not blanks alone, as the exporter
+// refuses one (transform.checkRulePattern): it is a regular expression over
+// metric names, like an entry of transform.include. And the rule has a name
+// or an expression, written with something other than "": with neither it
+// says which metrics it is about by nothing, and the exporter refuses it
+// (checkPrometheusRuleSelects).
 func collectorSchemaRule() map[string]any {
-	namesItsOwn := []string{"prometheus", "python"}
-	python := map[string]any{"properties": map[string]any{"transform": map[string]any{"properties": map[string]any{"type": map[string]any{"const": "python"}}, "required": []string{"type"}}}, "required": []string{"transform"}}
-	noValue := map[string]any{"properties": map[string]any{"metrics": map[string]any{"items": map[string]any{"properties": map[string]any{"labels": map[string]any{"items": map[string]any{"not": writtenKey("value")}}}}}}}
+	transformIs := func(name string) map[string]any {
+		return map[string]any{"properties": map[string]any{"transform": map[string]any{"properties": map[string]any{"type": map[string]any{"const": name}}, "required": []string{"type"}}}, "required": []string{"transform"}}
+	}
+	rules := func(rule map[string]any) map[string]any {
+		return map[string]any{"properties": map[string]any{"metrics": map[string]any{"items": rule}}}
+	}
+	pythonRule := map[string]any{
+		"not":        map[string]any{"anyOf": []any{writtenKey("type"), writtenKey("description"), writtenKey("required"), writtenKey("error_mode")}},
+		"properties": map[string]any{"labels": map[string]any{"items": map[string]any{"not": writtenKey("value"), "required": []string{"truncate"}, "properties": map[string]any{"truncate": map[string]any{"const": true}}}}},
+	}
+	prometheusRule := map[string]any{
+		"properties": map[string]any{"expression": map[string]any{"not": onlyBlanks()}},
+		"anyOf":      []any{writtenKey("name"), writtenKey("expression")},
+	}
 	return map[string]any{
 		"required":    []string{"name", "request", "transform"},
 		"description": "How to reach a kind of target and turn its response into metrics.",
-		"if":          map[string]any{"properties": map[string]any{"transform": map[string]any{"properties": map[string]any{"type": map[string]any{"not": map[string]any{"enum": namesItsOwn}}}}}},
-		"then":        map[string]any{"properties": map[string]any{"metrics": map[string]any{"items": writtenKey("name")}}},
-		"allOf":       []any{map[string]any{"if": python, "then": noValue}},
+		"if":          map[string]any{"properties": map[string]any{"transform": map[string]any{"properties": map[string]any{"type": map[string]any{"not": map[string]any{"const": "prometheus"}}}}}},
+		"then":        rules(writtenKey("name")),
+		"allOf": []any{
+			map[string]any{"if": transformIs("python"), "then": rules(pythonRule)},
+			map[string]any{"if": transformIs("prometheus"), "then": rules(prometheusRule)},
+		},
 	}
 }
 

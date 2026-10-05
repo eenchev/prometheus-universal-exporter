@@ -25,7 +25,7 @@ func TestDecodeFailuresThatDifferInTheirPlaceAreRecognisedAsOne(t *testing.T) {
 		}
 		return err
 	}
-	deep := strings.Repeat("[", jsonMaxDepth+1)
+	deep := strings.Repeat("[", MaxDepth+1)
 	for name, tc := range map[string]struct {
 		kind         string
 		a, b, other  string

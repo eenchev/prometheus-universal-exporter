@@ -8,6 +8,7 @@ import (
 
 	"github.com/eenchev/prometheus-universal-exporter/internal/model"
 	"github.com/eenchev/prometheus-universal-exporter/internal/testutil"
+	"github.com/eenchev/prometheus-universal-exporter/internal/testutil/alloctest"
 )
 
 func fingerprintTestConfig() *model.Config {
@@ -82,6 +83,11 @@ func TestFingerprintMemoComputesCollectorsOutsideTheConfiguration(t *testing.T) 
 	}
 }
 
+// Sixteen probes at once, half of them holding one configuration and half
+// another at every turn, as around a reload, are each given the fingerprint
+// of the collector they ask for while they trade the memo back and forth.
+// Under the race detector, which this test is for, each asks 25 times and
+// not 200: the memo is traded from the first turn on.
 func TestFingerprintMemoIsSafeForConcurrentProbes(t *testing.T) {
 	memo := &fingerprintMemo{}
 	configs := []*model.Config{fingerprintTestConfig(), fingerprintTestConfig()}
@@ -91,7 +97,7 @@ func TestFingerprintMemoIsSafeForConcurrentProbes(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			for i := range 200 {
+			for i := range alloctest.UnlessRaced(200, 25) {
 				cfg := configs[(worker+i)%2]
 				c := &cfg.Collectors[i%2]
 				if got := memo.fingerprint(cfg, c); got != collectorFingerprint(c) {

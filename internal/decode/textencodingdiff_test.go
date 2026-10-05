@@ -293,10 +293,15 @@ var changedFixtures = map[string]string{
 // three cases, read as HTML with nothing before the document naming an
 // encoding, and files that start with an XML declaration naming one, at
 // their first byte, read as HTML; each of the fixtures does differ.
+//
+// Under the race detector a file is read in every seventh of its 240 ways,
+// counted on from one file to the next, so that a file is read in 34 of
+// them, under every Content-Type and by every decoder, and the files
+// together in all of them.
 func TestTheEncodingOfEveryTestdataFileIsChosenAsItWas(t *testing.T) {
 	const root = "../../testdata"
 	differs := map[string]int{}
-	compared := 0
+	compared, ways, every := 0, 0, alloctest.UnlessRaced(1, 7)
 	err := filepath.WalkDir(root, func(path string, entry fs.DirEntry, err error) error {
 		if err != nil || entry.IsDir() {
 			return err
@@ -313,6 +318,9 @@ func TestTheEncodingOfEveryTestdataFileIsChosenAsItWas(t *testing.T) {
 		for _, contentType := range wellFormedContentTypes {
 			for _, decoder := range []string{"auto", "html", "xml", "json", "csv", "text"} {
 				for _, charset := range []string{"", "windows-1251"} {
+					if ways++; ways%every != 0 {
+						continue
+					}
 					e := encodingCase{body, contentType, decoder, charset}
 					old, got := e.read(oracleConvert), e.read(convertAsDecodeDoes)
 					compared++
@@ -410,12 +418,22 @@ var metaPlaces = []string{
 // with nothing before it naming the encoding; everywhere else such a page
 // is read as it was, the failure over an unknown name in the Content-Type
 // included.
+//
+// Under the race detector one page in seven is read, chosen so that every
+// form of a meta is still read with every name and after every place, and
+// every name after every place; and a meta is put at every seventh byte of
+// the first 1100, and at every byte within fifty of where it ends at the
+// 1024th or begins after it.
 func TestAMetaInEveryFormIsReadAsItWas(t *testing.T) {
 	const rest = "</head><body><table id=\"depots\"><tr><td class=\"city\">\xd1\xee\xf4\xe8\xff</td></tr></table></body></html>"
 	compared, passedOver := 0, 0
-	for _, place := range metaPlaces {
-		for _, form := range metaForms {
-			for _, name := range slices.Concat(metaNames, unknownMetaNames) {
+	every := alloctest.UnlessRaced(1, 7)
+	for p, place := range metaPlaces {
+		for f, form := range metaForms {
+			for n, name := range slices.Concat(metaNames, unknownMetaNames) {
+				if (p+f+n)%every != 0 {
+					continue
+				}
 				unknown := slices.Contains(unknownMetaNames, name)
 				head := place + strings.Replace(form, "%s", name, 1)
 				r := &fetch.HTTPResponse{Body: []byte(head + rest)}
@@ -457,6 +475,9 @@ func TestAMetaInEveryFormIsReadAsItWas(t *testing.T) {
 			for before := len("<!---->"); before <= 1100; before++ {
 				if before > 1024-len(meta) && before < 1024 {
 					// Cut by the end of the head: TestTheChoicesThatChanged.
+					continue
+				}
+				if before%every != 0 && (before < 1024-len(meta)-50 || before > 1024+50) {
 					continue
 				}
 				head := "<!--" + strings.Repeat("-", before-len("<!---->")) + "-->" + meta

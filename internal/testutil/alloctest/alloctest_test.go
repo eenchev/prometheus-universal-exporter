@@ -230,3 +230,16 @@ func TestRaceDetectorSaysHowTheTestsWereBuilt(t *testing.T) {
 		t.Errorf("RaceDetector is %v in a build with -race=%v", RaceDetector, race)
 	}
 }
+
+// A size is the plain one in a plain run and the other under the race
+// detector, whatever its type.
+func TestUnlessRacedIsThePlainSizeUnlessTheRaceDetectorIsOn(t *testing.T) {
+	count, text := UnlessRaced(30000, 3000), UnlessRaced("plain", "raced")
+	wantCount, wantText := 30000, "plain"
+	if RaceDetector {
+		wantCount, wantText = 3000, "raced"
+	}
+	if count != wantCount || text != wantText {
+		t.Errorf("UnlessRaced gave %d and %q with the race detector %v, want %d and %q", count, text, RaceDetector, wantCount, wantText)
+	}
+}

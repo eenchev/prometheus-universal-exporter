@@ -34,21 +34,26 @@ import (
 //     hands everything else to the library.
 //
 // Either way a document costs time and memory linear in its size, and
-// looking through it a stack no deeper than it is nested, which the
-// library's parser bounds at 10,000: learn, yamlRefusal.read and
+// looking through it a stack no deeper than it is written nested, which the
+// library's parser, a call for each level itself, bounds at 10,000 levels of
+// indentation and 10,000 of brackets: learn, yamlRefusal.read and
 // yamlWalk.learn call themselves for what a node holds and follow no alias,
 // and what the problems come to is added up without a call for each node
 // (listed). yamlWalk calls itself as the library's own decoding does, for
 // each node in another and for what an alias stands for, each such node
 // counted against what the library allows the aliases of a document.
 //
-// The library parses a document within that bound on its nesting, but it
-// decodes through the targets of its aliases, so an alias chain is a stack as
-// deep as the chain is long, with no bound on it (deepest, yamlDepthLimit). A
-// document whose depth through its aliases is over the bound is therefore
-// refused before anything decodes it, which refuses a chain of more than
-// 10,000 links that the library would otherwise decode; the depth is added up
-// like the problems, without a call for each node.
+// A document decodes into a value nested MaxDepth deep at most, as every
+// response does: one whose sequences and mappings nest deeper, an alias
+// counted as what it stands for, is refused before anything decodes it
+// (yamlTooDeep). The parser does not keep a document within that, and
+// neither does the library's decoding, which follows an alias into what it
+// stands for, so that a chain of anchors that each hold an alias of the one
+// before is a stack as deep as the chain is long, with no bound on it. The
+// one count bounds both the value and the stack. It is found in the one
+// look through the document where there is no alias (learn), and added up
+// through the aliases like the problems, without a call for each node,
+// where there is one (deepest).
 
 // yamlLargeMapping is how many keys a mapping may have for the library to
 // decode it whole, and how many keys of a larger one it is handed at a
@@ -138,7 +143,11 @@ type yamlLearnt struct {
 	seen map[yamlKey]uint32
 	// lists is how much text the problems under an anchored node come to.
 	lists map[*yaml.Node]uint64
-	// depths is how deep the library recurses through an anchored node
+	// inside is how many sequences and mappings the node being looked at is
+	// in, itself counted, and nested the most that came to: how deep the
+	// document is nested as it is written, an alias not followed.
+	inside, nested int
+	// depths is how deep an anchored node is nested through its aliases
 	// (deepest).
 	depths map[*yaml.Node]uint64
 	// compared counts the comparisons of two keys, for the tests.
@@ -191,8 +200,18 @@ func (l *yamlLearnt) writtenTwice(n *yaml.Node) yamlTwice {
 // learn looks through n and everything under it. counted is whether the
 // library, reading the document in its order, reads n at all. A scalar and
 // an alias have nothing under them, and are not looked at but as keys.
+//
+// A sequence and a mapping are each a level of nesting, and the document
+// that holds them is none: the level is carried here, where every node is
+// passed once anyway, so that a document without an alias costs no second
+// look for its depth.
 func (l *yamlLearnt) learn(n *yaml.Node, counted bool) {
 	if n.Kind != yaml.MappingNode {
+		outside := l.inside
+		if n.Kind == yaml.SequenceNode {
+			l.inside++
+			l.nested = max(l.nested, l.inside)
+		}
 		for _, child := range n.Content {
 			switch child.Kind {
 			case yaml.ScalarNode:
@@ -202,8 +221,11 @@ func (l *yamlLearnt) learn(n *yaml.Node, counted bool) {
 				l.learn(child, counted)
 			}
 		}
+		l.inside = outside
 		return
 	}
+	l.inside++
+	l.nested = max(l.nested, l.inside)
 	if len(n.Content)/2 > l.large {
 		l.hasLarge = true
 	}
@@ -226,6 +248,7 @@ func (l *yamlLearnt) learn(n *yaml.Node, counted bool) {
 			l.learn(child, counted && (i%2 == 0 || !l.isWrittenTwice(n.Content[i-1])))
 		}
 	}
+	l.inside--
 }
 
 // isWrittenTwice reports whether n is a mapping with a key written twice.
@@ -309,23 +332,6 @@ type yamlListing struct {
 	text uint64
 }
 
-// yamlDepthLimit is how deep the library's decoding may recurse through a
-// document and its aliases. It is the parser's own limit on how deeply a
-// document may be nested (scannerc.go, max_indents and max_flow_level, each
-// 10,000): a document nested deeper than that cannot be written, and a
-// mapping or a sequence of that depth is decoded by a stack of under 10 MB
-// (measured at about 720 bytes a level in the library and about 440 in the
-// walker, for sequences, mappings, merges and alias links alike). The
-// library parses within the limit, but it decodes through the targets of
-// aliases, so a chain of anchors that each hold an alias of the one before —
-// `a0: &a0 [x]`, `a1: &a1 [*a0]`, ... — expands to a depth that is the length
-// of the chain, with no limit on it: 100,000 such links are a 64 MB stack and
-// 320,000, which fit in a 10 MiB body, a 256 MB one; past about 100 MiB of
-// body the stack would pass Go's own 1 GB limit, which is fatal and caught by
-// no recover. So a document whose depth through its aliases is over the limit
-// is refused before anything decodes it.
-const yamlDepthLimit = 10000
-
 // yamlDepthFrame is a node whose depth deepest is finding: how many of the
 // nodes it holds have been looked at, and the deepest of those.
 type yamlDepthFrame struct {
@@ -354,13 +360,36 @@ func yamlDepthChild(n *yaml.Node, i int) *yaml.Node {
 	return n.Content[i]
 }
 
-// deepest is how deep the library's decoding recurses through the document
-// under root and the targets of its aliases: the depth of a node is 1 plus
-// the deepest of the nodes it holds, a scalar being 1, and an alias counting
-// as its target with 1 for the frame of the alias itself, as the library
-// decodes one (decode.go, unmarshal, alias). A merge recurses through the
-// value of the merge key, which is a node the mapping holds, so it is counted
-// with the rest.
+// deepest is how deep the document under root is nested, counting what its
+// aliases stand for: a scalar is no level, a sequence and a mapping are 1
+// more than the deepest of the nodes they hold, and an alias is what it
+// stands for. It is the count the JSON decoder keeps of its arrays and
+// objects, so a document is refused over MaxDepth whichever of the two
+// formats it is written in. The decoded value nests that deep and no deeper;
+// it nests less deep only where it is not nested as the document is
+// written: the value of a merge key is a node its mapping holds, and counts
+// as it is written, one level in, though its keys become the mapping's own,
+// and so does a key that is a sequence or a mapping, with which no document
+// decodes.
+//
+// That counting is what lets the one number bound the stack of the decoding
+// too. The library calls itself for each sequence and mapping in another,
+// for what an alias stands for and for a merge (decode.go: unmarshal,
+// sequence, mapping, alias, merge), and it bounds none of them: 100,000
+// anchors that each hold an alias of the one before — `a0: &a0 [x]`, `a1:
+// &a1 [*a0]`, ... — are a 64 MB stack and 320,000, which fit in a 10 MiB
+// body, a 256 MB one, and past about 100 MiB of body the stack would pass
+// Go's own 1 GB limit, which is fatal and caught by no recover. A level
+// here is a sequence or a mapping, with no more than one alias and one merge
+// on the way to it, which is the most the library calls itself for one. A
+// document within MaxDepth is therefore decoded in under 10 MB of stack,
+// which Go, growing a stack by doubling it, holds in one of 16 MB:
+// measured, 10,000 sequences or mappings nested plainly are decoded in a
+// stack grown to 4 or 8 MB, 10,000 that each hold an alias of the one
+// before in one of 8 MB, and 10,000 mappings each merged into the next
+// through an alias, the most a level costs at about 950 bytes, in one of
+// 16 MB. yamlWalk, which calls itself as the library does, takes less a
+// level.
 //
 // It is added up without a call for each node, in a stack no deeper than the
 // document is nested: the nodes being added up are kept in a list, as listed
@@ -372,8 +401,7 @@ func yamlDepthChild(n *yaml.Node, i int) *yaml.Node {
 // holds itself — and counts as 0 there, so the adding up terminates and the
 // library is left to refuse the document (yamlHoldsItself).
 func (l *yamlLearnt) deepest(root *yaml.Node) uint64 {
-	// The document is the one node a list of itself holds; its depth is that
-	// node's, without a frame of its own.
+	// The document is the one node a list of itself holds.
 	whole := yaml.Node{Content: []*yaml.Node{root}}
 	var few [16]yamlDepthFrame
 	open := append(few[:0], yamlDepthFrame{of: &whole})
@@ -382,11 +410,11 @@ func (l *yamlLearnt) deepest(root *yaml.Node) uint64 {
 		if at.next == yamlDepthChildren(at.of) {
 			depth := at.child
 			node := at.of
-			if node != &whole {
+			if node.Kind == yaml.SequenceNode || node.Kind == yaml.MappingNode {
 				depth++
-				if node.Anchor != "" {
-					l.depths[node] = depth
-				}
+			}
+			if node.Anchor != "" {
+				l.depths[node] = depth
 			}
 			open = open[:len(open)-1]
 			if len(open) == 0 {
@@ -420,10 +448,34 @@ func (l *yamlLearnt) deepest(root *yaml.Node) uint64 {
 	}
 }
 
-// yamlTooDeep is the error for a document nested, through its aliases, deeper
-// than the parser lets one be written.
+// tooDeep reports whether the document under root, looked through, is
+// nested deeper than a response may be, MaxDepth. As it is written it is
+// nested as deep as learn found it; only a document with an alias, which
+// may stand for something nested deeper than where it is written, is gone
+// through again for it.
+func (l *yamlLearnt) tooDeep(root *yaml.Node) bool {
+	return l.nested > MaxDepth || l.aliases && l.deepest(root) > MaxDepth
+}
+
+// yamlTooDeep is the error for a document nested deeper than a response may
+// be, with or without aliases.
 func yamlTooDeep() error {
-	return fmt.Errorf("yaml: the document is nested more than %d deep through its aliases, deeper than a YAML document may be written", yamlDepthLimit)
+	return yamlTooDeepAt("")
+}
+
+// yamlTooDeepAt is yamlTooDeep for a document the library's parser refused
+// for its depth (yamlParserDepth), after the line the parser names, as the
+// library writes a line, when it names one: where the level too many opens.
+// The failure is recognised by its words without the line, as every error
+// of the library is (yamlFailure), so it is one failure to the log whichever
+// of the two refused the document, and wherever in it.
+func yamlTooDeepAt(line string) error {
+	const library = "yaml: "
+	problem := fmt.Sprintf("the document is nested more than %[1]d deep, counting what its aliases stand for; a response may nest %[1]d deep at most", MaxDepth)
+	if line == "" {
+		return errors.New(library + problem)
+	}
+	return model.SameFailureAs(errors.New(library+"line "+line+": "+problem), library+problem)
 }
 
 // The ways a document is decoded.
@@ -458,12 +510,10 @@ type yamlReading struct {
 func (r yamlReading) value(root *yaml.Node) (any, error) {
 	learnt := yamlLearnt{large: r.large}
 	learnt.learn(root, true)
-	// A document whose aliases expand to a depth over the limit is refused
-	// before anything decodes it, on every way, the library's own included:
-	// that is where the deepest stack is (deepest, yamlDepthLimit). A document
-	// with no alias is nested no deeper than the parser let it be written, so
-	// only one with aliases is looked through for its depth.
-	if learnt.aliases && learnt.deepest(root) > yamlDepthLimit {
+	// A document nested deeper than a response may be is refused before
+	// anything decodes it, on every way, the library's own included: that is
+	// where the deepest stack is (deepest).
+	if learnt.tooDeep(root) {
 		return nil, yamlTooDeep()
 	}
 	switch learnt.way(root) {

@@ -16,6 +16,7 @@ import (
 	"golang.org/x/net/html"
 
 	"github.com/eenchev/prometheus-universal-exporter/internal/model"
+	"github.com/eenchev/prometheus-universal-exporter/internal/testutil/alloctest"
 )
 
 // A rule over HTML that selects attributes, as `//td/@data-value` does,
@@ -519,7 +520,9 @@ var differentialLabels = []string{
 // attribute had a parent: over every fixture page, with scripts, styles and
 // template content taken out so that the text of a node is what it was too,
 // rules of every kind make the same series, label for label, through the
-// accessors as they are and as they were on main.
+// accessors as they are and as they were on main. Under the race detector
+// each page is read by a quarter of the expressions and each expression
+// reads a quarter of the pages (pairTaken).
 func TestElementAndTextRulesOverHTMLReadWhatTheyRead(t *testing.T) {
 	expressions := []string{
 		"//td", "//tr", "//tr/td[1]", "//li", "//span", "//p", "//div", "//dt", "//a", "//time", "//*[@id]", "//*[@class]", "//*", "//h1 | //h2 | //title",
@@ -527,9 +530,13 @@ func TestElementAndTextRulesOverHTMLReadWhatTheyRead(t *testing.T) {
 		"count(//td)", "sum(//td[@class='n'])", "string(//title)", "//table//tr[td][1]/td | //table//th",
 	}
 	compared, pages := 0, htmlFixturePages(t)
+	place := places(pages)
 	for name, page := range pages {
 		root := withoutScriptsAndStyles(t, page)
-		for _, expression := range expressions {
+		for at, expression := range expressions {
+			if !pairTaken(place[name], at, 4) {
+				continue
+			}
 			rules := differentialXPathRules(expression, differentialLabels)
 			got, main := transformedHTML(t, root, htmlNodes, rules), transformedHTML(t, root, mainsHTMLNodes, rules)
 			if !reflect.DeepEqual(got, main) {
@@ -538,7 +545,7 @@ func TestElementAndTextRulesOverHTMLReadWhatTheyRead(t *testing.T) {
 			compared += len(got)
 		}
 	}
-	if compared < 5000 {
+	if compared < alloctest.UnlessRaced(5000, 1250) {
 		t.Fatalf("only %d series compared over %d pages", compared, len(pages))
 	}
 	t.Logf("%d series compared over %d pages", compared, len(pages))

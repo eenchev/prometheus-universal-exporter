@@ -15,6 +15,7 @@ import (
 
 	"github.com/eenchev/prometheus-universal-exporter/internal/expr"
 	"github.com/eenchev/prometheus-universal-exporter/internal/model"
+	"github.com/eenchev/prometheus-universal-exporter/internal/testutil/alloctest"
 	"gopkg.in/yaml.v3"
 )
 
@@ -266,6 +267,10 @@ func settingsCheckedAsBefore(t *testing.T, x *model.Collector) int {
 // pass-through, a prometheus transform with rules and a jq transform, beside
 // renames and labels that are in order and that are not; a collector with
 // such an entry gets one problem more for each, and what it got before.
+// Under the race detector each pair of lists is checked under one of the
+// nine pairings of a transform with the rest of its settings and not under
+// all: every list of include still meets every list of exclude, and every
+// list each of the nine.
 func TestOnlyAnEmptyOrBlankEntryOfIncludeOrExcludeIsRefusedAnew(t *testing.T) {
 	files, collectors := 0, 0
 	for _, root := range []string{"../../examples", "../../configs", "../../testdata", "../../charts"} {
@@ -300,17 +305,20 @@ func TestOnlyAnEmptyOrBlankEntryOfIncludeOrExcludeIsRefusedAnew(t *testing.T) {
 		lists = append(lists, []string{entry}, []string{"^up$", entry}, []string{entry, "("}, []string{entry, entry})
 	}
 	tried, refused := 0, 0
-	for _, shape := range []struct {
+	for s, shape := range []struct {
 		transform string
 		rules     []model.MetricRule
 	}{{"prometheus", nil}, {"prometheus", []model.MetricRule{{Expression: "^up$"}}}, {"jq", []model.MetricRule{{Name: "v", Expression: ".v"}}}} {
-		for _, include := range lists {
-			for _, exclude := range lists {
-				for _, rest := range []model.TransformConfig{
+		for i, include := range lists {
+			for j, exclude := range lists {
+				for r, rest := range []model.TransformConfig{
 					{},
 					{Rename: map[string]string{"up": "up2", "": "x", "a": "bad-name"}, Labels: map[string]string{"site": "", "bad-name": "x", "__name__": "y"}},
 					{RemoveLabels: []string{"", "a"}, RenameLabels: map[string]string{"a": "b", "c": "b", "": "bad-name"}},
 				} {
+					if raceDetector && (i+j)%9 != 3*s+r {
+						continue
+					}
 					rest.Type, rest.Include, rest.Exclude = shape.transform, include, exclude
 					tried++
 					if settingsCheckedAsBefore(t, &model.Collector{Name: "demo", Transform: rest, Metrics: shape.rules}) > 0 {
@@ -320,7 +328,7 @@ func TestOnlyAnEmptyOrBlankEntryOfIncludeOrExcludeIsRefusedAnew(t *testing.T) {
 			}
 		}
 	}
-	if tried < 50000 || refused < 10000 {
+	if tried < alloctest.UnlessRaced(50000, 5500) || refused < alloctest.UnlessRaced(10000, 1100) {
 		t.Fatalf("%d settings were tried and %d refused for an entry that is empty or blanks", tried, refused)
 	}
 	t.Logf("%d files with %d collectors, and %d generated settings, %d of them with an entry that is empty or blanks", files, collectors, tried, refused)
@@ -378,11 +386,16 @@ func yamlDocuments(t *testing.T, path string) []*yaml.Node {
 }
 
 // Every blank strings.TrimSpace takes off makes an entry that is refused,
-// alone and beside another blank, and no other character does.
+// alone and beside another blank, and no other character does. Under the
+// race detector every blank and every character of ASCII is tried still,
+// and one in five of the others that a run without it tries.
 func TestEveryBlankMakesAnEntryThatIsRefused(t *testing.T) {
 	blanks := 0
 	for r := rune(0); r <= unicode.MaxRune; r++ {
 		if r >= 0xD800 && r <= 0xDFFF || !unicode.IsSpace(r) && r > 0x3000 && r%97 != 0 {
+			continue
+		}
+		if raceDetector && !unicode.IsSpace(r) && r > unicode.MaxASCII && r%5 != 0 {
 			continue
 		}
 		for _, entry := range []string{string(r), string(r) + " ", "a" + string(r)} {

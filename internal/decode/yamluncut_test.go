@@ -54,7 +54,7 @@ func decodeYAMLUncut(r yamlReading, body []byte) (v any, err error) {
 func yamlValueUncut(r yamlReading, root *yaml.Node) (any, error) {
 	learnt := yamlLearnt{large: r.large}
 	learnt.learn(root, true)
-	if learnt.aliases && learnt.deepest(root) > yamlDepthLimit {
+	if learnt.tooDeep(root) {
 		return nil, yamlTooDeep()
 	}
 	switch learnt.way(root) {

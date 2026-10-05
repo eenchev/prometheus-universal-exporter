@@ -165,17 +165,21 @@ func TestTransformAllocationsPerSeriesAreBounded(t *testing.T) {
 // series, of which five have a value, gets room for as many as the limit of
 // a hundred, give or take what the allocator rounds a size up by, and not
 // for twenty thousand. Each rule carries on without the items that have no
-// value, so the scrape passes with the five.
+// value, so the scrape passes with the five. Under the race detector the
+// response describes four thousand series, forty times the limit still, of
+// which five have a value.
 func TestRoomForSeriesIsBoundedByTheLimit(t *testing.T) {
-	const described, limit = 20000, 100
+	const limit = 100
+	described := alloctest.UnlessRaced(20000, 4000)
 	optional := false
 	// each is a response of described items made by item, of which every
-	// four-thousandth has the value 1 and the others none.
+	// four-thousandth, or five of them where there are fewer, has the value
+	// 1 and the others none.
 	each := func(before string, item func(value string) string, after string) string {
 		var b strings.Builder
 		b.WriteString(before)
 		for i := range described {
-			if i%4000 == 0 {
+			if i%(described/5) == 0 {
 				b.WriteString(item("1"))
 			} else {
 				b.WriteString(item(""))

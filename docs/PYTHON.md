@@ -43,6 +43,28 @@ metrics: []
 `metrics: []` is explicit for Python because the script creates the metric
 definitions dynamically through `metric(...)`.
 
+### What a rule of a `python` collector is for
+
+A rule under `metrics` makes no series there: it names one the script makes,
+by the `name` the script gives it, and that is all it says. A
+[debug probe](CONFIGURATION.md#debugging-a-probe)'s report lists the rule
+among those that gave no series when the script made none of that name; the
+rule has its [`http_exporter_rule_failures_total`](SELF-METRICS.md) series,
+which stays `0`, since a rule that makes no series fails none; and each of
+its labels names a label of that series to
+[cut to `limits.max_label_value_length`](CONFIGURATION.md#long-label-values)
+with `truncate: true` (the label's `expression` must be there and is not
+read, and the rule's own is not read either). Everything else a rule says
+under another transform the script says itself, so it is refused at startup
+rather than ignored: `type` and `description`, which are
+`metric(..., type="counter", help="...")`; `required` and `error_mode`, for
+which a script that cannot do without something calls `fail("...")`, and
+[`error_handling.on_transform_error`](CONFIGURATION.md#when-a-stage-of-the-probe-fails)
+says what the collector does then; `items`, `scale`, `value_map`,
+`time_format` and `time_zone`; a label's `value`, `value_map` and `required`;
+a label without `truncate: true`; and a rule without a `name`. A key written
+`""` is the key left out.
+
 A name passed to `metric(...)`, and a label name, that is not a classic
 Prometheus name — `http.server.duration`, `service.name` — fails the scrape
 unless the collector sets `name_escaping`; see
@@ -75,6 +97,66 @@ Python `int`s and come back exact: an ID such as `1500000000000000001` that a
 pre-script leaves in `data` keeps every digit in a label, rather than being
 rounded to the nearest float.
 
+`data` arrives nested as deep as its decoder read it, and a pre-script may
+leave it that deep: a response decodes into a value whose lists and dicts
+nest 10,000 levels at most, one inside another, whatever its format, a
+document nested deeper failing the scrape in the `decode` stage before any
+script runs. A response that decodes is never refused on its way to a script
+for its depth, whichever Python runs the script. What a pre-script leaves
+nested deeper than 10,000 levels, and a list or a dict that holds itself,
+fails the scrape with `python pre-script failed: RecursionError: data is
+nested more than 10000 deep, or a list or a dict in it holds itself; the
+exporter reads what a script leaves in data nested 10000 deep at most, as
+deep as it decodes a response`. A list or a dict that holds itself is found
+where the worker comes back to it, at the same cost whether it is in itself
+once or twice, and not by following it ten thousand levels down.
+
+`data` goes back to the exporter as JSON, which cannot say that a list or a
+dict is one it has written already. One that is in `data` twice is written
+twice and read back as two: `x = [1, 2]; data = [x, x]` leaves
+`[[1, 2], [1, 2]]`. What a script built small can therefore be long written
+out. A list that holds another twice, which holds a third twice, and so on
+forty times, is forty lists to the script and a million million values as
+JSON, and the worker does not write it out to find that out: `data` that
+holds a list or a dict more than once and is longer than
+`limits.max_output_bytes` whatever is in it — each value is a byte at least,
+a string and a key as many as it is long — fails the scrape with
+
+```text
+python pre-script failed: OverflowError: what the script left in data is longer than limits.max_output_bytes (1048576 bytes) written out, a list or a dict that is there more than once being written each time; leave less there, or raise limits.max_output_bytes
+```
+
+and the worker carries on, having gone through each list and dict once, in
+the time and the memory the script took to build them or, where the script
+built a great deal, in a multiple of the limit. The `metrics` of a transform
+are held to the same: lists like these where a metric has one value fail the
+scrape as a list of two numbers there does (`metric "m" label "l" is an array
+of 2 values, not a single value; ...`), under a key of your own they are
+passed over, and metrics that hold one entry so often that they are longer than the
+limit fail with the same `OverflowError`, `... left in metrics ...`. An
+answer that holds no list or dict twice is not measured by the worker,
+however long: it is written, and one longer than `limits.max_output_bytes`
+fails the scrape with `python pre-script output exceeds limit` (`python
+transform output exceeds limit`) and costs its worker, as below. So does one
+that is longer only for a string it holds many times: a text is written each
+time too, and a million references to a megabyte of it are a million
+megabytes, which `limits.script_timeout` and `limits.max_script_memory` end.
+
+What the script itself does with data that deep is bounded by its
+interpreter. A function that calls itself for each level stops with a
+`RecursionError` at the recursion limit, `sys.getrecursionlimit()`, which is
+1000: go down deep data in a loop instead. Raising the limit with
+`sys.setrecursionlimit` lasts as long as the worker and is at the script's
+own risk, since an interpreter that recurses deeper than its stack holds ends
+without an error, and the worker with it. The standard library's own walks
+stop too, at a depth that depends on the Python release: `json.dumps(data)`,
+`json.loads(response.text)`, `response.json()` and `repr(data)` at the
+recursion limit up to Python 3.11, a little under 1,000 levels; at a limit of
+the interpreter's own on nested calls in C, which a script cannot change, in
+3.12 — the image's — and 3.13, a little under 10,000 levels (9,997 for
+`json`); and at what the stack holds from 3.14. `copy.deepcopy(data)` stops at
+about half the recursion limit on all of them.
+
 `metric(...)` takes a `value` as the other transforms do: a number, a numeric
 string such as `"12"`, or a boolean, as `1` or `0`; anything else, `None`
 included, fails the script naming the metric. A `timestamp` is milliseconds
@@ -82,7 +164,12 @@ since the Unix epoch, and may be a float, as `time.time() * 1000` is; it is
 cut to whole milliseconds, and one beyond what 64 bits of milliseconds hold
 fails the script. `name`, `type` and `help` are strings, and `None` for the
 type or the help is none given; anything else fails the script naming the
-metric and the argument, as in `metric 'jobs' help 5 is not a string`.
+metric and the argument, as in `metric 'jobs' help 5 is not a string`. A
+list, a dict, a tuple or a set given where `metric(...)` takes one value is
+named by what it is and how many items it has, not written out — `metric
+'jobs' help a list of 3 items is not a string` — so the error is the same,
+and as short, for a list of three numbers, one of a thousand, and one nested
+deeper than Python itself can write.
 
 A dict appended to `metrics` by hand, `{"name": ..., "value": ..., "labels":
 {...}}`, is checked as `metric(...)` checks its arguments: its value and
@@ -92,6 +179,20 @@ written the same way, `None` leaving the label off, and a missing `type` is
 mapping, and an entry of `metrics` that is not a dict fail the scrape the same
 way, naming the metric and what is wrong with it — `metric "jobs" labels are
 an array of 1 item, not a mapping of label names to values`.
+
+An entry of `metrics` is flat, as `metric(...)` makes it: `name`, `type`,
+`value`, `help` and `timestamp` hold one value each, and `labels` a dict of
+one value for each label. A list or a dict where one value belongs is the
+script's mistake and fails the scrape as a script failure, naming the metric,
+the part of it and what stands there by its kind and the number of its items:
+`python transform: metric "jobs" label "queue" is an array of 3 values, not a
+single value; select one, or join them with join(",")`, `metric "jobs" help an
+array of 3 items is not a string`, `metric "jobs" value an object with 1 key
+is not a number`. The failure is the same whatever the list or the dict
+holds: three numbers, lists nested thousands of levels deep — deeper than
+any response decodes — or itself. None of them fails as the interpreter's
+`RecursionError`, and the worker serves the next scrape. A key of the
+script's own in an entry, one no metric has, is not read, whatever it holds.
 
 `response.text`, `response.body` and, where the decoder gives a script the
 body as text, `data` are one string, not three copies: a large response costs
@@ -130,7 +231,9 @@ start once and then serves scrape after scrape.
   as `threading`, still loads.
 - **Errors.** A script that raises, calls `fail(...)` or `sys.exit()` fails that
   scrape with the Python error; the worker carries on. A worker that crashes, or
-  answers with more than `limits.max_output_bytes`, is replaced. A worker that
+  answers with more than `limits.max_output_bytes`, is replaced; an answer it
+  does not write because a list or a dict is in it too often, or in itself,
+  is the script's error, and the worker carries on. A worker that
   died while it sat idle — killed by the kernel for memory, or by a signal a
   script armed and left behind, such as `signal.alarm` — fails no scrape: it
   is found dead when it is next taken, counted as a `crash`, and another runs
@@ -259,7 +362,8 @@ metrics:
 
 Python parses, the metric declaration stays uniform, and `error_mode`,
 `required`, `description`, and `type` behave as they do everywhere else — none
-of which apply to metrics emitted from a `python` transform. Reserve
+of which apply to metrics emitted from a `python` transform, whose rules
+[do not take them](#what-a-rule-of-a-python-collector-is-for). Reserve
 `transform.type: python` for collectors whose metric *names* are not known until
 the response is read; those still emit through `metric(...)` and may omit the
 `metrics` array entirely.

@@ -15,7 +15,7 @@ import (
 func labelCollector(transform, label string) string {
 	rule := map[string]string{
 		"jq": "expression: .v", "yq": "expression: .v", "xpath": "expression: //v", "css": "items: tr\n        expression: td.v",
-		"regex": `expression: 'v=(\d+) site=(\w+)'`, "csv": "expression: cpu", "prometheus": "expression: '^up$'", "python": "description: Set by the script.",
+		"regex": `expression: 'v=(\d+) site=(\w+)'`, "csv": "expression: cpu", "prometheus": "expression: '^up$'", "python": "expression: cpu",
 	}[transform]
 	script := ""
 	if transform == "python" {

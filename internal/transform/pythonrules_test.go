@@ -21,6 +21,9 @@ import (
 // them out, when the series is a gauge without a help text, and nor are
 // required and error_mode, since a rule that makes no series has no value
 // to miss. The script's series are the same with such a rule as with none.
+// Which is why the load refuses each of them but the expressions, and with
+// them a rule without a name and a label without truncate: true, the last
+// two cases here (config.checkPythonRule).
 func TestAPythonRuleChangesNoSeriesButByTruncate(t *testing.T) {
 	requirePython(t)
 	const script = `

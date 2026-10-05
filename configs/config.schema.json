@@ -66,6 +66,58 @@
               "properties": {
                 "metrics": {
                   "items": {
+                    "not": {
+                      "anyOf": [
+                        {
+                          "properties": {
+                            "type": {
+                              "not": {
+                                "const": ""
+                              }
+                            }
+                          },
+                          "required": [
+                            "type"
+                          ]
+                        },
+                        {
+                          "properties": {
+                            "description": {
+                              "not": {
+                                "const": ""
+                              }
+                            }
+                          },
+                          "required": [
+                            "description"
+                          ]
+                        },
+                        {
+                          "properties": {
+                            "required": {
+                              "not": {
+                                "const": ""
+                              }
+                            }
+                          },
+                          "required": [
+                            "required"
+                          ]
+                        },
+                        {
+                          "properties": {
+                            "error_mode": {
+                              "not": {
+                                "const": ""
+                              }
+                            }
+                          },
+                          "required": [
+                            "error_mode"
+                          ]
+                        }
+                      ]
+                    },
                     "properties": {
                       "labels": {
                         "items": {
@@ -80,7 +132,76 @@
                             "required": [
                               "value"
                             ]
+                          },
+                          "properties": {
+                            "truncate": {
+                              "const": true
+                            }
+                          },
+                          "required": [
+                            "truncate"
+                          ]
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "transform": {
+                  "properties": {
+                    "type": {
+                      "const": "prometheus"
+                    }
+                  },
+                  "required": [
+                    "type"
+                  ]
+                }
+              },
+              "required": [
+                "transform"
+              ]
+            },
+            "then": {
+              "properties": {
+                "metrics": {
+                  "items": {
+                    "anyOf": [
+                      {
+                        "properties": {
+                          "name": {
+                            "not": {
+                              "const": ""
+                            }
                           }
+                        },
+                        "required": [
+                          "name"
+                        ]
+                      },
+                      {
+                        "properties": {
+                          "expression": {
+                            "not": {
+                              "const": ""
+                            }
+                          }
+                        },
+                        "required": [
+                          "expression"
+                        ]
+                      }
+                    ],
+                    "properties": {
+                      "expression": {
+                        "not": {
+                          "pattern": "^[\\t\\n\\v\\f\\r \\x85\\xA0  - \u2028\u2029  　]+$",
+                          "type": "string"
                         }
                       }
                     }
@@ -97,10 +218,7 @@
               "properties": {
                 "type": {
                   "not": {
-                    "enum": [
-                      "prometheus",
-                      "python"
-                    ]
+                    "const": "prometheus"
                   }
                 }
               }
@@ -273,6 +391,7 @@
             "type": "integer"
           },
           "metrics": {
+            "description": "The metric rules. No two of them may be the same rule, alike in name, expression, items, labels, value_map and time_format: each would make every series the other makes, and every scrape would fail on a duplicate series. The exporter checks that when the configuration loads. A python collector's rules make no series and are not held to it.",
             "items": {
               "additionalProperties": false,
               "if": {
@@ -309,7 +428,7 @@
                   ]
                 },
                 "error_mode": {
-                  "description": "What happens when this metric cannot be extracted. Defaults to log.",
+                  "description": "What happens when this metric cannot be extracted. Defaults to log. Not for the python transform, whose script fails the scrape itself, with fail(...).",
                   "enum": [
                     "fail",
                     "log",
@@ -447,7 +566,7 @@
                   "type": "string"
                 },
                 "required": {
-                  "description": "When false, a missing value is skipped without an error. Defaults to true.",
+                  "description": "When false, a missing value is skipped without an error. Defaults to true. Not for the python transform, whose rules read no value.",
                   "type": "boolean"
                 },
                 "scale": {

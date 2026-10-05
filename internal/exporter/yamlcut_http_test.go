@@ -15,6 +15,7 @@ import (
 
 	"github.com/eenchev/prometheus-universal-exporter/internal/config"
 	"github.com/eenchev/prometheus-universal-exporter/internal/testutil"
+	"github.com/eenchev/prometheus-universal-exporter/internal/testutil/alloctest"
 )
 
 // A YAML document one of whose keys is a sequence of 200,000 numbers fails
@@ -25,7 +26,10 @@ import (
 // recognised without the length, so the key grown shorter, to 150,000
 // numbers, is a repeat, logged at debug level with its own length, and a key
 // that starts otherwise is a new failure. A debug probe's report names the
-// failure in the same short line.
+// failure in the same short line. Under the race detector the keys are of
+// 20,000 and of 15,000 numbers, 129 kB and 94 kB as the library writes them:
+// hundreds of times the 256 bytes of a key an error keeps (yamlPartBytes in
+// internal/decode) and the kilobyte the answer and the log are held to.
 func TestAYAMLKeyOfAnySizeFailsTheProbeInAShortError(t *testing.T) {
 	testutil.CaptureLogs(t)
 	var document atomic.Pointer[string]
@@ -68,16 +72,19 @@ func TestAYAMLKeyOfAnySizeFailsTheProbeInAShortError(t *testing.T) {
 		}
 		return lines[0]
 	}
-	if line := scrape(1, 200000); line["level"] != "ERROR" || line["repeat"] != nil || !strings.HasSuffix(line["error"].(string), "63... (1488909 bytes)") { //nolint:forcetypeassert // checked by scrape
-		t.Errorf("a key of 200,000 numbers is logged as %v, want in full as an error, ending with its length", line)
+	// The keys' numbers, and the bytes the library writes each key in.
+	long, shorter := alloctest.UnlessRaced(200000, 20000), alloctest.UnlessRaced(150000, 15000)
+	longBytes, shorterBytes := alloctest.UnlessRaced(1488909, 128908), alloctest.UnlessRaced(1088909, 93908)
+	if line := scrape(1, long); line["level"] != "ERROR" || line["repeat"] != nil || !strings.HasSuffix(line["error"].(string), fmt.Sprintf("63... (%d bytes)", longBytes)) { //nolint:forcetypeassert // checked by scrape
+		t.Errorf("a key of %d numbers is logged as %v, want in full as an error, ending with its length", long, line)
 	}
-	if line := scrape(1, 150000); line["level"] != "DEBUG" || line["repeat"] != true || !strings.HasSuffix(line["error"].(string), "63... (1088909 bytes)") { //nolint:forcetypeassert // checked by scrape
+	if line := scrape(1, shorter); line["level"] != "DEBUG" || line["repeat"] != true || !strings.HasSuffix(line["error"].(string), fmt.Sprintf("63... (%d bytes)", shorterBytes)) { //nolint:forcetypeassert // checked by scrape
 		t.Errorf("the key grown shorter is logged as %v, want as a repeat at debug level, with its own length", line)
 	}
-	if line := scrape(2, 200000); line["level"] != "ERROR" || line["repeat"] != nil {
+	if line := scrape(2, long); line["level"] != "ERROR" || line["repeat"] != nil {
 		t.Errorf("a key that starts otherwise is logged as %v, want in full as an error", line)
 	}
-	_, said := keyed(2, 200000)
+	_, said := keyed(2, long)
 	report := debugProbeGet(t, server, strings.TrimPrefix(probePath("document", target.URL, "&debug=true"), "/probe?"))
 	if report.Code != http.StatusOK || !strings.Contains(report.Body.String(), said+"\n") {
 		t.Fatalf("the debug probe answered %d, and its report does not name the failure as %q:\n%.3000s", report.Code, said, report.Body)

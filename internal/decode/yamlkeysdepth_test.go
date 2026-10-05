@@ -86,7 +86,7 @@ func yamlStackOf(call func()) uint64 {
 // body and more than a goroutine may have for a larger one, which no recover
 // catches. Looking through the document, and decoding it, now takes under 2
 // MB; and the document comes to the text it came to, one key written twice.
-// The document, a chain far deeper than one may be written, is now refused for
+// The document, a chain far deeper than a response may nest, is now refused for
 // its depth before it is decoded (adding up the depth is as shallow a stack as
 // adding up the problems), where it was refused for its aliases.
 func TestTheProblemsOfAYAMLDocumentAreAddedUpInAStackNoDeeperThanItIsNested(t *testing.T) {
@@ -133,7 +133,9 @@ func TestTheProblemsOfAYAMLDocumentAreAddedUpInAStackNoDeeperThanItIsNested(t *t
 // outside it, in their order, against it and many times, an anchor that
 // holds an alias of what holds it, of itself, and of a mapping written
 // twice, in and outside a mapping written twice — whatever counts as a large
-// mapping.
+// mapping. Under the race detector a thousand are drawn and the files are
+// cut off after fewer of their lines (yamlFixtureDocuments), with the least
+// there is to be of each kind among so many.
 func TestTheProblemsOfAYAMLDocumentComeToWhatTheyDidByACallForEachNode(t *testing.T) {
 	twice := "{k: 1, k: 2}"
 	documents := append(append(yamlFixtureDocuments(t), hostileYAMLDocuments()...), yamlWrittenDocuments()...)
@@ -189,7 +191,11 @@ func TestTheProblemsOfAYAMLDocumentComeToWhatTheyDidByACallForEachNode(t *testin
 			}
 		}
 	}
-	if !raceDetector && (withProblems < 1000 || withAliases < 500 || len(differentTexts) < 30) {
+	leastProblems, leastAliases, leastTexts := 1000, 500, 30
+	if raceDetector {
+		leastProblems, leastAliases, leastTexts = 50, 30, 10
+	}
+	if withProblems < leastProblems || withAliases < leastAliases || len(differentTexts) < leastTexts {
 		t.Errorf("%d documents have keys written twice, %d of them aliases or merges, and they come to %d different texts: the documents do not cover it", withProblems, withAliases, len(differentTexts))
 	}
 }

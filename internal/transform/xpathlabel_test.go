@@ -13,6 +13,7 @@ import (
 	"github.com/eenchev/prometheus-universal-exporter/internal/decode"
 	"github.com/eenchev/prometheus-universal-exporter/internal/expr"
 	"github.com/eenchev/prometheus-universal-exporter/internal/model"
+	"github.com/eenchev/prometheus-universal-exporter/internal/testutil/alloctest"
 )
 
 // engineXPathLabels is xpathLabels as it was before labels were planned and
@@ -189,10 +190,12 @@ func labelsOrPanic(read func() map[string]string) (labels map[string]string, pan
 
 // agreeAtEveryNode holds the planned labels to the engine's, at every node
 // of a document and for every expression, each as a rule's one label, and
-// nodeText to nodes.text; it returns how many labels it compared.
-func agreeAtEveryNode[N comparable](t *testing.T, nodes xpathNodes[N], root N, namespaces map[string]string, expressions []string, document string) int {
+// nodeText to nodes.text; it returns how many labels it compared. Under the
+// race detector the labels are read at every fifth node, from the one
+// numbered first, and nodeText still at every node.
+func agreeAtEveryNode[N comparable](t *testing.T, nodes xpathNodes[N], root N, namespaces map[string]string, expressions []string, document string, first int) int {
 	t.Helper()
-	compared := 0
+	compared, stride := 0, alloctest.UnlessRaced(1, 5)
 	all := treeNodes(t, nodes, root)
 	for at, node := range all {
 		if got, want := nodeText(nodes, node), nodes.text(node); got != want {
@@ -202,7 +205,8 @@ func agreeAtEveryNode[N comparable](t *testing.T, nodes xpathNodes[N], root N, n
 	for _, expression := range expressions {
 		rule := model.MetricRule{Name: "m", Labels: []model.LabelRule{{Name: "l", Expression: expression}}}
 		plan := planXPathLabels(rule, namespaces, nodes.html)
-		for at, node := range all {
+		for at := first % stride; at < len(all); at += stride {
+			node := all[at]
 			want, wantPanic := labelsOrPanic(func() map[string]string { return engineXPathLabels(nodes, node, rule, namespaces) })
 			// One label is not the engine's: text() at an attribute a rule
 			// selected is the attribute's value, where the engine, as
@@ -282,7 +286,10 @@ func randomXML(r *rand.Rand) string {
 // comments, processing instructions, the document itself and the nodes made
 // of attributes. The shapes listed as walked are walked, and the near
 // misses are not, so neither half of the comparison is the engine against
-// itself.
+// itself. Under the race detector the random documents are four, and each
+// of the three response.namespaces reads a document at every fifth node
+// from a node of its own: every expression is still read over every
+// document under each of them, at fewer of its nodes.
 func TestXPathLabelFastPathsAgreeWithTheEngine(t *testing.T) {
 	walked := xpathWalkedExpressions()
 	for _, expression := range walked {
@@ -303,7 +310,7 @@ func TestXPathLabelFastPathsAgreeWithTheEngine(t *testing.T) {
 	compared := 0
 	documents := append([]string{}, xpathLabelDocuments...)
 	random := rand.New(rand.NewPCG(20261002, 4))
-	for range 12 {
+	for range alloctest.UnlessRaced(12, 4) {
 		documents = append(documents, randomXML(random))
 	}
 	for i, document := range documents {
@@ -311,8 +318,8 @@ func TestXPathLabelFastPathsAgreeWithTheEngine(t *testing.T) {
 		if err != nil {
 			t.Fatalf("document %d: %v\n%s", i, err, document)
 		}
-		for _, namespaces := range bindings {
-			compared += agreeAtEveryNode(t, xmlNodes, root, namespaces, expressions, fmt.Sprintf("XML document %d", i))
+		for first, namespaces := range bindings {
+			compared += agreeAtEveryNode(t, xmlNodes, root, namespaces, expressions, fmt.Sprintf("XML document %d", i), first)
 		}
 	}
 	for i, page := range xpathLabelPages {
@@ -320,7 +327,7 @@ func TestXPathLabelFastPathsAgreeWithTheEngine(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		compared += agreeAtEveryNode(t, htmlNodes, doc.Nodes[0], nil, expressions, fmt.Sprintf("HTML document %d", i))
+		compared += agreeAtEveryNode(t, htmlNodes, doc.Nodes[0], nil, expressions, fmt.Sprintf("HTML document %d", i), 0)
 	}
 	t.Logf("%d labels compared, of %d expressions over %d documents", compared, len(expressions), len(documents)+len(xpathLabelPages))
 }

@@ -119,7 +119,11 @@ func checkBodyRead(t *testing.T, c bodyCase) {
 // empty; at and around round sizes and the size at which the first buffer is
 // full; handed over whole or in pieces,
 // with the end coming with the last bytes or after them; and broken off by an
-// error at the start, in the middle or at the end.
+// error at the start, in the middle or at the end. Under the race detector,
+// which follows every byte that is copied, the small bodies are every
+// eleventh of their table, among which each way of any three things still
+// meets each of the others, and the bodies of more than a megabyte and a
+// byte are left to a run without it.
 func TestABodyIsReadAsBefore(t *testing.T) {
 	const unlimited = math.MaxInt64 - 1
 	pooled := testBodyStep * 32
@@ -133,6 +137,7 @@ func TestABodyIsReadAsBefore(t *testing.T) {
 		cases++
 	}
 	// Small bodies, every way.
+	at, every := 0, alloctest.UnlessRaced(1, 11)
 	for _, size := range []int{0, 1, 2, 511, 512, 513, 2500} {
 		for _, limit := range []int64{0, 1, int64(size) - 1, int64(size), int64(size) + 1, int64(size) / 2, 10 << 20, unlimited} {
 			for _, declared := range []int64{-1, 0, 1, int64(size) - 1, int64(size), int64(size) + 1, int64(size) / 2, 2 * int64(size), 1 << 50} {
@@ -140,6 +145,9 @@ func TestABodyIsReadAsBefore(t *testing.T) {
 					for _, pieces := range [][]int{nil, {1 << 30}, {100}, {700, 0, 1, 330}} {
 						for _, failAfter := range []int{-1, 0, size / 2, size} {
 							for _, eofAtOnce := range []bool{false, true} {
+								if at++; at%every != 0 {
+									continue
+								}
 								if limit >= 0 && (declared > 0 || first == 0) {
 									check(bodyCase{size, limit, declared, first, pieces, failAfter, eofAtOnce})
 								}
@@ -164,7 +172,11 @@ func TestABodyIsReadAsBefore(t *testing.T) {
 		check(bodyCase{size, unlimited, int64(size), 0, []int{4096}, size, true})
 	}
 	// Bodies of a megabyte and more: fewer of these.
-	for _, size := range []int{pooled - 1, pooled, pooled + 1, pooled + 16*testBodyStep + 1, 4<<20 + 3} {
+	large := []int{pooled - 1, pooled, pooled + 1, pooled + 16*testBodyStep + 1, 4<<20 + 3}
+	if alloctest.RaceDetector {
+		large = large[:3]
+	}
+	for _, size := range large {
 		check(bodyCase{size, unlimited, -1, 0, nil, -1, false})
 		check(bodyCase{size, int64(size), -1, 0, []int{70000, 0, 1, 33000}, -1, true})
 		check(bodyCase{size, int64(size) - 1, -1, 0, nil, -1, false})
@@ -177,10 +189,11 @@ func TestABodyIsReadAsBefore(t *testing.T) {
 
 // The same over bodies made at random from a fixed seed: 3,000 of them, of
 // sizes up to 5 MiB but nearly all small or near a round size, with limits and declared lengths near the size and far from it.
+// Under the race detector they are the first 600 of those.
 func TestARandomBodyIsReadAsBefore(t *testing.T) {
 	r := rand.New(rand.NewPCG(20261002, 2))
 	near := func(n int64) int64 { return max(0, n+int64(r.IntN(5))-2) }
-	for i := 0; i < 3000 && !t.Failed(); i++ {
+	for i := 0; i < alloctest.UnlessRaced(3000, 600) && !t.Failed(); i++ {
 		var size int
 		switch n := r.IntN(200); {
 		case n == 0:

@@ -10,6 +10,7 @@ import (
 
 	"github.com/eenchev/prometheus-universal-exporter/internal/fetch"
 	"github.com/eenchev/prometheus-universal-exporter/internal/model"
+	"github.com/eenchev/prometheus-universal-exporter/internal/testutil/alloctest"
 	"github.com/eenchev/prometheus-universal-exporter/internal/transform"
 	"gopkg.in/yaml.v3"
 )
@@ -206,7 +207,9 @@ func TestEveryDurationKeyTakesTextOrTheNumberZero(t *testing.T) {
 // what the exporter asks (transform.checkValueRules). The empty key is the
 // length's to refuse. The pattern is written for Go and for JavaScript
 // alike, so it holds no escape only one of them reads: none but \t, \n, \v,
-// \f, \r, \s, \S and \x with two digits.
+// \f, \r, \s, \S and \x with two digits. Under the race detector every
+// blank and every character of ASCII is tried still, and one in five of the
+// others that a run without it tries.
 func TestTheValueMapKeyPatternRefusesWhatTrimSpaceTakesOff(t *testing.T) {
 	rule := valueMapKeys()
 	if rule["minLength"] != 1 {
@@ -224,6 +227,9 @@ func TestTheValueMapKeyPatternRefusesWhatTrimSpaceTakesOff(t *testing.T) {
 			// Past the last blank, one character in 97 is tried.
 			continue
 		}
+		if alloctest.RaceDetector && !unicode.IsSpace(r) && r > unicode.MaxASCII && r%5 != 0 {
+			continue
+		}
 		for _, key := range []string{string(r), string(r) + "up", "up" + string(r), "u" + string(r) + "p", string(r) + "u\np" + string(r)} {
 			keys++
 			if got, want := pattern.MatchString(key), strings.TrimSpace(key) == key; got != want {
@@ -231,7 +237,7 @@ func TestTheValueMapKeyPatternRefusesWhatTrimSpaceTakesOff(t *testing.T) {
 			}
 		}
 	}
-	if blanks != 25 || keys < 100000 {
+	if blanks != 25 || keys < alloctest.UnlessRaced(100000, 20000) {
 		t.Fatalf("%d blanks and %d keys were tried", blanks, keys)
 	}
 	for _, key := range []string{"up", "*", "a b", "a\tb", "1", "a\n\nb", "\u200Bup", "up\uFEFF"} {

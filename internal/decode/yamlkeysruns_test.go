@@ -44,12 +44,11 @@ func yamlAsTheLibrary(t *testing.T, document string, large int) yamlOutcome {
 // And a large mapping beside a list the walk does not decode, 5000 items of
 // small mappings under a key, costs the document nothing more where it has
 // no alias: nothing is kept of the sequences and mappings the library is
-// handed, which was a third more memory.
+// handed, which was a third more memory. Under the race detector, which no
+// allocation is measured under, the lists are of a thousand items, eight
+// parts of yamlLargeMapping, with ten mappings a hundred items apart.
 func TestTheItemsOfAYAMLSequenceBesideALargeMappingAreHandedToTheLibraryTogether(t *testing.T) {
-	items := 20000
-	if raceDetector {
-		items = 4000
-	}
+	items := alloctest.UnlessRaced(20000, 1000)
 	large := "{" + manyYAMLPairs(129, "", ", ") + "}"
 	for name, tc := range map[string]struct {
 		body  string
@@ -138,6 +137,13 @@ var yamlSequenceItemsRefused = []string{"!!int foo", "&q [1, *q]", "&q [*big, [*
 // walk's at each place a part of 128 begins or ends at, at two such places,
 // and at none. Each is decoded with a mapping large past one, two, four and
 // 128 keys, which is how many items a part has.
+//
+// Under the race detector the short sequences are of one to five items, one
+// of each way and not four, decoded with parts of two items and of 128, and
+// the long ones have an item of the walk's at every eighth of those places:
+// a mapping of 129 keys handed to the library two keys at a time is 65 calls
+// of it, for each such item of each sequence. A sequence of five is still
+// three parts of two.
 func TestAYAMLSequenceOfItemsOfTheWalkAndOfTheLibraryIsWhatTheLibraryMakesOfIt(t *testing.T) {
 	random := rand.New(rand.NewPCG(3, 129)) //nolint:gosec // documents for a test
 	large := "{" + manyYAMLPairs(129, "", ", ") + "}"
@@ -146,11 +152,11 @@ func TestAYAMLSequenceOfItemsOfTheWalkAndOfTheLibraryIsWhatTheLibraryMakesOfIt(t
 		return "- " + strings.ReplaceAll(of[random.IntN(len(of))], "LARGE", large) + "\n"
 	}
 	var documents []string
-	fills := 4
+	fills, longest := 4, 6
 	if raceDetector {
-		fills = 1
+		fills, longest = 1, 5
 	}
-	for length := 1; length <= 6; length++ {
+	for length := 1; length <= longest; length++ {
 		for ofTheWalk := range 1 << length {
 			for range fills {
 				var doc strings.Builder
@@ -220,7 +226,11 @@ func TestAYAMLSequenceOfItemsOfTheWalkAndOfTheLibraryIsWhatTheLibraryMakesOfIt(t
 		}
 	}
 	t.Logf("%d documents: %d decoded, %d with problems, %d refused", len(documents), decoded, problems, refused)
-	if !raceDetector && (decoded < 1500 || problems < 100 || refused < 100) {
+	leastDecoded, leastProblems, leastRefused := 1500, 100, 100
+	if raceDetector {
+		leastDecoded, leastProblems, leastRefused = 90, 12, 4
+	}
+	if decoded < leastDecoded || problems < leastProblems || refused < leastRefused {
 		t.Errorf("%d documents were decoded, %d had problems listed and %d were refused: the documents do not cover it", decoded, problems, refused)
 	}
 }

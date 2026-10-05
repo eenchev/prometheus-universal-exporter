@@ -10,6 +10,7 @@ import (
 
 	"github.com/eenchev/prometheus-universal-exporter/internal/expr"
 	"github.com/eenchev/prometheus-universal-exporter/internal/model"
+	"github.com/eenchev/prometheus-universal-exporter/internal/testutil/alloctest"
 )
 
 // A regex rule's value is the capture group named value when the regex has
@@ -282,7 +283,8 @@ func formerRegexSeries(ctx context.Context, out *model.MetricSet, text string, m
 // error word for word, for every expression, text, error mode and
 // requirement of the table — groups that are optional, blank, named
 // otherwise, nested, read by labels that exist and that do not, mapped and
-// scaled values, and text that is no number.
+// scaled values, and text that is no number. Under the race detector each
+// of them is read under one error mode of the three, the three in turn.
 func TestARegexWithoutAValueGroupReadsAsBefore(t *testing.T) {
 	half := 0.5
 	optional := false
@@ -309,14 +311,17 @@ func TestARegexWithoutAValueGroupReadsAsBefore(t *testing.T) {
 		{Required: &optional},
 	}
 	compared := 0
-	for _, expression := range expressions {
+	for e, expression := range expressions {
 		if re, err := expr.CompileRegex(expression); err != nil || re.SubexpIndex(regexValueName) >= 0 {
 			t.Fatalf("%s: %v, or it has a group named value", expression, err)
 		}
-		for _, text := range texts {
-			for _, labels := range labelSets {
-				for _, variant := range variants {
-					for _, mode := range []string{model.ErrorModeFail, model.ErrorModeLog, model.ErrorModeIgnore} {
+		for x, text := range texts {
+			for l, labels := range labelSets {
+				for v, variant := range variants {
+					for m, mode := range []string{model.ErrorModeFail, model.ErrorModeLog, model.ErrorModeIgnore} {
+						if !pairTaken(e+x+l+v, m, 3) {
+							continue
+						}
 						rule := variant
 						rule.Name, rule.Type, rule.Expression, rule.Labels, rule.ErrorMode = "m", model.GaugeMetricType, expression, labels, mode
 						c := &model.Collector{Name: "text", Transform: model.TransformConfig{Type: "regex"}}
@@ -332,7 +337,7 @@ func TestARegexWithoutAValueGroupReadsAsBefore(t *testing.T) {
 			}
 		}
 	}
-	if compared != len(expressions)*len(texts)*len(labelSets)*len(variants)*3 {
+	if compared != len(expressions)*len(texts)*len(labelSets)*len(variants)*alloctest.UnlessRaced(3, 1) {
 		t.Fatalf("compared %d cases", compared)
 	}
 }

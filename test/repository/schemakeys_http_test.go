@@ -35,11 +35,12 @@ const jqCollector = `collectors:
             # label
 `
 
-// A rule of a prometheus or python transform needs no name: the series a
-// prometheus rule passes through have their own, and a script names its.
+// A rule of a prometheus transform needs no name: the series it passes
+// through have their own. A python rule makes no series and names one of
+// the script's, which is all it says.
 const (
 	prometheusCollector = "collectors:\n  - name: demo\n    request:\n      type: http\n    transform:\n      type: prometheus\n    metrics:\n      - expression: '^up$'\n        # metric\n"
-	pythonCollector     = "collectors:\n  - name: demo\n    request:\n      type: http\n    transform:\n      type: python\n      script: metric('up', 1)\n      # transform\n    metrics:\n      - description: Whether it is up.\n        # metric\n"
+	pythonCollector     = "collectors:\n  - name: demo\n    request:\n      type: http\n    transform:\n      type: python\n      script: metric('up', 1)\n      # transform\n    metrics:\n      - name: up\n        # metric\n"
 )
 
 // passthroughCollector is a configuration of one prometheus collector
@@ -76,12 +77,33 @@ func httpSchemaKeys() []schemaKey {
 		{key: "collectors[].transform.type", document: jqCollector, at: "      type: jq\n", setting: "      type: %s\n", valid: "jq", invalid: "jsonpath"},
 		{key: "collectors[].request.type", document: jqCollector, at: "      type: http\n", setting: "      type: %s\n", valid: "http", invalid: "gopher"},
 		{key: "collectors[].metrics[].labels[].name", document: jqCollector, at: "            name: l\n", setting: "            name: %s\n", valid: "l", invalid: "bad-name"},
-		// A rule's name is required of every transform but prometheus and
-		// python: the schema took a rule without one, and refused "" where
-		// the exporter takes it.
+		// A rule's name is required of every transform but prometheus: the
+		// schema took a rule without one, and refused "" where the exporter
+		// takes it. A python rule names a series of the script, and one
+		// without a name, which both took, named none.
 		{key: "collectors[].metrics[].name", document: jqCollector, at: "        name: v\n", setting: "        name: %s\n", valid: "v", invalid: "bad-name", absentWas: taken},
 		{key: "collectors[].metrics[].name", of: "of a prometheus rule", document: prometheusCollector, at: metric, setting: "        name: %s\n", valid: "up", invalid: "bad-name", absent: true, empty: true, emptyWas: refused},
-		{key: "collectors[].metrics[].name", of: "of a python rule", document: pythonCollector, at: metric, setting: "        name: %s\n", valid: "up", invalid: "bad-name", absent: true, empty: true, emptyWas: refused},
+		{key: "collectors[].metrics[].name", of: "of a python rule", document: strings.Replace(pythonCollector, "      - name: up\n", "      - expression: up\n        name: up\n", 1), at: "        name: up\n", setting: "        name: %s\n", valid: "up", invalid: "bad-name", absentWas: taken},
+		// What a python rule does not take, the script saying it of its
+		// series itself: both refuse each written, which both took, and
+		// take each left out and, where it is text, written "". required
+		// is a boolean, which has no empty form.
+		{key: "collectors[].metrics[].type", of: "of a python rule", document: pythonCollector, at: metric, setting: "        type: %s\n", invalid: "counter", invalidWas: taken, absent: true, empty: true, emptyWas: refused},
+		{key: "collectors[].metrics[].description", of: "of a python rule", document: pythonCollector, at: metric, setting: "        description: %s\n", invalid: "Whether it is up.", invalidWas: taken, absent: true, empty: true},
+		{key: "collectors[].metrics[].error_mode", of: "of a python rule", document: pythonCollector, at: metric, setting: "        error_mode: %s\n", invalid: "fail", invalidWas: taken, absent: true, empty: true, emptyWas: refused},
+		{key: "collectors[].metrics[].required", of: "of a python rule", document: pythonCollector, at: metric, setting: "        required: %s\n", invalid: "true", invalidWas: taken, absent: true},
+		{key: "collectors[].metrics[].required", of: "of a python rule, false", document: pythonCollector, at: metric, setting: "        required: %s\n", invalid: "false", invalidWas: taken, absent: true},
+		// A prometheus rule's expression is a regular expression over
+		// metric names: both refuse one of nothing but blanks, which both
+		// took, and take it left out and written "", the rule then
+		// matching the metric of its name.
+		{key: "collectors[].metrics[].expression", of: "of a prometheus rule", document: strings.Replace(prometheusCollector, "- expression: '^up$'\n", "- name: up\n", 1), at: metric, setting: "        expression: %s\n", valid: `"^up$"`, invalid: `"  "`, invalidWas: taken, absent: true, empty: true},
+		// A prometheus rule says which metrics it is about by its
+		// expression or, without one, by its name: both refuse a rule with
+		// neither, the one key it has left out or written "", which the
+		// exporter took, and the schema but for a name written "".
+		{key: "collectors[].metrics[].name", of: "of a prometheus rule without an expression", document: strings.Replace(prometheusCollector, "- expression: '^up$'\n", "- required: true\n        name: up\n", 1), at: "        name: up\n", setting: "        name: %s\n", valid: "up", invalid: "bad-name", absentWas: taken},
+		{key: "collectors[].metrics[].expression", of: "of a prometheus rule without a name", document: strings.Replace(prometheusCollector, "- expression: '^up$'\n", "- required: true\n        expression: '^up$'\n", 1), at: "        expression: '^up$'\n", setting: "        expression: %s\n", valid: `"^up$"`, invalid: `"  "`, invalidWas: taken, absentWas: taken, emptyWas: taken},
 		// Optional, with allowed values or a pattern: "" is the default.
 		{key: "collectors[].metrics_prefix", document: jqCollector, at: collector, setting: "    metrics_prefix: %s\n", valid: "grafana", invalid: "grafana_", absent: true, empty: true, emptyWas: refused},
 		{key: "collectors[].name_escaping", document: jqCollector, at: collector, setting: "    name_escaping: %s\n", valid: "underscores", invalid: "escape", absent: true, empty: true, emptyWas: refused},
@@ -113,6 +135,9 @@ func httpSchemaKeys() []schemaKey {
 		// A python rule's label names a label of the script's series and
 		// sets no constant: both refuse a value there, which both took.
 		{key: "collectors[].metrics[].labels[].value", of: "of a python rule's label", document: pythonLabel, at: "            expression: note\n", setting: "            value: %s\n", invalid: "x", invalidWas: taken},
+		// And it cuts that label, which is all it does: both refuse one
+		// without truncate: true, which both took.
+		{key: "collectors[].metrics[].labels[].truncate", of: "of a python rule's label", document: pythonLabel, at: "            truncate: true\n", setting: "            truncate: %s\n", valid: "true", invalid: "false", invalidWas: taken, absentWas: taken},
 		{key: "collectors[].metrics[].labels[].expression", of: "of blanks beside a value, in a csv rule", document: strings.NewReplacer("type: jq", "type: csv", "expression: .v", "expression: v", "expression: .l\n", "value: x\n").Replace(jqCollector), at: label, setting: "            expression: %s\n", invalid: `"\t "`, absent: true, empty: true, emptyWas: refused},
 		// Free text of at most one character: "" was the default already.
 		{key: "collectors[].response.csv.delimiter", document: csvCollector("';'"), at: "    response:\n      csv:\n        delimiter: ';'\n", setting: "    response:\n      csv:\n        delimiter: %s\n", valid: "';'", invalid: "';;'", absent: true, empty: true},
@@ -195,15 +220,16 @@ func TestSchemaAndExporterAgreeOnAnEmptyKeyBesideARule(t *testing.T) {
 		document string
 		accepted bool
 	}{
-		`otlp with compression: "" and no enabled`:     {"otlp: {compression: \"\"}\n" + testutil.MinimalConfig, false},
-		`otlp switched off with compression: ""`:       {"otlp: {enabled: false, compression: \"\"}\n" + testutil.MinimalConfig, true},
-		`a label with an expression and value: ""`:     {strings.Replace(jqCollector, "            # label\n", "            value: \"\"\n", 1), true},
-		`a label with both written ""`:                 {strings.Replace(strings.Replace(jqCollector, "expression: .l\n", "expression: \"\"\n", 1), "            # label\n", "            value: \"\"\n", 1), false},
-		`a label with a value and an expression`:       {strings.Replace(jqCollector, "            # label\n", "            value: x\n", 1), false},
-		`a label with a value of one blank`:            {strings.Replace(jqCollector, "expression: .l\n", "value: \" \"\n", 1), true},
-		`a label whose value YAML reads as a number`:   {strings.Replace(jqCollector, "expression: .l\n", "value: 0\n", 1), true},
-		`a prometheus rule with name: "" and a type`:   {strings.Replace(prometheusCollector, "        # metric\n", "        name: \"\"\n        type: \"\"\n", 1), true},
-		`a jq rule with every optional key written ""`: {strings.Replace(jqCollector, "        # metric\n", "        type: \"\"\n        error_mode: \"\"\n        description: \"\"\n        items: \"\"\n        time_format: \"\"\n        time_zone: \"\"\n", 1), true},
+		`otlp with compression: "" and no enabled`:         {"otlp: {compression: \"\"}\n" + testutil.MinimalConfig, false},
+		`otlp switched off with compression: ""`:           {"otlp: {enabled: false, compression: \"\"}\n" + testutil.MinimalConfig, true},
+		`a label with an expression and value: ""`:         {strings.Replace(jqCollector, "            # label\n", "            value: \"\"\n", 1), true},
+		`a label with both written ""`:                     {strings.Replace(strings.Replace(jqCollector, "expression: .l\n", "expression: \"\"\n", 1), "            # label\n", "            value: \"\"\n", 1), false},
+		`a label with a value and an expression`:           {strings.Replace(jqCollector, "            # label\n", "            value: x\n", 1), false},
+		`a label with a value of one blank`:                {strings.Replace(jqCollector, "expression: .l\n", "value: \" \"\n", 1), true},
+		`a label whose value YAML reads as a number`:       {strings.Replace(jqCollector, "expression: .l\n", "value: 0\n", 1), true},
+		`a prometheus rule with name: "" and a type`:       {strings.Replace(prometheusCollector, "        # metric\n", "        name: \"\"\n        type: \"\"\n", 1), true},
+		`a jq rule with every optional key written ""`:     {strings.Replace(jqCollector, "        # metric\n", "        type: \"\"\n        error_mode: \"\"\n        description: \"\"\n        items: \"\"\n        time_format: \"\"\n        time_zone: \"\"\n", 1), true},
+		`a python rule with every optional key written ""`: {strings.Replace(pythonCollector, "        # metric\n", "        type: \"\"\n        error_mode: \"\"\n        description: \"\"\n        expression: \"\"\n        items: \"\"\n        time_format: \"\"\n        time_zone: \"\"\n", 1), true},
 	} {
 		agree(t, schema, name, test.document, test.accepted)
 	}

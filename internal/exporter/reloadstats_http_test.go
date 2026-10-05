@@ -16,6 +16,7 @@ import (
 	"github.com/eenchev/prometheus-universal-exporter/internal/config"
 	"github.com/eenchev/prometheus-universal-exporter/internal/model"
 	"github.com/eenchev/prometheus-universal-exporter/internal/testutil"
+	"github.com/eenchev/prometheus-universal-exporter/internal/testutil/alloctest"
 )
 
 // holdFirstProbeOf makes the first probe of collector wait where it has read
@@ -400,7 +401,10 @@ func oldStatsFor(s *Server, name string) *serverStats {
 // that keep it, among configurations that remove, add and change the
 // collectors beside it and change its own definition, a caller of every
 // earlier configuration, the reader of the self-metrics and a caller by name
-// are given the very statistics the lookup by name gave.
+// are given the very statistics the lookup by name gave. Under the race
+// detector it is every thirteenth sequence, 20 of the 256, which have every
+// configuration at every step, and every configuration after every other,
+// with verbose self-metrics and without.
 func TestACollectorThatStaysHasTheStatisticsItHadThroughEveryReload(t *testing.T) {
 	kept, gone, added := testutil.Collector("kept", "text"), testutil.Collector("gone", "text"), testutil.Collector("added", "text")
 	changed := testutil.Collector("kept", "text")
@@ -412,6 +416,9 @@ func TestACollectorThatStaysHasTheStatisticsItHadThroughEveryReload(t *testing.T
 		sequences *= len(variants)
 	}
 	for sequence := range sequences {
+		if alloctest.RaceDetector && sequence%13 != 0 {
+			continue
+		}
 		server := verboseServer(t, sequence%2 == 0, kept, gone)
 		server.logger = testutil.QuietLogger(t)
 		first := server.statsFor("kept")
@@ -519,7 +526,10 @@ func keptCounters(t *testing.T, server *Server) string {
 // steps, each a probe, a reload that removes the collector beside it, one
 // that brings that back and adds another, or a probe held across such a
 // reload, its counters, its histogram's count and its request's series are
-// those of a server that made the same probes and was never reloaded.
+// those of a server that made the same probes and was never reloaded. Under
+// the race detector it is every third sequence, 22 of the 64, which have
+// every step first, second and third, and every step after every other,
+// with verbose self-metrics and without.
 func TestACollectorThatStaysCountsAsItDidThroughReloads(t *testing.T) {
 	target := textTarget(t, "value=42\n")
 	kept, gone, added := testutil.Collector("kept", "text"), testutil.Collector("gone", "text"), testutil.Collector("added", "text")
@@ -530,6 +540,9 @@ func TestACollectorThatStaysCountsAsItDidThroughReloads(t *testing.T) {
 		sequences *= len(steps)
 	}
 	for sequence := range sequences {
+		if alloctest.RaceDetector && sequence%3 != 0 {
+			continue
+		}
 		verbose := sequence%2 == 0
 		reloaded, never := verboseServer(t, verbose, kept, gone), verboseServer(t, verbose, kept, gone)
 		reloaded.logger, never.logger = testutil.QuietLogger(t), testutil.QuietLogger(t)

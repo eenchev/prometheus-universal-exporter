@@ -20,6 +20,7 @@ import (
 
 	"github.com/eenchev/prometheus-universal-exporter/internal/model"
 	"github.com/eenchev/prometheus-universal-exporter/internal/testutil"
+	"github.com/eenchev/prometheus-universal-exporter/internal/testutil/alloctest"
 )
 
 // A probe that carries on past a failed stage, under error_handling log or
@@ -653,7 +654,12 @@ func tripOf(t *testing.T, server *Server, name, target string, trip func(context
 // answered before: over a table of collectors and a generated one of the
 // statuses and bodies a target answers. A trip that carried on was answered
 // without any header and without a body in every format, which is what
-// changed.
+// changed. Under the race detector the target answers every body with 200
+// and each other status with one body, a different one each, and a collector
+// that keeps no result makes one trip to each: what a trip makes of a body
+// does not depend on which status it accepted, a status it does not accept
+// ends it before the body, and a second trip that no cache answers is the
+// first again.
 func TestOnlyTheAnswerOfATripThatCarriedOnChanged(t *testing.T) {
 	testutil.CaptureLogs(t)
 	type collectorCase struct {
@@ -676,7 +682,13 @@ func TestOnlyTheAnswerOfATripThatCarriedOnChanged(t *testing.T) {
 			c.Metrics = []model.MetricRule{{Name: "demo_value", Type: model.GaugeMetricType, Expression: "//value"}}
 		}},
 		{name: "denied", setup: func(c *model.Collector) { c.Request.DeniedTargets = []string{"127.0.0.1"} }},
-		{name: "limited", setup: func(c *model.Collector) { c.Limits.MaxMetrics = 1; c.Metrics = append(c.Metrics, c.Metrics[0]) }},
+		{name: "limited", setup: func(c *model.Collector) {
+			// A second rule that makes a second series: the same rule
+			// twice, which made one too, is refused when it loads.
+			second := c.Metrics[0]
+			second.Labels = []model.LabelRule{{Name: "copy", Value: "2"}}
+			c.Limits.MaxMetrics, c.Metrics = 1, append(c.Metrics, second)
+		}},
 	}
 	for _, policy := range []string{model.ErrorPolicyLog, model.ErrorPolicyIgnore} {
 		collectors = append(collectors,
@@ -711,8 +723,8 @@ func TestOnlyTheAnswerOfATripThatCarriedOnChanged(t *testing.T) {
 		body        string
 	}
 	var answers []answer
-	for _, status := range []int{http.StatusOK, http.StatusAccepted, http.StatusUnauthorized, http.StatusForbidden, http.StatusNotFound, http.StatusInternalServerError, http.StatusServiceUnavailable} {
-		for _, body := range []struct{ contentType, text string }{
+	for s, status := range []int{http.StatusOK, http.StatusAccepted, http.StatusUnauthorized, http.StatusForbidden, http.StatusNotFound, http.StatusInternalServerError, http.StatusServiceUnavailable} {
+		for b, body := range []struct{ contentType, text string }{
 			{"text/plain", "value=42\n"},
 			{"text/plain", "value=1\nvalue=2\n"},
 			{"text/plain", "nothing\n"},
@@ -723,6 +735,9 @@ func TestOnlyTheAnswerOfATripThatCarriedOnChanged(t *testing.T) {
 			{"application/xml", "<r><value>3</value></r>"},
 			{"application/xml", "<r><value>3</value>"},
 		} {
+			if alloctest.RaceDetector && s > 0 && b != s {
+				continue
+			}
 			answers = append(answers, answer{status, body.contentType, body.text})
 		}
 	}
@@ -742,7 +757,11 @@ func TestOnlyTheAnswerOfATripThatCarriedOnChanged(t *testing.T) {
 		t.Helper()
 		// Twice, so the cache answers the second trip of a collector that
 		// has one.
-		for trip := range 2 {
+		trips := 2
+		if alloctest.RaceDetector && !model.UsesCache(model.CollectorByName(before.manager.Get(), tc.name)) {
+			trips = 1
+		}
+		for trip := range trips {
 			was := tripOf(t, before, tc.name, address, probeTripBeforeCarriedOnWasRendered)
 			is := tripOf(t, after, tc.name, address, func(ctx context.Context, s *Server, p upstreamProbe) *probeResult { return s.probeTrip(ctx, p) })
 			compared++

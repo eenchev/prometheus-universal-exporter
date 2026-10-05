@@ -8,6 +8,7 @@ import (
 	"sort"
 	"strings"
 	"testing"
+	"time"
 
 	"gopkg.in/yaml.v3"
 )
@@ -404,6 +405,57 @@ func TestCIAndMakeTestEveryRequestTypeOnItsOwn(t *testing.T) {
 	}
 	if !regexp.MustCompile(`(?m)^ci:.*\btest-request-types\b`).MatchString(makefile) {
 		t.Error("make ci does not include test-request-types")
+	}
+}
+
+// The suite runs twice and shuffled under the race detector, where a package
+// takes several times what it takes without: go test's own limit of ten
+// minutes a package, meant for one plain run, was what a slow machine would
+// have failed on before any test did. So the command carries a limit of its
+// own, at least twice go test's, CI runs it under the condition of its other
+// Go steps, and `make test` runs the very same command, so that what passes
+// here is what passes there.
+func TestCIAndMakeRunTheRaceSuiteWithALimitOfItsOwn(t *testing.T) {
+	pattern := regexp.MustCompile(`(?m)^go test -race -count=2 -shuffle=on -timeout (\S+) \./\.\.\.$`)
+	steps := workflowSteps(t, ".github/workflows/ci.yml")["test"]
+	var command string
+	for _, step := range steps {
+		run, _ := step["run"].(string)
+		if !strings.Contains(run, "-race") {
+			continue
+		}
+		if command != "" {
+			t.Fatalf("ci.yml runs the race detector in more than one step: %q and %q", command, strings.TrimSpace(run))
+		}
+		command = strings.TrimSpace(run)
+		if condition := step["if"]; condition != "steps.changes.outputs.go == 'true'" {
+			t.Errorf("ci.yml runs %q under the condition %q, not that of its Go steps", command, condition)
+		}
+	}
+	match := pattern.FindStringSubmatch(command)
+	if match == nil {
+		t.Fatalf("ci.yml runs the race detector with %q, not twice, shuffled and with a limit of its own (%s)", command, pattern)
+	}
+	limit, err := time.ParseDuration(match[1])
+	if err != nil {
+		t.Fatalf("ci.yml gives the race suite the limit %q: %v", match[1], err)
+	}
+	// go test stops a package after ten minutes unless told otherwise.
+	if limit < 20*time.Minute {
+		t.Errorf("ci.yml gives a package %s under the race detector; twice go test's own ten minutes is the least", limit)
+	}
+	target := regexp.MustCompile(`(?m)^test:\n((?:\t.*\n)+)`).FindStringSubmatch(read(t, "Makefile"))
+	if target == nil {
+		t.Fatal("the Makefile has no test target")
+	}
+	var raced []string
+	for line := range strings.SplitSeq(target[1], "\n") {
+		if line = strings.TrimSpace(line); strings.Contains(line, "-race") && !strings.HasPrefix(line, "@#") {
+			raced = append(raced, line)
+		}
+	}
+	if len(raced) != 1 || raced[0] != command {
+		t.Errorf("make test runs the race detector with %q, but ci.yml with %q", raced, command)
 	}
 }
 

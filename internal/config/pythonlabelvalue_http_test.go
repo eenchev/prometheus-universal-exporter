@@ -15,9 +15,11 @@ import (
 // such a label, value: x, loaded and did nothing: the script's series did
 // not get site="x", with nothing said. The load refuses it now, naming the
 // collector, the metric and the label, and saying where a constant for every
-// series goes. A label that names a script's label, with an expression that
-// is not read, loads as it did, with truncate or without, and so does one
-// whose value is written "", which is the key left out.
+// series goes. A label that names a script's label to cut, with an
+// expression that is not read, loads as it did, and so does one whose value
+// is written "", which is the key left out. (A label without truncate: true,
+// which loaded then, cuts nothing and is refused for that since:
+// TestAPythonRuleNamesASeriesAndItsLabelsCutOne.)
 func TestAPythonRulesLabelWithAConstantValueIsRefused(t *testing.T) {
 	const want = `collector "racks" metric "cpu" label "site" sets value, which a python rule's label does not take: the script sets the labels of its series itself, with metric(..., labels={...}), and a rule's label only names one of them to cut with truncate: true; for a constant on every series of the collector, set transform.labels`
 	for _, label := range []string{
@@ -30,7 +32,7 @@ func TestAPythonRulesLabelWithAConstantValueIsRefused(t *testing.T) {
 		}
 	}
 	for _, label := range []string{
-		"            expression: site\n            truncate: true\n", "            expression: site\n", "            expression: site\n            value: \"\"\n            truncate: true\n",
+		"            expression: site\n            truncate: true\n", "            expression: site\n            value: \"\"\n            truncate: true\n",
 	} {
 		cfg, err := Load(testutil.WriteFile(t, "config.yaml", labelCollector("python", label)))
 		if err != nil {

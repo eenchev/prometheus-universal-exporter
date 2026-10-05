@@ -1465,6 +1465,15 @@ The JSON decoder MUST:
   the line and column of the byte that cannot be there.
 - Refuse anything but whitespace after the value, such as NDJSON's second
   record, saying NDJSON is not supported, rather than dropping it.
+- Read arrays and objects nested 10,000 deep, and refuse a document nested
+  deeper, saying so with the line and column where it is. That depth is the
+  one limit on how deep the lists and mappings of a decoded value nest,
+  whichever decoder made it: a response of any format MUST decode into a
+  value nested no deeper, and one that would nest deeper MUST be refused when
+  it is decoded, saying so (§ 10 for YAML; the other formats decode into
+  values a few levels deep, or into text). The limit MUST be stated once,
+  with the decoders; what depends on how deep a decoded value nests (§ 16.7)
+  MUST take it from there, and MUST NOT state a limit of its own beside it.
 - Read a whole number of more than 4,096 digits, sign included, as its text,
   every digit kept, rather than as a number: reading that many digits as an
   integer takes time growing with the square of their count, which a body
@@ -1599,23 +1608,60 @@ The YAML decoder MUST:
   is as deep as the document is nested plus the length of its alias chains,
   which the library bounds by neither its limit on nesting nor its limit on
   how much the aliases may expand to, so it is bounded here instead (below).
-- Refuse a document nested, through the targets of its aliases, deeper than
-  the parser lets a document be written — the parser bounds nesting at 10,000
-  (`max_indents`, `max_flow_level`) — before anything decodes it, on every way
-  a document is decoded, the library's own included: the depth of a node is 1
-  plus the deepest of the nodes it holds, an alias counting as its target's
-  depth plus 1, as the library's decoding recurses, and a merge key's value is
-  a node it holds. The depth MUST be found in the one look through the
-  document already taken, memoised and in a stack no deeper than the document
-  is nested, so that an alias chain is no stack of its own, and MUST terminate
-  on an anchor that holds itself, which keeps the refusal it has (`anchor 'a'
-  value contains itself`). This refuses a chain of anchors that each hold an
-  alias of the one before (`a0: &a0 [x]`, `a1: &a1 [*a0]`, ...) more than
-  10,000 links deep, which the library decodes today, a stack of one level a
-  link that a chain within `max_response_bytes` could grow past Go's own limit
-  and fail the process fatally; that the exporter refuses such a document
-  where the library decodes it is the accepted cost, a further way it MAY
-  treat a document otherwise than the library does (below).
+- Refuse a document nested deeper than 10,000, the one limit of every
+  decoded value (§ 9), before anything decodes it, on every way a document is
+  decoded, the library's own included, and whether or not it has an alias,
+  with one message for every such document: `yaml: the document is nested
+  more than 10000 deep, counting what its aliases stand for; a response may
+  nest 10000 deep at most`. What is counted is what § 9 counts, the
+  sequences and mappings one inside another: a scalar is no level, a sequence
+  or a mapping is 1 more than the deepest of the nodes it holds, and an alias
+  is as deep as what it stands for, itself no level. The nodes a mapping
+  holds are its keys, its values and the value of a merge key, which counts
+  as it is written, one level in, though its keys become the mapping's own.
+  A document that decodes therefore decodes into a value nested no deeper
+  than 10,000, and exactly as deep as it is counted wherever the value is
+  nested as the document is written, which a mapping merged is not. The
+  library MUST NOT be relied on for the limit: its parser bounds nesting by
+  indentation and nesting in brackets apart, at 10,000 each (`max_indents`,
+  `max_flow_level`), and refuses a document past either in its own words
+  (`yaml: exceeded max depth of 10000`, or `yaml: line N: exceeded max depth
+  of 10000` where the line it names is not the document's first); brackets
+  inside indentation therefore parse nested 20,000 deep, and 30,000 where
+  sequences stand under mappings' keys without being indented, a level of
+  indentation being two collections there. The parser's refusal is of a
+  document nested deeper than the limit as well, each of its levels being a
+  sequence or a mapping, and its words do not say what the 10000 bounds: it
+  MUST read as the exporter's own, the one message above, so that a document
+  nested too deep is refused in the same words whichever of the two refuses
+  it. Where the parser names a line the message MUST keep it, in the
+  library's place for one (`yaml: line 3: the document is nested more than
+  10000 deep, ...`): the line the level too many opens on, or, of levels of
+  indentation, the line of the last key or value written before them. The
+  failure MUST be recognised (§ 25.1) by the message without the line, with
+  or without one and whichever of the two refused the document. Only the
+  whole of the library's text for that refusal MUST be read as it — `exceeded
+  max depth of ` and the depth that is the limit, after `line N: ` or after
+  nothing, N a number from 1 — and any other text MUST be left as the
+  library wrote it. The
+  depth of a document without an alias MUST be found in the one look through
+  the document already taken, with no second pass over it and no allocation;
+  through aliases it MUST be found memoised and in a stack no deeper than the
+  document is nested, so that an alias chain is no stack of its own, and MUST
+  terminate on an anchor that holds itself, which keeps the refusal it has
+  (`anchor 'a' value contains itself`). The same count bounds the stack of
+  the decoding, where the library calls itself for each sequence and mapping
+  and, on the way to one, for no more than one alias and one merge: a
+  document within the limit MUST be decoded in a stack of no more than 16 MB.
+  This refuses a chain of anchors that each hold an alias of the one before
+  (`a0: &a0 [x]`, `a1: &a1 [*a0]`, ...) more than 10,000 links deep, which the
+  library decodes today, a stack of one level a link that a chain within
+  `max_response_bytes` could grow past Go's own limit and fail the process
+  fatally, and a document without an alias that the parser's two bounds let
+  through nested deeper than 10,000, which the library decodes too; that the
+  exporter refuses such documents where the library decodes them is the
+  accepted cost, a further way it MAY treat a document otherwise than the
+  library does (below).
 - Refuse a key written twice in one mapping, in the YAML library's words
   (`line 3: mapping key "a" already defined at line 1`, a problem for each
   two of them, named and counted as above), and decode every other document
@@ -1625,12 +1671,13 @@ The YAML decoder MUST:
   problems of no more than 64 kB of text, counted as 64 bytes and the key
   for each — a key of one or two bytes written 45 times, one of three bytes
   written 44 times — MUST be decoded, and refused, by the library itself,
-  unless it is nested through its aliases past the bound above, which refuses
-  any document whatever its mappings. Only a document past one of these MAY be
+  unless it is nested past the bound above, which refuses any document
+  whatever its mappings. Only a document past one of these MAY be
   treated otherwise than the library treats it, and only in this:
-  - Nested through its aliases past the bound above, it is refused for its
-    depth before it is decoded, where the library, which bounds the stack of
-    its own decoding by neither nesting nor aliasing, would decode it.
+  - Nested past the bound above, it is refused for its depth before it is
+    decoded, where the library, which bounds neither the whole of a
+    document's nesting nor the stack of its own decoding through aliases,
+    would decode it.
   - With keys written twice, its error is of the keys written twice alone,
     each mapping's listed once, where it is written. The library reported
     another error instead where it met one that ends the decoding, listed a
@@ -2599,6 +2646,22 @@ or the help being none given), labels that are not a mapping, and an entry of
 metric and the argument, whether given to `metric(...)` or appended; the
 message MUST NOT be the JSON decoder's error about the exporter's own types.
 
+A metric is flat: its name, type, value, help and timestamp are one value
+each, and its labels a mapping of one value each. A list or a dict where one
+value belongs — given to `metric(...)`, or in an entry appended to `metrics`,
+or as such an entry — MUST fail the scrape as a script's failure (§ 16.7),
+with a message that names the metric where it has a name, the part of it,
+and what stands there by its kind and the number of its items, as a value is
+named elsewhere (§ 18.1): `metric "m" help an array of 3 items is not a
+string`, `metric "m" label "l" is an array of 3 values, not a single value;
+select one, or join them with join(",")` for an entry, `metric 'm' help a
+list of 3 items is not a string` from `metric(...)`. The message MUST be the
+same whatever the list or the dict holds and however deep it nests, a list
+that holds itself included: it MUST NOT be written out in the message, and
+the failure MUST NOT be the interpreter's `RecursionError` or a traceback of
+the worker's own frames. A key of an entry that no metric has MUST NOT be
+read, whatever it holds.
+
 A series typed `histogram` MUST have buckets and one typed `summary`
 quantiles, and a series with either MUST have that type; a `prometheus` rule
 MUST NOT give a histogram or summary another type, nor another series one of
@@ -2804,13 +2867,82 @@ typical script.
   of it is walked for NaN and the infinities; a worker MAY write without that
   walk an answer of dicts, lists, tuples, strings, booleans, `None` and finite
   numbers, each of exactly that type, nested no deeper than half the
-  interpreter's recursion limit less ten, and MUST walk any other, so that
-  `limits.max_output_bytes` bounds what it bounded and an answer nested too
-  deep to walk fails as it did. An answer MUST be read into the series, the
+  interpreter's recursion limit less ten, and a transform's no deeper than
+  its metrics' label values, and MUST walk any other it writes, so that
+  `limits.max_output_bytes` bounds what it bounded. An answer MUST be read
+  into the series, the
   data or the error it holds whichever way it is read: an entry of `metrics`
   that is not what `metric(...)` appends MUST be checked as § 16.2 says, a
   metric past `limits.max_metrics` MUST be refused before one that is wrong,
   and a line that is no answer MUST fail the run.
+- The hand-over MUST NOT bound how deep `data` nests: a response that
+  decodes MUST reach its script, and what a pre-script leaves in `data` MUST
+  be read back, nested as deep as a decoder makes a value, whichever Python
+  runs the script. That depth MUST be stated once, with the decoders — it is
+  the one limit of them all, the 10,000 levels of a JSON document (§ 9), to
+  which a YAML document is held as well (§ 10) — and whatever writes a
+  request, reads an answer or runs in a worker MUST take it from there,
+  counting the object its own line puts around `data` apart, so that no two
+  of them are equal only by having been written alike. A worker's
+  interpreter bounds how deep its `json` module
+  follows a document: by the recursion limit, 1000, up to Python 3.11; from
+  3.12 by a limit of its own on nested calls in C, 10,000 in a release build
+  on Linux, which no script changes; from 3.14 by what the stack holds. Where
+  `json` refuses a request, or what a pre-script left in `data`, for its
+  depth, the worker MUST read or write it without a call for each level, into
+  the value and the line `json` makes of what it does not refuse, and MUST
+  NOT raise the interpreter's recursion limit to do so, which trades the
+  error for the end of the interpreter. Every other request and answer MUST
+  be read and written as it was. `data` a pre-script leaves nested deeper
+  than a decoder makes a value, or holding itself, MUST fail the run as the
+  script's failure, saying how deep `data` may nest; the worker MUST outlive
+  it, as it does the deepest it carries. What a transform appends to
+  `metrics` is not a response's and is not carried: a metric is flat
+  (§ 16.2), and nothing is read of what is nested inside a list or a dict
+  that stands where a metric has one value, or under a key no metric has.
+  Metrics that the walk and `json` cannot follow for what a script nested in
+  them, however deep or holding itself, MUST therefore be written without
+  it, each item of such a list or dict as `null`, so that the entry is read,
+  and refused or taken, as it is where the worker writes all of it; every
+  other answer MUST be the line it was. The worker MUST outlive it and MUST
+  NOT raise the recursion limit for it either, and MUST NOT look through a
+  transform's answer level after level for what a script nested in it, which
+  for a list holding itself twice is twice as much at each.
+- A list or a dict that is in an answer more than once has no JSON form but
+  its copy: it MUST be written each time it is met, so that `x = [1, 2];
+  data = [x, x]` is read back as two lists. What an answer is written as can
+  therefore be many times what its script built — lists that each hold the
+  next twice, forty of them, are forty lists and 2^40 numbers written — and
+  has no end where a list or a dict holds itself. A worker MUST NOT go
+  through such an answer as it is written: whatever it does with an answer
+  that holds a list or a dict more than once, or in itself, MUST take time
+  and memory in proportion to what the script built, each list and dict gone
+  through once however often it is there, or to `limits.max_output_bytes`,
+  and to neither the depth of the answer nor the length it is written in.
+  `data` that holds a list or a dict in itself MUST fail the run as the
+  script's failure, with the message of `data` nested too deep, found where
+  a walk that knows the lists and dicts it is inside of comes back to one of
+  them, and so at the same cost whether it holds itself once or twice.
+  `data` that holds a list or a dict more than once and cannot be written
+  within `limits.max_output_bytes` whatever its values are — a byte for each
+  value, a string's and a key's length for each — MUST fail the run as the
+  script's failure, `python pre-script failed: OverflowError: what the
+  script left in data is longer than limits.max_output_bytes (N bytes)
+  written out, a list or a dict that is there more than once being written
+  each time; leave less there, or raise limits.max_output_bytes`, without
+  being written or copied out. A transform's `metrics` that hold such a list
+  or dict MUST be written without what no metric has, as those the walk
+  cannot follow are, an entry that is there many times made once; and where
+  they are longer than the limit even so, the run MUST fail the same way,
+  `... left in metrics ...`. The worker MUST outlive each of these. An
+  answer that holds no list or dict twice MUST NOT be measured by the
+  worker: it MUST be written as it was whatever its length, the walk that
+  looks through it only counting its values, and one longer than
+  `limits.max_output_bytes` MUST end as it did, with the output limit's
+  error and its worker. An answer written before MUST be the line it was. A
+  string is no list: one that an answer holds many times is written each
+  time, and bounded by `limits.script_timeout` and
+  `limits.max_script_memory` alone.
 - A worker MUST say, with a line of its own before it runs the script, that
   it has read and parsed the request. `limits.script_timeout` MUST bound the
   run of a script from that line on: not the start of the interpreter, which
@@ -3188,7 +3320,9 @@ items`, `null`). A boolean MUST be read as `1` or `0`. What it does:
   per series. Rules MUST be told apart by their metric name, their expression
   and their `items`, and each MUST be recorded by itself: several rules of
   one metric name MUST NOT be recorded as one, with the error of the first;
-  rules alike in all three are one rule, which MUST be recorded as `log`
+  rules alike in all three, whose series their labels tell apart (alike in
+  those too they are the same rule, refused at load, as below), are one
+  rule, which MUST be recorded as `log`
   records it when either of them has `log`, whichever comes first. Two rules
   that differ in any of the three MUST NOT be taken for one whatever their
   expression and `items` hold, a NUL in a comment or a string of a jq or css
@@ -3308,6 +3442,104 @@ expression:
 | `xpath` | XPath selecting numeric text | XPath evaluated at each selected node, an absolute path in it from the document, or `@attribute` |
 | `prometheus` | regular expression matching source metric names | destination label name to source label name |
 
+A `prometheus` rule's `expression` is a regular expression matched anywhere
+in the name the target gives a metric; a rule without one MUST match the
+metric its `name` names, and an `expression` written `""` is the key left
+out (§ 24.3). An `expression` that is written and is nothing but blanks —
+text that `strings.TrimSpace` leaves nothing of — which matches only the
+names that hold those blanks, MUST be refused at load, by the exporter and
+by the schemas (§ 24.3), as an entry of `transform.include` is (§ 6). The
+error MUST name the collector and the metric, quote the expression, and say
+what an expression is and what to write: the pattern that was meant,
+`'[ ]'` or `'\x20'`, in single quotes, for a pattern that does mean a blank,
+or the key left out for the rule to pass on the metric of its name. It MUST
+be reported beside the rule's other mistakes, after them, and every rule
+without such an expression MUST get from the load what it got before this
+rule. Under every other transform that reads an expression, one of nothing
+but blanks is no expression, and the rule MUST be refused as one that has
+none.
+
+A `prometheus` rule MUST have a `name` or an `expression`, written with
+something other than `""`, which is the key left out: they are how it says
+which of the target's metrics it passes on. A rule with neither would be
+matched by the empty name, which no metric has, so it would make no series
+whatever the response held and whatever else it set, and, being required
+unless it says otherwise, be reported as missing its value on every scrape,
+a mistake of the configuration told as the target's. It MUST be refused at
+load, by the exporter and by the schemas (§ 24.3). The rule has no name to
+be named by, so the error MUST name the collector and the rule's place
+among the collector's `metrics`, counted from 1, as in `collector "node"
+metrics rule 2 has neither a name nor an expression`, and MUST say what a
+`prometheus` rule needs — an `expression` to match metric names by, or a
+`name` to match the metric of that name — and what to write, `expression:
+'.*'` for a rule about every metric among it. Every such rule of a collector
+MUST be reported, in order, beside what the collector's other rules are
+refused for. A rule with neither that the load refuses for something else —
+a type or an `error_mode` that is none, `items`, a label it does not take —
+MUST be refused for that alone, as it was, and every rule with a
+`name` or an `expression`, and every rule of another transform, MUST get
+from the load what it got before this rule.
+
+A `prometheus` rule's `name` is one metric's name and no pattern. A name
+that is no metric name MUST be refused as one, in the words the rule of any
+transform is (§ 24.2), and where it holds a character a regular expression
+gives a meaning — `.`, `*`, `+`, `?`, `^`, `$`, `|`, `(`, `)`, `[`, `]`,
+`{`, `}` or a backslash — the error of a `prometheus` rule MUST say as well
+that a pattern to match the target's metric names by is the rule's
+`expression`, not its `name`, and that `name`, beside an expression, is the
+one name the series it matches are exported under. A name that is none for
+another reason, a name Prometheus reserves, and any name under another
+transform, whose rules have no pattern to be mistaken for, MUST read as
+they did. `name_escaping` (§ 21.1) is about the names a response or a
+script gives and widens nothing of what a rule's `name` may be: a name with
+a dot MUST be refused under each of its values, under `prometheus` with the
+same advice.
+
+Two rules of a collector MUST NOT be the same rule: alike in everything
+that decides which series a rule makes, so that each makes every series the
+other makes, of one name and one set of labels, and every scrape fails on a
+duplicate series (§ 21), a mistake of the configuration told for ever as a
+scrape's. They MUST be refused at load. Two rules are the same rule when
+they are alike in
+
+- `name`, `expression` and `items`, each as written, `""` being the key
+  left out;
+- their labels: the same label names, each with the same `value` or the
+  same `expression`, in whatever order the labels are written. Labels of
+  one name keep the order they are written in, the last being the one a
+  series gets; and in a `prometheus` rule one of whose labels reads a label
+  the rule sets under another name, where the order decides the value, all
+  the labels are compared in the order they are written;
+- `value_map` and `time_format`, which say which texts the rule reads a
+  value from: of two rules that differ in one, each MAY read what the other
+  cannot — a field that is `up` or a number, a time written one way or
+  another — and a scrape then gets one series, so they are two rules.
+
+What else a rule says MUST NOT make it another rule: `scale`, `time_zone`,
+`description`, `required` and `error_mode` change the value or the help
+text of a series, or what is done when there is none, and a label's
+`truncate` and `required` change no label's name, while a label's
+`value_map` and a rule's `type` are one for the rules of a name. The error
+MUST name the collector, both rules by their places among its `metrics`,
+counted from 1, and the metric — of a `prometheus` rule without a name, the
+expression — as in `collector "node" metrics rule 1 and rule 3 are the same
+rule of metric "up"`, and MUST say to take one of the two out or tell their
+series apart by a label. Each rule that repeats an earlier one MUST be
+reported once, against the first of its kind, after everything else the
+collector's rules are refused for. Only rules the load takes otherwise are
+compared: a rule refused for something else MUST be refused for that alone,
+and a collector without two such rules MUST get from the load the verdict
+and the words it got before this rule. Rules of one name that differ in
+expression, `items` or a label MUST load, several rules being the way one
+family is read from several places (§ 24.2); among them, rules alike in
+name, expression and `items` that their labels tell apart stay one rule to
+the rule report and to the log (above, § 25.1). The comparison is of what
+is written: two expressions of one meaning, and a `prometheus` rule that
+matches the metric of its name beside one whose expression is that name,
+are two rules to it and load. A `python` rule makes no series, so two alike
+MUST load. No schema can compare the items of a list so, and the refusal is
+the exporter's alone (§ 24.3).
+
 A `regex` rule's value MUST be the text of the capture group named `value`
 (`(?P<value>...)`) when its expression has one, wherever the group stands,
 and of the first capture group otherwise; an expression without a group
@@ -3383,6 +3615,43 @@ cut with `truncate: true`, and that a constant for every series belongs in
 `value` written `""` is the key left out there as everywhere. Every other
 rule, of a `python` collector and of any other, MUST get from the load the
 verdict and the error it got before this rule.
+
+A rule of a `python` collector names a series the script makes, and MUST say
+nothing the script says of its series itself. It MUST have a `name`, the
+name the script gives the series: by it a debug probe's report lists the
+rule among the rules that gave no series when the script made none, the
+rule has its `http_exporter_rule_failures_total` series, which stays 0 since
+a rule that makes no series fails none, and its labels find the series they
+cut. Each of its labels MUST set `truncate: true`, which is all such a label
+does; its `expression`, which every label without a `value` has, is not
+read, and neither is the rule's own, which MAY be written. A rule's `type`,
+`description`, `required` and `error_mode`, a rule without a `name` and a
+label without `truncate: true` MUST be rejected at load, by the exporter and
+by the schemas (§ 24.3): each would otherwise load and do nothing — a rule
+saying `counter` leaving the series the gauge the script made it, a
+`description` being no series' help, `error_mode: fail` failing no scrape
+whose script made no such series, a rule without a name cutting no label,
+and a label's `expression` reading no label. The error MUST name the
+collector, the metric — a rule without a name by its place (§ 24.2) — and,
+for a label, the label, and MUST say what to do
+instead: that the script gives each series its type and its help text, with
+`metric(..., type="counter")` and `metric(..., help="...")`; that a script
+which cannot do without something fails the scrape itself, with
+`fail("...")`, and that `error_handling.on_transform_error` says what the
+collector does then; that a rule names a series of the script, by the name
+`metric(...)` gives it; and that a label there only names one to cut, the
+script setting its labels itself. A rule that says several of these MUST be
+told all of them, in that order — the name, `type`, `description`,
+`required`, `error_mode`, then its labels in theirs. A text key written `""`
+is the key left out there as everywhere, and `required` is written when it
+is there, `false` as `true`. These checks MUST come after every other check
+of the rule, so that a rule refused before them is refused in the words it
+was — a type or an `error_mode` that is none, `items`, `scale`, a
+`value_map`, a `time_format`, a label that is required, has a `value_map` or
+a `value` — and every rule they do not concern, of a `python` collector and
+of any other, MUST get from the load the verdict, the error and the defaults
+it got before them. PYTHON.md MUST say, in one place, what a rule of a
+`python` collector is for and what it does not take.
 
 ## 18.2 Metrics per item
 
@@ -4748,7 +5017,17 @@ targets due again (§ 42.14).
 Everything about a metric rule that can be known before a scrape MUST be
 checked when the configuration loads — at startup, on reload and by `--dry-run`
 — with a message naming the collector, the rule and, where it applies, the
-label:
+label. A rule MUST be named by its metric name, as in `collector "node"
+metric "up"`. A rule that has no name to be named by — `name` left out,
+written `""` or nothing but blanks — MUST be named by its place among the
+collector's `metrics`, counted from 1, as in `collector "node" metrics rule
+2`, in every message of the load about it: that it has no name, `collector
+"node" metrics rule 2 has no name`, which a rule of any transform but
+`prometheus` is refused for, and whatever else is wrong with it, since
+`metric ""` says which rule of thirty it is to nobody. A name that is no
+metric name for another reason MUST be quoted as written, and a message
+about a rule that has a name MUST read as it did before this rule. What is
+checked:
 
 - A declared metric name MUST be a valid Prometheus metric name and MUST NOT
   start with `__`.
@@ -4774,6 +5053,7 @@ label:
   An entry of `include` or `exclude` MUST NOT be the empty string or nothing
   but blanks (§ 6).
 - A label of a `python` rule MUST NOT set `value` (§ 18.1).
+- Two rules of a collector MUST NOT be the same rule (§ 18.1).
 - `transform.labels` keys and `rename_labels` targets MUST be valid label
   names, and two `rename_labels` entries with one target MUST be rejected.
 
@@ -4990,7 +5270,7 @@ the key left out; a
 `grpc` collector MUST have `rpc` so written, and `descriptors` unless its
 `rpc` names a method of `grpc.health.v1.Health`; a `localfile` collector
 MUST have `root` so written; and every rule of a collector whose transform
-is neither `prometheus` nor `python` MUST have `name` so written. The rule
+is not `prometheus` MUST have `name` so written. The rule
 of a block that `enabled` switches on (§ 42.1) goes by the keys the block
 has, to both, so a key written `""` there still needs `enabled`. A key the
 exporter requires MUST be refused by both written `""`, as it is left out:
@@ -5006,7 +5286,14 @@ MUST be refused by both written `""`; so MUST an empty entry of
 but blanks MUST be refused by both too (§ 6), by the pattern a label's
 `expression` is held to. A label of a rule of a collector whose
 `transform.type` is `python` MUST NOT have `value` written with a value other
-than `""`, to the schemas as to the exporter (§ 18.1).
+than `""`, to the schemas as to the exporter (§ 18.1), and MUST have
+`truncate: true`; a rule of such a collector MUST NOT have `type`,
+`description` or `error_mode` so written, nor `required` at all, a boolean
+having no empty form. A rule's `expression` of a collector whose
+`transform.type` is `prometheus` MUST NOT be text of nothing but blanks, by
+the pattern a label's `expression` is held to (§ 18.1), and a rule of such
+a collector MUST have `name` or `expression` written with a value other than
+`""` (§ 18.1).
 
 A block that `enabled` switches on is kept unchecked while it says
 `enabled: false`, and that MUST hold of the schemas as of the exporter, for
@@ -5034,6 +5321,16 @@ reads as no key at all are YAML's and the exporter's to refuse, a validator
 being handed the mapping made of them; and where a `value_map` may stand —
 not on a static label, in a `python` or `prometheus` rule or in a rule
 without a name — stays the exporter's to refuse.
+
+That no two rules of a collector are the same rule (§ 18.1) is the
+exporter's alone to refuse. A schema compares the items of a list only
+whole, with `uniqueItems`, and that is another verdict: it would take two
+rules that differ in a `description` or a `scale`, or of which one writes
+`expression: ""` and the other nothing, which are the same rule. The
+schemas MUST take each such pair, the description of `metrics` MUST say
+what the exporter checks of it, and a test MUST show such pairs past the
+schema and refused by the exporter, and the pairs that are two rules taken
+by both.
 
 A test MUST hold every key that a schema holds to allowed values, a pattern
 or a length to one verdict from the committed schema and from the loader,
@@ -5899,7 +6196,9 @@ The test suite MUST be deterministic and MUST NOT require access to real third-p
 
 It MUST also be repeatable: every test MUST pass when the suite runs more than
 once in one process and in a random order, and `make test` and CI MUST run it
-with the race detector, twice, shuffled (`go test -race -count=2 -shuffle=on`).
+with the race detector, twice, shuffled and with a limit for each package of at
+least twenty minutes (`go test -race -count=2 -shuffle=on -timeout 20m`), by
+one command that is the same in both.
 A test MUST NOT depend on state another test, or an earlier run of itself, left
 behind. Process-wide state a test reads counts from MUST be replaceable per
 test: the Python worker pool MUST be reached through one replaceable reference,
@@ -5938,6 +6237,19 @@ says so. And a test server that the exporter calls as a `grpc` target MUST
 listen on a port no such server of the test process had before, since the
 exporter keeps a connection per address and a reflection answer per
 connection, and the kernel gives a freed port out again.
+
+A test MAY work on a smaller input when the tests are built with the race
+detector, under which the suite runs twice and several times slower: fewer
+generated cases, a shorter body, fewer rounds, or a part of a table that is
+multiplied out. It MUST take that size through
+`internal/testutil/alloctest` (`UnlessRaced`, `RaceDetector`), so that a run
+without the detector works on the full size. Under the detector such a test
+MUST still assert everything it asserts without: it MUST NOT be skipped
+there, an expectation that depends on the size MUST be computed from it or
+given for both sizes, a floor on what a generated corpus held MUST be scaled
+with the corpus and MUST NOT be dropped, an input that is there to pass a
+bound of the code MUST still pass it, and a test of concurrency MUST keep the
+goroutines it runs together.
 
 ## 34.1 Test layers
 
@@ -6716,7 +7028,8 @@ A limit violation MUST be reported through the appropriate self-metrics and MUST
 
 Test that `max_metrics` bounds a scrape's work: for regex, jq, jq `items`,
 CSV, XPath, CSS `items`, prometheus rules and a prometheus passthrough, a
-response of 100,000 series with a limit of 10 fails with `metric count 11
+response of 100,000 series (10,000 under the race detector) with a limit of
+10 fails with `metric count 11
 exceeds limit 10`, marked as a limit, and allocates less than half of what
 making every series does; at the limit exactly it passes. The prometheus
 decoder stops at the 11th kept series within a few thousand allocations, for
@@ -8749,7 +9062,8 @@ Tests MUST show:
   eleven XML and six HTML selections — in document order, against it, and
   unions of both — reads the text the document gives for it alone; nesting
   is found in document order and not against it.
-- A jq rule without `items` over 100,000 values, with a label paired by
+- A jq rule without `items` over 100,000 values (20,000 under the race
+  detector), with a label paired by
   position, a label of one value and a static one, fails at a limit of 10
   with `metric count 11 exceeds limit 10`, the error of the same rule with
   `items`, having allocated less than an eighth of what making every series
@@ -8822,8 +9136,8 @@ Tests MUST show:
   then answers at once succeeds, with a script time under the timeout; one
   that has it at once and runs three times the timeout times out; one that
   answers an error instead of taking the request gives that answer.
-- With a real worker and a 32 MiB response, the script time a probe reports
-  is under a third of the run.
+- With a real worker and a 32 MiB response (8 MiB under the race detector),
+  the script time a probe reports is under a third of the run.
 - A script the probe's deadline ends before `script_timeout` fails with an
   error naming the time it ran and the `script_timeout` it had not reached,
   not a timeout, that is a deadline error and a script failure, and counts
@@ -9177,7 +9491,8 @@ Tests MUST show:
   infinite) and values likewise; a family with one series that fits its type
   and one that does not; a histogram and a summary with labels of their own
   named `le` and `quantile`; and 4000 seeded random sets of two to four
-  families whose names meet through OpenMetrics' suffixes.
+  families whose names meet through OpenMetrics' suffixes. Under the race
+  detector it is the first 400 of the random sets.
 - A family is written as `unknown` in OpenMetrics exactly when a strict
   parser refuses it as a family of its own type, over every one-family set
   above: no family loses its type needlessly, and none that must is missed.
@@ -9305,6 +9620,8 @@ Tests MUST show:
   appended): 80,000 bodies, of which more than 30,000 are accepted and more
   than 45,000 refused. A fuzz target compares the two on whatever body the
   fuzzer finds.
+  Under the race detector 2,000 documents are written, 8,000 bodies, of which
+  as large a share is to be accepted and refused.
 - A JSON body that cannot be read fails with `JSON decode:` and what is wrong
   where: the byte that cannot be there, what was being read (the beginning of
   a value, an object key, after an object key, after a key:value pair, after
@@ -9359,6 +9676,7 @@ Tests MUST show:
   limit: 48,000 parses, of which more than 12,000 are accepted and more than
   12,000 refused. A fuzz target compares the two on whatever body and reading
   the fuzzer finds.
+  Under the race detector 1,200 expositions are written, 4,800 parses.
 - Parsing an exposition of 1,000 series of one family, each with two labels,
   takes at most 5 allocations for each series (3 measured; 8 with the parser
   it was).
@@ -9383,7 +9701,8 @@ Tests MUST show:
   than one rule alone does: rules that share no items pay nothing for the
   sharing.
 - The room a transform makes for its series beforehand is bounded by
-  `limits.max_metrics`: of a response describing 20,000 series, five of them
+  `limits.max_metrics`: of a response describing 20,000 series (4,000 under
+  the race detector), five of them
   with a value, under a limit of 100, the csv, xpath, css, regex, jq and
   prometheus transforms each return their five (jq its ten, of two rules)
   in a set with room for fewer than 200.
@@ -9402,6 +9721,7 @@ Tests MUST show:
   map, and each transformed twice: 5,280 transforms with the same series,
   the same labels in a map or none, the same error and the same failures
   counted, and the decoded response left as it was decoded after each.
+  Under the race detector the random responses are ten.
 - A prometheus pass-through hands on the decoded series themselves when the
   collector changes nothing, also under `name_escaping: fail`; with a prefix,
   an escaping scheme, include or rename, or rules without labels, it gives
@@ -9470,7 +9790,9 @@ Tests MUST show:
   engine's panic is the walk's too and `text()` is the attribute's value
   rather than the engine's nothing: 417,924 labels. Every walked expression
   is recognised as walked and no near miss is, and `nodeText` equals the
-  node's text at every node.
+  node's text at every node. Under the race detector the random documents
+  are four, and the labels are compared at every fifth node of a document,
+  from another node under each `response.namespaces`.
 - An XPath rule mixing a static label, the node's attribute, walked labels,
   an engine label and a required one gives each series the labels the
   engine would, and leaves out the nodes whose required label is missing or
@@ -9518,7 +9840,9 @@ Tests MUST show:
   in pieces, some of nothing, with the
   end coming with the last bytes or after them; and broken off by an error at
   the start, in the middle or at the end: 37,502 bodies of a table and 3,000
-  seeded random ones of up to 5 MiB.
+  seeded random ones of up to 5 MiB. Under the race detector the table's
+  small bodies are every eleventh of them, its bodies of more than a
+  megabyte and a byte are left out, and the random ones are the first 600.
 - A declared length is only a hint for the buffer: a body said to be a
   petabyte long is read into a buffer of the limit and a byte, or of the
   largest first buffer and a byte, and a body shorter than it said into a
@@ -9991,6 +10315,7 @@ Tests MUST show:
   same error at the same line and column; one with blanks after a quoted
   field's closing quote, which that reader refused, is read as it reads the
   body without those blanks.
+  Under the race detector every seventh of the bodies is read.
 - Taking the blanks before quotes out of a body returns one without any as
   the same bytes, leaves the body it was given unchanged, and records each
   run taken out with its place.
@@ -10263,7 +10588,9 @@ Tests MUST show:
   table of 18 expressions, 12 texts, 4 label sets, 5 rule variants (plain,
   scaled, mapped, mapped with `"*"` and scaled, optional) and the 3 error
   modes, the transform and a copy of the former one return the same series
-  in the same order and the same error text.
+  in the same order and the same error text. Under the race detector each
+  case of the others is run under one of the 3 error modes, the three in
+  turn.
 - A rule with `time_format` gives the Unix seconds of the time its text
   writes: `rfc3339` with and without a fraction and with an offset;
   `rfc1123` with `GMT`, `UTC` and a numeric zone; either name in upper case;
@@ -11385,6 +11712,7 @@ Tests MUST show:
   same error — but for a body with a value past the header's last column,
   read with a header row, and one with whitespace after a quote, read
   under `trim_space`.
+  Under the race detector every seventh of the generated bodies is decoded.
 - `trim_space` trims the whitespace between a quoted field's closing
   quote and the delimiter or the line's end: with a comma, a semicolon, a
   tab and a pipe as the delimiter, before a line feed, a CRLF and the end
@@ -11414,6 +11742,7 @@ Tests MUST show:
   it. The 60,000 tab-separated bodies of § 34.80
   read as the reader reads them without that whitespace, an error's
   column counted in the body as written.
+  Under the race detector every seventh of the 87,000 is read.
 - `testdata/csv/stock-padded-quotes.csv`, a list with every text in
   quotes and padded with blanks after the closing quote, decodes under
   `trim_space` into its rows, a doubled quote, the delimiter and a line
@@ -11497,7 +11826,9 @@ Tests MUST show:
   compressed, the trip's verdicts and the self-metrics' counters are the
   same; a probe answered with series, one without, one a rule under `fail`
   fails with its JSON error and one a stage fails under `fail` are answered
-  the same headers and bytes as before over a real connection.
+  the same headers and bytes as before over a real connection. Under the race
+  detector the table is every body under `200` and one body under each other
+  status, and a collector without a cache makes one trip to each and not two.
 - Over HTML a rule that selects attributes, `//td/@data-value`, with the
   labels `../@data-server`, `../../@id`, `name(..)` and `name()` gives one
   series a cell, each with all four labels, as the same bytes give with
@@ -11529,7 +11860,9 @@ Tests MUST show:
   out; rules that select attributes keep their series, their values and
   the labels `.`, `text()`, `name()` and `@own-name`, and gain the labels
   read through the element; the label `node()` at a selected attribute,
-  which gave the value, selects nothing, as it does over XML.
+  which gave the value, selects nothing, as it does over XML. Under the
+  race detector each expression that selects elements or text reads a
+  quarter of the pages, and each page is read by a quarter of them.
 - A table whose rows hold `6<script>var n = 6;</script>` and
   `<style>.n{color:red}</style>7`, with a `template` row of placeholders,
   is read as 5, 6 and 7 by `css` with `items` and by `xpath`, with no
@@ -11661,6 +11994,9 @@ Tests MUST show:
   read as they were; every well-formed `Content-Type` of a generated
   table names what it named; and each choice that changed is listed with
   what was chosen and what is.
+  Under the race detector a file is read in every seventh of those ways, and
+  every seventh page of the generated table, which still has every form with
+  every name and after every place.
 - The search of a head for a `<meta>` allocates nothing but the name it
   returns.
 
@@ -11672,6 +12008,7 @@ Tests MUST show:
   allocations it costs with `decoder.type: json` and at most 8 more (1
   measured, 9,856 in all; 45,877 when the detection parsed the body with
   `encoding/json` first and the decoder read it again).
+  Under the race detector the body is of 100 items.
 - The detection with the json decoder agrees with the detection as it was,
   kept as an oracle (`encoding/json`'s `Unmarshal` of the trimmed body), over
   a table of bodies crossed with 15 `Content-Type`s, the transforms `jq`,
@@ -11684,6 +12021,9 @@ Tests MUST show:
   exposition, carbon lines, text, an empty body, keys written twice, bytes
   that are not UTF-8, halves of surrogate pairs, and arrays and objects nested
   9,999, 10,000 and 10,001 deep.
+  Under the race detector a body meets each `Content-Type` under one of the
+  transforms, the next for the next, and a body nested 9,999 or 10,000 deep is
+  decoded under no `Content-Type` alone.
 - A body with a number no 64-bit float holds — `1e400`, `-1e400`, a whole
   number of 309 digits above 1.797e308, of 400 and of 4,097 digits — is not
   taken for JSON by its content, as it never was, and is JSON under a JSON
@@ -11696,6 +12036,7 @@ Tests MUST show:
 - 2,000 random JSON documents, each as it is, between random whitespace and
   corrupted three times, 10,000 bodies under no `Content-Type` and under
   `text/plain`, are detected and decoded as before; 2,885 of them as JSON.
+  Under the race detector 200 documents are written, 1,000 bodies.
 - The Probe benchmarks have `jq_detected` and `jq_sniffed`, `jq_items` with
   the decoder left to a response served as `application/json` and as
   `text/plain`, and `prescript`, a pre-script passing 100 and 5,000 items on
@@ -11709,10 +12050,13 @@ Tests MUST show:
   objects, which are both written empty; the data of each decoder; a status
   that is HTTP's, a gRPC code and none; and data that is the body, sent once.
 - Data of a type no decoder makes (`int64`, `json.Number`, `[]string`, a
-  struct) and data nested deeper than 1,000 is written by `json.Marshal` as it
-  was, and refused as it was at the depth the Go release refuses (10,000 with
-  the release tested).
-- 10,000 random requests, half with values of types no decoder makes, written
+  struct) and data nested deeper than a decoder makes a value (10,000) is
+  written by `json.Marshal` as it was, and refused as it was; data nested up
+  to that depth is the line `json.Marshal` wrote, and where the Go release
+  refuses it for its depth (from 10,000 with the release tested) the line it
+  writes of data less deep, with the levels more around it.
+- 10,000 random requests (2,500 under the race detector), half with values
+  of types no decoder makes, written
   one after another by one encoder, are each the line `json.Marshal` wrote or
   fail with its error.
 - A request for 2,000 items is written in at most 4 allocations by an encoder
@@ -11729,14 +12073,17 @@ Tests MUST show:
   `json.dumps` writes and with more; top-level keys missing, twice, in another
   case, of the wrong type; lines cut short, with trailing data, with invalid
   numbers and strings; and, beside the table, data and metrics nested 9,997 to
-  10,001 deep. The same series in the same order with the same types, help,
+  10,002 deep, of which data nested 10,000 deep, which `encoding/json`
+  refused, is read. The same series in the same order with the same types, help,
   labels and timestamps, the same data with the same types, the same error
   text and marks, the same count against `max_metrics` under limits of 1 and
-  2, and the same outcome counted for the run.
+  2, and the same outcome counted for the run. Under the race detector each
+  of the nested lines is read nested 5 deep, as deep as it is read at all,
+  and at every depth past that, and not at the depths in between.
 - 5,000 random answers and two corruptions of each, 15,000 lines, are read as
   before: 4,019 of the answers without `encoding/json`, 6,376 of the lines as
   no answer, 1,560 as a script's error, 1,997 refused for a metric or the
-  limit.
+  limit. Under the race detector the answers are 600.
 - An answer of 2,000 series with two labels is read in at most 6 allocations a
   series (3 measured; 26 through `encoding/json` and maps).
 - With real workers, one running the worker script as it was and one as it is,
@@ -11744,25 +12091,29 @@ Tests MUST show:
   the same line for the response of each decoder (json, yaml, xml, html, csv
   with and without a header, prometheus, text, graphite): no int arrives as a
   float, no key in another place, no byte is lost.
-- 116 transform scripts answer the same line, byte for byte, from both
+- 113 transform scripts answer the same line, byte for byte, from both
   workers, and the line is read into the same series or error: `metric(...)`
   with every form of value, label, name, type, help and timestamp it takes and
   refuses; metrics appended by hand and changed after `metric(...)` made them;
   NaN and the infinities; `OrderedDict`, `defaultdict`, named tuples, list,
   tuple, dict, float and int subclasses; syntax errors, exceptions in nested
   calls and chained, `fail`, `sys.exit`, blocked imports; printed output short
-  and past 4 KiB; 3,000 metrics.
+  and past 4 KiB; 3,000 metrics (1,000 under the race detector).
 - 32 pre-scripts leave the same line for the response of each of 10 decoder
   inputs: `data` unchanged, removed, replaced by each scalar, by numbers of
   every size including `10**4000` and `10**5000`, by dicts with keys that are
   no strings, by sets, bytes and objects, changed in place, and the series of
-  a prometheus scrape edited.
-- An answer nested too deep fails with the same `RecursionError` at the same
-  depth from both workers: at depths around 490, where the worker stops
-  looking through an answer itself, and around 997, where the walk fails, for
-  lists, dicts and tuples, as metrics and as data, and under recursion limits
-  of 60, 100 and 3,000 a script set; an answer that holds itself and one whose
-  values are one list many times end the same.
+  a prometheus scrape edited. Under the race detector each pre-script is
+  given a third of the inputs and each input a third of the pre-scripts.
+- A transform's answer with junk nested under a key of the script's own is
+  the same line from both workers at depths around 490 and up to where the
+  walk fails, around 997, for lists, dicts and tuples, and under recursion
+  limits of 60, 100 and 3,000 a script set; from there, where the worker as
+  it was failed with a `RecursionError`, the answer is the metric with the
+  items of the junk left out (§ 34.99). A pre-script's data is the same line from both
+  where the worker as it was answered, and is carried where it failed for the
+  depth; data that holds itself fails saying how deep data may nest, and data
+  whose values are one list many times is the same line.
 - An answer exactly `max_output_bytes` long is taken and one a byte longer
   ends the run with the output limit's error, from both workers; a script that
   does not end is ended by its timeout from both.
@@ -11795,7 +12146,8 @@ Tests MUST show:
   add and change the collectors beside one that stays, and change its own
   definition, a caller of every earlier generation, the reader of the
   self-metrics and a caller by name are given the very statistics the old
-  lookup by name gives, never retired ones.
+  lookup by name gives, never retired ones. Under the race detector it is every
+  thirteenth sequence.
 - A caller that read a collector before a reload removed it is given
   retired statistics that are kept under no name, also when the collector
   is back and whether or not it has been used; a caller of no generation
@@ -11807,7 +12159,8 @@ Tests MUST show:
   collector beside it, one that brings that back and adds another, a probe
   held across such a reload after it read the configuration — the `_total`
   and `_count` series of a collector that stays, per-request ones included,
-  are those of a server that made the same probes and was never reloaded.
+  are those of a server that made the same probes and was never reloaded. Under
+  the race detector it is every third sequence.
 - With four probers running through twelve removals and returns of a
   collector, every probe of the collector that stays is answered `200` and
   counted, and the other, removed and brought back once more after the
@@ -12044,6 +12397,9 @@ Tests MUST show:
   were, under eight `Content-Type` values, four decoders, with and without
   `response.charset` and a byte order mark; and a `Content-Type` whose
   charset quote is not closed names nothing, as it did.
+  Under the race detector a file is read in every seventh of its ways and
+  every seventh page of the generated table is read, which still has every
+  form with every name and after every place.
 - Against the functions as they were before these corrections, kept as
   oracles: `contentTypeCharset` gives the same name at the same place for
   some 18,000 headers — those of the tests, a generated table and 20,000
@@ -12066,6 +12422,7 @@ Tests MUST show:
   and a body and a quarter of bytes more, where the list of what was taken
   out cost thirty allocations and up to some twenty times the body; a body
   without such whitespace is read where it lies.
+  Under the race detector the bodies are of 4 KiB and of 32 KiB.
 - An error after sixteen thousand runs of whitespace taken out of its line
   — of one byte and of three, on the first line and a later one, before
   opening quotes as well under a tab, and beside a bare quote — names the
@@ -12085,6 +12442,7 @@ Tests MUST show:
   the same path, tags and point or the same error, unless Go read its
   value or its timestamp with an underscore or as hexadecimal: those fail
   for the value, or for the timestamp when the value is a number.
+  Under the race detector every seventh of the lines is read.
 - A number an XPath function or operator computes — `number()`, `sum()`,
   `* 1`, `+ 0`, of an element and of an attribute, over XML and over HTML
   — is the XPath engine's: 1000 for `1_000`, 10.5 for `1_0.5`, 0.25 for
@@ -12127,7 +12485,8 @@ Tests MUST show:
   axes and blanks (`job /@id`) — the verdict is the engine's own, which asks
   its navigator for the root at some node of a document exactly for those said
   to reach it; and of 20,000 expressions strung together at random from a
-  fixed seed, 6,930 of which compile, none of the 1,082 the engine takes to
+  fixed seed (5,000 under the race detector), 6,930 of which compile, none
+  of the 1,082 the engine takes to
   the root is said not to reach it. An operator after a no-break space, which
   the parser does not read as one, is said to reach it, to be on the safe
   side.
@@ -12141,7 +12500,8 @@ Tests MUST show:
   without the blanks around it; and 20 labels that are one absolute path give
   at every node, in a document of more than 300 nodes at 300 of them, what
   they gave at the document: 685,159 labels of 140 expressions over XML and 94
-  over HTML.
+  over HTML. Under the race detector a label is read at 25 nodes of a
+  document at most, spread over all of it.
 - `concat(absolute, '|', relative)` and the two the other way round, for five
   absolute and seven relative paths, is at every node of a document the
   absolute path as read at the document and the relative one as read at the
@@ -12209,14 +12569,17 @@ Tests MUST show:
   decimals, exponents, signs, `1_000`, `0x1p-2`, infinities — read as XML
   and as HTML, every sum the exporter adds up, from the document and from
   elements, text nodes and attributes a rule selects, is the engine's sum
-  to the bit (some forty thousand), and rules and labels with sums make
-  the series and failures the transform made before.
+  to the bit (some forty thousand, and a third as many under the race
+  detector, which reads a third of the documents), and rules and labels
+  with sums make the series and failures the transform made before.
 - Over every HTML and XML fixture, rules without a `sum()` of their own
   context — selecting elements, text and attributes, computing values,
   required and not, with labels of every shape and a required one — make
   the same series and fail for as many, as many of them missing, as the
   transform did before; a rule without a sum has no sums on its compiled
   expression or its labels' plan and allocates exactly what it allocated.
+  Under the race detector each expression is run over a third of the
+  fixtures and each fixture is read by a third of the expressions.
 - Every failure of an `xpath` rule names the metric first, over XML and
   over HTML, and reads the same under `fail` and `log`: `metric "m" XPath
   "//td[": ...` for an expression that does not compile, `metric "m" XPath
@@ -12260,6 +12623,7 @@ Tests MUST show:
   same rows, or the same error at the same line and column, and the same
   line for every field. A body without a carriage return that ends a
   record is read as it was, and is not copied.
+  Under the race detector every seventh of the bodies is read.
 - Every fixture of `testdata/csv` is read as it was, under six delimiters,
   with `trim_space` and without, and without a copy of its body; the two
   written with lone carriage returns are read as the former reader read
@@ -12360,7 +12724,8 @@ Tests MUST show:
   back and adds another, and a probe, succeeding or failing, held across such
   a reload — a collector the reloads leave unchanged has the cached results,
   the remembered failures and the counters, cache hits and misses among
-  them, of a server that made the same probes and was never reloaded.
+  them, of a server that made the same probes and was never reloaded. Under the
+  race detector it is every seventh sequence.
 - Over all 256 sequences of four reloads among configurations that remove,
   add and change collectors, with a cached result, a remembered failure and
   statistics under every collector's name before each, following the reload
@@ -12370,7 +12735,8 @@ Tests MUST show:
   the failures of a changed collector, which are now forgotten; and to
   a caller of every earlier generation a collector stands exactly when it has
   been in every configuration since with the definition it had, to a caller
-  that names no configuration always, and to one of no generation never.
+  that names no configuration always, and to one of no generation never. Under
+  the race detector it is every thirteenth sequence.
 - A label value over `limits.max_label_value_length` fails validation with
   `metric "host_note" label "note" value is 11 bytes, longer than
   limits.max_label_value_length 10; a label one of the collector's rules
@@ -12526,10 +12892,13 @@ Tests MUST show:
   `testdata/xml` with and without `response.namespaces`, and the pages and
   fixtures of `testdata/html`, the labels, a sum's failure and a panic are
   what the per-node evaluation gives (some 150,000 labels over 32 documents).
+  Under the race detector the nodes of a document are up to 4 and 2, and the
+  random documents three.
 - No expression taken to be constant depends on the node: of 150,000
   expressions strung together at random from a fixed seed, each of the 1,334
   that are taken to be constant and compile has one value, failure or panic
-  at 25 nodes of five documents, read the slow way at each.
+  at 25 nodes of five documents, read the slow way at each. Under the race
+  detector the expressions are 50,000.
 - A rule with a label read once gives the series, the reported failures and
   the error it gives with the label read at every node: for eleven sets of
   labels — a path, one that selects nothing, a required one missing and one
@@ -12569,7 +12938,8 @@ Tests MUST show:
 - Over 20,000 generated failures and recoveries whose errors name no place
   and no size — plain, wrapped, marked with a kind, joined, none at all,
   minutes and hours apart — the failure log writes line for line what it
-  wrote when it compared texts (the former function kept as an oracle).
+  wrote when it compared texts (the former function kept as an oracle). Under
+  the race detector it is the first 5,000 of them.
 - `model.Errorf` reads word for word as `fmt.Errorf` does for the same
   format and arguments, positions, sizes and durations under any verb,
   width or argument index, and is and wraps what that is and wraps; it
@@ -12652,7 +13022,8 @@ Tests MUST show:
   one that removes it, and the same configuration loaded anew, each reload
   followed — the target is asked once, every probe is answered by that trip
   and counted as coalesced but the first, and one result is cached, as on a
-  server that was never reloaded.
+  server that was never reloaded. Under the race detector it is every seventh
+  sequence.
 - A reload made through the configuration manager is followed by the reload
   itself: with a cached result and a remembered failure under a collector it
   keeps, one it removes and one it changes, the followed configuration is the
@@ -12869,13 +13240,14 @@ Tests MUST show:
   deadlines, the turns skipped and the time of the next look exactly as the
   schedule did before (the former `plan` kept as an oracle): a target a
   reload changed once is started once, one no reload changed is not started
-  again, and the first scrape after the start is as it was.
+  again, and the first scrape after the start is as it was. Under the race
+  detector it is the first four runs.
 - Over all 196 runs of two reloads among those configurations and files,
   each followed, what a probe that read any earlier generation tells the
   failure log is held to its collector alone, as it was; a scrape of a
   static target that every file since has as it was is held to the same; and
   a scrape of a target that some file since lacks or has otherwise is held
-  to nothing.
+  to nothing. Under the race detector it is every third run.
 - A static target that a reload of the static target file points elsewhere,
   its collector as it was, has its remembered failure forgotten by the
   reload; the first failure of the new definition, failing the same way, is
@@ -13027,6 +13399,7 @@ Tests MUST show:
   decode into what they did or are refused in the words they were (the
   former decoder kept as an oracle); a refusal is recognised otherwise than
   before only when it names a line, and every one that names a line is.
+  Under the race detector a file is cut off after every sixth of those lines.
 - Through `/probe`, a YAML target whose document fails on line 3, 3, 7, 7,
   3 and 5 is logged in full once, at error level, and five times as a repeat
   at debug level; five minutes on, failing on line 9, the line has
@@ -13113,11 +13486,13 @@ Tests MUST show:
   `trim_space` and without — each is refused as the reader as it was
   refuses the same body with line feeds in place of the lone carriage
   returns: the same words, lines and columns.
+  Under the race detector every fifth of the bodies is read.
 - Of some 72,000 readings — generated bodies, fields left open among them,
   and every fixture of `testdata/csv` under six delimiters — each is handed
   to the reader byte for byte as before unless the reader refuses it,
   before and now; none is accepted now that was refused, or refused that
   was accepted, and the accepted have the rows they had.
+  Under the race detector every seventh of the generated bodies is read.
 - A body with a field left open is copied once for its carriage returns,
   whether the field is on the first line or after lines already copied
   for; a body whose only lone carriage return is its last byte, after
@@ -13149,7 +13524,7 @@ Tests MUST show:
   and the sweep of everything, after which nothing is counted. What a scrape
   is told of each trip is whether an entry of a rule of it exists. Rules
   whose expression or `items` hold a NUL, or the marker of a rule's key, are
-  among them.
+  among them. Under the race detector it is the first of the four sequences.
 - Two rules have one failure log key only when they are alike in name,
   expression and `items`: `items: ".i[] #\0.j[]"` with `expression: ".a #"`
   and `items: ".j[]"` with `expression: ".a #\0.i[] #"` have two; of 20,000
@@ -13216,6 +13591,7 @@ Tests MUST show:
   recognised without the words for its line) unless a problem is listed more
   than once, when there is one line for each different problem; some 1,050, 700 and 140 of
   them. Each of some 340 problem texts is read for its lines as it was.
+  Under the race detector 420 are drawn.
 - Through `/probe`, a YAML target whose list has two, then three, then
   twelve items that each write a key twice is logged in full once and then
   as repeats at debug level, the twelve named to the tenth with `... and 2
@@ -13290,6 +13666,8 @@ Tests MUST show:
   mapping with a sequence or a mapping as a key, which the library fails
   outright on or refuses for what is in that key, is refused with an error
   that may be another than the library's.
+  Under the race detector 600 are drawn, and a file is cut off after every
+  twelfth of those lines.
 - A YAML document is the library's to decode unless it has a mapping of more
   than 128 keys or keys written twice whose problems come to more than 64
   kB: a mapping of 128 keys, mappings of 128 keys nested in one, a key of
@@ -13312,6 +13690,8 @@ Tests MUST show:
   than ten different problems are recognised; a key of 30 kB written three
   and four times; and a list of 3000 small mappings that each write a key
   twice. The library is handed nothing.
+  Under the race detector the one key is written 250 times at most, and 40
+  mappings are made, of 129 to 200 pairs.
 - A YAML key written 1200, 100,000 and 209,715 times (a 1 MiB body) is
   refused with the first ten problems in the library's words and `... and
   719390`, `4999949990` and `21990085745 more problems`, recognised by the
@@ -13319,12 +13699,15 @@ Tests MUST show:
   which is what parsing it costs; the library allocated 137 MB for the 6 kB
   of the first. Once the document is parsed, refusing it allocates under 16
   kB in under 100 allocations for 1200 lines and for 100,000 alike.
+  Under the race detector, where no allocation is measured, the key is written
+  1200 and 10,000 times.
 - A YAML mapping of 20,000 keys is handed to the library 128 keys at a
   time, in 157 parts and never a mapping of more, whether its values are
   numbers, small mappings and lists, aliases of a mapping or mappings of 300
   keys themselves, and looking through it for keys written twice compares
   fewer pairs of keys than it has nodes; it decodes into the values the
   library makes of it.
+  Under the race detector the mapping is of 2,000 keys, in 16 parts.
 - Looking through a YAML document whose mappings have 24 keys or fewer
   allocates nothing and compares fewer pairs of keys than twice its nodes,
   and decoding it allocates what the library alone allocates; 500 mappings
@@ -13339,6 +13722,7 @@ Tests MUST show:
   merge and as a key of one, beside one, after one and apart from one
   (`anchor 'a' value contains itself`), with no mapping of more than 128
   keys handed to the library on the way.
+  Under the race detector the thousand numbers have 120 aliases and 160.
 - A merge into a YAML mapping of 300 keys, of a mapping of 300 keys and of
   several, is what the library makes of it: a key the mapping has keeps its
   value wherever the merge key is written, the earlier of two merged
@@ -13373,6 +13757,7 @@ Tests MUST show:
   their order, against it and many times; an anchor holding an alias of what
   holds it, of itself and of a mapping written twice), and 30,000 drawn at
   random.
+  Under the race detector 1,000 are drawn.
 - A panic of the exporter's own code while a YAML document is decoded is the
   decode's failure and is not put on the library: `the exporter failed on
   the YAML document (<file>:<line> <function>): <what was raised>; this is a
@@ -13408,6 +13793,8 @@ Tests MUST show:
   small mappings under a key, in a document without an alias, costs no more
   than a twentieth over the library alone: nothing is kept of the sequences
   and mappings the library is handed.
+  Under the race detector, where no allocation is measured, the lists are of
+  1,000 items.
 - A YAML sequence whose items are the walk's and the library's in every
   order is what the library makes of it: sequences of one to six items in
   each of the ways the items can be either — the library's drawn from
@@ -13419,6 +13806,8 @@ Tests MUST show:
   mapping large past one, two, four and 128 keys, and sequences of 126 to
   130, 255 to 258 and 385 items with an item of the walk's at each place a
   part of 128 begins or ends at, at two such places and at none.
+  Under the race detector the short sequences are of one to five items,
+  decoded with a mapping large past two and 128 keys.
 - What an item of a YAML sequence fails with comes before the refusal of a
   later item's aliases: with 209 aliases of a sequence of 997 numbers, a
   number and an alias of a sequence of 900, the list is decoded without the
@@ -13475,15 +13864,17 @@ Tests MUST show:
   the most is 603, and nine levels of nine aliases beside a mapping of 200
   keys are refused after 55, where aliases that were not refused would be
   387 million nodes; the tests fail at the bound, before the memory is gone.
-- A YAML document nested, through the targets of its aliases, deeper than the
-  parser lets one be written (10,000, the depth of a node 1 plus the deepest
-  it holds, an alias its target's plus 1) is refused before anything decodes
-  it, with `the document is nested more than 10000 deep through its aliases,
-  deeper than a YAML document may be written`: a single alias of a sequence
-  and of a mapping nested to the bound is decoded into what the library makes
-  of it, and one level over the bound the library still decodes it but the
-  exporter refuses it for its depth; the same for a merge of a mapping nested
-  over the bound, whose value the library decodes through.
+- A YAML document nested, counting what its aliases stand for, deeper than a
+  response may nest (10,000 sequences and mappings one inside another, an
+  alias as deep as what it stands for and itself no level) is refused before
+  anything decodes it, with `the document is nested more than 10000 deep,
+  counting what its aliases stand for; a response may nest 10000 deep at
+  most`: a single alias of a sequence and of a mapping nested to the bound
+  is decoded into what the library makes of it, and one level over the bound
+  the library still decodes it but the exporter refuses it for its depth;
+  the same for a merge of a mapping, which counts as it is written, one
+  level inside the mapping it is merged into, and whose value the library
+  decodes through.
 - A hidden chain of anchors that each hold an alias of the one before, through
   a sequence, a mapping and a merge key, is refused as the library refuses it
   up to the bound — for its aliases, the library decoding such a chain by
@@ -13491,9 +13882,10 @@ Tests MUST show:
 - A YAML document whose depth through its aliases is over the bound is refused
   for its depth on every way it would be decoded, the library's own included,
   since that is where the deepest stack is.
-- A deeply nested YAML document without aliases (9,990 sequences) is not
-  looked through for its depth, being nested no deeper than the parser let it
-  be written, and is decoded as the library decodes it.
+- A deeply nested YAML document without aliases (9,990 sequences) is found
+  as deep as it is in the one look through it, and is decoded as the library
+  decodes it; a document with an anchor and no alias is not gone through a
+  second time for its depth.
 - A self-containing YAML anchor, alone (`a: &a [*a]`, `a: &a {k: *a}`) and at
   the end of a chain, has no finite depth: the depth is added up without
   looping, the anchor met again counting as nothing, and the document keeps
@@ -13504,14 +13896,19 @@ Tests MUST show:
   aliases and not its depth.
 - No document of the differential corpus — the repository's YAML files, the
   error tests' documents, those written for the forms of a merge, a key and an
-  alias, and the random ones — comes near the depth bound (the deepest is a
-  few dozen deep), so the bound refuses none of them.
-- With the bound in force, decoding the deepest document it accepts (a single
-  alias of a sequence nested to 10,000) grows the goroutine stack by under 8
-  MB, measured on a fresh goroutine and skipped under the race detector, and a
-  chain of 400,000 links — hundreds of megabytes of stack were it decoded — is
-  refused with a stack of a few kilobytes and in time linear in it, the depth
-  added up without a call for each link.
+  alias, and 3,000 random ones — comes near the depth bound (the deepest is
+  19 deep), with or without an alias, so the bound refuses none of them; and
+  a document without an alias is as deep in the one look through it as when
+  its nodes are added up.
+- With the bound in force, decoding a document it accepts at the bound (a
+  single alias of a sequence nested to 10,000) grows the goroutine stack by
+  under 8 MB, measured on a fresh goroutine and skipped under the race
+  detector, and a chain of 400,000 links — hundreds of megabytes of stack
+  were it decoded — is refused with a stack of a few kilobytes and in time
+  linear in it, the depth added up without a call for each link. The
+  costliest document at the bound, 9,996 mappings each merged into the next
+  through an alias, is decoded by the library in a stack of no more than 16
+  MB, and one link more is refused in a stack of under 1 MB.
 - A chain of 20,000 anchors written in a mapping with a key written twice,
   each a sequence of an alias of the one before, aliased once outside, beside
   a thousand plain items — 419 kB that the YAML library decodes in a stack
@@ -13541,8 +13938,9 @@ Tests MUST show:
   schema as it was took `root: ""` and `collector: ""`.
 - A rule's `name` left out or written `""` is refused by both under a `jq`
   transform, where the schema as it was took the rule without a name, and
-  taken by both in a `prometheus` and in a `python` rule, where the schema
-  as it was refused `""`; `bad-name` is refused by both in all three.
+  taken by both in a `prometheus` rule, where the schema as it was refused
+  `""`; in a `python` rule both refuse it too, since § 34.98; `bad-name` is
+  refused by both in all three.
 - A `grpc` collector's `descriptors` left out or written `""` is taken by
   both when it calls `grpc.health.v1.Health/Check` and refused by both when
   it calls `acme.queue.v1.QueueService/GetStats`, where the schema as it was
@@ -13607,6 +14005,8 @@ Tests MUST show:
   character up to U+3000 and one in 97 past it, alone, before `up`, after
   it, inside it, and around a key with a line break — and holds no escape
   but `\t`, `\n`, `\v`, `\f`, `\r`, `\s`, `\S` and `\x` with two digits.
+  Under the race detector, of those characters past ASCII that are no
+  blanks, one in five is tried.
 - An optional key's pattern takes the empty text and what the key's own
   pattern takes, and nothing else, and its allowed values are the key's own
   and `""`, the list the exporter checks values against left as it was.
@@ -13629,6 +14029,8 @@ Tests MUST show:
   ending `... (# bytes)`, so a key of 150,000 numbers that starts the same
   is the same failure, with its own length in the error, and a key that
   starts with another number is another.
+  Under the race detector the keys are of 10,000 and of 7,500 numbers and a
+  mapping of 2,000 keys.
 - A YAML key of 100 kB written three times, in the explicit `? key` form, is
   refused with three problems that each show the first 64 bytes of the key,
   quoted as `model.QuoteValue` quotes a value, `... (100000 bytes)` and the
@@ -13652,6 +14054,7 @@ Tests MUST show:
   !!int``), recognised by the same with `(# bytes)`; a value that holds the
   words `` ` as a !!bool `` is cut where the value ends; a part of 1, 255
   and 256 bytes reads and is recognised as it was, and one of 257 is cut.
+  Under the race detector the value and the name are of 100 kB.
 - A cut falls between two characters: a key written twice, a value that does
   not fit its tag and an error over 2,000 bytes, each of characters of two,
   three and four bytes after none to three single bytes, are cut before the
@@ -13670,6 +14073,8 @@ Tests MUST show:
   (2,000 of them refused without the library) and 11,000 other errors, each
   also the decoder's own error once bounded. The few errors with a long part
   say how long it was.
+  Under the race detector 300 are drawn and 20 mappings made, each decoded
+  with a mapping large past 0 and 128 keys.
 - The error of a YAML document refused for a long part holds nothing of the
   document: with the error held and the document let go of, the heap is
   under 16 kB larger than before, through `decodeYAML` and through `Decode`,
@@ -13708,7 +14113,9 @@ Tests MUST show:
   under a kilobyte, one line of the decode stage with that error; the key
   grown shorter, to 150,000 numbers, is logged as a repeat at debug level
   with its own length, and a key that starts otherwise as a new failure; a
-  debug probe's report names the failure in the same short line.
+  debug probe's report names the failure in the same short line. Under the race
+  detector the keys are of 20,000 and of 15,000 numbers, the first of 128908
+  bytes.
 - The first line a decoder leaves out of a body it decodes is reported in an
   error bounded like a decode error, which a line of one long value no
   longer reaches (§ 34.95): a carbon line of 1 MiB skipped under
@@ -13741,7 +14148,9 @@ Tests MUST show:
   of blanks, beside `.site`, and a value beside an expression of U+FEFF, as
   setting both; and an expression of U+200B is jq's to refuse.
 - The rule check agrees with a copy of itself as it was, on the error word
-  for word and on the defaults it fills in, for every rule of the 13 shipped
+  for word — but for a rule without a name, told of since by its place
+  (§ 34.100) — and on the defaults it fills in, for every rule of the 13
+  shipped
   configurations under `examples`, `configs` and `testdata` — 147 rules with
   142 labels, none with an expression of blanks — and for 72,000 generated
   rules: under each of the eight transforms, a label of five values beside
@@ -13752,7 +14161,9 @@ Tests MUST show:
   `error_mode`, an expression of blanks or no name. The 8,640 rules in
   which the check gets as far as a label of blanks are refused in the new
   words, and of the others only the `python` rules of § 34.97, whose
-  settings are in order and one of whose labels sets a value.
+  settings are in order and one of whose labels sets a value, and those of
+  § 34.98, which say what a `python` rule does not take. Under the race
+  detector the generated rules are every seventh of the table.
 - The schemas' pattern for a label's expression, under `not`, takes a text
   exactly when `strings.TrimSpace` leaves nothing of it, over some 165,000
   texts — each character up to U+3000 and one in 97 past it, alone, twice,
@@ -13772,20 +14183,22 @@ Tests MUST show:
   tab and a space beside a value, in a `csv` rule, is refused by both, as
   the schema as it was refused it, and that label is taken by both without
   the expression and with it written `""`.
-- A table of 42 keys of a rule, its labels and a collector holds the schema
+- A table of 44 keys of a rule, its labels and a collector holds the schema
   and the loader to what each says of the key written as two spaces and
   written `""`. Both refuse blanks in a label's `expression`, alone, beside
   a value and beside a value in a `csv` rule, in a label's `value` beside
   an expression and its `name`, in a key of either `value_map`, in a rule's
   `name`, `type` and `error_mode`, in an entry of `transform.include` and
-  of `transform.exclude` (§ 34.97), and in `transform.type`,
+  of `transform.exclude` (§ 34.97), in a `prometheus` rule's `expression`
+  and a `python` rule's `description` (§ 34.98), and in `transform.type`,
   `request.method`, `metrics_prefix`, `name_escaping` and a collector's
   `name`. The loader alone refuses them in a rule's `expression`, `items`,
   `time_format` and `time_zone`, a value of `transform.rename` and of
   `rename_labels`, a key of `transform.labels`, a `python` transform's
   `script` and `response.charset`. Both take them in a label's `value`, a
   value of a label's `value_map` and of `transform.labels`, a rule's
-  `description`, a `prometheus` and a `python` rule's `expression`,
+  `description` under a transform that is not `python`, a `python` rule's
+  `expression`,
   a key of `transform.rename` and
   of `rename_labels`, `remove_labels`, `pre_script`, a `jq` transform's
   `script`, `request.path`, and a key and a value of `response.namespaces`.
@@ -13818,6 +14231,7 @@ Tests MUST show:
   too many fields, its value, its timestamp, one in milliseconds, a series
   without a path and a tag, from carbon lines and from the render API, and a
   render point of one element, of text and of an object.
+  Under the race detector the token is of 10 KiB.
 - Each of those failures is recognised by its message with `... (# bytes)`
   for each length and the mark for the line or the item: a token half as
   long, a line or an item further, is the same failure with its own length
@@ -13850,6 +14264,7 @@ Tests MUST show:
   line, the same for a name half as long a line further; the error is no
   longer the library's, which holds the name. A name of 64, 63 and three
   bytes is refused with the library's own error, recognised as it was.
+  Under the race detector the name is of 10 KiB.
 - An XML error of no known form is left as it is: one that ends otherwise
   than the form, starts otherwise, has a quote that is not closed, or holds
   only names within 64 bytes; the words ` (no semicolon)` after an entity
@@ -13883,6 +14298,7 @@ Tests MUST show:
   letter where no value in it is over 64 bytes, and otherwise the error as
   it was with each such value cut to its first 64 bytes, to a character
   boundary, and its length.
+  Under the race detector 3,000 carbon lines and 2,000 answers are drawn.
 - The exposition parser against the parser it was (§ 34.13), over the edge
   cases, the 48,000 random parses, the fuzz target, and the repository's two
   expositions whole, cut off after every fifth byte and with a token of each
@@ -13890,6 +14306,8 @@ Tests MUST show:
   the letter but for a value over 64 bytes, which is cut; every error is
   recognised by its text without its line and without the lengths of what it
   cut.
+  Under the race detector the random parses are 4,800, and an exposition is
+  cut off after every 55th byte, with two tokens of each line spoilt.
 - `model.Quoted` reads as `model.QuoteValue` for 3,400 values, given as text
   and as bytes — around 64 bytes, of characters of one to four bytes after
   none to three single bytes, of quotes, control characters and bytes that
@@ -14107,7 +14525,8 @@ Tests MUST show:
 - Over each character up to U+3000 and one in 97 past it, an entry made of
   it alone or of it and a space is refused as blanks exactly when
   `strings.TrimSpace` leaves nothing of it, 25 blanks in all, and one with
-  a letter before the character never is.
+  a letter before the character never is. Under the race detector, of those
+  characters past ASCII that are no blanks, one in five is tried.
 - The transform settings check agrees with a copy of itself as it was, on
   every problem word for word and in the same order, for the 30 collectors
   of the 13 files under `examples`, `configs`, `testdata` and `charts` that
@@ -14121,7 +14540,9 @@ Tests MUST show:
   with entries that are not in order, and beside `remove_labels` and
   `rename_labels` with such entries. The 50,400 settings with an entry that
   is empty or blanks get one problem more for each such entry, in the
-  lists' order, and what they got before.
+  lists' order, and what they got before. Under the race detector each
+  pair of lists is checked under one of the nine pairings of a transform
+  with the other settings, a ninth of the generated settings.
 - The committed schema and the loader agree on entries of `include` and of
   `exclude`: both take `["^node_"]`, two entries, `['.*']`, `['[ ]']`,
   `['\x20']`, an entry with a blank in it, before it or after it, U+200B,
@@ -14181,15 +14602,18 @@ Tests MUST show:
   its series itself, with metric(..., labels={...}), and a rule's label
   only names one of them to cut with truncate: true; for a constant on
   every series of the collector, set transform.labels`; before, it loaded
-  and no series got the constant. A label with an expression, with or
-  without `truncate`, and with `value: ""` beside it loads as it did, and
-  so does `transform.labels: {site: x}` on the collector.
+  and no series got the constant. A label with an expression and
+  `truncate: true`, with `value: ""` beside it or without, loads as it did,
+  and so does `transform.labels: {site: x}` on the collector. (A label
+  without `truncate`, which loaded as it did then, is refused since
+  § 34.98.)
 - A `python` rule's label with both a value and an expression, with
   neither, with a value and `required`, and with an expression and
   `required` is refused in the words it was; under each of the seven other
   transforms a rule's label with `value: x` loads.
 - The rule check agrees with a copy of itself as it was, on the error word
-  for word and on the defaults it fills in, for 23,136 generated rules:
+  for word — but for a rule without a name, told of since by its place
+  (§ 34.100) — and on the defaults it fills in, for 23,136 generated rules:
   under each of the eight transforms, a label of four values beside no
   expression and beside one, plain, truncated, required, with a `value_map`
   and with a name that is none, alone and beside a label in order, one
@@ -14200,10 +14624,15 @@ Tests MUST show:
   an `error_mode` that are none, with `scale`, with a `value_map` and with
   a `time_format`. The 351 `python` rules whose settings were in order and
   one of whose labels sets a value are refused in the new words, for the
-  first such label, and no rule of another transform is.
+  first such label, and no rule of another transform is. (Since § 34.98
+  the `python` rules among the others that say what a `python` rule does
+  not take are refused for that.) Under the race detector the generated
+  rules are all of those under `python` and every fifth under each other
+  transform.
 - The committed schema and the loader agree on a `python` rule's label:
-  both take one with an expression, with or without `truncate`, and with
-  `value: ""` beside it; both refuse `value: x`, alone, with `truncate` and
+  both take one with an expression and `truncate: true`, with `value: ""`
+  beside it or without (and, since § 34.98, refuse one without `truncate:
+  true`); both refuse `value: x`, alone, with `truncate` and
   beside `expression: ""`, a value of a blank and of `0`, a value beside an
   expression, `value: ""` alone and a label with neither key; both take a
   constant under `transform.labels` of a `python` collector and a value on
@@ -14224,6 +14653,778 @@ Tests MUST show:
   rule named `up` with `{name: note, expression: note, truncate: true}`
   cuts the `note` label of `up` to the limit of 20 bytes, and neither its
   `site` label nor the `note` label of the other series.
+
+## 34.98 What a python rule takes, a prometheus rule's expression of blanks, and values nested deep handed to Python and back
+
+- A `python` rule with `type: counter`, `gauge` or `untyped`, with a
+  `description`, one of a blank and of `0` among them, with `required: true`
+  or `false`, or with `error_mode: fail`, `log`, `ignore` or ` LOG ` is
+  refused at load, each in its own words after `collector "racks" metric
+  "cpu"`: `sets type, which a python rule does not take: the script gives
+  each of its series its type, with metric(..., type="counter"), and a series
+  is a gauge when it gives none; say the type in the script and leave type
+  out of the rule`; `sets description, which a python rule does not take:
+  the script gives each of its series its help text, with metric(...,
+  help="..."), and a series has none when it gives none; say the help in the
+  script and leave description out of the rule`; `sets required, which a
+  python rule does not take: the rule makes no series, so it has no value to
+  miss; a script that cannot do without something fails the scrape itself,
+  with fail("..."), so say it in the script and leave required out of the
+  rule`; and `sets error_mode, which a python rule does not take: the rule
+  makes no series, so it has no failure to handle; a script fails the scrape
+  itself, with fail("..."), and error_handling.on_transform_error says what
+  the collector does then, so leave error_mode out of the rule`. Before,
+  each loaded and nothing read it.
+- A `python` rule with all four and a label that cuts nothing is told the
+  five things at once, in the order type, description, required,
+  error_mode, the label.
+- A `python` rule of a name alone, with `type`, `description` and
+  `error_mode` written `""`, with an expression, and with a label that sets
+  `truncate: true` loads as it did, as a gauge under `log` with no
+  description and `required` unset.
+- What was refused of a `python` rule is refused in the words it was, alone
+  and with `description` and `required`, or `type` and `error_mode`, beside
+  it: type `histogram`, a type and an `error_mode` that are none, `items`,
+  `scale`, a `value_map`, a `time_format`, a label that is required, has a
+  `value_map`, a `value`, neither a value nor an expression, and an
+  expression of a blank; a `time_zone` is refused too.
+- Under each of the seven other transforms a rule with `type: counter`, a
+  `description`, `required: false` and `error_mode: fail` loads with all
+  four as written.
+- A `python` rule without a name — of labels alone, with `name: ""`, of an
+  expression alone, and `{}` — is refused at load with `collector "racks"
+  metrics rule 1 has no name, which a python rule needs: the rule makes no
+  series and only names one of the script's, whose labels it cuts with
+  truncate: true and which a debug probe's report lists when the script made
+  none; write the name the script gives the series, as in metric("up", ...),
+  or take the rule out`; a name of two blanks is refused as no metric name,
+  as it was.
+- A `python` rule's label with an expression and no `truncate`, with
+  `truncate: false`, and with `value: ""` beside the expression is refused
+  at load with `collector "racks" metric "cpu" label "site" does not set
+  truncate: true, which is all a python rule's label does: it names a label
+  of the script's series to cut to limits.max_label_value_length, and its
+  expression is not read; the script sets the labels of its series itself,
+  with metric(..., labels={...}), so set truncate: true on the label or take
+  it out`; of three labels the two that cut nothing are each named and the
+  one that cuts is not.
+- A `python` rule of a name alone, with an expression that would not
+  compile, with a label that cuts and with `labels: []`, a `python`
+  collector without `metrics` and with `metrics: []`, and a `prometheus`
+  rule without a name whose label sets no `truncate` all load.
+- The rule check agrees with a copy of itself as it was, on the error word
+  for word — but for a rule without a name, told of since by its place
+  (§ 34.100) — and on the defaults it fills in, for the 147 rules of the 13
+  shipped configurations under `examples`, `configs` and `testdata`, none of
+  which is refused, and for 107,520 generated rules: under each of the eight
+  transforms, a rule of four names, five types, three descriptions,
+  `required` unset, true and false and five `error_mode`s, beside each of
+  fourteen lists of labels — none, one that cuts, one that does not, both,
+  three of which one cuts, a constant, a constant that cuts, a constant
+  after a label that does not cut, a required one, one with a `value_map`,
+  one with neither key, one with both, one with a name that is none and one
+  with an expression of a blank — and the same lists and six ways of
+  writing the four keys in a rule in order and beside an expression that
+  does not compile, one of blanks, `items`, `scale`, a `value_map`, a
+  `time_format`, a `time_zone` alone, `scale` in a rule without a name and
+  a reserved name. The 95,340 rules the check refused are refused
+  in the same words; of the rest only `python` rules are refused, 1,162 of
+  them, each for exactly what it says that a `python` rule does not take,
+  every such thing named and in order, and 8 `python` rules load. Under the
+  race detector the generated rules are all of those under `python` and
+  every thirteenth under each other transform.
+- End to end, a `python` collector whose script makes `up`, with a `note`
+  label of 34 bytes, and a counter `jobs` with a help text, and whose rules
+  are `up` with `{name: note, expression: note, truncate: true}` and
+  `absent`, under `max_label_value_length: 20`: a probe is answered `up` as
+  a gauge with `note="a note of thirty-…"` and `jobs` as a counter with its
+  help, and nothing of `absent`; a debug probe's report says 2 series,
+  lists `up: 1` and `jobs: 1`, says `Rules that gave no series: absent` and
+  reports no rule as having carried on;
+  `http_exporter_rule_failures_total` is 0 for `up` and for `absent` and
+  has no series for `jobs`; without the rules the probe is answered 502 for
+  the label; and the same collector with a rule that sets `type`,
+  `description`, `required`, `error_mode` or a label's `value`, has no
+  name, or has a label without `truncate` does not validate.
+- The committed schema and the loader agree on a `python` rule: both take
+  one of a name alone, with an expression, one of blanks included, with
+  `type`, `description` or `error_mode` written `""`, and with
+  `labels: []`; both refuse `type` of `counter`, `gauge`, `untyped`,
+  `histogram` and `timer`, a `description` of text, of a blank, of `0` and
+  of `false`, `required` true and false, `error_mode` of `fail`, `log`,
+  `ignore` and `panic`, all four together, and `required: false` beside the
+  other three written `""`; both refuse a rule without a name, with
+  `name: ""`, `{}` and one of a label alone, and a second rule with a type;
+  both take a `python` collector without rules, with `metrics: []` and with
+  two rules of names alone, a `jq` and a `yq` rule with the four keys and a
+  `prometheus` rule with them and no name; with `transform.type: Python`
+  both refuse the document. `items`, `scale` and a `time_format` on a
+  `python` rule pass the schema and are refused by the loader in its words,
+  as they were.
+- The committed schema and the loader agree on a `python` rule's label
+  without `truncate: true`: both refuse one with an expression alone, with
+  `truncate: false` and with `truncate: "true"`, and take a `prometheus`
+  rule's label without `truncate` and a `jq` rule's without it.
+- In the tables of keys the schemas hold to a rule: a `python` rule's `name`
+  is refused by both left out and written `""`, where the schema as it was
+  took the rule without one, and taken as `up`; its `type: counter`,
+  `description`, `error_mode: fail` and `required`, true and false, are
+  refused by both, where the schema as it was took each, and taken by both
+  left out and, for the three that are text, written `""`, which loads as
+  the key left out; a `python` rule's label is refused by both without
+  `truncate`, with `truncate: false` and with `truncate: ""`, where the
+  schema as it was took the first two; and a `python` rule with every
+  optional text key written `""` is taken by both. Each row holds in the
+  configuration and in a collector file.
+- A `prometheus` rule with `expression: "  "` and `required: false` makes
+  of `up`, `node_load1` and `disk  free` the last alone, with no failure
+  reported; named `up`, it makes nothing of `up` and `node_load1`, with no
+  failure when it is not required and one, `metric "up" expression "  "
+  matched no metric in the response`, when it is.
+- A `prometheus` rule's expression of one blank, two, a tab, a line break
+  among blanks, U+00A0, U+0085, U+3000 and U+2028, in a rule without a
+  name, with one and with `required: false`, is refused by the rule check
+  with `collector "node" metric "up" expression "  " is nothing but blanks;
+  a prometheus rule's expression is a regular expression matched against a
+  metric's name as the target gives it, anywhere in it, so this one matches
+  only the names that hold these blanks: write the pattern that was meant,
+  or, for one that does mean a blank, '[ ]' or '\x20' in single quotes, or
+  leave expression out for the rule to pass on the metric its name names`;
+  in a rule with a name that is none and a `value_map` it is the third of
+  three problems.
+- `'[ ]'` and `'\x20'` pass the check and make of `up`, `disk free`,
+  `disk  free` and a name with a tab the two with a space; `'\x20{2}'`, `k
+  f`, ` free` and `\s` match what they spell, a rule of a name alone passes
+  on the metric of that name, and U+200B and U+FEFF are patterns that match
+  none of them.
+- The rule check agrees with a copy of itself as it was, on the error word
+  for word, for 8,800 generated rules: under each of the eight transforms,
+  twenty expressions — the transform's own, the empty one, nine of nothing
+  but blanks, three with U+200B or U+FEFF, four with a blank or its escape
+  in or around them and two that do not compile — beside five lists of
+  labels, in a rule
+  in order, without a name, with a name that is none and one that is
+  reserved, with `items`, `scale`, a `value_map`, a `value_map` key with a
+  blank, a `time_format`, a `time_zone` alone and three mistakes at once.
+  The 495 `prometheus` rules whose expression is nothing but blanks get
+  what they got and the new problem after it, 126 of them having had no
+  other mistake, and no other rule gets anything else.
+- Through the load, a `prometheus` rule with an expression of two spaces
+  and no name, and one named `up` with an expression of a space, a tab,
+  U+00A0, `' '`, `"\x20"` or a space beside `required: false`, is refused
+  in those words; a rule of a name alone, with `expression: ""`, with
+  `'^up$'`, `'[ ]'`, `'\x20'`, `'disk free'`, `' free'` and U+200B loads; a
+  `prometheus` rule's name of two blanks is refused as no metric name; a
+  `jq`, `yq`, `xpath`, `css`, `regex` and `csv` rule with an expression of
+  two blanks is refused with `collector "node" metric "cpu" has no
+  expression`; and a `python` rule's expression of blanks, which is not
+  read, loads.
+- The committed schema and the loader agree on a `prometheus` rule's
+  expression, in a rule that is required and in one that is not: both take
+  `"^up$"`, `'.*'`, `'[ ]'`, `'\x20'`, `"a b"`, ` up`, `up `, U+200B,
+  U+FEFF, `1`, `""` and the key left out; both refuse one blank, two, a
+  tab, `"\x20"`, a line break among blanks and U+00A0, and each of the
+  blanks `strings.TrimSpace` takes off, alone, twice and after a space,
+  while both take each between two letters; an expression that does not
+  compile passes the schema and is refused by the loader; a rule of an
+  expression of blanks and no name is refused by both; a `jq` rule's
+  expression of blanks passes the schema and is refused by the loader as a
+  rule that has no expression; and a `python` rule's is taken by both.
+- In the tables of keys, a `prometheus` rule's `expression` of two spaces
+  is refused by both, in the configuration and in a collector file, where
+  the schema as it was took it, and taken by both left out, written `""`,
+  which loads as the key left out, and as `"^up$"`; in the table of keys
+  written as blanks, now of 44, it is refused by both as blanks and taken
+  written `""`, a `python` rule's `description` of blanks is refused by
+  both and taken written `""`, and a `python` rule's `name` is refused by
+  both as blanks, as no metric name, and written `""`, as the name such a
+  rule needs.
+- A JSON body nested 9,998, 9,999 and 10,000 deep, the deepest the decoder
+  reads, in arrays, in objects and in the two in turn, reaches a python
+  transform, which goes down it in a loop and emits the depth and the
+  innermost value; goes through a pre-script to a jq rule that reads the
+  innermost value (`last(..)`); and comes back from a pre-script that leaves
+  `data` as the document it was. One nested 10,001 deep is refused by the
+  decoder (`arrays and objects nested more than 10000 deep`). Three workers,
+  one a script, take the nine bodies each and none is stopped. Before,
+  10,000 deep failed with `exceeded max depth` (the request is one object
+  deeper than `json.Marshal` writes with the Go release tested), 9,997 to
+  9,999 deep with the traceback of the worker's own `json.loads`, and what a
+  pre-script left from about 996 deep with `RecursionError: maximum recursion
+  depth exceeded`.
+- A JSON document with every kind of value at each of its levels — text
+  with escapes and a byte that is not UTF-8, floats, `1e400` kept as its
+  text, a whole number past int64, `null`, a boolean, an empty list, an empty
+  object, an empty key, a key written twice — nested 10,000 deep comes back
+  from a pre-script as the document it was.
+- The deepest YAML documents are handed over the same three ways, each a
+  value nested 10,000 deep: sequences nested 5,000 deep by indentation around
+  sequences nested 5,000 deep in brackets, around `7` and around `.nan`,
+  which the worker writes back as its marker; mappings nested 10,000 deep in
+  brackets; and 301 mappings each with a sequence written under its key
+  around sequences in brackets. One level more is the decoder's to refuse,
+  with the exporter's own message where the document is nested both ways,
+  under keys or beside an alias, or 10,000 deep each way, and with the
+  same message where it is nested one way and the parser refuses it
+  (§ 34.99).
+- What a pre-script leaves in `data` is read back nested 400, 1,200, 9,997,
+  9,999 and 10,000 deep, as lists, dicts, tuples, the two in turn and dicts
+  with numbers for keys, around `7` and around a NaN; nested 10,000 deep
+  around an empty list it is refused, as it is 10,001 and 15,000 deep and
+  holding itself, with `python pre-script failed: RecursionError: data is
+  nested more than 10000 deep, or a list or a dict in it holds itself; the
+  exporter reads what a script leaves in data nested 10000 deep at most, as
+  deep as it decodes a response`, the same text each time. One worker answers
+  all 80 runs, the 20 refused among them, and the request after each.
+- What the worker reads a deep request with and writes a deep answer with
+  reads and writes as `json` does, compared inside a worker for more than
+  21,000 values: the request lines of every decoder's response in both modes,
+  of 33 texts and 36 floats at every place of a request, numbers, strings and
+  whitespace of every form, a key written twice; 55 values a script can
+  leave, with tuples, keys that are numbers, booleans and `None`, subclasses
+  of `str`, `int`, `tuple` and `dict`, NaN and the infinities, and what
+  `json` refuses — a set, bytes, an object, a key that is a tuple or a NaN —
+  with `json`'s own error; and 3,000 values made at random, each written,
+  and read and written again in three layouts.
+- A pre-script's data nested 300 to 7,500 deep — lists, dicts, tuples, keys
+  that are numbers, a NaN and an infinity inside — is, byte for byte, the
+  line the worker as it was wrote under a recursion limit of 30,000.
+- Data nested 10,001 deep, which no decoder makes, is left to `json.Marshal`
+  and refused as it was. (A dict a transform appends to `metrics` with a key
+  nested 3,000 deep, which failed with `RecursionError: maximum recursion
+  depth exceeded`, is the metric it names: § 34.99.)
+- `decode.JSONValue` reads a value nested 1, 9,999 and 10,000 deep, in
+  arrays and in objects, with what follows it, and refuses one nested 10,001,
+  10,002 and 30,000 deep as a JSON document is refused at 10,001.
+- No YAML document decodes nested deeper than `decode.MaxDepth`, 10,000 as a
+  JSON document: 10,000 levels by indentation, 10,000 in brackets, and 5,000
+  of the second inside 5,000 of the first decode, and one more level of
+  either is refused; 301 mappings, each with a sequence written under its
+  key, around brackets decode nested 10,000 deep and are refused at 10,001,
+  two collections a level of indentation; a document with an alias is
+  refused over 10,000 in all, the alias itself no level.
+- `decode.MaxDepth` is 10,000, the JSON decoder's limit, and the one limit
+  of every decoded value: a table of 35 YAML documents nested about that
+  deep is decoded now and by the decoder as it was, kept as an oracle, and
+  where a document decodes it is what the YAML library alone makes of it,
+  nested as deep as the table says. Without an alias — sequences by
+  indentation, sequences and mappings in brackets, an innermost sequence
+  that is empty, brackets inside indentation, sequences under keys around
+  brackets — a document nested 9,999 and 10,000 deep is decoded as it was.
+- A YAML document without an alias nested deeper than 10,000 is refused
+  before it is decoded with `yaml: the document is nested more than 10000
+  deep, counting what its aliases stand for; a response may nest 10000 deep
+  at most`, where it was decoded: 5,000 levels of indentation around 5,001
+  of brackets, 5,001 around 5,000, 10,000 around 1 and around 10,000, and
+  sequences under 301 keys around brackets to 10,001, to 10,602, and around
+  indentation around brackets to 20,000. Nested 10,001 deep one way, by
+  indentation or in brackets, it is refused by the parser, as it was, and
+  with the same message (§ 34.99), where the parser's own words were `yaml:
+  exceeded max depth of 10000`.
+- With an alias a YAML document is held to the same count, where it was
+  held to the depth of the library's calls, which counted the document, a
+  scalar and each alias as a level: `p: &x [[...]]`, `q: *x` decodes with
+  the mapping around sequences nested 9,996 deep as it did, decodes around
+  9,997 and 9,999, a value nested 10,000 deep, where it was refused, and is
+  refused around 10,000 with the one message; brackets inside indentation
+  beside an alias decode to 10,000 and are refused at 10,001; a mapping
+  merged with `<<` decodes written 10,000 deep, its value nested 9,999, and
+  is refused written 10,001 deep; and anchors that each hold an alias of the
+  one before, written in a mapping with a key written twice, are a level a
+  link — refused for the key at 9,996 links, where they were refused for
+  their depth from 4,998, and for their depth at 9,997.
+- A YAML document that is not nested near the bound is decoded as it was,
+  the decoder as it was kept as an oracle with its look through a document
+  and its depth of calls: the repository's YAML files whole and cut off, the
+  error tests' documents, those written for the forms of a merge, a key and
+  an alias, and 10,000 drawn at random, each with mappings large past 128
+  keys and past 2, give the same value, the same error recognised by the
+  same text and the same failing outright; none is refused for its depth;
+  the look through each tells the same of its mappings, aliases and keys
+  written twice, with as many keys compared; and the depth is never more
+  than the depth of calls was, and one or two less without an alias.
+- `decode.JSONValue` reads 13 lines — values of every kind with what follows
+  them, values nested to the bound, and lines that are no JSON — into what
+  it read, and refuses what it refused, when it read a value 30,000 deep;
+  a value nested 10,001, 10,002 and 30,000 deep, which it then read, is
+  refused.
+
+## 34.99 A prometheus rule that selects by nothing, values nested deep in a script's metrics, and one message for a YAML document nested too deep
+
+- Handed to the transform, a `prometheus` rule with neither a name nor an
+  expression — of nothing, with `required: true`, a type, a description, a
+  `scale`, a constant label, a label that reads and cuts, and all of them —
+  makes no series of `up`, `node_load1`, `disk free`, `é`, `_` and `:`, of
+  `up` alone and of an empty response, and reports one failure each time,
+  `metric "" is not in the response`, a missing value; with `required:
+  false` it makes nothing and reports nothing. Between a rule named `up` and
+  one of `^node_` it adds that failure to the two series they make. The
+  rule check, which is handed no place, takes it as it did. A rule of a
+  name, of an expression, of both and of `.*` passes on `up`, `node_load1`,
+  the series renamed `load` and all six.
+- Through the load, a `prometheus` rule with neither a name nor an
+  expression is refused with `collector "node" metrics rule 1 has neither a
+  name nor an expression, and a prometheus rule needs one of them to say
+  which of the target's metrics it passes on: an expression, a regular
+  expression matched against a metric's name as the target gives it,
+  anywhere in it, to match metrics by, or a name, to match the metric of
+  that name; with neither it matches no metric, so write one, as in
+  expression: '^node_' or name: up, or expression: '.*' for a rule about
+  every metric, or take the rule out`: written `{}`, `name: ""`,
+  `expression: ""`, both `''`, `name: ~`, and of a type, a description,
+  `required: true`, `required: false`, `error_mode: ignore`, `scale: 2`, a
+  constant label, a label with an expression, and four keys at once. The
+  second of two rules is `rule 2`, the third of three `rule 3` and the one
+  between two that select `rule 2`.
+- Of four rules, the first and the last of neither and the third named
+  `bad-name`, the load reports three problems in order: rule 1, the name
+  that is no metric name in the words it had, and rule 4. In a collector
+  file the second rule of two is refused as `collector "node" metrics rule
+  2`.
+- A `prometheus` rule of neither that the load refused before is refused
+  for that alone, without the new message: `type: timer`, `error_mode:
+  panic`, a name of two blanks, an expression of two blanks, `items`, a
+  label with neither key, and a label with a `value_map` in a rule without
+  a name.
+- A `prometheus` rule of a name alone, of an expression alone, of both, of
+  `.*` with a type, of a name with `expression: ""`, of `name: ""` with an
+  expression, of `expression: 0`, two rules of one name the second with a
+  constant label, `expression: '^$'`, `metrics: []` and a collector without
+  `metrics` all load.
+- Under each of the eight transforms a rule of nothing, of a description
+  alone, of a name alone, of an expression alone and of both is loaded,
+  alone and as the second rule of its collector. `jq`, `yq`, `xpath`,
+  `css`, `regex` and `csv` refuse the first, second and fourth with
+  `collector "node" metrics rule 1 has no name`, or `rule 2`, the third with
+  `collector "node" metric "v" has no expression`, and load the fifth;
+  `python` refuses the first, second and fourth with `metrics rule 1 has no
+  name, which a python rule needs`, or `rule 2`, and loads the other two;
+  `prometheus` refuses the first two with `collector "node" metrics rule 1`
+  or `rule 2` and loads the other three. Each message about a rule without
+  a name names the rule's place (§ 34.100).
+- The check of a collector's rules agrees with a copy of itself as it was,
+  which makes of the rules it takes the later check of two that are the
+  same rule (§ 34.100), on the error word for word and on the defaults it
+  fills in, for the 147 rules of the 24 collectors of the 13 shipped
+  configurations under
+  `examples`, `configs` and `testdata`, none of which is refused anew, and
+  for 173,376 generated rules of 144,576 collectors: under each of the
+  eight transforms, one rule of five names — none, one in order, one that
+  is none, two blanks and a reserved one — six expressions — none, the
+  transform's own, two blanks, one that does not compile, `^$` and `.*` —
+  three types, `required` unset and false, three `error_mode`s, six lists
+  of labels and five other settings; and twelve rules, five of them of
+  neither key, beside each other in twos and threes. The 142,044
+  collectors the check refused are refused still: in the same words where
+  no rule of theirs is refused anew, and in 698 of them with the new
+  problem at such a rule's place, among the others in order. Of what the
+  check took only `prometheus` rules are refused, 1,440 in all, each by
+  its place, and no rule of another transform is. Under the race detector
+  the collectors of one rule are every seventeenth of those, and the
+  collectors of three rules end in one of three rules.
+- The committed schema and the loader agree on a `prometheus` rule of
+  neither a name nor an expression: both refuse `{}`, `name: ""`,
+  `expression: ""`, both written `""` and `''`, `name: ~`, a rule of a
+  type, of `type: ""`, of a description, of `required: true` and `false`,
+  of `error_mode: ignore`, of `scale: 2` and of a constant label, such a
+  rule after one that selects, before one and between two, and `{}` under
+  `transform.type: Prometheus`; both take a rule of a name, of an
+  expression, of both, of a name with `expression: ""`, of `name: ""` with
+  an expression, `.*` with a type, `expression: 0`, `expression: false`,
+  `expression: '^$'`, two rules that select, `metrics: []` and a collector
+  without `metrics`. A rule of `items` alone and one of a label with a
+  `value_map` alone are refused by the schema, and by the loader in the
+  words it had, without the new message. A `jq` rule of nothing and of an
+  expression alone is refused by both, one of a name alone passes the
+  schema and is refused by the loader for its expression, and a `python`
+  rule of a name alone is taken by both and of an expression alone refused
+  by both.
+- In the tables of keys, a `prometheus` rule's `name` in a rule without an
+  expression is refused by both left out and written `""`, in the
+  configuration and in a collector file, where the schema as it was took
+  it left out, taken as `up` and refused as `bad-name`; its `expression` in
+  a rule without a name is refused by both left out, written `""` and as
+  two blanks, where the schema as it was took all three, and taken as
+  `"^up$"`.
+- A list or a dict in an entry a transform appends to `metrics` by hand,
+  where a metric has one value, fails the scrape as a script failure with
+  the same message nested 2, 40, 480, 990, 1,100, 5,000, 10,001 and 30,000
+  deep, and when it holds itself once or twice: as the entry (`metrics[1] is
+  an array of 1 item, not a metric; call metric(...), or append a mapping
+  with a name and a value`), as its name, type, help, value or timestamp
+  (`metric "m" help an array of 1 item is not a string`, `metric "m" value an
+  object with 1 key is not a number`), as its labels (`metric "m" labels are
+  an array of 1 item, not a mapping of label names to values`) and as a
+  label's value (`metric "m" label "l" is an array of 1 values, not a single
+  value; select one, or join them with join(",")`); `metrics` appended to
+  itself is `metrics[1] is an array of 2 items, not a metric`. From about
+  1,000 deep, and holding itself, each of them failed with `python transform
+  failed: RecursionError: maximum recursion depth exceeded`. Every failure
+  is `model.ErrScriptFailed`, and one worker answers all 146 runs, none
+  stopped.
+- A label that is a list holding itself twice, in an entry that holds the
+  list under a key of its own as well, fails with `metric "m" label "l" is
+  an array of 2 values, ...` and the worker's interpreter has held no more
+  than 64 MiB (counted by `tracemalloc` in the script): the answer is not
+  looked through level after level, each twice as long as the one before,
+  which filled the worker's memory limit of 1 GiB, in seven seconds, before
+  the scrape failed.
+- A list or a dict under a key of an entry that no metric has is not read,
+  nested 2, 480, 990, 1,100, 10,001 and 30,000 deep and holding itself once
+  or twice: the scrape gives the metric, where from about 1,000 deep it
+  failed with the `RecursionError`; a metric that holds itself under such a
+  key is the metric, and a NaN and the infinities beside a tuple of such a
+  list, as values and as a label, are read as the floats they are.
+- A list or a dict given to `metric(...)` as its name, type, help, value or
+  timestamp fails the script with the same error nested 2, 990, 1,100, 10,001
+  and 30,000 deep and holding itself, after the traceback of the script's one
+  line: `ValueError: metric 'm' help a list of 1 item is not a string`,
+  `metric 'm' value a dict of 1 item is not a number`, `metric name a list of
+  2 items is not a string`. It was written out in the error, two thousand
+  brackets for one nested a thousand deep, and from 10,001 deep the error
+  ended in `RecursionError: maximum recursion depth exceeded while getting
+  the repr of an object`. Labels that are a list and a label that is a list
+  or a dict fail as they did, at every depth. A deque nested 30,000 deep as
+  a help, a value or a label, and a frozenset as a label, are named by their
+  kind (`a deque nested too deep to be written`) where the interpreter cannot
+  write them, and no `RecursionError` says so.
+- What the worker writes in place of a list or a dict it could not follow is
+  read as the list or the dict itself: 33 values — empty, short and nested
+  lists, dicts, tuples, a named tuple, an `OrderedDict`, a `defaultdict`, a
+  dict with keys that are numbers, `None` and `True`, a NaN inside, 60 levels
+  of lists and dicts in turn, and scalars of every kind — at 11 places of an
+  entry (the entry, name, type, help, value, timestamp, labels, a label, a
+  key of the script's own, a help without a name, a label without a value)
+  give the same series or the same failure with the entry as it is, whose
+  answer is the line the worker as it was wrote, and with the entry cut.
+- `metric(...)` given what is no list, dict, tuple or set as its name, type,
+  help, value or timestamp — 21 values, numbers, text, `None`, bytes, a
+  class, a range, a `Decimal`, values of types of the script's own — answers
+  the line the worker as it was answered, byte for byte; given a list, a
+  dict, a tuple, a set, a frozenset or a subclass of dict or list (13 values)
+  it answers that line with the value's kind and count (`a tuple of 2 items`,
+  `a Bag of 1 item`) where the value was written out, and nothing else
+  changed.
+- Through `/probe`, a label that is a list of three numbers, a list of three
+  whose first is nested 5,000 deep, and a list of three that holds itself
+  answer the same 502, `collector ... transform failed: python transform:
+  metric "m" label "l" is an array of 3 values, not a single value; select
+  one, or join them with join(",")`, twice each from one worker;
+  `metric(...)` given such a list as its help answers `ValueError: metric 'm'
+  help a list of 3 items is not a string`; each failure counts in
+  `http_exporter_script_errors_total` and
+  `http_exporter_transform_errors_total`, and the same list under a key of
+  the script's own answers 200 with the metric and counts in neither.
+- A YAML document nested 10,001 deep is refused with one message, `yaml: the
+  document is nested more than 10000 deep, counting what its aliases stand
+  for; a response may nest 10000 deep at most`, whichever refuses it: the
+  library's parser — block sequences, block mappings each the key of the one
+  around it, flow sequences, flow sequences that do not end, flow mappings —
+  where its own words were `yaml: exceeded max depth of 10000`, and the
+  exporter — flow sequences inside block sequences, 10,000 block sequences
+  under a key, 10,000 flow mappings under a key, an alias of flow sequences.
+  Where the parser names a line the message keeps it, `yaml: line 10001: the
+  document is nested ...` for block mappings and for flow sequences a line
+  each, `line 2:` for block sequences on two lines and for block sequences
+  on the line after their key (the key's line), `line 3:` for flow mappings
+  on the third line. All 15 are recognised by the message without a line
+  (`model.SameFailureText`), and through `decode.Decode` by `YAML decode: `
+  and that. Eleven of them written to nest 10,000 deep decode, into a value
+  nested 10,000 deep, and one nested that deep that the parser refuses for a
+  sequence that does not end is refused in the library's words.
+- Only the parser's own text for the depth is given the exporter's words:
+  `exceeded max depth of 10000` after nothing or after `line N: `, N a number
+  from 1. 30 other texts — another depth, words before or after, `line 0:`,
+  `line 007:`, a line that is no number, two lines, the scanner's context,
+  another problem — read, and are recognised, as `yamlFailure` made them
+  before (a copy of it is the oracle), and a text that does not start `yaml:
+  ` is returned as it is. The two tables that compare the decoder with what
+  it was over more than 11,000 documents (yamlcut_test.go,
+  yamlproblems_test.go) hold with that one refusal reworded.
+
+## 34.100 The same rule twice, a pattern under a name, rules named by their place, and data that holds a list too often
+
+- Two rules of a collector that are the same rule are refused at load with
+  `collector "node" metrics rule 1 and rule 3 are the same rule of metric
+  "up": alike in name, expression, items and labels, each makes every series
+  the other makes, and a scrape that has a series twice fails, as a
+  duplicate metric series; take one of the two out, or tell their series
+  apart by a label, as with a static label that has another value in each`:
+  a `prometheus` name twice, as rules 1 and 2 and as rules 1 and 3; a
+  `prometheus` expression twice, told as `the same rule of the metrics that
+  match "^node_"`; a name and expression twice; and a jq rule with `items`
+  and two labels pasted twice around another rule. Before, each loaded, and
+  every scrape failed with `duplicate metric series`.
+- A key written `""` is the key left out to the comparison: `name: up` with
+  `expression: ""` beside `name: up`, `name: ""` and `items: ""` beside an
+  expression alone, and a label's `value: ""` beside its expression are the
+  same rule as the rule without them.
+- What a rule says besides does not make it another rule: a second rule
+  that differs only in `scale`, in `description`, `required` and
+  `error_mode`, in `error_mode: " FAIL "`, in a `time_zone` beside one
+  `time_format`, in a label's `truncate` and `required`, or in the order
+  its labels are written in is refused as the same rule, and so are two
+  rules with the same `value_map`.
+- Each copy of a rule is told of once, against the first of its kind, in the
+  order of the copies and whatever stands between them: of `up`, `load`,
+  `up`, a pattern, `load`, `up`, the pattern and `down` the load reports
+  rules 1 and 3, 2 and 5, 1 and 6, and 4 and 7. Of three copies it reports
+  rules 1 and 2 and rules 1 and 3.
+- A rule the load refuses for something else is refused for that alone, and
+  its copy too: of two rules named `bad-name`, `up`, two rules of neither a
+  name nor an expression and `up` again, the load reports the name twice,
+  rules 4 and 5 for having neither, and rules 3 and 6 as the same rule. Two
+  rules alike but for two `value_map`s of one label are told of both: the
+  two maps first, as before, and then the same rule.
+- In a collector file the same rule twice is refused in the same words.
+- Pairs that are two rules load as they did: rules of one name with other
+  expressions and constants, with other `items`, with a label of another
+  value in each, with a label more, with a label that is a constant in one
+  and read in the other; rules whose `value_map`s or `time_format`s differ;
+  a `prometheus` rule of a name beside one of that name and its pattern; a
+  `python` rule twice, with a label and without; and the same rule in two
+  collectors.
+- What a scrape makes of such pairs, the rules being taken by the checks as
+  they were: under jq, yq, xpath, css, regex, csv and prometheus the same
+  rule twice — with items and labels, with the labels in another order,
+  with another scale, description, `required` and `error_mode`, with a
+  label cut and required in one, with another `time_zone`, with one
+  `value_map`, with a prometheus label that reads one the rule sets written
+  alike, and with a third rule between — makes series whose validation
+  fails with `duplicate metric series` naming the metric, and the load
+  refuses each. Pairs that are two rules make valid series: 2 of one name
+  from two expressions, 4 from one `items` with another constant or a
+  label more, 2 from other `items`, 1 from two `value_map`s that read other
+  texts, from a `value_map` or a `time_format` beside a number and from two
+  `time_format`s, 2
+  from labels of one name written in another order, and 2 from a prometheus
+  rule whose label reads one it sets, written in another order.
+- A `python` rule twice, each cutting the label `note`, loads, and the
+  script's one series is valid with its label cut to the limit.
+- Rules that mean the same in other words load as they did and fail the
+  scrape as they did, with `duplicate metric series "up"`: a `prometheus`
+  name beside the name with its pattern and beside the pattern alone, two
+  patterns of one name, two jq expressions of one meaning, `rfc3339` beside
+  `RFC3339`, and a label read by two expressions of one value.
+- Rules alike in name, expression and `items` with a label of another value
+  in each load under csv, jq and xpath, make the series of both, and are
+  one entry of the rule report with the failures of both, logged for the
+  one under `log`; with the label alike in both they are refused as the
+  same rule.
+- The check of a collector's rules agrees with a copy of itself as it was,
+  kept with the checks of one rule it called, for the 147 rules of the 24
+  collectors of the 13 shipped configurations, none of which is refused
+  anew, and for 176,256 generated rules of 53,376 collectors of one to four
+  rules under each of the eight transforms: a rule and what a scale, a
+  description with `required` and `error_mode`, its labels reversed, a
+  label's `truncate`, another constant, another expression, another name, a
+  `value_map`, a `time_format`, a `time_zone`, no labels, and an
+  `error_mode` in another case make of it, a rule without a name, a rule of
+  nothing and one with a bad name and an expression that does not compile.
+  The defaults filled in are the same; a collector with no two rules that
+  are the same rule and no rule without a name gets the same error word for
+  word, or none; 20,622 problems of rules without a name read as they did
+  but for the rule's place; and 25,986 rules are refused as the same rule
+  as an earlier one, by a specification written apart from the check, each
+  after everything that was said — 3,731 under each of jq, yq, xpath, css,
+  regex and csv, 3,600 under prometheus and none under python. Under the
+  race detector the collectors of three and four rules are of fewer.
+- The committed schema takes, and the loader alone refuses with `are the
+  same rule`, a prometheus name twice, an expression twice around another
+  rule, a name beside the name with `expression: ""`, a rule and its copy
+  with a scale and a description, and a jq rule pasted twice, with
+  `required` and `error_mode` changed, with its label cut, with its labels
+  in another order, with one `time_format` and a `time_zone`, with one
+  `value_map`, and as the third rule of its collector; both take a jq rule
+  with another label, a label more, another expression, another `value_map`
+  and another `time_format`, a prometheus name beside its pattern and with
+  a label, and a python rule twice, with a label each and without. The
+  schemas describe `collectors[].metrics` as checked for this by the
+  exporter.
+- A `prometheus` rule's name that is no metric name and holds a character
+  of a regular expression — `node_.*`, `^up$`, `up|node_load1`, `node_+`,
+  `up?`, `(up)`, `node_[a-z]`, `up{1}`, `node_\w`, `$`, `.`,
+  `http.server.duration`, `up{job="x"}`, `é.` and ` .* ` — is refused with
+  `collector "node" metric "node_.*": "node_.*" is not a valid Prometheus
+  metric name; use letters, digits, underscores and colons, not starting
+  with a digit; a pattern to match the target's metric names by is a
+  prometheus rule's expression, not its name, so if this is one, write it
+  as expression, in single quotes, and leave name out, or set name to the
+  one name the series it matches are to be exported under`, with an
+  expression beside the name and without, under `name_escaping` left out,
+  `fail`, `underscores` and `values`.
+- The same names under jq, yq, xpath, css, regex, csv and python, and under
+  every transform the names `bad-name`, `node load`, `1up`, `é`, `up,down`,
+  `a/b`, `up!`, `a=b`, `@up`, `a'b`, `a"b`, `a#b`, `~up`, `a&b`, `<up>` and
+  `a%b`, are refused with the first sentence alone, word for word as
+  before; `__up` is refused as reserved, and `up`, `node_load1`,
+  `job:up:sum`, `_` and `UP` are taken.
+- Through the load, `name: 'node_.*'`, `'^up$'`, `'up|node_load1'`,
+  `http.server.duration` and `'node_\d+'` of a prometheus rule, alone and
+  beside an expression as the second rule, are refused with both sentences
+  under each `name_escaping`, and with the first alone under jq and python;
+  `bad-name`, `1up` and `__up` read as they did; and `expression:
+  'node_.*'`, a name beside `'^node_load1$'` and
+  `'^http\.server\.duration$'` load.
+- A prometheus rule with such a name, `items` and an expression that does
+  not compile is told three things, the sentence about patterns ending the
+  first, checked by its name and by its place alike.
+- `CheckMetricRule` agrees with a copy of itself as it was for 77,760
+  generated rules under each of the eight transforms — twelve names, five
+  expressions, three `items`, six lists of labels and nine other settings —
+  problem for problem and word for word, but for the sentence added to the
+  first problem of the 4,050 prometheus rules whose name is none and reads
+  as a pattern; checked at its place, a rule with a name reads the same,
+  and the 31,653 problems of rules without a name read the same with
+  `collector "node" metrics rule 3` where `metric ""` or the blanks stood.
+- A rule is named in a message of the load by `metric "up"`, and one whose
+  name is left out, `""`, two blanks or a tab by `metrics rule 2`, counted
+  from 1; `bad-name` and ` up` are named as written.
+- A rule without a name is told of by its place, as rule 1 alone and as
+  rule 3 after two sound rules, and no message says `metric ""` or `a
+  metric without a name`: under jq, yq, xpath, css, regex and csv
+  `collector "node" metrics rule 3 has no name`, written without a name, as
+  `{}`, with `name: ""` and with a name of two blanks; under jq its
+  `error_mode` and type that are none and type `histogram`; under a csv
+  collector without a header row the columns it and its label read by name,
+  beside having no name.
+- Before/after of each message, the rule being rule 2 of collector `node`:
+  `collector "node" has a metric without a name` is `collector "node"
+  metrics rule 2 has no name`; `collector "node" has a metric without a
+  name, which a python rule needs: …` is `collector "node" metrics rule 2
+  has no name, which a python rule needs: …`; and every message that began
+  `collector "node" metric ""`, or `metric "  "` for a name of blanks,
+  begins `collector "node" metrics rule 2` and goes on as it did.
+- Under prometheus, where a rule needs no name, a rule without one is told
+  by its place of a type and an `error_mode` that are none; a label without
+  a name, with a name that is none, with a reserved name, with an
+  expression of blanks, with both keys, with neither, a constant that is
+  required and a `value_map`; `items`, `scale: 0`, a `value_map`, a
+  `time_format`, a `time_zone` alone; an expression that does not compile
+  and one of blanks; a name of blanks; three of these at once; a
+  description and a constant label longer than the limits; and a
+  placeholder in a constant label.
+- Under python a rule without a name is told by its place that it has
+  none, and beside it of its type, description, `required`, `error_mode`
+  and label without `truncate`, of a label's value, of a required label, of
+  `items` and `scale`, of a `time_format`, and of a name of blanks.
+- A rule with a name reads as it did: `collector "node" metric "up" has no
+  expression`, its invalid type as the second rule, its `error_mode`,
+  `bad-name` and ` up` as no metric names, `items` and a label with neither
+  key under prometheus, and a python rule's type.
+- The checks of csv columns, of placeholders and of the metric families
+  agree with copies of themselves as they were for the 24 shipped
+  collectors, word for word, and for 258, 399 and 819 generated collectors
+  of one to three rules with names, without and with names of blanks: a
+  collector all of whose rules have names gets the same error or none, and
+  of a rule without one each says what it said of a rule in that place with
+  a name of its own, with the place where `metric ""` stood — in 219, 244
+  and 435 collectors.
+- In a build without the `http` request type, the test that takes `http`
+  out of the built types leaves it out when it ends, so a later test that
+  loads the shipped configurations is refused the type as that build
+  refuses it.
+- Data a pre-script leaves that holds itself is refused with `python
+  pre-script failed: RecursionError: data is nested more than 10000 deep, or
+  a list or a dict in it holds itself; ...`, a script failure, where the
+  worker's walk comes back to a list or a dict it is inside of: a list in
+  itself once and twice, a dict in itself twice, two lists in each other
+  twice, a list in the tuples it holds, an `OrderedDict` in itself twice
+  beside a NaN, and a list in itself twice at the end of 300 and of 3,000
+  levels. The worker's interpreter holds under 1 MiB for each (counted by
+  `tracemalloc` in the script; about 0.43 MiB, most of it the script's own),
+  and no more for the list in itself twice than for the one in itself once,
+  where the levels of the first, each twice the one before, were gone
+  through until the worker's memory limit: 1 GiB and 8 to 15 seconds under
+  `max_script_memory: 1GiB`, and without one until `script_timeout` killed
+  the worker. In a document of 20,000 values the same list is refused once
+  as many values are counted as fit half of `limits.max_output_bytes`, in a
+  multiple of that limit (under 8 MiB at a limit of 128 KiB). One worker
+  refuses them all, none stopped, and answers the next request.
+- Data that holds one list twice, which holds another twice, 20, 30 and 40
+  times over — no list in itself, and 2^20 to 2^40 numbers written — is
+  refused with `python pre-script failed: OverflowError: what the script
+  left in data is longer than limits.max_output_bytes (131072 bytes) written
+  out, a list or a dict that is there more than once being written each
+  time; leave less there, or raise limits.max_output_bytes`, a script
+  failure, without being written: the worker holds the same for 20, 30 and
+  40 levels, under 1 MiB, where 20 levels were written out whole and refused
+  by the exporter with the worker stopped, and 30 and 40 filled the worker's
+  memory limit and failed as a `MemoryError` 18 seconds later. So are dicts
+  and tuples doubled 40 times, lists doubled 40 times beside a NaN and at
+  the end of 2,000 levels, and a list of ten of a list of ten twelve times
+  over; and, in a multiple of the output limit, lists doubled 2,000 and
+  9,000 times, and one list of a text of 1,000 characters, or one dict with
+  a key that long, held 80,000 times. One worker refuses all twelve, counted
+  as `script_error`, none stopped, and answers the next request.
+- What only looks like such data is written as it was: `pair = [1, 2]; data
+  = [pair, pair]` is read back as `[[1, 2], [1, 2]]`; the pair 5,000 times,
+  also beside a NaN, is 5,000 lists; twice at the end of 1,000 levels it is
+  read back nested 1,002 deep; one tuple and the empty tuple in each of
+  2,000 rows are read back in each; lists nested 10,000 deep are carried;
+  and lists doubled 12 times are their 4,096 numbers. One worker answers
+  them all. 30,000 numbers under an output limit of 128 KiB, nothing held
+  twice, fail as they did, `python pre-script output exceeds limit`, with
+  the worker stopped as `output_limit`.
+- Lists doubled 40 times in a transform's `metrics` fail the scrape as a
+  list of two there does, in under 1 MiB of the worker's memory: as the
+  entry (`metrics[1] is an array of 2 items, not a metric; ...`), a label
+  (`metric "m" label "l" is an array of 2 values, not a single value; ...`),
+  the labels, the value, the help and the timestamp; under a key of the
+  script's own the scrape gives the metric. Each was copied out by the
+  worker until its memory limit, 11 seconds at 1 GiB, and failed as a
+  `MemoryError`. One entry of a thousand keys held five times is five
+  metrics; held 200 times under an output limit of 128 KiB it fails with
+  `python transform failed: OverflowError: what the script left in metrics
+  is longer than limits.max_output_bytes (131072 bytes) written out, ...`,
+  and the one worker answers the scrape after it.
+- An answer that holds nothing in itself, and no list or dict so often that
+  it is longer than the limit, is the line it was, byte for byte, or fails
+  with the error it failed with: the worker's `plain`, `wire`, `flat` and
+  `answer` as they were are the oracle, run in the worker beside its own
+  over more than 800 answers — generated data and metrics of every kind of
+  value, of types of the script's own, with and without lists and dicts
+  held several times, some of them failing in `json`; a pair held 5,000
+  times, in each of 3,000 rows, and one labels dict in 3,000 metrics; lists
+  doubled 11 times, also beside a NaN and under a metric's key; and values
+  nested 300, 600, 1,100 and 3,000 deep around a number and around lists
+  held twice, as data, under a metric's key and as a label. `plain` says of
+  each what it said, what is cut of a metric is what was cut, and the
+  worker's measure of an answer (`weigh`) is no more than data is long
+  when it is written, and nothing where nothing is held twice.
+- Through `/probe`, a pre-script that leaves a list in itself twice answers
+  502 `collector ... transform failed: python pre-script failed:
+  RecursionError: data is nested more than 10000 deep, or a list or a dict
+  in it holds itself; ...`, one that leaves lists doubled 40 times
+  `... OverflowError: what the script left in data is longer than
+  limits.max_output_bytes (1048576 bytes) written out, ...`, and a
+  transform with those lists as a label `python transform: metric "m" label
+  "l" is an array of 2 values, not a single value; select one, or join them
+  with join(",")`, twice each from one worker, each counted in
+  `http_exporter_script_errors_total`; a pre-script that leaves one pair
+  twice answers 200 with the two lists its transform reads, which are no
+  longer one.
+
+## 34.101 The race suite's limit and the size of a test's input under the race detector
+
+- `ci.yml` runs the race detector in one step, whose command is
+  `go test -race -count=2 -shuffle=on -timeout <limit> ./...` with a limit
+  of at least twenty minutes, under the condition of its other Go steps, and
+  the `test` target of the Makefile runs that very command: a Makefile
+  without the limit, or with another, fails the test, naming both commands.
+- `alloctest.UnlessRaced(plain, raced)` gives the plain size in a build
+  without the race detector and the other in one with it, for a count and
+  for a text alike.
+- The tests of `internal/decode`, `internal/exporter`, `internal/transform`,
+  `internal/config` and `internal/fetch` whose time under the race detector
+  was the size of their input take a smaller input there, as the bullets
+  that state their sizes say, and assert there what they assert in a plain
+  run; a plain run works on what it worked on.
+- The floors that five tests of the YAML decoder left unchecked under the
+  race detector — how many documents of each outcome the corpus held, how
+  many failures were recognised by one, ten and eleven problems, how many
+  documents had problems, aliases and different texts — are checked there
+  too, scaled to the corpus that run draws.
 
 # 35. Documentation requirements
 

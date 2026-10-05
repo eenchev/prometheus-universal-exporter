@@ -15,6 +15,7 @@ import (
 	"github.com/eenchev/prometheus-universal-exporter/internal/expr"
 	"github.com/eenchev/prometheus-universal-exporter/internal/fetch"
 	"github.com/eenchev/prometheus-universal-exporter/internal/model"
+	"github.com/eenchev/prometheus-universal-exporter/internal/testutil/alloctest"
 )
 
 // copyingPrometheusTransform is applyPrometheusTransform as it was while it
@@ -310,11 +311,12 @@ func prometheusCollectors() map[string]model.Collector {
 // leaves that as it was decoded, and gives the same again when the same
 // decoded response is transformed a second time. Every collector is run
 // over a response with every kind of series, with and without a label value
-// to repair, and over random ones.
+// to repair, and over random ones, forty of them and ten under the race
+// detector.
 func TestPrometheusTransformGivesWhatCopyingGave(t *testing.T) {
 	bodies := []string{passthroughExposition(false), passthroughExposition(true), "", "up 1\n"}
 	random := rand.New(rand.NewPCG(20261002, 2))
-	for range 40 {
+	for range alloctest.UnlessRaced(40, 10) {
 		bodies = append(bodies, randomExposition(random))
 	}
 	compared := 0

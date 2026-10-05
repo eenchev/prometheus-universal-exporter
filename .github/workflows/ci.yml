@@ -124,8 +124,11 @@ jobs:
       - run: go test ./...
         if: steps.changes.outputs.go == 'true'
       # Twice, in a random order, so a test that depends on the order tests
-      # run in, or on running only once, is caught.
-      - run: go test -race -count=2 -shuffle=on ./...
+      # run in, or on running only once, is caught. The limit is a package's:
+      # go test's own ten minutes are for one run without the race detector,
+      # and this is two with it, on whatever machine the job was given. The
+      # Makefile runs the same command and a test keeps the two in step.
+      - run: go test -race -count=2 -shuffle=on -timeout 20m ./...
         if: steps.changes.outputs.go == 'true'
       - run: go vet ./...
         if: steps.changes.outputs.go == 'true'

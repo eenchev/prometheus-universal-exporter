@@ -299,7 +299,8 @@ func hostileYAMLDocuments() []string {
 // error was read at all and against the reading of it before the problems
 // were collapsed, but for a scanner's or a parser's error, which is now
 // recognised without the words for its line. And each problem is read for
-// its lines as it was.
+// its lines as it was. Under the race detector 420 documents are drawn, a
+// fifth, with a fifth of each kind of refusal to find among them.
 func TestAYAMLFailureWithFewDifferentProblemsReadsAndIsRecognisedAsItWas(t *testing.T) {
 	documents := hostileYAMLDocuments()
 	// The lines of a mapping, those of a list, and lines of every kind, of
@@ -310,7 +311,8 @@ func TestAYAMLFailureWithFewDifferentProblemsReadsAndIsRecognisedAsItWas(t *test
 		{"a: 1\n", "a: 2\n", "- {a: 1, a: 2}\n", " d: 1\n", "\t- e\n", "f: [1, 2\n", "g: *nope\n", "\n", "j: 'k\n", "---\n", "l: !!int m\n"},
 	}
 	random := rand.New(rand.NewPCG(14, 15)) //nolint:gosec // documents for a test
-	for i := range 2100 {
+	fewer := alloctest.UnlessRaced(1, 5)
+	for i := range 2100 / fewer {
 		lines := kinds[i%len(kinds)]
 		var doc strings.Builder
 		for range 1 + random.IntN(12) {
@@ -321,6 +323,9 @@ func TestAYAMLFailureWithFewDifferentProblemsReadsAndIsRecognisedAsItWas(t *test
 	refused, same, collapsed, counted := 0, 0, 0, 0
 	for _, document := range documents {
 		_, was := decodeYAMLBeforeLinesWereLeftOut([]byte(document))
+		// But for the parser's refusal of a document for its depth, which
+		// has since been given the exporter's words for one.
+		was = yamlDepthRefusalNow(was)
 		_, err := decodeYAML([]byte(document))
 		if (err == nil) != (was == nil) {
 			t.Fatalf("%q is refused with %v; it was with %v", document, err, was)
@@ -369,7 +374,7 @@ func TestAYAMLFailureWithFewDifferentProblemsReadsAndIsRecognisedAsItWas(t *test
 			t.Fatalf("%q is recognised by\n%s\nit was by\n%s", document, got, before)
 		}
 	}
-	if refused < 1000 || same < 500 || collapsed < 300 || counted < 100 {
+	if refused < 1000/fewer || same < 500/fewer || collapsed < 300/fewer || counted < 100/fewer {
 		t.Errorf("%d documents were refused: %d as they were, %d with a problem listed more than once and %d with more than ten: they do not cover all three", refused, same, collapsed, counted)
 	}
 	problems := []string{"", "line ", "line 1", "line 1:", "line 1: ", "line 12: x", "line 12:x", "line x: y", "on line 3: x", "line 3: line 4: x",

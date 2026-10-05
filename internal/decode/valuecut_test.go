@@ -258,13 +258,17 @@ func decodeError(t *testing.T, kind, body string, header http.Header) (bounded, 
 }
 
 // longTokenBytes is how long the token is that the tests of a cut value give
-// a decoder: 1 MiB, and 100 KiB under the race detector, where parsing a
+// a decoder: 1 MiB, and 10 KiB under the race detector, where parsing a
 // megabyte for each of some fifty messages took most of a minute of the ten
-// a package's tests have in CI. Both lengths start with the digits 10, which
-// the tests look for in the length an error names.
+// a package's tests have in CI, and a tenth of a megabyte still seconds. A
+// token of 10 KiB is five times the 2,000 bytes an error is bounded at
+// (maxFailureBytes), which is what it has to be past for the tests to tell
+// an error that shows its start from one cut at the bound. Both lengths
+// start with the digits 10, which the tests look for in the length an error
+// names.
 func longTokenBytes() int {
 	if raceDetector {
-		return 100 << 10
+		return 10 << 10
 	}
 	return 1 << 20
 }

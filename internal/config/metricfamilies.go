@@ -39,9 +39,10 @@ func checkMetricFamilies(x *model.Collector) error {
 		return nil
 	}
 	types := map[string]model.MetricType{}
-	for _, rule := range x.Metrics {
+	for i, rule := range x.Metrics {
+		// A prometheus rule may have no name, and is then named by its place.
 		if limits.MaxHelpLength > 0 && len(rule.Description) > limits.MaxHelpLength {
-			return fmt.Errorf("collector %q metric %q description is %d bytes, longer than limits.max_help_length %d, so every series would fail validation; shorten it or raise the limit", x.Name, rule.Name, len(rule.Description), limits.MaxHelpLength)
+			return fmt.Errorf("%s description is %d bytes, longer than limits.max_help_length %d, so every series would fail validation; shorten it or raise the limit", transform.RuleWhere(x, i), len(rule.Description), limits.MaxHelpLength)
 		}
 		for _, label := range rule.Labels {
 			if !label.Static() || label.Truncate || slices.Contains(x.Transform.RemoveLabels, label.Name) {
@@ -49,7 +50,7 @@ func checkMetricFamilies(x *model.Collector) error {
 			}
 			value := transform.MappedStaticLabelValue(x, rule.Name, label)
 			if limits.MaxLabelValueLength > 0 && len(value) > limits.MaxLabelValueLength {
-				return fmt.Errorf("collector %q metric %q label %q value is %d bytes, longer than limits.max_label_value_length %d, so every series would fail validation; shorten it, set truncate: true on the label, or raise the limit", x.Name, rule.Name, label.Name, len(value), limits.MaxLabelValueLength)
+				return fmt.Errorf("%s label %q value is %d bytes, longer than limits.max_label_value_length %d, so every series would fail validation; shorten it, set truncate: true on the label, or raise the limit", transform.RuleWhere(x, i), label.Name, len(value), limits.MaxLabelValueLength)
 			}
 		}
 		if rule.Name == "" || rule.Type == "" {

@@ -37,7 +37,7 @@ configured:
 | `http_exporter_collector_config_valid` | gauge | `1` for every loaded collector. A rejected reload keeps the previous collectors at `1`; it shows in `http_exporter_config_last_reload_successful`. |
 | `http_exporter_trips_in_flight` | gauge | Without a `collector` label: trips to targets in progress, probes and static target scrapes of every collector together, which `--probe.max-concurrent` bounds. A fair signal for scaling out on. |
 | `http_exporter_trips_max_concurrent` | gauge | Without a `collector` label: `--probe.max-concurrent`, `0` for no limit. |
-| `http_exporter_rule_failures_total` | counter | Labelled `collector` and `metric`: the series a metric rule could not produce and the probe carried on without, under `error_mode` `log` or `ignore`. Every rule with a name has its series from zero; a `prometheus` rule without a name has none: no series is exported with an empty `metric`, and what such a rule did not find moves only `http_exporter_missing_keys_total`. Rules that export one metric name share its series, which counts the failures of all of them, while the [log](LOGGING.md) tells them apart. A rule under `fail` fails the probe instead, counted in `http_exporter_transform_errors_total`. |
+| `http_exporter_rule_failures_total` | counter | Labelled `collector` and `metric`: the series a metric rule could not produce and the probe carried on without, under `error_mode` `log` or `ignore`. Every rule with a name has its series from zero, a [`python` rule](PYTHON.md#what-a-rule-of-a-python-collector-is-for) too, whose series stays `0` since it makes no series to fail; a `prometheus` rule without a name has none: no series is exported with an empty `metric`, and what such a rule did not find moves only `http_exporter_missing_keys_total`. Rules that export one metric name share its series, which counts the failures of all of them, while the [log](LOGGING.md) tells them apart. A rule under `fail` fails the probe instead, counted in `http_exporter_transform_errors_total`. |
 
 A failure rate, for example:
 
@@ -411,8 +411,9 @@ five minutes), `reload` (a reload changed or removed its script) or `evicted`
 the first five each cost the next scrape a fresh interpreter, and many
 `evicted` say the limit is too low for the scripts in use.
 
-A run ends `ok`, `script_error` (the script raised or called `fail(...)`; the
-worker carries on), `timeout` (it overran `limits.script_timeout`), `deadline`
+A run ends `ok`, `script_error` (the script raised or called `fail(...)`, or
+left `data` or `metrics` the worker does not write, such as a list that holds
+itself; the worker carries on), `timeout` (it overran `limits.script_timeout`), `deadline`
 (the probe's or scrape's deadline ended it first, or ran out while the
 response was handed to the worker: the time to raise is the probe's, not
 `script_timeout`), `output_limit` or `failed` (the worker could not be reached

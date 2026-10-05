@@ -12,6 +12,7 @@ import (
 	"github.com/eenchev/prometheus-universal-exporter/internal/decode"
 	"github.com/eenchev/prometheus-universal-exporter/internal/fetch"
 	"github.com/eenchev/prometheus-universal-exporter/internal/model"
+	"github.com/eenchev/prometheus-universal-exporter/internal/testutil/alloctest"
 )
 
 // The whole hand-over, as it is and as it was (pythonoracle_test.go), with
@@ -158,14 +159,20 @@ func TestPythonScriptIsGivenWhatItWasGiven(t *testing.T) {
 // handoverScripts are transforms of every kind: what metric(...) takes and
 // refuses, what a script appends to metrics itself, what it does to them
 // afterwards, values JSON has no form for, containers and numbers of types
-// of the script's own, and every way a script fails.
+// of the script's own, and every way a script fails. What is answered
+// otherwise than it was is not among them: a list or a dict where
+// metric(...) takes one value, which its error names by its kind, and
+// metrics that hold themselves (pythonflat_test.go). The largest makes 3,000
+// metrics, and under the race detector, where reading them takes the test
+// most of its time, 1,000: 6,000 values still, past the 4,096 from which a
+// worker weighs what it writes (plain, in the launcher).
 var handoverScripts = []string{
 	`metric("up", value=1)`,
 	`metric(name="jobs", type="counter", value=12.5, labels={"queue": "a", "state": "done"}, help="Jobs done.", timestamp=1700000000000)`,
 	`
 for i, item in enumerate([1, 2.5, True, False, "12", " 1.5 ", "1e3", float("nan"), float("inf"), float("-inf"), 10**30, -0.0, 5e-324, 1.7976931348623157e308]):
     metric("value", value=item, labels={"i": i})`,
-	`metric("big", value=10**400)`, `metric("text", value="abc")`, `metric("none", value=None)`, `metric("list", value=[1])`,
+	`metric("big", value=10**400)`, `metric("text", value="abc")`, `metric("none", value=None)`,
 	`import decimal
 metric("decimal", value=decimal.Decimal("1.5"))`,
 	`
@@ -187,7 +194,7 @@ metric("default", value=2, labels=collections.defaultdict(str, b="x"))`,
 	`
 for i, at in enumerate([None, 17, 17.9, "17", " 18 ", True, -5, 0, 1e15, 2**62]):
     metric("at", value=i, timestamp=at, labels={"i": i})`,
-	`metric("at", value=1, timestamp=float("nan"))`, `metric("at", value=1, timestamp=float("inf"))`, `metric("at", value=1, timestamp=1e19)`, `metric("at", value=1, timestamp=-1e19)`, `metric("at", value=1, timestamp="soon")`, `metric("at", value=1, timestamp=[1])`,
+	`metric("at", value=1, timestamp=float("nan"))`, `metric("at", value=1, timestamp=float("inf"))`, `metric("at", value=1, timestamp=1e19)`, `metric("at", value=1, timestamp=-1e19)`, `metric("at", value=1, timestamp="soon")`,
 	// Appended by hand.
 	`metrics.append({"name": "a", "value": 1})`, `metrics.append({"name": "a", "value": 1, "labels": {"k": "v", "n": 5, "f": 0.5, "b": True, "none": None, "nan": float("nan"), "big": 10**30}, "type": "counter", "help": "By hand.", "timestamp": 17.5})`,
 	`metrics.append({"name": "a"})`, `metrics.append({"value": 1})`, `metrics.append({})`, `metrics.append({"name": "a", "value": None})`, `metrics.append({"name": "a", "value": "x"})`, `metrics.append({"name": "a", "value": "12"})`,
@@ -201,7 +208,7 @@ for i, at in enumerate([None, 17, 17.9, "17", " 18 ", True, -5, 0, 1e15, 2**62])
 	// Changed after metric(...) made them.
 	`metric("a", value=1); metrics[0]["value"] = float("nan")`, `metric("a", value=1, labels={"k": "v"}); metrics[0]["labels"]["x"] = [1]`, `metric("a", value=1); metrics[0]["junk"] = {"s": {1}}`, `metric("a", value=1); del metrics[0]["name"]`,
 	`metric("a", value=1); metric("b", value=2); metrics.reverse()`, `metric("a", value=1); metrics.clear()`, `metric("a", value=1); metrics[0]["labels"] = None`, `metric("a", value=1); metrics[0]["value"] = "2.5"`, `metric("a", value=1); metrics[0] = metrics[0]["labels"]`,
-	`metric("a", value=1); metrics.append(metrics[0]); metrics.append(metrics)`, `metric("a", value=1); metrics[0]["self"] = metrics[0]`,
+	`metric("a", value=1); metrics.append(metrics[0])`,
 	// Containers and numbers of a script's own types.
 	`
 import collections
@@ -265,7 +272,7 @@ except KeyError as e:
 try:
     1 / 0
 except ZeroDivisionError:
-    metric("in", value=[1])`,
+    metric("in", value="x")`,
 	`
 class Loud(Exception):
     def __str__(self): raise RuntimeError("no text")
@@ -273,7 +280,7 @@ raise Loud()`,
 	`[metric("m", value=v) for v in [1, 2, "x"]]`, `raise ValueError("caf" + chr(233) + " " + chr(0x1F600) + chr(0))`, `def f(): return f()
 f()`, `import socket`, `open("/etc/passwd")`, `import os; os.system("true")`,
 	`print("printed"); metric("a", value=1)`, `print("x" * 5000); metric("a", value=1)`, `import sys; print("to stderr", file=sys.stderr); print(chr(233), chr(0), chr(0x1F600)); metric("a", value=1)`, `print("then failed"); raise RuntimeError("after printing")`,
-	`for i in range(3000): metric("many", value=i, labels={"i": i, "mod": str(i % 7)}, help="Many of them.")`,
+	fmt.Sprintf(`for i in range(%d): metric("many", value=i, labels={"i": i, "mod": str(i %% 7)}, help="Many of them.")`, alloctest.UnlessRaced(3000, 1000)),
 	`for i in range(500): metric("nan last", value=i)
 metric("nan last", value=float("nan"))`,
 }
@@ -304,7 +311,10 @@ func TestPythonTransformsAnswerWhatTheyAnswered(t *testing.T) {
 }
 
 // handoverPreScripts are pre-scripts: what they leave in data is what the
-// transform then reads.
+// transform then reads. The largest leaves 2,000 items, and under the race
+// detector, where reading them back takes the test most of its time, 1,200:
+// 4,800 values still, past the 4,096 from which a worker weighs what it
+// writes (plain, in the launcher).
 var handoverPreScripts = []string{
 	`pass`, `data = None`, `del data`, `data = "text"`, `data = 5`, `data = 1.5`, `data = True`, `data = response.text`, `data = {"was": data}`, `data = [data, data]`,
 	`data = [1, 2.0, "x", None, True, float("nan"), float("inf"), float("-inf"), 10**30, -(10**30), 2**63, 2**63 - 1, -(2**63), 2**53 + 1, 1.0, -0.0, 1e21, 1e-7, 5e-324, 0.1 + 0.2, 10**4000]`,
@@ -342,17 +352,22 @@ if isinstance(data, dict) and "metrics" in data:
         series["labels"]["site"] = "a"
         if "value" in series: series["value"] = series["value"] * 2
     data["metrics"].append({"name": "added", "value": 1})`,
-	`data = [{"id": i, "v": i * 0.5, "tags": ["a", "b"]} for i in range(2000)]`,
+	fmt.Sprintf(`data = [{"id": i, "v": i * 0.5, "tags": ["a", "b"]} for i in range(%d)]`, alloctest.UnlessRaced(2000, 1200)),
 	`raise RuntimeError("no data")`, "data = {\n", `print("printed by the pre-script"); data = {"ok": 1}`,
 }
 
 // Pre-scripts leave what they left, for the response of every decoder: the
 // answer is the answer it was, and data is read back into the values it
-// was, an int an int and a float a float.
+// was, an int an int and a float a float. Under the race detector each
+// response is given to a third of the pre-scripts and each pre-script a
+// third of the responses (pairTaken).
 func TestPythonPreScriptsLeaveWhatTheyLeft(t *testing.T) {
 	h := newHandover(t)
-	for _, input := range handoverInputs(t) {
-		for _, script := range handoverPreScripts {
+	for i, input := range handoverInputs(t) {
+		for j, script := range handoverPreScripts {
+			if !pairTaken(i, j, 3) {
+				continue
+			}
 			h.run("data", script, input, "", 1<<24, oracleTimeout)
 		}
 	}
@@ -361,13 +376,48 @@ func TestPythonPreScriptsLeaveWhatTheyLeft(t *testing.T) {
 	}
 }
 
-// An answer nested deeper than a worker could walk failed there, with a
-// RecursionError, and still does, at the same depth: what is nested deeper
-// than the worker looks through is left to the walk it replaced, under the
-// recursion limit as it is, also when a script changed it. An answer that
-// holds itself, and one whose values are many times the same list, end as
-// they ended.
-func TestPythonAnswersNestedDeepEndAsTheyEnded(t *testing.T) {
+// runDeep gives a script the input in both pools, as run does, and
+// compares the two but where the worker as it was failed for the depth of
+// what the script left in data or appended to metrics, with a
+// RecursionError: there the worker carries the data, or says how deep data
+// may nest, and writes the metrics without what no metric has, and was says
+// the line is not compared. It returns the answer.
+func (h *handover) runDeep(mode, script string, input handoverInput, state string) (line []byte, was bool) {
+	h.t.Helper()
+	c := &model.Collector{Name: "handover"}
+	request, err := pythonRequest(mode, script, input.decoded, input.response, c)
+	if err != nil {
+		h.t.Fatal(err)
+	}
+	spec := pythonSpec{Path: "python3", Collector: c.Name, MaxOutput: 1 << 24, Scripts: state}
+	wasLine, _, wasErr := h.old.run(context.Background(), spec, request, oracleTimeout)
+	line, _, err = h.now.run(context.Background(), spec, request, oracleTimeout)
+	if wasErr != nil || err != nil {
+		h.t.Fatalf("%s, script %q: the run ended with %v, and with %v as it was", input.name, script, err, wasErr)
+	}
+	if strings.HasPrefix(string(wasLine), `{"ok": false, "error": "RecursionError: maximum recursion depth exceeded`) {
+		return line, true
+	}
+	if string(line) != string(wasLine) {
+		h.t.Fatalf("%s, script %q: the answer is not the answer it was:\n     %.300q\nwas  %.300q", input.name, script, line, wasLine)
+	}
+	compareAnswer(h.t, line, 0)
+	return line, false
+}
+
+// A transform's answer nested deeper than a worker could walk failed there,
+// with a RecursionError: what is nested deeper than the worker looks
+// through is left to the walk it replaced, under the recursion limit as it
+// is, also when a script changed it. Where that walk answered, the answer
+// is the line it was, and where it failed for the depth, the answer is the
+// metrics without what no metric has, the items of a list under a key of
+// the script's own. What a pre-script leaves in data ended there too, and
+// is carried instead: where the worker as it was answered, the answer is
+// the line it was, and where it failed for the depth, the answer is the
+// data, as deep as it is. Data that holds itself fails saying how deep data
+// may nest, where it failed as a recursion without end, and data whose
+// values are many times the same list is the line it was.
+func TestPythonAnswersNestedDeepEndAsTheyEndedButForData(t *testing.T) {
 	h := newHandover(t)
 	input := handoverInputs(t)[1]
 	nested := `
@@ -375,53 +425,90 @@ junk = %[2]s
 for _ in range(%[1]d):
     junk = %[3]s
 `
-	failed, answered := 0, 0
-	count := func(line []byte) {
-		if strings.Contains(string(line), "RecursionError") {
-			failed++
-		} else if strings.HasPrefix(string(line), `{"ok": true`) {
+	failed, answered, carried := 0, 0, 0
+	// metrics runs a transform that appends a metric with junk under a key
+	// of its own, and counts it failed where the worker as it was failed for
+	// its depth: there the answer is the metric with the items of junk, a
+	// list or a dict of one, left out.
+	metrics := func(build, state, cut string) {
+		t.Helper()
+		line, was := h.runDeep("metrics", build+`metrics.append({"name": "deep", "value": 1, "junk": junk})`, input, state)
+		if !was {
 			answered++
+			return
 		}
+		if want := `{"ok": true, "log": "", "metrics": [{"name": "deep", "value": 1, "junk": ` + cut + `}]}`; string(line) != want {
+			t.Fatalf("a metric with junk the worker as it was failed on for its depth is answered %.300s, want %s", line, want)
+		}
+		failed++
+	}
+	// data runs a pre-script that leaves junk, which is nested deep times,
+	// and counts it carried where the worker as it was failed for its depth.
+	data := func(build, state string, deep int) {
+		t.Helper()
+		line, was := h.runDeep("data", build+`data = junk`, input, state)
+		if !was {
+			answered++
+			return
+		}
+		out, err := pythonResult(&model.Collector{Name: "handover"}, "pre-script", oracleTimeout, line, nil)
+		if err != nil {
+			t.Fatalf("data nested %d deep, which failed for its depth: %.300v", deep, err)
+		}
+		if got := nestedDepth(pythonData(out)); got != deep {
+			t.Fatalf("data nested %d deep is read back nested %d deep", deep, got)
+		}
+		carried++
 	}
 	// The depths lie around the two that matter under the recursion limit
 	// of 1000 an interpreter starts with: the one up to which the worker
 	// looks through an answer itself, 490, and the one at which wire fails,
 	// a little under 500 or under 1000 by the interpreter's release. The
-	// third shape nests two deep for each step.
+	// third shape nests two deep for each step, around an empty list.
 	single := []int{1, 200, 480, 487, 488, 489, 490, 491, 492, 494, 496, 498, 500, 600, 900, 994, 995, 996, 997, 1200}
 	double := []int{1, 100, 240, 243, 244, 245, 246, 247, 249, 250, 300, 450, 496, 497, 498, 499, 600}
 	for _, shape := range []struct {
-		leaf, step string
-		depths     []int
-	}{{"1", "[junk]", single}, {"1.5", `{"k": junk}`, single}, {"[]", `[(junk,)]`, double}} {
+		leaf, step, cut string
+		depths          []int
+		levels          func(int) int
+	}{
+		{"1", "[junk]", "[null]", single, func(steps int) int { return steps }}, {"1.5", `{"k": junk}`, `{"k": null}`, single, func(steps int) int { return steps }},
+		{"[]", `[(junk,)]`, "[null]", double, func(steps int) int { return 2*steps + 1 }},
+	} {
 		for _, depth := range shape.depths {
 			build := fmt.Sprintf(nested, depth, shape.leaf, shape.step)
-			count(h.run("metrics", build+`metrics.append({"name": "deep", "value": 1, "junk": junk})`, input, "", 1<<24, oracleTimeout))
-			count(h.run("data", build+`data = junk`, input, "", 1<<24, oracleTimeout))
+			metrics(build, "", shape.cut)
+			data(build, "", shape.levels(depth))
 		}
 	}
-	if failed < 8 || answered < 40 {
-		t.Fatalf("%d answers failed for their depth and %d did not: the depths should lie on both sides of the limit", failed, answered)
+	if failed < 4 || answered < 40 || carried < 4 {
+		t.Fatalf("%d transforms were answered where they failed for their depth, %d answers were as they were and %d were data carried where it failed: the depths should lie on both sides of the limit", failed, answered, carried)
 	}
 	// Under a recursion limit a script set, which lasts as long as its
 	// worker: each limit in a worker of its own.
 	for _, limit := range []int{60, 100, 3000} {
-		failed, answered = 0, 0
+		failed, answered, carried = 0, 0, 0
 		state := fmt.Sprintf("recursion limit %d", limit)
 		set := fmt.Sprintf("import sys\nsys.setrecursionlimit(%d)\n", limit)
 		for _, depth := range []int{2, limit/2 - 13, limit/2 - 12, limit/2 - 11, limit/2 - 10, limit/2 - 9, limit / 2, limit - 6, limit - 5, limit - 4, limit - 3, limit + 10} {
 			build := set + fmt.Sprintf(nested, depth, "1", "[junk]")
-			count(h.run("data", build+`data = junk`, input, state, 1<<24, oracleTimeout))
+			data(build, state, depth)
 			if depth < limit/2 {
-				count(h.run("metrics", build+`metrics.append({"name": "deep", "value": 1, "junk": junk})`, input, state, 1<<24, oracleTimeout))
+				metrics(build, state, "[null]")
 			}
 		}
-		if failed == 0 || answered == 0 {
-			t.Fatalf("under a recursion limit of %d, %d answers failed for their depth and %d did not", limit, failed, answered)
+		if carried == 0 || answered == 0 {
+			t.Fatalf("under a recursion limit of %d, %d answers were data carried where it failed for its depth and %d were as they were", limit, carried, answered)
+		}
+	}
+	for _, script := range []string{`a = []; a.append(a); data = a`, `d = {}; d["self"] = d; data = {"d": d}`} {
+		line, was := h.runDeep("data", script, input, "")
+		if want := fmt.Sprintf(`{"ok": false, "error": "RecursionError: data is nested more than %d deep, or a list or a dict in it holds itself;`, decode.MaxDepth); !was || !strings.HasPrefix(string(line), want) {
+			t.Fatalf("script %q: %.300s, want the answer to start %s where it was a recursion without end", script, line, want)
 		}
 	}
 	for _, script := range []string{
-		`a = []; a.append(a); data = a`, `d = {}; d["self"] = d; data = {"d": d}`, `a = [1]; data = (a, a, [a, a])`,
+		`a = [1]; data = (a, a, [a, a])`,
 		"x = [1.5, 'leaf']\nfor _ in range(12):\n    x = [x, x]\ndata = x", "x = [float('nan')]\nfor _ in range(10):\n    x = [x, x]\ndata = x",
 	} {
 		h.run("data", script, input, "", 1<<24, oracleTimeout)

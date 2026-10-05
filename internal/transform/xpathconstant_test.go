@@ -173,8 +173,13 @@ func someOf[N any](nodes []N, limit int) []N {
 // expression taken to be constant, at elements, text nodes, comments, the
 // document and the nodes made of attributes, in whatever order a rule may
 // come to them, over the fixtures, the documents of the label tests and
-// random ones, XML with and without response.namespaces and HTML.
+// random ones, XML with and without response.namespaces and HTML. Under the
+// race detector a document's nodes are four in their order and two from the
+// last back, the first and the last still among them, and the random
+// documents three: every expression is still read over every document in
+// both orders, at fewer of its nodes.
 func TestALabelReadOnceIsTheLabelReadAtEveryNode(t *testing.T) {
+	forward, back := alloctest.UnlessRaced(50, 4), alloctest.UnlessRaced(12, 2)
 	expressions := append([]string{}, constantXPathLabels...)
 	// Over the fixtures' own names too.
 	expressions = append(expressions, "//Cube/@rate", "sum(//Cube/@rate)", "count(//Cube[@currency])", "//h3", "//td[2]", "sum(//td)", "sum(//span[@class='country-population'])",
@@ -183,7 +188,7 @@ func TestALabelReadOnceIsTheLabelReadAtEveryNode(t *testing.T) {
 	compared, told, documents := 0, 0, 0
 	xml := append([]string{rootedMarkup}, xpathLabelDocuments...)
 	random := rand.New(rand.NewPCG(20261003, 12))
-	for range 10 {
+	for range alloctest.UnlessRaced(10, 3) {
 		xml = append(xml, randomXML(random))
 	}
 	fixtures, err := filepath.Glob("../../testdata/xml/*.xml")
@@ -207,7 +212,7 @@ func TestALabelReadOnceIsTheLabelReadAtEveryNode(t *testing.T) {
 			// In document order, as a rule comes to its nodes, and from
 			// the last node back, so that the label is read first at
 			// another node.
-			for _, selected := range [][]*xmlquery.Node{someOf(all, 50), reversed(someOf(all, 12))} {
+			for _, selected := range [][]*xmlquery.Node{someOf(all, forward), reversed(someOf(all, back))} {
 				c, s := constantAtEveryNode(t, xmlNodes, selected, namespaces, expressions, fmt.Sprintf("XML document %d", i))
 				compared, told = compared+c, told+s
 			}
@@ -232,13 +237,13 @@ func TestALabelReadOnceIsTheLabelReadAtEveryNode(t *testing.T) {
 			t.Fatalf("HTML document %d: %v", i, err)
 		}
 		all := treeNodes(t, htmlNodes, doc.Nodes[0])
-		for _, selected := range [][]*html.Node{someOf(all, 50), reversed(someOf(all, 12))} {
+		for _, selected := range [][]*html.Node{someOf(all, forward), reversed(someOf(all, back))} {
 			c, s := constantAtEveryNode(t, htmlNodes, selected, nil, expressions, fmt.Sprintf("HTML document %d", i))
 			compared, told = compared+c, told+s
 		}
 		documents++
 	}
-	if compared < 50000 || told < compared/10 {
+	if compared < alloctest.UnlessRaced(50000, 6000) || told < compared/10 {
 		t.Fatalf("%d labels compared, %d of them with a value or a failure: too few to show anything", compared, told)
 	}
 	t.Logf("%d labels compared, %d of them with a value or a failure, of %d expressions over %d documents", compared, told, len(expressions), documents)
@@ -256,7 +261,9 @@ func reversed[N any](nodes []N) []N {
 // test of what cannot depend on the node takes nothing the engine reads
 // relative to it. The pieces make paths, calls, operators, unions and
 // predicates in every order, and the documents have nodes of every kind
-// with different names, values and children.
+// with different names, values and children. Under the race detector a
+// third of the expressions are put together, and a third of them are to
+// compile and to have a value.
 func TestNoExpressionTakenToBeConstantDependsOnTheNode(t *testing.T) {
 	pieces := []string{"/", "/", "//", "//", "item", "value", "region", "*", "@id", "@*", ".", "..", "[1]", "[@id]", "[region]", "[. = 1]", "[position() = 2]", "text()", "node()",
 		"count(", "sum(", "string(", "name(", "not(", "number(", "normalize-space(", "concat(", ")", ")", " ", "|", " or ", " and ", " div ", "+", "-", "*", "=", ",", "child::", "ancestor::", "self::",
@@ -267,7 +274,7 @@ func TestNoExpressionTakenToBeConstantDependsOnTheNode(t *testing.T) {
 		roots = append(roots, decodedXML(t, document))
 	}
 	constant, compiled, valued := 0, 0, 0
-	for range 150000 {
+	for range alloctest.UnlessRaced(150000, 50000) {
 		var text strings.Builder
 		for range 1 + random.IntN(8) {
 			text.WriteString(pieces[random.IntN(len(pieces))])
@@ -302,7 +309,7 @@ func TestNoExpressionTakenToBeConstantDependsOnTheNode(t *testing.T) {
 			releaseXPathLabels(plan)
 		}
 	}
-	if compiled < 500 || valued < 300 {
+	if compiled < alloctest.UnlessRaced(500, 166) || valued < alloctest.UnlessRaced(300, 100) {
 		t.Fatalf("%d expressions taken to be constant, %d of them compiled and %d values: too few to show anything", constant, compiled, valued)
 	}
 	t.Logf("%d expressions taken to be constant, %d of them compiled, %d values", constant, compiled, valued)

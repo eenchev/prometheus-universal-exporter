@@ -264,7 +264,10 @@ var (
 // expression, which the exporter adds up, and a part of one, which the
 // engine computes still. The sum is compared with the engine's own, through
 // xpathValue as a rule and a label are evaluated, and the series and
-// failures of rules and labels with those of the transform as it was.
+// failures of rules and labels with those of the transform as it was. Under
+// the race detector the pages are the first eight of the twenty-four, which
+// have every number of groups and of numbers in a group that the others
+// have, and numbers of both kinds.
 func TestASumOfPlainNumbersIsWhatTheEngineGives(t *testing.T) {
 	random := rand.New(rand.NewPCG(11, 4))
 	numbers := func() string { return plainNumbers[random.IntN(len(plainNumbers))] }
@@ -287,7 +290,7 @@ func TestASumOfPlainNumbersIsWhatTheEngineGives(t *testing.T) {
 		}
 		added++
 	}
-	for page := range 24 {
+	for page := range alloctest.UnlessRaced(24, 8) {
 		source := numbers
 		if page%2 == 1 {
 			source = finite
@@ -367,7 +370,7 @@ func TestASumOfPlainNumbersIsWhatTheEngineGives(t *testing.T) {
 		}
 		compared += len(now)
 	}
-	if added < 10000 || engines < 2000 || compared < 3000 {
+	if added < alloctest.UnlessRaced(10000, 3300) || engines < alloctest.UnlessRaced(2000, 650) || compared < alloctest.UnlessRaced(3000, 1000) {
 		t.Fatalf("only %d sums the exporter added up compared with the engine's, %d left to the engine, and %d series and failures compared", added, engines, compared)
 	}
 	t.Logf("%d sums the exporter added up are the engine's, %d were left to the engine, and %d series and failures are as they were", added, engines, compared)
@@ -801,7 +804,9 @@ func fixtureDocuments(t *testing.T) (asHTML map[string]*html.Node, asXML map[str
 // shape, make the same series and fail for the same number of them, as
 // many for a missing value, as the transform did before it read the nodes
 // of sums and before its failures named the metric and the node. Only the
-// wording of a failure differs, which the tests of the messages hold.
+// wording of a failure differs, which the tests of the messages hold. Under
+// the race detector each expression reads a third of the documents of each
+// kind and each document is read by a third of the expressions (pairTaken).
 func TestXPathRulesWithoutASumMakeWhatTheyMade(t *testing.T) {
 	expressions := []string{
 		"//td", "//tr", "//tr/td[1]", "//li", "//span", "//p", "//dt", "//a", "//time", "//*[@id]", "//h1 | //h2 | //title", "//td/text()", "//body//text()",
@@ -826,10 +831,14 @@ func TestXPathRulesWithoutASumMakeWhatTheyMade(t *testing.T) {
 		return append(rules, mapped)
 	}
 	asHTML, asXML := fixtureDocuments(t)
+	placeHTML, placeXML := places(asHTML), places(asXML)
 	compared := 0
-	for _, expression := range expressions {
+	for at, expression := range expressions {
 		rules := rules(expression)
 		for name, root := range asHTML {
+			if !pairTaken(at, placeHTML[name], 3) {
+				continue
+			}
 			now, before := xpathNodesRun(t, transformXPathNodes[*html.Node], root, htmlNodes, rules), xpathNodesRun(t, transformXPathNodesBeforeSums[*html.Node], root, htmlNodes, rules)
 			if !reflect.DeepEqual(now, before) {
 				t.Fatalf("%s over %s as HTML: %d series and failures, and before %d; the first that differs:\n%s", expression, name, len(now), len(before), firstDifference(now, before))
@@ -837,6 +846,9 @@ func TestXPathRulesWithoutASumMakeWhatTheyMade(t *testing.T) {
 			compared += len(now)
 		}
 		for name, root := range asXML {
+			if !pairTaken(at, placeXML[name], 3) {
+				continue
+			}
 			now, before := xpathNodesRun(t, transformXPathNodes[*xmlquery.Node], root, xmlNodes, rules), xpathNodesRun(t, transformXPathNodesBeforeSums[*xmlquery.Node], root, xmlNodes, rules)
 			if !reflect.DeepEqual(now, before) {
 				t.Fatalf("%s over %s as XML: %d series and failures, and before %d; the first that differs:\n%s", expression, name, len(now), len(before), firstDifference(now, before))
@@ -844,7 +856,7 @@ func TestXPathRulesWithoutASumMakeWhatTheyMade(t *testing.T) {
 			compared += len(now)
 		}
 	}
-	if compared < 5000 || len(asHTML) < 10 || len(asXML) < 3 {
+	if compared < alloctest.UnlessRaced(5000, 1650) || len(asHTML) < 10 || len(asXML) < 3 {
 		t.Fatalf("only %d series and failures compared, over %d documents read as HTML and %d as XML", compared, len(asHTML), len(asXML))
 	}
 	t.Logf("%d series and failures compared, over %d documents read as HTML and %d as XML", compared, len(asHTML), len(asXML))

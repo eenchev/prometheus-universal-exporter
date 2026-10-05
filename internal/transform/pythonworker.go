@@ -19,6 +19,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/eenchev/prometheus-universal-exporter/internal/decode"
 	"github.com/eenchev/prometheus-universal-exporter/internal/model"
 )
 
@@ -758,9 +759,14 @@ func startPythonWorkerRunning(ctx context.Context, spec pythonSpec, launcher str
 	// bytecode caches. Where a module's cache is missing or stale and its
 	// directory writable, it would otherwise try to write one through the
 	// sandboxed _io.FileIO, whose refusal it does not expect, and the import
-	// would fail.
-	cmd := exec.CommandContext(context.WithoutCancel(ctx), spec.Path, "-I", "-B", "-c", launcher, string(modules), strconv.FormatInt(spec.MaxMemory, 10)) // #nosec G204 -- the interpreter is the operator's --python.path
-	cmd.ExtraFiles = []*os.File{requestRead, answerWrite}                                                                                                 // descriptors 3 and 4
+	// would fail. The worker is told how deep a decoded value nests, which
+	// is how deep it writes what a pre-script leaves in data (deep_check):
+	// the depth is stated once, with the decoders. And it is told how long
+	// an answer may be, limits.max_output_bytes: it does not write one
+	// that a list or a dict is in so many times over that it is longer
+	// (weigh). The exporter measures the line it reads, as it did.
+	cmd := exec.CommandContext(context.WithoutCancel(ctx), spec.Path, "-I", "-B", "-c", launcher, string(modules), strconv.FormatInt(spec.MaxMemory, 10), strconv.Itoa(decode.MaxDepth), strconv.Itoa(spec.MaxOutput)) // #nosec G204 -- the interpreter is the operator's --python.path
+	cmd.ExtraFiles = []*os.File{requestRead, answerWrite}                                                                                                                                                              // descriptors 3 and 4
 	cmd.Env = pythonWorkerEnvironment(os.Environ())
 	stderr := &tailBuffer{max: pythonStderrTail}
 	cmd.Stderr = stderr
@@ -1150,14 +1156,41 @@ def label_text(name,v):
             return text.rstrip('0').rstrip('.') if '.' in text else text
         return repr(v)
     if isinstance(v,(dict,list,tuple,set)): raise ValueError('label %r is a %s, not a single value; pass one value, or join them with ",".join(...)'%(name,type(v).__name__))
-    return str(v)
+    # Whatever else it is, as it writes itself; what holds so many of its
+    # own kind, one inside another, that the interpreter cannot write it is
+    # no single value either.
+    try: return str(v)
+    except RecursionError: pass
+    raise ValueError('label %r is a %s nested too deep to be written, not a single value; pass one value'%(name,type(v).__name__))
+def shown(v):
+    # A value as an error names it: as Python writes it, but a list, a
+    # dict, a tuple or a set as what it is and how many items it has, as
+    # the exporter names one (model.ShowValue). Written out, one nested
+    # deeper than the interpreter follows it ended the error that was to
+    # name it with a RecursionError, and one of a thousand items made an
+    # error of a thousand items.
+    if isinstance(v,(dict,list,tuple,set,frozenset)): return 'a %s of %d item%s'%(type(v).__name__,len(v),'' if len(v)==1 else 's')
+    try: return repr(v)
+    except RecursionError: return 'a %s nested too deep to be written'%type(v).__name__
 def wire(v):
     # NaN and the infinities have no JSON form: each goes as a marker the
     # exporter reads back as the float (transform/python.go).
     if isinstance(v,float) and (v!=v or v in (float('inf'),float('-inf'))):
         return '\x00pue-nonfinite:'+('NaN' if v!=v else '+Inf' if v>0 else '-Inf')+'\x00'
-    if isinstance(v,dict): return {k:wire(x) for k,x in v.items()}
-    if isinstance(v,(list,tuple)): return [wire(x) for x in v]
+    if isinstance(v,(dict,list,tuple)):
+        # A list or a dict gone through before is in the answer more than
+        # once, or holds itself: the answer is then weighed, once (weigh),
+        # before any more of it is copied. Nothing is called for one met
+        # the first time, and what is called for one met again may not
+        # have a frame left where this walk still has: it is then asked
+        # of the next.
+        i=id(v)
+        if i not in met: met.add(i)
+        elif whole[1] is None:
+            try: again()
+            except RecursionError: pass
+        if isinstance(v,dict): return {k:wire(x) for k,x in v.items()}
+        return [wire(x) for x in v]
     return v
 def metric_number(name,what,v):
     # A value or timestamp as a number: a bool as 1 or 0, a numeric string
@@ -1167,7 +1200,7 @@ def metric_number(name,what,v):
     if isinstance(v,str):
         try: return float(v.strip())
         except ValueError: pass
-    raise ValueError('metric %r %s %r is not a number'%(name,what,v))
+    raise ValueError('metric %r %s %s is not a number'%(name,what,shown(v)))
 def script_error(e):
     # The error as a traceback of the script's own frames, innermost last:
     # the worker's frames (this launcher, run as "<string>") are dropped, and
@@ -1180,6 +1213,78 @@ def script_error(e):
         te.stack=traceback.StackSummary.from_list([f for f in te.stack if f.filename!='<string>'][-5:])
         te=te.__cause__ or te.__context__
     return ''.join(shown.format())
+deepest,most=int(sys.argv[3]),int(sys.argv[4])
+def too_deep(): return RecursionError('data is nested more than %d deep, or a list or a dict in it holds itself; the exporter reads what a script leaves in data nested %d deep at most, as deep as it decodes a response'%(deepest,deepest))
+def too_long(what): return OverflowError('what the script left in %s is longer than limits.max_output_bytes (%d bytes) written out, a list or a dict that is there more than once being written each time; leave less there, or raise limits.max_output_bytes'%(what,most))
+# A script can leave one list or dict in an answer many times over, or in
+# itself. Python keeps it once, and JSON writes it out each time it is met:
+# a list that holds another twice, which holds a third twice, forty of them,
+# is forty lists to the script and a million million values written, and
+# one that holds itself has no end. A walk that does not remember where it
+# has been goes through all of that. So a walk that meets a list or a dict
+# it has met (wire), or whose count of values grows (plain) or has passed
+# what fits the bytes the exporter takes, limits.max_output_bytes (plain),
+# has the answer weighed before it goes on. weigh goes through each list and
+# dict one time, however often it is there, in a loop, remembering the ones
+# it is inside of: it finds one that holds itself when it comes back to it,
+# and adds up what the rest is written as without writing it, in the time
+# and the memory the script took to build it. An answer that holds nothing
+# twice is not bounded here: it is as long as what the script built, and is
+# written as it always was, for the exporter to measure.
+class Unwritable(Exception): pass
+whole=[None,None]
+met=set()
+def weigh(document,steps=1<<62):
+    # The least length document is written in, a list or a dict that is in
+    # it twice counted twice: a string as long as it is and its quotes, any
+    # other value one character, a list or a dict its brackets, a key four
+    # for its quotes, colon and space, and as long as it is when it is a
+    # string. Lists and dicts are gone through as wire goes through them.
+    # -1 when one holds itself, 0 when none is there twice, and None when
+    # there is more to go through than steps values. length has the
+    # length inside each list and dict done, and -1 for each the walk is
+    # inside of; held are those, each with the length so far of the one
+    # around it; and done keeps the ones done, so that none is taken for
+    # another that was given its place in memory.
+    leaves=frozenset((int,float,bool,type(None)))
+    length={}; held=[]; done=[]; values=iter((document,)); here=None; n=0; twice=False
+    while True:
+        for x in values:
+            t=type(x)
+            if t is str: n+=len(x)+2; continue
+            n+=1
+            if t in leaves: continue
+            if t is not dict and t is not list and t is not tuple and not isinstance(x,(dict,list,tuple)): continue
+            known=length.get(id(x))
+            if known is None:
+                keys=0
+                if t is dict:
+                    inner=x.values(); keys=4*len(x)
+                    try: keys+=sum(map(len,x))
+                    except TypeError: pass
+                elif isinstance(x,dict): inner=list(dict(x.items()).values()); keys=4*len(inner)
+                else: inner=x
+                steps-=len(inner)+1
+                if steps<0: return None
+                length[id(x)]=-1; held.append((values,here,n)); values=iter(inner); here=x; n=1+keys
+                break
+            if known<0: return -1
+            n+=known; twice=True
+        else:
+            if not held: return n if twice else 0
+            length[id(here)]=n; done.append(here)
+            below=n; values,here,n=held.pop(); n+=below
+def sized():
+    # weigh of the answer being written, weighed once.
+    if whole[1] is None: whole[1]=weigh(whole[0])
+    return whole[1]
+def unwritable():
+    # Whether the answer holds a list or a dict in itself, or more than
+    # once and is longer than limits.max_output_bytes whatever it holds.
+    n=sized()
+    return n<0 or n>most
+def again():
+    if unwritable(): raise Unwritable
 def plain_check():
     # Whether an answer can be written as it is, without wire: when it is
     # dicts, lists and tuples of strings, numbers, booleans and None, every
@@ -1190,45 +1295,208 @@ def plain_check():
     # value. It must also be nested far less deep than wire could follow
     # under the recursion limit as it is now, so that an answer wire would
     # have failed on still fails there: one nested deeper is left to wire, as
-    # is whatever else this does not recognise.
+    # is whatever else this does not recognise. A transform's answer is
+    # looked through no deeper than its metrics go (levels), the values of
+    # their labels, so that what a script nested in one, which may hold
+    # itself many times over, is not gone through here level after level.
+    # A level is every value of the lists and dicts of the one above, one
+    # that is there twice taken twice, so the levels of an answer that
+    # holds one list many times over, or in itself, grow without end where
+    # the script built little. So the values are counted, and each time
+    # the count has grown fourfold, from 4096, the answer is weighed as
+    # far as a sixty-fourth as many values go: that is all of one whose
+    # levels are many times what the script built, and costs one that
+    # holds nothing twice a look at one value in fifty. An answer too
+    # large to be weighed so is weighed whole when more values are counted
+    # than half of limits.max_output_bytes, most: it has two bytes at
+    # least for each value in a list or a dict, one of its own and one of
+    # the brackets or of the comma and space before it, and is longer than
+    # the exporter takes. None says the answer is unwritable, and not to
+    # be walked at all.
     recursion_limit=sys.getrecursionlimit
     scalars=frozenset((int,bool,type(None)))
-    def plain(document):
-        level=[document]
-        for _ in range(recursion_limit()//2-10):
+    def plain(document,levels=1<<30):
+        level=[document]; room=half=most//2; look=4096
+        for _ in range(min(levels,recursion_limit()//2-10)):
             below=[]
             extend=below.extend
             for v in level:
                 t=type(v)
                 if t is str: continue
-                if t is dict: extend(v.values())
+                if t is dict:
+                    extend(v.values())
+                    if len(below)>room:
+                        if unwritable(): return None
+                        room=look=1<<62
                 elif t is float:
                     # NaN and the infinities, which less themselves are NaN.
                     if v-v!=0: return False
-                elif t is list or t is tuple: extend(v)
+                elif t is list or t is tuple:
+                    extend(v)
+                    if len(below)>room:
+                        if unwritable(): return None
+                        room=look=1<<62
                 elif t not in scalars: return False
             if not below: return True
+            room-=len(below)
+            if half-room>look:
+                look=(half-room)*4
+                n=whole[1]=weigh(document,look>>8)
+                if n is not None:
+                    if n<0 or n>most: return None
+                    look=1<<62
             level=below
         return False
     return plain
 plain=plain_check()
 del plain_check
+def deep_check(deepest):
+    # A request and an answer are read and written by json, which calls
+    # itself for every list and dict inside another, and an interpreter
+    # bounds how deep calls nest: by its recursion limit, 1000 unless a
+    # script changed it, up to Python 3.11; from 3.12 by a limit of its own
+    # for calls in C, which nothing a script does changes (10,000 of them in
+    # a release build on Linux, and from 3.14 what the stack holds). So a
+    # response nested as deep as the exporter decodes one, deepest, failed
+    # with a RecursionError on its way to a script, and so did what a
+    # pre-script left of it on its way back, where wire calls itself too.
+    # Both are gone through here in one loop, the lists and dicts being read
+    # or written kept in a list, as deep as they go. That is slower than
+    # json, and is done only once json has refused for the depth: every
+    # other request and answer is read and written as it always was.
+    import re
+    scanstring=json.decoder.scanstring
+    quote=json.encoder.encode_basestring_ascii
+    token=re.compile(r'[ \t\n\r]*(?:(")|([\[{])|([\]}])|[,:]|(-?(?:0|[1-9][0-9]*))((?:\.[0-9]+)?(?:[eE][-+]?[0-9]+)?)|(NaN|-?Infinity|true|false|null))').match
+    words={'true':True,'false':False,'null':None,'NaN':float('nan'),'Infinity':float('inf'),'-Infinity':float('-inf')}
+    def loads(text):
+        # What json.loads reads of a request, which is JSON as the exporter
+        # writes it: a string by json's own reading of one, a number as an
+        # int unless it has a fraction or an exponent, and NaN and the
+        # infinities by their names.
+        whole=[]; inside=[]; at=whole; key=None; i=0
+        while True:
+            m=token(text,i)
+            if m is None: break
+            i=m.end()
+            quoted,opens,closes,digits,rest,word=m.groups()
+            if quoted:
+                v,i=scanstring(text,i)
+                # In a dict that has no key waiting for its value, a key.
+                if key is None and at.__class__ is dict: key=v; continue
+            elif opens: v=[] if opens=='[' else {}
+            elif closes: at=inside.pop(); continue
+            elif digits: v=float(digits+rest) if rest else int(digits)
+            elif word: v=words[word]
+            else: continue
+            if at.__class__ is dict: at[key]=v; key=None
+            else: at.append(v)
+            if opens: inside.append(at); at=v
+        if inside or len(whole)!=1 or text[i:].strip(' \t\n\r'): raise ValueError('the request is not one JSON value')
+        return whole[0]
+    def key_text(k):
+        # A key as json writes it: one that is no string as json makes it
+        # one, or refuses it.
+        if k.__class__ is str: return quote(k)
+        return json.dumps({k:None},allow_nan=False)[1:-7]
+    def dumps(document):
+        # What json.dumps(wire(document),allow_nan=False) writes: a dict's
+        # and a list's or a tuple's values in their order, and any other
+        # value as wire and json write it, or refuse it.
+        text=[]; put=text.append; inside=[]; none=inside
+        v=document
+        while True:
+            if isinstance(v,dict): put('{'); inside.append([iter(v.items()),'}',''])
+            elif isinstance(v,(list,tuple)): put('['); inside.append([iter(v),']',''])
+            else: put(json.dumps(wire(v),allow_nan=False))
+            # The answer is one dict deeper than what a script left in data.
+            if len(inside)>deepest+1: raise too_deep()
+            # The next value: of the innermost list or dict that has one
+            # left, those that have none being closed.
+            while inside:
+                at=inside[-1]
+                v=next(at[0],none)
+                if v is not none: break
+                put(at[1]); inside.pop()
+            else: return ''.join(text)
+            put(at[2]); at[2]=', '
+            if at[1]=='}': put(key_text(v[0])); put(': '); v=v[1]
+    return loads,dumps
+deep_loads,deep_dumps=deep_check(deepest)
+del deep_check
+def flat(metrics):
+    # A metric is flat: a name, a type, a value, a help and a timestamp,
+    # each one value, and labels, a dict of one value each. A script that
+    # appends to metrics itself can put a list or a dict where one value
+    # belongs, which the exporter refuses, naming the metric and what it
+    # found there by its kind and how many items it has, and under a key no
+    # metric has, which it does not read. What is inside such a list or
+    # dict it reads nowhere, so an answer that wire and json could not
+    # follow for what one holds, nested deep or holding itself, is written
+    # with None for each item of it: the exporter then says of it what it
+    # says of any list or dict that stands where it does. An entry, its
+    # labels, or a list or a dict in them that is in metrics many times
+    # over is made once here and stands in what is made as often, so that
+    # this takes no more than the script took to build them; made keeps
+    # each with what was made of it, by what it is made as.
+    made={}
+    def once(make,v):
+        got=made.get((make,id(v)))
+        if got is None: got=made[make,id(v)]=(make(v),v)
+        return got[0]
+    def cut(v):
+        if isinstance(v,dict): return dict.fromkeys(v)
+        return [None]*len(v)
+    def value(v):
+        if isinstance(v,(dict,list,tuple)): return once(cut,v)
+        return v
+    def labels(v): return {n:value(x) for n,x in v.items()}
+    def entry(m): return {k:once(labels,v) if k=='labels' and isinstance(v,dict) else value(v) for k,v in m.items()}
+    return [once(entry,m) if isinstance(m,dict) else value(m) for m in metrics]
 def answer(document):
     # An answer that is plain is written as it is; any other, and one whose
     # writing fails, goes through wire as every answer did, so that what is
-    # written, or raised, is what it was.
-    text=None
+    # written, or raised, is what it was. But what a pre-script left in data
+    # nested deeper than wire and json follow it, which ended there with a
+    # RecursionError, is written without them (deep_check), and so are a
+    # transform's metrics, without what no metric has (flat). An answer
+    # that holds a list or a dict in itself, or more than once and is
+    # longer than limits.max_output_bytes whatever is in it (weigh), is
+    # not walked through wire, which would copy it out whole: data like
+    # that is refused, saying which of the two it is, and metrics are
+    # written without what no metric has, as those wire cannot follow,
+    # and refused when they are longer than the limit even so.
+    text=None; follow=False; whole[0]=document; whole[1]=None
     try:
-        if plain(document): text=json.dumps(document,allow_nan=False)
-    except Exception: text=None
-    if text is None: text=json.dumps(wire(document),allow_nan=False)
+        follow=plain(document,5) if 'metrics' in document else plain(document)
+        if follow: text=json.dumps(document,allow_nan=False)
+    except Exception: text=None; follow=False
+    if text is None and follow is not None:
+        try: text=json.dumps(wire(document),allow_nan=False)
+        except Unwritable: pass
+        except RecursionError:
+            if 'data' not in document and 'metrics' not in document: raise
+        finally: met.clear()
+    # Outside the handler, so that what is raised here is raised alone.
+    if text is None:
+        if 'metrics' in document:
+            document=dict(document,metrics=flat(document['metrics']))
+            if weigh(document)>most: raise too_long('metrics')
+        else:
+            n=sized()
+            if n<0: raise too_deep()
+            if n>most: raise too_long('data')
+        text=deep_dumps(document)
     answers.write(text+'\n'); answers.flush()
 answer({'ok': True, 'ready': True})
 while True:
     line=requests.readline()
     if not line: break
     try:
-        p=json.loads(line)
+        # A request nested deeper than json reads one is read without it.
+        try: p=json.loads(line)
+        except RecursionError: p=None
+        if p is None: p=deep_loads(line)
         # The request's text is not kept while the script runs, and data
         # that is the body is the body's own string, not a copy.
         line=None
@@ -1238,10 +1506,10 @@ while True:
         answer({'started': True})
         metrics=[]
         def metric(name,type='gauge',value=0,labels=None,help=None,timestamp=None,_metrics=metrics):
-            if not isinstance(name,str): raise ValueError('metric name %r is not a string'%(name,))
+            if not isinstance(name,str): raise ValueError('metric name %s is not a string'%shown(name))
             if type is None: type='gauge'
-            if not isinstance(type,str): raise ValueError('metric %r type %r is not a string; give "gauge", "counter" or "untyped"'%(name,type))
-            if help is not None and not isinstance(help,str): raise ValueError('metric %r help %r is not a string'%(name,help))
+            if not isinstance(type,str): raise ValueError('metric %r type %s is not a string; give "gauge", "counter" or "untyped"'%(name,shown(type)))
+            if help is not None and not isinstance(help,str): raise ValueError('metric %r help %s is not a string'%(name,shown(help)))
             if labels is None: labels={}
             if not isinstance(labels,dict): raise ValueError('metric %r labels must be a mapping of label names to values, not a %s'%(name,labels.__class__.__name__))
             # A label that is a string already is its own text, which is

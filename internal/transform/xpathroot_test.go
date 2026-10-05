@@ -190,7 +190,9 @@ func engineReachesRoot(t *testing.T, root *xmlquery.Node, expression string) (re
 // and names elsewhere, and a slash inside a string is text. Each verdict is
 // the engine's own: evaluated at every node of a document, an expression
 // said to reach the root asks its navigator for it and one said not to
-// never does, so no label is evaluated from the wrong navigator.
+// never does, so no label is evaluated from the wrong navigator. Under the
+// race detector the expressions strung together at random are 5,000 of the
+// 20,000, of which a quarter as many are to compile and to reach the root.
 func TestWhetherALabelReachesTheRootIsToldFromItsExpression(t *testing.T) {
 	type verdict struct {
 		expression string
@@ -281,7 +283,8 @@ func TestWhetherALabelReachesTheRootIsToldFromItsExpression(t *testing.T) {
 	pieces := []string{"/", "//", "/", " ", " ", "job", "x", "*", "div", "and", "or", "mod", "@id", "@", ".", "..", "(", ")", "[", "]", "|", "=", "+", "-", "<", ",", "1", "'/'", "status", "text()", "count(", "::", "ancestor::", "x:"}
 	random := rand.New(rand.NewPCG(20261003, 11))
 	compiled, rooted := 0, 0
-	for range 20000 {
+	made := alloctest.UnlessRaced(20000, 5000)
+	for range made {
 		var expression strings.Builder
 		for range 1 + random.IntN(7) {
 			expression.WriteString(pieces[random.IntN(len(pieces))])
@@ -298,10 +301,10 @@ func TestWhetherALabelReachesTheRootIsToldFromItsExpression(t *testing.T) {
 			}
 		}
 	}
-	if compiled < 2000 || rooted < 300 {
+	if compiled < made/10 || rooted < made*3/200 {
 		t.Errorf("of the expressions made at random the engine compiled %d and took %d to the root", compiled, rooted)
 	}
-	t.Logf("of 20000 expressions made at random the engine compiled %d and took %d to the root", compiled, rooted)
+	t.Logf("of %d expressions made at random the engine compiled %d and took %d to the root", made, compiled, rooted)
 }
 
 // xpathLabelsBefore is xpathLabels as it was before a label could reach the
@@ -363,8 +366,9 @@ var xpathAbsoluteLabels = []string{
 // absolute path that matches nothing walks the whole document from each
 // node it is read at, so in a document of more than 300 nodes those are
 // read at 300 of them, spread over all of it, nodes of every kind among
-// them. It returns how many labels it compared, and how many of them were
-// there.
+// them. Under the race detector every label is read so, at 25 nodes of a
+// document at most. It returns how many labels it compared, and how many of
+// them were there.
 func rootDifference[N comparable](t *testing.T, nodes xpathNodes[N], root N, namespaces map[string]string, expressions []string, document string) (compared, found int) {
 	t.Helper()
 	absolute := map[string]bool{}
@@ -390,6 +394,9 @@ func rootDifference[N comparable](t *testing.T, nodes xpathNodes[N], root N, nam
 		stride := 1
 		if absolute[expression] {
 			stride += len(all) / 300
+		}
+		if raceDetector {
+			stride = 1 + len(all)/25
 		}
 		for at := 0; at < len(all); at += stride {
 			node := all[at]
@@ -427,7 +434,9 @@ func rootDifference[N comparable](t *testing.T, nodes xpathNodes[N], root N, nam
 // that navigator changes nothing but what `/` means. The node's own
 // attribute is what it was without the blanks around it. A label that is an
 // absolute path and nothing else gives at every node what it gave at the
-// document (rootDifference).
+// document (rootDifference). Under the race detector a label is read at 25
+// nodes of a document at most, spread over all of it, so every expression is
+// still read over every document.
 func TestLabelsWithoutAnAbsolutePathAreWhatTheyWere(t *testing.T) {
 	absolute := map[string]bool{}
 	for _, expression := range xpathAbsoluteLabels {
@@ -495,7 +504,7 @@ func TestLabelsWithoutAnAbsolutePathAreWhatTheyWere(t *testing.T) {
 		c, f := rootDifference(t, htmlNodes, doc.Nodes[0], nil, expressions[true], name)
 		compared, found = compared+c, found+f
 	}
-	if compared < 300000 || found < 50000 {
+	if compared < alloctest.UnlessRaced(300000, 45000) || found < alloctest.UnlessRaced(50000, 7500) {
 		t.Fatalf("%d labels compared, %d of them found", compared, found)
 	}
 	t.Logf("%d labels compared, %d of them found, of %d expressions over XML and %d over HTML, in %d XML documents and the pages", compared, found, len(expressions[false]), len(expressions[true]), len(documents))

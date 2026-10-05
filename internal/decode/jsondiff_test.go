@@ -14,6 +14,7 @@ import (
 	"testing"
 
 	"github.com/eenchev/prometheus-universal-exporter/internal/model"
+	"github.com/eenchev/prometheus-universal-exporter/internal/testutil/alloctest"
 )
 
 // The json decoder reads a body itself, in one pass (jsonvalue.go). What it
@@ -161,9 +162,9 @@ func TestJSONDecoderAgreesWithTheOneItReplacedOnEdgeCases(t *testing.T) {
 		// Comments and other things JSON has not.
 		"/**/1", "//\n1", "[1,/**/2]", "{\"a\":1,//\n}", "[1;2]", "(1)", "<a/>", "undefined", "[NaN]", "[Infinity]", "[-Infinity]", "[0x1]", "['a']", "{\"a\":01}",
 		// Depth: 10,000 arrays or objects, one inside the other, and no more.
-		deep("[", "]", 100), deep("[", "]", jsonMaxDepth), deep("[", "]", jsonMaxDepth+1), strings.Repeat("[", jsonMaxDepth), strings.Repeat("[", jsonMaxDepth+1), strings.Repeat("[", jsonMaxDepth+5) + "x",
-		deep(`{"a":`, "}", jsonMaxDepth-1) + "", strings.Repeat(`{"a":`, jsonMaxDepth-1) + "1" + strings.Repeat("}", jsonMaxDepth-1), strings.Repeat(`{"a":`, jsonMaxDepth) + "1" + strings.Repeat("}", jsonMaxDepth), strings.Repeat(`{"a":`, jsonMaxDepth+1) + "1" + strings.Repeat("}", jsonMaxDepth+1),
-		strings.Repeat(`{"a":[`, jsonMaxDepth/2) + strings.Repeat("]}", jsonMaxDepth/2), strings.Repeat(`{"a":[`, jsonMaxDepth/2) + "[]" + strings.Repeat("]}", jsonMaxDepth/2),
+		deep("[", "]", 100), deep("[", "]", MaxDepth), deep("[", "]", MaxDepth+1), strings.Repeat("[", MaxDepth), strings.Repeat("[", MaxDepth+1), strings.Repeat("[", MaxDepth+5) + "x",
+		deep(`{"a":`, "}", MaxDepth-1) + "", strings.Repeat(`{"a":`, MaxDepth-1) + "1" + strings.Repeat("}", MaxDepth-1), strings.Repeat(`{"a":`, MaxDepth) + "1" + strings.Repeat("}", MaxDepth), strings.Repeat(`{"a":`, MaxDepth+1) + "1" + strings.Repeat("}", MaxDepth+1),
+		strings.Repeat(`{"a":[`, MaxDepth/2) + strings.Repeat("]}", MaxDepth/2), strings.Repeat(`{"a":[`, MaxDepth/2) + "[]" + strings.Repeat("]}", MaxDepth/2),
 		"[" + strings.Repeat("[],", 20000) + "[]]",
 		// Many keys, many items, long strings and keys.
 		`{"items":[` + strings.Repeat(`{"id":"a","n":1},`, 3000) + `{"id":"b","n":2}]}`, `"` + strings.Repeat("x", 100000) + `"`, `{"` + strings.Repeat("k", 5000) + `":"` + strings.Repeat("\\n", 5000) + `"}`,
@@ -365,10 +366,12 @@ func (g *jsonGenerator) corrupt(body []byte) []byte {
 // surrogate, byte that is not UTF-8, key written twice and whitespace, and
 // three corruptions of each, 80,000 bodies in all: the decoder accepts
 // exactly those the one it replaced accepted, refuses the others for the
-// same kind of reason, and reads what it accepts as the same values.
+// same kind of reason, and reads what it accepts as the same values. Under
+// the race detector 2,000 documents, 8,000 bodies: the first tenth, of which
+// as large a share is to be accepted and refused.
 func TestJSONDecoderAgreesWithTheOneItReplacedOnRandomDocuments(t *testing.T) {
 	g := &jsonGenerator{random: rand.New(rand.NewPCG(2026, 1002))}
-	const documents = 20000
+	documents := alloctest.UnlessRaced(20000, 2000)
 	accepted, refused := 0, 0
 	count := func(ok bool) {
 		if ok {
@@ -387,8 +390,8 @@ func TestJSONDecoderAgreesWithTheOneItReplacedOnRandomDocuments(t *testing.T) {
 			count(compareJSON(t, g.corrupt(body)))
 		}
 	}
-	if accepted < 30000 || refused < 45000 {
-		t.Fatalf("%d bodies accepted and %d refused: the corruptions should leave more than 30,000 and 45,000", accepted, refused)
+	if accepted < documents*3/2 || refused < documents*9/4 {
+		t.Fatalf("%d bodies accepted and %d refused: the corruptions should leave more than %d and %d", accepted, refused, documents*3/2, documents*9/4)
 	}
 	t.Logf("%d bodies accepted, %d refused", accepted, refused)
 }

@@ -41,9 +41,39 @@ import (
 //   - A number has no leading zero, no leading +, and a digit on each side
 //     of its point and after its e.
 
-// jsonMaxDepth is how deep arrays and objects may nest, which is
-// encoding/json's limit.
-const jsonMaxDepth = 10000
+// MaxDepth is how deep the lists and mappings of a decoded value nest at
+// most, one inside another, whichever decoder made it: a response whose
+// value would nest deeper is refused when it is decoded, saying so. It is
+// encoding/json's limit on arrays and objects, which the json decoder had
+// from the start, and one limit for every format so that what reads a value
+// need not ask which decoder made it. What has to follow a value as deep as
+// it goes takes the depth from here: a value is handed to a Python script,
+// and what a script leaves is read back, to this depth
+// (transform/pythonrequest.go, pythonanswer.go, pythonworker.go), with no
+// limit of the hand-over's own for a response to decode within and then
+// fail on. Each decoder is within it:
+//
+//   - JSON counts the arrays and objects around what it is reading, and
+//     refuses the document at one more (enter).
+//   - YAML refuses a document whose sequences and mappings nest deeper, an
+//     alias counted as what it stands for, before anything decodes it
+//     (yamlkeys.go, yamlTooDeep). The library's parser does not keep a
+//     document within the limit: it bounds what is nested by indentation and
+//     what is nested in brackets apart, at 10,000 levels each (scannerc.go,
+//     max_indents and max_flow_level), and a level of indentation is two
+//     collections where a mapping's value is a sequence written no further
+//     in than its key, so a document without an alias parses nested up to
+//     30,000 deep; and it bounds what aliases expand to by its size, not by
+//     its depth.
+//   - CSV is a list of rows, each a list or a mapping of its fields;
+//     Graphite's series and a Prometheus exposition as a script reads it
+//     nest a few levels, of the exporter's own making.
+//   - Text is text, and so are HTML and XML to a script; as documents their
+//     elements nest MaxXMLDepth deep at most.
+//   - What a pre-script leaves in data is read by JSONValue, to this depth,
+//     and the worker refuses to write it nested deeper (pythonworker.go,
+//     deep_check).
+const MaxDepth = 10000
 
 // errJSONTrailingData is the error of a body that goes on after its value.
 // Only whitespace may follow it: a second record, as in NDJSON, or anything
@@ -72,13 +102,14 @@ func sniffJSON(body []byte) (any, bool) {
 }
 
 // JSONValue reads the JSON value body starts with as the json decoder reads
-// a document, and returns it and what of body follows it. depth is how many
-// arrays and objects the value lies inside already, which count towards how
-// deep it may nest. It is how the answer of a Python worker is read
-// (transform/pythonanswer.go): what a pre-script leaves in data is a value
-// inside the answer, and is read as a response's JSON is.
-func JSONValue(body []byte, depth int) (value any, rest []byte, err error) {
-	d := jsonDecoder{data: body, depth: depth}
+// a document, and returns it and what of body follows it. It is how the
+// answer of a Python worker is read (transform/pythonanswer.go): what a
+// pre-script leaves in data is a value inside the answer, and is read as a
+// response's JSON is, nested MaxDepth deep at most whatever lies around it
+// in the answer: a script may leave what it was given, as deep as a decoder
+// made it.
+func JSONValue(body []byte) (value any, rest []byte, err error) {
+	d := jsonDecoder{data: body}
 	d.space()
 	d.sizeCache()
 	if value, err = d.value(); err != nil {
@@ -288,9 +319,9 @@ func (d *jsonDecoder) literal(word string) error {
 
 // enter counts one more array or object around what is read next.
 func (d *jsonDecoder) enter() error {
-	if d.depth++; d.depth > jsonMaxDepth {
+	if d.depth++; d.depth > MaxDepth {
 		line, column := d.position(d.pos)
-		return model.Errorf("arrays and objects nested more than %d deep, at line %d, column %d", jsonMaxDepth, line, column)
+		return model.Errorf("arrays and objects nested more than %d deep, at line %d, column %d", MaxDepth, line, column)
 	}
 	return nil
 }

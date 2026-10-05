@@ -198,18 +198,25 @@ func (f csvField) former(trim bool, delimiter rune) string {
 // fields with blanks around their quotes, a quote inside a field and text
 // after a closing quote. A body with no carriage return that ends a record
 // is the same body in both, so it is read as it was, and it is not copied.
+// Under the race detector every seventh of the 45,000 bodies is read, counted
+// through them all, which is still every field beside every other under
+// every delimiter, and every field with every end of a line.
 func TestCSVReadsCarriageReturnLinesAsItReadLineFeedLines(t *testing.T) {
 	atoms := []csvField{{written: `a`}, {written: ``}, {written: ` b c `}, {written: `"q"`}, {written: ` "q"`}, {written: `"q" `}, {written: "\"c\rr\""}, {written: "\"c\rr|\r\n\" "},
 		{written: " \"c\rr\"", untrimmed: " \"c\nr\""}, {written: "\"two\nlines\""}, {written: `"x""y"`}, {written: `5" disk`}, {written: `"q" x`}, {written: `"st"ray"`}, {written: "\t\"t\""}}
 	ends := []csvLineEnd{{"\n", "\n"}, {"\r\n", "\r\n"}, {"\r", "\n"}, {"\r\r", "\n\n"}, {"\r\r\n", "\n\r\n"}}
 	lasts := []csvLineEnd{{"\n", "\n"}, {"\r\n", "\r\n"}, {"\r", "\n"}, {"", ""}}
 	read, refused, ended, same := 0, 0, 0, 0
+	bodies, every := 0, alloctest.UnlessRaced(1, 7)
 	for _, delimiter := range []rune{',', ';', '\t', ' ', ' '} {
 		for _, trim := range []bool{false, true} {
 			for _, first := range atoms {
 				for _, second := range atoms {
 					for _, end := range ends {
 						for _, last := range lasts {
+							if bodies++; bodies%every != 0 {
+								continue
+							}
 							lines := func(first, second, end, last string) []byte {
 								return []byte(strings.ReplaceAll("h|k"+end+first+"|"+second+end+second+"|z|"+first+last, "|", string(delimiter)))
 							}
@@ -261,7 +268,7 @@ func TestCSVReadsCarriageReturnLinesAsItReadLineFeedLines(t *testing.T) {
 			}
 		}
 	}
-	if read < 25000 || refused < 10000 || ended < 25000 || same < 10000 {
+	if read < 25000/every || refused < 10000/every || ended < 25000/every || same < 10000/every {
 		t.Errorf("%d bodies were read and %d refused, %d of them with a carriage return ending a record and %d without: they do not cover all four", read, refused, ended, same)
 	}
 }

@@ -19,6 +19,7 @@ import (
 	"github.com/eenchev/prometheus-universal-exporter/internal/config"
 	"github.com/eenchev/prometheus-universal-exporter/internal/model"
 	"github.com/eenchev/prometheus-universal-exporter/internal/testutil"
+	"github.com/eenchev/prometheus-universal-exporter/internal/testutil/alloctest"
 )
 
 // What a probe or a static target scrape writes under its collector's name
@@ -398,7 +399,9 @@ func writesOf(server *Server) string {
 // adds another, and a probe, succeeding or failing, held across such a reload
 // after it read the configuration — its cached results, what the failure log
 // remembers of it and its counters, cache hits and misses among them, are
-// those of a server that made the same probes and was never reloaded.
+// those of a server that made the same probes and was never reloaded. Under
+// the race detector it is every seventh sequence, 31 of the 216, which have
+// every step first, second and third, and every step after every other.
 func TestACollectorThatStaysCachesAndLogsAsItDidThroughReloads(t *testing.T) {
 	testutil.CaptureLogs(t)
 	target, _, failing := failableTarget(t)
@@ -410,6 +413,9 @@ func TestACollectorThatStaysCachesAndLogsAsItDidThroughReloads(t *testing.T) {
 		sequences *= len(steps)
 	}
 	for sequence := range sequences {
+		if alloctest.RaceDetector && sequence%7 != 0 {
+			continue
+		}
 		reloaded, never := verboseServer(t, false, kept, gone), verboseServer(t, false, kept, gone)
 		var taken []string
 		for rest := sequence; len(taken) < length; rest /= len(steps) {
@@ -557,6 +563,9 @@ func keptState(server *Server) string {
 // after each reload a caller of every earlier generation finds a collector
 // standing exactly when the collector has been in every configuration since
 // with the definition it had; a caller that names no configuration always.
+// Under the race detector it is every thirteenth sequence, 20 of the 256,
+// which have every configuration at every step, and every configuration
+// after every other.
 func TestFollowingAReloadDropsAndKeepsWhatItDid(t *testing.T) {
 	logger := testutil.QuietLogger(t)
 	kept, gone, added := testutil.Collector("kept", "text"), testutil.Collector("gone", "text"), testutil.Collector("added", "text")
@@ -570,6 +579,9 @@ func TestFollowingAReloadDropsAndKeepsWhatItDid(t *testing.T) {
 		sequences *= len(variants)
 	}
 	for sequence := range sequences {
+		if alloctest.RaceDetector && sequence%13 != 0 {
+			continue
+		}
 		now, former := verboseServer(t, false, kept, gone), verboseServer(t, false, kept, gone)
 		now.logger, former.logger = logger, logger
 		// history is the definitions of every configuration followed.

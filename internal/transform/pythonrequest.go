@@ -64,12 +64,17 @@ var pythonEncoders = sync.Pool{New: func() any { return &pythonEncoder{} }}
 // request of whatever size.
 const pythonEncoderKept = 16 << 20
 
-// pythonEncoderDepth is how deep the encoder follows data: as deep as
-// json.Marshal follows it before it starts looking for a value that holds
-// itself. Data nested deeper, which a response rarely is, is written as it
-// was, by json.Marshal, and refused as it was where json.Marshal refuses
-// it: for holding itself, or for nesting deeper than it writes.
-const pythonEncoderDepth = 1000
+// pythonEncoderDepth is how deep the encoder follows data: as deep as a
+// decoder makes a value, so that a response nested as deep as one decodes
+// is handed to its script. It was 1,000, the depth at which json.Marshal
+// starts looking for a value that holds itself, and deeper data was left
+// to json.Marshal. A Go release that bounds the nesting json.Marshal
+// writes then refused, with "exceeded max depth", a JSON document nested
+// as deep as the decoder reads one, the request being one object deeper
+// than its data. What nests deeper than any decoder's value no decoder
+// made: it is written as it was, by json.Marshal, and refused as it was
+// where json.Marshal refuses it, for holding itself or for its depth.
+const pythonEncoderDepth = decode.MaxDepth
 
 // request writes the request line that has a worker run script: the
 // response, with its body once, and the data, unless it is the body. The

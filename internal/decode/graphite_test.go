@@ -12,6 +12,7 @@ import (
 
 	"github.com/eenchev/prometheus-universal-exporter/internal/fetch"
 	"github.com/eenchev/prometheus-universal-exporter/internal/model"
+	"github.com/eenchev/prometheus-universal-exporter/internal/testutil/alloctest"
 )
 
 // graphiteNowIs fixes the decoder's clock for a test.
@@ -388,7 +389,9 @@ func formerParseCarbonLine(line string, now time.Time) (string, map[string]strin
 // none as the value and as the timestamp, a line without either is read the
 // same, and so is one whose value was no number before; a line whose value
 // Go read with an underscore or as hexadecimal fails for its value, and one
-// whose timestamp Go read so for its timestamp.
+// whose timestamp Go read so for its timestamp. Under the race detector
+// every seventh line is read, counted through them all, which is still
+// every number as a value and as a timestamp and after every path.
 func TestGraphiteCarbonLinesAreReadAsBeforeButForGoSyntax(t *testing.T) {
 	now := time.Unix(2000, 0)
 	numbers := []string{"42", "-1.5", ".5", "5.", "007", "1e3", "1E-3", "+7", "-1", "0", "NaN", "nan", "Inf", "-inf", "+Infinity", "1e400", "1e-400",
@@ -404,6 +407,7 @@ func TestGraphiteCarbonLinesAreReadAsBeforeButForGoSyntax(t *testing.T) {
 	paths := []string{"a.b", "a_b.c_d", "max.x;host=x_1", "0x1p-2", "hex.0X10;tag=_", "movingAverage(cpu_x.load;env=prod,'5min')", ";env=prod", "a.b;env"}
 	goSyntax := func(text string) bool { return strings.ContainsAny(text, "_xX") }
 	same, values, stamps := 0, 0, 0
+	lines, every := 0, alloctest.UnlessRaced(1, 7)
 	for i, path := range paths {
 		// Every timestamp for two of the paths, and one of each kind for the
 		// others.
@@ -413,6 +417,9 @@ func TestGraphiteCarbonLinesAreReadAsBeforeButForGoSyntax(t *testing.T) {
 		}
 		for _, value := range numbers {
 			for _, stamp := range timestamps {
+				if lines++; lines%every != 0 {
+					continue
+				}
 				line := strings.TrimSpace(path + " " + value + " " + stamp)
 				wantPath, wantTags, wantPoint, wantErr := formerParseCarbonLine(line, now)
 				gotPath, gotTags, gotPoint, err := parseCarbonLine(line, now)
@@ -440,7 +447,7 @@ func TestGraphiteCarbonLinesAreReadAsBeforeButForGoSyntax(t *testing.T) {
 			}
 		}
 	}
-	if same < 50000 || values < 20000 || stamps < 3000 {
+	if same < 50000/every || values < 20000/every || stamps < 3000/every {
 		t.Fatalf("%d lines are read as before, %d fail for a value in Go's syntax and %d for a timestamp: they do not cover all three", same, values, stamps)
 	}
 }

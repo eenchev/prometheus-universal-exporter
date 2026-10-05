@@ -15,6 +15,7 @@ import (
 
 	"github.com/eenchev/prometheus-universal-exporter/internal/fetch"
 	"github.com/eenchev/prometheus-universal-exporter/internal/model"
+	"github.com/eenchev/prometheus-universal-exporter/internal/testutil/alloctest"
 )
 
 // The CSV decoder as it was before it refused a row with a value past the
@@ -227,7 +228,10 @@ func compareWithFormerCSV(t *testing.T, body []byte, cfg model.CSVConfig) csvDif
 // or the same error. The only bodies that differ are those with a value past
 // the header's last column, read with a header row, which are refused, those
 // with white space after a quote, read under trim_space, and the two
-// fixtures in which a carriage return alone ends a record.
+// fixtures in which a carriage return alone ends a record. Under the race
+// detector every seventh of the small bodies is decoded, counted through
+// the settings, which is still every field beside every other and after
+// every header, with a seventh of each kind to find among them.
 func TestCSVDecodesAsBeforeButForLongRowsAndBlanksAfterQuotes(t *testing.T) {
 	no := false
 	var settings []model.CSVConfig
@@ -258,6 +262,7 @@ func TestCSVDecodesAsBeforeButForLongRowsAndBlanksAfterQuotes(t *testing.T) {
 	thirds := []string{"", "|", "| ", "|x", `|"q" `, "||y"}
 	lasts := []string{"1|2", "1|2|", "1|2|| 4 ", "1"}
 	generated := map[csvDifference]int{}
+	bodies, every := 0, alloctest.UnlessRaced(1, 7)
 	for _, cfg := range settings {
 		// A comma and a tab, read every way, and spaces as columns
 		// aligned with them are read.
@@ -273,6 +278,9 @@ func TestCSVDecodesAsBeforeButForLongRowsAndBlanksAfterQuotes(t *testing.T) {
 				for _, second := range fields {
 					for _, third := range thirds {
 						for _, last := range lasts {
+							if bodies++; bodies%every != 0 {
+								continue
+							}
 							written := header + "\n" + first + "|" + second + third + "\n" + last + "\n"
 							generated[compareWithFormerCSV(t, []byte(strings.ReplaceAll(written, "|", delimiter)), cfg)]++
 						}
@@ -281,7 +289,7 @@ func TestCSVDecodesAsBeforeButForLongRowsAndBlanksAfterQuotes(t *testing.T) {
 			}
 		}
 	}
-	if generated[csvSame] < 20000 || generated[csvLongRow] < 2000 || generated[csvClosingQuote] < 5000 {
+	if generated[csvSame] < 20000/every || generated[csvLongRow] < 2000/every || generated[csvClosingQuote] < 5000/every {
 		t.Errorf("of the generated bodies' readings %d are as before, %d have a long row and %d blanks after a quote: they do not cover all three", generated[csvSame], generated[csvLongRow], generated[csvClosingQuote])
 	}
 }
@@ -293,17 +301,23 @@ func TestCSVDecodesAsBeforeButForLongRowsAndBlanksAfterQuotes(t *testing.T) {
 // words, at the same line and column, unless it is read under trim_space and
 // has white space after a quote. A body in which a carriage return alone ends
 // a record is left out: it was read as one line with what follows, and
-// csvcarriagereturn_test.go holds what is made of it now.
+// csvcarriagereturn_test.go holds what is made of it now. Under the race
+// detector every seventh of the 87,000 bodies is read, counted through them
+// all, which is still every field beside every other under every delimiter.
 func TestCSVIsReadAsBeforeButForBlanksAfterQuotes(t *testing.T) {
 	atoms := []string{`a`, `b c`, ` lead`, `trail `, ``, `"q"`, ` "q"`, `"q" `, "\"q\"\u00a0 ", "\"q\"\t", ` "a|b"  `, `"x""y"`, "\"two\nlines\"", "\"two\nlines\" ", `"open`, `"st"ray"`, `"st"ray" `, `5" disk`, `"q" x`, `"q" "r"`, `x "mid" `, "\"cr\"\r"}
 	thirds := []string{`a`, ` "q" `, `"open`, `5" disk`, `"st"ray" `, "\"two\nlines\""}
 	read, refused, differ, ended := 0, 0, 0, 0
+	bodies, every := 0, alloctest.UnlessRaced(1, 7)
 	for _, delimiter := range []rune{',', ';', '\t', ' ', '\u00a0'} {
 		for _, trim := range []bool{false, true} {
 			for _, first := range atoms {
 				for _, second := range atoms {
 					for _, third := range thirds {
 						for _, ending := range []string{"\n", "\r\n", ""} {
+							if bodies++; bodies%every != 0 {
+								continue
+							}
 							body := []byte(strings.ReplaceAll(first+"|"+second+"\n"+third+"|"+second+ending, "|", string(delimiter)))
 							if !bytes.Equal(carriageReturnsAsLineEnds(body, delimiter, trim), body) {
 								ended++
@@ -330,7 +344,7 @@ func TestCSVIsReadAsBeforeButForBlanksAfterQuotes(t *testing.T) {
 			}
 		}
 	}
-	if read < 5000 || refused < 20000 || differ < 2000 || ended < 4000 || ended > 6000 {
+	if read < 5000/every || refused < 20000/every || differ < 2000/every || ended < 4000/every || ended > 6000/every {
 		t.Errorf("%d bodies were read as before, %d refused as before, %d differ and in %d a carriage return ends a record: they do not cover all four", read, refused, differ, ended)
 	}
 }

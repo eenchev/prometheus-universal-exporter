@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/eenchev/prometheus-universal-exporter/internal/model"
+	"github.com/eenchev/prometheus-universal-exporter/internal/testutil/alloctest"
 )
 
 // Refusing a constant value on a python rule's label changes the verdict on
@@ -20,6 +21,10 @@ import (
 // refused for one of its settings — a label that is required, has both a
 // value and an expression or neither, a type or an error_mode that is none —
 // is refused for that as it was.
+//
+// Under the race detector, which makes the check many times slower, the
+// table is whole under the python transform, whose rules are the ones
+// refused anew, and every fifth rule of it under each of the others.
 func TestOnlyAPythonRulesLabelValueIsRefusedAnew(t *testing.T) {
 	yes, no := true, false
 	two := 2.0
@@ -48,6 +53,10 @@ func TestOnlyAPythonRulesLabelValueIsRefusedAnew(t *testing.T) {
 			}
 		}
 		lists = append(lists, nil)
+		at, every := 0, 1
+		if alloctest.RaceDetector && name != "python" {
+			every = 5
+		}
 		for _, labels := range lists {
 			for _, rule := range []model.MetricRule{
 				{Name: "m", Items: shape.items, Expression: shape.expression},
@@ -63,6 +72,9 @@ func TestOnlyAPythonRulesLabelValueIsRefusedAnew(t *testing.T) {
 				{Name: "m", Items: shape.items, Expression: shape.expression, ValueMap: map[string]float64{"up": 1}},
 				{Name: "m", Items: shape.items, Expression: shape.expression, TimeFormat: "rfc3339", TimeZone: "UTC"},
 			} {
+				if at++; at%every != 0 {
+					continue
+				}
 				rule.Labels = slices.Clone(labels)
 				tried++
 				if checkedAsBefore(t, x, rule) == forAPythonValue {
@@ -71,7 +83,7 @@ func TestOnlyAPythonRulesLabelValueIsRefusedAnew(t *testing.T) {
 			}
 		}
 	}
-	if tried < 20000 || refused["python"] < 300 || len(refused) != 1 {
+	if tried < alloctest.UnlessRaced(20000, 6000) || refused["python"] < 300 || len(refused) != 1 {
 		t.Fatalf("%d rules were tried, and refused for a python rule's label with a value were %v", tried, refused)
 	}
 	t.Logf("%d generated rules, %d of them python rules refused for a label with a value", tried, refused["python"])

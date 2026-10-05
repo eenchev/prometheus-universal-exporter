@@ -643,8 +643,9 @@ func yamlPanicked(failed any, at yamlPlace) error {
 //
 // An error that holds a part of the document in full holds no more than the
 // start of it (yamlPartCut), and a problem with a key written twice no more
-// than the start of the key (yamlKeyCut); every other error reads as the
-// library wrote it.
+// than the start of the key (yamlKeyCut); a document the parser refuses for
+// its depth is refused in the exporter's words for one (yamlParserDepth);
+// every other error reads as the library wrote it.
 func yamlFailure(err error) error {
 	if problems, ok := err.(*yaml.TypeError); ok { //nolint:errorlint // the library returns its list of problems as it is, wrapped in nothing
 		return yamlProblems(problems)
@@ -659,10 +660,48 @@ func yamlFailure(err error) error {
 	if !ok {
 		return err
 	}
+	if line, deep := yamlParserDepth(problem); deep {
+		return yamlTooDeepAt(line)
+	}
 	if same := withoutYAMLLines(problem); same != problem {
 		return model.SameFailureAs(err, library+strings.TrimPrefix(same, "line "+model.MovingMark+": "))
 	}
 	return err
+}
+
+// yamlParserDepth reports whether problem is the YAML library's parser
+// refusing a document for its depth, and the line it names, "" when it
+// names none.
+//
+// The parser bounds what is nested by indentation and what is nested in
+// brackets, each at 10,000 levels (gopkg.in/yaml.v3 v3.0.1, scannerc.go,
+// max_indents and max_flow_level), and refuses a document past either in
+// the same words, `exceeded max depth of 10000`, after a line unless that
+// is the document's first: the line the level too many opens on, or, of
+// levels of indentation, that of the last key or value written before them
+// (the scanner's mark of its last simple key). Such a document is
+// nested deeper than a response may be (MaxDepth), every level of either
+// kind being a sequence or a mapping, and so is one the parser lets
+// through because it is nested both ways, or through an alias, which the
+// exporter refuses itself (yamlTooDeep): one mistake, which read as two,
+// the library's words not saying what the 10000 bounds. So the parser's
+// refusal is given the exporter's words.
+//
+// Only that text is recognised, whole, and only with the depth that is
+// MaxDepth: a library that came to bound a document elsewhere, or to word
+// its refusal otherwise, would have its error read as it wrote it.
+func yamlParserDepth(problem string) (line string, deep bool) {
+	rest, deep := strings.CutSuffix(problem, fmt.Sprintf("exceeded max depth of %d", MaxDepth))
+	if !deep || rest == "" {
+		return "", deep
+	}
+	rest, lined := strings.CutPrefix(rest, "line ")
+	line, ended := strings.CutSuffix(rest, ": ")
+	// A line as the library writes one: a number from 1, in digits alone.
+	if !lined || !ended || line == "" || line[0] == '0' || strings.Trim(line, "0123456789") != "" {
+		return "", false
+	}
+	return line, true
 }
 
 // yamlProblemsShown is how many of a document's problems its error lists;

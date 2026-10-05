@@ -45,9 +45,12 @@ rules of the collector export also carry the rule's `expression`, and its
 The lines of a name only one rule exports have neither attribute. Whether a
 name is shared is decided by the rules the collector has, not by which of
 them failed, so a rule's lines read the same on every scrape. Rules alike in
-name, expression and items are one rule to the log, as they are to the
-transform, which counts their failures together: it is logged if either of
-them has `error_mode: log`, whichever comes first. A `prometheus` rule without
+name, expression and items, whose series only their labels tell apart, are
+one rule to the log, as they are to the transform, which counts their
+failures together: it is logged if either of them has `error_mode: log`,
+whichever comes first. (Rules alike in their labels as well are
+[the same rule](CONFIGURATION.md#two-rules-that-are-the-same-rule) written
+twice, which the configuration is refused for.) A `prometheus` rule without
 a name has an empty `metric`. An empty `expression` on a line is the
 `prometheus` rule that has none and matches the sample of its own name, where
 another rule of that name has an expression.

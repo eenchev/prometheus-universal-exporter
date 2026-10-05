@@ -16,6 +16,10 @@
 // The others can only add to the count, never take from it. So a measurement
 // here is made several times and the least of them is the answer: the
 // function's own cost, or nearer to it than any one of them.
+//
+// The race detector changes what is allocated and how long a test takes, so
+// the package also says whether the tests were built with it (RaceDetector)
+// and gives a test the smaller size it works on there (UnlessRaced).
 package alloctest
 
 import "runtime"

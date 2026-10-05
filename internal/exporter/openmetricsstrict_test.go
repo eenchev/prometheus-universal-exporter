@@ -17,6 +17,7 @@ import (
 	"testing"
 
 	"github.com/eenchev/prometheus-universal-exporter/internal/model"
+	"github.com/eenchev/prometheus-universal-exporter/internal/testutil/alloctest"
 )
 
 // The Prometheus text format lets a target write values OpenMetrics does not
@@ -761,9 +762,11 @@ func keepsItsType(c oddCase, answer string) bool {
 
 // Every answer for a set with odd values is valid OpenMetrics by a strict
 // parser's rules, claims no name twice, and holds the series and values the
-// text format's answer does.
+// text format's answer does. Under the race detector the sets of every type
+// and shape are joined by the first 400 of the 4,000 random sets of several
+// families, which have every type and every name many times over.
 func TestOpenMetricsOfOddValuesIsValidAndHoldsTheTextFormatsSeries(t *testing.T) {
-	for _, c := range oddCases(4000) {
+	for _, c := range oddCases(alloctest.UnlessRaced(4000, 400)) {
 		answer := string(appendOpenMetrics(nil, c.set))
 		if err := strictOpenMetricsError(answer); err != nil {
 			t.Fatalf("%s: a strict parser refuses the answer: %v\n%s", c.name, err, answer)

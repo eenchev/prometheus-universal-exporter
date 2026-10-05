@@ -38,20 +38,24 @@ func labelled(set *model.MetricSet, label string) string {
 // gives and a set of labels for each before the first was counted: 1.8 GiB
 // for a response of 10 MiB. Refusing a response of 100,000 values must cost
 // a small part of what making their series does; it cost more than half.
+// Under the race detector the response is of 20,000 values, two thousand
+// times the limit: of a smaller one, what the detector itself allocates is
+// too large a part of a refusal for the eighth to hold with room.
 func TestAJQRuleWithoutItemsStopsAtTheSeriesLimit(t *testing.T) {
-	body := "[" + strings.TrimSuffix(repeated(`{"v":1,"id":"a"},`, manySeries), ",") + "]"
+	values := alloctest.UnlessRaced(manySeries, 2*manySeries)
+	body := "[" + strings.TrimSuffix(repeated(`{"v":1,"id":"a"},`, values), ",") + "]"
 	rule := model.MetricRule{Name: "n", Type: model.GaugeMetricType, Expression: ".[].v",
 		Labels: []model.LabelRule{{Name: "id", Expression: ".[].id"}, {Name: "site", Expression: `"a"`}, {Name: "kind", Value: "fixed"}}}
 	withItems := model.MetricRule{Name: "n", Type: model.GaugeMetricType, Items: ".[]", Expression: ".v",
 		Labels: []model.LabelRule{{Name: "id", Expression: ".id"}, {Name: "site", Expression: `"a"`}, {Name: "kind", Value: "fixed"}}}
 
-	c := jqValuesCollector(manySeries, rule)
+	c := jqValuesCollector(values, rule)
 	d, r := decodedBody(t, c, "application/json", body)
 	var set *model.MetricSet
 	var err error
 	// Measured once: the refusals are bounded by an eighth of it.
 	_, all := alloctest.Once(1, func() { set, err = Transform(context.Background(), d, r, &c, "") })
-	if err != nil || len(set.Metrics) != manySeries || set.Metrics[manySeries-1].Labels["id"] != "a" || set.Metrics[0].Labels["kind"] != "fixed" {
+	if err != nil || len(set.Metrics) != values || set.Metrics[values-1].Labels["id"] != "a" || set.Metrics[0].Labels["kind"] != "fixed" {
 		t.Fatalf("at the limit: %d series, %v", len(set.Metrics), err)
 	}
 

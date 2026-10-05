@@ -212,16 +212,69 @@ func TestPythonRequestIsTheLineItWas(t *testing.T) {
 	for _, data := range values {
 		compareRequest(t, used, "metrics", "pass", &decode.Decoded{Kind: "json", Data: data, Raw: plain.Body}, plain, c)
 	}
-	// Lists and objects nested as deep as the encoder follows them, and
-	// deeper, where json.Marshal writes them, up to the depth at which a
-	// Go release that bounds the nesting refuses them.
-	for _, depth := range []int{100, pythonEncoderDepth - 1, pythonEncoderDepth, pythonEncoderDepth + 1, pythonEncoderDepth + 2, 1500, 9998, 9999, 10000, 10001, 12000} {
-		var list, object any = "leaf", 1.0
-		for range depth {
-			list, object = []any{list}, map[string]any{"k": object}
+	// Lists and objects nested as deep as the encoder follows them, which
+	// is as deep as a decoder makes a value, and deeper, where json.Marshal
+	// writes them or refuses them. The encoder followed them 1,000 deep, and
+	// that is the one difference: where json.Marshal refuses a value no
+	// deeper than a decoder's for its depth — a Go release that bounds the
+	// nesting it writes refuses the request around data nested 10,000 deep
+	// — the encoder writes the line json.Marshal writes of a value less
+	// deep, with the levels more around its data.
+	nest := func(object bool, depth int) any {
+		var value any = "leaf"
+		if object {
+			value = 1.0
 		}
-		compareRequest(t, used, "metrics", "pass", &decode.Decoded{Kind: "json", Data: list, Raw: plain.Body}, plain, c)
-		compareRequest(t, used, "metrics", "pass", &decode.Decoded{Kind: "json", Data: object, Raw: plain.Body}, plain, c)
+		for range depth {
+			if object {
+				value = map[string]any{"k": value}
+			} else {
+				value = []any{value}
+			}
+		}
+		return value
+	}
+	// writable is a depth json.Marshal writes on every Go release.
+	const writable = 9000
+	depths := []int{100, 999, 1000, 1001, 1002, 1500, 9998, decode.MaxDepth - 1, decode.MaxDepth, decode.MaxDepth + 1, decode.MaxDepth + 2, 12000}
+	if raceDetector {
+		// The depths on each side of the two that matter, the 1,000 the
+		// encoder followed and decode.MaxDepth, and one json.Marshal writes
+		// that is nearly as deep: under the race detector writing data
+		// nested ten thousand deep takes a tenth of a second.
+		depths = []int{100, 1000, 1001, 9998, decode.MaxDepth, decode.MaxDepth + 1}
+	}
+	for _, depth := range depths {
+		for _, object := range []bool{false, true} {
+			d := &decode.Decoded{Kind: "json", Data: nest(object, depth), Raw: plain.Body}
+			_, refused := oraclePythonRequest("metrics", "pass", d, plain, c)
+			if refused == nil || depth > decode.MaxDepth {
+				compareRequest(t, used, "metrics", "pass", d, plain, c)
+				continue
+			}
+			if !strings.Contains(refused.Error(), "exceeded max depth") {
+				t.Fatalf("data nested %d deep was refused with %v", depth, refused)
+			}
+			less, err := oraclePythonRequest("metrics", "pass", &decode.Decoded{Kind: "json", Data: nest(object, writable), Raw: plain.Body}, plain, c)
+			if err != nil {
+				t.Fatal(err)
+			}
+			open, shut := "[", "]"
+			if object {
+				open, shut = `{"k":`, "}"
+			}
+			const before = `"data":`
+			at, end := strings.Index(string(less), before)+len(before), strings.Index(string(less), `,"response":`)
+			want := string(less[:at]) + strings.Repeat(open, depth-writable) + string(less[at:end]) + strings.Repeat(shut, depth-writable) + string(less[end:])
+			for _, write := range []func() ([]byte, error){
+				func() ([]byte, error) { return pythonRequest("metrics", "pass", d, plain, c) },
+				func() ([]byte, error) { return used.request("metrics", "pass", d, plain, c) },
+			} {
+				if line, err := write(); err != nil || string(line) != want {
+					t.Fatalf("data nested %d deep: error %v and a line of %d bytes, want the line of %d bytes json.Marshal writes of data nested %d deep, with the levels more around it", depth, err, len(line), len(want), writable)
+				}
+			}
+		}
 	}
 	// The data of each decoder, and a status of each kind.
 	code := 5
@@ -251,9 +304,10 @@ func TestPythonRequestIsTheLineItWas(t *testing.T) {
 // 10,000 random requests, half of them with values among their data that no
 // decoder makes, which the encoder leaves to json.Marshal: each is the line
 // it was. The encoder that writes them all has written every one before it,
-// so nothing of a request is left in the next.
+// so nothing of a request is left in the next. Under the race detector the
+// requests are 2,500, of the same two halves.
 func TestPythonRequestIsTheLineItWasForRandomData(t *testing.T) {
-	requests := 10000
+	requests := alloctest.UnlessRaced(10000, 2500)
 	if testing.Short() {
 		requests = 2000
 	}

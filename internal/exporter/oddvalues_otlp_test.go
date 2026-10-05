@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"github.com/eenchev/prometheus-universal-exporter/internal/model"
+	"github.com/eenchev/prometheus-universal-exporter/internal/testutil/alloctest"
 )
 
 // A family with values its type does not allow — a counter that is NaN or
@@ -112,14 +113,16 @@ func otlpGaugeSeries(metrics []otlpMetric) []string {
 
 // Every set of odd values is exported as valid OTLP. A family whose values
 // its type allows is one metric of its kind, and any other is gauges holding
-// the series and values of the text format's answer.
+// the series and values of the text format's answer. Under the race
+// detector the sets of one family, which are all that is counted, are joined
+// by the first 100 of the 1,000 random sets of several families.
 func TestOTLPExportOfOddValuesIsValidAndLeavesNothingOut(t *testing.T) {
 	kinds := map[model.MetricType]int{
 		model.GaugeMetricType: otlpKindGauge, model.UntypedMetricType: otlpKindGauge, model.CounterMetricType: otlpKindSum,
 		model.HistogramMetricType: otlpKindHistogram, model.SummaryMetricType: otlpKindSummary,
 	}
 	typed, untyped := 0, 0
-	for _, c := range oddCases(1000) {
+	for _, c := range oddCases(alloctest.UnlessRaced(1000, 100)) {
 		out := roundTripOTLP(t, c.set.Metrics...)
 		if err := otlpError(out); err != nil {
 			t.Fatalf("%s: %v\n%+v", c.name, err, out)

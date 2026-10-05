@@ -11,6 +11,7 @@ import (
 
 	"github.com/eenchev/prometheus-universal-exporter/internal/fetch"
 	"github.com/eenchev/prometheus-universal-exporter/internal/model"
+	"github.com/eenchev/prometheus-universal-exporter/internal/testutil/alloctest"
 )
 
 // bareQuoteRow is a row that is read leniently: its last field has a quote
@@ -293,7 +294,9 @@ func TestCSVErrorsOfTabSeparatedValuesNameTheBodysColumns(t *testing.T) {
 // after blanks or without, with the delimiter. And a quoted field with
 // blanks after its closing quote, which the reader refuses, is read as the
 // reader reads the body without those blanks, an error's column counted in
-// the body as it is written.
+// the body as it is written. Under the race detector every seventh of the
+// 64,000 bodies is read, counted through them all, which is still every
+// field beside every other and before every third.
 func TestCSVTrimSpaceReadsTabSeparatedValuesAsTheReaderDidButForEmptyFields(t *testing.T) {
 	atoms := []string{`a`, `b c`, ` lead`, `trail `, `"q"`, ` "q"`, `  "a|b"`, `"x""y"`, " \u00a0\"x \"\" y\"", "\"two\nlines\"", " \"two\n \"\"l|nes\"", `"open`, ` "open`, `"st"ray"`, ` "st"ray"`, `5" disk`, ` 5" disk`, `"sp" `, `x "mid"`, ` "a| |""b"`, "\f\"ff\"", ` " "`}
 	// without is an atom as the reader is given it: `"sp" ` is the one atom
@@ -306,11 +309,15 @@ func TestCSVTrimSpaceReadsTabSeparatedValuesAsTheReaderDidButForEmptyFields(t *t
 		return atom
 	}
 	compared, refused, closed := 0, 0, 0
+	bodies, every := 0, alloctest.UnlessRaced(1, 7)
 	for _, delimiter := range []rune{'\t', '\u2003'} {
 		for _, first := range atoms {
 			for _, second := range atoms {
 				for _, third := range atoms {
 					for _, ending := range []string{"\n", "\r\n", ""} {
+						if bodies++; bodies%every != 0 {
+							continue
+						}
 						body := []byte(strings.ReplaceAll(first+"|"+second+"\n"+third+"|z"+ending, "|", string(delimiter)))
 						clean := []byte(strings.ReplaceAll(without(first)+"|"+without(second)+"\n"+without(third)+"|z"+ending, "|", string(delimiter)))
 						if len(clean) != len(body) {
@@ -334,7 +341,7 @@ func TestCSVTrimSpaceReadsTabSeparatedValuesAsTheReaderDidButForEmptyFields(t *t
 			}
 		}
 	}
-	if compared < 60000 || refused < 10000 || refused > compared-10000 || closed < 5000 {
+	if compared < 60000/every || refused < 10000/every || refused > compared-10000/every || closed < 5000/every {
 		t.Fatalf("%d bodies were compared, %d of them refused and %d with blanks after a closing quote", compared, refused, closed)
 	}
 }

@@ -154,7 +154,10 @@ func TestCSVQuoteLeftOpenFailsAsWithLineFeeds(t *testing.T) {
 // field is open at the start of a line and after a delimiter, with blanks
 // before its quote and with a doubled quote in it; what follows it has
 // delimiters, doubled quotes and empty lines, ended four ways; under every
-// delimiter, with trim_space and without.
+// delimiter, with trim_space and without. Under the race detector every
+// fifth of the 26,000 bodies is read, counted through them all, which is
+// still every open field after every two lines and before everything that
+// follows one.
 func TestCSVQuoteLeftOpenIsRefusedAsItsLineFeedTwin(t *testing.T) {
 	// A line before the open field, and the same with what the former
 	// reader is to read in its place.
@@ -164,12 +167,16 @@ func TestCSVQuoteLeftOpenIsRefusedAsItsLineFeedTwin(t *testing.T) {
 	open := []string{`"d`, `c|"d`, `c| "d`, `"d ""e""`, "\"d\r", "c|\"\r"}
 	after := []string{"", "\r", "\n", "\r\n", "\re|f\rg|h", "\re|f\rg|h\r", "|x\r\r\"\"|y\r\n\"\"\"\"\r", "\r\"\"\r", " \r \r"}
 	compared, moved := 0, 0
+	bodies, every := 0, alloctest.UnlessRaced(1, 5)
 	for _, delimiter := range []rune{',', ';', '\t', ' ', '\u00a0'} {
 		for _, trim := range []bool{false, true} {
 			for _, first := range before {
 				for _, second := range before {
 					for _, field := range open {
 						for _, rest := range after {
+							if bodies++; bodies%every != 0 {
+								continue
+							}
 							written := func(s string) string { return strings.ReplaceAll(s, "|", string(delimiter)) }
 							head, formerHead := written("h|k\r"+first.written+second.written), written("h|k\n"+first.former+second.former)
 							body := head + written(field+rest)
@@ -201,7 +208,7 @@ func TestCSVQuoteLeftOpenIsRefusedAsItsLineFeedTwin(t *testing.T) {
 			}
 		}
 	}
-	if compared < 20000 || moved < 10000 {
+	if compared < 20000/every || moved < 10000/every {
 		t.Errorf("%d bodies compared, %d of them with another error than before", compared, moved)
 	}
 }
@@ -211,13 +218,17 @@ func TestCSVQuoteLeftOpenIsRefusedAsItsLineFeedTwin(t *testing.T) {
 // open among them, and of every fixture, each is handed to the reader as it
 // was handed before, byte for byte, unless the reader refuses it, before and
 // now; and a body the reader accepted has the rows it had. So the line of
-// every field of such a body is the line it was too.
+// every field of such a body is the line it was too. Under the race detector
+// every seventh of the 72,000 generated bodies is read, counted through
+// them all, which is still every field beside every other under every
+// delimiter; the fixtures are read as they are.
 func TestCSVBodiesReadBeforeQuotesLeftOpenEndedLinesAreReadTheSame(t *testing.T) {
 	atoms := []string{`a`, ``, ` b c `, `"q"`, ` "q"`, `"q" `, "\"c\rr\"", "\"c\rr|\r\n\" ", " \"c\rr\"", "\"two\nlines\"", `"x""y"`, `5" disk`, `"q" x`, `"st"ray"`, "\t\"t\"",
 		`"open`, ` "open`, `"open ""x""`, "\"open\r"}
 	ends := []string{"\n", "\r\n", "\r", "\r\r", "\r\r\n"}
 	lasts := []string{"\n", "\r\n", "\r", ""}
 	accepted, refused, changed := 0, 0, 0
+	bodies, every := 0, alloctest.UnlessRaced(1, 7)
 	compare := func(what string, body []byte, delimiter rune, trim bool) {
 		t.Helper()
 		was, now := carriageReturnsAsLineEndsBeforeOpenQuotes(body, delimiter, trim), carriageReturnsAsLineEnds(body, delimiter, trim)
@@ -244,6 +255,9 @@ func TestCSVBodiesReadBeforeQuotesLeftOpenEndedLinesAreReadTheSame(t *testing.T)
 				for _, second := range atoms {
 					for _, end := range ends {
 						for _, last := range lasts {
+							if bodies++; bodies%every != 0 {
+								continue
+							}
 							body := strings.ReplaceAll("h|k"+end+first+"|"+second+end+second+"|z|"+first+last, "|", string(delimiter))
 							compare(body, []byte(body), delimiter, trim)
 						}
@@ -264,7 +278,7 @@ func TestCSVBodiesReadBeforeQuotesLeftOpenEndedLinesAreReadTheSame(t *testing.T)
 			}
 		}
 	}
-	if accepted < 25000 || refused < 25000 || changed < 3000 {
+	if accepted < 25000/every || refused < 25000/every || changed < 3000/every {
 		t.Errorf("%d bodies accepted and %d refused, %d of them handed to the reader otherwise than before: they do not cover all three", accepted, refused, changed)
 	}
 }

@@ -292,9 +292,12 @@ func TestRulesOfNamesOfTheirOwnAreLoggedAsTheyWere(t *testing.T) {
 			}
 			if i > 0 && random.IntN(4) == 0 {
 				// Another rule of an earlier one's name, expression and
-				// items: the same rule, to the transform and to the log.
+				// items: one rule with it, to the transform's report and
+				// to the log. It has a label of its own, without which
+				// the two would be the same rule, which does not load.
 				twin := c.Metrics[random.IntN(i)]
 				rule.Name, rule.Expression, rule.Items = twin.Name, twin.Expression, twin.Items
+				rule.Labels = []model.LabelRule{{Name: "copy", Value: strconv.Itoa(i)}}
 			}
 			c.Metrics = append(c.Metrics, rule)
 		}
@@ -438,11 +441,15 @@ func TestRulesAreLoggedAsTheyWereWhenEveryRuleWasAsked(t *testing.T) {
 	for seed := range uint64(80) {
 		random := rand.New(rand.NewPCG(seed, 16))
 		c := model.Collector{Name: "generated"}
-		for range 1 + random.IntN(7) {
+		for i := range 1 + random.IntN(7) {
 			rule := model.MetricRule{Name: fmt.Sprintf("m%d", random.IntN(3)), Expression: fmt.Sprintf(".e%d", random.IntN(3)), ErrorMode: modes[random.IntN(len(modes))]}
 			if random.IntN(3) == 0 {
 				rule.Items = ".items[]"
 			}
+			// Each has a label of its own: rules alike in name,
+			// expression and items, which are one rule to the log, load
+			// only when their labels tell their series apart.
+			rule.Labels = []model.LabelRule{{Name: "copy", Value: strconv.Itoa(i)}}
 			c.Metrics = append(c.Metrics, rule)
 		}
 		now, logs, clock := ruleLogServer(t, testutil.Collector(c.Name, "text"))

@@ -47,9 +47,11 @@ func csvReadCost(t *testing.T, read func() error) (bytesPerRun uint64, allocatio
 // KiB as for one eight times as long. It kept the place and length of every
 // run it took out, which only an error's column is counted from, in a list
 // that grew with the body: some twenty times the body's size in all for a
-// blank every four bytes, in thirty allocations where there is one.
+// blank every four bytes, in thirty allocations where there is one. Under
+// the race detector the bodies are of 4 KiB and of 32, a sixteenth of each:
+// still hundreds of runs of blanks, and one body eight times the other.
 func TestCSVBlanksAroundQuotesCostOneCopyOfTheBody(t *testing.T) {
-	for _, size := range []int{64 << 10, 512 << 10} {
+	for _, size := range alloctest.UnlessRaced([]int{64 << 10, 512 << 10}, []int{4 << 10, 32 << 10}) {
 		for name, padded := range csvPaddedBodies(size) {
 			clean, removed := withoutBlanksAroundQuotes(padded, ',', false)
 			if len(removed) < size/16 || len(clean) >= len(padded) {

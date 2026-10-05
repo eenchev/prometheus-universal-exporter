@@ -10,6 +10,8 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/eenchev/prometheus-universal-exporter/internal/testutil/alloctest"
 )
 
 // ruleFailuresRecounted is what the failure log's counts of rule failures
@@ -41,7 +43,9 @@ func ruleFailuresRecounted(f *failureLog) map[string]int {
 // while the log is small and every hundred steps when it is full, exactly
 // the entries recounted, and what a scrape is told of each trip is whether
 // an entry of a rule of it exists. Among the rules are ones whose
-// expression and items hold a NUL and the marker itself.
+// expression and items hold a NUL and the marker itself. Under the race
+// detector it is the first of the four sequences, which makes every step
+// hundreds of times and fills the log as each of the others does.
 func TestTheRuleFailuresCountedAreTheEntriesThereAre(t *testing.T) {
 	logger := slog.New(slog.DiscardHandler)
 	collectors := []string{"web", "files", "api", "gone"}
@@ -64,7 +68,8 @@ func TestTheRuleFailuresCountedAreTheEntriesThereAre(t *testing.T) {
 	retired := configRead{followed: &followed, generation: 1}
 
 	var steps, counted, full, superseded, replaced int
-	for seed := range uint64(4) {
+	seeds := alloctest.UnlessRaced(4, 1)
+	for seed := range uint64(seeds) {
 		random := rand.New(rand.NewPCG(seed, 16))
 		f := newFailureLog()
 		now := time.Date(2026, 10, 4, 9, 0, 0, 0, time.UTC)
@@ -223,7 +228,7 @@ func TestTheRuleFailuresCountedAreTheEntriesThereAre(t *testing.T) {
 		}
 		f.mu.Unlock()
 	}
-	if counted < 10000 || full < 1000 || superseded < 500 || replaced < 500 {
+	if counted < 2500*seeds || full < 250*seeds || superseded < 125*seeds || replaced < 125*seeds {
 		t.Fatalf("%d counts compared, %d steps of a full log, %d of a retired collector and %d of a failure an hour old happening again: the generator shows too little", counted, full, superseded, replaced)
 	}
 }

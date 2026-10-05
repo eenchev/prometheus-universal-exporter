@@ -25,9 +25,10 @@ import (
 // makes its series of the decoded ones without copying them, so there both
 // are next to nothing, the error itself being most of a refusal: a refusal
 // within refusalBytes stopped in time whatever making every series costs.
+// Under the race detector a body is 10,000 series (manySeries), of which a
+// refusal is to allocate the same part.
 
 const (
-	manySeries  = 100000
 	seriesLimit = 10
 	// boundedAllocs bounds the allocations of a decode that stops at the
 	// 11th series; one that reads every line makes several per line.
@@ -37,6 +38,13 @@ const (
 	// far less than a hundredth of the series any case's body describes.
 	refusalBytes = 16 << 10
 )
+
+// manySeries is how many series a body describes that is refused for the
+// limit. Under the race detector it is a tenth: a thousand times seriesLimit
+// still, so that a transform which made every series before it counted them
+// allocates many times what one that stops at the 11th does, and a decoder
+// that read every line several times boundedAllocs.
+var manySeries = alloctest.UnlessRaced(100000, 10000)
 
 func repeated(item string, n int) string { return strings.Repeat(item, n) }
 
@@ -129,7 +137,8 @@ func itoa(i int) string {
 
 // The prometheus decoder keeps only the series its transform passes on, and
 // stops at the first past the limit, with the same error, so a large
-// exposition is refused without being held in memory.
+// exposition is refused without being held in memory: one of manySeries,
+// which are fewer under the race detector and far past the limit still.
 func TestPrometheusDecoderStopsAtTheSeriesLimit(t *testing.T) {
 	body := []byte(promSeries(manySeries))
 	for _, tc := range []struct {

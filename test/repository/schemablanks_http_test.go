@@ -79,15 +79,17 @@ func blanksKeys() []blanksKey {
 		{key: "collectors[].metrics[].labels[].name", document: jqCollector, at: "            name: l\n", setting: "            name: %s\n", blanks: bothRefuse("has a label without a name"), empty: bothRefuse("has a label without a name")},
 		{key: "collectors[].metrics[].labels[].value_map{}", document: jqCollector, at: label, setting: "            value_map: {%s: other}\n", blanks: bothRefuse("has surrounding blanks or is empty"), empty: bothRefuse("has surrounding blanks or is empty")},
 		{key: "collectors[].metrics[].labels[].value_map.*", document: jqCollector, at: label, setting: "            value_map: {a: %s}\n", blanks: bothTake, empty: bothTake},
-		{key: "collectors[].metrics[].name", document: jqCollector, at: "        name: v\n", setting: "        name: %s\n", blanks: bothRefuse("has a metric without a name"), empty: bothRefuse("has a metric without a name")},
+		{key: "collectors[].metrics[].name", document: jqCollector, at: "        name: v\n", setting: "        name: %s\n", blanks: bothRefuse("metrics rule 1 has no name"), empty: bothRefuse("metrics rule 1 has no name")},
 		{key: "collectors[].metrics[].name", of: "of a prometheus rule", document: prometheusCollector, at: metric, setting: "        name: %s\n", blanks: bothRefuse(noMetricName), empty: bothTake},
 		{key: "collectors[].metrics[].expression", document: jqCollector, at: "        expression: .v\n", setting: "        expression: %s\n", blanks: loaderRefuses("has no expression"), empty: loaderRefuses("has no expression")},
-		{key: "collectors[].metrics[].expression", of: "of a prometheus rule", document: strings.Replace(prometheusCollector, "- expression: '^up$'\n", "- name: up\n", 1), at: metric, setting: "        expression: %s\n", blanks: bothTake, empty: bothTake},
+		{key: "collectors[].metrics[].expression", of: "of a prometheus rule", document: strings.Replace(prometheusCollector, "- expression: '^up$'\n", "- name: up\n", 1), at: metric, setting: "        expression: %s\n", blanks: bothRefuse(`expression "  " is nothing but blanks; a prometheus rule's expression`), empty: bothTake},
 		{key: "collectors[].metrics[].expression", of: "of a python rule", document: pythonCollector, at: metric, setting: "        expression: %s\n", blanks: bothTake, empty: bothTake},
 		{key: "collectors[].metrics[].items", document: jqCollector, at: metric, setting: "        items: %s\n", blanks: loaderRefuses(`items "  "`), empty: bothTake},
 		{key: "collectors[].metrics[].time_format", document: jqCollector, at: metric, setting: "        time_format: %s\n", blanks: loaderRefuses(`time_format "  " is neither`), empty: bothTake},
 		{key: "collectors[].metrics[].time_zone", of: "beside a time_format", document: timed, at: metric, setting: "        time_zone: %s\n", blanks: loaderRefuses(`time_zone "  " is not a time zone`), empty: bothTake},
 		{key: "collectors[].metrics[].description", document: jqCollector, at: metric, setting: "        description: %s\n", blanks: bothTake, empty: bothTake},
+		{key: "collectors[].metrics[].description", of: "of a python rule", document: pythonCollector, at: metric, setting: "        description: %s\n", blanks: bothRefuse("sets description, which a python rule does not take"), empty: bothTake},
+		{key: "collectors[].metrics[].name", of: "of a python rule", document: pythonCollector, at: "      - name: up\n", setting: "      - name: %s\n", blanks: bothRefuse(noMetricName), empty: bothRefuse("metrics rule 1 has no name, which a python rule needs")},
 		{key: "collectors[].metrics[].type", document: jqCollector, at: metric, setting: "        type: %s\n", blanks: bothRefuse("has invalid type"), empty: bothTake},
 		{key: "collectors[].metrics[].error_mode", document: jqCollector, at: metric, setting: "        error_mode: %s\n", blanks: bothRefuse("error_mode has invalid value"), empty: bothTake},
 		{key: "collectors[].metrics[].value_map{}", document: jqCollector, at: metric, setting: "        value_map: {%s: 1}\n", blanks: bothRefuse("has surrounding blanks or is empty"), empty: bothRefuse("has surrounding blanks or is empty")},
@@ -126,14 +128,18 @@ func blanksKeys() []blanksKey {
 // expression, and then read the label with it. An entry of
 // transform.include or transform.exclude is refused by both written as
 // blanks, which matched only the names that hold them, and written "",
-// which matched every name: an entry of a list is no key to leave out. The
+// which matched every name: an entry of a list is no key to leave out. A
+// prometheus rule's expression of blanks, a regular expression over metric
+// names as those entries are, is refused by both for the same reason, and
+// taken written "", the rule then matching the metric of its name. A python
+// rule's description of blanks is a description written, which such a rule
+// does not take, and its name written "" is the name it needs left out. The
 // rest is as it was. Blanks
 // are refused where no text of blanks is what the key takes: a rule's
 // expression, name and items, a time_format and a time_zone, a key of a
 // value_map, and every key held to a set of values or a pattern. They are
 // taken where the text is used as it is written: a label's value, a
-// constant of blanks; a prometheus rule's expression, a regular expression
-// over metric names, which may hold blanks; the names transform.rename,
+// constant of blanks; the names transform.rename,
 // remove_labels and rename_labels look for, which may be such names;
 // request.path; and a
 // namespace of response.namespaces. A pre_script of blanks is no script,

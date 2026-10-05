@@ -3,6 +3,7 @@ package decode
 import (
 	"bytes"
 	"fmt"
+	"math/rand/v2"
 	"strings"
 	"testing"
 
@@ -44,8 +45,8 @@ func yamlAliasChain(kind string, links int) string {
 	return b.String()
 }
 
-// yamlDepthOf is how deep the library's decoding recurses through a parsed
-// document and its aliases.
+// yamlDepthOf is how deep a parsed document is nested, counting what its
+// aliases stand for.
 func yamlDepthOf(root *yaml.Node) uint64 {
 	l := yamlLearnt{large: yamlLargeMapping}
 	l.learn(root, true)
@@ -53,38 +54,46 @@ func yamlDepthOf(root *yaml.Node) uint64 {
 }
 
 // isYAMLTooDeep reports whether an error is the refusal of a document nested
-// through its aliases deeper than it may be written.
+// deeper than a response may be.
 func isYAMLTooDeep(err error) bool {
-	return err != nil && strings.Contains(err.Error(), "deeper than a YAML document may be written")
+	return err != nil && err.Error() == "yaml: the document is nested more than 10000 deep, counting what its aliases stand for; a response may nest 10000 deep at most"
 }
 
-// A YAML document nested through its aliases deeper than the parser lets one
-// be written is refused before anything decodes it, on every way the document
-// is decoded, the library's own included. A single alias of a deeply nested
-// anchor is a chain the library decodes: at the bound it is decoded into what
-// the library makes of it, and one level over the bound the library still
-// decodes it, deep stack and all, but the exporter refuses it for its depth.
-// The chain runs through a sequence, through a mapping and through a merge
-// key, whose value the library decodes through too.
-func TestAYAMLDocumentNestedThroughItsAliasesDeeperThanItMayBeWrittenIsRefused(t *testing.T) {
+// A YAML document nested deeper than a response may be, counting what its
+// aliases stand for, is refused before anything decodes it, on every way the
+// document is decoded, the library's own included. A single alias of a deeply
+// nested anchor is a chain the library decodes: at the bound, which is the
+// JSON decoder's and counts the sequences and mappings of the value, it is
+// decoded into what the library makes of it, and one level over the bound the
+// library still decodes it, deep stack and all, but the exporter refuses it
+// for its depth. The alias itself is no level, and neither are the document
+// and the scalar innermost, which the bound counted when it was the depth of
+// the library's calls: a document was then refused from three levels less
+// deep. The chain runs through a sequence, through a mapping and through a
+// merge key, whose value counts as it is written, one level in.
+func TestAYAMLDocumentNestedThroughItsAliasesDeeperThanAResponseMayNestIsRefused(t *testing.T) {
 	// A single alias of a deeply nested anchor: the library decodes it (its
 	// aliases expand to no more than twice its size), and so does the exporter
 	// up to the bound.
 	for _, nest := range []func(int) string{yamlFlowSeq, yamlFlowMap} {
-		// 9996 levels of nesting under the alias come to a depth of exactly the
-		// bound; one level more is over it.
-		at := parsedYAML(t, "p: &x "+nest(9996)+"\nq: *x\n")
-		if got := yamlDepthOf(at); got != yamlDepthLimit {
-			t.Fatalf("the accepted document is %d deep, want the bound of %d", got, yamlDepthLimit)
+		// 9999 levels of nesting under the key of a mapping come to a depth of
+		// exactly the bound, which the value the alias stands for has too; one
+		// level more is over it.
+		at := parsedYAML(t, "p: &x "+nest(9999)+"\nq: *x\n")
+		if got := yamlDepthOf(at); got != MaxDepth {
+			t.Fatalf("the accepted document is %d deep, want the bound of %d", got, MaxDepth)
 		}
 		library, ours := yamlByTheLibraryAlone(at), yamlWith(at, yamlLargeMapping, nil)
-		if !library.same(ours) {
+		if ours.err != nil || !library.same(ours) {
 			t.Errorf("at the bound the document decodes to %s, and the library makes %s of it", ours.text(), library.text())
 		}
+		if value, _ := ours.value.(map[string]any); valueDepth(value["p"]) != MaxDepth-1 || valueDepth(value["q"]) != MaxDepth-1 {
+			t.Errorf("at the bound the values under the mapping nest %d and %d deep, want %d", valueDepth(value["p"]), valueDepth(value["q"]), MaxDepth-1)
+		}
 
-		over := parsedYAML(t, "p: &x "+nest(9998)+"\nq: *x\n")
-		if got := yamlDepthOf(over); got <= yamlDepthLimit {
-			t.Fatalf("the document over the bound is %d deep, want more than %d", got, yamlDepthLimit)
+		over := parsedYAML(t, "p: &x "+nest(10000)+"\nq: *x\n")
+		if got := yamlDepthOf(over); got != MaxDepth+1 {
+			t.Fatalf("the document over the bound is %d deep, want %d", got, MaxDepth+1)
 		}
 		if library := yamlByTheLibraryAlone(over); library.err != nil || library.failed != nil {
 			t.Errorf("the library does not decode the document over the bound, it makes %s of it", library.text())
@@ -95,11 +104,19 @@ func TestAYAMLDocumentNestedThroughItsAliasesDeeperThanItMayBeWrittenIsRefused(t
 	}
 
 	// A merge key's value is a node the library decodes through, so a merge of
-	// a deeply nested mapping is counted in the depth and refused over the
-	// bound, where the library decodes it.
+	// a deeply nested mapping counts as it is written, a mapping inside the
+	// one it is merged into: at the bound it is decoded, and over it refused,
+	// where the library decodes it.
 	merge := parsedYAML(t, "p: &x "+yamlFlowMap(9998)+"\nq:\n  <<: *x\n")
-	if got := yamlDepthOf(merge); got <= yamlDepthLimit {
-		t.Fatalf("the merge of a nested mapping is %d deep, want more than %d", got, yamlDepthLimit)
+	if got := yamlDepthOf(merge); got != MaxDepth {
+		t.Fatalf("the merge of a nested mapping is %d deep, want the bound of %d", got, MaxDepth)
+	}
+	if library, ours := yamlByTheLibraryAlone(merge), yamlWith(merge, yamlLargeMapping, nil); ours.err != nil || !library.same(ours) {
+		t.Errorf("the merge at the bound decodes to %s, and the library makes %s of it", ours.text(), library.text())
+	}
+	merge = parsedYAML(t, "p: &x "+yamlFlowMap(9999)+"\nq:\n  <<: *x\n")
+	if got := yamlDepthOf(merge); got != MaxDepth+1 {
+		t.Fatalf("the merge of a nested mapping is %d deep, want %d", got, MaxDepth+1)
 	}
 	if library := yamlByTheLibraryAlone(merge); library.err != nil || library.failed != nil {
 		t.Errorf("the library does not decode the merge over the bound, it makes %s of it", library.text())
@@ -113,12 +130,19 @@ func TestAYAMLDocumentNestedThroughItsAliasesDeeperThanItMayBeWrittenIsRefused(t
 	// refuses it for its aliases well before the bound; up to the bound the
 	// exporter refuses it the same way, and over it for its depth instead.
 	for _, kind := range []string{"seq", "map", "merge"} {
-		// 4998 links come to a depth of exactly the bound, 4999 to one over it.
-		at := parsedYAML(t, yamlAliasChain(kind, 4998))
-		if got := yamlDepthOf(at); got != yamlDepthLimit {
-			t.Fatalf("the %s chain at the bound is %d deep, want %d", kind, got, yamlDepthLimit)
+		// 9998 links come to a depth of exactly the bound, a link being one
+		// level, and 9999 to one over it.
+		at := parsedYAML(t, yamlAliasChain(kind, 9998))
+		if got := yamlDepthOf(at); got != MaxDepth {
+			t.Fatalf("the %s chain at the bound is %d deep, want %d", kind, got, MaxDepth)
 		}
-		library, ours := yamlByTheLibraryAlone(at), yamlWith(at, yamlLargeMapping, nil)
+		// The library compares every two of the chain's keys before it decodes
+		// any, which takes seconds under the race detector: there the chain is
+		// held to the refusal the library is known to make.
+		library, ours := yamlOutcome{err: errYAMLAliasing}, yamlWith(at, yamlLargeMapping, nil)
+		if !raceDetector {
+			library = yamlByTheLibraryAlone(at)
+		}
 		if isYAMLTooDeep(ours.err) {
 			t.Errorf("the %s chain at the bound is refused for its depth, want the library's %s", kind, library.text())
 		}
@@ -126,9 +150,9 @@ func TestAYAMLDocumentNestedThroughItsAliasesDeeperThanItMayBeWrittenIsRefused(t
 			t.Errorf("the %s chain at the bound is %s, and the library makes %s of it", kind, ours.text(), library.text())
 		}
 
-		over := parsedYAML(t, yamlAliasChain(kind, 4999))
-		if got := yamlDepthOf(over); got <= yamlDepthLimit {
-			t.Fatalf("the %s chain over the bound is %d deep, want more than %d", kind, got, yamlDepthLimit)
+		over := parsedYAML(t, yamlAliasChain(kind, 9999))
+		if got := yamlDepthOf(over); got != MaxDepth+1 {
+			t.Fatalf("the %s chain over the bound is %d deep, want %d", kind, got, MaxDepth+1)
 		}
 		if ours := yamlWith(over, yamlLargeMapping, nil); !isYAMLTooDeep(ours.err) {
 			t.Errorf("the %s chain over the bound is refused with %s, want the depth", kind, ours.text())
@@ -136,16 +160,18 @@ func TestAYAMLDocumentNestedThroughItsAliasesDeeperThanItMayBeWrittenIsRefused(t
 	}
 }
 
-// A deeply nested YAML document without aliases is nested no deeper than the
-// parser let it be written, so it is not looked through for its depth and is
-// decoded as it always was: 9,990 levels of sequences, which the library
-// decodes, the exporter decodes the same.
+// A YAML document without aliases is nested as deep as it is written, which
+// the one look through it finds: it is not gone through a second time for its
+// depth, and one within the bound is decoded as it always was. 9,990 levels of
+// sequences, which the library decodes, the exporter decodes the same; and a
+// document with an anchor that nothing is an alias of, whose depth a second
+// look would have kept, is found as deep as it is without one.
 func TestADeeplyNestedYAMLDocumentWithoutAliasesIsDecodedAsBefore(t *testing.T) {
 	root := parsedYAML(t, strings.Repeat("- ", 9990)+"x\n")
 	learnt := yamlLearnt{large: yamlLargeMapping}
 	learnt.learn(root, true)
-	if learnt.aliases {
-		t.Fatal("a document of sequences has an alias")
+	if learnt.aliases || learnt.nested != 9990 || learnt.inside != 0 {
+		t.Fatalf("a document of 9990 sequences is found with an alias (%v), nested %d deep, and looked through to %d levels from its end", learnt.aliases, learnt.nested, learnt.inside)
 	}
 	library, ours := yamlByTheLibraryAlone(root), yamlWith(root, yamlLargeMapping, nil)
 	if isYAMLTooDeep(ours.err) {
@@ -153,6 +179,16 @@ func TestADeeplyNestedYAMLDocumentWithoutAliasesIsDecodedAsBefore(t *testing.T) 
 	}
 	if !library.same(ours) {
 		t.Errorf("the nested document decodes to %s, and the library makes %s of it", ours.text(), library.text())
+	}
+
+	root = parsedYAML(t, "a: &unused [[1], {b: [2, [3]]}]\nc: {d: 4}\n")
+	learnt = yamlLearnt{large: yamlLargeMapping}
+	learnt.learn(root, true)
+	if learnt.tooDeep(root) || learnt.nested != 5 || learnt.depths != nil {
+		t.Errorf("a document nested 5 deep with no alias is found nested %d deep, and the depths of %d anchors were added up for it, want none", learnt.nested, len(learnt.depths))
+	}
+	if depth := learnt.deepest(root); depth != 5 || len(learnt.depths) != 1 {
+		t.Errorf("gone through for its aliases the document is %d deep, with the depths of %d anchors kept, want 5 and 1", depth, len(learnt.depths))
 	}
 }
 
@@ -201,7 +237,7 @@ func TestExcessivelyAliasedShallowYAMLDocumentsKeepTheirError(t *testing.T) {
 		b.WriteString("]\n")
 	}
 	root := parsedYAML(t, b.String())
-	if got := yamlDepthOf(root); got > yamlDepthLimit {
+	if got := yamlDepthOf(root); got > MaxDepth {
 		t.Fatalf("the shallow document is %d deep, which is over the bound", got)
 	}
 	library, ours := yamlByTheLibraryAlone(root), yamlWith(root, yamlLargeMapping, nil)
@@ -216,10 +252,21 @@ func TestExcessivelyAliasedShallowYAMLDocumentsKeepTheirError(t *testing.T) {
 // The depth bound refuses no document of the differential corpus: none of the
 // repository's YAML files, the error tests' documents, those written for the
 // forms of a merge, a key and an alias, or the random ones comes near a depth
-// of 10,000, so the bound changes none of them.
+// of 10,000, with or without an alias, so the bound changes none of them. And
+// the two ways the depth is found agree: a document without an alias is as
+// deep in the one look through it as it is when its nodes are added up.
 func TestTheDepthBoundRefusesNoDocumentOfTheDifferentialCorpus(t *testing.T) {
 	documents := append(append(yamlFixtureDocuments(t), hostileYAMLDocuments()...), yamlWrittenDocuments()...)
+	maker := yamlMaker{random: rand.New(rand.NewPCG(25, 26))} //nolint:gosec // documents for a test
+	generated := 3000
+	if raceDetector {
+		generated = 1000
+	}
+	for range generated {
+		documents = append(documents, maker.document())
+	}
 	var deepest uint64
+	aliased, plain := 0, 0
 	for _, document := range documents {
 		root, _ := yamlDocumentOf([]byte(document))
 		if root == nil {
@@ -227,21 +274,24 @@ func TestTheDepthBoundRefusesNoDocumentOfTheDifferentialCorpus(t *testing.T) {
 		}
 		learnt := yamlLearnt{large: yamlLargeMapping}
 		learnt.learn(root, true)
-		if !learnt.aliases {
-			continue
+		if learnt.tooDeep(root) {
+			t.Errorf("%.120q is refused for its depth", document)
 		}
 		depth := learnt.deepest(root)
-		if depth > deepest {
-			deepest = depth
+		deepest = max(deepest, depth)
+		if learnt.aliases {
+			aliased++
+		} else {
+			plain++
 		}
-		if depth > yamlDepthLimit {
-			t.Errorf("%.120q is %d deep, which the bound of %d refuses", document, depth, yamlDepthLimit)
+		if depth > 100 || learnt.inside != 0 || depth < uint64(learnt.nested) || !learnt.aliases && depth != uint64(learnt.nested) { //nolint:gosec // a count of levels
+			t.Errorf("%.120q is %d deep through its aliases and %d as it is written (alias: %v), with %d levels left open", document, depth, learnt.nested, learnt.aliases, learnt.inside)
 		}
 	}
-	if deepest == 0 {
-		t.Fatal("no document of the corpus has an alias to look through the depth of")
+	if deepest == 0 || aliased < 100 || plain < 500 {
+		t.Fatalf("the corpus has %d documents with an alias and %d without, the deepest %d deep", aliased, plain, deepest)
 	}
-	t.Logf("the deepest document of the corpus is %d deep, the bound is %d", deepest, yamlDepthLimit)
+	t.Logf("the deepest document of the corpus is %d deep, the bound is %d; %d documents have an alias and %d none", deepest, MaxDepth, aliased, plain)
 }
 
 // With the bound in force, decoding the deepest document it accepts grows the
@@ -251,13 +301,20 @@ func TestTheDepthBoundRefusesNoDocumentOfTheDifferentialCorpus(t *testing.T) {
 // in time linear in it, the depth added up without a call for each link.
 // Measured on a fresh goroutine, as the survey's stack is; skipped under the
 // race detector, which keeps no such stack.
+//
+// A level of the bound is a sequence or a mapping, and what the library calls
+// itself for on the way to one is the most where each is a mapping merged
+// into the next through an alias: 9,996 of those, hidden from the library's
+// own count of aliases in a mapping with a key written twice, are nested to
+// the bound and decoded by the library in a stack grown to 16 MB and no
+// further, and one more is refused for its depth in a shallow one.
 func TestAYAMLDocumentAcceptedAtTheDepthBoundIsDecodedInABoundedStack(t *testing.T) {
 	if raceDetector {
 		t.Skip("the race detector keeps a stack of its own")
 	}
-	accepted := "p: &x " + yamlFlowSeq(9996) + "\nq: *x\n"
-	if got := yamlDepthOf(parsedYAML(t, accepted)); got != yamlDepthLimit {
-		t.Fatalf("the accepted document is %d deep, want the bound of %d", got, yamlDepthLimit)
+	accepted := "p: &x " + yamlFlowSeq(9999) + "\nq: *x\n"
+	if got := yamlDepthOf(parsedYAML(t, accepted)); got != MaxDepth {
+		t.Fatalf("the accepted document is %d deep, want the bound of %d", got, MaxDepth)
 	}
 	var err error
 	grown := yamlStackOf(func() { _, err = decodeYAML([]byte(accepted)) })
@@ -276,6 +333,34 @@ func TestAYAMLDocumentAcceptedAtTheDepthBoundIsDecodedInABoundedStack(t *testing
 	}
 	if grown > 1<<20 {
 		t.Errorf("refusing the 400,000-link chain grew the stack by %d kB, want under 1 MB", grown>>10)
+	}
+
+	merges := func(links int) string {
+		var doc strings.Builder
+		fmt.Fprintf(&doc, "pad: [%s1]\nx:\n  d: 1\n  d: 2\n  c:\n  - &a0 {k: x}\n", strings.Repeat("1,", links/20))
+		for i := 1; i <= links; i++ {
+			fmt.Fprintf(&doc, "  - &a%d {<<: *a%d}\n", i, i-1)
+		}
+		fmt.Fprintf(&doc, "y: *a%d\n", links)
+		return doc.String()
+	}
+	costly := merges(9996)
+	if got := yamlDepthOf(parsedYAML(t, costly)); got != MaxDepth {
+		t.Fatalf("the chain of merges is %d deep, want the bound of %d", got, MaxDepth)
+	}
+	grown = yamlStackOf(func() { _, err = decodeYAML([]byte(costly)) })
+	if err == nil || isYAMLTooDeep(err) || !strings.Contains(err.Error(), `mapping key "d" already defined`) {
+		t.Fatalf("the chain of merges at the bound is decoded with %v, want the library's refusal of the key written twice", err)
+	}
+	if grown > 17<<20 {
+		t.Errorf("decoding the chain of merges at the bound grew the stack by %d kB, want no more than 16 MB", grown>>10)
+	}
+	grown = yamlStackOf(func() { _, refused = decodeYAML([]byte(merges(9997))) })
+	if !isYAMLTooDeep(refused) {
+		t.Fatalf("the chain of merges one over the bound is refused with %v, want the depth", refused)
+	}
+	if grown > 1<<20 {
+		t.Errorf("refusing the chain of merges one over the bound grew the stack by %d kB, want under 1 MB", grown>>10)
 	}
 }
 

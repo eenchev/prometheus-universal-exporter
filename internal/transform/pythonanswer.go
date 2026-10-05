@@ -30,7 +30,10 @@ import (
 // answer.
 
 // pythonAnswerDepth is how deep encoding/json reads arrays and objects,
-// which is how deep an answer is read here.
+// which is how deep a metric of an answer that encoding/json reads may
+// nest, the answer around it counted (skip). What a pre-script left in data
+// is not read by it, and nests as deep as a decoded value does
+// (decode.MaxDepth, decode.JSONValue).
 const pythonAnswerDepth = 10000
 
 // answerReader reads a worker's answer.
@@ -124,7 +127,9 @@ func readPythonAnswer(line []byte) (*pythonOutput, bool) {
 			}
 		case "data":
 			saw = sawData
-			value, rest, err := decode.JSONValue(a.data[a.pos:], 1)
+			// As deep as a decoder makes a value, whatever lies around it
+			// here: a script may leave in data what it was given.
+			value, rest, err := decode.JSONValue(a.data[a.pos:])
 			if err != nil {
 				return nil, false
 			}

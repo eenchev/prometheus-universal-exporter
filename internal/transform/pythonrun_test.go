@@ -19,6 +19,7 @@ import (
 	"github.com/eenchev/prometheus-universal-exporter/internal/decode"
 	"github.com/eenchev/prometheus-universal-exporter/internal/fetch"
 	"github.com/eenchev/prometheus-universal-exporter/internal/model"
+	"github.com/eenchev/prometheus-universal-exporter/internal/testutil/alloctest"
 )
 
 // How a script's run is handed to a worker, timed, and ended, and what
@@ -120,7 +121,9 @@ func TestPythonScriptTimeoutStartsWhenTheWorkerHasTheRequest(t *testing.T) {
 
 // With a real worker and a large response: the time a probe reports its
 // script took (ScriptTimer) is the script's, a small part of the run, most
-// of which is handing the response over.
+// of which is handing the response over. The response is of 32 MiB, and of
+// 8 MiB under the race detector, where writing it for the worker takes
+// several times as long and is as large a part of the run.
 func TestPythonScriptDurationDoesNotCountHandingOverTheResponse(t *testing.T) {
 	requirePython(t)
 	c := workerCollector("handover", `metric(name="length", value=len(data))`)
@@ -128,7 +131,7 @@ func TestPythonScriptDurationDoesNotCountHandingOverTheResponse(t *testing.T) {
 	if _, err := runWorkerText(context.Background(), c, "warm"); err != nil {
 		t.Fatal(err)
 	}
-	body := strings.Repeat("requests 12345 worker=a\n", (32<<20)/24)
+	body := strings.Repeat("requests 12345 worker=a\n", alloctest.UnlessRaced(32<<20, 8<<20)/24)
 	ctx, timer := WithScriptTimer(context.Background())
 	start := time.Now()
 	set, err := runWorkerText(ctx, c, body)

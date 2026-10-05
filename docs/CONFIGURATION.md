@@ -124,11 +124,33 @@ and of an anchor's name — so it stays short whatever the document holds. A
 YAML body costs time and memory in proportion to its size whatever it holds —
 a mapping of 200,000 keys decodes in about the time it takes to parse, and a
 key written 100,000 times is refused as quickly — so `max_response_bytes`
-bounds what a target's answer can cost. A document nested, through the targets
-of its aliases, deeper than a YAML document may be written (more than 10,000
-levels, counting each alias as the depth of what it points at) is refused
-before it is decoded, since the YAML library would decode it on a stack as
-deep as the chain is long and could exhaust the process. A document the YAML
+bounds what a target's answer can cost. A response decodes into a
+value whose lists and mappings nest 10,000 deep at most, one inside another,
+whatever its format, and a document nested deeper fails the scrape in the
+`decode` stage, saying so: a JSON one with `arrays and objects nested more than
+10000 deep, at line 1, column 10001`, and a YAML one, with or without aliases
+and however it is written, with `yaml: the document is nested more than 10000
+deep, counting what its aliases stand for; a response may nest 10000 deep at
+most`, after `line N:` where the YAML library's parser is what stops at the
+level too many and names a line (`yaml: line 3: the document is nested more
+than 10000 deep, ...`: the line that level opens on, or the line of the last
+key or value before it), the failure being one failure to the
+[log of repeated failures](LOGGING.md#repeated-failures) with or without a
+line. A YAML document is
+counted as a JSON one is, by the sequences and mappings written one inside
+another, with an alias counting as what it points at — so anchors that each
+hold an alias of the one before are as deep as the chain is long — and a
+mapping merged with `<<` counting as it is written, one level inside the
+mapping it is merged into. The exporter keeps this bound itself, before the
+document is decoded, because the YAML library keeps none on the whole: its
+parser bounds indentation and brackets apart, at 10,000 levels each (a
+document past either is refused there, in the library's words `exceeded max
+depth of 10000`, which the exporter replaces with the message above, the same
+mistake reading the same whichever of the two finds it), so brackets inside
+indentation parse nested 20,000 deep and more,
+and it decodes a chain of aliases on a stack as deep as the chain is long,
+which could exhaust the process. A [Python script](PYTHON.md#what-data-is) is
+handed a value as deep as it decodes. A document the YAML
 library itself
 fails on fails the scrape in the `decode` stage like any other that cannot be
 decoded (`the YAML library failed on the document: ...`); should the exporter's
@@ -508,7 +530,39 @@ The expression and label values are interpreted by the selected transform:
   name, description, type, and selected labels. Without `type` a series keeps
   its own. A rule that matches no metric of the response has no value, so a
   required rule is [missing its value](#when-a-metric-cannot-be-extracted);
-  give a rule for a metric the target may leave out `required: false`.
+  give a rule for a metric the target may leave out `required: false`. The
+  expression is a regular expression, matched anywhere in the name the
+  target gives a metric; a rule without one matches the metric its `name`
+  names. One that is nothing but blanks, such as `expression: " "`, is
+  refused at startup, as [an entry of `transform.include`](#collector-wide-labels)
+  is: it matched only the names that hold those blanks, so the rule passed
+  nothing on, and with `required: false` said nothing. The error says how a
+  pattern that does mean a blank is written, `'[ ]'` or `'\x20'` in single
+  quotes. Written `""`, the expression is the key left out. A rule needs
+  one of the two, since they are how it says which metrics it is about: one
+  with neither a `name` nor an `expression` — `- {}`, or a rule of a `type`,
+  a `description` or `labels` alone — matched no metric, was reported as
+  missing on every scrape as if the target had left a metric out, and with
+  `required: false` did nothing without a word. It is refused at startup.
+  Such a rule has no name to be named by, so the error names the collector
+  and which of its rules it is, counted from 1, as in `collector "node"
+  metrics rule 2 has neither a name nor an expression, …`, and says what to
+  write: an `expression`, a `name`, or `expression: '.*'` for a rule about
+  every metric. A pattern belongs in `expression`, never in `name`: a
+  rule's `name` is one metric's, matched whole when the rule has no
+  expression, and beside an expression the one name the series it matches
+  are exported under. So `name: 'node_.*'`, `name: '^up$'` and
+  `name: 'up|node_load1'` are refused as no metric name, and since a name
+  with a character a regular expression gives a meaning — `. * + ? ^ $ | (
+  ) [ ] { }` or a backslash — is almost surely a pattern under the wrong
+  key, the error says so: `… is not a valid Prometheus metric name; use
+  letters, digits, underscores and colons, not starting with a digit; a
+  pattern to match the target's metric names by is a prometheus rule's
+  expression, not its name, so if this is one, write it as expression, …`.
+  A rule's name is held to these names whatever
+  [`name_escaping`](#utf-8-names) is, which is about the names a response
+  gives: a metric the target calls `http.server.duration` is matched by
+  `expression: '^http\.server\.duration$'`.
 
 CSS remains available specifically for HTML tables and HTML status pages; it is
 not used for CSV.
@@ -1032,14 +1086,16 @@ when a rule of the collector names the script's metric and the label:
 true}]}]` cuts the `note` label of the `up` series the script makes (the
 rule makes no series itself, and its `expression` is not read). Without such
 a rule the script cuts them, or the limit is raised. Naming a label to cut is
-all a `python` rule's label does, so one that sets `value` is refused at
-startup: the script's series would not get the constant, and nothing would
-say so. A constant for every series of the collector goes under
-[`transform.labels`](#collector-wide-labels), and one for some of them in the
-script's `metric(..., labels={...})`. A `python` rule's `type` and
-`description` are not given to the script's series either, which have the
-type and the help the script gives them, `gauge` and none when it gives
-neither.
+all a `python` rule's label does, so one that sets `value`, and one that
+does not set `truncate: true`, is refused at startup: the script's series
+would not get the constant, nor the label an `expression` there seems to
+read, and nothing would say so. A constant for every series of the collector
+goes under [`transform.labels`](#collector-wide-labels), and one for some of
+them in the script's `metric(..., labels={...})`. The rule itself names the
+script's series and says nothing else: its `type`, `description`, `required`
+and `error_mode` are the script's to say and are refused, as a rule without
+a `name` is; see
+[What a rule of a `python` collector is for](PYTHON.md#what-a-rule-of-a-python-collector-is-for).
 
 The other limits on a series say the same when a scrape fails for them: more
 labels than `limits.max_labels_per_metric` (20 by default) as `metric "M" has
@@ -1842,7 +1898,9 @@ scrape. Several rules of one metric name — one for each column or path its
 series come from — are each logged, remembered and recovered by themselves,
 and their lines say which rule it is with its `expression`, and its `items`,
 beside the `metric` ([Logging](LOGGING.md)); rules alike in name, expression
-and items are one rule, logged if either of them has `log`. Either way the
+and items, which their labels tell apart — alike in those too they are
+[the same rule](#two-rules-that-are-the-same-rule), which does not load —
+are one rule to the log, logged if either of them has `log`. Either way the
 series a rule carried on
 without are counted in `http_exporter_rule_failures_total{collector,
 metric}`, by the rule's metric name and so for the rules of one name
@@ -1997,10 +2055,17 @@ success. A metric rule with `error_mode: fail` fails the scrape whatever
 
 Everything about a metric that can be known before a scrape is checked at
 startup, on reload and by `--dry-run`, and an error names the collector, the
-metric and the label:
+metric and the label. A rule that has no name to be named by — `name` left
+out, written `""` or nothing but blanks — is named by its place among the
+collector's rules, counted from 1: `collector "node" metrics rule 2 has no
+name`, or, of a `prometheus` rule, which needs none, `collector "node"
+metrics rule 2 has invalid type "timer"`, where a rule with a name reads
+`collector "node" metric "up" has invalid type "timer"`. What is checked:
 
 - a metric name must be a valid Prometheus metric name, and not start with
-  `__`;
+  `__`; a rule of any transform but `prometheus` must have one, and under
+  `prometheus` a name that reads as a pattern is told that
+  [a pattern belongs in `expression`](#collectors);
 - every expression must compile in its transform's language — jq and yq
   (including `items`, and undefined functions and variables), regular
   expressions, CSS selectors, XPath with the collector's namespaces, and a
@@ -2021,6 +2086,13 @@ metric and the label:
 - a label of a `python` rule sets no `value`: the script sets its labels
   itself, and a constant for every series is
   [`transform.labels`](#collector-wide-labels);
+- a `python` rule has a `name`, the script's series it names, and no `type`,
+  `description`, `required` or `error_mode`, which the script says of its
+  series itself, and each of its labels sets `truncate: true`
+  ([What a rule of a `python` collector is for](PYTHON.md#what-a-rule-of-a-python-collector-is-for));
+- a `prometheus` rule's `expression` is not nothing but blanks, and the rule
+  has a `name` or an `expression`, by which it says which metrics it passes
+  on;
 - `transform.labels` and `rename_labels` must give label names, and two renames
   may not target the same label;
 - no label name, of a rule, `transform.labels`, `rename_labels` or a static
@@ -2037,6 +2109,9 @@ metric and the label:
   may feed one family, as `jobs{queue="a"}` and `jobs{queue="b"}` read from
   two places, but a family has one type. A `prometheus` rule without a `type`
   keeps the series' own and is not compared;
+- no two rules of a collector may be
+  [the same rule](#two-rules-that-are-the-same-rule): each would make every
+  series the other makes, and every scrape would fail on a duplicate series;
 - no rule may be named as a series of another rule's histogram or summary —
   `foo_bucket`, `foo_sum` or `foo_count` beside a histogram `foo`, `foo_sum` or
   `foo_count` beside a summary `foo`;
@@ -2084,6 +2159,57 @@ is refused, at the line it is written on.
 
 Each of these would otherwise load and then fail every scrape's validation,
 or be ignored, whatever the target answered.
+
+### Two rules that are the same rule
+
+Several rules may export one metric name, each reading its series from
+another place or giving them another label. Two rules that are alike in
+everything that decides which series a rule makes are something else: the
+same rule, written twice. Each makes every series the other makes, of one
+name and one set of labels, and a scrape that has a series twice fails —
+`validation failed: duplicate metric series "up"` — on every scrape, for as
+long as the configuration runs. So the pair is refused when the
+configuration loads, naming both rules by their places among the collector's
+rules, counted from 1, and the metric:
+
+```text
+collector "node" metrics rule 1 and rule 3 are the same rule of metric "up": alike in name, expression, items and labels, each makes every series the other makes, and a scrape that has a series twice fails, as a duplicate metric series; take one of the two out, or tell their series apart by a label, as with a static label that has another value in each
+```
+
+A `prometheus` rule without a name is told of by its pattern, `… are the
+same rule of the metrics that match "^node_": …`. Each copy of a rule is
+reported once, against the first.
+
+| Of two rules | Compared | Why |
+| --- | --- | --- |
+| `name`, `expression`, `items` | yes, as written; `""` is the key left out | they say which series the rule makes and from what |
+| `labels` | yes: the same label names, each with the same `value` or the same `expression`, in any order | a series is its name and its labels |
+| `value_map`, `time_format` | yes | they say which texts the rule reads a value from: of two rules that differ in one, each may read what the other cannot — a field that is `up` or a number, a time written one way or another — and a scrape gets one series |
+| `scale`, `time_zone`, `description`, `required`, `error_mode` | no | they change the value or the help text of a series, or what happens when there is none, never which series it is |
+| a label's `truncate`, `required` and `value_map` | no | the first two change no label's name, and a label's `value_map` is one for [all the rules of a name](#mapping-text-to-values-and-scaling-them) |
+| `type` | no | rules of one name have [one type](#checked-when-the-configuration-loads) |
+
+So two rules that differ only in a `scale`, a `description`, `required` or
+`error_mode` are the same rule, and are refused: whatever value each gives,
+it is a second value for one series. To export one name from two rules,
+tell their series apart by a label — a static label with another value in
+each is enough — or by reading another `expression` or other `items`.
+
+Labels of one name written twice in a rule keep their order, the last being
+the one a series gets. Under `prometheus`, where a label reads a label of
+the series the rule passes on, the order of a rule's labels is compared too
+when one of them reads a label the rule itself sets under another name,
+since the order then decides the value.
+
+The comparison is of what the rules write, not of what they mean. Two
+expressions that select the same thing in other words — `.v` and `(.v)`, or
+a `prometheus` rule `{name: up}`, which matches the metric of its name,
+beside `{name: up, expression: '^up$'}` or `{expression: '^up$'}` — are two
+rules to it: they load, and the scrape fails on the duplicate series as
+before. A `python` collector's rules make no series, the script does, so
+two of them alike change nothing and are not refused. A JSON schema cannot
+compare the items of a list in this way, so this is one of the checks only
+the exporter makes ([Editor support](#editor-support)).
 
 Every mistake is reported at once, not one per run: the mistakes of every
 collector and every rule, and of every [collector file](#collector-files), in
@@ -2151,17 +2277,22 @@ you are running; its `request.type` values are the request types that binary
 was built with. The schema describes the canonical spelling and is not the last
 word: startup validation also checks what a schema cannot, such as that an
 expression compiles, that `otlp.interval` is at least `1s` — a duration is
-text to a schema — that a duration is not too long to be held, and that a
-[size](#sizes) is under 2^63 bytes. Where a
+text to a schema — that a duration is not too long to be held, that a
+[size](#sizes) is under 2^63 bytes, and that no two rules of a collector are
+[the same rule](#two-rules-that-are-the-same-rule), a schema having no way
+to compare the items of a list by some of their keys. Where a
 schema can tell, it refuses what the exporter refuses: a
 `response.csv.delimiter` of more than one character, a size with a fraction
 and no unit, a block that sets keys beside a missing `enabled`, a
 `value_map` key that is empty or has blanks around it, a label's
 `expression` of nothing but blanks, an entry of `transform.include` or
-`transform.exclude` that is empty or nothing but blanks, a `value` on a
-label of a `python` rule, a `required` label
+`transform.exclude` that is empty or nothing but blanks, a `prometheus`
+rule's `expression` of nothing but blanks, a `value` on a
+label of a `python` rule and such a label without `truncate: true`, a
+`python` rule's `type`, `description`, `required` and `error_mode`, a
+`required` label
 whose `value_map` maps a value to `""`, a rule without a `name` under any
-transform but `prometheus` and `python`, a `grpc` collector that calls
+transform but `prometheus`, a `grpc` collector that calls
 another service than `grpc.health.v1.Health` without `descriptors`, and a
 negative duration, such as `timeout: -5s`, which no key takes. A duration is
 written as Go writes one — `500ms`, `1h30m`, `1.5s` — to the schemas as to
@@ -2201,12 +2332,15 @@ type of the series it passes through, `otlp.compression: ""` is `gzip`, and
 request type, such as `rpc`, `descriptors` or `method`, is left out when it
 is written `""`, and so takes no part in what that type refuses. A rule
 about a key goes by the key being written: a label has a `value` or an
-`expression`, and the one written `""` is the one it does not have. Blanks
+`expression`, and the one written `""` is the one it does not have, and a
+`prometheus` rule has a `name` or an `expression`, neither of which it has
+written `""`. Blanks
 are not the empty string: a key written as nothing but blanks, such as
 `" "`, is text like any other, which the key takes or refuses as it does its
 other values — a label's `value` of blanks is a constant of blanks, and its
 `expression` of blanks is refused, as an entry of blanks in
-`transform.include` or `transform.exclude` is. A key
+`transform.include` or `transform.exclude` and a `prometheus` rule's
+`expression` of blanks are. A key
 that is required is as missing written `""` as left out, and refused by
 both: `transform.type`, `request.type`, a collector's `name`, a label's
 `name`, a rule's `name` under the transforms that need one, a `grpc`

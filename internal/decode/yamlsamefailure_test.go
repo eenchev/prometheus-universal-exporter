@@ -14,6 +14,7 @@ import (
 
 	"github.com/eenchev/prometheus-universal-exporter/internal/fetch"
 	"github.com/eenchev/prometheus-universal-exporter/internal/model"
+	"github.com/eenchev/prometheus-universal-exporter/internal/testutil/alloctest"
 	"gopkg.in/yaml.v3"
 )
 
@@ -204,9 +205,12 @@ func decodeYAMLBeforeLinesWereLeftOut(body []byte) (any, error) {
 // after each of their first sixty lines and in the middle of it, which
 // leaves over a hundred of them open in a sequence or a quoted text; and
 // the documents of the tests above. Only what a refusal is recognised by differs, and only
-// for one that names a line.
+// for one that names a line. Under the race detector a file is cut off
+// after every sixth of those lines, a sixth of the documents, with a sixth
+// of each outcome to find among them.
 func TestYAMLDecodesAndIsRefusedAsBeforeItsLinesWereLeftOut(t *testing.T) {
 	var documents []string
+	every := alloctest.UnlessRaced(1, 6)
 	for _, pattern := range []string{"../../testdata/yaml/*", "../../examples/*.yaml", "../../configs/*.yaml"} {
 		files, err := filepath.Glob(pattern)
 		if err != nil || len(files) == 0 {
@@ -219,7 +223,7 @@ func TestYAMLDecodesAndIsRefusedAsBeforeItsLinesWereLeftOut(t *testing.T) {
 			}
 			documents = append(documents, string(raw))
 			lines := strings.SplitAfter(string(raw), "\n")
-			for cut := 1; cut < len(lines) && cut <= 60; cut++ {
+			for cut := 1; cut < len(lines) && cut <= 60; cut += every {
 				// Cut after the line, and in the middle of it.
 				whole := strings.Join(lines[:cut], "")
 				documents = append(documents, whole, whole[:len(whole)-len(lines[cut-1])/2])
@@ -253,7 +257,7 @@ func TestYAMLDecodesAndIsRefusedAsBeforeItsLinesWereLeftOut(t *testing.T) {
 			t.Fatalf("%q: %v names a line, and is still recognised by it", document, err)
 		}
 	}
-	if decoded < 1000 || refused < 100 || moved < 90 {
+	if decoded < 1000/every || refused < 100/every || moved < 90/every {
 		t.Errorf("%d documents decoded and %d were refused, %d of those recognised otherwise than before: they do not cover all three", decoded, refused, moved)
 	}
 }

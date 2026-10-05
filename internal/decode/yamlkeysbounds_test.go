@@ -16,12 +16,13 @@ import (
 // the body. The error is the one the library made: the first ten problems
 // in its words, and the others counted, which for 100,000 lines are
 // 4,999,949,990 and for the 209,715 of a 1 MiB body 21,990,085,745;
-// recognised by the one problem it is.
+// recognised by the one problem it is. Under the race detector, which no
+// memory is measured under, the key is written 1200 times and 10,000: the
+// second is still a mapping of more keys than the table kept for the next
+// has room for (yamlKeysKept), and 49,995,000 problems, counted and not
+// listed.
 func TestAYAMLKeyWrittenManyTimesIsRefusedInMemoryLinearInTheBody(t *testing.T) {
-	for _, count := range []int{1200, 100000, (1 << 20) / 5} {
-		if raceDetector && count > 100000 {
-			continue
-		}
+	for _, count := range alloctest.UnlessRaced([]int{1200, 100000, (1 << 20) / 5}, []int{1200, 10000}) {
 		body := []byte(strings.Repeat("a: 1\n", count))
 		var err error
 		allocated := alloctest.BytesAtMost(1, 250*uint64(len(body)), func() { _, err = decodeYAML(body) })

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"maps"
 	"net/url"
 	"os"
 	"reflect"
@@ -175,11 +176,12 @@ func checkCSVColumns(x *model.Collector) error {
 			errs = append(errs, fmt.Errorf("collector %q %s reads column %q, but response.csv.header is false, so columns are named by number, from 1; write the column's number, such as \"2\"", x.Name, what, column))
 		}
 	}
-	for _, rule := range x.Metrics {
-		check(fmt.Sprintf("metric %q", rule.Name), rule.Expression)
+	for i := range x.Metrics {
+		rule := &x.Metrics[i]
+		check(transform.RuleName(rule, i), rule.Expression)
 		for _, label := range rule.Labels {
 			if !label.Static() {
-				check(fmt.Sprintf("metric %q label %q", rule.Name, label.Name), label.Expression)
+				check(fmt.Sprintf("%s label %q", transform.RuleName(rule, i), label.Name), label.Expression)
 			}
 		}
 	}
@@ -320,22 +322,174 @@ func checkGraphiteResponse(x *model.Collector) error {
 
 // validateMetricRules checks each metric rule and fills in its defaults. It
 // reports the mistakes of every rule: a rule's own settings stop that rule at
-// the first, and its expressions are then all checked (CheckMetricRule).
+// the first, its expressions are then all checked (CheckMetricRuleAt), and a
+// python rule that passes both is told everything it says that such a rule
+// does not take (checkPythonRule). A prometheus rule that passes them all
+// must still say which metrics it is about (checkPrometheusRuleSelects). The
+// rules that pass all of that are then held against each other: no two of
+// them may be the same rule (checkRulesDiffer).
 func validateMetricRules(c *model.Config, x *model.Collector) error {
 	var errs []error
+	sound := make([]bool, len(x.Metrics))
 	for i := range x.Metrics {
-		errs = append(errs, validateMetricRule(x, &x.Metrics[i]))
+		err := validateMetricRule(x, i)
+		if err == nil {
+			err = checkPrometheusRuleSelects(x, i)
+		}
+		sound[i] = err == nil
+		errs = append(errs, err)
 	}
 	errs = append(errs, transform.CheckLabelValueMapsAgree(x))
+	errs = append(errs, checkRulesDiffer(x, sound)...)
 	return model.JoinProblems(errs...)
 }
 
-// validateMetricRule checks one metric rule and fills in its defaults.
-func validateMetricRule(x *model.Collector, r *model.MetricRule) error {
+// checkRulesDiffer refuses two rules of a collector that are the same rule:
+// alike in everything that decides which series a rule makes and of what.
+// Each then makes every series the other makes, of one name and one set of
+// labels, and the scrape fails on the first of them, `validation failed:
+// duplicate metric series "up"`, on every scrape: a mistake of the
+// configuration, a rule pasted twice, reported as a failure of the scrape
+// for as long as it runs.
+//
+// Two rules are the same rule when they are alike in
+//
+//   - name, expression and items, each as written, "" being the key left
+//     out;
+//   - their labels: the same names, each with the same value or the same
+//     expression (ruleLabels);
+//   - value_map and time_format, which say which texts the rule reads a
+//     value from.
+//
+// The last are compared because two rules that differ in them need not make
+// the same series: a rule reads no value from a text its value_map does not
+// hold or its time_format does not fit, so rules alike but for those can
+// each read what the other cannot, a field that is "up" or a number, a time
+// written one way or another, and a scrape gets the one series.
+//
+// What else a rule says changes the value or the help text of its series, or
+// what is done when it has none, and never which series it is: scale and
+// time_zone, description, required and error_mode, and a label's required
+// and truncate. Two rules that differ only in those are the same rule, as
+// are two that differ in nothing. A label's value_map is found by the
+// rule's name, so rules of one name share it (CheckLabelValueMapsAgree), and
+// a type is one for a name (checkMetricFamilies): neither can tell two such
+// rules apart.
+//
+// A python rule makes no series, the script does: two alike name one of the
+// script's twice, which changes nothing, and load.
+//
+// The comparison is of what is written. Two expressions that mean the same
+// and are written differently are two rules to it, and so are a prometheus
+// rule without an expression, which matches the metric of its name, and one
+// whose expression is that name anchored: they load, and fail the scrape as
+// they did.
+//
+// Only rules the checks of a rule take, sound, are compared, so a rule those
+// refuse is refused in the words it was, and is told of its copy once it
+// loads that far. Each rule that repeats an earlier one is reported against
+// the first of its kind, both named by their places among the collector's,
+// counted from 1 as CheckLabelValueMapsAgree counts them.
+func checkRulesDiffer(x *model.Collector, sound []bool) []error {
+	if x.Transform.Type == "python" {
+		return nil
+	}
+	// Rules alike in the four texts are few, and only those have their
+	// labels and value_maps compared.
+	type texts struct{ name, expression, items, timeFormat string }
+	var errs []error
+	alike := map[texts][]int{}
+	for i := range x.Metrics {
+		if !sound[i] {
+			continue
+		}
+		r := &x.Metrics[i]
+		key := texts{r.Name, r.Expression, r.Items, r.TimeFormat}
+		first := slices.IndexFunc(alike[key], func(earlier int) bool {
+			other := &x.Metrics[earlier]
+			return maps.Equal(r.ValueMap, other.ValueMap) && slices.EqualFunc(ruleLabels(x, r), ruleLabels(x, other), func(a, b model.LabelRule) bool {
+				return a.Name == b.Name && a.Value == b.Value && a.Expression == b.Expression
+			})
+		})
+		if first < 0 {
+			alike[key] = append(alike[key], i)
+			continue
+		}
+		of := fmt.Sprintf("of metric %q", r.Name)
+		if r.Name == "" {
+			of = fmt.Sprintf("of the metrics that match %q", r.Expression)
+		}
+		errs = append(errs, fmt.Errorf("collector %q metrics rule %d and rule %d are the same rule %s: alike in name, expression, items and labels, each makes every series the other makes, and a scrape that has a series twice fails, as a duplicate metric series; take one of the two out, or tell their series apart by a label, as with a static label that has another value in each", x.Name, alike[key][first]+1, i+1, of))
+	}
+	return errs
+}
+
+// ruleLabels is a rule's labels as checkRulesDiffer compares them: in the
+// order of their names, since a series has a label by its name wherever the
+// rule writes it, so that two rules whose labels are written in another
+// order are the same rule. Labels of one name stay in the order they are
+// written in, the last of them being the one a series gets.
+//
+// A prometheus rule's label reads a label of the series the rule passes on,
+// which a label written before it may have set: with labels a, read from
+// b, and b, a constant, a is the target's b when a is written first and the
+// constant when b is. Where a label of such a rule reads one the rule sets
+// under another name, the order decides the series, and the labels are
+// compared as they are written.
+func ruleLabels(x *model.Collector, r *model.MetricRule) []model.LabelRule {
+	if x.Transform.Type == "prometheus" {
+		for _, label := range r.Labels {
+			if !label.Static() && label.Expression != label.Name && slices.ContainsFunc(r.Labels, func(other model.LabelRule) bool { return other.Name == label.Expression }) {
+				return r.Labels
+			}
+		}
+	}
+	labels := slices.Clone(r.Labels)
+	slices.SortStableFunc(labels, func(a, b model.LabelRule) int { return strings.Compare(a.Name, b.Name) })
+	return labels
+}
+
+// checkPrometheusRuleSelects refuses the rule at index of a prometheus
+// collector's metrics that has neither a name nor an expression. Such a rule
+// passes on the metrics whose names its expression matches, or, without an
+// expression, the metric its name names; with neither, the pattern it was
+// matched by came to ^$ (transform.applyPrometheusTransform,
+// decode.prometheusKeeps), which is no metric's name. The rule loaded and
+// selected nothing by construction: being required unless it says
+// otherwise, it was reported as missing on every scrape, `metric "" is not
+// in the response`, a mistake of the configuration told as the target's;
+// with required: false nothing was ever said. Whatever else it set — a
+// type, a description, labels — applied to no series.
+//
+// A key written "" is the key left out, so name: "" and expression: "" are
+// neither. A name or an expression of nothing but blanks is refused before
+// this, as no metric name and as no pattern (transform.CheckMetricRule).
+//
+// The rule has no name to be named by, so the error says which rule of the
+// collector it is, counted from 1 as CheckLabelValueMapsAgree counts them.
+// It runs after every check that was there, so a rule those refuse is
+// refused in the words it was.
+func checkPrometheusRuleSelects(x *model.Collector, index int) error {
+	if r := x.Metrics[index]; x.Transform.Type != "prometheus" || r.Name != "" || r.Expression != "" {
+		return nil
+	}
+	return fmt.Errorf("collector %q metrics rule %d has neither a name nor an expression, and a prometheus rule needs one of them to say which of the target's metrics it passes on: an expression, a regular expression matched against a metric's name as the target gives it, anywhere in it, to match metrics by, or a name, to match the metric of that name; with neither it matches no metric, so write one, as in expression: '^node_' or name: up, or expression: '.*' for a rule about every metric, or take the rule out", x.Name, index+1)
+}
+
+// validateMetricRule checks one metric rule, the one at index of the
+// collector's metrics, and fills in its defaults. Its messages name the rule
+// as transform.RuleWhere does: by its metric name, or, when it has no name
+// to be named by, by its place among the collector's rules.
+func validateMetricRule(x *model.Collector, index int) error {
+	r, where := &x.Metrics[index], transform.RuleWhere(x, index)
+	// Whether the rule wrote a type and an error_mode is asked before their
+	// defaults are filled in, after which a key left out reads as one that
+	// was written (checkPythonRule).
+	wroteType, wroteErrorMode := r.Type != "", r.ErrorMode != ""
 	if r.ErrorMode == "" {
 		r.ErrorMode = model.ErrorModeLog
 	}
-	if err := normalizeErrorPolicy(x.Name, fmt.Sprintf("metric %q error_mode", r.Name), &r.ErrorMode); err != nil {
+	if err := normalizeErrorPolicy(x.Name, transform.RuleName(r, index)+" error_mode", &r.ErrorMode); err != nil {
 		return err
 	}
 	// A prometheus transform's rule without a type keeps the type of
@@ -353,26 +507,28 @@ func validateMetricRule(x *model.Collector, r *model.MetricRule) error {
 		// expose; a rule reading one number would expose a histogram
 		// with a single plain sample, which no parser accepts.
 		if x.Transform.Type != "prometheus" {
-			return fmt.Errorf("collector %q metric %q has type %s, which only a prometheus transform can give, passing through a %s that has its buckets or quantiles; a %s rule reads one value, so use gauge, counter or untyped", x.Name, r.Name, r.Type, r.Type, x.Transform.Type)
+			return fmt.Errorf("%s has type %s, which only a prometheus transform can give, passing through a %s that has its buckets or quantiles; a %s rule reads one value, so use gauge, counter or untyped", where, r.Type, r.Type, x.Transform.Type)
 		}
 	default:
-		return fmt.Errorf("collector %q metric %q has invalid type %q", x.Name, r.Name, r.Type)
+		return fmt.Errorf("%s has invalid type %q", where, r.Type)
 	}
+	// The rule has no name to be named by, so where says which rule of the
+	// collector it is.
 	if strings.TrimSpace(r.Name) == "" && x.Transform.Type != "prometheus" && x.Transform.Type != "python" {
-		return fmt.Errorf("collector %q has a metric without a name", x.Name)
+		return fmt.Errorf("%s has no name", where)
 	}
 	if strings.TrimSpace(r.Expression) == "" && x.Transform.Type != "python" && x.Transform.Type != "prometheus" {
-		return fmt.Errorf("collector %q metric %q has no expression", x.Name, r.Name)
+		return fmt.Errorf("%s has no expression", where)
 	}
 	for _, label := range r.Labels {
 		if strings.TrimSpace(label.Name) == "" {
-			return fmt.Errorf("collector %q metric %q has a label without a name", x.Name, r.Name)
+			return fmt.Errorf("%s has a label without a name", where)
 		}
 		if !namePattern.MatchString(label.Name) {
-			return fmt.Errorf("collector %q metric %q has invalid label name %q", x.Name, r.Name, label.Name)
+			return fmt.Errorf("%s has invalid label name %q", where, label.Name)
 		}
 		if err := model.CheckLabelName(label.Name); err != nil {
-			return fmt.Errorf("collector %q metric %q: %w", x.Name, r.Name, err)
+			return fmt.Errorf("%s: %w", where, err)
 		}
 		// An expression written as nothing but blanks is neither the key left
 		// out, which only "" is, nor anything to read a label with. The label
@@ -380,24 +536,27 @@ func validateMetricRule(x *model.Collector, r *model.MetricRule) error {
 		// was never exported, while a csv rule read the column of that name
 		// and a prometheus rule the source label of that name.
 		if label.Expression != "" && strings.TrimSpace(label.Expression) == "" {
-			return fmt.Errorf("collector %q metric %q label %q expression %q is nothing but blanks; write the expression that reads the label from the response, or leave expression out and set value for a constant", x.Name, r.Name, label.Name, label.Expression)
+			return fmt.Errorf("%s label %q expression %q is nothing but blanks; write the expression that reads the label from the response, or leave expression out and set value for a constant", where, label.Name, label.Expression)
 		}
 		hasValue, hasExpression := label.Value != "", strings.TrimSpace(label.Expression) != ""
 		switch {
 		case hasValue && hasExpression:
-			return fmt.Errorf("collector %q metric %q label %q sets both value and expression; set value for a static label, or expression to read it from the response", x.Name, r.Name, label.Name)
+			return fmt.Errorf("%s label %q sets both value and expression; set value for a static label, or expression to read it from the response", where, label.Name)
 		case !hasValue && !hasExpression:
-			return fmt.Errorf("collector %q metric %q label %q needs a value, for a static label, or an expression, to read it from the response", x.Name, r.Name, label.Name)
+			return fmt.Errorf("%s label %q needs a value, for a static label, or an expression, to read it from the response", where, label.Name)
 		case hasValue && label.Required:
-			return fmt.Errorf("collector %q metric %q label %q has a static value, so it cannot be required; its value is always there", x.Name, r.Name, label.Name)
+			return fmt.Errorf("%s label %q has a static value, so it cannot be required; its value is always there", where, label.Name)
 		case label.Required && x.Transform.Type == "python":
-			return fmt.Errorf("collector %q metric %q label %q cannot be required: a python transform's labels come from its script, not from label expressions", x.Name, r.Name, label.Name)
+			return fmt.Errorf("%s label %q cannot be required: a python transform's labels come from its script, not from label expressions", where, label.Name)
 		}
 	}
-	if err := checkPythonRuleLabels(x, r); err != nil {
+	if err := checkPythonRuleLabels(x, r, where); err != nil {
 		return err
 	}
-	return transform.CheckMetricRule(x, r)
+	if err := transform.CheckMetricRuleAt(x, index); err != nil {
+		return err
+	}
+	return checkPythonRule(x, r, where, wroteType, wroteErrorMode)
 }
 
 // checkPythonRuleLabels refuses a constant on a label of a python rule. The
@@ -405,17 +564,78 @@ func validateMetricRule(x *model.Collector, r *model.MetricRule) error {
 // and the one thing its label does is name a label of the script's series
 // to cut with truncate: true (transform.truncateLabels). A value there was
 // accepted and did nothing: the series did not get the constant, with
-// nothing said. A constant for every series is transform.labels.
-func checkPythonRuleLabels(x *model.Collector, r *model.MetricRule) error {
+// nothing said. A constant for every series is transform.labels. where names
+// the rule.
+func checkPythonRuleLabels(x *model.Collector, r *model.MetricRule, where string) error {
 	if x.Transform.Type != "python" {
 		return nil
 	}
 	for _, label := range r.Labels {
 		if label.Value != "" {
-			return fmt.Errorf("collector %q metric %q label %q sets value, which a python rule's label does not take: the script sets the labels of its series itself, with metric(..., labels={...}), and a rule's label only names one of them to cut with truncate: true; for a constant on every series of the collector, set transform.labels", x.Name, r.Name, label.Name)
+			return fmt.Errorf("%s label %q sets value, which a python rule's label does not take: the script sets the labels of its series itself, with metric(..., labels={...}), and a rule's label only names one of them to cut with truncate: true; for a constant on every series of the collector, set transform.labels", where, label.Name)
 		}
 	}
 	return nil
+}
+
+// checkPythonRule refuses what a rule of a python collector says that such a
+// rule does not take. The script makes the series, and gives each its type
+// and its help text and fails the scrape itself; a rule makes none. It names
+// one of the script's: its name is that series' name, by which a debug
+// probe's report lists the rule when the script made no such series
+// (writeTransform in the exporter) and by which its labels are found,
+// and each of its labels names a label of that series to cut with
+// truncate: true (transform.truncateLabels). Everything else a rule can say
+// was accepted there and did nothing, with nothing said:
+//
+//   - type and description, which are the script's to give: a rule saying
+//     counter left the series the gauge the script made it;
+//   - required and error_mode, which are about a value the rule fails to
+//     read: {name: up, error_mode: fail} did not fail a scrape whose script
+//     made no up;
+//   - a rule without a name, which names no series, so that its labels cut
+//     nothing whatever truncate said;
+//   - a label without truncate: true, which cuts nothing: its expression,
+//     which the check of a label requires, is not read, so an author who
+//     wrote one for a label of the series got no such label.
+//
+// Each is refused, saying where the script says it instead, and all of a
+// rule's are reported together, the rule named by where: by its place among
+// the collector's when it is the name that it lacks. wroteType and wroteErrorMode say the rule
+// wrote those keys, which their defaults have since filled in; a text key
+// written "" is the key left out, here as everywhere, and required is
+// written when it is there, true or false, since the rule holds it apart
+// from the key left out.
+//
+// It runs last, after every check that was there before it, so a rule those
+// refuse is refused in the words it was. What is left that a python rule may
+// say and nothing reads is its expression, as the documentation says.
+func checkPythonRule(x *model.Collector, r *model.MetricRule, where string, wroteType, wroteErrorMode bool) error {
+	if x.Transform.Type != "python" {
+		return nil
+	}
+	var errs []error
+	if r.Name == "" {
+		errs = append(errs, fmt.Errorf("%s has no name, which a python rule needs: the rule makes no series and only names one of the script's, whose labels it cuts with truncate: true and which a debug probe's report lists when the script made none; write the name the script gives the series, as in metric(\"up\", ...), or take the rule out", where))
+	}
+	if wroteType {
+		errs = append(errs, fmt.Errorf("%s sets type, which a python rule does not take: the script gives each of its series its type, with metric(..., type=\"counter\"), and a series is a gauge when it gives none; say the type in the script and leave type out of the rule", where))
+	}
+	if r.Description != "" {
+		errs = append(errs, fmt.Errorf("%s sets description, which a python rule does not take: the script gives each of its series its help text, with metric(..., help=\"...\"), and a series has none when it gives none; say the help in the script and leave description out of the rule", where))
+	}
+	if r.Required != nil {
+		errs = append(errs, fmt.Errorf("%s sets required, which a python rule does not take: the rule makes no series, so it has no value to miss; a script that cannot do without something fails the scrape itself, with fail(\"...\"), so say it in the script and leave required out of the rule", where))
+	}
+	if wroteErrorMode {
+		errs = append(errs, fmt.Errorf("%s sets error_mode, which a python rule does not take: the rule makes no series, so it has no failure to handle; a script fails the scrape itself, with fail(\"...\"), and error_handling.on_transform_error says what the collector does then, so leave error_mode out of the rule", where))
+	}
+	for _, label := range r.Labels {
+		if !label.Truncate {
+			errs = append(errs, fmt.Errorf("%s label %q does not set truncate: true, which is all a python rule's label does: it names a label of the script's series to cut to limits.max_label_value_length, and its expression is not read; the script sets the labels of its series itself, with metric(..., labels={...}), so set truncate: true on the label or take it out", where, label.Name))
+		}
+	}
+	return model.JoinProblems(errs...)
 }
 
 // validateWebAuthSettings checks the exporter's own basic authentication,

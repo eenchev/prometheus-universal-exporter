@@ -13,6 +13,7 @@ import (
 
 	"github.com/eenchev/prometheus-universal-exporter/internal/fetch"
 	"github.com/eenchev/prometheus-universal-exporter/internal/model"
+	"github.com/eenchev/prometheus-universal-exporter/internal/transform"
 )
 
 // What a collector sets and nothing would use is refused when the
@@ -76,7 +77,8 @@ func checkPlaceholdersAreFilled(x *model.Collector) error {
 			}
 		})
 	}
-	// A rule is named as its other errors name it, a label by its name.
+	// A rule is named as its other errors name it, by its metric name or,
+	// having none, by its place (transform.RuleName), a label by its name.
 	for i := range x.Metrics {
 		rule := &x.Metrics[i]
 		walkStrings(reflect.ValueOf(rule).Elem(), "", func(path, text string) {
@@ -88,7 +90,7 @@ func checkPlaceholdersAreFilled(x *model.Collector) error {
 				_, _ = fmt.Sscanf(m[1], "%d", &index)
 				path = fmt.Sprintf("label %q %s", rule.Labels[index].Name, path[len(m[0]):])
 			}
-			refuse(fmt.Sprintf("metric %q %s", rule.Name, path))
+			refuse(fmt.Sprintf("%s %s", transform.RuleName(rule, i), path))
 		})
 	}
 	return model.JoinProblems(errs...)

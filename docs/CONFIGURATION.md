@@ -740,11 +740,34 @@ Renames are made at once, from the labels as they were before any of them, so
 they never chain: with `a: b` and `b: c`, `b` gets the value `a` had and `c`
 the value `b` had. Two renames to the same label are refused at startup.
 
+A `transform.labels` value replaces a label of the same name that a rule, a
+script or the target gave a series: with `labels: {site: dc1}`, a series a
+rule labelled `site="rack1"` is exported with `site="dc1"`. A value written
+`""` is the label left out, as a key written `""` is the key left out
+([Editor support](#editor-support)): `labels: {site: ""}` adds no label,
+where it used to export `site=""`, and a series that has a `site` of its own
+keeps it.
+
 A `prometheus` transform passing metrics through without `metrics` rules can
 also pick and rename them: `include` and `exclude` are patterns a metric name
 must, or must not, match, and `rename` maps source names to new ones. With
 `metrics` rules, the rules choose and name the metrics, so these three are
 refused at startup there, as on any other transform, rather than ignored.
+
+An entry of `include` or `exclude` is a regular expression, matched anywhere
+in the name the target gives the metric, before `rename` and
+`metrics_prefix`: `^node_` picks the names that start with `node_`, and
+`load` those that have `load` in them. An entry that is the empty string, or
+nothing but blanks, is refused at startup, naming the collector and the key.
+The empty pattern matches every name, so `exclude: [""]` dropped every series
+and `include: [""]` kept every one; a pattern of blanks matches only the
+names that hold those blanks, so `include: ["  "]` exported nothing, with no
+error. Neither is what such an entry was written for — an empty string, or
+one that picked up spaces, a template that filled in nothing. To match every
+name write `'.*'`, and to filter nothing leave the key out; a pattern that
+does mean a blank, which a [UTF-8 name](#utf-8-names) may hold, is written
+`'[ ]'` or `'\x20'`, in single quotes, where YAML leaves the backslash to the
+regular expression.
 
 ### Prefixing a collector's metrics
 
@@ -1008,7 +1031,15 @@ when a rule of the collector names the script's metric and the label:
 `metrics: [{name: up, labels: [{name: note, expression: note, truncate:
 true}]}]` cuts the `note` label of the `up` series the script makes (the
 rule makes no series itself, and its `expression` is not read). Without such
-a rule the script cuts them, or the limit is raised.
+a rule the script cuts them, or the limit is raised. Naming a label to cut is
+all a `python` rule's label does, so one that sets `value` is refused at
+startup: the script's series would not get the constant, and nothing would
+say so. A constant for every series of the collector goes under
+[`transform.labels`](#collector-wide-labels), and one for some of them in the
+script's `metric(..., labels={...})`. A `python` rule's `type` and
+`description` are not given to the script's series either, which have the
+type and the help the script gives them, `gauge` and none when it gives
+neither.
 
 The other limits on a series say the same when a scrape fails for them: more
 labels than `limits.max_labels_per_metric` (20 by default) as `metric "M" has
@@ -1985,7 +2016,11 @@ metric and the label:
   `prometheus` rule are refused;
 - a `prometheus` transform's `rename` targets must be metric names;
   `include`, `exclude` and `rename` apply only to a `prometheus` transform
-  without `metrics` rules;
+  without `metrics` rules, and an entry of `include` or `exclude` is neither
+  the empty string nor [nothing but blanks](#collector-wide-labels);
+- a label of a `python` rule sets no `value`: the script sets its labels
+  itself, and a constant for every series is
+  [`transform.labels`](#collector-wide-labels);
 - `transform.labels` and `rename_labels` must give label names, and two renames
   may not target the same label;
 - no label name, of a rule, `transform.labels`, `rename_labels` or a static
@@ -2122,7 +2157,9 @@ schema can tell, it refuses what the exporter refuses: a
 `response.csv.delimiter` of more than one character, a size with a fraction
 and no unit, a block that sets keys beside a missing `enabled`, a
 `value_map` key that is empty or has blanks around it, a label's
-`expression` of nothing but blanks, a `required` label
+`expression` of nothing but blanks, an entry of `transform.include` or
+`transform.exclude` that is empty or nothing but blanks, a `value` on a
+label of a `python` rule, a `required` label
 whose `value_map` maps a value to `""`, a rule without a `name` under any
 transform but `prometheus` and `python`, a `grpc` collector that calls
 another service than `grpc.health.v1.Health` without `descriptors`, and a
@@ -2130,7 +2167,12 @@ negative duration, such as `timeout: -5s`, which no key takes. A duration is
 written as Go writes one — `500ms`, `1h30m`, `1.5s` — to the schemas as to
 the exporter: a `+` may lead it, and a `-` only a zero (`-0s`); only in an
 `otlp` block with `enabled: false`, which is kept unchecked, do both take a
-negative one. What is written negative is negative however small: `-0.4ns`,
+negative one. Unchecked is of the whole block, to both: switched off, it may
+hold a `compression` that is neither `gzip` nor `none` and a negative
+`max_pending_points` or `unready_after_failures`, as it may an endpoint that
+is no URL, and only what is not of a key's type at all — text for a number, a
+list for text — is refused there. What is written negative is negative
+however small: `-0.4ns`,
 which rounds to zero, is refused by both as `-1ns` is. The longest duration
 is 2^63 - 1 nanoseconds, some 292 years (`2562047h47m16.854775807s`): a
 longer one, such as `2562048h`, is well written, so the schemas take it, and
@@ -2162,9 +2204,9 @@ about a key goes by the key being written: a label has a `value` or an
 `expression`, and the one written `""` is the one it does not have. Blanks
 are not the empty string: a key written as nothing but blanks, such as
 `" "`, is text like any other, which the key takes or refuses as it does its
-other values — a label's `value` of blanks is a constant of blanks, its
-`expression` of blanks is refused, and a pattern of blanks in
-`transform.include` matches the names that have them. A key
+other values — a label's `value` of blanks is a constant of blanks, and its
+`expression` of blanks is refused, as an entry of blanks in
+`transform.include` or `transform.exclude` is. A key
 that is required is as missing written `""` as left out, and refused by
 both: `transform.type`, `request.type`, a collector's `name`, a label's
 `name`, a rule's `name` under the transforms that need one, a `grpc`
@@ -2172,7 +2214,8 @@ collector's `rpc`, a `localfile` collector's `root` and a static target's
 `collector`. What is not text has no empty form: `""` is no duration and no
 size, and both refuse it; and both refuse an empty entry of
 `collector_files`, `request.accept_status`, `request.allowed_targets`,
-`request.denied_targets`, `request.redirect_trusted_hosts` and the Python
+`request.denied_targets`, `request.redirect_trusted_hosts`,
+`transform.include`, `transform.exclude` and the Python
 libraries, and an empty key of a `value_map`, of `request.metadata` and of a
 static target's `params` and `labels`.
 

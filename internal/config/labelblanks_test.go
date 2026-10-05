@@ -16,10 +16,21 @@ import (
 )
 
 // validateMetricRuleBeforeBlankExpressions is validateMetricRule as it was
-// before a label's expression of nothing but blanks was refused, kept as an
-// oracle: every other rule must get from validateMetricRule the verdict, the
-// words and the defaults it got from this.
+// before a label's expression of nothing but blanks, and a constant value on
+// a python rule's label, were refused, kept as an oracle: every other rule
+// must get from validateMetricRule the verdict, the words and the defaults it
+// got from this. It is in two parts, as the check is: the rule's own
+// settings, which stop at the first mistake, and then its expressions.
 func validateMetricRuleBeforeBlankExpressions(x *model.Collector, r *model.MetricRule) error {
+	if err := ruleSettingsBeforeBlankExpressions(x, r); err != nil {
+		return err
+	}
+	return transform.CheckMetricRule(x, r)
+}
+
+// ruleSettingsBeforeBlankExpressions is the first part of the check as it
+// was: everything it said of a rule before it compiled the expressions.
+func ruleSettingsBeforeBlankExpressions(x *model.Collector, r *model.MetricRule) error {
 	if r.ErrorMode == "" {
 		r.ErrorMode = model.ErrorModeLog
 	}
@@ -67,19 +78,32 @@ func validateMetricRuleBeforeBlankExpressions(x *model.Collector, r *model.Metri
 			return fmt.Errorf("collector %q metric %q label %q cannot be required: a python transform's labels come from its script, not from label expressions", x.Name, r.Name, label.Name)
 		}
 	}
-	return transform.CheckMetricRule(x, r)
+	return nil
 }
+
+// refusedAnew is what the check refuses a rule for that the check as it was
+// did not.
+type refusedAnew int
+
+const (
+	asBefore refusedAnew = iota
+	forBlanks
+	forAPythonValue
+)
 
 // checkedAsBefore puts one rule through the loader's check and through the
 // check as it was, each with a copy of its own, and fails unless the two
 // agree: on the error, word for word, and on the rule the check leaves, with
-// its defaults filled in. The one case they may differ in is a rule the
-// check gets as far as a label whose expression is nothing but blanks, which
-// it must refuse in its own words whatever the check as it was said; it
-// reports whether the rule was one. How far the check gets is asked of the
+// its defaults filled in. They may differ in two cases, and it reports
+// which the rule was. One is a rule the check gets as far as a label whose
+// expression is nothing but blanks, which it must refuse in its own words
+// whatever the check as it was said. How far the check gets is asked of the
 // check as it was: with neither a value nor an expression, that label is
 // the one it says needs one, unless something before it refuses the rule.
-func checkedAsBefore(t *testing.T, x *model.Collector, rule model.MetricRule) bool {
+// The other is a python rule whose settings the check as it was found
+// nothing wrong with and one of whose labels sets a value: the check must
+// refuse it for the first such label, before it looks at the expressions.
+func checkedAsBefore(t *testing.T, x *model.Collector, rule model.MetricRule) refusedAnew {
 	t.Helper()
 	now, before := rule, rule
 	now.Labels, before.Labels = slices.Clone(rule.Labels), slices.Clone(rule.Labels)
@@ -97,13 +121,25 @@ func checkedAsBefore(t *testing.T, x *model.Collector, rule model.MetricRule) bo
 			if err == nil || err.Error() != want {
 				t.Errorf("%s rule %+v: %v, want %s", x.Transform.Type, rule, err, want)
 			}
-			return true
+			return forBlanks
+		}
+	}
+	if x.Transform.Type == "python" {
+		settings := rule
+		settings.Labels = slices.Clone(rule.Labels)
+		constant := slices.IndexFunc(rule.Labels, func(label model.LabelRule) bool { return label.Value != "" })
+		if constant >= 0 && ruleSettingsBeforeBlankExpressions(x, &settings) == nil {
+			want := fmt.Sprintf("collector %q metric %q label %q sets value, which a python rule's label does not take: the script sets the labels of its series itself, with metric(..., labels={...}), and a rule's label only names one of them to cut with truncate: true; for a constant on every series of the collector, set transform.labels", x.Name, rule.Name, rule.Labels[constant].Name)
+			if err == nil || err.Error() != want || !reflect.DeepEqual(now, settings) {
+				t.Errorf("python rule %+v: %v, leaving %+v\n want %s, leaving %+v", rule, err, now, want, settings)
+			}
+			return forAPythonValue
 		}
 	}
 	if (err == nil) != (was == nil) || err != nil && err.Error() != was.Error() || !reflect.DeepEqual(now, before) {
 		t.Errorf("%s rule %+v:\n now %v, leaving %+v\n was %v, leaving %+v", x.Transform.Type, rule, err, now, was, before)
 	}
-	return false
+	return asBefore
 }
 
 // Refusing a label's expression of nothing but blanks changes the verdict on
@@ -150,8 +186,8 @@ func TestOnlyALabelExpressionOfBlanksIsRefusedAnew(t *testing.T) {
 				for _, rule := range x.Metrics {
 					rules++
 					labels += len(rule.Labels)
-					if checkedAsBefore(t, x, rule) {
-						t.Errorf("%s: collector %q metric %q has a label whose expression is nothing but blanks", path, x.Name, rule.Name)
+					if checkedAsBefore(t, x, rule) != asBefore {
+						t.Errorf("%s: collector %q metric %q has a label whose expression is nothing but blanks, or a python rule's label with a value", path, x.Name, rule.Name)
 					}
 				}
 			}
@@ -199,7 +235,7 @@ func TestOnlyALabelExpressionOfBlanksIsRefusedAnew(t *testing.T) {
 							{Name: "", Items: shape.items, Expression: shape.expression, Labels: list},
 						} {
 							tried++
-							if checkedAsBefore(t, x, rule) {
+							if checkedAsBefore(t, x, rule) == forBlanks {
 								refused++
 							}
 						}

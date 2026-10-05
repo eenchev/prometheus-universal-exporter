@@ -393,6 +393,15 @@ in the schema — and a rule about a key is made of `writtenKey`, which goes by
 the key being written, not by its being there. A test of the build with every
 request type fails until a constrained key has its row.
 
+A block that `enabled` switches on is kept unchecked while it is off, by the
+schemas as by the exporter. A rule about the value of one of its keys
+therefore goes in the block's `then`, which holds with `enabled: true`
+(`otlpSchemaRule`), and not on the key; a keyword the key's type gives it,
+such as a whole number's `minimum`, is taken off the key by `nil` in its
+rule. `test/repository/schemaloader_otlpoff_test.go` puts every key of the
+`otlp` block through both, switched off and on, and fails for a key its
+table lacks.
+
 A key written as nothing but blanks is not the key written `""`: it is text,
 which the key takes or refuses. What the schema and the exporter say of a
 key both ways is the table of `test/repository/schemablanks_http_test.go`,

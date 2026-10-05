@@ -394,7 +394,28 @@ func validateMetricRule(x *model.Collector, r *model.MetricRule) error {
 			return fmt.Errorf("collector %q metric %q label %q cannot be required: a python transform's labels come from its script, not from label expressions", x.Name, r.Name, label.Name)
 		}
 	}
+	if err := checkPythonRuleLabels(x, r); err != nil {
+		return err
+	}
 	return transform.CheckMetricRule(x, r)
+}
+
+// checkPythonRuleLabels refuses a constant on a label of a python rule. The
+// script makes the series and sets their labels itself; a rule makes none,
+// and the one thing its label does is name a label of the script's series
+// to cut with truncate: true (transform.truncateLabels). A value there was
+// accepted and did nothing: the series did not get the constant, with
+// nothing said. A constant for every series is transform.labels.
+func checkPythonRuleLabels(x *model.Collector, r *model.MetricRule) error {
+	if x.Transform.Type != "python" {
+		return nil
+	}
+	for _, label := range r.Labels {
+		if label.Value != "" {
+			return fmt.Errorf("collector %q metric %q label %q sets value, which a python rule's label does not take: the script sets the labels of its series itself, with metric(..., labels={...}), and a rule's label only names one of them to cut with truncate: true; for a constant on every series of the collector, set transform.labels", x.Name, r.Name, label.Name)
+		}
+	}
+	return nil
 }
 
 // validateWebAuthSettings checks the exporter's own basic authentication,

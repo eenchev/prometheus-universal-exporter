@@ -61,7 +61,7 @@
                 "boolean"
               ]
             },
-            "description": "Added to every metric the target produces, without overwriting a label the collector extracted. static_target is set by the endpoint, and job and instance by Prometheus when it scrapes the endpoint, so none of the three can be used.",
+            "description": "Added to every metric the target produces, without overwriting a label the collector extracted. A label written \"\" is the label left out. static_target is set by the endpoint, and job and instance by Prometheus when it scrapes the endpoint, so none of the three can be used.",
             "propertyNames": {
               "minLength": 1,
               "not": {

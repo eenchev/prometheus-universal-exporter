@@ -203,6 +203,14 @@ func onlyBlanks() map[string]any {
 	return map[string]any{"type": "string", "pattern": "^[" + surroundingBlank + "]+$"}
 }
 
+// filterEntry is what an entry of transform.include or transform.exclude may
+// not be: the empty string, and blanks alone. The key keeps the types it
+// takes, as a label's expression does under onlyBlanks: an unquoted 1 is the
+// pattern it spells.
+func filterEntry() map[string]any {
+	return map[string]any{"minLength": 1, "not": onlyBlanks()}
+}
+
 // schemaFor describes t, found at path, with rules adding what the type
 // cannot say (configSchemaRules, staticTargetsSchemaRules).
 func schemaFor(t reflect.Type, path string, rules map[string]map[string]any) map[string]any {
@@ -248,7 +256,13 @@ func schemaFor(t reflect.Type, path string, rules map[string]map[string]any) map
 		}
 	}
 	if rule, ok := rules[path]; ok {
+		// A rule's nil takes away what the type said: the least of a whole
+		// number that a rule of the block around it sets instead.
 		for key, value := range rule {
+			if value == nil {
+				delete(schema, key)
+				continue
+			}
 			schema[key] = value
 		}
 		if _, restricted := rule["enum"]; restricted {
@@ -404,11 +418,14 @@ func configSchemaRules() map[string]map[string]any {
 		"web.basic_auth.password_file":               {"description": "Read the password from this file instead of password, such as a mounted Secret. Read again when it changes."},
 		"collectors[].name_escaping":                 {"enum": optionalEnum([]string{transform.NameEscapingFail, transform.NameEscapingUnderscores, transform.NameEscapingValues}), "description": "What to do with a metric or label name that is not a classic Prometheus name, such as http.server.duration: fail the scrape (the default), replace what a classic name may not have with underscores, or use Prometheus's reversible values encoding (U__…). See docs/CONFIGURATION.md#utf-8-names."},
 		"collectors[].response.charset":              {"description": "The encoding of the response when the target does not declare it or declares it wrongly, and of local files: a WHATWG name such as windows-1252, iso-8859-2, windows-1251 or shift_jis. See docs/CONFIGURATION.md#character-encodings."},
-		"otlp.max_pending_points":                    {"description": "The most data points kept waiting for export while the endpoint fails; past it the oldest are dropped and counted. Defaults to 100000."},
-		"otlp.unready_after_failures":                {"description": "Answer /ready with 503 after this many failed exports in a row, until one gets through. 0, the default, never does: an exporter whose exports fail still answers probes."},
+		"otlp.max_pending_points":                    {"minimum": nil, "description": "The most data points kept waiting for export while the endpoint fails; past it the oldest are dropped and counted. Defaults to 100000."},
+		"otlp.unready_after_failures":                {"minimum": nil, "description": "Answer /ready with 503 after this many failed exports in a row, until one gets through. 0, the default, never does: an exporter whose exports fail still answers probes."},
 		"otlp.probe_attributes":                      {"description": "Add collector and target attributes to the points a probe queues, so probes of different targets or collectors answering the same series are exported apart. Off, the default, the later probe's point replaces the earlier's."},
 		"collectors[].request.tls.server_name":       {"description": "The name the target's certificate is checked against, and sent as SNI, when the target is addressed by something else, such as an IP address. Unset, the target's host."},
-		"otlp.compression":                           {"enum": optionalEnum([]string{model.OTLPCompressionGzip, model.OTLPCompressionNone}), "description": "Compression of the export requests. Defaults to gzip."},
+		// A disabled block is unchecked, so compression takes any text there
+		// and the two numbers above any whole number, and otlpSchemaRule
+		// holds them to their values in a block that is switched on.
+		"otlp.compression": {"description": "Compression of the export requests: gzip, the default, or none."},
 		// A disabled block may hold any duration, so the two keys take a
 		// signed one, and otlpSchemaRule refuses a negative one of a block
 		// that is switched on.
@@ -435,19 +452,41 @@ func configSchemaRules() map[string]map[string]any {
 		// entry of nothing at all, "", is refused here as there.
 		"collectors[].request.allowed_targets[]": {"minLength": 1, "not": map[string]any{"type": "string", "pattern": fetch.OutsideASCIIPattern}},
 		"collectors[].request.denied_targets[]":  {"minLength": 1, "not": map[string]any{"type": "string", "pattern": fetch.OutsideASCIIPattern}},
+		// An entry of include or exclude is neither empty nor blanks alone
+		// (transform.checkFilterEntry): the empty regular expression matches
+		// every name, and one of blanks only the names that hold them. An
+		// entry is not a key, so "" is not one left out; a value of
+		// transform.labels is one, the label left out
+		// (transform.applyCollectorLabels).
+		"collectors[].transform.include":   {"description": "prometheus without metrics rules: keep only the metrics whose name one of these regular expressions matches, anywhere in the name as the target gives it. Left out, every metric is kept. An entry is not empty and not blanks alone: '.*' matches every name."},
+		"collectors[].transform.include[]": filterEntry(),
+		"collectors[].transform.exclude":   {"description": "prometheus without metrics rules: drop the metrics whose name one of these regular expressions matches, anywhere in the name as the target gives it, also when include matches it. An entry is not empty and not blanks alone: '.*' matches every name."},
+		"collectors[].transform.exclude[]": filterEntry(),
+		"collectors[].transform.labels":    {"description": "Constant labels given to every metric the collector exports, over a label of the same name a rule gave. A value written \"\" is the label left out. See docs/CONFIGURATION.md#collector-wide-labels."},
 	}
 }
 
 // otlpSchemaRule is the rule of the otlp block: one that enabled switches on
 // (enabledSwitchRule), whose timeout and interval, once it is on, are not
-// negative, as the exporter checks them then (validateOTLP). Switched off,
-// the block is kept unchecked by both, and the keys' own pattern takes any
-// duration.
+// negative, whose compression is then one of its values, and whose
+// max_pending_points and unready_after_failures are then not negative, as
+// the exporter checks them then (validateOTLP). Switched off, the block is
+// kept unchecked by both: the keys' own pattern takes any duration, and the
+// keys themselves any compression and any whole number. Compression was
+// held to its values whatever the switch said, and the two numbers to zero
+// and above, so an editor flagged in a block kept for later what the
+// exporter loads. What is not of a key's type — text for a number, a list
+// for text — is no value of the key, switched off or on, to both.
 func otlpSchemaRule() map[string]any {
 	rule := enabledSwitchRule(reflect.TypeOf(model.OTLPConfig{}), "OTLP export of probe results, self-metrics and static targets with export_via_otlp. Off until enabled is true; a block that sets any other key must say enabled, true or false. See docs/OTLP.md.")
 	notNegative := map[string]any{"pattern": durationPattern}
+	fromZero := map[string]any{"minimum": 0}
 	rule["if"] = map[string]any{"properties": map[string]any{"enabled": map[string]any{"const": true}}, "required": []string{"enabled"}}
-	rule["then"] = map[string]any{"properties": map[string]any{"timeout": notNegative, "interval": notNegative}}
+	rule["then"] = map[string]any{"properties": map[string]any{
+		"timeout": notNegative, "interval": notNegative,
+		"compression":        map[string]any{"enum": optionalEnum([]string{model.OTLPCompressionGzip, model.OTLPCompressionNone})},
+		"max_pending_points": fromZero, "unready_after_failures": fromZero,
+	}}
 	return rule
 }
 
@@ -477,13 +516,20 @@ func metricRuleSchemaRule() map[string]any {
 // python, whose script names them. A name written "" is no name, to both,
 // so it is the rule and not the key's pattern that refuses it, and only
 // where a name is needed.
+//
+// A label of a python rule sets no value, as the exporter refuses one
+// (checkPythonRuleLabels): the script sets its labels itself. A value
+// written "" is the key left out there as everywhere.
 func collectorSchemaRule() map[string]any {
 	namesItsOwn := []string{"prometheus", "python"}
+	python := map[string]any{"properties": map[string]any{"transform": map[string]any{"properties": map[string]any{"type": map[string]any{"const": "python"}}, "required": []string{"type"}}}, "required": []string{"transform"}}
+	noValue := map[string]any{"properties": map[string]any{"metrics": map[string]any{"items": map[string]any{"properties": map[string]any{"labels": map[string]any{"items": map[string]any{"not": writtenKey("value")}}}}}}}
 	return map[string]any{
 		"required":    []string{"name", "request", "transform"},
 		"description": "How to reach a kind of target and turn its response into metrics.",
 		"if":          map[string]any{"properties": map[string]any{"transform": map[string]any{"properties": map[string]any{"type": map[string]any{"not": map[string]any{"enum": namesItsOwn}}}}}},
 		"then":        map[string]any{"properties": map[string]any{"metrics": map[string]any{"items": writtenKey("name")}}},
+		"allOf":       []any{map[string]any{"if": python, "then": noValue}},
 	}
 }
 
@@ -551,7 +597,7 @@ func staticTargetsSchemaRules() map[string]map[string]any {
 		},
 		"targets[].labels": {
 			"propertyNames": map[string]any{"minLength": 1, "not": map[string]any{"enum": []string{StaticTargetLabel, "job", "instance"}}},
-			"description":   "Added to every metric the target produces, without overwriting a label the collector extracted. static_target is set by the endpoint, and job and instance by Prometheus when it scrapes the endpoint, so none of the three can be used.",
+			"description":   "Added to every metric the target produces, without overwriting a label the collector extracted. A label written \"\" is the label left out. static_target is set by the endpoint, and job and instance by Prometheus when it scrapes the endpoint, so none of the three can be used.",
 		},
 		"targets[].export_via_otlp":              {"description": "Also deliver this target's results over OTLP, on otlp.interval, besides serving them on the static targets endpoint. Needs otlp.enabled. Defaults to false."},
 		"targets[].request":                      {"description": "Overrides of the collector's request for this target, as the /probe parameters override it for a probe."},

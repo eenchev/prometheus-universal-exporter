@@ -13,6 +13,53 @@
       "description": "The collectors. A probe names one with its collector parameter. A name must be unique across this list and every collector file.",
       "items": {
         "additionalProperties": false,
+        "allOf": [
+          {
+            "if": {
+              "properties": {
+                "transform": {
+                  "properties": {
+                    "type": {
+                      "const": "python"
+                    }
+                  },
+                  "required": [
+                    "type"
+                  ]
+                }
+              },
+              "required": [
+                "transform"
+              ]
+            },
+            "then": {
+              "properties": {
+                "metrics": {
+                  "items": {
+                    "properties": {
+                      "labels": {
+                        "items": {
+                          "not": {
+                            "properties": {
+                              "value": {
+                                "not": {
+                                  "const": ""
+                                }
+                              }
+                            },
+                            "required": [
+                              "value"
+                            ]
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        ],
         "description": "How to reach a kind of target and turn its response into metrics.",
         "if": {
           "properties": {
@@ -1064,7 +1111,13 @@
             "additionalProperties": false,
             "properties": {
               "exclude": {
+                "description": "prometheus without metrics rules: drop the metrics whose name one of these regular expressions matches, anywhere in the name as the target gives it, also when include matches it. An entry is not empty and not blanks alone: '.*' matches every name.",
                 "items": {
+                  "minLength": 1,
+                  "not": {
+                    "pattern": "^[\\t\\n\\v\\f\\r \\x85\\xA0  - \u2028\u2029  　]+$",
+                    "type": "string"
+                  },
                   "type": [
                     "string",
                     "number",
@@ -1074,7 +1127,13 @@
                 "type": "array"
               },
               "include": {
+                "description": "prometheus without metrics rules: keep only the metrics whose name one of these regular expressions matches, anywhere in the name as the target gives it. Left out, every metric is kept. An entry is not empty and not blanks alone: '.*' matches every name.",
                 "items": {
+                  "minLength": 1,
+                  "not": {
+                    "pattern": "^[\\t\\n\\v\\f\\r \\x85\\xA0  - \u2028\u2029  　]+$",
+                    "type": "string"
+                  },
                   "type": [
                     "string",
                     "number",
@@ -1091,6 +1150,7 @@
                     "boolean"
                   ]
                 },
+                "description": "Constant labels given to every metric the collector exports, over a label of the same name a rule gave. A value written \"\" is the label left out. See docs/CONFIGURATION.md#collector-wide-labels.",
                 "type": "object"
               },
               "libraries": {

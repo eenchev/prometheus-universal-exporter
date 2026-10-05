@@ -106,7 +106,9 @@ for a value an environment variable supplies, since the file is checked after
 it is expanded.
 
 `labels` are added to every metric the target produces, without overwriting a
-label the collector already extracted. A target's `le` is left off a
+label the collector already extracted. A label written `""` is the label left
+out: it is added to no series, the target's health series included, where it
+used to be exported as `team=""`. A target's `le` is left off a
 histogram and its `quantile` off a summary, whose buckets and quantiles carry
 that label already. `static_target` is the endpoint's own
 label, and `job` and `instance` are Prometheus's, set when it scrapes the

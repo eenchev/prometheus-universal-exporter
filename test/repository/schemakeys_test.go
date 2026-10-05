@@ -139,6 +139,9 @@ type schemaKey struct {
 	// same thing both ways: "" is the key left out.
 	absent, empty                   bool
 	absentWas, emptyWas, invalidWas was
+	// validWas says the schema as it was refused the valid value: one of
+	// a block that is switched off, which the exporter leaves unchecked.
+	validWas was
 	// duration marks a duration key, which is put through the ways a
 	// duration is written too; zero is what the exporter refuses a zero
 	// with in a key that needs more, and empty where zero is taken.
@@ -206,14 +209,18 @@ func schemaNode(t *testing.T, schema map[string]any, path string) map[string]any
 }
 
 // schemaAsItWas is a committed schema with what "" being the key left out,
-// the number 0 being a duration, the rules of value_map keys and the rule
-// that a label's expression is not blanks alone added to it taken out
-// again: the schema before, kept as an oracle, so that the tables show what
-// each change changed and that the schemas say of every other case what
-// they said. The values of an optional key lose their "", its pattern its
-// empty alternative and a duration its number; the rules made of a key
-// being written are the rules of a key being there; and the rules that were
-// not there are gone.
+// the number 0 being a duration, the rules of value_map keys, the rule
+// that a label's expression is not blanks alone, the rules of an entry of
+// transform.include and transform.exclude and the rule that a python rule's
+// label sets no value added to it taken out again, and with what a
+// switched-off otlp block was held to put back: the schema before, kept as
+// an oracle, so that the tables show what each change changed and that the
+// schemas say of every other case what they said. The values of an optional
+// key lose their "", its pattern its empty alternative and a duration its
+// number; the rules made of a key being written are the rules of a key
+// being there; the rules that were not there are gone; and otlp.compression
+// is one of its values, and the block's two whole numbers zero or more,
+// whatever enabled says.
 func schemaAsItWas(t *testing.T, file string) map[string]any {
 	t.Helper()
 	schema := loadSchemaFile(t, file)
@@ -250,9 +257,32 @@ func schemaAsItWas(t *testing.T, file string) map[string]any {
 		delete(schemaNode(t, schema, "targets[].labels{}"), "minLength")
 		return schema
 	}
+	if file == configSchemaFile {
+		// What the block's then holds a key to once it is switched on, the
+		// key itself was held to.
+		then, _ := schemaNode(t, schema, "otlp")["then"].(map[string]any)
+		switchedOn, _ := then["properties"].(map[string]any)
+		for key, keyword := range map[string]string{"compression": "enum", "max_pending_points": "minimum", "unready_after_failures": "minimum"} {
+			rule, held := switchedOn[key].(map[string]any)
+			if !held {
+				t.Fatalf("the schema does not hold otlp.%s to its %s in a block that is switched on", key, keyword)
+			}
+			node := schemaNode(t, schema, "otlp."+key)
+			node[keyword] = rule[keyword]
+			if keyword == "enum" {
+				node["type"] = "string"
+			}
+			delete(switchedOn, key)
+		}
+	}
 	collector := schemaNode(t, schema, "collectors[]")
 	delete(collector, "if")
 	delete(collector, "then")
+	delete(collector, "allOf")
+	for _, key := range []string{"collectors[].transform.include[]", "collectors[].transform.exclude[]"} {
+		delete(schemaNode(t, schema, key), "minLength")
+		delete(schemaNode(t, schema, key), "not")
+	}
 	label := schemaNode(t, schema, "collectors[].metrics[].labels[]")
 	delete(label, "if")
 	delete(label, "then")
@@ -398,7 +428,7 @@ func checkSchemaKeys(t *testing.T, keys []schemaKey) {
 				t.Errorf("%s: written \"\" it loads as %+v, and left out as %+v", name, with, without)
 			}
 			if key.valid != "" {
-				expect("as "+key.valid, key.valid, true, true)
+				expect("as "+key.valid, key.valid, true, key.validWas.said(true))
 			}
 			if key.invalid != "" {
 				expect("as "+key.invalid, key.invalid, false, key.invalidWas.said(false))

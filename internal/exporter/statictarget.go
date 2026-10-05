@@ -228,8 +228,9 @@ func (s *Server) abortedByShutdown(target model.StaticTarget, c *model.Collector
 // leaves the last result, values and all, as it was.
 func staticTargetHealthMetrics(target model.StaticTarget, c *model.Collector, up, duration float64, lastSuccess time.Time) model.MetricSet {
 	labels := map[string]string{"collector": c.Name, "static_target": target.Name, "target": fetch.DisplayTarget(c, target.Target)}
+	// A label written "" is the label left out (withTargetLabels).
 	for name, value := range target.Labels {
-		if _, exists := labels[name]; !exists {
+		if _, exists := labels[name]; !exists && value != "" {
 			labels[name] = value
 		}
 	}
@@ -244,7 +245,9 @@ func staticTargetHealthMetrics(target model.StaticTarget, c *model.Collector, up
 // produced. A label the collector already extracted is never overwritten, so
 // declared metric labels keep precedence over target-wide ones; nor is the
 // label a histogram's buckets or a summary's quantiles carry, le or quantile,
-// which such a series has on every sample that can hold it. The cached
+// which such a series has on every sample that can hold it. A label written
+// "" is the label left out, as a transform.labels value written "" is: it
+// adds nothing. The cached
 // metric set stays unlabelled, which is what lets a static target scrape and an
 // equivalent probe share cache entries.
 func withTargetLabels(set model.MetricSet, labels map[string]string) model.MetricSet {
@@ -258,7 +261,7 @@ func withTargetLabels(set model.MetricSet, labels map[string]string) model.Metri
 		}
 		own := model.SeriesOwnLabel(out.Metrics[i])
 		for name, value := range labels {
-			if _, exists := out.Metrics[i].Labels[name]; !exists && name != own {
+			if _, exists := out.Metrics[i].Labels[name]; !exists && name != own && value != "" {
 				out.Metrics[i].Labels[name] = value
 			}
 		}

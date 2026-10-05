@@ -181,6 +181,10 @@ func CheckTransformSettings(x *model.Collector) error {
 		expressions []string
 	}{{"include", t.Include}, {"exclude", t.Exclude}} {
 		for _, expression := range setting.expressions {
+			if err := checkFilterEntry(x.Name, setting.key, expression); err != nil {
+				errs = append(errs, err)
+				continue
+			}
 			if _, err := expr.CompileRegex(expression); err != nil {
 				errs = append(errs, fmt.Errorf("collector %q transform.%s %q: %w", x.Name, setting.key, expression, err))
 			}
@@ -217,6 +221,30 @@ func CheckTransformSettings(x *model.Collector) error {
 		targets[to] = from
 	}
 	return model.JoinProblems(errs...)
+}
+
+// checkFilterEntry refuses an entry of transform.include or transform.exclude,
+// key, that is the empty string or nothing but blanks. Each compiles, and
+// neither can be meant. The empty regular expression matches every name, so
+// exclude: [""] dropped every series and include: [""] kept every one. An
+// entry of blanks matches only the names that hold those blanks, which a
+// UTF-8 name may, so it has a meaning, but written bare it is a slip — an
+// empty string that picked up spaces, a template that filled in nothing —
+// after which a pass-through exported nothing, with no error. An entry of a
+// list is not an optional key: written "" it is not the key left out.
+//
+// The entries are matched as applyPrometheusTransform matches them: against
+// the name a series has in the target's answer, before transform.rename and
+// metrics_prefix, and anywhere in it.
+func checkFilterEntry(collector, key, entry string) error {
+	const entryIs = "an entry is a regular expression matched against a metric's name as the target gives it, anywhere in it"
+	switch {
+	case entry == "":
+		return fmt.Errorf("collector %q transform.%s has an entry that is the empty string; %s, so the empty one matches every name: write '.*' to match every name, or leave transform.%s out to filter nothing", collector, key, entryIs, key)
+	case strings.TrimSpace(entry) == "":
+		return fmt.Errorf("collector %q transform.%s entry %q is nothing but blanks; %s, so this one matches only the names that hold these blanks: write the pattern that was meant, or, for one that does mean a blank, '[ ]' or '\\x20' in single quotes, or leave transform.%s out to filter nothing", collector, key, entry, entryIs, key)
+	}
+	return nil
 }
 
 // checkMetricName applies the rule exposition applies at scrape time, plus

@@ -26,7 +26,12 @@ otlp:
 ```
 
 `enabled` is the switch, and a block that sets anything must say it: `true`
-exports, `false` keeps the settings without using or checking them. An `otlp`
+exports, `false` keeps the settings without using or checking them: a block
+that is switched off may hold an endpoint that is no URL, a `compression`
+that is neither `gzip` nor `none`, a negative duration or count, and the
+[schema](CONFIGURATION.md#editor-support) flags none of them, as the exporter
+refuses none. Only what cannot be read as the key's kind of value at all,
+such as `timeout: soon` or an unknown key, is refused there too. An `otlp`
 block with an endpoint and no `enabled` would export nothing, so it is refused
 when the configuration loads, with `otlp sets endpoint but not enabled; say
 enabled: true to turn it on, or enabled: false to keep the settings without
@@ -110,6 +115,8 @@ bounded by `otlp.timeout`.
 
 Requests are gzipped (`Content-Encoding: gzip`), which every OpenTelemetry
 Collector accepts; set `otlp.compression: none` for an endpoint that does not.
+Any other value is refused when the configuration loads, in a block that is
+switched on.
 
 An export that fails with a network error, or with `429`, `502`, `503` or
 `504` — the answers the OTLP specification makes retryable — is tried again

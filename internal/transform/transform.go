@@ -164,6 +164,9 @@ func needsUTF8Repair(set *model.MetricSet) bool {
 // applyCollectorLabels applies the collector-wide label settings to every
 // metric, whatever the transform: transform.labels adds static labels,
 // remove_labels drops labels, and rename_labels renames them, in that order.
+// A transform.labels value of "" is the label left out, as a key written ""
+// is the key left out: it sets nothing, so a label of that name a rule gave
+// stays as it is, where a value that is not empty replaces it.
 //
 // The renames are made at once, from the labels as they were before any of
 // them, so they never chain: with a to b and b to c, b gets a's value and c
@@ -177,7 +180,9 @@ func applyCollectorLabels(set *model.MetricSet, t model.TransformConfig) {
 	for i := range set.Metrics {
 		labels := model.CloneLabels(set.Metrics[i].Labels)
 		for name, value := range t.Labels {
-			labels[name] = value
+			if value != "" {
+				labels[name] = value
+			}
 		}
 		for _, name := range t.RemoveLabels {
 			delete(labels, name)

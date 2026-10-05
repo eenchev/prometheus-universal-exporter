@@ -1069,9 +1069,27 @@ MUST apply to every metric a collector produces, whatever its transform, after
 its metric rules and in that order: add, remove, rename. The renames MUST be
 made at once from the labels as they were before any of them, so they never
 chain and the result does not depend on the order they are listed or walked in.
+A `transform.labels` value MUST replace a label of the same name the series
+has from a rule, a script or the target. A value written `""` MUST be the
+label left out, as a key written `""` is the key left out (§ 24.3): it MUST
+add no label — no `site=""` in an answer, in the OTLP export or in the count
+`limits.max_labels_per_metric` is held to — and MUST NOT take away or change
+a label of that name the series has.
 `transform.include`, `transform.exclude` and `transform.rename` pick and rename
 the metrics a `prometheus` transform passes through, and apply only to one
-without `metrics` rules.
+without `metrics` rules. An entry of `include` or `exclude` is a regular
+expression matched anywhere in the name the target gives a metric, before
+`rename` and `metrics_prefix`. An entry that is the empty string, which
+matches every name, and one that is nothing but blanks — text that
+`strings.TrimSpace` leaves nothing of — which matches only the names that
+hold them, MUST be refused at load, by the exporter and by the schemas
+(§ 24.3): an entry of a list is not an optional key, so `""` there is not
+the key left out. The error MUST name the collector and the key, quote an
+entry of blanks, and say what an entry is and what to write: `'.*'` to match
+every name, the key left out to filter nothing, and `'[ ]'` or `'\x20'`, in
+single quotes, for a pattern that does mean a blank. Every other entry, and
+every other transform setting, MUST get from the load what it got before
+this rule.
 
 The decoder MUST be chosen by `decoder.type`, the one key for it; `response`
 MUST NOT take a format. `decoder.type` is optional and defaults to `auto`. When
@@ -3354,7 +3372,17 @@ and `error_handling.allow_missing_keys`. `required` on a `value` label, or on a
 label of the python transform, MUST be rejected at startup.
 
 Python transforms are the exception: their script emits the common metric
-objects through `metric(...)`, so a `metrics` array is optional for them.
+objects through `metric(...)`, so a `metrics` array is optional for them. A
+rule of a `python` collector makes no series, and its label names a label of
+the script's series to cut with `truncate: true` and nothing else. A `value`
+on such a label MUST be rejected at load, by the exporter and by the schemas
+(§ 24.3), naming the collector, the metric and the label and saying that the
+script sets its labels itself, that a rule's label there only names one to
+cut with `truncate: true`, and that a constant for every series belongs in
+`transform.labels`: it would otherwise load and be given to no series. A
+`value` written `""` is the key left out there as everywhere. Every other
+rule, of a `python` collector and of any other, MUST get from the load the
+verdict and the error it got before this rule.
 
 ## 18.2 Metrics per item
 
@@ -4743,6 +4771,9 @@ label:
 - A prometheus transform's `rename` targets MUST be valid metric names.
   `include`, `exclude` and `rename` MUST be rejected on any collector other
   than a prometheus transform without `metrics` rules, rather than ignored.
+  An entry of `include` or `exclude` MUST NOT be the empty string or nothing
+  but blanks (§ 6).
+- A label of a `python` rule MUST NOT set `value` (§ 18.1).
 - `transform.labels` keys and `rename_labels` targets MUST be valid label
   names, and two `rename_labels` entries with one target MUST be rejected.
 
@@ -4968,9 +4999,30 @@ static target's `collector`. A duration and a size have no empty form, and
 MUST be refused by both written `""`; so MUST an empty entry of
 `collector_files`, `request.accept_status`, `request.allowed_targets`,
 `request.denied_targets`, `request.redirect_trusted_hosts`,
+`transform.include`, `transform.exclude`,
 `transform.libraries` and `transform.required_libs`, and an empty key of a
 `value_map`, of `request.metadata` and of a static target's `params` and
-`labels`.
+`labels`. An entry of `transform.include` or `transform.exclude` of nothing
+but blanks MUST be refused by both too (§ 6), by the pattern a label's
+`expression` is held to. A label of a rule of a collector whose
+`transform.type` is `python` MUST NOT have `value` written with a value other
+than `""`, to the schemas as to the exporter (§ 18.1).
+
+A block that `enabled` switches on is kept unchecked while it says
+`enabled: false`, and that MUST hold of the schemas as of the exporter, for
+every key of the block: what the exporter refuses of a key only in a block
+that is switched on, the schemas MUST refuse only there, under a rule that
+goes by `enabled` being `true`. Of the `otlp` block that is a negative
+`timeout` or `interval`, a `compression` that is neither `gzip` nor `none`,
+and a negative `max_pending_points` or `unready_after_failures`; the rest of
+what the exporter checks of the block — the endpoint, the headers, the `tls`
+files, the least interval, `service.name` among the attributes — no schema
+can tell. What is not of a key's type at all — text for a number, a list for
+text, an unknown key — is not a setting kept for later, and MUST be refused
+by both in a block switched off as in one switched on. A test MUST put every
+key of the `otlp` block, found from its struct, through both, switched off
+and on, with the values a block that is on is refused for and with values
+that are none of the key's type.
 
 The schemas MUST refuse of a `value_map`, a rule's and a label's, what the
 exporter refuses of its keys and values (§ 18.1): a key that is empty or
@@ -13698,8 +13750,9 @@ Tests MUST show:
   a name and with a name that is none, alone, before and after a label in
   order and one with neither key, in a rule in order and in one with a bad
   `error_mode`, an expression of blanks or no name. The 8,640 rules in
-  which the check gets as far as a label of blanks, and no other, are
-  refused in the new words.
+  which the check gets as far as a label of blanks are refused in the new
+  words, and of the others only the `python` rules of § 34.97, whose
+  settings are in order and one of whose labels sets a value.
 - The schemas' pattern for a label's expression, under `not`, takes a text
   exactly when `strings.TrimSpace` leaves nothing of it, over some 165,000
   texts — each character up to U+3000 and one in 97 past it, alone, twice,
@@ -13724,7 +13777,8 @@ Tests MUST show:
   written `""`. Both refuse blanks in a label's `expression`, alone, beside
   a value and beside a value in a `csv` rule, in a label's `value` beside
   an expression and its `name`, in a key of either `value_map`, in a rule's
-  `name`, `type` and `error_mode`, and in `transform.type`,
+  `name`, `type` and `error_mode`, in an entry of `transform.include` and
+  of `transform.exclude` (§ 34.97), and in `transform.type`,
   `request.method`, `metrics_prefix`, `name_escaping` and a collector's
   `name`. The loader alone refuses them in a rule's `expression`, `items`,
   `time_format` and `time_zone`, a value of `transform.rename` and of
@@ -13732,13 +13786,14 @@ Tests MUST show:
   `script` and `response.charset`. Both take them in a label's `value`, a
   value of a label's `value_map` and of `transform.labels`, a rule's
   `description`, a `prometheus` and a `python` rule's `expression`,
-  `transform.include`, `transform.exclude`, a key of `transform.rename` and
+  a key of `transform.rename` and
   of `rename_labels`, `remove_labels`, `pre_script`, a `jq` transform's
   `script`, `request.path`, and a key and a value of `response.namespaces`.
   The schema alone refuses `decoder.type` of blanks, which loads as the
   default. Written `""`, a key that is optional is taken by both; a
   label's only `value` or `expression`, its `name`, a rule's and a
-  collector's `name`, `transform.type` and a key of a `value_map` are
+  collector's `name`, `transform.type`, a key of a `value_map` and an entry
+  of `transform.include` and of `transform.exclude` are
   refused by both; and a rule's `expression`, a `python` transform's
   `script`, a value of `transform.rename` and of `rename_labels` and a key
   of `transform.labels` by the loader alone.
@@ -13993,6 +14048,182 @@ Tests MUST show:
   deadline of a second; a connection reset a second after the head and the
   start of the body were written fails the fetch as one reset in the middle
   of the body.
+
+## 34.97 Configurations that loaded and did something else: a switched-off otlp block, empty and blank filter entries, empty constant labels, a constant on a python rule's label
+
+- An `otlp` block with `enabled: false` is taken by the committed schema and
+  by the loader alike with `compression: zstd`, `GZIP`, a blank, `5` or
+  `true`, and with `max_pending_points` or `unready_after_failures` of `-1`,
+  which the schema refused there and the loader took; with `enabled: true`
+  both refuse each, and both take `gzip`, `none`, `""`, `0` and a count
+  above it switched off and on.
+- Every key of the `otlp` block but `enabled`, found from its struct, is put
+  through both switched off and on, and the test fails for a key its table
+  lacks: an endpoint that is no URL, is `ftp` or is `""`, a header name with
+  a space and a header value with a line break, a negative `timeout` and
+  `interval`, an `interval` of `500ms`, a `tls` block with a certificate and
+  no key or with a `ca_file` that is not there, and `service.name` among the
+  resource attributes are taken by both switched off, and switched on
+  refused by both (the negative durations) or by the loader alone. What is
+  not of the key's type — a list or a mapping for text, text or a fraction
+  for a count, `soon` and `30` for a duration, text for a boolean, an
+  unknown key of `tls` — is refused by both switched off as switched on.
+- `enabled: "false"`, written as text, and a block without `enabled` are
+  not blocks that are switched off: both refuse `compression: zstd` there.
+- In the tables of keys the schemas hold to a rule, `otlp.compression` of a
+  block that is switched off is taken by both left out, written `""` and as
+  `zstd`, where the schema as it was — the committed one with the
+  compression's values and the two counts' least put back on the keys —
+  refused `""` and `zstd`; the row of the block switched on is as it was.
+- A pass-through with `transform.exclude: [""]` or `transform.include:
+  [""]` is refused at load with `collector "node" transform.exclude has an
+  entry that is the empty string; an entry is a regular expression matched
+  against a metric's name as the target gives it, anywhere in it, so the
+  empty one matches every name: write '.*' to match every name, or leave
+  transform.exclude out to filter nothing`, naming the key it is under;
+  before, the first dropped every series and the second kept every one. An
+  empty entry among others is refused once for each, in the order of the
+  lists, beside an entry that does not compile, which is still reported.
+- `exclude: ['.*']` passes on no series and `include: ['.*']` every one, as
+  no key at all does; `include: [load]` passes on `node_load1` alone, the
+  pattern matched anywhere in the name, and `exclude: ['^n']` the two
+  names that do not begin with `n`.
+- An entry of `include` or `exclude` of one space, two, a tab, a space with
+  a tab and a line break, a no-break space, U+0085, an ideographic space
+  with a space and U+2028 is refused at load with `collector "node"
+  transform.include entry "  " is nothing but blanks; an entry is a regular
+  expression matched against a metric's name as the target gives it,
+  anywhere in it, so this one matches only the names that hold these
+  blanks: write the pattern that was meant, or, for one that does mean a
+  blank, '[ ]' or '\x20' in single quotes, or leave transform.include out to
+  filter nothing`, quoting the entry; before, it loaded and passed on only
+  the names that hold those blanks.
+- `'[ ]'` and `'\x20'` load, and pass on `disk free` and `disk  free` of
+  four names and neither `diskfree` nor a name with a tab; `\x20{2}`, `k f`,
+  ` free`, `\s` and `\t` each pass on the names they match, and U+200B and
+  U+FEFF, which only look like blanks, load and match none. YAML reads
+  `'[ ]'` and `'\x20'` in single quotes as the text the regular expression
+  reads, and `"\x20"` in double quotes as the blank, which is refused.
+- Over each character up to U+3000 and one in 97 past it, an entry made of
+  it alone or of it and a space is refused as blanks exactly when
+  `strings.TrimSpace` leaves nothing of it, 25 blanks in all, and one with
+  a letter before the character never is.
+- The transform settings check agrees with a copy of itself as it was, on
+  every problem word for word and in the same order, for the 30 collectors
+  of the 13 files under `examples`, `configs`, `testdata` and `charts` that
+  hold collectors, none of which has such an entry, and for 72,900
+  generated settings: `include` and `exclude` each of 90 lists — 22
+  entries, the empty one, nine of blanks, three with U+200B or U+FEFF, a
+  pattern that does not compile and patterns with blanks in or around them
+  among them, alone, after a pattern, before one that does not compile and
+  twice — under a pass-through, a `prometheus` transform with rules and a
+  `jq` transform, beside no other setting, beside `rename` and `labels`
+  with entries that are not in order, and beside `remove_labels` and
+  `rename_labels` with such entries. The 50,400 settings with an entry that
+  is empty or blanks get one problem more for each such entry, in the
+  lists' order, and what they got before.
+- The committed schema and the loader agree on entries of `include` and of
+  `exclude`: both take `["^node_"]`, two entries, `['.*']`, `['[ ]']`,
+  `['\x20']`, an entry with a blank in it, before it or after it, U+200B,
+  U+FEFF, `[1]`, `[true]` and `[]`; both refuse `[""]`, `['']`, one and two
+  spaces, a tab, `"\x20"`, a no-break space, an empty or blank entry before
+  or after a pattern, a list in the list and text for the list; and for
+  each of the blanks up to U+FFFF both refuse the blank alone, twice and
+  after a space, and take it between two letters. A pattern that does not
+  compile, and either key beside `metrics` rules, pass the schema and are
+  refused by the loader.
+- `transform.rename` with a key of `""` or of blanks, `remove_labels` with
+  such an entry, `rename_labels` with a key of `""`, and `transform.labels`
+  with a value of `""` or of a blank are taken by both, as they were.
+- In the tables of keys the schemas hold to a rule, an entry of
+  `transform.include` and of `transform.exclude` is taken by both left out
+  and as `"^node_"` or `"^go_"`, and refused by both written `""` and as two
+  spaces or a tab, in the configuration and in a collector file, where the
+  schema as it was took each; the table of keys written as blanks has both
+  refuse such an entry written as two spaces and written `""`.
+- A collector with `transform.labels: {site: "", env: prod}` exports its
+  series with `env="prod"` and no `site`, where it exported `site=""`: a
+  series a rule gives `site="rack1"` keeps it, where the empty value
+  replaced it; with `{site: dc1}` every series has `site="dc1"`, the rule's
+  too, as before; a value of one blank is exported as written; and under
+  `limits.max_labels_per_metric: 1` the series with the one label that has
+  a value are within the limit.
+- With `transform.labels: {site: ""}` and `rename_labels: {site: location}`
+  the series a rule gives `site` is exported with `location="rack1"` and
+  the other with no label.
+- `applyCollectorLabels` agrees with a copy of itself as it was for 1,080
+  series: six label sets of a series under nine `transform.labels`, four
+  `remove_labels` and five `rename_labels`, the labels it gives being those
+  it gave when no value is empty and otherwise those it gave for the same
+  settings without the empty entries, the series' own labels left as they
+  were.
+- A static target's label written `""` is added to no series: with
+  `labels: {team: "", region: "", zone: a}` a series gets `zone="a"` and
+  keeps a `region` of its own, and the target's three health series have
+  `collector`, `static_target`, `target` and `zone` and no `team`, where
+  each carried `team=""`.
+- `withTargetLabels` agrees with a copy of itself as it was for 55 series —
+  a series without labels, with none, with labels of its own, a histogram
+  and a summary, under eleven sets of target labels — giving the labels it
+  gave when no label is empty and otherwise those it gave without the empty
+  ones.
+- End to end, probes of collectors with `transform.labels` of `{site: "",
+  env: prod}`, of `{site: ""}` beside a rule's `site` and of `{site: dc1}`
+  beside it, each under `max_labels_per_metric: 1`, are answered `v{env=
+  "prod"} 7`, `v{site="rack1"} 7` and `v{site="dc1"} 7`, and nothing queued
+  for OTLP has a label with an empty value; a static target with `labels:
+  {team: "", zone: a}` is served with `zone="a"` on its series and its
+  health series and `team` on none, and exported over OTLP the same.
+- A `python` rule's label with `value: x`, with `truncate: true` beside it,
+  with a value of one blank, of `0`, or beside `expression: ""`, is refused
+  at load with `collector "racks" metric "cpu" label "site" sets value,
+  which a python rule's label does not take: the script sets the labels of
+  its series itself, with metric(..., labels={...}), and a rule's label
+  only names one of them to cut with truncate: true; for a constant on
+  every series of the collector, set transform.labels`; before, it loaded
+  and no series got the constant. A label with an expression, with or
+  without `truncate`, and with `value: ""` beside it loads as it did, and
+  so does `transform.labels: {site: x}` on the collector.
+- A `python` rule's label with both a value and an expression, with
+  neither, with a value and `required`, and with an expression and
+  `required` is refused in the words it was; under each of the seven other
+  transforms a rule's label with `value: x` loads.
+- The rule check agrees with a copy of itself as it was, on the error word
+  for word and on the defaults it fills in, for 23,136 generated rules:
+  under each of the eight transforms, a label of four values beside no
+  expression and beside one, plain, truncated, required, with a `value_map`
+  and with a name that is none, alone and beside a label in order, one
+  with neither key, a constant that is required and a constant, in a rule
+  in order, without a name, with a name that is none, with an expression
+  that does not compile, with `items`, with a type, a description,
+  `required` and `error_mode: fail`, with type `histogram`, with a type and
+  an `error_mode` that are none, with `scale`, with a `value_map` and with
+  a `time_format`. The 351 `python` rules whose settings were in order and
+  one of whose labels sets a value are refused in the new words, for the
+  first such label, and no rule of another transform is.
+- The committed schema and the loader agree on a `python` rule's label:
+  both take one with an expression, with or without `truncate`, and with
+  `value: ""` beside it; both refuse `value: x`, alone, with `truncate` and
+  beside `expression: ""`, a value of a blank and of `0`, a value beside an
+  expression, `value: ""` alone and a label with neither key; both take a
+  constant under `transform.labels` of a `python` collector and a value on
+  a `prometheus` and a `jq` rule's label; and with `transform.type: Python`
+  both refuse the document. In the tables of keys, a `python` rule's label
+  with `value: x` in place of its expression is refused by both, in the
+  configuration and in a collector file, where the schema as it was took
+  it.
+- A `python` script's two series are the same, name, type, help, labels
+  and value, whatever the collector's rules hold but `truncate`: with no
+  rule; with rules of the series' names giving another `type` and a
+  `description`, the series keeping the script's type and help, and
+  `gauge` and no help where the script gives none; with a rule that has an
+  expression that does not compile, `required: false` and `error_mode:
+  fail`, and one named for a series the script does not make; with labels
+  that set a value, which the load refuses; with labels that set an
+  expression; and with a rule without a name whose label has `truncate`. A
+  rule named `up` with `{name: note, expression: note, truncate: true}`
+  cuts the `note` label of `up` to the limit of 20 bytes, and neither its
+  `site` label nor the `note` label of the other series.
 
 # 35. Documentation requirements
 
@@ -14384,7 +14615,8 @@ nothing MUST be added.
 
 Export requests MUST be gzipped, with `Content-Encoding: gzip`, unless
 `otlp.compression` is `none`; `gzip` MUST be the default, and any other value
-MUST be rejected when the configuration loads.
+MUST be rejected when the configuration loads, in a block that is switched
+on (§ 24.3).
 
 An export that fails with a network error, `429`, `502`, `503` or `504` — the
 responses the OTLP/HTTP specification makes retryable — MUST be retried with
@@ -15281,7 +15513,10 @@ directly and MUST NOT be filtered through the collector's
 Each target MAY declare `labels`, which the exporter MUST add to every metric
 that target produces. A label the collector already extracted MUST NOT be
 overwritten, and a target's `le` MUST NOT be added to a histogram, nor its
-`quantile` to a summary, whose buckets and quantiles carry that label.
+`quantile` to a summary, whose buckets and quantiles carry that label. A
+label written `""` MUST be the label left out, as a `transform.labels` value
+written `""` is (§ 6): it MUST be added to no series of the target, its
+health series included.
 `static_target` MUST be refused as a target label, since the
 endpoint sets it, and so MUST `job` and `instance`, which Prometheus sets when
 it scrapes the endpoint and which, kept with `honor_labels`, a target's would

@@ -42,6 +42,15 @@ const (
 	pythonCollector     = "collectors:\n  - name: demo\n    request:\n      type: http\n    transform:\n      type: python\n      script: metric('up', 1)\n      # transform\n    metrics:\n      - description: Whether it is up.\n        # metric\n"
 )
 
+// passthroughCollector is a configuration of one prometheus collector
+// without rules, which include and exclude pick the series of, and
+// pythonLabel a python rule's label, which names a label of the script's
+// series.
+const (
+	passthroughCollector = "collectors:\n  - name: demo\n    request:\n      type: http\n    transform:\n      type: prometheus\n      # transform\n"
+	pythonLabel          = pythonCollector + "        labels:\n          - name: note\n            expression: note\n            truncate: true\n"
+)
+
 // switchedOnOTLP is a configuration with its otlp block switched on.
 const switchedOnOTLP = "otlp:\n  enabled: true\n  endpoint: http://collector.invalid:4318/v1/metrics\n  # otlp\n" + testutil.MinimalConfig
 
@@ -84,6 +93,9 @@ func httpSchemaKeys() []schemaKey {
 		{key: "collectors[].metrics[].error_mode", document: jqCollector, at: metric, setting: "        error_mode: %s\n", valid: "fail", invalid: "panic", absent: true, empty: true, emptyWas: refused},
 		{key: "collectors[].metrics[].type", document: jqCollector, at: metric, setting: "        type: %s\n", valid: "counter", invalid: "timer", absent: true, empty: true, emptyWas: refused},
 		{key: "otlp.compression", document: switchedOnOTLP, at: "  # otlp\n", setting: "  compression: %s\n", valid: "none", invalid: "zstd", absent: true, empty: true, emptyWas: refused},
+		// Switched off, the block is unchecked by both: the schema held
+		// its compression to the values all the same.
+		{key: "otlp.compression", of: "switched off", document: strings.Replace(switchedOnOTLP, "enabled: true", "enabled: false", 1), at: "  # otlp\n", setting: "  compression: %s\n", valid: "zstd", validWas: refused, absent: true, empty: true, emptyWas: refused},
 		// Keys of another request type: left out of an http collector, and
 		// so written "".
 		{key: "collectors[].request.rpc", of: "of an http collector", document: jqCollector, at: request, setting: "      rpc: %s\n", absent: true, empty: true, emptyWas: refused},
@@ -98,6 +110,9 @@ func httpSchemaKeys() []schemaKey {
 		{key: "collectors[].metrics[].labels[].expression", document: jqCollector, at: "            expression: .l\n", setting: "            expression: %s\n", valid: ".l", invalid: `"  "`, invalidWas: taken},
 		{key: "collectors[].metrics[].labels[].value", of: "beside an expression", document: jqCollector, at: label, setting: "            value: %s\n", invalid: "x", absent: true, empty: true, emptyWas: refused},
 		{key: "collectors[].metrics[].labels[].expression", of: "beside a value", document: strings.Replace(jqCollector, "expression: .l\n", "value: x\n", 1), at: label, setting: "            expression: %s\n", invalid: ".l", absent: true, empty: true, emptyWas: refused},
+		// A python rule's label names a label of the script's series and
+		// sets no constant: both refuse a value there, which both took.
+		{key: "collectors[].metrics[].labels[].value", of: "of a python rule's label", document: pythonLabel, at: "            expression: note\n", setting: "            value: %s\n", invalid: "x", invalidWas: taken},
 		{key: "collectors[].metrics[].labels[].expression", of: "of blanks beside a value, in a csv rule", document: strings.NewReplacer("type: jq", "type: csv", "expression: .v", "expression: v", "expression: .l\n", "value: x\n").Replace(jqCollector), at: label, setting: "            expression: %s\n", invalid: `"\t "`, absent: true, empty: true, emptyWas: refused},
 		// Free text of at most one character: "" was the default already.
 		{key: "collectors[].response.csv.delimiter", document: csvCollector("';'"), at: "    response:\n      csv:\n        delimiter: ';'\n", setting: "    response:\n      csv:\n        delimiter: %s\n", valid: "';'", invalid: "';;'", absent: true, empty: true},
@@ -109,6 +124,11 @@ func httpSchemaKeys() []schemaKey {
 		{key: "collectors[].request.allowed_targets[]", document: jqCollector, at: request, setting: "      allowed_targets: [%s]\n", valid: "api.example.com", invalid: "bücher.example", absent: true, emptyWas: taken},
 		{key: "collectors[].request.denied_targets[]", document: jqCollector, at: request, setting: "      denied_targets: [%s]\n", valid: "api.example.com", invalid: "bücher.example", absent: true, emptyWas: taken},
 		{key: "collectors[].request.redirect_trusted_hosts[]", document: jqCollector, at: request, setting: "      follow_redirects: true\n      redirect_trusted_hosts: [%s]\n", valid: "cdn.example.com", invalid: "bücher.example", absent: true},
+		// An entry of include or exclude is a regular expression: both
+		// refuse the empty one, which matches every name, and one of
+		// nothing but blanks, each of which both took.
+		{key: "collectors[].transform.include[]", document: passthroughCollector, at: "      # transform\n", setting: "      include: [%s]\n", valid: `"^node_"`, invalid: `"  "`, absent: true, emptyWas: taken, invalidWas: taken},
+		{key: "collectors[].transform.exclude[]", document: passthroughCollector, at: "      # transform\n", setting: "      exclude: [%s]\n", valid: `"^go_"`, invalid: `"\t"`, absent: true, emptyWas: taken, invalidWas: taken},
 		{key: "collectors[].transform.libraries[]", document: pythonCollector, at: "      # transform\n", setting: "      libraries: [%s]\n", valid: "lxml", invalid: "requests", absent: true},
 		{key: "collectors[].transform.required_libs[]", document: pythonCollector, at: "      # transform\n", setting: "      required_libs: [%s]\n", valid: "PyYAML", invalid: "requests", absent: true},
 		{key: "collectors[].metrics[].value_map{}", document: jqCollector, at: metric, setting: "        value_map: {%s: 1}\n", valid: "up", invalid: `" up"`, absent: true, emptyWas: taken, invalidWas: taken},

@@ -66,7 +66,8 @@ func blanksKeys() []blanksKey {
 	transform := "      type: jq\n"
 	static := strings.Replace(jqCollector, "expression: .l\n", "value: x\n", 1)
 	csv := strings.NewReplacer("type: jq", "type: csv", "expression: .v", "expression: v", "expression: .l\n", "value: x\n").Replace(jqCollector)
-	passthrough := "collectors:\n  - name: demo\n    request:\n      type: http\n    transform:\n      type: prometheus\n      # transform\n"
+	passthrough := passthroughCollector
+	const emptyEntry, blankEntry = "has an entry that is the empty string", `entry "  " is nothing but blanks`
 	xpath := "collectors:\n  - name: demo\n    request:\n      type: http\n    # collector\n    transform:\n      type: xpath\n    metrics:\n      - name: v\n        expression: //x:v\n"
 	timed := strings.Replace(jqCollector, metric, "        time_format: rfc3339\n"+metric, 1)
 	return []blanksKey{
@@ -90,8 +91,8 @@ func blanksKeys() []blanksKey {
 		{key: "collectors[].metrics[].type", document: jqCollector, at: metric, setting: "        type: %s\n", blanks: bothRefuse("has invalid type"), empty: bothTake},
 		{key: "collectors[].metrics[].error_mode", document: jqCollector, at: metric, setting: "        error_mode: %s\n", blanks: bothRefuse("error_mode has invalid value"), empty: bothTake},
 		{key: "collectors[].metrics[].value_map{}", document: jqCollector, at: metric, setting: "        value_map: {%s: 1}\n", blanks: bothRefuse("has surrounding blanks or is empty"), empty: bothRefuse("has surrounding blanks or is empty")},
-		{key: "collectors[].transform.include[]", document: passthrough, at: "      # transform\n", setting: "      include: [%s]\n", blanks: bothTake, empty: bothTake},
-		{key: "collectors[].transform.exclude[]", document: passthrough, at: "      # transform\n", setting: "      exclude: [%s]\n", blanks: bothTake, empty: bothTake},
+		{key: "collectors[].transform.include[]", document: passthrough, at: "      # transform\n", setting: "      include: [%s]\n", blanks: bothRefuse("transform.include " + blankEntry), empty: bothRefuse("transform.include " + emptyEntry)},
+		{key: "collectors[].transform.exclude[]", document: passthrough, at: "      # transform\n", setting: "      exclude: [%s]\n", blanks: bothRefuse("transform.exclude " + blankEntry), empty: bothRefuse("transform.exclude " + emptyEntry)},
 		{key: "collectors[].transform.rename{}", document: passthrough, at: "      # transform\n", setting: "      rename: {%s: up2}\n", blanks: bothTake, empty: bothTake},
 		{key: "collectors[].transform.rename.*", document: passthrough, at: "      # transform\n", setting: "      rename: {up: %s}\n", blanks: loaderRefuses(noMetricName), empty: loaderRefuses(noMetricName)},
 		{key: "collectors[].transform.labels{}", document: jqCollector, at: transform, setting: transform + "      labels: {%s: x}\n", blanks: loaderRefuses("transform.labels has invalid label name"), empty: loaderRefuses("transform.labels has invalid label name")},
@@ -122,15 +123,19 @@ func blanksKeys() []blanksKey {
 // through the committed schema and the exporter both ways, and the two must
 // say what the table says. A label's expression of blanks is refused by
 // both, whatever is beside it: the exporter took one beside a value, as no
-// expression, and then read the label with it. The rest is as it was. Blanks
+// expression, and then read the label with it. An entry of
+// transform.include or transform.exclude is refused by both written as
+// blanks, which matched only the names that hold them, and written "",
+// which matched every name: an entry of a list is no key to leave out. The
+// rest is as it was. Blanks
 // are refused where no text of blanks is what the key takes: a rule's
 // expression, name and items, a time_format and a time_zone, a key of a
 // value_map, and every key held to a set of values or a pattern. They are
 // taken where the text is used as it is written: a label's value, a
-// constant of blanks; a prometheus rule's expression and the patterns of
-// transform.include and transform.exclude, regular expressions over metric
-// names, which may hold blanks; the names transform.rename, remove_labels
-// and rename_labels look for, which may be such names; request.path; and a
+// constant of blanks; a prometheus rule's expression, a regular expression
+// over metric names, which may hold blanks; the names transform.rename,
+// remove_labels and rename_labels look for, which may be such names;
+// request.path; and a
 // namespace of response.namespaces. A pre_script of blanks is no script,
 // and a decoder.type of blanks the default, which the schema, describing
 // the canonical spelling, does not take. What the exporter alone refuses is

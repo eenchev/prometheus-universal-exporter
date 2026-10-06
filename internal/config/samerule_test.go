@@ -218,18 +218,18 @@ func TestTheSameRuleTwiceMakesEverySeriesTwice(t *testing.T) {
 
 // The comparison of two rules is of what they write. Rules that select the
 // same series by other words are two rules to it, and load as they did,
-// though a scrape fails on them as it did: a prometheus rule that matches
-// the metric of its name beside one whose expression is that name, with a
-// name or without, and two jq expressions of one meaning. They are what is
-// left.
+// though a scrape fails on them as it did: two prometheus rules whose
+// expressions are one name written in two ways, and two jq expressions of
+// one meaning. They are what is left; a prometheus rule that matches the
+// metric of its name beside one whose expression matches that name, which
+// was among them, is refused now
+// (TestAPatternThatMatchesANamedRulesMetricMakesItsSeriesTwice).
 func TestRulesThatMeanTheSameInOtherWordsLoadAsTheyDid(t *testing.T) {
 	const exposition = "# TYPE up gauge\nup 1\n"
 	for name, tc := range map[string]struct {
 		transform, decoder, contentType, body string
 		rules                                 []model.MetricRule
 	}{
-		"a name, and the name with its pattern":      {"prometheus", "prometheus", "text/plain", exposition, []model.MetricRule{{Name: "up"}, {Name: "up", Expression: "^up$"}}},
-		"a name, and its pattern alone":              {"prometheus", "prometheus", "text/plain", exposition, []model.MetricRule{{Name: "up"}, {Expression: "^up$"}}},
 		"two patterns of one name":                   {"prometheus", "prometheus", "text/plain", exposition, []model.MetricRule{{Expression: "^up$"}, {Expression: "^(up)$"}}},
 		"two jq expressions of one meaning":          {"jq", "json", "application/json", `{"v":1}`, []model.MetricRule{{Name: "up", Expression: ".v"}, {Name: "up", Expression: ".v "}}},
 		"two time_formats written in another case":   {"jq", "json", "application/json", `{"v":"2026-01-02T03:04:05Z"}`, []model.MetricRule{{Name: "up", Expression: ".v", TimeFormat: "rfc3339"}, {Name: "up", Expression: ".v", TimeFormat: "RFC3339"}}},
@@ -451,7 +451,7 @@ func TestOnlyTheSameRuleTwiceIsRefusedAnew(t *testing.T) {
 // them; rules that differ are not compared with what they differ from.
 func TestEachCopyOfARuleIsToldOfAgainstTheFirst(t *testing.T) {
 	x := &model.Collector{Name: "node", Transform: model.TransformConfig{Type: "prometheus"}}
-	up, load, every := model.MetricRule{Name: "up"}, model.MetricRule{Name: "load", Expression: "^node_load1$"}, model.MetricRule{Expression: ".*"}
+	up, load, every := model.MetricRule{Name: "up"}, model.MetricRule{Name: "load", Expression: "^node_load1$"}, model.MetricRule{Expression: "^node_"}
 	now := withRules(x, []model.MetricRule{up, load, up, every, load, up, every, {Name: "down"}})
 	err := validateMetricRules(nil, now)
 	want := strings.Join([]string{sameRuleSaid("node", 0, 2, up), sameRuleSaid("node", 1, 4, load), sameRuleSaid("node", 0, 5, up), sameRuleSaid("node", 3, 6, every)}, "\n")

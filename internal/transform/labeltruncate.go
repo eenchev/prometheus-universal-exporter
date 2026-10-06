@@ -10,7 +10,11 @@ import (
 // scrape: exposing a truncated value nobody asked for would be a silent
 // surprise. A label that carries free text — an incident update, a
 // description — can opt in with truncate: true, and is then cut to fit
-// instead, ending in "…" so a reader can tell it was cut.
+// instead, ending in "…" so a reader can tell it was cut. A limit of one or
+// two bytes has no room for the mark, and none for a value's first character
+// when that is longer than the limit: a value cut to nothing leaves the
+// label off its series, as every label with an empty value is left off
+// (setTruncated).
 
 const truncationMark = "…"
 
@@ -48,10 +52,23 @@ func truncateLabels(set *model.MetricSet, c *model.Collector) {
 				if !copied {
 					metric.Labels, copied = model.CloneLabels(metric.Labels), true
 				}
-				metric.Labels[name] = truncateLabelValue(value, limit)
+				setTruncated(metric.Labels, name, value, limit)
 			}
 		}
 	}
+}
+
+// setTruncated gives labels, which are the caller's to change, the label
+// name with value cut to limit bytes, or takes the label off them when
+// nothing of the value is left: a limit under the three bytes of the mark
+// and a value whose first character is longer than it. To Prometheus a
+// label with an empty value is no label, and none is exported as one.
+func setTruncated(labels map[string]string, name, value string, limit int) {
+	if cut := truncateLabelValue(value, limit); cut != "" {
+		labels[name] = cut
+		return
+	}
+	delete(labels, name)
 }
 
 // truncateLabelValue cuts a value to at most limit bytes, on a character

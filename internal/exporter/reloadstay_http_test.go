@@ -467,7 +467,12 @@ func TestAStaticTargetChangedInItsFileIsAnotherTargetToTheFailureLog(t *testing.
 // changed with it. What it remembers of a target the reload left as it was
 // stays, and so does what the static targets endpoint remembers of a metric
 // it left out, which is the endpoint's to settle, and a failure remembered
-// under an address, which a probe shares.
+// under an address, which a probe shares. So does what only reads as a
+// static target's: the failure of a probe whose target is the words a
+// static target's own failures were told by and the name of a target the
+// reload removed, and that of a file named schedule in a directory so
+// named, which a reload that read each key to tell whose it was forgot with
+// the target.
 func TestFollowingAReloadForgetsTheFailuresOfTheStaticTargetsItRetired(t *testing.T) {
 	const address = "http://target.invalid"
 	document := func(changed, removed bool) string {
@@ -485,15 +490,20 @@ func TestFollowingAReloadForgetsTheFailuresOfTheStaticTargetsItRetired(t *testin
 		logger := testutil.QuietLogger(t)
 		conf := cachedDocument("x", "y")
 		r := newReloadable(t, conf, document(false, false))
-		remember := func(collector, target, file string) {
-			r.server.failures.failed(logger, slog.LevelError, failureKey(collector, target, file), "static target scrape failed", "fetch", context.DeadlineExceeded)
+		// said is what each remembered failure is of, by its key.
+		said := map[string]string{}
+		remember := func(what string, key subjectKey) {
+			said[key.bytes] = what
+			r.server.failures.failed(logger, slog.LevelError, key, "static target scrape failed", "fetch", context.DeadlineExceeded)
 		}
 		for _, name := range []string{"kept", "gone", "changed"} {
-			remember("x", staticTargetKey(name), "")
-			remember("x", staticTargetKey(name), "schedule")
-			remember("", staticTargetKey(name), "family demo")
+			remember("the scrape of "+name, staticTargetKey("x", name))
+			remember("the schedule of "+name, staticTargetKey("x", name).aspect(scheduleAspect))
+			remember("the endpoint's metric of "+name, staticClashKey(name, "demo"))
+			remember("a probe of the target static target "+name, probeFailureKey("x", "static target "+name, ""))
+			remember("the file schedule at static target "+name, failureKey("x", "static target "+name, "schedule"))
 		}
-		remember("x", address, "\x00utf8")
+		remember("the bytes at the address", aspectKey("x", address, "", utf8Aspect))
 		r.write(r.targets, document(true, true))
 		switch how {
 		case "the static target file alone":
@@ -513,11 +523,14 @@ func TestFollowingAReloadForgetsTheFailuresOfTheStaticTargetsItRetired(t *testin
 		var remembered []string
 		r.server.failures.mu.Lock()
 		for key := range r.server.failures.entries {
-			remembered = append(remembered, strings.ReplaceAll(key, "\x00", "|"))
+			remembered = append(remembered, said[key])
 		}
 		r.server.failures.mu.Unlock()
 		slices.Sort(remembered)
-		want := []string{"x|" + address + "||utf8", "x|static target kept|", "x|static target kept|schedule", "|static target changed|family demo", "|static target gone|family demo", "|static target kept|family demo"}
+		want := []string{"the bytes at the address", "the scrape of kept", "the schedule of kept"}
+		for _, name := range []string{"kept", "gone", "changed"} {
+			want = append(want, "the endpoint's metric of "+name, "a probe of the target static target "+name, "the file schedule at static target "+name)
+		}
 		slices.Sort(want)
 		if !slices.Equal(remembered, want) {
 			t.Errorf("%s reloaded: the failure log remembers\n%q\nwant\n%q", how, remembered, want)

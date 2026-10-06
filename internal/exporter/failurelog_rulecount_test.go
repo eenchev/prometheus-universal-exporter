@@ -6,6 +6,8 @@ import (
 	"log/slog"
 	"math/rand/v2"
 	"reflect"
+	"slices"
+	"strconv"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -14,15 +16,68 @@ import (
 	"github.com/eenchev/prometheus-universal-exporter/internal/testutil/alloctest"
 )
 
+// reportedFailure is a failure as a test reports it to the failure log:
+// under the bytes key, and for a rule's as that of a rule of the trip or
+// file whose key is trip. One that is no rule's is that of trip itself.
+type reportedFailure struct {
+	trip subjectKey
+	key  string
+	rule bool
+	// metric, expression and items are what tells a rule apart, which a
+	// scrape reports its failure by: the log makes the rule's key, and key
+	// is what the test holds that key to.
+	metric, expression, items string
+	// keyed says that a rule's failure is reported under key instead, as a
+	// scrape reported one while it made the key itself
+	// (ruleFailedUnderKey): to a log kept as an oracle, whose keys are
+	// those of another time.
+	keyed bool
+}
+
+// ruleFailureOf is the failure of the rule of the trip or file whose key is
+// trip that metric, expression and items tell apart, as a scrape reports it,
+// with the key the log is to remember it under.
+func ruleFailureOf(trip subjectKey, key, metric, expression, items string) reportedFailure {
+	return reportedFailure{rule: true, trip: trip, key: key, metric: metric, expression: expression, items: items}
+}
+
+// failureOf is the failure of the trip or file whose key is trip.
+func failureOf(trip subjectKey) reportedFailure {
+	return reportedFailure{trip: trip, key: trip.bytes}
+}
+
+// subject is the key the failure is remembered under, with whose it is.
+func (r reportedFailure) subject() subjectKey { return r.trip.rule(r.key) }
+
+// failed reports the failure to f as that of a trip that read its collector
+// as read says, as a scrape reports a rule's failure and any other. The key
+// the log says a rule's failure is remembered under is the key the test
+// made of the rule, or none, when and only when no entry is under that key:
+// anything else is the test's failure, said in a panic, since the tests
+// that report by the thousand have no place to take it.
+func (r reportedFailure) failed(f *failureLog, read configRead, logger *slog.Logger, stage string, err error) {
+	switch {
+	case !r.rule:
+		f.failedFor(read, logger, slog.LevelWarn, r.trip, "failed", stage, err)
+	case r.keyed:
+		f.ruleFailedUnderKey(read, logger, slog.LevelWarn, r.trip, r.key, "failed", stage, err)
+	default:
+		under := f.ruleFailedFor(read, logger, slog.LevelWarn, r.trip, r.metric, r.expression, r.items, "failed", stage, err)
+		if remembered := f.remembers(r.key); under != r.key && under != "" || remembered != (under != "") {
+			panic(fmt.Sprintf("the failure of the rule %q, %q, %q of %q is said to be remembered under %q; its key is %q, and an entry is under it: %v", r.metric, r.expression, r.items, r.trip.bytes, under, r.key, remembered))
+		}
+	}
+}
+
 // ruleFailuresRecounted is what the failure log's counts of rule failures
-// must be: the entries there are, counted again by the trip or file before
-// the first marker of a rule's key, which is found here by itself and not as
-// the log finds it.
-func ruleFailuresRecounted(f *failureLog) map[string]int {
+// must be: the entries there are, counted again by the trip or file each was
+// reported as a rule of, which the test that reported them kept in of by
+// the rule's key, and is not found as the log finds it.
+func ruleFailuresRecounted(f *failureLog, of map[string]string) map[string]int {
 	counts := map[string]int{}
 	for key := range f.entries {
-		if at := strings.Index(key, "\x00rule\x00"); at >= 0 {
-			counts[key[:at]]++
+		if trip, rule := of[key]; rule {
+			counts[trip]++
 		}
 	}
 	return counts
@@ -43,14 +98,18 @@ func ruleFailuresRecounted(f *failureLog) map[string]int {
 // while the log is small and every hundred steps when it is full, exactly
 // the entries recounted, and what a scrape is told of each trip is whether
 // an entry of a rule of it exists. Among the rules are ones whose
-// expression and items hold a NUL and the marker itself. Under the race
+// expression and items hold a NUL and the marker itself, and among the
+// trips a directory's file named rule, whose key ends as the marker begins,
+// and the files of a target named rule, whose keys hold it: a failure is
+// counted for the trip it was reported as a rule of, which the test keeps
+// beside each rule's key, whatever the keys read as. Under the race
 // detector it is the first of the four sequences, which makes every step
 // hundreds of times and fills the log as each of the others does.
 func TestTheRuleFailuresCountedAreTheEntriesThereAre(t *testing.T) {
 	logger := slog.New(slog.DiscardHandler)
 	collectors := []string{"web", "files", "api", "gone"}
-	targets := []string{"http://a", "http://b", staticTargetKey("store"), staticTargetKey("vault"), ""}
-	files := []string{"", "a.prom"}
+	targets := []string{"http://a", "http://b", staticTargetWas + "store", staticTargetWas + "vault", "", "rule"}
+	files := []string{"", "a.prom", "rule"}
 	rules := [][3]string{
 		{"m", ".a", ""},
 		{"m", ".b", ".items[]"},
@@ -74,21 +133,34 @@ func TestTheRuleFailuresCountedAreTheEntriesThereAre(t *testing.T) {
 		f := newFailureLog()
 		now := time.Date(2026, 10, 4, 9, 0, 0, 0, time.UTC)
 		f.now = func() time.Time { return now }
-		trip := func() string {
-			return failureKey(collectors[random.IntN(len(collectors))], targets[random.IntN(len(targets))], files[random.IntN(len(files))])
+		trip := func() subjectKey {
+			now, _ := tripKeyOf(collectors[random.IntN(len(collectors))], targets[random.IntN(len(targets))], files[random.IntN(len(files))])
+			return now
 		}
-		key := func() string {
+		// of is the trip each rule's key was reported with: a rule's key
+		// is of one trip.
+		of := map[string]string{}
+		ruleOf := func(trip subjectKey, metric, expression, items string) reportedFailure {
+			t.Helper()
+			key := ruleFailureKey(trip.bytes, metric, expression, items)
+			if other, seen := of[key]; seen && other != trip.bytes {
+				t.Fatalf("the trips %q and %q have the one key %q of a rule", other, trip.bytes, key)
+			}
+			of[key] = trip.bytes
+			return ruleFailureOf(trip, key, metric, expression, items)
+		}
+		reported := func() reportedFailure {
 			if random.IntN(3) == 0 {
-				return trip()
+				return failureOf(trip())
 			}
 			rule := rules[random.IntN(len(rules))]
-			return ruleFailureKey(trip(), rule[0], rule[1], rule[2])
+			return ruleOf(trip(), rule[0], rule[1], rule[2])
 		}
 		check := func(what string) {
 			t.Helper()
 			f.mu.Lock()
 			defer f.mu.Unlock()
-			want := ruleFailuresRecounted(f)
+			want := ruleFailuresRecounted(f, of)
 			if !reflect.DeepEqual(f.ruleFailures, want) {
 				t.Fatalf("seed %d, step %d, after %s: the rule failures counted are %v, and the entries recounted %v", seed, steps, what, f.ruleFailures, want)
 			}
@@ -97,14 +169,14 @@ func TestTheRuleFailuresCountedAreTheEntriesThereAre(t *testing.T) {
 		told := func() {
 			t.Helper()
 			f.mu.Lock()
-			recounted := ruleFailuresRecounted(f)
+			recounted := ruleFailuresRecounted(f, of)
 			f.mu.Unlock()
 			for _, collector := range collectors {
 				for _, target := range targets {
 					for _, file := range files {
-						trip := failureKey(collector, target, file)
-						if got, remembered := f.remembersRules(trip), recounted[trip] > 0; got != remembered {
-							t.Fatalf("seed %d, step %d: a scrape of %q is told %v, and a rule's failure of it is remembered: %v", seed, steps, trip, got, remembered)
+						trip, _ := tripKeyOf(collector, target, file)
+						if got, remembered := f.remembersRules(trip, nil), recounted[trip.bytes] > 0; got != remembered {
+							t.Fatalf("seed %d, step %d: a scrape of %q is told %v, and a rule's failure of it is remembered: %v", seed, steps, trip.bytes, got, remembered)
 						}
 					}
 				}
@@ -117,10 +189,10 @@ func TestTheRuleFailuresCountedAreTheEntriesThereAre(t *testing.T) {
 			steps++
 			switch random.IntN(20) {
 			case 0, 1, 2:
-				f.recovered(logger, key(), "recovered")
+				f.recovered(logger, reported().subject(), "recovered")
 				return "a recovery"
 			case 3:
-				f.forget(key())
+				f.forget(reported().subject())
 				return "forgetting a key"
 			case 4:
 				if slow {
@@ -152,10 +224,11 @@ func TestTheRuleFailuresCountedAreTheEntriesThereAre(t *testing.T) {
 			case 7:
 				superseded++
 				if random.IntN(2) == 0 {
-					f.failedFor(retired, logger, slog.LevelWarn, ruleFailureKey(failureKey("gone", "http://a", ""), "m", ".a", ""), "failed", "metric", failures[1])
+					ruleOf(failureKey("gone", "http://a", ""), "m", ".a", "").failed(f, retired, logger, "metric", failures[1])
 					return "the failure of a retired collector's rule"
 				}
-				f.recoveredFor(retired, logger, ruleFailureKey(failureKey("gone", "http://a", ""), "m", ".a", ""), "recovered")
+				gone := failureKey("gone", "http://a", "")
+				f.recoveredFor(retired, logger, gone.rule(ruleFailureKey(gone.bytes, "m", ".a", "")), "recovered")
 				return "the recovery of a retired collector's rule"
 			case 8:
 				if slow {
@@ -164,21 +237,23 @@ func TestTheRuleFailuresCountedAreTheEntriesThereAre(t *testing.T) {
 				// A failure turns an hour old less than a minute after a
 				// sweep that found it younger, and happens again: it is
 				// dropped and remembered anew where it is reported.
-				again := key()
-				f.failed(logger, slog.LevelWarn, again, "failed", "metric", failures[2])
+				again := reported()
+				again.failed(f, configRead{}, logger, "metric", failures[2])
 				now = now.Add(failureLogForget - 30*time.Second)
 				f.failed(logger, slog.LevelWarn, failureKey("web", "http://a", ""), "failed", "http", failures[1])
 				now = now.Add(45 * time.Second)
-				f.failed(logger, slog.LevelWarn, again, "failed", "metric", failures[2])
+				again.failed(f, configRead{}, logger, "metric", failures[2])
 				f.mu.Lock()
-				if st := f.entries[again]; st == nil || st.failures != 1 || !st.first.Equal(now) {
+				if st := f.entries[again.key]; st == nil || st.failures != 1 || !st.first.Equal(now) {
 					t.Fatalf("seed %d, step %d: the failure an hour old was not remembered anew: %+v", seed, steps, st)
 				}
 				f.mu.Unlock()
 				replaced++
 				return "a failure an hour old happening again"
 			}
-			f.failed(logger, slog.LevelWarn, key(), "failed", []string{"metric", "http"}[random.IntN(2)], failures[random.IntN(len(failures))])
+			failed := reported()
+			stage := []string{"metric", "http"}[random.IntN(2)]
+			failed.failed(f, configRead{}, logger, stage, failures[random.IntN(len(failures))])
 			return "a failure"
 		}
 		for range 6000 {
@@ -196,7 +271,7 @@ func TestTheRuleFailuresCountedAreTheEntriesThereAre(t *testing.T) {
 			if i%3 == 0 {
 				f.failed(logger, slog.LevelWarn, trip, "failed", "http", failures[1])
 			} else {
-				f.failed(logger, slog.LevelWarn, ruleFailureKey(trip, "m", fmt.Sprintf(".e%d", i%3), ""), "failed", "metric", failures[2])
+				ruleOf(trip, "m", fmt.Sprintf(".e%d", i%3), "").failed(f, configRead{}, logger, "metric", failures[2])
 			}
 		}
 		check("filling the log")
@@ -233,6 +308,198 @@ func TestTheRuleFailuresCountedAreTheEntriesThereAre(t *testing.T) {
 	}
 }
 
+// A rule's failure is counted for the trip or file its scrape reported it as
+// a rule of, which is the key the scrape asks with, whatever the parts of
+// that key are: the failure log reads the trip out of no key. Over every key
+// made of a collector, a target and a file that are each nothing, a plain
+// name, rule, a NUL, the marker of a rule's key, or a piece of it — rule
+// after a NUL, as the key of a directory's file named rule ends; rule before
+// one; the marker short of its last byte or of its first; the marker twice —
+// and the keys of a file named rule, of a file of a target named rule and of
+// a static target named rule, with a rule failing on every second trip and
+// another, whose name is rule and whose expression and items hold the
+// marker, on every third:
+//
+//   - each trip's count is the failures reported of its own rules, and no
+//     trip is counted that has none, though the key of one trip is the
+//     beginning of another's, or what another's reads as up to a marker;
+//   - a scrape of each trip is told that a rule's failure is remembered
+//     when, and only when, one of its own rules' is, beside those it names
+//     as failing again, and a failure it names that is another trip's is
+//     not taken from its count;
+//   - when the failures recover, each count goes with them, and nothing is
+//     counted in the end.
+//
+// The log that read the trip out of the keys (remembersRulesReadingKeys)
+// told a scrape whose key neither held the marker nor ended as it begins of
+// every failure it is told of now, and of those of other trips besides; and
+// told one whose key ended in a NUL and rule, as that of a file named rule
+// did, of none, whatever was remembered. That log is given the keys the
+// trips and their rules had (failureKeyWas, ruleFailureKeyWas), and of the
+// trips that had one key between them — a part with a NUL read as two — the
+// first is taken, so that what is remembered now is what was then.
+func TestARulesFailureIsCountedForTheTripItsScrapeAsksWith(t *testing.T) {
+	logger := slog.New(slog.DiscardHandler)
+	parts := []string{"", "a.prom", "rule", "\x00", "\x00rule", "rule\x00", "\x00rule\x00", "\x00rul", "ule\x00", "\x00rule\x00rule\x00", "rule\x00rule"}
+	// A trip has the key it has, which the log is asked with, and the key
+	// it had, which the oracle reads.
+	type tripKeys struct {
+		now subjectKey
+		was string
+	}
+	var trips []tripKeys
+	add := func(collector, target, file string) {
+		now, was := tripKeyOf(collector, target, file)
+		trips = append(trips, tripKeys{now, was})
+	}
+	add("dir", "", "rule")
+	add("dir", "/var/metrics", "rule")
+	add("dir", "rule", "a.prom")
+	add("dir", staticTargetWas+"rule", "")
+	made := map[string]bool{}
+	for _, collector := range parts {
+		for _, target := range parts {
+			for _, file := range parts {
+				add(collector, target, file)
+				made[trips[len(trips)-1].now.bytes] = true
+			}
+		}
+	}
+	if len(made) != len(parts)*len(parts)*len(parts) {
+		t.Fatalf("the %d trips made of the parts have %d keys between them, want one each", len(parts)*len(parts)*len(parts), len(made))
+	}
+	slices.SortStableFunc(trips, func(a, b tripKeys) int { return strings.Compare(a.was, b.was) })
+	trips = slices.CompactFunc(trips, func(a, b tripKeys) bool { return a.was == b.was })
+	rules := [2][3]string{{"m", ".a", ""}, {"rule", ".b #\x00rule\x00", "\x00rule"}}
+	// keys are the keys of the two rules of each trip: no two trips have
+	// one in common, so an entry under one is of that trip's rule; nor had
+	// they, by the keys the rules had, which wasKeys holds.
+	keys, of, wasKeys, taken := make([][2]string, len(trips)), map[string]string{}, map[string]string{}, map[string]bool{}
+	for i, trip := range trips {
+		for j, rule := range rules {
+			key, wasKey := ruleFailureKey(trip.now.bytes, rule[0], rule[1], rule[2]), ruleFailureKeyWas(trip.was, rule[0], rule[1], rule[2])
+			if other, seen := of[key]; seen || taken[wasKey] {
+				t.Fatalf("the trips %q and %q have the one key %q of the rule %q, or had the one key %q", other, trip.was, key, rule, wasKey)
+			}
+			keys[i][j], of[key], wasKeys[key], taken[wasKey] = key, trip.was, wasKey, true
+		}
+	}
+	was := func(key string) string { return wasKeys[key] }
+	f := newFailureLog()
+	now := time.Date(2026, 10, 6, 9, 0, 0, 0, time.UTC)
+	f.now = func() time.Time { return now }
+	// failing says which of the two rules of the trip at i has a failure
+	// remembered.
+	failing := func(i int) [2]bool { return [2]bool{i%2 == 0, i%3 == 0} }
+	var short, untold, shared int
+	check := func(what string, remembered func(i int) [2]bool) {
+		t.Helper()
+		want := map[string]int{}
+		for i, trip := range trips {
+			for _, is := range remembered(i) {
+				if is {
+					want[trip.now.bytes]++
+				}
+			}
+		}
+		f.mu.Lock()
+		for _, trip := range trips {
+			if f.ruleFailures[trip.now.bytes] != want[trip.now.bytes] {
+				t.Fatalf("%s %d failures of rules are counted for %q, want %d", what, f.ruleFailures[trip.now.bytes], trip.now.bytes, want[trip.now.bytes])
+			}
+		}
+		if len(f.ruleFailures) != len(want) {
+			t.Fatalf("%s rule failures are counted for %d trips, want %d: some for a key that is no trip's", what, len(f.ruleFailures), len(want))
+		}
+		f.mu.Unlock()
+		counted := ruleFailuresReadFromKeys(f, was)
+		for i, keyed := range trips {
+			trip := keyed.was
+			is := remembered(i)
+			for _, asked := range []struct {
+				again [2]bool
+				want  bool
+			}{
+				{[2]bool{false, false}, is[0] || is[1]},
+				{[2]bool{true, false}, is[1]},
+				{[2]bool{false, true}, is[0]},
+				{[2]bool{true, true}, false},
+			} {
+				again := map[string]bool{}
+				for j, fails := range asked.again {
+					if fails {
+						again[keys[i][j]] = true
+					}
+				}
+				got := f.remembersRules(keyed.now, again)
+				if got != asked.want {
+					t.Fatalf("%s a scrape of %q, of whose rules %v have a failure remembered and %v fail again, is told %v that another rule's failure is remembered, want %v", what, trip, is, asked.again, got, asked.want)
+				}
+				// The first trip's rule, which fails whenever any does,
+				// is no rule of this trip.
+				if i > 0 {
+					again[keys[0][0]] = true
+					if got := f.remembersRules(keyed.now, again); got != asked.want {
+						t.Fatalf("%s a scrape of %q, of whose rules %v have a failure remembered and %v fail again, is told %v when it names the failure of a rule of %q too, want %v", what, trip, is, asked.again, got, trips[0].was, asked.want)
+					}
+					delete(again, keys[0][0])
+				}
+				was := remembersRulesReadingKeys(f, counted, trip, again)
+				_, marked := tripReadFromKey(trip)
+				switch {
+				case !marked && strings.HasSuffix(trip, "\x00rule"):
+					if was {
+						t.Fatalf("%s the oracle tells a scrape of %q, whose key ended as the marker begins, of a rule's failure: it does not read a rule's key as the log read it", what, trip)
+					}
+					if got {
+						untold++
+					}
+				case got && !was:
+					t.Fatalf("%s a scrape of %q, of whose rules %v have a failure remembered and %v fail again, is told of a rule's failure that it was not told of", what, trip, is, asked.again)
+				case was && !got:
+					shared++
+				}
+			}
+		}
+	}
+	check("With nothing failing", func(int) [2]bool { return [2]bool{} })
+	for i, trip := range trips {
+		if read, _ := tripReadFromKey(was(keys[i][0])); read != trip.was {
+			short++
+		}
+		for j, fails := range failing(i) {
+			if fails {
+				ruleFailureOf(trip.now, keys[i][j], rules[j][0], rules[j][1], rules[j][2]).failed(f, configRead{}, logger, "metric", errors.New("value is missing"))
+			}
+		}
+	}
+	check("With the rules failing", failing)
+	// The failures happen again, and one of each trip's with another text:
+	// each is counted once still.
+	for i, trip := range trips {
+		for j, fails := range failing(i) {
+			if fails {
+				ruleFailureOf(trip.now, keys[i][j], rules[j][0], rules[j][1], rules[j][2]).failed(f, configRead{}, logger, "metric", []error{errors.New("value is missing"), errors.New("not a number")}[j])
+			}
+		}
+	}
+	check("With the rules failing again", failing)
+	for i, trip := range trips {
+		f.recovered(logger, trip.now.rule(keys[i][0]), "recovered")
+	}
+	check("With the first rule recovered", func(i int) [2]bool { return [2]bool{false, failing(i)[1]} })
+	// What is left is swept when it is an hour old.
+	now = now.Add(failureLogForget + 2*time.Minute)
+	f.failed(logger, slog.LevelWarn, failureKey("web", "http://a", ""), "failed", "http", errors.New("connection refused"))
+	check("With everything forgotten", func(int) [2]bool { return [2]bool{} })
+	if len(f.entries) != 1 {
+		t.Errorf("after the sweep %d entries are remembered, want the one of the trip that failed last", len(f.entries))
+	}
+	if len(trips) < 1000 || short < 200 || untold < 200 || shared < 200 {
+		t.Errorf("of %d trips the key of a rule of %d did not read as the trip's; %d times a scrape whose key ended as the marker begins was told of a failure it was not told of, and %d times one was told of another trip's: the table shows too little", len(trips), short, untold, shared)
+	}
+}
+
 // Two rules have one key in the failure log only when they are one rule:
 // alike in metric name, expression and items. A jq or css expression may
 // hold a NUL, in a comment or a string, and the reviewer's pair of rules —
@@ -243,7 +510,7 @@ func TestTheRuleFailuresCountedAreTheEntriesThereAre(t *testing.T) {
 // generated rules that differ, with NULs and without; rules without a NUL
 // are told apart exactly as they were.
 func TestARulesKeyIsItsOwnWhateverItsExpressionHolds(t *testing.T) {
-	trip := failureKey("nul", "http://target.example", "")
+	trip := failureKey("nul", "http://target.example", "").bytes
 	if a, b := ruleFailureKey(trip, "m", ".a #", ".i[] #\x00.j[]"), ruleFailureKey(trip, "m", ".a #\x00.i[] #", ".j[]"); a == b {
 		t.Errorf("two rules that differ have the one key %q", a)
 	}
@@ -278,8 +545,8 @@ func TestARulesKeyIsItsOwnWhateverItsExpressionHolds(t *testing.T) {
 				t.Fatalf("the rules %q and %q, without a NUL, had the one key %q", known, r, wasKey)
 			}
 			wasKeys[wasKey] = r
-			if rest, found := strings.CutPrefix(key, trip+ruleKeyMarker); !found || !strings.HasPrefix(rest, r.metric+"\x00") {
-				t.Fatalf("the key %q of %q does not begin with its trip, the marker and the metric", key, r)
+			if rest, found := strings.CutPrefix(key, trip+ruleKeyMarker); !found || !strings.HasPrefix(rest, strconv.Itoa(len(r.metric))+"\x00"+r.metric) {
+				t.Fatalf("the key %q of %q does not begin with its trip, the marker and the metric after its length", key, r)
 			}
 		}
 		if plain && len(keys) != len(wasKeys) {

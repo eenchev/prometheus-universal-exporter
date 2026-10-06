@@ -147,7 +147,8 @@ func (s *Server) verboseCollectorMetrics(stats map[string]*serverStats) []model.
 	collectors := s.manager.Get().Collectors
 	names := make([]string, 0, len(collectors))
 	python := map[string]bool{}
-	for _, c := range collectors {
+	for i := range collectors {
+		c := &collectors[i]
 		names = append(names, c.Name)
 		if c.Transform.Type == "python" || c.Transform.PreScript != "" {
 			python[c.Name] = true

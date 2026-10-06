@@ -166,7 +166,7 @@ func shippedRules(t *testing.T, each func(path string, x *model.Collector, rule 
 			}
 			var written []model.Collector
 			_, _ = load(path, nil, func(c *model.Config) {
-				for _, collector := range c.Collectors {
+				for _, collector := range c.Collectors { //nolint:gocritic // each is copied, to keep it as it was written
 					collector.Metrics = slices.Clone(collector.Metrics)
 					for i := range collector.Metrics {
 						collector.Metrics[i].Labels = slices.Clone(collector.Metrics[i].Labels)

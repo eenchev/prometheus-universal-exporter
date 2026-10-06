@@ -116,7 +116,7 @@ func TestRepeatsAreLoggedAtDebugLevel(t *testing.T) {
 	var out strings.Builder
 	logger := slog.New(slog.NewJSONHandler(&out, &slog.HandlerOptions{Level: slog.LevelDebug}))
 	for i := 0; i < 3; i++ {
-		f.failed(logger, slog.LevelWarn, "k", "probe stage failed; continuing", "decode", errors.New("bad"))
+		f.failed(logger, slog.LevelWarn, failureKey("k", "", ""), "probe stage failed; continuing", "decode", errors.New("bad"))
 	}
 	if strings.Count(out.String(), `"repeat":true`) != 2 || strings.Count(out.String(), `"level":"WARN"`) != 1 {
 		t.Fatalf("debug output:\n%s", out.String())
@@ -130,13 +130,14 @@ func TestTheFailureLogIsBounded(t *testing.T) {
 	for i := 0; i < failureLogMaxEntries; i++ {
 		f.failed(logger, slog.LevelError, failureKey("c", "t", string(rune(i))), "m", "s", nil)
 	}
-	f.failed(logger, slog.LevelError, "extra", "m", "s", nil)
-	if _, ok := f.entries["extra"]; ok || len(f.entries) != failureLogMaxEntries {
+	extra := failureKey("extra", "", "")
+	f.failed(logger, slog.LevelError, extra, "m", "s", nil)
+	if _, ok := f.entries[extra.bytes]; ok || len(f.entries) != failureLogMaxEntries {
 		t.Fatalf("remembered %d entries past the bound", len(f.entries))
 	}
 	*now = now.Add(failureLogForget + time.Minute)
-	f.failed(logger, slog.LevelError, "extra", "m", "s", nil)
-	if _, ok := f.entries["extra"]; !ok || len(f.entries) != 1 {
+	f.failed(logger, slog.LevelError, extra, "m", "s", nil)
+	if _, ok := f.entries[extra.bytes]; !ok || len(f.entries) != 1 {
 		t.Fatalf("stale entries were not forgotten: %d", len(f.entries))
 	}
 	f.forgetCollectors(map[string]bool{"extra": true})

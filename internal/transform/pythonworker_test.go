@@ -44,10 +44,17 @@ func requirePython(t *testing.T) {
 // elsewhere, and one that fills 200 MiB more than two seconds. The minute
 // bounds a script that never ends; a test of the timeout itself calls
 // holdScriptsToTheirTimeout.
+//
+// An interpreter has a minute to start in too, where the exporter gives it
+// ten seconds, which one start on a busy machine has overrun. That is kept
+// by a test of the script's timeout, which starts an interpreter as any
+// other does; a test of the start's own limit sets a short one
+// (SetStartTimeout) and starts what never says it is ready.
 func usePythonPool(t *testing.T) {
 	t.Helper()
 	t.Cleanup(IsolatePythonWorkers())
 	PythonWorkers().SetLeastScriptTimeout(time.Minute)
+	PythonWorkers().SetStartTimeout(time.Minute)
 }
 
 // holdScriptsToTheirTimeout makes limits.script_timeout what ends a script

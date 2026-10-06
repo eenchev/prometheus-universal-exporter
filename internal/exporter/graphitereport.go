@@ -37,7 +37,7 @@ func (s *Server) noteGraphite(ctx context.Context, d *decode.Decoded, c *model.C
 	if report.LeftOut() > 0 {
 		s.tripDebug(ctx, "graphite series left out", append(attrs, "no_points", report.NoPoints, "older_than_max_age", report.Stale, "duplicates", report.Duplicates)...)
 	}
-	key := failureKey(c.Name, keyTarget, file) + "\x00carbon lines"
+	key := aspectKey(c.Name, keyTarget, file, carbonLinesAspect)
 	if report.SkippedLines > 0 {
 		s.tripFailed(ctx, rec.read, slog.LevelWarn, key, "carbon lines skipped", "decode", report.FirstSkipped, append(attrs, "skipped", report.SkippedLines)...)
 		return

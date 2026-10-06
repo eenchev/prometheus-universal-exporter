@@ -21,6 +21,7 @@ import (
 	"unicode"
 
 	"github.com/eenchev/prometheus-universal-exporter/internal/model"
+	"github.com/eenchev/prometheus-universal-exporter/internal/testutil"
 	"golang.org/x/net/idna"
 )
 
@@ -32,16 +33,19 @@ import (
 
 // namedServer is an HTTPS server, speaking HTTP/2 too, that keeps the name
 // each TLS handshake asked for, and the protocol and the Host of each
-// request.
+// request, and knows which of the connections made to it have ended.
 type namedServer struct {
 	*httptest.Server
 	mu           sync.Mutex
 	names, hosts []string
+	// ended are the connections the server has closed, by the address
+	// each was made from.
+	ended map[string]bool
 }
 
 func newNamedServer(t *testing.T) *namedServer {
 	t.Helper()
-	s := &namedServer{}
+	s := &namedServer{ended: map[string]bool{}}
 	s.Server = httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		s.mu.Lock()
 		s.hosts = append(s.hosts, r.Proto+" "+r.Host)
@@ -55,9 +59,38 @@ func newNamedServer(t *testing.T) *namedServer {
 		s.mu.Unlock()
 		return nil, nil
 	}}
+	s.Config.ConnState = func(conn net.Conn, state http.ConnState) {
+		if state == http.StateClosed || state == http.StateHijacked {
+			s.mu.Lock()
+			s.ended[conn.RemoteAddr().String()] = true
+			s.mu.Unlock()
+		}
+	}
 	s.StartTLS()
 	t.Cleanup(s.Close)
 	return s
+}
+
+// done closes every connection d has made and returns when the server has
+// ended each of them, and d makes none after it. What a client has dialed is
+// not over when its request is: a transport that dials again and again
+// leaves connections whose handshake the server has yet to read, and read
+// later, the name it asks for was counted with the handshakes of whatever
+// the test did next. After done, every handshake d's connections made has
+// been seen and none can come.
+func (s *namedServer) done(t *testing.T, d *dialRecord) {
+	t.Helper()
+	made := d.closeAll()
+	testutil.WaitFor(t, fmt.Sprintf("the server to end the %d connections made to it", len(made)), func() bool {
+		s.mu.Lock()
+		defer s.mu.Unlock()
+		for _, from := range made {
+			if !s.ended[from] {
+				return false
+			}
+		}
+		return true
+	})
 }
 
 // seen is the names asked for and the requests received since the last call.
@@ -69,12 +102,17 @@ func (s *namedServer) seen() (names, hosts []string) {
 	return names, hosts
 }
 
-// dialRecord keeps the addresses a transport asked to be connected to.
+// dialRecord keeps the addresses a transport asked to be connected to, and
+// the connections it was given.
 type dialRecord struct {
 	mu        sync.Mutex
 	addresses []string
 	// limit, when set, fails every dial after that many.
 	limit int
+	// made are the connections dialed, and closed says that they have been
+	// closed and no other is made (closeAll).
+	made   []net.Conn
+	closed bool
 }
 
 // to is a dialer that connects every address to backend, as a DNS that
@@ -91,8 +129,37 @@ func (d *dialRecord) to(backend string) func(context.Context, string, string) (n
 		if backend != "" {
 			address = backend
 		}
-		return (&net.Dialer{}).DialContext(ctx, network, address)
+		conn, err := (&net.Dialer{}).DialContext(ctx, network, address)
+		if err != nil {
+			return nil, err
+		}
+		d.mu.Lock()
+		defer d.mu.Unlock()
+		// A dial that was under way when the connections were closed has
+		// its own closed too, and is known to the caller of closeAll that
+		// comes after it; one that ends later still gives none.
+		if d.closed {
+			_ = conn.Close()
+			return nil, errors.New("the test dials no more")
+		}
+		d.made = append(d.made, conn)
+		return conn, nil
 	}
+}
+
+// closeAll closes the connections d has made, makes every dial from now on
+// fail, and returns the addresses the connections were made from, by which
+// a server knows them.
+func (d *dialRecord) closeAll() []string {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	d.closed = true
+	from := make([]string, 0, len(d.made))
+	for _, conn := range d.made {
+		from = append(from, conn.LocalAddr().String())
+		_ = conn.Close()
+	}
+	return from
 }
 
 // dialed is the addresses asked for since the last call.
@@ -102,6 +169,56 @@ func (d *dialRecord) dialed() []string {
 	out := d.addresses
 	d.addresses = nil
 	return out
+}
+
+// What a test dialed is over at the server before the test counts what the
+// server saw next. A connection made and not yet used, as a transport that
+// was stopped while it dialed leaves one, is closed by done and ended at
+// the server, so the handshake it would have made cannot come afterwards
+// and be counted with another host's; one whose handshake was made has it
+// counted by the time done returns, and not later; and a dial that ends
+// after done gives no connection. Without this the handshakes of one host's
+// redials were now and then read while the next host's were counted, and
+// the test of that host failed on a name that was the other's.
+func TestWhatWasDialedIsOverAtTheServerBeforeTheNextIsCounted(t *testing.T) {
+	secure := newNamedServer(t)
+	address := strings.TrimPrefix(secure.URL, "https://")
+	dials := &dialRecord{}
+	dial := dials.to(address)
+	hello := func(conn net.Conn, name string) error {
+		return tls.Client(conn, &tls.Config{ServerName: name, InsecureSkipVerify: true}).HandshakeContext(context.Background())
+	}
+	early, err := dial(context.Background(), "tcp", "early.example:8080")
+	if err != nil {
+		t.Fatal(err)
+	}
+	late, err := dial(context.Background(), "tcp", "late.example:8080")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := hello(early, "early.example"); err != nil {
+		t.Fatalf("the handshake of the connection made first: %v", err)
+	}
+	secure.done(t, dials)
+	// The handshake made is there, and the one not made cannot be.
+	if names, _ := secure.seen(); len(names) != 1 || names[0] != "early.example" {
+		t.Errorf("once the connections are over the server has seen the handshakes %q, want the one that was made", names)
+	}
+	if err := hello(late, "late.example"); err == nil {
+		t.Error("a connection that was closed made a handshake")
+	}
+	if conn, err := dial(context.Background(), "tcp", "later.example:8080"); err == nil {
+		_ = conn.Close()
+		t.Error("a dial after the connections were closed gave a connection")
+	}
+	// What is counted next is its own alone.
+	next := &dialRecord{}
+	if err := goGet(&http.Transport{DialContext: next.to(address), TLSClientConfig: &tls.Config{InsecureSkipVerify: true}}, "https://next.example:8080/x"); err != nil {
+		t.Fatal(err)
+	}
+	if names, hosts := secure.seen(); len(names) != 1 || names[0] != "next.example" || len(hosts) != 1 {
+		t.Errorf("the next request is counted with the handshakes %q and the requests %q, want its own alone", names, hosts)
+	}
 }
 
 // goGet sends one GET on a transport of Go's own, with nothing of the
@@ -224,9 +341,14 @@ func TestGoSendsAHostOutsideASCIIUnderTwoNames(t *testing.T) {
 			t.Errorf("%q over https through a proxy: Go sent %+v, want %q", tc.host, got, want)
 		}
 
-		dials.limit = 3
-		err := goGet(&http.Transport{DialContext: dials.to(secureAddress), TLSClientConfig: anyCertificate(), ForceAttemptHTTP2: true}, "https://"+tc.host+":8080/x")
-		dialed := dials.dialed()
+		// A transport that dials again and again is stopped at its fourth
+		// dial with the handshakes of the first three wherever they have
+		// got to. They are ended here, at the server too, before they are
+		// counted: one read later was counted with the next host's.
+		stopped := &dialRecord{limit: 3}
+		err := goGet(&http.Transport{DialContext: stopped.to(secureAddress), TLSClientConfig: anyCertificate(), ForceAttemptHTTP2: true}, "https://"+tc.host+":8080/x")
+		secure.done(t, stopped)
+		dialed := stopped.dialed()
 		names, hosts = secure.seen()
 		if tc.dialed == tc.sent || tc.dialed == tc.host {
 			// One name, or a host with no mapped form, which HTTP/2 keeps

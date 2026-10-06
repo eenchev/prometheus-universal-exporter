@@ -73,7 +73,8 @@ func Validate(c *model.Config) error {
 // transforms hold, which bounds how many compiled programs it needs.
 func expressionCount(c *model.Config) int {
 	n := 0
-	for _, x := range c.Collectors {
+	for i := range c.Collectors {
+		x := &c.Collectors[i]
 		n += len(x.Transform.Include) + len(x.Transform.Exclude)
 		for _, rule := range x.Metrics {
 			n += 2 + len(rule.Labels)
@@ -327,7 +328,9 @@ func checkGraphiteResponse(x *model.Collector) error {
 // does not take (checkPythonRule). A prometheus rule that passes them all
 // must still say which metrics it is about (checkPrometheusRuleSelects). The
 // rules that pass all of that are then held against each other: no two of
-// them may be the same rule (checkRulesDiffer).
+// them may be the same rule, and no prometheus rule's expression may match
+// the name another passes on the metric of with the same labels
+// (checkRulesDiffer, checkNoPatternRepeatsAName).
 func validateMetricRules(c *model.Config, x *model.Collector) error {
 	var errs []error
 	sound := make([]bool, len(x.Metrics))
@@ -380,10 +383,12 @@ func validateMetricRules(c *model.Config, x *model.Collector) error {
 // script's twice, which changes nothing, and load.
 //
 // The comparison is of what is written. Two expressions that mean the same
-// and are written differently are two rules to it, and so are a prometheus
-// rule without an expression, which matches the metric of its name, and one
-// whose expression is that name anchored: they load, and fail the scrape as
-// they did.
+// and are written differently are two rules to it: they load, and fail the
+// scrape as they did. One pair of rules that select the same in other words
+// is decided by the configuration alone, and is refused after the copies: a
+// prometheus rule without an expression, which matches the metric of its
+// name, and one whose expression matches that name
+// (checkNoPatternRepeatsAName).
 //
 // Only rules the checks of a rule take, sound, are compared, so a rule those
 // refuse is refused in the words it was, and is told of its copy once it
@@ -399,6 +404,8 @@ func checkRulesDiffer(x *model.Collector, sound []bool) []error {
 	type texts struct{ name, expression, items, timeFormat string }
 	var errs []error
 	alike := map[texts][]int{}
+	// The rules that repeat no earlier one, in their order.
+	var distinct []int
 	for i := range x.Metrics {
 		if !sound[i] {
 			continue
@@ -407,12 +414,11 @@ func checkRulesDiffer(x *model.Collector, sound []bool) []error {
 		key := texts{r.Name, r.Expression, r.Items, r.TimeFormat}
 		first := slices.IndexFunc(alike[key], func(earlier int) bool {
 			other := &x.Metrics[earlier]
-			return maps.Equal(r.ValueMap, other.ValueMap) && slices.EqualFunc(ruleLabels(x, r), ruleLabels(x, other), func(a, b model.LabelRule) bool {
-				return a.Name == b.Name && a.Value == b.Value && a.Expression == b.Expression
-			})
+			return maps.Equal(r.ValueMap, other.ValueMap) && alikeInLabels(x, r, other)
 		})
 		if first < 0 {
 			alike[key] = append(alike[key], i)
+			distinct = append(distinct, i)
 			continue
 		}
 		of := fmt.Sprintf("of metric %q", r.Name)
@@ -421,10 +427,182 @@ func checkRulesDiffer(x *model.Collector, sound []bool) []error {
 		}
 		errs = append(errs, fmt.Errorf("collector %q metrics rule %d and rule %d are the same rule %s: alike in name, expression, items and labels, each makes every series the other makes, and a scrape that has a series twice fails, as a duplicate metric series; take one of the two out, or tell their series apart by a label, as with a static label that has another value in each", x.Name, alike[key][first]+1, i+1, of))
 	}
+	return append(errs, checkNoPatternRepeatsAName(x, distinct)...)
+}
+
+// checkNoPatternRepeatsAName refuses two rules of a prometheus collector of
+// which one passes on the metric of its name, having no expression, and the
+// other has an expression that matches that very name, where both give the
+// metric's series one name and the same labels:
+//
+//	metrics:
+//	  - name: up
+//	  - expression: '^up'
+//
+// Every series of the metric is then made by each of them, and a scrape
+// that has a series twice fails, `validation failed: duplicate metric
+// series "up"`, on every scrape of a target that has the metric; of a
+// target that has none the rule of the name makes nothing, and unless it is
+// not required reports the metric missing. So the rule of the name, which
+// is about that metric alone, makes a series of no scrape that passes, and
+// that is told by the configuration alone: the name is written, and whether
+// a regular expression matches a text that is known is decided here as the
+// transform decides it for each series, by the expression compiled as it
+// compiles it and matched anywhere in the name
+// (transform.applyPrometheusTransform).
+//
+// The rules give the series one name when the rule with the expression has
+// no name, and so keeps the metric's own, or has that same name, which it
+// exports what it matches under. With another name it exports the metric
+// under that, another family, and the two are not held against each other.
+// Their labels are the same when the rules are alike in them as two rules
+// that are the same rule are (alikeInLabels). A value_map and a time_format,
+// which tell such rules apart, no prometheus rule has
+// (transform.CheckMetricRule).
+//
+// What else the rule of the name says changes nothing of it: with a type
+// the other has not the scrape fails on a metric of inconsistent types
+// before it comes to the duplicate, and where its scale or its type cannot
+// apply to the metric, a histogram or a summary, or a label it requires is
+// missing, the rule fails on the series instead of making it, and makes
+// none still.
+//
+// What else the rule with the expression says can change what a scrape
+// does, and with one exception does not change the verdict. That rule can
+// fail on a series of the metric as well: its type or its scale cannot
+// apply to a histogram or a summary, which keeps its own type and takes no
+// scale, a type of histogram or summary applies to nothing else, and a
+// series may not have a label the rule requires (canFailOnASeries). Under
+// error_mode log or ignore it then carries on without that series, and the
+// scrape passes with the one the rule of the name made. So what such a pair
+// does is the target's to say: `{name: lat}` beside `{expression: '.*',
+// scale: 0.001}` passes where lat is a histogram and fails on a duplicate
+// where it is a gauge, and `{name: up}` beside `{expression: '^up$', type:
+// gauge}` fails every scrape of a target whose up is a gauge, a counter or
+// untyped. Such pairs are refused with the others: a setting that fails on
+// some series is no way to keep a rule from a metric, since every series it
+// does not fail on is made twice. The error says that in place of saying
+// that every series is, and names what the rule sets.
+//
+// The exception is a rule with an expression that is about the histograms
+// alone, or the summaries (keepsToItsType): `{name: up}` beside
+// `{expression: '.*', type: histogram, error_mode: ignore}` is the metric
+// up and every histogram, and loads. That type applies to no metric of
+// another, so the rule fails on, and under error_mode log or ignore
+// carries on without, every gauge, counter and untyped metric and every
+// metric of the other of the two types, which leaves an ordinary metric to
+// the rule of its name. The pair makes a series twice only where the
+// target's metric of that name is itself of that type, and the scrape of
+// such a target fails on the duplicate, as that of two rules with
+// expressions that both match a metric does. Whatever else the rule sets,
+// a scale or a required label, is past its type and keeps it from more
+// series, not fewer. The pair stays refused where the rule of the name
+// sets that same type, since it then makes the metric only where the other
+// rule makes it too, and where the error_mode is fail, since the rule then
+// fails the scrape on the first metric of another type.
+//
+// Nothing else is refused. Two rules that both have an expression —
+// '^node_' and '^node_cpu' — make a series twice only where the target has
+// a metric both match, which no configuration says; so do a rule of a name
+// and one that exports another metric under that name, and rules whose
+// labels differ as written and come to the same on a target. Those load,
+// and fail the scrape that has such a series, as they did.
+//
+// The rules are those that repeat no earlier one, distinct, in their order:
+// a copy is told of as the same rule as the first of its kind
+// (checkRulesDiffer) and of nothing else, so no pair is reported twice and
+// taking the copy out leaves what is said of the first. Each pair is
+// reported once, at the later of its two rules, both named by their places
+// among the collector's, counted from 1.
+func checkNoPatternRepeatsAName(x *model.Collector, distinct []int) []error {
+	if x.Transform.Type != "prometheus" {
+		return nil
+	}
+	var errs []error
+	for at, later := range distinct {
+		for _, earlier := range distinct[:at] {
+			named, matching := earlier, later
+			if x.Metrics[named].Expression != "" {
+				named, matching = later, earlier
+			}
+			n, m := &x.Metrics[named], &x.Metrics[matching]
+			if n.Name == "" || n.Expression != "" || m.Expression == "" || m.Name != "" && m.Name != n.Name || keepsToItsType(n, m) {
+				continue
+			}
+			if pattern, err := expr.CompileRegex(m.Expression); err != nil || !pattern.MatchString(n.Name) || !alikeInLabels(x, n, m) {
+				continue
+			}
+			twice := ", so each makes every series of the metric, and a scrape that has a series twice fails, as a duplicate metric series"
+			if settings := canFailOnASeries(m); len(settings) > 0 && m.ErrorMode != model.ErrorModeFail {
+				// The rule carries on without a series it fails on, so not
+				// every series need be made twice; and the two make one of
+				// two types where one sets a type the other has not.
+				does, list := "does", settings[0]
+				if last := len(settings) - 1; last > 0 {
+					does, list = "do", strings.Join(settings[:last], ", ")+" and "+settings[last]
+				}
+				types := ""
+				if n.Type != m.Type {
+					types = " or, where the two rules give the metric different types, as a metric of inconsistent types"
+				}
+				twice = fmt.Sprintf("; %s of rule %d %s not keep it from the metric, since every series of the metric that rule %d does not fail on is made by each rule, and a scrape that has a series twice fails, as a duplicate metric series%s", list, matching+1, does, matching+1, types)
+			}
+			errs = append(errs, fmt.Errorf("collector %q metrics rule %d and rule %d both pass on metric %q: rule %d passes on the metric of that name, the expression %q of rule %d matches that name, and their labels are alike%s; take one of the two out, write the expression so that it does not match %q, or tell their series apart by a label, as with a static label that has another value in each", x.Name, earlier+1, later+1, n.Name, named+1, m.Expression, matching+1, twice, n.Name))
+		}
+	}
 	return errs
 }
 
-// ruleLabels is a rule's labels as checkRulesDiffer compares them: in the
+// keepsToItsType says whether a prometheus rule with an expression, its
+// defaults filled in, leaves the metric a rule of a name passes on to that
+// rule by its type: the type is histogram or summary, which applies to a
+// metric of that type and to no other (transform.applyPrometheusTransform),
+// the rule carries on without the series it fails on, its error_mode not
+// being fail, and the rule of the name does not set that type itself, with
+// which it would make the metric only where it is of that type, as the
+// other rule does.
+func keepsToItsType(named, matching *model.MetricRule) bool {
+	ofOneShape := matching.Type == model.HistogramMetricType || matching.Type == model.SummaryMetricType
+	return ofOneShape && matching.ErrorMode != model.ErrorModeFail && named.Type != matching.Type
+}
+
+// canFailOnASeries names what a prometheus rule sets that can fail on a
+// series the rule matches (transform.applyPrometheusTransform), as an error
+// names it: the type and the scale, which cannot apply to every metric, a
+// histogram or a summary keeping its own type and taking no scale and
+// nothing else becoming one, and each label the rule requires, which is
+// read from the series, and a series may not have it. Under error_mode log
+// or ignore the rule carries on without such a series.
+func canFailOnASeries(r *model.MetricRule) []string {
+	var settings []string
+	if r.Type != "" {
+		settings = append(settings, "the type")
+	}
+	if r.Scale != nil {
+		settings = append(settings, "the scale")
+	}
+	for _, label := range r.Labels {
+		if !label.Required {
+			continue
+		}
+		// A label written twice is named once.
+		if setting := fmt.Sprintf("the required label %q", label.Name); !slices.Contains(settings, setting) {
+			settings = append(settings, setting)
+		}
+	}
+	return settings
+}
+
+// alikeInLabels says whether two rules of a collector give a series the
+// same labels as far as the rules say: the same names, each with the same
+// value or the same expression (ruleLabels).
+func alikeInLabels(x *model.Collector, a, b *model.MetricRule) bool {
+	return slices.EqualFunc(ruleLabels(x, a), ruleLabels(x, b), func(a, b model.LabelRule) bool {
+		return a.Name == b.Name && a.Value == b.Value && a.Expression == b.Expression
+	})
+}
+
+// ruleLabels is a rule's labels as alikeInLabels compares them: in the
 // order of their names, since a series has a label by its name wherever the
 // rule writes it, so that two rules whose labels are written in another
 // order are the same rule. Labels of one name stay in the order they are
@@ -647,7 +825,8 @@ func validateWebAuthSettings(c *model.Config) error {
 	if err := validateWebAuth(c.Web.BasicAuth); err != nil {
 		return err
 	}
-	for _, collector := range c.Collectors {
+	for i := range c.Collectors {
+		collector := &c.Collectors[i]
 		if collector.Request.ForwardAuthorization {
 			return fmt.Errorf("web.basic_auth cannot be enabled with collector %q request.forward_authorization", collector.Name)
 		}
@@ -883,6 +1062,9 @@ type Manager struct {
 	// installed are told of every reload that put something in force
 	// (OnInstall), under reloadMu.
 	installed []func()
+	// prepared are given what every reload is about to put in force
+	// (OnPrepare), under reloadMu.
+	prepared []func(*model.Config, *model.StaticTargetFile)
 }
 
 // inForce is the configuration and the static target file in force. The two
@@ -989,6 +1171,26 @@ func (m *Manager) OnInstall(told func()) {
 	m.reloadMu.Lock()
 	defer m.reloadMu.Unlock()
 	m.installed = append(m.installed, told)
+}
+
+// OnPrepare asks for prepare to be called whenever a reload is about to put a
+// configuration, a static target file or both in force: once they have been
+// read and checked, and before they are in force. It is given the two as
+// InForce will answer with them, the one the reload leaves as it is among
+// them, and nil without a static target file; while it runs, Get and InForce
+// still answer with what was in force, and wait for nothing. So what is
+// costly to work out for a configuration, and depends on the configuration
+// alone, is worked out before anything can ask for it, on the path that
+// reloads, rather than by the first to use the configuration: the reload
+// puts it in force later by as long as prepare takes. What prepare is given
+// always goes in force when it returns, and those who asked are then told
+// (OnInstall); a reload that is refused prepares nothing. prepare is called
+// under the lock that serializes reloads, as told is: it must not reload,
+// nor ask here or with OnInstall.
+func (m *Manager) OnPrepare(prepare func(*model.Config, *model.StaticTargetFile)) {
+	m.reloadMu.Lock()
+	defer m.reloadMu.Unlock()
+	m.prepared = append(m.prepared, prepare)
 }
 
 // SetWatchInterval enables the configuration watch and sets how often the
@@ -1315,7 +1517,9 @@ func (m *Manager) loadTargets() (*model.StaticTargetFile, error) {
 // install puts c and f in force, either of which may be nil to keep the one
 // in force, in one step: no reader sees the configuration of this reload
 // with the targets of the last, or the reverse, which could name a collector
-// the other no longer has. What follows from each is done once both are in
+// the other no longer has. Those who asked to prepare what goes in force
+// (OnPrepare) do so first, and nothing comes between their preparing it and
+// its being in force. What follows from each is done once both are in
 // force, and then those who asked are told (OnInstall). reloadMu is held.
 func (m *Manager) install(trigger string, c *model.Config, f *model.StaticTargetFile) {
 	pair := *m.current.Load()
@@ -1324,6 +1528,9 @@ func (m *Manager) install(trigger string, c *model.Config, f *model.StaticTarget
 	}
 	if f != nil {
 		pair.targets = f
+	}
+	for _, prepare := range m.prepared {
+		prepare(pair.config, pair.targets)
 	}
 	m.current.Store(&pair)
 	if c != nil {

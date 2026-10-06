@@ -20,6 +20,12 @@ import (
 // These tests compare it with the parser it was (promoracle_test.go): on the
 // same body, read the same way, the two return the same series in the same
 // order, or the same error, word for word.
+//
+// Since then the parser leaves a label with an empty value off its series,
+// which the parser it was kept. A body that has no "" in it has no such
+// label, and is compared with the parser it was as it is; a body that has
+// is compared with it under the switch of that one difference
+// (mayHoldAnEmptyLabel, oracleParse).
 
 // sameFloat reports whether two floats are the same bit for bit, so that a
 // NaN is itself and -0 is not 0.
@@ -104,21 +110,31 @@ func (r promReading) options(asked *[]string) promOptions {
 	return options
 }
 
+// mayHoldAnEmptyLabel reports whether body may have a label with an empty
+// value: one is written name="", so a body without two quotes side by side
+// has none. Other things are written so too, an empty quoted name and a
+// quote escaped before a value's end, and a body that has only those is
+// read the same with the oracle's switch and without it.
+func mayHoldAnEmptyLabel(body []byte) bool { return bytes.Contains(body, []byte(`""`)) }
+
 // compareExposition parses body with the parser and with the oracle, read
 // one way, and reports any difference. It says whether the body was
 // accepted.
 //
-// One difference is allowed, by name: the parser's error shows no more than
-// the first 64 bytes of a value of the body, with its length, where the
-// oracle's quotes the value whole (isCutOf). An error whose values are all
-// within 64 bytes is the oracle's to the letter. The oracle's error says
-// nothing of what it is recognised by, so that is checked against the
+// Two differences are allowed, by name. A label with an empty value is left
+// off its series, which the oracle does only under its switch: it is
+// switched for a body that may hold such a label (mayHoldAnEmptyLabel), and
+// is the parser as it was for every other. And the parser's error shows no
+// more than the first 64 bytes of a value of the body, with its length,
+// where the oracle's quotes the value whole (isCutOf). An error whose values
+// are all within 64 bytes is the oracle's to the letter. The oracle's error
+// says nothing of what it is recognised by, so that is checked against the
 // error's own text: the text without its lines and without the lengths of
 // what it cut (recognisedExposition).
 func compareExposition(t *testing.T, body []byte, reading promReading) bool {
 	t.Helper()
 	var askedOld, asked []string
-	old, oldErr := oracleParseExposition(bytes.Clone(body), reading.options(&askedOld))
+	old, oldErr := oracleParse(bytes.Clone(body), reading.options(&askedOld), mayHoldAnEmptyLabel(body))
 	// The parser is given a copy it could spoil, to show that it does not.
 	given := bytes.Clone(body)
 	got, err := parseExposition(given, reading.options(&asked))
@@ -606,11 +622,13 @@ func (g *promGenerator) corrupt(body []byte) []byte {
 // written twice, families written apart, comments and # EOF. Under the race
 // detector 1,200 expositions, 4,800 parses: a tenth, drawn as the first
 // tenth is, of which still a quarter at least are accepted and a quarter
-// refused.
+// refused. Most of the bodies have no "" in them, and so no label with an
+// empty value, and are compared with the parser as it was; a tenth at least
+// of the parses, of bodies that may hold one, with it under its switch.
 func TestPromParserAgreesWithTheOneItWasOnRandomExpositions(t *testing.T) {
 	g := &promGenerator{random: rand.New(rand.NewPCG(2026, 1003))}
 	expositions := alloctest.UnlessRaced(12000, 1200)
-	accepted, refused := 0, 0
+	accepted, refused, asItWas, switched := 0, 0, 0, 0
 	compare := func(body []byte) {
 		readings := []promReading{
 			{openMetrics: g.random.IntN(2) == 0},
@@ -622,6 +640,11 @@ func TestPromParserAgreesWithTheOneItWasOnRandomExpositions(t *testing.T) {
 			} else {
 				refused++
 			}
+			if mayHoldAnEmptyLabel(body) {
+				switched++
+			} else {
+				asItWas++
+			}
 		}
 	}
 	for i := 0; i < expositions && !t.Failed(); i++ {
@@ -632,7 +655,10 @@ func TestPromParserAgreesWithTheOneItWasOnRandomExpositions(t *testing.T) {
 	if accepted < expositions || refused < expositions {
 		t.Fatalf("%d parses accepted and %d refused: the generator should write many of both", accepted, refused)
 	}
-	t.Logf("%d parses accepted, %d refused", accepted, refused)
+	if asItWas < 2*expositions || switched < 4*expositions/10 {
+		t.Fatalf("%d parses of bodies without \"\" and %d of bodies with: the generator should write many of both", asItWas, switched)
+	}
+	t.Logf("%d parses accepted, %d refused; %d of bodies without \"\", compared with the parser as it was, and %d of bodies with", accepted, refused, asItWas, switched)
 }
 
 // Whatever the body and however it is read, the parser and the one it was

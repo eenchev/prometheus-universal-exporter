@@ -228,18 +228,40 @@ func (s *Server) metricsHandler(w http.ResponseWriter, r *http.Request) {
 // by name, and the statistics they were read from. A collector a reload
 // removed is not among them: its series stop, and Prometheus marks them stale
 // (reconcile.go).
+//
+// Every probe takes the statistics lock to find its collector's statistics,
+// so nothing is done under it here but finding each collector's: the names
+// are read from the configuration, by index, a collector being too large to
+// copy for its name, and the slices and the map are made at their size, all
+// before the lock is taken; and the map is filled once it is released
+// (BenchmarkCollectorStats reports how long it is held).
 func (s *Server) collectorStats() (names []string, values map[string]statsValues, stats map[string]*serverStats) {
 	followed := s.reconcile()
+	collectors := followed.config.Collectors
+	names = slices.Grow(names, len(collectors))
+	for i := range collectors {
+		names = append(names, collectors[i].Name)
+	}
+	found := make([]*serverStats, len(names))
+	stats = make(map[string]*serverStats, len(names))
+	hook := statsReadHook.Load()
+	if hook != nil {
+		(*hook)(true)
+	}
 	s.statsMu.Lock()
-	stats = make(map[string]*serverStats)
-	for _, c := range followed.config.Collectors {
+	for i, name := range names {
 		// A collector first heard of here has its statistics made now; one
 		// another reload removed since the configuration was read is shown
 		// in this answer with none kept for it (statsSince).
-		stats[c.Name] = s.statsSinceLocked(followed.generation, c.Name)
-		names = append(names, c.Name)
+		found[i] = s.statsSinceLocked(followed.generation, name)
 	}
 	s.statsMu.Unlock()
+	if hook != nil {
+		(*hook)(false)
+	}
+	for i, name := range names {
+		stats[name] = found[i]
+	}
 	sort.Strings(names)
 	values = make(map[string]statsValues, len(names))
 	for _, name := range names {
@@ -247,6 +269,11 @@ func (s *Server) collectorStats() (names []string, values map[string]statsValues
 	}
 	return names, values, stats
 }
+
+// statsReadHook, set by tests, is called with true when the read of every
+// collector's statistics is about to take the statistics lock, and with false
+// when it has released it, so a benchmark can tell how long the lock is held.
+var statsReadHook atomic.Pointer[func(held bool)]
 
 // selfMetricSet is every self-metric, grouped by family: each per-collector
 // family with the collectors' series and then, in verbose mode, the
@@ -262,8 +289,9 @@ func (s *Server) selfMetricSet() model.MetricSet {
 		"http_exporter_probes_in_flight": func(name string) float64 { return float64(s.trips.count(name)) },
 	}
 	requestTypes := map[string]string{}
-	for _, c := range s.manager.Get().Collectors {
-		requestTypes[c.Name] = c.Request.Type
+	collectors := s.manager.Get().Collectors
+	for i := range collectors {
+		requestTypes[collectors[i].Name] = collectors[i].Request.Type
 	}
 	var out []model.Metric
 	for _, d := range selfMetricDescriptors {
@@ -291,8 +319,9 @@ func (s *Server) selfMetricSet() model.MetricSet {
 		}
 	}
 	out = append(out, buildInfoMetric())
-	for _, c := range s.manager.Get().Collectors {
-		out = append(out, model.Metric{Name: "http_exporter_collector_config_valid", Help: exporterMetricHelp["http_exporter_collector_config_valid"], Type: model.GaugeMetricType, Value: 1, Labels: map[string]string{"collector": c.Name}})
+	collectors = s.manager.Get().Collectors
+	for i := range collectors {
+		out = append(out, model.Metric{Name: "http_exporter_collector_config_valid", Help: exporterMetricHelp["http_exporter_collector_config_valid"], Type: model.GaugeMetricType, Value: 1, Labels: map[string]string{"collector": collectors[i].Name}})
 	}
 	out = append(out, s.ruleFailureMetrics()...)
 	out = append(out, s.staticTargetCountMetrics()...)
@@ -324,7 +353,9 @@ func recordScriptDuration(rec statsRecorder, timer *transform.ScriptTimer) {
 // metric name share it.
 func (s *Server) ruleFailureMetrics() []model.Metric {
 	var out []model.Metric
-	for _, c := range s.manager.Get().Collectors {
+	collectors := s.manager.Get().Collectors
+	for i := range collectors {
+		c := &collectors[i]
 		stats := s.statsFor(c.Name)
 		// The failures are counted in the collector's statistics, and for as
 		// long as those are kept, whenever the rule was added.

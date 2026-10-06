@@ -197,14 +197,15 @@ func TestDataThatHoldsItselfIsRefusedWhereTheWalkComesBackToIt(t *testing.T) {
 	}
 	// Around it, a document of 20,000 values: the walk has counted as many
 	// values as an answer may have bytes before the whole is weighed, and
-	// no more, so what it costs is a multiple of that limit.
-	if !raceDetector {
-		if data, err := leaveShared(t, c, "a list in itself twice, in a large document", 5000); err == nil || err.Error() != holdsItself {
-			t.Fatalf("a list in itself twice, in a large document: %v, %.300v, want %q", data, err, holdsItself)
-		}
-		if peak := sharedPeak(t, c); peak > sharedBounded {
-			t.Fatalf("a list in itself twice, in a large document: the worker held %d bytes to refuse it, want no more than %d under an output limit of %d", peak, sharedBounded, sharedLimit)
-		}
+	// no more, so what it costs is a multiple of that limit. The document
+	// is as large under the race detector: it is built, walked and refused
+	// in the worker, which the detector does not slow, and all the exporter
+	// hands over and reads of it is the shape's name and the refusal.
+	if data, err := leaveShared(t, c, "a list in itself twice, in a large document", 5000); err == nil || err.Error() != holdsItself {
+		t.Fatalf("a list in itself twice, in a large document: %v, %.300v, want %q", data, err, holdsItself)
+	}
+	if peak := sharedPeak(t, c); peak > sharedBounded {
+		t.Fatalf("a list in itself twice, in a large document: the worker held %d bytes to refuse it, want no more than %d under an output limit of %d", peak, sharedBounded, sharedLimit)
 	}
 	if data, err := leaveShared(t, c, "a pair twice", 0); err != nil || fmt.Sprint(data) != "[[1 2] [1 2]]" {
 		t.Fatalf("after the refusals: %v, %v, want the worker to answer", data, err)
@@ -229,6 +230,16 @@ func TestDataThatHoldsOneListManyTimesOverIsRefusedForItsLength(t *testing.T) {
 	want := "python pre-script failed: " + fmt.Sprintf(tooLong, "data")
 	sharedPeak(t, c)
 	peaks := map[int]int{}
+	// The last four are of the sizes they are under the race detector too.
+	// Each is built and weighed in the worker, which the detector does not
+	// slow, and all the exporter hands over and reads of one is the shape's
+	// name and the refusal. Each is there to be refused only once the walk
+	// has counted more values than half of sharedLimit and the whole is
+	// weighed: lists doubled thousands of times are more lists than the
+	// worker's looks at a part of the answer reach before that, and one
+	// list or dict held 80,000 times is that many values at once. A quarter
+	// as many, fewer with what they hold than that half, would be written
+	// out for the exporter to refuse, and the worker stopped.
 	shapes := []struct {
 		name   string
 		levels int
@@ -237,17 +248,7 @@ func TestDataThatHoldsOneListManyTimesOverIsRefusedForItsLength(t *testing.T) {
 		{"doubled", 20, sharedSmall}, {"doubled", 30, sharedSmall}, {"doubled", 40, sharedSmall}, {"doubled dicts", 40, sharedSmall}, {"doubled tuples", 40, sharedSmall},
 		{"doubled, beside a NaN", 40, sharedSmall}, {"doubled, far down", 40, sharedSmall}, {"tenfold", 12, sharedSmall},
 		{"doubled", 2000, sharedBounded}, {"one list many times", 80000, sharedBounded},
-	}
-	if !raceDetector {
-		shapes = append(shapes, struct {
-			name   string
-			levels int
-			most   int
-		}{"doubled", 9000, sharedBounded}, struct {
-			name   string
-			levels int
-			most   int
-		}{"one long key many times", 80000, sharedBounded})
+		{"doubled", 9000, sharedBounded}, {"one long key many times", 80000, sharedBounded},
 	}
 	for _, shape := range shapes {
 		data, err := leaveShared(t, c, shape.name, shape.levels)

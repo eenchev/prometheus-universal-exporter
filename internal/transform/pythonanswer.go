@@ -313,8 +313,9 @@ func (a *answerReader) metric() (model.Metric, bool) {
 
 // labels reads a metric's labels, an object of strings: null leaves a label
 // out, as None does, also one written before it under the same name, since
-// of a name written twice the later counted. A value that is no string, or
-// is the marker of a float that is not finite, is not read here.
+// of a name written twice the later counted, and so does an empty string
+// (pythonMetric.metric). A value that is no string, or is the marker of a
+// float that is not finite, is not read here.
 func (a *answerReader) labels() (map[string]string, bool) {
 	if !a.take('{') {
 		return nil, false
@@ -342,7 +343,11 @@ func (a *answerReader) labels() (map[string]string, bool) {
 			if !ok || value != "" && value[0] == 0 {
 				return nil, false
 			}
-			labels[name] = value
+			if value == "" {
+				delete(labels, name)
+			} else {
+				labels[name] = value
+			}
 		}
 		a.space()
 		if a.take(',') {

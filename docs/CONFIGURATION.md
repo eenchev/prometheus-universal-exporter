@@ -271,6 +271,31 @@ number, for example
 label value that is not valid UTF-8 does not fail it: it is repaired with `�`
 and counted, as above.
 
+A label a target writes with an empty value is left off its series:
+`m{l="",k="v"}` is read as `m{k="v"}`. To Prometheus the two are one series,
+and the exporter exports no label with an empty value, wherever it comes
+from — a target's exposition, a rule's expression, a script, a constant
+written `""`. The label is off before anything reads the series: a
+`prometheus` rule's label that reads `l` finds none, as when the target did
+not write it, and a `required` one is missing; a pre-script and a `python`
+transform are given the series without it; and the text format, OpenMetrics
+and [OTLP](OTLP.md) carry none, with or without a script in between. What
+was refused about such a label still is: its name written twice on a
+sample, and a histogram's `le` or a summary's `quantile` that is empty,
+which is a bound that is no number rather than a label. On a series that
+has no buckets or quantiles, `le` and `quantile` are labels like any other
+and are left off when empty.
+
+Two series a target tells apart by nothing but such a label are the same
+series twice, `m{l=""}` beside `m`, and the scrape fails for the duplicate
+as it does for `m` written twice (`duplicate metric series "m"`); it failed
+before as well, the check having always read an empty label as none. A
+histogram's or a summary's samples written so are one series' samples: a
+histogram whose buckets carry `l=""` and whose `_sum` and `_count` do not is
+one histogram, where it was two halves that failed the scrape, and two whole
+histograms told apart by `l=""` alone fail the decode for the sample they
+then have twice (`second h_sum sample for the histogram h`).
+
 A histogram or a summary is passed on as the target wrote it, with its
 buckets and quantiles in ascending order, and with values that the text
 format allows and OpenMetrics does not, such as a negative `_sum` or bucket
@@ -562,7 +587,11 @@ The expression and label values are interpreted by the selected transform:
   A rule's name is held to these names whatever
   [`name_escaping`](#utf-8-names) is, which is about the names a response
   gives: a metric the target calls `http.server.duration` is matched by
-  `expression: '^http\.server\.duration$'`.
+  `expression: '^http\.server\.duration$'`. A metric is passed on by every
+  rule that matches it, each making its series, so a rule of a `name` and a
+  rule whose expression matches that name both pass that metric on: with
+  the same labels they would make every series of it twice, and are
+  [refused at startup](#a-name-and-a-pattern-that-matches-it).
 
 CSS remains available specifically for HTML tables and HTML status pages; it is
 not used for CSV.
@@ -602,7 +631,9 @@ select one of its fields, or make one value of an array with
 A label expression that gives a series no value — a selector or path that
 matches nothing, a missing attribute or capture group, an empty CSV cell, a
 null — leaves the label off that series, as does an empty value, which
-Prometheus treats the same way. A `csv` label that names a column the
+Prometheus treats the same way; a label a [Python script](PYTHON.md) gives
+as `None` or as the empty string is left off alike, and so is one a target's
+own exposition writes as `l=""` under a `prometheus` transform. A `csv` label that names a column the
 response does not have at all is not that: no row could give it, so the rule
 fails, once for the response and whether the rule or the label is `required`
 or not, as its [`error_mode`](#when-a-metric-cannot-be-extracted) says, with
@@ -1075,7 +1106,11 @@ labels:
 ```
 
 A longer value is then cut to the cap, on a character boundary, and ends in
-`…`, which counts towards the cap. Truncation applies to declared metrics from
+`…`, which counts towards the cap. A cap of 1 or 2 bytes has no room for the
+`…`, which is three, and the value is cut without it; when the value's first
+character does not fit either — `日本` under a cap of 2 — nothing is left,
+and the label is left off the series, as every label with an empty value is,
+where it used to be exported as `message=""`. Truncation applies to declared metrics from
 every transform, a `prometheus` rule without a `name` included, before any
 `metrics_prefix` is added and before `transform.rename_labels`, so a label
 keeps its `truncate: true` under the name a rename gives it. Text that is not
@@ -2112,6 +2147,11 @@ metrics rule 2 has invalid type "timer"`, where a rule with a name reads
 - no two rules of a collector may be
   [the same rule](#two-rules-that-are-the-same-rule): each would make every
   series the other makes, and every scrape would fail on a duplicate series;
+- under `prometheus`, no rule's `expression` may match the `name` another
+  rule passes on the metric of, where the two give its series
+  [one name and the same labels](#a-name-and-a-pattern-that-matches-it):
+  each would make every series of that metric. A rule of the histograms or
+  the summaries alone, by its `type`, may;
 - no rule may be named as a series of another rule's histogram or summary —
   `foo_bucket`, `foo_sum` or `foo_count` beside a histogram `foo`, `foo_sum` or
   `foo_count` beside a summary `foo`;
@@ -2203,13 +2243,170 @@ since the order then decides the value.
 
 The comparison is of what the rules write, not of what they mean. Two
 expressions that select the same thing in other words — `.v` and `(.v)`, or
-a `prometheus` rule `{name: up}`, which matches the metric of its name,
-beside `{name: up, expression: '^up$'}` or `{expression: '^up$'}` — are two
-rules to it: they load, and the scrape fails on the duplicate series as
-before. A `python` collector's rules make no series, the script does, so
-two of them alike change nothing and are not refused. A JSON schema cannot
-compare the items of a list in this way, so this is one of the checks only
-the exporter makes ([Editor support](#editor-support)).
+the `prometheus` expressions `'^up$'` and `'^(up)$'` — are two rules to it:
+they load, and the scrape fails on the duplicate series as before. A
+`python` collector's rules make no series, the script does, so two of them
+alike change nothing and are not refused. A JSON schema cannot compare the
+items of a list in this way, so this is one of the checks only the exporter
+makes ([Editor support](#editor-support)).
+
+### A name and a pattern that matches it
+
+One pair of `prometheus` rules that select the same in other words is
+decided by the configuration alone, and is refused when it loads. A rule
+without an `expression` passes on the metric its `name` names. A rule with
+an `expression` passes on every metric the expression matches. Where the
+expression matches that very name, both pass the metric on:
+
+```yaml
+metrics:
+  - name: up
+    description: Whether the target is up.
+  - expression: '.*'
+```
+
+Each rule makes every series of `up`, and a scrape that has a series twice
+fails — `validation failed: duplicate metric series "up"` — on every scrape
+of a target that has the metric; of a target that has none, the first rule
+makes nothing, and reports the metric missing unless it has
+`required: false`. The first rule, which is about that one metric, makes a
+series of no scrape that passes, so the load says:
+
+```text
+collector "node" metrics rule 1 and rule 2 both pass on metric "up": rule 1 passes on the metric of that name, the expression ".*" of rule 2 matches that name, and their labels are alike, so each makes every series of the metric, and a scrape that has a series twice fails, as a duplicate metric series; take one of the two out, write the expression so that it does not match "up", or tell their series apart by a label, as with a static label that has another value in each
+```
+
+The expression is matched against the name as it is against a metric of the
+target: compiled the same, and matched anywhere in the name, so `up`,
+`'^u'`, `'(?i)^UP$'` and `'.*'` all match `up`. The pair is refused
+whichever of the two rules is written first, and when
+
+- the rule with the expression has no `name`, and so keeps the metric's
+  own, or has that same `name`: with another, as in
+  `{name: alive, expression: '^up$'}`, it exports the metric under that
+  name, and the two rules load;
+- the two are alike in `labels`, as
+  [two rules that are the same rule](#two-rules-that-are-the-same-rule)
+  are: a label in one that the other has not, or has with another `value`
+  or `expression`, tells their series apart as far as the configuration
+  says, and the rules load.
+
+What else the rule of the name says changes nothing of it, as there: a
+`description`, a `scale`, a `type`, `required`, `error_mode` and a label's
+`truncate` and `required` do not say which series a rule makes. With a
+`type` other than the metric's own, the scrape fails on a metric of two
+types before it comes to the duplicate. And where its `scale` or `type` cannot
+apply to the metric, or a label it requires is missing, the rule fails on
+the series instead of making it — it makes no series of the metric there
+either.
+
+What else the rule with the expression says does not keep the pair from
+being refused either, with one exception, a `type` of `histogram` or
+`summary` (below), though it can change what a scrape makes of it. A
+rule that sets a `type`, a `scale` or a `required` label can fail on a
+series instead of making it: a histogram or a summary keeps its own type
+and takes no scale, a `type` of `histogram` or `summary` applies to no
+other metric, and a series may not have the label. Under `error_mode: log`
+or `ignore` the rule then carries on without that series, and the scrape
+passes with the one the rule of the name made. So what such a pair does is
+the target's to say:
+
+| The rule with the expression sets | Each rule makes the series, and the scrape fails | That rule fails on the series, and the scrape passes | The load |
+|---|---|---|---|
+| `type: gauge`, `counter` or `untyped` | of a gauge, a counter or an untyped metric: on a duplicate where the type is the metric's own, on `inconsistent types` where it is not | of a histogram or a summary | refuses the pair |
+| `type: histogram` or `summary` | of a metric of that type | of any other metric | takes the pair, unless the rule of the name sets that `type` too |
+| `scale` | of a gauge, a counter or an untyped metric | of a histogram or a summary | refuses the pair |
+| a `required` label | where the series has the label | where it has not | refuses the pair |
+
+`{name: request_duration_seconds}` beside `{expression: '.*', scale: 0.001}`
+passed a histogram of that name on once, and failed the scrape of a target
+where it is a gauge; `{name: up}` beside `{expression: '^up$', type: gauge}`
+failed every scrape of an ordinary target. Both are refused, whatever the
+target has: a setting that fails on some series is no way to keep a rule
+from a metric, since every series it does not fail on is made twice. The
+load names what the rule sets — its type, its scale, each label it
+requires — in place of saying that every series is made twice:
+
+```text
+collector "node" metrics rule 1 and rule 2 both pass on metric "request_duration_seconds": rule 1 passes on the metric of that name, the expression ".*" of rule 2 matches that name, and their labels are alike; the scale of rule 2 does not keep it from the metric, since every series of the metric that rule 2 does not fail on is made by each rule, and a scrape that has a series twice fails, as a duplicate metric series; take one of the two out, write the expression so that it does not match "request_duration_seconds", or tell their series apart by a label, as with a static label that has another value in each
+```
+
+Where one of the two rules sets a `type` the other does not, it says too
+that the scrape fails `or, where the two rules give the metric different
+types, as a metric of inconsistent types`. With `error_mode: fail` the rule
+fails the scrape wherever it fails on a series, so no scrape of the pair
+passes, and the load says of it what it says of the two rules above. A
+`required` label that the rule of the name has not is a label that tells
+their series apart, and those rules load.
+
+The exception is a rule of the histograms alone, or of the summaries: a
+rule with an expression whose `type` is `histogram` or `summary`, under
+`error_mode: log` or `ignore`, is taken beside a name it matches. Here that
+is the metric `up`, and every histogram:
+
+```yaml
+metrics:
+  - name: up
+  - expression: '.*'
+    type: histogram
+    error_mode: ignore
+```
+
+A `type` of `histogram` or `summary` applies to a metric of that type and
+to no other, so this rule fails on, and carries on without, every gauge,
+counter, untyped metric and summary: it is a rule of the histograms alone,
+and leaves an ordinary metric to the rule of its name. Of a target with a
+gauge `up`, a counter and two histograms, the scrape has `up` once and
+each histogram once. With `error_mode: ignore` nothing is logged; with
+`log`, the default, the scrape is the same, and the rule's failures on the
+metrics that are no histograms are logged as a warning.
+
+The pair still makes a series twice where the target's metric of that name
+is itself a histogram — a summary, under `type: summary`. Each rule then
+makes it, and the scrape of that target fails with
+`validation failed: duplicate metric series "up"`: the type of a metric is
+the target's to say, and the load cannot tell. For a name whose metric is a
+histogram, write the expression so that it does not match the name, or take
+the rule of the name out, the other making that histogram already.
+
+Only the `type` decides, whatever else that rule sets. With a `scale` or a
+`required` label besides, the pair loads as well: those keep the rule from
+more series, not from fewer, and a rule with `type: histogram` and a
+`scale` makes no series at all, since a histogram takes no scale. The pair
+is refused as the others are
+
+- where the rule of the name sets that same `type`, as in
+  `{name: latency, type: histogram}` beside
+  `{expression: '.*', type: histogram}`: that rule then makes the metric
+  only where the other makes it too, a histogram twice and anything else
+  not at all. With another `type` in the rule of the name — `gauge`, or
+  `summary` beside `histogram` — the rules load, and no scrape has a series
+  twice: of a metric of the pattern's type the rule of the name fails, and
+  the other rule makes the one series;
+- under `error_mode: fail`, where the rule fails the scrape on the first
+  metric of another type.
+
+Nothing else is refused. Rules of which the configuration does not say that
+they pass on one metric, under one name and with the same labels, load as
+they did, and fail the scrape that has a series twice with
+`duplicate metric series`:
+
+- two rules that both have an expression, such as `'^node_'` and
+  `'^node_cpu'`, which both pass on a metric only if the target has one
+  that both match;
+- a rule of a name beside a rule that exports another metric under that
+  name, `{name: up}` and `{name: up, expression: '^node_up$'}`, whose
+  series are the same only if the two metrics have the same labels;
+- rules whose labels differ as written and come to the same on a target,
+  such as a static `job: api` in one rule where the target's series has
+  that label already.
+
+Each pair is reported once, naming both rules by their places among the
+collector's rules, counted from 1, after the copies of a rule, which are
+told of as [the same rule](#two-rules-that-are-the-same-rule) and of
+nothing else. A schema cannot ask whether one item's expression matches
+what another item names, so this too is a check only the exporter makes
+([Editor support](#editor-support)).
 
 Every mistake is reported at once, not one per run: the mistakes of every
 collector and every rule, and of every [collector file](#collector-files), in
@@ -2279,8 +2476,10 @@ word: startup validation also checks what a schema cannot, such as that an
 expression compiles, that `otlp.interval` is at least `1s` — a duration is
 text to a schema — that a duration is not too long to be held, that a
 [size](#sizes) is under 2^63 bytes, and that no two rules of a collector are
-[the same rule](#two-rules-that-are-the-same-rule), a schema having no way
-to compare the items of a list by some of their keys. Where a
+[the same rule](#two-rules-that-are-the-same-rule), nor a `prometheus`
+[name and a pattern that matches it](#a-name-and-a-pattern-that-matches-it),
+a schema having no way to compare the items of a list by some of their
+keys. Where a
 schema can tell, it refuses what the exporter refuses: a
 `response.csv.delimiter` of more than one character, a size with a fraction
 and no unit, a block that sets keys beside a missing `enabled`, a

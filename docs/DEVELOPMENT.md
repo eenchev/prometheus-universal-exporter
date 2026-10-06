@@ -113,8 +113,81 @@ rule's expression. A count at zero beside a remembered failure would leave a
 recovery unlogged: an entry is made in `putLocked` and dropped in
 `dropLocked` and nowhere else, which
 `TestTheRuleFailuresCountedAreTheEntriesThereAre` holds every operation to.
-What the log costs a scrape is measured with
-`go test -run '^$' -bench 'LogRuleFailures' ./internal/exporter/`.
+The trip a failure is counted for is the key its scrape reported it with
+(`ruleFailedFor`), which the entry keeps, and that is the key the scrape asks
+with: it is not read back out of the rule's key. Nothing is read out of a
+key. Its parts are the operator's and the scraper's — a probe's target is
+any bytes its caller sends, a directory and its files have any names — and
+while a key was those parts with a NUL between them, one subject's key could
+be another's, or read as another's: the key of a directory's file named
+`rule` ended as the marker of a rule's key begins, and read at its first
+marker a rule of that file was counted for a key no scrape asks with, its
+recovery never logged
+(`TestARulesFailureIsCountedForTheTripItsScrapeAsksWith`); what was
+remembered of a probe of the target `static target one` was forgotten with
+the static target `one`; a file named `schedule` in a directory so named had
+the key of that target's skipped turns; and a target with NULs in it could
+be written to have the key of a rule of another target's probe.
+
+So a key is made by one of a few constructors, in one form (`subjectKey` in
+`failurelog.go`): the kind of its subject, a letter — a probe
+(`probeFailureKey`), a static target's own (`staticTargetKey`), what a trip
+found at the address it went to (`failureKey`, `aspectKey`), a metric the
+static targets endpoint left out (`staticClashKey`); then each part of the
+subject after its length and a NUL, so that a part ends where its length
+says, whatever it holds; then what of the subject failed, when it is not the
+subject itself: one of a fixed few aspects (`failureAspect`), or the marker
+of a rule's key with the rule's name and expression, each after its length,
+and its `items` (`appendRuleFailureKey`). No two subjects have one key,
+whatever their parts hold: `TestNoTwoSubjectsHaveOneKey` reads every
+generated key back as the subject it was made of, which only a test does.
+What the log needs to know of a key it is told beside it, and keeps with the
+entry (`failureState`): the trip of a rule's failure, and whose the failure
+is — its collector, and the static target when the failure is a static
+target's own. That is what a reload goes by when it forgets
+(`forgetCollectorsLocked`, `forgetStaticTargetsLocked`) and what a trip is
+held to (`logStands`), so the two drop exactly what is the collector's and
+the static target's
+(`TestForgettingDropsExactlyWhatIsTheCollectorsOrTheStaticTargets`). A new
+thing to remember gets a constructor or an aspect of its own, with a line in
+those two tests' tables, never a string appended to a key where the failure
+is reported; and a trip's key is made once, in one allocation, the key of an
+aspect with its aspect (`aspectKey`).
+A scrape with a rule's failure remembered makes no key either, and no
+scrape makes one at all: the log does, when it first remembers a failure. A
+scrape reports a rule's failure by what tells the rule apart — its name,
+its expression and its `items` (`ruleFailedFor`) — and the log writes the
+bytes of the rule's key where the last one's were (`ruleLocked`), under its
+lock, finds the failure by them, and makes a string of them only to remember
+a failure it did not (`failedOf`): once for a rule that fails on every
+scrape, and never for a failure the full log does not remember, which is
+logged in full on every scrape for as long as the log stays full and would
+have had its key made on every one. The log returns the key the failure is
+remembered under, or none, which is what the scrape keeps of the rules that
+failed on it; a rule whose failure was not remembered it tells by the
+rule's parts (`failedAmong`), should another scrape of the trip have had the
+failure remembered meanwhile
+(`TestARuleRememberedByAnotherScrapeMeanwhileIsNotLoggedAsRecovered`). A
+debug probe, which the log is told nothing of, asks for the key an earlier
+scrape's failure is remembered under (`rememberedRule`), and makes none. And
+a scrape asks about each of its rules only when
+a failure is remembered of a rule other than those that failed on it
+(`remembersRules`), which a scrape of a target that lacks a value, on which
+the same rule fails every time, never is. The bytes of a key are made in one
+place (`appendRuleFailureKey`), so a failure is looked up by what it is
+remembered under. What the log costs a scrape is measured with
+`go test -run '^$' -bench 'LogRuleFailures' ./internal/exporter/`, where
+`/every_key` is the scrape as it was while it made every rule's key and
+`/full_log` the scrape whose rules fail while the log is full of other
+targets' failures; `TestAScrapeWithARuleRememberedAllocatesNothingOfItsExpressionsSize`
+holds a scrape with a failure remembered, and
+`TestAScrapeWhoseRulesAFullLogDoesNotRememberAllocatesNothingOfItsExpressionsSize`
+one whose failures the full log does not remember and a debug probe's, to
+allocating the same for expressions of 200 bytes and of 20 KB. A rule's
+failure reported with its key made beforehand is kept beside the tests
+(`failedUnderKey`), and
+`TestARulesFailureIsLoggedAndRememberedByItsPartsAsUnderItsKey` holds the
+two to the same lines and the same entries, a full log among them.
 
 ## Repeatable tests
 
@@ -191,7 +264,15 @@ packages that run scripts, and `usePythonPool` on each fresh pool, set it
 (`PythonPool.SetLeastScriptTimeout`), since a script of a millisecond has
 overrun the default 100ms on a busy machine. A test of the timeout itself
 calls `holdScriptsToTheirTimeout(t)`, and its script is one that never ends,
-so the timeout is what stops it however slow the machine. And a test's gRPC
+so the timeout is what stops it however slow the machine. An interpreter has
+a minute to start in as well, where the exporter gives it ten seconds, which
+one start on a busy machine has overrun: the same two places set it
+(`PythonPool.SetStartTimeout`), and `holdScriptsToTheirTimeout` leaves it,
+since a test of the script's timeout starts an interpreter like any other. A
+test of the start's own limit sets a short one and starts a stand-in for
+`python3` that never says it is ready (`pythonstart_test.go`). Neither
+setter may be called outside a test, which a repository test holds
+(`TestOnlyTestsGiveScriptsALeastTime`). And a test's gRPC
 server never listens on a port another had in the same process
 (`grpctest.Start`, and `grpctest.Listen` for anything else a test has the
 exporter call as a gRPC target): the exporter keeps a connection per address
@@ -201,6 +282,15 @@ was kept of the one before it. A test of a server that comes back gives the
 connection an hour to wait by itself and the call a minute to connect in
 (`connectionsWaitAnHour`, `callsWaitForAConnection`), so that only what the
 test is about reconnects, in however long it takes.
+
+What a test leaves behind in its own server is held to the same rule. A
+client that was stopped while it dialed leaves connections whose handshake
+the server reads later, and a test that counts what its server sees ends them
+first, at the server too: `namedServer.done` in
+`internal/fetch/wirename_test.go` closes what the test's dialer made and
+waits for the server to have closed each. A handshake read late was counted
+with the next case's, and failed that case now and then with a name that was
+the case before's.
 
 How long the suite takes under the race detector is held down in the tests
 too. Code runs several times slower there and the command runs every test
@@ -219,6 +309,11 @@ computed from the size, and a floor on what a generated corpus held — so many
 documents refused, so many with an alias — is scaled with the corpus and never
 dropped. Where a test is about a bound in the code, the smaller input is
 still past it. A test of concurrency keeps its goroutines and gives up rounds.
+One thing more is allowed where an input cannot shrink, being at a bound, and
+the slow part is an oracle the test compares with: under the detector the
+result is held to the answer the oracle is known to give, as long as the
+plain run asks the oracle itself (`yamlkeysaliasdepth_test.go`, where the
+YAML library takes seconds over a chain of aliases at the depth limit).
 A test that waits on the clock or on a Python process is not made faster this
 way and is left as it is. Aim for a second under the detector; to see where a
 package's time goes:
@@ -520,6 +615,233 @@ And a request in a binary form Python loads faster than JSON (`pickle`
 reads this one in 7 ms, `marshal` in 6) would change the protocol the
 specification fixes, one JSON document per line.
 
+`BenchmarkYAMLMerge` in `internal/decode` decodes a YAML body with a merge
+(`<<: *base`) of a mapping of 20,000 and of 200,000 keys, beside the same
+body without the merge and with the merged pairs written out; `body-bytes`
+is what to divide `B/op` and `allocs/op` by:
+
+```sh
+go test -run '^$' -bench 'YAMLMerge' -benchtime 3x ./internal/decode/
+```
+
+The walk that decodes a document with a large mapping handed the library
+each merged key and each merged value alone, two calls of it for a pair.
+It now hands them a run of 128 pairs at a time, the keys and then the values
+of the keys the merge gives. Decoding the parsed document, parsing left out
+(the least of several runs, old and new in turn; 20,000 keys):
+
+| Document | Before | After |
+| --- | --- | --- |
+| the mapping, not merged | 19 ms, 19.5 bytes and 0.24 allocations per body byte | the same |
+| merged once | 48 ms, 52.3 bytes, 0.85 allocations | 31 ms, 33.3 bytes, 0.49 allocations |
+| merged four times | 146 ms, 150.5 bytes, 2.68 allocations | 77 ms, 74.6 bytes, 1.24 allocations |
+| a list of two, half their keys shared | 102 ms, 48.4 bytes, 0.78 allocations | 67 ms, 31.6 bytes, 0.46 allocations |
+
+A merged pair costs 230 bytes in four allocations where it cost 540 in ten,
+and a pair of the mapping itself costs 320 in four. `yamlkeysmerge_test.go`
+holds it: a merge may allocate no more than the mapping it merges, the
+library is called twice for every 128 keys of a merge, and the walk as it
+was (`yamlkeysmergeoracle_test.go`) decodes every document of the tests into
+the same value or error.
+
+Following a reload has a benchmark of its own,
+`internal/exporter/reloadfollow_bench_test.go`:
+
+```sh
+go test -run '^$' -bench 'FollowReload' -benchtime 20x ./internal/exporter/
+```
+
+It reloads between two configurations of 50, 500 and 2,000 collectors: the
+same collectors read again (`unchanged`), every one changed (`changed`), and
+half of them removed and as many added (`half`), each also with a static
+target of every collector in a file reloaded with them (`/static`). The
+time of the operation is the whole following, with what a reload prepares of
+it before it puts its configuration in force (below). Beside it the
+benchmark reports `following-ns/op`, what is left of it once the
+configuration is in force, and `locked-ns/op`, how long the statistics lock
+was held: every probe takes that lock to find its collector's statistics,
+and the read of the self-metrics takes it. As measured on two shared cores,
+with and without static targets, which make no difference that shows:
+
+| Benchmark | Before | After |
+| --- | --- | --- |
+| `unchanged/n=50` | 25–34 ms, all of it under the lock; 17.7 MB, 53,113 allocations | 11–13 ms, 2–3 µs of it under the lock; 9.7 MB, 29,219 allocations |
+| `unchanged/n=500` | 205–257 ms, all of it under the lock; 176.6 MB, 531,013 allocations | 108–145 ms, 10–14 µs of it under the lock; 97.2 MB, 292,064 allocations |
+| `changed/n=500` | 229–286 ms, all of it under the lock; 176.7 MB, 531,032 allocations | 119–142 ms, 21–34 µs of it under the lock; 97.2 MB, 292,083 allocations |
+| `half/n=500` | 199–227 ms, all of it under the lock; 132.5 MB, 398,294 allocations | 107–145 ms, 97–147 µs of it under the lock; 92.8 MB, 278,820 allocations |
+| `unchanged/n=2000` | 0.7–1.3 s, all of it under the lock; 706.5 MB, 2,124,026 allocations | 345–562 ms, 32–45 µs of it under the lock; 388.7 MB, 1,168,226 allocations |
+| `half/n=2000` | 0.5–1.0 s, all of it under the lock; 530.2 MB, 1,593,070 allocations | 344–720 ms, 0.35–0.57 ms of it under the lock; 371.3 MB, 1,115,171 allocations |
+
+Nearly all of the time was one thing: a collector's fingerprint is
+its definition written as YAML and hashed, about 0.2 ms and 177 kB for a
+collector of one rule, and a reload worked it out for every collector of the
+new configuration and again for every collector of the one it had followed,
+with the lock held, to tell the collectors it changed. Comparing the static
+targets took 0.6 ms for 500 of them, and the maps and the drops the rest.
+Now the fingerprints of a configuration are kept with it once it is
+followed, so a reload works out those of the new configuration alone; what
+the following is to drop and replace is worked out before the lock is taken,
+into a plan; and the lock is taken to do that, once the plan is seen to be
+still of the configuration in force and from the one followed
+(`planFollowing` and `followLocked` in `reconcile.go`).
+`reloadplan_http_test.go` holds this by counts and by the order of events,
+not by time: no definition is encoded while the lock is held, a reload
+encodes each collector of the new configuration once, a probe is answered
+while a reload is held between its plan and the lock, and over generated
+sequences of reloads with probes and scrapes held across them a server
+leaves what one that follows as it did before leaves, the former following
+kept beside the test.
+
+A probe that comes when a reloaded configuration is in force and the reload
+has not yet followed it needs it followed before it reads its collector
+there, and works out the same plan. While the fingerprints were made by the
+plan, such a probe waited for those the reload had not made yet, at worst
+all of them, at every reload. So a reload makes them before it puts its
+configuration in force: the configuration manager lets the server prepare
+what a reload has read and checked (`config.Manager.OnPrepare`,
+`prepareReload` in `reconcile.go`), on the goroutine that reloads, while
+`Get` and `InForce` still answer with the configuration before it and the
+probes go on with that one. The configuration then goes in force with every
+fingerprint made, those of the collectors of the configuration followed that
+it compares them with among them, and whoever follows it first, the reload
+or a probe, has only the maps of the plan left to make. The reload as a
+whole takes what it took; its configuration is in force later by as long as
+the fingerprints take, about 0.1 s for 500 collectors; and a probe never
+waits for a reload's fingerprints. `BenchmarkFollowReloadProbeWait`, in the
+same file and found by the same `-bench`, reads a file of 50, 500 and 2,000
+collectors again as `SIGHUP` reads it, holds the reload where its
+configuration is in force and not yet followed, and asks for the state there
+as a probe does; `probe-wait-ns/op` is how long that took, and the time of
+the operation the whole reload. As measured on two shared cores:
+
+| Collectors | A probe waited | It waits | Left of the following once in force (`following-ns/op`) |
+| --- | --- | --- | --- |
+| 50 | 13–19 ms | 15–70 µs | 12–43 µs |
+| 500 | 121–181 ms | 0.11–0.30 ms | 0.13–0.37 ms |
+| 2,000 | 0.38–0.61 s | 0.5–0.7 ms | 0.5–2.3 ms |
+
+The time, the memory and the allocations of a whole reload are what they
+were, and so is the time under the lock. Only the fingerprints are prepared:
+they are of a configuration alone, which never changes once loaded, so they
+are right whatever is followed when they are used. The plan is not prepared,
+since it is from the configuration followed, which a test, or anything that
+puts a configuration in force without a reload, can make another between
+the two. The prepared fingerprints are kept beside those the probes last
+used (`fingerprintMemo`), so a probe that still holds the former
+configuration does not have the new one's made again, and the memo holds
+those of two configurations at most, the one in force and one before it
+while probes still read it. `reloadprepare_http_test.go` holds all of it by
+counting where a definition is encoded: none once a reloaded configuration
+is in force, by the reload's own following or by a probe held between the
+two, each collector of the configuration once for a reload, none for a
+static target file reloaded alone, and after 1,000 reloads no configuration
+is held but the last few. `onprepare_http_test.go` in `internal/config`
+holds the order: prepared, in force, told.
+
+The static targets make no difference that shows above because their
+schedule is not in what is measured there: it is the scrape loop's own
+(`targetSchedule` in `statictargetschedule.go`), and looks at a reloaded
+configuration on that loop's goroutine, within a second of the reload. A
+target starts again when its collector's definition changed, which the
+schedule tells by the collector's fingerprint, kept with the target's place
+in the schedule. It made that fingerprint itself: every collector with a
+static target was encoded a second time for every reload, and so was the
+collector of every target a static target file reloaded alone started. That
+kept no probe waiting, but for 2,000 collectors with a target each it was a
+third of a second of one core and 355 MB allocated after every reload. Now
+the schedule reads the fingerprints the reload made, which the configuration
+followed keeps (`followedConfig.fingerprintOf` in `reconcile.go`). The loop
+is given the configuration, the static target file and their following as
+one (`followedInForce`), none of which changes once followed, and the
+fingerprints are read only when the configuration the schedule plans with is
+the very one that following is of; for any other, and for a caller that
+follows none, as the tests of the schedule alone are, the definition is
+encoded as it was. The schedule takes no lock for it; where the exporter
+started with the configuration, whose fingerprints no reload prepared, it
+makes the ones nothing asked for yet, once, and the probes and the next
+reload find them made. `BenchmarkFollowReloadSchedule`, in the same file and
+found by the same `-bench`, reloads as `BenchmarkFollowReload` does, every
+collector with a static target, and times the look the schedule then takes,
+alone; `encodes/op` is how many definitions the reload and the look encoded
+together, and `schedule-encodes/op` how many of them the look did. As
+measured on two shared cores, old and new in turn, three times:
+
+| Benchmark | Before | After |
+| --- | --- | --- |
+| `unchanged/n=50` | 10–12 ms; 8.9 MB, 26,735 allocations; 100 definitions encoded, 50 by the look | 0.08–0.14 ms; 49 kB, 185 allocations; 50 encoded, none by the look |
+| `unchanged/n=500` | 92–98 ms; 88.8 MB, 267,268 allocations; 1,000 encoded, 500 by the look | 1.3–1.6 ms; 533 kB, 1,768 allocations; 500 encoded, none by the look |
+| `changed/n=500` | 94–98 ms; 88.7 MB, 267,018 allocations; 1,000 encoded, 500 by the look | 0.7–1.3 ms; 397 kB, 1,518 allocations; 500 encoded, none by the look |
+| `half/n=500` | 98–123 ms; 88.7 MB, 267,143 allocations; 1,000 encoded, 500 by the look | 0.9–1.1 ms; 465 kB, 1,643 allocations; 500 encoded, none by the look |
+| `unchanged/n=2000` | 320–333 ms; 355.2 MB, 1,069,038 allocations; 4,000 encoded, 2,000 by the look | 8.2–8.6 ms; 2.1 MB, 7,038 allocations; 2,000 encoded, none by the look |
+| `changed/n=2000` | 315–347 ms; 354.7 MB, 1,068,038 allocations; 4,000 encoded, 2,000 by the look | 6.1–7.3 ms; 1.6 MB, 6,038 allocations; 2,000 encoded, none by the look |
+
+What is left of the look for 2,000 collectors is mostly finding each
+target's collector by its name among them, 4.6 ms, as it was before.
+`reloadschedule_http_test.go` holds it by counting where a definition is
+encoded: a reload of a configuration whose collectors all have a static
+target encodes each collector once, before it is in force, and the look
+after it none, driven as the loop drives it and with the loop running; the
+fingerprints the schedule asks for first are the ones the probes use; a
+static target file reloaded alone has the look encode only a collector that
+nothing had asked about; and over generated runs of reloads every look
+leaves the schedule as the former one, kept beside the test, leaves it.
+
+The read of every collector's statistics, which each scrape of the
+self-metrics makes under that same lock, has a benchmark beside that one,
+`internal/exporter/collectorstats_bench_test.go`:
+
+```sh
+go test -run '^$' -bench 'CollectorStats/steady' ./internal/exporter/
+go test -run '^$' -bench 'CollectorStats/reloaded' -benchtime 20x ./internal/exporter/
+```
+
+`steady` is a read that finds every collector's statistics there, as every
+read but the first after a reload does, and `reloaded` the first read after
+a reload that replaced every collector by another, which makes the
+statistics of each with the lock held; the reload is not timed and takes far
+longer than the read, hence the fixed number of rounds. It reports
+`locked-ns/op` as `FollowReload` does. As measured on two shared cores, old
+and new in turn, three times:
+
+| Benchmark | Before | After |
+| --- | --- | --- |
+| `steady/n=50` | 26–31 µs, 10–11 µs of it under the lock; 20,304 bytes, 70 allocations | 23–31 µs, 0.9–1.3 µs of it under the lock; 17,872 bytes, 60 allocations |
+| `steady/n=500` | 270–319 µs, 106–120 µs of it under the lock; 228,560 bytes, 531 allocations | 205–310 µs, 8–13 µs of it under the lock; 194,992 bytes, 510 allocations |
+| `steady/n=2000` | 1.3–2.2 ms, 0.5–0.9 ms of it under the lock; 940,216 bytes, 2,054 allocations | 1.1–1.3 ms, 89–92 µs of it under the lock; 779,680 bytes, 2,022 allocations |
+| `reloaded/n=50` | 41–70 µs, 29–48 µs of it under the lock; 36,304 bytes, 120 allocations | 29–44 µs, 12–15 µs of it under the lock; 33,872 bytes, 110 allocations |
+| `reloaded/n=500` | 397–438 µs, 236–266 µs of it under the lock; 388,560 bytes, 1,031 allocations | 311–332 µs, 129–155 µs of it under the lock; 354,992 bytes, 1,010 allocations |
+| `reloaded/n=2000` | 1.7–2.1 ms, 1.0–1.4 ms of it under the lock; 1,580,216 bytes, 4,054 allocations | 1.2–1.3 ms, 0.58–0.59 ms of it under the lock; 1,419,680 bytes, 4,022 allocations |
+
+The read took the lock and did under it all that gave it the statistics by
+name. Of the 100–110 µs for 500 collectors, about 25 were the copy of each
+collector's definition, 1,224 bytes, which `for _, c := range` made to read
+a name; about 50 the map of the statistics, made without its size and grown
+as it was filled; about 9 the slice of the names, grown likewise; and the
+rest filling the map and finding each collector's statistics, of which only
+the finding, 6–9 µs, needs the lock. Now the names are read by index and the
+map and the slices made at their size before the lock is taken, the
+statistics are found into a slice under it, and the map is filled from that
+once it is released (`collectorStats` in `selfmetrics.go`). What the first
+read after a reload still does with the lock held is make the statistics of
+the collectors the reload added, a quarter of a microsecond each: 320 bytes,
+which is most of it, and a reading of the clock, which is when the
+collector's counters began to count. The sort of the names and the copy of
+each collector's counters, under that collector's own lock, are as they were
+and are the rest of the read.
+
+`collectorstats_http_test.go` holds it without a duration. One read of 500
+collectors may make 515 allocations of 210,000 bytes: it makes 510 of
+194,992, and made 531 of 228,560 while the map and the names grew; either
+left without its size is past the bound alone. And over generated sequences
+of reloads that remove, add and bring back collectors, in every order, a
+server read as now gives the names, the counters and the very statistics
+that one read as before gives, the former read kept beside the test, with a
+reload between the read of the configuration and the lock and without. The
+copy allocates nothing, so the lint holds it: gocritic's `rangeValCopy`
+reports a loop that copies a kilobyte or more at each round, which in this
+code is a loop over collectors by value and nothing else (static analysis,
+below).
+
 What was made fast stays fast by tests, not by the benchmarks: the decoders,
 the transforms, the duplicate check and the body read each have a test that
 bounds their allocations per series or per body, and a test that compares
@@ -527,7 +849,13 @@ them with the plainer code they replaced, kept beside the tests, over a
 table and tens of thousands of generated inputs. The hand-over to Python is
 compared the same way, down to the worker's script as it was
 (`internal/transform/pythonoracle_test.go`), which a second pool of workers
-runs beside the current one. The allocation bounds are
+runs beside the current one. What the failure log costs a scrape whose rules
+fail has a benchmark of its own, `LogRuleFailures` — nothing failing, one
+rule and thirty failing and remembered, and, as `/full_log`, one and thirty
+failing while the log is full and remembers neither — and a bound that does
+not depend on the length of the rules' expressions, for the remembered and
+for the full log alike (the failure log, above). The
+allocation bounds are
 skipped under `-race`, which changes what is allocated; `make ci` runs the
 tests without it as well.
 
@@ -759,6 +1087,17 @@ bumping with it. Beyond the standard linters it enables `bodyclose`, `errorlint`
 `gocritic`, `gosec`, `misspell`, `nilerr`, `noctx`, `perfsprint`, `revive`,
 `unconvert` and `usestdlibvars`. The repository is gofmt-clean and CI fails on
 unformatted sources rather than rewriting them.
+
+Of gocritic's checks that are off by default one is on: `rangeValCopy`, from
+1,024 bytes. A collector's definition (`model.Collector`) is 1,224, and the
+largest other element a loop takes by value is 656, in a test, so what it
+reports is a loop over collectors by value, which copies every collector to
+look at it. Write `for i := range cfg.Collectors` and take
+`c := &cfg.Collectors[i]`, or read `cfg.Collectors[i].Name`. A loop that
+wants the copy, to change it and leave the configuration alone, keeps it and
+says so beside a `//nolint:gocritic`, as the other exceptions in the code
+do. A test in `test/repository` fails when the threshold is raised past a
+collector's size or the check is dropped.
 
 Known vulnerabilities are reported by `.github/workflows/govulncheck.yml`, on
 every push and pull request and weekly on Mondays, since an advisory is

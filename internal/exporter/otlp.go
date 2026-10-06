@@ -198,11 +198,15 @@ func (r otlpResourceIdentity) attributes() []otlpAttribute {
 }
 
 // defaultResourceIdentity is the exporter-wide resource used for probe output
-// and self-health metrics.
+// and self-health metrics. A resource attribute written "" is the attribute
+// left out, as a transform.labels value written "" is the label left out:
+// the resource carries no attribute that says nothing.
 func defaultResourceIdentity(cfg model.OTLPConfig) otlpResourceIdentity {
 	identity := otlpResourceIdentity{ServiceName: cfg.ServiceName, Attributes: map[string]string{}}
 	for key, value := range cfg.ResourceAttributes {
-		identity.Attributes[key] = value
+		if value != "" {
+			identity.Attributes[key] = value
+		}
 	}
 	return identity
 }

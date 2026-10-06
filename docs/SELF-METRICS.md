@@ -394,7 +394,7 @@ the state of its [Python workers](PYTHON.md#how-scripts-run):
 |---|---|---|
 | `http_exporter_python_workers` | `state`: `starting`, `idle`, `busy` | Workers of the collector now in each state. |
 | `http_exporter_python_worker_starts_total` | | Workers started. |
-| `http_exporter_python_worker_start_failures_total` | | Workers that failed to start: Python missing, a library that does not import. |
+| `http_exporter_python_worker_start_failures_total` | | Workers that failed to start: Python missing, a library that does not import, an interpreter not ready within its ten seconds. |
 | `http_exporter_python_worker_stops_total` | `reason` | Workers stopped, and why (below). |
 | `http_exporter_python_runs_total` | `outcome` | Script runs, and how they ended (below). |
 

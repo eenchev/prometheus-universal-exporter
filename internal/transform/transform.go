@@ -2844,7 +2844,7 @@ func applyPrometheusTransform(ctx context.Context, in model.MetricSet, c *model.
 					// cut here.
 					if label.Truncate && c.Limits.MaxLabelValueLength > 0 {
 						if value, ok := metric.Labels[label.Name]; ok {
-							metric.Labels[label.Name] = truncateLabelValue(value, c.Limits.MaxLabelValueLength)
+							setTruncated(metric.Labels, label.Name, value, c.Limits.MaxLabelValueLength)
 						}
 					}
 				}

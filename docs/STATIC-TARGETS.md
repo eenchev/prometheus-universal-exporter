@@ -304,7 +304,9 @@ http_exporter_target_up{collector="legacy_text",region="us",static_target="legac
   one endpoint, and the same metric from two targets stays two series.
 - The `target` label is the target as logs show it: a password in it, and the
   value of a query parameter named like a credential (`token`, `api_key`, …),
-  are withheld, and the rest is as written.
+  are withheld, and the rest is as written. A target that names none, as one
+  of a `localfile` collector that reads the collector's own path may, has no
+  `target` label, where it used to have `target=""`.
 - `http_exporter_target_up` and `http_exporter_target_scrape_duration_seconds`
   report each target's last scrape, so a failing target is visible rather
   than simply absent.
@@ -444,6 +446,8 @@ scraped again.
 `otlp.service_name` and `otlp.resource_attributes` set the OTLP resource the
 target's metrics arrive under; both fall back to the exporter-wide `otlp`
 settings, and per-target attributes are merged over the exporter-wide ones.
+An attribute written `""` is the attribute left out: it sets nothing, so the
+exporter-wide attribute of that name stays as it is.
 Targets with different identities are exported as separate `resourceMetrics`
 entries. The `otlp` block is only for a target with `export_via_otlp`, and
 refused on any other. `resource_attributes` may not set `service.name`, which

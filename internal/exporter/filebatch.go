@@ -54,7 +54,7 @@ func (s *Server) collectDirectory(ctx context.Context, read *fetch.DirectoryRead
 	rec.update(func(x *serverStats) { x.lastBytes = read.Bytes })
 	// These hold for as long as the directory stays as it is, so they are
 	// logged like repeated failures (failurelog.go).
-	listingKey, skippedKey := failureKey(c.Name, keyTarget, "\x00listing"), failureKey(c.Name, keyTarget, "\x00skipped")
+	listingKey, skippedKey := aspectKey(c.Name, keyTarget, "", listingAspect), aspectKey(c.Name, keyTarget, "", skippedAspect)
 	if read.Truncated {
 		s.tripFailed(ctx, rec.read, slog.LevelWarn, listingKey, "directory has more entries than one scrape lists; only the first were considered", "listing", nil, "collector", c.Name, "target", logTarget, "directory", read.Path, "listed", read.Listed, "max_files", c.Request.MaxFiles)
 	} else {
@@ -163,7 +163,7 @@ func (s *Server) collectFile(ctx context.Context, file fetch.FileRead, c *model.
 	if set == nil {
 		set = &model.MetricSet{}
 	}
-	s.noteUTF8Repairs(ctx, repaired, rec, c, file.Name, keyTarget+"\x00"+file.Name)
+	s.noteUTF8Repairs(ctx, repaired, rec, c, file.Name, keyTarget, file.Name)
 	if err := set.Validate(c.Limits); err != nil {
 		rec.update(func(x *serverStats) { x.limitErrors++ })
 		return nil, &fileFailure{"validation", err}

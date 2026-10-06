@@ -136,9 +136,18 @@ func TestAYAMLDocumentNestedThroughItsAliasesDeeperThanAResponseMayNestIsRefused
 		if got := yamlDepthOf(at); got != MaxDepth {
 			t.Fatalf("the %s chain at the bound is %d deep, want %d", kind, got, MaxDepth)
 		}
-		// The library compares every two of the chain's keys before it decodes
-		// any, which takes seconds under the race detector: there the chain is
-		// held to the refusal the library is known to make.
+		// The library is not run on this chain under the race detector, where
+		// the exporter's answer is held to the refusal the library is known to
+		// make of it. The library compares every two of the chain's 9,999 keys
+		// before it decodes any, for each of the three chains a quarter of a
+		// second in a plain run and two and a half under the detector, which
+		// runs every test twice; and the chain cannot be shorter there, as
+		// other tests' inputs are, since its length is the bound. What stands
+		// in for the library is no measurement but one refusal, the same in
+		// every build: the plain run holds the exporter's answer to the
+		// library's, and the run under the detector holds the same answer to
+		// that refusal, so a refusal that were not the library's would fail
+		// the one or the other.
 		library, ours := yamlOutcome{err: errYAMLAliasing}, yamlWith(at, yamlLargeMapping, nil)
 		if !raceDetector {
 			library = yamlByTheLibraryAlone(at)

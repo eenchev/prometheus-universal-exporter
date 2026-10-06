@@ -540,8 +540,8 @@ func keptState(server *Server) string {
 	}
 	server.cache.mu.Unlock()
 	server.failures.mu.Lock()
-	for key := range server.failures.entries {
-		names[keyCollector(key)] = true
+	for _, st := range server.failures.entries {
+		names[st.key.collector] = true
 	}
 	server.failures.mu.Unlock()
 	var b strings.Builder

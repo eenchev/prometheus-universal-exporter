@@ -326,7 +326,10 @@ func TestAliasesInThePartsOfALargeYAMLMappingAreCountedAsTheLibraryCountsThem(t 
 			}
 		}
 	}
-	if !raceDetector && (decoded < 200 || problems < 20 || noKeys < 10) {
+	// The one size the race detector is given makes 29 documents that are
+	// decoded, 3 with the problem and 2 refused, where the sizes of the plain
+	// run make 476, 48 and 32.
+	if least := alloctest.UnlessRaced([3]int{200, 20, 10}, [3]int{19, 2, 1}); decoded < least[0] || problems < least[1] || noKeys < least[2] {
 		t.Errorf("%d documents were decoded, %d had the key listed as a problem and %d were refused for it: the documents do not cover it", decoded, problems, noKeys)
 	}
 }

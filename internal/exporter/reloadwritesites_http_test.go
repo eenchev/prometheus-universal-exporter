@@ -300,7 +300,7 @@ func TestTheScrapeLoopsLateScrapeLeavesNothingUnderATargetBroughtBack(t *testing
 			success := lastSuccessOf(r.server, name)
 			// The target brought back has a skipped scrape remembered, and its
 			// target answers otherwise from now on.
-			key := failureKey("gone", staticTargetKey(name), "schedule")
+			key := staticTargetKey("gone", name).aspect(scheduleAspect)
 			r.server.failures.failed(r.server.logger, slog.LevelWarn, key, "static target scrape skipped", "schedule", errStillRunning)
 			value.Store(7)
 			resume()

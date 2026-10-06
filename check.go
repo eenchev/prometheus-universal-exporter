@@ -184,7 +184,8 @@ type requestPolicy struct {
 // requestPolicies are the policies of the collectors that set one, by name.
 func requestPolicies(conf *model.Config) map[string]requestPolicy {
 	out := map[string]requestPolicy{}
-	for _, c := range conf.Collectors {
+	for i := range conf.Collectors {
+		c := &conf.Collectors[i]
 		p := requestPolicy{AllowedTargets: c.Request.AllowedTargets, DeniedTargets: c.Request.DeniedTargets, AcceptStatus: c.Request.AcceptStatus, AcceptCodes: c.Request.AcceptCodes}
 		if len(p.AllowedTargets)+len(p.DeniedTargets)+len(p.AcceptStatus)+len(p.AcceptCodes) > 0 {
 			out[c.Name] = p
@@ -198,8 +199,8 @@ func requestPolicies(conf *model.Config) map[string]requestPolicy {
 // the operator knows what to change before a deprecated spelling is removed.
 func configDetails(conf *model.Config, expandEnv bool) map[string]any {
 	names := make([]string, 0, len(conf.Collectors))
-	for _, c := range conf.Collectors {
-		names = append(names, c.Name)
+	for i := range conf.Collectors {
+		names = append(names, conf.Collectors[i].Name)
 	}
 	details := map[string]any{
 		"collectors":        names,

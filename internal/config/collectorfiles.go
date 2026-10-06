@@ -219,13 +219,14 @@ func mergeCollectorFiles(c *model.Config, configPath string, opts []LoadOption) 
 	var errs []error
 	c.CollectorSources = map[string]string{}
 	own := c.Collectors[:0:0]
-	for _, x := range c.Collectors {
+	for i := range c.Collectors {
+		x := &c.Collectors[i]
 		if first, dup := c.CollectorSources[x.Name]; dup {
 			errs = append(errs, duplicateCollectorError(x.Name, first, configPath))
 			continue
 		}
 		c.CollectorSources[x.Name] = configPath
-		own = append(own, x)
+		own = append(own, *x)
 	}
 	c.Collectors = own
 	files, err := resolveCollectorFiles(configPath, c.CollectorFiles)
@@ -239,13 +240,14 @@ func mergeCollectorFiles(c *model.Config, configPath string, opts []LoadOption) 
 			errs = append(errs, &fileProblem{file: file, err: err, named: true})
 			continue
 		}
-		for _, x := range collectors {
+		for i := range collectors {
+			x := &collectors[i]
 			if first, dup := c.CollectorSources[x.Name]; dup {
 				errs = append(errs, duplicateCollectorError(x.Name, first, file))
 				continue
 			}
 			c.CollectorSources[x.Name] = file
-			c.Collectors = append(c.Collectors, x)
+			c.Collectors = append(c.Collectors, *x)
 		}
 	}
 	return model.JoinProblems(errs...)

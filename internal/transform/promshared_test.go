@@ -297,7 +297,7 @@ func prometheusCollectors() map[string]model.Collector {
 		"truncation without a name":  {Limits: model.Limits{MaxLabelValueLength: 12}, Metrics: []model.MetricRule{{Expression: "^jobs$", Labels: labelled(model.LabelRule{Name: "note", Expression: "note", Truncate: true})}, {Name: "work", Expression: "^jobs$"}}},
 		"rules and everything after": {MetricsPrefix: "v", NameEscaping: NameEscapingUnderscores, Transform: model.TransformConfig{Labels: map[string]string{"site": "a"}, RemoveLabels: []string{"queue"}}, Metrics: []model.MetricRule{{Name: "jobs"}, {Expression: "duration"}, {Name: "up", Labels: labelled(model.LabelRule{Name: "k", Value: "v"})}}},
 	}
-	for name, c := range collectors {
+	for name, c := range collectors { //nolint:gocritic // a value of a map is changed in a copy
 		c.Name, c.Decoder.Type, c.Transform.Type = "prom", "prometheus", "prometheus"
 		collectors[name] = c
 	}

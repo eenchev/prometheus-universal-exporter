@@ -17,7 +17,8 @@ import (
 
 // failedByText is failureLog.failedFor as it was while a failure was told
 // from another by its error's text as it is.
-func (f *failureLog) failedByText(logger *slog.Logger, level slog.Level, key, msg, stage string, err error, attrs ...any) {
+func (f *failureLog) failedByText(logger *slog.Logger, level slog.Level, subject subjectKey, msg, stage string, err error, attrs ...any) {
+	key := subject.bytes
 	errText := ""
 	if err != nil {
 		errText = err.Error()
@@ -33,7 +34,7 @@ func (f *failureLog) failedByText(logger *slog.Logger, level slog.Level, key, ms
 	}
 	if st == nil || st.stage != stage || st.err != errText {
 		if st != nil || f.rememberLocked() {
-			f.entries[key] = &failureState{stage: stage, err: errText, first: now, logged: now, seen: now, failures: 1}
+			f.entries[key] = &failureState{key: subject, stage: stage, err: errText, first: now, logged: now, seen: now, failures: 1}
 		}
 		f.mu.Unlock()
 		logger.Log(context.Background(), level, msg, attrs...)
@@ -90,7 +91,7 @@ func TestTheFailureLogWritesWhatItDidForErrorsThatNameNoPlace(t *testing.T) {
 		errors.New(`CSV column "used" is empty in row 3`),
 		errors.New(`CSV column "used" is empty in row 7`),
 	}
-	keys := []string{failureKey("web", "http://a", ""), failureKey("web", "http://b", ""), failureKey("files", "", "a.prom")}
+	keys := []subjectKey{failureKey("web", "http://a", ""), failureKey("web", "http://b", ""), failureKey("files", "", "a.prom")}
 	stages := []string{"http", "transform"}
 	rounds := alloctest.UnlessRaced(20000, 5000)
 	for range rounds {

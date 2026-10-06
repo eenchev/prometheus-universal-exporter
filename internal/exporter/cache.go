@@ -380,6 +380,9 @@ func probeCacheKeyWith(fingerprint string, c *model.Collector, target string, qu
 // configuration reload retires every entry cached under the previous
 // definition. An empty result disables caching for the collector.
 func collectorFingerprint(c *model.Collector) string {
+	if hook := fingerprintedHook.Load(); hook != nil {
+		(*hook)()
+	}
 	encoded, err := yaml.Marshal(c)
 	if err != nil {
 		return ""

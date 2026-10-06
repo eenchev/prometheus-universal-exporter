@@ -609,7 +609,9 @@ for i in range(100):
 // metric(...) asks label_text for the text of a label that is not a string,
 // and takes one that is as it is, which is what label_text returns for it:
 // the script counts the calls by putting a counter in its place. Asking for
-// every label made a third of what a call of metric(...) costs.
+// every label made a third of what a call of metric(...) costs. The label
+// given as the empty string is one of those taken as it is, and is left off
+// the series where the answer is read (pythonemptylabel_test.go).
 func TestPythonMetricTakesAStringLabelAsItIs(t *testing.T) {
 	requirePython(t)
 	c := workerCollector("labels", `
@@ -631,7 +633,7 @@ metric("asked", value=len(asked), labels={"names": ",".join(sorted(map(str, aske
 	if err != nil || len(set.Metrics) != 2 {
 		t.Fatalf("%v, %v", set, err)
 	}
-	want := map[string]string{"a": "x", "b": "5", "d": "true", "e": "sub", "f": "", "7": "seven", "g": "0.5"}
+	want := map[string]string{"a": "x", "b": "5", "d": "true", "e": "sub", "7": "seven", "g": "0.5"}
 	if got := set.Metrics[0].Labels; fmt.Sprint(got) != fmt.Sprint(want) {
 		t.Fatalf("labels %v, want %v", got, want)
 	}

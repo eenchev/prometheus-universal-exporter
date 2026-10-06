@@ -69,7 +69,7 @@ func TestAReloadIsFollowedWhenItIsMade(t *testing.T) {
 	set := model.MetricSet{Metrics: []model.Metric{{Name: "demo_value", Type: model.GaugeMetricType, Value: 1}}}
 	for _, name := range []string{"kept", "gone", "changed"} {
 		r.server.cache.Put(name+"-result", name, set, time.Hour, 0, 0, time.Now())
-		r.server.failures.failed(logger, slog.LevelError, failureKey(name, "static target one", ""), "static target scrape failed", "fetch", context.DeadlineExceeded)
+		r.server.failures.failed(logger, slog.LevelError, staticTargetKey(name, "one"), "static target scrape failed", "fetch", context.DeadlineExceeded)
 	}
 	before := r.server.followed.Load()
 	r.reloadTo(strings.Replace(cachedDocument("kept", "changed"), "changed_value", "renamed_value", 1))

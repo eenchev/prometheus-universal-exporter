@@ -57,9 +57,7 @@ func problemsOf(t *testing.T, document string) []string {
 //
 // What stays loadable: rules of one name that differ in expression, items
 // or a label, which export one family; rules that read their value from
-// other texts; a prometheus rule that matches the metric of its name beside
-// one whose expression is that name, which are two rules as written; a
-// python rule twice; and the same rule in two collectors.
+// other texts; a python rule twice; and the same rule in two collectors.
 func TestTwoRulesThatAreTheSameRuleAreRefusedAtLoad(t *testing.T) {
 	const jobs = "      - name: jobs\n        items: .queues[]\n        expression: .jobs\n        labels:\n          - name: queue\n            expression: .name\n          - name: site\n            value: rack1\n"
 	up, load, every := model.MetricRule{Name: "up"}, model.MetricRule{Name: "load", Expression: "^node_load1$"}, model.MetricRule{Expression: "^node_"}
@@ -118,7 +116,6 @@ func TestTwoRulesThatAreTheSameRuleAreRefusedAtLoad(t *testing.T) {
 		"a label that is a constant and one read": collectorRules("jq", "", "      - name: up\n        expression: .v\n        labels: [{name: site, value: .s}]\n      - name: up\n        expression: .v\n        labels: [{name: site, expression: .s}]\n"),
 		"value_maps of other texts":               collectorRules("jq", "", "      - name: state\n        expression: .s\n        error_mode: ignore\n        value_map: {up: 1}\n      - name: state\n        expression: .s\n        error_mode: ignore\n        value_map: {down: 0}\n"),
 		"time_formats of other texts":             collectorRules("csv", "", "      - name: at\n        expression: at\n        error_mode: ignore\n        time_format: rfc3339\n      - name: at\n        expression: at\n        error_mode: ignore\n        time_format: rfc1123\n"),
-		"a name, and the name with its pattern":   collectorRules("prometheus", "", "      - name: up\n      - name: up\n        expression: '^up$'\n"),
 		"a python rule twice":                     collectorRules("python", "", "      - name: v\n      - name: v\n"),
 		"a python rule twice, with a label":       collectorRules("python", "", "      - name: v\n        labels: [{name: note, expression: note, truncate: true}]\n      - name: v\n        labels: [{name: note, expression: note, truncate: true}]\n"),
 		"the same rule in two collectors":         collectorRules("prometheus", "", "      - name: up\n") + strings.Replace(strings.TrimPrefix(collectorRules("prometheus", "", "      - name: up\n"), "collectors:\n"), "name: node", "name: other", 1),

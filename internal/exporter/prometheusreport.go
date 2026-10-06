@@ -31,7 +31,7 @@ func (s *Server) notePrometheus(ctx context.Context, d *decode.Decoded, c *model
 	if file != "" {
 		attrs = append(attrs, "file", file)
 	}
-	key := failureKey(c.Name, keyTarget, file) + "\x00sample lines"
+	key := aspectKey(c.Name, keyTarget, file, sampleLinesAspect)
 	report := d.Prometheus
 	if report == nil {
 		s.tripRecovered(ctx, rec.read, key, "every sample line is part of its family again", attrs...)

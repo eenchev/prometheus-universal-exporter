@@ -28,11 +28,16 @@ import (
 // The state follows a reload when the reload is made: the configuration
 // manager tells the server when it has put something in force
 // (config.Manager's OnInstall, followReload), on the goroutine that reloads
-// and never on a probe's. The state does not depend on having been told: the
-// server also compares the configuration it last saw with the current one
-// whenever it is about to use its per-collector state, which costs a pointer
-// comparison while nothing has changed, and follows then what it was not
-// told of. Followed only so, two reloads with no use of the state between
+// and never on a probe's. What following a configuration takes long to work
+// out, the fingerprints of its collectors, the reload works out before it
+// puts the configuration in force (config.Manager's OnPrepare,
+// prepareReload), so that nothing that uses the configuration waits for it.
+//
+// The state does not depend on having been told: the server also compares
+// the configuration it last saw with the current one whenever it is about
+// to use its per-collector state, which costs a pointer comparison while
+// nothing has changed, and follows then what it was not told of. Followed
+// only so, two reloads with no use of the state between
 // them are followed as one: a collector the first removed and the second
 // brought back as it was is then one that stayed.
 //
@@ -70,13 +75,56 @@ import (
 // from firstGeneration. defined says, for each collector of the
 // configuration, the generation it has been there from with the definition
 // it has, and targetsDefined the same for each static target of the file;
-// neither is changed once the configuration is followed.
+// neither is changed once the configuration is followed. fingerprints are
+// those of the configuration's collectors, by which the next reload tells
+// the ones it changed, and the schedule of the static targets the targets
+// whose collector changed (fingerprintOf): each is worked out once, when
+// this configuration is followed or when the next is, and not again for
+// every reload.
 type followedConfig struct {
 	config         *model.Config
 	targets        *model.StaticTargetFile
 	generation     uint64
 	defined        map[string]uint64
 	targetsDefined map[string]uint64
+	fingerprints   *fingerprintGeneration
+}
+
+// fingerprint is the fingerprint of the configuration's collector at index:
+// the one kept for it, and one made afresh when none is kept.
+func (f *followedConfig) fingerprint(index int) string {
+	if f.fingerprints == nil {
+		return collectorFingerprint(&f.config.Collectors[index])
+	}
+	return f.fingerprints.at(index)
+}
+
+// fingerprintOf is the fingerprint of the collector of cfg named name, and
+// empty when cfg has none of that name: collectorFingerprint of the first
+// collector so named. It is for a caller that was given cfg and f together,
+// as the schedule of the static targets is (planFollowed), and is told
+// whether a collector changed by the very fingerprints the following of the
+// reload was: when cfg is the configuration f followed, the fingerprint is
+// the one kept for it, which the reload made before it put cfg in force
+// (prepareReload) and which is made here, once, and kept when nothing had
+// asked for it, as for the configuration the exporter started with. Only
+// the fingerprints of cfg itself are read: for any other configuration, and
+// for a caller that follows none, f nil, the definition is encoded afresh,
+// as it was for every call. f never changes once followed, so no reload that
+// comes meanwhile makes them those of another configuration. It takes no
+// lock, and waits only where a probe or a reload is making that same
+// fingerprint, for that one (fingerprintGeneration.at).
+func (f *followedConfig) fingerprintOf(cfg *model.Config, name string) string {
+	for i := range cfg.Collectors {
+		if cfg.Collectors[i].Name != name {
+			continue
+		}
+		if f != nil && f.config == cfg && f.fingerprints != nil && f.fingerprints.config == cfg {
+			return f.fingerprints.at(i)
+		}
+		return collectorFingerprint(&cfg.Collectors[i])
+	}
+	return ""
 }
 
 // configRead is the configuration a probe or a static target scrape read its
@@ -171,22 +219,103 @@ const (
 // force, and returns that configuration with its generation, for the caller
 // to use together: the collectors it reads there are the ones whose
 // statistics the generation names.
+//
+// What the following is to do is worked out before the statistics lock is
+// taken (planFollowing), and only done under it (followLocked): telling the
+// collectors a reload changed from those it left encodes every one of them,
+// which takes as long as the configuration is large, and every probe takes
+// that lock to find its collector's statistics. The lock is then taken to
+// make a following that is still the one to make: of the configuration and
+// file in force then, from the configuration followed then. A reload, or
+// another caller's following, may have come between the two; the following
+// is then worked out again, from what is followed now, or found made. So
+// any number of callers may work out the same following at once, a reload
+// and the probes that come while it does: they share the fingerprints, one
+// makes the following, and the others find it made. The fingerprints of a
+// configuration a reload put in force were made before it was in force
+// (prepareReload), so none of them waits for one; only a configuration put
+// in force without the manager's reload has them made here.
 func (s *Server) reconcile() *followedConfig {
 	cfg, targets := s.manager.InForce()
-	if followed := s.followed.Load(); followed != nil && followed.config == cfg && followed.targets == targets {
-		return followed
+	previous := s.followed.Load()
+	for {
+		if previous != nil && previous.config == cfg && previous.targets == targets {
+			return previous
+		}
+		plan := planFollowing(previous, cfg, targets, s.fingerprints)
+		if hook := followPlannedHook.Load(); hook != nil {
+			(*hook)()
+		}
+		var report func()
+		s.statsMu.Lock()
+		// Read again under the lock: another reload may have come, and whoever
+		// holds the lock follows the latest.
+		inForce, file := s.manager.InForce()
+		followed := s.followed.Load()
+		made := followed == previous && inForce == cfg && file == targets
+		if made {
+			followed = s.followLocked(plan, &report)
+		}
+		s.statsMu.Unlock()
+		if made {
+			if report != nil {
+				report()
+			}
+			return followed
+		}
+		previous, cfg, targets = followed, inForce, file
 	}
-	var report func()
-	s.statsMu.Lock()
-	// Read again under the lock: another reload may have come, and whoever
-	// holds the lock follows the latest.
-	cfg, targets = s.manager.InForce()
-	followed := s.followLocked(cfg, targets, &report)
-	s.statsMu.Unlock()
-	if report != nil {
-		report()
+}
+
+// followPlannedHook, set by tests, is called when a following has been
+// worked out and the statistics lock is not yet taken to make it, so a test
+// can put a probe, or another reload, between the two.
+var followPlannedHook atomic.Pointer[func()]
+
+// prepareReload works out, for a configuration a reload is about to put in
+// force, what following it needs that takes as long as the configuration is
+// large: the fingerprint of every collector of cfg, and of those collectors
+// of the configuration followed that cfg still names and that nothing has
+// asked for yet, which the following compares them with. The configuration
+// manager calls it once the reload has read and checked cfg and before it is
+// in force (config.Manager's OnPrepare), on the goroutine that reloads: the
+// probes of the configuration still in force go on meanwhile, and from when
+// cfg is in force whoever follows it first, the reload (followReload) or a
+// probe that came before that was done (reconcile), finds every fingerprint
+// made, and waits for none.
+//
+// Only the fingerprints are prepared, which are of a configuration and of
+// nothing else: a configuration never changes once loaded, so they cannot be
+// out of date whatever is followed when they are used. The plan of the
+// following is not: it is from the configuration followed, which is another
+// by then when something other than a reload put one in force meanwhile, and
+// with the fingerprints made it costs no more than its maps (planFollowing).
+// A static target file reloaded alone leaves the configuration the one
+// followed, whose fingerprints are kept with it: nothing is prepared.
+//
+// It takes no lock, and waits only for a probe that is working out one of
+// the same fingerprints, for that one.
+func (s *Server) prepareReload(cfg *model.Config, _ *model.StaticTargetFile) {
+	followed := s.followed.Load()
+	if cfg == nil || followed != nil && followed.config == cfg {
+		return
 	}
-	return followed
+	s.fingerprints.prepare(cfg)
+	// A configuration followed that a reload prepared has them all: only the
+	// one the exporter started with, or one put in force without a reload,
+	// may have some left to make.
+	if followed == nil || followed.config == nil || followed.fingerprints == nil || followed.fingerprints.whole.Load() {
+		return
+	}
+	named := make(map[string]bool, len(cfg.Collectors))
+	for i := range cfg.Collectors {
+		named[cfg.Collectors[i].Name] = true
+	}
+	for i := range followed.config.Collectors {
+		if named[followed.config.Collectors[i].Name] {
+			followed.fingerprints.at(i)
+		}
+	}
 }
 
 // followReload follows a reload as it is made: the configuration manager
@@ -194,8 +323,12 @@ func (s *Server) reconcile() *followedConfig {
 // (config.Manager's OnInstall), so the per-collector state is in line with
 // what is in force from then on, whether or not anything asks for it, and
 // what a probe or scrape of a collector the reload retired writes from then
-// on goes nowhere. The reload waits for it, and no probe does unless it asks
-// for the state meanwhile, as it would have waited for its own following.
+// on goes nowhere. The reload waits for it. A probe does not, unless it asks
+// for the state meanwhile: it then follows the reload itself, as it would
+// have without being told, and neither holds a lock the other needs while
+// it works out what the following is to do (reconcile), nor waits for a
+// fingerprint, all made before the configuration was in force
+// (prepareReload).
 func (s *Server) followReload() { s.reconcile() }
 
 // generationOf is the generation of cfg when it is the configuration in
@@ -235,12 +368,97 @@ func (f *followedConfig) stay(target, collector string) uint64 {
 	return max(f.targetsDefined[target], f.defined[collector])
 }
 
-// followLocked makes cfg, with the static target file targets in force with
-// it, the configuration the per-collector state follows, under statsMu, and
-// returns it with its generation. The whole of it happens
-// under the lock, and the followed configuration is replaced last: a caller
-// that finds cfg followed finds the state of the collectors a reload removed
-// dropped, and one that takes statistics meanwhile waits. When there are
+// following is what following a reload is to do, worked out before the
+// statistics lock is taken (planFollowing): next is the configuration to
+// follow, from previous, the one followed when it was worked out. moved
+// names the static targets that left their stay (targetsMoved). collectors
+// says that next has another configuration than previous, whose collectors
+// are then gone through; removed names those of previous it no longer has,
+// and stale those and the ones whose definition changed, neither set when
+// previous followed no configuration.
+type following struct {
+	previous, next *followedConfig
+	moved          map[string]bool
+	collectors     bool
+	removed, stale map[string]bool
+}
+
+// planFollowing works out the following of cfg, with the static target file
+// targets in force with it, from previous, the configuration followed, which
+// is another. It takes no lock and changes nothing the server keeps: it reads
+// the two configurations, which never change once loaded, and what previous
+// says, which does not either; the fingerprints it has worked out are
+// remembered in memo for the probes of cfg, which key their results by them,
+// and in next for the reload after this one. So it is here that the time of
+// a following goes, and several callers may be at it at once: they share the
+// fingerprints, each worked out once, and for a reload before its
+// configuration was in force (prepareReload), which leaves the maps to make
+// here.
+func planFollowing(previous *followedConfig, cfg *model.Config, targets *model.StaticTargetFile, memo *fingerprintMemo) *following {
+	next := &followedConfig{config: cfg, targets: targets, generation: firstGeneration}
+	if previous != nil {
+		next.generation = previous.generation + 1
+	}
+	plan := &following{previous: previous, next: next}
+	next.targetsDefined = targetsDefinedFrom(previous, targets, next.generation)
+	plan.moved = targetsMoved(previous, next.targetsDefined)
+	if previous != nil && previous.config == cfg {
+		// Another static target file with the configuration followed: the
+		// collectors are as they were, and nothing kept for them changes.
+		next.defined, next.fingerprints = previous.defined, previous.fingerprints
+		return plan
+	}
+	plan.collectors = true
+	var collectors []model.Collector
+	if cfg != nil {
+		collectors = cfg.Collectors
+		next.fingerprints = memo.of(cfg)
+	}
+	next.defined = make(map[string]uint64, len(collectors))
+	if previous == nil || previous.config == nil {
+		for i := range collectors {
+			next.defined[collectors[i].Name] = next.generation
+		}
+		return plan
+	}
+	current := make(map[string]string, len(collectors))
+	for i := range collectors {
+		current[collectors[i].Name] = next.fingerprints.at(i)
+	}
+	plan.removed, plan.stale = map[string]bool{}, map[string]bool{}
+	for i := range previous.config.Collectors {
+		c := &previous.config.Collectors[i]
+		fingerprint, kept := current[c.Name]
+		switch {
+		case !kept:
+			plan.removed[c.Name] = true
+			plan.stale[c.Name] = true
+		case fingerprint != previous.fingerprint(i):
+			plan.stale[c.Name] = true
+		default:
+			// Unchanged, it is defined as it has been.
+			next.defined[c.Name] = previous.defined[c.Name]
+		}
+	}
+	// The definition of a collector that is new, back or changed has been
+	// there from this generation.
+	for i := range collectors {
+		if _, unchanged := next.defined[collectors[i].Name]; !unchanged {
+			next.defined[collectors[i].Name] = next.generation
+		}
+	}
+	return plan
+}
+
+// followLocked makes the following plan, under statsMu, which the caller
+// took once plan was worked out and found plan.previous still followed and
+// plan.next still in force: it makes plan.next the configuration the
+// per-collector state follows, and returns it with its generation. All that
+// a following changes is changed under the lock, and the followed
+// configuration is replaced last: a caller that finds the configuration
+// followed finds the state of the collectors a reload removed dropped, and
+// one that takes statistics meanwhile waits, for no longer than dropping and
+// replacing takes: nothing is compared or encoded here. When there are
 // cached results or remembered failures to drop, it is replaced under the
 // locks of the cache and of the failure log, with the drop: a trip that
 // asks under either lock whether its collector stands (configRead) is
@@ -250,21 +468,9 @@ func (f *followedConfig) stay(target, collector string) uint64 {
 // are forgotten, and the followed configuration replaced, under the lock of
 // the failure log. report, when it is set, is given what there is to log
 // once the lock is released.
-func (s *Server) followLocked(cfg *model.Config, targets *model.StaticTargetFile, report *func()) *followedConfig {
-	previous := s.followed.Load()
-	if previous != nil && previous.config == cfg && previous.targets == targets {
-		return previous
-	}
-	next := &followedConfig{config: cfg, targets: targets, generation: firstGeneration}
-	if previous != nil {
-		next.generation = previous.generation + 1
-	}
-	next.targetsDefined = targetsDefinedFrom(previous, targets, next.generation)
-	moved := targetsMoved(previous, next.targetsDefined)
-	if previous != nil && previous.config == cfg {
-		// Another static target file with the configuration followed: the
-		// collectors are as they were, and nothing kept for them changes.
-		next.defined = previous.defined
+func (s *Server) followLocked(plan *following, report *func()) *followedConfig {
+	next, moved := plan.next, plan.moved
+	if !plan.collectors {
 		s.storeFollowedForgetting(next, moved)
 		return next
 	}
@@ -272,37 +478,17 @@ func (s *Server) followLocked(cfg *model.Config, targets *model.StaticTargetFile
 		s.since = map[string]uint64{}
 	}
 	var collectors []model.Collector
-	if cfg != nil {
-		collectors = cfg.Collectors
+	if next.config != nil {
+		collectors = next.config.Collectors
 	}
-	next.defined = make(map[string]uint64, len(collectors))
-	if previous == nil || previous.config == nil {
+	if plan.previous == nil || plan.previous.config == nil {
 		for i := range collectors {
 			s.since[collectors[i].Name] = next.generation
-			next.defined[collectors[i].Name] = next.generation
 		}
 		s.storeFollowed(next)
 		return next
 	}
-	current := make(map[string]string, len(collectors))
-	for i := range collectors {
-		current[collectors[i].Name] = s.fingerprints.fingerprint(cfg, &collectors[i])
-	}
-	removed, stale := map[string]bool{}, map[string]bool{}
-	for i := range previous.config.Collectors {
-		c := &previous.config.Collectors[i]
-		fingerprint, kept := current[c.Name]
-		switch {
-		case !kept:
-			removed[c.Name] = true
-			stale[c.Name] = true
-		case fingerprint != collectorFingerprint(c):
-			stale[c.Name] = true
-		default:
-			// Unchanged, it is defined as it has been.
-			next.defined[c.Name] = previous.defined[c.Name]
-		}
-	}
+	removed, stale := plan.removed, plan.stale
 	for name := range removed {
 		// The histogram goes with the statistics it is part of. A trip
 		// still under way holds them and goes on counting in them, where
@@ -315,14 +501,10 @@ func (s *Server) followLocked(cfg *model.Config, targets *model.StaticTargetFile
 		delete(s.stats, name)
 		delete(s.since, name)
 	}
-	// A collector that is new, or back, has been there from this generation,
-	// and so has the definition of one that is new, back or changed.
+	// A collector that is new, or back, has been there from this generation.
 	for i := range collectors {
 		if _, known := s.since[collectors[i].Name]; !known {
 			s.since[collectors[i].Name] = next.generation
-		}
-		if _, unchanged := next.defined[collectors[i].Name]; !unchanged {
-			next.defined[collectors[i].Name] = next.generation
 		}
 	}
 	if len(stale) == 0 {

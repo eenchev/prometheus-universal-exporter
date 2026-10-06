@@ -306,8 +306,19 @@ func TestSchemaAndExporterAgreeOnAPrometheusRuleOfNeitherANameNorAnExpression(t 
 // two that write `expression: ""` and nothing. So this is the exporter's
 // alone to refuse, as the description of metrics says, and the schema takes
 // each such pair. Both take alike the pairs that are two rules: of one name
-// and another label, of other expressions, a prometheus rule of a name
-// beside one of that name's pattern, and a python rule twice.
+// and another label, of other expressions, and a python rule twice.
+//
+// The same holds of a prometheus rule of a name beside one whose expression
+// matches that name: each makes the metric's series, and whether an
+// expression matches what another item of the list names is nothing a
+// schema can ask. The schema takes the pair and the exporter refuses it, as
+// the description says, whatever the rule with the expression sets besides,
+// such as a type or a scale, but for a type of histogram or summary under
+// an error_mode other than fail, which keeps that rule to the metrics of
+// that type: `name: up` beside a pattern of every histogram both take, and
+// under error_mode fail, or with that type in the rule of the name too, the
+// exporter refuses it. With a label that tells their series apart, or an
+// expression that does not match the name, both take the pair.
 func TestTheExporterAloneRefusesTheSameRuleTwice(t *testing.T) {
 	schema := loadSchema(t)
 	prometheus := func(rules string) string {
@@ -330,13 +341,31 @@ func TestTheExporterAloneRefusesTheSameRuleTwice(t *testing.T) {
 		loadersAlone(t, schema, name, document, "are the same rule")
 	}
 	for name, document := range map[string]string{
+		"a prometheus name and its pattern":       prometheus("      - name: up\n      - name: up\n        expression: '^up$'\n"),
+		"a prometheus name and a pattern alone":   prometheus("      - name: up\n      - expression: '^u'\n"),
+		"a pattern of every metric before a name": prometheus("      - expression: '.*'\n      - name: load\n      - name: up\n        description: Up.\n"),
+		"a name and a pattern with a type":        prometheus("      - name: up\n      - expression: '^up$'\n        type: gauge\n"),
+		"a name and a pattern with a scale":       prometheus("      - name: up\n      - expression: '.*'\n        scale: 0.001\n        error_mode: ignore\n"),
+		"a name and every histogram, under fail":  prometheus("      - name: up\n      - expression: '.*'\n        type: histogram\n        error_mode: fail\n"),
+		"a histogram's name and every histogram":  prometheus("      - name: up\n        type: histogram\n      - expression: '.*'\n        type: histogram\n        error_mode: ignore\n"),
+	} {
+		loadersAlone(t, schema, name, document, `both pass on metric "up"`)
+	}
+	metrics, _ := schema["properties"].(map[string]any)["collectors"].(map[string]any)["items"].(map[string]any)["properties"].(map[string]any)["metrics"].(map[string]any)
+	if description, _ := metrics["description"].(string); !strings.Contains(description, "No two of them may be the same rule") || !strings.Contains(description, "may the expression of one rule match the name another rule passes on the metric of") || !strings.Contains(description, "The exporter checks both when the configuration loads") {
+		t.Errorf("the description of collectors[].metrics does not say what the exporter checks of two rules: %q", description)
+	}
+	for name, document := range map[string]string{
 		"a jq rule with another label":          jqCollector + strings.Replace(jqRule, "expression: .l", "expression: .m", 1),
 		"a jq rule with a label more":           jqCollector + jqRule + "          - name: site\n            value: a\n",
 		"a jq rule with another expression":     jqCollector + strings.Replace(jqRule, "expression: .v", "expression: .w", 1),
 		"a jq rule with another value_map":      strings.Replace(jqCollector, "        # metric\n", "        value_map: {up: 1}\n", 1) + strings.Replace(jqRule, "        labels:", "        value_map: {down: 0}\n        labels:", 1),
 		"a jq rule with another time_format":    strings.Replace(jqCollector, "        # metric\n", "        time_format: rfc3339\n", 1) + strings.Replace(jqRule, "        labels:", "        time_format: rfc1123\n        labels:", 1),
-		"a prometheus name and its pattern":     prometheus("      - name: up\n      - name: up\n        expression: '^up$'\n"),
 		"a prometheus name with a label":        prometheus("      - name: up\n      - name: up\n        labels:\n          - name: site\n            value: a\n"),
+		"a name and its pattern with a label":   prometheus("      - name: up\n      - expression: '^up$'\n        labels:\n          - name: site\n            value: a\n"),
+		"a name and a pattern of another":       prometheus("      - name: up\n      - expression: '^node_'\n"),
+		"a name and every histogram":            prometheus("      - name: up\n      - expression: '.*'\n        type: histogram\n        error_mode: ignore\n"),
+		"a name and every summary":              prometheus("      - expression: '.*'\n        type: summary\n      - name: up\n        type: gauge\n"),
 		"a python rule twice":                   pythonCollector + "      - name: up\n",
 		"a python rule twice with a label each": pythonLabel + "      - name: up\n        labels:\n          - name: note\n            expression: note\n            truncate: true\n",
 	} {

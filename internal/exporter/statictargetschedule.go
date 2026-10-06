@@ -93,7 +93,12 @@ type targetSchedule struct {
 type staticTargetState struct {
 	// target is the definition the state was made for, and collector the
 	// fingerprint of its collector's definition (collectorFingerprint); a
-	// reload that changes either starts the target again (plan). since is
+	// reload that changes either starts the target again (plan). The
+	// fingerprint is only compared, with the one the collector has in the
+	// configuration planned with, and is read where the reload made it for
+	// that configuration, the one the following of the reload told the
+	// changed collectors by (planFollowed, followedConfig.fingerprintOf):
+	// the schedule encodes no definition a second time. since is
 	// the generation the target's stay had begun at when the state was made
 	// (followedConfig.stay): reloads that changed either and changed it
 	// back, or removed either and brought it back, between two looks of the
@@ -194,9 +199,13 @@ func (s *targetSchedule) plan(cfg *model.Config, targets []model.StaticTarget, n
 func (s *targetSchedule) planFollowed(cfg *model.Config, targets []model.StaticTarget, followed *followedConfig, now time.Time) (due, skipped []dueTarget, next time.Time) {
 	// A reload puts another configuration or another list in force; until
 	// one does, every state is that of its target as it is, and no stay
-	// began. The collectors' fingerprints are worked out only for another
-	// configuration, and then once per collector, however many targets
-	// share it.
+	// began. The collectors' fingerprints are asked for only for another
+	// configuration, or for a target that starts, and then once per
+	// collector, however many targets share it. They are read where the
+	// reload that put cfg in force made them, with followed
+	// (followedConfig.fingerprintOf): the schedule encodes a definition
+	// itself only when it plans with a configuration that is not the one
+	// followed gives it, as a caller that follows none does (plan).
 	reloaded := cfg != s.config
 	changed := reloaded || len(targets) != len(s.targets) || len(targets) > 0 && &targets[0] != &s.targets[0]
 	s.config, s.targets = cfg, targets
@@ -205,9 +214,7 @@ func (s *targetSchedule) planFollowed(cfg *model.Config, targets []model.StaticT
 		value, known := fingerprints[collector]
 		if !known {
 			if cfg != nil {
-				if c := model.CollectorByName(cfg, collector); c != nil {
-					value = collectorFingerprint(c)
-				}
+				value = followed.fingerprintOf(cfg, collector)
 			}
 			fingerprints[collector] = value
 		}
@@ -383,7 +390,7 @@ var slotWaitHook atomic.Pointer[func(string)]
 // retired the target: what the turn leaves once one has is shown by a call
 // with a generation read before a reload.
 func (s *Server) turnSkipped(generation uint64, d dueTarget) {
-	s.failures.failedFor(s.readTargetAt(generation, d.target.Name), s.logger, slog.LevelWarn, failureKey(d.target.Collector, staticTargetKey(d.target.Name), "schedule"),
+	s.failures.failedFor(s.readTargetAt(generation, d.target.Name), s.logger, slog.LevelWarn, staticTargetKey(d.target.Collector, d.target.Name).aspect(scheduleAspect),
 		"static target scrape skipped", "schedule", errStillRunning, "target", d.target.Name, "collector", d.target.Collector, "interval", d.state.interval.String())
 }
 
@@ -450,7 +457,7 @@ func (s *Server) StaticScrapeLoop(ctx context.Context) {
 					if shuttingDown(scrapeCtx) {
 						return
 					}
-					s.failures.failedFor(s.readTargetAt(generation, d.target.Name), s.logger, slog.LevelWarn, failureKey(d.target.Collector, staticTargetKey(d.target.Name), "schedule"),
+					s.failures.failedFor(s.readTargetAt(generation, d.target.Name), s.logger, slog.LevelWarn, staticTargetKey(d.target.Collector, d.target.Name).aspect(scheduleAspect),
 						"static target scrape skipped", "schedule", errNoSlot, "target", d.target.Name, "collector", d.target.Collector, "interval", d.state.interval.String())
 					return
 				}
@@ -462,7 +469,7 @@ func (s *Server) StaticScrapeLoop(ctx context.Context) {
 					return
 				}
 				// A scrape that starts ends a run of skipped ones.
-				s.failures.recoveredFor(s.readTargetAt(generation, d.target.Name), s.logger, failureKey(d.target.Collector, staticTargetKey(d.target.Name), "schedule"),
+				s.failures.recoveredFor(s.readTargetAt(generation, d.target.Name), s.logger, staticTargetKey(d.target.Collector, d.target.Name).aspect(scheduleAspect),
 					"static target scrapes on schedule again", "target", d.target.Name, "collector", d.target.Collector)
 				s.scrapeTargetSince(scrapeCtx, d.config, generation, d.target)
 			}()

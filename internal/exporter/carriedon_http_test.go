@@ -549,7 +549,7 @@ func probeTripBeforeCarriedOnWasRendered(ctx context.Context, s *Server, p upstr
 	limit := maxConcurrentProbes(c)
 	if full := s.trips.tryAcquire(name, limit); full != nil {
 		rec.update(func(x *serverStats) { countRejection(x, full) })
-		s.failures.failed(s.logger, slog.LevelWarn, failureKey(name, p.failureKeyTarget(), ""), "probe rejected: too many probes in progress", "concurrency", nil, append(p.logAttrs(), "reason", full.message)...)
+		s.failures.failed(s.logger, slog.LevelWarn, p.failureKey(), "probe rejected: too many probes in progress", "concurrency", nil, append(p.logAttrs(), "reason", full.message)...)
 		http.Error(out, full.message+"; this probe was not sent", http.StatusServiceUnavailable)
 		return out.result(false)
 	}
@@ -563,7 +563,7 @@ func probeTripBeforeCarriedOnWasRendered(ctx context.Context, s *Server, p upstr
 		collector: c, target: p.target, overrides: p.overrides, headers: p.forwarded,
 		rec: rec, display: logTarget, cacheKey: p.cacheKey, budget: p.budget, budgetSource: p.budgetSource,
 		log: collectLog{
-			key:    failureKey(name, p.failureKeyTarget(), ""),
+			key:    p.failureKey(),
 			failed: "probe failed", continuing: "probe stage failed; continuing", recovery: "probe recovered",
 			attrs: p.logAttrs(),
 		},

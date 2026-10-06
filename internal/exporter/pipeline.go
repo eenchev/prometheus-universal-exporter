@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
-	"strconv"
 	"strings"
 	"time"
 	"unicode"
@@ -48,7 +47,7 @@ type collectJob struct {
 // collectLog is how a caller's failures are logged: under which key of the
 // failure log (failurelog.go), with which messages and attributes.
 type collectLog struct {
-	key                          string
+	key                          subjectKey
 	failed, continuing, recovery string
 	attrs                        []any
 }
@@ -304,7 +303,7 @@ func (s *Server) collect(ctx context.Context, j collectJob) collected {
 		}
 		trace.step("transform", "ok", time.Since(mark), fmt.Sprintf("%d series", len(set.Metrics)))
 		trace.record(func(t *probeTrace) { t.transform = set })
-		s.noteUTF8Repairs(ctx, repaired, rec, c, j.display, j.target)
+		s.noteUTF8Repairs(ctx, repaired, rec, c, j.display, j.target, "")
 	}
 	mark = time.Now()
 	if err := set.Validate(c.Limits); err != nil {
@@ -380,29 +379,41 @@ func (s *Server) transformRecorded(ctx context.Context, d *decode.Decoded, r *fe
 // scrape, whose failure names the metric.
 //
 // Each rule is logged, remembered and recovered by itself, and not with the
-// collector's other rules of its metric name (ruleFailureKey): one that
+// collector's other rules of its metric name (appendRuleFailureKey): one that
 // starts to fail beside one that has been failing is a new failure, and one
 // that works again recovers while the other is still remembered. Where
 // several rules export the name, the lines say which rule it is
 // (sharedRuleNames). Rules alike in name, expression and items are one rule,
 // logged when either is under log (transform.RuleFailure).
 func (s *Server) logRuleFailures(ctx context.Context, read configRead, c *model.Collector, failures []transform.RuleFailure, l collectLog, complete bool) {
-	failing := map[string]bool{}
+	// failing are the rules that failed on this scrape, by the keys their
+	// failures are remembered under, and unremembered counts those whose
+	// failure is not remembered, which have no key: one that started while
+	// the log was full, and one the log does not take, a debug probe's or
+	// that of a collector that no longer stands, when no earlier scrape's
+	// is remembered.
+	failing, unremembered := map[string]bool{}, 0
 	var shared sharedRuleNames
 	for _, f := range failures {
 		if !f.Logged {
 			continue
 		}
-		key := ruleFailureKey(l.key, f.Metric, f.Expression, f.Items)
-		failing[key] = true
 		attrs := append(append([]any{}, l.attrs...), "metric", f.Metric)
 		attrs = append(shared.telling(attrs, c, f.Metric, f.Expression, f.Items), "error_mode", model.ErrorModeLog, "failures", f.Failures)
-		s.tripFailed(ctx, read, slog.LevelWarn, key, "metric extraction failed", "metric", f.First, attrs...)
+		// A rule's failure is reported by what tells the rule apart, and
+		// its key is made by the log, when the log first remembers it.
+		if key := s.ruleFailed(ctx, read, slog.LevelWarn, l.key, f.Metric, f.Expression, f.Items, "metric extraction failed", "metric", f.First, attrs...); key != "" {
+			failing[key] = true
+		} else {
+			unremembered++
+		}
 	}
 	// A scrape of a trip none of whose rules has a failure remembered, as
-	// nearly every one is, has no rule to recover: it makes no key, whose
-	// cost grows with the rules' expressions, and asks the log once.
-	if !complete || !s.failures.remembersRules(l.key) {
+	// nearly every one is, has no rule to recover, and neither has one whose
+	// remembered failures are all of rules that failed again: it asks the
+	// log once. No scrape makes a key to ask, whose cost would grow with the
+	// rules' expressions.
+	if !complete || !s.failures.remembersRules(l.key, failing) {
 		return
 	}
 	for _, rule := range c.Metrics {
@@ -411,27 +422,57 @@ func (s *Server) logRuleFailures(ctx context.Context, read configRead, c *model.
 		}
 		// Nearly every rule recovers from nothing, and no line is made for
 		// it then, nor is it asked which names the rules share.
-		key := ruleFailureKey(l.key, rule.Name, rule.Expression, rule.Items)
-		if failing[key] || !s.failures.remembers(key) {
+		key, remembered := s.failures.rememberedRule(l.key, rule.Name, rule.Expression, rule.Items)
+		if !remembered || failing[key] {
+			continue
+		}
+		// A failure remembered now that was not when this scrape reported
+		// it is one another scrape of the trip reported since, at the same
+		// time as this one: the rule failed here too, and has not
+		// recovered.
+		if unremembered > 0 && failedAmong(failures, rule.Name, rule.Expression, rule.Items) {
 			continue
 		}
 		attrs := append(append([]any{}, l.attrs...), "metric", rule.Name)
-		s.tripRecovered(ctx, read, key, "metric extraction recovered", shared.telling(attrs, c, rule.Name, rule.Expression, rule.Items)...)
+		s.tripRecovered(ctx, read, l.key.rule(key), "metric extraction recovered", shared.telling(attrs, c, rule.Name, rule.Expression, rule.Items)...)
 	}
 }
 
-// ruleFailureKey is the failure log's key for a rule on the trip or file key
-// is for. The rule is told apart as the transform tells it apart
-// (transform.RuleFailure): by its metric name, its expression and its items.
+// failedAmong reports whether the rule that metric, expression and items
+// tell apart is one of those failures reports as logged: told apart as the
+// failure log's keys tell rules apart (appendRuleFailureKey), without a key.
+func failedAmong(failures []transform.RuleFailure, metric, expression, items string) bool {
+	for i := range failures {
+		if f := &failures[i]; f.Logged && f.Metric == metric && f.Expression == expression && f.Items == items {
+			return true
+		}
+	}
+	return false
+}
+
+// appendRuleFailureKey appends to dst the bytes of the failure log's key for
+// a rule on the trip or file whose key's bytes are key (subjectKey). The
+// rule is told apart as the transform tells it apart
+// (transform.RuleFailure): by its metric name, its expression and its
+// items.
 //
-// The expression is written after its length, so where it ends is not read
-// from what it holds: a jq or css expression may have a NUL in a comment or
-// a string, and with only a NUL between them an expression and items that
+// The name and the expression are each written after their length, as the
+// parts of every key are (appendKeyPart), so where one ends is not read from
+// what it holds: a jq or css expression may have a NUL in a comment or a
+// string, and with only a NUL between them an expression and items that
 // hold one would read as those of another rule, whose failures and
-// recoveries would then be this rule's. A metric name holds no NUL.
-func ruleFailureKey(key, metric, expression, items string) string {
-	var length [20]byte
-	return key + ruleKeyMarker + metric + "\x00" + string(strconv.AppendInt(length[:0], int64(len(expression)), 10)) + "\x00" + expression + "\x00" + items
+// recoveries would then be this rule's. The items are the rest of the key.
+//
+// The bytes are made here and nowhere else, where the failure log keeps
+// those of the last rule it looked for (ruleLocked), and the key a failure
+// is remembered under is a string of them (failedOf): so it is the key the
+// failure is looked up by.
+func appendRuleFailureKey(dst []byte, key, metric, expression, items string) []byte {
+	dst = append(dst, key...)
+	dst = append(dst, ruleKeyMarker...)
+	dst = appendKeyPart(dst, metric)
+	dst = appendKeyPart(dst, expression)
+	return append(dst, items...)
 }
 
 // sharedRuleNames are the metric names several rules of a collector export,

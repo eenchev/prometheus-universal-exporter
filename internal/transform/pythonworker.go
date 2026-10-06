@@ -88,6 +88,9 @@ var PythonLibraries = map[string]bool{"lxml": true, "PyYAML": true, "yaml": true
 // the exporter does.
 
 const (
+	// pythonStartupTimeout is how long an interpreter may take to say it is
+	// ready: every pool's start timeout, which only a test changes
+	// (PythonPool.SetStartTimeout).
 	pythonStartupTimeout = 10 * time.Second
 	// pythonHandoverTimeout is how long a worker may take to read and parse
 	// a request when the probe's deadline does not end it sooner: far longer
@@ -218,6 +221,10 @@ type PythonPool struct {
 	// whatever its limits.script_timeout (SetLeastScriptTimeout). It is for
 	// the tests, as start is.
 	leastScriptTimeout atomic.Int64
+	// startTimeout is how long an interpreter the pool starts may take to
+	// say it is ready: pythonStartupTimeout, but in the tests
+	// (SetStartTimeout).
+	startTimeout atomic.Int64
 }
 
 // Why a worker stopped, and how a run ended: bounded sets, so they can be
@@ -282,7 +289,9 @@ func IsolatePythonWorkers() (restore func()) {
 }
 
 func newPythonPool() *PythonPool {
-	return &PythonPool{idle: map[string][]*pythonWorker{}, stats: map[string]*pythonCollectorStats{}, busy: map[string]int{}, obsolete: map[string]bool{}, start: startPythonWorker}
+	pool := &PythonPool{idle: map[string][]*pythonWorker{}, stats: map[string]*pythonCollectorStats{}, busy: map[string]int{}, obsolete: map[string]bool{}, start: startPythonWorker}
+	pool.startTimeout.Store(int64(pythonStartupTimeout))
+	return pool
 }
 
 // SetLeastScriptTimeout gives every script the pool runs at least this long,
@@ -295,6 +304,17 @@ func newPythonPool() *PythonPool {
 // the timeout itself sets 0.
 func (p *PythonPool) SetLeastScriptTimeout(least time.Duration) {
 	p.leastScriptTimeout.Store(int64(least))
+}
+
+// SetStartTimeout is how long an interpreter the pool starts may take to say
+// it is ready, which is ten seconds in the exporter. It is for tests. An
+// interpreter that starts in a tenth of a second has taken more than the ten
+// on a machine busy enough, and a test that is not about the start then
+// fails by it; such a test runs against a pool that leaves the start a
+// minute, as it leaves a script (SetLeastScriptTimeout). A test of the limit
+// itself sets a short one, and starts something that never says it is ready.
+func (p *PythonPool) SetStartTimeout(limit time.Duration) {
+	p.startTimeout.Store(int64(limit))
 }
 
 // SetMaxWorkers bounds the workers alive at once, of every collector
@@ -784,22 +804,74 @@ func startPythonWorkerRunning(ctx context.Context, spec pythonSpec, launcher str
 		close(worker.exited)
 	}()
 
-	timer := time.NewTimer(pythonStartupTimeout)
+	// The pool's limit, which is pythonStartupTimeout but in a test.
+	limit := time.Duration(PythonWorkers().startTimeout.Load())
+	timer := time.NewTimer(limit)
 	defer timer.Stop()
 	select {
 	case line, ok := <-worker.lines:
-		if !ok || line.err != nil || !strings.Contains(string(line.data), `"ready": true`) {
+		switch {
+		case !ok:
+			return nil, worker.startEnded(ctx, timer.C)
+		case line.err != nil:
 			worker.stop()
 			return nil, fmt.Errorf("the interpreter did not start: %s", worker.describe(line.err))
+		case !strings.Contains(string(line.data), `"ready": true`):
+			// It answered, and is running: what it is stopped for is the
+			// answer, which the exporter's worker never gives.
+			worker.stop()
+			return nil, worker.startFailure(model.Errorf("the interpreter did not start: its first answer was %s, not that it is ready, so it was stopped; --python.path must name a Python 3 interpreter that runs the exporter's worker", model.Quoted(line.data)))
 		}
 		return worker, nil
 	case <-timer.C:
-		worker.stop()
-		return nil, fmt.Errorf("the interpreter did not start within %s: %s", pythonStartupTimeout, worker.describe(nil))
+		return nil, worker.startOverran(limit)
 	case <-ctx.Done():
 		worker.stop()
 		return nil, ctx.Err()
 	}
+}
+
+// startEnded stops a worker whose answers ended before it said it was
+// ready, and is why its start failed: it exited. Why it did is on its
+// stderr, which is whole only once the process has been waited for, so that
+// is waited for, until overrun, the start's own limit, or the scrape's end.
+func (w *pythonWorker) startEnded(ctx context.Context, overrun <-chan time.Time) error {
+	w.stop()
+	select {
+	case <-w.exited:
+	case <-overrun:
+	case <-ctx.Done():
+	}
+	return fmt.Errorf("the interpreter did not start: %s", w.describe(nil))
+}
+
+// startOverran stops a worker that has not said it is ready within limit,
+// and is why its start failed. What it says is what was true when the limit
+// ran out, so that is asked before the worker is stopped: stopped, every
+// worker has exited, and an operator told so of one that was only slow looks
+// for a crash that did not happen.
+func (w *pythonWorker) startOverran(limit time.Duration) error {
+	defer w.stop()
+	select {
+	case <-w.exited:
+		return fmt.Errorf("the interpreter did not start within %s: %s", limit, w.describe(nil))
+	default:
+	}
+	return w.startFailure(fmt.Errorf("the interpreter did not start within %s: it was still running and had not said it was ready, so it was stopped; it did not crash: look at how busy the machine is and at how long the libraries the collector declares take to import", limit))
+}
+
+// startFailure is err, the failure of a start that ended with the
+// interpreter still running, with what the interpreter had written to stderr
+// by then. How much that is depends on when it was stopped, so the failure
+// is recognised without it (model.SameFailureText): a start that is too slow
+// on every scrape is one failure to the log, however far each got.
+func (w *pythonWorker) startFailure(err error) error {
+	tail := strings.TrimSpace(w.stderr.String())
+	if tail == "" {
+		return err
+	}
+	const written = "; it had written to stderr: "
+	return model.SameFailureAs(fmt.Errorf("%w%s%s", err, written, tail), model.SameFailureText(err)+written+model.MovingMark)
 }
 
 // pythonWorkerEnvironment is the environment a worker starts in: the

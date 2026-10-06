@@ -46,7 +46,7 @@ type Server struct {
 	// staticClashes are the targets' metrics the last read of the endpoint
 	// left out for their type (statictargetsendpoint.go).
 	staticClashMu sync.Mutex
-	staticClashes map[string]staticClash
+	staticClashes map[subjectKey]staticClash
 	// timeoutOffset is how much of Prometheus's scrape timeout a probe leaves
 	// unused (scrapetimeout.go).
 	timeoutOffset time.Duration
@@ -109,7 +109,7 @@ func NewServer(m *config.Manager, p string, l *slog.Logger) *Server {
 	// reload adds, from when its statistics are made (selfcreated.go).
 	cfg, targets := m.InForce()
 	s.statsMu.Lock()
-	first := s.followLocked(cfg, targets, nil)
+	first := s.followLocked(planFollowing(nil, cfg, targets, s.fingerprints), nil)
 	if cfg != nil {
 		for i := range cfg.Collectors {
 			stats := newServerStats(exporterStart())
@@ -119,9 +119,12 @@ func NewServer(m *config.Manager, p string, l *slog.Logger) *Server {
 	}
 	s.statsMu.Unlock()
 	// The state kept per collector follows a reload when it is made
-	// (reconcile.go). Asked for once statsMu is released: the manager tells
-	// under the lock that serializes reloads, and the following takes statsMu
-	// under that one.
+	// (reconcile.go), and what following it needs that takes long is worked
+	// out before the reload puts its configuration in force (prepareReload).
+	// Asked for once statsMu is released: the manager tells under the lock
+	// that serializes reloads, and the following takes statsMu under that
+	// one.
+	m.OnPrepare(s.prepareReload)
 	m.OnInstall(s.followReload)
 	return s
 }
@@ -418,7 +421,7 @@ func (s *Server) probeHandler(w http.ResponseWriter, r *http.Request) {
 			budget: budget, budgetSource: budgetSource,
 			// Probes of one target differing in their parameters or
 			// forwarded headers — tenants, paths — fail apart in the log.
-			failureTarget: target + "\x00" + key, requestURL: requestURL,
+			failure: probeFailureKey(name, target, key), requestURL: requestURL,
 		})
 	}
 	// No key, when the collector's definition could not be fingerprinted,
@@ -474,20 +477,20 @@ type upstreamProbe struct {
 	// came from.
 	budget       time.Duration
 	budgetSource string
-	// failureTarget tells the probe apart in the failure log
-	// (failurelog.go): its target with everything else that makes it the
-	// probe it is, parameters and forwarded headers; the target alone when
-	// empty. requestURL is its url label, which logs show.
-	failureTarget string
-	requestURL    string
+	// failure tells the probe apart in the failure log (probeFailureKey):
+	// by its target with everything else that makes it the probe it is,
+	// parameters and forwarded headers; by the target alone when it is not
+	// set. requestURL is its url label, which logs show.
+	failure    subjectKey
+	requestURL string
 }
 
-// failureKeyTarget is what the failure log tells p apart by.
-func (p upstreamProbe) failureKeyTarget() string {
-	if p.failureTarget != "" {
-		return p.failureTarget
+// failureKey is what the failure log tells p apart by.
+func (p upstreamProbe) failureKey() subjectKey {
+	if p.failure.bytes != "" {
+		return p.failure
 	}
-	return p.target
+	return probeFailureKey(p.collector.Name, p.target, "")
 }
 
 // logAttrs are the attributes p's log lines carry.
@@ -506,7 +509,7 @@ func (p upstreamProbe) logAttrs() []any {
 // the collector has cache.stale_if_error, the last good result answers
 // instead of the error (cache.go).
 func (s *Server) probeUpstream(ctx context.Context, p upstreamProbe) *probeResult {
-	c, name := p.collector, p.collector.Name
+	c := p.collector
 	result := s.probeTrip(ctx, p)
 	if result.abandoned || model.StaleIfError(c) <= 0 || p.cacheKey == "" {
 		return result
@@ -525,7 +528,7 @@ func (s *Server) probeUpstream(ctx context.Context, p upstreamProbe) *probeResul
 		s.logger.Debug("probe refused by the target policy; no stale result served", p.logAttrs()...)
 		return result
 	}
-	staleKey := failureKey(name, p.failureKeyTarget(), "\x00stale")
+	staleKey := p.failureKey().aspect(staleAspect)
 	if result.ok {
 		s.failures.recoveredFor(p.rec.read, s.logger, staleKey, "probe answered with a fresh result again", p.logAttrs()...)
 		return result
@@ -580,7 +583,7 @@ func (s *Server) probeTrip(ctx context.Context, p upstreamProbe) *probeResult {
 	limit := maxConcurrentProbes(c)
 	if full := s.trips.tryAcquire(name, limit); full != nil {
 		rec.update(func(x *serverStats) { countRejection(x, full) })
-		s.failures.failedFor(rec.read, s.logger, slog.LevelWarn, failureKey(name, p.failureKeyTarget(), ""), "probe rejected: too many probes in progress", "concurrency", nil, append(p.logAttrs(), "reason", full.message)...)
+		s.failures.failedFor(rec.read, s.logger, slog.LevelWarn, p.failureKey(), "probe rejected: too many probes in progress", "concurrency", nil, append(p.logAttrs(), "reason", full.message)...)
 		http.Error(out, full.message+"; this probe was not sent", http.StatusServiceUnavailable)
 		return out.result(false)
 	}
@@ -594,7 +597,7 @@ func (s *Server) probeTrip(ctx context.Context, p upstreamProbe) *probeResult {
 		collector: c, target: p.target, overrides: p.overrides, headers: p.forwarded,
 		rec: rec, display: logTarget, cacheKey: p.cacheKey, budget: p.budget, budgetSource: p.budgetSource,
 		log: collectLog{
-			key:    failureKey(name, p.failureKeyTarget(), ""),
+			key:    p.failureKey(),
 			failed: "probe failed", continuing: "probe stage failed; continuing", recovery: "probe recovered",
 			attrs: p.logAttrs(),
 		},
@@ -750,9 +753,11 @@ type utf8Repairs struct {
 // noteUTF8Repairs counts and logs what the transform repaired for invalid
 // UTF-8 (transform.Transform repairs it before labels are mapped and
 // truncated), so the one scrape still reaches Prometheus and the problem is
-// still seen.
-func (s *Server) noteUTF8Repairs(ctx context.Context, repaired utf8Repairs, rec statsRecorder, c *model.Collector, target, keyTarget string) {
-	key := failureKey(c.Name, keyTarget, "\x00utf8")
+// still seen. file is the directory's file the transform was of, or empty;
+// target is what the lines name, keyTarget the address as the failure log
+// tells addresses apart.
+func (s *Server) noteUTF8Repairs(ctx context.Context, repaired utf8Repairs, rec statsRecorder, c *model.Collector, target, keyTarget, file string) {
+	key := aspectKey(c.Name, keyTarget, file, utf8Aspect)
 	changed, first := repaired.count, repaired.first
 	if changed == 0 {
 		s.tripRecovered(ctx, rec.read, key, "output is valid UTF-8 again", "collector", c.Name, "target", target)

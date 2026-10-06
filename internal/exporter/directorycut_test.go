@@ -77,7 +77,7 @@ func TestADirectoryReadTheShutdownCutShortIsAborted(t *testing.T) {
 	cancel(errShuttingDown)
 	result := server.collect(ctx, collectJob{
 		collector: c, rec: server.recorderFor(server.statsFor(c.Name), c.Name, "", "READ"),
-		log: collectLog{key: "k", failed: "static target scrape failed", attrs: []any{"collector", c.Name}},
+		log: collectLog{key: staticTargetKey(c.Name, "k"), failed: "static target scrape failed", attrs: []any{"collector", c.Name}},
 	})
 	if !result.aborted || !errors.Is(result.err, errShuttingDown) {
 		t.Fatalf("result=%+v, want aborted by the shutdown", result)

@@ -69,6 +69,16 @@ import (
 // histogram, which an exposition cannot hold. expfmt made an empty series of
 // it.
 //
+// A label written with an empty value is left off its series (promParser.
+// empty): to Prometheus m{l=""} is the series m, and the exporter leaves an
+// empty label off wherever one comes from. The label is read and checked as
+// any other first, so a name written twice is still an error, and so is a
+// histogram's le or a summary's quantile that is empty, which is no number.
+// Two series that differ only in such a label are one series: a histogram's
+// or a summary's samples are then one series' samples, refused where that
+// series has a sample twice, and two plain series are the duplicates the
+// check of every scrape refuses (model.MetricSet.Validate).
+//
 // Families come back in the order they were first seen, and series in the
 // order of their first sample, so a decode is deterministic.
 func parsePrometheusText(body []byte) ([]model.Metric, error) {
@@ -252,6 +262,9 @@ type promParser struct {
 	// in the body or, when they have escapes, unescaped in unescaped.
 	labels    []promLabel
 	unescaped []byte
+	// empty says that one of labels has an empty value, which add leaves
+	// off: nearly no sample has one, and it is then all a sample pays.
+	empty bool
 	// seen holds the label names of a sample with more labels than
 	// promLabelsCompared, to find one written twice.
 	seen map[string]struct{}
@@ -385,7 +398,7 @@ func (p *promParser) sample(s []byte) error {
 		name []byte
 		err  error
 	)
-	p.labels = p.labels[:0]
+	p.labels, p.empty = p.labels[:0], false
 	if s[0] == '{' {
 		name, s, err = p.readLabels(s[1:], true)
 		if err != nil {
@@ -532,6 +545,13 @@ func (p *promParser) add(f *promFamily, role int, value float64, timestamp int64
 			p.labels = append(p.labels[:i], p.labels[i+1:]...)
 			break
 		}
+	}
+	if p.empty {
+		// A label with an empty value is no label of the series. It is left
+		// off here, once le or quantile is taken out, which is refused when
+		// it is empty rather than left off, and before anything is made of
+		// the labels: the series' map and a histogram's signature.
+		p.labels = slices.DeleteFunc(p.labels, func(l promLabel) bool { return len(l.value) == 0 })
 	}
 	if role == promRoleCreated {
 		return nil
@@ -886,8 +906,13 @@ func (p *promParser) readLabels(s []byte, bracesForm bool) ([]byte, []byte, erro
 		// A label value that is not valid UTF-8 is kept as it is: the
 		// transform repairs it with U+FFFD and counts it, as it does the
 		// output of every other decoder (textencoding.go), rather than
-		// failing the whole scrape over one value.
+		// failing the whole scrape over one value. One that is empty is
+		// kept until the sample is added (add), so that its name written
+		// twice is found as any other's is.
 		p.labels = append(p.labels, promLabel{name: label, value: value})
+		if len(value) == 0 {
+			p.empty = true
+		}
 		after = skipBlanks(after)
 		switch {
 		case len(after) == 0:

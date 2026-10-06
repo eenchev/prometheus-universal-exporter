@@ -54,6 +54,15 @@ loads, as a collector's request is, rather than failing every export:
   sets — the resource would carry it twice. The same holds for a static
   target's `otlp.resource_attributes` and its `otlp.service_name`.
 
+An attribute of `resource_attributes` written `""` is the attribute left
+out, as a [`transform.labels`](CONFIGURATION.md#collector-wide-labels) value
+written `""` is the label left out: the resource does not carry it, where it
+used to carry an attribute without a value, and a static target's sets
+nothing, so the exporter-wide attribute of that name stays. A data point
+carries no such attribute either: a label with an empty value is on no
+series the exporter makes, whether a rule, a script or the target's own
+exposition gave it, so an export has no attribute that says nothing.
+
 OTLP export is best-effort and does not make a Prometheus probe fail. Metric
 values are buffered as latest values and exported every `otlp.interval`;
 the default is 30 seconds. Each export request is bounded by `otlp.timeout`,

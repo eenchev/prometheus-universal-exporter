@@ -5,6 +5,7 @@ package exporter
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -104,8 +105,8 @@ func rememberedOf(server *Server, collector string) []string {
 	server.failures.mu.Lock()
 	defer server.failures.mu.Unlock()
 	var out []string
-	for key, st := range server.failures.entries {
-		if keyCollector(key) == collector {
+	for _, st := range server.failures.entries {
+		if st.key.collector == collector {
 			out = append(out, fmt.Sprintf("%s x%d", st.stage, st.failures))
 		}
 	}
@@ -226,4 +227,25 @@ func checkLateSite(t *testing.T, site lateSite) {
 			t.Errorf("after a success of its own the collector in force has %v remembered, want recovered and the recovery logged once:\n%s", after, l.logs)
 		}
 	})
+}
+
+// levelsOf are the levels of the lines with the message msg in logs, a log
+// of JSON lines, in order: a failure in full at its own level, a repeat at
+// DEBUG, a recovery at INFO.
+func levelsOf(t *testing.T, logs *bytes.Buffer, msg string) []string {
+	t.Helper()
+	var levels []string
+	for _, line := range strings.Split(strings.TrimSpace(logs.String()), "\n") {
+		if line == "" {
+			continue
+		}
+		var record struct{ Level, Msg string }
+		if err := json.Unmarshal([]byte(line), &record); err != nil {
+			t.Fatalf("the log line %q is not JSON: %v", line, err)
+		}
+		if record.Msg == msg {
+			levels = append(levels, record.Level)
+		}
+	}
+	return levels
 }

@@ -1600,6 +1600,18 @@ The YAML decoder MUST:
   it costs. A mapping of many keys MUST NOT make the rest of its document
   cost a call of the YAML library for each item of a sequence beside it:
   the items are handed to the library together, no more than 128 at a time.
+  A mapping merged into another (`<<`) MUST NOT cost a call of the library
+  for each of its keys and values either: the keys of a run of its pairs
+  are handed to the library together, and then the values of those the
+  merge gives the mapping, no more than 128 at a time, so that decoding a
+  mapping and a merge of it allocates no more than twice what decoding the
+  mapping does.
+  A pair MAY be handed alone where its key is no scalar, where the walk
+  decodes its value itself or the library could refuse the value for its
+  aliases in a part made for it, and where a key of its run is not decoded
+  without a word, as a null among text keys. What a merge decodes into, the
+  order its problems are listed in, and where a document is refused for its
+  aliases MUST be what they are with every pair handed alone.
   And looking through a document before it is decoded MUST NOT take a stack
   deeper than the document is nested, however its aliases follow one
   another: anchors that each hold an alias of the one before MUST NOT be a
@@ -2391,6 +2403,28 @@ It deliberately differs from expfmt where expfmt was wrong for a scrape target:
 - It rejects a label set with no metric name, such as `{a="b"} 1`, which
   expfmt attached to the previous line's family, and names that mix bare and
   quoted parts, such as `a"b"`, which expfmt spliced together.
+- It leaves a label written with an empty value off its series, which
+  expfmt kept: `m{l="",k="v"}` MUST be read as `m{k="v"}`, since Prometheus
+  reads a label with an empty value as none and no series the exporter makes
+  has one (§ 18.1). An exposition MUST be read as the same exposition without
+  those labels is read: the same series, in the same order, or the same
+  error. The label MUST be read and checked as any other before it is left
+  off, so what was refused about it still is, in the same words: a label
+  name written twice on a sample, when one of its values or both are empty,
+  and an empty `le` of a histogram's sample or `quantile` of a summary's,
+  which is a bound that is no float. On a series without buckets or
+  quantiles, an OpenMetrics gauge histogram's `foo_bucket` among them, `le`
+  and `quantile` are labels as any other and MUST be left off when empty.
+  The label MUST be off before a series is made of the sample, so that a
+  histogram's or a summary's samples are grouped without it, and a
+  pre-script, a `python` transform and the rules of a `prometheus`
+  transform are given the series without it. Two series a target tells
+  apart by nothing else are then one: a histogram's or a summary's samples
+  written so MUST be one series' samples, refused where that series has a
+  sample twice, and two plain series MUST both be returned, without the
+  label, for validation to refuse as the duplicates they are (§ 21).
+  Reading an exposition that has no such label MUST cost no allocation it
+  did not cost.
 - It never panics. expfmt panicked on inputs such as `{b="c",} 1`, which a
   target could serve to crash the exporter from a static target scrape, where no
   HTTP handler recovers the panic.
@@ -2640,7 +2674,17 @@ and a non-finite one, or one beyond an int64 of milliseconds, refused. A
 metric a script appends to `metrics` itself MUST be read the same way: its
 value and timestamp as `metric(...)` reads them, `None` refused, its label
 values written as label text with `None` leaving the label off, and a missing
-type `gauge`. A name, type or help that is not a string (`None` for the type
+type `gauge`. A label a script gives as the empty string — to `metric(...)`,
+in an entry it appends, or on a series a pre-script leaves a `prometheus`
+transform — MUST be left off its series, as `None` is and as an expression
+label with an empty value is (§ 18.1). It MUST be left off where the
+script's answer is read, so that the rules of a `prometheus` transform,
+`truncate`, the check for duplicate series, the text exposition and OTLP all
+see the series without it: the rule is about the value the script gave. A
+label a target's own exposition writes with an empty value is left off by
+the decoder, with a pre-script or without one (§ 14.1), so a pre-script
+that leaves `data` as it got it MUST change nothing of what the collector
+answers. A name, type or help that is not a string (`None` for the type
 or the help being none given), labels that are not a mapping, and an entry of
 `metrics` that is not a mapping MUST fail the scrape with a message naming the
 metric and the argument, whether given to `metric(...)` or appended; the
@@ -2675,7 +2719,19 @@ data.
 A pre-script of a `prometheus` transform MUST receive the series as
 `{"metrics": [...]}`, as a Python transform does, and what it leaves MUST be
 read back into series for the rules, anything not of that shape refused naming
-the series. A label value a pre-script left in a CSV row MUST be written as
+the series. A series' `help` or `type` that is neither a string nor `None`,
+and `labels` that are neither a mapping nor `None`, MUST fail the scrape as
+a script's failure (§ 16.7), with a message naming the series, the key, what
+stands there by its kind and the number of its items (§ 18.1) and what
+belongs there: `data["metrics"][0]: up help 5 is not a string`,
+`... up labels are an array of 1 item, not a mapping of label names to
+values`. They MUST NOT be read as none given, which exported the series
+without its help, untyped, or without its labels, as another series than
+the script meant. `None` for one of the three MUST be none given, as the key
+left out is, and of several the first MUST be reported, in the order type,
+help, labels. A type that is a string and no metric type MUST be read as
+written and refused by validation, as a rule's is. A label value a
+pre-script left in a CSV row MUST be written as
 label text, `None` leaving the label off.
 
 What a script prints MUST be kept to its first 4 KiB, logged at debug level,
@@ -2952,7 +3008,21 @@ typical script.
   timeout error naming the limit, and its worker MUST be killed. A worker
   pool MAY be told a least time to give every script whatever its limit,
   which the tests set on the pools they run scripts in (§ 34); the exporter
-  MUST NOT set one, so that the limit is what the collector configures.
+  MUST NOT set one, so that the limit is what the collector configures. The
+  same holds for the start's budget: a pool MAY be told another, which the
+  tests do, and the exporter MUST NOT, so that its start has the 10 seconds.
+- A start that fails MUST say what was true of the interpreter when it
+  failed, found out before the interpreter is stopped. One that had exited
+  MUST be said to have exited, with the end of what it wrote to stderr, read
+  once the process has been waited for. One still running when the budget
+  ran out MUST be said to have been running and not ready, and that this is
+  no crash but a busy machine or a slow import, with what it had written to
+  stderr until then; it MUST NOT be said to have exited. One whose first
+  answer is not that it is ready MUST be said to have answered that, the
+  answer shown as a value is quoted in any error (§ 18.1), and what
+  `--python.path` must name. What a running interpreter had written to
+  stderr depends on when it was stopped, so the failure MUST be recognised
+  without it (§ 25.1).
 - A run that the probe's or scrape's deadline ends before
   `limits.script_timeout` does MUST be stopped the same way and MUST NOT be
   reported as a timeout of the script: its error MUST say that the probe's
@@ -3534,11 +3604,96 @@ expression, `items` or a label MUST load, several rules being the way one
 family is read from several places (§ 24.2); among them, rules alike in
 name, expression and `items` that their labels tell apart stay one rule to
 the rule report and to the log (above, § 25.1). The comparison is of what
-is written: two expressions of one meaning, and a `prometheus` rule that
-matches the metric of its name beside one whose expression is that name,
-are two rules to it and load. A `python` rule makes no series, so two alike
-MUST load. No schema can compare the items of a list so, and the refusal is
-the exporter's alone (§ 24.3).
+is written: two expressions of one meaning are two rules to it and load. A
+`python` rule makes no series, so two alike MUST load. No schema can
+compare the items of a list so, and the refusal is the exporter's alone
+(§ 24.3).
+
+Of two `prometheus` rules of a collector, the `expression` of one MUST NOT
+match the `name` the other, having no expression, passes on the metric of,
+where the two give that metric's series one name and the same labels: each
+then makes every series of the metric that it does not fail on, and a
+scrape that has a series twice fails on a duplicate series (§ 21). Where
+neither fails on a series, that is every scrape of a target that has the
+metric, and of a target that has none the rule of the name makes nothing,
+so that rule, which is about the one metric, makes a series of no scrape
+that passes. The pair MUST be refused at load. Whether the expression
+matches is decided as the transform decides it of a metric of the target:
+the expression compiled the same and matched anywhere in the name. The
+rules give the series one name when the rule with the expression has no
+`name` or has that same `name`; with another it exports the metric under
+that, and the two MUST load. Their labels are the same when the rules are
+alike in them as two rules that are the same rule are (above); rules that
+differ in a label MUST load. What else the rule of the name says MUST NOT
+change the verdict — `scale`, `type`, `description`, `required`,
+`error_mode`, a label's `truncate` and `required` — since where one of them
+keeps that rule from making a series, it makes none. What else the rule with
+the expression says MUST NOT change the verdict either. The one exception to
+both is a `type` of `histogram` or `summary` in the rule with the expression
+(below). A rule that
+sets a `type`, a `scale` or a `required` label, and whose `error_mode` is
+not `fail`, MAY fail on a series of the metric — a histogram or a summary
+keeps its type and takes no scale, a `type` of `histogram` or `summary`
+applies to no other metric, and a series may not have the label — and carry
+on, the scrape passing with the series the rule of the name made, which
+only the target decides: a `type` of `gauge`, `counter` or `untyped` and a
+`scale` fail the scrape of a metric that is a gauge, a counter or untyped
+and pass that of a histogram or a summary, a `type` of `histogram` or
+`summary` fails the scrape of a metric of that type alone, and a `required`
+label fails the scrape whose series have it. A pair with such a rule MUST
+be refused as every other is, whatever a target would have made of it,
+every series the rule does not fail on being made by each rule. One such
+pair MUST load instead: that whose rule with the expression has a `type` of
+`histogram` or `summary` and an `error_mode` other than `fail`, unless the
+rule of the name sets that same `type`. Such a `type` applies to a metric of
+that type and to no other, so the rule fails on, and carries on without,
+every metric of another type: it is a rule of the histograms, or of the
+summaries, alone, and leaves an ordinary metric to the rule of its name, as
+`name: up` beside `expression: '.*'` with `type: histogram` and `error_mode:
+ignore`, the metric up and every histogram. The `type` alone decides: the
+pair MUST load whatever else that rule sets, a `scale` or a `required`
+label, which keep it from more series and from no fewer, and whatever other
+`type` the rule of the name sets. Where the rule of the name sets that same
+`type` it makes the metric only where the other rule makes it too, and under
+`error_mode: fail` the rule fails the scrape on a metric of another type:
+both MUST be refused, in the words given below for a rule that can fail on a
+series and carry on and for one that cannot. A pair that loads so still
+makes a series twice where the target's metric of that name is itself of
+that type, which only the target decides; the scrape of such a target MUST
+fail on the duplicate metric series, as any scrape that has a series twice
+does, and the user documentation MUST say so and what to change. Nothing
+else is refused: two rules that both have an expression, a rule of a name
+beside one that exports another metric under that name, and rules whose
+labels differ as written — a `required` label that the rule of the name has
+not among them — MUST load, and fail the scrape that has a series twice as
+they did. The error MUST name the collector, both rules by their places
+among its `metrics`, counted from 1, the metric and the expression, as in
+`collector "node" metrics rule 1 and rule 2 both pass on metric "up": rule
+1 passes on the metric of that name, the expression "^up$" of rule 2
+matches that name`, and MUST say to take one of the two out, write the
+expression so that it does not match the name, or tell their series apart
+by a label. Of a rule with an expression that makes a series of every
+series it matches or fails the scrape — it sets no `type`, no `scale` and
+no `required` label, or its `error_mode` is `fail` — it MUST say, as it
+did, `and their labels are alike, so each makes every series of the metric,
+and a scrape that has a series twice fails, as a duplicate metric series`.
+Of a rule that can fail on a series and carry on it MUST NOT say that each
+makes every series: it MUST name what that rule sets of the three — the
+type, the scale, and each required label by its name, once — and say that
+these do not keep the rule from the metric, as in `and their labels are
+alike; the type and the scale of rule 2 do not keep it from the metric,
+since every series of the metric that rule 2 does not fail on is made by
+each rule, and a scrape that has a series twice fails, as a duplicate
+metric series`, followed, where one of the two rules sets a `type` the
+other does not, by `or, where the two rules give the metric different
+types, as a metric of inconsistent types`. Each such pair MUST be reported
+once, whichever of its rules is written first, after the rules that are the
+same rule as an earlier one; a rule that is such a copy MUST be reported as
+that alone, and a rule refused for something else for that alone. A
+collector without such a pair — every collector of another transform among
+them — MUST get from the load the verdict and the words it got before this
+rule. No schema can ask whether one item's expression matches what another
+item names, and the refusal is the exporter's alone (§ 24.3).
 
 A `regex` rule's value MUST be the text of the capture group named `value`
 (`(?P<value>...)`) when its expression has one, wherever the group stands,
@@ -3569,7 +3724,11 @@ A label MAY set `truncate: true`. A value longer than
 `limits.max_label_value_length` then MUST be cut to that many bytes, on a
 character boundary, ending in `…`, the mark counted within the limit; without
 it, such a value MUST fail the scrape as before (§ 21), since a silently
-shortened value would surprise. Truncation MUST apply to the labels of declared
+shortened value would surprise. A limit of 1 or 2 bytes has no room for the
+mark, and the value MUST be cut without it; a value of which nothing is then
+left, its first character being longer than the limit, MUST leave the label
+off its series, an expression's and a constant's alike, rather than export it
+with an empty value. Truncation MUST apply to the labels of declared
 metrics from every transform, a `prometheus` rule without a name included and
 the series of a `python` script that a rule names (the rule makes no series;
 it declares the script's metric and the label to cut), and
@@ -3586,14 +3745,26 @@ exponent form otherwise; `NaN`, `+Inf` and `-Inf` for non-finite numbers;
 be a failure of the metric rule, handled by its `error_mode`, with an error
 saying to select a field or join the array, rather than a label in any
 language's syntax for it. A Python script's label values passed to `metric()`
-MUST be written the same way: a number or a boolean as its text, `None` as no
-label, and a list, tuple, set or dict refused with an error naming the label,
-as MUST be `labels` that is not a mapping.
+MUST be written the same way: a number or a boolean as its text, `None` and
+the empty string as no label (§ 16.2), and a list, tuple, set or dict
+refused with an error naming the label, as MUST be `labels` that is not a
+mapping.
 
 An expression label that gives a series no value — a selector or path matching
 nothing, a missing attribute, capture group or source label, an empty CSV
 cell, a null — or an empty value MUST be left off that series, in every
-transform, so the text exposition and OTLP agree. A `csv` label naming a
+transform, so the text exposition and OTLP agree. A series the exporter
+makes MUST NOT have a label with an empty value, whatever gave it the label: one
+of a target's own exposition is left off by the `prometheus` decoder, so a
+`prometheus` rule's label read from it is a missing source label (§ 14.1); a
+script's is left off where its answer is read (§ 16.2); a `transform.labels`
+value and a static target's label written `""` are the label left out (§ 6,
+§ 42.14); a value `truncate: true` cuts to nothing leaves the label off
+(above); and a rule's constant written `""` is no `value` at all, refused at
+load when the label has no `expression` either (above). The exporter's own
+series MUST NOT have one either: a static target that names no target has no
+`target` label on its health series (§ 42.14), and an OTLP resource
+attribute written `""` is the attribute left out (§ 42.1). A `csv` label naming a
 column the response does not have is no such label: it MUST fail its rule
 (§ 42.2). An `expression` label MAY set
 `required: true`. A series missing a required label MUST then be a missing
@@ -4898,8 +5069,8 @@ The exporter MUST reload when asked, not only when the watch finds a change:
 
 After any reload, whatever its trigger, the per-collector state MUST follow the
 new configuration when the reload is made: on the path that reloads, before
-the reload returns or `/-/reload` answers, and never on a probe's. Where it
-has not been, it MUST follow before it is next used. A removed collector's
+the reload returns or `/-/reload` answers, and without a probe having to ask
+for it. Where it has not been, it MUST follow before it is next used. A removed collector's
 self-metric series, per-request series, scrape-time histogram, cached results
 and remembered failures MUST be dropped, so its series stop being exposed and
 exported and Prometheus marks them stale, and a collector added again under
@@ -4918,6 +5089,59 @@ and MUST have its remembered failures forgotten (§ 25.1), as a removed
 collector's are, so that the first failure of the new definition is logged as
 a first failure and not as a repeat of the old one's; an unchanged collector
 MUST keep everything.
+
+What a reload changed — the collectors and static targets it removed,
+changed or left as they were — MUST be worked out before the lock of the
+per-collector statistics is taken, which every probe takes to find its
+collector's statistics and every read of the self-metrics takes: the lock
+MUST be held only to drop and replace what the following changes, and the
+exporter MUST NOT encode, hash or compare a collector's definition while it
+holds it. Following a reload MUST work out the fingerprint of each collector
+of the new configuration (§ 42.13) at most once and MUST NOT work out again
+those of the configuration it had followed, which it MUST keep with that
+configuration; a static target file reloaded alone MUST work out none. A
+reload MUST work them out before it puts its configuration in force, once
+the configuration has been read and checked, on the path that reloads and
+with the configuration before it still in force, which probes MUST go on
+being answered by meanwhile without waiting; with them it MUST work out the
+fingerprints not yet worked out of the collectors of the configuration
+followed that the new one still names. A reload that is refused MUST work
+out none. Once a reloaded configuration is in force the exporter MUST NOT
+encode or hash a collector's definition to tell what the reload changed,
+on the path that reloads or on a probe's: a probe that comes before the
+reload has followed its configuration MUST NOT wait for a fingerprint. The
+schedule of the static targets, which starts a target again when the
+definition of its collector changed (§ 42.14), MUST tell that by the same
+fingerprints, those kept with the configuration followed, read only when
+that is the very configuration it plans with, and MUST plan what it would
+plan had it encoded each definition itself. It MUST NOT work out again a
+fingerprint that is kept: after a reload of a configuration, whose
+fingerprints the reload made, it MUST NOT encode or hash a definition, so
+that each collector is encoded once in all for the reload, static targets
+or none; a fingerprint that nothing had asked for yet, of the configuration
+the exporter started with, it MUST work out once and keep with that
+configuration, where the probes and the next reload find it made. The
+fingerprints kept MUST NOT grow with the reloads: the exporter MUST keep
+those of the configuration in force, and MAY keep those of one
+configuration before it while probes still read that one. What was worked
+out MUST be done only if, with the lock held, the configuration and the
+static target file it was worked out for are still in force and the
+configuration it was worked out from is still the one followed. Otherwise it
+MUST be worked out again from what is followed then, so that a reload that
+overtakes another's following is followed with it as one, or be found done:
+a probe that needs the per-collector state while a reload works out its
+following MUST NOT wait for a lock the reload holds, and MAY work out and do
+the same following itself, of which exactly one MUST be done.
+
+A read of the self-metrics MUST hold that lock only to find the statistics
+of each collector of the configuration it read, and to make those of a
+collector first heard of: it MUST read the collectors' names, and make what
+it gives the statistics back in at the size the configuration says, before
+it takes the lock, and MUST NOT copy a collector's definition to read its
+name. What it gives back MUST NOT depend on that: every collector of the
+configuration read, sorted by name, each with the statistics kept for it, or
+with statistics retired and kept nowhere when a reload removed it between
+the read of the configuration and the lock.
 
 What a probe or static target scrape writes under its collector's name when
 it ends MUST go nowhere once the collector it read is no longer the one in
@@ -4968,6 +5192,18 @@ repeat of the old one's. What is remembered of a target the reload left as
 it was MUST stay, and so MUST what the static targets endpoint remembers of
 a metric it left out and what a trip remembers under the address it went to,
 which a probe of that address shares.
+
+Whose a remembered failure is — which collector's, and whether a static
+target's own — MUST be what the probe, the scrape or the schedule that
+reported it said, kept with the failure, and MUST NOT be read out of the key
+the failure is remembered under. Following a reload MUST therefore forget
+exactly the failures of the collectors it removed or changed, and exactly
+the own failures of the static targets it removed or changed — a failed
+scrape, a skipped turn, a rule of the scrape — whatever a probe's target, an
+address, a file's name, a metric name, an expression or `items` hold: what
+is remembered of a probe whose target is the words `static target` and the
+name of a static target, and of a file of a directory so named, MUST stay
+when a reload removes or changes that static target.
 
 A probe MUST NOT join a trip in flight (§ 42.13a) that was started by a probe
 of another stay of its collector — one that read the collector before a
@@ -5054,6 +5290,10 @@ checked:
   but blanks (§ 6).
 - A label of a `python` rule MUST NOT set `value` (§ 18.1).
 - Two rules of a collector MUST NOT be the same rule (§ 18.1).
+- The `expression` of a `prometheus` rule MUST NOT match the `name` another
+  rule of the collector passes on the metric of, where the two give its
+  series one name and the same labels, but for a rule that its `type` keeps
+  to the histograms or the summaries (§ 18.1).
 - `transform.labels` keys and `rename_labels` targets MUST be valid label
   names, and two `rename_labels` entries with one target MUST be rejected.
 
@@ -5330,7 +5570,11 @@ rules that differ in a `description` or a `scale`, or of which one writes
 schemas MUST take each such pair, the description of `metrics` MUST say
 what the exporter checks of it, and a test MUST show such pairs past the
 schema and refused by the exporter, and the pairs that are two rules taken
-by both.
+by both. The same holds of a `prometheus` rule of a name beside one whose
+expression matches that name (§ 18.1): whether an expression matches what
+another item of the list names is nothing a schema asks, so the schemas
+MUST take the pair, the description MUST say that the exporter checks it,
+and the test MUST show it.
 
 A test MUST hold every key that a schema holds to allowed values, a pattern
 or a length to one verdict from the committed schema and from the loader,
@@ -5397,6 +5641,28 @@ them failed on a scrape. A scrape of a target, or a directory's file, none
 of whose rules has a failure remembered — as nearly every scrape is — MUST
 cost the failure log one lookup: it MUST NOT make the key of each rule, whose
 size is that of the rule's expression, to ask whether that rule recovered.
+Neither MUST a scrape make it while a failure of one of its rules is
+remembered — as it is on every scrape of a target that lacks one value, for
+as long as it lacks it: what such a scrape allocates for the failure log
+MUST NOT grow with the length of its rules' expressions, a rule's key being
+made when its failure starts to be remembered and not on the scrapes that
+find it remembered. Nor MUST a rule's key be made for a failure the failure
+log does not remember — one that starts while the log is full (§ 25.1) and
+is logged every time, on every scrape for as long as the log stays full, and
+one a debug probe reports, which the failure log is told nothing of: what
+such a scrape allocates for the failure log MUST NOT grow with the length of
+its rules' expressions either. A rule that failed on a scrape MUST NOT be
+logged as recovered by that scrape, whether or not its failure was
+remembered when the scrape reported it.
+What the failure log remembers of a rule MUST be found by the scrape of the
+target, or the directory's file, the rule failed on, whatever the collector,
+the target and the file are named: a rule's failure MUST be remembered as
+one of the trip or file its scrape reported it for, and the scrape MUST ask
+with that same key, compared whole. The trip or file MUST NOT be read back
+out of the key the rule's failure is remembered under, in which a target, a
+file's name or an expression may hold what the key's parts are joined with:
+the rules of a directory's file named `rule` MUST be logged as recovered as
+those of any other file are, and their failures forgotten then.
 The lines of a metric name only one rule exports
 MUST carry neither. A `prometheus` rule without a name MUST be logged with
 an empty `metric`, and one with a name and no expression, which matches by
@@ -5521,6 +5787,22 @@ apart by its parameters and forwarded headers too, and its lines MUST carry
 its `url` label. A failure not reported for an hour MUST be forgotten, whether
 or not the log is full: its return is a new failure, and its recovery after
 the silence is not logged.
+
+Two things the failure log tells apart MUST NOT be taken for one, whatever
+their parts hold. They are: a probe, told by its collector, its target and
+its parameters and forwarded headers; a static target, told by its collector
+and its name; what a trip found at the address it went to — bytes that were
+not UTF-8, lines a decoder left out, a directory over a bound, a directory's
+file — told by the collector, the address and the file; a metric the static
+targets endpoint left out; and of each, what failed: itself, a stale answer,
+a skipped turn, or a rule, told as § 18.1 tells it. The key a failure is
+remembered under MUST be that of two of them only when they are one, of one
+kind and alike in every part, a part being any bytes: a probe's target may
+hold NUL bytes, a directory or a file may be named `schedule`, `stale` or
+`rule`, and a target may begin with the words `static target`. So no choice
+of a target, an address, a file's name, a metric name, an expression or
+`items` MUST make a failure of one a repeat of another's, or make the
+recovery of one end another's failure.
 
 ---
 
@@ -6233,10 +6515,12 @@ that interval, each beside a test of the same schedule on a clock of its own.
 Two things many tests meet are held to this in one place. The worker pool a
 test runs Python scripts in MUST leave each script at least a minute,
 whatever its `limits.script_timeout`, unless the test is of that timeout and
-says so. And a test server that the exporter calls as a `grpc` target MUST
-listen on a port no such server of the test process had before, since the
-exporter keeps a connection per address and a reflection answer per
-connection, and the kernel gives a freed port out again.
+says so, and MUST leave an interpreter a minute to start in, unless the test
+is of that limit, which then starts what never becomes ready. And a test
+server that the exporter calls as a `grpc` target MUST listen on a port no
+such server of the test process had before, since the exporter keeps a
+connection per address and a reflection answer per connection, and the
+kernel gives a freed port out again.
 
 A test MAY work on a smaller input when the tests are built with the race
 detector, under which the suite runs twice and several times slower: fewer
@@ -6249,7 +6533,11 @@ there, an expectation that depends on the size MUST be computed from it or
 given for both sizes, a floor on what a generated corpus held MUST be scaled
 with the corpus and MUST NOT be dropped, an input that is there to pass a
 bound of the code MUST still pass it, and a test of concurrency MUST keep the
-goroutines it runs together.
+goroutines it runs together. Where an input cannot be smaller, because it is
+at a bound, and what takes the time there is an oracle the test compares
+with, the test MAY hold the result under the detector to the answer the
+oracle is known to give, provided a run without the detector compares with
+the oracle itself and the test's comment says so.
 
 ## 34.1 Test layers
 
@@ -9643,6 +9931,10 @@ Tests MUST show:
   timestamps, buckets, quantiles, sums and counts and their absence, or the
   same error word for word, a limit's being marked as a limit; the filter is
   asked about the same names in the same order, and the body is not changed.
+  A body that has `""` in it, and so may have a label with an empty value,
+  which the parser leaves off (§ 34.107), is compared with the oracle under
+  its switch of that one difference, here and in the bullets below; every
+  other body with the oracle as it was.
 - That table holds: blank lines and lines of other white space (form feed,
   vertical tab, no-break space, line separator); values in every spelling
   and what is no value; timestamps that are integers, floats, too large or
@@ -15181,8 +15473,7 @@ Tests MUST show:
   expressions and constants, with other `items`, with a label of another
   value in each, with a label more, with a label that is a constant in one
   and read in the other; rules whose `value_map`s or `time_format`s differ;
-  a `prometheus` rule of a name beside one of that name and its pattern; a
-  `python` rule twice, with a label and without; and the same rule in two
+  a `python` rule twice, with a label and without; and the same rule in two
   collectors.
 - What a scrape makes of such pairs, the rules being taken by the checks as
   they were: under jq, yq, xpath, css, regex, csv and prometheus the same
@@ -15202,8 +15493,7 @@ Tests MUST show:
 - A `python` rule twice, each cutting the label `note`, loads, and the
   script's one series is valid with its label cut to the limit.
 - Rules that mean the same in other words load as they did and fail the
-  scrape as they did, with `duplicate metric series "up"`: a `prometheus`
-  name beside the name with its pattern and beside the pattern alone, two
+  scrape as they did, with `duplicate metric series "up"`: two `prometheus`
   patterns of one name, two jq expressions of one meaning, `rfc3339` beside
   `RFC3339`, and a label read by two expressions of one value.
 - Rules alike in name, expression and `items` with a label of another value
@@ -15237,8 +15527,8 @@ Tests MUST show:
   in another order, with one `time_format` and a `time_zone`, with one
   `value_map`, and as the third rule of its collector; both take a jq rule
   with another label, a label more, another expression, another `value_map`
-  and another `time_format`, a prometheus name beside its pattern and with
-  a label, and a python rule twice, with a label each and without. The
+  and another `time_format`, a prometheus name with a label, and a python
+  rule twice, with a label each and without. The
   schemas describe `collectors[].metrics` as checked for this by the
   exporter.
 - A `prometheus` rule's name that is no metric name and holds a character
@@ -15425,6 +15715,1143 @@ Tests MUST show:
   many failures were recognised by one, ten and eleven problems, how many
   documents had problems, aliases and different texts — are checked there
   too, scaled to the corpus that run draws.
+
+## 34.102 A name beside a pattern that matches it, what a script's series may hold, and an interpreter's start
+
+- Under `prometheus`, a rule of a name beside a rule whose expression
+  matches that name is refused at load with `collector "node" metrics rule 1
+  and rule 2 both pass on metric "up": rule 1 passes on the metric of that
+  name, the expression "^up$" of rule 2 matches that name, and their labels
+  are alike, so each makes every series of the metric, and a scrape that has
+  a series twice fails, as a duplicate metric series; take one of the two
+  out, write the expression so that it does not match "up", or tell their
+  series apart by a label, as with a static label that has another value in
+  each`: `name: up` beside `name: up` with `expression: '^up$'`, beside
+  `'^u'` alone, and after `expression: up`, told as `rule 2 passes on the
+  metric of that name, the expression "up" of rule 1`. Before, each loaded,
+  and every scrape of a target with the metric failed with `duplicate metric
+  series "up"`.
+- What a scrape made of such pairs, the rules being taken by the check as
+  it was: a name beside the name with its pattern, beside the pattern alone
+  in either order, beside `.*`, `load` beside `node_load1`, `(?i)^UP$`, the
+  same two labels in another order, a description, scale, `required: false`
+  and `error_mode: ignore` in the rule of the name, a label cut in one, a
+  rule between the two, and a histogram all gave series whose validation
+  fails with `duplicate metric series`; with `type: counter` in the rule of
+  the name, or in the pattern's rule under `error_mode: fail`, with `metric
+  "up" has inconsistent types`. Each is refused now.
+- The rule of the name makes a series of no scrape that passes, and the
+  pair is refused where it makes none at all: with a scale on a histogram
+  under `ignore`, or a required label the series have not, the scrape made
+  the pattern's one series; of a target without the metric it made none of
+  it, with `required: false` as without.
+- Of a rule with an expression that can fail on a series and carry on,
+  beside a rule of a name: `.*` with a scale under `ignore` beside
+  `name: lat`, a histogram, makes 4 valid series, `^lat` with `type: gauge`
+  makes 1, and a pattern's rule that requires a label the series have not
+  makes 1; the same rules with a metric the scale or type applies to, or
+  the label there, fail the scrape with `duplicate metric series "up"`.
+  Such a pair was held to be no pair, and is refused now, as under
+  `error_mode: fail` it was (§ 34.107).
+- Pairs the configuration does not decide load as they did. Their series
+  are valid: 2 with a constant label of another value in each, 5 with a
+  label more in a rule of `.*`, 3 beside `^node_`, 2 where the pattern's
+  rule has another name, 2 where another metric is exported under the
+  name, and 2 where a label reads one the rule sets, written in another
+  order. Or the scrape fails as it did, with `duplicate metric series`: two
+  expressions `^node_` and `^node_cpu`, a name under two rules with one
+  expression, and a constant label `job: api` the target's series has.
+- Through the load: `expression: ""` beside the name and `name: ""` beside
+  the expression are the keys left out; an expression with a backslash is
+  quoted as Go quotes it; a pattern of every metric before `up`, a rule of a
+  name and an expression, and `down` is told of beside rules 2 and 4 and
+  not beside rule 3; and in a collector file the pair is refused in the
+  same words.
+- A pair is told of once, at its later rule, after the copies: of `up`,
+  `.*`, `up`, `down`, `.*` and a rule of `load` with its own pattern the
+  load reports rules 1 and 3 and rules 2 and 5 as the same rule, then rules
+  1 and 2 for `up` and rules 2 and 4 for `down`, and nothing of a copy
+  beside another rule. Of `^up`, `up`, `up$` and `startup` it reports rules
+  1 and 2, 2 and 3, and 3 and 4. A rule refused for an invalid type or an
+  expression that does not compile is held against no other.
+- The check of a collector's rules agrees with a copy of itself as it was,
+  on the error word for word and on the defaults it fills in, for the 147
+  rules of the 24 collectors of the 13 shipped configurations, none of
+  which is refused anew, and for generated rules: every pair of 252
+  prometheus rules — a name or none, with no
+  expression, `^up$`, `p`, `.*`, an alternation of two names or one that
+  does not compile, and with eight sets of labels, a scale, a scale under
+  `error_mode: " FAIL "`, a description with `required` and `error_mode`, a
+  type, a label cut and a label required — collectors of three of a few
+  rules, and pairs of jq, csv and python rules. A collector without a pair
+  that a specification written apart from the check names gets the same
+  error, or none, and none is refused anew under jq, csv or python. Under
+  the race detector the pairs are of every ninth rule with every fifth and
+  the collectors of three rules of six. The copy the check is held to, the
+  rules and the counts are since those of § 34.107.
+- The committed schema takes, and the loader alone refuses with `both pass
+  on metric "up"`, a prometheus name beside the name with its pattern,
+  beside `'^u'`, and after `.*` and another rule; both take a name beside
+  its pattern with a label and beside `'^node_'`. The description of
+  `collectors[].metrics` says the exporter checks both when the
+  configuration loads.
+- A pre-script of a `prometheus` transform that leaves a series' `help` as
+  a number, a float, a boolean, a list or a dict, its `type` as a list, a
+  number, a boolean or a dict, or its `labels` as a list of pairs, an empty
+  list, text, a number or a boolean fails with `data["metrics"][1]: made
+  help 5 is not a string`, `made type an array of 1 item is not a string;
+  give "gauge", "counter", "untyped", "histogram" or "summary"`, `made
+  labels are an array of 1 item, not a mapping of label names to values`,
+  where the series was read without its help, untyped or without its
+  labels; `None` for each, the key left out, a help or a type of `""` and
+  labels of `{}` are none given, as they were, the other two parts kept.
+- Of a series with several of them the failure is the first, in the order
+  type, help, labels, after `has no name` and before a label that is a
+  list, a timestamp or a value.
+- Through a transform with a script, each of the three, a tuple for the
+  labels and a NaN for the help fail the scrape with `python pre-script:
+  data["metrics"][0]: up_thing ...` as a script's failure
+  (`model.ErrScriptFailed`), as a timestamp that is a list does; a script
+  that hands `data` on, sets the three to `None` or deletes them is read
+  back; a type of `"counterr"` is read as written and refused by
+  validation as `metric "up_thing" has invalid type "counterr"`.
+- An entry a `python` transform appends with a `help` of `5`, a `type` of
+  `["counter"]` or `labels` of `[["a", "b"]]` fails as it did, as a
+  script's failure naming the metric and the key.
+- End to end, probes of four collectors whose pre-script leaves a help, a
+  type, labels or a timestamp of another kind are answered `collector ...
+  transform failed: python pre-script: data["metrics"][0]: up_thing ...`
+  and each counted once in `http_exporter_script_errors_total` and once in
+  `http_exporter_transform_errors_total`; one that sets the help to `None`
+  is answered with the series and counted in neither, and one that sets
+  the type to `"counterr"` is refused by validation and counted in
+  neither.
+- A label a script gives as the empty string is left off its series:
+  `metric("m", "gauge", 1, {"l": ""})`, with other labels beside it, with
+  an object whose `str()` is empty, an entry appended to `metrics` by hand,
+  and, under a `prometheus` transform, a pre-script that sets a label of a
+  series, replaces one the target gave, or appends a series with one; a
+  label of one blank, and every other label, is kept.
+- Two series a script tells apart by an empty label alone — from
+  `metric(...)`, from an appended entry, and one a pre-script appends
+  beside the target's — fail validation as `duplicate metric series "m"`.
+- A `python` rule's `truncate: true` cuts the label a script gave a long
+  value and finds none where it gave `""`; a `prometheus` rule's label read
+  from a label a pre-script emptied is left off, and with `required: true`
+  and `error_mode: fail` fails as `metric "up_thing" label "location" is
+  missing`.
+- A `prometheus` transform without a script leaves a label its target wrote
+  as `l=""` off the series, as one with a pre-script does (§ 34.107), and
+  `m{l=""}` beside `m` fails validation as `duplicate metric series "m"`;
+  series built by hand that differ only in a label with an empty value
+  still fail with the error that names the empty value.
+- End to end, probes of a `python` collector calling `metric(...)` with
+  `{"l": "", "k": "v"}`, of one appending an entry with `{"l": ""}` and of
+  a `prometheus` collector whose pre-script sets `l` to `""` are answered
+  `m{k="v"} 1`, `m 1` and `up_thing{a="b"} 1`, the three series queued for
+  OTLP carry no empty label, and a script emitting `m` with `{"l": ""}`
+  beside `m` is refused as a duplicate series.
+- `metric(...)` still takes a label that is a plain string as it is,
+  without asking `label_text` (5 of 8 asked), and the one given as `""` is
+  on no series.
+- A `python` transform's answers are read as a copy of the reading as it
+  was reads them, error for error and series for series, but for the
+  labels that were the empty string, which are left off: 4,000 random
+  answers (300 under the race detector), and as many again as
+  `metric(...)` appends them and as a script appends them by hand, with
+  labels that are often empty; a table of thirteen entries — an empty
+  label alone, beside others, beside `None`, under a name written twice,
+  before and after a value — is read the same way, with and without
+  encoding/json.
+- What a pre-script leaves a `prometheus` transform is read as a copy of
+  `prometheusFromPython` as it was reads it, over 30,000 generated
+  documents (3,000 under the race detector) of series of every type, with
+  and without each key and with parts wrong in every way a part was
+  refused for: a document with no empty label and no help, type or labels
+  of another kind is read exactly as it was, series for series and error
+  for error; one with an empty label is read as it was without that label;
+  and one with a part of another kind fails for the first such series,
+  unless a series before it, or that series' name, failed as it always
+  did.
+- The two exposition fixtures under `testdata/prometheus`, each as a
+  pre-script is given it and leaves it unchanged, are read back as they
+  were.
+- An interpreter a test starts has a minute to say it is ready in: on the
+  process's own worker pool of the packages that run scripts, on the pool
+  each test is given, and still after a test of the script's timeout has
+  held its scripts to their limit. A pool nobody has set gives a start the
+  exporter's 10s, and no file but a test's sets another, as none but a
+  test's sets a least time for scripts.
+- The limit a start runs under is its pool's: a stand-in for `python3` that
+  says it is ready only when the test lets it starts under the tests' minute
+  after three times 50ms, and under a limit of 50ms is stopped and reported
+  as not started within 50ms, not sooner than that.
+- A stand-in that never says it is ready fails the scrape, under a start
+  limit of 50ms, with `python transform failed: the interpreter did not
+  start within 50ms: it was still running and had not said it was ready, so
+  it was stopped; it did not crash: look at how busy the machine is and at
+  how long the libraries the collector declares take to import`, where it
+  was said to have exited; the text is what the failure is recognised by,
+  and the start is counted as one start failure and one failed run.
+- A stand-in that writes `ModuleNotFoundError: No module named 'lxml'` to
+  stderr and exits fails the scrape with `the interpreter did not start: the
+  interpreter exited: ` and that line. A worker whose stderr arrives only
+  once it has been stopped has it in the failure, the start having waited
+  for the process; a start whose scrape was given up, or whose limit ran
+  out, does not wait and says that the interpreter exited.
+- A stand-in whose first answer is `Python 2.7.18` fails the scrape with
+  `the interpreter did not start: its first answer was "Python 2.7.18", not
+  that it is ready, so it was stopped; --python.path must name a Python 3
+  interpreter that runs the exporter's worker`, where it was said to have
+  exited; an answer of 200 bytes is shown by its first 64 and `(200 bytes)`
+  and recognised with the mark in place of the length.
+- A worker that had exited when its start's limit ran out is reported as
+  `the interpreter did not start within 50ms: the interpreter exited`, with
+  its stderr after it when it wrote any; one still running that had written
+  to stderr is reported as still running, with `; it had written to stderr:
+  ` and what it wrote, and two such starts that had written differently
+  much are recognised by one text, the mark in place of what was written.
+  Both workers are stopped.
+- Beside the start as it was, an interpreter that is not there, one that
+  exits with status 3 or 0 without a word, one whose first answer is longer
+  than its output limit, a scrape given up before the interpreter is ready,
+  and `python3` itself end a start as they did, text for text.
+- Under the race detector the YAML documents at the bound of a part hold at
+  least 12 of each kind of pair and one of each pair, of the 19 and the 2 to
+  9 that the places written there make, and the documents with aliases in
+  the parts of a large mapping at least 19 decoded, 2 with the key listed as
+  a problem and 1 refused for its key, of 29, 3 and 2; the plain run holds
+  them to 90 and 10, and to 200, 20 and 10, as before.
+
+## 34.103 Rule keys while a failure is remembered, a merge of a large YAML mapping, and a reload followed outside the statistics lock
+
+- A scrape of a trip that has a rule's failure remembered makes no rule's
+  key either: for thirty rules under `log` it allocates for the log no more
+  times, and within 512 bytes the same, with expressions of 20 KB as with
+  expressions of 200 bytes — when one rule fails on every scrape, when all
+  thirty do, and when the scrape asks about each of its rules, as one of a
+  collector a reload retired does. A failure that starts and then ends
+  allocates less than three keys more with the long expressions, where the
+  two scrapes made sixty-one keys; the former logging, kept as an oracle,
+  allocates for the one failing rule more than thirty times the difference
+  of the expressions. Skipped under the race detector.
+- Over 80 generated collectors whose rules share metric names, differ in
+  expression and `items`, have twins and expressions of 2 KB that differ in
+  their last byte or hold a NUL, under every error mode, and 60 generated
+  scrapes each of two targets, of a directory's files — one named `rule` —
+  and of the files of a target named `rule`, with transforms that are not
+  complete, minutes or hours passing, trips of a retired collector and debug
+  probes, a reload forgetting the collector, and for every eighth collector
+  180 scrapes with the log full from the fifteenth to the hundred and
+  fiftieth (§ 34.106), the log reads line for line as
+  it did while a scrape made the key of every rule (kept as an oracle), a
+  debug probe's report has the lines it had, and the failure log holds the
+  entries, times and counts it held — the file named `rule` as a file of
+  another name was logged and held (§ 34.104). Under the race detector it is
+  every tenth of the collectors.
+- A rule's key is byte for byte its parts joined in one expression — its
+  trip's key, the marker, its name and its expression each after its length
+  and a NUL, and its `items` — and so are the bytes a lookup writes in place
+  of a key, after whatever its buffer held and with nothing left of a longer
+  key: over 30,000 generated rules with NULs, the marker of a rule's key and
+  digits in every part, and names and expressions of every length at which
+  the count of the length's digits changes, up to 12,000 bytes; 6,000 under
+  the race detector. The bytes are not those a key had while the name stood
+  before a NUL without its length (§ 34.105).
+- A rule is found remembered without its key when, and only when, an entry
+  is under its key, with that key; a scrape on which no rule fails is told
+  that a rule of its trip is remembered as it was told, but for a file named
+  `rule` and a target named `rule` (§ 34.104); and one on which
+  some rules fail is told so only when an entry of a rule of the trip is
+  under a key other than theirs: after every fifth step of three generated
+  sequences of 4,000 failures, recoveries, forgotten keys, passing minutes
+  and hours and reloads forgetting a collector or a static target, for
+  every rule of 24 trips, a directory's file named `rule` and a target named
+  `rule` among them. Every entry holds the key it is under. Under the race
+  detector it is one sequence of 1,500 steps.
+- Rules looked up from six scrapes at once, of two trips, with keys of a few
+  bytes and of 4,000, while failures are remembered and recovered from, are
+  each found under their own key or not at all.
+- The pairs of a YAML mapping merged into another (`<<`) are handed to the
+  library a run at a time where a document has a large mapping: decoding a
+  parsed document of a mapping of 5,000 keys and a small mapping that
+  merges it allocates no more than twice the bytes of the same document
+  without the merge and no more than 2.25 times the allocations, and with
+  four mappings that each merge it no more than five times the bytes and
+  six times the allocations; a call of the library for each merged key and
+  each merged value was 2.7 and 3.5 times, and 7.7 and 11 times. The library
+  is called no more than twice for every 128 keys of each merge, beside
+  once for every 128 keys of the mapping itself, and is handed no sequence
+  of more than 128 keys or values; it was called twice for a merged pair.
+- A document with a merge decodes into what the library alone makes of it
+  and into what the walk made of it when every merged pair was handed
+  alone, the walk as it was kept beside the tests: the documents written
+  for the forms of a merge, 27 written for a run — two keys that decode
+  into one, `.nan` keys, a null among text keys, a key that does not fit
+  its tag after a value with a problem, problems in the order they are
+  written, a value a merge leaves out, the merge key's text as a key, a
+  merge within a merged mapping — and 200 drawn at random of two to six
+  mappings of a few keys, of 126 to 131, of 254 to 259 and of up to 430
+  that merge one another: an alias, a mapping in place, a list of both, the
+  merge key before, between and after the mapping's own keys, keys that
+  are numbers, booleans, null, `.nan`, dates, aliases and sequences, and a
+  scalar, an alias of a scalar or of a sequence and a list with a scalar as
+  what is merged (`map merge requires map or sequence of maps as the
+  value`). Each is decoded with a mapping large past 128 keys and past one,
+  two or four, a written one past each; values, their types, error texts
+  and what the failure is recognised by are the same, but where the walk
+  already refused a merge beside a key that is a sequence with another
+  error than the library's.
+- A merge of a mapping of 5,000 keys, 39 runs of 128 and a part of one, is
+  what the walk made of it before: merged once, four times, in a list with
+  another that shares half its keys, through a mapping that merges it, with
+  keys that are numbers into a mapping of text keys and into one of keys of
+  any type, with values whose problems are listed once for the mapping and
+  once for the merge, in order, and in a list that ends with a scalar,
+  which is refused.
+- The aliases of a merged mapping are counted pair by pair as before: small
+  mappings that each merge 130 pairs of aliases of ten numbers are decoded
+  up to nineteen and refused from the twentieth (`document contains
+  excessive aliasing`), and twenty pairs of fifty numbers, large past four
+  keys, from the thirteenth, as the library alone and the walk before
+  refuse them. A value that does not fit its tag in a pair handed with the
+  pair the document is refused at comes first (``cannot decode !!str `foo`
+  as a !!int``), and one in that pair or after it is not read.
+- Following a reload does what it did when the whole of it was done under
+  the statistics lock: over 16 generated sequences of 8 reloads, each
+  keeping, removing, adding or changing collectors and static targets,
+  putting a static target file in force alone, or reading both files again
+  as they are, with a probe held at its target and another held before it
+  takes its statistics across each reload, static target scrapes begun
+  after it with what they read before, and targets that fail, the answers,
+  the statistics and the stay they are of, the generations of collectors and
+  static targets, the requests tracked, the cached results, the failures
+  remembered, the static targets' results, the self-metrics and the log
+  lines are those of a server told of each reload by the former following,
+  kept as an oracle, with verbose self-metrics and without, with a static
+  target file and without; the oracle's server works out no following of its
+  own. Under the race detector it is 4 sequences of 6 reloads.
+- Following a reload encodes no collector's definition while the statistics
+  lock is held: a reload of 100 collectors that leaves them as they were,
+  changes every one, or removes half and adds as many, with a static target
+  file read again or without one, encodes 100 definitions, each collector of
+  the new configuration once and none of the configuration it had followed,
+  and the first reload after the start at most 200; the former following
+  encoded 200 at every such reload, all with the lock held. Under the race
+  detector it is 10 collectors.
+- A static target file put in force alone, the configuration as it was,
+  encodes no collector's definition: its targets are defined from the new
+  generation and the collectors from the ones they had.
+- A probe that comes while a reload has worked out its following and not yet
+  taken the statistics lock, which is free there, is answered before the
+  reload's following ends, by the new configuration and from its target; it
+  makes the following itself, one generation, the collector the reload kept
+  defined as it was and the changed one from then; a read of the
+  self-metrics then shows the changed collector's counters kept and its one
+  cached result, of the new definition; and the reload, let go on, finds the
+  following made and makes no second one.
+- A following that another reload overtakes between its being worked out and
+  the lock being taken is not made of the configuration overtaken: it is
+  worked out again of the one in force, from the one still followed, as one
+  generation, so a collector the first reload removed and the second brought
+  back as it was keeps its cached result and the generation it was defined
+  from, and one the second changed has neither.
+- `BenchmarkFollowReload` measures one following for 50, 500 and 2,000
+  collectors unchanged, all changed, and half removed and as many added,
+  with a static target of each collector and without, and reports how long
+  the statistics lock was held.
+
+## 34.104 A rule's failure counted for its trip, cases that run under the race detector too, and a comparison that writes no place
+
+- Through `/probe` without a target and as a static target, a `localfile`
+  directory with the files `rule` and `rules.txt` and a rule under `log`
+  that both lack, lack again and then have: each file's rule is logged
+  `metric extraction failed` as a warning, then as a repeat, then
+  `metric extraction recovered`, and nothing on the scrape after; the lines
+  of the file named `rule` are those of `rules.txt` but for the name, and
+  afterwards the failure log remembers nothing of the collector and counts
+  no rule's failure. Read back out of the rule's key, the file named `rule`
+  was read a part short: its recovery was never logged and its failure
+  stayed remembered. A directory named `rule` given as the target, whose key
+  holds the marker of a rule's key whole, is logged the same way, as it was.
+- A rule's failure is counted for the trip it was reported as a rule of,
+  whatever the trip's key holds: over 1,037 keys made of a collector, a
+  target and a file that are each nothing, a plain name, `rule`, a NUL, the
+  marker of a rule's key, or a piece of it — `rule` after a NUL, `rule`
+  before one, the marker short of its last byte or its first, the marker
+  twice — with one rule failing on every second trip and another, named
+  `rule` and with the marker in its expression and `items`, on every third,
+  each trip's count is the failures of its own rules and no key is counted
+  that is no trip's; a scrape of each trip is told of a remembered failure
+  only when one of its own rules has one beside those it names as failing
+  again, and naming the failure of another trip's rule takes nothing from
+  its count; the counts are the same after every failure happens again, one
+  with another text, go with the recoveries, and are none after the sweep.
+  The log that read the trip out of the keys, kept as an oracle and given
+  the keys the trips had (§ 34.105), told every scrape whose key did not end
+  in a NUL and `rule` of each failure it is told of now, 7,070 times of
+  another trip's besides, and told a scrape whose key ended so of none, 236
+  times while one was remembered.
+- What a scrape is told of its rules' remembered failures is what it was
+  told while the trip was read out of the keys, for every trip whose key
+  neither held the marker nor ended as it begins: 28,800 times over the
+  three generated sequences of § 34.103. A directory's file named `rule` was
+  told of none and is told as any other trip, 5,375 times of a failure it
+  was not told of; the files of a target named `rule` were told of every
+  failure of the target's trips, their own among them, and are told of
+  their rules' alone, never of one they were not told of then.
+- In the 80 generated collectors of § 34.103, the former logging, which made
+  the key of every rule and read the trip out of the key, is given the file
+  named `rule` under the key of a file named `elur`, with the lines'
+  attributes as they are: the log then reads line for line the same after
+  every scrape, the failure log holds the same entries, times and counts
+  under that key, and counts each trip's failures where they were counted
+  then — the files of a target named `rule` together, under what stands
+  before the marker in their keys. Given the key of the file named `rule`
+  itself, on a log of its own, the former logging logs no recovery on any
+  scrape of that file, where the scrapes compared log 141.
+- The failure log's counts recounted after every step of the four generated
+  sequences of § 34.92 are recounted by the trip each failure was reported
+  as a rule of, which the test keeps beside the rule's key, and the trips
+  include a directory's file named `rule` and the files of a target named
+  `rule`; a rule's key is reported for one trip only.
+- The three cases of data that holds a list too often which ran only in a
+  plain run are run under the race detector too, at the sizes and under the
+  bounds on the worker's memory of a plain run: a list in itself twice in a
+  document of 20,000 values (5,000 rows), lists doubled 9,000 times, and one
+  dict with a key of 1,000 characters held 80,000 times. Each is built,
+  walked and refused in the worker, which the detector does not slow (0.15
+  to 0.2 seconds each in either run), and all the exporter hands over and
+  reads of one is the shape's name and the refusal, so none takes a smaller
+  input there. Under the detector as without, one worker refuses all twelve
+  of the lists held many times over, counted as `script_error`.
+- Each of the three is still past what it is there to pass, the count of
+  more values than half of `limits.max_output_bytes` (65,536 at a limit of
+  128 KiB) at which the worker weighs the whole answer: the 9,000 lists are
+  more than its looks at a part of the answer reach before that count, and
+  80,000 items are more than it at once, both refused as the script's
+  failure that names the limit and not as an output over it; and the list
+  in itself stands after 5,000 rows, refused as data that holds itself with
+  under 8 MiB held by the worker.
+- One oracle stays out of the run under the race detector: on the hidden
+  chain of 9,998 links, which is at the depth bound by its length and cannot
+  be shorter, the library is not run there, for each of the chain through a
+  sequence, a mapping and a merge key. It compares every two of the chain's
+  9,999 keys before it decodes any, a quarter of a second for each chain in
+  a plain run and two and a half seconds under the detector. There the
+  exporter's answer is held to the refusal the library makes of the chain,
+  `yaml: document contains excessive aliasing`, written in the test; the
+  plain run holds the same answer to the library itself, and both runs
+  assert that the chain is not refused for its depth and that one link more
+  is.
+- The comparison the decoders' differential tests find two decoded values
+  the same by writes the place of a difference only where there is one: two
+  values that are the same, nested 10,000 deep in lists and mappings, are
+  compared in no more than four allocations, where the place of every level
+  was written on the way down, 15,003 allocations for them. The count is of
+  a run without the race detector.
+- A difference is told as it was: over 1,500 generated documents, each with
+  one node in turn changed — a number by its sign bit or to the next number,
+  a text, a boolean, a null, a list by its length or its kind, a mapping by
+  a key under another name, a key more or its kind — the comparison says to
+  the letter what the one that wrote every place said, and of a document
+  beside a copy of itself both say nothing. Under the race detector it is
+  300 documents.
+
+## 34.105 A failure's key is its subject's alone, and a reload forgets by whose a failure is
+
+- Through `/probe`, an `http` probe of the target `static target one` and a
+  static target named `one`, both failing, with the static target file
+  reloaded to change `one` between scrapes: before the reload each failure
+  is logged in full and then as a repeat; after it the probe's is the repeat
+  it is, at debug level, the static target's is logged in full as a changed
+  target's first, and the failure log remembers the two. Read out of each
+  key, the probe's target was taken for the static target's name, and the
+  probe's failure was forgotten with the target and logged in full again.
+- Through `/probe`, an `http` collector whose definition has no fingerprint,
+  with a jq rule under `log` whose expression ends in a NUL in a comment and
+  whose value the target lacks, probed in turn with the target and with a
+  target written to have had the key of that rule — the target, three NULs,
+  `rule`, the rule's name, the length of its expression and the expression
+  short of its last byte: the second probe is answered 502 naming an invalid
+  control character in the URL, as it was; the rule's failure is logged as a
+  warning and then as a repeat, the probe's as an error and then as a
+  repeat, and the two are remembered. With one key between them each was
+  logged in full every time, and one failure was remembered.
+- A static target that reads the `localfile` directory
+  `static target textfiles` with a file named `schedule` that does not
+  decode, scraped and its turn skipped, twice: the file's failure and the
+  skipped turn are each logged as a warning and then as a repeat, and two
+  failures are remembered; forgetting the static target `textfiles` leaves
+  the file's. The two had one key: each was logged in full every time, one
+  failure was remembered, and forgetting the static target forgot it.
+- No two things the failure log tells apart have one key: of 300,000
+  generated subjects of every kind — a probe, a static target, what a trip
+  found at an address or in a file, a metric the endpoint left out — and
+  every form — the subject's own, each of the seven aspects, a rule — whose
+  collectors, targets, addresses, files, static target names, probe keys,
+  metric names, expressions and `items` are joined of NULs, the marker of a
+  rule's key and its pieces, the aspects and their names, the words
+  `static target `, `family `, the kinds' letters and lengths as a key
+  writes them, the bytes of every key read back as the subject it was made
+  of and no key is that of two; each key says whose it is, its collector,
+  none for the endpoint's, and the static target for a static target's own
+  alone; the key of an aspect made at once is the key made and then given
+  the aspect. Eight named pairs that had one key have two: a file named
+  `schedule` in a directory named as a static target and that target's
+  skipped turns; a probe of a target with NULs and a rule of another
+  target's probe; two targets' rules; a stale answer and a file named
+  `stale`; a directory listed short and a file whose name is a NUL and
+  `listing`; a file's bytes and those at an address with a NUL; a probe and
+  a file whose name is the probe's key and a NUL; the endpoint's metric and
+  a file of a collector without a name. Of the subjects the exporter makes
+  keys of, two plain ones — no NUL in a part, a named collector, a target
+  that does not begin `static target ` — had one key only when they were
+  one subject, as now, and some 10,000 of the others had the key of
+  another.
+  60,000 subjects under the race detector.
+- A key is made in one allocation — a probe's, a static target's, a file's,
+  an aspect's with its aspect, the endpoint's — and a probe that has its key
+  makes none for a trip; a rule's key is made in one, by the failure log
+  when it first remembers the rule's failure (§ 34.106), with names and
+  expressions of every length at which the count of a length's digits
+  changes. Not counted under the race detector.
+- Forgetting drops exactly what is the collector's, or the static target's
+  own: over fifteen rounds of 4,000 generated subjects, all remembered as
+  failing and rules as those of their trips, six collectors and six static
+  targets forgotten in turn, after each the entries left are those of every
+  subject of another collector, and, for a static target, everything but
+  its own failure, its skipped turns and its rules' under any collector —
+  the endpoint's metric of the target, the probe whose target reads as its
+  name and the file of a directory so named stay — and the rule failures
+  counted are those of the entries left. For the plain subjects, remembered
+  on a second log under the keys they had, the forgetting that read the
+  keys, kept as an oracle, leaves what is left now, some 38,000 times;
+  given the others too it dropped some 7,000 times a subject that is kept
+  now. Two rounds under the race detector.
+- The failure log writes what it did for subjects that had keys of their
+  own: over 40,000 generated steps on 100 plain subjects of every kind and
+  form the exporter makes keys of — failures with four texts in three
+  stages, of trips that stand and of a retired collector's, recoveries,
+  forgotten keys, minutes and hours passing, a reload forgetting a collector
+  or a static target — the log reads line for line as a log that holds each
+  subject under the key it had and forgets by reading the keys, and every
+  fiftieth step holds the same failures with the same stage, text, times and
+  counts, and counts the same failures of rules. With five subjects whose
+  keys were another's among them the two logs differ within the same steps.
+  6,000 steps under the race detector.
+- Following a reload that removes one static target and changes another
+  leaves, besides what it left, the failure of a probe whose target is
+  `static target ` and the name of each, and that of a file named `schedule`
+  in a directory so named, whichever way the reload is followed.
+- A rule's key holds its name after its length: the rule named
+  `a`, a NUL, `3`, a NUL and `xyz` without an expression, and the rule named
+  `a` with the expression `xyz` and the `items` `0` and two NULs, had one
+  key and have two; of the 30,000 generated rules of § 34.103 no two that
+  differ have one key, and two whose names hold no NUL have one when, and
+  only when, they had one; 1,500 generated pairs with a NUL in a name had
+  one key, 300 under the race detector.
+- The oracles of §§ 34.103 and 34.104 that read a key as the log read one
+  are given the keys as they were, a collector, a target and a file with a
+  NUL between them and a rule's name before a NUL: what a scrape is told of
+  its rules, the counts, the lines logged and the entries held are compared
+  as before, each entry and trip under the key it had, and no two of the
+  trips and rules compared had one key. A static target's own failure is
+  among the trips as that target's, and a file at an address that reads as
+  a static target's name as a file, which a reload forgetting the static
+  target no longer forgets. The 1,331 trips made of the eleven parts of
+  § 34.104 have a key each, where they had 1,033 between them.
+
+## 34.106 No key for a failure the log does not remember, and a read of the self-metrics that holds the lock only to find
+
+- A scrape whose rules' failures the failure log does not remember makes no
+  rule's key: with the log full of 10,000 failures of other targets, a
+  scrape of thirty rules under `log` allocates for the log no more times,
+  and within 512 bytes the same, with expressions of 20 KB as with
+  expressions of 200 bytes, when one rule fails and when all thirty do,
+  each logged in full on every scrape and none remembered; and so does a
+  debug probe's scrape with all thirty failing, of a log with room. The log
+  is as full afterwards. The former logging, kept as an oracle, allocates
+  for the thirty more than thirty times the difference of the expressions.
+  Skipped under the race detector.
+- A rule's failure reported by its name, its expression and its `items`,
+  for the failure log to make its key when it first remembers it, is logged
+  and remembered as one reported under a key made beforehand was (the
+  former reporting kept as an oracle, to the letter, and asked as a scrape
+  asked it): over four generated sequences of 3,000 steps on two logs —
+  failures of ten rules of five trips, the same again and with another
+  stage or text, of a collector that stands and of one a reload retired,
+  recoveries, a key forgotten, a reload forgetting a collector, seconds and
+  minutes passing, and the hour after which a failure is forgotten, with
+  the sweep due and with it just run — the two read line for line the same
+  after every step, hold as many entries and those of the trips' rules with
+  the same times and counts (every entry each two hundredth step), and
+  count the same failures for the same trips. In every other sequence the
+  logs are filled to their 10,000 entries a quarter of the way in and again
+  every twenty steps: a failure that starts is remembered by neither, and
+  one that was not is remembered by both at a later report, once a
+  recovery, a forgotten key, the sweep or a reload made room. The key the
+  log returns is the rule's when, and only when, an entry is under it
+  afterwards, and none otherwise, a retired collector's failure returning
+  the key an earlier one is remembered under. Among the rules are ones
+  with a NUL and the marker in expression and `items`, one without a name,
+  an expression or `items`, and two of 2 KB that differ in their last byte.
+  Under the race detector it is two sequences of 1,500 steps.
+- The comparison of the rules' logging with the logging that made every key
+  (§ 34.103) has, for every eighth collector, 180 scrapes with the log full
+  of other targets' failures from the fifteenth to the hundred and
+  fiftieth: filled before every scrape up to the forty-fifth and before
+  every fourth from there on, so that a failure the full log did not
+  remember is remembered at a later scrape, when a recovery, a reload or
+  the sweep made room, and repeats and recovers from there. The lines, a
+  debug probe's report, the entries and the counts are what they were
+  after every scrape; while the log is full the entries compared after
+  each scrape are those of the trips' rules, with how many the log holds,
+  and every entry after each twentieth.
+- A rule that failed on a scrape is not logged as recovered by that scrape
+  when its failure, which the full log did not remember as the scrape
+  reported it, is remembered by the time the scrape looks for the rules
+  that recovered: another scrape of the trip, made between the first one's
+  two failures after room was made, reported it. Both failures are
+  remembered afterwards, the lines are those of the logging that held every
+  failing rule's key, given the same scrapes, and the next scrape, on which
+  the rule works, logs its recovery once.
+- The key the failure log makes of a rule when it first remembers the rule's
+  failure, and returns, is byte for byte the rule's parts joined, over the
+  30,000 generated rules of § 34.103; remembering a failure allocates
+  twice, the entry and the key, and less than two keys' bytes, with names
+  and expressions of every length at which the count of a length's digits
+  changes up to 12,000 bytes, where a scrape made the key in two
+  allocations before it reported the failure. Not counted under the race
+  detector.
+- The tests of the failure log's counts, lookups and forgetting (§ 34.104,
+  § 34.105) report a rule's failure by its parts, and every such report —
+  to logs that stand, to a retired collector's, to a full log and from six
+  scrapes at once — returns the rule's key when an entry is under that key
+  afterwards and none when none is.
+- `BenchmarkLogRuleFailures` has, as `/full_log`, the scrape of thirty rules
+  on which one fails, and all thirty, while the failure log is full of the
+  failures of other targets, with expressions of 10 bytes and of 2 KB, as
+  it is now and as it was while a scrape made the key of every rule it
+  reported; the log is as full, and remembers none of the scrape's rules,
+  after each case.
+- The read of every collector's statistics, which a scrape of the
+  self-metrics makes, gives what it gave while it did all of its work under
+  the statistics lock: two servers are told the same over 40 generated
+  sequences of 8 reloads among collectors of twelve names in every order -
+  none of them, one, some, and once two hundred more - so that collectors
+  are removed, added and brought back; after each reload one server is read
+  as now and then by the former read, kept as an oracle, and the other by
+  the oracle and then as now. The second read of a server gives the names,
+  sorted and a slice or none alike, the counters and the very statistics of
+  the first, which are the ones the server keeps, and the two servers give
+  the same but for when their statistics were made, with counters counted
+  in between that differ by collector. Under the race detector it is 8
+  sequences and forty more collectors.
+- A read with a reload, or two, between its reading of the configuration
+  and its taking of the statistics lock gives the collectors of the
+  configuration it read, as the former read does: those a reload removed
+  with statistics retired and kept nowhere, though the second reload has
+  brought them back, and the others with their own.
+- One read of the statistics of 500 collectors, each with its own, makes at
+  most 515 allocations of 210,000 bytes: it makes 510 of 194,992, and the
+  former read, measured beside it, 531 of 228,560, its map of the
+  statistics and its slice of the names grown as they were filled with the
+  lock held. The count is of a run without the race detector.
+- `.golangci.yml` enables gocritic's `rangeValCopy` with a threshold no
+  larger than a collector's definition, 1,224 bytes, so that the lint
+  reports a loop that copies each collector, as the read of the statistics
+  did under the lock.
+- `BenchmarkCollectorStats` measures one read of every collector's
+  statistics for 50, 500 and 2,000 collectors, with every collector's
+  statistics there and as the first read after a reload that replaced every
+  collector, and reports how long the statistics lock was held.
+- What a test of the names Go sends has dialed is over at the server before
+  the test counts what the server sees next: a connection made and not used
+  is closed and ended at the server, so that a handshake on it fails and is
+  not counted; a handshake that was made is counted by then and not later; a
+  dial after that gives no connection; and the next request is counted with
+  its own handshake alone. The test of a host outside ASCII ends the
+  connections of a transport it stopped while it dialed again and again this
+  way: a handshake of theirs read later was counted with the next host's,
+  and the test failed, now and then, on the name of the host before.
+
+## 34.107 A name beside a pattern refused whatever its rule sets, and no label with an empty value
+
+- Under `prometheus`, a rule of a name beside a rule whose expression
+  matches that name, with the same labels, is refused at load whatever the
+  rule with the expression sets, but for a `type` of `histogram` or
+  `summary` (§ 34.108), and whatever its `error_mode`: `name:
+  request_duration_seconds` beside `.*` with `scale: 0.001`, `name: up`
+  beside `^up$` with `type: gauge` under `error_mode: ignore`, a rule that
+  reads `service` from `job` beside `^up$` requiring that label, and `^u`
+  with a type, a scale and `error_mode: LOG` written two rules before
+  `name: up`. Each loaded before, a rule that can fail on a series and carry
+  on being held against no rule of a name.
+- Of such a pair the load says, in full, `collector "node" metrics rule 1
+  and rule 2 both pass on metric "up": rule 1 passes on the metric of that
+  name, the expression "^up$" of rule 2 matches that name, and their labels
+  are alike; the type of rule 2 does not keep it from the metric, since
+  every series of the metric that rule 2 does not fail on is made by each
+  rule, and a scrape that has a series twice fails, as a duplicate metric
+  series or, where the two rules give the metric different types, as a
+  metric of inconsistent types; take one of the two out, write the
+  expression so that it does not match "up", or tell their series apart by
+  a label, as with a static label that has another value in each`.
+- It names what the rule with the expression sets: `the scale of rule 1
+  does`, `the type and the scale of rule 2 do`, `the type, the scale and
+  the required label "zone" of rule 2 do`, and a required label written
+  twice once, in `the type, the scale, the required label "job" and the
+  required label "zone" of rule 2 do`.
+- It says `or, where the two rules give the metric different types, as a
+  metric of inconsistent types` only where one rule sets a type the other
+  does not: with a type in the pattern's rule alone, and with `type:
+  counter` in the rule of the name beside a pattern's scale; not with a
+  scale or a required label alone, nor with `type: counter` in both.
+- A pair that was refused is refused in the words it was, `and their labels
+  are alike, so each makes every series of the metric, and a scrape that
+  has a series twice fails, as a duplicate metric series; take one of the
+  two out`: a rule with an expression that sets none of the three, and one
+  that sets a type, a scale or a required label under `error_mode: fail`,
+  for each of the thirteen pairs below.
+- What a scrape made of a rule `name: m` beside `^m$` under `error_mode:
+  log` and `ignore`, the rules taken by the check as it was, of a target
+  whose `m` is a gauge, a counter, untyped, a histogram and a summary: with
+  `type: gauge`, `counter` and `untyped` a duplicate of the metric of that
+  type, `metric "m" has inconsistent types` of the other two of the three,
+  and one valid series of the histogram and of the summary.
+- With `type: histogram` the scrape made one valid series of the gauge, the
+  counter, the untyped metric and the summary, and a duplicate of the
+  histogram; with `type: summary` one of each but the summary, a duplicate.
+- With a scale it made a duplicate of the gauge, the counter and the
+  untyped metric and one valid series of the histogram and of the summary;
+  with a type and a scale what the type alone made.
+- With a required label the series have it made a duplicate of all five;
+  with one they have not, one valid series of each; with that label
+  required by both rules, no series and no failure; and with a type, a
+  scale and two required labels of which the series lack one, one valid
+  series of each.
+- With `type: counter` in the rule of the name and a scale in the pattern's
+  it made inconsistent types of the gauge and the untyped metric, a
+  duplicate of the counter and no series of the histogram and the summary;
+  with `type: counter` in both a duplicate of the first three and no
+  series of the other two.
+- Under `error_mode: fail` each of those thirteen pairs fails every scrape
+  of the five: with the duplicate or the two types where the other modes
+  gave them, and with the rule's failure where they gave valid series or
+  none.
+- A required label in the pattern's rule that the rule of the name has not
+  is a label more: `name: up` beside `^up$` with `service` read from `job`
+  and required loads.
+- Of the pairs of § 34.102 six change sides, from taken to refused: `.*`
+  with a scale under `ignore` beside `name: lat`, a histogram (4 valid
+  series), `^lat` with `type: gauge` (1), `^up$` requiring a label the
+  series have not (1), `.*` with a scale under `ignore` beside `name: up`,
+  `^up$` with `type: gauge`, and `^up$` requiring a label the series have
+  (each `duplicate metric series "up"`). A rule of `.*` with a scale
+  written before `name: lat` is told as `rule 2 passes on the metric of
+  that name, the expression ".*" of rule 1`.
+- The check of a collector's rules agrees with a copy of itself as it was,
+  on the error word for word and on the defaults it fills in, for the 147
+  rules of the 24 collectors of the 13 shipped configurations, none of
+  which has such a pair, and for generated rules: every pair of the 252
+  prometheus rules of § 34.102, collectors of three of a few rules, a rule
+  with a type and a scale under `error_mode: " Ignore "` among them, and
+  pairs of jq, csv and python rules.
+- There the pairs are those a specification written apart from the check
+  names, reported after everything else that is said, in the order of the
+  later rule and then the earlier, and none under jq, csv or python. Under
+  the race detector the pairs are of every ninth rule with every fifth and
+  the collectors of three rules of fewer. The copy the check is held to,
+  the rules and the counts are since those of § 34.108.
+- The committed schema takes, and the loader alone refuses with `both pass
+  on metric "up"`, a prometheus name beside `^up$` with `type: gauge` and
+  beside `.*` with a scale under `error_mode: ignore`.
+- A label a target's exposition writes with an empty value is read as the
+  label not written: 32 expositions, each written with such labels and
+  without them, are read by the parser as the parser it was reads the
+  second, in every one of eight ways of reading (text format, OpenMetrics,
+  with a filter, with a limit) — alone and beside other labels, with a
+  quoted name, in the braces form, with escapes, a timestamp and an
+  exemplar, on a histogram's and a summary's samples, on a sample left out
+  of its family, on an OpenMetrics `_created`, info, state set and gauge
+  histogram, and named `le` or `quantile` on a series without buckets or
+  quantiles; a label of one blank stays.
+- What an empty label was refused for it still is, in the same words:
+  `m{l="",l="x"}` and `m{l="",l=""}` as `duplicate label name "l"`, a
+  histogram's `le=""` and a summary's `quantile=""`, also on a `_created`
+  sample, as `expected float as value for 'le' label, got ""`,
+  `__name__=""` as reserved, and a line with a bad value, timestamp or
+  label set as that; a second `_sum` or `_count` names its series without
+  the label (`second s_count sample for the summary s{k="v"}`).
+- `m{l=""}` beside `m`, and `m{l="",k="v"}` beside `m{k="v",j=""}`, are
+  returned as two series with the same labels, none empty, which
+  validation refuses as `duplicate metric series "m"`; a histogram written
+  whole with `l=""` and again without is refused by the decoder as `second
+  h_sum sample for the histogram h`, where the parser it was made two
+  series of it.
+- 6,000 generated expositions (600 under the race detector), each written
+  as a target writes it and without its labels of an empty value, are read
+  two ways each as the parser it was reads the second, series for series
+  and error for error: histograms and summaries complete and incomplete,
+  one series in four the one before it but for such labels, quoted names,
+  the braces form, escapes, timestamps, exemplars, names written twice;
+  of the readings of expositions with such a label an eighth at least were
+  read otherwise by the parser it was in more than the label.
+- The differential tests of the parser (§ 34.77) compare a body that has no
+  `""` in it with the parser it was as it is, and one that has with it
+  under the switch of the one named difference: of 48,000 parses of random
+  expositions (4,800 under the race detector) more than half are of the
+  first kind and a tenth at least of the second, and the fixtures under
+  `testdata/prometheus`, whole, cut and spoilt, are read as they were.
+- An exposition of 1,000 series and 100 histograms whose every sample has
+  two labels with empty values costs the parser the allocations of the
+  same exposition without them, and at most 5 for each series.
+- A `prometheus` transform makes `m{k="v"}` of a target's `m{l="",k="v"}`:
+  without rules, with `include`, with `exclude` and `rename`, with a rule
+  by name, without a name and one that renames, under `transform.labels`,
+  `rename_labels` of `l`, `remove_labels` and `metrics_prefix`. A rule's
+  label read from `l` is left off, also when it is `l` itself; with
+  `required: true` the rule fails as `metric "m" label "x" is missing`
+  under `fail` and makes no series under `ignore`; a rule's label `k` read
+  from `l` leaves the target's `k="v"`, which the empty `l` took from the
+  series before; a rule's constant `l` is the rule's value.
+- Eight expositions with empty labels are transformed as the same
+  expositions without them by nine `prometheus` collectors — passing
+  through, limited, picking and renaming, with collector labels and a
+  prefix, with rules by name and by pattern, with labels read, required,
+  constant and cut — to the series, labels, values, types, help and times,
+  or the same error; no series has a label with an empty value.
+- With a pre-script `data = data`, five of those collectors make of each of
+  the eight expositions what they make without the script, and a `python`
+  transform is given `m{l="",k="v",j=""}` with the label `k` alone.
+- A label `truncate: true` cuts to nothing is left off: `日本` under
+  `limits.max_label_value_length: 2`, `éa` and `日本` under 1, `…` under 2;
+  `éa` under 2 is `é`, `abc` under 1 is `a`, and under 3 and more a value
+  is cut as it was (`…`, `a…`, `日…`). A `prometheus` rule without a name
+  and one with a name leave off an expression's label and a constant's
+  that are cut to nothing, and keep `zone="é"`.
+- The `prometheus` transform and the cut of its rules' labels make of
+  20,000 generated sets of series under as many generated collectors
+  (2,000 under the race detector) what copies of the two as they were
+  make, series for series, error for error and rule failure for rule
+  failure, but for the labels cut to nothing, which are left off; neither
+  writes to the series it is given.
+- End to end, a probe of a target writing `m{l="",k="v"}`, a histogram
+  with `l=""` on every sample and `c_total{l="",zone=""}` is answered
+  `m{k="v"} 1`, the histogram's lines and `c_total 5` in the text format,
+  and the same series in OpenMetrics, which a strict parser reads; the
+  export an OTLP endpoint receives has no attribute without a value, on a
+  data point or on the resource, and has `k` and
+  `deployment.environment`.
+- End to end, a collector with the pre-script `data = data` answers a
+  probe of that target as the collector without it does, byte for byte, in
+  the text format and in OpenMetrics, and neither queues a series with an
+  empty label for OTLP.
+- End to end, a probe of a target writing `m{l=""}` beside `m`, `m`
+  twice, or `m{l="",k="v"}` beside `m{k="v",j=""}` is answered 502
+  `collector pass validation failed: duplicate metric series "m"`, and one
+  writing a histogram's `_sum` and `_count` with `l=""` and again without
+  502 `... decode failed: ... second h_sum sample for the histogram h`.
+- An OTLP resource attribute written `""` is on no resource: the
+  exporter-wide resource leaves it out, a static target's sets nothing so
+  that the exporter-wide attribute of the name stays, a value that is not
+  empty replaces it, and two targets that differ only in such an attribute
+  share a resource. Over 200 pairs of exporter-wide and per-target
+  attributes a resource is the one a copy of the code as it was makes of
+  the same attributes without the empty ones.
+- The health series of a static target that names no target have no
+  `target` label; over four targets and five sets of the target's labels
+  they are what a copy of the code as it was makes, but for `target=""`,
+  and a label of the target's own named `target` is not theirs. End to
+  end, a `localfile` static target without a target is served
+  `http_exporter_target_up{collector="files",static_target="main"} 1`, one
+  that names a directory keeps `target="batch"`, the file's `queue=""` is
+  on no series, and no series queued for OTLP has an empty label.
+- With verbose self-metrics, after probes answered, refused and never
+  made, no series on the self-metrics path has a label with an empty
+  value, in the text format and in OpenMetrics.
+
+## 34.108 A name beside a pattern of the histograms or the summaries, and a configuration prepared before it is in force
+
+- Under `prometheus`, `name: up` beside `expression: '.*'` with `type:
+  histogram` and `error_mode: ignore` loads, the rule with the expression
+  being about the histograms alone. So do the pair under the default
+  `error_mode`, `^u` with `type: summary` and `error_mode: LOG` written two
+  rules before `name: up`, a rule that exports the histograms `^u` matches
+  under the name `up`, the pattern's rule with a scale besides and with a
+  required label both rules read, and the rule of the name with `type:
+  gauge` and a scale, or with `type: summary` beside the pattern's `type:
+  histogram`. Each was refused before.
+- With that type in the rule of the name too the pair is refused, in the
+  words it was, in full: `collector "node" metrics rule 1 and rule 2 both
+  pass on metric "latency": rule 1 passes on the metric of that name, the
+  expression ".*" of rule 2 matches that name, and their labels are alike;
+  the type of rule 2 does not keep it from the metric, since every series
+  of the metric that rule 2 does not fail on is made by each rule, and a
+  scrape that has a series twice fails, as a duplicate metric series; take
+  one of the two out, write the expression so that it does not match
+  "latency", or tell their series apart by a label, as with a static label
+  that has another value in each`.
+- Under `error_mode: fail`, written `fail`, `Fail` or `FAIL`, a rule with
+  `type: histogram` or `summary` beside the name is refused in the words it
+  was, `and their labels are alike, so each makes every series of the
+  metric, and a scrape that has a series twice fails, as a duplicate metric
+  series; take one of the two out`.
+- Of `name: up`, `.*` with `type: histogram` and `^u` with `type: gauge`
+  the load reports rules 1 and 3 and nothing of rule 2.
+- What a scrape makes of a rule `name: m` beside `^m$` with `type:
+  histogram`, under `error_mode: log` and `ignore`, of a target whose `m`
+  is a gauge, a counter, untyped, a histogram and a summary: one valid
+  series of each but the histogram, a duplicate; with `type: summary`, one
+  of each but the summary. With a scale besides, one valid series of all
+  five, the rule with the expression making none; with a required label
+  the series have, what the type alone makes; with one they have not, one
+  valid series of all five.
+- With `type: gauge`, or a scale, in the rule of the name beside `type:
+  histogram`, the scrape makes one valid series of the gauge, the counter
+  and the untyped metric, one of the histogram and none of the summary;
+  with `type: summary` there, none of the first three and one of each of
+  the other two; and so, with the two types the other way about, `type:
+  counter` beside `type: summary` and `type: histogram` beside `type:
+  summary`. No scrape of those has a series twice. The one series of the
+  metric of the pattern's type is that rule's: under `error_mode: fail` in
+  it, that scrape alone passes.
+- With `type: histogram` in both rules the scrape makes no series of the
+  gauge, the counter, the untyped metric and the summary and a duplicate of
+  the histogram, with a label both rules read and one requires as without;
+  with `type: summary` in both, a duplicate of the summary alone. With
+  `type: histogram` in both and a scale in the pattern's rule it makes one
+  valid series of the histogram and none of the others, and the pair is
+  refused all the same, the type alone deciding.
+- Of those 26 pairs — the thirteen of § 34.107 less the two of `type:
+  histogram` and `type: summary`, and fifteen with such a type — the load
+  takes eleven under `log` and `ignore`, those a specification written
+  apart from the check names: the type of the rule with the expression is
+  `histogram` or `summary`, its `error_mode` is not `fail`, and the rule of
+  the name does not set that type. It refuses the other fifteen, and all 26
+  under `fail`, each in the words the check as it was said of it, which
+  refused all 78.
+- Of the 35 pairs of the table of §§ 34.102 and 34.107 none changes sides.
+  Ten are added. Taken: `name: up` beside `.*` with `type: histogram` (2
+  valid series, `up` and the target's histogram), that rule written before
+  `name: up` with a scale (2), beside `name: up` with `type: counter` (2),
+  beside `name: lat`, a histogram, with `type: summary` (1) and with a
+  scale of its own (1), `name: up` beside a rule that exports the summaries
+  `^u` matches as `up` (1), and `name: lat` beside `.*` with `type:
+  histogram`, which fails the scrape with `duplicate metric series "lat"`.
+  Refused: `type: histogram` in both rules (that duplicate), `type:
+  summary` in both (no series), and `^lat$` with `type: histogram` under
+  `error_mode: FAIL` (that duplicate).
+- The check of a collector's rules agrees with a copy of itself as it was
+  while such a pair was refused whatever the rule with the expression sets,
+  on the error word for word and on the defaults it fills in, for the 147
+  rules of the 24 collectors of the 13 shipped configurations, none of
+  which has a pair of a name and a pattern that matches it or is refused,
+  and for 240,735 generated rules of 119,269 collectors: every pair of 342
+  prometheus rules — the 252 of § 34.102 and, for each name and expression,
+  a rule with `type: histogram`, with `type: summary` under `error_mode:
+  ignore`, with `type: histogram` under `error_mode: " Fail "`, with `type:
+  histogram` and a scale, and with `type: summary` and a required label —
+  collectors of three of thirteen rules, a rule of the histograms among
+  them, and pairs of jq, csv and python rules.
+- There the copy reports every pair a specification written apart from the
+  check names, after everything else it says, in the order of the later
+  rule and then the earlier; the check says everything else in the same
+  words and order, and then the pairs whose rule with the expression does
+  not keep to its type, in the same words. 621 of 3,084 pairs are reported
+  no more: 576 collectors load again, 45 are refused for less than they
+  were, 51,290 are refused in the words they were and 67,358 are taken as
+  they were; none of another transform changes. Under the race detector
+  the pairs are of every ninth rule with every fifth and the collectors of
+  three rules of seven: 6,489 rules of 3,073 collectors, and 44 of 265
+  pairs.
+- The committed schema and the loader both take a prometheus `name: up`
+  beside `.*` with `type: histogram` under `error_mode: ignore`, and `.*`
+  with `type: summary` written before `name: up` with `type: gauge`. The
+  schema takes, and the loader alone refuses with `both pass on metric
+  "up"`, the first under `error_mode: fail` and with `type: histogram` in
+  the rule of the name too.
+- End to end, a configuration of `name: up` beside `expression: '.*'` with
+  `type: histogram` and `error_mode: ignore` loads from a file, and a probe
+  of a target that has a gauge `up`, a counter and two histograms is
+  answered 200 with `up{job="api"} 1` once and each histogram once, in the
+  target's order and without the counter; no line is logged at warning
+  level or above. Under the default `error_mode` the answer is the same,
+  and one warning `metric extraction failed` is logged, with `"failures":2`
+  and `a histogram or summary keeps its own type, and no other series can
+  become one`.
+- A probe with that configuration of a target whose `up` is itself a
+  histogram is answered 502 `collector app validation failed: duplicate
+  metric series "up"`; and that configuration under `error_mode: fail` is
+  refused at load, `collector "app" metrics rule 1 and rule 2 both pass on
+  metric "up": ... so each makes every series of the metric`.
+- A reload lets those who asked (`config.Manager.OnPrepare`) prepare what it
+  is about to put in force, once for a reload that puts something in force
+  and before it is in force: it gives the configuration and the static
+  target file as they will be in force, the one the reload leaves as it is
+  among them, while `Get` and `InForce` still answer with what was in force,
+  to the goroutine that reloads and to another, which is not kept waiting;
+  when the reload returns what was prepared is in force, and those who asked
+  to be told (`OnInstall`) were told after, with it in force. So it is for a
+  reload of both files, for a watch tick that finds only the static target
+  file changed, which prepares the configuration in force with the file
+  read, or only the configuration, for a reload whose configuration is
+  refused and whose static target file goes in force alone, and for one
+  whose static target file is refused and whose configuration goes in force
+  alone. A reload refused whole prepares nothing, and neither does a watch
+  tick that finds nothing changed. Two who asked prepare in the order they
+  asked, both before the configuration is in force and before either is
+  told.
+- A reloaded configuration goes in force with the fingerprint of every one
+  of its collectors made: a reload of 100 collectors that leaves them as
+  they were, changes every one, or removes half and adds as many has
+  encoded, where its configuration is in force and not yet followed, each
+  collector of it once, 100 definitions, and encodes none from there to its
+  end, none with the statistics lock held; the first reload after the start
+  has encoded by then, with them, the collectors it started with and kept,
+  100 to 200 in all. Before, every one was encoded once the configuration
+  was in force. Under the race detector it is 10 collectors.
+- A probe that comes where a reload has put its configuration in force and
+  has not yet followed it follows the configuration itself and encodes no
+  collector's definition, where it encoded every one: at the first reload
+  after the start, when nothing had asked for the fingerprints of the
+  configuration the exporter started with, and at the next, the probes of
+  the collector the reload kept and of the one it changed are answered by
+  the new configuration, the first from the result cached for it once there
+  is one and the second by its target, one generation on, the kept
+  collector defined as it was and the changed one from then; the reload,
+  let go on, finds its following made, makes no second one and encodes
+  none either.
+- While a reload prepares its configuration the one before it is in force
+  and followed, and a probe made where the reload encodes its first
+  definition, on the goroutine that reloads, is answered by the former
+  definition of the collector the reload changes, with the result cached for
+  it, without a request of its target and without encoding a definition;
+  the reload encodes each of its two collectors once, and the collector is
+  then answered by its new definition, from its target.
+- The fingerprints kept do not grow with the reloads: after each of 1,000
+  reloads between two configurations the fingerprints remembered, those
+  prepared and those kept with the configuration followed are the same
+  ones, of the configuration in force, and afterwards at most three of the
+  1,000 configurations are still held, the one in force among them. Under
+  the race detector it is 200 reloads.
+- Preparing a configuration of two collectors encodes two definitions and
+  leaves the probes of the configuration still in force the fingerprints
+  remembered for them; the first to ask for those of the prepared
+  configuration is given them made, each the fingerprint of its
+  collector's definition; a probe that still holds the former configuration
+  then has its own made afresh, and the next to ask for the prepared
+  configuration's, and preparing it again, encode none. A configuration one
+  of whose two fingerprints is remembered has only the other made when it
+  is prepared, and its prepared fingerprints are the ones remembered.
+- Preparing a static target file with the configuration followed, as a
+  static target file reloaded alone does, encodes no collector's definition
+  and keeps nothing as prepared, and neither does preparing no
+  configuration. A configuration of four collectors that is not the one
+  followed, one of its fingerprints made, has the three others made when it
+  is prepared, with the four of the configuration followed, which nothing
+  had asked for; prepared again, with a static target file or without, it
+  has none made.
+- `BenchmarkFollowReload` prepares the configuration as a reload does before
+  it puts it in force, and reports beside the time of the whole and the
+  time the statistics lock was held what is left of the following once the
+  configuration is in force; `BenchmarkFollowReloadProbeWait` reads a file
+  of 50, 500 and 2,000 collectors again as `SIGHUP` does, holds the reload
+  where its configuration is in force and not yet followed, and reports how
+  long asking for the per-collector state there takes, as a probe asks.
+
+## 34.109 The schedule reads the reload's fingerprints, and what the merge tests hold at two fifths of their cost
+
+- The schedule of the static targets encodes no collector's definition
+  after a reload: with a static target of each of 100 collectors, a reload
+  that leaves the collectors as they were, changes every one, or removes
+  half and adds as many, their targets with them, encodes each collector of
+  its configuration once, 100 definitions, and the look the schedule then
+  takes, as the scrape loop takes it, encodes none, where it encoded every
+  one again; none is encoded with the statistics lock held. The first
+  reload after the start encodes 100 too: the fingerprints the schedule
+  asked for at its first look, one for each collector the exporter started
+  with, are kept with that configuration and not made again. The look keeps
+  in their place the targets of the collectors the reload left as they
+  were, all, none and half of them, and starts the others anew. Under the
+  race detector it is 10 collectors.
+- With the scrape loop running over four collectors, each with a static
+  target scraped hourly, the start encodes each collector once, and a
+  reload that changes every collector, after which the loop starts every
+  target anew and scrapes it by its collector's new definition, encodes
+  four definitions in all, where the reload and the loop encoded twelve.
+- The fingerprints the schedule reads are the ones the probes use: of three
+  caching collectors, one with a static target, the schedule's first look
+  encodes that one, a probe of it then none, and a probe of the second its
+  own; a static target file reloaded alone, which moves the target to the
+  second collector and adds one of the first and one of the third, has the
+  look start the three anew, each with the fingerprint of its collector,
+  and encode the third collector alone, which nothing had asked about,
+  where it encoded all three; a probe of the third and another look then
+  encode none.
+- The fingerprint the schedule is given for a collector is that of the
+  collector in the configuration it plans with: read where it is kept when
+  that is the configuration followed, made once and the one the probes are
+  given, and encoded afresh at every ask for another configuration, for a
+  caller that follows none, and when the configuration followed keeps none;
+  a configuration that has the collector at another place, with another
+  definition, is not answered with what is kept for the one followed, and
+  the schedule given it plans by its definition; a name the configuration
+  does not have has no fingerprint and encodes nothing.
+- The schedule that reads the reloads' fingerprints plans as it did: over
+  12 generated runs of 60 looks, with none, one or two reloads between two
+  looks — of the configuration, prepared as a reload prepares it or put in
+  force without, of the static target file alone, or of both; collectors
+  and targets kept, changed, removed, added and brought back, a target
+  moved to another collector or to one never configured, both lists in
+  another order each time, the reloads followed at once or only at the
+  look, and a probe asking for a fingerprint now and then — and scrapes
+  that end some looks after they began, every look leaves what the former
+  schedule, kept beside the test, leaves: the scrapes due with their
+  deadlines and their configuration, the turns skipped, the time of the
+  next look, which targets kept their place and which started anew, and
+  every place with its target, its collector's fingerprint, its generation
+  and its times. Half the runs plan with the configuration followed, as the
+  loop does, and encode at most a quarter of the definitions the former
+  schedule encoded; a quarter with none followed, and encode as many; a
+  quarter with the configuration followed at the look before, and encode no
+  more. Under the race detector it is 4 runs of 40 looks.
+- `BenchmarkFollowReloadSchedule` times the look the schedule takes after a
+  reload of 50, 500 and 2,000 collectors with a static target each, the
+  reload itself left out, and reports how many definitions the reload and
+  the look encoded together and how many of them the look did.
+- The tests of a merge of a large YAML mapping (§ 34.103) hold what they
+  held in two fifths of the time, 1.9 s where they took 4.7 and 1.4 s under
+  the race detector where they took 2.4: the documents drawn at random are
+  200 where they were 400, four under the detector where they were twelve;
+  the mapping merged is of 5,000 keys where it was of 20,000, 39 runs of 128
+  pairs and a part of one, and of 400 under the detector where it is
+  compared with the walk as it was; only the documents an allocation is
+  measured for are parsed; and the document refused for its aliases at the
+  seventh pair of its last merge is one the library decodes a third less
+  for. The bounds on what a merge allocates are those of § 34.103, and what
+  is measured at 5,000 keys is what is at 20,000 within half a hundredth:
+  1.71 times the bytes and 2.02 times the allocations for one merge, 3.83
+  and 5.07 for four, in 123 and 369 calls of the library against bounds of
+  128 and 380. On the walk as it was the tests fail as they did: the
+  comparison by its two counts of runs alone, none handed together and none
+  one at a time, and the bounds with 2.68 and 3.49 times, 7.74 and 10.97,
+  and 10,043 and 40,049 calls.
+- Each document written for what a run of merged pairs must not change is
+  decoded with a mapping large past one key, past two and past four, where
+  it was decoded past one of the three by its place in the list: two keys
+  of a merged mapping that decode into one (`0x2` and `2`), of which the
+  first is taken, are met within one run, under the race detector too.
+- The library is handed nothing of a merged mapping apart from the rest of
+  the document that it would refuse for its aliases where it does not
+  refuse the document: one merge of six pairs of aliases of 200 numbers, in
+  runs of five pairs, whose five values together are 1,011 nodes to the
+  library, 1,005 of them for an alias, is decoded, the values handed in two
+  parts; and one merge of two pairs of aliases of 998 numbers, a value of
+  which is 1,001 nodes as the one item of a part, is decoded, the value
+  handed as the alias it is. Both are what the library alone and the walk
+  before make of them.
 
 # 35. Documentation requirements
 
@@ -15728,6 +17155,12 @@ than failing every export:
   `otlp.service_name` sets: the resource would carry the key twice. The error
   MUST point at `service_name`. The same MUST hold for a static target's
   `otlp.resource_attributes` (§ 42.14).
+
+An attribute of `otlp.resource_attributes` written `""` MUST be the
+attribute left out, as a `transform.labels` value written `""` is the label
+left out (§ 6): the resource MUST NOT carry it. An export MUST NOT hold an
+attribute without a value, on a resource or on a data point; a data point's
+attributes are its series' labels, none of which is empty (§ 18.1).
 
 Both metric classes MUST be exportable through the same OTLP exporter:
 
@@ -16817,7 +18250,10 @@ http_exporter_target_last_success_timestamp_seconds
 ```
 
 Without them a failing target is absent and cannot be distinguished from a
-target that was never configured. The last success timestamp MUST be the Unix
+target that was never configured. A target that names no target, as one of a
+`localfile` collector may, MUST have no `target` label on them rather than
+one with an empty value (§ 18.1), and a label of the target's own named
+`target` MUST NOT take its place. The last success timestamp MUST be the Unix
 time of the target's last successful scrape, kept through later failures, and
 0 until one succeeds, so how long a target has given nothing new can
 be alerted on. A failed scrape MUST produce the health
@@ -16912,7 +18348,9 @@ only with `export_via_otlp`; set without it, the block MUST be refused rather
 than ignored. These form the OTLP resource the target's metrics are exported
 under. Both MUST default to the exporter-wide `otlp.service_name` and
 `otlp.resource_attributes`, and per-target attributes MUST be merged over the
-exporter-wide ones rather than replacing them. A target's
+exporter-wide ones rather than replacing them. A target's attribute written
+`""` MUST be the attribute left out (§ 42.1): it sets nothing, so the
+exporter-wide attribute of that name MUST stay as it is. A target's
 `otlp.resource_attributes` MUST NOT set `service.name`, which its
 `otlp.service_name` sets; the file MUST be refused naming the target and
 pointing at `service_name` (§ 42.1). The exporter MUST emit one

@@ -115,9 +115,12 @@ func requirePython(t *testing.T) {
 // limits.script_timeout: a script that takes a millisecond has been seen to
 // take more than the default 100ms on a machine with every CPU busy
 // elsewhere. The minute bounds a script that never ends; a test of the
-// timeout itself calls holdScriptsToTheirTimeout.
+// timeout itself calls holdScriptsToTheirTimeout. An interpreter has a minute
+// to start in too, where the exporter gives it ten seconds, which one start
+// on a busy machine has overrun.
 func usePythonPool(t *testing.T) {
 	t.Helper()
 	t.Cleanup(transform.IsolatePythonWorkers())
 	transform.PythonWorkers().SetLeastScriptTimeout(time.Minute)
+	transform.PythonWorkers().SetStartTimeout(time.Minute)
 }

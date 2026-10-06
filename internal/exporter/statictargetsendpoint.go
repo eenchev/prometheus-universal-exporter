@@ -414,7 +414,7 @@ func (s *Server) requestedStaticTargets(query url.Values) (map[string]bool, erro
 // histogram or summary one of whose series is named like an earlier target's
 // family (errFamilyNameClash). The rest of both targets is served.
 func (s *Server) mergeStaticTargets(results []namedSet) model.MetricSet {
-	clashes := map[string]staticClash{}
+	clashes := map[subjectKey]staticClash{}
 	type family struct {
 		typ     model.MetricType
 		metrics []model.Metric
@@ -424,7 +424,7 @@ func (s *Server) mergeStaticTargets(results []namedSet) model.MetricSet {
 	// on the endpoint, the family it is a series of.
 	derived := map[string]string{}
 	leftOut := func(target string, m model.Metric, clash error, attrs ...any) {
-		key := failureKey("", "static target "+target, "family "+m.Name)
+		key := staticClashKey(target, m.Name)
 		clashes[key] = staticClash{target: target, metric: m.Name}
 		s.failures.failed(s.logger, slog.LevelWarn, key,
 			"static target metric left out of the static targets endpoint", "exposition", clash,
@@ -487,7 +487,7 @@ type staticClash struct{ target, metric string }
 // whose target is gone is forgotten without a word, since nothing was fixed.
 // Without this a clash that went away was never said to have, and one that
 // came back within the failure log's memory read as the old one continuing.
-func (s *Server) settleStaticClashes(clashes map[string]staticClash, results []namedSet) {
+func (s *Server) settleStaticClashes(clashes map[subjectKey]staticClash, results []namedSet) {
 	served := make(map[string]bool, len(results))
 	for _, result := range results {
 		served[result.name] = true

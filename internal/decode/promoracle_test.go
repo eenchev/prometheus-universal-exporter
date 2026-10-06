@@ -7,6 +7,18 @@ package decode
 // what to parse, and the model. It is not to be changed with the parser: a
 // change of what the parser accepts or returns is made there, and shown here
 // as a difference the test then has to allow by name.
+//
+// One such difference cannot be told from the two results, and is a switch
+// here that only the test of that difference sets (oracleParse's
+// withoutEmptyLabels, for a body that may hold such a label): a label with
+// an empty value is left off its series, where the oracle keeps it. Two
+// series that differ only in such a label are then one, which changes what
+// a histogram's samples make and where a limit is reached, and that takes
+// the parse itself to say. Without the switch the oracle is what it was, to
+// the letter, and that is what reads every body that has no "" in it, and
+// the bodies of the test of the difference itself (promemptylabel_test.go),
+// which compares the parser's reading of a body with the unswitched oracle's
+// reading of the same body without the labels.
 
 import (
 	"bytes"
@@ -22,7 +34,14 @@ import (
 )
 
 func oracleParseExposition(body []byte, options promOptions) ([]model.Metric, error) {
-	p := oraclePromParser{byName: map[string]*oraclePromFamily{}, options: options}
+	return oracleParse(body, options, false)
+}
+
+// oracleParse is oracleParseExposition, with the one difference the parser
+// has from it by name when withoutEmptyLabels says so: a label with an empty
+// value is no label of its series.
+func oracleParse(body []byte, options promOptions, withoutEmptyLabels bool) ([]model.Metric, error) {
+	p := oraclePromParser{byName: map[string]*oraclePromFamily{}, options: options, withoutEmptyLabels: withoutEmptyLabels}
 	for number := 1; ; number++ {
 		raw, rest, more := bytes.Cut(body, []byte("\n"))
 		line := strings.TrimSuffix(string(raw), "\r")
@@ -104,6 +123,9 @@ type oraclePromParser struct {
 	eof bool
 	// number is the line being read.
 	number int
+	// withoutEmptyLabels is the switch of the one named difference: a
+	// label with an empty value is left off its series.
+	withoutEmptyLabels bool
 }
 
 type oraclePromAlias struct {
@@ -323,6 +345,9 @@ func (p *oraclePromParser) add(f *oraclePromFamily, labels []oraclePromLabel, ro
 				return fmt.Errorf("expected float as value for '%s' label, got %q", special, l.value)
 			}
 			bound, hasBound = b, true
+			continue
+		}
+		if p.withoutEmptyLabels && l.value == "" {
 			continue
 		}
 		own[l.name] = l.value

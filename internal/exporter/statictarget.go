@@ -80,7 +80,7 @@ func (s *Server) scrapeStaticTarget(ctx context.Context, target model.StaticTarg
 
 	// Repeats of the same failure are logged sparingly (failurelog.go).
 	log := collectLog{
-		key:    failureKey(c.Name, staticTargetKey(target.Name), ""),
+		key:    staticTargetKey(c.Name, target.Name),
 		failed: "static target scrape failed", continuing: "static target stage failed; continuing", recovery: "static target recovered",
 		attrs: []any{"target", target.Name, "collector", c.Name, "address", address},
 	}
@@ -234,6 +234,14 @@ func staticTargetHealthMetrics(target model.StaticTarget, c *model.Collector, up
 			labels[name] = value
 		}
 	}
+	// A target that names none, as one of a localfile collector may that
+	// reads the collector's own path, has no target label: it was
+	// target="", which to Prometheus is no label. It is taken off after the
+	// target's labels are added, so that the name stays the health series'
+	// own and no label of the target's takes its place.
+	if labels["target"] == "" {
+		delete(labels, "target")
+	}
 	return model.MetricSet{Metrics: []model.Metric{
 		{Name: "http_exporter_target_up", Help: "Whether the last scrape of this static target succeeded.", Type: model.GaugeMetricType, Value: up, Labels: model.CloneLabels(labels)},
 		{Name: "http_exporter_target_scrape_duration_seconds", Help: "Duration of the last scrape of this static target in seconds.", Type: model.GaugeMetricType, Value: duration, Labels: model.CloneLabels(labels)},
@@ -352,17 +360,20 @@ func targetOwnRequest(t *model.StaticTarget) []string {
 }
 
 // targetResource resolves the OTLP resource identity for this target, with the
-// exporter-wide service name and attributes as the defaults.
+// exporter-wide service name and attributes as the defaults. An attribute
+// written "" is the attribute left out, the target's as the exporter-wide
+// one (defaultResourceIdentity): it sets nothing, so an exporter-wide
+// attribute of that name stays as it is, where a value that is not empty
+// replaces it.
 func targetResource(t *model.StaticTarget, cfg model.OTLPConfig) otlpResourceIdentity {
-	identity := otlpResourceIdentity{ServiceName: cfg.ServiceName, Attributes: map[string]string{}}
-	for key, value := range cfg.ResourceAttributes {
-		identity.Attributes[key] = value
-	}
+	identity := defaultResourceIdentity(cfg)
 	if t.OTLP.ServiceName != "" {
 		identity.ServiceName = t.OTLP.ServiceName
 	}
 	for key, value := range t.OTLP.ResourceAttributes {
-		identity.Attributes[key] = value
+		if value != "" {
+			identity.Attributes[key] = value
+		}
 	}
 	return identity
 }

@@ -196,7 +196,11 @@ file's series are answered, and the probe succeeds. The collector's
 self-metrics count the failure as usual — a malformed file in
 `http_exporter_parse_errors_total`, an oversized one in
 `http_exporter_series_limit_exceeded_total`. That includes a metric rule with
-`error_mode: fail`: it fails its file, not the probe. Alert on it:
+`error_mode: fail`: it fails its file, not the probe. A rule with
+`error_mode: log` is [logged](LOGGING.md) for each file by itself, with the
+`file`: `metric extraction failed` once and then as a repeat, and
+`metric extraction recovered` when that file has its value again, whatever
+the file is named. Alert on a file left out:
 
 ```promql
 localfile_scrape_error == 1

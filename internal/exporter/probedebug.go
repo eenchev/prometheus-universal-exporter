@@ -203,20 +203,44 @@ func (t *probeTrace) converted(c *model.Collector, decoded *decode.Decoded) {
 // probe to its report alone. read is the configuration the trip read its
 // collector in: the failure log remembers nothing of a collector that no
 // longer stands (failedFor).
-func (s *Server) tripFailed(ctx context.Context, read configRead, level slog.Level, key, msg, stage string, err error, attrs ...any) {
+func (s *Server) tripFailed(ctx context.Context, read configRead, level slog.Level, key subjectKey, msg, stage string, err error, attrs ...any) {
 	if t := probeTraceFrom(ctx); t != nil {
-		if err != nil {
-			attrs = append(attrs, "error", err)
-		}
-		t.logger.Log(ctx, level, msg, attrs...)
+		t.failed(ctx, level, msg, err, attrs...)
 		return
 	}
 	s.failures.failedFor(read, s.logger, level, key, msg, stage, err, attrs...)
 }
 
+// failed logs a failure of a debug probe's trip to its report, which is
+// under no key: the failure log is told nothing of it.
+func (t *probeTrace) failed(ctx context.Context, level slog.Level, msg string, err error, attrs ...any) {
+	if err != nil {
+		attrs = append(attrs, "error", err)
+	}
+	t.logger.Log(ctx, level, msg, attrs...)
+}
+
+// ruleFailed is tripFailed for the failure of a rule of the trip or file
+// whose key is trip, the rule told apart by its metric name, its expression
+// and its items: the failure log is told which trip the rule is of, and
+// does not read it out of a key, and makes the rule's key itself, when it
+// first remembers the failure (ruleFailedFor). What is returned is the
+// bytes of the key a failure of the rule is remembered under, and nothing
+// when none is. A debug probe's failure is remembered nowhere, so for one
+// it is the key an earlier scrape's is remembered under, which is asked
+// for without a key (rememberedRule).
+func (s *Server) ruleFailed(ctx context.Context, read configRead, level slog.Level, trip subjectKey, metric, expression, items, msg, stage string, err error, attrs ...any) string {
+	if t := probeTraceFrom(ctx); t != nil {
+		key, _ := s.failures.rememberedRule(trip, metric, expression, items)
+		t.failed(ctx, level, msg, err, attrs...)
+		return key
+	}
+	return s.failures.ruleFailedFor(read, s.logger, level, trip, metric, expression, items, msg, stage, err, attrs...)
+}
+
 // tripRecovered is tripFailed's recovery: a debug probe has nothing to
 // recover from, and says nothing.
-func (s *Server) tripRecovered(ctx context.Context, read configRead, key, msg string, attrs ...any) {
+func (s *Server) tripRecovered(ctx context.Context, read configRead, key subjectKey, msg string, attrs ...any) {
 	if probeTraceFrom(ctx) != nil {
 		return
 	}

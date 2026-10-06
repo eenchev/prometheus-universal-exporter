@@ -255,7 +255,7 @@ func logRuleFailuresByName(ctx context.Context, s *Server, read configRead, c *m
 		}
 		failing[f.Metric] = true
 		attrs := append(append([]any{}, l.attrs...), "metric", f.Metric, "error_mode", model.ErrorModeLog, "failures", f.Failures)
-		s.tripFailed(ctx, read, slog.LevelWarn, l.key+"\x00rule\x00"+f.Metric, "metric extraction failed", "metric", f.First, attrs...)
+		s.tripFailed(ctx, read, slog.LevelWarn, l.key.rule(l.key.bytes+"\x00rule\x00"+f.Metric), "metric extraction failed", "metric", f.First, attrs...)
 	}
 	if !complete {
 		return
@@ -263,7 +263,7 @@ func logRuleFailuresByName(ctx context.Context, s *Server, read configRead, c *m
 	for _, rule := range c.Metrics {
 		if rule.ErrorMode == model.ErrorModeLog && !failing[rule.Name] {
 			attrs := append(append([]any{}, l.attrs...), "metric", rule.Name)
-			s.tripRecovered(ctx, read, l.key+"\x00rule\x00"+rule.Name, "metric extraction recovered", attrs...)
+			s.tripRecovered(ctx, read, l.key.rule(l.key.bytes+"\x00rule\x00"+rule.Name), "metric extraction recovered", attrs...)
 		}
 	}
 }
@@ -402,11 +402,11 @@ func logRuleFailuresAskingEveryRule(ctx context.Context, s *Server, read configR
 		if !f.Logged {
 			continue
 		}
-		key := keyOf(l.key, f.Metric, f.Expression, f.Items)
+		key := keyOf(l.key.bytes, f.Metric, f.Expression, f.Items)
 		failing[key] = true
 		attrs := append(append([]any{}, l.attrs...), "metric", f.Metric)
 		attrs = append(shared.telling(attrs, c, f.Metric, f.Expression, f.Items), "error_mode", model.ErrorModeLog, "failures", f.Failures)
-		s.tripFailed(ctx, read, slog.LevelWarn, key, "metric extraction failed", "metric", f.First, attrs...)
+		s.tripFailed(ctx, read, slog.LevelWarn, l.key.rule(key), "metric extraction failed", "metric", f.First, attrs...)
 	}
 	if !complete {
 		return
@@ -415,12 +415,12 @@ func logRuleFailuresAskingEveryRule(ctx context.Context, s *Server, read configR
 		if rule.ErrorMode != model.ErrorModeLog {
 			continue
 		}
-		key := keyOf(l.key, rule.Name, rule.Expression, rule.Items)
+		key := keyOf(l.key.bytes, rule.Name, rule.Expression, rule.Items)
 		if failing[key] || !s.failures.remembers(key) {
 			continue
 		}
 		attrs := append(append([]any{}, l.attrs...), "metric", rule.Name)
-		s.tripRecovered(ctx, read, key, "metric extraction recovered", shared.telling(attrs, c, rule.Name, rule.Expression, rule.Items)...)
+		s.tripRecovered(ctx, read, l.key.rule(key), "metric extraction recovered", shared.telling(attrs, c, rule.Name, rule.Expression, rule.Items)...)
 	}
 }
 
@@ -498,7 +498,7 @@ func TestRulesAreLoggedAsTheyWereWhenEveryRuleWasAsked(t *testing.T) {
 			now.logRuleFailures(ctx, configRead{}, &c, failures, l, complete)
 			logRuleFailuresAskingEveryRule(ctx, was, configRead{}, &c, failures, l, complete)
 			if logs.String() != wasLogs.String() {
-				t.Fatalf("seed %d, scrape %d of %q, with the rules %+v failing %+v, complete %v: the log is\n%s\nwant as it was\n%s", seed, step, l.key, c.Metrics, failures, complete, logs, wasLogs)
+				t.Fatalf("seed %d, scrape %d of %q, with the rules %+v failing %+v, complete %v: the log is\n%s\nwant as it was\n%s", seed, step, l.key.bytes, c.Metrics, failures, complete, logs, wasLogs)
 			}
 			for kind := range kinds {
 				kinds[kind] += strings.Count(logs.String(), kind)
@@ -556,8 +556,8 @@ func TestAScrapeWithNoRuleRememberedMakesNoKey(t *testing.T) {
 		t.Fatalf("the rule's failure, its repeat and its recovery log %v", lines)
 	}
 	healthy("after the trip's rule recovered")
-	if !server.failures.remembersRules(other.key) || server.failures.remembersRules(l.key) {
-		t.Errorf("the log remembers a rule of the other target: %v, and of the trip: %v; want true and false", server.failures.remembersRules(other.key), server.failures.remembersRules(l.key))
+	if !server.failures.remembersRules(other.key, nil) || server.failures.remembersRules(l.key, nil) {
+		t.Errorf("the log remembers a rule of the other target: %v, and of the trip: %v; want true and false", server.failures.remembersRules(other.key, nil), server.failures.remembersRules(l.key, nil))
 	}
 }
 
@@ -670,16 +670,29 @@ func TestTwinRulesUnderIgnoreAndLogAreLoggedInEitherOrder(t *testing.T) {
 // BenchmarkLogRuleFailures is what the log costs a scrape of thirty rules
 // under error_mode log, with short expressions and with expressions of 2 KB:
 // when nothing fails and nothing is remembered, as on nearly every scrape,
-// and when one rule fails on every scrape. /by_name is the same scrape while
-// a metric name's rules were logged as one (logRuleFailuresByName), to
-// compare with:
+// when one rule fails on every scrape, and when all thirty do. /by_name is
+// the same scrape while a metric name's rules were logged as one
+// (logRuleFailuresByName), and /every_key the same while a scrape with a
+// failure remembered made the key of every rule
+// (logRuleFailuresMakingEveryKey), to compare with; each has a target of its
+// own, so that none finds what another remembered.
+//
+// /full_log is the scrape on which one rule fails, and all thirty, when the
+// failure log is full of the failures of other targets
+// (failureLogMaxEntries): the failures are remembered nowhere, and each is
+// logged in full on every scrape for as long as the log stays full.
+// /every_key there is the scrape while it made the key of every rule it
+// reported.
 //
 //	go test -run '^$' -bench 'LogRuleFailures' ./internal/exporter/
 func BenchmarkLogRuleFailures(b *testing.B) {
 	for _, length := range []int{10, 2000} {
 		c := model.Collector{Name: "generated"}
+		var all []transform.RuleFailure
 		for i := range 30 {
-			c.Metrics = append(c.Metrics, model.MetricRule{Name: fmt.Sprintf("m%d", i), Items: ".items[]", Expression: fmt.Sprintf(".values.e%d | %s", i, strings.Repeat("x", length)), ErrorMode: model.ErrorModeLog})
+			rule := model.MetricRule{Name: fmt.Sprintf("m%d", i), Items: ".items[]", Expression: fmt.Sprintf(".values.e%d | %s", i, strings.Repeat("x", length)), ErrorMode: model.ErrorModeLog}
+			c.Metrics = append(c.Metrics, rule)
+			all = append(all, transform.RuleFailure{Metric: rule.Name, Expression: rule.Expression, Items: rule.Items, Failures: 1, First: model.Errorf("metric %q value is missing for item %d", rule.Name, model.Position(3)), Logged: true})
 		}
 		quiet := slog.New(slog.DiscardHandler)
 		cfg := &model.Config{Collectors: []model.Collector{testutil.Collector(c.Name, "text")}}
@@ -687,23 +700,54 @@ func BenchmarkLogRuleFailures(b *testing.B) {
 			b.Fatal(err)
 		}
 		server := NewServer(config.NewManager(cfg, "", quiet), "python3", quiet)
-		l := collectLog{key: failureKey(c.Name, "http://target.example", ""), attrs: []any{"collector", c.Name, "target", "http://target.example", "url", "http://target.example"}}
 		ctx := context.Background()
-		failing := []transform.RuleFailure{{Metric: c.Metrics[7].Name, Expression: c.Metrics[7].Expression, Items: c.Metrics[7].Items, Failures: 1, First: model.Errorf("metric %q value is missing for item %d", "m7", model.Position(3)), Logged: true}}
-		for _, failures := range [][]transform.RuleFailure{nil, failing} {
+		for _, failures := range [][]transform.RuleFailure{nil, all[7:8], all} {
 			name := fmt.Sprintf("expression=%d/failing=%d", length, len(failures))
-			b.Run(name+"/now", func(b *testing.B) {
-				b.ReportAllocs()
-				for b.Loop() {
-					server.logRuleFailures(ctx, configRead{}, &c, failures, l, true)
-				}
-			})
-			b.Run(name+"/by_name", func(b *testing.B) {
-				b.ReportAllocs()
-				for b.Loop() {
-					logRuleFailuresByName(ctx, server, configRead{}, &c, failures, l, true)
-				}
-			})
+			for _, variant := range []struct {
+				name string
+				log  func(l collectLog)
+			}{
+				{"now", func(l collectLog) { server.logRuleFailures(ctx, configRead{}, &c, failures, l, true) }},
+				{"by_name", func(l collectLog) { logRuleFailuresByName(ctx, server, configRead{}, &c, failures, l, true) }},
+				{"every_key", func(l collectLog) { logRuleFailuresMakingEveryKey(ctx, server, configRead{}, &c, failures, l, true) }},
+			} {
+				target := "http://" + variant.name + ".example"
+				l := collectLog{key: failureKey(c.Name, target, ""), attrs: []any{"collector", c.Name, "target", target, "url", target}}
+				b.Run(name+"/"+variant.name, func(b *testing.B) {
+					b.ReportAllocs()
+					for b.Loop() {
+						variant.log(l)
+					}
+				})
+			}
+		}
+		// The cases above are done with the log they filled: this one is
+		// full, of the failures of targets no case scrapes.
+		full := NewServer(config.NewManager(cfg, "", quiet), "python3", quiet)
+		for i := range failureLogMaxEntries {
+			full.failures.failed(quiet, slog.LevelError, failureKey("filling", fmt.Sprintf("http://t%d", i), ""), "failed", "http", model.Errorf("connection refused"))
+		}
+		for _, failures := range [][]transform.RuleFailure{all[7:8], all} {
+			name := fmt.Sprintf("expression=%d/full_log/failing=%d", length, len(failures))
+			for _, variant := range []struct {
+				name string
+				log  func(l collectLog)
+			}{
+				{"now", func(l collectLog) { full.logRuleFailures(ctx, configRead{}, &c, failures, l, true) }},
+				{"every_key", func(l collectLog) { logRuleFailuresMakingEveryKey(ctx, full, configRead{}, &c, failures, l, true) }},
+			} {
+				target := "http://" + variant.name + ".example"
+				l := collectLog{key: failureKey(c.Name, target, ""), attrs: []any{"collector", c.Name, "target", target, "url", target}}
+				b.Run(name+"/"+variant.name, func(b *testing.B) {
+					b.ReportAllocs()
+					for b.Loop() {
+						variant.log(l)
+					}
+					if remembered := len(full.failures.entries); remembered != failureLogMaxEntries || full.failures.ruleFailures[l.key.bytes] != 0 {
+						b.Fatalf("the log remembers %d failures, %d of them of the scrape's rules; want it full of the %d of other targets", remembered, full.failures.ruleFailures[l.key.bytes], failureLogMaxEntries)
+					}
+				})
+			}
 		}
 	}
 }

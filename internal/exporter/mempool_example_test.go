@@ -27,8 +27,8 @@ func newMempool(t *testing.T, height string) (*standIn, *Server) {
 		"/api/blocks/tip/height":   {"text/plain; charset=utf-8", []byte(height)},
 	})
 	var names []string
-	for _, collector := range cfg.Collectors {
-		names = append(names, collector.Name)
+	for i := range cfg.Collectors {
+		names = append(names, cfg.Collectors[i].Name)
 	}
 	if want := []string{"bitcoin_fees", "bitcoin_mempool", "bitcoin_chain"}; !slices.Equal(names, want) {
 		t.Fatalf("%s holds the collectors %v, want %v", mempoolConfig, names, want)

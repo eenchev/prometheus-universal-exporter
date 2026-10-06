@@ -198,6 +198,12 @@ func (m pythonMetric) metric() (model.Metric, error) {
 				label, err = firstUnreadableLabel(labels, pythonFloats)
 				return out, fmt.Errorf("metric %q label %q %w", name, label, err)
 			}
+			// An empty value leaves the label out too, as a rule's
+			// expression label does (missingRequiredLabel): Prometheus
+			// reads such a label as none.
+			if text == "" {
+				continue
+			}
 			out.Labels[label] = text
 		}
 	default:
@@ -357,12 +363,32 @@ func prometheusSeries(series map[string]any) (model.Metric, error) {
 		return model.Metric{}, errors.New("has no name")
 	}
 	m := model.Metric{Name: name, Type: model.UntypedMetricType}
-	if kind, ok := series["type"].(string); ok && kind != "" {
-		m.Type = model.MetricType(kind)
+	// A type, a help or labels of another kind than a series has is the
+	// script's mistake, as a value of another kind is: read as none given,
+	// the series was exported untyped, without its help or without its
+	// labels, which made another series of it. None is none given.
+	switch kind := series["type"].(type) {
+	case nil:
+	case string:
+		if kind != "" {
+			m.Type = model.MetricType(kind)
+		}
+	default:
+		return m, fmt.Errorf(`%s type %s is not a string; give "gauge", "counter", "untyped", "histogram" or "summary"`, name, model.ShowValue(kind))
 	}
-	m.Help, _ = series["help"].(string)
-	if labels, ok := series["labels"].(map[string]any); ok && len(labels) > 0 {
-		m.Labels = make(map[string]string, len(labels))
+	switch help := series["help"].(type) {
+	case nil:
+	case string:
+		m.Help = help
+	default:
+		return m, fmt.Errorf("%s help %s is not a string", name, model.ShowValue(help))
+	}
+	switch labels := series["labels"].(type) {
+	case nil:
+	case map[string]any:
+		if len(labels) > 0 {
+			m.Labels = make(map[string]string, len(labels))
+		}
 		for key, value := range labels {
 			if value == nil {
 				continue
@@ -372,8 +398,15 @@ func prometheusSeries(series map[string]any) (model.Metric, error) {
 				key, err = firstUnreadableLabel(labels, func(value any) any { return value })
 				return m, fmt.Errorf("%s label %q %w", name, key, err)
 			}
+			// An empty value leaves the label off, as None does and as a
+			// rule's expression label does (missingRequiredLabel).
+			if text == "" {
+				continue
+			}
 			m.Labels[key] = text
 		}
+	default:
+		return m, fmt.Errorf("%s labels are %s, not a mapping of label names to values", name, model.ShowValue(labels))
 	}
 	if at, ok := series["timestamp"]; ok && at != nil {
 		value, err := pythonNumber(at)

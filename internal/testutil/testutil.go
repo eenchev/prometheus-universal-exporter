@@ -87,8 +87,8 @@ func CollectorsDocument(names ...string) string {
 // CollectorNames lists the names of a configuration's collectors, in order.
 func CollectorNames(c *model.Config) []string {
 	names := make([]string, 0, len(c.Collectors))
-	for _, x := range c.Collectors {
-		names = append(names, x.Name)
+	for i := range c.Collectors {
+		names = append(names, c.Collectors[i].Name)
 	}
 	return names
 }

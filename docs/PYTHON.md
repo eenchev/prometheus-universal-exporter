@@ -73,8 +73,12 @@ unless the collector sets `name_escaping`; see
 `labels` is a mapping of label names to values. A value that is not a string
 is written the way a [jq label](CONFIGURATION.md#collectors) is: `1234567`
 as `1234567`, `0.5` as `0.5`, `True` as `true`, and `None` leaves the label
-off. A list or a dict is not one value and fails the script, saying so; join
-it into one first, with `",".join(tags)`.
+off. So does the empty string, `""`, as a rule's label that comes out empty
+is left off under every other transform: Prometheus reads `m{l=""}` as the
+series `m`. Two series a script tells apart by such a label alone are
+therefore one series twice, and the scrape fails for the duplicate. A list
+or a dict is not one value and fails the script, saying so; join it into one
+first, with `",".join(tags)`.
 
 The launcher blocks `socket`, `ssl`, `subprocess`, `ctypes`, `multiprocessing`, `threading`, `mmap`, `pty`, `pathlib`, `shutil`, `tempfile` and `urllib.request`, and the C modules beneath them, such as `_socket` and `_posixsubprocess`; shell execution; opening files, through `open`, `io.FileIO` or `os`, but for reading time zone data; and package installation. A script may not import `posix`, `_io`, `_thread`, `select`, `selectors`, `fcntl`, `termios` or `importlib` itself, though the standard library it imports may, so `dataclasses` and the like still work. Time zone data is the one thing a script may read: the system's zone files (`zoneinfo.TZPATH`, `/usr/share/zoneinfo` and the like, and `/etc/localtime`), `python-dateutil`'s bundled copy and the `tzdata` package's, so `zoneinfo.ZoneInfo("Europe/Berlin")` and `dateutil.tz.gettz("Europe/Berlin")` work; the image ships the system's. (From Python 3.12, `zoneinfo` loads `sysconfig`, which imports `threading`; the worker loads `zoneinfo` before the sandbox is in place, so scripts can import it while `threading` stays blocked.) Any other file, or one reached from those directories by `..` or a symlink out of them, is still refused. The worker never writes bytecode caches either (it runs Python with `-B`), so importing a module whose `.pyc` is missing or out of date works in a writable directory as in a read-only one. The sandbox keeps a script from doing by mistake what it should not; it is not a wall against a script written to get out, which Python cannot offer from inside the interpreter. Treat collector configuration as you treat the exporter's code, and rely on the container — the chart runs it as a non-root user with a read-only root file system — for isolation. Python has no supported network API; `requests` and `httpx` are unnecessary. `script_timeout` and metric/output limits apply. Declared `libraries` are validated against the supported names (`lxml`, `PyYAML`, and `python-dateutil`, or their import names `yaml` and `dateutil`); they are never installed during a scrape, and the image has no pip to install them with.
 
@@ -174,8 +178,8 @@ deeper than Python itself can write.
 A dict appended to `metrics` by hand, `{"name": ..., "value": ..., "labels":
 {...}}`, is checked as `metric(...)` checks its arguments: its value and
 timestamp are read the same way, `None` failing, its label values are
-written the same way, `None` leaving the label off, and a missing `type` is
-`gauge`. A name, type or help that is not a string, labels that are not a
+written the same way, `None` and the empty string leaving the label off, and
+a missing `type` is `gauge`. A name, type or help that is not a string, labels that are not a
 mapping, and an entry of `metrics` that is not a dict fail the scrape the same
 way, naming the metric and what is wrong with it — `metric "jobs" labels are
 an array of 1 item, not a mapping of label names to values`.
@@ -225,6 +229,19 @@ start once and then serves scrape after scrape.
   probe or scrape ran out of time, not because of limits.script_timeout (30s)`
   — so the limit to raise is the probe's, and the run is counted with
   the outcome `deadline`, not `timeout`.
+- **Starting.** An interpreter has ten seconds to start in: to import the
+  collector's libraries and say it is ready. One still running after that is
+  stopped, and the scrape fails with `python transform failed: the
+  interpreter did not start within 10s: it was still running and had not
+  said it was ready, so it was stopped; it did not crash: look at how busy
+  the machine is and at how long the libraries the collector declares take
+  to import`, followed by what it had written to stderr, if anything. One
+  that exited before it was ready fails the scrape with `the interpreter did
+  not start: the interpreter exited: ` and what it wrote to stderr, which is
+  where Python says why — a module that is not installed, for one. Only
+  that is a crash to look for. Either start is counted in
+  `http_exporter_python_worker_start_failures_total`, and the next scrape
+  starts another interpreter.
 - **Declared libraries are preloaded.** The libraries in `libraries` are
   imported when the worker starts, so their import time is not counted against
   the script, and a library that itself needs a module the sandbox blocks, such
@@ -380,7 +397,24 @@ A pre-script of a `prometheus` transform gets `{"metrics": [...]}`, [as above](#
 and must leave `data` in the same shape: it may drop series, change their
 values and labels, or add series, which the transform's rules then read as
 they read the exposition. A series without a `type` is `untyped`; a histogram
-has `buckets`, and a summary `quantiles`. A histogram or summary left without
+has `buckets`, and a summary `quantiles`. A series' `type` and `help` are
+strings and its `labels` a dict of label names to values; `None` for one of
+them is none given, as the key left out is. Anything else there — a number
+for the help, a list for the type, a list of pairs for the labels — fails
+the scrape as the script's failure, counted in
+`http_exporter_script_errors_total`, naming the series, the key and what
+stands there: `python pre-script: data["metrics"][0]: up_thing labels are an
+array of 1 item, not a mapping of label names to values`, `up_thing help 5 is
+not a string`, `up_thing type an array of 1 item is not a string; give
+"gauge", "counter", "untyped", "histogram" or "summary"`. A type that is text
+and none of the five is refused when the series are validated, as
+`metric "up_thing" has invalid type "counterr"`. A label value is written as
+`metric(...)` writes one, and `None` or the empty string leaves the label
+off the series the rules read. A label the target's own exposition gave as
+`l=""` is not among a series' `labels` to begin with: the decoder leaves it
+off, with a pre-script or without one, so a script that passes `data` on as
+it got it changes nothing of what is scraped
+([Prometheus input](CONFIGURATION.md#character-encodings)). A histogram or summary left without
 `sum` or `count`, or with `None` for it, is exported without a `_sum` or a
 `_count`, as one the target wrote without it, and a histogram's count is then
 its `+Inf` bucket's. A histogram is checked as one read from the target is:

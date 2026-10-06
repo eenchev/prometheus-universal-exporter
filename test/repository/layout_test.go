@@ -54,32 +54,39 @@ func TestNoTestRunsInParallel(t *testing.T) {
 }
 
 // Only the tests give a Python script more time than its
-// limits.script_timeout: the exporter's own pool has no least time, so the
-// limit a collector configures is the one its scripts run under.
+// limits.script_timeout, and an interpreter another time to start in than
+// the exporter's ten seconds: the exporter's own pool has no least time, so
+// the limit a collector configures is the one its scripts run under, and its
+// start timeout is the constant.
 func TestOnlyTestsGiveScriptsALeastTime(t *testing.T) {
-	call := "." + "SetLeastScriptTimeout("
-	calls := 0
-	err := filepath.WalkDir(".", func(path string, entry fs.DirEntry, err error) error {
-		if err != nil || entry.IsDir() || !strings.HasSuffix(path, ".go") {
-			return err
-		}
-		raw, err := os.ReadFile(path)
-		if err != nil {
-			return err
-		}
-		if n := strings.Count(string(raw), call); n > 0 {
-			calls += n
-			if !strings.HasSuffix(path, "_test.go") {
-				t.Errorf("%s calls %s), which gives every script of the pool more time than its limits.script_timeout; only the tests may", path, call)
+	for _, setter := range []struct{ name, gives string }{
+		{"SetLeastScriptTimeout", "gives every script of the pool more time than its limits.script_timeout"},
+		{"SetStartTimeout", "gives every interpreter of the pool another time to start in than the exporter's"},
+	} {
+		call := "." + setter.name + "("
+		calls := 0
+		err := filepath.WalkDir(".", func(path string, entry fs.DirEntry, err error) error {
+			if err != nil || entry.IsDir() || !strings.HasSuffix(path, ".go") {
+				return err
 			}
+			raw, err := os.ReadFile(path)
+			if err != nil {
+				return err
+			}
+			if n := strings.Count(string(raw), call); n > 0 {
+				calls += n
+				if !strings.HasSuffix(path, "_test.go") {
+					t.Errorf("%s calls %s), which %s; only the tests may", path, call, setter.gives)
+				}
+			}
+			return nil
+		})
+		if err != nil {
+			t.Fatal(err)
 		}
-		return nil
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if calls == 0 {
-		t.Fatalf("no file calls %s): the test looks for a name that is gone", call)
+		if calls == 0 {
+			t.Fatalf("no file calls %s): the test looks for a name that is gone", call)
+		}
 	}
 }
 

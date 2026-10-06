@@ -5,6 +5,8 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+
+	"github.com/eenchev/prometheus-universal-exporter/internal/testutil/alloctest"
 )
 
 // yamlBoundaryPairs are the pairs of a mapping that are no plain text key
@@ -34,6 +36,11 @@ var yamlBoundaryPairs = []struct {
 // another kind at the next such place. Compared are the values with their
 // types, the maps' among them, against the library alone, which is handed no
 // mapping of more than 128 keys.
+//
+// Under the race detector one place in three is written, and none with a
+// second pair beside it: 19 documents of a kind, where the plain run has 98,
+// and of a pair 2 to 9, where it has 12 to 67. What the documents must hold
+// of each is less there with them, and held to as well.
 func TestAYAMLMappingAtTheBoundOfAPartIsWhatTheLibraryMakesOfIt(t *testing.T) {
 	large := "{" + manyYAMLPairs(129, "", ", ") + "}"
 	head := "s: &s text\nn: &n 7\nt: &t !!str 8\nm: &m {key5: of m, extra: 1}\nl: &l [1, 2]\nbig: &big " + large + "\nmain:\n"
@@ -88,12 +95,13 @@ func TestAYAMLMappingAtTheBoundOfAPartIsWhatTheLibraryMakesOfIt(t *testing.T) {
 		}
 	}
 	t.Logf("%d documents: %v", written, decoded)
+	ofAKind, ofAPair := alloctest.UnlessRaced(90, 12), alloctest.UnlessRaced(10, 1)
 	for _, of := range yamlBoundaryPairs {
-		if decoded[of.kind] < 90 && !raceDetector {
+		if decoded[of.kind] < ofAKind {
 			t.Errorf("%d documents have %s: the documents do not cover it", decoded[of.kind], of.kind)
 		}
 		for _, pair := range of.pairs {
-			if each[pair] < 10 && !raceDetector {
+			if each[pair] < ofAPair {
 				t.Errorf("%d documents have the pair %q: the documents do not cover it", each[pair], pair)
 			}
 		}

@@ -69,7 +69,7 @@ func TestAStaticTargetBackOnScheduleIsRecovered(t *testing.T) {
 	file := &model.StaticTargetFile{Interval: model.Duration(time.Second), Targets: []model.StaticTarget{{Name: "t", Collector: "text", Target: target.URL}}}
 	server := newStaticServer(t, cfg, file)
 	server.logger = slog.Default()
-	key := failureKey("text", "static target t", "schedule")
+	key := staticTargetKey("text", "t").aspect(scheduleAspect)
 	server.failures.failed(server.logger, slog.LevelWarn, key, "static target scrape skipped", "schedule", errStillRunning)
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})
@@ -80,7 +80,7 @@ func TestAStaticTargetBackOnScheduleIsRecovered(t *testing.T) {
 	remembered := func() bool {
 		server.failures.mu.Lock()
 		defer server.failures.mu.Unlock()
-		_, ok := server.failures.entries[key]
+		_, ok := server.failures.entries[key.bytes]
 		return ok
 	}
 	testutil.WaitFor(t, "the skipped scrapes to be forgotten", func() bool { return !remembered() })

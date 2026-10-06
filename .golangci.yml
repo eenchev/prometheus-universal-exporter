@@ -46,6 +46,17 @@ linters:
         # The exposition and OTLP writers build strings from small fixed parts;
         # switching them to a different construct would not make them clearer.
         - appendAssign
+      enabled-checks:
+        # A collector's definition is over a kilobyte, and a loop that takes
+        # each as a value copies it: the read of the self-metrics did, for
+        # every collector, with the lock held that every probe takes. Loops
+        # over collectors go by index. The threshold is above every other
+        # element the code ranges over, so the check reports nothing else; a
+        # loop that copies on purpose says so beside its nolint.
+        - rangeValCopy
+      settings:
+        rangeValCopy:
+          sizeThreshold: 1024
     gosec:
       excludes:
         # G304 is reported for every file the operator names in configuration:

@@ -40,46 +40,62 @@ func oracleDecodeJSON(body []byte) (any, error) {
 // sameJSON says where two decoded values differ, or nothing when they are
 // the same: of the same types throughout, a float64 bit for bit, so that -0
 // is not 0 and a NaN would be itself, and a *big.Int by its value.
+//
+// The place is written only where there is a difference, on the way back up
+// from it (differsAt). Written on the way down, for every node whether it
+// differed or not, it cost a text as long as the node is deep at every
+// level: for two values nested as deep as a response may nest, fifty
+// megabytes to say that they are the same.
 func sameJSON(old, got any, path string) string {
+	if diff := differsAt(old, got); diff != "" {
+		return path + diff
+	}
+	return ""
+}
+
+// differsAt is the difference between two decoded values as sameJSON tells
+// it, with the place from where they are: ".key[3]: 2, was 1", and nothing
+// when they are the same.
+func differsAt(old, got any) string {
 	switch x := old.(type) {
 	case map[string]any:
 		y, ok := got.(map[string]any)
 		if !ok || len(x) != len(y) || (x == nil) != (y == nil) {
-			return fmt.Sprintf("%s: %#v, was %#v", path, got, old)
+			return fmt.Sprintf(": %#v, was %#v", got, old)
 		}
 		for key, value := range x {
 			other, has := y[key]
 			if !has {
-				return fmt.Sprintf("%s: no key %q", path, key)
+				return fmt.Sprintf(": no key %q", key)
 			}
-			if diff := sameJSON(value, other, path+"."+key); diff != "" {
-				return diff
+			if diff := differsAt(value, other); diff != "" {
+				return "." + key + diff
 			}
 		}
 	case []any:
 		y, ok := got.([]any)
 		if !ok || len(x) != len(y) || (x == nil) != (y == nil) {
-			return fmt.Sprintf("%s: %#v, was %#v", path, got, old)
+			return fmt.Sprintf(": %#v, was %#v", got, old)
 		}
 		for i := range x {
-			if diff := sameJSON(x[i], y[i], fmt.Sprintf("%s[%d]", path, i)); diff != "" {
-				return diff
+			if diff := differsAt(x[i], y[i]); diff != "" {
+				return fmt.Sprintf("[%d]%s", i, diff)
 			}
 		}
 	case float64:
 		if y, ok := got.(float64); !ok || math.Float64bits(x) != math.Float64bits(y) {
-			return fmt.Sprintf("%s: %#v, was %#v", path, got, old)
+			return fmt.Sprintf(": %#v, was %#v", got, old)
 		}
 	case *big.Int:
 		if y, ok := got.(*big.Int); !ok || x.Cmp(y) != 0 {
-			return fmt.Sprintf("%s: %#v, was %#v", path, got, old)
+			return fmt.Sprintf(": %#v, was %#v", got, old)
 		}
 	case int, string, bool, nil:
 		if old != got {
-			return fmt.Sprintf("%s: %#v, was %#v", path, got, old)
+			return fmt.Sprintf(": %#v, was %#v", got, old)
 		}
 	default:
-		return fmt.Sprintf("%s: the oracle made a %T", path, old)
+		return fmt.Sprintf(": the oracle made a %T", old)
 	}
 	return ""
 }

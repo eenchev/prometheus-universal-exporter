@@ -90,6 +90,48 @@ func TestOnlyTestsGiveScriptsALeastTime(t *testing.T) {
 	}
 }
 
+// Only the tests hold the exporter in its --web.shutdown-delay: the wait is a
+// variable of the main package (waitOutShutdownDelay), which a test of the
+// shutdown replaces in the child process it runs the exporter in, so that the
+// delay ends when the test has seen what it is about. The exporter itself
+// declares it, as time.Sleep, and calls it, and nothing but a test sets it.
+func TestOnlyTestsHoldTheShutdownDelay(t *testing.T) {
+	const name = "waitOutShutdownDelay"
+	declared, called, set := 0, 0, 0
+	err := filepath.WalkDir(".", func(path string, entry fs.DirEntry, err error) error {
+		if err != nil || entry.IsDir() || !strings.HasSuffix(path, ".go") {
+			return err
+		}
+		raw, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		for _, line := range strings.Split(string(raw), "\n") {
+			line = strings.TrimSpace(line)
+			switch {
+			case !strings.Contains(line, name), strings.HasPrefix(line, "//"):
+			case strings.HasSuffix(path, "_test.go"):
+				if strings.HasPrefix(line, name+" = ") {
+					set++
+				}
+			case line == "var "+name+" = time.Sleep":
+				declared++
+			case strings.HasPrefix(line, name+"("):
+				called++
+			default:
+				t.Errorf("%s: %q: only a test may give the wait for --web.shutdown-delay another meaning than time.Sleep", path, line)
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if declared != 1 || called != 1 || set == 0 {
+		t.Fatalf("%s is declared %d times, called %d times and set by the tests %d times; want one declaration, one call and a test that sets it: the test looks for a name that is gone", name, declared, called, set)
+	}
+}
+
 // internalLayers is the order of the internal packages: each may import only
 // the ones before it (docs/SPECIFICATION-EXPORTER.md, section 7.1).
 var internalLayers = []string{"model", "expr", "fetch", "decode", "transform", "config", "exporter"}

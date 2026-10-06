@@ -57,16 +57,16 @@ func TestAStaticTargetsRefusedCredentialGetsNoStaleResult(t *testing.T) {
 	c := staleCollector(time.Millisecond, time.Hour)
 	file := &model.StaticTargetFile{Interval: model.Duration(time.Minute), Targets: []model.StaticTarget{{Name: "t", Collector: "flaky", Target: target.URL}}}
 	server := newStaticServer(t, &model.Config{Collectors: []model.Collector{c}}, file)
-	server.scrapeStaticTargets(context.Background(), 10*time.Second)
+	server.scrapeStaticTargets(context.Background(), 0)
 	time.Sleep(5 * time.Millisecond)
 	flaky.mode.Store("unauthorized")
-	server.scrapeStaticTargets(context.Background(), 10*time.Second)
+	server.scrapeStaticTargets(context.Background(), 0)
 	body := getStaticTargets(t, server, "/static-targets")
 	if strings.Contains(body, "demo_value") || !strings.Contains(body, `http_exporter_target_up{collector="flaky",static_target="t"`) {
 		t.Fatalf("after a 401:\n%s", body)
 	}
 	flaky.mode.Store("status")
-	server.scrapeStaticTargets(context.Background(), 10*time.Second)
+	server.scrapeStaticTargets(context.Background(), 0)
 	if body := getStaticTargets(t, server, "/static-targets"); !strings.Contains(body, `demo_value{static_target="t"} 7`) {
 		t.Fatalf("after a 503 the stale result is not served:\n%s", body)
 	}
@@ -119,16 +119,16 @@ func TestAStaticTargetsRefusedTargetGetsNoStaleResult(t *testing.T) {
 	c.Request.FollowRedirects = true
 	file := &model.StaticTargetFile{Interval: model.Duration(time.Minute), Targets: []model.StaticTarget{{Name: "t", Collector: "flaky", Target: target.URL}}}
 	server := newStaticServer(t, &model.Config{Collectors: []model.Collector{c}}, file)
-	server.scrapeStaticTargets(context.Background(), 10*time.Second)
+	server.scrapeStaticTargets(context.Background(), 0)
 	time.Sleep(5 * time.Millisecond)
 	flaky.mode.Store("redirect-denied")
-	server.scrapeStaticTargets(context.Background(), 10*time.Second)
+	server.scrapeStaticTargets(context.Background(), 0)
 	body := getStaticTargets(t, server, "/static-targets")
 	if strings.Contains(body, "demo_value") || !strings.Contains(body, `http_exporter_target_up{collector="flaky",static_target="t"`) {
 		t.Fatalf("after a refusal:\n%s", body)
 	}
 	flaky.mode.Store("status")
-	server.scrapeStaticTargets(context.Background(), 10*time.Second)
+	server.scrapeStaticTargets(context.Background(), 0)
 	if body := getStaticTargets(t, server, "/static-targets"); !strings.Contains(body, `demo_value{static_target="t"} 7`) {
 		t.Fatalf("after a 503 the stale result is not served:\n%s", body)
 	}

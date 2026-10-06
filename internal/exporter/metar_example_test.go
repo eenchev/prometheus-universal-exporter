@@ -301,7 +301,7 @@ func TestTheMETARExampleScrapesItsStaticTargets(t *testing.T) {
 	}
 
 	server := newStaticServer(t, cfg, file)
-	server.scrapeStaticTargets(context.Background(), 10*time.Second)
+	server.scrapeStaticTargets(context.Background(), 0)
 	body := getStaticTargets(t, server, "/static-targets")
 	for _, want := range []string{
 		`metar_observation_timestamp_seconds{city="Sofia",static_target="sofia",station="LBSF"} 1.791018e+09`,

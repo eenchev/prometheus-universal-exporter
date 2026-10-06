@@ -59,7 +59,7 @@ func TestStaticScrapeGroupsMetricsByTargetResource(t *testing.T) {
 		},
 	}}
 	server := newStaticServer(t, cfg, file)
-	server.scrapeStaticTargets(context.Background(), 10*time.Second)
+	server.scrapeStaticTargets(context.Background(), 0)
 	resources := server.drainOTLP()
 	if len(resources) != 2 {
 		t.Fatalf("expected one resource per service name, got %d", len(resources))
@@ -101,7 +101,7 @@ func TestStaticScrapeReportsFailureAsTargetDown(t *testing.T) {
 	file := &model.StaticTargetFile{Interval: model.Duration(time.Minute), Targets: []model.StaticTarget{{ExportViaOTLP: true, Name: "down", Collector: "text", Target: target.URL}}}
 	server := newStaticServer(t, cfg, file)
 
-	server.scrapeStaticTargets(context.Background(), 10*time.Second)
+	server.scrapeStaticTargets(context.Background(), 0)
 	resources := server.drainOTLP()
 	if len(resources) != 1 {
 		t.Fatalf("resources=%d", len(resources))
@@ -129,9 +129,9 @@ func TestStaticScrapeUsesTheCollectorCache(t *testing.T) {
 	file := &model.StaticTargetFile{Interval: model.Duration(time.Minute), Targets: []model.StaticTarget{{ExportViaOTLP: true, Name: "cached", Collector: "text", Target: target.URL}}}
 	server := newStaticServer(t, cfg, file)
 
-	server.scrapeStaticTargets(context.Background(), 10*time.Second)
+	server.scrapeStaticTargets(context.Background(), 0)
 	_ = server.drainOTLP()
-	server.scrapeStaticTargets(context.Background(), 10*time.Second)
+	server.scrapeStaticTargets(context.Background(), 0)
 	resources := server.drainOTLP()
 	if got := requests.Load(); got != 1 {
 		t.Fatalf("target requests=%d, want 1", got)
@@ -218,8 +218,8 @@ func TestStaticScrapePayloadCarriesSeparateResources(t *testing.T) {
 		OTLP:   model.TargetOTLPConfig{ServiceName: "legacy-app"},
 	}}}
 	server := newStaticServer(t, cfg, file)
-	server.scrapeStaticTargets(context.Background(), 10*time.Second)
-	server.exportOTLP(context.Background(), 5*time.Second)
+	server.scrapeStaticTargets(context.Background(), 0)
+	server.exportOTLP(context.Background(), time.Minute)
 
 	select {
 	case payload := <-received:

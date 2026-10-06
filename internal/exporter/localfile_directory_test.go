@@ -272,7 +272,7 @@ func TestLocalDirectoryStaticTargets(t *testing.T) {
 	file := &model.StaticTargetFile{Interval: model.Duration(time.Minute), Targets: []model.StaticTarget{{ExportViaOTLP: true, Name: "textfiles", Collector: "dir", Labels: map[string]string{"source": "node"}}}}
 	server := newStaticServer(t, cfg, file)
 	server.logger = testutil.QuietLogger(t)
-	server.scrapeStaticTargets(context.Background(), 10*time.Second)
+	server.scrapeStaticTargets(context.Background(), 0)
 	found := map[string]float64{}
 	for _, resource := range server.drainOTLP() {
 		for _, m := range resource.Set.Metrics {

@@ -230,6 +230,21 @@ A test (`TestAllocationsAreMeasuredOnlyThroughAlloctest`) fails for a test file
 outside `internal/testutil` that calls `testing.AllocsPerRun` or reads the
 allocation counters of `runtime.MemStats` or of a benchmark's result itself.
 
+How much stack a call takes is counted for the process as well, and depends
+on the collector besides: a goroutine whose stack is outgrown is given a
+larger one, and the one it had goes back at once only while no collection is
+running. During one it is kept until the collection ends, so a call that
+ended before the collection did was measured with every stack it had outgrown
+beside the one it had: 24 MB and 32 MB for a stack of 16, on a machine busy
+enough for a collection to last from the stack's last doubling to the end of
+the call, and that was a failure of `internal/decode` nobody could repeat on
+a quiet one. A test that bounds a stack therefore measures it with no
+collection running, as `yamlStackOf` does (`yamlkeysdepth_test.go`): it turns
+the collector off, finishes the collection in progress, runs the call on a
+goroutine of its own, and puts the collector back. The measurement is then
+the goroutine's stack to the byte, 16 MB or 4 MB or nothing, whatever else
+the machine does.
+
 The race detector changes what is allocated: under it `sync.Pool`, which `fmt`
 and the regexp and XPath engines keep their working memory in, hands back only
 some of what it is given, and some allocations are larger. A bound that is
@@ -282,6 +297,78 @@ was kept of the one before it. A test of a server that comes back gives the
 connection an hour to wait by itself and the call a minute to connect in
 (`connectionsWaitAnHour`, `callsWaitForAConnection`), so that only what the
 test is about reconnects, in however long it takes.
+
+A deadline is where a test most easily waits for a length of time: something
+has to have happened when the deadline passes, and a deadline on the
+machine's clock leaves it that long and no longer. Three ways keep the clock
+out of it, in this order of choice:
+
+- The test ends the deadline itself, when it has seen what had to come
+  first. `testutil.DeadlineEndedByHand` gives a context that ends as one
+  whose deadline has passed, when the test says so: the tests of a directory
+  read cut short end it once the hook that holds a file's read has been
+  called (`localfile_reads_test.go`), and a test whose reads or runs have to
+  overlap holds each until all are there, where a sleep in each only made it
+  likely (`TestLocalDirectoryReadsFilesConcurrently`, `leaveIdleWorkers`).
+- Where nothing tells the test that the earlier step is over, the code under
+  test runs on a clock of the test's own (`testing/synctest`), which stands
+  still while any goroutine of the test is at work or waits for the network
+  and moves on when all of them wait for the clock or for each other. A
+  deadline on it passes when the fetch has got as far as it gets by itself,
+  and the test asserts the time it took to the nanosecond
+  (`onItsOwnClock` in `internal/fetch/fetcher_test.go`,
+  `TestGRPCEachRetryOfACallWithoutAConnectionDialsAgain`, the stand-in
+  workers of `internal/transform`). What the test talks to is started outside
+  that clock, since a server waits for connections for as long as it runs and
+  would hold the clock; an HTTP target answers `Connection: close`, since a
+  connection kept open is one still read from; and what would be kept after
+  the test with the clock's time or its timers in it — a connection pool, a
+  gRPC connection — is kept in a cache of the test's own, and the gRPC
+  connection closed before the clock is left. Code that only computes never
+  lets such a clock move, so this is not for a jq program or a real Python
+  script.
+- Where neither is possible, as with a real interpreter or a jq program that
+  must be running when the deadline passes, the deadline is on the machine's
+  clock and short, and the test looks at how the run ended: when it ended
+  because the earlier step had not been reached, the test runs it again with
+  twice the time, up to some sixteen seconds
+  (`TestRuleFailuresBeforeTheDeadlineAreKept`,
+  `TestPythonRunCutByTheProbesDeadlineIsNotATimeout`, and the alarm of
+  `TestPythonWorkerKilledByItsOwnAlarmIsReplaced`). A slow machine pays for
+  the longer runs and a quiet one for the first.
+
+A context that only keeps a test from hanging is a minute long, like the
+deadline of a probe that is to be answered; ten seconds, and five, were what
+a request that must succeed had on a machine that once took longer than that
+to start an interpreter.
+
+The exporter's own limits are met the same way wherever a test runs against
+one. What is meant to get through has half a minute, the bound of a hang, in
+place of the exporter's seconds: a static target scrape a test makes itself
+(`scrapeStaticTargets` with a budget of 0), an OTLP export and each of its
+attempts (`otlpConfig`, whose `timeout` is half a minute), a probe with a
+`timeout` parameter, and a target of the scrape loop, whose interval ends its
+scrape and is therefore minutes long, with a name whose first scrape is due
+at once (`soonScraped`). A test of a budget within which something has to
+happen first — the target has to answer, for the deadline to pass inside a
+rule or in the wait before a retry; an attempt has to end, for there to be
+time for another — starts with a short budget and makes the round again with
+twice the budget and a new exporter, up to half a minute, for as long as the
+round itself says the budget ran out too early
+(`TestADeadlineInsideARuleFailsTheProbe`,
+`TestAProbeWhoseRetryRunsOutOfTimeReportsTheTargetsAnswer`): what says so
+must be something no failure of what the test is about can look like.
+`TestUnreachableOTLPEndpoint` makes a round without a retry again, which is
+what it is about: an exporter that does not retry makes none in any round,
+at once, and fails the test at the last. And a test that has the exporter do
+something in its `--web.shutdown-delay` runs it in a child process that
+stays in the delay, once that is over, until the test lets it go
+(`exporterProcess.endDelay` in `shutdown_http_test.go`): the child replaces
+the wait, `waitOutShutdownDelay` in `main.go`, which is a variable for that
+alone and which nothing but a test may set
+(`TestOnlyTestsHoldTheShutdownDelay`). A deadline the exporter sets on a
+connection is read from the connection, not waited out
+(`notedConn` in `internal/exporter/answerwrite_test.go`).
 
 What a test leaves behind in its own server is held to the same rule. A
 client that was stopped while it dialed leaves connections whose handshake
@@ -775,10 +862,66 @@ measured on two shared cores, old and new in turn, three times:
 | `unchanged/n=2000` | 320–333 ms; 355.2 MB, 1,069,038 allocations; 4,000 encoded, 2,000 by the look | 8.2–8.6 ms; 2.1 MB, 7,038 allocations; 2,000 encoded, none by the look |
 | `changed/n=2000` | 315–347 ms; 354.7 MB, 1,068,038 allocations; 4,000 encoded, 2,000 by the look | 6.1–7.3 ms; 1.6 MB, 6,038 allocations; 2,000 encoded, none by the look |
 
-What is left of the look for 2,000 collectors is mostly finding each
-target's collector by its name among them, 4.6 ms, as it was before.
-`reloadschedule_http_test.go` holds it by counting where a definition is
-encoded: a reload of a configuration whose collectors all have a static
+What was then left of the look for 2,000 collectors was mostly finding each
+target's collector by its name: the schedule went through the collectors of
+the configuration once for every collector with a static target, so 2,000
+times through 2,000, and 10,000 times through 10,000. A probe did the same
+once for its collector and once more for that collector's fingerprint, when
+the collector caches, and so did the scrape of a static target: of 10,000
+collectors, a probe of the last one answered from the cache took 0.1 to
+0.2 ms where one of the first took 0.02. Now the place of each collector is
+kept by its name with the configuration's fingerprints
+(`fingerprintGeneration.place` in `fingerprint.go`), which live as long as
+the configuration does and are shared by the same callers. The collectors
+are gone through once for a configuration, by the reload that prepares it,
+before it is in force, or, for the configuration the exporter started with,
+by whoever first asks for a name; that is 0.1 ms and 109 kB for 2,000
+collectors, where the reload takes a third of a second. The map is made
+under a `sync.Once` and never changed after, so the scrape loop, the probes
+and a reload read it without a lock. `followedConfig.collectorOf` and
+`fingerprintOf` read it only for the configuration their following is of,
+and `fingerprintMemo.fingerprint` only while the fingerprints remembered are
+that configuration's: for any other configuration, as for a scrape that
+waited for a slot across a reload, and for a caller that follows none, the
+collectors are gone through as they were. `schedule-scans/op` is how many
+times the look went through them: none now, and once for every collector
+with a static target before. The benchmark also has 10,000 collectors with a
+target each, for which `-bench 'FollowReloadSchedule/.*/n=10000$' -benchtime
+5x` is enough, a reload of that many taking seconds that are not timed and
+are waited for all the same, and 500 collectors with 20 targets each
+(`/targets=20`). As measured on two shared cores, old and new in turn; the
+bytes and the allocations of the look are what they were, a scan having
+allocated nothing:
+
+| Benchmark | Before | After |
+| --- | --- | --- |
+| `unchanged/n=50` | 0.08–0.10 ms | 0.07–0.11 ms |
+| `unchanged/n=500` | 1.1–2.2 ms | 0.9–1.0 ms |
+| `changed/n=500` | 0.6–1.0 ms | 0.3–0.6 ms |
+| `unchanged/n=2000` | 7.1–10.3 ms | 4.1–6.6 ms |
+| `changed/n=2000` | 5.1–8.5 ms | 1.3–4.7 ms |
+| `half/n=2000` | 10.6–15.2 ms | 3.1–5.1 ms |
+| `unchanged/n=10000` | 298–307 ms | 64–78 ms |
+| `changed/n=10000` | 263–339 ms | 20–25 ms |
+| `half/n=10000` | 228–243 ms | 22–31 ms |
+| `unchanged/n=500/targets=20` | 14–24 ms | 14–31 ms |
+| `changed/n=500/targets=20` | 7–17 ms | 7–17 ms |
+
+With 20 targets to a collector the look is as long as it was: it asked once
+for each collector then too, 500 times through 500, and the time is that of
+the 10,000 targets, each compared with its place in the schedule. A probe of
+the last of 2,000 collectors answered from the cache takes 17–24 µs where it
+took 23–37, and of 10,000, 14–22 µs where it took 106–224; the scrape of the
+last static target of 2,000, answered from the cache, 13–15 µs where it took
+22–53. What a probe allocates is what it was. `reloadschedule_http_test.go`
+holds it by counting the times the collectors are gone through
+(`collectorsScannedHook`), never by time: once by the schedule's first look,
+once by a reload, and not at all by the look after it, by a probe or by a
+scrape, for 60 collectors and for 240, and with five targets to a collector.
+`collectorplace_test.go` holds that what is found by a name is what going
+through the collectors found, the former lookups kept beside the test.
+`reloadschedule_http_test.go` also holds the rest by counting where a
+definition is encoded: a reload of a configuration whose collectors all have a static
 target encodes each collector once, before it is in force, and the look
 after it none, driven as the loop drives it and with the loop running; the
 fingerprints the schedule asks for first are the ones the probes use; a

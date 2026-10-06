@@ -50,7 +50,7 @@ func TestAFileNamedRuleHasItsRulesRecoveriesLogged(t *testing.T) {
 			if scraped.query == "" {
 				file := &model.StaticTargetFile{Interval: model.Duration(time.Minute), Targets: []model.StaticTarget{{Name: "textfiles", Collector: "dir"}}}
 				server = newStaticServer(t, &model.Config{Collectors: []model.Collector{c}}, file)
-				scrape = func() { server.scrapeStaticTargets(context.Background(), 10*time.Second) }
+				scrape = func() { server.scrapeStaticTargets(context.Background(), 0) }
 			} else {
 				server = fileServer(t, c)
 			}

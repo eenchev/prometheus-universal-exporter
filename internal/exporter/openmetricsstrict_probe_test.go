@@ -143,7 +143,7 @@ func TestOddValuesOfATargetReachTheOTLPEndpoint(t *testing.T) {
 	if r := probeOnce(t, server, "/probe?collector=pass&target="+url.QueryEscape(target.URL), nil); r.Code != http.StatusOK {
 		t.Fatalf("the probe answered %d: %s", r.Code, r.Body.String())
 	}
-	server.exportOTLP(context.Background(), 5*time.Second)
+	server.exportOTLP(context.Background(), time.Minute)
 
 	var payload otlpPayload
 	select {

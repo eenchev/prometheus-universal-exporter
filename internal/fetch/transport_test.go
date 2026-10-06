@@ -82,7 +82,9 @@ func TestClientsUseTheProxyFromTheEnvironment(t *testing.T) {
 	transports = newTransportCache()
 	t.Cleanup(func() { transports = previous })
 
-	client, err := HTTPClient(TransportSettings{}, true, 5*time.Second)
+	// A minute for the request the proxy answers, which bounds one that
+	// hangs.
+	client, err := HTTPClient(TransportSettings{}, true, time.Minute)
 	if err != nil {
 		t.Fatal(err)
 	}

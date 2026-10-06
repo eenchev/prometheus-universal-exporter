@@ -2,9 +2,11 @@ package main
 
 import (
 	"bytes"
+	"io"
 	"os"
 	"strings"
 	"testing"
+	"time"
 )
 
 // Shutting down: the wait for the probes in progress, and the second signal
@@ -13,12 +15,30 @@ import (
 // helperArgsEnv carries the arguments of a child process running run.
 const helperArgsEnv = "PUE_TEST_RUN_ARGS"
 
+// helperHoldsDelayEnv, when set, has the child process stay in its
+// --web.shutdown-delay, once that is over, until its standard input is
+// closed.
+const helperHoldsDelayEnv = "PUE_TEST_HOLD_SHUTDOWN_DELAY"
+
 // TestRunHelperProcess is not a test: it is the exporter, run in a child
 // process by tests that need to signal it.
+//
+// A test that has the exporter do something in its --web.shutdown-delay
+// cannot have that done in time by a delay however long: the delay is the
+// exporter's own clock, and a machine busy enough is later. So the delay of
+// such a child is waited out and then goes on until the test, which holds
+// the other end of the child's standard input, closes it: the test waits for
+// what it is about, and then lets the shutdown begin.
 func TestRunHelperProcess(_ *testing.T) {
 	args := os.Getenv(helperArgsEnv)
 	if args == "" {
 		return
+	}
+	if os.Getenv(helperHoldsDelayEnv) != "" {
+		waitOutShutdownDelay = func(delay time.Duration) {
+			time.Sleep(delay)
+			_, _ = io.Copy(io.Discard, os.Stdin)
+		}
 	}
 	os.Exit(run(strings.Split(args, "\x1f"), os.Stdout, os.Stderr))
 }

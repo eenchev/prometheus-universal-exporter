@@ -27,9 +27,12 @@ func (s *Server) scrapeTarget(ctx context.Context, cfg *model.Config, target mod
 // that was in force together with it, read at generation
 // (Server.followedInForce): the scrape may begin long after, when it has
 // waited for a slot, and counts in its collector's statistics only when no
-// reload has removed the collector meanwhile (statsSince).
+// reload has removed the collector meanwhile (statsSince). The collector is
+// found by its name where the configuration followed keeps its place, while
+// cfg is that configuration, and by going through the collectors of cfg, as
+// it was for every scrape, once a reload has come (collectorOf).
 func (s *Server) scrapeTargetSince(ctx context.Context, cfg *model.Config, generation uint64, target model.StaticTarget) {
-	collector := model.CollectorByName(cfg, target.Collector)
+	collector := s.followed.Load().collectorOf(cfg, target.Collector)
 	if collector == nil {
 		s.logger.Error("static target references unknown collector", "target", target.Name, "collector", target.Collector)
 		return

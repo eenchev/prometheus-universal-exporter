@@ -112,7 +112,11 @@ func TestCollectorCacheExpiresAndRefetches(t *testing.T) {
 		return "value=2\n"
 	})
 	defer target.Close()
-	server, _ := newCacheTestServer(t, cachingCollector("expiring", 50*time.Millisecond))
+	// The test expires the entry itself (expireCachedEntries), and the ttl is
+	// long, so the entry of the second probe is alive when it is counted
+	// below however late that is, which a ttl of 50ms is over before on a
+	// machine busy enough.
+	server, _ := newCacheTestServer(t, cachingCollector("expiring", time.Minute))
 
 	first := probeOnce(t, server, "/probe?target="+target.URL+"&collector=expiring", nil)
 	if !strings.Contains(first.Body.String(), "demo_value 1") {
@@ -612,10 +616,10 @@ func TestStaticScrapeExportsTheLastGoodResultMarkedStale(t *testing.T) {
 	file := &model.StaticTargetFile{Interval: model.Duration(time.Minute), Targets: []model.StaticTarget{{ExportViaOTLP: true, Name: "t", Collector: "flaky", Target: target.URL}}}
 	server := newStaticServer(t, cfg, file)
 
-	server.scrapeStaticTargets(context.Background(), 10*time.Second)
+	server.scrapeStaticTargets(context.Background(), 0)
 	_ = server.drainOTLP()
 	flaky.mode.Store("status")
-	server.scrapeStaticTargets(context.Background(), 10*time.Second)
+	server.scrapeStaticTargets(context.Background(), 0)
 	var all model.MetricSet
 	for _, resource := range server.drainOTLP() {
 		all.Metrics = append(all.Metrics, resource.Set.Metrics...)
@@ -661,7 +665,7 @@ func TestParametersThatDoNotMakeTheRequestShareACacheEntry(t *testing.T) {
 	if n := len(server.cache.entries); n != 1 {
 		t.Fatalf("%d cache entries, want 1", n)
 	}
-	for _, extra := range []string{"&timeout=5s", "&method=POST", "&header_X-Tenant=a", "&header_X-Tenant=b", "&param_region=us"} {
+	for _, extra := range []string{"&timeout=50s", "&method=POST", "&header_X-Tenant=a", "&header_X-Tenant=b", "&param_region=us"} {
 		if r := probeOnce(t, server, probe+extra, nil); r.Code != http.StatusOK {
 			t.Fatalf("%s answered %d: %s", extra, r.Code, r.Body)
 		}

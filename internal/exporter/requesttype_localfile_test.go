@@ -201,7 +201,7 @@ func TestLocalFileStaticTargets(t *testing.T) {
 	}
 	file := &model.StaticTargetFile{Interval: model.Duration(time.Minute), Targets: []model.StaticTarget{
 		{ExportViaOTLP: true, Name: "main", Collector: "files", Labels: map[string]string{"source": "main"}},
-		{ExportViaOTLP: true, Name: "batch", Collector: "files", Target: "batch", Labels: map[string]string{"source": "batch"}, Request: model.TargetRequestConfig{Timeout: model.Duration(time.Second)}},
+		{ExportViaOTLP: true, Name: "batch", Collector: "files", Target: "batch", Labels: map[string]string{"source": "batch"}, Request: model.TargetRequestConfig{Timeout: model.Duration(time.Minute)}},
 	}}
 	if err := config.ValidateStaticTargets(file); err != nil {
 		t.Fatal(err)
@@ -210,7 +210,7 @@ func TestLocalFileStaticTargets(t *testing.T) {
 		t.Fatal(err)
 	}
 	server := newStaticServer(t, cfg, file)
-	server.scrapeStaticTargets(context.Background(), 10*time.Second)
+	server.scrapeStaticTargets(context.Background(), 0)
 	values := map[string]float64{}
 	for _, resource := range server.drainOTLP() {
 		for _, m := range resource.Set.Metrics {
@@ -347,5 +347,5 @@ func TestALocalFileProbeTakesATimeout(t *testing.T) {
 	testutil.WriteIn(t, root, "app.prom", promFile)
 	server := fileServer(t, fileCollector("files", root, "app.prom"))
 	// timeout is shared.
-	probeFile(t, server, "collector=files&timeout=5s").must(t, http.StatusOK)
+	probeFile(t, server, "collector=files&timeout=50s").must(t, http.StatusOK)
 }

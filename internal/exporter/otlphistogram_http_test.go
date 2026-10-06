@@ -38,8 +38,8 @@ func TestHistogramsAndSummariesReachTheOTLPEndpoint(t *testing.T) {
 	file := &model.StaticTargetFile{Interval: model.Duration(time.Minute), Targets: []model.StaticTarget{{ExportViaOTLP: true, Name: "scheduled", Collector: "passthrough", Target: target.URL}}}
 	server := newStaticServer(t, cfg, file)
 	probeOnce(t, server, "/probe?collector=passthrough&target="+url.QueryEscape(target.URL), nil)
-	server.scrapeStaticTargets(context.Background(), 10*time.Second)
-	server.exportOTLP(context.Background(), 5*time.Second)
+	server.scrapeStaticTargets(context.Background(), 0)
+	server.exportOTLP(context.Background(), time.Minute)
 
 	var payload otlpPayload
 	select {

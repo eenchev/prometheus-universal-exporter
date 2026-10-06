@@ -319,7 +319,10 @@ func TestAStartThatRanOutOfTimeSaysWhatWasTrueWhenItDid(t *testing.T) {
 }
 
 // oracleStartPythonWorker is startPythonWorker as it was before a start that
-// fails said what was true of the interpreter, with the limit as it was.
+// fails said what was true of the interpreter. Its limit is the pool's, as
+// the start's is now, which leaves a start a minute in a test: with the ten
+// seconds it had, python3 on a busy machine ran out of them here and the
+// two no longer ended alike, in a test of the starts that do not run out.
 func oracleStartPythonWorker(ctx context.Context, spec pythonSpec) (*pythonWorker, error) {
 	requestRead, requestWrite, err := os.Pipe()
 	if err != nil {
@@ -348,7 +351,8 @@ func oracleStartPythonWorker(ctx context.Context, spec pythonSpec) (*pythonWorke
 		close(worker.exited)
 	}()
 
-	timer := time.NewTimer(pythonStartupTimeout)
+	limit := time.Duration(PythonWorkers().startTimeout.Load())
+	timer := time.NewTimer(limit)
 	defer timer.Stop()
 	select {
 	case line, ok := <-worker.lines:
@@ -359,7 +363,7 @@ func oracleStartPythonWorker(ctx context.Context, spec pythonSpec) (*pythonWorke
 		return worker, nil
 	case <-timer.C:
 		worker.stop()
-		return nil, fmt.Errorf("the interpreter did not start within %s: %s", pythonStartupTimeout, worker.describe(nil))
+		return nil, fmt.Errorf("the interpreter did not start within %s: %s", limit, worker.describe(nil))
 	case <-ctx.Done():
 		worker.stop()
 		return nil, ctx.Err()

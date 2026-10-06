@@ -105,7 +105,7 @@ func TestAStaticResultAgesUntilTheNextScrape(t *testing.T) {
 	file := &model.StaticTargetFile{Interval: model.Duration(10 * time.Minute), Targets: []model.StaticTarget{{Name: "t", Collector: "aged", Target: target.URL}}}
 	server := newStaticServer(t, cfg, file)
 	server.logger = testutil.QuietLogger(t)
-	server.scrapeStaticTargets(t.Context(), 10*time.Second)
+	server.scrapeStaticTargets(t.Context(), 0)
 	ageOf := func(body string) float64 {
 		for _, line := range strings.Split(body, "\n") {
 			if value, found := strings.CutPrefix(line, `http_exporter_result_age_seconds{static_target="t"} `); found {
@@ -138,7 +138,7 @@ func TestAStaticResultAgesUntilTheNextScrape(t *testing.T) {
 	// A collector without stale_if_error has no age to keep.
 	plain := newStaticServer(t, &model.Config{Collectors: []model.Collector{testutil.Collector("aged", "text")}}, file)
 	plain.logger = testutil.QuietLogger(t)
-	plain.scrapeStaticTargets(t.Context(), 10*time.Second)
+	plain.scrapeStaticTargets(t.Context(), 0)
 	if _, aged := plain.staticFetched["t"]; aged || strings.Contains(getStaticTargets(t, plain, "/static-targets"), resultAgeMetric) {
 		t.Fatal("a collector without stale_if_error has an age")
 	}
@@ -173,7 +173,7 @@ func TestARefusedTargetIsAnswered403(t *testing.T) {
 	file := &model.StaticTargetFile{Interval: model.Duration(time.Minute), Targets: []model.StaticTarget{{Name: "t", Collector: "guarded", Target: target.URL}}}
 	static := newStaticServer(t, cfg, file)
 	static.logger = testutil.QuietLogger(t)
-	static.scrapeStaticTargets(t.Context(), 10*time.Second)
+	static.scrapeStaticTargets(t.Context(), 0)
 	if body := getStaticTargets(t, static, "/static-targets"); !strings.Contains(body, `http_exporter_target_up{collector="guarded",static_target="t",target="`+target.URL+`"} 0`) {
 		t.Fatalf("a refused static target is up:\n%s", body)
 	}
@@ -229,7 +229,7 @@ func TestAStaticTargetAcceptsItsOwnStatuses(t *testing.T) {
 	}}
 	server := newStaticServer(t, cfg, file)
 	server.logger = testutil.QuietLogger(t)
-	server.scrapeStaticTargets(t.Context(), 10*time.Second)
+	server.scrapeStaticTargets(t.Context(), 0)
 	body := getStaticTargets(t, server, "/static-targets")
 	if !strings.Contains(body, `demo_value{static_target="tolerant"} 4`) {
 		t.Fatalf("the tolerant target's 503 was not decoded:\n%s", body)

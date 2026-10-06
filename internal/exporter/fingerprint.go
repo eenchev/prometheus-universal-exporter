@@ -39,24 +39,100 @@ type fingerprintMemo struct {
 
 // fingerprintGeneration is the fingerprints of one configuration, each worked
 // out the first time it is asked for. whole says that all of them have been,
-// the configuration having been prepared.
+// the configuration having been prepared. places says where the
+// configuration has each collector, by its name (place): made once, under
+// placed, and never changed, so whoever reads it finds it whole.
 type fingerprintGeneration struct {
 	config *model.Config
 	once   []sync.Once
 	values []string
 	whole  atomic.Bool
+	placed sync.Once
+	places map[string]int
 }
 
 func newFingerprintGeneration(cfg *model.Config) *fingerprintGeneration {
 	return &fingerprintGeneration{config: cfg, once: make([]sync.Once, len(cfg.Collectors)), values: make([]string, len(cfg.Collectors))}
 }
 
+// A probe, the scrape of a static target and the schedule of the static
+// targets each have a collector's name and need the collector, or its
+// fingerprint. Going through the configuration's collectors for it costs as
+// much as the configuration is large, at every probe and every scrape, and
+// for a look of the schedule after a reload once for every collector with a
+// static target: for 2,000 collectors with a target each that was more than
+// half the look. So the place of each collector is kept by its name with the
+// configuration's fingerprints, which live as long as the configuration
+// does and are shared by the same callers: the collectors are gone through
+// once for a configuration, when a reload prepares it (prepare) or, for the
+// one the exporter started with, when a name is first asked for.
+
+// collectorsScannedHook, set by tests, is called whenever the collectors of
+// a configuration are gone through, to find one of them (placeByScan,
+// fingerprintMemo.fingerprint) or to note where each is (makePlaces): once
+// for each time, not for each collector, so a test can count the times and
+// see that it is once for a configuration, not once for each probe, scrape
+// or static target.
+var collectorsScannedHook atomic.Pointer[func()]
+
+// collectorsScanned tells a test that the collectors of a configuration are
+// about to be gone through.
+func collectorsScanned() {
+	if hook := collectorsScannedHook.Load(); hook != nil {
+		(*hook)()
+	}
+}
+
+// placeByScan is the index of the first collector of cfg named name, found
+// by going through them as model.CollectorByName does, and -1 when cfg has
+// none of that name. It is what place answers without going through them.
+func placeByScan(cfg *model.Config, name string) int {
+	collectorsScanned()
+	for i := range cfg.Collectors {
+		if cfg.Collectors[i].Name == name {
+			return i
+		}
+	}
+	return -1
+}
+
+// place is the index of the configuration's collector named name, and false
+// when it has none of that name: what placeByScan finds, read from places.
+// The names of a loaded configuration are all different (config.Validate);
+// were two collectors to share one, the first is the one named, as it is
+// for a scan.
+func (g *fingerprintGeneration) place(name string) (int, bool) {
+	g.placed.Do(g.makePlaces)
+	index, found := g.places[name]
+	return index, found
+}
+
+// makePlaces goes through the configuration's collectors, once, and notes
+// where each name is. From the last to the first: the first collector of a
+// name is the one left under it.
+func (g *fingerprintGeneration) makePlaces() {
+	collectorsScanned()
+	places := make(map[string]int, len(g.config.Collectors))
+	for i := len(g.config.Collectors) - 1; i >= 0; i-- {
+		places[g.config.Collectors[i].Name] = i
+	}
+	g.places = places
+}
+
 // fingerprint is collectorFingerprint(c), remembered when c is one of cfg's
 // collectors. A collector that is not, such as a copy, is fingerprinted
-// afresh.
+// afresh. While the fingerprints remembered are cfg's, as they are but for a
+// probe that still holds the configuration before a reload, c is found by
+// its name (place) and the collectors are not gone through.
 func (m *fingerprintMemo) fingerprint(cfg *model.Config, c *model.Collector) string {
+	if generation := m.current.Load(); c != nil && generation != nil && generation.config == cfg {
+		if index, found := generation.place(c.Name); found && &cfg.Collectors[index] == c {
+			return generation.at(index)
+		}
+	}
 	index := -1
 	if cfg != nil {
+		collectorsScanned()
 		for i := range cfg.Collectors {
 			if &cfg.Collectors[i] == c {
 				index = i
@@ -76,7 +152,9 @@ func (m *fingerprintMemo) fingerprint(cfg *model.Config, c *model.Collector) str
 // the fingerprints they use: what is remembered for them is not replaced
 // until something asks for those of cfg. A configuration whose fingerprints
 // are kept already, prepared or remembered, has those that are left worked
-// out, and none again.
+// out, and none again. Where each collector is, by its name, is noted with
+// them (place), so that no probe of cfg is the one to go through its
+// collectors.
 func (m *fingerprintMemo) prepare(cfg *model.Config) {
 	generation := m.prepared.Load()
 	if generation == nil || generation.config != cfg {
@@ -87,6 +165,7 @@ func (m *fingerprintMemo) prepare(cfg *model.Config) {
 	for i := range cfg.Collectors {
 		generation.at(i)
 	}
+	generation.placed.Do(generation.makePlaces)
 	generation.whole.Store(true)
 	m.prepared.Store(generation)
 }

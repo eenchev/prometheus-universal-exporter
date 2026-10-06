@@ -3,6 +3,7 @@
 package exporter
 
 import (
+	"context"
 	"fmt"
 	"maps"
 	"math/rand/v2"
@@ -293,7 +294,12 @@ func describeLook(s *targetSchedule, was map[string]*staticTargetState, due, ski
 // quarter with the configuration followed at the look before, another than
 // the one planned with whenever a reload came between, whose fingerprints
 // must not be read for it. It is 12 runs of 60 looks, and 4 runs of 40 under
-// the race detector.
+// the race detector. The collectors are found by their names
+// (fingerprintGeneration.place) and no longer by going through them: more
+// often than once a look a target's collector stands in the configuration
+// after one that has no static target, and as often a target names a
+// collector the configuration does not have, one never configured or one a
+// reload removed, which has no fingerprint, the empty one, before and after.
 func TestTheScheduleThatReadsTheReloadsFingerprintsPlansAsItDid(t *testing.T) {
 	testutil.CaptureLogs(t)
 	steps := []time.Duration{0, 100 * time.Millisecond, time.Second, 3 * time.Second, firstScrapeWindow, time.Minute}
@@ -315,6 +321,11 @@ func TestTheScheduleThatReadsTheReloadsFingerprintsPlansAsItDid(t *testing.T) {
 	// the former one did.
 	var encodedNow, encodedWas [3]int
 	started, anew, kept, compared := 0, 0, 0, 0
+	// The targets planned whose collector is not where a count of the
+	// collectors with a static target would put it, one without a target
+	// standing before it in the configuration, and those whose collector the
+	// configuration does not have, never configured or removed by a reload.
+	displaced, orphaned := 0, 0
 	for run := range runs {
 		how := []int{0, 0, 1, 2}[run%4]
 		random := rand.New(rand.NewPCG(uint64(run), 33))
@@ -356,6 +367,18 @@ func TestTheScheduleThatReadsTheReloadsFingerprintsPlansAsItDid(t *testing.T) {
 				given = lookedAt
 			}
 			lookedAt = followed
+			targeted, configured := map[string]bool{}, testutil.CollectorNames(followed.config)
+			for i := range targets {
+				targeted[targets[i].Collector] = true
+			}
+			for i := range targets {
+				switch at := slices.Index(configured, targets[i].Collector); {
+				case at < 0:
+					orphaned++
+				case slices.ContainsFunc(configured[:at], func(before string) bool { return !targeted[before] }):
+					displaced++
+				}
+			}
 			places, formerPlaces := maps.Clone(schedule.states), maps.Clone(former.states)
 			encodes = &encodedNow[how]
 			due, skipped, next := schedule.planFollowed(followed.config, targets, given, now)
@@ -389,6 +412,12 @@ func TestTheScheduleThatReadsTheReloadsFingerprintsPlansAsItDid(t *testing.T) {
 	// target started anew at every third look, and more kept in their place.
 	if floor := runs * looks / 3; started < floor || anew < floor || kept < 5*floor || compared < 5*floor {
 		t.Errorf("the %d runs started %d scrapes, started %d targets anew and kept %d in their place, %d of them with a collector's fingerprint; too few of one of them to show anything", runs, started, anew, kept, compared)
+	}
+	// And for the collectors to have been found by their names where it
+	// matters: a target at every look whose collector stands after one without
+	// a target, and one whose collector the configuration does not have.
+	if floor := runs * looks; displaced < floor || orphaned < floor {
+		t.Errorf("the %d runs planned %d targets whose collector stands after one without a static target and %d whose collector is not configured; too few of one of them to show anything", runs, displaced, orphaned)
 	}
 	// The schedule that plans as the loop does reads what the reloads made,
 	// and one that follows no configuration encodes what it did.
@@ -672,5 +701,116 @@ func TestTheFingerprintOfANamedCollectorIsTheOneOfTheConfigurationPlannedWith(t 
 	schedule.planFollowed(other, targets, followed, time.Unix(1_000_000, 0))
 	if got := schedule.states["one"].collector; got != want[other]["x"] {
 		t.Errorf("planning with a configuration that is not the one followed, the schedule has the fingerprint %q of the target's collector, want %q, that of the configuration planned with", got, want[other]["x"])
+	}
+}
+
+// targetsOfEach is a static target file with each static targets of every
+// one of the named collectors, scraped every hour, all at address.
+func targetsOfEach(collectors []string, each int, address string) string {
+	var b strings.Builder
+	b.WriteString("interval: 1h\ntargets:\n")
+	for _, name := range collectors {
+		for k := range each {
+			fmt.Fprintf(&b, "  - name: t_%s_%d\n    collector: %s\n    target: %s\n", name, k, name, address)
+		}
+	}
+	return b.String()
+}
+
+// countCollectorScans counts, until the test ends, the times the collectors
+// of a configuration are gone through, to find one or to note where each is
+// (collectorsScannedHook).
+func countCollectorScans(t *testing.T) *atomic.Int64 {
+	t.Helper()
+	scans := &atomic.Int64{}
+	hook := func() { scans.Add(1) }
+	collectorsScannedHook.Store(&hook)
+	t.Cleanup(func() { collectorsScannedHook.Store(nil) })
+	return scans
+}
+
+// The collectors of a configuration are gone through once for it, and not
+// for its static targets, its probes or its scrapes. Of 60 caching
+// collectors with a static target each, of 240, and of 60 with five targets
+// each (12, 48 and 12 under the race detector), the schedule's first look
+// goes through the collectors of the configuration the exporter started
+// with once, to note where each is by its name, and a reload that removes
+// half of them and adds as many, their targets with them, goes through
+// those of its configuration once, before it is in force. The look the
+// schedule then takes, as the scrape loop takes it, goes through them not at
+// all, where it went through them once for every collector with a static
+// target, so as many times as there are collectors: four times the
+// collectors made sixteen times the names compared. Neither does a probe of
+// the last collector, nor the scrape of the last static target, each of
+// which went through them twice, for the collector and for its fingerprint.
+// A caller that follows no configuration goes through them once for each
+// collector it asks about, as before, however many targets share it.
+func TestTheCollectorsOfAConfigurationAreGoneThroughOnce(t *testing.T) {
+	testutil.CaptureLogs(t)
+	target := textTarget(t, "value=42\n")
+	scans := countCollectorScans(t)
+	n := alloctest.UnlessRaced(60, 12)
+	for _, size := range []struct{ collectors, each int }{{n, 1}, {4 * n, 1}, {n, 5}} {
+		what := fmt.Sprintf("%d collectors with %d static targets each", size.collectors, size.each)
+		names := [2][]string{followBenchNames(0, size.collectors), followBenchNames(size.collectors/2, size.collectors)}
+		documents := [2]string{cachedDocument(names[0]...), cachedDocument(names[1]...)}
+		targets := [2]string{targetsOfEach(names[0], size.each, target.URL), targetsOfEach(names[1], size.each, target.URL)}
+		r := newReloadable(t, documents[0], targets[0])
+		schedule := newTargetSchedule()
+		now := time.Unix(1_000_000, 0)
+		// look is the scrape loop's look at what is in force, and says how
+		// many times it went through the collectors.
+		look := func() int64 {
+			before := scans.Load()
+			followed := r.server.followedInForce()
+			schedule.planFollowed(followed.config, staticTargetsOf(followed.targets), followed, now)
+			return scans.Load() - before
+		}
+		scans.Store(0)
+		byLook := look()
+		if len(schedule.states) != size.collectors*size.each {
+			t.Fatalf("%s: the schedule's first look left %d targets in the schedule, want %d", what, len(schedule.states), size.collectors*size.each)
+		}
+		if byLook != 1 {
+			t.Errorf("%s: the schedule's first look went through the collectors %d times, want once", what, byLook)
+		}
+		for reload := 1; reload <= 3; reload++ {
+			scans.Store(0)
+			r.reloadBoth(documents[reload%2], targets[reload%2])
+			byReload := scans.Load()
+			byLook = look()
+			followed := r.server.followedInForce()
+			if followed.config != r.manager.Get() || len(schedule.states) != size.collectors*size.each {
+				t.Fatalf("%s: after reload %d its configuration is followed %v and the schedule has %d targets, want %d", what, reload, followed.config == r.manager.Get(), len(schedule.states), size.collectors*size.each)
+			}
+			if byReload != 1 || byLook != 0 {
+				t.Errorf("%s: reload %d went through the collectors %d times and the schedule's look after it %d times; want once and not at all", what, reload, byReload, byLook)
+			}
+			// The last collector, and the last static target, which is one of
+			// its: the farthest to go through the collectors for.
+			last := names[reload%2][size.collectors-1]
+			static := staticTargetsOf(followed.targets)
+			scans.Store(0)
+			if outcome := probeOnce(t, r.server, probePath(last, target.URL, ""), nil); outcome.Code != http.StatusOK {
+				t.Fatalf("%s: the probe of %s after reload %d was answered %d: %s", what, last, reload, outcome.Code, outcome.Body)
+			}
+			if got := scans.Load(); got != 0 {
+				t.Errorf("%s: a probe of the last collector after reload %d went through the collectors %d times, want not at all", what, reload, got)
+			}
+			scans.Store(0)
+			r.server.scrapeTargetSince(context.Background(), followed.config, followed.generation, static[len(static)-1])
+			if published := publishedOf(r.server, static[len(static)-1].Name); static[len(static)-1].Collector != last || len(published) == 0 {
+				t.Fatalf("%s: the scrape of the last static target, of %s, after reload %d published %v; want the result of a scrape of %s", what, static[len(static)-1].Collector, reload, published, last)
+			}
+			if got := scans.Load(); got != 0 {
+				t.Errorf("%s: the scrape of the last static target after reload %d went through the collectors %d times, want not at all", what, reload, got)
+			}
+		}
+		followed := r.server.followedInForce()
+		scans.Store(0)
+		newTargetSchedule().plan(followed.config, staticTargetsOf(followed.targets), now)
+		if got := scans.Load(); got != int64(size.collectors) {
+			t.Errorf("%s: a schedule that follows no configuration went through the collectors %d times at its first look, want %d, once for each collector", what, got, size.collectors)
+		}
 	}
 }

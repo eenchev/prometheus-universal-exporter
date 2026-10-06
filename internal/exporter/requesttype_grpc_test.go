@@ -142,7 +142,7 @@ func TestGRPCStaticTargetsCacheApart(t *testing.T) {
 	}}
 	server := newStaticServer(t, cfg, file)
 	server.logger = testutil.QuietLogger(t)
-	server.scrapeStaticTargets(t.Context(), 10*time.Second)
+	server.scrapeStaticTargets(t.Context(), 0)
 	calls := upstream.Calls()
 	if len(calls) != 3 {
 		t.Fatalf("%d calls", len(calls))
@@ -162,7 +162,7 @@ func TestGRPCStaticTargetsCacheApart(t *testing.T) {
 	}
 	// Scraped again, every one is answered from the cache; so is a probe
 	// with the same message.
-	server.scrapeStaticTargets(t.Context(), 10*time.Second)
+	server.scrapeStaticTargets(t.Context(), 0)
 	message := url.QueryEscape(`{"queue": "orders", "include_shards": true}`)
 	if recorder := probeOnce(t, server, "/probe?collector=queue_stats&target="+url.QueryEscape(upstream.Addr)+"&message="+message, nil); recorder.Code != http.StatusOK {
 		t.Fatalf("%d %s", recorder.Code, recorder.Body)

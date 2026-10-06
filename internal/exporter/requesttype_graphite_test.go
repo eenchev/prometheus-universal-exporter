@@ -125,7 +125,7 @@ func TestAGraphiteStaticTarget(t *testing.T) {
 	}}}
 	server := newStaticServer(t, cfg, file)
 	server.logger = testutil.QuietLogger(t)
-	server.scrapeStaticTargets(t.Context(), 10*time.Second)
+	server.scrapeStaticTargets(t.Context(), 0)
 	asked := graphite.asked()
 	if len(asked) != 1 || strings.Join(asked[0], " | ") != "app.web0*.requests" {
 		t.Fatalf("asked %q", asked)
@@ -163,7 +163,7 @@ func TestGraphiteStaticTargetsCacheApart(t *testing.T) {
 	}}
 	server := newStaticServer(t, cfg, file)
 	server.logger = testutil.QuietLogger(t)
-	server.scrapeStaticTargets(t.Context(), 10*time.Second)
+	server.scrapeStaticTargets(t.Context(), 0)
 	probeOnce(t, server, "/probe?collector=graphite_app&target="+url.QueryEscape(upstream.URL), nil)
 	var asked []string
 	for _, targets := range graphite.asked() {
@@ -174,7 +174,7 @@ func TestGraphiteStaticTargetsCacheApart(t *testing.T) {
 		t.Fatalf("asked %q, want %q", asked, want)
 	}
 	// Scraped again, every one is answered from the cache.
-	server.scrapeStaticTargets(t.Context(), 10*time.Second)
+	server.scrapeStaticTargets(t.Context(), 0)
 	if len(graphite.asked()) != 4 {
 		t.Fatalf("asked again: %q", graphite.asked())
 	}

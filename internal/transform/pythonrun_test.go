@@ -13,12 +13,15 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/eenchev/prometheus-universal-exporter/internal/decode"
 	"github.com/eenchev/prometheus-universal-exporter/internal/fetch"
 	"github.com/eenchev/prometheus-universal-exporter/internal/model"
+	"github.com/eenchev/prometheus-universal-exporter/internal/testutil"
 	"github.com/eenchev/prometheus-universal-exporter/internal/testutil/alloctest"
 )
 
@@ -97,26 +100,40 @@ type heldAnswer struct {
 // longer than the timeout to read a large response, and then runs its script
 // in no time, does not time out; a script that runs longer than the timeout
 // does, however quickly the request was read.
+//
+// The workers are stand-ins and the clock the test's own (testing/synctest),
+// so the reading and the running take exactly the time given here, and the
+// script is said to have run for exactly what it ran. On the machine's
+// clock the first held only where the test was not left waiting for the
+// timeout between the worker's word and its answer, which was there
+// already, and the second only where the test took the worker's word
+// within two timeouts of its being given.
 func TestPythonScriptTimeoutStartsWhenTheWorkerHasTheRequest(t *testing.T) {
-	const timeout = 300 * time.Millisecond
-	slowToRead := heldWorker(t, heldAnswer{2 * timeout, pythonRequestTaken}, heldAnswer{0, `{"ok": true}`})
-	line, ran, err := slowToRead.call(context.Background(), []byte(`{}`), timeout)
-	if err != nil || string(line) != `{"ok": true}` {
-		t.Fatalf("a request read in %s and run at once, under a timeout of %s: %q %v", 2*timeout, timeout, line, err)
-	}
-	if ran >= timeout {
-		t.Fatalf("the script is said to have run %s", ran)
-	}
-	slowToRun := heldWorker(t, heldAnswer{0, pythonRequestTaken}, heldAnswer{3 * timeout, `{"ok": true}`})
-	if _, ran, err := slowToRun.call(context.Background(), []byte(`{}`), timeout); !errors.Is(err, errPythonTimeout) || ran < timeout {
-		t.Fatalf("a script that ran %s under a timeout of %s: ran %s, %v", 3*timeout, timeout, ran, err)
-	}
-	// A worker that cannot read the request answers why instead of saying
-	// it has it, and that is the run's answer.
-	refused := heldWorker(t, heldAnswer{0, `{"ok": false, "error": "no"}`})
-	if line, _, err := refused.call(context.Background(), []byte(`{}`), timeout); err != nil || string(line) != `{"ok": false, "error": "no"}` {
-		t.Fatalf("%q %v", line, err)
-	}
+	synctest.Test(t, func(t *testing.T) {
+		const timeout = 300 * time.Millisecond
+		slowToRead := heldWorker(t, heldAnswer{2 * timeout, pythonRequestTaken}, heldAnswer{0, `{"ok": true}`})
+		began := time.Now()
+		line, ran, err := slowToRead.call(context.Background(), []byte(`{}`), timeout)
+		if err != nil || string(line) != `{"ok": true}` {
+			t.Fatalf("a request read in %s and run at once, under a timeout of %s: %q %v", 2*timeout, timeout, line, err)
+		}
+		if took := time.Since(began); ran != 0 || took != 2*timeout {
+			t.Fatalf("the script is said to have run %s of a run of %s, want none of the %s the request was read in", ran, took, 2*timeout)
+		}
+		slowToRun := heldWorker(t, heldAnswer{0, pythonRequestTaken}, heldAnswer{3 * timeout, `{"ok": true}`})
+		if _, ran, err := slowToRun.call(context.Background(), []byte(`{}`), timeout); !errors.Is(err, errPythonTimeout) || ran != timeout {
+			t.Fatalf("a script that ran %s under a timeout of %s: ran %s, %v", 3*timeout, timeout, ran, err)
+		}
+		// The clock stops when this function returns, so the stand-in is
+		// first left the time to end.
+		time.Sleep(3 * timeout)
+		// A worker that cannot read the request answers why instead of
+		// saying it has it, and that is the run's answer.
+		refused := heldWorker(t, heldAnswer{0, `{"ok": false, "error": "no"}`})
+		if line, _, err := refused.call(context.Background(), []byte(`{}`), timeout); err != nil || string(line) != `{"ok": false, "error": "no"}` {
+			t.Fatalf("%q %v", line, err)
+		}
+	})
 }
 
 // With a real worker and a large response: the time a probe reports its
@@ -124,6 +141,14 @@ func TestPythonScriptTimeoutStartsWhenTheWorkerHasTheRequest(t *testing.T) {
 // of which is handing the response over. The response is of 32 MiB, and of
 // 8 MiB under the race detector, where writing it for the worker takes
 // several times as long and is as large a part of the run.
+//
+// The script's part is a thousandth of the run and is held to a third. It
+// is measured from the worker's word that it has the request to its answer,
+// so a machine that leaves the worker, or the exporter reading it, waiting
+// between the two adds the wait to it, and can only add: the run is made
+// again then, up to five times, and the first whose script is within the
+// third is the answer. A script timed with the response's handing over is
+// most of every run.
 func TestPythonScriptDurationDoesNotCountHandingOverTheResponse(t *testing.T) {
 	requirePython(t)
 	c := workerCollector("handover", `metric(name="length", value=len(data))`)
@@ -132,18 +157,24 @@ func TestPythonScriptDurationDoesNotCountHandingOverTheResponse(t *testing.T) {
 		t.Fatal(err)
 	}
 	body := strings.Repeat("requests 12345 worker=a\n", alloctest.UnlessRaced(32<<20, 8<<20)/24)
-	ctx, timer := WithScriptTimer(context.Background())
-	start := time.Now()
-	set, err := runWorkerText(ctx, c, body)
-	took := time.Since(start)
-	if err != nil {
-		t.Fatalf("after %s: %v", took, err)
-	}
-	if workerMetricValue(t, set, "length") != float64(len(body)) {
-		t.Fatalf("%+v", set.Metrics)
-	}
-	if seconds, ran := timer.Seconds(); !ran || seconds > took.Seconds()/3 {
-		t.Fatalf("the script is said to have run %vs of a run that took %s", seconds, took)
+	for run := 1; ; run++ {
+		ctx, timer := WithScriptTimer(context.Background())
+		start := time.Now()
+		set, err := runWorkerText(ctx, c, body)
+		took := time.Since(start)
+		if err != nil {
+			t.Fatalf("after %s: %v", took, err)
+		}
+		if workerMetricValue(t, set, "length") != float64(len(body)) {
+			t.Fatalf("%+v", set.Metrics)
+		}
+		seconds, ran := timer.Seconds()
+		if ran && seconds <= took.Seconds()/3 {
+			return
+		}
+		if !ran || run == 5 {
+			t.Fatalf("the script is said to have run %vs of a run that took %s, the last of %d runs", seconds, took, run)
+		}
 	}
 }
 
@@ -159,9 +190,29 @@ func TestPythonRunCutByTheProbesDeadlineIsNotATimeout(t *testing.T) {
 	if _, err := runWorkerText(context.Background(), c, "fast"); err != nil {
 		t.Fatal(err)
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
-	defer cancel()
-	_, err := runWorkerText(ctx, c, "slow")
+	// The deadline has to pass while the script runs, and nothing tells the
+	// test when the worker has taken the request and begun it. So the
+	// deadline is a second away, and where that second passed with the
+	// request still on its way, on a machine that left the worker waiting
+	// so long, the run says the script never ran: that run is counted, and
+	// the next has twice the time, up to sixteen seconds, which the script's
+	// own twenty are still past.
+	var err error
+	cut := uint64(0)
+	for within := time.Second; ; within *= 2 {
+		ctx, cancel := context.WithTimeout(context.Background(), within)
+		_, err = runWorkerText(ctx, c, "slow")
+		cancel()
+		cut++
+		if err == nil || !strings.Contains(err.Error(), "python transform did not run") || within >= 16*time.Second {
+			break
+		}
+		// The worker was stopped with its run; the next run finds one
+		// waiting, as the first did.
+		if _, err := runWorkerText(context.Background(), c, "fast"); err != nil {
+			t.Fatal(err)
+		}
+	}
 	if err == nil || !strings.Contains(err.Error(), "python transform was stopped after ") ||
 		!strings.Contains(err.Error(), "because its probe or scrape ran out of time, not because of limits.script_timeout (20s)") ||
 		strings.Contains(err.Error(), "timed out") || !errors.Is(err, context.DeadlineExceeded) || !errors.Is(err, model.ErrScriptFailed) {
@@ -172,8 +223,8 @@ func TestPythonRunCutByTheProbesDeadlineIsNotATimeout(t *testing.T) {
 		t.Fatalf("the failure %v is recognised by %q", err, same)
 	}
 	snap := PythonWorkers().Snapshot(c.Name)
-	if snap.Runs[pythonRunDeadline] != 1 || snap.Runs[pythonRunTimeout] != 0 || snap.Stops[pythonStopDeadline] != 1 || snap.Stops[pythonStopTimeout] != 0 {
-		t.Fatalf("runs %v stops %v", snap.Runs, snap.Stops)
+	if snap.Runs[pythonRunDeadline] != cut || snap.Runs[pythonRunTimeout] != 0 || snap.Stops[pythonStopDeadline] != cut || snap.Stops[pythonStopTimeout] != 0 {
+		t.Fatalf("runs %v stops %v, want %d of each ended by the deadline", snap.Runs, snap.Stops, cut)
 	}
 
 	// The deadline already past when the request is handed over: the script
@@ -186,7 +237,7 @@ func TestPythonRunCutByTheProbesDeadlineIsNotATimeout(t *testing.T) {
 	if _, err := runWorkerText(past, c, "fast"); err == nil || !strings.Contains(err.Error(), "python transform did not run: its probe or scrape ran out of time while the response was handed to the worker") {
 		t.Fatalf("err=%v", err)
 	}
-	if snap := PythonWorkers().Snapshot(c.Name); snap.Runs[pythonRunDeadline] != 2 {
+	if snap := PythonWorkers().Snapshot(c.Name); snap.Runs[pythonRunDeadline] != cut+1 {
 		t.Fatalf("runs %v", snap.Runs)
 	}
 
@@ -197,7 +248,7 @@ func TestPythonRunCutByTheProbesDeadlineIsNotATimeout(t *testing.T) {
 	if _, err := runWorkerText(far, c, "slow"); err == nil || !strings.Contains(err.Error(), "python transform timed out after 200ms") {
 		t.Fatalf("err=%v", err)
 	}
-	if snap := PythonWorkers().Snapshot(c.Name); snap.Runs[pythonRunTimeout] != 1 || snap.Stops[pythonStopTimeout] != 1 || snap.Runs[pythonRunDeadline] != 2 {
+	if snap := PythonWorkers().Snapshot(c.Name); snap.Runs[pythonRunTimeout] != 1 || snap.Stops[pythonStopTimeout] != 1 || snap.Runs[pythonRunDeadline] != cut+1 {
 		t.Fatalf("runs %v stops %v", snap.Runs, snap.Stops)
 	}
 	for _, name := range []string{pythonRunDeadline, pythonStopDeadline} {
@@ -240,8 +291,27 @@ metrics.append({"name": "n", "value": 2, "help": None, "type": None, "labels": N
 
 // leaveIdleWorkers runs n scripts of the collector at once, which leaves n
 // workers idle, and returns them.
+//
+// The runs are at once because each is held where it starts its worker
+// until all n are there, and so has found no worker of another's to take.
+// Left to the 0.3s their scripts sleep for, a run that the machine began
+// that much later than another took the other's worker, and left one fewer.
 func leaveIdleWorkers(t *testing.T, c *model.Collector, n int) []*pythonWorker {
 	t.Helper()
+	pool := PythonWorkers()
+	start := pool.start
+	var starting atomic.Int32
+	together := make(chan struct{})
+	pool.start = func(ctx context.Context, spec pythonSpec) (*pythonWorker, error) {
+		if int(starting.Add(1)) == n {
+			close(together)
+		}
+		select {
+		case <-together:
+		case <-time.After(30 * time.Second):
+		}
+		return start(ctx, spec)
+	}
 	var wg sync.WaitGroup
 	for i := 0; i < n; i++ {
 		wg.Add(1)
@@ -253,7 +323,7 @@ func leaveIdleWorkers(t *testing.T, c *model.Collector, n int) []*pythonWorker {
 		}()
 	}
 	wg.Wait()
-	pool := PythonWorkers()
+	pool.start = start
 	pool.mu.Lock()
 	defer pool.mu.Unlock()
 	idle := append([]*pythonWorker(nil), pool.idle[pythonWorkerSpec("python3", c).key()]...)
@@ -318,16 +388,29 @@ func TestPythonRunMovesToAnotherWorkerWhenAnIdleOneCannotTakeIt(t *testing.T) {
 // A script can arm its worker's death by accident: an alarm outlives the
 // run and kills the idle worker a second later. The next scrape gets
 // another worker instead of a broken pipe.
+//
+// The alarm has to outlive the run it was armed in, which is a moment's
+// work once it is armed, and on a machine that leaves the worker waiting a
+// second at that moment it does not: the alarm ends the run. The test then
+// arms one twice as far away, and so on up to sixteen seconds. The worker
+// the alarm is to end is looked up, idle, when the run has returned: got by
+// a second run, that run had to end within the alarm's second as well.
 func TestPythonWorkerKilledByItsOwnAlarmIsReplaced(t *testing.T) {
 	requirePython(t)
-	c := workerCollector("alarm", "import signal\nif data == 'arm': signal.alarm(1)\nmetric(name='v', value=1)")
-	if _, err := runWorkerText(context.Background(), c, "arm"); err != nil {
-		t.Fatal(err)
+	c := workerCollector("alarm", "import signal\nif data != 'go': signal.alarm(int(data))\nmetric(name='v', value=1)")
+	for seconds := 1; ; seconds *= 2 {
+		_, err := runWorkerText(context.Background(), c, strconv.Itoa(seconds))
+		if err == nil {
+			break
+		}
+		if seconds >= 16 {
+			t.Fatalf("the run that armed an alarm %d seconds away: %v", seconds, err)
+		}
 	}
-	idle := leaveIdleWorkers(t, c, 1)
+	armed := idleWorker(t, c)
 	select {
-	case <-idle[0].exited:
-	case <-time.After(10 * time.Second):
+	case <-armed.exited:
+	case <-time.After(time.Minute):
 		t.Fatal("the alarm did not end the worker")
 	}
 	if _, err := runWorkerText(context.Background(), c, "go"); err != nil {
@@ -461,11 +544,7 @@ func TestBusyPythonWorkerDoesNotOutliveAKilledExporter(t *testing.T) {
 		t.Fatal(err)
 	}
 	_ = helper.Wait()
-	deadline := time.Now().Add(15 * time.Second)
-	for processRuns(worker) {
-		if time.Now().After(deadline) {
-			t.Fatal("the busy worker outlived the killed exporter")
-		}
-		time.Sleep(20 * time.Millisecond)
-	}
+	// The worker looks once a second; half a minute bounds one that never
+	// ends.
+	testutil.WaitFor(t, "the busy worker to end once its exporter was killed", func() bool { return !processRuns(worker) })
 }

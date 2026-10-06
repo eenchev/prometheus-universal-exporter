@@ -320,7 +320,7 @@ func TestStaticTargetsAndPathParameters(t *testing.T) {
 		file := &model.StaticTargetFile{Interval: model.Duration(time.Minute), Targets: []model.StaticTarget{{Name: "one", Collector: "tenants", Target: target.URL}}}
 		server := newStaticServer(t, cfg, file)
 
-		server.scrapeStaticTargets(context.Background(), 10*time.Second)
+		server.scrapeStaticTargets(context.Background(), 0)
 		if got := recorder.last(t); got != "/api/acme/status" {
 			t.Fatalf("target received %q, want the default", got)
 		}

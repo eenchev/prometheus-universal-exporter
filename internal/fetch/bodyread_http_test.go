@@ -129,7 +129,9 @@ func TestAnAnswerIsReadWholeWithOrWithoutALength(t *testing.T) {
 					c.Request.AcceptStatus = []string{"2xx"}
 				}
 			})
-			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			// A minute bounds a fetch that hangs, and no answer of megabytes
+			// on a busy machine.
+			ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 			defer cancel()
 			response, err := FetchCollector(ctx, test.target, c, RequestOverrides{}, nil)
 			if test.wantErr != "" {

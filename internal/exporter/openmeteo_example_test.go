@@ -265,7 +265,7 @@ func TestTheOpenMeteoExampleScrapesItsStaticTargets(t *testing.T) {
 	}
 
 	server := newStaticServer(t, cfg, file)
-	server.scrapeStaticTargets(context.Background(), 10*time.Second)
+	server.scrapeStaticTargets(context.Background(), 0)
 	body := getStaticTargets(t, server, "/static-targets")
 	for _, want := range []string{
 		`weather_temperature_celsius{city="Sofia",latitude="42.6875",longitude="23.3125",static_target="sofia"} 14.3`,

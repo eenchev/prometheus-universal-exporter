@@ -80,7 +80,9 @@ import (
 // the ones it changed, and the schedule of the static targets the targets
 // whose collector changed (fingerprintOf): each is worked out once, when
 // this configuration is followed or when the next is, and not again for
-// every reload.
+// every reload. With them is kept where each collector of the configuration
+// is, by its name, which is how a probe and the scrape of a static target
+// find theirs (collectorOf).
 type followedConfig struct {
 	config         *model.Config
 	targets        *model.StaticTargetFile
@@ -114,17 +116,59 @@ func (f *followedConfig) fingerprint(index int) string {
 // comes meanwhile makes them those of another configuration. It takes no
 // lock, and waits only where a probe or a reload is making that same
 // fingerprint, for that one (fingerprintGeneration.at).
+//
+// The collector is found by its name where the fingerprints are kept
+// (fingerprintGeneration.place), without going through the collectors of
+// cfg, which the schedule would otherwise do once for every collector with a
+// static target at every look after a reload. For another configuration
+// than the one followed, and for a caller that follows none, they are gone
+// through as they were (placeByScan): the scrape loop is never such a
+// caller, and encoding the definition, which such a caller then does at
+// every ask, costs far more than finding it.
 func (f *followedConfig) fingerprintOf(cfg *model.Config, name string) string {
-	for i := range cfg.Collectors {
-		if cfg.Collectors[i].Name != name {
-			continue
+	if kept := f.keptFor(cfg); kept != nil {
+		if index, found := kept.place(name); found {
+			return kept.at(index)
 		}
-		if f != nil && f.config == cfg && f.fingerprints != nil && f.fingerprints.config == cfg {
-			return f.fingerprints.at(i)
-		}
-		return collectorFingerprint(&cfg.Collectors[i])
+		return ""
+	}
+	if index := placeByScan(cfg, name); index >= 0 {
+		return collectorFingerprint(&cfg.Collectors[index])
 	}
 	return ""
+}
+
+// keptFor is the fingerprints kept for cfg, with the places of its
+// collectors, when cfg is the configuration f followed and f keeps them, and
+// nil for any other configuration, for a caller that follows none, f nil,
+// and when none are kept.
+func (f *followedConfig) keptFor(cfg *model.Config) *fingerprintGeneration {
+	if f != nil && f.config == cfg && f.fingerprints != nil && f.fingerprints.config == cfg {
+		return f.fingerprints
+	}
+	return nil
+}
+
+// collectorOf is the collector of cfg named name, and nil when cfg has none
+// of that name: model.CollectorByName(cfg, name), the first collector so
+// named. A probe and the scrape of a static target ask it for the one
+// collector they are of, and when cfg is the configuration f followed the
+// collector is found by its name where the fingerprints are kept, as
+// fingerprintOf finds it, and the collectors are not gone through, which
+// took every probe and every scrape as long as the configuration is large.
+// For any other configuration, such as the one a scrape read before a reload
+// that came while it waited for a slot, they are gone through as they were.
+func (f *followedConfig) collectorOf(cfg *model.Config, name string) *model.Collector {
+	if kept := f.keptFor(cfg); kept != nil {
+		if index, found := kept.place(name); found {
+			return &cfg.Collectors[index]
+		}
+		return nil
+	}
+	if index := placeByScan(cfg, name); index >= 0 {
+		return &cfg.Collectors[index]
+	}
+	return nil
 }
 
 // configRead is the configuration a probe or a static target scrape read its

@@ -285,7 +285,7 @@ func TestTheScrapeLoopsLateScrapeLeavesNothingUnderATargetBroughtBack(t *testing
 			stop := runLoop(t, r.server)
 			select {
 			case <-reached:
-			case <-time.After(15 * time.Second):
+			case <-time.After(30 * time.Second):
 				t.Fatal("the target's scrape never came due")
 			}
 			r.reloadBoth(without, staticDocument(stays, "kept", other.URL))
@@ -371,7 +371,7 @@ func TestAScrapeThatFindsNoSlotAfterItsCollectorWasRemovedIsNotRemembered(t *tes
 			testutil.WaitFor(t, "the other scrape to take the only slot", func() bool { return heldHits.Load() >= 1 })
 			select {
 			case <-waiting:
-			case <-time.After(15 * time.Second):
+			case <-time.After(30 * time.Second):
 				t.Fatal("the second scrape never came to wait for the slot")
 			}
 			if removed == "the target alone" {

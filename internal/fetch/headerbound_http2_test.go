@@ -88,7 +88,9 @@ func TestResponseHeadersAreBoundedOverHTTP2(t *testing.T) {
 	})
 	fetchWith := func(path string, overrides RequestOverrides) (*HTTPResponse, error) {
 		t.Helper()
-		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		// A minute bounds a fetch that hangs: the headers are megabytes,
+		// which a busy machine takes its time over.
+		ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 		defer cancel()
 		hits.Store(0)
 		mu.Lock()

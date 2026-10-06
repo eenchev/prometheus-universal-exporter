@@ -36,7 +36,7 @@ func TestHTTPAcceptsEveryHTTPOverride(t *testing.T) {
 	c := pathCollector("/api/{{param_tenant}}")
 	c.Request.ForwardHeaders = []string{"X-Tenant"}
 	server := pathServer(t, c)
-	response := probeWith(t, server, target.URL, "&param_tenant=a&method=GET&timeout=5s&body=x&insecure_skip_verify=false"+
+	response := probeWith(t, server, target.URL, "&param_tenant=a&method=GET&timeout=50s&body=x&insecure_skip_verify=false"+
 		"&follow_redirects=false&enable_http2=false&retry_attempts=0&retry_backoff=0s&header_X-Tenant=a")
 	if response.Code != http.StatusOK {
 		t.Fatalf("status=%d body=%s", response.Code, response.Body.String())

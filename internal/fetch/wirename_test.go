@@ -225,7 +225,9 @@ func TestWhatWasDialedIsOverAtTheServerBeforeTheNextIsCounted(t *testing.T) {
 // exporter around it.
 func goGet(tr *http.Transport, rawURL string) error {
 	defer tr.CloseIdleConnections()
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	// A minute, which bounds a request that hangs: a transport that dials
+	// again and again is stopped by its test's dialer, not by this.
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 	defer cancel()
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, rawURL, nil)
 	if err != nil {

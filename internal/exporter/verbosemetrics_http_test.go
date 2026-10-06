@@ -95,7 +95,7 @@ func TestOnlyTripsToTheTargetAreObserved(t *testing.T) {
 	scheduled := testutil.Collector("static_timed", "text")
 	cfg := &model.Config{Collectors: []model.Collector{scheduled}, OTLP: otlpConfig("http://collector.invalid/v1/metrics"), Web: model.WebConfig{SelfMetrics: model.SelfMetricsConfig{Verbose: true}}}
 	server = newStaticServer(t, cfg, &model.StaticTargetFile{Interval: model.Duration(time.Minute), Targets: []model.StaticTarget{{Name: "eu", Collector: "static_timed", Target: target.URL}}})
-	server.scrapeStaticTargets(context.Background(), 10*time.Second)
+	server.scrapeStaticTargets(context.Background(), 0)
 	if n := server.statsFor("static_timed").tripHistogram().Count; n != 1 {
 		t.Fatalf("observed %d trips for one static target scrape", n)
 	}

@@ -9,11 +9,13 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/eenchev/prometheus-universal-exporter/internal/config"
+	"github.com/eenchev/prometheus-universal-exporter/internal/fetch"
 	"github.com/eenchev/prometheus-universal-exporter/internal/model"
 	"github.com/eenchev/prometheus-universal-exporter/internal/testutil"
 )
@@ -62,9 +64,14 @@ func TestProbeAnswersBeforePrometheusGivesUp(t *testing.T) {
 // answer — the http_status stage, the status and the body, in the answer, the
 // log and last_status — rather than a bare deadline error.
 //
-// The budget is two seconds and the wait an hour: the target has to have
-// answered when the budget ends, which at 300ms a machine busy enough does
-// not leave it the time to.
+// The wait is an hour, so the budget is what ends the probe, and it ends it
+// in the wait once the target's answer has been read within the budget. How
+// long that takes is the machine's to say: the budget starts at 100ms, and a
+// round in which it ran out before the exporter had the whole answer, which
+// the trace of the probe's requests says, is made again with twice the
+// budget and a new exporter, up to half a minute. A slow machine makes the
+// test slower, where one budget, two seconds, fails it when the target takes
+// longer.
 func TestAProbeWhoseRetryRunsOutOfTimeReportsTheTargetsAnswer(t *testing.T) {
 	logs := testutil.CaptureLogs(t)
 	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
@@ -73,23 +80,43 @@ func TestAProbeWhoseRetryRunsOutOfTimeReportsTheTargetsAnswer(t *testing.T) {
 	t.Cleanup(target.Close)
 	c := testutil.Collector("retrying", "text")
 	c.Request.Retry = model.RetryConfig{Attempts: 2, Backoff: model.Duration(time.Hour)}
-	cfg := &model.Config{Collectors: []model.Collector{c}}
-	if err := config.Validate(cfg); err != nil {
-		t.Fatal(err)
+	// round probes with the budget, and reports whether the exporter had read
+	// the target's answer when the budget ended: only then did the deadline
+	// come in the wait before the retry.
+	round := func(budget time.Duration) (inTime bool) {
+		logs.Reset()
+		cfg := &model.Config{Collectors: []model.Collector{c}}
+		if err := config.Validate(cfg); err != nil {
+			t.Fatal(err)
+		}
+		server := NewServer(config.NewManager(cfg, "", slog.Default()), "python3", slog.Default())
+		server.SetTimeoutOffset(0)
+		scrapeTimeout := strconv.FormatFloat(budget.Seconds(), 'f', -1, 64)
+		ranOut := "ran out of its " + probeBudget(http.Header{scrapeTimeoutHeader: {scrapeTimeout}}, 0).String() + " budget"
+		ctx, trace := fetch.WithRequestTrace(t.Context())
+		request := httptest.NewRequest(http.MethodGet, "/probe?collector=retrying&target="+url.QueryEscape(target.URL), nil).WithContext(ctx)
+		request.Header.Set(scrapeTimeoutHeader, scrapeTimeout)
+		recorder := httptest.NewRecorder()
+		server.Handler().ServeHTTP(recorder, request)
+		if sent := trace.Requests(); len(sent) != 1 || sent[0].Outcome != "503 Service Unavailable" {
+			return false
+		}
+		body := recorder.Body.String()
+		if recorder.Code != http.StatusBadGateway || !strings.Contains(body, "http_status failed") || !strings.Contains(body, "received HTTP status 503") || !strings.Contains(body, ranOut) {
+			t.Fatalf("status=%d body=%s", recorder.Code, body)
+		}
+		if !strings.Contains(logs.String(), "maintenance until noon") {
+			t.Fatalf("the target's explanation is not in the log:\n%s", logs)
+		}
+		if got := seriesValue(t, selfMetrics(t, server), `http_exporter_scrape_http_status_code{collector="retrying"}`); got != 503 {
+			t.Fatalf("last status %v, want 503", got)
+		}
+		return true
 	}
-	server := NewServer(config.NewManager(cfg, "", slog.Default()), "python3", slog.Default())
-	server.SetTimeoutOffset(0)
-
-	recorder := probeWithScrapeTimeout(t, server, "collector=retrying&target="+url.QueryEscape(target.URL), "2")
-	body := recorder.Body.String()
-	if recorder.Code != http.StatusBadGateway || !strings.Contains(body, "http_status failed") || !strings.Contains(body, "received HTTP status 503") || !strings.Contains(body, "ran out of its 2s budget") {
-		t.Fatalf("status=%d body=%s", recorder.Code, body)
-	}
-	if !strings.Contains(logs.String(), "maintenance until noon") {
-		t.Fatalf("the target's explanation is not in the log:\n%s", logs)
-	}
-	if got := seriesValue(t, selfMetrics(t, server), `http_exporter_scrape_http_status_code{collector="retrying"}`); got != 503 {
-		t.Fatalf("last status %v, want 503", got)
+	for budget := 100 * time.Millisecond; !round(budget); budget *= 2 {
+		if 2*budget > 30*time.Second {
+			t.Fatalf("the exporter did not read the target's answer within a budget of %s", budget)
+		}
 	}
 }
 

@@ -28,7 +28,7 @@ func TestAStaticTargetWithoutATargetIsServedWithoutATargetLabel(t *testing.T) {
 	}}
 	server := newStaticServer(t, cfg, file)
 	server.logger = testutil.QuietLogger(t)
-	server.scrapeStaticTargets(context.Background(), 10*time.Second)
+	server.scrapeStaticTargets(context.Background(), 0)
 	body := probeOnce(t, server, "/static-targets", nil).Body.String()
 	for _, want := range []string{
 		"jobs{kind=\"batch\",static_target=\"main\"} 7\n", "jobs{queue=\"default\",static_target=\"batch\"} 3\n",

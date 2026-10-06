@@ -50,7 +50,7 @@ func TestAnOTLPPartialSuccessCountsTheRejectedPoints(t *testing.T) {
 			endpoint := otlpAnswering(t, http.StatusOK, "application/json", `{"partialSuccess":{"rejectedDataPoints":`+count+`,"errorMessage":"metric name too long"}}`)
 			server, logs := loggedServer(t, endpoint.URL)
 			queueProbeMetric(server, "first_value", 1)
-			server.exportOTLP(context.Background(), 5*time.Second)
+			server.exportOTLP(context.Background(), time.Minute)
 
 			exposition := selfMetrics(t, server)
 			if got := seriesValue(t, exposition, "http_exporter_otlp_points_dropped_total"); got != 2 {
@@ -76,7 +76,7 @@ func TestAnOTLPPartialSuccessWarningIsLogged(t *testing.T) {
 	endpoint := otlpAnswering(t, http.StatusOK, "application/json", `{"partialSuccess":{"errorMessage":"deprecated attribute"}}`)
 	server, logs := loggedServer(t, endpoint.URL)
 	queueProbeMetric(server, "first_value", 1)
-	server.exportOTLP(context.Background(), 5*time.Second)
+	server.exportOTLP(context.Background(), time.Minute)
 	if got := seriesValue(t, selfMetrics(t, server), "http_exporter_otlp_points_dropped_total"); got != 0 {
 		t.Fatalf("dropped %v points on a warning", got)
 	}
@@ -99,7 +99,7 @@ func TestAnOTLPFullSuccessReportsNothing(t *testing.T) {
 			endpoint := otlpAnswering(t, http.StatusOK, answer.contentType, answer.body)
 			server, logs := loggedServer(t, endpoint.URL)
 			queueProbeMetric(server, "first_value", 1)
-			server.exportOTLP(context.Background(), 5*time.Second)
+			server.exportOTLP(context.Background(), time.Minute)
 			if got := seriesValue(t, selfMetrics(t, server), "http_exporter_otlp_points_dropped_total"); got != 0 {
 				t.Fatalf("dropped %v points", got)
 			}
@@ -115,7 +115,7 @@ func TestARefusedOTLPExportLogsTheEndpointsExplanation(t *testing.T) {
 	endpoint := otlpAnswering(t, http.StatusBadRequest, "application/json", `{"code":3,"message":"invalid metric type"}`)
 	server, logs := loggedServer(t, endpoint.URL)
 	queueProbeMetric(server, "first_value", 1)
-	server.exportOTLP(context.Background(), 5*time.Second)
+	server.exportOTLP(context.Background(), time.Minute)
 	text := logs.String()
 	if !strings.Contains(text, "refused an export") || !strings.Contains(text, `"response_body"`) || !strings.Contains(text, "invalid metric type") {
 		t.Fatalf("the refusal was not logged with the endpoint's explanation:\n%s", text)

@@ -330,7 +330,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 		httpServer.SetKeepAlivesEnabled(false)
 		if *shutdownDelay > 0 {
 			logger.Info("shutting down: /ready answers 503 while probes are still served for --web.shutdown-delay; a second signal exits at once", "shutdown_delay", shutdownDelay.String())
-			time.Sleep(*shutdownDelay)
+			waitOutShutdownDelay(*shutdownDelay)
 		}
 		logger.Info("shutting down: finishing the probes in progress and sending the last OTLP export; a second signal exits at once", "shutdown_timeout", shutdownTimeout.String())
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), *shutdownTimeout)
@@ -359,6 +359,15 @@ func run(args []string, stdout, stderr io.Writer) int {
 	}
 	return 0
 }
+
+// waitOutShutdownDelay waits out --web.shutdown-delay. It is a variable for
+// the tests alone, which run the exporter in a child process and have it wait
+// there for as long and then until the test says the delay may end
+// (TestRunHelperProcess): what a test has the exporter do in its delay then
+// has no bound but the test's own, where a delay of a few seconds is over
+// before a machine busy enough has done it. Nothing but a test may set it,
+// which a repository test holds (TestOnlyTestsHoldTheShutdownDelay).
+var waitOutShutdownDelay = time.Sleep
 
 // parseLogLevel reads --log.level: debug, info, warn or error, in any case.
 func parseLogLevel(level string) (slog.Level, error) {

@@ -477,7 +477,7 @@ func TestAStaticTargetsRequestCountsSinceItsFirstScrape(t *testing.T) {
 	server.logger = testutil.QuietLogger(t)
 	now := time.Unix(1_700_000_000, 0)
 	server.requests.now = func() time.Time { return now }
-	server.scrapeStaticTargets(context.Background(), 10*time.Second)
+	server.scrapeStaticTargets(context.Background(), 0)
 	now = now.Add(time.Minute)
 	_, body := answerOf(t, server, "/self-metrics", prometheus2Accept)
 	request := `{collector="text",http_method="GET",url="` + target.URL + `"}`
@@ -591,7 +591,7 @@ func TestATripEndingAfterItsCollectorWasRemovedIsNotCountedInTheOneBroughtBack(t
 		if endsLate {
 			// Another timeout makes it another probe, which does not wait for
 			// the one under way.
-			if code := probeOnce(t, r.server, probePath("gone", target.URL, "&timeout=5s"), nil).Code; code != http.StatusOK {
+			if code := probeOnce(t, r.server, probePath("gone", target.URL, "&timeout=50s"), nil).Code; code != http.StatusOK {
 				t.Fatalf("the probe of the collector brought back was answered %d", code)
 			}
 			end()
@@ -674,7 +674,7 @@ func TestARequestsCreatedNeverMovesEarlier(t *testing.T) {
 		// Another timeout makes a probe another one than the early probe,
 		// which does not wait for it, of the same request.
 		probe := func() {
-			if code := probeOnce(t, r.server, probePath("kept", target.URL, "&timeout=5s"), nil).Code; code != http.StatusOK {
+			if code := probeOnce(t, r.server, probePath("kept", target.URL, "&timeout=50s"), nil).Code; code != http.StatusOK {
 				t.Fatalf("%s: a probe was answered %d", tc.name, code)
 			}
 		}
@@ -797,7 +797,7 @@ func TestProbeAndStaticTargetAnswersAreTheSameWithCreatedTimestamps(t *testing.T
 	file := &model.StaticTargetFile{Interval: model.Duration(time.Minute), Targets: []model.StaticTarget{{Name: "one", Collector: "pass", Target: target.URL}}}
 	server := newStaticServer(t, cfg, file)
 	server.logger = testutil.QuietLogger(t)
-	server.scrapeStaticTargets(context.Background(), 10*time.Second)
+	server.scrapeStaticTargets(context.Background(), 0)
 
 	type key struct{ path, accept string }
 	paths := []string{probePath("pass", target.URL, ""), "/static-targets"}

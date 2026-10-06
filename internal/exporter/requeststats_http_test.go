@@ -344,7 +344,7 @@ func TestVerboseRequestMetricsCoverStaticTargets(t *testing.T) {
 	}
 	file := &model.StaticTargetFile{Interval: model.Duration(time.Minute), Targets: []model.StaticTarget{{Name: "one", Collector: "text", Target: target.URL}}}
 	server := newStaticServer(t, cfg, file)
-	server.scrapeStaticTargets(context.Background(), 10*time.Second)
+	server.scrapeStaticTargets(context.Background(), 0)
 
 	exposition := selfMetrics(t, server)
 	labels := fmt.Sprintf(`{collector="text",http_method="GET",url="%s"}`, target.URL)

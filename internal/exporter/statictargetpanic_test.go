@@ -36,7 +36,7 @@ func TestAPanickingStaticScrapeFailsOnlyThatScrape(t *testing.T) {
 	file := &model.StaticTargetFile{Interval: model.Duration(time.Minute), Targets: []model.StaticTarget{{ExportViaOTLP: true, Name: "broken", Collector: "broken", Target: "panics://data"}, {ExportViaOTLP: true, Name: "fine", Collector: "fixed", Target: "fixture://data"}}}
 	server := newStaticServer(t, cfg, file)
 
-	server.scrapeStaticTargets(context.Background(), 10*time.Second)
+	server.scrapeStaticTargets(context.Background(), 0)
 
 	up := map[string]float64{}
 	for _, resource := range server.drainOTLP() {

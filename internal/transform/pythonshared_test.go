@@ -118,10 +118,12 @@ func sharedCollector() *model.Collector {
 const sharedLimit = 1 << 17
 
 // sharedTime is how long a run of these tests may take before its probe's
-// deadline ends it: many times what any takes, and far shorter than the
+// deadline ends it: the half minute that ends a hang, and shorter than the
 // minute a test's script has, so that a worker that walks a value without
-// end fails its test and does not hang it.
-const sharedTime = 15 * time.Second
+// end fails its test and does not hang it. The run's interpreter is started
+// within it too, which on a busy machine has taken most of the fifteen
+// seconds this was.
+const sharedTime = 30 * time.Second
 
 // leaveShared runs the collector's pre-script on a response that names a
 // shape and its levels, and returns the data it left.

@@ -80,7 +80,7 @@ func TestMetricsPrefixOnOTLPExport(t *testing.T) {
 	file := &model.StaticTargetFile{Interval: model.Duration(time.Minute), Targets: []model.StaticTarget{{ExportViaOTLP: true, Name: "eu", Collector: "text", Target: upstream.URL}}}
 	server := newStaticServer(t, cfg, file)
 
-	server.scrapeStaticTargets(context.Background(), 10*time.Second)
+	server.scrapeStaticTargets(context.Background(), 0)
 	resources := server.drainOTLP()
 	if len(resources) != 1 {
 		t.Fatalf("resources=%+v", resources)

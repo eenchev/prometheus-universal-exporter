@@ -143,7 +143,7 @@ func TestTheScrapeLoopScrapesAnewATargetChangedBackWhileItsScrapeRan(t *testing.
 	stop := runLoop(t, r.server)
 	select {
 	case <-reached:
-	case <-time.After(15 * time.Second):
+	case <-time.After(30 * time.Second):
 		t.Fatal("the target's scrape never came due")
 	}
 	r.reloadBoth(conf, hourlyDocument(name, target.URL, "b"))

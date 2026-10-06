@@ -99,11 +99,12 @@ func keptConnectionState(addr string, c *model.Collector) (connectivity.State, b
 // forwarded as usual.
 type tcpRelay struct {
 	addr string
-	// answerDelay holds back what the server sends, as a slow path back does.
-	answerDelay time.Duration
 
 	mu       sync.Mutex
 	silenced chan struct{}
+	// held, while it is not nil, holds back what the server sends until it
+	// is closed (holdAnswers).
+	held     chan struct{}
 	conns    []net.Conn
 	accepted int
 	// closed counts the connections the client has closed.
@@ -112,15 +113,8 @@ type tcpRelay struct {
 
 func startTCPRelay(t *testing.T, backend string) *tcpRelay {
 	t.Helper()
-	return startSlowTCPRelay(t, backend, 0)
-}
-
-// startSlowTCPRelay is startTCPRelay with everything the server sends held
-// back by answerDelay.
-func startSlowTCPRelay(t *testing.T, backend string, answerDelay time.Duration) *tcpRelay {
-	t.Helper()
 	listener := grpctest.Listen(t)
-	r := &tcpRelay{addr: listener.Addr().String(), answerDelay: answerDelay, silenced: make(chan struct{})}
+	r := &tcpRelay{addr: listener.Addr().String(), silenced: make(chan struct{})}
 	t.Cleanup(func() {
 		_ = listener.Close()
 		r.mu.Lock()
@@ -158,8 +152,13 @@ func startSlowTCPRelay(t *testing.T, backend string, answerDelay time.Duration) 
 						}
 						return
 					}
-					if !fromClient && r.answerDelay > 0 {
-						time.Sleep(r.answerDelay)
+					if !fromClient {
+						r.mu.Lock()
+						held := r.held
+						r.mu.Unlock()
+						if held != nil {
+							<-held
+						}
 					}
 					select {
 					case <-silenced:
@@ -180,6 +179,22 @@ func (r *tcpRelay) goSilent() {
 	defer r.mu.Unlock()
 	close(r.silenced)
 	r.silenced = make(chan struct{})
+}
+
+// holdAnswers holds back everything the server sends from now on, on every
+// connection, until release is called: what the server says of a call made
+// meanwhile does not reach the client before then, however long that is.
+func (r *tcpRelay) holdAnswers() (release func()) {
+	held := make(chan struct{})
+	r.mu.Lock()
+	r.held = held
+	r.mu.Unlock()
+	return sync.OnceFunc(func() {
+		r.mu.Lock()
+		r.held = nil
+		r.mu.Unlock()
+		close(held)
+	})
 }
 
 // connections is how many connections were made, and how many of them the
@@ -400,8 +415,23 @@ func TestGRPCEndingAConnectionsWaitAgainLeavesOtherCallsAsTheyWere(t *testing.T)
 // Every retry of a call that found no connection dials: a target that goes
 // on refusing is asked once for the first attempt and again for each retry,
 // and the probe still fails as UNAVAILABLE.
+//
+// A retry waits a second for the connection it asked for (reconnectWait),
+// and nothing tells it that the target refused again, so what a retry dials
+// has to have been hung up on within that second for the next to dial too:
+// on the machine's clock a target that was a second late to hang up, or a
+// probe that long to see it, left the test a dial short. The probe therefore
+// runs on a clock of the test's own (testing/synctest), which stands still
+// while a connection is being made or hung up on and moves on when the
+// probe and its connection only wait. There every wait ends the
+// connection's own four times, a quarter of a second apart, each has its
+// dial hung up on before the next, and the connection, which would wait an
+// hour by itself, dials for nothing else: one dial for the call and four for
+// each retry, in the two waits and the two backoffs to the millisecond.
 func TestGRPCEachRetryOfACallWithoutAConnectionDialsAgain(t *testing.T) {
-	// A listener that hangs up on every connection, counting them.
+	// A listener that hangs up on every connection, counting them. It is
+	// started outside the clock, where it waits for connections without
+	// holding it.
 	listener := grpctest.Listen(t)
 	t.Cleanup(func() { _ = listener.Close() })
 	var dials atomic.Int32
@@ -419,19 +449,31 @@ func TestGRPCEachRetryOfACallWithoutAConnectionDialsAgain(t *testing.T) {
 	c.Request.Retry.Attempts = 2
 	c.Request.Retry.Backoff = model.Duration(10 * time.Millisecond)
 	checked := validGRPC(t, c)
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-	ctx, trace := WithRequestTrace(ctx)
-	_, err := FetchCollector(ctx, listener.Addr().String(), checked, RequestOverrides{}, nil)
-	if code, _ := GRPCStatusCode(checked, err); code != int(codes.Unavailable) {
-		t.Fatalf("err=%v, want UNAVAILABLE", err)
-	}
-	if n := len(trace.Requests()); n != 3 {
-		t.Fatalf("%d attempts, want the call and its 2 retries", n)
-	}
-	if n := dials.Load(); n < 3 {
-		t.Fatalf("the target was dialed %d times by a call and its 2 retries, want each to dial", n)
-	}
+	connectionsWaitAnHour(t)
+	// The connection is made on the test's clock and closed on it, so the
+	// probe has a cache of its own to keep it in.
+	previous := grpcConns
+	grpcConns = &grpcConnCache{entries: map[grpcConnKey]*grpcConnEntry{}}
+	t.Cleanup(func() { grpcConns = previous })
+	synctest.Test(t, func(t *testing.T) {
+		ctx, trace := WithRequestTrace(context.Background())
+		began := time.Now()
+		_, err := FetchCollector(ctx, listener.Addr().String(), checked, RequestOverrides{}, nil)
+		took := time.Since(began)
+		for key, entry := range grpcConns.entries {
+			grpcConns.drop(key, entry)
+		}
+		if code, _ := GRPCStatusCode(checked, err); code != int(codes.Unavailable) {
+			t.Fatalf("err=%v, want UNAVAILABLE", err)
+		}
+		if n := len(trace.Requests()); n != 3 {
+			t.Fatalf("%d attempts, want the call and its 2 retries", n)
+		}
+		resets := int(reconnectWait / reconnectAgain)
+		if n, want := int(dials.Load()), 1+2*resets; n != want || took != 2*(10*time.Millisecond+reconnectWait) {
+			t.Fatalf("the target was dialed %d times in %s by a call and its 2 retries, want %d: once, and %d times in each retry's wait of %s", n, took, want, resets, reconnectWait)
+		}
+	})
 }
 
 // A connection that dies without a FIN or RST is replaced. grpc-go goes on
@@ -497,11 +539,7 @@ func TestGRPCDroppingAConnectionDoesNotCutOffACallBeingAnswered(t *testing.T) {
 		}
 		return statsAnswer(ctx, m, request)
 	}})
-	// The server learns the call's deadline and gives the call up when it
-	// passes, an instant after the probe does. Its word is held back, so that
-	// the probe's own deadline is always what ends the call, as it is on a
-	// connection that has died.
-	relay := startSlowTCPRelay(t, server.Addr, 150*time.Millisecond)
+	relay := startTCPRelay(t, server.Addr)
 	checked := validGRPC(t, protosetCollector(t))
 	message := func(queue string) RequestOverrides {
 		m := `{"queue": "` + queue + `"}`
@@ -513,9 +551,18 @@ func TestGRPCDroppingAConnectionDoesNotCutOffACallBeingAnswered(t *testing.T) {
 		slow <- err
 	}()
 	<-slowArrived
+	// The server learns the call's deadline and gives the call up when it
+	// passes, an instant after the probe does. Its word is held back until
+	// the probe has given up, so that the probe's own deadline is always
+	// what ends the call, as it is on a connection that has died: held back
+	// for 150ms, it came first where the machine left the probe waiting
+	// longer than that at its deadline, and the probe took it for an answer.
+	release := relay.holdAnswers()
+	t.Cleanup(release)
 	if _, err := probeGRPC(relay.addr, checked, 200*time.Millisecond, message("never")); !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatalf("the probe the server never answers: err=%v", err)
 	}
+	release()
 	if _, err := probeGRPC(relay.addr, checked, time.Minute, message("next")); err != nil {
 		t.Fatal(err)
 	}

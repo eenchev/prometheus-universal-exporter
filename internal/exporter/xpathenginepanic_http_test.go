@@ -116,7 +116,7 @@ func TestAnEnginePanicThroughAProbeIsItsRulesFailure(t *testing.T) {
 
 	// The static targets: the one under log is up with the other rules'
 	// series, the one under fail is down.
-	server.scrapeStaticTargets(context.Background(), 10*time.Second)
+	server.scrapeStaticTargets(context.Background(), 0)
 	code, static := get(server.staticTargetsEndpoint())
 	if code != http.StatusOK || !strings.Contains(static, `cells{static_target="logging"} 2`) || !strings.Contains(static, `total{static_target="logging"} 9`) || strings.Contains(static, `{static_target="failing"}`) || strings.Contains(static, "marked") {
 		t.Errorf("the static targets answer %d:\n%s", code, static)

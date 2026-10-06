@@ -49,13 +49,29 @@ func holdingTarget(t *testing.T, answers int64) (server *httptest.Server, hits *
 // stops the loop, and a channel closed when it has returned.
 func loopServer(t *testing.T, concurrency int, targets ...model.StaticTarget) (*Server, context.CancelFunc, chan struct{}) {
 	t.Helper()
+	server := loopServerAtRest(t, concurrency, targets...)
+	stop, done := startLoop(t, server)
+	return server, stop, done
+}
+
+// loopServerAtRest is the server of loopServer with its loop not yet
+// running, for a test that has something happen before the loop's first
+// scrape: startLoop runs the loop.
+func loopServerAtRest(t *testing.T, concurrency int, targets ...model.StaticTarget) *Server {
+	t.Helper()
 	cfg := &model.Config{Collectors: []model.Collector{testutil.Collector("text", "text")}, OTLP: otlpConfig("http://collector.invalid/v1/metrics")}
 	if err := config.Validate(cfg); err != nil {
 		t.Fatal(err)
 	}
 	manager := config.NewManager(cfg, "", testutil.QuietLogger(t))
 	manager.SetTargets("", &model.StaticTargetFile{Interval: model.Duration(time.Minute), Concurrency: concurrency, Targets: targets})
-	server := NewServer(manager, "python3", testutil.QuietLogger(t))
+	return NewServer(manager, "python3", testutil.QuietLogger(t))
+}
+
+// startLoop runs the scrape loop of server, and returns a function that
+// stops the loop and a channel closed when it has returned.
+func startLoop(t *testing.T, server *Server) (context.CancelFunc, chan struct{}) {
+	t.Helper()
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})
 	go func() {
@@ -67,7 +83,7 @@ func loopServer(t *testing.T, concurrency int, targets ...model.StaticTarget) (*
 		server.AbortStaticScrapes()
 		<-done
 	})
-	return server, cancel, done
+	return cancel, done
 }
 
 func targetUp(server *Server, name string) (float64, bool) {
@@ -85,9 +101,15 @@ func targetUp(server *Server, name string) (float64, bool) {
 }
 
 // When the loop stops, a scrape in flight is finished, and publishes as usual.
+//
+// The interval is a minute, so the scrape the target holds has that long to
+// be let go in and no second one comes meanwhile, and the name is one whose
+// first scrape is due at once (soonScraped). At 300ms a test that gets no
+// CPU for 200ms lets the scrape go when its interval has ended it.
 func TestAStoppingLoopFinishesTheScrapesInFlight(t *testing.T) {
 	target, hits, release := holdingTarget(t, 0)
-	server, stop, done := loopServer(t, 0, model.StaticTarget{Name: "slow", Collector: "text", Target: target.URL, Interval: model.Duration(300 * time.Millisecond)})
+	name := soonScraped(t, time.Minute, 1)[0]
+	server, stop, done := loopServer(t, 0, model.StaticTarget{Name: name, Collector: "text", Target: target.URL, Interval: model.Duration(time.Minute)})
 	testutil.WaitFor(t, "the scrape to reach the target", func() bool { return hits.Load() >= 1 })
 	stop()
 	select {
@@ -97,7 +119,7 @@ func TestAStoppingLoopFinishesTheScrapesInFlight(t *testing.T) {
 	}
 	close(release)
 	<-done
-	if up, ok := targetUp(server, "slow"); !ok || up != 1 {
+	if up, ok := targetUp(server, name); !ok || up != 1 {
 		t.Fatalf("the finished scrape published up=%v, %v; want 1", up, ok)
 	}
 	if hits.Load() != 1 {
@@ -107,14 +129,25 @@ func TestAStoppingLoopFinishesTheScrapesInFlight(t *testing.T) {
 
 // A scrape the shutdown cuts short publishes nothing, over OTLP neither, and
 // logs no failure: the target's last result stands.
+//
+// The last result is that of a scrape made before the loop runs, and the
+// scrape cut short is the loop's first, of a target with an interval of a
+// minute whose name has it due at once (soonScraped): the target holds it,
+// and nothing but the shutdown ends it while the test runs. With the loop
+// making both, 300ms apart, the first had to be answered and the second cut
+// short within 300ms each, or the interval ended them and they published a
+// target that was down.
 func TestAbortedScrapesPublishNothing(t *testing.T) {
 	logs := testutil.CaptureLogs(t)
 	target, hits, _ := holdingTarget(t, 1)
-	server, stop, done := loopServer(t, 0, model.StaticTarget{Name: "slow", Collector: "text", Target: target.URL, Interval: model.Duration(300 * time.Millisecond), ExportViaOTLP: true})
-	testutil.WaitFor(t, "a second scrape to be held", func() bool { return hits.Load() >= 2 })
-	if up, ok := targetUp(server, "slow"); !ok || up != 1 {
+	name := soonScraped(t, time.Minute, 1)[0]
+	server := loopServerAtRest(t, 0, model.StaticTarget{Name: name, Collector: "text", Target: target.URL, Interval: model.Duration(time.Minute), ExportViaOTLP: true})
+	server.scrapeStaticTargets(t.Context(), 0)
+	if up, ok := targetUp(server, name); !ok || up != 1 {
 		t.Fatalf("the first scrape published up=%v, %v", up, ok)
 	}
+	stop, done := startLoop(t, server)
+	testutil.WaitFor(t, "the loop's scrape to be held", func() bool { return hits.Load() >= 2 })
 	stop()
 	server.AbortStaticScrapes()
 	select {
@@ -122,7 +155,7 @@ func TestAbortedScrapesPublishNothing(t *testing.T) {
 	case <-time.After(30 * time.Second):
 		t.Fatal("the loop did not return once its scrapes were cut short")
 	}
-	if up, ok := targetUp(server, "slow"); !ok || up != 1 {
+	if up, ok := targetUp(server, name); !ok || up != 1 {
 		t.Fatalf("after the abort the endpoint serves up=%v, %v; want the last result, 1", up, ok)
 	}
 	if up, ok := pendingValue(server, "http_exporter_target_up"); !ok || up != 1 {
@@ -172,7 +205,7 @@ func TestAStoppingLoopDropsScrapesWaitingForASlot(t *testing.T) {
 	for name := ""; name != "queued3"; {
 		select {
 		case name = <-waiting:
-		case <-time.After(15 * time.Second):
+		case <-time.After(30 * time.Second):
 			t.Fatal("the second scrape never waited for the slot")
 		}
 	}
@@ -216,14 +249,14 @@ func TestAStoppedLoopDoesNotBeginAScrapeThatFindsASlotFree(t *testing.T) {
 		_, stop, done := loopServer(t, 1, model.StaticTarget{Name: "held50", Collector: "text", Target: target.URL, Interval: model.Duration(time.Minute)})
 		select {
 		case <-arrived:
-		case <-time.After(15 * time.Second):
+		case <-time.After(30 * time.Second):
 			t.Fatal("the scrape never came due")
 		}
 		stop()
 		letGo()
 		select {
 		case <-done:
-		case <-time.After(15 * time.Second):
+		case <-time.After(30 * time.Second):
 			t.Fatal("the loop did not return")
 		}
 	}

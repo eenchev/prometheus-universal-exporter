@@ -318,7 +318,7 @@ func TestAStaticScrapeBegunAfterItsCollectorWasRemovedIsCountedNowhereShown(t *t
 	})
 	select {
 	case <-waiting:
-	case <-time.After(15 * time.Second):
+	case <-time.After(30 * time.Second):
 		t.Fatal("the target's scrape never came due")
 	}
 	r.reloadBoth(createdDocument(true, "kept"), staticDocument("stays", "kept", other.URL))
@@ -329,7 +329,7 @@ func TestAStaticScrapeBegunAfterItsCollectorWasRemovedIsCountedNowhereShown(t *t
 	stop()
 	select {
 	case <-done:
-	case <-time.After(15 * time.Second):
+	case <-time.After(30 * time.Second):
 		t.Fatal("the loop did not return")
 	}
 	for _, answer := range []string{removed, read()} {
@@ -605,8 +605,10 @@ func TestProbesDuringReloadsAreCountedForTheCollectorThatStaysAndNotForOneBrough
 					return
 				default:
 				}
-				// Each probe a request of its own, so none shares another's trip.
-				request := httptest.NewRequest(http.MethodGet, probePath(name, target.URL, fmt.Sprintf("&timeout=%d.%03ds", 5+i, n%1000)), nil)
+				// Each probe a request of its own, so none shares another's trip:
+				// by a timeout of its own, of an hour and more, which none of
+				// them is held to.
+				request := httptest.NewRequest(http.MethodGet, probePath(name, target.URL, fmt.Sprintf("&timeout=%d.%03ds", 3600+i, n%1000)), nil)
 				recorder := httptest.NewRecorder()
 				r.server.Handler().ServeHTTP(recorder, request)
 				if name == "kept" {

@@ -56,7 +56,7 @@ func TestOTLPExportsReuseTheirConnection(t *testing.T) {
 	cfg := &model.Config{Collectors: []model.Collector{testutil.Collector("text", "text")}, OTLP: otlpConfig(endpoint.URL + "/v1/metrics")}
 	server := newStaticServer(t, cfg, nil)
 	for i := 0; i < 3; i++ {
-		server.exportOTLP(context.Background(), 5*time.Second)
+		server.exportOTLP(context.Background(), time.Minute)
 	}
 	if got := conns.Load(); got != 1 {
 		t.Fatalf("three exports opened %d connections, want 1", got)

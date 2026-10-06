@@ -66,10 +66,24 @@ func followBenchManager(tb testing.TB, document string, static bool) *config.Man
 // of cfg, checked as a reload checks the file it reads.
 func followBenchTargets(tb testing.TB, cfg *model.Config) *model.StaticTargetFile {
 	tb.Helper()
+	return followBenchTargetsEach(tb, cfg, 1)
+}
+
+// followBenchTargetsEach is followBenchTargets with each static targets of
+// every collector: the first of a collector is named as its only one is, and
+// the file has them collector by collector.
+func followBenchTargetsEach(tb testing.TB, cfg *model.Config, each int) *model.StaticTargetFile {
+	tb.Helper()
 	file := &model.StaticTargetFile{Interval: model.Duration(60e9)}
 	for i := range cfg.Collectors {
 		name := cfg.Collectors[i].Name
-		file.Targets = append(file.Targets, model.StaticTarget{Name: "t_" + name, Collector: name, Target: "http://127.0.0.1:9/" + name, Labels: map[string]string{"site": name}})
+		for k := range each {
+			target := "t_" + name
+			if k > 0 {
+				target += "_" + strconv.Itoa(k)
+			}
+			file.Targets = append(file.Targets, model.StaticTarget{Name: target, Collector: name, Target: "http://127.0.0.1:9/" + name, Labels: map[string]string{"site": name}})
+		}
 	}
 	err := config.ValidateStaticTargets(file)
 	if err == nil {
@@ -80,6 +94,10 @@ func followBenchTargets(tb testing.TB, cfg *model.Config) *model.StaticTargetFil
 	}
 	return file
 }
+
+// followScheduleSizes are the configurations BenchmarkFollowReloadSchedule
+// measures: so many collectors, with each static targets of every one.
+var followScheduleSizes = []struct{ collectors, each int }{{50, 1}, {500, 1}, {2000, 1}, {10000, 1}, {500, 20}}
 
 // followBenchShapes are the reloads measured: the two configurations a
 // benchmark reloads between, as their documents.
@@ -205,25 +223,41 @@ func BenchmarkFollowReloadProbeWait(b *testing.B) {
 // targets takes after a reload (StaticScrapeLoop, planFollowed), which the
 // benchmarks above leave out: the schedule is the scrape loop's own, and
 // plans on that loop's goroutine, some time after the reload has returned.
-// Every collector of 50, 500 and 2,000 has one static target, in a file
-// reloaded with the configuration, and the schedule has looked at the
-// configuration before; the reload, prepared and followed as above, is not
-// timed, so the time, the bytes and the allocations of the operation are the
-// look's alone. encodes/op is how many collectors' definitions the reload
-// and the look after it encoded together (collectorFingerprint), and
-// schedule-encodes/op how many of them the look did.
+// Every collector of 50, 500, 2,000 and 10,000 has one static target, and
+// every one of 500 has 20 (/targets=20), in a file reloaded with the
+// configuration, and the schedule has looked at the configuration before;
+// the reload, prepared and followed as above, is not timed, so the time, the
+// bytes and the allocations of the operation are the look's alone.
+// encodes/op is how many collectors' definitions the reload and the look
+// after it encoded together (collectorFingerprint), schedule-encodes/op how
+// many of them the look did, and schedule-scans/op how many times the look
+// went through the collectors of the configuration to find one by its name
+// (collectorsScannedHook), which it did once for every collector with a
+// static target. A reload of 10,000 collectors takes seconds, which are not
+// timed and are waited for all the same: -benchtime 5x is enough there.
 func BenchmarkFollowReloadSchedule(b *testing.B) {
 	for _, shape := range followBenchShapes {
-		for _, n := range []int{50, 500, 2000} {
-			b.Run(fmt.Sprintf("%s/n=%d", shape.name, n), func(b *testing.B) {
-				managers := [2]*config.Manager{followBenchManager(b, shape.first(n), true), followBenchManager(b, shape.second(n), true)}
+		for _, size := range followScheduleSizes {
+			n := size.collectors
+			name := fmt.Sprintf("%s/n=%d", shape.name, n)
+			if size.each > 1 {
+				name += fmt.Sprintf("/targets=%d", size.each)
+			}
+			b.Run(name, func(b *testing.B) {
+				managers := [2]*config.Manager{followBenchManager(b, shape.first(n), false), followBenchManager(b, shape.second(n), false)}
+				for _, manager := range managers {
+					manager.SetTargets("", followBenchTargetsEach(b, manager.Get(), size.each))
+				}
 				server := NewServer(managers[0], "python3", slog.New(slog.DiscardHandler))
 				schedule := newTargetSchedule()
 				now := time.Unix(1_000_000, 0)
-				var encoded, bySchedule int64
+				var encoded, bySchedule, scanned, scannedBySchedule int64
 				hook := func() { encoded++ }
 				fingerprintedHook.Store(&hook)
 				defer fingerprintedHook.Store(nil)
+				scans := func() { scanned++ }
+				collectorsScannedHook.Store(&scans)
+				defer collectorsScannedHook.Store(nil)
 				// reload puts the other configuration in force as a reload
 				// does, and look is the loop's look at what is then followed.
 				reload := func(i int) *followedConfig {
@@ -233,16 +267,17 @@ func BenchmarkFollowReloadSchedule(b *testing.B) {
 					return server.followedInForce()
 				}
 				look := func(followed *followedConfig) {
-					before := encoded
+					before, scannedBefore := encoded, scanned
 					schedule.planFollowed(followed.config, staticTargetsOf(followed.targets), followed, now)
 					bySchedule += encoded - before
+					scannedBySchedule += scanned - scannedBefore
 				}
 				// The start, and a reload each way: from then on every
 				// configuration followed was prepared by a reload.
 				look(server.followedInForce())
 				look(reload(0))
 				look(reload(1))
-				encoded, bySchedule = 0, 0
+				encoded, bySchedule, scannedBySchedule = 0, 0, 0
 				b.ReportAllocs()
 				b.ResetTimer()
 				for i := range b.N {
@@ -253,6 +288,7 @@ func BenchmarkFollowReloadSchedule(b *testing.B) {
 				}
 				b.ReportMetric(float64(encoded)/float64(b.N), "encodes/op")
 				b.ReportMetric(float64(bySchedule)/float64(b.N), "schedule-encodes/op")
+				b.ReportMetric(float64(scannedBySchedule)/float64(b.N), "schedule-scans/op")
 			})
 		}
 	}

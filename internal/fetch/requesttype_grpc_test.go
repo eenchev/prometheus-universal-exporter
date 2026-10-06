@@ -285,7 +285,9 @@ func TestGRPCCall(t *testing.T) {
 	c.Request.Metadata = map[string]string{"x-tenant": "{{param_tenant:default}}", "x-static": "one"}
 	c.Request.BearerTokenFile = token
 	checked := validGRPC(t, c)
-	overrides := RequestOverrides{Params: map[string]string{"param_queue": "orders"}, Timeout: 5 * time.Second}
+	// The probe's timeout is the deadline the server is to see, and no
+	// measure of the call: a minute, which a busy machine does not use up.
+	overrides := RequestOverrides{Params: map[string]string{"param_queue": "orders"}, Timeout: time.Minute}
 	forwarded := http.Header{"X-Request-Id": {"r1"}, "Grpc-Timeout": {"1S"}, "Host": {"elsewhere"}}
 	resp, err := FetchCollector(context.Background(), server.Addr, checked, overrides, forwarded)
 	if err != nil {
@@ -310,7 +312,7 @@ func TestGRPCCall(t *testing.T) {
 	if md.Get("x-tenant")[0] != "default" || md.Get("x-static")[0] != "one" || md.Get("authorization")[0] != "Bearer s3cret" || md.Get("x-request-id")[0] != "r1" {
 		t.Fatalf("metadata %v", md)
 	}
-	if call.Deadline <= 0 || call.Deadline > 5*time.Second {
+	if call.Deadline <= 0 || call.Deadline > time.Minute {
 		t.Fatalf("deadline %s did not reach the server", call.Deadline)
 	}
 
@@ -710,7 +712,7 @@ func TestGRPCAShortProbeDoesNotFailTheSharedReflection(t *testing.T) {
 	t.Cleanup(release)
 	server := grpctest.Start(t, grpctest.Options{Reflection: "v1", Answer: statsAnswer, ReflectionHold: answer})
 	c := validGRPC(t, grpcCollector())
-	short, endDeadline := deadlineEndedByHand()
+	short, endDeadline := testutil.DeadlineEndedByHand()
 	shortDone := make(chan error, 1)
 	go func() {
 		_, err := FetchCollector(short, server.Addr, c, RequestOverrides{}, nil)
@@ -751,29 +753,6 @@ func TestGRPCAShortProbeDoesNotFailTheSharedReflection(t *testing.T) {
 	}
 	if n := lonely.ReflectionStreams.Load(); n != 1 {
 		t.Fatalf("%d reflection streams, want the one the short probe started", n)
-	}
-}
-
-// handDeadline is a context whose deadline the test ends itself, so that what
-// a probe does at its deadline does not depend on the clock.
-type handDeadline struct {
-	context.Context
-	ended chan struct{}
-}
-
-func deadlineEndedByHand() (ctx context.Context, end func()) {
-	c := &handDeadline{Context: context.Background(), ended: make(chan struct{})}
-	return c, func() { close(c.ended) }
-}
-
-func (c *handDeadline) Done() <-chan struct{} { return c.ended }
-
-func (c *handDeadline) Err() error {
-	select {
-	case <-c.ended:
-		return context.DeadlineExceeded
-	default:
-		return nil
 	}
 }
 

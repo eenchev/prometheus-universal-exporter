@@ -106,7 +106,7 @@ func TestTheBudgetBoundsEveryRequestTypeAndIsOptional(t *testing.T) {
 	if recorder := probeOnce(t, server, "/probe?collector=stalled&target=somewhere", nil); recorder.Code != http.StatusOK {
 		t.Fatalf("without the header: status=%d body=%s", recorder.Code, recorder.Body)
 	}
-	if recorder := probeWithScrapeTimeout(t, server, "collector=stalled&target=somewhere", "10"); recorder.Code != http.StatusOK {
+	if recorder := probeWithScrapeTimeout(t, server, "collector=stalled&target=somewhere", "3600"); recorder.Code != http.StatusOK {
 		t.Fatalf("with a generous timeout: status=%d body=%s", recorder.Code, recorder.Body)
 	}
 }
@@ -175,11 +175,12 @@ func TestANonFiniteScrapeTimeoutIsNoneAndATinyOneIsABudget(t *testing.T) {
 	}
 	server := NewServer(config.NewManager(cfg, "", testutil.QuietLogger(t)), "python3", testutil.QuietLogger(t))
 	server.SetDefaultProbeTimeout(200 * time.Millisecond)
-	// The caller gives up after five seconds, so a probe given a longer
-	// budget than it should have fails the test rather than holding it.
+	// The caller gives up after half a minute, so a probe given a longer
+	// budget than it should have fails the test rather than holding it, and
+	// one that its budget ended is answered however long the machine takes.
 	probe := func(header string) *httptest.ResponseRecorder {
 		t.Helper()
-		ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+		ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
 		defer cancel()
 		request := httptest.NewRequest(http.MethodGet, "/probe?collector=hung&target=somewhere", nil).WithContext(ctx)
 		request.Header.Set(scrapeTimeoutHeader, header)

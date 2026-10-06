@@ -51,6 +51,9 @@ type exporterProcess struct {
 	logs  *syncBuffer
 	// address is where the exporter listens.
 	address string
+	// endDelay lets the exporter's --web.shutdown-delay end, which it does
+	// not before, however long ago the delay was over (TestRunHelperProcess).
+	endDelay func()
 }
 
 func startHeldExporter(t *testing.T, args ...string) *exporterProcess {
@@ -88,8 +91,13 @@ func startHeldExporterWith(t *testing.T, config string, args ...string) *exporte
 		address := listener.Addr().String()
 		_ = listener.Close()
 		p = &exporterProcess{cmd: exec.Command(os.Args[0], "-test.run=^TestRunHelperProcess$"), exited: make(chan error, 1), ended: make(chan struct{}), logs: &syncBuffer{}, address: address}
-		p.cmd.Env = append(os.Environ(), helperArgsEnv+"="+strings.Join(append([]string{"--config.file=" + conf, "--web.listen-address=" + address}, args...), "\x1f"))
+		p.cmd.Env = append(os.Environ(), helperArgsEnv+"="+strings.Join(append([]string{"--config.file=" + conf, "--web.listen-address=" + address}, args...), "\x1f"), helperHoldsDelayEnv+"=1")
 		p.cmd.Stderr = p.logs
+		held, err := p.cmd.StdinPipe()
+		if err != nil {
+			t.Fatal(err)
+		}
+		p.endDelay = sync.OnceFunc(func() { _ = held.Close() })
 		if err := p.cmd.Start(); err != nil {
 			t.Fatal(err)
 		}
@@ -212,10 +220,11 @@ func TestShutdownTimeoutBoundsTheWait(t *testing.T) {
 // With --web.shutdown-delay, a SIGTERM first makes /ready answer 503 while
 // probes are still served, and only then begins the graceful shutdown.
 //
-// The delay is three seconds: the test has that long to see /ready answer
-// 503 and to probe, which takes milliseconds on a machine that is not busy.
+// The exporter stays in its delay until the test has seen /ready answer 503
+// and has probed (endDelay), however long the machine takes over that, and
+// is not out of it before the delay, a second, is over.
 func TestShutdownDelayKeepsServingWhileUnready(t *testing.T) {
-	p := startHeldExporter(t, "--web.shutdown-delay=3s", "--web.shutdown-timeout=1s")
+	p := startHeldExporter(t, "--web.shutdown-delay=1s", "--web.shutdown-timeout=1s")
 	fast := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		_, _ = w.Write([]byte("v=7\n"))
 	}))
@@ -246,19 +255,23 @@ func TestShutdownDelayKeepsServingWhileUnready(t *testing.T) {
 	if code, _, err := read("/health"); err != nil || code != http.StatusOK {
 		t.Errorf("/health during the delay: %d %v", code, err)
 	}
+	if strings.Contains(p.logs.String(), "shutting down: finishing the probes in progress") {
+		t.Errorf("the graceful shutdown began while the delay was held:\n%s", p.logs.String())
+	}
+	p.endDelay()
 	select {
 	case err := <-p.exited:
 		took := time.Since(start)
 		if err != nil {
 			t.Fatalf("exit: %v\n%s", err, p.logs.String())
 		}
-		if took < 3*time.Second {
+		if took < time.Second {
 			t.Errorf("exited after %s, before the delay ended", took)
 		}
 	case <-time.After(30 * time.Second):
 		t.Fatalf("the exporter did not exit\n%s", p.logs.String())
 	}
-	if !strings.Contains(p.logs.String(), `"shutdown_delay":"3s"`) {
+	if !strings.Contains(p.logs.String(), `"shutdown_delay":"1s"`) {
 		t.Errorf("the log does not name the delay:\n%s", p.logs.String())
 	}
 }
@@ -278,6 +291,13 @@ func TestNoShutdownDelayStopsListeningAtOnce(t *testing.T) {
 
 // Static targets keep being scraped through --web.shutdown-delay, while their
 // endpoint is still served, and the shutdown reports none of them failed.
+//
+// The exporter stays in its delay until a scrape has reached the target
+// after the delay began (endDelay), however long the machine takes to make
+// one. The interval is a second, the least there is, and a scrape that a
+// busy machine did not let end within it is logged as failed for that, by
+// the budget it names: that is no report of the shutdown's, and is not held
+// against it.
 func TestStaticTargetsAreScrapedThroughTheShutdownDelay(t *testing.T) {
 	var scrapes atomic.Int64
 	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
@@ -286,12 +306,16 @@ func TestStaticTargetsAreScrapedThroughTheShutdownDelay(t *testing.T) {
 	}))
 	defer target.Close()
 	targets := testutil.WriteIn(t, t.TempDir(), "targets.yaml", "interval: 1s\ntargets:\n  - name: fast\n    collector: slow\n    target: "+target.URL+"\n")
-	// The delay is five intervals long, so a scrape is one of several the
-	// delay has room for, whatever the machine is busy with.
-	p := startHeldExporter(t, "--static-targets-file="+targets, "--web.shutdown-delay=5s", "--web.shutdown-timeout=1s")
+	p := startHeldExporter(t, "--static-targets-file="+targets, "--web.shutdown-delay=1s", "--web.shutdown-timeout=1s")
 	testutil.WaitFor(t, "the static target to be scraped", func() bool { return scrapes.Load() >= 1 })
 	p.signal(t, syscall.SIGTERM)
-	atSignal := scrapes.Load()
+	testutil.WaitFor(t, "the delay to begin", func() bool { return strings.Contains(p.logs.String(), "shutting down: /ready answers 503") })
+	inDelay := scrapes.Load()
+	testutil.WaitFor(t, "a scrape during the delay", func() bool { return scrapes.Load() > inDelay })
+	if strings.Contains(p.logs.String(), "shutting down: finishing the probes in progress") {
+		t.Errorf("the graceful shutdown began while the delay was held:\n%s", p.logs.String())
+	}
+	p.endDelay()
 	select {
 	case err := <-p.exited:
 		if err != nil {
@@ -300,21 +324,38 @@ func TestStaticTargetsAreScrapedThroughTheShutdownDelay(t *testing.T) {
 	case <-time.After(30 * time.Second):
 		t.Fatalf("the exporter did not exit\n%s", p.logs.String())
 	}
-	if during := scrapes.Load() - atSignal; during < 1 {
-		t.Errorf("the static target was scraped %d times during the 5s delay, want at least one", during)
-	}
-	if strings.Contains(p.logs.String(), "static target scrape failed") || strings.Contains(p.logs.String(), "no scrape slot came free") {
-		t.Errorf("the shutdown reported a static target failing:\n%s", p.logs.String())
+	for _, line := range strings.Split(p.logs.String(), "\n") {
+		failed := strings.Contains(line, "static target scrape failed") && !strings.Contains(line, "the scrape ran out of its 1s budget")
+		if failed || strings.Contains(line, "no scrape slot came free") {
+			t.Errorf("the shutdown reported a static target failing: %s", line)
+		}
 	}
 }
 
 // A SIGHUP during the shutdown reloads, as at any other time, rather than
 // ending the process with Go's default action for a signal nobody catches.
+//
+// The exporter stays in its delay until it has reloaded (endDelay), so the
+// signal finds it shutting down however late the test sends it: with a delay
+// of a second and a half, and a second for the probe after it, a test later
+// than that sends the signal to a process that has ended.
 func TestASIGHUPDuringTheShutdownDoesNotEndIt(t *testing.T) {
-	p := startHeldExporter(t, "--web.shutdown-delay=1500ms", "--web.shutdown-timeout=1s")
+	p := startHeldExporter(t, "--web.shutdown-delay=100ms", "--web.shutdown-timeout=1s")
 	p.signal(t, syscall.SIGTERM)
 	testutil.WaitFor(t, "the shutdown to begin", func() bool { return strings.Contains(p.logs.String(), "shutting down") })
 	p.signal(t, syscall.SIGHUP)
+	testutil.WaitFor(t, "the reload the signal asked for", func() bool {
+		select {
+		case <-p.ended:
+			return true
+		default:
+		}
+		return strings.Contains(p.logs.String(), `"msg":"configuration reloaded","trigger":"sighup"`)
+	})
+	if !strings.Contains(p.logs.String(), `"msg":"configuration reloaded","trigger":"sighup"`) {
+		t.Fatalf("the exporter ended without reloading:\n%s", p.logs.String())
+	}
+	p.endDelay()
 	select {
 	case err := <-p.exited:
 		if err != nil {
@@ -332,8 +373,8 @@ func TestASIGHUPDuringTheShutdownDoesNotEndIt(t *testing.T) {
 // targets whose results it delivers keep being scraped: an export arrives
 // after the signal and before the delay has ended, which the log tells — the
 // last export, sent as the exporter finishes, comes after the line that says
-// so. The delay is five intervals long, so the export is one of several the
-// delay has room for, whatever the machine is busy with.
+// so. The exporter stays in its delay until that export has arrived
+// (endDelay), however long the machine takes to make one.
 func TestOTLPExportsThroughTheShutdownDelay(t *testing.T) {
 	var exports atomic.Int64
 	collector := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
@@ -342,15 +383,16 @@ func TestOTLPExportsThroughTheShutdownDelay(t *testing.T) {
 	}))
 	defer collector.Close()
 	// 1s is the least otlp.interval a configuration may set.
-	p := startHeldExporterWith(t, "otlp:\n  enabled: true\n  endpoint: "+collector.URL+"/v1/metrics\n  interval: 1s\n", "--web.shutdown-delay=5s", "--web.shutdown-timeout=1s")
+	p := startHeldExporterWith(t, "otlp:\n  enabled: true\n  endpoint: "+collector.URL+"/v1/metrics\n  interval: 1s\n", "--web.shutdown-delay=1s", "--web.shutdown-timeout=1s")
 	testutil.WaitFor(t, "an export", func() bool { return exports.Load() >= 1 })
 	p.signal(t, syscall.SIGTERM)
 	testutil.WaitFor(t, "the delay to begin", func() bool { return strings.Contains(p.logs.String(), "shutting down: /ready answers 503") })
 	inDelay := exports.Load()
 	testutil.WaitFor(t, "an export during the delay", func() bool { return exports.Load() > inDelay })
 	if strings.Contains(p.logs.String(), "shutting down: finishing the probes in progress") {
-		t.Errorf("no export arrived in a 5s delay at a 1s interval before the delay ended\n%s", p.logs.String())
+		t.Errorf("no export arrived at a 1s interval before the delay ended\n%s", p.logs.String())
 	}
+	p.endDelay()
 	select {
 	case err := <-p.exited:
 		if err != nil {
@@ -397,7 +439,7 @@ func TestASIGHUPDuringStartupReloadsOnceStarted(t *testing.T) {
 	// waitFor is testutil.WaitFor that also notices the exporter ending.
 	waitFor := func(what string, done func() bool) {
 		t.Helper()
-		deadline := time.Now().Add(20 * time.Second)
+		deadline := time.Now().Add(30 * time.Second)
 		for !done() {
 			select {
 			case err := <-exited:
@@ -440,7 +482,7 @@ func TestASIGHUPDuringStartupReloadsOnceStarted(t *testing.T) {
 		if err != nil {
 			t.Fatalf("exit: %v\n%s", err, logs.String())
 		}
-	case <-time.After(20 * time.Second):
+	case <-time.After(30 * time.Second):
 		t.Fatalf("the exporter did not exit\n%s", logs.String())
 	}
 	if n := strings.Count(logs.String(), `"msg":"configuration reloaded","trigger":"sighup"`); n != 1 {

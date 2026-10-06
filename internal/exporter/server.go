@@ -290,16 +290,12 @@ func (s *Server) probeHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// The configuration is read with its generation, which says below which
-	// statistics the probe counts in (statsSince).
+	// statistics the probe counts in (statsSince), and the collector is found
+	// by its name where the configuration followed keeps its place
+	// (collectorOf): its collectors are not gone through for every probe.
 	followed := s.reconcile()
 	cfg := followed.config
-	var c *model.Collector
-	for i := range cfg.Collectors {
-		if cfg.Collectors[i].Name == name {
-			c = &cfg.Collectors[i]
-			break
-		}
-	}
+	c := followed.collectorOf(cfg, name)
 	if c == nil {
 		http.Error(w, fmt.Sprintf("unknown collector %q", name), http.StatusBadRequest)
 		return

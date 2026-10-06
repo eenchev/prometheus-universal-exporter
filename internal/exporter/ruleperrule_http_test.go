@@ -1129,7 +1129,7 @@ func TestAStaticTargetLogsEachRuleOfAMetricName(t *testing.T) {
 		table := wholeDisks()
 		step.change(&table)
 		target.serve(table)
-		server.scrapeStaticTargets(context.Background(), 10*time.Second)
+		server.scrapeStaticTargets(context.Background(), 0)
 		var got []string
 		for _, line := range strings.Split(logs.String(), "\n") {
 			if found := identify.FindStringSubmatch(line); found != nil {

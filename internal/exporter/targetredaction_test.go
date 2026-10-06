@@ -48,7 +48,7 @@ func TestAShownTargetWithholdsItsQueryCredentials(t *testing.T) {
 		}
 	}
 
-	server.scrapeStaticTargets(context.Background(), 10*time.Second)
+	server.scrapeStaticTargets(context.Background(), 0)
 	body := getStaticTargets(t, server, "/static-targets")
 	if !strings.Contains(body, `target="`+up.URL+`/?api_key=<redacted>&tenant=a"`) {
 		t.Errorf("the target label is not withheld:\n%s", body)

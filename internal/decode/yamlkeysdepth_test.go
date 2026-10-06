@@ -3,6 +3,8 @@ package decode
 import (
 	"fmt"
 	"math/rand/v2"
+	"runtime"
+	"runtime/debug"
 	"runtime/metrics"
 	"strings"
 	"testing"
@@ -68,7 +70,19 @@ func yamlStacks() uint64 {
 
 // yamlStackOf is how much the stacks grew by while a call ran, on a
 // goroutine of its own, which starts with a few kilobytes.
+//
+// No collection runs while the call does. A stack that is outgrown is given
+// back at once only while none is running: during one it is kept until the
+// collection ends, and a call that ended first was measured with the stacks
+// it had outgrown beside the one it had, 24 MB and 32 MB for a stack of 16.
+// That happened where a collection lasted from the stack's last doublings
+// to the end of the call, which is seldom on a quiet machine and was the
+// failure of a busy one. The collection in progress is finished first, which also
+// gives back the stacks that goroutines before this one left; the heap
+// grows by what the call allocates and is collected afterwards.
 func yamlStackOf(call func()) uint64 {
+	defer debug.SetGCPercent(debug.SetGCPercent(-1))
+	runtime.GC()
 	grown := make(chan uint64)
 	go func() {
 		before := yamlStacks()

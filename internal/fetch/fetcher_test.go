@@ -8,6 +8,7 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/eenchev/prometheus-universal-exporter/internal/model"
@@ -339,30 +340,39 @@ func TestOnlyIdempotentRequestsAreRetried(t *testing.T) {
 // gave, with its body, rather than the bare context error, which would only
 // say that time ran out.
 //
-// The deadline is two seconds away and the wait an hour long: the target has
-// to have answered when the deadline passes, which at 200ms a machine busy
-// enough does not leave it the time to, and the wait must not be over by
-// then. The fetch returning at all is the deadline cutting the wait short.
+// The target has to have answered when the deadline passes, and the wait
+// must not be over by then. Two seconds on the machine's clock did not
+// always leave a busy machine the time for the answer, so the fetch runs on
+// a clock of the test's own (onItsOwnClock): the deadline is two seconds
+// away on it and the wait an hour, and the clock stands still until the
+// answer has been read and the fetch waits. The fetch then returns at the
+// deadline to the nanosecond, which is the deadline cutting the wait short.
 func TestACutShortRetryWaitKeepsTheTargetsAnswer(t *testing.T) {
 	var requests atomic.Int64
 	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		requests.Add(1)
+		// A connection kept for the next request is one the client still
+		// reads from, and the clock would stand still for as long as it did.
+		w.Header().Set("Connection", "close")
 		http.Error(w, "maintenance until noon", http.StatusServiceUnavailable)
 	}))
 	defer target.Close()
 	c := model.Collector{Name: "retry", Request: model.RequestConfig{Type: RequestTypeHTTP, AllowedSchemes: []string{"http"}, Retry: model.RetryConfig{Attempts: 2, Backoff: model.Duration(time.Hour)}}, Limits: model.Limits{MaxResponseBytes: 1024}}
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-	defer cancel()
-	response, err := fetch(ctx, target.URL, &c, RequestOverrides{})
-	if err != nil {
-		t.Fatalf("got error %v, want the target's answer", err)
-	}
-	if response.StatusCode != http.StatusServiceUnavailable || !strings.Contains(string(response.Body), "maintenance until noon") {
-		t.Fatalf("status=%d body=%q, want the 503 and its body", response.StatusCode, response.Body)
-	}
-	if requests.Load() != 1 || ctx.Err() == nil {
-		t.Fatalf("requests=%d, and the deadline had passed: %v; want one request and an answer at the deadline", requests.Load(), ctx.Err() != nil)
-	}
+	onItsOwnClock(t, func(t *testing.T) {
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel()
+		began := time.Now()
+		response, err := fetch(ctx, target.URL, &c, RequestOverrides{})
+		if err != nil {
+			t.Fatalf("got error %v, want the target's answer", err)
+		}
+		if response.StatusCode != http.StatusServiceUnavailable || !strings.Contains(string(response.Body), "maintenance until noon") {
+			t.Fatalf("status=%d body=%q, want the 503 and its body", response.StatusCode, response.Body)
+		}
+		if took := time.Since(began); requests.Load() != 1 || ctx.Err() == nil || took != 2*time.Second {
+			t.Fatalf("requests=%d after %s, and the deadline had passed: %v; want one request and an answer at the deadline", requests.Load(), took, ctx.Err() != nil)
+		}
+	})
 }
 
 // A network error whose retry wait is cut short keeps its own error, and says
@@ -371,13 +381,37 @@ func TestACutShortRetryWaitAfterANetworkErrorKeepsTheError(t *testing.T) {
 	closed := httptest.NewServer(http.NotFoundHandler())
 	address := closed.URL
 	closed.Close()
-	// Two seconds for the connection to be refused in, and an hour's wait
-	// for the deadline to cut short, as above.
+	// As above: the clock stands still while the connection is being
+	// refused, and the deadline passes in the hour's wait.
 	c := model.Collector{Name: "retry", Request: model.RequestConfig{Type: RequestTypeHTTP, AllowedSchemes: []string{"http"}, Retry: model.RetryConfig{Attempts: 2, Backoff: model.Duration(time.Hour)}}, Limits: model.Limits{MaxResponseBytes: 1024}}
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-	defer cancel()
-	_, err := fetch(ctx, address, &c, RequestOverrides{})
-	if err == nil || !strings.Contains(err.Error(), "connection refused") || !strings.Contains(err.Error(), "the wait before retrying was cut short") {
-		t.Fatalf("got %v, want the connection error and the cut-short wait", err)
-	}
+	onItsOwnClock(t, func(t *testing.T) {
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel()
+		began := time.Now()
+		_, err := fetch(ctx, address, &c, RequestOverrides{})
+		if err == nil || !strings.Contains(err.Error(), "connection refused") || !strings.Contains(err.Error(), "the wait before retrying was cut short") {
+			t.Fatalf("got %v, want the connection error and the cut-short wait", err)
+		}
+		if took := time.Since(began); took != 2*time.Second {
+			t.Fatalf("the fetch returned after %s, want at the deadline", took)
+		}
+	})
+}
+
+// onItsOwnClock runs a test of a fetch's deadline on a clock of its own
+// (testing/synctest). That clock moves only when every goroutine of the
+// test waits for it or for another of them, and stands still while one of
+// them is at work or waits for the network: a deadline on it passes when
+// the fetch has got as far as it gets without the clock, in however long
+// the machine takes over that, and not while a request is still on its way.
+// The test's target is started outside, so that its goroutines, which wait
+// for connections for as long as it runs, do not hold the clock; and the
+// fetch has connection pools of its own, since a pool made on this clock
+// would be kept with the clock's time on it.
+func onItsOwnClock(t *testing.T, test func(t *testing.T)) {
+	t.Helper()
+	previous := transports
+	transports = newTransportCache()
+	t.Cleanup(func() { transports = previous })
+	synctest.Test(t, test)
 }

@@ -156,7 +156,7 @@ func TestStaticTargetParams(t *testing.T) {
 	}}
 	server := newStaticServer(t, cfg, file)
 	server.logger = testutil.QuietLogger(t)
-	server.scrapeStaticTargets(context.Background(), 5*time.Second)
+	server.scrapeStaticTargets(context.Background(), 0)
 	got := target.last(t)
 	if got.path != "/api/acme" || got.header.Get("X-Tenant") != "acme" || got.body != `{"service": "checkout", "limit": 10}` {
 		t.Fatalf("request %+v", got)

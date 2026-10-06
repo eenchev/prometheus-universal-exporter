@@ -137,7 +137,7 @@ func TestLocalFileAbandonedReadsAreCapped(t *testing.T) {
 	close(release)
 	waitForNoAbandonedReads(t, "stuck")
 	afterLocalFileRead.Store(nil)
-	resp, err := read("f0.prom", 5*time.Second)
+	resp, err := read("f0.prom", time.Minute)
 	if err != nil || !strings.Contains(string(resp.Body), "} 7") {
 		t.Fatalf("resp=%v err=%v", resp, err)
 	}
@@ -195,7 +195,10 @@ func TestLocalFileConcurrentReadsOfAHealthyFilesystemAreNotRefused(t *testing.T)
 	errs := make(chan error, probes)
 	for i := range probes {
 		go func() {
-			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			// A minute, which only a read that never returns uses up: the
+			// reads are held until all of them are in progress, and ten
+			// seconds were not always enough for that.
+			ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 			defer cancel()
 			resp, err := fetchLocalFile(ctx, "f"+strconv.Itoa(i)+".prom", c, RequestOverrides{}, nil)
 			if err == nil && !strings.Contains(string(resp.Body), "} 7") {
@@ -237,7 +240,7 @@ func TestLocalDirectoryReadsCountOnlyWhenAbandoned(t *testing.T) {
 	errs := make(chan error, probes)
 	for i := range probes {
 		go func() {
-			resp, err := read("d"+strconv.Itoa(i), 10*time.Second)
+			resp, err := read("d"+strconv.Itoa(i), time.Minute)
 			switch {
 			case err != nil:
 			case resp.Directory == nil || len(resp.Directory.Files) != 1:
@@ -261,12 +264,28 @@ func TestLocalDirectoryReadsCountOnlyWhenAbandoned(t *testing.T) {
 	}
 
 	// The filesystem stops answering: each probe's deadline ends with its
-	// directory read still running, and the cap is reached.
+	// directory read still running, and the cap is reached. The deadline is
+	// the test's to end, which it does once the read is held at the
+	// directory's file: a deadline of 200ms had passed, on a machine slow
+	// enough, before the directory was listed, and the probe then fails
+	// for the listing and answers no file.
 	release := make(chan struct{})
 	t.Cleanup(sync.OnceFunc(func() { close(release) }))
-	onFileRead(t, func(string) { <-release })
+	held := make(chan struct{}, localFileMaxAbandonedReads)
+	onFileRead(t, func(string) {
+		held <- struct{}{}
+		<-release
+	})
 	for i := range localFileMaxAbandonedReads {
-		resp, err := read("d"+strconv.Itoa(i), 200*time.Millisecond)
+		ctx, end := testutil.DeadlineEndedByHand()
+		go func() {
+			select {
+			case <-held:
+			case <-time.After(30 * time.Second):
+			}
+			end()
+		}()
+		resp, err := fetchLocalFile(ctx, "d"+strconv.Itoa(i), c, RequestOverrides{}, nil)
 		if err != nil || !errors.Is(fileErrors(t, resp)["app.prom"], context.DeadlineExceeded) {
 			t.Fatalf("read %d: resp=%v err=%v", i, resp, err)
 		}
@@ -347,34 +366,58 @@ func TestLocalDirectorySizeLimits(t *testing.T) {
 
 // A file the read has not finished by the scrape's deadline fails alone; what
 // was read is answered.
+//
+// The files that are answered have to have been read when the deadline
+// passes, and nothing tells the test that they were: so the deadline is its
+// own to end, and the directory holds as many files whose read hangs as the
+// read has workers. A worker takes its next file when it has finished the
+// one before, and the two files that are read come first by name, so with
+// every worker held at a file that hangs, those two are finished. A
+// deadline of a second had passed, on a machine slow enough, before they
+// were.
 func TestLocalDirectoryAnswersWhatWasReadByTheDeadline(t *testing.T) {
 	root := t.TempDir()
-	for _, name := range []string{"a.prom", "b.prom", "slow.prom"} {
+	names := []string{"a.prom", "b.prom"}
+	for i := range localFileDirectoryWorkers {
+		names = append(names, "slow"+strconv.Itoa(i)+".prom")
+	}
+	for _, name := range names {
 		testutil.WriteIn(t, root, name, "# TYPE v gauge\nv 1\n")
 	}
 	hold := make(chan struct{})
 	release := sync.OnceFunc(func() { close(hold) })
 	t.Cleanup(release)
+	held := make(chan struct{}, localFileDirectoryWorkers)
 	onFileRead(t, func(full string) {
-		if filepath.Base(full) == "slow.prom" {
+		if strings.HasPrefix(filepath.Base(full), "slow") {
+			held <- struct{}{}
 			<-hold
 		}
 	})
-	// The other two files have a second to be read in before the deadline,
-	// and the slow one is not read while the test runs: a fetch that returns
-	// was not held by it.
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
-	defer cancel()
+	// The slow files are not read while the test runs: a fetch that returns
+	// was not held by them.
+	ctx, end := testutil.DeadlineEndedByHand()
+	go func() {
+		for range localFileDirectoryWorkers {
+			select {
+			case <-held:
+			case <-time.After(30 * time.Second):
+			}
+		}
+		end()
+	}()
 	resp, err := fetchLocalFile(ctx, "", validated(t, dirCollector("dir", root, "*.prom")), RequestOverrides{}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	errs := fileErrors(t, resp)
-	if len(errs) != 3 || errs["a.prom"] != nil || errs["b.prom"] != nil {
+	if len(errs) != len(names) || errs["a.prom"] != nil || errs["b.prom"] != nil {
 		t.Fatalf("errs=%v", errs)
 	}
-	if err := errs["slow.prom"]; !errors.Is(err, context.DeadlineExceeded) {
-		t.Fatalf("the file still being read: err=%v", err)
+	for _, name := range names[2:] {
+		if err := errs[name]; !errors.Is(err, context.DeadlineExceeded) {
+			t.Fatalf("%s, still being read: err=%v", name, err)
+		}
 	}
 	// The read says it was cut short, so the answer is not cached.
 	if !resp.Directory.CutShort {
@@ -388,8 +431,13 @@ func TestLocalDirectoryAnswersWhatWasReadByTheDeadline(t *testing.T) {
 	}
 }
 
-// Files are read several at a time, never more than the workers, and answered
-// in name order whatever order the reads finished in.
+// Files are read as many at a time as there are workers, never more, and
+// answered in name order whatever order the reads finished in.
+//
+// The first reads are held until as many are in progress as there are
+// workers, so that many are, however late the machine starts a worker: with
+// each read taking 30ms instead, a worker that began after the first had
+// read every file found nothing left to read beside it.
 func TestLocalDirectoryReadsFilesConcurrently(t *testing.T) {
 	root := t.TempDir()
 	for i := range 10 {
@@ -397,12 +445,23 @@ func TestLocalDirectoryReadsFilesConcurrently(t *testing.T) {
 	}
 	var mu sync.Mutex
 	current, peak := 0, 0
+	together := make(chan struct{})
 	onFileRead(t, func(string) {
 		mu.Lock()
 		current++
 		peak = max(peak, current)
+		if current == localFileDirectoryWorkers {
+			select {
+			case <-together:
+			default:
+				close(together)
+			}
+		}
 		mu.Unlock()
-		time.Sleep(30 * time.Millisecond)
+		select {
+		case <-together:
+		case <-time.After(30 * time.Second):
+		}
 		mu.Lock()
 		current--
 		mu.Unlock()
@@ -425,8 +484,8 @@ func TestLocalDirectoryReadsFilesConcurrently(t *testing.T) {
 	}
 	mu.Lock()
 	defer mu.Unlock()
-	if peak < 2 || peak > localFileDirectoryWorkers {
-		t.Fatalf("%d files were read at once, want between 2 and %d", peak, localFileDirectoryWorkers)
+	if peak != localFileDirectoryWorkers {
+		t.Fatalf("%d files were read at once, want %d, as many as there are workers", peak, localFileDirectoryWorkers)
 	}
 }
 

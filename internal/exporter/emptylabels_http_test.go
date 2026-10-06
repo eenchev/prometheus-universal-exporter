@@ -64,7 +64,7 @@ func TestALabelWrittenEmptyIsInNoAnswer(t *testing.T) {
 		}
 	}
 
-	server.scrapeStaticTargets(context.Background(), 10*time.Second)
+	server.scrapeStaticTargets(context.Background(), 0)
 	body := probeOnce(t, server, "/static-targets", nil).Body.String()
 	target := `collector="plain",static_target="eu",target="` + upstream.URL + `",zone="a"`
 	for _, want := range []string{`v{static_target="eu",zone="a"} 7` + "\n", "http_exporter_target_up{" + target + "} 1\n", "http_exporter_target_scrape_duration_seconds{" + target + "} "} {

@@ -57,7 +57,9 @@ func newDecodingProxy(t *testing.T, routes map[string]string) *decodingProxy {
 // serve answers one request, GET http://host/path, and closes.
 func (p *decodingProxy) serve(conn net.Conn) {
 	defer func() { _ = conn.Close() }()
-	_ = conn.SetDeadline(time.Now().Add(10 * time.Second))
+	// A minute for the request and its answer, which bounds a connection
+	// that sends nothing and no request of a busy machine.
+	_ = conn.SetDeadline(time.Now().Add(time.Minute))
 	reader := bufio.NewReader(conn)
 	line, err := reader.ReadString('\n')
 	if err != nil {

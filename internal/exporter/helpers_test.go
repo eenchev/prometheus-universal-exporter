@@ -41,6 +41,11 @@ func fixtureCollector() model.Collector {
 	return c
 }
 
+// otlpConfig is an otlp block for endpoint. Its timeout, which bounds each
+// attempt of an export, is half a minute, where the default is five seconds:
+// an attempt that is meant to get through then has as long as anything else
+// a test waits for, and one a busy machine held up is not sent again, which
+// a test that counts the requests would see.
 func otlpConfig(endpoint string) model.OTLPConfig {
 	return model.OTLPConfig{
 		Enabled:            true,
@@ -48,7 +53,7 @@ func otlpConfig(endpoint string) model.OTLPConfig {
 		ServiceName:        "prometheus-universal-exporter",
 		ResourceAttributes: map[string]string{"deployment.environment": "test"},
 		Interval:           model.Duration(time.Minute),
-		Timeout:            model.Duration(5 * time.Second),
+		Timeout:            model.Duration(30 * time.Second),
 	}
 }
 
@@ -62,7 +67,9 @@ func parseExposition(body []byte) error {
 
 // scrapeStaticTargets scrapes every static target once, now, within
 // budget, as StaticScrapeLoop would when each came due: the tests drive
-// scrapes directly rather than wait for the schedule.
+// scrapes directly rather than wait for the schedule. A budget of 0 is half
+// a minute, which only ends a hang, and is what a test whose scrapes are
+// meant to end by themselves gives; a test of the budget names its own.
 func (s *Server) scrapeStaticTargets(ctx context.Context, budget time.Duration) {
 	if budget <= 0 {
 		budget = 30 * time.Second

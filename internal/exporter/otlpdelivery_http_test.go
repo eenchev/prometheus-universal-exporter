@@ -141,9 +141,9 @@ func TestOTLPExportsAreGzippedUnlessCompressionIsNone(t *testing.T) {
 		t.Fatalf("otlp.compression defaults to %q, want gzip", got)
 	}
 	queueProbeMetric(server, "probe_value", 1)
-	server.exportOTLP(context.Background(), 5*time.Second)
+	server.exportOTLP(context.Background(), time.Minute)
 	server.manager.Get().OTLP.Compression = model.OTLPCompressionNone
-	server.exportOTLP(context.Background(), 5*time.Second)
+	server.exportOTLP(context.Background(), time.Minute)
 
 	if endpoint.count() != 2 || endpoint.encoding[0] != "gzip" || endpoint.encoding[1] != "" {
 		t.Fatalf("Content-Encoding of the exports: %q", endpoint.encoding)
@@ -167,7 +167,7 @@ func TestOTLPExportsRetryTransientFailures(t *testing.T) {
 		endpoint := newOTLPEndpoint(t, status, status, http.StatusOK)
 		server := otlpServer(t, endpoint.server.URL)
 		queueProbeMetric(server, "probe_value", 1)
-		server.exportOTLP(context.Background(), 5*time.Second)
+		server.exportOTLP(context.Background(), time.Minute)
 		if endpoint.count() != 3 {
 			t.Fatalf("%d: %d attempts, want 3", status, endpoint.count())
 		}
@@ -192,20 +192,20 @@ func TestOTLPExportsRetryTransientFailures(t *testing.T) {
 }
 
 // A Retry-After longer than the budget ends the export rather than waiting
-// past it.
+// past it, where an answer without one is retried.
 //
-// The endpoint never accepts, so an export that returns was ended by its
-// budget, and one that waited out the hour the endpoint asks for would hold
-// the test until the minute its context has: no time is measured. The first
-// budget is a second so that the first attempt, which has to end with time
-// left for another, has nearly all of it to end in.
+// No time is measured, and none is short. The first export is retried once
+// and then accepted, in a budget of a minute. The second has half a minute,
+// which the hour the endpoint asks for is longer than: it returns after one
+// attempt, and an export that waited out the hour would be held until the
+// minute its context has.
 func TestOTLPRetriesStayWithinTheBudget(t *testing.T) {
 	fastRetries(t)
-	endpoint := newOTLPEndpoint(t, http.StatusServiceUnavailable)
+	endpoint := newOTLPEndpoint(t, http.StatusServiceUnavailable, http.StatusOK, http.StatusServiceUnavailable)
 	server := otlpServer(t, endpoint.server.URL)
-	server.exportOTLP(context.Background(), time.Second)
-	if endpoint.count() < 2 {
-		t.Fatalf("%d attempts within the budget, want retries", endpoint.count())
+	server.exportOTLP(context.Background(), time.Minute)
+	if endpoint.count() != 2 {
+		t.Fatalf("%d attempts at an endpoint that accepts the second, want the retry", endpoint.count())
 	}
 
 	endpoint.mu.Lock()
@@ -214,9 +214,9 @@ func TestOTLPRetriesStayWithinTheBudget(t *testing.T) {
 	before := endpoint.count()
 	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 	defer cancel()
-	server.exportOTLP(ctx, time.Second)
+	server.exportOTLP(ctx, 30*time.Second)
 	if ctx.Err() != nil || endpoint.count() != before+1 {
-		t.Fatalf("Retry-After 3600 with a 1s budget: %d attempts, and the export was still waiting a minute later: %v; want one attempt and no wait", endpoint.count()-before, ctx.Err() != nil)
+		t.Fatalf("Retry-After 3600 with a 30s budget: %d attempts, and the export was still waiting a minute later: %v; want one attempt and no wait", endpoint.count()-before, ctx.Err() != nil)
 	}
 }
 
@@ -269,7 +269,7 @@ func TestRefusedOTLPDataIsDropped(t *testing.T) {
 	server := otlpServer(t, endpoint.server.URL)
 	queueProbeMetric(server, "first_value", 1)
 	queueProbeMetric(server, "second_value", 1)
-	server.exportOTLP(context.Background(), 5*time.Second)
+	server.exportOTLP(context.Background(), time.Minute)
 	if endpoint.count() != 1 {
 		t.Fatalf("a 400 was tried %d times, want once", endpoint.count())
 	}
@@ -287,22 +287,34 @@ func TestRefusedOTLPDataIsDropped(t *testing.T) {
 
 // Unreachable is retried and kept.
 //
-// The budget is a second: the first attempt has to end with time left for
-// another, and under 200ms a machine busy enough leaves it none.
+// The first attempt has to end with time left for another, and how long it
+// takes to be refused is the machine's to say: the budget starts at 200ms,
+// and an export that made no retry within it is made again with twice the
+// budget and a new exporter, up to half a minute. An exporter that does not
+// retry makes none in any of them, at once, so the test fails as fast as it
+// passes; a slow machine makes it slower.
 func TestUnreachableOTLPEndpoint(t *testing.T) {
 	fastRetries(t)
 	endpoint := httptest.NewServer(http.NotFoundHandler())
 	url := endpoint.URL
 	endpoint.Close()
-	server := otlpServer(t, url)
-	queueProbeMetric(server, "probe_value", 1)
-	server.exportOTLP(context.Background(), time.Second)
-	exposition := selfMetrics(t, server)
-	if seriesValue(t, exposition, `http_exporter_otlp_exports_total{result="failure"}`) != 1 || seriesValue(t, exposition, "http_exporter_otlp_export_retries_total") < 1 {
-		t.Fatalf("an unreachable endpoint was not retried and counted:\n%s", exposition)
-	}
-	if _, ok := pendingValue(server, "probe_value"); !ok {
-		t.Fatal("data for an unreachable endpoint was dropped")
+	for budget := 200 * time.Millisecond; ; budget *= 2 {
+		server := otlpServer(t, url)
+		queueProbeMetric(server, "probe_value", 1)
+		server.exportOTLP(context.Background(), budget)
+		exposition := selfMetrics(t, server)
+		if _, ok := pendingValue(server, "probe_value"); !ok {
+			t.Fatal("data for an unreachable endpoint was dropped")
+		}
+		if seriesValue(t, exposition, `http_exporter_otlp_exports_total{result="failure"}`) != 1 {
+			t.Fatalf("an unreachable endpoint was not counted as a failed export:\n%s", exposition)
+		}
+		if seriesValue(t, exposition, "http_exporter_otlp_export_retries_total") >= 1 {
+			return
+		}
+		if 2*budget > 30*time.Second {
+			t.Fatalf("an unreachable endpoint was not retried within a budget of %s:\n%s", budget, exposition)
+		}
 	}
 }
 

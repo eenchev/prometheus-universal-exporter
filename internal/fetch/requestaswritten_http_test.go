@@ -253,7 +253,9 @@ func TestATargetOnlyTheProxyResolvesIsRequestedThroughIt(t *testing.T) {
 	resolveHost = func(_ context.Context, host string) ([]netip.Addr, error) {
 		return nil, &net.DNSError{Err: "no such host", Name: host, IsNotFound: true}
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	// A minute for the test's requests together, which bounds one that
+	// hangs and no request of a busy machine.
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 	defer cancel()
 
 	resp, err := FetchCollector(ctx, "http://metrics.partner.invalid/metrics?x=1", httpCollector(t, nil), RequestOverrides{}, nil)

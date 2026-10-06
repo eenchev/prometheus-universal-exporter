@@ -5120,7 +5120,15 @@ fingerprints the reload made, it MUST NOT encode or hash a definition, so
 that each collector is encoded once in all for the reload, static targets
 or none; a fingerprint that nothing had asked for yet, of the configuration
 the exporter started with, it MUST work out once and keep with that
-configuration, where the probes and the next reload find it made. The
+configuration, where the probes and the next reload find it made. To find a
+collector of the configuration followed by its name — a probe its own, the
+scrape of a static target its target's, the schedule the one whose
+fingerprint it reads — the exporter MUST NOT go through the collectors of
+that configuration: where each is MUST be noted once for the configuration,
+by the reload that works out its fingerprints, before it is in force, or,
+for the configuration the exporter started with, by the first to ask, and
+the collector found MUST be the one going through them finds, the first of
+that name. The
 fingerprints kept MUST NOT grow with the reloads: the exporter MUST keep
 those of the configuration in force, and MAY keep those of one
 configuration before it while probes still read that one. What was worked
@@ -6502,6 +6510,12 @@ what is allocated, so each such test MUST be measured under it too, and where
 its bound does not hold there with room to spare the test MUST skip its
 allocation assertions under the race detector and say so in its comment.
 
+How much stack a call takes is counted for the process too, and a stack a
+goroutine has outgrown is kept until a collection in progress has ended. A
+test that bounds the stack a call takes MUST measure it with no collection
+running: it finishes the one in progress and lets none start until the call
+has ended.
+
 Nor MAY a test depend on how fast the machine is. A test MUST wait for the
 event it is about — a condition it polls, a hook, a channel — and not for a
 length of time, under a bound that only ends a hang. Where a test runs
@@ -6509,7 +6523,13 @@ against one of the exporter's own timeouts, its values MUST be chosen so that
 a slower machine makes the test slower and does not fail it: what must not
 happen is given long, and what must happen has no bound but the hang's. A
 test MUST NOT assert that a measured duration is below a value; it asserts an
-order, a count, or a least duration. The tests that hold the static target
+order, a count, or a least duration. Where something has to have happened
+when a deadline passes, the test ends the deadline itself once it has seen
+what had to come first, or runs the code on a clock of its own that stands
+still while the code is at work, or runs again with twice the time for as
+long as the deadline passed too early, up to the bound that ends a hang; a
+deadline that is on the machine's clock and is not tried again MUST leave
+the earlier step a second or more. The tests that hold the static target
 loop to its interval on the real clock MAY compare a time with a multiple of
 that interval, each beside a test of the same schedule on a clock of its own.
 Two things many tests meet are held to this in one place. The worker pool a
@@ -6520,7 +6540,11 @@ is of that limit, which then starts what never becomes ready. And a test
 server that the exporter calls as a `grpc` target MUST listen on a port no
 such server of the test process had before, since the exporter keeps a
 connection per address and a reflection answer per connection, and the
-kernel gives a freed port out again.
+kernel gives a freed port out again. A test that has the exporter do
+something within its `--web.shutdown-delay` MUST keep the exporter in the
+delay until that is done, and MUST NOT rely on the delay being long enough;
+the wait for the delay MUST be replaceable for that, and nothing but a test
+MAY replace it.
 
 A test MAY work on a smaller input when the tests are built with the race
 detector, under which the suite runs twice and several times slower: fewer
@@ -8261,8 +8285,8 @@ See § 5.0a, § 5.1a, § 22.0d, § 23 and § 42.1a.
 - A caching collector whose directory read was cut short reads again on the
   next probe, and one whose read finished is served from the cache; a read the
   shutdown cut short is aborted and logs no failure.
-- Files of a directory are read at most four at a time and more than one at
-  once, and answered in name order.
+- Files of a directory are read four at a time, never more, and answered in
+  name order.
 - A listing past its bound is logged with how many entries were listed.
 - A file that grows during its read past its share of `max_total_bytes` fails
   alone, saying it grew.
@@ -8376,7 +8400,7 @@ See § 23 and § 30.
 - A target given a new interval while its scrape runs is skipped, not
   scraped beside it, until that scrape ends; a removed target's result is
   neither kept nor queued.
-- After a `SIGTERM` with `--web.shutdown-delay` of 3s, `/ready` answers `503`
+- After a `SIGTERM` with `--web.shutdown-delay` of 1s, `/ready` answers `503`
   naming the shutdown while a probe is still answered `200`; the process exits
   `0` after the delay, logging it; a negative value exits 2. Without the delay
   nothing changes: the exporter stops at once.
@@ -9264,8 +9288,9 @@ Tests MUST show:
   reflection question; the connection would wait an hour to try again by
   itself.
 - A `grpc` call and its two retries to a target that hangs up on every
-  connection dial it at least three times, make three attempts and fail
-  `UNAVAILABLE`.
+  connection dial it nine times on a clock of the test's own, once for the
+  call and four times in each retry's wait of a second, make three attempts
+  and fail `UNAVAILABLE` after the two waits and the two backoffs.
 - A `grpc` connection silenced without FIN or RST fails the probe that finds
   it with `DEADLINE_EXCEEDED`; the next probe is answered on a second
   connection, and the dead one is closed.
@@ -9420,12 +9445,14 @@ Tests MUST show:
 - The request for a Python script holds a text response's body once, is not
   much larger than it, and the script finds `response.text`, `response.body`
   and `data` to be one string; data that is not the body is sent as it is.
-- A worker that takes twice `script_timeout` to say it has the request and
-  then answers at once succeeds, with a script time under the timeout; one
-  that has it at once and runs three times the timeout times out; one that
-  answers an error instead of taking the request gives that answer.
+- On a clock of the test's own, a worker that takes twice `script_timeout`
+  to say it has the request and then answers at once succeeds, with a script
+  time of nothing; one that has it at once and runs three times the timeout
+  times out when the timeout has passed, to the nanosecond; one that answers
+  an error instead of taking the request gives that answer.
 - With a real worker and a 32 MiB response (8 MiB under the race detector),
-  the script time a probe reports is under a third of the run.
+  the script time a probe reports is under a third of the run, in the first
+  of up to five runs where it is.
 - A script the probe's deadline ends before `script_timeout` fails with an
   error naming the time it ran and the `script_timeout` it had not reached,
   not a timeout, that is a deadline error and a script failure, and counts
@@ -9442,8 +9469,9 @@ Tests MUST show:
   four stops are counted `crash`, one worker is started, no run `failed`.
 - Idle workers whose request pipes are closed, alive or not when taken,
   cost the next scrape another worker and no failure.
-- A script that arms `signal.alarm` leaves a worker that dies idle a second
-  later, and the scrape after that succeeds.
+- A script that arms `signal.alarm` leaves a worker that dies idle when the
+  alarm goes off, a second later, or twice as long for as often as the alarm
+  ended the run that armed it; the scrape after that succeeds.
 - A worker whose script replaces `os.getppid` and runs for 2.5 seconds, past
   the parent watch's interval, serves the runs before and after it: one
   worker started.
@@ -9489,9 +9517,10 @@ Tests MUST show:
   handler only until the write deadline: the handler returns, the connection
   is closed, and the drop is logged once, at debug level, with the path, the
   client's address and the deadline, and nothing at warn or error level.
-- A second probe on a kept-alive connection, sent after twice the write
-  deadline, is answered in full on the same connection, and so is a probe
-  whose trip takes longer than the deadline.
+- Each answer on a kept-alive connection sets a write deadline of its own on
+  it, no earlier than 30 seconds after its target answered, and a probe sent
+  on the connection while it carries a deadline already past is answered in
+  full on the same connection.
 - A probe's OTLP point carries the time its cache entry has; a cache hit ten
   seconds later, a cache hit at the start of a trip, and a stale answer five
   minutes later carry that scrape's time, while
@@ -14739,8 +14768,9 @@ Tests MUST show:
   exporter, killed by it, once the log says the shutdown has begun.
 - A retry wait the deadline cuts short keeps the target's `503`, and a
   refused connection its error, with a deadline two seconds away and a wait
-  of an hour, and the deadline has passed when the fetch returns; a probe
-  whose retry runs out of a 2s budget reports the target's `503`.
+  of an hour on a clock of the test's own, which stands still until the
+  fetch waits: the fetch returns at the deadline to the nanosecond; a probe
+  whose retry wait runs out of its budget reports the target's `503`.
 - A static target scrape that waits for a slot gets it when the test frees
   it, which it does once the scrape is seen waiting in line; trip limiter
   waiters are each seen in line before the next is started.
@@ -14750,14 +14780,16 @@ Tests MUST show:
 - A static target file rewritten at the same length is reloaded by the watch
   with its time set a second later, as a filesystem that stamps two writes
   within one tick of its clock alike would not show the change.
-- A deadline that an earlier step has to beat leaves that step a second or
-  more: a rule's failure is kept when the rule after it runs into a deadline
-  a second away; a probe whose budget of a second runs out inside a jq rule
-  answers `502` naming the rule and the budget, under each error mode; the
-  other files of a directory are answered when one read hangs past a
-  deadline of a second; a connection reset a second after the head and the
-  start of the body were written fails the fetch as one reset in the middle
-  of the body.
+- A deadline that an earlier step has to beat leaves that step the time it
+  takes, or a second or more: a rule's failure is kept when the rule after
+  it runs into a deadline, a tenth of a second away and twice as far for as
+  long as it passed at the first rule; a probe whose budget runs out inside
+  a jq rule answers `502` naming the rule and the budget, under each error
+  mode, with a budget that is doubled until the target has answered within
+  it; the other files of a directory are answered when the reads of four
+  hang past a deadline the test ends once all four are held; a
+  connection reset a second after the head and the start of the body were
+  written fails the fetch as one reset in the middle of the body.
 
 ## 34.97 Configurations that loaded and did something else: a switched-off otlp block, empty and blank filter entries, empty constant labels, a constant on a python rule's label
 
@@ -16852,6 +16884,218 @@ Tests MUST show:
   which is 1,001 nodes as the one item of a part, is decoded, the value
   handed as the alias it is. Both are what the library alone and the walk
   before make of them.
+
+## 34.110 Tests that no longer race a clock, a stack measured with no collection running, and a collector found by its name
+
+- No test of `internal/exporter` or of the main package gives something that
+  is meant to happen less than half a minute, the bound of a hang, to happen
+  in: a static target scrape a test makes itself, an OTLP export and each of
+  its attempts, a probe with a `timeout` parameter whose target answers when
+  the test lets it, a probe a caller of the test's waits for, and a scrape
+  the loop made that a test waits for at a channel.
+- Every endpoint's write deadline is no earlier than 30 seconds after its
+  request began and no later than 30 seconds after its handler returned,
+  however long the handler took.
+- A client that reads nothing of a 7 MiB answer is dropped at a write
+  deadline of 300ms that the test does not race: the probe's success is read
+  from its counter, and the exporter's side of the connection, which notes
+  the one deadline set on it, is closed no earlier than that deadline.
+- Three answers on one kept-alive connection each set a write deadline of
+  their own on it, no earlier than 30 seconds after the target of each
+  answered, with the deadline as the exporter has it, and each after the
+  first is written in full on a connection given a deadline already past.
+- A probe whose budget runs out inside a jq rule that never ends, and one
+  whose budget runs out in an hour's wait before a retry, start with a
+  budget of 100ms and are made again with twice the budget and a new
+  exporter for as long as the budget ended before the target's answer was
+  read, which the probe says itself — the `http` stage failing for the
+  budget, or a trace of its requests without the target's whole `503` — and
+  hold what they held, with the budget they name, once it was.
+- An OTLP export retried once and then accepted makes two attempts in a
+  budget of a minute, and one answered `503` with a `Retry-After` of an hour
+  returns after one attempt in a budget of half a minute; an unreachable
+  endpoint is retried, counted as one failed export and its data kept, in a
+  budget that starts at 200ms and is doubled until the first attempt left
+  time for a second.
+- The scrape loop with a concurrency of 2 and five targets due at once, each
+  held at the target, has two scrapes there when all five have come for a
+  slot and a tenth of a second later, and no more than two at any time; the
+  intervals are an hour, so no scrape ends before its target answers.
+- A fast target of the scrape loop is scraped four times on its interval of
+  40ms while an hourly one is scraped at most once, counted where the loop
+  begins a scrape, so that a scrape the interval ended before it reached the
+  target counts.
+- A scrape in flight when the scrape loop stops finishes and publishes, and
+  one the shutdown cuts short leaves the result of a scrape made before the
+  loop ran, with targets whose interval is a minute and whose first scrape
+  is due at once, so that no interval ends a scrape the target holds.
+- A cache entry of a collector with a `cache.ttl` of a minute that the test
+  expires itself is fetched again, and the entry the second probe leaves is
+  counted alive however late.
+- A child exporter stays in its `--web.shutdown-delay`, once that is over,
+  until the test closes its standard input: `/ready` answers `503` and a
+  probe is answered `200` in a delay of a second, a static target scrape and
+  an OTLP export arrive after the log says the delay began and before it
+  says the delay ended, and a `SIGHUP` sent in a delay of 100ms is answered
+  with a reload, each before the test lets the delay end; each exporter then
+  exits `0`, the first not before its delay was over.
+- A static target scrape that the target's interval of a second ended is
+  not counted as a failure the shutdown reported; any other failed scrape,
+  and a scrape without a slot, is.
+- `waitOutShutdownDelay` is declared once as `time.Sleep`, called once, and
+  set by no file that is not a test's.
+- A retry wait the deadline cuts short is tested on a clock of the test's
+  own, which stands still while the request is on its way or its answer is
+  read and moves on when the fetch waits: with a deadline two seconds away
+  and a wait of an hour, the fetch of a target that answers `503` returns
+  the `503` and its body, and the fetch of a refused connection its error
+  and that the wait was cut short, each two seconds on to the nanosecond.
+  The target is started outside that clock and answers `Connection: close`,
+  and the fetch has connection pools of its own. With the request made three
+  seconds late both hold as they do without; on the machine's clock both
+  failed there with the bare `context deadline exceeded`.
+- A `grpc` call and its two retries to a target that hangs up on every
+  connection are made on a clock of the test's own, with connections that
+  would wait an hour by themselves kept in a cache of the test's and closed
+  before the clock is left: the target is dialed nine times, once for the
+  call and four times in each retry's wait of a second, a quarter of a
+  second apart, in three attempts that fail `UNAVAILABLE` after 2.02s of
+  that clock. A target two and a half seconds late to hang up changes
+  neither count; on the machine's clock it left the test at two dials, one
+  short of the three it asked for.
+- A probe whose deadline ends on a call the server never answers, beside a
+  call still being answered on the same connection, fails with its own
+  deadline however late it learns of it: what the server sends is held back
+  from the moment the call is made until the probe has given up, and let
+  through then. Held back for 150ms, the server's own `DEADLINE_EXCEEDED`
+  came first for a probe 300ms late, which took it for an answer and kept
+  the connection.
+- A `grpc` call that is to be answered has a minute for its deadline, which
+  the server sees as more than nothing and no more than a minute; at five
+  seconds a server six seconds late failed the call.
+- A deadline that passes with a directory's read still running is the
+  test's to end (`testutil.DeadlineEndedByHand`), and is ended when the
+  read is held at the file it hangs on: each of four probes of a directory
+  whose file is never read answers the file as not read before the
+  deadline, and the fifth is refused for the four reads left behind; of a
+  directory of two files and four whose reads hang, as many as the read has
+  workers, the two are answered, the four fail with the deadline, and the
+  read is marked cut short. With every directory read 1.2 seconds late both
+  hold; with deadlines of 200ms and of a second on the machine's clock the
+  probes failed there for the listing.
+- The files of a directory are read four at a time, exactly: the first
+  reads are held until as many are in progress as there are workers. With
+  every worker but the first half a second late it is four still, where
+  reads of 30ms each left one worker to read all ten files alone.
+- A request that must succeed has a minute where it had five or ten seconds,
+  which only bounds one that hangs: the reads of a healthy filesystem that
+  are held until twelve are in progress, of files and of directories, and
+  the read after the abandoned ones returned; an answer read whole with or
+  without its length; the answers whose headers are megabytes over HTTP/2;
+  a request through the proxy the environment names; an answer over the
+  response limit that is refused before its body is read; a request Go sends
+  with nothing of the exporter around it; and the stand-in proxy's reading
+  of one request. Each fails as it did when what it waits for is eleven
+  seconds late, and none does now.
+- Tests left as they were hold on a slow machine by what they are: a host
+  refused for a character no name has, or one outside ASCII, is refused
+  with its deadline already past; so is the transform that a deadline stops
+  at its first rule; a connection reset after the head and the start of the
+  body fails as a reset in the middle of the body with no wait at all
+  between the two, the head being read before the reset is seen; and the
+  `grpc` calls of a target that resets every TLS handshake name two ports
+  with the resets a second and a half late, in one more round of calls.
+- On a clock of the test's own, a worker that takes 600ms to say it has the
+  request and answers at once, under a `script_timeout` of 300ms, succeeds
+  after exactly 600ms with a script time of nothing, and one that has the
+  request at once and answers after 900ms times out at exactly 300ms. With
+  the caller 400ms late between starting the script's clock and looking for
+  the answer both hold; on the machine's clock the first timed out there.
+- A script the probe's deadline ends is run under a deadline a second away,
+  and under twice that for as often as the deadline passed with the request
+  still on its way to the worker, up to sixteen seconds: the run that the
+  deadline ended in the script is reported as stopped after its time
+  because the probe ran out of it, not because of `limits.script_timeout
+  (20s)`, and as many runs and workers are counted ended by the deadline as
+  were. With every request handed over a second and a half late, two are.
+- A rule's failure before the deadline is kept under a deadline a tenth of a
+  second away, and twice that for as long as the deadline passed at the
+  first rule: the transform is then stopped at the second rule with the
+  first one's failure in the report. With every transform begun a second
+  and a half late the deadline that holds is the fifth, of 1.6 seconds.
+- A script that arms `signal.alarm` by the seconds its response names ends
+  its idle worker when the alarm goes off, and the next run gets another
+  worker; an alarm that ended the run it was armed in, on a machine that
+  left the worker waiting so long, is armed again twice as far away. The
+  idle worker is looked up, not got by a second run, which had to end
+  within the alarm's second too.
+- The workers a test leaves idle together are each started while the others
+  are being started: every run is held where it starts its worker until all
+  are there, so four runs leave four workers and two leave two, with each
+  run begun a second after the one before as with all begun at once, where
+  scripts that slept 0.3s left one.
+- The script time a probe reports of a 32 MiB response is under a third of
+  the run in the first of up to five runs: with the exporter half a second
+  late to read the first answer, the second run holds it.
+- A busy worker whose exporter was killed ends within the half minute a
+  wait has, where it had fifteen seconds; a run of the tests of shared
+  values has half a minute, its interpreter's start included, where it had
+  fifteen seconds; and the start as it was, beside which a start is run,
+  has the pool's limit, a minute in a test, where its ten seconds made
+  `python3` on a busy machine end otherwise than the start it is compared
+  with.
+- What a call adds to the goroutines' stacks is measured with no collection
+  running: the collector is turned off, the collection in progress finished
+  and the collector put back after the call, so that a stack the goroutine
+  has outgrown is given back at once and not kept until a collection ends.
+  Decoding the chain of 9,996 merges at the depth bound, and the library's
+  decoding of a chain of 20,000 anchors, then grow the stack by 16 MB to the
+  byte, the deepest sequence accepted by 4 MB and each refusal by nothing,
+  in 40 runs on one processor of a busy machine and in 10 with the collector
+  set to run nearly without pause (`GOGC=1`). Measured with collections
+  running, the chain of merges came to 24 MB in one run of five with
+  `GOGC=1` and to 32 MB in one of twenty on one processor of a busy machine,
+  over the 17 MB its test allows: the failure of `internal/decode` under
+  load.
+- A collector found by its name is the one going through the collectors
+  found: over 60 generated configurations of no collector to 24, half of
+  them named so that collectors share a name, and for every name of theirs,
+  one never configured and the empty one, the place kept for a name is the
+  index of the first collector so named, or none; the collector a probe or a
+  scrape is given is the very one `model.CollectorByName` gives; and the
+  fingerprint the schedule is given is the one the former lookup, kept
+  beside the test, gives, with as many definitions encoded, asked with the
+  configuration followed, with none followed, with another one followed and
+  with one followed that keeps no fingerprints. The fingerprint a probe's
+  cache key is made of is as it was too, for every collector, the second of
+  a name among them, for a copy of one, for a collector of another
+  configuration than the one remembered, with no configuration and with no
+  collector, again with as many definitions encoded. With the configuration
+  followed its collectors are gone through once in all, and once for every
+  ask otherwise. Under the race detector it is 20 configurations.
+- The collectors of a configuration are gone through once for it, and not
+  for its static targets, its probes or its scrapes: of 60 caching
+  collectors with a static target each, of 240, and of 60 with five targets
+  each, the schedule's first look goes through the collectors of the
+  configuration the exporter started with once, a reload that removes half
+  of them and adds as many, their targets with them, goes through those of
+  its configuration once, before it is in force, and the look the schedule
+  then takes goes through them not at all, where it went through them once
+  for every collector with a static target; neither does a probe of the
+  last collector nor the scrape of the last static target, each of which
+  went through them twice. A schedule that follows no configuration goes
+  through them once for each collector it asks about, however many targets
+  share it. Under the race detector it is 12, 48 and 12 collectors.
+- The generated reloads the schedule is compared over with the former one
+  (§ 34.109) have, more often than once a look, a target whose collector
+  stands in the configuration after one without a static target, and as
+  often a target whose collector the configuration does not have, never
+  configured or removed by a reload, which has no fingerprint before or
+  after; the test fails when its runs have fewer.
+- `BenchmarkFollowReloadSchedule` also times the look for 10,000 collectors
+  with a static target each and for 500 collectors with 20 targets each,
+  and reports how many times the look went through the collectors of the
+  configuration to find one by its name: none.
 
 # 35. Documentation requirements
 

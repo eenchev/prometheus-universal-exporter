@@ -152,16 +152,27 @@ func TestTransformsStopWhenTheContextIsDone(t *testing.T) {
 // read.
 //
 // The first rule has to have failed when the deadline passes, which nothing
-// tells the test, so the deadline is a second away: at 50ms a machine that
-// leaves the test waiting for a CPU that long ends the transform at the
-// first rule, which fails the test.
+// tells the test. So the deadline is a tenth of a second away, and where a
+// machine that left the test waiting for a CPU that long ended the transform
+// at the first rule, the test doubles it and tries again, until a deadline
+// of more than ten seconds has passed at the first rule too. At a deadline
+// of 50ms, and then of a second, that machine failed the test.
 func TestRuleFailuresBeforeTheDeadlineAreKept(t *testing.T) {
 	testutil.CaptureLogs(t)
 	c := model.Collector{Name: "mixed", Decoder: model.DecoderConfig{Type: "json"}, Transform: model.TransformConfig{Type: "jq"},
 		Metrics: []model.MetricRule{{Name: "absent", Expression: ".missing", ErrorMode: model.ErrorModeLog}, {Name: "slow", Expression: endless, ErrorMode: model.ErrorModeLog}}}
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
-	defer cancel()
-	_, failures, err := transformWith(ctx, t, c, "application/json", `{"a":1}`)
+	var (
+		failures []RuleFailure
+		err      error
+	)
+	for within := 100 * time.Millisecond; ; within *= 2 {
+		ctx, cancel := context.WithTimeout(context.Background(), within)
+		_, failures, err = transformWith(ctx, t, c, "application/json", `{"a":1}`)
+		cancel()
+		if within > 10*time.Second || !errors.Is(err, context.DeadlineExceeded) || strings.Contains(err.Error(), `"slow"`) {
+			break
+		}
+	}
 	if !errors.Is(err, context.DeadlineExceeded) || !strings.Contains(err.Error(), `"slow"`) {
 		t.Fatalf("err %v", err)
 	}

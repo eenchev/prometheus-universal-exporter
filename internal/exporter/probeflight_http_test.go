@@ -185,7 +185,7 @@ func TestDifferentProbesAreNotShared(t *testing.T) {
 	}{
 		{target.URL, "", "Bearer alice"},
 		{other.URL, "", "Bearer alice"},
-		{target.URL, "&timeout=5s", "Bearer alice"},
+		{target.URL, "&timeout=50s", "Bearer alice"},
 		{target.URL, "", "Bearer bob"},
 	}
 	var outcomes []<-chan probeOutcome

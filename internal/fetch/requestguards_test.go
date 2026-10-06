@@ -68,7 +68,8 @@ func TestTheResponseLimitReportsTheRealSize(t *testing.T) {
 		_, _ = w.Write(bytes.Repeat([]byte("x"), 10))
 		w.(http.Flusher).Flush()
 		// The rest never comes until the test is over: only a fetch that
-		// does not read the body returns in time.
+		// does not read the body returns before its deadline, a minute
+		// away, with another error than the deadline's.
 		select {
 		case <-release:
 		case <-r.Context().Done():
@@ -76,7 +77,7 @@ func TestTheResponseLimitReportsTheRealSize(t *testing.T) {
 	}))
 	defer declared.Close()
 	c := httpCollector(t, func(c *model.Collector) { c.Request.MaxResponseBytes = 100 })
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 	defer cancel()
 	_, err := FetchCollector(ctx, declared.URL, c, RequestOverrides{}, nil)
 	if !errors.Is(err, model.ErrLimitExceeded) || !strings.Contains(err.Error(), "response size 5000 exceeds limit 100") {

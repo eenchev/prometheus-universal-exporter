@@ -79,7 +79,7 @@ func TestStaticTargetsFollowErrorHandling(t *testing.T) {
 				file := &model.StaticTargetFile{Interval: model.Duration(time.Minute), Targets: []model.StaticTarget{{ExportViaOTLP: true, Name: "flaky", Collector: "demo", Target: target.URL}}}
 				server := newStaticServer(t, cfg, file)
 
-				server.scrapeStaticTargets(context.Background(), 10*time.Second)
+				server.scrapeStaticTargets(context.Background(), 0)
 				resources := server.drainOTLP()
 				if len(resources) != 1 {
 					t.Fatalf("resources=%d", len(resources))
@@ -143,7 +143,7 @@ func TestStaticTargetsAndProbesAgreeOnErrorHandling(t *testing.T) {
 
 				probe := probeOnce(t, server, "/probe?collector=demo&target="+target.URL, nil)
 				probeUp := probe.Code == http.StatusOK
-				server.scrapeStaticTargets(context.Background(), 10*time.Second)
+				server.scrapeStaticTargets(context.Background(), 0)
 				up := metricByName(server.drainOTLP()[0].Set, "http_exporter_target_up")
 				if staticUp := up != nil && up.Value == 1; staticUp != probeUp {
 					t.Fatalf("probe answered %d but the static target is up=%v", probe.Code, staticUp)
@@ -169,7 +169,7 @@ func TestStaticMetricFailureFailsDespiteTransformPolicy(t *testing.T) {
 	file := &model.StaticTargetFile{Interval: model.Duration(time.Minute), Targets: []model.StaticTarget{{ExportViaOTLP: true, Name: "strict", Collector: "demo", Target: target.URL}}}
 	server := newStaticServer(t, cfg, file)
 
-	server.scrapeStaticTargets(context.Background(), 10*time.Second)
+	server.scrapeStaticTargets(context.Background(), 0)
 	up := metricByName(server.drainOTLP()[0].Set, "http_exporter_target_up")
 	if up == nil || up.Value != 0 {
 		t.Fatalf("a metric rule with error_mode fail should fail the scrape: %+v", up)
@@ -195,7 +195,7 @@ func TestStaticCarryOnDoesNotLogRecovery(t *testing.T) {
 	server := newStaticServer(t, cfg, file)
 
 	for range 3 {
-		server.scrapeStaticTargets(context.Background(), 10*time.Second)
+		server.scrapeStaticTargets(context.Background(), 0)
 		_ = server.drainOTLP()
 	}
 	if strings.Contains(logs.String(), "static target recovered") {

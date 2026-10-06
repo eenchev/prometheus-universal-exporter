@@ -356,7 +356,7 @@ func TestErrorModesOnAStaticTarget(t *testing.T) {
 			file := &model.StaticTargetFile{Interval: model.Duration(time.Minute), Targets: []model.StaticTarget{{ExportViaOTLP: true, Name: "one", Collector: "scheduled", Target: target.URL}}}
 			server := newStaticServer(t, cfg, file)
 
-			server.scrapeStaticTargets(context.Background(), 10*time.Second)
+			server.scrapeStaticTargets(context.Background(), 0)
 			resources := server.drainOTLP()
 			if len(resources) != 1 {
 				t.Fatalf("resources=%d", len(resources))

@@ -83,7 +83,7 @@ func TestStaticTargetsAnswerInTheFormatAskedFor(t *testing.T) {
 	}}
 	server := newStaticServer(t, cfg, file)
 	server.logger = testutil.QuietLogger(t)
-	server.scrapeStaticTargets(context.Background(), 10*time.Second)
+	server.scrapeStaticTargets(context.Background(), 0)
 	for _, path := range []string{"/static-targets", "/static-targets?targets=eu"} {
 		for _, accept := range []string{"", prometheus2Accept} {
 			request := httptest.NewRequest(http.MethodGet, path, nil)

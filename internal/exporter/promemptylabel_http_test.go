@@ -108,7 +108,7 @@ func TestATargetsEmptyLabelIsInNoAnswerAndNoExport(t *testing.T) {
 		}
 	}
 
-	server.exportOTLP(context.Background(), 5*time.Second)
+	server.exportOTLP(context.Background(), time.Minute)
 	select {
 	case export := <-received:
 		empty, all := emptyAttributes(t, export)

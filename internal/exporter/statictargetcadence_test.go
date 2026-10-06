@@ -612,13 +612,13 @@ func TestAFailedScrapeLeavesOnlyTheHealthSeries(t *testing.T) {
 		file := &model.StaticTargetFile{Interval: model.Duration(time.Minute), Targets: []model.StaticTarget{{Name: "app", Collector: "text", Target: target.URL}}}
 		server := newStaticServer(t, &model.Config{Collectors: []model.Collector{collector}}, file)
 		server.logger = testutil.QuietLogger(t)
-		server.scrapeStaticTargets(t.Context(), 10*time.Second)
+		server.scrapeStaticTargets(t.Context(), 0)
 		body := getStaticTargets(t, server, "/static-targets")
 		if !strings.Contains(body, `demo_value{static_target="app"} 1`) || !strings.Contains(body, "http_exporter_target_up{") {
 			t.Fatalf("stale_if_error %t, after a good scrape:\n%s", stale, body)
 		}
 		down.Store(true)
-		server.scrapeStaticTargets(t.Context(), 10*time.Second)
+		server.scrapeStaticTargets(t.Context(), 0)
 		body = getStaticTargets(t, server, "/static-targets")
 		if !strings.Contains(body, `http_exporter_target_up{collector="text",static_target="app",target="`+target.URL+`"} 0`) ||
 			strings.Contains(body, "http_exporter_target_last_success_timestamp_seconds{collector=\"text\",static_target=\"app\",target=\""+target.URL+"\"} 0\n") {
@@ -633,7 +633,7 @@ func TestAFailedScrapeLeavesOnlyTheHealthSeries(t *testing.T) {
 		// A scrape the shutdown cuts short publishes nothing: what the
 		// failed scrape left is still what is served.
 		server.AbortStaticScrapes()
-		server.scrapeStaticTargets(server.staticScrapes(), 10*time.Second)
+		server.scrapeStaticTargets(server.staticScrapes(), 0)
 		if again := getStaticTargets(t, server, "/static-targets"); stale && !strings.Contains(again, `demo_value{static_target="app"} 1`) || !strings.Contains(again, "http_exporter_target_up{") {
 			t.Fatalf("stale_if_error %t, after a scrape that published nothing:\n%s", stale, again)
 		}
@@ -704,7 +704,7 @@ func TestAScrapeUsesTheConfigurationItsTargetWasReadWith(t *testing.T) {
 		select {
 		case name := <-waiting:
 			begun[name] = true
-		case <-time.After(15 * time.Second):
+		case <-time.After(30 * time.Second):
 			t.Fatal("the second scrape never began to wait for a slot")
 		}
 	}

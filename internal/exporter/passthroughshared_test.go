@@ -117,7 +117,7 @@ latency_seconds_count{handler="/a"} 2
 	}
 	unchanged("after a second probe")
 
-	server.scrapeStaticTargets(context.Background(), 10*time.Second)
+	server.scrapeStaticTargets(context.Background(), 0)
 	unchanged("after the static targets were scraped")
 	if resources := server.drainOTLP(); len(resources) == 0 {
 		t.Fatal("the static targets queued nothing for OTLP")

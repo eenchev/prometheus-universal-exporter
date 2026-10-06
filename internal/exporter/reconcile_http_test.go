@@ -171,13 +171,13 @@ func TestAFailingStaticTargetLogsOnce(t *testing.T) {
 	logs := testutil.CaptureLogs(t)
 	server.logger = slog.Default()
 	for i := 0; i < 3; i++ {
-		server.scrapeStaticTargets(t.Context(), 5*time.Second)
+		server.scrapeStaticTargets(t.Context(), 0)
 	}
 	if got := strings.Count(logs.String(), `"msg":"static target scrape failed"`); got != 1 {
 		t.Fatalf("3 identical failures logged %d lines:\n%s", got, logs.String())
 	}
 	up.Store(true)
-	server.scrapeStaticTargets(t.Context(), 5*time.Second)
+	server.scrapeStaticTargets(t.Context(), 0)
 	if !strings.Contains(logs.String(), `"msg":"static target recovered","target":"api"`) || !strings.Contains(logs.String(), `"failures":3`) {
 		t.Fatalf("recovery not logged:\n%s", logs.String())
 	}

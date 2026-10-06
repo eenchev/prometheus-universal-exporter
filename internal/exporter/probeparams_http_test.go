@@ -77,11 +77,11 @@ func TestSpellingsOfOneRequestShareACacheEntry(t *testing.T) {
 	server, _ := newCacheTestServer(t, staleCollector(time.Minute, time.Hour))
 	probe := "/probe?collector=flaky&target=" + url.QueryEscape(target.URL)
 	for _, spelling := range []string{
-		"&method=GET&timeout=5s&retry_backoff=1s&retry_attempts=2&insecure_skip_verify=true&follow_redirects=false",
-		"&method=get&timeout=5s&retry_backoff=1s&retry_attempts=2&insecure_skip_verify=true&follow_redirects=false",
-		"&method=%20Get%20&timeout=5000ms&retry_backoff=1000ms&retry_attempts=2&insecure_skip_verify=true&follow_redirects=false",
-		"&method=GET&timeout=5.0s&retry_backoff=0m1s&retry_attempts=02&insecure_skip_verify=TRUE&follow_redirects=False",
-		"&method=GET&timeout=%205s&retry_backoff=1s&retry_attempts=%2B2&insecure_skip_verify=%20true&follow_redirects=false&x=1",
+		"&method=GET&timeout=50s&retry_backoff=1s&retry_attempts=2&insecure_skip_verify=true&follow_redirects=false",
+		"&method=get&timeout=50s&retry_backoff=1s&retry_attempts=2&insecure_skip_verify=true&follow_redirects=false",
+		"&method=%20Get%20&timeout=50000ms&retry_backoff=1000ms&retry_attempts=2&insecure_skip_verify=true&follow_redirects=false",
+		"&method=GET&timeout=50.0s&retry_backoff=0m1s&retry_attempts=02&insecure_skip_verify=TRUE&follow_redirects=False",
+		"&method=GET&timeout=%2050s&retry_backoff=1s&retry_attempts=%2B2&insecure_skip_verify=%20true&follow_redirects=false&x=1",
 	} {
 		if r := probeOnce(t, server, probe+spelling, nil); r.Code != http.StatusOK {
 			t.Fatalf("%s answered %d: %s", spelling, r.Code, r.Body)
@@ -103,7 +103,7 @@ func TestSpellingsOfOneRequestShareACacheEntry(t *testing.T) {
 	if calls := flaky.calls.Load(); calls != 2 {
 		t.Errorf("the probe without parameters, written %d ways, went to the target %d times, want once", len(bare), calls-1)
 	}
-	for _, other := range []string{"&method=POST", "&timeout=6s", "&retry_attempts=3", "&follow_redirects=true"} {
+	for _, other := range []string{"&method=POST", "&timeout=60s", "&retry_attempts=3", "&follow_redirects=true"} {
 		before := flaky.calls.Load()
 		if r := probeOnce(t, server, probe+other, nil); r.Code != http.StatusOK || flaky.calls.Load() != before+1 {
 			t.Errorf("%s answered %d after %d trips, want a trip of its own", other, r.Code, flaky.calls.Load()-before)
@@ -129,9 +129,11 @@ func TestSpellingsOfOneRequestShareATrip(t *testing.T) {
 	server, _ := newCacheTestServer(t, testutil.Collector("text", "text"))
 	probe := "/probe?collector=text&target=" + url.QueryEscape(target.URL)
 	answers := make(chan int, 2)
-	go func() { answers <- probeOnce(t, server, probe+"&method=get&timeout=5s", nil).Code }()
+	// The timeout is one neither probe is held to: the target answers when
+	// the second has joined the first, however long that takes.
+	go func() { answers <- probeOnce(t, server, probe+"&method=get&timeout=50s", nil).Code }()
 	<-entered
-	go func() { answers <- probeOnce(t, server, probe+"&method=GET&timeout=5000ms", nil).Code }()
+	go func() { answers <- probeOnce(t, server, probe+"&method=GET&timeout=50000ms", nil).Code }()
 	testutil.WaitFor(t, "the second probe to join the first", func() bool {
 		server.flights.mu.Lock()
 		defer server.flights.mu.Unlock()

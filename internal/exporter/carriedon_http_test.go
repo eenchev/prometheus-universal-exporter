@@ -501,7 +501,7 @@ func TestAStaticTargetThatCarriesOnContributesItsHealthSeriesOnly(t *testing.T) 
 					cfg := &model.Config{Collectors: []model.Collector{collector}}
 					file := &model.StaticTargetFile{Interval: model.Duration(time.Minute), Targets: []model.StaticTarget{{Name: "flaky", Collector: "demo", Target: address}}}
 					server := newStaticServer(t, cfg, file)
-					server.scrapeStaticTargets(context.Background(), 10*time.Second)
+					server.scrapeStaticTargets(context.Background(), 0)
 
 					labels := `{collector="demo",static_target="flaky",target="` + address + `"}`
 					for _, format := range expositionFormats {

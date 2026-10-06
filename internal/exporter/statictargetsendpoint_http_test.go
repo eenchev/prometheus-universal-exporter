@@ -39,7 +39,7 @@ func TestTheStaticTargetsEndpointServesEveryTarget(t *testing.T) {
 	if body := getStaticTargets(t, server, "/static-targets"); body != "" {
 		t.Fatalf("before any scrape the endpoint served:\n%s", body)
 	}
-	server.scrapeStaticTargets(context.Background(), 10*time.Second)
+	server.scrapeStaticTargets(context.Background(), 0)
 	body := getStaticTargets(t, server, "/static-targets")
 	for series, want := range map[string]float64{
 		`demo_value{region="eu",static_target="eu"}`:                                                       42,
@@ -73,7 +73,7 @@ func TestExportViaOTLPAlsoQueuesTheTargetForOTLP(t *testing.T) {
 		{Name: "served", Collector: "text", Target: target.URL, Labels: map[string]string{"via": "endpoint"}},
 	}}
 	server := newStaticServer(t, cfg, file)
-	server.scrapeStaticTargets(context.Background(), 10*time.Second)
+	server.scrapeStaticTargets(context.Background(), 0)
 
 	body := getStaticTargets(t, server, "/static-targets")
 	for _, name := range []string{"exported", "served"} {
@@ -125,7 +125,7 @@ func TestARemovedTargetLeavesTheEndpoint(t *testing.T) {
 		{Name: "removed", Collector: "text", Target: target.URL},
 	}}
 	server := newStaticServer(t, cfg, both)
-	server.scrapeStaticTargets(context.Background(), 10*time.Second)
+	server.scrapeStaticTargets(context.Background(), 0)
 	if body := getStaticTargets(t, server, "/static-targets"); !strings.Contains(body, `static_target="removed"`) {
 		t.Fatalf("before the reload:\n%s", body)
 	}
@@ -188,21 +188,21 @@ func TestTheLastSuccessOfAStaticTargetIsServed(t *testing.T) {
 	series := `http_exporter_target_last_success_timestamp_seconds{collector="text",static_target="t",target="` + target.URL + `"}`
 
 	failing.Store(true)
-	server.scrapeStaticTargets(context.Background(), 10*time.Second)
+	server.scrapeStaticTargets(context.Background(), 0)
 	if got := metricValue(t, getStaticTargets(t, server, "/static-targets"), series); got != 0 {
 		t.Fatalf("before any success the timestamp is %v, want 0", got)
 	}
 
 	failing.Store(false)
 	before := float64(time.Now().Unix())
-	server.scrapeStaticTargets(context.Background(), 10*time.Second)
+	server.scrapeStaticTargets(context.Background(), 0)
 	succeeded := metricValue(t, getStaticTargets(t, server, "/static-targets"), series)
 	if succeeded < before || succeeded > float64(time.Now().Unix()+1) {
 		t.Fatalf("after a success the timestamp is %v, want about %v", succeeded, before)
 	}
 
 	failing.Store(true)
-	server.scrapeStaticTargets(context.Background(), 10*time.Second)
+	server.scrapeStaticTargets(context.Background(), 0)
 	body := getStaticTargets(t, server, "/static-targets")
 	if got := metricValue(t, body, series); got != succeeded {
 		t.Fatalf("after a failure the timestamp is %v, want the earlier success %v", got, succeeded)
@@ -285,7 +285,7 @@ func TestTheStaticTargetsEndpointServesTheNamedTargets(t *testing.T) {
 		{Name: "asia", Collector: "text", Target: target.URL},
 	}}
 	server := newStaticServer(t, cfg, file)
-	server.scrapeStaticTargets(context.Background(), 10*time.Second)
+	server.scrapeStaticTargets(context.Background(), 0)
 
 	all := getStaticTargets(t, server, "/static-targets")
 	for query, want := range map[string]string{
@@ -331,7 +331,7 @@ func TestTheStaticTargetsParameterRefusesUnknownNames(t *testing.T) {
 	if body := getStaticTargets(t, server, "/static-targets?targets=eu"); body != "" {
 		t.Fatalf("a target not scraped yet was served:\n%s", body)
 	}
-	server.scrapeStaticTargets(context.Background(), 10*time.Second)
+	server.scrapeStaticTargets(context.Background(), 0)
 	for query, want := range map[string]string{
 		"?targets=eu,uss,apac": `no static target is named "apac", "uss"`,
 		"?targets=":            "the targets parameter names no static target",
@@ -391,7 +391,7 @@ func TestStaticTargetsSharingAResourceStayApartOverOTLP(t *testing.T) {
 		{Name: "us", Collector: "text", Target: us.URL, ExportViaOTLP: true},
 	}}
 	server := newStaticServer(t, cfg, file)
-	server.scrapeStaticTargets(context.Background(), 10*time.Second)
+	server.scrapeStaticTargets(context.Background(), 0)
 
 	values := map[string]float64{}
 	for _, resource := range server.drainOTLP() {
@@ -442,7 +442,7 @@ func TestTheStaticTargetsEndpointKeepsItsMergeBetweenScrapes(t *testing.T) {
 		{Name: "us", Collector: "text", Target: target.URL},
 	}}
 	server := newStaticServer(t, cfg, file)
-	server.scrapeStaticTargets(context.Background(), 10*time.Second)
+	server.scrapeStaticTargets(context.Background(), 0)
 
 	first := getStaticTargets(t, server, "/static-targets")
 	view := server.staticView
@@ -483,7 +483,7 @@ func TestAReadAgainstAReplacedFileForgetsNothing(t *testing.T) {
 	server := newStaticServer(t, cfg, old)
 	added := &model.StaticTargetFile{Interval: old.Interval, Targets: append(append([]model.StaticTarget{}, old.Targets...), model.StaticTarget{Name: "us", Collector: "text", Target: target.URL})}
 	server.manager.SetTargets("", added)
-	server.scrapeStaticTargets(context.Background(), 10*time.Second)
+	server.scrapeStaticTargets(context.Background(), 0)
 	// A read that started before the reload.
 	server.storedStaticResults(old, time.Time{})
 	if body := getStaticTargets(t, server, "/static-targets"); !strings.Contains(body, `static_target="us"`) {

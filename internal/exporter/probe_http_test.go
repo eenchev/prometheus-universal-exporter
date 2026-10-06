@@ -65,7 +65,7 @@ func TestProbeRequestOverrides(t *testing.T) {
 		t.Fatal(err)
 	}
 	server := NewServer(config.NewManager(cfg, "", slog.Default()), "python3", slog.Default())
-	request := httptest.NewRequest(http.MethodGet, "/probe?target="+target.URL+"&collector=override&method=POST&path=%2Fapi%2Fstatus&timeout=2s&body=raw+payload", nil)
+	request := httptest.NewRequest(http.MethodGet, "/probe?target="+target.URL+"&collector=override&method=POST&path=%2Fapi%2Fstatus&timeout=50s&body=raw+payload", nil)
 	response := httptest.NewRecorder()
 	server.Handler().ServeHTTP(response, request)
 	if response.Code != http.StatusOK {

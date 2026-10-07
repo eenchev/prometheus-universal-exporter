@@ -275,7 +275,8 @@ start once and then serves scrape after scrape.
   answers with more than `limits.max_output_bytes`, is replaced; an answer it
   does not write because a list or a dict is in it too often, or in itself,
   or because its strings alone are longer than the limit, is the script's
-  error, and the worker carries on. A worker that
+  error, and the worker carries on. An exception is never such an answer,
+  however long its text is (below). A worker that
   died while it sat idle — killed by the kernel for memory, or by a signal a
   script armed and left behind, such as `signal.alarm` — fails no scrape: it
   is found dead when it is next taken, counted as a `crash`, and another runs
@@ -317,9 +318,41 @@ start once and then serves scrape after scrape.
   transform failed: ... (3613 lines)` and then the end of the traceback: the
   last exception with its frames, and as many of those before it as fit.
   The same failure with a longer message, or a longer chain that ends alike,
-  is one failure to the log. An exception whose message is larger than
-  `limits.max_output_bytes` does not come back at all: the scrape fails with
-  `python transform output exceeds limit`, as for any answer over it.
+  is one failure to the log.
+
+  An exception's text does not count as output, and
+  `limits.max_output_bytes` never makes of it `python transform output
+  exceeds limit`. A traceback of more than 16,384 characters, or one whose
+  line would not fit the limit, is cut by the worker itself, before it
+  writes it, to exactly what is shown of it above. So `raise
+  ValueError(response.text)`
+  with a response of two megabytes, `fail(text)`, a `KeyError` of a large
+  key or a `SyntaxError` on a line of megabytes fails under the default limit
+  of 1 MiB with the frame and the exception's line as above: counted as the
+  script's error (`script_error`, not `output_limit`), recognised as the
+  same failure whatever the length, and with the worker still in service.
+  The worker neither joins nor copies such a message to cut it, whatever
+  its characters are: it is in memory as often as Python's `traceback`
+  module makes it, twice or three times with the version, where writing it
+  whole took five.
+
+  Where the worker cannot make the text of an error at all, the scrape
+  still fails as the script's, with the type of its exception and of what
+  kept the text from being written: `python transform failed: ValueError:
+  (the text of this error could not be written: MemoryError)`. That one is
+  a message `limits.max_script_memory` does not hold twice, which is how
+  often the `traceback` module needs it: raise less of the data in the
+  exception, or raise the limit. The worker stays in service after it.
+
+  What is shown of an error fits any limit of 16 KiB or more, whatever its
+  characters are: written out it stays under 11 kB even where JSON writes
+  every byte of it as six characters. Under a smaller limit that does not
+  hold it the error is what fits: what would be shown in
+  half the 1,500 bytes, and half again, which leaves out frames and lines
+  of the message before the exception's own line; and under a limit too
+  small for that line by its first 200 bytes, as many of its first
+  characters as fit. The `MemoryError` of `limits.max_script_memory` is cut
+  the same way.
 - **Output.** `print` inside a script is captured per run and never mixes with
   the metrics. The first 4 KiB of it is logged at debug level, as `python
   transform printed` or `python pre-script printed` with the collector, so

@@ -193,8 +193,18 @@ func targetsChecked(f *model.StaticTargetFile, configs ...*model.Config) *model.
 		if c == nil {
 			continue
 		}
+		// Only a target that sets a message has its collector looked for,
+		// so a target file that sets none, as every one without a grpc
+		// collector, goes through no collectors at all.
+		var collectors map[string]*model.Collector
 		for i := range f.Targets {
-			if collector := model.CollectorByName(c, f.Targets[i].Collector); collector != nil && f.Targets[i].Request.Message != "" {
+			if f.Targets[i].Request.Message == "" {
+				continue
+			}
+			if collectors == nil {
+				collectors = collectorsByName(c)
+			}
+			if collector := collectors[f.Targets[i].Collector]; collector != nil {
 				checked.Collectors = append(checked.Collectors, *collector)
 			}
 		}

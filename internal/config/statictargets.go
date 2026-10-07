@@ -9,6 +9,7 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/eenchev/prometheus-universal-exporter/internal/fetch"
@@ -212,28 +213,26 @@ func ValidateStaticTargetsAgainst(f *model.StaticTargetFile, c *model.Config) er
 			return fmt.Errorf("target %q sets export_via_otlp, which needs otlp.endpoint", t.Name)
 		}
 	}
-	known := map[string]bool{}
-	for i := range c.Collectors {
-		known[c.Collectors[i].Name] = true
-	}
+	collectors := collectorsByName(c)
 	for i := range f.Targets {
 		t := &f.Targets[i]
-		if !known[t.Collector] {
+		collector := collectors[t.Collector]
+		if collector == nil {
 			return fmt.Errorf("target %q references unknown collector %q", t.Name, t.Collector)
 		}
 		// What a target may be depends on the collector's request type: an
 		// absolute URL for http, a file under request.root for localfile,
 		// which may also leave it out.
-		if err := fetch.CheckTarget(model.CollectorByName(c, t.Collector), t.Target, true); err != nil {
+		if err := fetch.CheckTarget(collector, t.Target, true); err != nil {
 			if errors.Is(err, fetch.ErrMissingTarget) {
 				return fmt.Errorf("target %q has no target address", t.Name)
 			}
 			return fmt.Errorf("target %q: %w", t.Name, err)
 		}
-		if err := fetch.CheckTargetRequest(t, model.CollectorByName(c, t.Collector)); err != nil {
+		if err := fetch.CheckTargetRequest(t, collector); err != nil {
 			return err
 		}
-		if err := checkRetriesFitTheInterval(t, model.CollectorByName(c, t.Collector)); err != nil {
+		if err := checkRetriesFitTheInterval(t, collector); err != nil {
 			return err
 		}
 		// Every placeholder of the collector, in its request or in a label
@@ -241,28 +240,61 @@ func ValidateStaticTargetsAgainst(f *model.StaticTargetFile, c *model.Config) er
 		// params or a default, since nothing else can fill it; and every
 		// param must fill one, since an unused one is a misspelling.
 		// Catching both here makes them startup errors naming both sides.
-		if collector := model.CollectorByName(c, t.Collector); collector != nil {
-			unused, err := fetch.CheckRequestParams(collector, fetch.TargetOverrides(t))
-			var missing *fetch.MissingParamError
-			if errors.As(err, &missing) {
-				// Only a path the target sets itself replaces the
-				// collector's placeholder; a query value, header or body
-				// placeholder has no such way around it.
-				alternatives := "set it under the target's params, or give the placeholder a default"
-				if missing.Where == "request.path" {
-					alternatives = "set it under the target's params, give the placeholder a default, or set request.path on the target"
-				}
-				return fmt.Errorf("target %q uses collector %q, whose %s needs %s, a parameter without a default; a static target has no probe to supply it, so %s", t.Name, t.Collector, missing.Where, missing.Name, alternatives)
+		unused, err := fetch.CheckRequestParams(collector, fetch.TargetOverrides(t))
+		var missing *fetch.MissingParamError
+		if errors.As(err, &missing) {
+			// Only a path the target sets itself replaces the
+			// collector's placeholder; a query value, header or body
+			// placeholder has no such way around it.
+			alternatives := "set it under the target's params, or give the placeholder a default"
+			if missing.Where == "request.path" {
+				alternatives = "set it under the target's params, give the placeholder a default, or set request.path on the target"
 			}
-			if err != nil {
-				return fmt.Errorf("target %q uses collector %q: %w", t.Name, t.Collector, err)
-			}
-			if len(unused) > 0 {
-				return fmt.Errorf("target %q params %s are not used by collector %q: no placeholder in its request or its label values names them", t.Name, strings.Join(unused, ", "), t.Collector)
-			}
+			return fmt.Errorf("target %q uses collector %q, whose %s needs %s, a parameter without a default; a static target has no probe to supply it, so %s", t.Name, t.Collector, missing.Where, missing.Name, alternatives)
+		}
+		if err != nil {
+			return fmt.Errorf("target %q uses collector %q: %w", t.Name, t.Collector, err)
+		}
+		if len(unused) > 0 {
+			return fmt.Errorf("target %q params %s are not used by collector %q: no placeholder in its request or its label values names them", t.Name, strings.Join(unused, ", "), t.Collector)
 		}
 	}
 	return nil
+}
+
+// A static target names its collector, and every check of the target
+// against the configuration needs that collector. Going through the
+// configuration's collectors for it (model.CollectorByName) costs as much as
+// the configuration is large, and the check went through them four times
+// for every target, and once more for each configuration to learn which
+// descriptor files it opens (targetsChecked): for 10,000 targets of as many
+// collectors that was seconds of a reload, which checks the pair up to five
+// times. So where the collectors are is noted once for a check, by their
+// names, and each target's is found there. The exporter keeps the same for
+// the configuration it follows (internal/exporter, fingerprintGeneration);
+// that one lives with what the exporter keeps for a configuration in force,
+// and the check is also of a configuration that is not in force yet.
+
+// collectorsIndexedHook, set by tests, is called whenever the collectors of
+// a configuration are gone through to note where each is (collectorsByName):
+// once for each time, not for each collector, so a test can count the times
+// and see that it is once for a check, not once for each static target.
+var collectorsIndexedHook atomic.Pointer[func()]
+
+// collectorsByName is the collectors of c by their names, each the one
+// model.CollectorByName(c, name) returns: the very collector of c and not a
+// copy, and of two that share a name the first, which is why they are gone
+// through from the last. A loaded configuration has no two of one name
+// (Validate), and a name it has none of is not in the map.
+func collectorsByName(c *model.Config) map[string]*model.Collector {
+	if hook := collectorsIndexedHook.Load(); hook != nil {
+		(*hook)()
+	}
+	byName := make(map[string]*model.Collector, len(c.Collectors))
+	for i := len(c.Collectors) - 1; i >= 0; i-- {
+		byName[c.Collectors[i].Name] = &c.Collectors[i]
+	}
+	return byName
 }
 
 // paramPlaceholder is `{{param_`, spaces allowed after the braces, which

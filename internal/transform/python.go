@@ -49,6 +49,11 @@ type pythonOutput struct {
 	Metrics []any  `json:"metrics"`
 	Data    any    `json:"data"`
 	Log     string `json:"log"`
+	// Shown is the error of a script that failed as the worker cut it, in
+	// place of Error: one of more than 16,384 characters, or whose line
+	// limits.max_output_bytes does not hold, as the exporter would have
+	// shown it (shownByWorker).
+	Shown []any `json:"shown"`
 	// read says readPythonAnswer read the answer (pythonanswer.go), which
 	// leaves no Metrics: series are the metrics as the series they stand
 	// for, up to the first that is none, whose error seriesErr is, and
@@ -643,7 +648,12 @@ func pythonResult(c *model.Collector, what string, timeout time.Duration, line [
 	if !out.OK {
 		PythonWorkers().recordRun(c.Name, pythonRunScriptError)
 		// A traceback past what an error holds is shown by its end, the
-		// exception's own line and the frames before it (scripterror.go).
+		// exception's own line and the frames before it (scripterror.go):
+		// by the worker already where it might not have fitted the output
+		// limit whole.
+		if out.Shown != nil {
+			return nil, model.Errorf("python %s failed: %s", what, shownByWorker(out.Shown))
+		}
 		return nil, model.Errorf("python %s failed: %s", what, shownScriptError(strings.TrimSpace(out.Error)))
 	}
 	PythonWorkers().recordRun(c.Name, pythonRunOK)

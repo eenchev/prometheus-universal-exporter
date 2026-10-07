@@ -1,6 +1,7 @@
 package transform
 
 import (
+	"encoding/json"
 	"strconv"
 	"strings"
 	"unicode/utf8"
@@ -139,6 +140,54 @@ func shownScriptError(text string) model.QuotedValue {
 	}
 	return model.ShownAs(said.String(), same.String())
 }
+
+// shownByWorker is the error of a script that failed as the worker made it
+// ready to show, parts: the texts and the numbers of what shownScriptError
+// makes of the whole traceback, in their order. A traceback that may be
+// longer than limits.max_output_bytes is not sent whole to be shown here —
+// it was, and the line it made was refused as output over the limit, which
+// said nothing of the exception and cost the worker. The worker shows it by
+// the same rules (the launcher's cut; scripterrorcut_test.go compares the
+// two) and sends what is shown. Each number is one that was measured, the
+// length of a line or how many lines a part had, so it is written as it is
+// and is the mark in what the failure is recognised by.
+//
+// Parts that come to more than a worker shows of any error
+// (shownByWorkerBytes) are no worker's: a script can write to the answers
+// itself, as it could always write an error of its own there, and one of a
+// megabyte in parts was a transform's error of a megabyte, where every
+// error a worker sent was cut here. Such a text is an error's text like
+// another and is shown as one is, so nothing this returns is longer than
+// that.
+func shownByWorker(parts []any) model.QuotedValue {
+	var said, same strings.Builder
+	for _, part := range parts {
+		switch part := part.(type) {
+		case string:
+			said.WriteString(part)
+			same.WriteString(part)
+		case json.Number:
+			said.WriteString(part.String())
+			same.WriteString(model.MovingMark)
+		}
+	}
+	if said.Len() > shownByWorkerBytes {
+		return shownScriptError(strings.TrimSpace(said.String()))
+	}
+	return model.ShownAs(said.String(), same.String())
+}
+
+// shownByWorkerBytes is how long what is shown of a script's error can be,
+// by shownScriptError and so by a worker: the lines it keeps take
+// scriptErrorBytes at most, each with its line break, which the last has
+// none of; before them and after them may stand how many lines a part had;
+// and each number, which takes one byte where the lines are counted, is as
+// many digits as a length has, nineteen at most. The numbers are those two
+// and the length of each line that is cut, which takes its first
+// scriptLineBytes bytes, or up to three fewer, and the mark of its length:
+// seven lines at most. That is 1,689 bytes.
+const shownByWorkerBytes = scriptErrorBytes - 1 + 2*len("... (# lines)\n") +
+	(2+scriptErrorBytes/(scriptLineBytes-utf8.UTFMax+1+len("... (# bytes)\n")))*(len("9223372036854775807")-len(model.MovingMark))
 
 // stderrShownBytes is how much of what a worker wrote to stderr an error
 // shows. The worker keeps the last pythonStderrTail bytes of it, 4,096, and

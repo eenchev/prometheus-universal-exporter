@@ -3095,10 +3095,11 @@ typical script.
   MUST end as it did, written, with the output limit's error and its
   worker; an answer of exactly `limits.max_output_bytes` MUST be taken; and
   an answer within the limit MUST be the line it was, byte for byte. An
-  answer that is no script's `data` or `metrics`, the worker's own word or
-  a script's error, MUST be written however long. Counting the strings MUST
-  add no second walk of an answer: the cost is one addition for each string
-  the walk meets.
+  answer that is no script's `data` or `metrics` is not measured so: the
+  worker's own word MUST be written as it is, and a script's error as the
+  rule on it below says, never longer than the limit. Counting the strings
+  MUST add no second walk of an answer: the cost is one addition for each
+  string the walk meets.
 - A worker MUST say, with a line of its own before it runs the script, that
   it has read and parsed the request. `limits.script_timeout` MUST bound the
   run of a script from that line on: not the start of the interpreter, which
@@ -3168,6 +3169,61 @@ typical script.
   the failure MUST be recognised (§ 25.1) by the text with those marks, so
   that the same failure of a longer message, or of a longer chain that ends
   alike, is shown by the same lines and is one failure.
+- A script's error MUST NOT be output over the limit, whatever its length:
+  an exception whose text is longer than `limits.max_output_bytes` — a
+  message as long as the response, a `KeyError` of a large key, a
+  `SyntaxError` on a long line, exceptions raised from one another — MUST
+  fail the run with the error the rule above makes of the whole traceback,
+  recognised as that is, MUST be counted as a script's failure (the outcome
+  `script_error`, § 22.1a) and MUST leave the worker in service. A worker
+  MUST NOT write an error's line longer than the limit. An error of 16,384
+  characters or fewer whose line is within the limit MUST be written whole,
+  the line it was. Any other the worker MUST cut itself, by the rule above
+  to the byte — the text trimmed of the space around it as the exporter
+  trims it, its lines told by line feeds alone, lengths in bytes of UTF-8
+  with half a surrogate pair as U+FFFD and the two halves of one as their
+  character, as the exporter reads them — and MUST write as `shown` in place
+  of `error`: the text in parts, each a string or a number that was
+  measured (a line's length, how many lines a part had), which the exporter
+  MUST write in its place and MUST leave out of what the failure is
+  recognised by. The exporter MUST NOT make of `shown` more than it shows
+  of an error: parts that come to more than 1,689 bytes — the longest the
+  rule above shows, 1,500 bytes of lines, how many lines were left out
+  before them and after, and nine numbers of nineteen digits — are no
+  worker's, and MUST be shown as the text of an error of that length is; a
+  part that is neither a string nor a number MUST be passed over.
+  What is shown of an error is within 16 KiB however it is
+  written, so an error that reached the exporter whole under a limit MUST
+  still be reported as it was under that limit. Where the limit holds
+  neither the whole error nor what is shown of it, the error MUST be what
+  fits: what the rule above shows in half its 1,500 bytes, and half again
+  down to none, which leaves out frames and lines of the message and keeps
+  the exception's own line by its first 200 bytes; and where that line
+  does not fit either, as many of its first characters as do. The
+  `MemoryError` that names `limits.max_script_memory` MUST be written the
+  same way. To cut an
+  error a worker MUST NOT join, copy or encode it whole, one with halves of
+  surrogate pairs in it no more than another: it MUST look at the
+  pieces the traceback module hands out one at a time, those shorter than
+  64 KiB joined until they come to that much, less than 128 KiB together,
+  so that a message is held no more often
+  than that module makes it. A worker MUST answer that the script failed
+  whatever making the line of its error raises — a `MemoryError` where
+  `limits.max_script_memory` does not hold the copy the traceback module
+  makes of a message, an exception of a class that cannot be asked for its
+  name: the error MUST then be `T: (the text of this error could not be
+  written: F)`, T the type of the script's exception as a traceback names
+  it, by its first 80 characters, or `an exception` where the type gives no
+  name, and F the type of what was raised; under a limit too small for
+  that, as many of its first characters as fit. Nothing of the answer MUST
+  have been written before, what the attempt held MUST be let go of before
+  that answer is made, the run MUST be counted as a script's failure and
+  the worker MUST stay in service. A worker MUST NOT make ready at its
+  start what cuts an error: it MUST do so when an error first needs to be
+  cut, and an attempt that fails MUST leave it to be made for the next. An
+  answer that is no error MUST end as it did:
+  `metrics` or `data` longer than the limit with the output limit's error
+  and their worker, or with the worker's own refusal.
 - `limits.max_script_memory`, a size, MUST bound each of the collector's
   workers' address space (`RLIMIT_AS`), set after the declared libraries are
   imported. A script that needs more MUST fail the run with a `MemoryError`
@@ -5511,7 +5567,17 @@ a static target file in force, which scrapes are reading: whatever spelling
 it normalizes — a target's `accept_status`, `accept_codes` and
 `retry.codes` — MUST be written once, when the file is loaded and before it
 is in force, and the check of the target file against the configuration,
-which a reload repeats on the file in force, MUST only read both. A reload
+which a reload repeats on the file in force, MUST only read both. That check
+MUST NOT go through the configuration's collectors for each target, which
+for as many targets as collectors costs the square of their number: where
+the collectors are MUST be noted once for a check, by their names, and each
+target's collector found there, the one going through them finds, the first
+of that name, so that the check accepts what it accepted and refuses a file
+for the same target and with the same message. The collectors whose
+descriptor files the check opens (§ 24.1) MUST be found the same way, once
+for each configuration the file is checked against, and only once a target
+sets a `request.message`: a target file in which none does MUST NOT have
+the collectors gone through for it at all. A reload
 that changes a collector's definition MUST make that collector's static
 targets due again (§ 42.14).
 
@@ -18733,6 +18799,214 @@ The watch looks at the descriptor files of the configuration in force (§ 24.1):
   With `stampedFiles.changed` answering that files are there, which reloads
   at every tick, the test fails at the second tick.
 - No file but a test's calls `SetWatchTicked`.
+
+## 34.114 A script's error longer than the output limit, and a target file checked without going through the collectors for each target
+
+A script's error is cut by its worker to what the exporter shows of it (§ 16.7):
+
+- A script that raises more than `limits.max_output_bytes` fails with its
+  exception, not with the output limit's error: `raise ValueError('x' *
+  int(response.text))` and `fail('x' * int(response.text))` in a transform,
+  and the raise in a pre-script, of two and of three megabytes under the
+  default limit of 1 MiB, fail with `python transform failed: Traceback (most
+  recent call last):`, the frame, and `ValueError: ` with 188 of the
+  characters and `... (2097164 bytes)`; each is a script's failure and no
+  limit's, recognised by the same text as the same raise of 20,000 characters,
+  which the limit holds and the worker cuts, and of 2,000, which reach the
+  exporter whole; and one worker runs all four, stopped for none, with four
+  runs of outcome `script_error` and no other. Each of the first two ended
+  with `python transform output exceeds limit`, its worker stopped as
+  `output_limit`, before.
+- The error of a script that fails is what the exporter makes of the whole
+  traceback under any limit that holds what is shown of it: for 193 scripts
+  (59 under the race detector) — a raise, `fail()`, a `KeyError` of a text and
+  of a tuple, an assertion, `sys.exit`, a `MemoryError` and a
+  `KeyboardInterrupt` of the script's own, an `OSError`, `raise ... from`, an
+  exception raised while another is handled, a chain of three raised deep in
+  the script's functions, a `SyntaxError` of the script and of what it
+  compiles, an exception group, a note, an exception whose `str()` raises and
+  one whose `str()` is long, with no message and with messages of ASCII, of
+  characters of two, three and four bytes, of control characters, quotes and
+  backslashes, halves of surrogate pairs alone, in twos and among other
+  characters, lines of many lengths, lines past 200 bytes, blank lines, CR LF,
+  a line that reads as a frame, only indented lines after one, and space
+  around them that Go trims, that only Python calls space and that both do, of
+  0 to 87,400 characters around 200, 1,500, 2,048 and 16,384 — each run as a
+  transform or a pre-script under the default limit of 1 MiB and under two of
+  the limits of 27, 120, 600, 2,048 and 16,384 bytes, taken in turn. The whole
+  traceback is what the worker as it was writes; the error and what it is
+  recognised by are `shownScriptError` of it. The line is never longer than
+  the limit; it is the line the worker as it was wrote wherever that is 16,384
+  bytes or fewer and fits, and never that line for an error of more
+  characters; the error is the exporter's exactly when the whole line, the
+  trimmed text of 1,500 bytes or fewer, or the line of what is shown fits the
+  limit, and the line written is then one of those three to the byte; and the
+  line of what is shown is within 16,384 bytes for every one of the scripts.
+- One worker for each limit serves every script of those and is stopped for
+  none: six workers started, no stop, every run of outcome `script_error`. The
+  worker as it was wrote a line past the limit in at least one run a script,
+  each of which ended as `output_limit` with its worker stopped; at least half
+  as many runs as there are scripts are cut by the worker, as many are shown
+  in part, and a quarter as many by the start of a line.
+- The `MemoryError` of `limits.max_script_memory` fits a small output limit:
+  under the 116 bytes its line takes it is `python transform failed:
+  MemoryError: the script ran out of memory under limits.max_script_memory
+  (134217728 bytes)`; under 115 bytes it is that without its last character,
+  and under 27 it is `M`; each twice or more from one worker that is not
+  stopped, where the line was refused as output over the limit and the worker
+  stopped.
+- A worker that cuts an error holds a message of 4 MiB at most three and a
+  half times, by `tracemalloc`: twice with Python 3.12, where writing it whole
+  held it more than four times; and of a chain of five exceptions with such a
+  message each, at most seven and a half times one, the five the exceptions
+  hold and one more with Python 3.12.
+- Where the limit holds neither, the error is a part of what is shown: its
+  lines in their order without some, a line of an error the exporter would
+  show whole by its first 200 bytes and its length, the exception's own
+  line among them wherever the script names it; or, where that does not
+  fit, the start of the exception's own line alone, in valid UTF-8. Under
+  27 bytes `raise ValueError` fails with `python transform failed: V`.
+- An answer over the limit ends as it did beside an error that is cut:
+  under a limit of 4,096 bytes a worker that has cut `raise
+  ValueError("x" * 100000)` to its frame and `ValueError: ` with 188
+  characters and `... (100012 bytes)` refuses metrics with a label of 5,000
+  characters with `python transform failed: OverflowError: what the script
+  left in metrics is longer than limits.max_output_bytes (4096 bytes)
+  written out, ...`, the line the worker as it was writes, serves a metric
+  after it, and is stopped as `output_limit` over 300 metrics that are
+  longer than the limit written out, `python transform output exceeds
+  limit`.
+- A script that raises a message of 48 MiB under a memory limit of 256 MiB
+  fails with its exception, twice in one worker; written whole, the message
+  was held five times and the interpreter ended of a `MemoryError`.
+- A worker in which cutting an error raises still answers that the script
+  failed: with a launcher whose cut is stopped by a `ZeroDivisionError`,
+  `raise ValueError('x' * 20000)` fails with `python transform failed:
+  ValueError: (the text of this error could not be written:
+  ZeroDivisionError)` and `fail(...)` with `RuntimeError: (...)`, each a
+  script's failure; a class of the script is named `__collector__.Odd`, one
+  with a name of 100,000 characters by `__collector__.` and 66 of them, one of
+  100 three-byte characters by 80, and one whose `__module__` is `5` as
+  `<unknown>.Odd`; `raise ValueError('ordinary')` is the traceback it was; and
+  one worker runs the seven and a metric after them, stopped for none. Under a
+  limit of 27 bytes for an answer the error is `python transform failed: V`,
+  twice from one worker. Each of the long errors ended the interpreter,
+  without the net: `python transform failed: the interpreter exited: ...`.
+- What cuts an error is compiled when an error first needs it: a worker whose
+  launcher holds source there that is no Python starts, writes `raise
+  ValueError('ordinary')` as the traceback it is, fails `raise ValueError('x'
+  * 20000)` with `ValueError: (the text of this error could not be written:
+  SyntaxError)` and a `KeyError` after it alike, the source being compiled
+  anew, and emits a metric after them: one worker, stopped for none. Compiled
+  at the start, such a worker does not start.
+- An error the traceback module cannot make is the script's failure in the
+  worker as it is: an exception of a class whose metaclass raises
+  `LookupError` when asked for `__qualname__` fails with `python transform
+  failed: an exception: (the text of this error could not be written:
+  LookupError)`; a script that has set `traceback.TracebackException` to
+  `None` fails with `ValueError: (the text of this error could not be written:
+  AttributeError)`; and the script after it, which puts the class back, with
+  its traceback: three script errors of one worker, stopped for none. Each of
+  the first two ended the interpreter before.
+- Under `limits.max_script_memory` of 128 MiB a script that raises 72 MiB,
+  which the limit does not hold twice, fails with `python transform failed:
+  ValueError: (the text of this error could not be written: MemoryError)`, a
+  script's failure, in the worker of the 116 bytes for an answer above, after
+  its two scripts out of memory and before a third: four script errors of one
+  worker, stopped for none. The `MemoryError` of the traceback module ended
+  the interpreter before.
+- A message with halves of surrogate pairs is not made anew to be cut: by
+  `tracemalloc`, a worker that cuts 1 Mi halves, each alone (shown as
+  `ValueError: `, 62 U+FFFD and `... (3145740 bytes)`), or 512 Ki pairs of two
+  halves apart (47 of the character and `... (2097164 bytes)`), holds at most
+  three and a half times the 2 MiB Python holds the message in, as of a
+  message of 4 MiB of ASCII; with the copy of the message that showed the
+  halves so, they were 7.0 and 5.5 times.
+- What is shown of an error fits a limit of 16 KiB, and no smaller one is
+  promised that: of `LookupError('first' + '\n' * 2000 + 'last')` raised five
+  calls deep, which 16 KiB hold whole, what is shown is a line of more than
+  2,048 bytes; under a limit of exactly that line the answer is that line and
+  the error the exporter's, recognised alike. The longest line there can be,
+  six characters for each of the 1,689 bytes `shownScriptError` can show and
+  the brackets, quotes and commas of nineteen parts, is within 16,384; what is
+  shown of lines of control characters is a line of more than 8,192 bytes and
+  no longer than that longest.
+- The exporter makes of `shown` no more than it shows of an error: for 23
+  answers and 300 generated (60 under the race detector) — texts and numbers
+  in turn, `null`, booleans, lists, dicts, fractions, negative numbers,
+  `1e999`, a number of thirty digits and one of 20,000, halves of surrogate
+  pairs, a text of a megabyte (16 KiB under the race detector), 20,000 lines,
+  20,000 numbers and 20,000 lists (2,000 of each under the race detector) —
+  parts that come to 1,689 bytes or fewer give the text they gave, a number in
+  its place and the mark where the failure is recognised, with what is neither
+  text nor number passed over; parts that come to more give `shownScriptError`
+  of that text, trimmed; neither the text nor what it is recognised by is
+  longer than 1,689 bytes, the transform's error is that text after `python
+  transform failed:`, within 2,000 bytes; a third as many answers as were
+  generated, or more, are on each side; and the longest a worker shows — seven
+  lines cut, one of a byte, the lines left out before and after, numbers of
+  nineteen digits — is 1,689 bytes exactly and is shown as it is, where one
+  byte more, or one digit, is cut. A text of a megabyte in `shown` was an
+  error of a megabyte.
+
+The check of a static target file finds each collector by its name (§ 24.1a):
+
+- The check of a static target file against a configuration goes through
+  the configuration's collectors once, to note where each is by its name,
+  whatever the targets: for one target of one collector, one of 400, 400
+  each of its own collector and 400 all of the last one, and for a file it
+  refuses at its last target, for a collector no configuration has and for
+  a param its collector's path needs, as for one it accepts; the refusals
+  are worded as they were. It went through them four times for every
+  target.
+- The collectors whose descriptor files that check opens are found by going
+  through the collectors of a configuration once for each configuration
+  given, the same one given twice counting twice and a nil one not at all,
+  for one target of 300 that sets a `request.message` as for all 300; a
+  file none of whose targets sets a message, and a file without targets,
+  has no collectors gone through.
+- Over 20,000 generated pairs of a configuration and a static target file
+  the check says what the former check, kept beside the test, says: nothing
+  where that said nothing, and otherwise the same message, that of the
+  first target it refused and of the first thing it refused that target
+  for. The configurations are not loaded ones: up to six collectors that
+  may share a name, of every request type the build carries and of one it
+  lacks, with placeholders in a path and a header, with and without
+  defaults, and retries, and with OTLP export on, off and without an
+  endpoint; the targets name a collector of the configuration, one of the
+  other names or one nothing has, with no address or one a type refuses,
+  request keys of one type or another, retries that do not fit the
+  interval, params that fill a placeholder, miss one or name none, and
+  `export_via_otlp`, several of them at once. The collectors found for the
+  targets that set a message are those the former search finds, copies of
+  the same collectors in the same order, for one configuration, two, one
+  given twice, a nil one among them and none; and the collector noted for
+  each name is the very one `model.CollectorByName` gives, the first so
+  named, with no name noted that it does not find. The test fails when
+  fewer than one case in 400 is a file accepted, a configuration with two
+  collectors of a name, or a file refused for each of: OTLP export off, no
+  OTLP endpoint, an unknown collector, a request type the build lacks, no
+  target address (where a type of the build needs one), a request key that
+  does not apply, retries that do not fit, a parameter without a value and
+  a param nothing uses. Under the race detector it is 2,000 pairs.
+- Every static target file the repository ships under `configs`, `examples`
+  and `testdata/chart`, four of them, checked against every configuration
+  it ships there that the build loads, at least ten, gives what the former
+  check gives for each pair, at least two that agree and twenty that do
+  not, and the same collectors for the files the check opens.
+- Neither `internal/config/statictargets.go` nor `namedfiles.go` uses
+  `model.CollectorByName`, called or taken as a value, and each calls
+  `collectorsByName`; the test that reads them finds a use in a source
+  given to it and none where a comment names the function, and fails when
+  `internal/model` no longer declares a function of that name.
+- `BenchmarkValidateStaticTargetsAgainst` times the check for 100, 2,000
+  and 10,000 targets and as many collectors, each target of its own
+  collector, all of the last one, and a single target, and
+  `BenchmarkTargetsChecked` the search for the collectors whose descriptor
+  files the check opens, with no target, every target and one target
+  setting a message; both report how many times the collectors of a
+  configuration were gone through: once for the check, and for the search
+  once, or not at all when no target sets a message.
 
 # 35. Documentation requirements
 

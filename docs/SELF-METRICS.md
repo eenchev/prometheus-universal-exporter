@@ -415,7 +415,8 @@ five minutes), `reload` (a reload changed or removed its script) or `evicted`
 the first five each cost the next scrape a fresh interpreter, and many
 `evicted` say the limit is too low for the scripts in use.
 
-A run ends `ok`, `script_error` (the script raised or called `fail(...)`, or
+A run ends `ok`, `script_error` (the script raised or called `fail(...)`,
+with a message of any length, or
 left `data` or `metrics` the worker does not write, such as a list that holds
 itself or strings that are longer together than `limits.max_output_bytes`; the
 worker carries on), `timeout` (it overran `limits.script_timeout`), `deadline`

@@ -1073,6 +1073,79 @@ static target file reloaded alone has the look encode only a collector that
 nothing had asked about; and over generated runs of reloads every look
 leaves the schedule as the former one, kept beside the test, leaves it.
 
+The check of a static target file against a configuration, which the start
+and `--dry-run` make once and a reload once when the two agree, three times
+when one file was read and is refused, and up to five when both were, has a
+benchmark in `internal/config/targetcheck_bench_http_test.go`:
+
+```sh
+go test -run '^$' -bench 'StaticTargetsAgainst|TargetsChecked' ./internal/config/
+```
+
+`BenchmarkValidateStaticTargetsAgainst` is the check
+(`ValidateStaticTargetsAgainst`) of n targets against n collectors: `own`
+with each target of its own collector, `last` with every target of the last
+collector, whose path has a placeholder, and `one` with a single target.
+`BenchmarkTargetsChecked` is the search for the collectors whose descriptor
+files the check opens (`targetsChecked`), which a reload that reads the
+target file makes for the configuration read and the one in force:
+`no_message` with no target setting a `request.message`, as in every file
+without a grpc collector, `every_message` and `one_message`. The check found
+a target's collector by going through the configuration's collectors
+(`model.CollectorByName`), four times for every target, and the search once
+more for every target, whether or not it set a message, reading a name out
+of each definition of 1,224 bytes: for as many targets as collectors that is
+the square of their number. Now the collectors are gone through once for a
+check, to note where each is by its name (`collectorsByName` in
+`statictargets.go`), in the map the check made before to know the names, and
+the search does so only once it meets a target that sets a message.
+`indexes/op` is how many times they were gone through. As measured on two
+shared cores, old and new in turn (the times are the range of two or three
+runs):
+
+| Benchmark | Before | After |
+| --- | --- | --- |
+| `own/n=100` | 0.62–0.75 ms, 41,388 bytes, 513 allocations | 0.49–0.63 ms, 38,237 bytes, 508 allocations |
+| `own/n=2000` | 58–70 ms, 906,182 bytes, 10,031 allocations | 10.7–12.2 ms, 797,449 bytes, 10,012 allocations |
+| `own/n=10000` | 2.07–2.35 s, 4,313,560 bytes, 50,083 allocations | 57–62 ms, 3,877,267 bytes, 50,038 allocations |
+| `last/n=2000` | 122–128 ms, 1,482,083 bytes, 18,029 allocations | 11.9–16.7 ms, 1,373,336 bytes, 18,010 allocations |
+| `last/n=10000` | 5.8–6.3 s, 7,193,448 bytes, 90,081 allocations | 62–67 ms, 6,757,032 bytes, 90,035 allocations |
+| `one/n=10000` | 2.4–2.7 ms, 873,921 bytes, 88 allocations | 1.2–1.4 ms, 437,551 bytes, 43 allocations |
+| `no_message/n=2000` | 11.8–15.0 ms | 2.2–2.3 µs |
+| `no_message/n=10000` | 0.56–1.27 s | 11–18 µs |
+| `every_message/n=2000` | 24–28 ms, 9,026,688 bytes, 14 allocations | 10.9–11.1 ms, 9,136,304 bytes, 25 allocations |
+| `every_message/n=10000` | 0.67–0.85 s, 58,424,448 bytes, 20 allocations | 67–78 ms, 58,861,712 bytes, 55 allocations |
+| `one_message/n=10000` | 0.53–0.54 s, 1,280 bytes, 1 allocation | 1.3–1.6 ms, 438,544 bytes, 36 allocations |
+
+What is left of the check is a target's own, 5 to 6 µs each whatever the
+configuration holds: about half of it is reading which keys the target's
+`request` block sets, by reflection over the block's fields and their tags
+(`setKeys` in `internal/fetch`), and a quarter binding the target's params,
+which parses the placeholders of the collector's request anew for every
+target of it (`fetch.CheckRequestParams`); noting where 10,000 collectors
+are is 1 to 2 ms of the 57. The search with every target setting a message is
+the copies it returns, a collector's definition for each such target. One
+case costs more than it did: a target file of fewer than ten or so targets,
+one of which sets a message, checked against thousands of collectors, for
+which going through them a few times was less than noting where all of them
+are — 0.6 ms where it was 0.1 for one target and 10,000 collectors, at a
+reload that reads a configuration of that size in seconds.
+
+It is held without a duration. `targetcheck_http_test.go` and
+`targetcheck_test.go` count the times the collectors are gone through
+(`collectorsIndexedHook`): once for a check, of one target and of 400, of a
+file accepted and of one refused at its last target; and for the search once
+for each configuration given, not at all for a file none of whose targets
+sets a message. `test/repository/collectorbyname_test.go` reads the two
+source files and fails when either uses `model.CollectorByName` again. And
+the check and the search as they were are kept beside the tests: over 20,000
+generated pairs of a configuration and a target file — collectors that share
+a name, a request type the build lacks, targets refused for each thing the
+check refuses and for several at once — and over every static target file
+the repository ships against every configuration it ships, the check says
+what it said, message for message, and the search finds the same collectors
+in the same order.
+
 The read of every collector's statistics, which each scrape of the
 self-metrics makes under that same lock, has a benchmark beside that one,
 `internal/exporter/collectorstats_bench_test.go`:

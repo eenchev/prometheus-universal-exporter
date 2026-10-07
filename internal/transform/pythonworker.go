@@ -785,7 +785,8 @@ func startPythonWorkerRunning(ctx context.Context, spec pythonSpec, launcher str
 	// an answer may be, limits.max_output_bytes: it does not write one
 	// that a list or a dict is in so many times over that it is longer
 	// (weigh), nor one whose strings alone are, each as often as it is
-	// written. The exporter measures the line it reads, as it did.
+	// written, nor a script's error, which it cuts to what is shown of one
+	// (failed). The exporter measures the line it reads, as it did.
 	cmd := exec.CommandContext(context.WithoutCancel(ctx), spec.Path, "-I", "-B", "-c", launcher, string(modules), strconv.FormatInt(spec.MaxMemory, 10), strconv.Itoa(decode.MaxDepth), strconv.Itoa(spec.MaxOutput)) // #nosec G204 -- the interpreter is the operator's --python.path
 	cmd.ExtraFiles = []*os.File{requestRead, answerWrite}                                                                                                                                                              // descriptors 3 and 4
 	cmd.Env = pythonWorkerEnvironment(os.Environ())
@@ -1281,14 +1282,16 @@ def script_error(e):
     # The error as a traceback of the script's own frames, innermost last:
     # the worker's frames (this launcher, run as "<string>") are dropped, and
     # of the rest the five innermost are kept, the failing line among them.
-    # Chained exceptions ("During handling of ...") are trimmed alike.
+    # Chained exceptions ("During handling of ...") are trimmed alike. It is
+    # handed on in the pieces the traceback module makes it of, the lines of
+    # a frame or of an exception each, for what writes it to join (failed).
     shown=traceback.TracebackException.from_exception(e)
     te,seen=shown,set()
     while te is not None and id(te) not in seen:
         seen.add(id(te))
         te.stack=traceback.StackSummary.from_list([f for f in te.stack if f.filename!='<string>'][-5:])
         te=te.__cause__ or te.__context__
-    return ''.join(shown.format())
+    return shown.format()
 deepest,most=int(sys.argv[3]),int(sys.argv[4])
 def too_deep(): return RecursionError('data is nested more than %d deep, or a list or a dict in it holds itself; the exporter reads what a script leaves in data nested %d deep at most, as deep as it decodes a response'%(deepest,deepest))
 def too_long(what): return OverflowError('what the script left in %s is longer than limits.max_output_bytes (%d bytes) written out, a list or a dict that is there more than once being written each time; leave less there, or raise limits.max_output_bytes'%(what,most))
@@ -1602,6 +1605,301 @@ def answer(document):
             if n>most: raise too_long('data')
         text=deep_dumps(document)
     answers.write(text+'\n'); answers.flush()
+def failed_check(most):
+    # A script's error was written whole, however long: the traceback with
+    # a message as long as the response, joined, written as JSON and sent,
+    # each a copy of it, for the exporter to refuse a line past
+    # limits.max_output_bytes as output over the limit and stop the worker
+    # over it. But of an error past 1,500 bytes the exporter shows only the
+    # exception's own line and the frames before it, each line by its first
+    # 200 bytes (transform/scripterror.go, shownScriptError). So a long
+    # error, and one whose line would be longer than the exporter takes, is
+    # not written: the worker makes of it what the exporter would have
+    # shown (cut) and writes that, which is within the limit, and carries
+    # on. A traceback of ordinary length is joined and written as it
+    # always was (failed).
+    #
+    # What cuts an error is its source here, compiled when an error first
+    # needs it (cut): compiled at every start it was a tenth of what
+    # starting a worker takes, for an error most workers never see. The
+    # source is a raw string, so every backslash in it is the compiler's to
+    # read, as it would be were this the launcher's own code.
+    source=r'''def cut_check(most):
+    import re,collections
+    # What the exporter shows of an error and of a line of one, in bytes
+    # (scriptErrorBytes, scriptLineBytes), and what it trims an error of
+    # (strings.TrimSpace: the characters unicode.IsSpace names).
+    whole,start=1500,200
+    space='\t\n\v\f\r \x85\xa0\u1680\u2000\u2001\u2002\u2003\u2004\u2005\u2006\u2007\u2008\u2009\u200a\u2028\u2029\u202f\u205f\u3000'
+    inked=re.compile('[^'+space+']').search
+    halved=re.compile('[\ud800-\udfff]').search
+    # Runs of pairs of halves, a thousand pairs at most at a time: the search
+    # for a pattern that begins with what the first half is passes quickly
+    # over what holds none.
+    paired=re.compile('[\ud800-\udbff][\udc00-\udfff](?:[\ud800-\udbff][\udc00-\udfff]){0,1023}').finditer
+    unindented=re.compile('^(?! )',re.M).search
+    def read(t):
+        # t as the exporter reads it from JSON, where a string with half a
+        # surrogate pair in it is written with the half: U+FFFD for a half
+        # alone, and of two halves the character they are of.
+        return t.encode('utf-16-le','surrogatepass').decode('utf-16-le','replace')
+    def size(s,a,b,halves=False):
+        # How many bytes s[a:b] is in UTF-8, without a copy of all of it,
+        # and as the exporter reads it where it holds halves of surrogate
+        # pairs (halves): written as it is, a half is the three bytes
+        # U+FFFD is, so the two of a pair are two bytes more than the four
+        # of their character, a byte for each half of a run of pairs.
+        n=0
+        for i in range(a,b,65536): n+=len(s[i:min(i+65536,b)].encode('utf-8','surrogatepass'))
+        if halves: n-=sum(m.end()-m.start() for m in paired(s,a,b))
+        return n
+    def inked_to(s):
+        # Where the last character of s that is no space ends.
+        i=len(s)
+        while i>0:
+            j=max(0,i-4096); t=s[j:i].rstrip(space)
+            if t: return j+len(t)
+            i=j
+        return 0
+    def cut(pieces):
+        # The answer line of an error that pieces are the text of: what
+        # shownScriptError makes of the whole text, trimmed, by the same
+        # rules to the byte, so that the exporter's error is the one it
+        # would have made had the text reached it. The text is the lines
+        # of the pieces; own is the exception's own line, the first that
+        # is not indented after the last that names a frame, or the last
+        # line. Shown are the lines from own on, the first that fit in
+        # half of whole, or in whole where there is no frame (first), and
+        # of those before it the last that fit in the rest (before), each
+        # by its first start bytes and its length, with how many lines
+        # each part had where some are left out. A line takes its length
+        # as the failure is recognised by it, with one byte for a number,
+        # and its line break.
+        #
+        # No long piece is joined to another or copied: each is looked at
+        # where the traceback module left it, by the lines that can still
+        # be shown, the first after own and the last so far (last), and is
+        # let go of before the next is made. A message of a hundred
+        # megabytes is in memory as often as the traceback module makes it,
+        # and its lines are counted, not gone through. Short pieces, the
+        # frames of a long chain of exceptions or the lines of a note, are
+        # looked at together, joined until they come to 64 KiB.
+        lines=0; own=0; skipping=False; first=[]; used=0; full=False; before=[]
+        last=collections.deque(); kept=0; text=[]; chars=0; halves=False
+        def line(s,x,y,plain,known):
+            # The line s[x:y] as it is shown: its text or its first start
+            # bytes, cut between two characters; its length in bytes when
+            # it is cut; and what it takes.
+            r=known.get(x)
+            if r is None:
+                n=y-x if plain else size(s,x,y,halves)
+                if n<=start: r=(read(s[x:y]) if halves else s[x:y],None,n+1)
+                elif plain: r=(s[x:x+start],n,start+14)
+                else:
+                    head=s[x:x+start+1]; head=(read(head) if halves else head).encode('utf-8'); k=start
+                    while head[k]&192==128: k-=1
+                    r=(head[:k].decode('utf-8'),n,k+14)
+                known[x]=r
+            return r
+        def back(s,a,z,plain,known):
+            # The last lines of s[a:z], in their order, as many as can be
+            # shown at most, and whether they are all of them.
+            out=[]; t=0
+            while True:
+                x=max(s.rfind('\n',a,z)+1,a)
+                r=line(s,x,z,plain,known); out.append(r); t+=r[2]
+                if x==a or t>=2*whole: out.reverse(); return out,x==a
+                z=x-1
+        def take(s,a,b,ends):
+            # s[a:b] is the next lines of the text: whole lines, the last
+            # ended by the line break before b, or by b where the text ends.
+            nonlocal lines,own,skipping,first,used,full,before,kept,text,chars,halves
+            e=b if ends else b-1
+            plain=s.isascii(); known={}; halves=not plain and halved(s) is not None
+            if text is not None:
+                # The text itself, while it may be one the exporter shows whole.
+                chars+=b-a
+                if chars>whole: text=None
+                else: text.append(s[a:b])
+            # The last line here that names a frame: own is after it.
+            f=s.rfind('\n  File ',a,e)+1
+            if not f: f=a if s.startswith('  File ',a,e) else -1
+            x=a
+            if f>=0:
+                skipping=True; first=[]; used=0; full=False
+                x=s.find('\n',f,e)+1 or None
+            if skipping and x is not None:
+                m=unindented(s,x,e)
+                x=m and m.start()
+                if m:
+                    skipping=False; own=lines+s.count('\n',a,x)
+                    before,whence=back(s,a,x-1,plain,known) if x>a else ([],True)
+                    if whence: before=list(last)+before
+            if not skipping and not full:
+                room=whole//2 if own else whole
+                while True:
+                    y=s.find('\n',x,e)
+                    if y<0: y=e
+                    r=line(s,x,y,plain,known)
+                    if first and used+r[2]>room: full=True; break
+                    first.append(r); used+=r[2]
+                    if y==e: break
+                    x=y+1
+            lines+=s.count('\n',a,e)+1
+            recent,whence=back(s,a,e,plain,known)
+            if not whence: last.clear(); kept=0
+            last.extend(recent); kept+=sum(r[2] for r in recent)
+            while kept-last[0][2]>=2*whole: kept-=last.popleft()[2]
+        # The text is trimmed as the exporter trims it. What stands before
+        # its first character that is no space is passed over; a piece is
+        # held until another that is not blank follows it, and the blank
+        # ones after it with it, so that the last of them is taken only as
+        # far as its last character that is no space. A piece that does not
+        # end a line, which the traceback module does not make, is joined
+        # to the next. A string that holds half a surrogate pair is left as
+        # it is, however long: what is shown of it and the lengths of its
+        # lines are made of it as the exporter reads it (read, size).
+        held=None; blank=[]; carried=''; short=[]; n=0
+        def chunk(s):
+            nonlocal held,carried
+            if carried: s=carried+s; carried=''
+            if not s.endswith('\n'): carried=s; return
+            m=inked(s)
+            if m is None:
+                if held: blank.append(s)
+                return
+            if held:
+                take(held[0],held[1],len(held[0]),False)
+                for b in blank: take(b,0,len(b),False)
+                blank.clear()
+                held=(s,0)
+            else: held=(s,m.start())
+        for piece in pieces:
+            # A long piece that is held is let go of with the next piece.
+            if len(piece)<65536 and not (held and len(held[0])>=65536):
+                short.append(piece); n+=len(piece)
+                if n<65536: continue
+                piece=None
+            if short: chunk(''.join(short)); short.clear(); n=0
+            if piece: chunk(piece)
+        piece=None
+        # The last line of the text ends with it.
+        chunk(''.join(short)+'\n')
+        if not held: return json.dumps({'ok':False,'error':''})
+        take(held[0],held[1],inked_to(held[0]),True)
+        held=None
+        if text is not None:
+            # A text of whole bytes or fewer is shown whole.
+            text=read(''.join(text))
+            if size(text,0,len(text))<=whole:
+                written=json.dumps({'ok':False,'error':text})
+                if len(written)<=most: return written
+        if skipping:
+            # No line after the last frame is not indented: the last is own.
+            before=list(last); own=lines-1; first=[before.pop()]
+        def shown(budget):
+            # The error as it is shown in budget bytes, in parts: a string,
+            # or a number that was measured, which the exporter writes as it
+            # is and recognises the failure without (shownByWorker).
+            room=budget//2 if own else budget
+            n=1; u=first[0][2]
+            while n<len(first) and u+first[n][2]<=room: u+=first[n][2]; n+=1
+            i=len(before)
+            while i>0 and u+before[i-1][2]<=budget: i-=1; u+=before[i][2]
+            out=['... (',own,' lines)'] if len(before)-i<own else ['']
+            for r in before[i:]+first[:n]:
+                out[-1]+=('\n' if len(out)>1 or out[0] else '')+r[0]
+                if r[1] is not None: out[-1]+='... ('; out+=[r[1],' bytes)']
+            if n<lines-own: out[-1]+='\n... ('; out+=[lines-own,' lines)']
+            return out
+        # What the exporter would show is some 1,600 bytes, and as JSON at
+        # most six times that. Under a limit too small for it the error is
+        # what fits: shown in half the bytes, and half again, which leaves
+        # out frames and then lines of the message, down to the exception's
+        # own line by its start; and under a limit too small for that, as
+        # many of that line's first characters as fit.
+        budget=whole
+        while True:
+            written=json.dumps({'ok':False,'shown':shown(budget)})
+            if len(written)<=most or not budget: break
+            budget//=2
+        n=len(first[0][0])
+        while len(written)>most and n>=0:
+            written=json.dumps({'ok':False,'error':first[0][0][:n]}); n-=1
+        return written
+    return cut
+'''
+    cutter=[]
+    def cut(pieces):
+        # The line of an error that is cut, by what source defines: compiled
+        # for the first of them, and kept once it is whole, so that a fault
+        # in making it leaves it to be made for the next.
+        if not cutter:
+            scope={'json':json}
+            exec(compile(source,'<string>','exec'),scope)
+            cutter.append(scope['cut_check'](most))
+        return cutter[0](pieces)
+    def line_of(pieces):
+        # The answer line of an error pieces are the text of. An error of
+        # 16,384 or fewer characters whose line is within the limit is
+        # joined and written whole, the line it always was.
+        # What the exporter shows of an error is within 16 KiB however it
+        # is written, so no error that reached the exporter whole under a
+        # smaller limit is cut here to less than was shown of it. The
+        # pieces of any other error are cut one by one, unjoined, whatever
+        # the limit is: the worker makes no line of megabytes for the
+        # exporter to show a few lines of.
+        pieces=iter(pieces); early=[]; n=0
+        for piece in pieces:
+            early.append(piece); n+=len(piece)
+            if n>16384: break
+        else:
+            written=json.dumps({'ok': False, 'error': ''.join(early)})
+            if len(written)<=most: return written
+        piece=None
+        def rest():
+            early.reverse()
+            while early: yield early.pop()
+            yield from pieces
+        return cut(rest())
+    def named(kind):
+        # A type as a traceback names it, by its first 80 characters, and
+        # whatever asking a script's class for its name does.
+        try:
+            name,module=kind.__qualname__,kind.__module__
+            if module not in ('builtins','__main__'): name=(module if type(module) is str else '<unknown>')+'.'+name
+            if type(name) is str: return name[:80]
+        except BaseException: pass
+        return 'an exception'
+    def failed(e,said=None):
+        # Answers that the script failed with e: with said, the pieces of
+        # the error's text, or with e's traceback (script_error, line_of).
+        #
+        # Making that line can fail too: the traceback module makes a copy
+        # of the message, which limits.max_script_memory may not hold beside
+        # the message, and whatever else is raised in here was raised with
+        # nothing around it, so the interpreter ended, the run failed as a
+        # worker's and not as the script's, and the next paid for another.
+        # So whatever is raised, the answer is still the script's failure:
+        # its exception's type, and that the text could not be written and
+        # of what, which is all that is certain to fit in memory and in the
+        # limit (as many of its first characters as fit, under a limit too
+        # small for it). Nothing has been written when it is made, the line
+        # being written here alone, and what the attempt held is let go of
+        # with the fault, whose traceback holds it, before it is made.
+        try: written=line_of(script_error(e) if said is None else said)
+        except BaseException as fault: written=None; why=type(fault)
+        if written is None:
+            text='%s: (the text of this error could not be written: %s)'%(named(type(e)),named(why))
+            n=len(text)
+            while True:
+                written=json.dumps({'ok': False, 'error': text[:n]})
+                if len(written)<=most or not n: break
+                n-=1
+        answers.write(written+'\n'); answers.flush()
+    return failed
+failed=failed_check(most)
+del failed_check
 answer({'ok': True, 'ready': True})
 while True:
     line=requests.readline()
@@ -1657,6 +1955,6 @@ while True:
         else: result['metrics']=metrics
         answer(result)
     except MemoryError as e:
-        answer({'ok': False, 'error': 'MemoryError: the script ran out of memory under limits.max_script_memory (%d bytes)'%max_memory if max_memory>0 else script_error(e)})
+        failed(e,('MemoryError: the script ran out of memory under limits.max_script_memory (%d bytes)'%max_memory,) if max_memory>0 else None)
     except BaseException as e:
-        answer({'ok': False, 'error': script_error(e)})`
+        failed(e)`

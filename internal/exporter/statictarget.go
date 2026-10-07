@@ -2,7 +2,6 @@ package exporter
 
 import (
 	"context"
-	"fmt"
 	"net/url"
 	"runtime/debug"
 	"strconv"
@@ -54,7 +53,7 @@ func (s *Server) scrapeStaticTarget(ctx context.Context, target model.StaticTarg
 	var failedOnPanic func()
 	defer func() {
 		if recovered := recover(); recovered != nil {
-			s.logger.Error("static target scrape panicked", "target", target.Name, "collector", c.Name, "panic", fmt.Sprint(recovered), "stack", string(debug.Stack()))
+			s.logger.Error("static target scrape panicked", "target", target.Name, "collector", c.Name, "panic", panicText(recovered), "stack", string(debug.Stack()))
 			if failedOnPanic != nil {
 				failedOnPanic()
 			}

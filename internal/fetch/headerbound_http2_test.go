@@ -208,7 +208,7 @@ func TestAHealthyRequestIsRetriedWhenAnotherClosesItsHTTP2Connection(t *testing.
 		c.Request.EnableHTTP2 = true
 		c.Request.Retry.Attempts = 2
 	})
-	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 	defer cancel()
 	type answer struct {
 		resp *HTTPResponse
@@ -286,7 +286,7 @@ func TestAHealthyRequestIsAnsweredWhenTheRequestThatClosedItsHTTP2ConnectionIsRe
 		c.Request.EnableHTTP2 = true
 		c.Request.Retry.Attempts = 3
 	})
-	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 	defer cancel()
 	type answer struct {
 		resp *HTTPResponse

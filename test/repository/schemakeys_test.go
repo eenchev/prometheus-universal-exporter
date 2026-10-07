@@ -9,21 +9,17 @@ import (
 	"unicode/utf8"
 
 	"github.com/eenchev/prometheus-universal-exporter/internal/config"
+	"github.com/eenchev/prometheus-universal-exporter/internal/model"
 	"github.com/eenchev/prometheus-universal-exporter/internal/testutil"
 	"gopkg.in/yaml.v3"
 )
 
 // strictProblems checks what the validator of schema_test.go lets through
 // and a validator of JSON Schema does not: maxLength, the length of a string
-// in characters, so a character of several bytes is one; and a key left
-// empty, which is null and none of the types a key of the schema takes.
+// in characters, so a character of several bytes is one.
 func strictProblems(schema map[string]any, value any, path string) []string {
 	var problems []string
 	switch x := value.(type) {
-	case nil:
-		if types, typed := schema["type"]; typed {
-			problems = append(problems, fmt.Sprintf("%s: null is not %v", path, types))
-		}
 	case string:
 		if most, ok := schema["maxLength"].(float64); ok && float64(utf8.RuneCountInString(x)) > most {
 			problems = append(problems, fmt.Sprintf("%s: %q is longer than %v", path, x, most))
@@ -48,12 +44,65 @@ func strictProblems(schema map[string]any, value any, path string) []string {
 // schemaProblems are the problems a schema finds in a document.
 func schemaProblems(t *testing.T, schema map[string]any, document string) []string {
 	t.Helper()
-	var doc any
+	var doc yaml.Node
 	if err := yaml.Unmarshal([]byte(document), &doc); err != nil {
 		t.Fatalf("not YAML: %v\n%s", err, document)
 	}
-	value := normalizeYAML(doc)
+	var value any
+	if len(doc.Content) > 0 {
+		value = documentValue(doc.Content[0])
+	}
 	return append(validateAgainstSchema(schema, value), strictProblems(schema, value, "")...)
+}
+
+// documentValue is a YAML document as a validator of JSON Schema is handed
+// it by an editor, made of the document as it is written: a mapping is an
+// object of the keys the decoder reads (model.DecodedEntries), each by its
+// text, since a key of JSON is text however YAML reads it, so that
+// value_map: {1: running} has the key "1"; a key YAML reads as none is
+// dropped with its value, as the decoder drops it; a scalar is null, a
+// boolean or a number where YAML reads it as one, and its text otherwise,
+// which is what a date written without quotes is to YAML 1.2 and to an
+// editor. Decoding the document into a value of any kind, as the validator
+// was handed it before, made of such a date a time, which is none of the
+// types of JSON, and of a mapping with a key that is not text something
+// that was no object: the schemas were then said to refuse what they take.
+func documentValue(n *yaml.Node) any {
+	for n.Kind == yaml.AliasNode {
+		n = n.Alias
+	}
+	switch n.Kind {
+	case yaml.MappingNode:
+		object := map[string]any{}
+		for _, entry := range model.DecodedEntries(n) {
+			if entry.Key.Kind == yaml.ScalarNode && entry.Key.ShortTag() == "!!null" {
+				continue
+			}
+			object[entry.Key.Value] = documentValue(entry.Value)
+		}
+		return object
+	case yaml.SequenceNode:
+		list := make([]any, len(n.Content))
+		for i, item := range n.Content {
+			list[i] = documentValue(item)
+		}
+		return list
+	}
+	switch n.ShortTag() {
+	case "!!null":
+		return nil
+	case "!!bool":
+		var boolean bool
+		if n.Decode(&boolean) == nil {
+			return boolean
+		}
+	case "!!int", "!!float":
+		var number float64
+		if n.Decode(&number) == nil {
+			return number
+		}
+	}
+	return n.Value
 }
 
 // The validator takes maximum as it takes minimum: a number above it is
@@ -147,6 +196,12 @@ type schemaKey struct {
 	// with in a key that needs more, and empty where zero is taken.
 	duration bool
 	zero     string
+	// booleanAlone and numberAlone are what the exporter alone refuses the
+	// key with, written as the boolean true and as the number 1, where the
+	// key takes more than text and what is wrong with that text is not a
+	// schema's to tell: a collector of that name there is none of, a
+	// directory that is not absolute.
+	booleanAlone, numberAlone string
 }
 
 // name is the key with what tells its row apart.
@@ -211,9 +266,10 @@ func schemaNode(t *testing.T, schema map[string]any, path string) map[string]any
 // schemaAsItWas is a committed schema with what "" being the key left out,
 // the number 0 being a duration, the rules of value_map keys, the rule
 // that a label's expression is not blanks alone, the rules of an entry of
-// transform.include and transform.exclude and the rule that a python rule's
-// label sets no value added to it taken out again, and with what a
-// switched-off otlp block was held to put back: the schema before, kept as
+// transform.include and transform.exclude, the rule that a python rule's
+// label sets no value and the rule that a collector's name_escaping says
+// which names its rules and labels may have added to it taken out again, and
+// with what a switched-off otlp block was held to put back: the schema before, kept as
 // an oracle, so that the tables show what each change changed and that the
 // schemas say of every other case what they said. The values of an optional
 // key lose their "", its pattern its empty alternative and a duration its
@@ -279,6 +335,14 @@ func schemaAsItWas(t *testing.T, file string) map[string]any {
 	delete(collector, "if")
 	delete(collector, "then")
 	delete(collector, "allOf")
+	// A rule's name and a label's were classic names whatever the
+	// collector's name_escaping, by a pattern of the key's own.
+	for key, pattern := range map[string]string{"collectors[].metrics[].name": "^[a-zA-Z_:][a-zA-Z0-9_:]*$", "collectors[].metrics[].labels[].name": "^[a-zA-Z_][a-zA-Z0-9_]*$"} {
+		node := schemaNode(t, schema, key)
+		delete(node, "not")
+		delete(node, "minLength")
+		node["type"], node["pattern"] = "string", pattern
+	}
 	for _, key := range []string{"collectors[].transform.include[]", "collectors[].transform.exclude[]"} {
 		delete(schemaNode(t, schema, key), "minLength")
 		delete(schemaNode(t, schema, key), "not")
@@ -392,7 +456,11 @@ var zerosOfAnotherSpelling = []string{`0.0`, `00`, `0x0`, `0e0`, `-0.0`, `0_0`}
 // exporter four ways — without the key, with the key written "", with a
 // value both take and with one both refuse — and fails unless both give the
 // verdict the row says; a key taken both left out and written "" must load
-// as the same thing both ways. The schema as it was (schemaAsItWas) must
+// as the same thing both ways. A fifth way has one verdict for every row:
+// written with no value, as null or ~, the key is refused by both. And a
+// sixth is read from the schema: written as a boolean and as a number, true
+// and 1, a key whose schema takes text alone is refused by both, and any
+// other key gets one verdict of both. The schema as it was (schemaAsItWas) must
 // say what the row says it said: the same, but for the cases a change is
 // about. A duration key goes through the ways a duration is written too.
 // Each row is logged as a line of the table the documentation of the
@@ -401,6 +469,7 @@ var zerosOfAnotherSpelling = []string{`0.0`, `00`, `0x0`, `0e0`, `-0.0`, `0_0`}
 func checkSchemaKeys(t *testing.T, keys []schemaKey) {
 	t.Helper()
 	schemas := loadKeySchemas(t)
+	builtSchemas := map[keyFile]map[string]any{inConfiguration: builtSchema(t, configSchemaFile), inTargetFile: builtSchema(t, staticTargetsSchemaFile)}
 	verdict := func(accepted bool) string {
 		if accepted {
 			return "takes it"
@@ -432,6 +501,45 @@ func checkSchemaKeys(t *testing.T, keys []schemaKey) {
 			}
 			if key.invalid != "" {
 				expect("as "+key.invalid, key.invalid, false, key.invalidWas.said(false))
+			}
+			// Written with no value at all, null or ~, the key is refused
+			// by both, as every key is, and was by the schemas. A key of a
+			// mapping is no value: one YAML reads as none is refused by
+			// another rule.
+			for _, none := range []string{"null", "~"} {
+				if strings.HasSuffix(key.key, "{}") {
+					break
+				}
+				if _, err := expect("written "+none, none, false, false); err != nil && !strings.Contains(err.Error(), "which YAML reads as no value at all") {
+					t.Errorf("%s, written %s: the exporter refuses it for something else: %v", name, none, err)
+				}
+			}
+			// Written as a boolean and as a number, true and 1, a key the
+			// schema holds to text alone is refused by both, the exporter
+			// saying how YAML reads it and to quote it, or which values
+			// the key takes where the schema holds it to some; any other key is
+			// taken by both, as the text it spells or as the number it is,
+			// or refused by both, but for what the row says is the
+			// exporter's alone to tell, and is never told that it is not
+			// text. A key of a mapping is text however it is written.
+			node := schemaNode(t, map[keyFile]map[string]any{inConfiguration: schemas.configuration, inTargetFile: schemas.targetFile}[key.file], key.key)
+			textOnly := node["type"] == "string" && !strings.HasSuffix(key.key, "{}")
+			built := schemaNode(t, builtSchemas[key.file], key.key)
+			for _, form := range []struct{ written, kind, alone string }{{"true", "a boolean", key.booleanAlone}, {"1", "a number", key.numberAlone}} {
+				document := key.written(t, form.written)
+				now, _, _, err := file.check(t, document)
+				notText := err != nil && strings.Contains(err.Error(), "is written "+form.written+", which YAML reads as "+form.kind+", not as text; "+notTextAdvice(built, form.written))
+				switch {
+				case textOnly && (form.alone != "" || len(now) == 0 || !notText):
+					t.Errorf("%s, written %s: want it refused by both, the exporter saying that YAML reads it as %s; the schema says %v, the exporter %v\n%s", name, form.written, form.kind, now, err, document)
+				case textOnly:
+				case notText:
+					t.Errorf("%s, written %s: the exporter says it is not text, of a key whose schema takes more than text: %v\n%s", name, form.written, err, document)
+				case form.alone != "" && (len(now) != 0 || err == nil || !strings.Contains(err.Error(), form.alone)):
+					t.Errorf("%s, written %s: want it past the schema and refused by the exporter with %q; the schema says %v, the exporter %v\n%s", name, form.written, form.alone, now, err, document)
+				case form.alone == "" && (len(now) == 0) != (err == nil):
+					t.Errorf("%s, written %s: want one verdict of both; the schema says %v, the exporter %v\n%s", name, form.written, now, err, document)
+				}
 			}
 			if i == 0 {
 				exporter := `takes it as the key left out`

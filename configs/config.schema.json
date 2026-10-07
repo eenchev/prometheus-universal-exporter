@@ -209,6 +209,47 @@
                 }
               }
             }
+          },
+          {
+            "if": {
+              "not": {
+                "properties": {
+                  "name_escaping": {
+                    "enum": [
+                      "underscores",
+                      "values"
+                    ]
+                  }
+                },
+                "required": [
+                  "name_escaping"
+                ]
+              }
+            },
+            "then": {
+              "properties": {
+                "metrics": {
+                  "items": {
+                    "properties": {
+                      "labels": {
+                        "items": {
+                          "properties": {
+                            "name": {
+                              "pattern": "^[a-zA-Z_][a-zA-Z0-9_]*$",
+                              "type": "string"
+                            }
+                          }
+                        }
+                      },
+                      "name": {
+                        "pattern": "^$|^[a-zA-Z_:][a-zA-Z0-9_:]*$",
+                        "type": "string"
+                      }
+                    }
+                  }
+                }
+              }
+            }
           }
         ],
         "description": "How to reach a kind of target and turn its response into metrics.",
@@ -507,7 +548,12 @@
                         ]
                       },
                       "name": {
-                        "pattern": "^[a-zA-Z_][a-zA-Z0-9_]*$",
+                        "description": "The label's name: letters, digits and _, not starting with a digit. Under the collector's name_escaping underscores or values it may be any name, such as service.name, and is exported escaped. Text: a name YAML reads as a number or a boolean is written in quotes.",
+                        "minLength": 1,
+                        "not": {
+                          "pattern": "^[\\t\\n\\v\\f\\r \\x85\\xA0  - \u2028\u2029  　]+$",
+                          "type": "string"
+                        },
                         "type": "string"
                       },
                       "required": {
@@ -561,8 +607,11 @@
                   "type": "array"
                 },
                 "name": {
-                  "description": "The metric name, before metrics_prefix.",
-                  "pattern": "^$|^[a-zA-Z_:][a-zA-Z0-9_:]*$",
+                  "description": "The metric name, before metrics_prefix: letters, digits, _ and :, not starting with a digit. Under the collector's name_escaping underscores or values it may be any name, such as http.server.duration, and is exported escaped. Text: a name YAML reads as a number or a boolean, such as 404 or true, is written in quotes.",
+                  "not": {
+                    "pattern": "^[\\t\\n\\v\\f\\r \\x85\\xA0  - \u2028\u2029  　]+$",
+                    "type": "string"
+                  },
                   "type": "string"
                 },
                 "required": {
@@ -635,7 +684,7 @@
             "type": "string"
           },
           "name_escaping": {
-            "description": "What to do with a metric or label name that is not a classic Prometheus name, such as http.server.duration: fail the scrape (the default), replace what a classic name may not have with underscores, or use Prometheus's reversible values encoding (U__…). See docs/CONFIGURATION.md#utf-8-names.",
+            "description": "What to do with a metric or label name that is not a classic Prometheus name, such as http.server.duration: fail the scrape (the default), replace what a classic name may not have with underscores, or use Prometheus's reversible values encoding (U__…). A name the collector writes itself, a rule's or a label's, is held to the same when the configuration loads: refused under fail, exported escaped under the other two. See docs/CONFIGURATION.md#utf-8-names.",
             "enum": [
               "fail",
               "underscores",

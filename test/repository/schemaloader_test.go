@@ -12,7 +12,6 @@ import (
 	"github.com/eenchev/prometheus-universal-exporter/internal/config"
 	"github.com/eenchev/prometheus-universal-exporter/internal/model"
 	"github.com/eenchev/prometheus-universal-exporter/internal/testutil"
-	"gopkg.in/yaml.v3"
 )
 
 // The schema an editor checks a configuration against and the exporter that
@@ -27,12 +26,7 @@ import (
 // problems the schema finds, and the error of loading it.
 func verdicts(t *testing.T, schema map[string]any, document string) ([]string, error) {
 	t.Helper()
-	var doc any
-	if err := yaml.Unmarshal([]byte(document), &doc); err != nil {
-		t.Fatalf("not YAML: %v\n%s", err, document)
-	}
-	value := normalizeYAML(doc)
-	problems := append(validateAgainstSchema(schema, value), strictProblems(schema, value, "")...)
+	problems := schemaProblems(t, schema, document)
 	_, err := config.Load(testutil.WriteFile(t, "config.yaml", document))
 	return problems, err
 }
@@ -55,6 +49,16 @@ func loadersAlone(t *testing.T, schema map[string]any, name, document, message s
 	problems, err := verdicts(t, schema, document)
 	if len(problems) != 0 || err == nil || !strings.Contains(err.Error(), message) {
 		t.Errorf("%s: want it past the schema and refused by the exporter with %q; the schema says %v, the exporter %v", name, message, problems, err)
+	}
+}
+
+// refusedByBoth fails unless the schema refuses the document and the
+// exporter refuses it with the message.
+func refusedByBoth(t *testing.T, schema map[string]any, name, document, message string) {
+	t.Helper()
+	problems, err := verdicts(t, schema, document)
+	if len(problems) == 0 || err == nil || !strings.Contains(err.Error(), message) {
+		t.Errorf("%s: want it refused by the schema and by the exporter with %q; the schema says %v, the exporter %v\n%s", name, message, problems, err, document)
 	}
 }
 

@@ -6,6 +6,8 @@ import (
 	neturl "net/url"
 	"sync"
 	"time"
+
+	"github.com/eenchev/prometheus-universal-exporter/internal/model"
 )
 
 // A debug probe (/probe?debug=true) reports every request a trip sent: each
@@ -104,7 +106,7 @@ func traceBodyError(ctx context.Context, err error) {
 	defer t.mu.Unlock()
 	if n := len(t.requests); n > 0 {
 		r := &t.requests[n-1]
-		r.Outcome += ", then the body broke off: " + err.Error()
+		r.Outcome += ", then the body broke off: " + model.CutTo(err.Error(), model.MaxFailureBytes, false)
 		r.Duration = time.Since(r.started)
 	}
 }
@@ -120,6 +122,9 @@ func traceOutcome(ctx context.Context, outcome string) {
 	defer t.mu.Unlock()
 	if n := len(t.requests); n > 0 && t.requests[n-1].Outcome == "" {
 		r := &t.requests[n-1]
-		r.Outcome, r.Duration = outcome, time.Since(r.started)
+		// An outcome is a status line or an error's text, either of which
+		// the target can make as long as its headers may be: the report
+		// shows no more of it than of any failure (model.MaxFailureBytes).
+		r.Outcome, r.Duration = model.CutTo(outcome, model.MaxFailureBytes, false), time.Since(r.started)
 	}
 }

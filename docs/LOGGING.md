@@ -121,6 +121,25 @@ and what to change. An error still over 2,000 bytes, long by many values
 rather than by one, is cut there and ends `... (6400 bytes)`. Each such
 length, a size like any other, is left out of what is compared: the same
 mistake with a longer or a shorter value that starts the same is a repeat.
+The 2,000 bytes bound the error of every stage, not of the decode alone:
+whatever a probe or a static target's scrape fails with — a fetch, a
+refused target, a rule, a script, the validation, a file of a directory, a
+credential file that cannot be read — the `error` of its log line, the
+answer to the scraper after the collector and the stage, the line a debug
+report names it in and the text it is remembered by are each no longer,
+whatever the target sent, the scraper asked for or the script raised, and so
+is the first failure a rule's line shows (`metric extraction failed`) and
+the `panic` of a probe that panicked. A trip that ran out of its budget says
+so after the error. Where an error says why after the part that can be long,
+that part is shown by its start so that the reason is whole: a URL by its
+first 512 bytes (`Get "http://db.internal/aaaa..."... (8019 bytes): dial tcp
+10.0.0.7:80: connect: connection refused`), the name of a metric or of a
+label by its first 200 (`invalid metric name "aaaa..."... (10485561 bytes):
+longer than limits.max_metric_name_length 200`), a script's traceback by its
+last frames and the exception's own line ([Python](PYTHON.md#how-scripts-run)),
+and the metrics of a directory's file that clash with another file's by the
+first of them, the rest counted (`...; and 4983 more: a metric has one type
+across the directory's files`).
 Of a [runtime error of the XPath engine](CONFIGURATION.md#when-the-xpath-engine-fails-on-an-expression)
 what follows `runtime error:` is left out as well, since the numbers there
 come from the response; so it is of a runtime error while a YAML document is
@@ -220,7 +239,14 @@ directory over `max_files` or its listing bound, to probes rejected by
 repaired for invalid UTF-8, and to probes
 answered with the last good result under `cache.stale_if_error` (`probe
 failed; answered with the last successful result`, with its `result_age`,
-then `probe answered with a fresh result again`). Up to 10,000
+then `probe answered with a fresh result again`), and to a metric name that
+two writers of one OTLP resource export as different kinds (`OTLP metric name
+written as two kinds under one resource; the data points of the kind written
+earlier are left out of the export`, with the `metric`, the `kind` exported,
+the `left_out_kind` and its `left_out_points`, and the resource's
+`service_name`; it is one failing thing per resource and name whichever kind
+is written last, and has no line for its end: see
+[Two writers of one series or one name](OTLP.md#two-writers-of-one-series-or-one-name)). Up to 10,000
 failing things are remembered at a time, and one not reported for an hour is
 forgotten: the same failure later is logged as new, and its recovery after
 the silence is not logged; past that bound, a new failure is simply logged

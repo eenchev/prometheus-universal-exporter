@@ -284,7 +284,8 @@ func TestHTMLExpectedOfARowWithoutItsCell(t *testing.T) {
 // a blank, written without quotes, loads as what stands before the blank:
 // body #proxy is the selector body, which reads the whole page. In quotes it
 // is the selector it was meant to be, and an id written without a blank
-// before it, span#proxy, needs none.
+// before it, span#proxy, needs none. A selector that is an id alone leaves
+// its key with no value, which the load refuses as it does of any key.
 func TestHTMLExpectedOfASelectorWithAnIDInYAML(t *testing.T) {
 	const page = `<body><span id="proxy">5</span> backends</body>`
 	for _, expectation := range []htmlExpectation{
@@ -299,7 +300,7 @@ func TestHTMLExpectedOfASelectorWithAnIDInYAML(t *testing.T) {
 			series: []string{`proxy_backends 5`}},
 		{name: "a selector that is an id alone is no expression at all", transform: "css", page: page,
 			rules:   "      - name: proxy_backends\n        expression: #proxy\n",
-			refused: `metric "proxy_backends" has no expression`},
+			refused: `line 11: expression has nothing after its colon, which YAML reads as no value at all; write its value, or take the key out`},
 	} {
 		expectation.run(t)
 	}

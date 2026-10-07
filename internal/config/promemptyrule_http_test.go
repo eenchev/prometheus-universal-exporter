@@ -35,7 +35,6 @@ func TestAPrometheusRuleOfNeitherANameNorAnExpressionIsRefusedAtLoad(t *testing.
 		"      - name: \"\"\n":                       0,
 		"      - expression: \"\"\n":                 0,
 		"      - name: ''\n        expression: ''\n": 0,
-		"      - name: ~\n":                          0,
 		"      - type: counter\n":                    0,
 		"      - description: Whether it is up.\n":   0,
 		"      - required: true\n":                   0,
@@ -61,7 +60,7 @@ func TestAPrometheusRuleOfNeitherANameNorAnExpressionIsRefusedAtLoad(t *testing.
 	if !errors.As(err, &problems) || len(problems) != 3 {
 		t.Fatalf("two rules of neither and one with a name that is none: %v", err)
 	}
-	for i, want := range []string{ruleOfNeither("node", 0), `collector "node" metric "bad-name": "bad-name" is not a valid Prometheus metric name; use letters, digits, underscores and colons, not starting with a digit`, ruleOfNeither("node", 3)} {
+	for i, want := range []string{ruleOfNeither("node", 0), `collector "node" metric "bad-name": "bad-name" is not a valid Prometheus metric name; use letters, digits, underscores and colons, not starting with a digit, or set the collector's name_escaping to underscores or values to export it escaped`, ruleOfNeither("node", 3)} {
 		if !strings.HasSuffix(problems[i].Error(), want) {
 			t.Errorf("problem %d is %v\nwant %s", i+1, problems[i], want)
 		}

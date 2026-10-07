@@ -7,6 +7,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/eenchev/prometheus-universal-exporter/internal/exporter"
 )
 
 // Shutting down: the wait for the probes in progress, and the second signal
@@ -29,6 +31,11 @@ const helperHoldsDelayEnv = "PUE_TEST_HOLD_SHUTDOWN_DELAY"
 // such a child is waited out and then goes on until the test, which holds
 // the other end of the child's standard input, closes it: the test waits for
 // what it is about, and then lets the shutdown begin.
+//
+// The child leaves a request's headers half a minute, the bound of a hang,
+// where the exporter leaves them ten seconds: every test that runs a child
+// asks it over a real connection, and none is about that limit
+// (exporter.SetReadHeaderTimeout).
 func TestRunHelperProcess(_ *testing.T) {
 	args := os.Getenv(helperArgsEnv)
 	if args == "" {
@@ -40,6 +47,7 @@ func TestRunHelperProcess(_ *testing.T) {
 			_, _ = io.Copy(io.Discard, os.Stdin)
 		}
 	}
+	exporter.SetReadHeaderTimeout(30 * time.Second)
 	os.Exit(run(strings.Split(args, "\x1f"), os.Stdout, os.Stderr))
 }
 

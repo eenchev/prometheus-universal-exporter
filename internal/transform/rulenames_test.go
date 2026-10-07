@@ -25,7 +25,7 @@ func checkMetricRuleBeforePatternNames(x *model.Collector, r *model.MetricRule) 
 		}
 	}
 	if r.Name != "" {
-		if err := checkMetricName(r.Name); err != nil {
+		if err := checkMetricName(x, r.Name); err != nil {
 			fail(fmt.Errorf("%s: %w", where, err))
 		}
 	}
@@ -131,9 +131,11 @@ func checkMetricRuleBeforePatternNames(x *model.Collector, r *model.MetricRule) 
 const patternUnderName = `; a pattern to match the target's metric names by is a prometheus rule's expression, not its name, so if this is one, write it as expression, in single quotes, and leave name out, or set name to the one name the series it matches are to be exported under`
 
 // notAMetricName is what the load says of a rule's name that is no metric
-// name, after the collector and the rule.
+// name, after the collector and the rule, under name_escaping fail, where
+// it is refused: what it said, and, as a scrape says of a response's name
+// that is not classic, what would export it.
 func notAMetricName(name string) string {
-	return fmt.Sprintf(`%q is not a valid Prometheus metric name; use letters, digits, underscores and colons, not starting with a digit`, name)
+	return fmt.Sprintf(`%q is not a valid Prometheus metric name; use letters, digits, underscores and colons, not starting with a digit, or set the collector's name_escaping to underscores or values to export it escaped`, name)
 }
 
 // A prometheus rule picks the target's metrics by its expression, a regular
@@ -147,10 +149,12 @@ func notAMetricName(name string) string {
 // and what name is beside one. Nothing else reads differently: a name that
 // is none for another reason, a name Prometheus reserves, a name that is
 // one, and the same names under the seven other transforms, whose rules
-// have no pattern to be mistaken for. A rule's name is held to the classic
-// names whatever name_escaping says of the names a response gives, so a
-// dotted name is refused under each of its values, and under prometheus
-// with the same advice.
+// have no pattern to be mistaken for. That is under name_escaping fail,
+// written or left out, where a name that is not classic is refused, and is
+// told as well what would export it. Under underscores and values a rule's
+// name is held to what a scrape holds a name to, so each of these loads,
+// under every transform, but one underscores would export beginning with
+// "__", which Prometheus reserves.
 func TestAPatternUnderAPrometheusRulesNameIsToldItBelongsInExpression(t *testing.T) {
 	patterns := []string{"node_.*", "^up$", "up|node_load1", "node_+", "up?", "(up)", "node_[a-z]", "up{1}", `node_\w`, "$", ".", "http.server.duration", `up{job="x"}`, "é.", " .* "}
 	others := []string{"bad-name", "node load", "1up", "é", "up,down", "a/b", "up!", "a=b", "@up", "a'b", `a"b`, "a#b", "~up", "a&b", "<up>", "a%b"}
@@ -165,9 +169,21 @@ func TestAPatternUnderAPrometheusRulesNameIsToldItBelongsInExpression(t *testing
 				}
 				return err.Error()
 			}
+			// What the load says of a name that is not classic: under
+			// fail that it is none, and under the other two nothing,
+			// unless underscores exports it as a reserved name.
+			refusal := func(name string) string {
+				switch exported := escapeName(name, escaping, true); {
+				case escaping == NameEscapingValues || escaping == NameEscapingUnderscores && !strings.HasPrefix(exported, "__"):
+					return ""
+				case escaping == NameEscapingUnderscores:
+					return `collector "node" metric ` + fmt.Sprintf("%q: %q is exported as %q under name_escaping underscores, which starts with \"__\", which Prometheus reserves", name, name, exported)
+				}
+				return `collector "node" metric ` + fmt.Sprintf("%q: ", name) + notAMetricName(name)
+			}
 			for _, name := range patterns {
-				want := `collector "node" metric ` + fmt.Sprintf("%q: ", name) + notAMetricName(name)
-				if transformType == "prometheus" {
+				want := refusal(name)
+				if transformType == "prometheus" && want != "" {
 					want += patternUnderName
 				}
 				// With an expression beside it and, where the transform
@@ -180,7 +196,7 @@ func TestAPatternUnderAPrometheusRulesNameIsToldItBelongsInExpression(t *testing
 				}
 			}
 			for _, name := range others {
-				if got, want := said(name, expression), `collector "node" metric `+fmt.Sprintf("%q: ", name)+notAMetricName(name); got != want {
+				if got, want := said(name, expression), refusal(name); got != want {
 					t.Errorf("%s, name_escaping %q, name %q:\n got %s\nwant %s", transformType, escaping, name, got, want)
 				}
 			}

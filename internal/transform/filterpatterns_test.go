@@ -145,7 +145,9 @@ func TestAnEntryOfIncludeOrExcludeThatIsNothingButBlanksIsRefused(t *testing.T) 
 // checkTransformSettingsBeforeEmptyEntries is CheckTransformSettings as it
 // was before an entry of include or exclude that is empty or nothing but
 // blanks was refused, kept as an oracle: of every other setting, and of
-// every other entry, the check must say what this says.
+// every other entry, the check must say what this says. Its collectors set
+// no name_escaping, under which a name that is not classic is refused as it
+// was, and told since what would export it (EscapingAdvice), here too.
 func checkTransformSettingsBeforeEmptyEntries(x *model.Collector) error {
 	t := x.Transform
 	var errs []error
@@ -170,13 +172,13 @@ func checkTransformSettingsBeforeEmptyEntries(x *model.Collector) error {
 	}
 	for _, from := range model.SortedKeys(t.Rename) {
 		to := t.Rename[from]
-		if err := checkMetricName(to); err != nil {
+		if err := checkMetricName(x, to); err != nil {
 			errs = append(errs, fmt.Errorf("collector %q transform.rename %q to %q: %w", x.Name, from, to, err))
 		}
 	}
 	for _, name := range model.SortedKeys(t.Labels) {
 		if !model.ValidLabelName(name) {
-			errs = append(errs, fmt.Errorf("collector %q transform.labels has invalid label name %q", x.Name, name))
+			errs = append(errs, fmt.Errorf("collector %q transform.labels has invalid label name %q%s", x.Name, name, EscapingAdvice(name)))
 		} else if err := model.CheckLabelName(name); err != nil {
 			errs = append(errs, fmt.Errorf("collector %q transform.labels: %w", x.Name, err))
 		}
@@ -185,7 +187,7 @@ func checkTransformSettingsBeforeEmptyEntries(x *model.Collector) error {
 	for _, from := range model.SortedKeys(t.RenameLabels) {
 		to := t.RenameLabels[from]
 		if !model.ValidLabelName(to) {
-			errs = append(errs, fmt.Errorf("collector %q transform.rename_labels %q to invalid label name %q", x.Name, from, to))
+			errs = append(errs, fmt.Errorf("collector %q transform.rename_labels %q to invalid label name %q%s", x.Name, from, to, EscapingAdvice(to)))
 			continue
 		}
 		if err := model.CheckLabelName(to); err != nil {

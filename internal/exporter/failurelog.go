@@ -118,7 +118,9 @@ func newFailureLog() *failureLog {
 //   - what a trip found at the address it went to (failureKey, aspectKey):
 //     its collector, the address, and the directory's file, or none;
 //   - a static target's metric left out of the static targets endpoint
-//     (staticClashKey): the target's name and the metric's.
+//     (staticClashKey): the target's name and the metric's;
+//   - a metric name the OTLP export had as two kinds under one resource
+//     (otlpNameClashKey): the resource's key and the name.
 //
 // So a probe whose target reads as a static target's name is a probe, a
 // directory's file named schedule, stale or rule is a file, and a target
@@ -130,6 +132,7 @@ const (
 	staticSubject   = 's'
 	addressSubject  = 'a'
 	endpointSubject = 'e'
+	exportSubject   = 'o'
 )
 
 // failureAspect is what of a subject a failure is, when it is not the
@@ -225,6 +228,14 @@ func aspectKey(collector, target, file string, of failureAspect) subjectKey {
 // own: the endpoint settles it (settleStaticClashes), and no reload does.
 func staticClashKey(target, metric string) subjectKey {
 	return subjectKey{bytes: subjectBytes(endpointSubject, "", target, metric)}
+}
+
+// otlpNameClashKey is the key of the metric name that an OTLP export had
+// as two kinds under the resource whose key is resource (otlpMetricsOf). It
+// is of no collector: the two that wrote the name may be any, and no reload
+// forgets it.
+func otlpNameClashKey(resource, metric string) subjectKey {
+	return subjectKey{bytes: subjectBytes(exportSubject, "", resource, metric)}
 }
 
 // subjectBytes are the bytes of the key of a subject of kind with the
@@ -350,7 +361,11 @@ func (f *failureLog) ruleFailedFor(read configRead, logger *slog.Logger, level s
 func (f *failureLog) failedOf(read configRead, logger *slog.Logger, level slog.Level, rule bool, key subjectKey, metric, expression, items, msg, stage string, err error, attrs ...any) string {
 	errText := ""
 	if err != nil {
-		errText = model.SameFailureText(err)
+		// What is remembered is no longer than a failure's text may be,
+		// whoever reports the failure: a trip's error is bounded already
+		// (boundedTripFailure), and its recognised text is then the one
+		// this makes, so the cut costs such an error nothing.
+		errText = model.CutTo(model.SameFailureText(err), model.MaxFailureBytes, true)
 		attrs = append(attrs, "error", err)
 	}
 	now := f.now()

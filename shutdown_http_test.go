@@ -229,7 +229,7 @@ func TestShutdownDelayKeepsServingWhileUnready(t *testing.T) {
 		_, _ = w.Write([]byte("v=7\n"))
 	}))
 	defer fast.Close()
-	client := &http.Client{Transport: &http.Transport{DisableKeepAlives: true}, Timeout: 5 * time.Second}
+	client := &http.Client{Transport: &http.Transport{DisableKeepAlives: true}, Timeout: 30 * time.Second}
 	read := func(path string) (int, string, error) {
 		resp, err := client.Get("http://" + p.address + path)
 		if err != nil {

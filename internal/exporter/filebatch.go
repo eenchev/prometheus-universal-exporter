@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"strconv"
 	"strings"
 
 	"github.com/eenchev/prometheus-universal-exporter/internal/decode"
@@ -81,6 +82,9 @@ func (s *Server) collectDirectory(ctx context.Context, read *fetch.DirectoryRead
 		}
 		fileKey := failureKey(c.Name, keyTarget, file.Name)
 		if failure != nil {
+			// Whatever stage the file failed at, its error is no longer
+			// than a trip's may be (boundedTripFailure).
+			failure.err = boundedTripFailure(failure.err)
 			failed[file.Name] = true
 			s.tripFailed(ctx, rec.read, slog.LevelWarn, fileKey, "file of a directory failed; its series are left out and the other files' are answered", failure.stage, failure.err, "collector", c.Name, "target", logTarget, "file", file.Name, "stage", failure.stage)
 			continue
@@ -179,20 +183,43 @@ func (s *Server) collectFile(ctx context.Context, file fetch.FileRead, c *model.
 	return set, nil
 }
 
+// mergeShownBytes is how much of the list of a file's metrics that clash
+// with another file's the file's error shows before it counts the rest.
+const mergeShownBytes = 1200
+
 // checkFileFamilies refuses a file whose metric has a different type than
 // the same metric in a file read before it: one exposition can declare a
 // family only once.
+//
+// Every metric that clashes is named while the names are within
+// mergeShownBytes together, and the rest are counted: two files of fifty
+// thousand families each, typed otherwise in one than in the other, clash
+// in every one, and the error that named them all was 5.7 MB, of which the
+// bound on a trip's error (boundedTripFailure) kept the first seventeen and
+// not what the error says after them. How many more there are is something
+// measured, and is the mark in what the failure is recognised by.
 func checkFileFamilies(set *model.MetricSet, families map[string][]model.Metric, typeFrom map[string]string) *fileFailure {
 	var conflicts []string
+	shown, more := 0, 0
 	reported := map[string]bool{}
 	for _, m := range set.Metrics {
 		if existing, ok := families[m.Name]; ok && existing[0].Type != m.Type && !reported[m.Name] {
 			reported[m.Name] = true
+			if shown > mergeShownBytes {
+				more++
+				continue
+			}
 			conflicts = append(conflicts, fmt.Sprintf("%s is a %s here but a %s in %s", m.Name, m.Type, existing[0].Type, typeFrom[m.Name]))
+			shown += len(conflicts[len(conflicts)-1])
 		}
 	}
 	if len(conflicts) == 0 {
 		return nil
 	}
-	return &fileFailure{"merge", fmt.Errorf("%s: a metric has one type across the directory's files", strings.Join(conflicts, "; "))}
+	list := strings.Join(conflicts, "; ")
+	clashing := model.ShownAs(list, list)
+	if more > 0 {
+		clashing = model.ShownAs(list+"; and "+strconv.Itoa(more)+" more", list+"; and "+model.MovingMark+" more")
+	}
+	return &fileFailure{"merge", model.Errorf("%s: a metric has one type across the directory's files", clashing)}
 }

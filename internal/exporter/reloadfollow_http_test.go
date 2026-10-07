@@ -429,6 +429,18 @@ func windowedDocument(flipSeries string, collectors ...string) string {
 // ended. Run with the race detector, it also shows that the probes, the
 // scrapes and the reloads that follow them write and replace the state
 // together.
+//
+// The targets' interval is a minute, with names whose first scrape is due at
+// once (soonScraped): the interval ends a scrape, and with one of a second
+// the scrape the test waits for at the end had to end within that second
+// beside four probers. The loop looks for a reload when a scrape is due and
+// once a second besides, and a target a reload starts again before its first
+// scrape was due waits anew, so by itself the loop makes one scrape while the
+// reloads go on and one after the last. The targets in force are therefore
+// scraped by the test as well, one round after another until the last reload,
+// each scrape as the loop makes one that is due, so that scrapes begin and
+// end throughout the reloads however fast the machine. A probe has half a
+// minute and more.
 func TestProbesScrapesAndReloadsTogetherLeaveOnlyWhatIsInForce(t *testing.T) {
 	testutil.CaptureLogs(t)
 	var asked atomic.Int64
@@ -445,9 +457,9 @@ func TestProbesScrapesAndReloadsTogetherLeaveOnlyWhatIsInForce(t *testing.T) {
 		_, _ = w.Write([]byte("value=42\n"))
 	}))
 	defer failing.Close()
-	names := soonScraped(t, time.Second, 3)
+	names := soonScraped(t, time.Minute, 3)
 	targets := func(withGone bool) string {
-		document := "interval: 1s\nconcurrency: 2\ntargets:\n"
+		document := "interval: 1m\nconcurrency: 2\ntargets:\n"
 		document += "  - name: " + names[0] + "\n    collector: kept\n    target: " + failing.URL + "\n"
 		document += "  - name: " + names[1] + "\n    collector: flip\n    target: " + target.URL + "\n"
 		if withGone {
@@ -487,12 +499,29 @@ func TestProbesScrapesAndReloadsTogetherLeaveOnlyWhatIsInForce(t *testing.T) {
 				// A few requests of each collector, so some probes share a
 				// trip or a cached result and some make their own.
 				collector := []string{"kept", "flip", "gone"}[n%3]
-				request := httptest.NewRequest(http.MethodGet, probePath(collector, failing.URL, fmt.Sprintf("&timeout=%d.%03ds", 5+i, n%7)), nil)
+				request := httptest.NewRequest(http.MethodGet, probePath(collector, failing.URL, fmt.Sprintf("&timeout=%d.%03ds", 30+i, n%7)), nil)
 				r.server.Handler().ServeHTTP(httptest.NewRecorder(), request)
 				ended[i].Add(1)
 			}
 		})
 	}
+	// The scrapes the loop does not come to: every target in force, with the
+	// configuration in force with it. They end before the last reload, so the
+	// scrape waited for after it is the loop's.
+	lastReload, scrapesEnded := make(chan struct{}), make(chan struct{})
+	endScrapes := sync.OnceFunc(func() { close(lastReload) })
+	defer endScrapes()
+	go func() {
+		defer close(scrapesEnded)
+		for {
+			select {
+			case <-lastReload:
+				return
+			default:
+			}
+			r.server.scrapeStaticTargets(context.Background(), 0)
+		}
+	}()
 	wg.Go(func() {
 		for {
 			select {
@@ -513,6 +542,8 @@ func TestProbesScrapesAndReloadsTogetherLeaveOnlyWhatIsInForce(t *testing.T) {
 		r.reloadBoth(windowedDocument("flip_value", "kept", "flip", "gone"), targets(true))
 		probed()
 	}
+	endScrapes()
+	<-scrapesEnded
 	r.reloadBoth(windowedDocument("flip_other", "kept", "flip"), targets(false))
 	testutil.WaitFor(t, "the changed collector's target to be scraped as it is in force", func() bool {
 		return slices.Contains(publishedOf(r.server, names[1]), "flip_other 42")

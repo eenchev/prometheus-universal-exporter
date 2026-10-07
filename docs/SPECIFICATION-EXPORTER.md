@@ -978,7 +978,10 @@ keys:
   all of them, a reserved name left out.
 - Connections MUST be kept per target and TLS settings and reused, closed
   after 5 minutes unused, and made again when a TLS file changes on disk,
-  without cancelling a call still using the old one. A connection that failed
+  without cancelling a call still using the old one. An attempt to connect —
+  the TCP connection, the TLS handshake and the server's answer to the
+  HTTP/2 preface — MUST be given up after 20 seconds, a call still waiting
+  for it then failing as `UNAVAILABLE`. A connection that failed
   to connect MUST wait at most 5 seconds before trying again, and a call that
   finds it waiting MUST end the wait and try at once, within its deadline, so
   a server that came back is reached at the next probe. A call cannot tell a
@@ -1333,6 +1336,54 @@ it is recognised by, keeps no more than that; that the error is a limit that
 was exceeded (§ 20) MUST be kept, and what else it was to `errors.As` MAY be
 lost. The error a decoder reports of the first line it left out of a body it
 decoded MUST be bounded alike.
+
+The bound is that of every failure, not of a decode's alone. The error of
+every stage a probe or a static target's scrape can fail at — the fetch,
+whatever its request type, and the status it found; the target policy's
+refusal; the transform, each of its rules and its scripts; the validation;
+each stage a file of a directory is left out at; and the stages of a static
+target's scrape before its trip — MUST be no longer than 2,000 bytes where
+the trip reports it: in the answer to the scraper, which is that error after
+what the answer always wrote around it (the collector and the stage, or the
+JSON object of a rule under `error_mode: fail`); in the `error` of every log
+line; in a debug report, in each line that names the failure and in how each
+request ended; in the first failure a rule is reported with (§ 25); and in
+the text the failure log remembers the failure by (§ 25.1), which MUST be no
+longer whoever reports the failure. It MUST be bounded as a decode error is:
+one within the bound MUST be the stage's own error, untouched, made at no
+cost but the reading of its text and of what it is recognised by; a longer
+one MUST be cut to its start and its length, recognised by the start of what
+it was recognised by and the mark, and MUST NOT hold the error it was cut
+from, of which it keeps what kind of failure it was (§ 20: a limit exceeded,
+a value missing, a script that failed). What an error is to the trip — a
+refusal, a credential refused, a rule's failure under `fail`, a deadline —
+MUST be read before it is cut. A trip that ran out of its budget MUST still
+say so, after the bounded error. The text of a panic a probe or a scrape
+recovered from MUST be bounded alike in the answer, in a debug report and in
+the log; its stack is logged as it was.
+
+That bound loses what an error says after a long part, so where an error of
+those stages says why after a part the target, the scraper or a script can
+make as long as a response, the part MUST be shown by its start and its
+length, as a decoder shows a value, and the error MUST go on as it did:
+
+- a URL the error of an HTTP request quotes (`Get "<URL>": <reason>`), and
+  the same URL where the refusal of a redirect writes it again, by its first
+  512 bytes, the cut between two characters, with its credentials withheld
+  as they were;
+- the name of a metric or of a label the validation quotes, by its first 200
+  bytes, the default `limits.max_metric_name_length`, quoted, with its
+  length after the quotes;
+- a script's error and what its interpreter wrote to stderr, as § 16.7 says
+  of them;
+- the metrics of a directory's file that clash in type with another file's,
+  named while their clashes are within 1,200 bytes together, the rest
+  counted (`...; and 4983 more: a metric has one type across the
+  directory's files`).
+
+Each such length and count MUST be the mark in what the failure is
+recognised by, and an error none of whose parts is over its bound MUST be
+the error it was, to the letter, at the cost it had.
 
 ---
 
@@ -2464,6 +2515,21 @@ at the first kept series past `limits.max_metrics` with the limit's error
 (§ 20). The other lines MUST still be parsed and checked. With a
 `pre_script`, which is given every series, every series MUST be kept.
 
+The decoder MUST stop only for series the transform is sure to make a series
+of. A rule whose `error_mode` is `log` or `ignore` carries on without a
+series it cannot make: one its `type` cannot apply to, a histogram or a
+summary under another type and any other metric under one of those two; a
+histogram or a summary under a `scale`; and a series that lacks a label the
+rule requires. A series of a metric that no rule matching its name is sure
+to keep — every such rule carrying on, and setting a type or a scale that
+cannot apply to a metric of that type, or requiring a label — MUST be kept
+and MUST NOT count while it is decoded: the transform counts the series it
+makes of them (§ 20). A scrape of which the rules keep no more series than
+the limit MUST NOT be refused for the series they carry on without. A series
+of a metric that one matching rule is sure to keep, a rule under `fail`
+among them, MUST count as before, so that the decoder stops as it did for
+every collector none of whose rules can carry on without a series.
+
 ---
 
 # 15. Plain text decoder
@@ -2995,10 +3061,35 @@ typical script.
   worker: it MUST be written as it was whatever its length, the walk that
   looks through it only counting its values, and one longer than
   `limits.max_output_bytes` MUST end as it did, with the output limit's
-  error and its worker. An answer written before MUST be the line it was. A
-  string is no list: one that an answer holds many times is written each
-  time, and bounded by `limits.script_timeout` and
-  `limits.max_script_memory` alone.
+  error and its worker. An answer written before MUST be the line it was.
+- A string that an answer holds many times is written each time too: a
+  text of 100,000 characters that is the item of a list 5,000 times, the
+  value of every key of a dict, or a label of every metric, is 500 MB
+  written from 100 kB the script made. A worker MUST NOT make or write such
+  an answer for the exporter to refuse. The walk that goes through an
+  answer before it is written MUST add up the lengths of its strings, each
+  as often as it is met and as long as it is, in characters: a string is
+  written at least that long, whatever its characters are escaped as. Where
+  the sum is more than `limits.max_output_bytes`, `data` and `metrics` MUST
+  fail the run as the script's failure with the `OverflowError` of an
+  answer that holds a list too often, to the letter, naming `data` or
+  `metrics`, before any of it is written, and the worker MUST outlive it:
+  whether the answer is plain, has a value that is no JSON beside the
+  strings, or is nested deeper than the worker's own walk follows. The sum
+  MUST be of what would be written: where a transform's `metrics` are
+  written without what no metric has, what is left out MUST NOT count. It
+  is of the strings that are values, of exactly the type `str`; the keys of
+  dicts, numbers and punctuation MUST NOT count, so that the sum is never
+  more than the answer is long and no answer the exporter would take is
+  refused. An answer whose strings are within the limit and which is longer
+  than it written out — the sum exactly at the limit, or numbers alone —
+  MUST end as it did, written, with the output limit's error and its
+  worker; an answer of exactly `limits.max_output_bytes` MUST be taken; and
+  an answer within the limit MUST be the line it was, byte for byte. An
+  answer that is no script's `data` or `metrics`, the worker's own word or
+  a script's error, MUST be written however long. Counting the strings MUST
+  add no second walk of an answer: the cost is one addition for each string
+  the walk meets.
 - A worker MUST say, with a line of its own before it runs the script, that
   it has read and parsed the request. `limits.script_timeout` MUST bound the
   run of a script from that line on: not the start of the interpreter, which
@@ -3022,7 +3113,12 @@ typical script.
   answer shown as a value is quoted in any error (§ 18.1), and what
   `--python.path` must name. What a running interpreter had written to
   stderr depends on when it was stopped, so the failure MUST be recognised
-  without it (§ 25.1).
+  without it (§ 25.1). Of what an interpreter wrote to stderr, at a start or
+  when it died in a run, an error MUST show the last 1,500 bytes, from a
+  character's start, after `... ` when it wrote more, so that the error is
+  within the bound of every failure (§ 6) with where the interpreter said
+  why it stopped, and with the hint about `limits.max_script_memory` that
+  follows it, whole; stderr within that MUST be in the error as it was.
 - A run that the probe's or scrape's deadline ends before
   `limits.script_timeout` does MUST be stopped the same way and MUST NOT be
   reported as a timeout of the script: its error MUST say that the probe's
@@ -3047,6 +3143,22 @@ typical script.
   exception MUST be trimmed alike. A worker that exits, crashes, or writes
   an answer longer than `limits.max_output_bytes` MUST be discarded, and the next
   scrape MUST start another.
+- A script's error of 1,500 bytes or fewer MUST be in the transform's error
+  whole, as it was. A longer one — a message as long as the data, a source
+  line of kilobytes, a chain of exceptions raised from one another, each
+  written out — MUST be shown by what says most, in an error within the
+  bound of every failure (§ 6) that is not cut again: each line by its first
+  200 bytes and its length; from the exception's own line on, which is the
+  first line after the last frame that is not indented, the lines that fit
+  in 750 bytes, or in 1,500 where the text has no frame, and then how many
+  lines that part had (`... (4001 lines)`) when some were left out; and
+  before it the last lines that fit in what is left of the 1,500 bytes,
+  after how many lines stood before the exception's own (`... (3613
+  lines)`) when some were left out. Which lines are shown MUST be decided
+  by their lengths with the mark in place of every length measured, and
+  the failure MUST be recognised (§ 25.1) by the text with those marks, so
+  that the same failure of a longer message, or of a longer chain that ends
+  alike, is shown by the same lines and is one failure.
 - `limits.max_script_memory`, a size, MUST bound each of the collector's
   workers' address space (`RLIMIT_AS`), set after the declared libraries are
   imported. A script that needs more MUST fail the run with a `MemoryError`
@@ -3559,11 +3671,13 @@ that a pattern to match the target's metric names by is the rule's
 `expression`, not its `name`, and that `name`, beside an expression, is the
 one name the series it matches are exported under. A name that is none for
 another reason, a name Prometheus reserves, and any name under another
-transform, whose rules have no pattern to be mistaken for, MUST read as
-they did. `name_escaping` (§ 21.1) is about the names a response or a
-script gives and widens nothing of what a rule's `name` may be: a name with
-a dot MUST be refused under each of its values, under `prometheus` with the
-same advice.
+transform, whose rules have no pattern to be mistaken for, MUST NOT be told
+that. Which names are metric names is the collector's `name_escaping` to
+say (§ 21.1): under `fail` a name with a dot MUST be refused, under
+`prometheus` with that advice beside what would export it, and under
+`underscores` and `values`, where it is a name like a target's, it MUST be
+taken as the metric of that very name, with no advice, a dot being as much
+a character of `http.server.duration` as of a pattern.
 
 Two rules of a collector MUST NOT be the same rule: alike in everything
 that decides which series a rule makes, so that each makes every series the
@@ -4159,6 +4273,18 @@ of the way, a label's values not pairing — MUST drop them and give their room
 back, as a rule with `items` does. A python transform's answer is bounded by
 `max_output_bytes`, and its metrics MUST be counted before they are read.
 
+The room is held by the series a scrape keeps, and by nothing else once a
+rule has ended: when a transform ends, the series counted MUST be those it
+returns, whatever its rules carried on without and whichever of them failed
+as a whole, and a rule MUST find all the room that the series kept before
+it leave. This holds for the prometheus decoder too, which MUST NOT count a
+series its transform may carry on without (§ 14.1). While a rule runs, the
+series it has made count: a rule that makes more than the limit has room
+for MUST end the scrape with the limit's error at the first series past it,
+also when the rule would have failed as a whole further on and given them
+up, and MUST NOT go on through the response to find that out. The rules of
+a transform run one after another, so the count needs no lock.
+
 `max_cache_entries` bounds the number of live cache entries a single collector
 may hold. It MUST default to a finite value and MUST be enforced by evicting
 expired entries first and then the entries closest to expiry.
@@ -4372,6 +4498,47 @@ and each file of a directory alike. A label map shared among metrics MUST NOT
 be changed in place. Two labels of one series that escape to one name MUST fail
 the scrape naming both, and two metrics that do so are duplicate series and
 fail as such.
+
+A name a collector's configuration writes — a rule's `name` and the `name`
+of each of its labels, under every transform, a key of `transform.labels`,
+and what `transform.rename` and `transform.rename_labels` rename to — MUST
+be held, when the configuration loads, to what a scrape of that collector
+holds a name to, and MUST be exported by the same escaping, in that one
+place, and by no second one:
+
+- under `fail`, written, left out or written `""`, a name that is not
+  classic could only fail every scrape, so it MUST be refused at load, in
+  the words it was, and where it is valid UTF-8 and not blanks alone the
+  error MUST say as the scrape's does that `name_escaping` `underscores` or
+  `values` would export it escaped;
+- under `underscores` and `values` it MUST load, whatever characters it
+  has, and its series MUST be exported under the name that scheme gives a
+  target's same name, with `metrics_prefix` joined first, in the text
+  format, in OpenMetrics and over OTLP alike.
+
+A `prometheus` rule's `name` without an `expression` MUST match the
+target's metric of that name as it is written, whole, and a `python` rule's
+`name` and its labels' names the script's series and labels as the script
+gives them. What a rule says of its series MUST find them by the names as
+written, before they are escaped: a label's `value_map`, `truncate`,
+`remove_labels` and what `rename_labels` renames. A log line, a probe's
+error and the rule's failures among the self-metrics MUST name a rule as it
+is written; a debug probe's lists of series and of the rules that gave none
+(§ 42.17) are of exported names.
+
+Whatever `name_escaping` is: a name of nothing but blanks MUST be refused,
+being neither the key left out nor a name; a metric name MUST NOT be
+exported beginning with `__` and a label name MUST NOT either, so a name
+written so MUST be refused as it was, and one that `underscores` would
+export so, such as `1_x`, MUST be refused under `underscores`, the error
+naming what it is exported as, and taken under `values`; and a static
+target's `labels` (§ 42.14) MUST be classic names, being added to what the
+collector exported after its names were escaped. The length a rule's name
+is held to with a `metrics_prefix` (§ 6) MUST be that of the name as it is
+exported, and the error MUST quote that name. Two rules whose names differ
+as written and are one name once escaped are not the same rule to the load
+(§ 18.1), which compares what is written: they MUST load, and a scrape that
+has both fails as it does of two such names of a target.
 
 ---
 
@@ -4925,7 +5092,9 @@ gzip.
 
 The exporter's own HTTP server MUST bound what a client can hold open: request
 headers within 10 seconds, the whole request within 30 seconds, and an idle
-keep-alive connection closed after two minutes. A request's line and headers
+keep-alive connection closed after two minutes. The tests MAY give the headers
+another time (§ 34); the exporter MUST NOT, so that its servers have the 10
+seconds. A request's line and headers
 together MUST be bounded at 64 KiB, a longer request being answered `431`. It
 MUST NOT have a write timeout counted from the request's arrival, which would
 cut off a probe that legitimately takes as long as its scrape timeout.
@@ -5274,7 +5443,9 @@ about a rule that has a name MUST read as it did before this rule. What is
 checked:
 
 - A declared metric name MUST be a valid Prometheus metric name and MUST NOT
-  start with `__`.
+  start with `__`. Under `name_escaping` `underscores` or `values` it, and
+  every other name the collector writes, MAY be any name that is not blanks
+  alone and is not exported starting with `__` (§ 21.1).
 - Every expression MUST compile in its transform's language: jq and yq value,
   `items` and label expressions (compiled, not only parsed, so an undefined
   function or variable is caught); regular expressions; CSS selectors, which
@@ -5336,7 +5507,72 @@ checked:
   mapping of names to values, such as `value_map`, `headers` or `labels`,
   MUST be refused naming the mapping and the line, since the decoder would
   drop the entry; quoted, it is that text.
-- These two checks MUST look at the values the decoder uses (§ 24.2a): with
+- A value YAML reads as none — nothing after the colon or the dash, `null`
+  or `~`, in any spelling YAML takes for them — MUST be refused wherever a
+  file takes a value: at every key the configuration, a collector file and
+  the static target file have, required or not and whatever it takes, a
+  block and a list among them; at every entry of every list; and at every
+  value of every mapping of names to values. The decoder takes such a key
+  for the key left out, or, of a static target's `request.path` and
+  `request.body`, for one written `""`, drops such an entry, so that a rule
+  meant under a bare dash is missing with nothing said, and takes such a
+  value of a mapping for `""` or 0. The error MUST name the line and the
+  place — the key, as in `line 7: ttl has nothing after its colon, which
+  YAML reads as no value at all; write its value, or take the key out`, the
+  list and the entry's place in it, counted from 1, as in `line 12: metrics
+  entry 1 is a dash with nothing after it, …; write a metric rule there, or
+  take the entry out`, or the mapping and its key — and MUST say how the
+  value is written and what to do. Each such value MUST be reported, in the
+  order of the file, beside whatever else the decoding refuses, and the
+  checks of the configuration that come after decoding are not reached. The
+  check MUST be of every key the files' types have, found from the types the
+  schemas are generated from and not listed by hand, so that a key added
+  later is held to it. A top-level `x-` key (§ 24.2a) is the file's own, and
+  MAY hold such a value; text that is empty, `""`, is a value.
+- A value MUST be written as the kind its key takes, in the configuration, a
+  collector file and the static target file alike, and what a key takes MUST
+  be what its schema says (§ 24.3), read from the schemas the files' types
+  generate and not listed by hand. The decoder hands a key of text the text
+  of whatever is written. A key of free text — one the schemas hold to no
+  allowed values and no pattern: a description, an expression, a label's
+  `value`, a header, a query parameter, a body, a path, a value of a mapping
+  of names to text — MUST take a scalar YAML reads as a boolean or a number
+  as the text it spells, so that `value: 1` and `description: 404` need no
+  quotes, and a key of a mapping is text however it is written
+  (`value_map: {1: running}`). A key the schemas hold to text alone — one
+  with allowed values or a pattern, and the few they say are text
+  themselves: a collector's, a rule's, a label's and a static target's
+  `name`, `metrics_prefix`, `name_escaping`, `request.type`, `method`, `rpc`
+  and `descriptors`, `decoder.type`, `transform.type`, the error policies, a
+  rule's `type`, `error_mode` and `time_zone`, `response.csv.delimiter`,
+  `response.graphite.value` and `invalid_lines`, and an entry of
+  `collector_files`, `redirect_trusted_hosts`, `accept_codes`,
+  `retry.codes`, `transform.libraries` and `required_libs` — MUST refuse
+  such a scalar, which the decoder took as its text, so that `name: true`
+  was the name `true`: `line 9: name is written true, which YAML reads as a
+  boolean, not as text; to use that text there, quote it: "true"`, naming
+  the line and the key, or the list and the entry's place in it, how the
+  value is written and whether YAML reads it as a boolean or as a number. A
+  key the schemas hold to allowed values MUST be told those values in place
+  of the advice to quote, which would not make the value one of them: `line
+  5: type is written 1, which YAML reads as a number, not as text; write one
+  of graphite, grpc, http, localfile`. A
+  rule's and a label's `name` are among them under every `name_escaping`. A
+  key that takes a boolean MUST take `true` and `false`, in the three cases
+  YAML reads as one, and MUST refuse the words YAML 1.1 read as booleans —
+  `y`, `yes`, `on`, `n`, `no`, `off` and their capitalised and upper-case
+  forms, quoted or not — which are text to YAML 1.2 and to an editor and
+  which the decoder took for booleans: `line 3: enabled is written yes,
+  which YAML reads as text, not as a boolean; write true`, saying which of
+  the two the word was read as. Text MUST be taken wherever text is, a date
+  written without quotes and those words among it; a number or a boolean in
+  quotes is text, and the decoder's own refusal of it at a key of numbers or
+  booleans stands. Each such value MUST be reported, in the order of the
+  file, beside whatever else the decoding refuses, and a document that
+  writes none MUST load or be refused as before, message for message. A
+  test MUST name the keys held to text alone, so that a key that comes to be
+  among them, or to leave them, is seen.
+- These four checks MUST look at the values the decoder uses (§ 24.2a): with
   a merge key, the mapping's own key and not the merged one it replaces,
   wherever the merge key stands, and of a list of merges the first that sets
   the key, a merged mapping's own before what it merges in itself. A
@@ -5450,8 +5686,23 @@ not at the repository root, and the schemas' published addresses MUST be under
 it. `make schemas` MUST regenerate all three.
 
 The schema describes the canonical spelling, and MUST allow an unquoted number
-or boolean where the exporter reads a string, since YAML reads `expression: 1`
-as a number. Startup validation remains the authority on what is valid.
+or boolean where the exporter reads free text, since YAML reads `expression: 1`
+as a number. A key with allowed values or a pattern MUST be a string alone,
+a rule's and a label's `name` among them whatever the collector's
+`name_escaping`, and the exporter MUST refuse a number or a boolean there as
+the schema does; a boolean key MUST be a boolean alone, and the exporter
+MUST refuse the words YAML 1.1 read as one (§ 24.2). A test MUST read every
+place of the three committed schemas where a single value is written — each
+key, each entry of a list, each value of a mapping — and put a boolean, a
+number, such a word and a quoted number or boolean at it through the schema
+and the exporter, and require that the schema finds a problem at the place
+exactly when the exporter refuses what is on its line while reading the
+file; the tables of keys MUST put each of their keys through both written
+`true` and `1` as well. The exporter's reader takes a few more spellings
+for a number than YAML 1.2 does, such as `1_000` and `0b101`, which an
+editor reads as text and the exporter MUST refuse as numbers at a key of
+text alone: the documentation of the schemas MUST say so. Startup
+validation remains the authority on what is valid.
 
 Where a schema can tell, it MUST refuse what the exporter refuses, and a test
 MUST put a table of documents through both the committed schema and the
@@ -5542,6 +5793,35 @@ having no empty form. A rule's `expression` of a collector whose
 the pattern a label's `expression` is held to (§ 18.1), and a rule of such
 a collector MUST have `name` or `expression` written with a value other than
 `""` (§ 18.1).
+
+A key written with no value at all — nothing after its colon, `null` or
+`~` — is not the key written `""`, and MUST be refused by the schemas and
+by the exporter alike, as an entry of a list and a value of a mapping so
+written MUST be (§ 24.2): null is none of the types a key of the schemas
+takes, and the exporter MUST NOT take what they refuse. The schemas were
+not widened to take null at each optional key: that makes every key's type
+a list with `null` in it and every rule about a key being written a rule
+about its not being null either, some quarter more of each schema, and an
+editor would no longer flag a key left empty by mistake. A test MUST find
+every key, every list and every mapping of names to values from the
+committed schemas themselves, in the configuration, a collector file and
+the target file, and hold the schema and the exporter to refusing a
+document that writes that one place with nothing, with `null` and with `~`,
+the exporter by the line and the place; and the tables of constrained keys
+(below) MUST put each of their keys through both written `null` and `~`.
+The test's own validator MUST read null as a JSON Schema validator does, as
+of the type `null` alone.
+
+A rule's `name` and a label's `name` MUST be classic names to the schemas
+where the exporter holds them to that (§ 21.1) and any name that is not
+blanks alone where it does not: the pattern of each MUST stand under a rule
+of the collector that holds unless its `name_escaping` is `underscores` or
+`values`, and the keys' descriptions MUST say so. That a name is not
+exported beginning with `__`, as written or as `underscores` escapes it,
+and what the keys of `transform.labels` and the targets of `rename` and
+`rename_labels` may be, which the schemas hold to nothing, stay the
+exporter's to refuse, and a test MUST show each past the schema and refused
+by the exporter.
 
 A block that `enabled` switches on is kept unchecked while it says
 `enabled: false`, and that MUST hold of the schemas as of the exporter, for
@@ -6544,7 +6824,22 @@ kernel gives a freed port out again. A test that has the exporter do
 something within its `--web.shutdown-delay` MUST keep the exporter in the
 delay until that is done, and MUST NOT rely on the delay being long enough;
 the wait for the delay MUST be replaceable for that, and nothing but a test
-MAY replace it.
+MAY replace it. And the two limits of ten seconds that tests not about them
+run under — the TLS handshake with a target, and the time a client has to
+send a request's headers to the exporter in — MUST be half a minute in the
+tests: each MUST be settable for that, nothing but a test MAY set either,
+and a test of the limit itself MUST set a short one against something that
+never ends, a target that never answers the handshake or a client that never
+ends its headers. The twenty seconds an attempt to connect to a `grpc` target
+has (§ 5.1, `grpc`) MUST be half a minute in the tests in the same way, in
+every package whose tests call a `grpc` server, with the waits between
+attempts left the exporter's: its setter MUST be there in a build without the `grpc`
+request type too, since the tests are set up by the same code whatever was
+built; the test of the limit MUST connect to a target that never answers the
+HTTP/2 preface, with the wait before the next attempt shorter than the
+limit, since an attempt has the longer of the two; and a test MUST hold what
+a connection is made with when nothing is set to the exporter's values, one
+for one.
 
 A test MAY work on a smaller input when the tests are built with the race
 detector, under which the suite runs twice and several times slower: fewer
@@ -8063,8 +8358,9 @@ status captured:
 - `raise`, `fail(...)` and `sys.exit` fail the run with the Python error and
   leave the worker in service.
 - A worker that exits is replaced on the next run.
-- An answer over `max_output_bytes` fails with the output limit error, and the
-  next run succeeds.
+- An answer over `max_output_bytes` that the worker does not refuse itself,
+  its strings together being within the limit, fails with the output limit
+  error, and the next run succeeds.
 - `socket`, `subprocess` and `threading` imports, `open`, `os.system`, and
   reading or writing the protocol descriptors are refused on every run.
 - The ways around those are refused too: importing `_socket`,
@@ -9630,7 +9926,7 @@ Tests MUST show:
   keys of `web.basic_auth`.
 - `enabled: false` with other settings, invalid ones included, loads with
   the block off; `enabled: true` turns it on; a merge key may supply
-  `enabled`; an empty block and a block with no value need none.
+  `enabled`; an empty block needs none.
 - The two blocks still refuse, with the line and in the file's terms, an
   unknown key, an unknown nested key, a value of the wrong kind, a bad
   duration and a block that is not a mapping, and report an unknown key
@@ -12643,7 +12939,7 @@ Tests MUST show:
 - A `css` expression written `body #proxy` without quotes loads as the
   selector `body` and fails on the whole page's text; in quotes it reads
   the element, `span#proxy` needs no quotes, and `expression: #proxy` is
-  refused as a rule without an expression.
+  refused as a key with nothing after its colon.
 - A page of one-word Cyrillic names in windows-1251 that declares no
   encoding fails the probe in validation with `duplicate metric series`,
   after the warning that two label values were repaired, each name being
@@ -14788,8 +15084,8 @@ Tests MUST show:
   mode, with a budget that is doubled until the target has answered within
   it; the other files of a directory are answered when the reads of four
   hang past a deadline the test ends once all four are held; a
-  connection reset a second after the head and the start of the body were
-  written fails the fetch as one reset in the middle of the body.
+  connection reset when the client has read the head and the start of the
+  body fails the fetch as one reset in the middle of the body.
 
 ## 34.97 Configurations that loaded and did something else: a switched-off otlp block, empty and blank filter entries, empty constant labels, a constant on a python rule's label
 
@@ -15295,7 +15591,7 @@ Tests MUST show:
   that name; with neither it matches no metric, so write one, as in
   expression: '^node_' or name: up, or expression: '.*' for a rule about
   every metric, or take the rule out`: written `{}`, `name: ""`,
-  `expression: ""`, both `''`, `name: ~`, and of a type, a description,
+  `expression: ""`, both `''`, and of a type, a description,
   `required: true`, `required: false`, `error_mode: ignore`, `scale: 2`, a
   constant label, a label with an expression, and four keys at once. The
   second of two rules is `rule 2`, the third of three `rule 3` and the one
@@ -15569,24 +15865,28 @@ Tests MUST show:
   `http.server.duration`, `up{job="x"}`, `é.` and ` .* ` — is refused with
   `collector "node" metric "node_.*": "node_.*" is not a valid Prometheus
   metric name; use letters, digits, underscores and colons, not starting
-  with a digit; a pattern to match the target's metric names by is a
-  prometheus rule's expression, not its name, so if this is one, write it
-  as expression, in single quotes, and leave name out, or set name to the
-  one name the series it matches are to be exported under`, with an
-  expression beside the name and without, under `name_escaping` left out,
-  `fail`, `underscores` and `values`.
+  with a digit, or set the collector's name_escaping to underscores or
+  values to export it escaped; a pattern to match the target's metric names
+  by is a prometheus rule's expression, not its name, so if this is one,
+  write it as expression, in single quotes, and leave name out, or set name
+  to the one name the series it matches are to be exported under`, with an
+  expression beside the name and without, under `name_escaping` left out
+  and `fail`; under `underscores` and `values` each loads, but `é.` and
+  ` .* ` under `underscores`, which would export them beginning with `__`.
 - The same names under jq, yq, xpath, css, regex, csv and python, and under
   every transform the names `bad-name`, `node load`, `1up`, `é`, `up,down`,
   `a/b`, `up!`, `a=b`, `@up`, `a'b`, `a"b`, `a#b`, `~up`, `a&b`, `<up>` and
-  `a%b`, are refused with the first sentence alone, word for word as
-  before; `__up` is refused as reserved, and `up`, `node_load1`,
-  `job:up:sum`, `_` and `UP` are taken.
+  `a%b`, are refused under `name_escaping` left out and `fail` with the
+  first sentence alone, and load under the other two; `__up` is refused as
+  reserved, and `up`, `node_load1`, `job:up:sum`, `_` and `UP` are taken,
+  under all four.
 - Through the load, `name: 'node_.*'`, `'^up$'`, `'up|node_load1'`,
   `http.server.duration` and `'node_\d+'` of a prometheus rule, alone and
   beside an expression as the second rule, are refused with both sentences
-  under each `name_escaping`, and with the first alone under jq and python;
-  `bad-name`, `1up` and `__up` read as they did; and `expression:
-  'node_.*'`, a name beside `'^node_load1$'` and
+  under `name_escaping` left out and `fail`, and with the first alone under
+  jq and python, and load under `underscores` and `values`; `bad-name` and
+  `1up` are refused with the first sentence and `__up` as it was; and
+  `expression: 'node_.*'`, a name beside `'^node_load1$'` and
   `'^http\.server\.duration$'` load.
 - A prometheus rule with such a name, `items` and an expression that does
   not compile is told three things, the sentence about patterns ending the
@@ -17000,11 +17300,9 @@ Tests MUST show:
 - Tests left as they were hold on a slow machine by what they are: a host
   refused for a character no name has, or one outside ASCII, is refused
   with its deadline already past; so is the transform that a deadline stops
-  at its first rule; a connection reset after the head and the start of the
-  body fails as a reset in the middle of the body with no wait at all
-  between the two, the head being read before the reset is seen; and the
-  `grpc` calls of a target that resets every TLS handshake name two ports
-  with the resets a second and a half late, in one more round of calls.
+  at its first rule; and the `grpc` calls of a target that resets every TLS
+  handshake name two ports with the resets a second and a half late, in one
+  more round of calls.
 - On a clock of the test's own, a worker that takes 600ms to say it has the
   request and answers at once, under a `script_timeout` of 300ms, succeeds
   after exactly 600ms with a script time of nothing, and one that has the
@@ -17096,6 +17394,835 @@ Tests MUST show:
   with a static target each and for 500 collectors with 20 targets each,
   and reports how many times the look went through the collectors of the
   configuration to find one by its name: none.
+
+## 34.111 Keys of the OTLP export, a value written as none, a name the configuration writes, and the tests left to a clock
+
+- A probe of a JSON answer that reads the series `m_total` with the label `a`
+  of `1`, a NUL and `b=2`, the one with `a="1"` and `b="2"` and a third
+  answers with all three and exports all three; the first had the second's
+  place among the points waiting for the export, and was never exported.
+- Two static targets whose `otlp.resource_attributes` are `a=b` of the value
+  `c` and `a` of the value `b=c` are exported as two resources, each with its
+  own series and its own health; they were one, with the series and the
+  health of both under the attributes of the target scraped first.
+- Two series of a resource whose labels were joined to the same bytes are
+  both exported, and an undelivered point of one waits again though a point
+  of the other was queued meanwhile; two resources whose attributes were
+  joined alike are exported apart, a series both have once for each; and the
+  exporter's own metrics are exported under its own resource, not under a
+  static target's whose attributes were joined to the bytes its own are. Each
+  test holds beside the export what the old keys sent: one point of two, one
+  resource of two.
+- A series of one resource and a series of another whose resource's key and
+  own key were joined to the same bytes — an attribute's value holding what
+  the other's series begins with — keep their own start times over three
+  exports: the one that grows starts where it first was exported, and the
+  one that is reset starts again at its reset. With the old keys the two
+  shared one start time: the lower was reset at every export, the higher
+  took the start the lower was given, and the reset of the higher went
+  unseen.
+- Every key of the OTLP export — of 40,000 generated resources and series
+  (4,000 under the race detector) whose parts hold the bytes the parts are
+  joined with, a key's own `0x01` and two NULs, bytes that are no UTF-8,
+  nothing, and parts of 200 and of 20,000 bytes — is read back to the parts
+  it was made of, and no two subjects have one key, though more than an
+  eighth of them had the old key of another; the join a key is read back to
+  is the old key.
+- Pairs that had one key have a key each: series whose label value holds a
+  NUL and the next label, three labels as one, a name that holds the type
+  and a label, a label's name that holds an `=`; resources whose attribute's
+  name holds an `=`, whose attribute's value or service name holds a NUL and
+  the next attribute, and whose attributes are bytes that are no UTF-8; and
+  a resource and a series whose start time was kept under the key of
+  another resource and series.
+- The keys of generated resources and of generated series, in the order the
+  export puts them in, have their old keys in order: among them many whose
+  old key was another's and then a NUL, and many that had the old key of
+  another, which follow one another in an order that is the same every time.
+- A key is made in one allocation — of a series with labels, without, with
+  NULs in its labels and with labels of 300 and 18,000 bytes, and of a
+  resource — and a series' start time is found with no other, where the old
+  keys took two or more each; a series of twelve labels takes at most
+  three, fewer than its old key; and 300 keys of as many sizes, their
+  lengths written with one byte and with two and their NULs with two, take
+  one allocation each, which a size one byte short does not.
+- 400 generated runs of exports (60 under the race detector) — several
+  resources, the exporter's own and static targets', queued scrapes of
+  counters, gauges, histograms and summaries with classic names, such as
+  `name_escaping` makes, whose counts rise and fall, about a quarter of the
+  exports failing so that their points wait again beside newer ones — are
+  sent, byte for byte, as an export whose keys are each subject's own sends
+  them; and as the export with the old keys, kept beside the test, sent
+  them, in every run where no two resources and no two series had one old
+  key and no name was two kinds in an export (§ 34.112): more than a third
+  of the runs, a twentieth or more of them with NULs in their values. In a
+  fifth or more of the runs two subjects had one old key, and in a tenth or
+  more the old keys sent something else.
+- A key written with no value — nothing after its colon, `null`, `~`, `Null`
+  or `NULL` — is refused when the file is read, where it loaded as the key
+  left out: `line 3: name_escaping has nothing after its colon, which YAML
+  reads as no value at all; write its value, or take the key out`, and `is
+  written null` or `is written ~` for the other spellings. That is so of a
+  key of text, of a number, of a duration, of a required key (`name`,
+  `request.type`), of a block (`request`, `transform`, `limits`, `web`,
+  `otlp`, `web.basic_auth`) and of a list written whole (`collectors`,
+  `collector_files`, `metrics`), in the configuration, a collector file
+  (after `collector file <path>:`) and the static target file, where
+  `request.path: ~` was read as one written `""`.
+- A bare dash among a collector's `metrics` — first, in the middle, last,
+  alone or twice — is refused with its line and its place in the list,
+  `line 4: metrics entry 1 is a dash with nothing after it, which YAML reads
+  as no value at all, so the entry would be left out without a word; write
+  a metric rule there, or take the entry out`, where the configuration
+  loaded with the rules that were left; `- null` and `- ~` read `is written
+  null` and `is written ~`. An entry of `collectors`, of a rule's `labels`,
+  of `collector_files`, of `transform.include` in a flow list, of
+  `transform.exclude`, `remove_labels`, `libraries`, a static target's
+  `request.accept_status` and of `targets` is refused the same way, named
+  as a collector, a label, a static target or a value.
+- A value of a mapping written with no value is refused naming the mapping
+  and its key, `line 5: value_map key "up" has nothing after its colon, …`,
+  where `value_map: {up: }` mapped `up` to 0 and a label, a header or a
+  rename so written was one written `""`.
+- Several such values of one file are each reported, in the order of the
+  file, after what the decoder refuses and beside a limit with a fraction
+  and a mapping key that is no key; a block whose `enabled` has no value is
+  told that beside `sets endpoint but not enabled`.
+- A value an alias names is refused where the key that takes it is written;
+  a key written with no value over one a merge key supplies is refused, and
+  so is one in a merged mapping that the mapping does not override, at the
+  line it is written on; one the mapping overrides is not, nor is anything
+  under a top-level `x-` key, an empty document after `---`, `""`, `''`,
+  `{}` or `[]`.
+- `valueProblems` agrees with a copy of itself as it was on each of the 70
+  documents the repository ships as a configuration or a target file — the
+  examples, `configs`, the fixtures and the fenced YAML blocks of the
+  documentation, none of which writes such a value — and on three documents
+  it refused before; and of each of those with one value that is none put
+  at one of 9,376 places, a tenth of them tried and under the race detector
+  a hundred and twentieth, at a key the mappings write or could, in a list
+  first, in the middle and last, or in a mapping of names to values, written
+  as nothing, `null` and `~` in turn, it says what it said of that document
+  and that one place more, by its line and in the words of its kind.
+- Every key, every list and every mapping of names to values of the three
+  committed schemas — 152, 21 and 11 in the configuration, 121, 20 and 9 in
+  a collector file, 42, 5 and 5 in the target file, read from the schemas
+  themselves — written with nothing, `null` and `~` in a document that holds
+  that one place is refused by the schema, at that place and for its type,
+  and by the exporter, with the line and the place; written with a value it
+  is told of as empty by neither, and a top-level `x-` key takes each
+  spelling to both.
+- In a configuration that loads, eleven optional keys, twelve other keys
+  and blocks, the required ones among them, four values of mappings, a
+  `value_map` value and a header, each written with nothing, `null`, `~`,
+  `Null` and `NULL`, are refused by the committed schema and the exporter
+  alike, and `name_escaping: ""`, `metrics_prefix: ''`, `limits: {}`,
+  `metrics: []`, `cache: {}` and a label written `""` are taken by both.
+- Each row of the tables of keys the schemas hold to a rule is refused by
+  both, and was by the schemas as they were, written `null` and `~`, the
+  exporter saying that YAML reads it as no value at all.
+- The validator the schema tests use reads null as of the type `null` alone,
+  and every shipped file and every test of the schemas holds as it did.
+- `web.basic_auth:` and `otlp:` with nothing after them, which loaded as
+  blocks that set nothing, are refused each by its line; `{}` for each loads.
+- A `css` rule written `expression: #proxy` is refused as a key with nothing
+  after its colon, where it was refused as a rule without an expression, and
+  a `prometheus` rule written `name: ~` as a key written `~`.
+- A rule named `http.server.duration` with a label `service.name` loads
+  under `name_escaping: underscores` and `values`, where it was refused under
+  every `name_escaping`: of a jq collector, of a prometheus collector whose
+  rule passes on the target's metric of that name, of one whose rule exports
+  a classic metric under that name with `expression`, and of a python
+  collector whose rule names the script's series to cut its label. Through
+  `/probe` each answers, byte for byte, what a pass-through of a target that
+  gives those names answers, `http_server_duration{service_name="api"}
+  0.25` or `U__http_2e_server_2e_duration{U__service_2e_name="api"} 0.25`
+  after its `# TYPE` line, in the text format and in OpenMetrics, and queues
+  for OTLP the series the pass-through queues; the export of the jq rule's
+  series has a gauge of the escaped name with the escaped attribute key and
+  no metric of the name as written.
+- Under `name_escaping` left out and `fail` the same rules are refused at
+  load, each in the words it was and with `set the collector's
+  name_escaping to underscores or values to export it escaped` after them,
+  as the pass-through's scrape answers 502 with; a prometheus rule's name is
+  told that and then where a pattern belongs.
+- A csv and a regex rule's name, a key of `transform.labels` and what
+  `transform.rename` and `transform.rename_labels` rename to are refused
+  under `fail` with that advice and load under `underscores` and `values`.
+- `checkMetricName` agrees with a copy of itself as it was on 43 names under
+  each `name_escaping`: a classic name is taken, or refused for its two
+  leading underscores, word for word under all four; a name that is not
+  classic is refused under `fail` in the words it was, with the advice when
+  it is valid UTF-8 and not blanks, and is taken under the other two, where
+  it is exported as a classic name, unless it is blanks alone, refused as it
+  was, or `underscores` exports it beginning with `__`, refused as `"1_x"
+  is exported as "__x" under name_escaping underscores, which starts with
+  "__", which Prometheus reserves`. A label's name is held to the same.
+- A rule's name of one blank or two is refused under `underscores` and
+  `values`, a jq rule's as a rule without a name; `__up` and a label
+  `__site` are refused as they were; `1_min.load` and a label `..site` are
+  refused under `underscores` naming what they are exported as and load
+  under `values`.
+- The check of a rule agrees with a copy of itself as it was on every rule
+  of the shipped configurations, whose names are all classic, under each
+  `name_escaping`, the error and the defaults; and on a generated table
+  under each transform — nine names, eleven label names, three labels, two
+  lists, two rules — where a label's name is classic or the check does not
+  come to it. A label's name that is not classic gets the old refusal and
+  the advice under `fail`, and under the other two what the check said of a
+  classic name in its place, or the refusal of a name exported as reserved.
+- Four collectors of classic names — a jq rule, a prometheus rule of a
+  name, one of a name and an expression and a python rule — answer what a
+  pass-through of a target of those names answers, the same bytes with
+  `name_escaping` left out, `fail`, `underscores` and `values`, in the text
+  format and OpenMetrics, and queue the same series for OTLP, as they did
+  before a rule's name followed `name_escaping`.
+- A rule's name with `metrics_prefix` is held to
+  `limits.max_metric_name_length` as it is exported: `http.server.duration`
+  under prefix `otel` and `values` is refused as `exported as
+  "U__otel__http_2e_server_2e_duration"`, fits under `underscores`, and a
+  classic name too long is refused in the words it was under all four.
+- A rule named `http.client.duration` that finds no value is logged with
+  `metric` as written, fails a probe under `error_mode: fail` with that
+  name, and counts in `http_exporter_rule_failures_total` under it; a
+  label's `value_map` and a python rule's `truncate: true` find the series
+  and the label by the names as written.
+- A debug probe's report lists a rule that gave no series by the name its
+  series are exported under — `http_client_duration`,
+  `U__otel__http_2e_client_2e_duration`, `otel_queue_depth` — and does not
+  list one whose series are in the report, where a rule of a collector with
+  a `metrics_prefix` was listed as giving none whatever it gave, the prefix
+  having been joined without its underscore.
+- Two rules named `a.b` and `a_b` under `underscores`, alike in everything
+  else or of two types, and two such labels of one rule, load; and a static
+  target's label `deployment.env` is refused as it was under a collector
+  that escapes names.
+- The committed schema and the exporter agree on a rule's `name` and a
+  label's `name` under a jq, a prometheus and a python transform, with
+  `name_escaping` left out, `""`, `fail`, `underscores` and `values`: both
+  take five classic names and four classic label names under each; both
+  refuse ten other names (a dot, a dash, a blank inside, a leading digit, a
+  letter outside ASCII, blanks around it, `/`, `"`, a quoted `"1"`) and a
+  label with a colon under the first three and take them under the last
+  two; both refuse a name of one blank, two or a tab and a label written
+  `""` under all five; and a rule's `name: ""` is taken where the rule needs
+  none. `__up`, a label `__site`, and under `underscores` `1_up` and a label
+  `..site`, are past the schema and refused by the exporter; so are a key of
+  `transform.labels` and the targets of `rename` and `rename_labels` that
+  are not classic, under `fail`, which both take under the other two.
+- In the tables of keys, a rule's `name` and a label's `name` under
+  `name_escaping: underscores` and `values`, and a prometheus rule's `name`
+  under `values`, are taken by both with a dot, a blank or a slash in them,
+  which the schema as it was refused, and refused by both as blanks.
+- The stress test of probes, scrapes and reloads together gives its static
+  targets an interval of a minute, with names whose first scrape is due at
+  once, and its probes half a minute and more: with the changed collector's
+  target 1.1 seconds late with every answer the test holds what it held,
+  where an interval of a second ended every scrape of that target and the
+  test waited half a minute for a result that never came. The loop by
+  itself makes one scrape while the reloads go on and one after the last,
+  so the test also scrapes the targets in force itself, round after round
+  until the last reload, and the scrape waited for after that reload is the
+  loop's.
+- The Prometheus demo example's second probe is answered from memory with
+  the two probes sixteen seconds apart: the result the first probe left is
+  fresh for exactly the example's fifteen seconds, read from the cache, and
+  is moved an hour ahead before the second probe. Aged by its fifteen
+  seconds instead, the stand-in is asked again.
+- A TLS handshake with a target has ten seconds in a pool built with no
+  limit set and half a minute in the pools of the tests of `internal/fetch`
+  and `internal/exporter`, and a pool keeps the limit it was built with. A
+  target that takes the connection and never answers the handshake fails
+  the fetch with `TLS handshake timeout` no sooner than a limit of 100ms,
+  with a minute left on the fetch's own deadline, on a pool whose limit is
+  read to be the 100ms. A handshake the server is eleven seconds late with
+  succeeds under the tests' limit and fails under the exporter's.
+- The exporter's HTTP server leaves a request's headers ten seconds with
+  nothing set and half a minute in the tests of `internal/exporter` and in
+  the child exporters of the main package's tests. A client that sends a
+  request line and one header and nothing more is dropped at a limit of
+  100ms: the first read deadline on the exporter's side of the connection is
+  the limit after the server began to read, the connection is closed no
+  earlier than that with no answer, and no handler sees the request. A
+  client eleven seconds late with its request is answered under the tests'
+  limit, in `internal/exporter` and by a child exporter, and is not under
+  the exporter's.
+- No file but a test's calls `SetTLSHandshakeTimeout` or
+  `SetReadHeaderTimeout`, as none but a test's calls `SetLeastScriptTimeout`
+  or `SetStartTimeout`; a call from the setter's own package, and one in a
+  function written on one line, is found as any other.
+- The contexts that only keep a fetch from hanging are a minute where they
+  were twenty seconds: the two fetches a failure is recognised from, and the
+  shared contexts of the two tests of a healthy request beside one whose
+  headers close their HTTP/2 connection; and the scripts whose answers are
+  compared with the worker as it was have a minute where they had twenty
+  seconds. With what each waits for twenty-one seconds late — a reset in
+  the middle of a body, the healthy request's answer, a script — each test
+  holds, and failed as it was. The twenty seconds grpc-go gives an attempt
+  to connect in stayed the exporter's in every test until § 34.112: where a
+  test makes a connection wait an hour before it tries again, an attempt has
+  the hour, and a server preface twenty-one seconds late fails no such test.
+- Under `--python.max-workers=2` the burst of six runs is held where its two
+  workers start until the other four runs wait for one, so six runs meet
+  two workers and another script's run evicts one idle worker, with each
+  run begun half a second after the one before; left to the 50ms the script
+  sleeps for, such runs shared one worker and none was evicted.
+- A reflection question left behind by the only probe that waited for it is
+  held at the server until that probe has given up, which it does when its
+  question is seen there, and is answered after: the next probe asks no
+  second one. With a deadline of 50ms and an answer after 300ms, a probe
+  whose connection was 100ms late had given up before anything was asked,
+  and the test passed all the same.
+- A target that resets a connection in the middle of a body does so when
+  the client's side of the connection has read the head and the start of
+  the body, on both connections of the test, and not a second after writing
+  them: the fetch fails in the middle of the body with the client a second
+  and a half late to read, as it did on Linux with the reset a second
+  after the write, and the test takes no time where it took two seconds.
+- A probe made in a child exporter's `--web.shutdown-delay` is answered
+  `200` with its target six seconds late; the test's client gave up after
+  five.
+
+## 34.112 The kind a value is written as, one writer for an OTLP stream, the series a scrape keeps, a script's strings, and no error longer than the bound
+
+- A boolean or a number written at a key the schemas hold to text alone is
+  refused when the file is read, where the decoder took it as its text:
+  `name: true`, a collector's `name: True`, `metrics_prefix: FALSE`, a
+  rule's `name: 1`, a label's `name: 0x1F`, a rule's `time_zone: +1`,
+  `response.csv.delimiter: 1`, and entries of `collector_files`,
+  `redirect_trusted_hosts`, `accept_codes` and `retry.codes` each fail the
+  load with `line N: name is written true, which YAML reads as a boolean,
+  not as text; to use that text there, quote it: "true"`, a number saying
+  `as a number` and an entry naming its list and its place in it
+  (`collector_files entry 2`). A key held to allowed values is told them
+  instead: `name_escaping: false`, `request.type: 1`, `method: 1.5`,
+  `decoder.type: true`, `transform.type: 2`, an error policy, a rule's
+  `type: 1e3` and `error_mode: true` and an entry of `transform.libraries`
+  fail with `…, not as text; write one of fail, underscores, values`, each
+  with its own values and `request.type` with the request types built.
+  Several are all told, in the order of the file, after what the decoder
+  itself refuses and beside a limit with a fraction and a key with no value;
+  a collector file's and the static target file's (`name: 1`,
+  `request.method: true`, `accept_codes: [5]`) are told the same way.
+- A word YAML 1.1 read as a boolean is refused at a key that takes one,
+  quoted or not, where the decoder read it as one: `coalesce: yes`,
+  `follow_redirects: On`, `insecure_skip_verify: n`, `header: NO`,
+  `trim_space: "y"`, `required: 'off'`, `truncate: Yes`, the `enabled` of
+  `otlp` and of `web.basic_auth`, `self_metrics.verbose: on`, and a static
+  target's `export_via_otlp: yes` and `non_idempotent: N` fail with `line N:
+  coalesce is written yes, which YAML reads as text, not as a boolean; write
+  true`, or `write false`.
+- The value an alias names is told where it is written, a key the mapping
+  writes over a merged one is the one read, and a value in an anchor that
+  the mapping merging it in overrides is not refused. A variable's value
+  under `--config.expand-env` is the kind it reads as: `name: ${NAME}` with
+  `NAME=true` is refused as the boolean, and `name: "${NAME}"` is the
+  collector `true`.
+- Not refused: a boolean and a number at keys of free text — `path: 1`,
+  `body: true`, `bearer_token: 12345`, header and query values, entries of
+  `allowed_targets` and `include`, `transform.labels` values,
+  `description: 404`, `expression: 1`, `items: true`, a label's `value: 1`
+  and `expression: 2` and its `value_map: {1: 1.5, 2: true}`; the keys of a
+  `value_map` written `1`, `true` and `2.5`; text at a key held to text,
+  `name: yes`, `metrics_prefix: on`, a rule's `name: 2026-10-06` and
+  `time_zone: no`; quoted numbers and booleans there, and `!!str 1`;
+  booleans written `True`, `FALSE`, `true` and `false`; a file's own `x-`
+  keys; and in the target file `name: yes`, `collector: 1`, `target: true`,
+  labels, params, a path, a body and headers.
+- The keys the load holds to text alone are read from the schemas and are
+  the twenty-five of a collector and `collector_files[]` in the
+  configuration, the same twenty-five in a collector file, and a target's
+  `name`, `request.method`, `request.accept_codes[]` and
+  `request.retry.codes[]` in the target file, each named by the test; a
+  type that is no file's has none.
+- `valueProblems` says of every shipped document — 71 examples, files under
+  `configs`, fixtures and fenced blocks of the documentation — what it said
+  before, so none writes a number or a boolean where text alone is taken or
+  a word for a boolean. With one value more at one place, of some 9,500
+  places — every key written and every key that could be, every list and
+  every mapping of names to values — written in one of fourteen ways
+  (`true`, `False`, `1`, `-1.5e3`, `0x1F`, `.inf`, `2026-10-06`, `text`,
+  `"1"`, `'true'`, `yes`, `Off`, `"no"`, `Y`), it says what the function as
+  it was says, message for message and in order, and one message more
+  exactly where a boolean or a number stands at a key of text alone or such
+  a word at a key that takes a boolean: of 792 values tried (90 under the
+  race detector), 259 and 106 are refused anew and 427 are as before.
+- The sixteen words refused where a boolean is taken are each read by the
+  decoder as the boolean the message says, quoted too, and `maybe`, `t`,
+  `yEs`, `oN`, `ja`, `"true"`, `0` and `1` are refused by the decoder itself
+  and told of by nothing more.
+- The walk of `configs/config.example.yaml` and of
+  `configs/static-targets.example.yaml`, which have nothing to refuse,
+  allocates what the walk as it was allocates, 1,580 and 505 times, held to
+  within a hundredth: what a place takes is read from a tree made of the
+  schema once, where a path joined at every key allocated a tenth more.
+- At every place of the three committed schemas where a single value is
+  written — 272 keys, entries and values of mappings: 55 that take text
+  alone, 154 free text, 37 booleans and 26 numbers, durations and sizes —
+  the schema finds a problem at the place exactly when the exporter refuses
+  what is on its line while reading the file, for `True`, `false` and a
+  number within the key's range at each; `1.5e3` and `0x1F` at a key of text
+  alone, with the exporter's message naming the key, the entry or the
+  mapping's key; `Yes`, `off`, `"y"` and `"true"` at a boolean; and `"77"`
+  and `'1'` at a number. An entry of `accept_status`, a status or a class,
+  is the one place that takes text beside a number and no boolean: `true`
+  there is refused by the schema for its kind and by the exporter as no
+  status, once the file is read.
+- In the tables of keys every row is put through both written `true` and
+  `1`: a key whose schema type is `string` alone is refused by both, the
+  exporter saying it is not text; any other key gets one verdict of both
+  and is never told that it is not text, but for what a row names as the
+  exporter's alone — `targets[].collector` of an unknown collector,
+  `request.root` that is not absolute, `limits.max_script_memory: 1` under
+  32MiB, and a target's label named `1`.
+- A rule's `name` and a label's `name` written `1`, `1.5e3`, `0x10`, `true`
+  or `False` are refused by both under a jq, a prometheus and a python
+  transform with `name_escaping` left out, `""`, `fail`, `underscores` and
+  `values`, the exporter naming the line; `"true"` and `'False'` are taken
+  by both under all five, and `"1"` under the last two. Under `underscores`
+  and `values` both took an unquoted `1`, and under `fail` the exporter took
+  `true` where the schema refused it.
+- The validator the schema tests use is handed a document as an editor
+  hands it one: a mapping's keys by their text, so `value_map: {1: running}`
+  is an object with the key `1`, and a date written without quotes as text.
+  Decoded into a value of any kind, such a mapping was no object and such a
+  date none of the types of JSON, so the schemas were said to refuse a
+  label's `value: 2026-10-06` and a `value_map` with a key written `1` or
+  `true`, which they take.
+- A connection to a `grpc` target is made with waits of a second growing by
+  1.6 to five seconds at most, with a fifth of jitter, and twenty seconds
+  for an attempt when no limit is set, value for value what it was made with
+  before a test could set one; in the tests of `internal/fetch` and
+  `internal/exporter` an attempt has half a minute and the waits are the
+  exporter's.
+- A target that takes the connection and never answers the HTTP/2 preface
+  fails a health call as `UNAVAILABLE`, naming the server preface, no sooner
+  than a limit of 200ms, with a minute left on the probe's own deadline,
+  after the target was sent the client's preface, on a connection whose
+  limit is read to be the 200ms and whose wait before the next attempt is a
+  millisecond. Run once under the exporter's wait of a second, the same call
+  ended after a second, grpc-go giving an attempt the longer of the two.
+- No file but a test's calls `SetGRPCConnectTimeout`. With a nanosecond for
+  an attempt, 22 of the 48 `grpc` tests of `internal/fetch` and 6 of the 10
+  of `internal/exporter` fail or hang; with a second's wait for a failed
+  connection cut to a nanosecond only the two tests of that wait fail. With
+  a server preface twenty-one seconds late `TestGRPCHealthNeedsNoDescriptors`
+  passes under the tests' half minute, after 21 seconds, and failed under
+  the exporter's twenty.
+- Two scrapes queued under one resource a second apart, case by case, are
+  exported with each stream once — a point's resource, its metric's name and
+  kind, and its attributes — where the export held both points, or the name
+  as two metrics: a histogram `h` whose `+Inf` bucket and `_count` differ,
+  exported as gauges, and a gauge `h_bucket{le="1"}` are one point of
+  `h_bucket`, the one written last, in either order, beside the histogram's
+  other samples; a summary `s` with the quantile 1.5 and a gauge
+  `s{quantile="1.5"}`, and its `s_count` and an untyped `s_count`, likewise;
+  a gauge and an untyped series of one name and labels; and a counter that
+  is NaN, exported as a gauge, and a gauge of its name and labels. A third
+  scrape's counter of that family is exported as a gauge too, though the
+  point that is NaN is left out for the gauge written after it: a family is
+  gauges for any such series the export had. None of these is logged, and
+  no point left out in any of these cases or the next is counted in
+  `http_exporter_otlp_points_dropped_total`.
+- A gauge `m` and a counter `m` of two scrapes under one resource, with the
+  same labels or with others, are exported as the kind written last alone —
+  the sum, or the gauge when the gauge is written last — with every point of
+  that kind and none of the other, where the export held a gauge `m` and a
+  sum `m`; so are a gauge, a counter and a histogram of one name, a
+  histogram and a gauge of its name, and the `h_sum` of a histogram exported
+  as gauges and a counter `h_sum`. Each is logged once.
+- What was one writer's is sent as it was, byte for byte: a gauge and an
+  untyped series of one name and other labels, as two points of one gauge,
+  the gauge's first; two gauges of one name and labels, the later alone; a
+  histogram `h` beside gauges `h_count` and `h_bucket`, and a summary `s`
+  beside a gauge `s_sum`, since a histogram and a summary are exported under
+  their own names alone; the counters `x_total` and `x`, as two sums, no
+  name being changed on the way; a counter and a counter of its family that
+  is NaN, and a histogram and a series of its family exported as gauges,
+  where the whole family is gauges, each series a point.
+- A gauge `m` under a static target's own resource and a counter `m` under
+  the exporter's, and a gauge and an untyped series of one name and labels
+  under the two, are all exported, byte for byte as before, and nothing is
+  logged: a stream and a name are a resource's.
+- With `otlp.probe_attributes`, a gauge `m` of one collector and a counter
+  `m` of another, whose points differ in their `collector` attribute, are
+  exported as the kind written last and logged; two gauges `v` of the two
+  are two points of one gauge.
+- A probe's counter named and labelled as the exporter's own
+  `http_exporter_otlp_exports_total{result="success"}` is exported once, as
+  the exporter's own point of that export, beside the probe's series of that
+  name with another `result`; a probe's untyped series named as the
+  exporter's own gauge is exported as the exporter's; and a probe's gauge
+  named as the exporter's counter `http_exporter_otlp_export_retries_total`
+  is left out for the exporter's sum and logged, with `kind` `sum` and
+  `left_out_kind` `gauge`.
+- A collector that scrapes the exporter's own metrics endpoint queues more
+  than 20 series that are the exporter's own, and the export after it has
+  every one of the exporter's own series once, where it held each twice.
+- Two probes of one pass-through collector, of two targets — a histogram
+  whose `+Inf` bucket and `_count` differ, a gauge `m` and an untyped `u`;
+  and a gauge `h_bucket{le="1"}`, a counter `m` and a gauge `u` — are
+  exported, after both, with `h_bucket{le="1"}`, `m` and `u` as the target
+  probed last wrote them, `m` as a sum, and one warning naming `m`, the kind
+  `sum`, the left-out kind `gauge` and the service name; after the first
+  target is probed again, as that one wrote them, `m` as a gauge, with no
+  second line at info level.
+- A static target without an `otlp` block and a probe are two writers under
+  the exporter's resource: the target's gauge `m` is left out for the
+  probe's counter `m`, written after it, and logged with one point left
+  out, while a static target with its own `otlp.service_name` keeps its
+  gauge `m` under its resource.
+- One scrape's set has no stream twice: a set with a series twice, with a
+  series and the same with an empty label, with a name of two types, with a
+  gauge named as its histogram's buckets, a counter named as its
+  histogram's sum, a gauge named as its summary or as its summary's count,
+  or with a histogram labelled `le` or a summary labelled `quantile`, is
+  refused by the validation every scrape's result passes before it is
+  queued, and a histogram with a bound twice and a summary with a quantile
+  twice are refused where they are read; a target that answers with a
+  series twice, a name of two types, a gauge named as a sample of its
+  histogram or a bucket twice is answered `502`, and nothing of it waits
+  for an export.
+- Three points that an export could not deliver, twice, wait again beside
+  an untyped series named and labelled as the gauge among them and a gauge
+  named as the counter among them, queued since: five points wait, and the
+  next export has the gauge's stream once, with the later value, and the
+  counter's name as the gauge written later.
+- A counter left out of an export for a gauge of its name written after it
+  is, when it is next exported alone, a sum that started at the point that
+  was left out; its count that fell in another export that left it out is a
+  reset, and it has started there when it is exported again with a count
+  above the one it had before; written after the gauge it is exported with
+  that start. Another writer's lower count of the same counter is a reset,
+  and the first writer's higher count after it is none. No gauge's point
+  has a start time, and every cumulative point has one.
+- A name written as two kinds is logged as a warning with `metric`, `kind`,
+  `left_out_kind`, `left_out_points` and `service_name`, and an `error`
+  that says the name is exported as different kinds, to rename one of the
+  metrics, or to give a static target `otlp.service_name` or
+  `otlp.resource_attributes` of its own. A minute later, the other kind
+  written last, it is logged at debug level with `repeat`; the same name
+  under another resource is a warning of its own; past five minutes it is
+  a warning again with `repeated` 2 and `failing_since`; three names of two
+  kinds in one export are a line each, in the order of the names; and a
+  name of three kinds is one line whose `left_out_kind` is `gauge, sum` for
+  two points. A gauge and an untyped series of one name and labels in the
+  same exports are never logged.
+- The key the failure log remembers a name of two kinds under is its
+  resource's and its name's alone: six pairs of a resource's key and a name
+  that hold NULs, or end and begin with what the other holds, have six
+  keys, none of them a collector's or a static target's, and none the key
+  of a probe, a static target, an address or a metric left out of the
+  static targets endpoint of the same parts.
+- An export in which no two series can be one stream is made in one pass:
+  for 50 counters, a gauge, an untyped series, a histogram and a summary of
+  five names each start time is asked for once, and the points take no more
+  allocations than the conversion as it was; the exporter's own metrics in
+  verbose mode with the resource metrics, beside the series two collectors
+  and a static target queued under its resource, more than 100 series of
+  more than 50 metrics, are taken for one writer's. With a counter of the
+  histogram's name written last, one name is reported as two kinds, the
+  start time of each exported point is asked for twice, with one answer,
+  and that of the point left out once.
+- 2,000 generated sets a scrape may answer with (300 under the race
+  detector), of gauges, untyped series, counters, histograms and summaries,
+  more than a third of more than three series and a tenth or more with a
+  family exported as gauges, which are gone through a second time, are made
+  the points they were made, byte for byte, with the start times asked for
+  in the order they were: nothing is left out of one scrape's set.
+- 300 generated runs of exports (40 under the race detector) — scrapes,
+  each a set a probe may answer with, of gauges, untyped series, counters,
+  histograms and summaries named `w`, `w_bucket`, `w_sum`, `w_count`,
+  `v_total` and as two of the exporter's own metrics, with labels `a`,
+  `le`, `quantile` and `result`, some with values their type does not
+  allow, queued under the exporter's resource, a static target's
+  without an `otlp` block and one with its own, two fifths of the exports
+  failing at the endpoint or while another scrape is queued — send, in
+  every export, with the exporter's own metrics: no resource twice, no name
+  as two metrics of a resource, no two points of a metric with the same
+  attributes, no gauge point with a start time and no other without one;
+  and exactly the points the conversion as it was, kept beside the test,
+  made of what waited and of the exporter's own, without those of a kind
+  of their name, and those of a stream, that were not written last. Of
+  the about 900 exports of the 300 runs, 75 or more had every stream once
+  already, 150 or more a name of two kinds, 150 or more two points of a
+  stream, and 75 or more a point of a stream of the exporter's own; the
+  floors are scaled with the runs. It takes about a second, and about a
+  second and a half under the race detector.
+- The 400 generated runs of § 34.111 (60 under the race detector), in a
+  quarter of which a name now has series of several types, are sent, byte
+  for byte, as a model sends them whose keys are each subject's own, which
+  leaves out the series of the kinds of a name that were not queued last
+  and has seen every cumulative series it drained; and as the export with
+  the old keys and the conversion as it was sent them — every series a
+  point, a name a metric for each of its kinds — in every run where no two
+  subjects had one old key and no name was two kinds in an export, start
+  times included: more than a third of the runs. In a tenth or more of
+  the runs a name was two kinds in an export and was sent otherwise
+  before.
+- The series a rule gives up hold no room of `limits.max_metrics`: in
+  seventeen cases, of jq with and without `items`, xpath, css, regex, csv and
+  prometheus rules — a jq program or an `items` expression that fails after
+  six values, two rules reading such items, labels that do not pair, an XPath
+  engine failure at the seventh of ten nodes, values that are no numbers,
+  items and series that lack a required label, a csv label whose column is in
+  no row, and a prometheus `type` or `scale` that histograms cannot take, and
+  the type of a histogram on gauges — the transform ends holding room for
+  exactly the series it returns under a limit far above them.
+- Each of those scrapes passes, decode and transform, with a limit of the
+  series it keeps, the same series as without a limit, and fails with `metric
+  count N exceeds limit N-1` one under it. The four prometheus scrapes were
+  refused by the decoder, `metric count 6 exceeds limit 5` for twenty matched
+  series of which the rule kept five.
+- A rule that makes more series than the limit has room for ends the scrape
+  there, also when it would have failed as a whole further on: in the five
+  cases of a rule that makes six series and then fails as a whole, the scrape
+  passes with a limit of six, the four series of the rule after it, and fails
+  with `metric count 6 exceeds limit 5` under five.
+- Which series of a prometheus transform count while they are decoded, for
+  ten rules under each `error_mode` and the five metric types: a rule under
+  `fail`, or without an `error_mode`, counts every series; one under `log` or
+  `ignore` counts them unless its type cannot apply to the metric — gauge,
+  counter and untyped to a histogram or a summary, histogram and summary to
+  any other type — its scale meets a histogram or a summary, or it requires
+  a label; a metric counts when one of the rules matching its name keeps
+  every series of it; and every series counts without rules and with a rule
+  whose expression does not compile.
+- The prometheus parser stops only for the series that count: of 6,000
+  generated expositions and a corruption of each (500 under the race
+  detector), read with a random choice of names kept, of names and types
+  counted, and a limit of one to four, each is refused with the limit's error
+  exactly where the parser it was is when it keeps the counted families
+  alone, and is otherwise what that parser returns without a limit, series
+  for series or the same error; over 600 of them are taken that a limit on
+  every kept series refused, and over 1,000 refused.
+- The prometheus decoder still stops at the eleventh series of a large
+  exposition, within a few thousand allocations, for a rule under `log` or
+  `ignore` that sets the metric's own type, another type it takes, or a
+  scale, for a rule under `fail` that requires a label, and for a metric that
+  a second rule is sure to keep; for a rule under `log` that requires a
+  label it keeps every series the rule matches, and the transform fails at
+  the eleventh series it makes, with the same `metric count 11 exceeds limit
+  10`.
+- A prometheus scrape is what it was but for the series a rule gives up: of
+  6,000 generated expositions, rule sets and limits (1,000 under the race
+  detector), compared with the scrape as the decoder counted before, every
+  scrape that was not refused for the limit, and every one of which no rule
+  gives a series up, has the same series, the same error to the letter and
+  the same failures of its rules; a scrape that was refused and keeps no more
+  series than the limit is the scrape without a limit, its rules' failures
+  included; and one that keeps more fails with the limit's error as before.
+  Hundreds of each.
+- The room a transform makes beforehand is bounded with the response decoded
+  under its limit, as a scrape decodes it: the prometheus case, 20,000 series
+  of which a rule requiring a label keeps five under a limit of 100, was
+  refused by the decoder and had to be decoded without the limit.
+- `data` that holds one text of 1,000 characters 20,000 times in a list or a
+  tuple, as every value of a dict of 10,000 keys, twice in each of 5,000
+  rows, beside a NaN, and at the end of 3,000 levels, and one text of 4 MiB
+  alone, fails under an output limit of 128 KiB as the script's failure,
+  `python pre-script failed: OverflowError: what the script left in data is
+  longer than limits.max_output_bytes (131072 bytes) written out, ...`, with
+  the worker holding 1 to 5 MiB at most, about twice what its script built,
+  where it made the 4 to 20 MB the answer is written as, twice; one worker
+  refuses all seven, counted as `script_error`, and answers the next
+  request. Each ended with `python pre-script output exceeds limit` before.
+- The worker refuses for its strings only past the limit: texts exactly as
+  long together as the limit, in a plain list, beside a NaN and 3,000 levels
+  down, are written and refused by the exporter, `python pre-script output
+  exceeds limit`, with the worker stopped as `output_limit`; one character
+  more and the worker refuses the answer itself and serves the next request.
+  One text whose answer is exactly the limit is taken, and one character
+  more ends with the output limit's error; 30,000 numbers and a text of
+  1,000 characters that is the key of each of 200 rows end with it too.
+- A label or a help text of 1,000 characters on 5,000 metrics, also with a
+  NaN among their values, and a text 5,000 times under a key of the script's
+  own, fail the scrape with `python transform failed: OverflowError: what the
+  script left in metrics is longer than limits.max_output_bytes (131072
+  bytes) written out, ...`, from one worker that stays; 50 such metrics are
+  their 50 series; and the text under a key of the script's own beside lists
+  nested 3,000 deep, where the worker writes the metrics without what no
+  metric has, is not counted: the metric is the one series it was.
+- Answers within the limit by their strings are the lines they were: of
+  1,200 generated answers for each of two seeds (400 for one under the race
+  detector), with texts of up to 9,000 characters held once and many times,
+  under an output limit of 16 KiB, compared with the worker's answer as it
+  was, every answer that was written within the limit is the same line byte
+  for byte; one written longer than the limit is refused by the worker
+  exactly when the strings read back from that line are longer together than
+  the limit, and is the same line when they are not; and one that failed
+  fails with the same error, but that a few whose strings are over the limit
+  and which json refuses for a value fail for their strings instead. About
+  960 the lines they were, 90 written past the limit as they were, 130
+  refused for their strings, 30 failed as they did, per seed.
+- An answer of 100 metrics with a name of one letter, 2048 bytes allowed, is
+  refused by the exporter and the next run succeeds in another worker: its
+  strings are within the limit, so the worker does not refuse it itself.
+- The largest failure each stage of a probe can be made to end with is
+  answered, logged and remembered in at most 2,000 bytes, end to end through
+  `/probe`: a scraper's target of eight kilobytes that refuses the connection,
+  a followed redirect to a `Location` of 900 kB that refuses it or that
+  `denied_targets` refuses (403), an answer of 200 kB that is no HTTP, a 500
+  with a body of ten megabytes, an exposition label of ten megabytes never
+  closed, a metric name of ten megabytes, a script that raises its data of ten
+  megabytes and a pre-script that raises a megabyte, two label names of three
+  megabytes that escape alike, a jq rule that raises `error(.message)` with
+  ten megabytes under `fail` and under `log`, and a script's failure of a
+  megabyte carried on under `error_handling.on_transform_error: log`. The
+  answer is the error after `collector c <stage> failed: ` (or after
+  `collector c refused the target: `, or as the `error` of the JSON object of
+  a rule under `fail`), the log line's `error` is the error, and the failure
+  log remembers it by no more. Where the error says why after what it quotes
+  it ends with the reason (`... bytes): dial tcp 127.0.0.1:41233: connect:
+  connection refused`, `... bytes): longer than limits.max_metric_name_length
+  200`); any other is exactly 2,000 bytes and ends with its length. Half as
+  large, the failure is a repeat at debug level with its own length, and for
+  another target one text remembered twice; a debug probe's report names it in
+  a line no longer than the bound and what the line says before it. Under the
+  race detector the failures are made of 256 kB.
+- A failure within the bound is answered, logged and remembered as it was, to
+  the letter: for 640 generated failures (128 under the race detector) of a
+  refused connection, an unaccepted status, a JSON, an exposition, a YAML and
+  a CSV decode, a rule that raises and one whose value is no number under
+  `fail`, a script, a pre-script, two script-named series the worker refuses,
+  a name over `limits.max_metric_name_length`, a label value over its limit, a
+  duplicate series and labels that escape alike, each made of a value of up to
+  150 bytes, the answer, the log line's error and the remembered text are what
+  the stages' own error gave, the stages run in the test as the trip runs them
+  and the answer worded as the probe words it; at least 40 (8 under the race
+  detector) are of each of the `http`, `http_status`, `decode`, `metric`,
+  `transform` and `validation` stages.
+- A static target's scrape that fails is logged and remembered within the
+  bound at a stage of its trip and at one before it: a script that raises ten
+  megabytes fails the `transform` stage in under 400 bytes that end with the
+  exception's length, and a `bearer_token_file` whose path is three kilobytes
+  fails the `credentials` stage in 2,000 bytes ending `... (3092 bytes)`; both
+  are remembered by a text with the mark for the length.
+- A gRPC call a server ends with a status message of ten megabytes (one under
+  the race detector) fails its probe at the `grpc` stage in exactly 2,000
+  bytes, `gRPC call failed: FAILED_PRECONDITION: sss...` to its length,
+  answered, logged with `grpc_code` and remembered alike; half as long it is a
+  repeat, and a message of a few words is answered as it was.
+- A path of three kilobytes that names no file fails a localfile probe at the
+  `file` stage in 2,000 bytes ending with the error's length. Two files of a
+  directory whose 5,000 families (1,000 under the race detector) are typed
+  otherwise in the second leave it out at the `merge` stage in under 1,500
+  bytes: the first clashes named, the rest counted (`; and <n> more`), and `:
+  a metric has one type across the directory's files` after them; with half as
+  many families the line is a repeat at debug level with its own count. A file
+  with a metric name of megabytes is left out at `validation` with the name's
+  first 200 bytes, its length and the limit it is over.
+- A file is refused for its clashing types in the words it was while the
+  clashes are within 1,200 bytes together: over 1,500 generated files of up to
+  200 families (300 under the race detector) the failure is, to the letter and
+  in what it is recognised by, what a copy of the function as it was gives for
+  more than 400 of them, and for more than 400 it is the first clashes as they
+  were, the rest counted, recognised with the mark for the count.
+- A probe, a debug probe, a debug scrape and a static target's scrape that
+  panic with a megabyte of text answer `probe failed: internal error: ` and
+  its first 2,000 bytes to its length, report the same in the line that says
+  what would have been answered or published, and log it as `panic` in four
+  lines, the stack beside it in three; a panic that says `boom` is reported as
+  it was.
+- The failure log remembers a failure reported to it unbounded by the first
+  2,000 bytes of what it is recognised by, ending `... (# bytes)`: an error of
+  a megabyte and then of half a megabyte are one failure, counted twice, one
+  bounded before it is reported is remembered by the same text, and a short
+  one by what it was.
+- `model.BoundedFailure` cuts an error over the bound to 2,000 bytes and keeps
+  each kind it was marked with, for every combination of `ErrLimitExceeded`,
+  `ErrMissingValue` and `ErrScriptFailed`, and nothing else of the error or of
+  what it wrapped; an error that is a nil pointer of its type, which panics
+  when it is read, is handed on as it came. For 1,200 generated parts (300
+  under the race detector) of up to 4,000 bytes of characters of one to four
+  bytes, in eight shapes of error — a text, a wrapped error, `Errorf` with a
+  position, a size and a quoted value, `SameFailureAs`, a marked error, two
+  errors wrapped, a budget's explanation — an error within the bound is the
+  very error, and one over it is at most 2,000 bytes of valid UTF-8 that start
+  as it did and end with its length, recognised by at most 2,000 bytes that
+  start as its recognised text did; at least 2,400 of each.
+- Bounding an error within the bound allocates nothing of its own: none at all
+  for an error of `errors.New`, of `fmt.Errorf` over a chain and of
+  `MarkError`, and for one of `Errorf` no more than reading its text and its
+  recognised text once does; the error returned is the error given. The count
+  for `Errorf` is not taken under the race detector, where `fmt`'s pool
+  changes what a reading allocates.
+- `model.Shown` gives a text as it is up to its limit and otherwise its start,
+  cut between two characters of two, three and four bytes and at the limit in
+  bytes that are no UTF-8, with its length, recognised by the start and the
+  mark.
+- A set that cannot be exposed is refused in the words it was while the names
+  its error quotes are within 200 bytes: for 3,000 generated series (500 under
+  the race detector) with a name or a label's name that is none or is over the
+  limit, a type that is none, too many labels, a label value or a help too
+  long, or the series twice, the error is what quoting each name whole gave,
+  and a name past 200 bytes is quoted by its first 200, cut between two
+  characters, with its length, the rest of the error whole and the failure
+  recognised with the mark; at least 400 of each (60 under the race detector).
+  A name of ten megabytes is refused with `invalid metric name "m..."...
+  (10485761 bytes): longer than limits.max_metric_name_length 200`.
+- The error of a name within 200 bytes is made in as many allocations as
+  `fmt.Errorf` made it in, for a metric's name and for a label's beside it,
+  and is the error `fmt.Errorf` makes. The allocations are not counted under
+  the race detector.
+- A script's error of 1,500 bytes or fewer is in the transform's error as it
+  was and is recognised by all of it: over 700 generated tracebacks (140 under
+  the race detector) of one to three exceptions, up to five frames each and
+  messages of one line, of several and of none, for a transform and for a
+  pre-script, and one of exactly 1,500 bytes.
+- A script's error past 1,500 bytes is shown by its frames and its own line:
+  an exception of ten million characters by its frame and `Exception: ` with
+  189 of them and `... (10000011 bytes)`; a chain of four hundred exceptions
+  by `... (2805 lines)` and the last lines that fit, the last exception whole
+  and five before it; a message of four thousand lines by the exception's
+  line, the 21 lines after it and `... (4001 lines)`; a text with no frame by
+  its first line's start and what follows. Each is recognised with `#` for
+  every length, is the same failure at half the size with another text, and is
+  not cut again by the bound of every failure.
+- Whatever a script fails with, the transform's error is within the bound by
+  itself: for more than 250 generated tracebacks over 1,500 bytes (50 under
+  the race detector), of up to forty exceptions, source lines of up to two
+  kilobytes and messages of one line of up to 400 kB or of up to a thousand
+  lines, the error is under 1,700 bytes of valid UTF-8 with the exception's
+  own line, by its first 200 bytes, and a frame before it.
+- Through a worker, `raise Exception('x'*10000000)` fails the transform in the
+  frame, the exception's first 200 bytes and its length, counted as a script's
+  failure; a pre-script that raises a million characters fails alike, and
+  `metric('m'*1000000, 1)` in under 600 bytes with `ValueError: metric 'mmm`
+  and the line's length. Under the race detector the characters are 400,000
+  and 40,000.
+- The error of a worker that died after writing 100,000 bytes to stderr and
+  then why shows `... ` and the last 1,500 bytes, with `Fatal Python error:
+  Segmentation fault` and the hint about `limits.max_script_memory` after it,
+  within the bound with the transform's words before it; stderr of 1,500 bytes
+  or fewer, and none, is in the error as it was, for a worker that exited and
+  for a start that was stopped, which is recognised without it; the cut is at
+  a character's start.
+- The first failure a rule reports is 2,000 bytes for a jq rule that raises
+  `error(.message)` with ten megabytes (256 kB under the race detector) under
+  `log` and under `ignore`, ending with its length and recognised without it,
+  the failure counted once; the transform's own line of the rule under `log`
+  has the same 2,000 bytes, and a rule that raises a few words reports and
+  logs them as they were.
+- A failed fetch whose URL is 512 bytes or fewer ends with the very error it
+  did: for 2,000 generated URLs (400 under the race detector) of ASCII, of
+  characters of two bytes and of escapes, with and without a query, in the
+  five shapes a fetch's error has — refused, wrapped, a redirect refused that
+  writes the URL twice, a retry's wait cut short, a target that does not
+  parse.
+- A failed fetch whose URL is 513 bytes, eight kilobytes or a megabyte (128 kB
+  under the race detector) shows the URL's first 512 bytes and its length
+  where the error quotes it and where a refusal writes it again, says what it
+  said after it in under 1,400 bytes, unwraps to the `*url.Error` and to
+  `ErrTargetRefused` as it did, is recognised with `#` for the length, and
+  shown again is as it is. A URL with a user, a password and a token has them
+  withheld in what is shown, and its failure is recognised without the port
+  the connection was made from; a URL of characters of three bytes is cut
+  between two.
+- How a request ended is recorded for a debug report in at most 2,000 bytes:
+  an error of a megabyte, a status line of a megabyte and the error a body
+  broke off with, after its status, are each recorded by their start and their
+  length, and an outcome of ordinary length as it was.
 
 # 35. Documentation requirements
 
@@ -17367,7 +18494,9 @@ without using or checking them. An `otlp` block with other keys and no
 `enabled`, or an `enabled` left empty, MUST be refused when the configuration
 loads, naming the block, the keys it sets, the line and both ways out —
 settings without the switch would be ignored without a word, the endpoint
-nothing is exported to. An empty block, and none, need no switch. The same
+nothing is exported to. An empty block, `{}`, and none, need no switch; a
+block written with no value at all is a key with no value, refused as
+every such key is (§ 24.2). The same
 rule MUST hold for `web.basic_auth` (§ 42.5), and for any block added later
 that does nothing until an `enabled` key turns it on. The configuration
 schema MUST say so, each other key of such a block requiring `enabled`
@@ -17449,9 +18578,9 @@ resource attributes MUST be preserved:
   attribute, and `s_sum` and `s_count` likewise; `le` and `quantile` written
   as the text format writes them, over a label of the series' own by that
   name. Every series of the family in the export MUST be exported so, so that
-  a name is one kind of metric in it; such a point MUST NOT be dropped, and
-  MUST NOT carry a start time. A family with no such series MUST keep its
-  kind.
+  a name is one kind of metric in it; such a point MUST NOT be dropped for
+  its values, and MUST NOT carry a start time. A family with no such series
+  MUST keep its kind.
 - A metric declared a histogram or summary but carrying no such data MUST be
   exported as a gauge of its value.
 - Every series of a family MUST be a data point of one OTLP metric, not a
@@ -17479,6 +18608,67 @@ resource attributes MUST be preserved:
   one. A cumulative point of one of the exporter's own series MUST instead
   start at the series' creation time (§ 22.1b), which the exporter knows, and
   need not be remembered.
+- A resource MUST be told from every other by its service name and the name
+  and value of each of its attributes, and a series of a resource by its
+  name, its type and the name and value of each of its labels, whatever bytes
+  they hold: a label's value is the target's and may be any text, an `=` or a
+  NUL included, and a service name and an attribute's name and value are
+  whatever the operator wrote. The series whose label `a` is `1`, a NUL and
+  `b=2` is not the series whose labels are `a="1"` and `b="2"`, and the
+  resource with the attribute `a=b` of the value `c` is not the one with the
+  attribute `a` of the value `b=c`. Two resources that differ in any part
+  MUST be exported as two, each with its own points and none of the other's,
+  the exporter's own resource among them. Two series that differ in any part
+  MUST both be exported: a point of one MUST NOT replace a waiting point of
+  the other, and MUST NOT keep an undelivered point of the other from waiting
+  again (§ 42.1a). Each MUST have its own start time and its own resets, also
+  when the two are of different resources.
+- An export MUST have one writer for each stream. To a receiver a data point
+  is its resource's, its metric's — the name and the kind: gauge, sum,
+  histogram or summary — and its attributes', and a name is one metric of
+  one kind under a resource; what waits for an export is told apart as
+  series, by name, type and labels, and two of those may be exported as one
+  stream, or as one name of two kinds. One scrape's result has neither
+  (§ 21); the results of two under one resource — two probes, a probe and
+  a static target without a resource of its own, a probe and the exporter's
+  own metrics — may. An export MUST NOT hold two data points of one metric
+  of a resource with the same attributes, and MUST NOT hold two metrics of
+  one name under a resource, by the rule of a waiting series, that the
+  later replaces the earlier:
+  - of the points that would be one metric's with the same attributes, the
+    one written last MUST be exported and no other: a gauge and an untyped
+    series of one name and labels; a sample of a family exported as gauges
+    and a gauge of that sample's name and attributes, `le` or `quantile`
+    among them; a probe's series and the one of the exporter's own it is
+    named and labelled like. Nothing MUST be logged for it;
+  - of the kinds a name of a resource would be exported as, the kind of the
+    point written last MUST be exported, with every point of that kind, and
+    no point of another kind, whatever the points' attributes, those of
+    `otlp.probe_attributes` included. It MUST be logged as a warning that
+    names the metric, the kind exported, the kinds and the number of points
+    left out and the resource's service name, and says to rename a metric or
+    to give a static target a resource of its own; as one repeated failure
+    (§ 25.1) for the resource and the name, whichever kind is written last at
+    each export, with no line when it ends.
+
+  Written last is queued last, a point that waits again after a failed
+  export keeping the place it was first queued with (§ 42.1a), and the
+  exporter's own points, taken at the export, are written after every queued
+  one. A point left out so is replaced, not dropped: it MUST NOT be counted
+  in `http_exporter_otlp_points_dropped_total`. A cumulative point left out
+  for another kind of its name MUST still be a point of its series to the
+  start times, a count the series had: the series starts at the first point
+  an export had of it, sent or left out, a count that fell in a point left
+  out is a reset, and the series is forgotten an hour after the last. Two
+  writers of one counter, histogram or summary — one name, type and labels —
+  are one series to the start times: the lower count of one after the
+  other's is a reset. A family is exported as gauges, as above, when any of
+  its series in the export is one whose values its type does not allow,
+  whichever writer's and whether or not that point is then left out. An
+  export in which no two series can be one stream — every name of one type,
+  no family exported as gauges, no series named like one of the exporter's
+  own — MUST be what it was before this rule, byte for byte, and MUST be made
+  in one pass over its series, as it was.
 
 Probe results MUST be queued under the exporter-wide resource, a series known
 by its name, type and labels, so a later probe's point for the same series
@@ -18666,7 +19856,10 @@ closed it. A scrape overriding `insecure_skip_verify` or `enable_http2` MUST
 use the pool of its own settings. A TLS file rotated on disk MUST be picked up
 by the next request, with the previous pool's idle connections closed. Idle
 connections MUST time out (90 seconds), and a pool unused for five minutes —
-such as one a reload made obsolete — MUST be closed and dropped. A response
+such as one a reload made obsolete — MUST be closed and dropped. A TLS
+handshake with a target MUST be given up after 10 seconds, whatever is left
+of the probe's deadline; a pool MAY be built with another limit, which the
+tests do (§ 34) and the exporter MUST NOT. A response
 body MUST be read to its end before it is closed where the exporter can, so
 the connection returns to the pool.
 
@@ -19056,7 +20249,10 @@ and MUST answer `200` with a `text/plain` report of it:
   directory is shown as its files, with their sizes as read;
 - each stage, its duration and outcome, saying when `error_handling` carried
   on;
-- the series by metric name, the rules that gave none, and the rules that
+- the series by metric name, the rules that gave none, each by the name its
+  series are exported under, with the collector's `metrics_prefix` and
+  escaped as its `name_escaping` escapes it (§ 21.1), so that a rule whose
+  series are in the first list is not in the second, and the rules that
   carried on without some series, each rule by itself with how many and its
   first error, under its metric name and, where several rules of the
   collector export that name, its expression and its `items`; a `prometheus`

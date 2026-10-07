@@ -47,24 +47,31 @@ func unusedAddr(t *testing.T) string {
 	return addr
 }
 
-// waitsAnHour makes a connection that could not be made wait an hour before
-// it tries again by itself.
-var waitsAnHour = grpc.WithConnectParams(grpc.ConnectParams{
-	Backoff:           backoff.Config{BaseDelay: time.Hour, Multiplier: 1, MaxDelay: time.Hour},
-	MinConnectTimeout: 20 * time.Second,
-})
+// anHoursWait is a wait of an hour between a connection's attempts to be
+// made, and waitsAnHour makes a connection that could not be made wait it
+// before it tries again by itself. An attempt to make it has the hour as
+// well: grpc-go gives an attempt the longer of the wait and
+// MinConnectTimeout, which is the exporter's twenty seconds here and so
+// decides nothing, as a server preface held back for twenty-one seconds
+// showed. Under the exporter's own waits, of five seconds at most, the
+// twenty seconds are what an attempt has, and the half minute the tests
+// give it instead (SetGRPCConnectTimeout).
+var (
+	anHoursWait = backoff.Config{BaseDelay: time.Hour, Multiplier: 1, MaxDelay: time.Hour}
+	waitsAnHour = grpc.WithConnectParams(grpc.ConnectParams{Backoff: anHoursWait, MinConnectTimeout: 20 * time.Second})
+)
 
 // connectionsWaitAnHour gives the connections the test's calls make an hour
 // to wait before they try again by themselves, where the exporter's wait
-// five seconds at most (grpcReconnect). In a test of what ends that wait
+// five seconds at most (grpcBackoff). In a test of what ends that wait
 // nothing else then makes the connection again, however long the machine
 // takes over the test: a server that came back is reached because a call
 // ended the wait, or not at all.
 func connectionsWaitAnHour(t *testing.T) {
 	t.Helper()
-	previous := grpcReconnect
-	t.Cleanup(func() { grpcReconnect = previous })
-	grpcReconnect = waitsAnHour
+	previous := grpcBackoff
+	t.Cleanup(func() { grpcBackoff = previous })
+	grpcBackoff = anHoursWait
 }
 
 // callsWaitForAConnection gives a call a minute to wait for a connection

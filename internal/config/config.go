@@ -702,10 +702,12 @@ func validateMetricRule(x *model.Collector, index int) error {
 		if strings.TrimSpace(label.Name) == "" {
 			return fmt.Errorf("%s has a label without a name", where)
 		}
-		if !namePattern.MatchString(label.Name) {
-			return fmt.Errorf("%s has invalid label name %q", where, label.Name)
+		// A label's name is held to what a scrape holds it to under the
+		// collector's name_escaping (transform.TakesLabelName).
+		if !transform.TakesLabelName(x, label.Name) {
+			return fmt.Errorf("%s has invalid label name %q%s", where, label.Name, transform.EscapingAdvice(label.Name))
 		}
-		if err := model.CheckLabelName(label.Name); err != nil {
+		if err := transform.CheckExportedLabelName(x, label.Name); err != nil {
 			return fmt.Errorf("%s: %w", where, err)
 		}
 		// An expression written as nothing but blanks is neither the key left

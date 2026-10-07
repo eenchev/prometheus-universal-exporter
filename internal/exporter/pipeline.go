@@ -44,6 +44,28 @@ type collectJob struct {
 	log    collectLog
 }
 
+// boundedTripFailure is a stage's error as a trip reports it: the error
+// itself, and when its text is longer than a failure's may be
+// (model.MaxFailureBytes), a new one of the start of the text and its
+// length. The text of a stage's error goes into the answer to the scraper,
+// into the log line, into a debug probe's report and, as what the failure is
+// recognised by, into the failure log's memory, where it stays for as long as
+// the failure repeats; and it is made of what the target sent, what the
+// scraper asked for and what a script raised, none of which the limits on a
+// response bound once an error has quoted them. So every error a trip
+// reports passes here first, once, where the stage's failure is known for
+// what it is and before anything is made of its text: what a stage of
+// collect failed with (stageFailed, the target policy's refusal, a rule
+// under error_mode fail), what a file of a directory failed with
+// (collectDirectory), and what a static target's scrape failed with before
+// its trip (logCollectFailure). What the error was to errors.Is and
+// errors.As is read before: a cut error is no longer the one it was cut
+// from.
+//
+// An error within the bound is returned as it is, and costs the reading of
+// its text.
+func boundedTripFailure(err error) error { return model.BoundedFailure(err) }
+
 // collectLog is how a caller's failures are logged: under which key of the
 // failure log (failurelog.go), with which messages and attributes.
 type collectLog struct {
@@ -53,9 +75,11 @@ type collectLog struct {
 }
 
 // logCollectFailure logs a failure of stage at error level, for a caller
-// that read its collector as read says (tripFailed).
+// that read its collector as read says (tripFailed). The error is bounded
+// here (boundedTripFailure): it is that of a stage before the trip, which
+// collect has not seen.
 func (s *Server) logCollectFailure(read configRead, l collectLog, stage string, err error, extra ...any) {
-	s.logTripFailure(context.Background(), read, l, stage, err, extra...)
+	s.logTripFailure(context.Background(), read, l, stage, boundedTripFailure(err), extra...)
 }
 
 // logTripFailure is logCollectFailure for a trip, which a debug probe's
@@ -128,12 +152,14 @@ func (s *Server) collect(ctx context.Context, j collectJob) collected {
 			s.observeTargetScrape(rec.collector, time.Since(start))
 		}
 	}()
-	// stageFailed applies a stage's error policy.
+	// stageFailed applies a stage's error policy to the stage's error,
+	// which it bounds first (boundedTripFailure); reported is the same for
+	// an error that is bounded already.
 	// extra attributes go to the log only, never into the probe's answer.
 	// mark is when the stage in progress started, for a debug probe's
 	// report.
 	mark := start
-	stageFailed := func(stage string, err error, policy string, extra ...any) collected {
+	reported := func(stage string, err error, policy string, extra ...any) collected {
 		if cutShort(ctx) {
 			trace.step(stage, "cancelled", time.Since(mark), err.Error())
 			return collected{stage: stage, err: err, aborted: true}
@@ -161,6 +187,9 @@ func (s *Server) collect(ctx context.Context, j collectJob) collected {
 		s.logTripFailure(ctx, rec.read, j.log, stage, err, extra...)
 		return collected{stage: stage, err: err}
 	}
+	stageFailed := func(stage string, err error, policy string, extra ...any) collected {
+		return reported(stage, boundedTripFailure(err), policy, extra...)
+	}
 
 	response, err := fetch.FetchCollector(ctx, j.target, c, j.overrides, j.headers)
 	// A debug probe's report shows what the target sent: a copy made here,
@@ -179,6 +208,7 @@ func (s *Server) collect(ctx context.Context, j collectJob) collected {
 			}
 		})
 		if errors.Is(err, fetch.ErrTargetRefused) {
+			err = boundedTripFailure(err)
 			rec.update(func(x *serverStats) { x.refused++ })
 			trace.step(stageTargetPolicy, "refused", time.Since(mark), err.Error())
 			s.logTripFailure(ctx, rec.read, j.log, stageTargetPolicy, err)
@@ -245,11 +275,13 @@ func (s *Server) collect(ctx context.Context, j collectJob) collected {
 			// limits.max_metrics, which is the validation's failure,
 			// found sooner (transform/serieslimit.go).
 			rec.update(func(x *serverStats) { x.limitErrors++ })
-			return stageFailed("validation", err, model.ErrorPolicyFail)
+			return reported("validation", err, model.ErrorPolicyFail)
 		}
 		if err != nil {
+			// A decode's error is bounded where every decoder's leaves
+			// (decode.Decode), and is not read for its length again.
 			rec.update(func(x *serverStats) { x.parseErrors++ })
-			return stageFailed("decode", err, c.ErrorHandling.OnDecodeError)
+			return reported("decode", err, c.ErrorHandling.OnDecodeError)
 		}
 		trace.step("decode", "ok", time.Since(mark), decoded.Kind)
 		trace.record(func(t *probeTrace) { t.decoded = decoded.Kind })
@@ -292,6 +324,7 @@ func (s *Server) collect(ctx context.Context, j collectJob) collected {
 			// would have carried on after a failed transform.
 			var failure *transform.MetricFailure
 			if errors.As(err, &failure) {
+				err = boundedTripFailure(err)
 				if cutShort(ctx) {
 					return collected{stage: "metric", err: err, aborted: true}
 				}

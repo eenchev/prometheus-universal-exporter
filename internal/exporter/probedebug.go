@@ -338,11 +338,11 @@ func (s *Server) debugTrip(ctx context.Context, trace *probeTrace, p debugProbe,
 			stack := string(debug.Stack())
 			// The stack goes to the exporter's log, where a bug is reported
 			// from; the report says what happened.
-			trace.logger.Error("probe panicked; its stack is in the exporter's log", "panic", fmt.Sprint(recovered))
-			s.logger.Error("debug probe panicked", "collector", p.collector.Name, "target", p.logTarget, "panic", fmt.Sprint(recovered), "stack", stack)
-			verdict, answer = fmt.Sprintf("500: probe failed: internal error: %v", recovered), nil
+			trace.logger.Error("probe panicked; its stack is in the exporter's log", "panic", panicText(recovered))
+			s.logger.Error("debug probe panicked", "collector", p.collector.Name, "target", p.logTarget, "panic", panicText(recovered), "stack", stack)
+			verdict, answer = "500: probe failed: internal error: "+panicText(recovered), nil
 			if p.static != nil {
-				verdict = fmt.Sprintf("target up 0: the scrape failed: internal error: %v", recovered)
+				verdict = "target up 0: the scrape failed: internal error: " + panicText(recovered)
 			}
 		}
 	}()
@@ -679,7 +679,9 @@ func writeTransform(b *bytes.Buffer, c *model.Collector, set *model.MetricSet, f
 	var empty []string
 	seen := map[string]bool{}
 	for _, rule := range c.Metrics {
-		name := c.MetricsPrefix + rule.Name
+		// The series are named as they are exported, so the rule is looked
+		// for, and listed, by the name its series are exported under.
+		name := transform.ExportedMetricName(c, rule.Name)
 		if rule.Name == "" || seen[name] || counts[name] > 0 {
 			continue
 		}

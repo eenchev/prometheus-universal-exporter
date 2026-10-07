@@ -285,7 +285,9 @@ func logRuleFailure(ctx context.Context, c *model.Collector, rule model.MetricRu
 	if ctx.Value(callerLogsRulesKey{}) != nil {
 		return
 	}
-	ruleLogger(ctx).Error("metric extraction failed", "collector", collectorName(c), "metric", rule.Name, "error_mode", rule.ErrorMode, "error", err, "failures", failures)
+	// The line is no longer than a failure's text may be, whatever the
+	// rule's error quotes of the response (model.BoundedFailure).
+	ruleLogger(ctx).Error("metric extraction failed", "collector", collectorName(c), "metric", rule.Name, "error_mode", rule.ErrorMode, "error", model.BoundedFailure(err), "failures", failures)
 }
 
 // ruleFailures gathers the failures of rules that carried on, under log or
@@ -360,7 +362,11 @@ func (f *ruleFailures) finish(c *model.Collector, report *RuleReport) {
 			logRuleFailure(f.ctx, c, failed.rule, failed.first, failed.count)
 		}
 		if report != nil {
-			report.add(failed.rule.Name, failed.rule.Expression, failed.rule.Items, failed.count, failed.missing, failed.first, failed.logged)
+			// The first failure is kept by whoever reads the report, logged
+			// and remembered: it is no longer than a failure's text may be
+			// (model.BoundedFailure), once for the rule, however many of
+			// its series failed.
+			report.add(failed.rule.Name, failed.rule.Expression, failed.rule.Items, failed.count, failed.missing, model.BoundedFailure(failed.first), failed.logged)
 		}
 	}
 }

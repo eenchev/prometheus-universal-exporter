@@ -108,6 +108,11 @@ type promOptions struct {
 	// limit, when above 0, is how many series may be kept: the parse stops
 	// at the first one past it with model.MetricCountError.
 	limit int
+	// counts, when set, says whether the kept series of a metric name and
+	// type count against limit: those of a family it answers false for are
+	// kept without being counted, for whoever is given the series to count
+	// what it makes of them.
+	counts func(name string, typ model.MetricType) bool
 }
 
 // parseExposition parses body as options say.
@@ -212,8 +217,10 @@ type promFamily struct {
 	// an OpenMetrics gauge histogram's, for the gauges it is read as.
 	helpOf *promFamily
 	// kept says whether the family's series are stored, once decided by
-	// promOptions.keep at its first series.
+	// promOptions.keep at its first series, and uncounted that they are
+	// stored without counting against promOptions.limit (promOptions.counts).
 	kept, keptKnown bool
+	uncounted       bool
 }
 
 // exportedName is the name of the family's series.
@@ -246,8 +253,10 @@ type promParser struct {
 	aliases map[string]promAlias
 	// series are the series kept, in the order their first samples were
 	// read, and unordered says that this is not the families' order.
+	// uncounted is how many of them do not count against the limit.
 	series    []promSeries
 	unordered bool
+	uncounted int
 	// eof is set by OpenMetrics' # EOF, after which nothing may follow.
 	eof bool
 	// number is the line being read.
@@ -519,6 +528,9 @@ func (p *promParser) newFamily(f *promFamily) *promFamily {
 func (p *promParser) add(f *promFamily, role int, value float64, timestamp int64, timed bool) error {
 	if !f.keptKnown {
 		f.kept = p.options.keep == nil || p.options.keep(f.exportedName())
+		// The family's type is what it stays: a TYPE line after a sample
+		// is refused.
+		f.uncounted = f.kept && p.options.counts != nil && !p.options.counts(f.exportedName(), f.typ)
 		f.keptKnown = true
 	}
 	special := ""
@@ -760,9 +772,13 @@ func describePromSeries(f *promFamily, s *promSeries) model.QuotedValue {
 }
 
 // keep stores one more series of f, with p.labels as its labels, and fails
-// past promOptions.limit, before anything is made of the series.
+// past promOptions.limit, before anything is made of the series. A series
+// of a family that does not count (promFamily.uncounted) is stored whatever
+// the limit.
 func (p *promParser) keep(f *promFamily) (*promSeries, error) {
-	if kept := len(p.series) + 1; p.options.limit > 0 && kept > p.options.limit {
+	if f.uncounted {
+		p.uncounted++
+	} else if kept := len(p.series) + 1 - p.uncounted; p.options.limit > 0 && kept > p.options.limit {
 		return nil, model.MetricCountError(kept, p.options.limit)
 	}
 	if n := len(p.series); n > 0 && f.index < p.series[n-1].family.index {

@@ -111,6 +111,16 @@ var (
 	httpIdleTimeout       = 2 * time.Minute
 )
 
+// SetReadHeaderTimeout is how long a client has to send a request's headers
+// to an HTTP server made from now on (NewHTTPServer), which is ten seconds in
+// the exporter. It is for tests. A test's client that sends its request at
+// once is ten seconds late with it on a machine with every CPU busy
+// elsewhere, and a test that is not about the limit then fails by it; such a
+// test runs against a server that leaves the headers half a minute, the
+// bound of a hang and what the whole request has. A test of the limit itself
+// sets a short one, and its client never ends its headers.
+func SetReadHeaderTimeout(limit time.Duration) { httpReadHeaderTimeout = limit }
+
 // httpMaxHeaderBytes bounds a request's line and headers.
 const httpMaxHeaderBytes = 64 << 10
 

@@ -413,11 +413,13 @@ the first five each cost the next scrape a fresh interpreter, and many
 
 A run ends `ok`, `script_error` (the script raised or called `fail(...)`, or
 left `data` or `metrics` the worker does not write, such as a list that holds
-itself; the worker carries on), `timeout` (it overran `limits.script_timeout`), `deadline`
+itself or strings that are longer together than `limits.max_output_bytes`; the
+worker carries on), `timeout` (it overran `limits.script_timeout`), `deadline`
 (the probe's or scrape's deadline ended it first, or ran out while the
 response was handed to the worker: the time to raise is the probe's, not
-`script_timeout`), `output_limit` or `failed` (the worker could not be reached
-or its answer was unreadable). A worker found dead when it was taken from the
+`script_timeout`), `output_limit` (it wrote an answer longer than
+`limits.max_output_bytes`, and the worker was stopped) or `failed` (the worker
+could not be reached or its answer was unreadable). A worker found dead when it was taken from the
 pool is replaced before the run, and is no failed run.
 
 ```promql

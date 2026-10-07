@@ -251,7 +251,8 @@ func schemaFor(t reflect.Type, path string, rules map[string]map[string]any) map
 			// YAML reads an unquoted 1 or true as a number or a boolean, and the
 			// exporter takes it as the string it spells, so a plain string
 			// accepts them too. A key with allowed values or a pattern is
-			// string-only.
+			// string-only, and the load refuses a number or a boolean there
+			// as the schema does (schemaKinds, yamlvalues.go).
 			schema = map[string]any{"type": []string{"string", "number", "boolean"}}
 		}
 	}
@@ -383,7 +384,7 @@ func configSchemaRules() map[string]map[string]any {
 		"collectors[].error_handling.on_decode_error":    errorPolicy,
 		"collectors[].error_handling.on_transform_error": errorPolicy,
 		"collectors[].metrics":                           {"description": "The metric rules. No two of them may be the same rule, alike in name, expression, items, labels, value_map and time_format: each would make every series the other makes, and every scrape would fail on a duplicate series. Nor, under a prometheus transform, may the expression of one rule match the name another rule passes on the metric of, where the two give its series one name and the same labels: each would make every series of that metric. A rule with an expression whose type is histogram or summary and whose error_mode is not fail is about the metrics of that type alone, and may match such a name unless the rule of the name sets that type too. The exporter checks both when the configuration loads. A python collector's rules make no series and are not held to it."},
-		"collectors[].metrics[].name":                    {"pattern": optionalPattern(`^[a-zA-Z_:][a-zA-Z0-9_:]*$`), "description": "The metric name, before metrics_prefix."},
+		"collectors[].metrics[].name":                    {"type": "string", "not": onlyBlanks(), "description": "The metric name, before metrics_prefix: letters, digits, _ and :, not starting with a digit. Under the collector's name_escaping underscores or values it may be any name, such as http.server.duration, and is exported escaped. Text: a name YAML reads as a number or a boolean, such as 404 or true, is written in quotes."},
 		"collectors[].metrics[].items":                   {"description": "jq, yq and css only: selects the things the metric is about, such as table rows. The expression and labels are then evaluated once per item: for jq and yq with the item as . and the whole document as $root, for css as selectors within the item."},
 		"collectors[].metrics[].expression":              {"description": "Where the value comes from, in the transform's language: jq, a regex, a CSS selector, an XPath expression, a CSV column or a source metric pattern."},
 		"collectors[].metrics[].error_mode": {
@@ -391,7 +392,7 @@ func configSchemaRules() map[string]map[string]any {
 			"description": "What happens when this metric cannot be extracted. Defaults to log. Not for the python transform, whose script fails the scrape itself, with fail(...).",
 		},
 		"collectors[].metrics[].required":      {"description": "When false, a missing value is skipped without an error. Defaults to true. Not for the python transform, whose rules read no value."},
-		"collectors[].metrics[].labels[].name": {"pattern": `^[a-zA-Z_][a-zA-Z0-9_]*$`},
+		"collectors[].metrics[].labels[].name": {"type": "string", "minLength": 1, "not": onlyBlanks(), "description": "The label's name: letters, digits and _, not starting with a digit. Under the collector's name_escaping underscores or values it may be any name, such as service.name, and is exported escaped. Text: a name YAML reads as a number or a boolean is written in quotes."},
 		// A name, and one of value and expression.
 		"collectors[].metrics[].labels[]":            labelSchemaRule(),
 		"collectors[].metrics[].labels[].value":      {"description": "A static label value, exported as written."},
@@ -417,7 +418,7 @@ func configSchemaRules() map[string]map[string]any {
 		"otlp.endpoint":                              {"description": "OTLP/HTTP metrics endpoint, such as http://otel-collector:4318/v1/metrics."},
 		"web.basic_auth.username_file":               {"description": "Read the username from this file instead of username, such as a mounted Secret. Read again when it changes."},
 		"web.basic_auth.password_file":               {"description": "Read the password from this file instead of password, such as a mounted Secret. Read again when it changes."},
-		"collectors[].name_escaping":                 {"enum": optionalEnum([]string{transform.NameEscapingFail, transform.NameEscapingUnderscores, transform.NameEscapingValues}), "description": "What to do with a metric or label name that is not a classic Prometheus name, such as http.server.duration: fail the scrape (the default), replace what a classic name may not have with underscores, or use Prometheus's reversible values encoding (U__…). See docs/CONFIGURATION.md#utf-8-names."},
+		"collectors[].name_escaping":                 {"enum": optionalEnum([]string{transform.NameEscapingFail, transform.NameEscapingUnderscores, transform.NameEscapingValues}), "description": "What to do with a metric or label name that is not a classic Prometheus name, such as http.server.duration: fail the scrape (the default), replace what a classic name may not have with underscores, or use Prometheus's reversible values encoding (U__…). A name the collector writes itself, a rule's or a label's, is held to the same when the configuration loads: refused under fail, exported escaped under the other two. See docs/CONFIGURATION.md#utf-8-names."},
 		"collectors[].response.charset":              {"description": "The encoding of the response when the target does not declare it or declares it wrongly, and of local files: a WHATWG name such as windows-1252, iso-8859-2, windows-1251 or shift_jis. See docs/CONFIGURATION.md#character-encodings."},
 		"otlp.max_pending_points":                    {"minimum": nil, "description": "The most data points kept waiting for export while the endpoint fails; past it the oldest are dropped and counted. Defaults to 100000."},
 		"otlp.unready_after_failures":                {"minimum": nil, "description": "Answer /ready with 503 after this many failed exports in a row, until one gets through. 0, the default, never does: an exporter whose exports fail still answers probes."},
@@ -524,6 +525,16 @@ func metricRuleSchemaRule() map[string]any {
 // text key written "" is the key left out there as everywhere; required is
 // a boolean, written when it is there.
 //
+// A rule's name and the names of its labels are classic Prometheus names
+// unless the collector's name_escaping is underscores or values, under which
+// a scrape exports any name escaped and the exporter takes any written one
+// (transform.TakesLabelName): the patterns of the two keys hold where the
+// collector does not say one of those two. The two keys are text under every
+// name_escaping, as a key with a pattern is throughout, by the type they
+// have themselves (configSchemaRules): a name YAML reads as a number or a
+// boolean is refused by the schemas and, read from them, by the load, and is
+// written in quotes where it is meant, such as "404" under values.
+//
 // A prometheus rule's expression is not blanks alone, as the exporter
 // refuses one (transform.checkRulePattern): it is a regular expression over
 // metric names, like an entry of transform.include. And the rule has a name
@@ -545,6 +556,11 @@ func collectorSchemaRule() map[string]any {
 		"properties": map[string]any{"expression": map[string]any{"not": onlyBlanks()}},
 		"anyOf":      []any{writtenKey("name"), writtenKey("expression")},
 	}
+	escapesNames := map[string]any{"properties": map[string]any{"name_escaping": map[string]any{"enum": []string{transform.NameEscapingUnderscores, transform.NameEscapingValues}}}, "required": []string{"name_escaping"}}
+	classicNames := map[string]any{"properties": map[string]any{
+		"name":   map[string]any{"type": "string", "pattern": optionalPattern(`^[a-zA-Z_:][a-zA-Z0-9_:]*$`)},
+		"labels": map[string]any{"items": map[string]any{"properties": map[string]any{"name": map[string]any{"type": "string", "pattern": `^[a-zA-Z_][a-zA-Z0-9_]*$`}}}},
+	}}
 	return map[string]any{
 		"required":    []string{"name", "request", "transform"},
 		"description": "How to reach a kind of target and turn its response into metrics.",
@@ -553,6 +569,7 @@ func collectorSchemaRule() map[string]any {
 		"allOf": []any{
 			map[string]any{"if": transformIs("python"), "then": rules(pythonRule)},
 			map[string]any{"if": transformIs("prometheus"), "then": rules(prometheusRule)},
+			map[string]any{"if": map[string]any{"not": escapesNames}, "then": rules(classicNames)},
 		},
 	}
 }

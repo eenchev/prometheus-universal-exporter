@@ -784,7 +784,8 @@ func startPythonWorkerRunning(ctx context.Context, spec pythonSpec, launcher str
 	// the depth is stated once, with the decoders. And it is told how long
 	// an answer may be, limits.max_output_bytes: it does not write one
 	// that a list or a dict is in so many times over that it is longer
-	// (weigh). The exporter measures the line it reads, as it did.
+	// (weigh), nor one whose strings alone are, each as often as it is
+	// written. The exporter measures the line it reads, as it did.
 	cmd := exec.CommandContext(context.WithoutCancel(ctx), spec.Path, "-I", "-B", "-c", launcher, string(modules), strconv.FormatInt(spec.MaxMemory, 10), strconv.Itoa(decode.MaxDepth), strconv.Itoa(spec.MaxOutput)) // #nosec G204 -- the interpreter is the operator's --python.path
 	cmd.ExtraFiles = []*os.File{requestRead, answerWrite}                                                                                                                                                              // descriptors 3 and 4
 	cmd.Env = pythonWorkerEnvironment(os.Environ())
@@ -871,7 +872,7 @@ func (w *pythonWorker) startFailure(err error) error {
 		return err
 	}
 	const written = "; it had written to stderr: "
-	return model.SameFailureAs(fmt.Errorf("%w%s%s", err, written, tail), model.SameFailureText(err)+written+model.MovingMark)
+	return model.SameFailureAs(fmt.Errorf("%w%s%s", err, written, shownStderr(tail)), model.SameFailureText(err)+written+model.MovingMark)
 }
 
 // pythonWorkerEnvironment is the environment a worker starts in: the
@@ -1024,7 +1025,7 @@ func (w *pythonWorker) describe(err error) string {
 		message = err.Error()
 	}
 	if tail := strings.TrimSpace(w.stderr.String()); tail != "" {
-		message += ": " + tail
+		message += ": " + shownStderr(tail)
 	}
 	return message
 }
@@ -1245,6 +1246,9 @@ def shown(v):
     try: return repr(v)
     except RecursionError: return 'a %s nested too deep to be written'%type(v).__name__
 def wire(v):
+    # A string is written as long as it is at least, each time it is met:
+    # its length is added to what the answer's strings come to (whole[2]).
+    if type(v) is str: whole[2]+=len(v); return v
     # NaN and the infinities have no JSON form: each goes as a marker the
     # exporter reads back as the float (transform/python.go).
     if isinstance(v,float) and (v!=v or v in (float('inf'),float('-inf'))):
@@ -1303,8 +1307,25 @@ def too_long(what): return OverflowError('what the script left in %s is longer t
 # and the memory the script took to build it. An answer that holds nothing
 # twice is not bounded here: it is as long as what the script built, and is
 # written as it always was, for the exporter to measure.
+#
+# A string is another matter. One long string that is in an answer many
+# times, as the items of a list, the values of a dict or a label of every
+# metric, is in a list or a dict that is there once, and is written each
+# time: a hundred thousand characters held five thousand times are five
+# hundred million written, which the worker made in its memory, a gigabyte
+# and seconds of it, for the exporter to read the first of, refuse and stop
+# the worker over. So the walks that go through an answer anyway add up how
+# long its strings are, each as often as it is met, which is how often it
+# is written (plain, wire; whole[2]): a string is written as long as it is
+# at least, whatever its characters are escaped as, so an answer whose
+# strings come to more than limits.max_output_bytes is longer than the
+# exporter takes, and is refused unwritten (answer), as one that holds a
+# list too often is. The sum is of the values, not of the keys of dicts,
+# which no walk goes through, and of strings of exactly that type; an
+# answer that is longer than the limit only with its keys, its numbers and
+# its punctuation is written, and refused by the exporter, as before.
 class Unwritable(Exception): pass
-whole=[None,None]
+whole=[None,None,0]
 met=set()
 def weigh(document,steps=1<<62):
     # The least length document is written in, a list or a dict that is in
@@ -1384,17 +1405,19 @@ def plain_check():
     # least for each value in a list or a dict, one of its own and one of
     # the brackets or of the comma and space before it, and is longer than
     # the exporter takes. None says the answer is unwritable, and not to
-    # be walked at all.
+    # be walked at all. The strings the look passes are added up, one
+    # addition for each, and an answer that is plain is left with how
+    # long its strings are together (whole[2]).
     recursion_limit=sys.getrecursionlimit
     scalars=frozenset((int,bool,type(None)))
     def plain(document,levels=1<<30):
-        level=[document]; room=half=most//2; look=4096
+        level=[document]; room=half=most//2; look=4096; s=0
         for _ in range(min(levels,recursion_limit()//2-10)):
             below=[]
             extend=below.extend
             for v in level:
                 t=type(v)
-                if t is str: continue
+                if t is str: s+=len(v); continue
                 if t is dict:
                     extend(v.values())
                     if len(below)>room:
@@ -1409,7 +1432,7 @@ def plain_check():
                         if unwritable(): return None
                         room=look=1<<62
                 elif t not in scalars: return False
-            if not below: return True
+            if not below: whole[2]=s; return True
             room-=len(below)
             if half-room>look:
                 look=(half-room)*4
@@ -1480,7 +1503,11 @@ def deep_check(deepest):
         while True:
             if isinstance(v,dict): put('{'); inside.append([iter(v.items()),'}',''])
             elif isinstance(v,(list,tuple)): put('['); inside.append([iter(v),']',''])
-            else: put(json.dumps(wire(v),allow_nan=False))
+            else:
+                put(json.dumps(wire(v),allow_nan=False))
+                # Its strings are counted as wire meets them, and it is
+                # not written on once they are longer than an answer may be.
+                if whole[2]>most: raise too_long('metrics' if 'metrics' in document else 'data')
             # The answer is one dict deeper than what a script left in data.
             if len(inside)>deepest+1: raise too_deep()
             # The next value: of the innermost list or dict that has one
@@ -1537,21 +1564,36 @@ def answer(document):
     # not walked through wire, which would copy it out whole: data like
     # that is refused, saying which of the two it is, and metrics are
     # written without what no metric has, as those wire cannot follow,
-    # and refused when they are longer than the limit even so.
-    text=None; follow=False; whole[0]=document; whole[1]=None
+    # and refused when they are longer than the limit even so. What a
+    # script left whose strings alone are longer than the limit, each as
+    # often as it is written, is refused the same way, unwritten, by the
+    # count of the walk that went through all of it (whole[2]): plain,
+    # where the answer is plain, wire, where it went through wire to its
+    # end, and otherwise what writes one nested too deep for wire, as it
+    # writes. A count that wire did not finish is dropped: what is written
+    # then may be without what it counted. An answer that is not a
+    # script's data or metrics, an error or a word to the exporter, is
+    # written however long.
+    left='metrics' if 'metrics' in document else 'data' if 'data' in document else None
+    text=None; follow=False; whole[0]=document; whole[1]=None; whole[2]=0
     try:
-        follow=plain(document,5) if 'metrics' in document else plain(document)
-        if follow: text=json.dumps(document,allow_nan=False)
+        follow=plain(document,5) if left=='metrics' else plain(document)
+        if follow and (whole[2]<=most or not left): text=json.dumps(document,allow_nan=False)
     except Exception: text=None; follow=False
-    if text is None and follow is not None:
-        try: text=json.dumps(wire(document),allow_nan=False)
-        except Unwritable: pass
+    if text is None and follow is False:
+        whole[2]=0
+        try:
+            copy=wire(document)
+            if whole[2]<=most or not left: text=json.dumps(copy,allow_nan=False)
+        except Unwritable: whole[2]=0
         except RecursionError:
-            if 'data' not in document and 'metrics' not in document: raise
+            if not left: raise
+            whole[2]=0
         finally: met.clear()
     # Outside the handler, so that what is raised here is raised alone.
     if text is None:
-        if 'metrics' in document:
+        if whole[2]>most: raise too_long(left)
+        if left=='metrics':
             document=dict(document,metrics=flat(document['metrics']))
             if weigh(document)>most: raise too_long('metrics')
         else:

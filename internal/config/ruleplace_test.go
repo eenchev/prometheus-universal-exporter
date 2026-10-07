@@ -3,10 +3,12 @@ package config
 import (
 	"fmt"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 
 	"github.com/eenchev/prometheus-universal-exporter/internal/model"
+	"github.com/eenchev/prometheus-universal-exporter/internal/transform"
 )
 
 // saidNow is what the load says of the rule at index of a collector's
@@ -18,7 +20,18 @@ import (
 // `collector "demo" metrics rule 2 has no name`. Of a rule that has a name
 // nothing is said differently. It is the list of what changed, as the
 // differential tests of the rule checks read the checks as they were by.
+//
+// One thing more changed, for a rule with a name as for one without: the
+// refusal of a label's name that is not classic says, as a scrape's does,
+// what would export it (transform.EscapingAdvice). The checks as they were
+// are of collectors that set no name_escaping, under which such a name is
+// refused as it was, and end their refusal with the name.
 func saidNow(text, collector, name string, index int) string {
+	if at := strings.LastIndex(text, " has invalid label name "); at >= 0 && !strings.Contains(text[at:], "\n") {
+		if label, err := strconv.Unquote(text[at+len(" has invalid label name "):]); err == nil {
+			text += transform.EscapingAdvice(label)
+		}
+	}
 	if strings.TrimSpace(name) != "" {
 		return text
 	}

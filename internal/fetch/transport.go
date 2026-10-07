@@ -13,6 +13,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/eenchev/prometheus-universal-exporter/internal/model"
@@ -54,6 +55,56 @@ const (
 // the headers is 10 MiB, all of it kept in memory for as long as the answer
 // is, whatever the collector's limit; no API's headers come near 1 MiB.
 const maxResponseHeaderBytes = 1 << 20
+
+// tlsHandshakeTimeout is how long the TLS handshake of a connection to a
+// target may take. A target that accepts a connection and then says nothing
+// is given up after it, where the probe's own deadline may be minutes away.
+const tlsHandshakeTimeout = 10 * time.Second
+
+// tlsHandshakeLimit is what a test gave the handshake in place of
+// tlsHandshakeTimeout (SetTLSHandshakeTimeout); zero is the exporter's own.
+var tlsHandshakeLimit atomic.Int64
+
+// SetTLSHandshakeTimeout is how long the TLS handshake of a connection may
+// take in the pools built from now on, which is ten seconds in the exporter.
+// It is for tests. A handshake of a few milliseconds takes far longer on a
+// machine with every CPU busy elsewhere, and a test that is not about the
+// limit then fails by it; such a test runs with a limit of half a minute,
+// the bound of a hang. A test of the limit itself sets a short one, and
+// connects to something that never answers the handshake. A pool built
+// before keeps the limit it was built with.
+func SetTLSHandshakeTimeout(limit time.Duration) {
+	tlsHandshakeLimit.Store(int64(limit))
+}
+
+// grpcConnectLimit is what a test gave an attempt to connect to a grpc
+// target in place of grpcConnectTimeout (SetGRPCConnectTimeout); zero is the
+// exporter's own. It stands here, beside the handshake's, and not with the
+// grpc connections, which a build without the grpc request type leaves out:
+// the tests are set up by the same code whatever was built.
+var grpcConnectLimit atomic.Int64
+
+// SetGRPCConnectTimeout is how long an attempt to connect to a grpc target
+// may take, on the connections made from now on, which is twenty seconds in
+// the exporter: until the server has answered the HTTP/2 preface, after the
+// TCP connection and the TLS handshake. It is for tests. A connection of a
+// few milliseconds takes far longer on a machine with every CPU busy
+// elsewhere, and a test that is not about the limit then fails by it; such a
+// test runs with a limit of half a minute, the bound of a hang. A test of
+// the limit itself sets a short one, and connects to something that never
+// answers the preface. A connection made before keeps the limit it was made
+// with.
+func SetGRPCConnectTimeout(limit time.Duration) {
+	grpcConnectLimit.Store(int64(limit))
+}
+
+// handshakeTimeout is the limit a pool built now gives a TLS handshake.
+func handshakeTimeout() time.Duration {
+	if limit := time.Duration(tlsHandshakeLimit.Load()); limit > 0 {
+		return limit
+	}
+	return tlsHandshakeTimeout
+}
 
 // TransportSettings are what a connection pool depends on. Requests with the
 // same settings share one pool.
@@ -115,7 +166,7 @@ func (c *transportCache) get(settings TransportSettings, now time.Time) (*http.T
 		DialContext:         policyDialer((&net.Dialer{Timeout: 30 * time.Second, KeepAlive: 30 * time.Second}).DialContext),
 		MaxIdleConnsPerHost: transportMaxIdlePerHost,
 		IdleConnTimeout:     transportIdleConnTimeout,
-		TLSHandshakeTimeout: 10 * time.Second,
+		TLSHandshakeTimeout: handshakeTimeout(),
 		// An answer with more headers than this fails the request
 		// (responseHeadersTooLarge).
 		MaxResponseHeaderBytes: maxResponseHeaderBytes,

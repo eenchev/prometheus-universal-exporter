@@ -144,7 +144,7 @@ func checkMetricRuleBeforeBlankPatterns(x *model.Collector, r *model.MetricRule)
 		}
 	}
 	if r.Name != "" {
-		if err := checkMetricName(r.Name); err != nil {
+		if err := checkMetricName(x, r.Name); err != nil {
 			fail(fmt.Errorf("%s: %w", where, err))
 		}
 	}

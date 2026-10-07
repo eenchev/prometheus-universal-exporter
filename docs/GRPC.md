@@ -91,7 +91,10 @@ malformed.
 
 Calls to one target, with one set of TLS settings, share one connection,
 kept between probes and closed after 5 minutes unused, and made again with a
-new certificate when a TLS file changes on disk. When the server goes away,
+new certificate when a TLS file changes on disk. An attempt to connect — the
+TCP connection, the TLS handshake and the server's first HTTP/2 frames — is
+given up after 20 seconds, and a probe still waiting for it then fails as
+`UNAVAILABLE`. When the server goes away,
 the connection tries to reconnect at most every 5 seconds, and a probe that
 finds it failed tries at once, so a server that comes back is answered at
 the next probe rather than after a growing wait. The probe waits up to a

@@ -339,9 +339,11 @@ func FetchCollector(ctx context.Context, target string, c *model.Collector, over
 	}
 	response, err := rt.Fetch(ctx, target, c, overrides, forwarded)
 	// However a type's fetch failed, the error goes to logs, probe answers
-	// and debug reports without the credentials a URL in it carries, and is
-	// the same failure to the log whichever connection it happened on.
-	return response, sameFetchFailure(RedactURLErrors(err))
+	// and debug reports without the credentials a URL in it carries, with
+	// a URL as long as a scraper or a redirect made it shown by its start
+	// (shortURLErrors), and is the same failure to the log whichever
+	// connection it happened on.
+	return response, sameFetchFailure(shortURLErrors(RedactURLErrors(err)))
 }
 
 // ErrMissingTarget is CheckTarget's answer to a target left out by a type

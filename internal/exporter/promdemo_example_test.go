@@ -7,6 +7,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/eenchev/prometheus-universal-exporter/internal/config"
 	"github.com/eenchev/prometheus-universal-exporter/internal/testutil"
@@ -136,6 +137,12 @@ func TestThePrometheusDemoExamplePassesThroughWhatItPicks(t *testing.T) {
 
 // Within the fifteen seconds of cache.ttl a second scrape is answered from
 // memory, with the same series.
+//
+// The fifteen seconds are read from the result the first probe left in the
+// cache, and that result is then moved an hour ahead (ageEntries), so the
+// second probe comes within them however long after the first a busy machine
+// makes it. On the machine's clock the two probes had to be made within
+// fifteen seconds of each other.
 func TestThePrometheusDemoExampleAnswersARepeatedScrapeFromMemory(t *testing.T) {
 	testutil.CaptureLogs(t)
 	service, cfg := newStandIn(t, promDemoConfig, map[string]standInAnswer{
@@ -143,6 +150,16 @@ func TestThePrometheusDemoExampleAnswersARepeatedScrapeFromMemory(t *testing.T) 
 	})
 	server := NewServer(config.NewManager(cfg, promDemoConfig, slog.Default()), "python3", slog.Default())
 	first := probeStandIn(t, server, service, "prometheus_server", "")
+	var fresh []time.Duration
+	server.cache.mu.Lock()
+	for _, entry := range server.cache.entries {
+		fresh = append(fresh, entry.freshUntil.Sub(entry.fetched))
+	}
+	server.cache.mu.Unlock()
+	if !slices.Equal(fresh, []time.Duration{15 * time.Second}) {
+		t.Fatalf("the first probe left results fresh for %v, want one, for the example's cache.ttl of 15s", fresh)
+	}
+	ageEntries(server, -time.Hour)
 	sameSeries(t, probeStandIn(t, server, service, "prometheus_server", ""), first)
 	if asked := len(service.requests()); asked != 1 {
 		t.Errorf("the stand-in was asked %d times by two probes within cache.ttl, want once", asked)

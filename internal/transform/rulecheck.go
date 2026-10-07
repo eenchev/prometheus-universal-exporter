@@ -3,6 +3,7 @@ package transform
 import (
 	"fmt"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/eenchev/prometheus-universal-exporter/internal/expr"
 	"github.com/eenchev/prometheus-universal-exporter/internal/model"
@@ -64,7 +65,7 @@ func checkMetricRule(x *model.Collector, r *model.MetricRule, where string) erro
 		}
 	}
 	if r.Name != "" {
-		if err := checkMetricName(r.Name); err != nil {
+		if err := checkMetricName(x, r.Name); err != nil {
 			fail(fmt.Errorf("%s: %w%s", where, err, patternForAName(x, r.Name)))
 		}
 	}
@@ -229,25 +230,25 @@ func CheckTransformSettings(x *model.Collector) error {
 	}
 	for _, from := range model.SortedKeys(t.Rename) {
 		to := t.Rename[from]
-		if err := checkMetricName(to); err != nil {
+		if err := checkMetricName(x, to); err != nil {
 			errs = append(errs, fmt.Errorf("collector %q transform.rename %q to %q: %w", x.Name, from, to, err))
 		}
 	}
 	for _, name := range model.SortedKeys(t.Labels) {
-		if !model.ValidLabelName(name) {
-			errs = append(errs, fmt.Errorf("collector %q transform.labels has invalid label name %q", x.Name, name))
-		} else if err := model.CheckLabelName(name); err != nil {
+		if !TakesLabelName(x, name) {
+			errs = append(errs, fmt.Errorf("collector %q transform.labels has invalid label name %q%s", x.Name, name, EscapingAdvice(name)))
+		} else if err := CheckExportedLabelName(x, name); err != nil {
 			errs = append(errs, fmt.Errorf("collector %q transform.labels: %w", x.Name, err))
 		}
 	}
 	targets := map[string]string{}
 	for _, from := range model.SortedKeys(t.RenameLabels) {
 		to := t.RenameLabels[from]
-		if !model.ValidLabelName(to) {
-			errs = append(errs, fmt.Errorf("collector %q transform.rename_labels %q to invalid label name %q", x.Name, from, to))
+		if !TakesLabelName(x, to) {
+			errs = append(errs, fmt.Errorf("collector %q transform.rename_labels %q to invalid label name %q%s", x.Name, from, to, EscapingAdvice(to)))
 			continue
 		}
-		if err := model.CheckLabelName(to); err != nil {
+		if err := CheckExportedLabelName(x, to); err != nil {
 			errs = append(errs, fmt.Errorf("collector %q transform.rename_labels %q: %w", x.Name, from, err))
 			continue
 		}
@@ -303,15 +304,86 @@ func checkRulePattern(where, pattern string) error {
 	return fmt.Errorf("%s expression %q is nothing but blanks; a prometheus rule's expression is a regular expression matched against a metric's name as the target gives it, anywhere in it, so this one matches only the names that hold these blanks: write the pattern that was meant, or, for one that does mean a blank, '[ ]' or '\\x20' in single quotes, or leave expression out for the rule to pass on the metric its name names", where, pattern)
 }
 
-// checkMetricName applies the rule exposition applies at scrape time, plus
-// the "__" prefix Prometheus reserves, so a name that could never be exported
-// is refused before the first scrape.
-func checkMetricName(name string) error {
-	if !model.ValidMetricName(name) {
-		return fmt.Errorf("%q is not a valid Prometheus metric name; use letters, digits, underscores and colons, not starting with a digit", name)
+// A name written in a collector's configuration — a rule's name and its
+// labels' names, the keys of transform.labels and what transform.rename and
+// transform.rename_labels rename to — is held at the load to what the same
+// name is held to at a scrape, where it leaves the transform beside the
+// names the response gave and is escaped with them, in the one place
+// (escapeNames). Under name_escaping fail, the default, a name that is not
+// classic could only fail every scrape, so the load refuses it, and says, as
+// the scrape does, that underscores or values would export it escaped. Under
+// those two it loads, whatever characters it has, and is exported as each
+// exports a response's name: a rule named http.server.duration makes
+// http_server_duration, or U__http_2e_server_2e_duration.
+//
+// Two things the load holds a written name to that a scrape does not hold a
+// response's. A name of nothing but blanks is no name under any of the
+// three, as an expression of blanks is none: neither the key left out, which
+// only "" is, nor a name anyone meant. And a metric name is not exported
+// beginning with "__", which Prometheus reserves: not as it is written, and
+// not as underscores escapes it, where a leading digit or dot becomes "_".
+// A label's name is held to that by the scrape as well.
+
+// escapes reports whether the collector exports a name that is not classic
+// escaped, its name_escaping being underscores or values, where under fail,
+// or with the key left out, such a name fails the scrape.
+func escapes(x *model.Collector) bool {
+	return x.NameEscaping == NameEscapingUnderscores || x.NameEscaping == NameEscapingValues
+}
+
+// EscapingAdvice is what the load adds to its refusal of a name that is not
+// classic, in the words the scrape's refusal of such a name has
+// (model.MetricSet.Validate), and for the names it has them for: one that is
+// valid UTF-8, which escaping exports. A name of blanks is refused under
+// every name_escaping, and is told nothing of it.
+func EscapingAdvice(name string) string {
+	if strings.TrimSpace(name) == "" || !utf8.ValidString(name) {
+		return ""
+	}
+	return "; set the collector's name_escaping to underscores or values to export it escaped"
+}
+
+// TakesLabelName reports whether a label name written in the collector's
+// configuration is one a scrape of the collector exports: a classic name,
+// or, under name_escaping underscores or values, any that is not blanks
+// alone. A name it takes may still be one Prometheus reserves
+// (CheckExportedLabelName).
+func TakesLabelName(x *model.Collector, name string) bool {
+	return model.ValidLabelName(name) || escapes(x) && strings.TrimSpace(name) != ""
+}
+
+// CheckExportedLabelName refuses a label name the collector takes
+// (TakesLabelName) that is exported as one Prometheus reserves, beginning
+// with "__": a classic name written so, in the words it always was, and a
+// name underscores escapes to one, which the scrape would refuse of every
+// series that has the label.
+func CheckExportedLabelName(x *model.Collector, name string) error {
+	exported := escapeName(name, x.NameEscaping, false)
+	if exported == name {
+		return model.CheckLabelName(name)
+	}
+	if model.ReservedLabelName(exported) {
+		return fmt.Errorf("label name %q is exported as %q under name_escaping %s, which starts with __, which Prometheus reserves for its own labels", name, exported, x.NameEscaping)
+	}
+	return nil
+}
+
+// checkMetricName applies the rule exposition applies at scrape time under
+// the collector's name_escaping, plus the "__" prefix Prometheus reserves, so
+// a name that could never be exported is refused before the first scrape.
+func checkMetricName(x *model.Collector, name string) error {
+	if !model.ValidMetricName(name) && (!escapes(x) || strings.TrimSpace(name) == "") {
+		advice := EscapingAdvice(name)
+		if advice != "" {
+			advice = ", or" + strings.TrimPrefix(advice, ";")
+		}
+		return fmt.Errorf("%q is not a valid Prometheus metric name; use letters, digits, underscores and colons, not starting with a digit%s", name, advice)
 	}
 	if strings.HasPrefix(name, "__") {
 		return fmt.Errorf("%q starts with \"__\", which Prometheus reserves", name)
+	}
+	if exported := escapeName(name, x.NameEscaping, true); strings.HasPrefix(exported, "__") {
+		return fmt.Errorf("%q is exported as %q under name_escaping %s, which starts with \"__\", which Prometheus reserves", name, exported, x.NameEscaping)
 	}
 	return nil
 }
@@ -327,11 +399,14 @@ func checkMetricName(name string) error {
 // Prometheus reserves — and a name of any other transform's rule, which has
 // no pattern to be mistaken for, add nothing.
 //
-// A rule's name is held to the classic names whatever the collector's
-// name_escaping is, which is about the names a response or a script gives:
-// name: http.server.duration is refused under every one, and under
-// prometheus it is told the same, the metric of that name being matched by
-// expression: '^http\.server\.duration$'.
+// The advice is of a name the load refuses, which under name_escaping
+// underscores or values a name with such a character is not, unless
+// underscores would export it as a name Prometheus reserves: a dot is as
+// much a character of http.server.duration as of a pattern, and there the
+// rule passes on the metric of that very name, as a rule of a classic name
+// does (applyPrometheusTransform quotes the name it matches by). Under fail
+// the name is refused and told both things: what would export it, and where
+// a pattern belongs.
 func patternForAName(x *model.Collector, name string) string {
 	if x.Transform.Type != "prometheus" || model.ValidMetricName(name) || !strings.ContainsAny(name, `.*+?^$|()[]{}\`) {
 		return ""

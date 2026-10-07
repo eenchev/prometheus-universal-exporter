@@ -4,12 +4,15 @@ import (
 	"bytes"
 	"compress/gzip"
 	"context"
+	"encoding/binary"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"math"
 	"net/http"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -176,17 +179,11 @@ type otlpResourceSet struct {
 	seqs     []int64
 }
 
-// key is the stable identity used to group pending metrics by resource.
+// key is what tells the resource from every other (otlpKey): its service
+// name, and each attribute's name and value. Pending metrics are grouped by
+// it, and the resources of an export are in the order of their keys.
 func (r otlpResourceIdentity) key() string {
-	var b strings.Builder
-	b.WriteString(r.ServiceName)
-	for _, name := range model.SortedKeys(r.Attributes) {
-		b.WriteByte(0)
-		b.WriteString(name)
-		b.WriteByte('=')
-		b.WriteString(r.Attributes[name])
-	}
-	return b.String()
+	return otlpKey("", r.Attributes, r.ServiceName)
 }
 
 func (r otlpResourceIdentity) attributes() []otlpAttribute {
@@ -226,7 +223,10 @@ func (s *Server) pushOTLP(ctx context.Context, cfg model.OTLPConfig, resources [
 		if len(resource.Set.Metrics) == 0 {
 			continue
 		}
-		payload.ResourceMetrics = append(payload.ResourceMetrics, otlpResourceMetrics{Resource: otlpResource{Attributes: resource.Identity.attributes()}, ScopeMetrics: []otlpScopeMetrics{{Scope: otlpScope{Name: "prometheus-universal-exporter"}, Metrics: otlpMetrics(resource.Set, now, s.otlpStarts.forResource(resource.Identity.key()))}}})
+		key := resource.Identity.key()
+		metrics, clashes := otlpMetricsOf(resource, now, s.otlpStarts.forResource(key))
+		s.logOTLPNameClashes(resource.Identity, key, clashes)
+		payload.ResourceMetrics = append(payload.ResourceMetrics, otlpResourceMetrics{Resource: otlpResource{Attributes: resource.Identity.attributes()}, ScopeMetrics: []otlpScopeMetrics{{Scope: otlpScope{Name: "prometheus-universal-exporter"}, Metrics: metrics}}})
 	}
 	if len(payload.ResourceMetrics) == 0 {
 		return 0, otlpPartialSuccess{}, nil
@@ -445,29 +445,64 @@ func otlpAttributesForLabels(labels map[string]string) []otlpAttribute {
 // which such a family is written as there (planOpenMetrics), is in OTLP.
 // Every point then is valid, and none is left out.
 func otlpMetrics(set model.MetricSet, now string, start func(m model.Metric, at string) string) []otlpMetric {
-	var out []otlpMetric
-	index := map[string]int{}
+	out, _ := otlpMetricsOf(otlpResourceSet{Set: set}, now, start)
+	return out
+}
+
+// otlpPoints is the conversion otlpMetrics describes, of the series as the
+// set has them. own is where the exporter's own series begin in the set,
+// after those that waited in the queue (exportOTLP). keep, when there is
+// one, is asked of every point before it is made — the series it is of, by
+// its place in the set, and the name, the kind and the attributes it would
+// be exported with — and a point it refuses is left out, and its series'
+// start time not asked for.
+//
+// shared says that two points of the result may be one to a receiver — one
+// metric's, with the same attributes — or that a name is two metrics of
+// different kinds in it, which otlpMetricsOf then looks into. It is told
+// without a look at any point's attributes, by where the points of a metric
+// come from. The series of one name and type that follow one another in the
+// set are a run, and those of a run differ in their labels, as the keys
+// they waited under and the exporter's own series do. So a metric whose
+// points are all of one run, each exported under its series' own name with
+// its labels for attributes, has no two alike; and shared is said where a
+// metric gets a point of a second run, where a name is exported as a second
+// kind, and where a histogram or a summary is exported as gauges under its
+// samples' names, with le or quantile among the attributes.
+func otlpPoints(set model.MetricSet, own int, now string, start func(m model.Metric, at string) string, keep func(series int, name string, kind int, attributes []otlpAttribute) bool) (out []otlpMetric, shared bool) {
+	// Where the metric of a name is in out, and the run that made it.
+	type place struct{ at, run int }
+	index := map[string]place{}
+	run := 0
 	// metric is the metric of a name and a kind that a point is added to. A
 	// name first seen, or reused with another kind, is a new metric, so
 	// points of different kinds are never mixed in one.
 	metric := func(name, help string, kind int) *otlpMetric {
-		i, seen := index[name]
-		if !seen || otlpKind(out[i]) != kind {
-			index[name] = len(out)
-			i = len(out)
-			out = append(out, newOTLPMetric(name, help, kind))
+		p, seen := index[name]
+		if seen && otlpKind(out[p.at]) == kind {
+			shared = shared || p.run != run
+			return &out[p.at]
 		}
-		return &out[i]
+		shared = shared || seen
+		index[name] = place{at: len(out), run: run}
+		out = append(out, newOTLPMetric(name, help, kind))
+		return &out[len(out)-1]
 	}
 	untyped := untypedFamilies(set)
 	var e expositionWriter
-	for _, m := range set.Metrics {
+	for i, m := range set.Metrics {
+		if i == 0 || i == own || m.Name != set.Metrics[i-1].Name || m.Type != set.Metrics[i-1].Type {
+			run++
+		}
 		at := now
 		if m.Timestamp != nil {
 			at = strconv.FormatInt(*m.Timestamp*int64(time.Millisecond), 10)
 		}
 		attributes := otlpAttributesForLabels(m.Labels)
 		gauge := func(name string, attributes []otlpAttribute, value float64) {
+			if keep != nil && !keep(i, name, otlpKindGauge, attributes) {
+				return
+			}
 			v := otlpDouble(value)
 			g := metric(name, m.Help, otlpKindGauge).Gauge
 			g.DataPoints = append(g.DataPoints, otlpNumberDataPoint{Attributes: attributes, TimeUnixNano: at, AsDouble: &v})
@@ -475,6 +510,7 @@ func otlpMetrics(set model.MetricSet, now string, start func(m model.Metric, at 
 		kind := otlpKindOf(m)
 		if kind != otlpKindGauge && untyped[m.Name] {
 			// The lines the text format writes for the series, each a gauge.
+			shared = shared || kind != otlpKindSum
 			switch kind {
 			case otlpKindHistogram:
 				for _, b := range e.ascendingBuckets(m.Histogram.Buckets) {
@@ -506,6 +542,9 @@ func otlpMetrics(set model.MetricSet, now string, start func(m model.Metric, at 
 			}
 			continue
 		}
+		if keep != nil && kind != otlpKindGauge && !keep(i, m.Name, kind, attributes) {
+			continue
+		}
 		startAt := ""
 		switch {
 		case kind == otlpKindGauge:
@@ -535,7 +574,168 @@ func otlpMetrics(set model.MetricSet, now string, start func(m model.Metric, at 
 			gauge(m.Name, attributes, m.Value)
 		}
 	}
-	return out
+	return out, shared
+}
+
+// otlpNameClash is a name that the writers of one resource export as
+// metrics of different kinds in one export: the kind the latest of them
+// wrote is exported, and points of the others, of the kinds leftOut, are
+// not.
+type otlpNameClash struct {
+	name    string
+	kept    int
+	leftOut []int
+	points  int
+}
+
+// otlpMetricsOf is otlpMetrics of what one resource has in an export — the
+// series that waited in the queue, each with its place in it, and after
+// them the exporter's own, for its own resource — as one writer's.
+//
+// To a receiver a point is its resource's, its metric's — the name and the
+// kind — and its attributes', and each such stream has one writer: two
+// points of one in a request are one too many, of which it keeps either,
+// or refuses the request; and two metrics of one name and different kinds
+// are a conflict it settles as it likes. The queue holds a series once, by
+// its name, type and labels (otlpMetricKey), which is not what it is
+// exported as: a gauge and an untyped series of one name and labels are one
+// gauge's point twice; so are the h_bucket of a histogram h exported as
+// gauges and a gauge h_bucket with that le, and a series of a probe named
+// and labelled like one of the exporter's own; and what one probe makes a
+// gauge of and another a counter are two metrics of one name. One set a
+// probe answers with has none of these (MetricSet.Validate); two sets
+// under one resource have. What a series is exported as is not known when
+// it is queued — a family is exported as gauges when any of its series in
+// the export has values its type does not allow (untypedFamilies), and the
+// exporter's own never wait — so it is settled here, where the points are
+// made, by the rule of the queue: the later replaces the earlier.
+//
+//   - Of the kinds a name is exported as, the one of the point written last
+//     is exported, and no point of another: they are reported, to be logged
+//     (logOTLPNameClashes).
+//   - Of the points of one metric with the same attributes, the one written
+//     last is exported, as a later scrape's point replaces a series' in
+//     the queue, without a word.
+//
+// Written last is queued last, and one of the exporter's own is written
+// after every queued one, at the export; of two written at once, the later
+// in the set.
+//
+// Nearly no export has either, and it is then made once, as it was
+// (otlpPoints): only where that says two points may be one are the points
+// gone through again, to find those to leave out, and, where there are any,
+// a third time without them. A start time is then asked for twice, for the
+// same point, which gives it the same; and a cumulative point left out has
+// been a point of its series to the start times, a count the series had
+// (otlpStartTimes).
+func otlpMetricsOf(resource otlpResourceSet, now string, start func(m model.Metric, at string) string) ([]otlpMetric, []otlpNameClash) {
+	set, own := resource.Set, len(resource.seqs)
+	out, shared := otlpPoints(set, own, now, start, nil)
+	if !shared {
+		return out, nil
+	}
+	// Every point the export would have, in the order they are made in.
+	type point struct {
+		name, identity string
+		kind           int
+		written        int64
+	}
+	var points []point
+	otlpPoints(set, own, now, nil, func(series int, name string, kind int, attributes []otlpAttribute) bool {
+		written := int64(math.MaxInt64)
+		if series < own {
+			written = resource.seqs[series]
+		}
+		points = append(points, point{name: name, identity: otlpPointIdentity(name, attributes), kind: kind, written: written})
+		return false
+	})
+	later := func(a, b int) bool {
+		return points[a].written > points[b].written || points[a].written == points[b].written && a > b
+	}
+	// The point of each name written last, whose kind the name is exported
+	// as.
+	last := map[string]int{}
+	for n := range points {
+		if of, seen := last[points[n].name]; !seen || later(n, of) {
+			last[points[n].name] = n
+		}
+	}
+	leftOut, some := make([]bool, len(points)), false
+	latest := map[string]int{}
+	var clashes map[string]*otlpNameClash
+	for n := range points {
+		p := &points[n]
+		if kept := points[last[p.name]].kind; p.kind != kept {
+			leftOut[n], some = true, true
+			if clashes == nil {
+				clashes = map[string]*otlpNameClash{}
+			}
+			clash := clashes[p.name]
+			if clash == nil {
+				clash = &otlpNameClash{name: p.name, kept: kept}
+				clashes[p.name] = clash
+			}
+			if !slices.Contains(clash.leftOut, p.kind) {
+				clash.leftOut = append(clash.leftOut, p.kind)
+			}
+			clash.points++
+			continue
+		}
+		earlier, seen := latest[p.identity]
+		switch {
+		case !seen:
+			latest[p.identity] = n
+		case later(n, earlier):
+			leftOut[earlier], some = true, true
+			latest[p.identity] = n
+		default:
+			leftOut[n], some = true, true
+		}
+	}
+	if !some {
+		return out, nil
+	}
+	n := 0
+	out, _ = otlpPoints(set, own, now, start, func(int, string, int, []otlpAttribute) bool {
+		n++
+		return !leftOut[n-1]
+	})
+	reported := make([]otlpNameClash, 0, len(clashes))
+	for _, name := range model.SortedKeys(clashes) {
+		slices.Sort(clashes[name].leftOut)
+		reported = append(reported, *clashes[name])
+	}
+	return out, reported
+}
+
+// otlpPointIdentity is what tells a point of a resource from every other
+// in an export, among those of the kind its name is exported as: the
+// metric's name, and each attribute's name and value, each after its length
+// (appendKeyPart), so nothing is read from what they hold.
+func otlpPointIdentity(name string, attributes []otlpAttribute) string {
+	b := appendKeyPart(nil, name)
+	for _, a := range attributes {
+		b = appendKeyPart(appendKeyPart(b, a.Key), a.Value.StringValue)
+	}
+	return string(b)
+}
+
+// errOTLPNameClash is what is logged of a name exported as two kinds.
+var errOTLPNameClash = errors.New("two writers of one OTLP resource - probes, static targets, or the exporter with its own metrics - export this metric name as different kinds, and a name is one metric of one kind there; rename one of the metrics, or give a static target a resource of its own with its otlp.service_name or otlp.resource_attributes")
+
+// logOTLPNameClashes logs each name of a resource that an export had as
+// two kinds, once and then as a repeat (failureLog), whichever of the kinds
+// was written last at each export.
+func (s *Server) logOTLPNameClashes(identity otlpResourceIdentity, resource string, clashes []otlpNameClash) {
+	for _, clash := range clashes {
+		kinds := make([]string, 0, len(clash.leftOut))
+		for _, kind := range clash.leftOut {
+			kinds = append(kinds, otlpKindNames[kind])
+		}
+		s.failures.failed(s.logger, slog.LevelWarn, otlpNameClashKey(resource, clash.name),
+			"OTLP metric name written as two kinds under one resource; the data points of the kind written earlier are left out of the export", "otlp", errOTLPNameClash,
+			"metric", clash.name, "kind", otlpKindNames[clash.kept], "left_out_kind", strings.Join(kinds, ", "), "left_out_points", clash.points, "service_name", identity.ServiceName)
+	}
 }
 
 // untypedFamilies are the names of the families of a set that have a series
@@ -574,6 +774,9 @@ const (
 	otlpKindHistogram
 	otlpKindSummary
 )
+
+// otlpKindNames are the kinds as a log line names them.
+var otlpKindNames = [...]string{otlpKindGauge: "gauge", otlpKindSum: "sum", otlpKindHistogram: "histogram", otlpKindSummary: "summary"}
 
 // otlpKindOf is the OTLP kind a metric is exported as. A histogram or summary
 // type without its data is exported as a gauge of its value.
@@ -825,7 +1028,10 @@ func (t scrapeTime) covers(i int, m model.Metric) bool {
 // probe's point replaces the earlier's before the export. With
 // otlp.probe_attributes, each probe's points carry collector and target
 // attributes, so they stay apart; a label of the series' own by either name
-// is kept.
+// is kept. What two probes write that is one stream to a receiver without
+// being one series here — a gauge and an untyped series of one name, a name
+// that is a gauge of one and a counter of the other — is settled where the
+// export is made (otlpMetricsOf).
 
 // Probe attribute names.
 const (
@@ -1096,21 +1302,121 @@ func countPoints(resources []otlpResourceSet) int {
 	return n
 }
 
+// otlpMetricKey is what tells a series of a resource from every other
+// (otlpKey): its name, its type, and each label's name and value. A point
+// queued replaces the one waiting under it, and a resource's points are
+// exported in the order of their keys.
 func otlpMetricKey(metric model.Metric) string {
-	keys := make([]string, 0, len(metric.Labels))
-	for key := range metric.Labels {
-		keys = append(keys, key)
+	return otlpSeriesKey("", &metric)
+}
+
+// otlpSeriesKey is otlpMetricKey written after before: where the start
+// times are kept, the key of the series' resource (otlpStartTimes).
+func otlpSeriesKey(before string, metric *model.Metric) string {
+	return otlpKey(before, metric.Labels, metric.Name, string(metric.Type))
+}
+
+// What a key of the export has after each NUL of its join, and what ends
+// the join (otlpKey).
+const (
+	otlpKeyNUL = "\x00\x01"
+	otlpKeyEnd = "\x00\x00"
+)
+
+// otlpKey is the key of a resource or of a series: what the export tells one
+// from every other by, where points wait for it (otlpBatch), among the
+// resources of one (appendToResource) and where start times are kept
+// (otlpStartTimes). head are the parts every one has — a resource's service
+// name; a series' name and type — and pairs its attributes or its labels.
+// before is written first, as it is.
+//
+// The key was once the parts joined: the head with a NUL between its parts,
+// and then a NUL, the name, = and the value of each pair, by the pairs'
+// names in order. But a label's value is the target's and a resource's
+// attributes are the operator's, of any bytes: m{a="1\x00b=2"} and
+// m{a="1",b="2"} are joined to the same bytes, as are the attribute a=b of
+// the value c and the attribute a of the value b=c, and a resource whose
+// last attribute holds what another's series begin with. Two series with
+// one key were one in the queue, where the later point replaced the other
+// and that series was never exported; two resources with one key were
+// exported as one, under the attributes of the first; and two series with
+// one key among the start times each took the other's count for its own,
+// and were given a start time, and a reset, that the other had.
+//
+// So the key is the join, and after it the length of every part, each a
+// varint (binary.AppendUvarint), in the order the parts are joined in. The
+// lengths say where each part is within the join, so nothing is read from
+// what a part holds, and no two subjects have one key whatever their parts
+// hold. Where the join ends is told without a length before it: every NUL of
+// the join, a part's own or one between two parts, is written with a 0x01
+// after it (otlpKeyNUL), and two NULs end it (otlpKeyEnd), which the join
+// so written never holds.
+//
+// The join is kept, where the failure log's keys have each part after its
+// own length (appendKeyPart), and it ends as it does, because the resources
+// of an export and the points of each are exported in the order of their
+// keys (drainOTLP), which was the order of the joins: and written so, keys
+// are in the order of their joins still. Up to where two joins first differ
+// their keys are the same; there the smaller byte is the smaller byte of
+// the keys, a NUL too; and a join that is the beginning of another ends
+// with two NULs where the other goes on with a byte that is not a NUL, or
+// with a NUL and 0x01. Only subjects whose parts are joined to the same
+// bytes, which had one key, are in the order of the lengths.
+//
+// It is made in the one allocation that holds it, where the old key took
+// one for the names in order and several as it grew: the parts are put in
+// the order they are joined in, in place, for all but a subject of more
+// pairs than any is likely to have.
+func otlpKey(before string, pairs map[string]string, head ...string) string {
+	// The head, and then each pair's name and value. A subject has few
+	// pairs, so each is moved down to its place among those before it.
+	var few [2 + 2*8]string
+	parts := append(few[:0], head...)
+	for name, value := range pairs {
+		parts = append(parts, name, value)
+		for at := len(parts) - 2; at > len(head) && parts[at] < parts[at-2]; at -= 2 {
+			parts[at], parts[at-2] = parts[at-2], parts[at]
+			parts[at+1], parts[at-1] = parts[at-1], parts[at+1]
+		}
 	}
-	sort.Strings(keys)
+	// What the key takes: before a name and between the parts of the head
+	// a NUL as a key has it, and before a value an =; of each part its
+	// bytes, one more for each NUL among them, and its length.
+	size := len(before) + len(otlpKeyNUL)*(len(head)-1+len(pairs)) + len(pairs) + len(otlpKeyEnd)
+	nuls := 0
+	for _, part := range parts {
+		nuls += strings.Count(part, "\x00")
+		size += len(part) + 1
+		for more := len(part) >> 7; more > 0; more >>= 7 {
+			size++
+		}
+	}
 	var b strings.Builder
-	b.WriteString(metric.Name)
-	b.WriteByte(0)
-	b.WriteString(string(metric.Type))
-	for _, key := range keys {
-		b.WriteByte(0)
-		b.WriteString(key)
-		b.WriteByte('=')
-		b.WriteString(metric.Labels[key])
+	b.Grow(size + nuls)
+	b.WriteString(before)
+	for i, part := range parts {
+		switch {
+		case i == 0:
+		case i >= len(head) && (i-len(head))%2 == 1:
+			b.WriteByte('=')
+		default:
+			b.WriteString(otlpKeyNUL)
+		}
+		// Hardly any subject has a NUL in a part, and then none is looked
+		// for again.
+		if nuls > 0 {
+			for nul := strings.IndexByte(part, 0); nul >= 0; nul = strings.IndexByte(part, 0) {
+				b.WriteString(part[:nul])
+				b.WriteString(otlpKeyNUL)
+				part = part[nul+1:]
+			}
+		}
+		b.WriteString(part)
+	}
+	b.WriteString(otlpKeyEnd)
+	var length [binary.MaxVarintLen64]byte
+	for _, part := range parts {
+		b.Write(binary.AppendUvarint(length[:0], uint64(len(part))))
 	}
 	return b.String()
 }

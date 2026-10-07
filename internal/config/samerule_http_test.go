@@ -83,8 +83,8 @@ func TestTwoRulesThatAreTheSameRuleAreRefusedAtLoad(t *testing.T) {
 		// A rule refused for something else is told that alone, and its
 		// copy too; a sound rule's copy is told beside them.
 		"prometheus, copies that are refused": {collectorRules("prometheus", "", "      - name: bad-name\n      - name: bad-name\n      - name: up\n      - {}\n      - {}\n      - name: up\n"), []string{
-			`collector "node" metric "bad-name": "bad-name" is not a valid Prometheus metric name; use letters, digits, underscores and colons, not starting with a digit`,
-			`collector "node" metric "bad-name": "bad-name" is not a valid Prometheus metric name; use letters, digits, underscores and colons, not starting with a digit`,
+			`collector "node" metric "bad-name": "bad-name" is not a valid Prometheus metric name; use letters, digits, underscores and colons, not starting with a digit, or set the collector's name_escaping to underscores or values to export it escaped`,
+			`collector "node" metric "bad-name": "bad-name" is not a valid Prometheus metric name; use letters, digits, underscores and colons, not starting with a digit, or set the collector's name_escaping to underscores or values to export it escaped`,
 			ruleOfNeither("node", 3), ruleOfNeither("node", 4), sameRuleSaid("node", 2, 5, up),
 		}},
 	} {
@@ -131,16 +131,23 @@ func TestTwoRulesThatAreTheSameRuleAreRefusedAtLoad(t *testing.T) {
 // and what name is beside one
 // (transform.TestAPatternUnderAPrometheusRulesNameIsToldItBelongsInExpression).
 // The same name under another transform, and a name that is none for
-// another reason, read word for word as they did. name_escaping, which is
-// about the names a response gives, changes nothing of it: a rule's name
-// with a dot is refused under each of its values.
+// another reason, are told what they were, and each, as a scrape tells a
+// response's name that is not classic, that name_escaping underscores or
+// values would export it escaped. That is under name_escaping fail, written
+// or left out; under the other two a rule's name is held to what a scrape
+// holds a name to, and every one of these loads, under each transform: a
+// dot is a character of http.server.duration as much as of a pattern.
 func TestAPatternUnderAPrometheusRulesNameIsToldSoAtLoad(t *testing.T) {
-	const useLetters = ` is not a valid Prometheus metric name; use letters, digits, underscores and colons, not starting with a digit`
+	const useLetters = ` is not a valid Prometheus metric name; use letters, digits, underscores and colons, not starting with a digit, or set the collector's name_escaping to underscores or values to export it escaped`
 	const belongs = `; a pattern to match the target's metric names by is a prometheus rule's expression, not its name, so if this is one, write it as expression, in single quotes, and leave name out, or set name to the one name the series it matches are to be exported under`
 	for written, name := range map[string]string{`'node_.*'`: "node_.*", `'^up$'`: "^up$", `'up|node_load1'`: "up|node_load1", `http.server.duration`: "http.server.duration", `'node_\d+'`: `node_\d+`} {
 		quoted := `"` + strings.ReplaceAll(name, `\`, `\\`) + `"`
 		for _, escaping := range []string{"", "    name_escaping: fail\n", "    name_escaping: underscores\n", "    name_escaping: values\n"} {
+			escaped := strings.Contains(escaping, "underscores") || strings.Contains(escaping, "values")
 			want := []string{`collector "node" metric ` + quoted + `: ` + quoted + useLetters + belongs}
+			if escaped {
+				want = nil
+			}
 			if got := problemsOf(t, collectorRules("prometheus", escaping, "      - name: "+written+"\n")); !slices.Equal(got, want) {
 				t.Errorf("prometheus, %sname: %s: the load says %q\nwant %q", escaping, written, got, want)
 			}
@@ -148,6 +155,9 @@ func TestAPatternUnderAPrometheusRulesNameIsToldSoAtLoad(t *testing.T) {
 				t.Errorf("prometheus, %sname: %s beside an expression: the load says %q\nwant %q", escaping, written, got, want)
 			}
 			want = []string{`collector "node" metric ` + quoted + `: ` + quoted + useLetters}
+			if escaped {
+				want = nil
+			}
 			if got := problemsOf(t, collectorRules("jq", escaping, "      - name: "+written+"\n        expression: .v\n")); !slices.Equal(got, want) {
 				t.Errorf("jq, %sname: %s: the load says %q\nwant %q", escaping, written, got, want)
 			}

@@ -395,30 +395,30 @@ func (s *MetricSet) validate(l Limits, seen *seriesSet) error {
 		m := &s.Metrics[i]
 		if !ValidMetricName(m.Name) {
 			if m.Name != "" && utf8.ValidString(m.Name) {
-				return fmt.Errorf("metric name %q is not a classic Prometheus name; set the collector's name_escaping to underscores or values to export it escaped", m.Name)
+				return nameErrorf("metric name %q is not a classic Prometheus name; set the collector's name_escaping to underscores or values to export it escaped", shownName(m.Name))
 			}
-			return fmt.Errorf("invalid metric name %q", m.Name)
+			return nameErrorf("invalid metric name %q", shownName(m.Name))
 		}
 		if len(m.Name) > l.MaxMetricNameLength && l.MaxMetricNameLength > 0 {
-			return fmt.Errorf("invalid metric name %q: longer than limits.max_metric_name_length %d", m.Name, l.MaxMetricNameLength)
+			return nameErrorf("invalid metric name %q: longer than limits.max_metric_name_length %d", shownName(m.Name), l.MaxMetricNameLength)
 		}
 		switch m.Type {
 		case GaugeMetricType, CounterMetricType, HistogramMetricType, SummaryMetricType, UntypedMetricType:
 		default:
-			return fmt.Errorf("metric %q has invalid type %q", m.Name, m.Type)
+			return nameErrorf("metric %q has invalid type %q", shownName(m.Name), m.Type)
 		}
 		// A histogram is its buckets and a summary its quantiles: a series
 		// typed as one without them, or with them and another type, is
 		// exposition no parser reads as intended.
 		switch {
 		case (m.Type == HistogramMetricType) != (m.Histogram != nil):
-			return fmt.Errorf("metric %q has type %s but %s; only a histogram read from Prometheus exposition has buckets, and metric() and the rules make gauges, counters and untyped series", m.Name, m.Type, map[bool]string{true: "buckets", false: "no buckets"}[m.Histogram != nil])
+			return nameErrorf("metric %q has type %s but %s; only a histogram read from Prometheus exposition has buckets, and metric() and the rules make gauges, counters and untyped series", shownName(m.Name), m.Type, map[bool]string{true: "buckets", false: "no buckets"}[m.Histogram != nil])
 		case (m.Type == SummaryMetricType) != (m.Summary != nil):
-			return fmt.Errorf("metric %q has type %s but %s; only a summary read from Prometheus exposition has quantiles, and metric() and the rules make gauges, counters and untyped series", m.Name, m.Type, map[bool]string{true: "quantiles", false: "no quantiles"}[m.Summary != nil])
+			return nameErrorf("metric %q has type %s but %s; only a summary read from Prometheus exposition has quantiles, and metric() and the rules make gauges, counters and untyped series", shownName(m.Name), m.Type, map[bool]string{true: "quantiles", false: "no quantiles"}[m.Summary != nil])
 		}
 		// Prometheus accepts infinities and NaN, so no value check applies here.
 		if len(m.Labels) > l.MaxLabelsPerMetric && l.MaxLabelsPerMetric > 0 {
-			return Errorf("metric %q has %d labels, more than limits.max_labels_per_metric %d; drop labels it does not need or raise limits.max_labels_per_metric", m.Name, Size(len(m.Labels)), l.MaxLabelsPerMetric)
+			return Errorf("metric %q has %d labels, more than limits.max_labels_per_metric %d; drop labels it does not need or raise limits.max_labels_per_metric", shownName(m.Name), Size(len(m.Labels)), l.MaxLabelsPerMetric)
 		}
 		var labels uint64
 		for k, v := range m.Labels {
@@ -434,7 +434,7 @@ func (s *MetricSet) validate(l Limits, seen *seriesSet) error {
 			}
 		}
 		if l.MaxHelpLength > 0 && len(m.Help) > l.MaxHelpLength {
-			return Errorf("metric %q help is %d bytes, longer than limits.max_help_length %d; shorten it or raise limits.max_help_length", m.Name, Size(len(m.Help)), l.MaxHelpLength)
+			return Errorf("metric %q help is %d bytes, longer than limits.max_help_length %d; shorten it or raise limits.max_help_length", shownName(m.Name), Size(len(m.Help)), l.MaxHelpLength)
 		}
 		// The series of a family nearly always follow one another, so a
 		// series of the family and type of the one before it has nothing to
@@ -443,14 +443,14 @@ func (s *MetricSet) validate(l Limits, seen *seriesSet) error {
 			if prior, ok := types[m.Name]; !ok {
 				types[m.Name] = m.Type
 			} else if prior != m.Type {
-				return fmt.Errorf("metric %q has inconsistent types", m.Name)
+				return nameErrorf("metric %q has inconsistent types", shownName(m.Name))
 			}
 		}
 		if duplicate, empty := seen.addHashed(i, labels); duplicate {
 			if empty {
-				return fmt.Errorf("duplicate metric series %q: Prometheus reads a label with an empty value as no label, so series that differ only in one are the same series", m.Name)
+				return nameErrorf("duplicate metric series %q: Prometheus reads a label with an empty value as no label, so series that differ only in one are the same series", shownName(m.Name))
 			}
-			return fmt.Errorf("duplicate metric series %q", m.Name)
+			return nameErrorf("duplicate metric series %q", shownName(m.Name))
 		}
 	}
 	return checkDerivedNames(types)
@@ -563,6 +563,50 @@ func ParseFloat(text string) (float64, error) {
 
 // maxQuotedValue is how much of a value an error quotes.
 const maxQuotedValue = 64
+
+// maxShownName is how much of a metric's or a label's name the error of a
+// set that cannot be exposed quotes: the default
+// limits.max_metric_name_length, so a name within that is quoted whole.
+const maxShownName = 200
+
+// shownName is a metric's or a label's name as the error of a set that
+// cannot be exposed quotes it with %q (Validate): the name itself when it is
+// no longer than maxShownName, which %q quotes whole as it always did, and
+// otherwise its first maxShownName bytes, at a character boundary, quoted,
+// with its length after the quotes, as Quoted shows a value. A name is the
+// target's or a script's to make as long as the response, and the error says
+// after it what is wrong with it and which limit to raise: `invalid metric
+// name "..."... (10485561 bytes): longer than limits.max_metric_name_length
+// 200`.
+//
+// A name within the bound costs the error what it did: it is the string the
+// error was made of before, in the error fmt.Errorf made of it before
+// (nameErrorf).
+func shownName(name string) any {
+	if len(name) <= maxShownName {
+		return name
+	}
+	head := HeadOf(name, maxShownName)
+	return shownStart(strconv.Quote(name[:head]), head, len(name))
+}
+
+// nameErrorf is fmt.Errorf for the error of a set that cannot be exposed
+// whose text quotes a name (shownName), and is the error fmt.Errorf makes
+// unless a name was cut: then it is the one Errorf makes, which reads the
+// same and is recognised with the mark in place of the name's length, so a
+// target whose over-long name grows from one scrape to the next fails the
+// same way to the log on each.
+func nameErrorf(format string, args ...any) error {
+	for _, arg := range args {
+		if _, cut := arg.(QuotedValue); cut {
+			// A copy, which the error keeps: the arguments themselves
+			// are then kept by nothing, and an error of names within
+			// the bound is made without them leaving the stack.
+			return Errorf(format, slices.Clone(args)...)
+		}
+	}
+	return fmt.Errorf(format, args...)
+}
 
 // QuoteValue quotes text for an error message, cut to its first 64 bytes, at
 // a character boundary, when it is longer, with its full length after it. A
@@ -802,12 +846,12 @@ func SanitizeUTF8(set *MetricSet) (uint64, string) {
 func labelFailure(m *Metric, k, v string, l *Limits) error {
 	if !ValidLabelName(k) {
 		if k != "" && utf8.ValidString(k) {
-			return fmt.Errorf("metric %q has label %q, which is not a classic Prometheus label name; set the collector's name_escaping to underscores or values to export it escaped", m.Name, k)
+			return nameErrorf("metric %q has label %q, which is not a classic Prometheus label name; set the collector's name_escaping to underscores or values to export it escaped", shownName(m.Name), shownName(k))
 		}
-		return fmt.Errorf("metric %q has invalid label name %q", m.Name, k)
+		return nameErrorf("metric %q has invalid label name %q", shownName(m.Name), shownName(k))
 	}
 	if ReservedLabelName(k) {
-		return fmt.Errorf("metric %q has %s", m.Name, reservedLabelError(k))
+		return nameErrorf("metric %q has %s", shownName(m.Name), reservedLabelError(k))
 	}
 	// A histogram's buckets are told apart by le and a summary's
 	// quantiles by quantile. A series with that label of its own
@@ -815,10 +859,10 @@ func labelFailure(m *Metric, k, v string, l *Limits) error {
 	// reads as a bucket or a quantile without a bound, and twice on
 	// every bucket.
 	if own := seriesOwnLabel(m); k == own {
-		return fmt.Errorf("metric %q is a %s and has a label %s of its own, which its %s carry; name the label something else", m.Name, m.Type, own, map[string]string{"le": "buckets", "quantile": "quantiles"}[own])
+		return nameErrorf("metric %q is a %s and has a label %s of its own, which its %s carry; name the label something else", shownName(m.Name), m.Type, own, map[string]string{"le": "buckets", "quantile": "quantiles"}[own])
 	}
 	if l.MaxLabelValueLength > 0 && len(v) > l.MaxLabelValueLength {
-		return Errorf("metric %q label %q value is %d bytes, longer than limits.max_label_value_length %d; a label one of the collector's rules gives can be cut to fit with truncate: true on that label, or raise limits.max_label_value_length", m.Name, k, Size(len(v)), l.MaxLabelValueLength)
+		return Errorf("metric %q label %q value is %d bytes, longer than limits.max_label_value_length %d; a label one of the collector's rules gives can be cut to fit with truncate: true on that label, or raise limits.max_label_value_length", shownName(m.Name), shownName(k), Size(len(v)), l.MaxLabelValueLength)
 	}
 	return nil
 }

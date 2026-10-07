@@ -115,6 +115,26 @@ label, and `job` and `instance` are Prometheus's, set when it scrapes the
 endpoint, so a target may set none of the three: kept as the series' own
 labels, as the endpoint is scraped, a target's `job` would move its series out
 of the job that scrapes it. Name such a label something else, such as `task`.
+A label's name is a classic Prometheus name, letters, digits and `_`,
+whatever the collector's [`name_escaping`](CONFIGURATION.md#utf-8-names):
+the labels are added to what the collector exported, after its names were
+escaped.
+
+A key, an entry of a list or a label written with no value at all — nothing
+after the colon or the dash, `null` or `~` — is refused, as it is in the
+[configuration](CONFIGURATION.md#checked-when-the-configuration-loads), naming its line: leave the key
+out for its default. It was taken as the key left out, and a `request.path`
+or `request.body` so written as one written `""`, which replaces the
+collector's.
+
+A value is written as the kind its key takes, as in the
+[configuration](CONFIGURATION.md#checked-when-the-configuration-loads). A
+target's `name` and `request.method`, and an entry of `request.accept_codes`
+and `request.retry.codes`, are text alone: a number or a boolean there is
+refused, saying to quote it if that text is meant (`name: "1"`). A label, a
+parameter, a header, a path, a body or the `collector` takes one as the text
+it spells, so `labels: {shard: 3}` needs no quotes. And a boolean is `true`
+or `false`: `export_via_otlp: yes` is refused, saying to write `true`.
 
 Targets that share a collector, a target or labels can write them once with
 a YAML anchor under a top-level `x-` key, which the exporter ignores, and

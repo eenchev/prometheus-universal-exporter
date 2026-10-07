@@ -216,9 +216,6 @@ type Options struct {
 	TLS bool
 	// Answer answers the queue service's unary calls; nil answers {}.
 	Answer Answer
-	// ReflectionDelay holds each reflection stream this long before it is
-	// served.
-	ReflectionDelay time.Duration
 	// ReflectionHold holds each reflection stream until it is closed, for a
 	// test that has to do something while the question is in flight and
 	// cannot say how long that takes on a busy machine.
@@ -356,13 +353,6 @@ func Start(t testing.TB, opts Options) *Server {
 			s.mu.Lock()
 			s.reflectionMetadata = md
 			s.mu.Unlock()
-			if opts.ReflectionDelay > 0 {
-				select {
-				case <-time.After(opts.ReflectionDelay):
-				case <-stream.Context().Done():
-					return stream.Context().Err()
-				}
-			}
 			if opts.ReflectionHold != nil {
 				select {
 				case <-opts.ReflectionHold:

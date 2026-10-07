@@ -89,7 +89,25 @@ A decode error is bounded at the one place every decoder's error leaves by
 `decode.Decode`): past 2,000 bytes the text, and what it is recognised by, are
 cut and end with the length, the mark in the recognised text. That is the
 last resort, which loses what the error says after the long part: no error
-of a decoder's own may reach it for one long value. An error that names a
+of a decoder's own may reach it for one long value. The bound itself is
+`model.BoundedFailure` (`internal/model/failurebound.go`), and every other
+stage's error passes it where the trip reports the error, once
+(`boundedTripFailure` in `internal/exporter/pipeline.go`: the stages of
+`collect`, a file of a directory in `collectDirectory`, a static target's
+stages before its trip in `logCollectFailure`), and a rule's first failure
+where the transform hands it to the report (`ruleFailures.finish`). An error
+is read for what it is — `errors.Is`, `errors.As` — before it is bounded: a
+cut error is a new one. A new place that answers, logs or remembers an
+error's text takes the error from one of those, or bounds it itself; the
+failure log cuts what it remembers in any case. A site outside the decoders
+whose error says why after a part the target, the scraper or a script makes
+long shows that part by its start, as the decoders do, with
+`model.Shown(text, limit)` for free text or one of the helpers there are
+(`shortURLErrors` for a URL in a fetch's error, `shownScriptError` and
+`shownStderr` for what a script and its interpreter said, `shownName` in
+`MetricSet.Validate`), and is recognised with the mark in place of the
+length; the test `TestTheLargestFailureOfEveryStageIsAnsweredLoggedAndRememberedWithinTheBound`
+has a case for each stage, and a new stage gets one. An error that names a
 value of the body is made with `model.Errorf` and gives the value as
 `model.Quoted(value)`, or as `model.Bare(name)` where the message writes a
 name without quotes, never with `%q`, `%s` or `%v`: the argument formats as
@@ -298,6 +316,59 @@ connection an hour to wait by itself and the call a minute to connect in
 (`connectionsWaitAnHour`, `callsWaitForAConnection`), so that only what the
 test is about reconnects, in however long it takes.
 
+Two more of the exporter's ten seconds are limits that tests which are not
+about them run under: the TLS handshake with a target, for every test of an
+`https` target — 15 tests of `internal/fetch` and 20 of `internal/exporter`
+fail when a handshake has a nanosecond — and the time a client has to send
+a request's headers in, for every test that asks the exporter's HTTP server
+over a real connection: four tests of `internal/exporter`, and the eight of
+the main package that run the exporter in a child process. Both are half a
+minute in the tests, the bound of a hang. `TestMain` of `internal/fetch`
+and of `internal/exporter` sets the first (`fetch.SetTLSHandshakeTimeout`),
+and `TestMain` of `internal/exporter` and the child process of the main
+package's tests set the second (`exporter.SetReadHeaderTimeout`). A test of
+either limit sets a short one against something that never ends: a target
+that takes the connection and never answers the handshake
+(`internal/fetch/tlshandshake_http_test.go`), and a client that never ends
+its headers (`TestAClientThatNeverEndsItsHeadersIsDropped`). Each also reads
+the limit where the code put it — the pool's `TLSHandshakeTimeout`, and the
+read deadline on the exporter's side of the connection — so that a limit
+that was not the one set fails the test at once and not by its length. The
+exporter's own values are asserted with nothing set
+(`TestATLSHandshakeHasTenSecondsInTheExporterAndHalfAMinuteInTheTests`,
+`TestHTTPServerTimeouts`), and neither setter may be called outside a test
+(`TestOnlyTestsGiveScriptsALeastTime`).
+
+The twenty seconds an attempt to connect to a grpc target has
+(`grpcConnectTimeout` in `internal/fetch/grpcconn.go`: the TCP connection,
+the TLS handshake and the server's answer to the HTTP/2 preface) are such a
+limit too, for every test that calls a grpc server: 22 tests of
+`internal/fetch` and 6 of `internal/exporter` fail or hang when an attempt
+has a nanosecond, and a server whose preface came 21 seconds late failed
+`TestGRPCHealthNeedsNoDescriptors`. They are half a minute in the tests as
+well, set by `TestMain` of both packages (`fetch.SetGRPCConnectTimeout`,
+beside the handshake's in `internal/fetch/transport.go`, where a build
+without the grpc request type has it too); the main package's child process
+calls no grpc target. The waits between attempts (`grpcBackoff`) stay the
+exporter's. The test of the limit sets 200 milliseconds against a target
+that takes the connection and never answers the preface
+(`TestAGRPCTargetThatNeverAnswersThePrefaceIsGivenUpAtTheConnectLimit`), and
+shortens the wait before the next attempt with it: grpc-go gives an attempt
+the longer of the two, so under the exporter's wait of a second the second
+would be what the attempt has, and under the hour of a test that makes a
+connection wait before it tries again (`connectionsWaitAnHour`) an attempt
+has the hour, whatever the limit. What a connection is made with when
+nothing is set, the exporter's values one for one, is asserted
+(`TestAnAttemptToConnectHasTwentySecondsInTheExporterAndHalfAMinuteInTheTests`),
+and the setter is held to the tests like the others. The other limits of a
+grpc call are not under half a minute: a reflection question has thirty
+seconds, the dialer of a collector with a target policy thirty, a call its
+request's own timeout, and no keepalive pings are sent. The second a call
+waits for a connection that had failed (`reconnectWait`) decides no test
+that is not about it: with a nanosecond two tests fail, both of the wait
+itself and on a clock of their own (`synctest`), and the tests of a server
+that comes back give it a minute (`callsWaitForAConnection`).
+
 A deadline is where a test most easily waits for a length of time: something
 has to have happened when the deadline passes, and a deadline on the
 machine's clock leaves it that long and no longer. Three ways keep the clock
@@ -309,7 +380,16 @@ out of it, in this order of choice:
   read cut short end it once the hook that holds a file's read has been
   called (`localfile_reads_test.go`), and a test whose reads or runs have to
   overlap holds each until all are there, where a sleep in each only made it
-  likely (`TestLocalDirectoryReadsFilesConcurrently`, `leaveIdleWorkers`).
+  likely (`TestLocalDirectoryReadsFilesConcurrently`, `leaveIdleWorkers`,
+  and the burst of `TestPythonWorkersAreCappedProcessWide`, whose two starts
+  wait until the other four runs wait for a worker). What a test's server
+  does once the client has read something, it does when the client has read
+  it: the target that resets a connection in the middle of an answer waits
+  for the client's side of the connection to have read the start
+  (`startRead` in `internal/fetch/samefailure_http_test.go`), where it slept
+  a second, and a test server that answers after the probe has given up is
+  held until it has (`grpctest.Options.ReflectionHold`, the relay's
+  `holdAnswers`), not for a length of time.
 - Where nothing tells the test that the earlier step is over, the code under
   test runs on a clock of the test's own (`testing/synctest`), which stands
   still while any goroutine of the test is at work or waits for the network
@@ -360,7 +440,18 @@ round itself says the budget ran out too early
 must be something no failure of what the test is about can look like.
 `TestUnreachableOTLPEndpoint` makes a round without a retry again, which is
 what it is about: an exporter that does not retry makes none in any round,
-at once, and fails the test at the last. And a test that has the exporter do
+at once, and fails the test at the last. A result a second probe is to find
+in the cache is not left to be found within its `cache.ttl` on the machine's
+clock: the test reads the ttl from the entry and moves the entry ahead
+(`ageEntries` with a negative age), as it moves one back to expire it
+(`TestThePrometheusDemoExampleAnswersARepeatedScrapeFromMemory`, whose
+example keeps a result fifteen seconds). And a test that wants scrapes of
+static targets while something else goes on makes them itself
+(`scrapeStaticTargets`) beside the loop: the loop looks for a reload when a
+scrape is due and once a second besides, and a target a reload starts again
+before its first scrape was due waits anew, so reloads a few milliseconds
+apart leave the loop one scrape or two
+(`TestProbesScrapesAndReloadsTogetherLeaveOnlyWhatIsInForce`). And a test that has the exporter do
 something in its `--web.shutdown-delay` runs it in a child process that
 stays in the delay, once that is over, until the test lets it go
 (`exporterProcess.endDelay` in `shutdown_http_test.go`): the child replaces
@@ -605,6 +696,49 @@ takes `""` as the key left out — `optionalEnum` and `optionalPattern` say so
 in the schema — and a rule about a key is made of `writtenKey`, which goes by
 the key being written, not by its being there. A test of the build with every
 request type fails until a constrained key has its row.
+
+No key takes a value YAML reads as none — nothing after its colon, `null`,
+`~` — and no list such an entry: to a schema null is none of a key's types,
+and the exporter refuses it in the one walk of a document beside the types
+the schemas are generated from (`valueProblems`,
+`internal/config/yamlvalues.go`), so a new key needs nothing for it.
+`test/repository/schemanovalue_test.go` reads every key, list and mapping of
+names to values out of the committed schemas and puts a document with
+nothing at that one place through both; the tables above put each of their
+keys through both written `null` and `~` as well. The validator those tests
+use (`validateAgainstSchema`) reads null as a JSON Schema validator does: do
+not let it through as any type again, which is how the schemas and the
+exporter came to differ on it unseen.
+
+A key takes the kinds of value its schema says, and the exporter reads
+which from the schema: the same walk refuses a scalar YAML reads as a
+boolean or a number at a key whose schema type is `string` alone
+(`schemaKinds`), and a word of YAML 1.1's for a boolean, `yes` or `off`, at
+a key that takes a boolean, both of which the decoder takes. `schemaFor`
+gives a key of text the types `string`, `number` and `boolean`, since free
+text written `1` or `true` is the text it spells, and makes a key with
+allowed values or a pattern `string` alone; so giving a key an `enum` or a
+`pattern` makes the exporter refuse `key: 1` there, with nothing more to
+do — saying to quote the text, or, of a key with an `enum`, which values it
+takes — and `TestTheKeysHeldToTextAloneAreTheSchemas` (`internal/config`),
+which names those keys, fails until the key is added to it. A key that is
+a name or a word without a pattern says `"type": "string"` in its rule, as a
+rule's `name` does. `test/repository/schemakinds_test.go` reads every place
+of the committed schemas where a single value is written and puts a
+boolean, a number, such a word and a quoted number at it through both, and
+the tables above put each of their keys through both written `true` and
+`1`: a row whose key takes more than text, and whose text the exporter
+refuses for what a schema cannot tell, says with what (`booleanAlone`,
+`numberAlone`). The validator is handed a document as an editor hands it
+one (`documentValue`): a key of a mapping by its text, and a date written
+without quotes as the text it is to YAML 1.2.
+
+A name a collector writes — a rule's, a label's — is a classic name or any
+name by the collector's `name_escaping`, which a key's own pattern cannot
+read: the patterns stand in `collectorSchemaRule`, under a condition on the
+collector, and the loader's side is `transform.TakesLabelName` and
+`checkMetricName`. `test/repository/schemaloader_names_test.go` holds the
+two to one verdict under each value of the key and each kind of transform.
 
 A block that `enabled` switches on is kept unchecked while it is off, by the
 schemas as by the exporter. A rule about the value of one of its keys
@@ -984,6 +1118,54 @@ copy allocates nothing, so the lint holds it: gocritic's `rangeValCopy`
 reports a loop that copies a kilobyte or more at each round, which in this
 code is a loop over collectors by value and nothing else (static analysis,
 below).
+
+`BenchmarkOTLPPoints` (`otlpkeys_bench_test.go`) measures what an OTLP export
+does for each of its points beside encoding them. `queue` queues n series
+under a resource, as a probe or a static target's scrape does, and empties
+the queue in order, as an export does; `start` makes them the points of an
+export, each with the start time of its series:
+
+```sh
+go test -run '^$' -bench 'OTLP' -benchtime 2s ./internal/exporter/
+```
+
+Both make a key for every point (`otlpKey` in `otlp.go`): what a resource,
+and a series of one, is told from every other by — where points wait for an
+export, among the resources of one, and where start times are kept. A key
+was its parts joined, a NUL between them and an `=` between a name and its
+value, and the parts are a target's and the operator's: the series
+`m{a="1\x00b=2"}` had the key of `m{a="1",b="2"}`, and was never exported
+while the other was queued after it; the resource with the attribute `a=b`
+of the value `c` had the key of the one with `a` of the value `b=c`, and the
+points of both went out under the attributes of the first; and a resource
+whose last attribute held what another's series began with shared a start
+time with it. Now a key is that join and then the length of every part, so
+that no two subjects have one key whatever their parts hold
+(`TestAnOTLPKeyIsReadBackToItsParts` reads every generated key back to its
+parts, which only a test does). The join is kept, where the failure log's
+keys have each part after its length, because an export's resources and the
+points of each are sent in the order of their keys, which was the order of
+the joins: a NUL of the join is written with a `0x01` after it and two NULs
+end it, and so written the keys are in the order of the joins still
+(`TestOTLPKeysAreInTheOrderTheOldKeysHad`).
+`TestOTLPExportsAreWhatTheyWereWhereNoTwoSubjectsHadOneKey` holds generated
+runs of exports, byte for byte, to the export as it was with the old keys,
+which are kept beside the tests, wherever no two subjects of a run had one
+old key, and every run to an export whose keys are each subject's own.
+
+The old key grew as it was written, beside a slice of the label names in
+order, and a start time's was joined to its resource's: four allocations for
+a series of three labels, five for its start time. The new one is made at
+its size, with the parts put in order in place: one allocation
+(`TestAnOTLPKeyIsMadeInOneAllocation`). As measured on two shared cores (the
+times are the range of four runs, old and new in turn):
+
+| Benchmark | Before | After |
+| --- | --- | --- |
+| `queue/n=100` | 136–231 µs, 100.8 kB, 721 allocations | 133–242 µs, 87.2 kB, 420 allocations |
+| `queue/n=5000` | 6.8–11.3 ms, 5.50 MB, 35,058 allocations | 7.3–10.5 ms, 4.89 MB, 20,057 allocations |
+| `start/n=100` | 130–205 µs, 86.0 kB, 912 allocations | 122–209 µs, 67.6 kB, 515 allocations |
+| `start/n=5000` | 6.0–10.8 ms, 4.53 MB, 45,069 allocations | 5.8–8.2 ms, 3.61 MB, 25,071 allocations |
 
 What was made fast stays fast by tests, not by the benchmarks: the decoders,
 the transforms, the duplicate check and the body read each have a test that

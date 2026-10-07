@@ -306,7 +306,9 @@ func normalizeYAML(v any) any {
 // validateAgainstSchema checks the part of JSON Schema the generated schema
 // uses: type, properties, additionalProperties, propertyNames, required,
 // items, minItems, enum, pattern, minimum and maximum. It is enough to test the schema without a
-// third-party validator.
+// third-party validator. A value YAML reads as none, null, is of the type
+// null and of no other, as a validator of JSON Schema has it: it was let
+// through as any type, which hid that the schemas refuse a key left empty.
 func validateAgainstSchema(schema map[string]any, value any) []string {
 	var errs []string
 	var check func(schema map[string]any, value any, path string)
@@ -478,9 +480,13 @@ func schemaTypeMatches(types, value any) bool {
 			if _, ok := value.(bool); ok {
 				return true
 			}
+		case "null":
+			if value == nil {
+				return true
+			}
 		}
 	}
-	return value == nil
+	return false
 }
 
 func toStrings(v any) []string {

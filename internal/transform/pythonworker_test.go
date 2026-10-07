@@ -354,11 +354,17 @@ func TestPythonWorkerCrashIsReplaced(t *testing.T) {
 	}
 }
 
+// An answer longer than limits.max_output_bytes is refused by the exporter,
+// which reads no more of it, and the next scrape is served by another
+// worker. The answer is of a hundred metrics with a name of one letter:
+// far longer than the limit with all that is written around its strings,
+// which together are well within it, so the worker does not refuse it
+// itself (pythonstrings_test.go).
 func TestPythonWorkerOutputLimit(t *testing.T) {
 	requirePython(t)
 	c := workerCollector("output_limit", `
-for i in range(1000):
-    metric(name="series_with_a_long_name", value=i, labels={"i": str(i)})
+for i in range(100):
+    metric(name="v", value=i, labels={"i": str(i)})
 `)
 	c.Limits.MaxOutputBytes = 2048
 	_, err := runWorkerScript(t, c)
@@ -571,10 +577,26 @@ func TestPythonWorkerStartFailuresAreCounted(t *testing.T) {
 // together: a burst waits for a worker instead of starting one each, and a
 // script with no worker of its own takes the place of the idle worker unused
 // for longest.
+//
+// The six runs are a burst however far apart the machine begins them: the
+// two that start a worker are held where they start it until the other four
+// wait for one, so six runs meet two workers, and two workers are left for
+// the last script to take the place of one of. Left to the 50ms their script
+// sleeps for, runs that each began after the one before had ended shared one
+// worker, and no worker was evicted.
 func TestPythonWorkersAreCappedProcessWide(t *testing.T) {
 	requirePython(t)
 	pool := PythonWorkers()
 	pool.SetMaxWorkers(2)
+	start := pool.start
+	together := make(chan struct{})
+	pool.start = func(ctx context.Context, spec pythonSpec) (*pythonWorker, error) {
+		select {
+		case <-together:
+		case <-time.After(30 * time.Second):
+		}
+		return start(ctx, spec)
+	}
 	stop := make(chan struct{})
 	most := make(chan int, 1)
 	go func() {
@@ -599,11 +621,16 @@ func TestPythonWorkersAreCappedProcessWide(t *testing.T) {
 			errs <- err
 		}()
 	}
+	testutil.WaitFor(t, "two runs to start a worker and the other four to wait for one", func() bool {
+		return pool.Snapshot("capped_a").Starting == 2 && pool.PoolSnapshot().Waiting == 4
+	})
+	close(together)
 	for i := 0; i < 6; i++ {
 		if err := <-errs; err != nil {
 			t.Fatal(err)
 		}
 	}
+	pool.start = start
 	b := workerCollector("capped_b", `metric(name="v", value=2)`)
 	if _, err := runWorkerScript(t, b); err != nil {
 		t.Fatal(err)

@@ -31,7 +31,8 @@ var MetricsPrefixRE = regexp.MustCompile(`^[a-zA-Z][a-zA-Z0-9]*(?:_[a-zA-Z0-9]+)
 
 // ValidateMetricsPrefix checks a collector's prefix and, when one is set, that
 // every metric name the configuration declares still fits
-// limits.max_metric_name_length once prefixed. Names produced at scrape time —
+// limits.max_metric_name_length once prefixed, and escaped where the
+// collector's name_escaping escapes it. Names produced at scrape time —
 // by a Python script or passed through by a prometheus transform — are checked
 // against the same limit when the scrape happens.
 func ValidateMetricsPrefix(c *model.Collector) error {
@@ -49,11 +50,19 @@ func ValidateMetricsPrefix(c *model.Collector) error {
 		if rule.Name == "" {
 			continue
 		}
-		if name := prefixedMetricName(c.MetricsPrefix, rule.Name); limit > 0 && len(name) > limit {
+		if name := ExportedMetricName(c, rule.Name); limit > 0 && len(name) > limit {
 			return fmt.Errorf("collector %q metric %q is exported as %q, which is longer than limits.max_metric_name_length %d", c.Name, rule.Name, name, limit)
 		}
 	}
 	return nil
+}
+
+// ExportedMetricName is the name the series a rule of the collector names
+// name are exported under: the collector's metrics_prefix joined to it, and
+// the whole escaped as the collector's name_escaping escapes a name that is
+// not classic, as Transform does with every series, in that order.
+func ExportedMetricName(c *model.Collector, name string) string {
+	return escapeName(prefixedMetricName(c.MetricsPrefix, name), c.NameEscaping, true)
 }
 
 func prefixedMetricName(prefix, name string) string {

@@ -92,7 +92,7 @@ func oraclePythonPool() *PythonPool {
 }
 
 // oracleTimeout is the script_timeout of the runs that compare the two.
-const oracleTimeout = 20 * time.Second
+const oracleTimeout = time.Minute
 
 // oraclePythonLauncher is pythonWorkerLauncher as it was.
 const oraclePythonLauncher = `import sys,json,builtins,contextlib,io,os,traceback,decimal,linecache

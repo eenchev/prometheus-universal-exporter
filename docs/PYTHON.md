@@ -68,7 +68,11 @@ a label without `truncate: true`; and a rule without a `name`. A key written
 A name passed to `metric(...)`, and a label name, that is not a classic
 Prometheus name — `http.server.duration`, `service.name` — fails the scrape
 unless the collector sets `name_escaping`; see
-[UTF-8 names](CONFIGURATION.md#utf-8-names).
+[UTF-8 names](CONFIGURATION.md#utf-8-names). With `name_escaping:
+underscores` or `values` a rule may name such a series, and such a label of
+it to cut, by the names the script gives them: the names are escaped after
+the rule has found its series. Without it such a rule is refused at startup,
+as the series it names would fail every scrape.
 
 `labels` is a mapping of label names to values. A value that is not a string
 is written the way a [jq label](CONFIGURATION.md#collectors) is: `1234567`
@@ -137,14 +141,31 @@ are held to the same: lists like these where a metric has one value fail the
 scrape as a list of two numbers there does (`metric "m" label "l" is an array
 of 2 values, not a single value; ...`), under a key of your own they are
 passed over, and metrics that hold one entry so often that they are longer than the
-limit fail with the same `OverflowError`, `... left in metrics ...`. An
-answer that holds no list or dict twice is not measured by the worker,
-however long: it is written, and one longer than `limits.max_output_bytes`
-fails the scrape with `python pre-script output exceeds limit` (`python
-transform output exceeds limit`) and costs its worker, as below. So does one
-that is longer only for a string it holds many times: a text is written each
-time too, and a million references to a megabyte of it are a million
-megabytes, which `limits.script_timeout` and `limits.max_script_memory` end.
+limit fail with the same `OverflowError`, `... left in metrics ...`.
+
+A string is written each time it is there too, and one long string held many
+times is the commonest way to a long answer: `data = [text] * 5000`, a dict
+with the same text for every key, a `blob` label or a `help` that every one
+of thousands of metrics carries. A hundred thousand characters held five
+thousand times are 500 MB as JSON from 100 kB of the script's memory. The
+worker does not make that either. While it looks through an answer it adds
+up how long the strings in it are, each as often as it is there, and an
+answer whose strings alone come to more than `limits.max_output_bytes` —
+which is then longer than the limit whatever else is in it — fails the
+scrape with the same `OverflowError`, naming `data` or `metrics`, before
+anything is written: in a few milliseconds, in the memory the script took,
+and the worker carries on. That goes for one long text alone as well, and
+for an answer of many different texts that are too long together: `leave
+less there, or raise limits.max_output_bytes` is what to do about each. Only
+the strings that are values count, as long as they are in characters; the
+keys of dicts, numbers and the punctuation between them do not.
+
+An answer the worker does not refuse this way is not measured by it: it is
+written, and one longer than `limits.max_output_bytes` — its strings within
+the limit, and the whole over it with its keys, its numbers and what stands
+between them — fails the scrape with `python pre-script output exceeds
+limit` (`python transform output exceeds limit`) and costs its worker, as
+below.
 
 What the script itself does with data that deep is bounded by its
 interpreter. A function that calls itself for each level stops with a
@@ -239,7 +260,10 @@ start once and then serves scrape after scrape.
   that exited before it was ready fails the scrape with `the interpreter did
   not start: the interpreter exited: ` and what it wrote to stderr, which is
   where Python says why — a module that is not installed, for one. Only
-  that is a crash to look for. Either start is counted in
+  that is a crash to look for. Of stderr an error shows the last 1,500
+  bytes, after `... ` when there was more: the end is where Python says why
+  it stopped, and the error of a worker that died in a run goes on after it
+  to the hint about `limits.max_script_memory`. Either start is counted in
   `http_exporter_python_worker_start_failures_total`, and the next scrape
   starts another interpreter.
 - **Declared libraries are preloaded.** The libraries in `libraries` are
@@ -250,7 +274,8 @@ start once and then serves scrape after scrape.
   scrape with the Python error; the worker carries on. A worker that crashes, or
   answers with more than `limits.max_output_bytes`, is replaced; an answer it
   does not write because a list or a dict is in it too often, or in itself,
-  is the script's error, and the worker carries on. A worker that
+  or because its strings alone are longer than the limit, is the script's
+  error, and the worker carries on. A worker that
   died while it sat idle — killed by the kernel for memory, or by a signal a
   script armed and left behind, such as `signal.alarm` — fails no scrape: it
   is found dead when it is next taken, counted as a `crash`, and another runs
@@ -270,6 +295,31 @@ start once and then serves scrape after scrape.
              ~~~~~~~~~~~~~~~~^~~~~~~~~~~~~~~~
   ZeroDivisionError: division by zero
   ```
+
+  A traceback of more than 1,500 bytes is shown by what says most, so that
+  the error, held to 2,000 bytes like any other
+  ([Logging](LOGGING.md#repeated-failures)), still ends with the exception:
+  each line by its first 200 bytes and its length; the exception's own line,
+  and of a message of several lines the first that fit in 750 bytes, with
+  how many lines it had; and before it the last frames that fit in the rest,
+  after how many lines stood before them. So `raise Exception(text)` with a
+  response of ten megabytes fails with its frame and the exception's line by
+  its start:
+
+  ```text
+  python transform failed: Traceback (most recent call last):
+    File "<collector-python>", line 1, in <module>
+      raise Exception(data['message'])
+  Exception: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa... (10485571 bytes)
+  ```
+
+  and four hundred exceptions raised from one another fail with `python
+  transform failed: ... (3613 lines)` and then the end of the traceback: the
+  last exception with its frames, and as many of those before it as fit.
+  The same failure with a longer message, or a longer chain that ends alike,
+  is one failure to the log. An exception whose message is larger than
+  `limits.max_output_bytes` does not come back at all: the scrape fails with
+  `python transform output exceeds limit`, as for any answer over it.
 - **Output.** `print` inside a script is captured per run and never mixes with
   the metrics. The first 4 KiB of it is logged at debug level, as `python
   transform printed` or `python pre-script printed` with the collector, so

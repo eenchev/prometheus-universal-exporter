@@ -741,12 +741,31 @@ func TestGRPCAShortProbeDoesNotFailTheSharedReflection(t *testing.T) {
 	}
 	// The question outlives the probe that started it even when no other
 	// probe waits: its answer serves the next probe, which asks nothing.
+	// This server too holds the question, until the probe has given up, and
+	// the probe gives up when its question is seen at the server: with a
+	// deadline of 50ms and a question answered after 300ms, a probe the
+	// machine was late with gave up before it had asked anything, and the
+	// test passed without the question having been left by a probe.
 	alone := validGRPC(t, grpcCollector())
-	lonely := grpctest.Start(t, grpctest.Options{Reflection: "v1", Answer: statsAnswer, ReflectionDelay: 300 * time.Millisecond})
-	if _, err := probeGRPC(lonely.Addr, alone, 50*time.Millisecond, RequestOverrides{}); !errors.Is(err, context.DeadlineExceeded) {
+	lonelyAnswer := make(chan struct{})
+	releaseLonely := sync.OnceFunc(func() { close(lonelyAnswer) })
+	t.Cleanup(releaseLonely)
+	lonely := grpctest.Start(t, grpctest.Options{Reflection: "v1", Answer: statsAnswer, ReflectionHold: lonelyAnswer})
+	short, endDeadline = testutil.DeadlineEndedByHand()
+	go func() {
+		_, err := FetchCollector(short, lonely.Addr, alone, RequestOverrides{}, nil)
+		shortDone <- err
+	}()
+	waitFor(t, "the lonely probe's question to reach the server", func() bool { return lonely.ReflectionStreams.Load() > 0 })
+	endDeadline()
+	if err := <-shortDone; !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatalf("the short probe outlived its deadline: %v", err)
 	}
 	lonelyKey := reflectedKey{conn: grpcConnKey{dial: lonely.Addr, policy: policyOf(alone)}, service: grpctest.Service}
+	if !reflectionAnswers.fetchedAt(lonelyKey).IsZero() {
+		t.Fatal("the question was answered while the server held it")
+	}
+	releaseLonely()
 	waitFor(t, "the question the short probe left behind to be answered", func() bool { return !reflectionAnswers.fetchedAt(lonelyKey).IsZero() })
 	if _, err := probeGRPC(lonely.Addr, alone, time.Minute, RequestOverrides{}); err != nil {
 		t.Fatal(err)

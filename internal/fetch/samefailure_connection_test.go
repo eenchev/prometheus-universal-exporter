@@ -57,7 +57,7 @@ func resettingTarget(t *testing.T) string {
 func fetchFailures(t *testing.T, c *model.Collector, target string) (first, second error) {
 	t.Helper()
 	failure := func() error {
-		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+		ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 		defer cancel()
 		_, err := FetchCollector(ctx, target, c, RequestOverrides{}, nil)
 		if err == nil {

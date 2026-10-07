@@ -96,6 +96,14 @@ The start times remembered are bounded too, at twice
 keep changing cannot grow them without limit; past it the series exported
 least recently is forgotten first, and starts again if it comes back.
 
+A series is its resource, its name, its type and its labels, exactly as they
+are. A label's value may be any text a target gives, an `=` or a NUL
+character included, and a service name and a resource attribute's name and
+value are whatever the configuration says: two series that differ anywhere,
+and two resources that differ in the service name or in an attribute's name
+or value, are exported apart, each with its own points and its own start
+times.
+
 ## Probes of several targets
 
 Probe results are exported under the one exporter-wide resource, where a
@@ -112,6 +120,67 @@ other parameters, such as `tenant`, are kept, so targets that differ in them
 stay apart. A label the series has of its own by either name is
 kept. Static targets are unaffected: they have a resource of their own
 ([below](#static-targets)).
+
+## Two writers of one series or one name
+
+To an OTLP receiver a data point is one of a stream: its resource, its
+metric — the name and the kind: gauge, sum, histogram or summary — and its
+attributes. A stream has one writer, and a name is one metric of one kind
+under a resource. Sent two points of one stream in a request, a receiver
+keeps either or refuses the request; sent a name as a gauge and as a sum, it
+keeps one, or neither.
+
+One probe's answer has neither: a series twice, a name with two types, or a
+gauge named like a sample of a histogram beside it, fails the scrape. But
+everything under one resource goes out together — the answers of every probe,
+the static targets without a resource of their own, and the exporter's own
+metrics — and two of them can write what is one stream, or one name, to the
+receiver. An export has each stream once and each name as one kind, by the
+rule a series already has while it waits: **the later replaces the earlier**.
+
+- **Two points of one stream.** The one written last is exported. That is
+  two probes answering the same series, as [above](#probes-of-several-targets),
+  and also what is two series to Prometheus and one stream over OTLP: a gauge
+  and an untyped series of one name and labels, both gauges here; a histogram
+  `h` exported [as gauges](#delivery) and another probe's gauge `h_bucket`
+  with the `le` of one of its buckets; and a series a probe reads that is
+  named and labelled like one of the exporter's own, as when a collector
+  scrapes the exporter's `/metrics` — the exporter's own point, taken at the
+  export, is the one sent, where the export used to carry both. Nothing is
+  logged, as nothing is when a later scrape's value replaces a series'.
+- **One name as two kinds.** A gauge `jobs` of one probe and a counter `jobs`
+  of another are one name, whatever their labels: `otlp.probe_attributes`
+  keeps points apart, not metrics. The kind written last is exported, with
+  every point of that kind, and the points of the other kind are left out of
+  that export, where it used to carry two metrics of the name. Which of the
+  two is last may change from one export to the next, so this is something to
+  fix, and it is logged as a warning, once and then as a
+  [repeated failure](LOGGING.md#repeated-failures), whichever kind wins:
+
+  ```json
+  {"level":"WARN","msg":"OTLP metric name written as two kinds under one resource; the data points of the kind written earlier are left out of the export","metric":"jobs","kind":"sum","left_out_kind":"gauge","left_out_points":2,"service_name":"prometheus-universal-exporter","error":"two writers of one OTLP resource - probes, static targets, or the exporter with its own metrics - export this metric name as different kinds, and a name is one metric of one kind there; rename one of the metrics, or give a static target a resource of its own with its otlp.service_name or otlp.resource_attributes"}
+  ```
+
+  Rename one of the metrics — a rule's `name`, or the collector's
+  [`metrics_prefix`](CONFIGURATION.md#prefixing-a-collectors-metrics) — or give a static
+  target a [resource of its own](#static-targets). The line is not followed by
+  one that says it is over: a name not written as two kinds for an hour is
+  forgotten, and logged in full if it happens again.
+
+Written last is queued last: the probe or scrape that ran last, whatever
+timestamps its series carry, with the exporter's own metrics after every one
+of them. A point that waits again after a failed export is as old as when it
+was first queued, so it is still the earlier beside one queued since. Points
+left out so are replaced, not given up on: they are not counted in
+`http_exporter_otlp_points_dropped_total`.
+
+A counter, a histogram or a summary left out of an export for another kind
+of its name has still been seen: its start time is that of the first point
+the exporter had of it, and a count that fell in an export that left it out
+is the reset it is. Two probes that write one counter are one series to the
+start times as to the receiver: when one's count is below the other's last
+it reads as a reset and the series starts again, and the higher count after
+it as growth — one counter cannot be two.
 
 ## Shutting down
 
@@ -242,7 +311,10 @@ targets:
 ```
 
 Targets with different identities are exported as separate `resourceMetrics`
-entries. Each export delivers the latest value of each series the targets'
+entries; a target without an `otlp` block is exported under the exporter-wide
+resource, beside the probes' series and the exporter's own, where a name it
+shares with them must be one kind of metric
+([above](#two-writers-of-one-series-or-one-name)). Each export delivers the latest value of each series the targets'
 scrapes left since the last one: they are scraped on their own intervals, not
 on `otlp.interval`. A target that sets `export_via_otlp` while OTLP export is
 disabled or has no endpoint stops the exporter at startup, and a reload that

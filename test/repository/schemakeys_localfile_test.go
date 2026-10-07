@@ -30,7 +30,7 @@ func localfileSchemaKeys() []schemaKey {
 	request := "      # request\n"
 	directory := strings.Replace(fileCollector, "      path: status.txt\n", "      files: ['*.txt']\n", 1)
 	return []schemaKey{
-		{key: "collectors[].request.root", document: fileCollector, at: "      root: /var/lib/app\n", setting: "      root: %s\n", valid: "/var/lib/app", emptyWas: taken},
+		{key: "collectors[].request.root", document: fileCollector, at: "      root: /var/lib/app\n", setting: "      root: %s\n", valid: "/var/lib/app", emptyWas: taken, booleanAlone: `request.root "true" must be an absolute path`, numberAlone: `request.root "1" must be an absolute path`},
 		{key: "collectors[].request.method", of: "of a localfile collector", document: fileCollector, at: request, setting: "      method: %s\n", absent: true, empty: true, emptyWas: refused},
 		{key: "collectors[].request.max_age", document: fileCollector, at: request, setting: "      max_age: %s\n", valid: "30s", invalid: "soon", absent: true, duration: true},
 		{key: "collectors[].request.max_total_bytes", document: directory, at: request, setting: "      max_total_bytes: %s\n", valid: "1MiB", invalid: "lots", absent: true},

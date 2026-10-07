@@ -164,15 +164,23 @@ func (f *probeFlights) do(ctx context.Context, key flightKey, work func(context.
 	}
 }
 
+// panicText is what a recovered panic said, as the answer and the log give
+// it: no more than the text of any failure may be (model.MaxFailureBytes).
+// A panic is raised with whatever its code had at hand, which may be a value
+// of the response as long as the response.
+func panicText(recovered any) string {
+	return model.CutTo(fmt.Sprint(recovered), model.MaxFailureBytes, false)
+}
+
 func (f *probeFlights) run(ctx context.Context, key flightKey, flight *probeFlight, work func(context.Context) *probeResult) {
 	defer func() {
 		// The work runs on its own goroutine, where a panic would take the
 		// whole exporter down rather than one request as it would in a handler.
 		if recovered := recover(); recovered != nil {
 			recorder := newProbeRecorder()
-			http.Error(recorder, fmt.Sprintf("probe failed: internal error: %v", recovered), http.StatusInternalServerError)
+			http.Error(recorder, "probe failed: internal error: "+panicText(recovered), http.StatusInternalServerError)
 			flight.result = recorder.result(false)
-			slog.Default().Error("probe panicked", "panic", fmt.Sprint(recovered), "stack", string(debug.Stack()))
+			slog.Default().Error("probe panicked", "panic", panicText(recovered), "stack", string(debug.Stack()))
 		}
 		f.mu.Lock()
 		if f.flights[key] == flight {

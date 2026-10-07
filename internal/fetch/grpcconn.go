@@ -108,7 +108,7 @@ func (c *grpcConnCache) get(key grpcConnKey, now time.Time) (*grpcConnEntry, err
 		}
 		creds = credentials.NewTLS(cfg)
 	}
-	options := []grpc.DialOption{grpc.WithTransportCredentials(creds), grpcReconnect}
+	options := []grpc.DialOption{grpc.WithTransportCredentials(creds), grpc.WithConnectParams(grpcConnectParams())}
 	// Behind a proxy grpc-go's own dialer connects through it, which a
 	// dialer of the exporter's would bypass; the call resolved and checked
 	// the server's addresses instead.
@@ -230,13 +230,32 @@ func grpcPolicyDialer(policy *targetPolicy, hostPort string, refused *atomic.Poi
 	}
 }
 
-// grpcReconnect keeps the wait between attempts to reconnect short. grpc-go's
+// grpcBackoff keeps the wait between attempts to reconnect short. grpc-go's
 // default grows to two minutes, and a connection that is waiting fails every
 // call at once, so after a long outage a server that is back would go on
 // being reported down for up to two minutes. Five seconds at most is as
 // often as a probe could matter; a probe that finds the connection waiting
-// also ends the wait, and so does each of its retries (reconnectNow).
-var grpcReconnect = grpc.WithConnectParams(grpc.ConnectParams{
-	Backoff:           backoff.Config{BaseDelay: time.Second, Multiplier: 1.6, Jitter: 0.2, MaxDelay: 5 * time.Second},
-	MinConnectTimeout: 20 * time.Second,
-})
+// also ends the wait, and so does each of its retries (reconnectNow). It is
+// a variable for the tests of what ends that wait, which make it an hour.
+var grpcBackoff = backoff.Config{BaseDelay: time.Second, Multiplier: 1.6, Jitter: 0.2, MaxDelay: 5 * time.Second}
+
+// grpcConnectTimeout is how long an attempt to connect to a target may
+// take: the TCP connection, the TLS handshake and the server's answer to the
+// HTTP/2 preface. A target that takes the connection and then says nothing
+// is given up after it, and the calls waiting for the connection fail. It
+// is grpc-go's least time for an attempt, which gives one the longer of this
+// and the wait before the next, so under grpcBackoff it is what an attempt
+// has.
+const grpcConnectTimeout = 20 * time.Second
+
+// grpcConnectParams are how a connection made now connects and connects
+// again: after the waits of grpcBackoff, each attempt within
+// grpcConnectTimeout, or within what a test gave it instead
+// (SetGRPCConnectTimeout).
+func grpcConnectParams() grpc.ConnectParams {
+	timeout := grpcConnectTimeout
+	if limit := time.Duration(grpcConnectLimit.Load()); limit > 0 {
+		timeout = limit
+	}
+	return grpc.ConnectParams{Backoff: grpcBackoff, MinConnectTimeout: timeout}
+}

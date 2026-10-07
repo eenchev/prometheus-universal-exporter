@@ -17,6 +17,14 @@ import (
 // down, which only a reset does. A series not exported for otlpStartForget is
 // forgotten, and starts again when it comes back.
 //
+// A series is seen here when an export has a point of it, also when the
+// point is then left out for another kind of its name written later
+// (otlpMetricsOf): the count is one the series had, so it starts where it
+// was first seen, and a count that fell in a point left out is the reset
+// it is. Two writers of one series under a resource, two probes that
+// answer with one counter, are one series: the lower count of one after
+// the other's is a reset, and the higher after it is none.
+//
 // The exporter's own counters, histograms and summaries are not among them:
 // it knows when each began to count, and their points carry that time
 // (selfcreated.go, otlpMetrics).
@@ -77,10 +85,16 @@ func (t *otlpStartTimes) bound(maxPending int) {
 	t.max = otlpStartMaxSeries(maxPending)
 }
 
-// forResource is the start time of each cumulative point of one resource.
+// forResource is the start time of each cumulative point of one resource,
+// whose key resource is. A series is remembered under the resource's key,
+// after its length as a part of a key is written (appendKeyPart), and then
+// its own (otlpSeriesKey): where the one ends and the other begins is not
+// read from what either holds, so no series of one resource has the start
+// time of a series of another.
 func (t *otlpStartTimes) forResource(resource string) func(m model.Metric, at string) string {
+	of := string(appendKeyPart(nil, resource))
 	return func(m model.Metric, at string) string {
-		return t.start(resource+"\x00"+otlpMetricKey(m), cumulativeCount(m), at)
+		return t.start(otlpSeriesKey(of, &m), cumulativeCount(m), at)
 	}
 }
 

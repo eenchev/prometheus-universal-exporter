@@ -55,7 +55,9 @@ otlp:
 
 // enabled: false keeps a block's settings without using or checking them,
 // enabled: true uses them, a merge key may supply the switch, and a block
-// that sets nothing needs none.
+// that sets nothing needs none. A block written with no value at all is not
+// one that sets nothing: it is a key with no value, refused as every such
+// key is (TestAKeyAnEntryOrAMappingValueWithNoValueIsRefused).
 func TestEnabledSaidEitherWayIsAccepted(t *testing.T) {
 	for name, test := range map[string]struct {
 		block      string
@@ -65,7 +67,6 @@ func TestEnabledSaidEitherWayIsAccepted(t *testing.T) {
 		"on":                 {"web:\n  basic_auth: {enabled: true, username: admin, password: s3cret}\notlp: {enabled: true, endpoint: 'http://collector:4318/v1/metrics'}\n", true, true},
 		"merged in":          {"x-on: &on {enabled: true}\notlp: {<<: *on, endpoint: 'http://collector:4318/v1/metrics'}\n", true, false},
 		"empty blocks":       {"web: {basic_auth: {}}\notlp: {}\n", false, false},
-		"no value at all":    {"web:\n  basic_auth:\notlp:\n", false, false},
 	} {
 		cfg, err := Load(testutil.WriteFile(t, "config.yaml", test.block+testutil.MinimalConfig))
 		if err != nil {
@@ -75,6 +76,10 @@ func TestEnabledSaidEitherWayIsAccepted(t *testing.T) {
 		if auth := cfg.Web.BasicAuth != nil && cfg.Web.BasicAuth.Enabled; cfg.OTLP.Enabled != test.otlp || auth != test.auth {
 			t.Errorf("%s: otlp enabled %v, web.basic_auth enabled %v", name, cfg.OTLP.Enabled, auth)
 		}
+	}
+	_, err := Load(testutil.WriteFile(t, "config.yaml", "web:\n  basic_auth:\notlp:\n"+testutil.MinimalConfig))
+	if want := "line 2: basic_auth has nothing after its colon, which YAML reads as no value at all; write its value, or take the key out; line 3: otlp has nothing after its colon, which YAML reads as no value at all; write its value, or take the key out"; err == nil || err.Error() != want {
+		t.Errorf("blocks with no value at all: %v\nwant %s", err, want)
 	}
 }
 

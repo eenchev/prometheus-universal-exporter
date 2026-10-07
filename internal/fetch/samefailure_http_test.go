@@ -6,6 +6,7 @@ import (
 	"bufio"
 	"bytes"
 	"compress/gzip"
+	"context"
 	"crypto/tls"
 	"crypto/x509"
 	"io"
@@ -14,6 +15,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -43,6 +45,58 @@ func closedPort(t *testing.T) string {
 	return listener.Addr().String()
 }
 
+// startRead is a dialer whose connections each say when the client has read
+// size bytes from them, the start of an answer, under the address they were
+// made from, by which the target knows the connection.
+type startRead struct {
+	size  int
+	conns sync.Map
+}
+
+// startReadConn closes read when left bytes of the connection have been
+// read.
+type startReadConn struct {
+	net.Conn
+	left atomic.Int64
+	once sync.Once
+	read chan struct{}
+}
+
+func (c *startReadConn) Read(p []byte) (int, error) {
+	n, err := c.Conn.Read(p)
+	if n > 0 && c.left.Add(-int64(n)) <= 0 {
+		c.once.Do(func() { close(c.read) })
+	}
+	return n, err
+}
+
+func (s *startRead) dial(ctx context.Context, network, address string) (net.Conn, error) {
+	conn, err := (&net.Dialer{}).DialContext(ctx, network, address)
+	if err != nil {
+		return nil, err
+	}
+	noted := &startReadConn{Conn: conn, read: make(chan struct{})}
+	noted.left.Store(int64(s.size))
+	s.conns.Store(conn.LocalAddr().String(), noted.read)
+	return noted, nil
+}
+
+// wait returns when the client at the address has read the start of the
+// answer, and says whether it has: not when the dialer made no connection
+// from there, or after half a minute.
+func (s *startRead) wait(client string) bool {
+	read, made := s.conns.Load(client)
+	if !made {
+		return false
+	}
+	select {
+	case <-read.(chan struct{}):
+		return true
+	case <-time.After(30 * time.Second):
+		return false
+	}
+}
+
 // A target that resets every connection fails every fetch with an error
 // that names the port that connection was made from, another each time:
 // the two errors read differently, each in full, and are recognised by one
@@ -56,16 +110,32 @@ func TestAResetConnectionIsRecognisedWhateverPortItWasMadeFrom(t *testing.T) {
 	transports = newTransportCache()
 	t.Cleanup(func() { transports = previous })
 	instead := resettingTarget(t)
+	// The client has read the head and the start of the body when the
+	// connection is reset: the target waits for the client's side of the
+	// connection to have read them. On Linux a reset that arrives first
+	// still leaves the client what it had been sent, and the fetch fails in
+	// the middle of the body either way; a system that drops what was not
+	// yet read with the reset would fail the fetch as one reset in place of
+	// the answer, which a second's sleep before the reset only made
+	// unlikely.
+	const start = "HTTP/1.1 200 OK\r\nContent-Length: 100\r\n\r\nvalue 1\n"
+	reads := &startRead{size: len(start)}
+	var startsRead atomic.Int64
 	midBody := connectionTarget(t, func(conn net.Conn) {
 		readRequestHead(conn)
-		_, _ = conn.Write([]byte("HTTP/1.1 200 OK\r\nContent-Length: 100\r\n\r\nvalue 1\n"))
-		// The client has the head and the start of the body before the
-		// reset: it is left a second to read them in, since a reset that
-		// arrives first takes what was not yet read with it, and the fetch
-		// then fails as one reset in place of the answer.
-		time.Sleep(time.Second)
+		_, _ = conn.Write([]byte(start))
+		if reads.wait(conn.RemoteAddr().String()) {
+			startsRead.Add(1)
+		}
 		resetConnection(conn)
 	})
+	// Every collector of the test has the settings of this one, and so its
+	// pool, whose connections note what the client reads.
+	pool, err := transports.get(TransportSettings{policy: policyOf(httpCollector(t, nil))}, time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	pool.DialContext = policyDialer(reads.dial)
 	handshake := resettingTarget(t)
 	for name, tc := range map[string]struct {
 		target, same string
@@ -82,6 +152,9 @@ func TestAResetConnectionIsRecognisedWhateverPortItWasMadeFrom(t *testing.T) {
 		if model.SameFailureText(a) != tc.same || model.SameFailureText(b) != tc.same {
 			t.Errorf("%s: the failures\n%v\n%v\nare recognised by\n%s\n%s\nwant both by\n%s", name, a, b, model.SameFailureText(a), model.SameFailureText(b), tc.same)
 		}
+	}
+	if got := startsRead.Load(); got != 2 {
+		t.Errorf("the target reset %d connections whose client had read the start of the answer, want both in the middle of the body", got)
 	}
 	// A credential in the target's query is withheld from the text the
 	// failure is recognised by as it is from the error.

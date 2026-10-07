@@ -57,13 +57,22 @@ func TestNoTestRunsInParallel(t *testing.T) {
 // limits.script_timeout, and an interpreter another time to start in than
 // the exporter's ten seconds: the exporter's own pool has no least time, so
 // the limit a collector configures is the one its scripts run under, and its
-// start timeout is the constant.
+// start timeout is the constant. Two more of the exporter's ten seconds are
+// the same: only the tests give a TLS handshake with a target, or the headers
+// of a request to the exporter, another time; and so are the twenty seconds
+// of an attempt to connect to a grpc target. A call is looked for with and
+// without the package or the value it is called on, so one from within the
+// setter's own package counts too; the setter's declaration and a comment
+// are no call.
 func TestOnlyTestsGiveScriptsALeastTime(t *testing.T) {
 	for _, setter := range []struct{ name, gives string }{
 		{"SetLeastScriptTimeout", "gives every script of the pool more time than its limits.script_timeout"},
 		{"SetStartTimeout", "gives every interpreter of the pool another time to start in than the exporter's"},
+		{"SetTLSHandshakeTimeout", "gives every TLS handshake with a target another time than the exporter's"},
+		{"SetGRPCConnectTimeout", "gives every attempt to connect to a grpc target another time than the exporter's"},
+		{"SetReadHeaderTimeout", "gives the headers of a request to the exporter another time than the exporter's"},
 	} {
-		call := "." + setter.name + "("
+		call := setter.name + "("
 		calls := 0
 		err := filepath.WalkDir(".", func(path string, entry fs.DirEntry, err error) error {
 			if err != nil || entry.IsDir() || !strings.HasSuffix(path, ".go") {
@@ -73,8 +82,13 @@ func TestOnlyTestsGiveScriptsALeastTime(t *testing.T) {
 			if err != nil {
 				return err
 			}
-			if n := strings.Count(string(raw), call); n > 0 {
-				calls += n
+			for _, line := range strings.Split(string(raw), "\n") {
+				line = strings.TrimSpace(line)
+				declared := strings.HasPrefix(line, "func "+call) || strings.HasPrefix(line, "func (") && strings.Contains(line, ") "+call)
+				if !strings.Contains(line, call) || strings.HasPrefix(line, "//") || declared {
+					continue
+				}
+				calls++
 				if !strings.HasSuffix(path, "_test.go") {
 					t.Errorf("%s calls %s), which %s; only the tests may", path, call, setter.gives)
 				}

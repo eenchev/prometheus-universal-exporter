@@ -358,15 +358,18 @@ func columnIsEmpty(rows [][]string, i int, trim bool) bool {
 func decodePrometheus(r *fetch.HTTPResponse, c *model.Collector) (*Decoded, error) {
 	options := promOptions{openMetrics: isOpenMetrics(r)}
 	// A prometheus transform passes on only the series its rules, or its
-	// include and exclude, pick, each at least once, so the decoder keeps
-	// only those, and stops at the first past limits.max_metrics, as the
-	// transform would have: a body of a million series costs a scrape
-	// that keeps ten what the ten cost. A pre-script, or a python
-	// transform, is given every series, and the transform counts what it
-	// makes of them.
+	// include and exclude, pick, so the decoder keeps only those, and
+	// stops at the first past limits.max_metrics, as the transform would
+	// have: a body of a million series costs a scrape that keeps ten what
+	// the ten cost. It stops for the series the transform is sure to make
+	// a series of, and for no other: a series a rule may carry on without
+	// is kept and not counted here (prometheusCounts), and the transform
+	// counts those it makes. A pre-script, or a python transform, is given
+	// every series, and the transform counts what it makes of them.
 	if c.Transform.Type == "prometheus" && strings.TrimSpace(c.Transform.PreScript) == "" {
 		options.keep = prometheusKeeps(c)
 		options.limit = c.Limits.MaxMetrics
+		options.counts = prometheusCounts(c)
 	}
 	metrics, report, err := parseExpositionReporting(r.Body, options)
 	if errors.Is(err, model.ErrLimitExceeded) {
@@ -380,6 +383,96 @@ func decodePrometheus(r *fetch.HTTPResponse, c *model.Collector) (*Decoded, erro
 		return nil, fmt.Errorf("decoding %s: %w", format, err)
 	}
 	return &Decoded{Kind: "prometheus", Data: model.MetricSet{Metrics: metrics}, Raw: r.Body, Prometheus: report}, nil
+}
+
+// prometheusCounts says which of the series the decoder keeps for a
+// prometheus transform count against limits.max_metrics while they are
+// decoded, by their metric's name and type: those of which the transform is
+// sure to make a series each, so that a scrape the decoder stops for them
+// is one the transform would have stopped. A rule that carries on without a
+// series it fails on, its error_mode log or ignore, is not sure to: its
+// type and its scale cannot apply to every metric, and a label it requires
+// may be missing on a series (applyPrometheusTransform in the transform
+// package). The series such a rule alone matches took room for what the
+// scrape never exported, and a response of twenty series of which the rule
+// kept five failed under a limit of ten. So they are kept uncounted, as
+// what any other response describes is decoded whole, and the transform,
+// which stops at the first series it makes past the limit, counts those it
+// makes. A metric counts when one of the rules that match its name keeps
+// every series of it (prometheusRuleKeeps).
+//
+// It is nil when every kept series counts: without rules, where include
+// and exclude pass a series on or leave it out and nothing fails on one,
+// with rules none of which carries on without a series, as nearly every
+// collector's are, and with a rule whose expression does not compile, for
+// which the decoder keeps everything (prometheusKeeps).
+func prometheusCounts(c *model.Collector) func(name string, typ model.MetricType) bool {
+	carriesOn := false
+	for i := range c.Metrics {
+		rule := &c.Metrics[i]
+		if rule.Type == "" && rule.Scale == nil && !requiresALabel(rule) {
+			continue
+		}
+		if rule.ErrorMode == model.ErrorModeLog || rule.ErrorMode == model.ErrorModeIgnore {
+			carriesOn = true
+			break
+		}
+	}
+	if !carriesOn {
+		return nil
+	}
+	patterns := make([]*regexp.Regexp, len(c.Metrics))
+	for i := range c.Metrics {
+		pattern := c.Metrics[i].Expression
+		if pattern == "" {
+			pattern = "^" + regexp.QuoteMeta(c.Metrics[i].Name) + "$"
+		}
+		re, err := expr.CompileRegex(pattern)
+		if err != nil {
+			return nil
+		}
+		patterns[i] = re
+	}
+	return func(name string, typ model.MetricType) bool {
+		for i, re := range patterns {
+			if re.MatchString(name) && prometheusRuleKeeps(&c.Metrics[i], typ) {
+				return true
+			}
+		}
+		return false
+	}
+}
+
+// prometheusRuleKeeps says whether a prometheus rule makes a series of
+// every series of a metric of a type that its expression, or its name,
+// matches. A rule whose error_mode is fail does, or fails the scrape. One
+// that carries on does unless it can fail on a series of the metric: its
+// type on a histogram or a summary, which keeps its own, and on any other
+// metric when it is one of those two, which no other can become; its scale
+// on a histogram or a summary; and a label it requires, which is read from
+// each series, on any metric.
+func prometheusRuleKeeps(rule *model.MetricRule, typ model.MetricType) bool {
+	if rule.ErrorMode != model.ErrorModeLog && rule.ErrorMode != model.ErrorModeIgnore {
+		return true
+	}
+	shaped := typ == model.HistogramMetricType || typ == model.SummaryMetricType
+	if rule.Type != "" && rule.Type != typ && (shaped || rule.Type == model.HistogramMetricType || rule.Type == model.SummaryMetricType) {
+		return false
+	}
+	if rule.Scale != nil && shaped {
+		return false
+	}
+	return !requiresALabel(rule)
+}
+
+// requiresALabel says whether a rule has a label marked required.
+func requiresALabel(rule *model.MetricRule) bool {
+	for i := range rule.Labels {
+		if rule.Labels[i].Required {
+			return true
+		}
+	}
+	return false
 }
 
 // prometheusKeeps says which metric names a prometheus transform passes on,

@@ -176,7 +176,12 @@ holds, and so is the warning for the first line a decoder leaves out, a
 carbon line that is skipped or a sample line left out. The last resort is a
 bound on the whole error, 2,000 bytes: one longer than that — a histogram
 series named by a hundred labels, each shown — is cut there and ends with the
-length it had, `... (6400 bytes)`.
+length it had, `... (6400 bytes)`. The bound is that of the error of every
+stage a probe or a static target's scrape can fail at, in the answer, in the
+log and in a debug report alike ([Logging](LOGGING.md#repeated-failures)): a
+jq rule that raises `error(.message)`, a script that raises an exception with
+its data, a redirect to a URL of a megabyte and a gRPC status message of ten
+fail in 2,000 bytes at most, where the error was as long as what it quoted.
 
 ### Character encodings
 
@@ -581,13 +586,16 @@ The expression and label values are interpreted by the selected transform:
   with a character a regular expression gives a meaning — `. * + ? ^ $ | (
   ) [ ] { }` or a backslash — is almost surely a pattern under the wrong
   key, the error says so: `… is not a valid Prometheus metric name; use
-  letters, digits, underscores and colons, not starting with a digit; a
-  pattern to match the target's metric names by is a prometheus rule's
-  expression, not its name, so if this is one, write it as expression, …`.
-  A rule's name is held to these names whatever
-  [`name_escaping`](#utf-8-names) is, which is about the names a response
-  gives: a metric the target calls `http.server.duration` is matched by
-  `expression: '^http\.server\.duration$'`. A metric is passed on by every
+  letters, digits, underscores and colons, not starting with a digit, or
+  set the collector's name_escaping to underscores or values to export it
+  escaped; a pattern to match the target's metric names by is a prometheus
+  rule's expression, not its name, so if this is one, write it as
+  expression, …`. That is under [`name_escaping`](#utf-8-names) `fail`, the
+  default. Under `underscores` and `values` a rule's name may be any name,
+  as a target's may, so `name: http.server.duration` is the metric the
+  target calls that, matched whole and exported escaped, and nothing there
+  tells a name from a pattern: `name: 'node_.*'` loads as the metric of
+  that very name, which no target has. A metric is passed on by every
   rule that matches it, each making its series, so a rule of a `name` and a
   rule whose expression matches that name both pass that metric on: with
   the same labels they would make every series of it twice, and are
@@ -880,7 +888,8 @@ The exporter answers in the classic text format or OpenMetrics (see
 letters, digits, `_` and, for metrics, `:`, as are the names older
 Prometheus servers, recording rules and dashboards expect. A name outside
 that can come from a `prometheus` transform passing a target through, a Python
-script or a pre-script. `name_escaping` says what happens to it:
+script or a pre-script, or be written in the collector itself, as a rule's
+name. `name_escaping` says what happens to it:
 
 ```yaml
 collectors:
@@ -913,6 +922,57 @@ prefixed `values` name still starts with `U__`: `metrics_prefix: otel` gives
 duplicate series, and two such labels of one series fail the scrape naming
 both. The default is `fail` so a name never changes without someone having
 asked for it.
+
+A name the collector writes itself is held to the same, when the
+configuration loads: a rule's `name` and the `name` of each of its labels,
+under every transform, the keys of `transform.labels`, and what
+`transform.rename` and `transform.rename_labels` rename to. Each leaves the
+transform beside the names the response gave and is escaped with them.
+
+```yaml
+collectors:
+  - name: otel_app
+    name_escaping: underscores
+    request:
+      type: http
+    transform:
+      type: jq
+    metrics:
+      - name: http.server.duration     # exported as http_server_duration
+        expression: .duration
+        labels:
+          - name: service.name         # exported as service_name
+            expression: .service
+```
+
+| `name_escaping` | A rule named `http.server.duration` with a label `service.name` |
+| --- | --- |
+| `fail` (default) | is refused at startup, since every scrape could only fail: ``collector "otel_app" metric "http.server.duration" has invalid label name "service.name"; set the collector's name_escaping to underscores or values to export it escaped``, and of the metric's name ``… is not a valid Prometheus metric name; use letters, digits, underscores and colons, not starting with a digit, or set the collector's name_escaping to underscores or values to export it escaped`` |
+| `underscores` | loads, and exports `http_server_duration{service_name="api"}` |
+| `values` | loads, and exports `U__http_2e_server_2e_duration{U__service_2e_name="api"}` |
+
+A `prometheus` rule's `name` without an `expression` is the target's metric
+of that name, matched whole as it is written, so under `underscores` or
+`values` `name: http.server.duration` passes that metric on; a `python`
+rule's `name` and its labels' names are the script's, as the script gives
+them. What a rule says of its series finds them by the names as written,
+before they are escaped: a label's `value_map`, `truncate: true`,
+`transform.remove_labels` and the names `rename_labels` renames. Logs, probe
+errors and the rule's failures in the self-metrics name the rule as it is
+written.
+
+Three things hold whatever `name_escaping` is. A name of nothing but blanks
+is no name. A name is not exported beginning with `__`, which Prometheus
+reserves: `__up` is refused as written, and under `underscores` so is a
+name that it would turn into one, such as `1_min.load`, whose leading digit
+becomes `_`, with an error naming both; `values`, which writes `U__` before
+every name it escapes, takes it. And a
+[static target](STATIC-TARGETS.md)'s `labels` are classic names: they are
+added to what the collector exported, after its names were escaped. Two
+rules whose names differ as written and are one name once escaped, `a.b`
+and `a_b` under `underscores`, load, since the load compares what is
+written, and fail each scrape that has both as the duplicate series, or the
+metric of two types, that two such names of a target are.
 
 The prefix applies to every metric the collector produces, whatever the
 transform: declared metrics, the names a Python script passes to `metric(...)`,
@@ -1026,7 +1086,8 @@ off.
 Write a selector that holds a `#` in quotes, as above. In YAML a `#` after a
 blank starts a comment, so `expression: body #proxy` without them is the
 selector `body`, which loads and reads the whole page, and `expression:
-#proxy` is no expression at all.
+#proxy` is no expression at all: the key has nothing after its colon, and
+is refused as such.
 
 #### The text of an HTML element
 
@@ -2100,7 +2161,10 @@ metrics rule 2 has invalid type "timer"`, where a rule with a name reads
 - a metric name must be a valid Prometheus metric name, and not start with
   `__`; a rule of any transform but `prometheus` must have one, and under
   `prometheus` a name that reads as a pattern is told that
-  [a pattern belongs in `expression`](#collectors);
+  [a pattern belongs in `expression`](#collectors). Under
+  [`name_escaping`](#utf-8-names) `underscores` or `values` a rule's name,
+  and every other name the collector writes, may be any name that is not
+  blanks alone, and is exported escaped;
 - every expression must compile in its transform's language — jq and yq
   (including `items`, and undefined functions and variables), regular
   expressions, CSS selectors, XPath with the collector's namespaces, and a
@@ -2128,8 +2192,9 @@ metrics rule 2 has invalid type "timer"`, where a rule with a name reads
 - a `prometheus` rule's `expression` is not nothing but blanks, and the rule
   has a `name` or an `expression`, by which it says which metrics it passes
   on;
-- `transform.labels` and `rename_labels` must give label names, and two renames
-  may not target the same label;
+- `transform.labels` and `rename_labels` must give label names, classic ones
+  unless `name_escaping` escapes the others, and two renames may not target
+  the same label;
 - no label name, of a rule, `transform.labels`, `rename_labels` or a static
   target, may start with `__`, which Prometheus keeps for its own labels: it
   refuses `__name__` in what it scrapes and drops the others. A series whose
@@ -2187,9 +2252,54 @@ metrics rule 2 has invalid type "timer"`, where a rule with a name reads
   limit left out, is the default. [Sizes](#sizes) are held to the same;
 - a mapping key YAML reads as no key at all — `null`, `~`, or nothing before
   the colon, as in `value_map: {null: 0}` — is refused, since the entry would
-  be dropped; quote it, `"null"`, when that text is the key.
+  be dropped; quote it, `"null"`, when that text is the key;
+- a value YAML reads as none — nothing after the colon or the dash, `null`
+  or `~` — is refused wherever the file takes a value: a key's, an entry of
+  a list, a value of a mapping. YAML hands the exporter nothing for it, so a
+  key written `ttl:` was the key left out, a bare `-` among the
+  `metrics` was no rule at all, with nothing to say that the rule meant
+  there is missing, and `value_map: {up: }` mapped `up` to 0. The error
+  names the line and the place, and says what to do: `line 12: metrics entry
+  1 is a dash with nothing after it, which YAML reads as no value at all, so
+  the entry would be left out without a word; write a metric rule there, or
+  take the entry out`, or `line 7: ttl has nothing after its colon, which
+  YAML reads as no value at all; write its value, or take the key out`. To
+  leave a key at its default, leave it out; a key of text may also be
+  written `""`, which is the key left out
+  ([Editor support](#editor-support)), and a block that sets nothing `{}`.
+  A file's own top-level `x-` keys hold what they like;
+- a value is written as the kind its key takes. YAML reads an unquoted
+  `true` or `False` as a boolean and `1`, `1.5e3` or `0x1F` as a number, and
+  hands a key of text the text of whatever is written. Where the text is
+  free — a `description`, an `expression`, a label's `value`, a header, a
+  query parameter, a body, a path, a `value_map`'s keys and a label's
+  `value_map` texts — that is what was meant, and `value: 1`,
+  `description: 404` and `value_map: {1: running}` need no quotes. A key
+  that takes a name, one of a few words, a host or a single character takes
+  text alone: a collector's, a rule's and a label's `name`,
+  `metrics_prefix`, `name_escaping`, `request.type`, `method`, `rpc` and
+  `descriptors`, `decoder.type`, `transform.type`, the error policies, a
+  rule's `type`, `error_mode` and `time_zone`, `response.csv.delimiter`,
+  `response.graphite.value` and `invalid_lines`, an entry of
+  `collector_files`, `redirect_trusted_hosts`, `accept_codes`, `retry.codes`
+  and the Python libraries, and a static target's `name` and
+  `request.method`. A number or a boolean there was read as its text, so
+  that `name: true` was the metric named `true`, and is refused: `line 9:
+  name is written true, which YAML reads as a boolean, not as text; to use
+  that text there, quote it: "true"`. A key that takes one of a few words
+  is told the words, which quoting a number would not make it one of: `line
+  5: type is written 1, which YAML reads as a number, not as text; write one
+  of graphite, grpc, http, localfile`. And a boolean is `true` or `false`.
+  `yes`, `no`, `on`, `off`, `y` and `n` were booleans to YAML 1.1 and are
+  text now, to an editor and wherever the exporter takes text — a label
+  value of `NO`, for Norway, is `NO` and not `false` — so a key that takes a
+  boolean refuses them, quoted or not, where it used to read them as one:
+  `line 3: enabled is written yes, which YAML reads as text, not as a
+  boolean; write true`. A date written without quotes, `2026-10-06`, is
+  text as well, wherever text is taken, and a number or a boolean in quotes
+  is text, which no key of numbers or booleans takes.
 
-The last two look at the values YAML gives the exporter. With a
+The last four look at the values YAML gives the exporter. With a
 [merge key](#reusing-settings-with-yaml-anchors), a key the mapping sets
 itself replaces the one merged in, and of a list of merges (`<<: [*a, *b]`)
 the first that sets a key is the one read, so
@@ -2414,7 +2524,7 @@ order, one per line, each quoting the expression it is about:
 
 ```text
 collector "a" metric "x" expression ".foo[": unexpected EOF
-collector "a" metric "bad-name": "bad-name" is not a valid Prometheus metric name; use letters, digits, underscores and colons, not starting with a digit
+collector "a" metric "bad-name": "bad-name" is not a valid Prometheus metric name; use letters, digits, underscores and colons, not starting with a digit, or set the collector's name_escaping to underscores or values to export it escaped
 collector "b" metric "z" regex "value=\\d+" has no capture group; the value is the capture group named value, as in '(?P<value>\d+)', or else the first, so wrap the number in one, such as 'requests=(\d+)'
 ```
 
@@ -2491,7 +2601,9 @@ label of a `python` rule and such a label without `truncate: true`, a
 `python` rule's `type`, `description`, `required` and `error_mode`, a
 `required` label
 whose `value_map` maps a value to `""`, a rule without a `name` under any
-transform but `prometheus`, a `grpc` collector that calls
+transform but `prometheus`, a rule's or a label's `name` that is not a
+classic name in a collector whose `name_escaping` is not `underscores` or
+`values`, a `grpc` collector that calls
 another service than `grpc.health.v1.Health` without `descriptors`, and a
 negative duration, such as `timeout: -5s`, which no key takes. A duration is
 written as Go writes one — `500ms`, `1h30m`, `1.5s` — to the schemas as to
@@ -2544,8 +2656,24 @@ that is required is as missing written `""` as left out, and refused by
 both: `transform.type`, `request.type`, a collector's `name`, a label's
 `name`, a rule's `name` under the transforms that need one, a `grpc`
 collector's `rpc`, a `localfile` collector's `root` and a static target's
-`collector`. What is not text has no empty form: `""` is no duration and no
-size, and both refuse it; and both refuse an empty entry of
+`collector`. A key written with no value at all — nothing after its colon,
+`null` or `~` — is another thing, and no key takes it: to a schema it is
+none of the types the key takes, and the exporter refuses it at every key,
+every entry of a list and every value of a mapping, naming the line, so
+that an editor and the exporter flag the same key. And a key takes the
+kinds of value its schema says, to the exporter too: free text takes a
+number and a boolean as the text they spell (`value: 1`, `description:
+404`); a key the schemas hold to allowed values or a pattern — a name, a
+word of a few, a host — takes text alone, and the exporter refuses a number
+or a boolean there, saying to quote it, where it read `name: true` as the
+name `true`; and a boolean is `true` or `false`, the exporter refusing the
+`yes` and `on` it read as one. A rule's and a label's `name` are text under
+every `name_escaping`: one that is a number, as `underscores` and `values`
+allow, is written in quotes, `name: "404"`. An editor reads the file as
+YAML 1.2, and the exporter's reader takes a few more spellings for a
+number, `1_000` and `0b101` among them: at a key of text alone the exporter
+refuses those as numbers too, which is all the two differ on there. What is
+not text has no empty form: `""` is no duration and no size, and both refuse it; and both refuse an empty entry of
 `collector_files`, `request.accept_status`, `request.allowed_targets`,
 `request.denied_targets`, `request.redirect_trusted_hosts`,
 `transform.include`, `transform.exclude` and the Python
@@ -2808,7 +2936,11 @@ or a key, quoted or not, whole or part of a longer one — and the variable is
 always exactly that value. A token holding ` #`, one starting with `*`, `&` or
 `[`, quotes, backslashes and line breaks all arrive as written: the value is
 written back quoted where YAML would otherwise read it differently, and left
-unquoted where it reads the same, so a number stays a number. A reference in
+unquoted where it reads the same, so a number stays a number. So does a
+boolean: at a key that takes text alone, such as a `name`, write the
+reference in quotes, `name: "${NAME}"`, or a variable set to `true` or `1`
+is [refused](#checked-when-the-configuration-loads) as the boolean or the
+number it then is. A reference in
 a comment is left alone, set or not. That holds in a flow collection too,
 where a bare reference is not YAML until it is expanded — alone, as in
 `regions: [${PRIMARY}, ${SECONDARY}]` or `{token: ${TOKEN}}`, as part of a
@@ -3202,13 +3334,29 @@ series, and its labels, as its expression gives each value, with `items` and
 without. The prometheus
 decoder keeps only the series its transform passes on — those its rules match,
 or `include` and `exclude` pick — and stops the same way, so a large exposition
-of which a collector keeps a few costs what the few cost; a series a rule
-matches counts even if the rule then drops it. With a `pre_script`, which is
-given every series, the decoder keeps them all and the transform counts. A
-python transform's answer is bounded by `limits.max_output_bytes`, and its
-metrics are counted before they are read. The failure is the probe's
+of which a collector keeps a few costs what the few cost. With a `pre_script`,
+which is given every series, the decoder keeps them all and the transform
+counts. A python transform's answer is bounded by `limits.max_output_bytes`,
+and its metrics are counted before they are read. The failure is the probe's
 `validation` stage, counted in `http_exporter_series_limit_exceeded_total`,
 whatever `error_handling` says.
+
+What counts is the series the scrape keeps. An item a rule carries on
+without, under `error_mode: log` or `ignore` — a value that is no number, a
+required label that is missing — makes no series and takes no room, and a
+rule that fails as a whole after it made series, a jq program that fails part
+of the way or an XPath expression the engine fails on, gives their room back
+with them: the rules after it have all the limit leaves. A prometheus rule
+that carries on without a series it cannot make — its `type` or its `scale`
+on a histogram or a summary, a required label the series lacks — is counted
+the same way, by the series it makes: the decoder stops only for the series
+a rule is sure to pass on, keeps the others that a rule matches, and the
+transform counts those it makes of them. So of twenty series a rule matches
+and keeps five, the scrape passes under `max_metrics: 5`. One thing counts
+that is not kept: a rule that makes more series than the limit has room for
+ends the scrape there, also when it would have failed as a whole further on
+and given them all up, since finding that out would mean making every series
+the response describes.
 
 In a container with a memory limit, `--runtime.memory-limit-ratio` sets the Go
 memory limit to a share of it, read at startup from the container's own

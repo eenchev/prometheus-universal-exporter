@@ -43,6 +43,12 @@ const (
 	pythonCollector     = "collectors:\n  - name: demo\n    request:\n      type: http\n    transform:\n      type: python\n      script: metric('up', 1)\n      # transform\n    metrics:\n      - name: up\n        # metric\n"
 )
 
+// escapingNames is a configuration of one collector with its name_escaping
+// set.
+func escapingNames(configuration, escaping string) string {
+	return strings.Replace(configuration, " name: demo\n", " name: demo\n    name_escaping: "+escaping+"\n", 1)
+}
+
 // passthroughCollector is a configuration of one prometheus collector
 // without rules, which include and exclude pick the series of, and
 // pythonLabel a python rule's label, which names a label of the script's
@@ -84,6 +90,15 @@ func httpSchemaKeys() []schemaKey {
 		{key: "collectors[].metrics[].name", document: jqCollector, at: "        name: v\n", setting: "        name: %s\n", valid: "v", invalid: "bad-name", absentWas: taken},
 		{key: "collectors[].metrics[].name", of: "of a prometheus rule", document: prometheusCollector, at: metric, setting: "        name: %s\n", valid: "up", invalid: "bad-name", absent: true, empty: true, emptyWas: refused},
 		{key: "collectors[].metrics[].name", of: "of a python rule", document: strings.Replace(pythonCollector, "      - name: up\n", "      - expression: up\n        name: up\n", 1), at: "        name: up\n", setting: "        name: %s\n", valid: "up", invalid: "bad-name", absentWas: taken},
+		// Under name_escaping underscores and values a scrape exports a
+		// name that is not classic escaped, so a rule's name and a label's
+		// may be any name there but one of blanks alone: both take one
+		// with a dot, which both refused under every name_escaping.
+		{key: "collectors[].metrics[].name", of: "under name_escaping underscores", document: escapingNames(jqCollector, "underscores"), at: "        name: v\n", setting: "        name: %s\n", valid: "http.server.duration", validWas: refused, invalid: `"  "`, absentWas: taken},
+		{key: "collectors[].metrics[].name", of: "under name_escaping values", document: escapingNames(jqCollector, "values"), at: "        name: v\n", setting: "        name: %s\n", valid: `"1st load-average"`, validWas: refused, invalid: `"  "`, absentWas: taken},
+		{key: "collectors[].metrics[].name", of: "of a prometheus rule under name_escaping values", document: escapingNames(prometheusCollector, "values"), at: metric, setting: "        name: %s\n", valid: "http.server.duration", validWas: refused, invalid: `" "`, absent: true, empty: true, emptyWas: refused},
+		{key: "collectors[].metrics[].labels[].name", of: "under name_escaping underscores", document: escapingNames(jqCollector, "underscores"), at: "            name: l\n", setting: "            name: %s\n", valid: "service.name", validWas: refused, invalid: `"  "`},
+		{key: "collectors[].metrics[].labels[].name", of: "under name_escaping values", document: escapingNames(jqCollector, "values"), at: "            name: l\n", setting: "            name: %s\n", valid: "k8s.pod/name", validWas: refused, invalid: `" "`},
 		// What a python rule does not take, the script saying it of its
 		// series itself: both refuse each written, which both took, and
 		// take each left out and, where it is text, written "". required
@@ -161,7 +176,7 @@ func httpSchemaKeys() []schemaKey {
 		// Sizes: "" is no size, to both.
 		{key: "collectors[].limits.max_output_bytes", document: jqCollector, at: collector, setting: "    limits:\n      max_output_bytes: %s\n", valid: "1MiB", invalid: "lots", absent: true},
 		{key: "collectors[].limits.max_response_bytes", document: jqCollector, at: collector, setting: "    limits:\n      max_response_bytes: %s\n", valid: "1MiB", invalid: "lots", absent: true},
-		{key: "collectors[].limits.max_script_memory", document: jqCollector, at: collector, setting: "    limits:\n      max_script_memory: %s\n", valid: "64MiB", invalid: "lots", absent: true},
+		{key: "collectors[].limits.max_script_memory", document: jqCollector, at: collector, setting: "    limits:\n      max_script_memory: %s\n", valid: "64MiB", invalid: "lots", absent: true, numberAlone: "limits.max_script_memory must be 0, for no limit, or at least 32MiB"},
 		{key: "collectors[].request.max_response_bytes", document: jqCollector, at: request, setting: "      max_response_bytes: %s\n", valid: "1MiB", invalid: "lots", absent: true},
 		// Durations: "" is no duration, to both, and the number 0 is one.
 		{key: "collectors[].cache.ttl", document: jqCollector, at: collector, setting: "    cache:\n      ttl: %s\n", valid: "30s", invalid: "soon", absent: true, duration: true},
@@ -176,11 +191,11 @@ func httpSchemaKeys() []schemaKey {
 		// The target file. A target's name left out is made of its
 		// collector and its place; its collector is required.
 		{key: "targets[].name", file: inTargetFile, document: oneTarget, at: "    name: a\n", setting: "    name: %s\n", valid: "a", invalid: "bad-name", absent: true, empty: true, emptyWas: refused},
-		{key: "targets[].collector", file: inTargetFile, document: oneTarget, at: "    collector: demo\n", setting: "    collector: %s\n", valid: "demo", emptyWas: taken},
+		{key: "targets[].collector", file: inTargetFile, document: oneTarget, at: "    collector: demo\n", setting: "    collector: %s\n", valid: "demo", emptyWas: taken, booleanAlone: `references unknown collector "true"`, numberAlone: `references unknown collector "1"`},
 		{key: "targets[].request.method", file: inTargetFile, document: oneTarget, at: target, setting: "    request:\n      method: %s\n", valid: "POST", invalid: "FETCH", absent: true, empty: true, emptyWas: refused},
 		{key: "targets[].request.accept_status[]", file: inTargetFile, document: oneTarget, at: target, setting: "    request:\n      accept_status: [%s]\n", valid: "503", invalid: "600", absent: true},
 		{key: "targets[].params{}", file: inTargetFile, document: oneTarget, at: target, setting: "    params: {%s: one}\n", valid: "param_id", invalid: "tenant", absent: true},
-		{key: "targets[].labels{}", file: inTargetFile, document: oneTarget, at: target, setting: "    labels: {%s: one}\n", valid: "team", invalid: "job", absent: true, emptyWas: taken},
+		{key: "targets[].labels{}", file: inTargetFile, document: oneTarget, at: target, setting: "    labels: {%s: one}\n", valid: "team", invalid: "job", absent: true, emptyWas: taken, numberAlone: `has invalid label name "1"`},
 		{key: "interval", file: inTargetFile, document: oneTarget, at: "interval: 1m\n", setting: "interval: %s\n", valid: "30s", invalid: "soon", duration: true, zero: "interval is required"},
 		{key: "targets[].interval", file: inTargetFile, document: oneTarget, at: target, setting: "    interval: %s\n", valid: "30s", invalid: "soon", absent: true, duration: true},
 		{key: "targets[].request.timeout", file: inTargetFile, document: oneTarget, at: target, setting: "    request:\n      timeout: %s\n", valid: "30s", invalid: "soon", absent: true, duration: true},

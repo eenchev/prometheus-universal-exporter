@@ -230,11 +230,11 @@ func TestRoomForSeriesIsBoundedByTheLimit(t *testing.T) {
 			if tc.name == "jq items" {
 				want = 10
 			}
-			// Decoded without the limit, which the prometheus decoder
-			// would stop at itself.
-			unlimited := c
-			unlimited.Limits.MaxMetrics = 0
-			d, r := decodedBody(t, unlimited, "", tc.body)
+			// Decoded with the limit, as a scrape is: the prometheus
+			// decoder stops at it itself, but only for series its rules
+			// are sure to keep, which those of a rule that requires a
+			// label are not.
+			d, r := decodedBody(t, c, "", tc.body)
 			set, err := Transform(LeaveRuleLoggingToCaller(context.Background()), d, r, &c, "")
 			if err != nil || len(set.Metrics) != want {
 				t.Fatalf("%d series, %v; want %d", len(set.Metrics), err, want)

@@ -142,6 +142,13 @@ const stageTargetPolicy = "target_policy"
 func (s *Server) collect(ctx context.Context, j collectJob) collected {
 	c, rec := j.collector, j.rec
 	trace := probeTraceFrom(ctx)
+	// The trip's parameters fill the placeholders of the collector's label
+	// values where the transform reads them, for a response and for each
+	// file of a directory alike (transform.WithLabelParams). Nearly every
+	// collector has none, and its trips carry nothing for it.
+	if c.LabelParams != nil {
+		ctx = transform.WithLabelParams(ctx, j.overrides.Params)
+	}
 	start := time.Now()
 	defer func() {
 		// The last-scrape timestamp and the duration histogram describe a trip

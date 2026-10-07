@@ -769,7 +769,11 @@ starting with `.` MUST match only a pattern starting with `.`. A missing
 directory, or a target naming something other than a directory, MUST fail the
 scrape in the `file` stage under `on_fetch_error`. There is no file to name, so
 the `path` and `param_<name>` probe parameters MUST be refused with `400`, and
-`request.path` in a static target at load, each saying why.
+`request.path` in a static target at load, each saying why. A collector whose
+label values hold placeholders (§ 42.10c) has those for a `param_<name>` to
+fill: its probes MUST be held to the placeholders' own rule instead — a
+parameter a label names accepted, for the series of every file, and any other
+refused with `400` as unused — and `path` MUST stay refused.
 
 The directory MUST be listed in batches, and the listing MUST stop after ten
 times `max_files` entries, and at least 1000, whatever they are, logging a
@@ -944,6 +948,9 @@ keys:
   has appeared in an import path before the one a file was found in, which
   MUST be the one compiled from then on. A file MUST be stamped before it is
   read, so that one replaced while the files were being read is read again.
+  With the configuration watch on, a change to one of these files MUST also
+  reload the configuration at the next tick, which checks it against them
+  (§ 24.1).
 - With `reflection`, the target's `grpc.reflection.v1` service MUST be asked,
   and `v1alpha` when the server does not implement v1, for the file defining
   the service and every file it imports, asking by name for any the answer
@@ -1077,7 +1084,9 @@ has from a rule, a script or the target. A value written `""` MUST be the
 label left out, as a key written `""` is the key left out (§ 24.3): it MUST
 add no label — no `site=""` in an answer, in the OTLP export or in the count
 `limits.max_labels_per_metric` is held to — and MUST NOT take away or change
-a label of that name the series has.
+a label of that name the series has. A value MAY hold `{{param_<name>}}`
+placeholders, filled from the probe (§ 42.10c); one filled to nothing is a
+value written `""`.
 `transform.include`, `transform.exclude` and `transform.rename` pick and rename
 the metrics a `prometheus` transform passes through, and apply only to one
 without `metrics` rules. An entry of `include` or `exclude` is a regular
@@ -3602,7 +3611,8 @@ it MUST produce what could be extracted.
 Each label entry MUST have `name` and exactly one of `value` and `expression`;
 setting both or neither MUST be rejected at startup. A `value` label is static:
 its value MUST be exported as written and never evaluated, a value of nothing
-but blanks included, which is a constant of blanks. An `expression` that is
+but blanks included, which is a constant of blanks; the one thing filled in
+it is a `{{param_<name>}}` placeholder, from the probe (§ 42.10c). An `expression` that is
 written and is nothing but blanks — text that `strings.TrimSpace` leaves
 nothing of — MUST be rejected at load, under every transform and whether
 `value` is set beside it, written `""` or left out, with an error that names
@@ -4344,7 +4354,11 @@ than `limits.max_help_length`; and a static label value, of a rule or of
 `transform.labels`, longer than `limits.max_label_value_length`, unless the
 label has `truncate: true`, a `value_map` maps the value to a shorter one, or
 `remove_labels` drops it. A `python` transform's rules make no series, so only
-its `transform.labels` are checked.
+its `transform.labels` are checked. A value that holds placeholders
+(§ 42.10c) MUST be measured with each replaced by its default, and by
+nothing where it has none, and its refusal MUST say so; such a value of a
+rule's label MUST NOT be measured where a `value_map` of the rule's name maps
+the label.
 
 A scrape that fails validation for a limit of its series MUST say which and
 what to change: the metric, what is over the limit and by how much, the limit
@@ -5032,8 +5046,9 @@ Recommended behavior:
   offer a field for the target, required when the request type needs one; a
   timeout, 10 seconds to start with, sent as the
   `X-Prometheus-Scrape-Timeout-Seconds` header so the probe answers with its
-  own error, with the page giving up a few seconds after it; for each request
-  parameter, required unless its placeholder has a default, which
+  own error, with the page giving up a few seconds after it; for each
+  parameter the collector takes, in its request or in a label value
+  (§ 42.10c), required unless its placeholder has a default, which
   it shows; for each header in `request.forward_headers` that can be
   forwarded, sent as `header_<name>`; and, when `request.forward_authorization`
   is set, a bearer token or a username and password, sent to `/probe` as the
@@ -5159,6 +5174,66 @@ that configuration is refused, so a configuration adding a collector file with
 a mistake in it reloads once that file is fixed. Starting the watch MUST NOT
 reload a configuration that has not changed since it was loaded.
 
+The watch MUST cover the descriptor files of the configuration in force: the
+`request.protoset_file` and `request.proto_files` of its collectors, which
+only a `grpc` collector may set (§ 5.1), and the files those `.proto` files
+import, through however many files, which are every path the compile of the
+`proto_files` looked at on disk, as set out below for a refused reload. The
+configuration is checked against these files when it loads, and a collector
+reads them again at a call when they change (§ 5.1), so one of them changing,
+appearing or disappearing MUST reload at the next tick, as a change to the
+configuration file does, although no configuration file changed: the
+configuration MUST be read and checked again, against the descriptors as a
+call would read them then (§ 5.1). A descriptor file that no longer defines a
+collector's method, no longer takes its message or no longer compiles MUST
+thus be a rejected reload at that tick — logged with the reason, counted, and
+shown by the reload self-metrics (§ 22.0b) — and one the configuration still
+fits MUST be a reload logged as any other, which MUST keep everything a reload
+of an unchanged configuration keeps (§ 24.1a). A reload rejected for such a
+file MUST leave the configuration in force and MUST NOT be tried again until a
+file changes again; the collectors read the changed files at their next call
+whatever became of it.
+
+The static target file MUST be read and checked with the configuration at
+such a tick when a target of the file in force sets a `request.message` for
+a collector that names descriptor files, so that a message the changed files
+refuse is a rejected reload of the target file, on its own line and in its
+own series. Which descriptor file changed need not be told: the target file
+MAY be read for a file of a collector none of its targets uses, and is then
+found as it was. A target file none of whose targets does, and one whose own
+last reload was refused, MUST NOT be read for a descriptor file: the latter
+is read again only for what it was refused for, below. That holds for a
+target file refused only because the configuration in force disagrees with
+it, which waits for the configuration (§ 24.1a): it MUST be read again when
+the configuration file or a collector file changes, or a file that a refused
+configuration is tried again for, and MUST NOT be read because a descriptor
+file of the configuration in force changed, unless its own check opened that
+file. The configuration such a tick reads is the one that refused it.
+
+A descriptor file MUST be stamped, as what its path leads to (below), before
+the configuration is checked against it, at startup and on reload: a file
+the configuration names before anything reads it, and a file one of those
+imports when the files that import it have been read to learn which it is,
+before the configuration is validated, a file that changed between that
+reading and its stamp counting as changed. Which files a collector's
+`.proto` files import MUST be learnt then from the configuration as its
+files write it, its `request.type` and `request.descriptors` taken as the
+validation names them (§ 5.1): a collector written `type: GRPC` has its
+imported files stamped before the validation as one written `type: grpc`
+has, and nothing is stamped once the configuration is in force. The compile
+that learns them MUST be the one the validation uses. A descriptor file
+changed at any later moment — while the configuration is validated, while
+the rest of a startup or a reload runs, or once the configuration is in
+force — MUST therefore reload at the next tick, and starting the watch MUST
+NOT reload for descriptor files that have not changed since the
+configuration was loaded.
+The files watched MUST be those of the configuration in force, from the
+reload that put it in force: a reload that removes a collector, or names
+other files for it, changes them. Without the watch, a startup and a reload
+that is accepted MUST NOT stamp a descriptor file, nor read one to learn
+what it imports: they read the descriptor files only to check the
+configuration (§ 5.1), and nothing is watched in force.
+
 While the configuration last read is refused, whatever triggered that reload,
 the files it names that loading it opens MUST count among the files whose
 change reloads it, with those the configuration in force names:
@@ -5184,17 +5259,25 @@ configuration uses MUST thus be tried again at the tick after that file
 changes or appears. A file of the same name in a later import path than the
 one it was found in, and the places where a well-known file
 (`google/protobuf/*.proto`) that is built in was looked for, MUST NOT be
-among them. Which files are imported is known only once the load has read
-the files that import them, so they MUST be stamped once it has, and a file
-that changed between the load's reading of it and that stamp MUST reload at
-the next tick, as a change made while a named file was being read does.
+among them. Which files are imported is known only once the files that
+import them have been read, so they MUST be stamped once they have, and a
+file that changed between that reading of it and its stamp MUST reload at
+the next tick, as a change made while a named file was being read does. The
+descriptor files of the configuration that was read, named and imported,
+MUST be watched while it is refused as they were stamped before it was
+validated (above): one that changed at any moment since — mended after the
+validation read it and before the reload was refused, say — MUST reload at
+the next tick, and MUST NOT be stamped again as the refusal finds it.
 
 A tick that finds nothing changed MUST NOT read the configuration, MUST NOT
-compile a `.proto` file and MUST NOT log; however many files changed since
+compile a `.proto` file and MUST NOT log, with descriptor files in force as
+without: it MAY only stamp the files. However many files changed since
 the last tick, a tick MUST make one reload, logged as any other. Once the
-configuration is in force these files MUST NOT reload it: what uses them
-reads them again itself, a grpc collector the files its `.proto` files
-import with those it names (§ 5.1, `grpc`).
+configuration is in force, the files among these that are not descriptor
+files — the `otlp.tls` files and the `web.basic_auth` files — MUST NOT
+reload it: nothing in the configuration is checked against them, and what
+uses them reads them again itself. Its descriptor files, named and imported,
+MUST go on reloading it, as above.
 
 The static target file MUST be held to the same. While the target file last
 read is refused, whatever triggered that reload, the files that checking it
@@ -5203,9 +5286,13 @@ reloads it: the `request.protoset_file` and `request.proto_files` of the
 collectors named by its targets that set a `request.message`, in the
 configuration it was checked against and in the one in force, and the files
 those `.proto` files import, as for the configuration. They MUST be
-stamped before the check reads them, as above; a tick that finds them as
+stamped before the check reads them, as above, the imported ones once the
+files that import them have been read to learn which they are, so that one
+that changes after the check read it reads the target file again; a tick
+that finds them as
 they were MUST NOT read the target file and MUST NOT log; and once the
-target file is in force they MUST NOT reload it. A target file refused
+target file is in force they reload it as descriptor files of the
+configuration in force do, above. A target file refused
 before that check — one that cannot be read as a target file, or is invalid
 on its own — opens no other file, and no file but itself changing MUST read
 it again. A target's own credential files are read at a scrape and MUST NOT
@@ -5405,7 +5492,10 @@ files; a file watched for it while it is refused (§ 24.1), when there is
 one, the files a configuration names and the files those import each named
 when there are such; and the other of the two files, when the file was
 rejected only because it disagrees with the other as in force, which a
-change to the other MUST then read again. Without the watch nothing is read
+change to the other MUST then read again. For a target file that waits, a
+change to the configuration is one to its file, to a collector file or to a
+file a refused configuration is tried again for, and not one to a descriptor
+file of the configuration in force (§ 24.1). Without the watch nothing is read
 again until a reload is asked for, and the line MUST NOT carry
 `retried_when`. Reloads MUST be
 serialized, so two triggers at once never interleave. The Helm chart MUST expose the flag as a
@@ -5476,13 +5566,18 @@ checked:
 - `transform.labels` keys and `rename_labels` targets MUST be valid label
   names, and two `rename_labels` entries with one target MUST be rejected.
 
-- A `{{param_...}}` placeholder (§ 42.10a, § 42.10b) in a setting of a
-  collector where a probe's parameters are not filled in MUST be refused,
+- A `{{param_...}}` placeholder (§ 42.10a, § 42.10b, § 42.10c) in a setting
+  of a collector where a probe's parameters are not filled in MUST be refused,
   naming the field — `request.bearer_token`, `request.basic_auth.username`,
-  a credential or TLS file, `request.tls.server_name`,
-  `transform.labels.<name>`, a prometheus transform's `include` or
-  `exclude`, a `value_map`, a label's `value` — since it would be sent or
-  exported as written. Every string the collector holds MUST be checked but
+  a credential or TLS file, `request.tls.server_name`, a prometheus
+  transform's `include` or `exclude`, a `value_map`, a key of
+  `transform.labels`, a label's `name`, the `value` of a label that also
+  sets `expression` — since it would be sent or exported as written, and the
+  refusal MUST name the label values among the places that are filled. The
+  values of `transform.labels` and the `value` of a rule's static label are
+  filled (§ 42.10c) and MUST NOT be refused; a placeholder of one that is
+  not well formed MUST be, naming the collector and the value, a rule
+  without a name by its place. Every string the collector holds MUST be checked but
   those written in a language of their own, where the text `{{param_` is that
   language's and no placeholder: `transform.script` and
   `transform.pre_script`, a metric's `items`, `expression` and `description`,
@@ -9945,8 +10040,9 @@ Tests MUST show:
   is refused pointing at `service_name`; a `service_name` with another
   attribute loads.
 - A `{{param_...}}` placeholder in `request.bearer_token`, a `basic_auth`
-  username or password, `tls.server_name`, a credential file path, a
-  `transform.labels` value or a static label's `value`, with or without a
+  username or password, `tls.server_name`, a credential file path, a key of
+  `transform.labels`, a `rename_labels` target, a label's name or the
+  `value` of a label beside an `expression`, with or without a
   space after the braces, is refused naming the field; two are reported
   together; placeholders in the path, a header value, a query value and the
   body load, and braces that open no `param_` placeholder are text.
@@ -11158,19 +11254,22 @@ Tests MUST show:
   is refused as `reading protoset_file`, logged once, and leaves the target
   file in force; three ticks with nothing changed read nothing and log
   nothing; the tick after the file is back logs `static targets reloaded`
-  with the trigger `watch` and puts the target file in force, the
-  configuration not being read; with the target file in force, the file
-  replaced again reloads nothing.
+  with the trigger `watch` and puts the target file in force. The
+  configuration, whose descriptor file it is, is read with it each time,
+  its line first: refused while the file is missing, reloaded when it is
+  back. With the target file in force, the file replaced again reloads both
+  once more, and the tick after it logs nothing.
 - A descriptor file that changes and is still no descriptor set is one more
-  refused reload of the target file over two ticks, logged once; the set
-  back, the reload goes through. After a `SIGHUP` reload with the file
-  missing, which refuses both files, a tick with nothing changed logs
-  nothing and the tick after the file is back reloads the configuration and
-  the target file, each logged once.
+  refused reload of the target file, and of the configuration, over two
+  ticks, each logged once; the set back, both reloads go through. After a
+  `SIGHUP` reload with the file missing, which refuses both files, a tick
+  with nothing changed logs nothing and the tick after the file is back
+  reloads the configuration and the target file, each logged once.
 - A target file that is not YAML, written after a reload refused for a
   missing descriptor file, is refused once and not read again when the
-  descriptor file comes back or changes: two ticks log nothing and count no
-  reload; written anew and valid, it is put in force.
+  descriptor file comes back or changes: each of two such ticks logs
+  `configuration reloaded` alone and counts no reload of the target file;
+  written anew and valid, it is put in force.
 - The files watched for a refused target file are the `protoset_file` and
   `proto_files` of the collectors that its targets with a `request.message`
   name, in the configuration it is checked against and the one in force,
@@ -12821,7 +12920,8 @@ Tests MUST show:
   the files watched are the named file and the two imported ones; three
   ticks read nothing, look at no descriptor file and log nothing; the file
   mended, the next tick logs `configuration reloaded`; and in force the
-  file changing reloads nothing and no file is watched.
+  file changing is one more reload with the trigger `watch`, the ticks
+  after it quiet, and no file is watched as one of a refused reload.
 - A configuration whose message sets a field the imported file lacks is
   refused, and is in force at the tick after the file has the field.
 - A reload asked for by `SIGHUP` and refused for a missing import, named in
@@ -12832,16 +12932,20 @@ Tests MUST show:
   reload watches no file of the third; files of the third changing leave
   three ticks quiet; and a sound file appearing in the first import path
   reloads at the next tick.
-- An imported file rewritten between the load's reading and the stamp is
-  one more refused reload at the next tick, the ticks after it quiet, and
-  mended it reloads.
+- An imported file rewritten between a look at what a refused reload read
+  and the look that settles its stamp — the two looks at the configuration
+  being read, before it is validated, or the two at the configuration in
+  force, when the reload is refused, four looks in all — is one more refused
+  reload at the next tick, the ticks after it quiet, and mended it reloads.
 - A static target file refused because a file its collector's `.proto` file
   imports does not compile is logged once with `retried_when` `the static
   target file, a file its check opens or the configuration changes`, watches
   the named file and the two imported ones, and leaves three ticks quiet;
   mended without the field its message sets it is refused once more, naming
-  the field; with the field it is in force at the next tick, the
-  configuration not read; and in force the file changing reloads nothing.
+  the field; with the field it is in force at the next tick. The
+  configuration, whose descriptor file it is, is read with it each time, its
+  line first: refused for the file that does not compile, and reloaded at
+  the two ticks after: two reloads and one refused in all.
 - Over 400 generated configurations that compile no `.proto` file, alone
   and in pairs, the files named are those of the old list in its order, no
   imported file joins the files stamped for a refused reload, whose stamp
@@ -18224,6 +18328,412 @@ Tests MUST show:
   broke off with, after its status, are each recorded by their start and their
   length, and an outcome of ordinary length as it was.
 
+## 34.113 A probe parameter as a label value, and the watch of the descriptor files in force
+
+A probe parameter fills a label value (§ 42.10c):
+
+- A collector with `transform.labels: {tenant: "{{param_tenant}}", region:
+  "{{param_region:eu}}"}` and a rule's label `{name: source, value:
+  "api-{{param_tenant}}"}`, probed with `param_tenant=acme`, answers
+  `status_up{region="eu",source="api-acme",tenant="acme"} 1` in the text
+  format and in OpenMetrics, its request going to `/api/acme/status` by the
+  same parameter; another tenant and `param_region=us` give their own
+  labels, an empty `param_region=` the default, and no self-metric carries a
+  parameter's value.
+- A value is written as given: `a"b\c`, a line break, `é`, `{{param_region}}`
+  and `{x}` in a parameter reach the series' label, of `transform.labels`
+  and of a rule alike, escaped by the writers of both formats and by
+  nothing else.
+- A label's placeholder with no value and no default, one given an empty
+  value, and one beside a `path` that replaces the request's are answered
+  `400` naming the parameter and `transform.labels.<name>` or `metric "m"
+  label "l" value`; a parameter nothing uses, one given twice and one that
+  is not valid UTF-8 (`%FF`, `%C3`) are answered `400`; the target is
+  contacted for none of them. A parameter only a label uses is accepted,
+  with a `path` probe parameter too, and the refusal of an unused one names
+  the label values among the places it looked in.
+- `{{param_dc}}/{{param_rack:r1}}/{{param_dc}}` fills each placeholder, and
+  `{{x}}`, `{{ y }}`, a lone `}}`, `{param_dc}`, a trailing `{{` and
+  `{{not_a_param}}` stay text.
+- Under jq with and without `items`, yq, regex, css with and without
+  `items`, csv, xpath over XML and over HTML, a prometheus rule with a name
+  and one without, and a prometheus pass-through, and under `remove_labels`,
+  `rename_labels`, `truncate: true`, `metrics_prefix` with `name_escaping`,
+  and a `value_map` of the rule's name, the answer of a collector written
+  with placeholders and probed with their values is byte for byte, in both
+  formats, the answer of the collector written with the values.
+- `transform.labels` of a `python` collector are filled over a label of that
+  name the script gave, and a missing parameter is `400`; a `python` rule's
+  label with `value: "{{param_tenant}}"` is refused as any value there, and
+  `transform.labels` of a python collector with a placeholder load.
+- A label filled to nothing is left off: `transform.labels` `{{param_tenant:}}`
+  leaves a passed-on series its own `tenant`, a prometheus rule's `job`
+  filled to nothing leaves the series its own `job`, a jq rule's label of two
+  empty halves is off the series, and a value of one blank is a value.
+- Under `limits.max_label_value_length: 8` a filled value of 8 bytes is
+  exported, a rule's longer one with `truncate: true` is cut to `api-a…`, a
+  `transform.labels` value and a rule's value of 9 bytes without it fail the
+  scrape in the validation naming the metric and the label, and a fourth
+  filled label under `max_labels_per_metric: 3` fails it too.
+- Two rules alike but for `value: "{{param_a}}"` and `value: "{{param_b}}"`
+  load, export two series for different values, and fail the scrape with
+  `duplicate metric series` for the same value; two that write the same
+  placeholder are refused as the same rule, as is a prometheus name beside a
+  pattern with the same value; a label with a placeholder for its value
+  still cannot be `required`.
+- With `cache.ttl`, probes of two tenants each get their own series and a
+  repeat of each is answered from its own entry, the target contacted twice
+  in all; with `cache.stale_if_error`, a failed trip of a tenant without a
+  good result is `502` and never another tenant's, and that of the tenant
+  with one is its own, marked stale; five concurrent probes of three tenants
+  make three requests and each gets its own series.
+- A static target's `params` fill its collector's label placeholders on the
+  static targets endpoint and in the OTLP export, beside the target's own
+  labels, which stay literal (`own="{{literal}}"`), two targets of one
+  caching collector each with their own series; a target that leaves a
+  label's parameter out, one with an entry nothing uses and one with a value
+  that is not UTF-8 are refused when the file loads, naming the target, the
+  collector and the parameter, from a YAML target file as from one built in
+  the tests.
+- A debug probe's report shows the filled series and no placeholder, and the
+  collectors page has a field for each parameter of a label, required unless
+  it has a default.
+- A grpc collector's labels are filled by the parameter that fills its
+  message, the `message` probe parameter leaves a label's parameter in use
+  and a missing one `400`, and the refusal of an unused parameter names the
+  message, the metadata values and the label values.
+- A graphite collector's labels are filled by a parameter, one that fills
+  only a label holding a comma, a quote and parentheses that an expression
+  could not, while one that also fills an expression is held to the
+  expression's rule.
+- A localfile collector's labels are filled by the parameter that names its
+  file, one that fills only a label holding a `/`, and a `path` probe
+  parameter leaves a label's parameter in use.
+- A directory collector whose labels hold placeholders takes the parameters
+  they name, for the series of every file, answers `400` for a missing one
+  and for one no label names, and still refuses `path`; one without
+  placeholders refuses every `param_` in the words it did; a static target's
+  `params` fill them, and a target without them is refused at load.
+- The load keeps the parsed placeholders with the collector, named
+  `transform.labels.<name>` and `metric "m" label "l" value`, and nothing
+  for a collector without any, for `{{not_a_param}}` and for the `value` of
+  a label's expression text.
+- `{{ param_x }}`, `{{param_x|json}}`, a default with a `|` and an unclosed
+  placeholder in a `transform.labels` value, in a rule's label and in the
+  label of a rule without a name are each refused at load naming the
+  collector and the value, the rule by its place, a filter in the words of a
+  label value; a bad name, a brace in a default and a default that is not
+  UTF-8 are refused by the check of a collector, and a file that is not
+  UTF-8 by the load; the refusal of a filter in a header reads as it did.
+- A value with placeholders is measured at load with its defaults: under a
+  limit of 8, `{{param_tenant}}`, `api-{{param_a:1234}}` and a default of 4
+  bytes load, and a text or defaults of 9 to 11 bytes are refused saying so,
+  for `transform.labels` and for a rule's label; `truncate: true`,
+  `remove_labels` and a `value_map` of the rule's name spare them, and a
+  constant is measured and refused as it was.
+- A placeholder in a key of `transform.labels`, a `rename_labels` target, a
+  label's name and the `value` of a label beside an `expression` is refused,
+  and the refusal names the label values among the places that are filled.
+- Filling writes nothing into the collector: after eight goroutines filled
+  one collector fifty times each with their own tenant, and changed their
+  copies, it reads as it was; labels that are no longer those the
+  placeholders were read from are not filled.
+- A collector without label placeholders is checked and transformed as it
+  was: the check of a probe's parameters gives what a copy of it as it was
+  gives over 576 combinations of request, parameters and replaced parts, in
+  no more allocations, a transform reads the collector itself for none, and
+  Transform gives the series, the error and the rule report of a copy of
+  itself as it was over every file of the fixtures under each transform
+  that reads it and seven settings of its labels, with parameters in its
+  context and without, in no more allocations (one more is let pass under
+  the race detector, where a count is one more in some measurements than
+  in others); no collector of the shipped configurations has anything read
+  or refused.
+- Filling the labels of a collector with three templated values allocates
+  5 times, and a value that is one placeholder is the parameter's value
+  itself.
+- A brace before a placeholder is a brace: a label value
+  `{{{param_a}}}-{{param_b:x}}` probed with `param_a=acme` is exported as
+  `{acme}-x`, a rule's `[{{{param_a}}},{{{{param_b:x}}}}]` as
+  `[{acme},{{x}}]`, and a probe without `param_a` is answered `400` naming
+  it, with no series; `{{{param_a}}}` alone in a `transform.labels` value
+  loads and is filled, and `{{{ param_a }}}` is refused at load as a
+  placeholder with a space after `{{`.
+- A header value and a query value `{{{param_x}}}` reach the target as `{`,
+  the value and `}`, a body of `{{{param_x|json}}}`,
+  `{{{param_n:1|number}}}` and `{{{param_f:"f":1|raw}}}` with each value
+  under its filter between its braces, `{{ {{param_x}}`, `{{{{param_x}}}}`
+  and `{{{x}}}` with the braces that open nothing as they are written; a
+  probe without the parameter is `400` and the target is not contacted.
+- A header, a query value, a gRPC metadata value, a body under no filter,
+  `|json` and `|raw`, a gRPC message and a Graphite expression each write
+  the value between the braces around `{{{param_x}}}`; `{{ {{param_a}}` is
+  `{{ acme`, `{{{{param_a}}}}` is `{{acme}}`, five braces leave three;
+  `{{ param_x }}` and `{{{ param_x }}}` are refused in a header, a query
+  value, a body and a label value.
+- Over more than 17,000 texts of one to five opening and closing braces
+  around placeholders, blanks and other words (7,000 under the race
+  detector), read as a header value, as a body, as a label value and as a
+  path, the placeholders found and the refusal are those of the parser that
+  stepped two bytes over a `{{` opening nothing, except for texts with an
+  odd run of three or more `{` directly before `param_`, blanks allowed
+  between; the path is read as it was for every text.
+- What such a text was read as: text, with no placeholder in the run and
+  nothing refused, in every place but the path, whatever followed `param_`;
+  now the placeholder is read, and `{{{ param_a}}`, `{{{param_a`,
+  `{{{param_a-b}}}` and, outside a body, `{{{param_a|json}}}` are refused
+  as they are without the brace. The path refuses the third brace as it
+  did.
+- A Graphite expression `app.{{{param_host}},db}.cpu` loads and is asked
+  for as `app.{web01,db}.cpu`, `{{{param_env:prod}},{{param_other:test}}}.up`
+  as `{prod,test}.up`; a probe without `param_host` and a value with a glob
+  are `400`; a list the placeholder leaves open, a blank after the braces
+  and a default an expression cannot hold are refused at load.
+- The refusal of a probe parameter nothing uses names, for each request type
+  of the build, every place a placeholder of such a collector is filled in
+  and no other: `request.path`, body, header or query values for `http`;
+  `request.targets`, `request.path` and header or query values for
+  `graphite`; `request.message` and metadata values for `grpc`;
+  `request.path` for `localfile`, of a file and of a directory; and the
+  label values for each.
+- A rule's label `{name: l, value: "{{param_a:}}", required: true}`, with
+  and without a default, with text around the placeholder and with a brace
+  before it, under jq and under prometheus, is refused saying that the
+  value comes from the probe and that `required` is for a label read from
+  the response; `{name: l, value: "{{param_a}}", value_map: {a: b}}` is
+  refused saying to have the probe give the value wanted or to set the
+  `value_map` on a label of that name another rule of the metric's name
+  reads with an expression, and a configuration that does so loads. A
+  constant, and a value whose braces open no placeholder, are refused in the
+  words they were, byte for byte; a python rule's label with a placeholder
+  and `required` is refused as a python rule's label.
+- With OTLP on and no response cache, three probes that give a label three
+  values leave three start times of the counter after an export, bounded at
+  twice `otlp.max_pending_points`; two of them failing leave two entries in
+  the failure log, and one recovering leaves one.
+- Every line with `{{` of the examples, the configurations and their
+  schemas, the chart's templates, the test data and the documentation is
+  read in each place as it was, but the lines that show a brace before a
+  placeholder, which the documentation of that has.
+
+The watch looks at the descriptor files of the configuration in force (§ 24.1):
+
+- With the watch on and a grpc collector reading a descriptor set in force,
+  the set replaced by one in which the collector's method is renamed is, at
+  the next tick, a `configuration reload rejected` line at `ERROR` with the
+  trigger `watch`, the configuration's path as `file`, the error `has no
+  method GetStats; it has GetStatsRenamed, ...` and `retried_when` `the
+  configuration or a file it names changes`; the static target file, whose
+  target's message is checked against the same set, is read with it and
+  rejected on a line of its own, `static target reload rejected`, with
+  `retried_when` `the static target file, a file its check opens or the
+  configuration changes`; each file counts one failed reload and none
+  accepted, `http_exporter_config_last_reload_successful` reads 0 for both,
+  and the configuration and the target file in force are the very ones they
+  were. Three ticks after it log nothing and count nothing. The old set back,
+  the next tick logs `configuration reloaded` and `static targets reloaded`
+  with the trigger `watch`, the series read 1, and another configuration is in
+  force.
+- A `.proto` file of the configuration in force changed so that it still fits
+  — the file the configuration names, a file it imports, a file two imports
+  away, or all three between two ticks — is one reload at the next tick: one
+  line, `configuration reloaded` at `INFO` with the trigger `watch` and
+  `collectors` 1, one reload counted and none refused, another configuration
+  in force. The static target file, whose target sets no message, is not read.
+  The files watched in force are the named file and the two it leads to, and
+  three ticks before the change and three after it read nothing, look at no
+  descriptor file and log nothing.
+- A file two imports away from the one a collector in force names, edited so
+  that it no longer compiles, is a rejected reload at the next tick, naming
+  `base.proto:3:`, with `retried_when` `the configuration, a file it names or
+  a file one of those imports changes`, the reload series at 0 and the
+  configuration in force as it was; three ticks log nothing; mended, the next
+  tick logs `configuration reloaded`, the series reads 1, and the ticks after
+  are quiet.
+- With three import paths and the imports found in the second, the files
+  watched in force hold the import's place in the first import path and no
+  path under the third or of a well-known file; a file of the third changing
+  leaves three ticks quiet; the import appearing in the first import path
+  reloads at the next tick; from then on the file of the second import path
+  changing reloads nothing, and the one in the first changing reloads.
+- A descriptor set behind a `..data` link: the link swapped to another
+  directory and back between two ticks reloads nothing; swapped to a directory
+  whose file has the size and the modification time of the old, it reloads the
+  configuration and the target file at the next tick, once.
+- A static target whose `request.message` sets a field that the imported file
+  in force then loses is, at the next tick, a `static target reload rejected`
+  line with the target file's path as `file`, the error `target "q":
+  request.message does not fit w.common.Request` naming the field, and
+  `retried_when` `the static target file, a file its check opens or the
+  configuration changes`, although the target file did not change; the
+  configuration is rejected on the line before it for the same target, with
+  `retried_when` `the configuration, a file it names, a file one of those
+  imports or the static target file changes`; both reload series read 0, both
+  files in force are the ones they were, and three ticks log nothing. The
+  field back, the next tick reloads both and both series read 1.
+- A target file that is not YAML, refused once, is not read again when a
+  descriptor file its targets in force are checked against changes: that tick
+  logs `configuration reloaded` alone, and the target file's refused reloads
+  stay one.
+- A descriptor file edited by what prepares the configuration a reload is
+  about to put in force (`OnPrepare`) reloads once more at the next tick, and
+  the ticks after that are quiet.
+- A manager started as the exporter starts one — the stamp taken, the
+  configuration read with `LoadStamped`, the manager made and given the stamp
+  — watches the named file and the two it leads to, and its first three ticks
+  reload nothing, log nothing and count nothing. With the named file, or the
+  file two imports away, edited after the configuration was read and before
+  the manager was made, the first tick logs `configuration reloaded` with the
+  trigger `watch` and the second logs nothing; the same edit with the
+  configuration read by `Load`, without its stamp, is taken as read, and the
+  first tick logs nothing.
+- A collector written `type: ' GRPC '` with `descriptors: ' Proto '` has the
+  named file and the two it leads to watched from the start and after a
+  reload; the ticks with nothing changed log nothing, and the imported file
+  changing reloads, twice in a row.
+- A reload that points the collector at the `.proto` files of another
+  directory watches those three files from then on: a file of the old
+  directory broken leaves three ticks quiet, and one of the new changing
+  reloads. A reload to a collector calling the health service, which names no
+  descriptor file, leaves none watched, and the old files broken leave three
+  ticks quiet.
+- With `web.basic_auth` reading its username and its password from files and a
+  grpc collector reading a descriptor set, the one file watched in force is
+  the set: each credential file rewritten, removed and written back over three
+  ticks reloads nothing, logs nothing and counts nothing; the set rewritten
+  reloads at the next tick.
+- With the watch off, `ReloadLoop` returns at once with a descriptor file of
+  the configuration in force broken: nothing is reloaded, logged or counted,
+  and no descriptor file is looked at.
+- Over 400 generated configurations — `otlp` and `web.basic_auth` on or off
+  with files that are there or not, collectors of every type — the descriptor
+  files are the `protoset_file` and `proto_files` their collectors name, in
+  order and each once, each of them among the files the configuration named
+  before; the same configuration without its collectors, and no configuration,
+  have none.
+- `LoadStamped` returns the configuration `Load` returns, or its error, for a
+  configuration that loads in a build with http, a collector without a request
+  type, one with no collectors, a file that is not YAML and a file that is not
+  there; the stamp holds descriptor files for every file that could be read as
+  YAML and for no other.
+- A grpc collector with `cache.ttl: 1h` reading a descriptor set, and a static
+  target that sets a `request.message` for it, scraped once: the set rewritten
+  with the same content and a later time, the watch's next tick logs
+  `configuration reloaded` and `static targets reloaded` with the trigger
+  `watch`, each once, and the server follows another configuration and another
+  target file one generation on; the collector's one cached result and its one
+  remembered failure are kept, a second scrape of the target makes no call,
+  and the target keeps its place in the schedule.
+- A target file refused because the descriptor set its check opens is gone is
+  logged after the configuration's own line, which is `configuration reload
+  rejected` with `retried_when` `the configuration or a file it names
+  changes`.
+- An imported file made not to compile while a reload is put in force
+  (`OnPrepare`), after the validation read it, is a `configuration reload
+  rejected` line naming `base.proto:3:` at the next tick, with
+  `http_exporter_config_last_reload_successful` at 0 and three quiet ticks
+  after it, for a collector written `type: grpc`, `type: GRPC` and `type: '
+  Grpc '` alike; the files watched after the reload are the named file and
+  the two it leads to in each case.
+- A manager started as the exporter with the watch starts one, an imported
+  file broken after the configuration was read and before the manager was
+  made: the first three ticks log one `configuration reload rejected` line
+  naming `base.proto:3:`, for each of the three ways of writing the type.
+- For each of the three ways of writing `request.type` with each of
+  `descriptors: proto`, `PROTO` and `' Proto '`, the descriptor files stamped
+  for the configuration as its file writes it, before it is validated, are
+  the named file and the two it leads to, with imported files among them, and
+  stamping the validated configuration gives the same files and the same
+  stamp.
+- `fetch.ReadFiles` answers what the old function, which looked the type up
+  as the collector has it, answers, paths and mark, for every collector of a
+  table of over 100: each known request type, one unknown and none, with each
+  source of descriptors and `Proto`, with and without `.proto` files and
+  import paths, at least four of them with files read. The same collector
+  with its type in capitals, or with blanks around it, is answered as for the
+  type as it is named, where the old function answered nothing; the whole
+  table compiles twice, once for the files with their import path and once
+  without.
+- A collector written `type: GRPC` whose files are asked for before it is
+  validated is compiled once, and `ValidateRequest` then compiles nothing and
+  leaves the type `grpc`.
+- Every collector of the shipped configurations that load in the build — the
+  examples, those under `configs` and the fixtures' — and of 300 generated
+  configurations leads to the files, and gives the mark, that its type looked
+  up as the collector has it gives.
+- A target file naming a collector the configuration does not have is
+  refused with `retried_when` `the static target file or the configuration
+  changes`; a descriptor file of the configuration in force then changing,
+  twice, is each time one `configuration reloaded` line with the trigger
+  `watch` and nothing else, the target file's refused reloads staying one;
+  the configuration file changing then reads the target file again with it,
+  `configuration reloaded` and `static target reload rejected`, two refused
+  in all.
+- A target file whose message sets a field the imported file lacks is refused
+  with `retried_when` `the static target file, a file its check opens or the
+  configuration changes`; three ticks read nothing and look at no descriptor
+  file; the imported file with the field, the next tick logs `configuration
+  reloaded` and `static targets reloaded`, the message in force is the new
+  one, and three ticks after it are quiet.
+- A reload that adds a collector whose imported file does not compile is
+  refused, and the target file naming that collector with it, with
+  `retried_when` `the static target file or the configuration changes`;
+  three ticks log nothing; the imported file mended, the next tick reloads
+  both, and the target in force names the added collector.
+- A reload that turns a collector calling the health service into one that
+  compiles `.proto` files, with the imported file broken, and the file mended
+  at the refusal's first look at the files, after the validation read it: the
+  reload is refused naming `base.proto:3:` after three looks, with
+  `retried_when` `the configuration, a file it names or a file one of those
+  imports changes`; the next tick logs `configuration reloaded` and the new
+  configuration is in force; three ticks after it log nothing.
+- A target file whose message sets a field the imported file lacks, the file
+  gaining the field at the first look at the files of the target file's
+  check: two ticks later the target file in force sends the new message.
+- With two collectors that each compile their own `.proto` files and a target
+  that sets a message for one of them, a descriptor file of the other
+  changing logs `configuration reloaded` and `static targets reloaded` at the
+  next tick; with a target that sets no message it logs `configuration
+  reloaded` alone; the tick after either logs nothing.
+- A manager started as the exporter without the watch starts one — the stamp
+  taken, the configuration read by `Load`, the manager made and given the
+  stamp — asks for the files the compile looked at 0 times at the startup, 0
+  times at an accepted reload on demand and 4 times at a refused one, as
+  before the descriptor files in force were watched, and has no descriptor
+  file stamped.
+- Started with the watch — read by `LoadStamped` — it asks 2 times at the
+  startup, 2 at an accepted reload, 0 at a tick that finds nothing changed
+  and 4 at a refused reload, and watches the three files in force.
+- A reload that reads a descriptor file edited during it — an imported file
+  edited between the reading that learns of it and its stamp, or the named
+  file edited before the first look — looks at the files twice, and reloads
+  once more at the next tick.
+- An imported file rewritten, as broken as it was, before the second look of
+  a pair at what a refused reload read — the pair at the configuration being
+  read, or the pair at the configuration in force — is a reload refused after
+  four looks and refused once more at the next tick, two in all; three ticks
+  are then quiet, and mended it reloads.
+- Over 300 generated configurations in force, without the watch no file is
+  watched in force; with it turned on the files watched are the descriptor
+  files the configuration names; and with the files given new times, removed
+  and written back over four steps, the watch finds the configuration changed
+  exactly when the function it had before the descriptor files were watched
+  does, and finds the descriptor files changed exactly when one is no longer
+  as stamped. A configuration that names none has none found changed and
+  never has the target file read for one. The rounds hold at least 100 steps
+  of each kind and 20 where a descriptor file alone changed.
+- The exporter started in a child process with `--config.watch` on a grpc
+  collector whose `.proto` file imports another, the imported file edited
+  while the startup is held in its check of the Python scripts, the child
+  saying when each tick of its watch is over: one `configuration reloaded`
+  line with the trigger `watch` precedes the first tick's end and none the
+  ends of the next two; the named file then edited, one such line comes, and
+  none before the end of that tick or of the two after it; the exporter ends
+  on `SIGTERM` with exit 0, two such lines in all and no rejected reload.
+  With `stampedFiles.changed` answering that files are there, which reloads
+  at every tick, the test fails at the second tick.
+- No file but a test's calls `SetWatchTicked`.
+
 # 35. Documentation requirements
 
 The repository MUST include documentation covering:
@@ -19093,14 +19603,21 @@ default that is `.` or `..` or holds `/`, `\` or NUL, naming the collector,
 the parameter and the default.
 
 The probe MUST also be rejected with `400` when a `param_` parameter is given
-more than once, or when the collector's path does not use it. The latter is
+more than once, or when nothing of the collector uses it: its path, the
+places of § 42.10b, or a label value (§ 42.10c). The latter is
 almost always a misspelling, and with a default in place a misspelled parameter
 would otherwise succeed against the default and report one tenant's data as
-another's.
+another's. The refusal MUST name the places a placeholder of the collector
+can stand in, which are those of its request type and its label values, and
+no place its type does not have: the path, the body and the header and query
+values of an `http` collector; the expressions, the path and the header and
+query values of a `graphite` one; the message and the metadata values of a
+`grpc` one; the path of a `localfile` one.
 
 Path parameters MUST be bound only in the collector's `request.path`. A `path`
 probe parameter replaces that path and MUST be used as given, and a `param_`
-parameter sent with it is unused and therefore rejected.
+parameter sent with it that only the path used is unused and therefore
+rejected.
 
 Path parameters and environment references (§ 42.15a) MUST NOT overlap
 syntactically. Environment references are expanded once, when the file is
@@ -19126,22 +19643,28 @@ and the field; in `request.path` any `{{` is refused, as in a collector's path,
 and elsewhere `{{` followed by `param_`, spaces allowed between, so a JSON
 body's own braces are not. The check MUST run after environment expansion
 (§ 42.15a), so a placeholder a variable supplies is refused too. Every
-placeholder of the collector's request — path, body, header and query values —
+placeholder of the collector — in its request's path, body, header and query
+values, and in its label values (§ 42.10c) —
 MUST be filled by `params` or a default, and every entry of `params` MUST fill
 one and be a valid name; any other combination MUST be rejected at startup with
 a message naming the target, the collector and the parameter. `params` MUST be
-part of the target's cache key.
+part of the target's cache key. A target's own `labels` are literal: a
+placeholder there MUST NOT be filled.
 
 ## 42.10b Placeholders in the body, headers and query
 
 An `http` collector's `request.body`, the values of `request.headers` and the
 values of `request.query` MAY contain the placeholders of § 42.10a, filled by
 the same probe parameters with the same defaults; a missing value, one given
-twice and one no placeholder of the request uses MUST be refused with `400`
-before the target is contacted. In these fields `{{` MUST open a placeholder
+twice and one no placeholder of the request or of a label value (§ 42.10c)
+uses MUST be refused with `400` before the target is contacted. In these fields `{{` MUST open a placeholder
 only when `param_` follows it, and `{{` followed by spaces and `param_` MUST be
-rejected at load. A header name or query name containing `{{` MUST be rejected
-at load. When the `body` probe parameter replaces the body, its placeholders
+rejected at load. Every `{{` that `param_` follows opens one, whatever
+stands before it: a brace directly before a placeholder is text, so
+`{{{param_x}}}` MUST be filled as `{`, the value and `}`, and
+`{{{ param_x}}` MUST be rejected at load as `{{ param_x}}` is. A header
+name or query name containing `{{` MUST be rejected at load. When the
+`body` probe parameter replaces the body, its placeholders
 MUST NOT be bound, and a parameter only they use is unused.
 
 Each value MUST be written as its place requires:
@@ -19163,9 +19686,110 @@ expression cannot hold — MUST be rejected, naming the collector, the field
 and the parameter, whether or not the field's other placeholders have
 defaults. The values MUST NOT reach any self-metric label.
 
-Placeholders are filled in the request's path (§ 42.10a) and in the places
-above, and nowhere else: a `{{param_...}}` in any other setting of a
-collector MUST be refused at load, naming the field (§ 24.2).
+Placeholders are filled in the request's path (§ 42.10a), in the places
+above and in the collector's fixed label values (§ 42.10c), and nowhere
+else: a `{{param_...}}` in any other setting of a collector MUST be refused
+at load, naming the field (§ 24.2).
+
+## 42.10c Placeholders in label values
+
+The two places a collector writes a fixed label value MAY contain the
+placeholders of § 42.10a, filled by the same probe parameters: the values of
+`transform.labels` (§ 6), and the `value` of a metric rule's static label,
+under every transform whose rules take one, which is every transform but
+`python` (§ 18.1). The same parameter MAY fill the request and a label.
+
+```yaml
+transform:
+  type: jq
+  labels:
+    tenant: "{{param_tenant}}"
+    region: "{{param_region:eu}}"
+metrics:
+  - name: status_up
+    expression: .up
+    labels:
+      - {name: source, value: "api-{{param_tenant}}"}
+```
+
+A value MUST be read as a header value is (§ 42.10b): any number of
+`{{param_<name>}}` and `{{param_<name>:<default>}}` among text of its own,
+`{{` opening a placeholder only when `param_` follows it, and every other
+brace text, a brace directly before a placeholder among them:
+`{{{param_dc}}}` filled with `ams` MUST be `{ams}`. `{{` followed by spaces
+and `param_`, a placeholder left open or named otherwise, a default
+containing a brace, and a filter MUST be rejected
+at load, naming the collector and the value; the refusal of a filter MUST
+say that a label value is written one way. The `value` of a label that also
+sets `expression`, a label's name and a key of `transform.labels` are not
+such values, and a placeholder there MUST be refused (§ 24.2).
+
+A value MUST be filled as given, with nothing of it escaped: what a label
+value may not hold bare is the exposition writers' to escape. A
+parameter's value that is not valid UTF-8 MUST be refused with `400` naming
+the parameter; nothing else about its characters is refused. A default that
+is not valid UTF-8 MUST be refused when the collector is checked; no
+configuration file can hold one, since a document that is not UTF-8 is
+refused whole.
+
+The probe's rules MUST be those of § 42.10a. A placeholder with no value and
+no default MUST answer `400` naming the parameter and the value, before the
+target is contacted and before anything is counted against it; an empty
+probe value MUST count as not given; an empty default binds nothing. A
+`param_` parameter that fills a label value is used, whatever the request
+names: it MUST NOT be refused as unused, and a `path`, `body` or `message`
+probe parameter, which takes away the request's use of a parameter, MUST NOT
+take away a label's. A parameter no place uses MUST still be refused.
+
+A label whose filled value is empty MUST be left off the series. For
+`transform.labels` it is the value written `""` (§ 6): no label is added, and
+a label of that name the series has is kept. For a rule's label it is the
+label the rule does not set: the series has no such label from the rule,
+and a series a `prometheus` rule passes on keeps the one it has.
+
+Everything that reads a label's value MUST treat a filled value as the same
+text written in the configuration: `limits.max_label_value_length` and a
+label's `truncate`, the `value_map` of the rule's name, `remove_labels` and
+`rename_labels` in their order, `name_escaping` and `metrics_prefix`,
+`limits.max_labels_per_metric`, and the check for a series made twice. The
+answer of a collector written with placeholders, probed with their values,
+MUST be the answer of the collector written with the values.
+
+The checks that hold a collector's rules against each other when the
+configuration loads (§ 18.1, § 24.2) MUST compare a label's value as it is
+written. Two rules that differ only in the placeholders of a label's value
+are two rules; a probe that fills them alike makes one series twice, and
+that scrape MUST fail as a duplicate series does. The check of a static
+value's length MUST measure a value that holds placeholders with each
+replaced by its default (§ 24.2).
+
+A label whose value holds a placeholder is a static label in what may stand
+beside its value: `required` and a `value_map` of its own MUST be refused at
+load (§ 18.1), each for a reason that is true of a value the probe gives.
+The refusal of `required` MUST say that the value comes from the probe and
+that `required` is for a label read from the response, not that the value is
+always there; the refusal of `value_map` MUST say that the probe is to give
+the value wanted, or that the `value_map` of a label of that name which
+another rule of the metric's name reads with an expression maps it, not that
+the value it maps to be written. A constant's refusals MUST read as they
+did.
+
+A static target's `params` MUST fill the placeholders of a label value as
+they fill the request's, and the target file MUST be held to both at load
+(§ 42.10a). Every `param_` parameter is part of the response cache key
+(§ 42.13) and of what makes two probes identical (§ 42.13a), so two probes
+that differ only in a parameter a label takes MUST NOT get each other's
+series: from a fresh cache entry, from a stale one answering a failed trip,
+or from one request shared while both are in flight. The values MUST NOT
+reach any self-metric label.
+
+Whether a collector's label values hold placeholders MUST be decided when
+the configuration loads, once, and the parsed values kept with it; a probe
+of a collector that has none MUST do no more for the feature than see that,
+and MUST allocate nothing for it. A probe of a collector that has some reads
+a copy of the collector's labels with the values filled in; the collector's
+own configuration, which its probes share, MUST NOT be written to. The
+collectors page (§ 23) MUST list a label's parameters with the request's.
 
 ## 42.12 CI, container, and chart releases
 

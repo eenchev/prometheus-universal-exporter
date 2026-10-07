@@ -187,6 +187,12 @@ func checkLabelValueMaps(x *model.Collector, r *model.MetricRule, where string) 
 			continue
 		}
 		switch {
+		case label.Static() && ruleLabelHoldsPlaceholders(x, label.Value):
+			// There is no value it maps to, to write instead: the value
+			// is the probe's. What maps it is a value_map of the rule's
+			// name (mapLabelValues), which a label that reads its value
+			// with an expression may set.
+			return fmt.Errorf("%s label %q sets value_map beside a value with a {{param_...}} placeholder, and a label with a value takes no value_map: have the probe give the parameter the value wanted, or, where another rule of the same metric name reads a label %q with an expression, set the value_map on that label, which maps the label for the series of every rule of that name", where, label.Name, label.Name)
 		case label.Static():
 			return fmt.Errorf("%s label %q sets value_map with a static value; write the value it maps to instead", where, label.Name)
 		case x.Transform.Type == "python":

@@ -140,7 +140,7 @@ pattern needs. See the
 | `--web.static-targets-path` | `/static-targets` | Path the static targets' latest results are served at, for Prometheus to scrape. A path another endpoint uses is refused. |
 | `--python.path` | `python3` | Interpreter used by the `python` transform. |
 | `--log.level` | `info` | `debug`, `info`, `warn` or `error`, in any case; anything else is refused. |
-| `--config.watch` | off | Re-read the configuration when it changes on disk. |
+| `--config.watch` | off | Re-read the configuration when it changes on disk, or a [descriptor file](docs/CONFIGURATION.md#descriptor-files) of a grpc collector does. |
 | `--config.watch-interval` | `60s` | How often to check, with `--config.watch`. |
 | `--config.expand-env` | off | Expand `${NAME}` references in the configuration and its collector files. |
 | `--static-targets.expand-env` | off | Expand `${NAME}` references in the static target file. See [Static targets](docs/STATIC-TARGETS.md#environment-variables). |

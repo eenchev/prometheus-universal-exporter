@@ -52,18 +52,24 @@ var labelPath = regexp.MustCompile(`^labels\[(\d+)\]\.`)
 
 // checkPlaceholdersAreFilled refuses a {{param_...}} placeholder in a
 // setting of the collector that a probe's parameters do not fill: a bearer
-// token or a label value holding one would be sent or exported with the
+// token or a value_map holding one would be sent or exported with the
 // placeholder as text. Every string the collector holds is looked at, and the
 // fields that are filled are asked of the code that fills them
-// (fetch.TemplatedFields), so a field that starts taking placeholders is
-// allowed here by that alone. What is code, an expression or free text is not
-// looked into (holdsItsOwnBraces): there the same characters are the
-// language's own.
+// (fetch.TemplatedFields, and fetch.TemplatedRuleLabel for the value of a
+// rule's label), so a field that starts taking placeholders is allowed here
+// by that alone. What is code, an expression or free text is not looked into
+// (holdsItsOwnBraces): there the same characters are the language's own.
+//
+// The label values that are filled are those read into x.LabelParams
+// (fetch.ParseLabelParams), which validateCollector reads before this: the
+// values of transform.labels and of a rule's static label. A label's value
+// beside an expression is not one of them, since such a label is not
+// static, and is refused here as it was.
 func checkPlaceholdersAreFilled(x *model.Collector) error {
 	filled := fetch.TemplatedFields(x)
 	var errs []error
 	refuse := func(where string) {
-		errs = append(errs, fmt.Errorf("collector %q %s has a {{param_...}} placeholder, which is not filled in there and would be used as written; a probe's parameters fill placeholders only in the request's path, body, header and query values, a grpc message and metadata values, and a graphite collector's targets", x.Name, where))
+		errs = append(errs, fmt.Errorf("collector %q %s has a {{param_...}} placeholder, which is not filled in there and would be used as written; a probe's parameters fill placeholders only in the request's path, body, header and query values, a grpc message and metadata values, a graphite collector's targets, and the label values of transform.labels and of a metric rule's static label", x.Name, where))
 	}
 	collector := reflect.ValueOf(x).Elem()
 	for i := 0; i < collector.NumField(); i++ {
@@ -88,6 +94,9 @@ func checkPlaceholdersAreFilled(x *model.Collector) error {
 			if m := labelPath.FindStringSubmatch(path); m != nil {
 				var index int
 				_, _ = fmt.Sscanf(m[1], "%d", &index)
+				if path[len(m[0]):] == "value" && fetch.TemplatedRuleLabel(x, i, index) {
+					return
+				}
 				path = fmt.Sprintf("label %q %s", rule.Labels[index].Name, path[len(m[0]):])
 			}
 			refuse(fmt.Sprintf("%s %s", transform.RuleName(rule, i), path))
@@ -104,8 +113,9 @@ func checkPlaceholdersAreFilled(x *model.Collector) error {
 // that matches the text; and a description, which may well explain the
 // collector's parameters by naming one. Refusing those refused scripts and
 // expressions that run as they are written. Every other field is a setting —
-// a credential, a file, a name, a label's value, a pattern of metric names —
-// in which the text can only be a placeholder that nothing fills.
+// a credential, a file, a name, a value_map, a pattern of metric names — in
+// which the text can only be a placeholder, which is filled where the code
+// that fills placeholders says it is and refused everywhere else.
 func holdsItsOwnBraces(path string) bool {
 	switch labelPath.ReplaceAllString(path, "labels[].") {
 	case "transform.script", "transform.pre_script", // Python

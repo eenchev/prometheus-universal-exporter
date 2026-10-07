@@ -236,9 +236,10 @@ func ValidateStaticTargetsAgainst(f *model.StaticTargetFile, c *model.Config) er
 		if err := checkRetriesFitTheInterval(t, model.CollectorByName(c, t.Collector)); err != nil {
 			return err
 		}
-		// Every placeholder of the collector's request must be filled, by the
-		// target's params or a default, since nothing else can fill it; and
-		// every param must fill one, since an unused one is a misspelling.
+		// Every placeholder of the collector, in its request or in a label
+		// value (fetch/labelparams.go), must be filled, by the target's
+		// params or a default, since nothing else can fill it; and every
+		// param must fill one, since an unused one is a misspelling.
 		// Catching both here makes them startup errors naming both sides.
 		if collector := model.CollectorByName(c, t.Collector); collector != nil {
 			unused, err := fetch.CheckRequestParams(collector, fetch.TargetOverrides(t))
@@ -257,7 +258,7 @@ func ValidateStaticTargetsAgainst(f *model.StaticTargetFile, c *model.Config) er
 				return fmt.Errorf("target %q uses collector %q: %w", t.Name, t.Collector, err)
 			}
 			if len(unused) > 0 {
-				return fmt.Errorf("target %q params %s are not used by collector %q: no placeholder in its request names them", t.Name, strings.Join(unused, ", "), t.Collector)
+				return fmt.Errorf("target %q params %s are not used by collector %q: no placeholder in its request or its label values names them", t.Name, strings.Join(unused, ", "), t.Collector)
 			}
 		}
 	}

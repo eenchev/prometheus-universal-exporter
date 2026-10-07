@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/eenchev/prometheus-universal-exporter/internal/config"
 	"github.com/eenchev/prometheus-universal-exporter/internal/exporter"
 )
 
@@ -22,6 +23,16 @@ const helperArgsEnv = "PUE_TEST_RUN_ARGS"
 // closed.
 const helperHoldsDelayEnv = "PUE_TEST_HOLD_SHUTDOWN_DELAY"
 
+// helperSaysTicksEnv, when set, has the child process write watchTickedLine
+// to its standard error after every tick of its configuration watch, behind
+// whatever that tick logged.
+const helperSaysTicksEnv = "PUE_TEST_SAY_WATCH_TICKS"
+
+// watchTickedLine is the line a child process writes after a tick of its
+// watch. The exporter writes no such line: a tick that finds nothing changed
+// logs nothing.
+const watchTickedLine = `{"msg":"test: the watch ticked"}`
+
 // TestRunHelperProcess is not a test: it is the exporter, run in a child
 // process by tests that need to signal it.
 //
@@ -31,6 +42,10 @@ const helperHoldsDelayEnv = "PUE_TEST_HOLD_SHUTDOWN_DELAY"
 // such a child is waited out and then goes on until the test, which holds
 // the other end of the child's standard input, closes it: the test waits for
 // what it is about, and then lets the shutdown begin.
+//
+// A test that has to show a tick of the watch did nothing has nothing of the
+// exporter's to wait for either, since such a tick logs nothing; its child
+// says when each tick is over (helperSaysTicksEnv, config.SetWatchTicked).
 //
 // The child leaves a request's headers half a minute, the bound of a hang,
 // where the exporter leaves them ten seconds: every test that runs a child
@@ -46,6 +61,9 @@ func TestRunHelperProcess(_ *testing.T) {
 			time.Sleep(delay)
 			_, _ = io.Copy(io.Discard, os.Stdin)
 		}
+	}
+	if os.Getenv(helperSaysTicksEnv) != "" {
+		config.SetWatchTicked(func() { _, _ = os.Stderr.WriteString(watchTickedLine + "\n") })
 	}
 	exporter.SetReadHeaderTimeout(30 * time.Second)
 	os.Exit(run(strings.Split(args, "\x1f"), os.Stdout, os.Stderr))

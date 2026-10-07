@@ -451,3 +451,95 @@ func TestCompilingProtoFilesGivesWhatItGave(t *testing.T) {
 		})
 	}
 }
+
+// oldReadFiles is ReadFiles as it was before it took a request.type however
+// it is written: it looked the type up as the collector had it.
+func oldReadFiles(c *model.Collector) (paths []string, read string) {
+	if rt := requestTypeOf(c); rt != nil && rt.ReadFiles != nil {
+		return rt.ReadFiles(c)
+	}
+	return nil, ""
+}
+
+// ReadFiles takes a collector's request.type as ValidateRequest names it,
+// so the watch can ask about a collector that is not validated yet. Of a
+// collector whose type is written as the types are named, which every
+// validated one's is, it answers what it answered: over a table of every
+// type there is, one there is not and none, with each source of
+// descriptors, with and without .proto files and import paths, the paths
+// and the mark are the ones it gave. Of the same collector with its type in
+// capitals or with blanks around it, where it answered nothing, it answers
+// what it does for the type as it is named; and the reading is shared, so
+// asking in every spelling compiles the files once.
+func TestReadFilesTakesTheTypeAsItIsNamedHoweverItIsWritten(t *testing.T) {
+	dir := t.TempDir()
+	service := writeProto(t, dir, importingService, serviceSource)
+	writeProto(t, dir, importedTypes, typesSource)
+	writeProto(t, dir, importedBase, baseSource)
+	spellings := func(name string) []string {
+		return []string{strings.ToUpper(name), " " + name + "\t", strings.ToUpper(name[:1]) + name[1:] + " "}
+	}
+	collectors, withFiles := 0, 0
+	if n := compiles(func() {
+		for _, name := range append(slices.Clone(knownRequestTypes), "carrier-pigeon", "") {
+			for _, descriptors := range []string{"", descriptorsProto, descriptorsProtoset, descriptorsReflection, "Proto"} {
+				for _, files := range [][]string{nil, {service}} {
+					for _, importPaths := range [][]string{nil, {dir}} {
+						c := &model.Collector{Name: "c", Request: model.RequestConfig{Type: name, Descriptors: descriptors, ProtoFiles: files, ProtoImportPaths: importPaths}}
+						paths, read := ReadFiles(c)
+						wantPaths, wantRead := oldReadFiles(c)
+						if !slices.Equal(paths, wantPaths) || read != wantRead {
+							t.Errorf("type %q, descriptors %q, files %v, import paths %v: read %v with the mark %q; it read %v with %q", name, descriptors, files, importPaths, paths, read, wantPaths, wantRead)
+						}
+						collectors++
+						if len(paths) > 0 {
+							withFiles++
+						}
+						if name == "" {
+							continue
+						}
+						for _, written := range spellings(name) {
+							other := *c
+							other.Request.Type = written
+							if again, mark := ReadFiles(&other); !slices.Equal(again, wantPaths) || mark != wantRead {
+								t.Errorf("type written %q, descriptors %q, files %v: read %v with the mark %q, and %v with %q for the type as it is named", written, descriptors, files, again, mark, wantPaths, wantRead)
+							}
+							if old, mark := oldReadFiles(&other); len(old) != 0 || mark != "" {
+								t.Errorf("type written %q: it read %v before", written, old)
+							}
+						}
+					}
+				}
+			}
+		}
+	}); n != 2 {
+		t.Errorf("%d compiles, want one for the files with their import path and one without", n)
+	}
+	if collectors < 100 || withFiles < 4 {
+		t.Fatalf("the table held %d collectors, %d of them with files read; too few to say", collectors, withFiles)
+	}
+}
+
+// The compile that tells the watch which files a collector's .proto files
+// import, asked for before the collector is validated, is the one its
+// validation then uses: a collector written `type: GRPC` is compiled once by
+// the two together, and its validation reads no file again.
+func TestTheValidationUsesTheCompileThatLearntTheImports(t *testing.T) {
+	dir := t.TempDir()
+	writeProto(t, dir, importingService, serviceSource)
+	writeProto(t, dir, importedTypes, typesSource)
+	writeProto(t, dir, importedBase, baseSource)
+	c := importingCollector(dir, dir)
+	c.Request.Type = "GRPC"
+	var paths []string
+	if n := compiles(func() { paths, _ = ReadFiles(c) }); n != 1 || len(paths) != 3 {
+		t.Fatalf("asking for the files of the collector as written: %d compiles, the files %v; want one compile and the three files", n, paths)
+	}
+	if n := compiles(func() {
+		if err := ValidateRequest(c); err != nil {
+			t.Fatal(err)
+		}
+	}); n != 0 || c.Request.Type != RequestTypeGRPC {
+		t.Fatalf("validating the collector compiled %d times after its files were asked for, and its type is %q", n, c.Request.Type)
+	}
+}

@@ -17,7 +17,12 @@ import (
 // for a file the watch never looked at — a certificate missing for the moment
 // in which a Secret is replaced — and, with the configuration itself
 // unchanged, would never be tried again. So the watch stamps those files
-// too while a configuration is refused (Manager.retryFiles).
+// too while a configuration is refused (Manager.retryFiles). The descriptor
+// files among them, which the configuration is checked against, it stamps
+// as long as the configuration is in force (Manager.descriptors): a
+// collector reads them again at a call when they change, and the reload
+// that follows at the next tick says whether the configuration still fits
+// them.
 
 // namedFiles are the files the configurations name that loading one opens,
 // each once, in order:
@@ -106,6 +111,62 @@ func importedFiles(named []string, configs ...*model.Config) (files []string, st
 	stamp = filesStamp(files)
 	_, again := look()
 	return files, stamp, slices.Equal(reads, again)
+}
+
+// stampedFiles are files and how they were at one moment (filesStamp); a
+// stamp no files have, as the empty one of files that are there to stamp,
+// says they are to be read again whatever they are like. imports says files
+// that the .proto files among them import are among them.
+type stampedFiles struct {
+	files   []string
+	stamp   string
+	imports bool
+}
+
+// changed reports whether one of the files is no longer as it was stamped.
+func (s stampedFiles) changed() bool {
+	return len(s.files) > 0 && filesStamp(s.files) != s.stamp
+}
+
+// namedDescriptorFiles are the descriptor files a configuration names: the
+// request.protoset_file and request.proto_files of its collectors, which
+// only a grpc collector may set (fetch.ValidateRequest), so a build without
+// the grpc request type has none in force. They are the files of namedFiles
+// that the configuration is checked against, its method and its messages,
+// and so the ones the watch goes on looking at once the configuration is in
+// force (Manager.descriptors); the certificates and credential files among
+// namedFiles say nothing about the configuration, and are watched only
+// while it is refused. A nil configuration names none.
+func namedDescriptorFiles(c *model.Config) []string {
+	if c == nil {
+		return nil
+	}
+	return namedFiles(&model.Config{Collectors: c.Collectors})
+}
+
+// stampDescriptors stamps the descriptor files of a configuration that is
+// about to be validated: the files it names, as they are before anything
+// reads them, and the files that its .proto files import, which are read
+// here to learn which they are, before the validation needs them, and
+// stamped once they have been (importedFiles). The validation that follows
+// checks the configuration against that reading while the files stay as
+// they are, and reads them again when one changed, which the stamp then
+// tells: a file edited at any moment from here on, while the configuration
+// is validated or put in force, is not as stamped, and the next tick of the
+// watch reloads. The compile is the one the validation would make, kept for
+// it (fetch.ReadFiles), so stamping costs no second one, but for files that
+// do not compile, which are read again by whoever needs them.
+//
+// The configuration is as its files write it, and the validation changes
+// nothing that says which the files are: the paths are used as written, and
+// the request.type and request.descriptors that decide whether there are
+// imported files are read here as the validation names them, whatever their
+// case (fetch.ReadFiles). So the files stamped are the ones the validated
+// configuration reads, and nothing is left to stamp once it is in force.
+func stampDescriptors(c *model.Config) stampedFiles {
+	named := namedDescriptorFiles(c)
+	files, stamp, imports := retryImported(named, filesStamp(named), c)
+	return stampedFiles{files: files, stamp: stamp, imports: imports}
 }
 
 // targetsNamedFiles are the files that checking a static target file

@@ -52,9 +52,9 @@ import (
 // method or a message that does not fit fails the configuration, and read
 // again at a call when one of their files has changed: the descriptor set,
 // a .proto file, or a file one imports. The watch of the configuration
-// looks at the same files while a reload is refused (ReadFiles). The health
-// service's types are compiled into the exporter, so it needs none of the
-// three.
+// looks at the same files, while the configuration is in force and while a
+// reload is refused (ReadFiles). The health service's types are compiled
+// into the exporter, so it needs none of the three.
 
 // reflectionTTL is how long a reflection answer is used before the server is
 // asked again.

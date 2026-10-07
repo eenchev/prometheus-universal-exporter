@@ -67,7 +67,8 @@ func TestARuleWithoutANameIsToldOfByItsPlace(t *testing.T) {
 		{"prometheus", "", "expression: '^node_'\n        items: .rows[]\n        scale: 0\n        labels:\n          - name: site\n            expression: instance\n            value_map: {a: b}\n", []string{" sets items, which", " scale must be", ` label "site" sets value_map on a rule without a name`}},
 		{"prometheus", small, "expression: '^node_'\n        description: A description of thirty-two bytes.\n", []string{" description is 34 bytes, longer than limits.max_help_length 10, so every series would fail validation; shorten it or raise the limit"}},
 		{"prometheus", small, "expression: '^node_'\n        labels:\n          - name: site\n            value: rack-one\n", []string{` label "site" value is 8 bytes, longer than limits.max_label_value_length 5, so every series would fail validation; shorten it, set truncate: true on the label, or raise the limit`}},
-		{"prometheus", "", "expression: '^node_'\n        labels:\n          - name: site\n            value: \"{{param_site}}\"\n", []string{` label "site" value has a {{param_...}} placeholder, which is not filled in there and would be used as written`}},
+		{"prometheus", "", "expression: '^node_'\n        labels:\n          - name: site\n            expression: instance\n            value: \"{{param_site}}\"\n", []string{` label "site" value has a {{param_...}} placeholder, which is not filled in there and would be used as written`}},
+		{"prometheus", "", "expression: '^node_'\n        labels:\n          - name: site\n            value: \"{{param_site|json}}\"\n", []string{` label "site" value placeholder {{param_site|json}} has a filter; a label value is written one way`}},
 
 		{"python", "", "{}\n", []string{pythonNeeds}},
 		{"python", "", "expression: up\n", []string{pythonNeeds}},

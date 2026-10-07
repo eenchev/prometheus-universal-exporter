@@ -117,7 +117,11 @@ http_exporter_config_reloads_total{file="config",result="failure"} 1
 [static target file](STATIC-TARGETS.md), reported only when there is
 one. Loading at startup counts as a success; the counter counts reloads after
 it, whatever triggered them: the watch, `SIGHUP` or
-[`POST /-/reload`](CONFIGURATION.md#reloading-on-demand). Alert on a change that did not take:
+[`POST /-/reload`](CONFIGURATION.md#reloading-on-demand). With the watch on,
+a [descriptor file](CONFIGURATION.md#descriptor-files) of a grpc collector
+that changes is a reload too, although no configuration file did: one that
+no longer has the collector's method, or no longer takes its message, turns
+the series to `0` at the next tick. Alert on a change that did not take:
 
 ```promql
 http_exporter_config_last_reload_successful == 0

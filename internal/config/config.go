@@ -91,6 +91,15 @@ func validateCollector(c *model.Config, x *model.Collector) error {
 	if err := fetch.ValidateRequest(x); err != nil {
 		return err
 	}
+	// The placeholders of the label values are read before the check that
+	// refuses a placeholder nothing fills, which asks which values are
+	// filled (checkPlaceholdersAreFilled), and are kept with the collector
+	// for its probes.
+	labels, err := fetch.ParseLabelParams(x, func(index int) string { return transform.RuleName(&x.Metrics[index], index) })
+	if err != nil {
+		return err
+	}
+	x.LabelParams = labels
 	if err := checkPlaceholdersAreFilled(x); err != nil {
 		return err
 	}
@@ -156,7 +165,7 @@ func validateCollector(c *model.Config, x *model.Collector) error {
 	// The rules and the transform settings are checked apart from each
 	// other, and all their mistakes reported; the metric families are
 	// checked only when the rules they are made of are sound.
-	err := model.JoinProblems(validateMetricRules(c, x), checkCSVColumns(x), transform.CheckTransformSettings(x))
+	err = model.JoinProblems(validateMetricRules(c, x), checkCSVColumns(x), transform.CheckTransformSettings(x))
 	if err != nil {
 		return err
 	}
@@ -698,7 +707,7 @@ func validateMetricRule(x *model.Collector, index int) error {
 	if strings.TrimSpace(r.Expression) == "" && x.Transform.Type != "python" && x.Transform.Type != "prometheus" {
 		return fmt.Errorf("%s has no expression", where)
 	}
-	for _, label := range r.Labels {
+	for j, label := range r.Labels {
 		if strings.TrimSpace(label.Name) == "" {
 			return fmt.Errorf("%s has a label without a name", where)
 		}
@@ -719,12 +728,20 @@ func validateMetricRule(x *model.Collector, index int) error {
 			return fmt.Errorf("%s label %q expression %q is nothing but blanks; write the expression that reads the label from the response, or leave expression out and set value for a constant", where, label.Name, label.Expression)
 		}
 		hasValue, hasExpression := label.Value != "", strings.TrimSpace(label.Expression) != ""
+		// A value that holds a placeholder (fetch.ParseLabelParams) is not
+		// always there, as a constant is: it is what the probe gives. It
+		// cannot be required either, and is told why in its own words. A
+		// python rule's label takes no value at all, placeholder or not,
+		// and is left to the cases that say so.
+		templated := hasValue && fetch.TemplatedRuleLabel(x, index, j)
 		switch {
 		case hasValue && hasExpression:
 			return fmt.Errorf("%s label %q sets both value and expression; set value for a static label, or expression to read it from the response", where, label.Name)
 		case !hasValue && !hasExpression:
 			return fmt.Errorf("%s label %q needs a value, for a static label, or an expression, to read it from the response", where, label.Name)
-		case hasValue && label.Required:
+		case templated && label.Required && x.Transform.Type != "python":
+			return fmt.Errorf("%s label %q cannot be required: its value has a {{param_...}} placeholder, so it comes from the probe, and required is for a label an expression reads from the response. A probe that leaves out a parameter whose placeholder has no default is answered 400, and a placeholder with an empty default, {{param_<name>:}}, leaves the label off because the configuration says so; remove required", where, label.Name)
+		case hasValue && label.Required && !templated:
 			return fmt.Errorf("%s label %q has a static value, so it cannot be required; its value is always there", where, label.Name)
 		case label.Required && x.Transform.Type == "python":
 			return fmt.Errorf("%s label %q cannot be required: a python transform's labels come from its script, not from label expressions", where, label.Name)
@@ -1028,9 +1045,14 @@ type Manager struct {
 	// then a change the watch sees, so a reload refused because a
 	// certificate was being replaced is tried again when it is in place,
 	// although the configuration itself is as it was. When it is refused,
-	// the files that its .proto files import join them (retryImported):
-	// retryConfigs are the configurations the files were taken from, and
-	// retryImports says such files are among them.
+	// the files that its .proto files import are watched too: retryConfigs
+	// are the configurations the files were taken from, the one in force and
+	// then the one read, and retryImports says there are such files. With
+	// the watch on, those of the configuration read were stamped before it
+	// was validated (loading), and those of the one in force join retryFiles
+	// (retryImported); without it, when nothing compares a stamp, those of
+	// both do, as they did before the descriptor files in force were
+	// watched.
 	retryFiles     []string
 	retryStamp     string
 	retryConfigs   []*model.Config
@@ -1046,13 +1068,34 @@ type Manager struct {
 	expandStaticTargetsEnv bool
 	// targetsRetryFiles and targetsRetryStamp are retryFiles and retryStamp
 	// for the static target file: the files that checking the file last
-	// read against the configuration opens (targetsNamedFiles), kept while
-	// that file is refused, when the files those import join them, and
-	// targetsRetryChecked the collectors they were taken from
-	// (targetsChecked).
+	// read against the configuration opens (targetsNamedFiles) and, with
+	// the watch on, the files those import, each as it was before the check
+	// read it, kept while that file is refused; targetsRetryChecked are the
+	// collectors they were taken from (targetsChecked). Without the watch
+	// the imported files join them when the file is refused.
 	targetsRetryFiles   []string
 	targetsRetryStamp   string
 	targetsRetryChecked *model.Config
+	// descriptors are the descriptor files of the configuration in force,
+	// the request.protoset_file and request.proto_files of its grpc
+	// collectors and the files those .proto files import, and how they were
+	// just before the load that last read the configuration read them
+	// (stampDescriptors). Unlike retryFiles they are kept while the
+	// configuration is in force: the configuration is checked against them,
+	// so one of them changing is a change the watch reloads for, which finds
+	// at the tick, and not at the probes that then fail, a descriptor that
+	// no longer has the collector's method or takes its message. loading are
+	// those of the configuration loadConfig last read, stamped before it was
+	// validated: they become descriptors when it is put in force, and while
+	// it is refused they stay watched as they are, so that a file the
+	// refused load read, and that changed at any moment since, reads the
+	// configuration again. Both are empty without the watch: nothing would
+	// compare the stamps, so none is taken, and no descriptor file is read
+	// to learn what it imports. descriptorsStamped says descriptors were
+	// taken for the configuration in force, by the startup (UseStamp) or
+	// when the watch was turned on (SetWatchInterval).
+	descriptors, loading stampedFiles
+	descriptorsStamped   bool
 	// configWaits and targetsWaits say that file's last reload was refused
 	// only because the other file, as in force, disagrees with it, so a
 	// change to the other file reads it again (apply).
@@ -1099,6 +1142,8 @@ func NewManager(c *model.Config, path string, l *slog.Logger) *Manager {
 		m.watchCollectorFiles(c.CollectorFiles)
 	}
 	// The file as read at startup is not a change for the first watch tick.
+	// Its descriptor files are stamped when the watch is turned on
+	// (SetWatchInterval), and not at all without it.
 	if st, err := os.Stat(path); err == nil && c != nil {
 		m.lastMod, m.lastSize = st.ModTime(), st.Size()
 	}
@@ -1116,6 +1161,9 @@ type Stamp struct {
 	found          bool
 	entries        []string
 	collectorFiles string
+	// descriptors are the descriptor files of the configuration read with
+	// the stamp (LoadStamped), nil when none was.
+	descriptors *stampedFiles
 }
 
 // TakeStamp stamps the file at path as it is now. For a configuration file,
@@ -1134,14 +1182,33 @@ func TakeStamp(path string, listsCollectorFiles bool, opts ...LoadOption) Stamp 
 	return s
 }
 
+// LoadStamped is Load for the configuration an exporter with the watch on
+// starts with: it adds to s, taken before the file was read (TakeStamp), how
+// the descriptor files of the configuration were before the validation read
+// them (stampDescriptors), which only the file's own collectors and those of
+// its collector files say. A stamp of a file that could not be read has
+// none. An exporter without the watch reads its configuration with Load:
+// stamping the descriptor files reads them to learn what they import, for a
+// stamp that no tick would ever compare.
+func LoadStamped(path string, s *Stamp, opts ...LoadOption) (*model.Config, error) {
+	return load(path, opts, func(c *model.Config) {
+		descriptors := stampDescriptors(c)
+		s.descriptors = &descriptors
+	})
+}
+
 // UseStamp makes s, taken before the configuration in force was read, what
-// the watch compares the configuration and its collector files against.
+// the watch compares the configuration, its collector files and, when it was
+// read with the stamp (LoadStamped), its descriptor files against.
 func (m *Manager) UseStamp(s Stamp) {
 	if s.found {
 		m.lastMod, m.lastSize = s.mod, s.size
 	}
 	if s.entries != nil {
 		m.watchedFiles, m.collectorFiles = s.entries, s.collectorFiles
+	}
+	if s.descriptors != nil {
+		m.descriptors, m.descriptorsStamped = *s.descriptors, true
 	}
 }
 
@@ -1199,7 +1266,17 @@ func (m *Manager) OnPrepare(prepare func(*model.Config, *model.StaticTargetFile)
 // files are re-stated. A non-positive interval leaves the watch disabled, which
 // is the default: configuration is then read once at startup and changes take
 // effect on restart.
-func (m *Manager) SetWatchInterval(interval time.Duration) { m.watchInterval = interval }
+//
+// Turning the watch on stamps the descriptor files of the configuration in
+// force as they are now, unless the startup stamped them before it read them
+// (UseStamp, as the exporter does): the first tick then reloads nothing that
+// has not changed since. A manager whose watch stays off stamps none.
+func (m *Manager) SetWatchInterval(interval time.Duration) {
+	m.watchInterval = interval
+	if m.WatchEnabled() && !m.descriptorsStamped {
+		m.descriptors, m.descriptorsStamped = stampDescriptors(m.Get()), true
+	}
+}
 
 // WatchEnabled reports whether ReloadLoop will do anything.
 func (m *Manager) WatchEnabled() bool { return m.watchInterval > 0 }
@@ -1290,9 +1367,26 @@ func (m *Manager) ReloadLoop(ctx context.Context) {
 			return
 		case <-ticker.C:
 			m.reloadChanged()
+			if watchTicked != nil {
+				watchTicked()
+			}
 		}
 	}
 }
+
+// watchTicked, when set, is called after every tick of a watch
+// (SetWatchTicked).
+var watchTicked func()
+
+// SetWatchTicked asks for ticked to be called after every tick of the watch
+// of a manager whose loop starts from now on, whatever the tick found, by
+// the loop itself, once the tick has reloaded what it found changed and
+// logged it. It is for tests. A tick that finds nothing changed reads
+// nothing and logs nothing, so a test of an exporter in a child process
+// that must show a tick reloaded nothing has nothing of the exporter's to
+// wait for, and no time it could wait is long enough on a machine busy
+// enough; it waits for the tick itself.
+func SetWatchTicked(ticked func()) { watchTicked = ticked }
 
 // The configuration is reloaded when the watch sees a file change
 // (reloadChanged), on SIGHUP, and on POST /-/reload when the lifecycle API is
@@ -1317,25 +1411,39 @@ const (
 // refused until it was touched again.
 
 // reloadChanged reloads what the watch finds changed: the configuration, when
-// the file or one of its collector files changed, or, after a refused
-// reload, a file it names or one of those imports; and the static target
-// file, when it changed, or, after a refused reload, a file its check opens;
-// and with either, the other when it waits for it. It is one tick of the watch: whatever changed since
-// the last, there is one reload.
+// the file or one of its collector files changed, or a descriptor file of
+// the configuration in force, or, after a refused reload, a file it names or
+// one of those imports; and the static target file, when it changed, or,
+// after a refused reload, a file its check opens, or with the configuration
+// when a descriptor file in force changed and the target file is checked
+// against descriptor files (targetsFollowDescriptors); and with either, the
+// other when it waits for it. It is one tick of the watch: whatever changed
+// since the last, there is one reload.
+//
+// A target file that waits for the configuration is read again when the
+// configuration changes (configChanged), not when a descriptor file of the
+// configuration in force does: the configuration read for that file is the
+// one the target file was refused by, and a descriptor file that its own
+// check opened is among the files it is tried again for (targetsChanged).
 func (m *Manager) reloadChanged() {
 	m.reloadMu.Lock()
 	defer m.reloadMu.Unlock()
-	configChanged, targetsChanged := m.configChanged(), m.targetsChanged()
-	doConfig := configChanged || targetsChanged && m.configWaits
-	doTargets := targetsChanged || configChanged && m.targetsWaits
+	configChanged, descriptorsChanged, targetsChanged := m.configChanged(), m.descriptors.changed(), m.targetsChanged()
+	doConfig := configChanged || descriptorsChanged || targetsChanged && m.configWaits
+	doTargets := targetsChanged || configChanged && m.targetsWaits || descriptorsChanged && m.targetsFollowDescriptors()
 	if !doConfig && !doTargets {
 		return
 	}
 	_ = m.apply(reloadTriggerWatch, doConfig, doTargets)
 }
 
-// configChanged reports whether the configuration file, or one of its
-// collector files, changed since it was last read.
+// configChanged reports whether the configuration changed since it was last
+// read: the file, one of its collector files, or, while the configuration
+// last read is refused, a file it names or one of those imports. The
+// descriptor files of the configuration in force, which the watch reloads
+// for as well, are asked for apart (descriptors): unlike these, they do not
+// read a target file again that waits for the configuration
+// (reloadChanged).
 func (m *Manager) configChanged() bool {
 	st, err := os.Stat(m.path)
 	if err != nil {
@@ -1343,10 +1451,31 @@ func (m *Manager) configChanged() bool {
 	}
 	// A collector file edited, added or removed is a change too, although the
 	// configuration file itself is untouched; and so, while the configuration
-	// last read is refused, is a file it names (retryFiles). Nothing is
-	// logged for a tick that finds them as they were.
+	// last read is refused, is a file it names (retryFiles) or a descriptor
+	// file it was checked against, as that was before the refused load read
+	// it (loading). The files are only stamped: nothing is read, and nothing
+	// logged, for a tick that finds them as they were.
 	return !st.ModTime().Equal(m.lastMod) || st.Size() != m.lastSize || collectorFilesStamp(m.path, m.watchedFiles) != m.collectorFiles ||
-		len(m.retryFiles) > 0 && filesStamp(m.retryFiles) != m.retryStamp
+		len(m.retryFiles) > 0 && filesStamp(m.retryFiles) != m.retryStamp || m.loading.changed()
+}
+
+// targetsFollowDescriptors reports whether the static target file in force
+// is read again with the configuration when a descriptor file of the
+// configuration in force changed, whichever of them it is: one of its
+// targets sets a request.message for a collector that names descriptor
+// files, which the message is checked against (targetsChecked). The tick
+// then reads the target file with the configuration, so a message the new
+// descriptors refuse is reported for the target file, on its own line,
+// rather than only as what the configuration disagrees with. Which of the
+// descriptor files changed is not asked: the stamp is one for all of them,
+// so a target file with such a target is read also for a file of a
+// collector none of its targets uses, and is then found as it was. A target
+// file whose last reload was refused is not the one in force, and is read
+// again only for what it was refused for (targetsChanged, targetsWaits).
+func (m *Manager) targetsFollowDescriptors() bool {
+	c, f := m.InForce()
+	return m.targetPath != "" && f != nil &&
+		!slices.Contains(m.Reloads.Rejected(), ReloadFileStaticTargets) && len(targetsNamedFiles(f, c)) > 0
 }
 
 // targetsChanged reports whether the static target file changed since it was
@@ -1404,10 +1533,17 @@ func (m *Manager) apply(trigger string, doConfig, doTargets bool) error {
 		pairTargets = targets
 		// The files the checks below open for the file just read are
 		// stamped before they are read, as the configuration's are, and kept
-		// if it is refused: one of them back in place is then a change.
+		// if it is refused: one of them back in place is then a change. With
+		// the watch on, so are the files those import, read here to learn
+		// which they are (stampDescriptors): one that changes after the
+		// checks read it, and before the file is refused, is then a change
+		// too.
 		m.targetsRetryChecked = targetsChecked(targets, pairConfig, m.Get())
 		m.targetsRetryFiles = namedFiles(m.targetsRetryChecked)
 		m.targetsRetryStamp = filesStamp(m.targetsRetryFiles)
+		if m.WatchEnabled() {
+			m.targetsRetryFiles, m.targetsRetryStamp, _ = retryImported(m.targetsRetryFiles, m.targetsRetryStamp, m.targetsRetryChecked)
+		}
 	}
 	if agree(pairTargets, pairConfig) == nil {
 		m.install(trigger, cfg, targets)
@@ -1480,13 +1616,23 @@ func (m *Manager) loadConfig() (*model.Config, error) {
 	// them, as the configuration file is, so one replaced while it was read
 	// is a change for the next tick: those of the configuration in force,
 	// and with them those of the one being read as soon as it says which.
+	// The descriptor files of the configuration in force are stamped again
+	// with them: if this load is refused they stay the ones watched, and a
+	// tick reloads for them when they change once more, not at every tick
+	// for the change that was just read. Those of the configuration being
+	// read are stamped with the watch on alone (loading): without it no tick
+	// compares them, and no file is read to learn what it imports.
 	inForce := namedFiles(m.Get())
 	m.retryFiles, m.retryStamp = inForce, filesStamp(inForce)
 	m.retryConfigs, m.retryImports = []*model.Config{m.Get()}, false
+	m.descriptors.stamp, m.loading = filesStamp(m.descriptors.files), stampedFiles{}
 	c, err := load(m.path, m.loadOptions(), func(candidate *model.Config) {
 		m.retryFiles = namedFiles(m.Get(), candidate)
 		m.retryStamp = filesStamp(m.retryFiles)
 		m.retryConfigs = []*model.Config{m.Get(), candidate}
+		if m.WatchEnabled() {
+			m.loading = stampDescriptors(candidate)
+		}
 	})
 	if err != nil {
 		return nil, err
@@ -1550,9 +1696,12 @@ func (m *Manager) install(trigger string, c *model.Config, f *model.StaticTarget
 // kept for a configuration follow it. reloadMu is held.
 func (m *Manager) installedConfig(trigger string, c *model.Config) {
 	m.configWaits = false
-	// In force, the configuration is not read again for a file it names:
-	// what uses a certificate or a credential file reads it again itself.
+	// In force, the configuration is not read again for a certificate or a
+	// credential file it names: what uses one reads it again itself. It is
+	// for its descriptor files, which it is checked against: they are
+	// watched from now as they were before this load read them.
 	m.retryFiles, m.retryStamp, m.retryConfigs, m.retryImports = nil, "", nil, false
+	m.descriptors, m.loading = m.loading, stampedFiles{}
 	m.Reloads.record(reloadFileConfig, true)
 	// Interpreters of scripts this reload removed or changed are stopped now
 	// rather than after the idle timeout.
@@ -1581,7 +1730,19 @@ func (m *Manager) installedTargets(trigger string, f *model.StaticTargetFile) {
 // that changes. reloadMu is held.
 func (m *Manager) rejectConfig(trigger string, err error, waits bool) error {
 	m.configWaits = waits
-	m.retryFiles, m.retryStamp, m.retryImports = retryImported(m.retryFiles, m.retryStamp, m.retryConfigs...)
+	// With the watch on, the descriptor files of the configuration that was
+	// read, named and imported, were stamped before it was validated, and
+	// stay watched as they were then (loading): were they looked at again
+	// now, a file mended since the load read it would be stamped as mended,
+	// and the refused configuration never read again. Only the imports of
+	// the configuration in force, which this load need not have read, are
+	// looked at here.
+	configs := m.retryConfigs
+	if m.WatchEnabled() {
+		configs = configs[:1]
+	}
+	m.retryFiles, m.retryStamp, m.retryImports = retryImported(m.retryFiles, m.retryStamp, configs...)
+	m.retryImports = m.retryImports || m.loading.imports
 	// The file is named, as a collector file's error names its own: a YAML
 	// error's line number means nothing without it. Problems that are all
 	// in one collector file are logged against that file.
@@ -1603,8 +1764,11 @@ func (m *Manager) rejectConfig(trigger string, err error, waits bool) error {
 func (m *Manager) rejectTargets(trigger string, err error, waits bool) error {
 	m.targetsWaits = waits
 	// The files its check opens are those the collectors name and those
-	// that these import.
-	m.targetsRetryFiles, m.targetsRetryStamp, _ = retryImported(m.targetsRetryFiles, m.targetsRetryStamp, m.targetsRetryChecked)
+	// that these import, which with the watch on were stamped before the
+	// check read them (apply).
+	if !m.WatchEnabled() {
+		m.targetsRetryFiles, m.targetsRetryStamp, _ = retryImported(m.targetsRetryFiles, m.targetsRetryStamp, m.targetsRetryChecked)
+	}
 	attrs := []any{"trigger", trigger, "file", m.targetPath, "error", err}
 	var stamped []string
 	if len(m.targetsRetryFiles) > 0 {

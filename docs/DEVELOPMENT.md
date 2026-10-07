@@ -457,7 +457,17 @@ stays in the delay, once that is over, until the test lets it go
 (`exporterProcess.endDelay` in `shutdown_http_test.go`): the child replaces
 the wait, `waitOutShutdownDelay` in `main.go`, which is a variable for that
 alone and which nothing but a test may set
-(`TestOnlyTestsHoldTheShutdownDelay`). A deadline the exporter sets on a
+(`TestOnlyTestsHoldTheShutdownDelay`). A test that has to show a tick of the
+configuration watch reloaded nothing has nothing of the exporter's to wait
+for, since such a tick logs nothing: its child says when each tick is over,
+behind whatever the tick logged (`config.SetWatchTicked`, set by the child
+for `helperSaysTicksEnv` in `shutdown_test.go`, and a test's alone by
+`TestOnlyTestsGiveScriptsALeastTime`), and the test reads the child's lines
+in their order (`watchstartup_grpc_test.go`). What that test has the
+interpreter of the child wait on is a named pipe of which the test holds
+both ends, not a file looked for in a loop, and the child leads a process
+group that the test ends, so a test that fails midway leaves nothing
+running. A deadline the exporter sets on a
 connection is read from the connection, not waited out
 (`notedConn` in `internal/exporter/answerwrite_test.go`).
 

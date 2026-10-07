@@ -160,22 +160,33 @@ func applyPathParams(raw string, values []string) string {
 // A parameter the path does not use is rejected too. It is almost always a
 // misspelling — param_tenat for param_tenant — and when the placeholder has a
 // default, the misspelled scrape would otherwise succeed against the default
-// tenant and report its numbers as the intended one's.
+// tenant and report its numbers as the intended one's. A parameter that
+// fills a label value of the collector is used (labelparams.go).
+//
+// The refusal names the places a placeholder of the collector can stand in,
+// which are those of its request type (requestTemplates): an operator sent
+// to look at the body of a graphite collector, which has none, or past the
+// expressions that hold its placeholders, looks in the wrong place.
 func CheckPathParams(c *model.Collector, overrides RequestOverrides) error {
 	unused, err := CheckRequestParams(c, overrides)
 	if err != nil || len(unused) == 0 {
 		return err
 	}
 	if overrides.PathSet {
-		return fmt.Errorf("probe parameters %s are not used: the path probe parameter replaces request.path, and nothing else in the request names them", strings.Join(unused, ", "))
+		return fmt.Errorf("probe parameters %s are not used: the path probe parameter replaces request.path, and nothing else in the request and no label value of the collector names them", strings.Join(unused, ", "))
 	}
-	if c.Request.Type == RequestTypeGRPC {
+	switch c.Request.Type {
+	case RequestTypeGRPC:
 		if overrides.Message != nil {
-			return fmt.Errorf("probe parameters %s are not used: the message probe parameter replaces request.message, and nothing else in the request names them", strings.Join(unused, ", "))
+			return fmt.Errorf("probe parameters %s are not used: the message probe parameter replaces request.message, and nothing else in the request and no label value of the collector names them", strings.Join(unused, ", "))
 		}
-		return fmt.Errorf("probe parameters %s are not used by collector %q: no placeholder in its request.message or metadata values names them", strings.Join(unused, ", "), c.Name)
+		return fmt.Errorf("probe parameters %s are not used by collector %q: no placeholder in its request.message, its metadata values or its label values names them", strings.Join(unused, ", "), c.Name)
+	case RequestTypeGraphite:
+		return fmt.Errorf("probe parameters %s are not used by collector %q: no placeholder in its request.targets, its request.path (%q), its header or query values or its label values names them", strings.Join(unused, ", "), c.Name, c.Request.Path)
+	case RequestTypeLocalFile:
+		return fmt.Errorf("probe parameters %s are not used by collector %q: no placeholder in its request.path (%q) or its label values names them", strings.Join(unused, ", "), c.Name, c.Request.Path)
 	}
-	return fmt.Errorf("probe parameters %s are not used by collector %q: no placeholder in its request.path (%q), body, header or query values names them", strings.Join(unused, ", "), c.Name, c.Request.Path)
+	return fmt.Errorf("probe parameters %s are not used by collector %q: no placeholder in its request.path (%q), body, header or query values or its label values names them", strings.Join(unused, ", "), c.Name, c.Request.Path)
 }
 
 // requestLabel is the URL a verbose self-metric carries for a request. Path

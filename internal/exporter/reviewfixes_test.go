@@ -73,6 +73,11 @@ func TestTargetOwnSectionsAreCounted(t *testing.T) {
 // from the whole definition, and this keeps it so for a setting added later,
 // such as one kept out of the encoding. Each settable leaf of the collector,
 // set on its own, changes the key; lists and mappings are set as a whole.
+//
+// LabelParams is the one thing a collector holds that is kept out of its
+// encoding, and it is no setting: it is what the load read of the
+// placeholders in transform.labels and in the rules' labels
+// (fetch.ParseLabelParams), which are settings, and in the key.
 func TestEverySettingChangesTheCacheKey(t *testing.T) {
 	type leaf struct {
 		name  string
@@ -88,7 +93,9 @@ func TestEverySettingChangesTheCacheKey(t *testing.T) {
 				continue
 			}
 			if key == "-" {
-				t.Errorf("%s%s is kept out of the collector's encoding, so out of its cache key", prefix, field.Name)
+				if prefix+field.Name != "LabelParams" {
+					t.Errorf("%s%s is kept out of the collector's encoding, so out of its cache key", prefix, field.Name)
+				}
 				continue
 			}
 			at := append(append([]int(nil), index...), i)

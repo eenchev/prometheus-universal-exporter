@@ -565,7 +565,7 @@
                         "type": "boolean"
                       },
                       "value": {
-                        "description": "A static label value, exported as written.",
+                        "description": "A static label value, exported as written. May contain {{param_name}} placeholders, filled from the probe's parameters; see docs/REQUESTS.md#in-label-values.",
                         "type": [
                           "string",
                           "number",
@@ -1348,7 +1348,7 @@
                     "boolean"
                   ]
                 },
-                "description": "Constant labels given to every metric the collector exports, over a label of the same name a rule gave. A value written \"\" is the label left out. See docs/CONFIGURATION.md#collector-wide-labels.",
+                "description": "Constant labels given to every metric the collector exports, over a label of the same name a rule gave. A value written \"\" is the label left out. Values may contain {{param_name}} placeholders, filled from the probe's parameters. See docs/CONFIGURATION.md#collector-wide-labels.",
                 "type": "object"
               },
               "libraries": {

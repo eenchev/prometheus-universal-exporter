@@ -60,7 +60,9 @@ func TestNoTestRunsInParallel(t *testing.T) {
 // start timeout is the constant. Two more of the exporter's ten seconds are
 // the same: only the tests give a TLS handshake with a target, or the headers
 // of a request to the exporter, another time; and so are the twenty seconds
-// of an attempt to connect to a grpc target. A call is looked for with and
+// of an attempt to connect to a grpc target. And only the tests have the
+// ticks of the configuration watch reported to them: the exporter's own
+// watch tells nobody of a tick. A call is looked for with and
 // without the package or the value it is called on, so one from within the
 // setter's own package counts too; the setter's declaration and a comment
 // are no call.
@@ -71,6 +73,7 @@ func TestOnlyTestsGiveScriptsALeastTime(t *testing.T) {
 		{"SetTLSHandshakeTimeout", "gives every TLS handshake with a target another time than the exporter's"},
 		{"SetGRPCConnectTimeout", "gives every attempt to connect to a grpc target another time than the exporter's"},
 		{"SetReadHeaderTimeout", "gives the headers of a request to the exporter another time than the exporter's"},
+		{"SetWatchTicked", "has every tick of the configuration watch reported"},
 	} {
 		call := setter.name + "("
 		calls := 0

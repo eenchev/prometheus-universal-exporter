@@ -112,14 +112,23 @@ type RequestType struct {
 // import, and the places an imported file was looked for at and not found.
 // The watch of the configuration stamps them while a reload is refused, so
 // a reload refused for an imported file is tried again when that file
-// changes or appears, as one refused for a file the configuration names is.
+// changes or appears, as one refused for a file the configuration names is,
+// and while the configuration is in force, so one changing is checked
+// against the configuration at the next tick.
 //
 // The files are read now when they were never read, or changed since they
 // were. read is a mark of the reading the paths are of: the same mark from a
 // later call says nothing the reading looked at has changed between the
 // reading and that call.
+//
+// The collector need not have been validated: the watch asks before the
+// configuration is, to stamp the files before the validation reads them. Its
+// request.type is therefore taken as ValidateRequest names it, whatever its
+// case and the blanks around it, so that a collector written `type: GRPC`
+// has the files it will have once it is validated. Of a validated collector,
+// whose type is written as the types are named, this changes nothing.
 func ReadFiles(c *model.Collector) (paths []string, read string) {
-	if rt := requestTypeOf(c); rt != nil && rt.ReadFiles != nil {
+	if rt := RequestTypes[strings.ToLower(strings.TrimSpace(c.Request.Type))]; rt != nil && rt.ReadFiles != nil {
 		return rt.ReadFiles(c)
 	}
 	return nil, ""

@@ -103,7 +103,9 @@ An expression may hold [`{{param_<name>}}` placeholders](REQUESTS.md#path-parame
 filled from the probe's `param_<name>`, or the default after the colon:
 `{{param_env:prod}}`. A placeholder with no default that the probe does not
 fill fails the probe with `400` before Graphite is asked, as does a
-`param_<name>` that no placeholder uses.
+`param_<name>` that no placeholder uses. The collector's fixed label values,
+`transform.labels` and a rule's static `value`, take placeholders too ([In
+label values](REQUESTS.md#in-label-values)).
 
 A value lands inside a Graphite expression, which has no escaping, so it may
 hold only what a path node or a tag value is made of: letters, digits and
@@ -112,7 +114,9 @@ refused with `400`, since it could change the expression rather than fill a
 value in it: `x'),sumSeries('y` would otherwise add a series nobody
 configured. A default is held to the same rule when the configuration loads:
 `{{param_env:prod*}}` stops the exporter at startup, since every probe that
-left `param_env` out would be refused.
+left `param_env` out would be refused. The rule is the expression's: a
+parameter that fills only a label value is written as given, and one that
+fills both is held to it.
 
 ## The series document
 

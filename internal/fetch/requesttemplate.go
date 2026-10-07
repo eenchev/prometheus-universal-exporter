@@ -49,6 +49,11 @@ import (
 // query value and a target, `{{` opens a placeholder only when `param_` follows it, since a
 // body may well contain braces of its own; `{{ param_x }}` with spaces is
 // refused rather than sent as text. In a path, `{{` always opens one.
+//
+// A brace before a placeholder is a brace: in `{{{param_x}}}`, and in a
+// Graphite list `{{{param_a}},db}`, the first `{` is the text's own and the
+// two after it open the placeholder, so every `{{` of a run of braces is
+// looked at, each one byte after the last, and not every second one.
 
 // The filters a body placeholder may name.
 var bodyFilters = []string{"json", "number", "form", "xml", "raw"}
@@ -64,6 +69,13 @@ var graphiteValue = regexp.MustCompile(`^[A-Za-z0-9_.:@%+~-]*$`)
 // makes every `{{` a placeholder; otherwise only `{{param_`. filters allows a
 // |filter.
 func parsePlaceholders(where, text string, strict, filters bool) ([]pathPlaceholder, error) {
+	return parsePlaceholdersOf(where, text, strict, filters, "filters apply only in request.body, and a path, header or query value is always encoded one way")
+}
+
+// parsePlaceholdersOf is parsePlaceholders for a place that says in its own
+// words, unfiltered, why a placeholder of it takes no filter: a label value
+// is no part of the request (labelparams.go).
+func parsePlaceholdersOf(where, text string, strict, filters bool, unfiltered string) ([]pathPlaceholder, error) {
 	var out []pathPlaceholder
 	for offset := 0; ; {
 		open := strings.Index(text[offset:], "{{")
@@ -75,7 +87,11 @@ func parsePlaceholders(where, text string, strict, filters bool) ([]pathPlacehol
 			after := text[open+2:]
 			trimmed := strings.TrimLeft(after, " \t")
 			if !strings.HasPrefix(trimmed, PathParamPrefix) {
-				offset = open + 2
+				// These two braces open nothing, but the second may be
+				// the first of two that do, as in {{{param_x}}: it is
+				// looked at next, where a step over both would pass the
+				// placeholder by and leave it unfilled.
+				offset = open + 1
 				continue
 			}
 			if len(trimmed) != len(after) {
@@ -91,7 +107,7 @@ func parsePlaceholders(where, text string, strict, filters bool) ([]pathPlacehol
 		filter := ""
 		if i := strings.LastIndex(inner, "|"); i >= 0 {
 			if !filters {
-				return nil, fmt.Errorf("%s placeholder {{%s}} has a filter; filters apply only in request.body, and a path, header or query value is always encoded one way", where, inner)
+				return nil, fmt.Errorf("%s placeholder {{%s}} has a filter; %s", where, inner, unfiltered)
 			}
 			filter = inner[i+1:]
 			if !slices.Contains(bodyFilters, filter) {
@@ -296,8 +312,9 @@ func requestParamNames(c *model.Collector, overrides RequestOverrides) (map[stri
 	return used, nil
 }
 
-// RequestParam is a parameter a collector's request takes from the probe, as
-// param_<name>: the value a {{param_<name>}} placeholder is filled with.
+// RequestParam is a parameter a collector takes from the probe, as
+// param_<name>: the value a {{param_<name>}} placeholder of its request or
+// of its label values is filled with.
 type RequestParam struct {
 	Name string
 	// Required is set when some placeholder naming it has no default, so a
@@ -306,10 +323,10 @@ type RequestParam struct {
 	Default  string
 }
 
-// RequestParams lists the parameters a collector's request takes, in its
-// path, templated body, headers and query values, sorted by name. A request
-// whose placeholders cannot be parsed takes none; the configuration refuses
-// it before it gets here.
+// RequestParams lists the parameters a collector takes, in its request's
+// path, templated body, headers and query values and in its label values
+// (labelparams.go), sorted by name. A request whose placeholders cannot be
+// parsed takes none; the configuration refuses it before it gets here.
 func RequestParams(c *model.Collector) []RequestParam {
 	var placeholders []pathPlaceholder
 	if HasPathParams(c.Request.Path) {
@@ -326,6 +343,7 @@ func RequestParams(c *model.Collector) []RequestParam {
 		}
 		placeholders = append(placeholders, found...)
 	}
+	placeholders = append(placeholders, labelPlaceholders(c.LabelParams)...)
 	byName := map[string]*RequestParam{}
 	var names []string
 	for _, p := range placeholders {
@@ -351,7 +369,10 @@ func RequestParams(c *model.Collector) []RequestParam {
 
 // CheckRequestParams binds every placeholder of a request against the
 // parameters without sending anything, so a missing or unfit value is known
-// before the target is contacted, and reports parameters nothing uses.
+// before the target is contacted, and reports parameters nothing uses. The
+// placeholders of the collector's label values are bound with them
+// (labelparams.go): a parameter one of those names is used, whatever the
+// request names and whatever of it the probe replaced.
 func CheckRequestParams(c *model.Collector, overrides RequestOverrides) (unused []string, err error) {
 	used, err := requestParamNames(c, overrides)
 	if err != nil {
@@ -364,6 +385,11 @@ func CheckRequestParams(c *model.Collector, overrides RequestOverrides) (unused 
 	}
 	for _, f := range requestTemplates(c, overrides) {
 		if _, err := f.render(overrides.Params); err != nil {
+			return nil, err
+		}
+	}
+	if labels := c.LabelParams; labels != nil {
+		if err := checkLabelParams(labels, overrides.Params, used); err != nil {
 			return nil, err
 		}
 	}

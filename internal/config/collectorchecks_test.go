@@ -196,23 +196,28 @@ func TestANullMappingKeyIsRefused(t *testing.T) {
 	}
 }
 
-// A {{param_...}} placeholder is filled in only where the request takes one.
-// In any other setting of a collector it would be used as written — sent as
-// the token, exported as the label — so it is refused naming the field. Where
-// placeholders are filled in, they still load.
+// A {{param_...}} placeholder is filled in only where the request takes one
+// and in a fixed label value. In any other setting of a collector it would
+// be used as written — sent as the token, mapped as the value — so it is
+// refused naming the field, and the refusal names the label values among the
+// places that are filled. A label's value beside an expression is no static
+// label's, and is refused with the rest. Where placeholders are filled in,
+// they still load.
 func TestAPlaceholderWhereNoneIsFilledIsRefused(t *testing.T) {
 	for name, test := range map[string]struct{ request, collector, metric, where string }{
-		"bearer_token":           {"      bearer_token: \"{{param_token:abc}}\"\n", "", "", "request.bearer_token"},
-		"basic_auth username":    {"      basic_auth: {username: \"{{param_user}}\", password: x}\n", "", "", "request.basic_auth.username"},
-		"basic_auth password":    {"      basic_auth: {username: u, password: \"{{param_password}}\"}\n", "", "", "request.basic_auth.password"},
-		"tls.server_name":        {"      tls: {server_name: \"{{param_host}}\"}\n", "", "", "request.tls.server_name"},
-		"bearer_token_file":      {"      bearer_token_file: \"/run/{{param_tenant}}/token\"\n", "", "", "request.bearer_token_file"},
-		"a basic_auth_file path": {"      basic_auth_file: {username: \"/run/{{param_tenant}}/user\", password: /run/password}\n", "", "", "request.basic_auth_file.username"},
-		"transform.labels":       {"", "    transform: {type: jq, labels: {tenant: \"{{param_tenant:acme}}\"}}\n", "", "transform.labels.tenant"},
-		"a static label value":   {"", "", "        labels:\n          - name: region\n            value: \"{{param_region:eu}}\"\n", `metric "m" label "region" value`},
-		"a metric's value_map":   {"", "", "        value_map: {\"{{param_state}}\": 1}\n", `metric "m" value_map`},
-		"a label's value_map":    {"", "", "        labels:\n          - name: region\n            expression: .region\n            value_map: {eu: \"{{param_region}}\"}\n", `metric "m" label "region" value_map.eu`},
-		"with a space":           {"      bearer_token: \"{{ param_token }}\"\n", "", "", "request.bearer_token"},
+		"bearer_token":                 {"      bearer_token: \"{{param_token:abc}}\"\n", "", "", "request.bearer_token"},
+		"basic_auth username":          {"      basic_auth: {username: \"{{param_user}}\", password: x}\n", "", "", "request.basic_auth.username"},
+		"basic_auth password":          {"      basic_auth: {username: u, password: \"{{param_password}}\"}\n", "", "", "request.basic_auth.password"},
+		"tls.server_name":              {"      tls: {server_name: \"{{param_host}}\"}\n", "", "", "request.tls.server_name"},
+		"bearer_token_file":            {"      bearer_token_file: \"/run/{{param_tenant}}/token\"\n", "", "", "request.bearer_token_file"},
+		"a basic_auth_file path":       {"      basic_auth_file: {username: \"/run/{{param_tenant}}/user\", password: /run/password}\n", "", "", "request.basic_auth_file.username"},
+		"a transform.labels name":      {"", "    transform: {type: jq, labels: {\"{{param_tenant:acme}}\": x}}\n", "", "transform.labels"},
+		"a rename_labels target":       {"", "    transform: {type: jq, rename_labels: {tenant: \"{{param_tenant:acme}}\"}}\n", "", "transform.rename_labels.tenant"},
+		"a value beside an expression": {"", "", "        labels:\n          - name: region\n            expression: .region\n            value: \"{{param_region:eu}}\"\n", `metric "m" label "region" value`},
+		"a label's name":               {"", "", "        labels:\n          - name: \"{{param_region:eu}}\"\n            value: x\n", `metric "m" label "{{param_region:eu}}" name`},
+		"a metric's value_map":         {"", "", "        value_map: {\"{{param_state}}\": 1}\n", `metric "m" value_map`},
+		"a label's value_map":          {"", "", "        labels:\n          - name: region\n            expression: .region\n            value_map: {eu: \"{{param_region}}\"}\n", `metric "m" label "region" value_map.eu`},
+		"with a space":                 {"      bearer_token: \"{{ param_token }}\"\n", "", "", "request.bearer_token"},
 	} {
 		collector := test.collector
 		document := checkedCollector(test.request, "", test.metric)
@@ -220,14 +225,14 @@ func TestAPlaceholderWhereNoneIsFilledIsRefused(t *testing.T) {
 			document = strings.Replace(document, "    transform: {type: jq}\n", collector, 1)
 		}
 		_, err := Load(testutil.WriteFile(t, "config.yaml", document))
-		want := fmt.Sprintf(`collector "a" %s has a {{param_...}} placeholder, which is not filled in there and would be used as written; a probe's parameters fill placeholders only in the request's path, body, header and query values`, test.where)
+		want := fmt.Sprintf(`collector "a" %s has a {{param_...}} placeholder, which is not filled in there and would be used as written; a probe's parameters fill placeholders only in the request's path, body, header and query values, a grpc message and metadata values, a graphite collector's targets, and the label values of transform.labels and of a metric rule's static label`, test.where)
 		if err == nil || !strings.Contains(err.Error(), want) {
 			t.Errorf("%s: error %v, want %q", name, err, want)
 		}
 	}
 	// Every mistake of the kind is reported in one pass.
-	_, err := loadChecked(t, "      bearer_token: \"{{param_token}}\"\n", "", "        labels:\n          - name: region\n            value: \"{{param_x}}\"\n")
-	if err == nil || !strings.Contains(err.Error(), "request.bearer_token") || !strings.Contains(err.Error(), `metric "m" label "region" value`) {
+	_, err := loadChecked(t, "      bearer_token: \"{{param_token}}\"\n", "", "        labels:\n          - name: region\n            expression: .region\n            value_map: {eu: \"{{param_x}}\"}\n")
+	if err == nil || !strings.Contains(err.Error(), "request.bearer_token") || !strings.Contains(err.Error(), `metric "m" label "region" value_map.eu`) {
 		t.Errorf("two placeholders: %v", err)
 	}
 	cfg, err := loadChecked(t, "      method: POST\n      path: /api/{{param_tenant:acme}}\n      headers: {X-Tenant: \"{{param_tenant:acme}}\"}\n      query: {region: \"{{param_region:eu}}\"}\n      body: '{\"service\": {{param_service:web|json}}}'\n      bearer_token: \"{{not_a_param}}\"\n", "", "")

@@ -21,7 +21,9 @@ import (
 // refused because one of those was missing, or did not compile, was never
 // tried again: the watch looked at the named files alone. The files the
 // compile looked at are now watched with them while the reload is refused,
-// for the configuration and for the static target file.
+// for the configuration and for the static target file; those of the
+// configuration in force are watched as long as it is
+// (watchdescriptors_grpc_test.go).
 
 // The .proto files of these tests: a service whose file imports a
 // well-known file and the file of its request, which imports another, so the
@@ -142,7 +144,7 @@ func writeService(t *testing.T, dir string) (service, types, base string) {
 // nothing, compile nothing and log nothing. The files watched meanwhile are
 // the named file and those the compile read, and no place of a well-known
 // file. Once the configuration is in force, the imported file changing
-// reloads nothing: the collector reads it again itself.
+// reloads it once more, and no file is watched as one of a refused reload.
 func TestAReloadRefusedForAnImportedFileIsTriedAgainWhenThatFileIsMended(t *testing.T) {
 	dir := t.TempDir()
 	service, types, base := writeService(t, dir)
@@ -170,11 +172,15 @@ func TestAReloadRefusedForAnImportedFileIsTriedAgainWhenThatFileIsMended(t *test
 		t.Fatalf("with the imported file mended: logged %v, in force %s", line, versionInForce(p))
 	}
 
-	// In force, the configuration is not read again for the file.
+	// In force, the configuration is read again for the file, once.
 	writeProto(t, dir, importedBase, baseWithRegion)
+	p.manager.reloadChanged()
+	if line = theLine(t, logs); line["msg"] != "configuration reloaded" || line["trigger"] != reloadTriggerWatch {
+		t.Fatalf("with the imported file changed in force: logged %v", line)
+	}
 	quietTicks(t, p, logs, looks, reloadFileConfig)
 	if len(p.manager.retryFiles) != 0 {
-		t.Fatalf("files are watched for a configuration in force: %v", p.manager.retryFiles)
+		t.Fatalf("files are watched for a refused reload of a configuration in force: %v", p.manager.retryFiles)
 	}
 }
 
@@ -282,52 +288,66 @@ func TestTheImportedFilesWatchedAreTheOnesTheImportPathsResolved(t *testing.T) {
 	}
 }
 
-// An imported file that changes between the load's reading of it and the
-// stamp taken of it afterwards is a change the next tick sees, as an edit
-// made while a named file was being read is: the refused configuration is
-// read once more, and the ticks after that are quiet again.
+// An imported file that changes between a reading of it and the stamp taken
+// of it afterwards is a change the next tick sees, as an edit made while a
+// named file was being read is: the refused configuration is read once
+// more, and the ticks after that are quiet again. It is so for each of the
+// two readings a refused reload stamps: that of the configuration being
+// read, before it is validated, and that of the configuration in force,
+// when the reload is refused.
 func TestAnImportedFileChangedWhileItWasReadIsReadAtTheNextTick(t *testing.T) {
-	dir := t.TempDir()
-	writeService(t, dir)
-	p, logs, looks := importingPair(t, dir, dir)
-	writeProto(t, dir, importedBase, baseBroken)
-	p.write(t, p.configPath, importingDocument("v2", plainMessage, dir, dir))
-	// The file is written again, as broken as it was, after the load and
-	// the first look at what it read, before the look that settles the
-	// stamp.
-	counting := readFiles
-	calls := 0
-	readFiles = func(c *model.Collector) ([]string, string) {
-		if calls++; calls == 3 {
-			writeProto(t, dir, importedBase, baseBroken+"// again\n")
-		}
-		return counting(c)
-	}
-	p.manager.reloadChanged()
-	readFiles = counting
-	if line := theLine(t, logs); line["msg"] != "configuration reload rejected" {
-		t.Fatalf("with the imported file broken: logged %v", line)
-	}
-	p.manager.reloadChanged()
-	if line := theLine(t, logs); line["msg"] != "configuration reload rejected" {
-		t.Fatalf("at the tick after the file changed under the stamp: logged %v", line)
-	}
-	if _, failures := p.reloads(reloadFileConfig); failures != 2 {
-		t.Fatalf("%d reloads refused, want the one that read the file and the one after it changed", failures)
-	}
-	quietTicks(t, p, logs, looks, reloadFileConfig)
-	writeProto(t, dir, importedBase, baseSource)
-	p.manager.reloadChanged()
-	if line := theLine(t, logs); line["msg"] != "configuration reloaded" || versionInForce(p) != "v2" {
-		t.Fatalf("with the imported file mended: logged %v, in force %s", line, versionInForce(p))
+	for name, look := range map[string]int{
+		// The reload looks at the files four times: twice at the
+		// configuration being read, to read what it imports and then, the
+		// files stamped, to see that reading is still the one; and twice at
+		// the configuration in force, when the reload is refused. The file
+		// is written again, as broken as it was, before the second look of a
+		// pair, when its stamp has been taken.
+		"of the configuration being read": 2,
+		"of the configuration in force":   4,
+	} {
+		t.Run(name, func(t *testing.T) {
+			dir := t.TempDir()
+			writeService(t, dir)
+			p, logs, looks := importingPair(t, dir, dir)
+			writeProto(t, dir, importedBase, baseBroken)
+			p.write(t, p.configPath, importingDocument("v2", plainMessage, dir, dir))
+			counting := readFiles
+			calls := 0
+			readFiles = func(c *model.Collector) ([]string, string) {
+				if calls++; calls == look {
+					writeProto(t, dir, importedBase, baseBroken+"// again\n")
+				}
+				return counting(c)
+			}
+			p.manager.reloadChanged()
+			readFiles = counting
+			if line := theLine(t, logs); line["msg"] != "configuration reload rejected" || calls != 4 {
+				t.Fatalf("with the imported file broken: logged %v after %d looks, want four", line, calls)
+			}
+			p.manager.reloadChanged()
+			if line := theLine(t, logs); line["msg"] != "configuration reload rejected" {
+				t.Fatalf("at the tick after the file changed under the stamp: logged %v", line)
+			}
+			if _, failures := p.reloads(reloadFileConfig); failures != 2 {
+				t.Fatalf("%d reloads refused, want the one that read the file and the one after it changed", failures)
+			}
+			quietTicks(t, p, logs, looks, reloadFileConfig)
+			writeProto(t, dir, importedBase, baseSource)
+			p.manager.reloadChanged()
+			if line := theLine(t, logs); line["msg"] != "configuration reloaded" || versionInForce(p) != "v2" {
+				t.Fatalf("with the imported file mended: logged %v, in force %s", line, versionInForce(p))
+			}
+		})
 	}
 }
 
 // The static target file is held to the same: a reload of it refused because
 // a file its collector's .proto file imports did not compile, or lacked a
 // field the target's message sets, is tried again at the tick after that
-// file changes, the target file untouched, and the configuration, which did
-// not change, is not read. The ticks between read nothing and log nothing.
+// file changes, the target file untouched; the configuration, whose
+// descriptor file it is, is read with it each time, and its line comes
+// first. The ticks between read nothing and log nothing.
 func TestARefusedTargetFileIsTriedAgainWhenAnImportedFileChanges(t *testing.T) {
 	dir := t.TempDir()
 	service, types, base := writeService(t, dir)
@@ -336,8 +356,19 @@ func TestARefusedTargetFileIsTriedAgainWhenAnImportedFileChanges(t *testing.T) {
 
 	writeProto(t, dir, importedBase, baseBroken)
 	p.write(t, p.targetsAt, importingTargets(regionMessage))
+	// both is the two lines of a tick that read both files, the
+	// configuration's with the message it must have.
+	both := func(configLine string) map[string]any {
+		t.Helper()
+		lines := testutil.AssertJSONLines(t, logs, 2)
+		logs.Reset()
+		if lines[0]["msg"] != configLine {
+			t.Fatalf("the configuration's line is %v, want %q", lines[0], configLine)
+		}
+		return lines[1]
+	}
 	p.manager.reloadChanged()
-	line := theLine(t, logs)
+	line := both("configuration reload rejected")
 	if line["msg"] != "static target reload rejected" || !strings.Contains(line["error"].(string), "base.proto:3:") || inForce() != "" {
 		t.Fatalf("with the imported file broken: logged %v, in force %q", line, inForce())
 	}
@@ -353,7 +384,7 @@ func TestARefusedTargetFileIsTriedAgainWhenAnImportedFileChanges(t *testing.T) {
 	// reload, refused and logged once.
 	writeProto(t, dir, importedBase, baseSource)
 	p.manager.reloadChanged()
-	line = theLine(t, logs)
+	line = both("configuration reloaded")
 	if line["msg"] != "static target reload rejected" || !strings.Contains(line["error"].(string), "region") || inForce() != "" {
 		t.Fatalf("with the imported file without the field: logged %v, in force %q", line, inForce())
 	}
@@ -361,14 +392,12 @@ func TestARefusedTargetFileIsTriedAgainWhenAnImportedFileChanges(t *testing.T) {
 
 	writeProto(t, dir, importedBase, baseWithRegion)
 	p.manager.reloadChanged()
-	line = theLine(t, logs)
+	line = both("configuration reloaded")
 	if line["msg"] != "static targets reloaded" || line["trigger"] != reloadTriggerWatch || inForce() != regionMessage {
 		t.Fatalf("with the field in the imported file: logged %v, in force %q", line, inForce())
 	}
-	if successes, failures := p.reloads(reloadFileConfig); successes != 0 || failures != 0 {
-		t.Fatalf("the configuration, unchanged, was read: %d reloads, %d refused", successes, failures)
+	if successes, failures := p.reloads(reloadFileConfig); successes != 2 || failures != 1 {
+		t.Fatalf("the configuration was read at each change of its descriptor file: %d reloads, %d refused, want 2 and 1", successes, failures)
 	}
-	// In force, the target file is not read again for the file.
-	writeProto(t, dir, importedBase, baseSource)
 	quietTicks(t, p, logs, looks, ReloadFileStaticTargets)
 }

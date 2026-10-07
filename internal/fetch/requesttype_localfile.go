@@ -76,7 +76,11 @@ func init() {
 		Display: func(target string) string { return target },
 		Stage:   "file",
 		CheckOverride: func(c *model.Collector, key string) error {
-			if readsDirectory(c) && (key == "path" || strings.HasPrefix(key, PathParamPrefix)) {
+			// A param_ parameter can still fill a label value of the
+			// collector (labelparams.go): when its labels hold a
+			// placeholder, which parameters are used is for the check of
+			// the placeholders to say (CheckPathParams).
+			if readsDirectory(c) && (key == "path" || strings.HasPrefix(key, PathParamPrefix) && c.LabelParams == nil) {
 				return fmt.Errorf("collector %q reads every file of a directory that request.files matches, so there is no file for it to name; name a directory with the target instead", c.Name)
 			}
 			return nil

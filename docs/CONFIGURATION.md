@@ -624,6 +624,11 @@ like any other, exported as written. For a static label on
 every metric of a collector, use [`transform.labels`](#collector-wide-labels)
 instead.
 
+A `value` may hold `{{param_<name>}}` placeholders, which the probe's
+parameters fill as they fill the request's: `value: "api-{{param_tenant}}"`
+is `api-acme` on the series of a probe with `&param_tenant=acme`. See
+[In label values](REQUESTS.md#in-label-values) for the rules.
+
 Label expressions use the same transform-specific language as the metric
 expression. For CSV, each row produces a metric and `expression: server`
 selects that row's `server` column.
@@ -840,6 +845,23 @@ rule labelled `site="rack1"` is exported with `site="dc1"`. A value written
 ([Editor support](#editor-support)): `labels: {site: ""}` adds no label,
 where it used to export `site=""`, and a series that has a `site` of its own
 keeps it.
+
+A `transform.labels` value may hold `{{param_<name>}}` placeholders, which
+the probe's parameters fill as they fill the request's, so one collector
+labels its series with a value only the scrape knows:
+
+```yaml
+transform:
+  type: jq
+  labels:
+    tenant: "{{param_tenant}}"      # &param_tenant=acme -> tenant="acme"
+    region: "{{param_region:eu}}"   # eu unless the probe says otherwise
+```
+
+A probe that leaves out a parameter without a default is answered `400`
+before the target is contacted, and a value filled to nothing — an empty
+default the probe does not replace — is the label left out, as `""` is. The
+rules are in [In label values](REQUESTS.md#in-label-values).
 
 A `prometheus` transform passing metrics through without `metrics` rules can
 also pick and rename them: `include` and `exclude` are patterns a metric name
@@ -1192,6 +1214,10 @@ script's series and says nothing else: its `type`, `description`, `required`
 and `error_mode` are the script's to say and are refused, as a rule without
 a `name` is; see
 [What a rule of a `python` collector is for](PYTHON.md#what-a-rule-of-a-python-collector-is-for).
+
+A static label whose value a [probe's
+parameter](REQUESTS.md#in-label-values) fills is measured as the text it is
+filled to, and with `truncate: true` cut as that text is.
 
 The other limits on a series say the same when a scrape fails for them: more
 labels than `limits.max_labels_per_metric` (20 by default) as `metric "M" has
@@ -2223,7 +2249,11 @@ metrics rule 2 has invalid type "timer"`, where a rule with a name reads
 - a `description` may be no longer than `limits.max_help_length`, and a
   static label value, of a rule or of `transform.labels`, no longer than
   `limits.max_label_value_length` — unless the label has `truncate: true`, a
-  `value_map` maps it to something shorter, or `remove_labels` drops it;
+  `value_map` maps it to something shorter, or `remove_labels` drops it. A
+  value that holds `{{param_...}}` placeholders is measured with each
+  replaced by its default, and by nothing where it has none; such a value of
+  a rule's label is not measured where a `value_map` of the rule's name maps
+  the label;
 - an explicit `decoder.type` must be one the transform
   [reads](#collectors);
 - a setting must belong to the decoder or transform the collector has:
@@ -2239,12 +2269,17 @@ metrics rule 2 has invalid type "timer"`, where a rule with a name reads
   where YAML reads `\t` as the tab character; in single quotes, or
   unquoted, `\t` is a backslash and a `t`, and is refused;
 - a `{{param_...}}` placeholder stands only where a probe's parameters are
-  [filled in](REQUESTS.md#in-the-body-headers-and-query). In any other
+  filled in: in the [request](REQUESTS.md#in-the-body-headers-and-query) and
+  in a [fixed label value](REQUESTS.md#in-label-values), of
+  `transform.labels` or of a rule's static label. In any other
   setting of a collector — `request.bearer_token`, `basic_auth`,
-  `tls.server_name`, `transform.labels`, a label's `value` — it would be
+  `tls.server_name`, a `value_map`, a label's name — it would be
   sent or exported as written, so it is refused, naming the field. A Python
   script, an expression and a description are not searched: there the text
   is the script's, the expression's or the description's own;
+- a placeholder in a label value is well formed: `{{param_<name>}}` or
+  `{{param_<name>:<default>}}`, without a space after the braces and without
+  a filter, which a label value does not take;
 - a limit is a whole number from 0: a negative one, as in
   `limits.max_metrics: -1`, and one with a fraction, as in
   `max_concurrent_probes: 1.9`, are refused naming the key and the value
@@ -2333,7 +2368,7 @@ reported once, against the first.
 | Of two rules | Compared | Why |
 | --- | --- | --- |
 | `name`, `expression`, `items` | yes, as written; `""` is the key left out | they say which series the rule makes and from what |
-| `labels` | yes: the same label names, each with the same `value` or the same `expression`, in any order | a series is its name and its labels |
+| `labels` | yes: the same label names, each with the same `value` or the same `expression`, in any order; a `value` as written, [placeholders](REQUESTS.md#in-label-values) and all | a series is its name and its labels |
 | `value_map`, `time_format` | yes | they say which texts the rule reads a value from: of two rules that differ in one, each may read what the other cannot — a field that is `up` or a number, a time written one way or another — and a scrape gets one series |
 | `scale`, `time_zone`, `description`, `required`, `error_mode` | no | they change the value or the help text of a series, or what happens when there is none, never which series it is |
 | a label's `truncate`, `required` and `value_map` | no | the first two change no label's name, and a label's `value_map` is one for [all the rules of a name](#mapping-text-to-values-and-scaling-them) |
@@ -3120,7 +3155,8 @@ covers the collector name and its full effective configuration, the `target`,
 every `/probe` parameter the collector's request type accepts (`method`,
 `path`, `timeout`, `body`, `insecure_skip_verify`, `follow_redirects`,
 `enable_http2`, `retry_attempts`, `retry_backoff`, `message`, `from`, `until`
-and every `param_<name>`), and every header forwarded to the target, including
+and every `param_<name>`, whether it fills the request or only a [label
+value](REQUESTS.md#in-label-values)), and every header forwarded to the target, including
 a forwarded `Authorization` value and the `header_<name>` parameters that are
 forwarded. A parameter that changes nothing sent is not part of it: one no
 request type knows, which a probe ignores, and a `header_<name>` for a header
@@ -3236,7 +3272,10 @@ Identical means the same thing it does for the response cache: the same
 collector definition, target, probe parameters and forwarded headers,
 credentials included, so two probes that could get different answers never
 share one, and probes differing only in parameters that change nothing sent
-still do. It needs no cache: the cache helps the probes that come after one
+still do. A `param_<name>` that fills a [label
+value](REQUESTS.md#in-label-values) is a parameter of the probe like the
+others: two probes that differ in it get different series, and never share.
+It needs no cache: the cache helps the probes that come after one
 has finished, and this helps the ones that arrive while it is still running.
 With a cache, the probes that share a request fill the cache once.
 
@@ -3478,6 +3517,113 @@ attached to, so such a watch would stop firing after the first change.
 The watch follows the [collector files](#collector-files) too: a collector file
 edited, a new file matching a pattern, or a file removed triggers a reload.
 
+### Descriptor files
+
+The watch also follows the descriptor files of the grpc collectors in force:
+a collector's `request.protoset_file` and `request.proto_files`, and the
+files those `.proto` files import, through however many files. The
+configuration is checked against them when it loads — the collector's `rpc`
+must be a method they define, and its `message`, like a static target's
+`request.message`, must fit that method's request type — and a grpc collector
+reads them again by itself at its next call once they change (see
+[Descriptors](GRPC.md#descriptors)). Nothing would check the configuration
+against the new files, though: a descriptor set replaced by one without the
+method would be found by the probes that then fail, with the last reload
+still reported as successful. So when one of these files changes, appears or
+disappears, the next tick reloads, as it does for the configuration file: the
+configuration is read and checked again, against the files as they are now.
+No flag turns this on and none turns it off; it is part of `--config.watch`.
+
+When everything still fits, the reload is logged like any other, as
+`configuration reloaded` with `"trigger":"watch"`, and counted as a
+successful reload. The collectors are defined as they were, so nothing is
+dropped or started again: their counters, their cached results, what the
+[failure log](LOGGING.md#repeated-failures) remembers of them and the
+cadence of their static targets are kept. A result cached before the change
+was made with the old descriptors, and is served until its
+[`cache.ttl`](#response-caching) runs out.
+
+When something no longer fits — the service no longer has the method, the
+request type no longer has a field the `message` sets, a `.proto` file does
+not compile, an import is gone — the reload is rejected at that tick, with
+the reason:
+
+```json
+{"level":"ERROR","msg":"configuration reload rejected","trigger":"watch","file":"/etc/exporter/config.yaml","error":"collector \"queue_stats\": the service acme.queue.v1.QueueService in protoset_file /etc/exporter/protos/queue.pb has no method GetStats; it has GetQueue, Watch","retried_when":"the configuration or a file it names changes"}
+```
+
+`http_exporter_config_last_reload_successful{file="config"}` then reads `0`
+until a reload succeeds, so a descriptor that broke a collector can be
+alerted on from the tick that found it — see
+[Configuration reloads](SELF-METRICS.md#configuration-reloads). The
+configuration in force stays in force, but not the old descriptors: the
+collector reads the changed files at its next call whatever became of the
+reload, so the calls that no longer fit them fail, for the reason the reload
+was rejected for, until the files are mended. The rejected reload is logged
+once, and not tried again until a file changes again; the tick after the
+files are mended reloads, and is logged as a reload.
+
+The [static target file](STATIC-TARGETS.md#reloading) is read and checked
+again with the configuration when a target in force sets a
+`request.message` for a collector that reads descriptor files: the message
+is checked against the same files. Which descriptor file changed is not
+asked, so such a target file is read also for a file of a collector none of
+its targets uses, and is then found as it was. A message the new files refuse
+is reported for the target file, on a line of its own and in its own series:
+
+```json
+{"level":"ERROR","msg":"static target reload rejected","trigger":"watch","file":"/etc/exporter/targets.yaml","error":"target \"orders\": request.message does not fit acme.queue.v1.GetStatsRequest: (line 1:30): unknown field \"include_shards\"","retried_when":"the static target file, a file its check opens or the configuration changes"}
+```
+
+The configuration is then rejected with it, naming the same target, since
+the two take effect only as a pair that agrees; both stay as they were, and
+both are read again when the file changes once more. A target file without
+such a target is not read for a descriptor file, and neither is one whose
+own last reload was rejected: that one is read again for what its line names
+as `retried_when`. Where that line names the configuration — the target
+file names a collector the configuration does not have, say — it means the
+configuration file, its collector files and, while the configuration is
+rejected too, the files that one is tried again for. A descriptor file of
+the configuration in force changing reloads the configuration, which is the
+one the target file was rejected by, and leaves the target file as it is;
+the descriptor files the target file's own check opened are named apart, as
+`a file its check opens`, and do read it again.
+
+Which files are watched follows the configuration in force: a reload that
+removes a grpc collector, or points it at other files, changes them from
+that reload on. An imported file is watched where the `proto_import_paths`
+resolved it, and so is the place in an earlier import path where it was
+looked for and not found, since a file appearing there is the one compiled
+from then on; a file of the same name in a later import path is never read
+and not looked at, and neither are the places of the well-known files
+(`google/protobuf/*.proto`), which are built in. A file has changed when its
+modification time, its size or its permissions have, when it appeared or
+disappeared, or when its path leads to another file through a symbolic
+link, which is how Kubernetes swaps in a new version of a mounted ConfigMap.
+The reload checks the configuration against the descriptors as the
+collectors read them, and a collector reads a file again when its time or
+its size changed: a link pointed at a file with the very time and size of
+the old one reloads, and finds the descriptors the collectors go on using.
+So does a file whose permissions alone changed: one made unreadable by a
+`chmod` reloads, and the reload is accepted with the descriptors read
+before, which the collectors use until the file's time or size changes.
+
+The cost is one look at each of these files per tick: a tick that finds them
+as they were reads no file, compiles nothing and logs nothing. However many
+of them changed since the last tick, there is one reload. Starting the
+exporter reloads nothing: the files are stamped as the configuration is
+first read, before it is checked against them, so one edited while the
+exporter was starting is seen by the first tick. A reload stamps them the
+same way, before it validates what it read, however `request.type` and
+`descriptors` are written (`GRPC` is `grpc`): the `.proto` files are compiled
+then, to learn what they import, and that compile is the one the validation
+uses, so a startup and a reload compile no file twice unless it does not
+compile. Without `--config.watch` none of this is done: no descriptor file
+is stamped, and a startup or a reload reads them only to check the
+configuration.
+
+### Rejected reloads
+
 A reload that is rejected is not tried again until something changes, and is
 logged once. What can change is more than the configuration: loading it opens
 the files it names, and a reload that runs in the moment one is being
@@ -3504,11 +3650,15 @@ size, its permissions, or, through a symbolic link, the file the path leads
 to, which is how Kubernetes swaps in a new version of a Secret — the next
 tick reloads, once however many of them changed, and a reload that then
 succeeds is logged like any other. A tick that finds them as they were does
-nothing and logs nothing: it reads no file and compiles none. Once the
-configuration is in force the watch leaves these files alone: the export, the
-exporter's own authentication and the grpc collectors each read their files
-again when they change, a grpc collector the files its `.proto` files import
-with them (see [.proto sources](GRPC.md#proto-sources)). A
+nothing and logs nothing: it reads no file and compiles none. The descriptor
+files are watched as they were before the rejected reload read them, so one
+mended while that reload was still running — after it was read, before the
+reload was rejected — is not taken as read: the next tick reloads. Once the
+configuration is in force the watch goes on looking at the
+[descriptor files](#descriptor-files) alone, and leaves the certificates and
+the credential files be: nothing in the configuration is checked against
+them, and the export and the exporter's own authentication each read their
+files again when they change. A
 collector's own credential and TLS files are read at each request, not when
 the configuration loads, and never reject a reload.
 
@@ -3519,10 +3669,14 @@ same way. Checking it opens the `request.protoset_file` and
 message is checked against, so a reload of the target file in the moment
 such a file is being replaced is rejected for that file alone. While the
 target file is rejected the watch looks at those files too, the imported
-ones as for the configuration, and the tick after one changes reads the
+ones as for the configuration and each as it was before the check read it,
+and the tick after one changes reads the
 target file again,
-although it is as it was; a tick that finds them as they were does nothing
-and logs nothing, and once the target file is in force they are left alone.
+although it is as it was, and the configuration with it, whose
+[descriptor files](#descriptor-files) they are; a tick that finds them as
+they were does nothing and logs nothing. Once the target file is in force
+they go on being watched as the configuration's descriptor files are: one
+changing reads both again.
 A target file rejected for what it says itself — one that is not YAML, a
 target without a collector — opens no other file, and is read again when it
 changes. A target's own credential files (`request.bearer_token_file`,

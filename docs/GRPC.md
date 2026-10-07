@@ -186,7 +186,8 @@ An import the set does not carry is taken from the types built into the
 exporter when it has them, as it has the well-known types
 (`google/protobuf/*.proto`); any other missing import fails, naming it. The
 file is read again when it changes on disk, so a new set is picked up at the
-next call without a reload.
+next call without a reload; with `--config.watch` the configuration is
+checked against the new set as well, [as below](#proto-sources).
 
 ### .proto sources
 
@@ -220,11 +221,23 @@ earlier in the import paths than the one that was compiled, which is then
 the one read, as `protoc` would. A file of the same name later in the import
 paths is never read.
 
-With [`--config.watch`](CONFIGURATION.md#watching-the-configuration), a
-reload rejected because one of these files did not compile, was missing or
-lacked what the configuration or a static target's message uses is tried
-again when that file changes or appears, an imported one as well as one the
-configuration names.
+A call only finds out that a changed file no longer fits when it fails: the
+method is gone, the request type no longer takes the `message`, or the files
+do not compile. With
+[`--config.watch`](CONFIGURATION.md#descriptor-files) the watch follows the
+descriptor files of the collectors in force — a `protoset_file`, the
+`proto_files` and the files they import — and the tick after one changes
+reads the configuration again and checks it against them, with the static
+target file when one of its targets sets a `request.message` for a
+collector that reads such files. Files that still fit are logged as a
+reload, and nothing kept
+about the collector is dropped; files that do not are a rejected reload,
+logged with the reason and shown by
+`http_exporter_config_last_reload_successful`, while the calls fail until
+the files are mended. A reload rejected because one of these files did not
+compile, was missing or lacked what the configuration or a static target's
+message uses is tried again when that file changes or appears, an imported
+one as well as one the configuration names.
 
 ### Health checks
 
@@ -304,7 +317,11 @@ quotes and escapes it, `|number` for a number, checked to be one, and `|raw`
 for a value written as it is. `|form` and `|xml` do not write JSON and are
 refused. Metadata values may hold placeholders too, whose values may not hold
 a control character, as a header's may not. `rpc` takes none: one collector
-calls one method.
+calls one method. The collector's fixed label values, `transform.labels` and
+a rule's static `value`, take placeholders as for any request type, written
+as given ([In label values](REQUESTS.md#in-label-values)); the `message`
+probe parameter, which replaces the message, leaves a parameter a label
+names in use.
 
 When the configuration loads, every placeholder takes its default, or a
 stand-in of its filter's kind when it has none, and the message must be JSON.

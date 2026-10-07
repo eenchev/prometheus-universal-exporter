@@ -395,7 +395,7 @@ func configSchemaRules() map[string]map[string]any {
 		"collectors[].metrics[].labels[].name": {"type": "string", "minLength": 1, "not": onlyBlanks(), "description": "The label's name: letters, digits and _, not starting with a digit. Under the collector's name_escaping underscores or values it may be any name, such as service.name, and is exported escaped. Text: a name YAML reads as a number or a boolean is written in quotes."},
 		// A name, and one of value and expression.
 		"collectors[].metrics[].labels[]":            labelSchemaRule(),
-		"collectors[].metrics[].labels[].value":      {"description": "A static label value, exported as written."},
+		"collectors[].metrics[].labels[].value":      {"description": "A static label value, exported as written. May contain {{param_name}} placeholders, filled from the probe's parameters; see docs/REQUESTS.md#in-label-values."},
 		"collectors[].metrics[].labels[].expression": {"not": onlyBlanks(), "description": "Reads the label from the response, in the transform's language, like the metric's expression. Not blanks alone: a constant is a value."},
 		"collectors[].metrics[].labels[].truncate":   {"description": "Cut a value longer than limits.max_label_value_length to fit, ending in …, instead of failing the scrape."},
 		"collectors[].metrics[].labels[].required":   {"description": "expression labels only: a series the expression gives no value, or an empty one, fails the metric under its error_mode instead of being exported without the label. Defaults to false."},
@@ -464,7 +464,7 @@ func configSchemaRules() map[string]map[string]any {
 		"collectors[].transform.include[]": filterEntry(),
 		"collectors[].transform.exclude":   {"description": "prometheus without metrics rules: drop the metrics whose name one of these regular expressions matches, anywhere in the name as the target gives it, also when include matches it. An entry is not empty and not blanks alone: '.*' matches every name."},
 		"collectors[].transform.exclude[]": filterEntry(),
-		"collectors[].transform.labels":    {"description": "Constant labels given to every metric the collector exports, over a label of the same name a rule gave. A value written \"\" is the label left out. See docs/CONFIGURATION.md#collector-wide-labels."},
+		"collectors[].transform.labels":    {"description": "Constant labels given to every metric the collector exports, over a label of the same name a rule gave. A value written \"\" is the label left out. Values may contain {{param_name}} placeholders, filled from the probe's parameters. See docs/CONFIGURATION.md#collector-wide-labels."},
 	}
 }
 

@@ -27,6 +27,7 @@ import (
 	"github.com/eenchev/prometheus-universal-exporter/internal/config"
 	"github.com/eenchev/prometheus-universal-exporter/internal/exporter"
 	"github.com/eenchev/prometheus-universal-exporter/internal/fetch"
+	"github.com/eenchev/prometheus-universal-exporter/internal/model"
 	"github.com/eenchev/prometheus-universal-exporter/internal/transform"
 )
 
@@ -88,7 +89,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 	pythonPath := flags.String("python.path", "python3", "Python interpreter used by the python transform")
 	pythonMaxWorkers := flags.Int("python.max-workers", 0, "How many Python workers, of every collector together, may be alive at once, starting, running a script or idle. A run that finds none free takes the place of the idle worker unused for longest, or waits within its probe's deadline. 0, the default, leaves them bounded only per script")
 	targetFile := flags.String("static-targets-file", "", "Optional file of static targets, scraped by the exporter on their intervals and served at --web.static-targets-path; a target with export_via_otlp is also delivered over OTLP")
-	watchConfig := flags.Bool("config.watch", false, "Reload the configuration, collector and static target files when they change on disk")
+	watchConfig := flags.Bool("config.watch", false, "Reload the configuration, collector and static target files when they change on disk, or a grpc collector's descriptor files do")
 	watchInterval := flags.Duration("config.watch-interval", config.DefaultWatchInterval, "How often to check the configuration files for changes when config.watch is set")
 	logLevel := flags.String("log.level", "info", "Log level: debug, info, warn, or error")
 	expandEnv := flags.Bool("config.expand-env", false, "Expand ${NAME} environment variable references in the configuration and collector files")
@@ -215,10 +216,19 @@ func run(args []string, stdout, stderr io.Writer) int {
 		}, stdout, logger)
 	}
 	// Stamped before they are read, so an edit made while they are is seen
-	// by the first watch tick.
+	// by the first watch tick; with the watch on, the descriptor files the
+	// configuration names are stamped as it is read, before it is checked
+	// against them. Without the watch nothing would compare that stamp, and
+	// the configuration is read without it.
 	configStamp := config.TakeStamp(*configFile, true, loadOptions...)
 	targetsStamp := config.TakeStamp(*targetFile, false)
-	conf, err := config.Load(*configFile, loadOptions...)
+	load := config.Load
+	if *watchConfig {
+		load = func(path string, opts ...config.LoadOption) (*model.Config, error) {
+			return config.LoadStamped(path, &configStamp, opts...)
+		}
+	}
+	conf, err := load(*configFile, loadOptions...)
 	if err != nil {
 		logger.Error("invalid startup configuration; exiting", "error", err)
 		return 1

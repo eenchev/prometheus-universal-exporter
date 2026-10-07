@@ -132,8 +132,8 @@ collector:
   probe parameter as the chart sends a monitor's `headers`. These appear in
   the URL, so they are not for secrets.
 - **Request parameters** — the `{{param_<name>}}` placeholders of the path,
-  body, headers and query — get a field each, required unless the placeholder
-  has a default, which is shown.
+  body, headers and query, and of the collector's label values — get a field
+  each, required unless the placeholder has a default, which is shown.
 
 Each form also has a timeout, 10 seconds to start with, sent as the
 scrape timeout Prometheus would send, so a target that never answers ends

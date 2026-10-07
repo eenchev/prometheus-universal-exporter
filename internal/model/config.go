@@ -135,6 +135,12 @@ type Collector struct {
 	// classic Prometheus name: fail, the default, underscores or values. See
 	// transform/nameescaping.go.
 	NameEscaping string `yaml:"name_escaping"`
+	// LabelParams is what the collector's label values hold of
+	// {{param_...}} placeholders, read once when the configuration loads
+	// (labelparams.go); nil when they hold none, as nearly every
+	// collector's do. It is no key of the configuration: it is made of
+	// transform.labels and the rules' labels, which are.
+	LabelParams *LabelParams `yaml:"-"`
 }
 
 // RequestConfig is a collector's request block: how the target is reached.

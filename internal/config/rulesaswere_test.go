@@ -182,12 +182,16 @@ func checkCSVColumnsBeforeRulePlaces(x *model.Collector) error {
 }
 
 // checkPlaceholdersAreFilledBeforeRulePlaces is checkPlaceholdersAreFilled
-// as it was before a rule without a name was named by its place.
+// as it was before a rule without a name was named by its place. Its
+// refusal ends as the check's now does, with the label values among the
+// places a probe's parameters fill: of a collector whose label values were
+// not read for placeholders, as those it is given are, it refuses a label's
+// value as the check does.
 func checkPlaceholdersAreFilledBeforeRulePlaces(x *model.Collector) error {
 	filled := fetch.TemplatedFields(x)
 	var errs []error
 	refuse := func(where string) {
-		errs = append(errs, fmt.Errorf("collector %q %s has a {{param_...}} placeholder, which is not filled in there and would be used as written; a probe's parameters fill placeholders only in the request's path, body, header and query values, a grpc message and metadata values, and a graphite collector's targets", x.Name, where))
+		errs = append(errs, fmt.Errorf("collector %q %s has a {{param_...}} placeholder, which is not filled in there and would be used as written; a probe's parameters fill placeholders only in the request's path, body, header and query values, a grpc message and metadata values, a graphite collector's targets, and the label values of transform.labels and of a metric rule's static label", x.Name, where))
 	}
 	collector := reflect.ValueOf(x).Elem()
 	for i := 0; i < collector.NumField(); i++ {

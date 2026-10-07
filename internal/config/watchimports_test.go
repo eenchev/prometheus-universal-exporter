@@ -172,7 +172,7 @@ func TestRetriedWhenSaysWhatItSaidAndNamesImportedFiles(t *testing.T) {
 	for _, watch := range []bool{true, false} {
 		m := &Manager{}
 		if watch {
-			m.SetWatchInterval(time.Minute)
+			m.watchInterval = time.Minute
 		}
 		for _, file := range []struct{ file, stamped, other string }{
 			{"the configuration", "a file it names", "the static target file"},

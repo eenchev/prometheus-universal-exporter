@@ -95,6 +95,12 @@ The `/probe` parameters that apply are `path`, `timeout` and `param_<name>`.
 Any parameter that belongs only to `http`, such as `method` or `header_<name>`,
 is refused with `400`.
 
+A `param_<name>` also fills a placeholder in the collector's fixed label
+values, `transform.labels` and a rule's static `value` ([In label
+values](REQUESTS.md#in-label-values)). The rule of one file name is the
+path's: a parameter that fills only a label is written as given, `/` and
+all, and one that fills both is held to it.
+
 ## Scraping with Prometheus
 
 Prometheus asks the exporter; the file never needs a URL of its own. With a
@@ -232,7 +238,12 @@ With `*.prom`, a temporary `batch.prom.$$` is not read either.
 The directory is `root`, or the directory under it the probe's or static
 target's `target` names; `/probe?collector=textfiles&target=nightly` reads
 `root/nightly`. There is no file to name, so the `path` and `param_<name>`
-probe parameters, and `request.path` in a static target, are refused.
+probe parameters, and `request.path` in a static target, are refused. A
+directory collector whose [label values hold
+placeholders](REQUESTS.md#in-label-values) has something for a
+`param_<name>` to fill: it takes the parameters its labels name, for the
+series of every file, refuses any other as unused, and still refuses `path`;
+a static target gives them under `params`.
 
 Any file a collector can decode can be read this way, not only `.prom`. Each
 file's decoder is chosen as for one file: from its extension with

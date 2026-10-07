@@ -78,7 +78,9 @@ headers are applied directly and are not filtered through the collector's
 
 A collector's [`{{param_…}}` placeholders](REQUESTS.md#path-parameters) — in
 its path, body, header values, query values, Graphite targets and gRPC
-message and metadata values — are filled by the target's
+message and metadata values, and in its [label
+values](REQUESTS.md#in-label-values), `transform.labels` and a rule's static
+`value` — are filled by the target's
 `params`, since there is no probe to supply `param_<name>`:
 
 ```yaml
@@ -96,6 +98,30 @@ Every placeholder must be filled, by `params` or a default, and every entry of
 `params` must fill one; otherwise the exporter refuses to start, naming the
 target, the collector and the parameter. A target's own `target`, `request.path`, `body`
 and `headers` are written out in full, without placeholders.
+
+So one collector whose labels take a parameter serves several targets, each
+labelled with its own value:
+
+```yaml
+# the collector:  transform: {type: jq, labels: {tenant: "{{param_tenant}}"}}
+interval: 1m
+targets:
+  - name: acme
+    collector: tenant_status
+    target: https://api.example
+    params: {param_tenant: acme}       # its series carry tenant="acme"
+  - name: globex
+    collector: tenant_status
+    target: https://api.example
+    params: {param_tenant: globex}     # and these tenant="globex"
+```
+
+A target that leaves the parameter out is refused when the file loads:
+`target "acme" uses collector "tenant_status", whose transform.labels.tenant
+needs param_tenant, a parameter without a default; a static target has no
+probe to supply it, so set it under the target's params, or give the
+placeholder a default`. The target's own `labels` are literal: a placeholder
+written there is exported as the text it is.
 
 A `{{param_…}}` placeholder anywhere a target writes a value of its own — its
 `target`, `request.path`, `request.body` or a header value — is refused when
@@ -521,6 +547,17 @@ collector whose target sets a `request.message`. A reload that ran while such
 a file was being replaced
 thus goes through at the tick after it is in place (see
 [Watching the configuration](CONFIGURATION.md#watching-the-configuration)).
+A rejected target file is not read for any other descriptor file: one
+rejected because it names a collector the configuration does not have is
+read again when it or the configuration file changes, and a descriptor file
+changing meanwhile reloads the configuration alone.
+The same files are watched while the target file is in force: when one
+changes, the next tick reads the target file again with the configuration,
+although neither changed, and a `request.message` that the new descriptors
+refuse is a rejected reload of the target file, logged with the target and
+the reason, rather than only scrapes that fail (see
+[Descriptor files](CONFIGURATION.md#descriptor-files)). When the message
+still fits, the reload changes nothing: every target keeps its cadence.
 A target's credential files are read at each scrape, so one that is missing
 fails that target's scrapes, not the reload.
 

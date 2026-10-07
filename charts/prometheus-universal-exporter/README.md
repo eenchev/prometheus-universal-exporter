@@ -232,7 +232,7 @@ Supported parameters include:
 * `follow_redirects`
 * `enable_http2`
 * retry settings
-* `param_<name>`, which fills a `{{param_<name>}}` placeholder in the collector's `request.path`
+* `param_<name>`, which fills a `{{param_<name>}}` placeholder in the collector's `request.path`, or in one of its label values
 * `from` and `until`, the render window of a [`graphite`](../../docs/GRAPHITE.md) collector
 * `message`, the request message of a [`grpc`](../../docs/GRPC.md) collector
 
@@ -242,7 +242,10 @@ For example, a collector with `path: /api/{{param_tenant}}/status` scraped by a
 monitor with `params: {param_tenant: [acme]}` requests `/api/acme/status`. A
 placeholder may have a default after a colon, `{{param_tenant:acme}}`; one with
 no default that the monitor does not supply fails the scrape with `400`. See
-[Target requests](../../docs/REQUESTS.md#path-parameters).
+[Target requests](../../docs/REQUESTS.md#path-parameters). A collector's
+label can take the same parameter, `transform: {labels: {tenant:
+"{{param_tenant}}"}}`, so each monitor's series carry the value it sends
+([In label values](../../docs/REQUESTS.md#in-label-values)).
 
 A [`graphite`](../../docs/GRAPHITE.md) collector is monitored the same way: a
 monitor selects the Graphite Service, whose address becomes the `target`, and

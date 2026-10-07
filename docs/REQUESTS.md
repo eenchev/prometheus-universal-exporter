@@ -210,18 +210,21 @@ one configured. Defaults are escaped the same way, and a default of `.` or
 path holds a default to what it holds a value to, so there one with `/` or
 `\` in it [stops it too](LOCALFILE.md#which-file-is-read).
 
-**Mistakes are errors, not fallbacks.** A `param_` parameter the collector's path
-does not use is rejected with `400`, and so is one given twice. The first is
+**Mistakes are errors, not fallbacks.** A `param_` parameter the collector
+does not use, in its path or in another place that takes placeholders, is
+rejected with `400`, and so is one given twice. The first is
 almost always a misspelling: with `{{param_tenant:acme}}`, a probe sending
 `param_tenat=globex` would otherwise succeed against the default tenant and
 report `acme`'s numbers as `globex`'s.
 
-**Scope.** Placeholders are bound in the collector's `request.path` and, for
-an `http` collector, in its [body, header values and query
-values](#in-the-body-headers-and-query). A `path` probe parameter replaces the
+**Scope.** Placeholders are bound in the collector's `request.path`, for
+an `http` collector in its [body, header values and query
+values](#in-the-body-headers-and-query), and in the collector's [fixed label
+values](#in-label-values). A `path` probe parameter replaces the
 path wholesale and is used exactly as given, and a `body` probe parameter
 replaces the body the same way, so a `param_` parameter only they would have
-used has nothing to fill and is rejected. `{{` always opens a placeholder in
+used has nothing to fill and is rejected; one that also fills a label value
+still has that to fill, and is accepted. `{{` always opens a placeholder in
 `request.path`; anything that is not a well-formed `{{param_<name>}}` or
 `{{param_<name>:<default>}}` stops the exporter at startup, naming the
 collector.
@@ -261,11 +264,12 @@ targets:
       param_service: checkout
 ```
 
-Every placeholder of the collector's request must then be filled, by `params`
+Every placeholder of the collector, in its request or in a [label
+value](#in-label-values), must then be filled, by `params`
 or by a default, and every entry of `params` must fill one; otherwise the
 exporter refuses to start, naming the target, the collector and the parameter.
 The target's own `request` block — its `path`, `body` and `headers` — is
-literal and cannot use placeholders.
+literal and cannot use placeholders, and neither can its own `labels`.
 
 From a Prometheus Operator monitor, the values go in `params` like any other
 probe parameter:
@@ -336,19 +340,22 @@ probe for the configuration's mistake.
 **Braces of the body's own.** In a body, a header value or a query value,
 `{{` opens a placeholder only when `param_` follows it, since a body may well
 contain braces of its own; `{{ param_x }}` with spaces is refused at startup
-rather than sent as text. Header names and query names cannot hold
-placeholders.
+rather than sent as text. A brace before a placeholder is a brace:
+`{{{param_x}}}` is sent as `{`, the value and `}`, as a list of a Graphite
+expression needs, `app.{{{param_host}},db}.cpu`. Header names and query
+names cannot hold placeholders.
 
-**Only there.** Placeholders are filled in the places above and nowhere else.
+**Only there.** Placeholders are filled in the places above, in the
+collector's [fixed label values](#in-label-values), and nowhere else.
 A `{{param_...}}` in any other setting of a collector — `bearer_token`,
-`basic_auth`, a credential or TLS file, `tls.server_name`, a label's `value`,
-`transform.labels`, a `value_map`, a prometheus transform's `include` and
-`exclude` — would be used as written, the token sent with the braces in it
-and the label exported as `{{param_region}}`, so it stops the exporter at
+`basic_auth`, a credential or TLS file, `tls.server_name`, a `value_map`, a
+label's name, a `rename_labels` target, a prometheus transform's `include`
+and `exclude` — would be used as written, the token sent with the braces in
+it and the value mapped to `{{param_region}}`, so it stops the exporter at
 startup, naming the field:
 
 ```text
-collector "api" request.bearer_token has a {{param_...}} placeholder, which is not filled in there and would be used as written; a probe's parameters fill placeholders only in the request's path, body, header and query values, a grpc message and metadata values, and a graphite collector's targets
+collector "api" request.bearer_token has a {{param_...}} placeholder, which is not filled in there and would be used as written; a probe's parameters fill placeholders only in the request's path, body, header and query values, a grpc message and metadata values, a graphite collector's targets, and the label values of transform.labels and of a metric rule's static label
 ```
 
 To send a token the probe supplies, put it in a header value:
@@ -366,6 +373,155 @@ placeholder written in an expression is evaluated as the text it is.
 The values are part of the response cache key like every probe parameter, and
 the verbose self-metrics never carry them: the `url` label has no query string,
 and the body and headers are not labels at all.
+
+### In label values
+
+A placeholder is also filled in the two places a collector writes a fixed
+label value: the values of
+[`transform.labels`](CONFIGURATION.md#collector-wide-labels), and the `value`
+of a metric rule's static label. One collector can then label its series
+with a value only the scrape knows — the tenant it was asked about, the
+region a monitor stands for:
+
+```yaml
+collectors:
+  - name: tenant_status
+    request: {type: http, path: "/api/{{param_tenant}}/status"}
+    transform:
+      type: jq
+      labels:
+        tenant: "{{param_tenant}}"
+        region: "{{param_region:eu}}"
+    metrics:
+      - name: status_up
+        expression: .up
+        labels:
+          - {name: source, value: "api-{{param_tenant}}"}
+```
+
+```text
+/probe?target=https://api.example&collector=tenant_status&param_tenant=acme
+  -> GET https://api.example/api/acme/status
+     status_up{region="eu",source="api-acme",tenant="acme"} 1
+```
+
+One parameter may fill the request and the labels alike, as `param_tenant`
+does here, or a label alone, in a collector whose request has no placeholder
+at all. It works with every request type — `http`, `grpc`, `graphite` and
+`localfile` — and under every transform: `transform.labels` are applied
+after every transform, a `python` one included, and a rule's `value` is
+filled wherever a rule's label has one, which is every transform but
+`python`, whose rules [set no label
+value](CONFIGURATION.md#long-label-values). A `python` script is not given
+the parameters; what it labels its series with is its own.
+
+**Written as in a header value.** `{{param_<name>}}` or
+`{{param_<name>:<default>}}`, any number of them in one value, among text of
+the value's own: `rack: "{{param_dc}}/{{param_rack:r1}}"`. `{{` opens a
+placeholder only when `param_` follows it, so any other braces are text, and
+are exported as written; a brace before a placeholder is a brace, so
+`"{{{param_dc}}}"` filled with `ams` is `{ams}`. Two things stop the
+exporter at startup, naming the
+collector and the label: `{{ param_x }}` with a space after the braces, and
+a filter, since a label value is written one way, as it is given:
+
+```text
+collector "tenant_status" transform.labels.tenant placeholder {{param_tenant|json}} has a filter; a label value is written one way, as it is given, so write the placeholder without a |, which a default cannot hold either
+```
+
+A label's name cannot hold a placeholder, nor can the `value` of a label that
+also sets `expression`, which is refused whatever its value says. A label
+with a placeholder in its `value` takes neither `required`, which is for a
+label an expression reads from the response, nor a `value_map` of its own,
+as no label with a `value` does: have the probe send the value wanted, or
+set the `value_map` on a label of that name that another rule of the same
+metric name reads with an expression, which maps the label for every rule of
+that name.
+
+**As given.** Nothing of a value is escaped when it is filled in, and nothing
+is refused for the characters it holds: the exposition formats escape a
+quote, a backslash and a line break where they write a label, as for any
+label. The one value refused is text that is not valid UTF-8, which no label
+value may be: such a probe is answered `400` naming the parameter.
+
+**The probe's rules are the request's.** A placeholder with no value and no
+default answers `400` naming the parameter and the label, before the target
+is contacted:
+
+```text
+transform.labels.tenant needs param_tenant, which the probe did not supply and which has no default; add &param_tenant=<value> to the probe, or give it a default as {{param_tenant:<default>}}
+```
+
+An empty value (`param_tenant=`) counts as not supplied, so it takes the
+default, or fails if there is none. An explicit empty default,
+`{{param_suffix:}}`, binds nothing — and a label whose whole value comes to
+nothing is left off the series, as a label with an empty value is everywhere.
+For `transform.labels` that is the label left out: a series that has a label
+of that name of its own keeps it, where a value that is not empty replaces
+it. For a rule's label it is the label the rule does not set: the series
+simply has none, and one a `prometheus` rule passes on keeps the label of
+that name the target gave it.
+
+**Used, and unused.** A parameter that fills a label is used, so it is not
+refused as unused even when the request names no placeholder, and a `path`,
+`body` or `message` probe parameter that replaces a templated part of the
+request takes away the request's use of a parameter, never a label's. A
+parameter that no place uses is still answered `400`, as is one given twice.
+
+**The same as the text written.** Everything that reads a label's value
+treats a filled value exactly as it would treat the same text written in the
+configuration: `limits.max_label_value_length` — a longer value fails the
+scrape in the validation, unless the rule's label has
+[`truncate: true`](CONFIGURATION.md#long-label-values), which cuts it —
+`remove_labels` and `rename_labels` and their order, a `value_map` of the
+rule's name, `name_escaping`, `limits.max_labels_per_metric`, and the check
+for a series made twice.
+
+**When the configuration loads**, rules are compared as they are written
+([Two rules that are the same rule](CONFIGURATION.md#two-rules-that-are-the-same-rule)):
+two rules alike but for `value: "{{param_a}}"` and `value: "{{param_b}}"`
+are two rules, and load. A probe that gives both parameters the same value
+makes them the same series, and that scrape fails as any scrape with a
+series twice does, `validation failed: duplicate metric series "status_up"`.
+The one check of a value's length that can be made then is made on the value
+as a probe that gives no parameter fills it — each placeholder replaced by
+its default, and by nothing where it has none — since a value too long by its
+own text and defaults fails every probe that leaves the parameters out:
+
+```text
+collector "tenant_status" transform.labels "tenant" is 612 bytes once its placeholders take their defaults, longer than limits.max_label_value_length 500, so every series of a probe that gives them no other value would fail validation; shorten the text or the defaults, or raise the limit
+```
+
+**Static targets.** A [static target](STATIC-TARGETS.md)'s `params` fill a
+label's placeholders exactly as they fill the request's, and the file is
+held to both when it loads: every placeholder of the collector, in the
+request or in a label, filled by `params` or a default, and every entry of
+`params` filling one. The target's own `labels` stay literal.
+
+**Caching.** Every probe parameter is part of the [response
+cache](CONFIGURATION.md#response-caching) key, and of what makes two probes
+[identical](CONFIGURATION.md#identical-probes-share-one-request), whether it
+fills the request or only a label. Two probes that differ only in a label's
+parameter never get each other's series: not from the cache, not as the
+stale result `cache.stale_if_error` answers a failed trip with, and not by
+sharing one request while both are in flight.
+
+**Cardinality.** Each distinct value is a set of series of its own in
+Prometheus, so the values should come from your own monitors' `params` — a
+known list of tenants or regions — and not from whoever can reach `/probe`.
+The exporter itself keeps a value only where it keeps any probe's
+parameters and series, each within a bound: in the response cache, which
+`limits.max_cache_entries` bounds; in the
+[failure log](LOGGING.md#repeated-failures), which remembers a probe that
+fails, parameters and all, until it recovers or has not failed for an hour,
+10,000 failing things at most; and, with the [OTLP export](OTLP.md) on, in
+the data points that wait for the next export, which
+[`otlp.max_pending_points`](OTLP.md#delivery) bounds, and in the start
+times of the counters, histograms and summaries exported, each kept until
+its series has not been exported for an hour, twice `otlp.max_pending_points`
+of them at most. Its verbose self-metrics never carry a value. A collector
+whose label values hold no placeholder pays nothing for the feature; one
+that has some makes a copy of its labels for each probe.
 
 ## Redirects and HTTP/2
 

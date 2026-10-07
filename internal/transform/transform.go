@@ -30,7 +30,14 @@ import (
 // they are exported: every transform's output passes through here, so the
 // collector's metrics_prefix is applied in exactly one place, before the limits
 // are checked, the set is cached, or it is written to /probe or OTLP.
+//
+// A collector whose label values hold {{param_...}} placeholders is read
+// with them filled in from the probe's parameters (labelparams.go).
 func Transform(ctx context.Context, d *decode.Decoded, r *fetch.HTTPResponse, c *model.Collector, pythonPath string) (*model.MetricSet, error) {
+	c, err := withFilledLabels(ctx, c)
+	if err != nil {
+		return nil, err
+	}
 	report, _ := ctx.Value(ruleReportKey{}).(*RuleReport)
 	ctx = withResponseVariables(ctx, r)
 	ctx = withSeriesBudget(ctx, c.Limits.MaxMetrics)

@@ -516,19 +516,12 @@ func (s *Server) serveStaticTargetDebug(w http.ResponseWriter, r *http.Request, 
 	// reload came meanwhile, or of none: the scripts of a collector the
 	// reload kept would be counted under no collector, in its own worker.
 	followed := s.followedInForce()
-	cfg, file := followed.config, followed.targets
-	var target *model.StaticTarget
-	for _, t := range staticTargetsOf(file) {
-		if t.Name == name {
-			target = &t
-			break
-		}
-	}
+	cfg := followed.config
+	target, c := staticDebugTarget(followed, name)
 	if target == nil {
 		http.Error(w, fmt.Sprintf("no static target is named %q", name), http.StatusNotFound)
 		return
 	}
-	c := model.CollectorByName(cfg, target.Collector)
 	if c == nil {
 		http.Error(w, fmt.Sprintf("static target %q references unknown collector %q", target.Name, target.Collector), http.StatusNotFound)
 		return
@@ -555,6 +548,26 @@ func (s *Server) serveStaticTargetDebug(w http.ResponseWriter, r *http.Request, 
 		p.staleKey = s.probeCacheKey(cfg, c, target.Target, targetCacheQuery(target), headers, targetOwnRequest(target)...)
 	}
 	s.serveDebugProbe(w, r, p)
+}
+
+// staticDebugTarget is the static target of followed named name, the first
+// so named, nil when its file has none, and the collector of followed's
+// configuration it references, nil when the configuration has none of that
+// name. The target is the one in the file in force, not a copy: going
+// through the targets by value copied each of them on the heap, its pointer
+// being kept, which for 10,000 targets took milliseconds before the one
+// asked for was found. Nothing the debug scrape does with it writes to it.
+// The collector is found where followed keeps its place
+// (followedConfig.collectorOf), as a scrape finds it, and the collectors
+// are not gone through for it.
+func staticDebugTarget(followed *followedConfig, name string) (*model.StaticTarget, *model.Collector) {
+	targets := staticTargetsOf(followed.targets)
+	for i := range targets {
+		if targets[i].Name == name {
+			return &targets[i], followed.collectorOf(followed.config, targets[i].Collector)
+		}
+	}
+	return nil, nil
 }
 
 // report renders the trace. Its lines are cut where they are longer than a

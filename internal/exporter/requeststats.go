@@ -3,6 +3,7 @@ package exporter
 import (
 	"sort"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/eenchev/prometheus-universal-exporter/internal/fetch"
@@ -59,6 +60,18 @@ type requestTracker struct {
 	// longer tracked (dropLocked): a request tracked from now on, which may be
 	// that one again, counts since a later time (adoptLocked).
 	latestDropped time.Time
+	// idleFloor is a time no request other than a static target's was last
+	// used before (markUsedLocked, expireLocked). While none of them can
+	// have been idle for VerboseRequestIdleExpiry by it, expireLocked has
+	// nothing to drop and does not go through the requests: past the limit,
+	// a read of the self-metrics offers the tracker every static target's
+	// request it has no room for (setStatic), and each offer went through
+	// every request tracked, which for 2,000 static targets took 55 ms or
+	// more at each read, and for 10,000 more than half a second. It only
+	// moves later when expireLocked goes through them, and moves earlier
+	// when a request is used at an earlier time, which a test's clock can
+	// make happen. The zero time, before any, is where it starts.
+	idleFloor time.Time
 	// now is the clock expiry reads; tests replace it.
 	now func() time.Time
 }
@@ -110,8 +123,17 @@ func (t *requestTracker) existingLocked(key requestKey) *serverStats {
 	if tracked == nil {
 		return nil
 	}
-	tracked.used = t.now()
+	t.markUsedLocked(tracked, t.now())
 	return tracked.stats
+}
+
+// markUsedLocked records that a probe or scrape asked for a tracked request
+// at now, keeping idleFloor not after it.
+func (t *requestTracker) markUsedLocked(tracked *trackedRequest, now time.Time) {
+	tracked.used = now
+	if now.Before(t.idleFloor) {
+		t.idleFloor = now
+	}
 }
 
 // existingOf is existing for a request of the collector whose statistics are
@@ -184,7 +206,7 @@ func (t *requestTracker) adopt(key requestKey, staged, collector *serverStats) {
 func (t *requestTracker) adoptLocked(key requestKey, created *serverStats) *serverStats {
 	now := t.now()
 	if tracked := t.stats[key]; tracked != nil {
-		tracked.used = now
+		t.markUsedLocked(tracked, now)
 		return tracked.stats
 	}
 	if len(t.stats) >= VerboseRequestSeriesLimit {
@@ -200,7 +222,9 @@ func (t *requestTracker) adoptLocked(key requestKey, created *serverStats) *serv
 		created.created = now
 	}
 	created.mu.Unlock()
-	t.stats[key] = &trackedRequest{stats: created, used: now}
+	tracked := &trackedRequest{stats: created}
+	t.markUsedLocked(tracked, now)
+	t.stats[key] = tracked
 	return created
 }
 
@@ -246,14 +270,36 @@ func (t *requestTracker) expire() {
 	t.expireLocked(t.now())
 }
 
+// expireLocked is expire under the lock, at now. It goes through the
+// requests only when one of them may be idle (idleFloor), and settles
+// idleFloor at the earliest time one left was last used: a request a static
+// target no longer has is dropped (setStatic), never made one that can
+// expire, so going through them again is only needed once that time is
+// VerboseRequestIdleExpiry old.
 func (t *requestTracker) expireLocked(now time.Time) {
-	for key, tracked := range t.stats {
-		if !t.static[key] && now.Sub(tracked.used) > VerboseRequestIdleExpiry {
-			t.dropLocked(key)
+	if now.Sub(t.idleFloor) > VerboseRequestIdleExpiry {
+		if hook := requestsScannedHook.Load(); hook != nil {
+			(*hook)()
 		}
+		floor := now
+		for key, tracked := range t.stats {
+			switch {
+			case t.static[key]:
+			case now.Sub(tracked.used) > VerboseRequestIdleExpiry:
+				t.dropLocked(key)
+			case tracked.used.Before(floor):
+				floor = tracked.used
+			}
+		}
+		t.idleFloor = floor
 	}
 	t.settleCapLocked()
 }
+
+// requestsScannedHook, set by tests, is called whenever expireLocked goes
+// through the tracked requests, so a test can count how often a read of the
+// verbose self-metrics does. Nothing in the exporter sets it.
+var requestsScannedHook atomic.Pointer[func()]
 
 // settleCapLocked clears the limit indicator once requests have left and
 // there is room again.

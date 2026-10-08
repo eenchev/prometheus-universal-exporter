@@ -5738,20 +5738,33 @@ or none; a fingerprint that nothing had asked for yet, of the configuration
 the exporter started with, it MUST work out once and keep with that
 configuration, where the probes and the next reload find it made. To find a
 collector of the configuration followed by its name — a probe its own, the
-scrape of a static target its target's, the schedule the one whose
-fingerprint it reads — the exporter MUST NOT go through the collectors of
-that configuration: where each is MUST be noted once for the configuration,
-by the reload that works out its fingerprints, before it is in force, or,
-for the configuration the exporter started with, by the first to ask, and
-the collector found MUST be the one going through them finds, the first of
-that name. A read of the verbose self-metrics, which finds the collector of
+scrape of a static target and its debug scrape (§ 42.17) its target's, the
+schedule the one whose fingerprint it reads — the exporter MUST NOT go
+through the collectors of that configuration: where each is MUST be noted
+once for the configuration, by the reload that works out its fingerprints,
+before it is in force, or, for the configuration the exporter started with,
+by the first to ask, and the collector found MUST be the one going through
+them finds, the first of that name. A read of the verbose self-metrics, which finds the collector of
 every static target in force to name the target's request (§ 22.1), MUST
 find each so too, while the configuration it read is the one followed, and
 MUST track the requests it tracked while it went through the collectors for
-every target. To tell whether a static target of a name is one of the
-static target file followed — the scrape of a static target that ends,
-before it publishes (§ 42.14), and a read of the static targets endpoint
-that names targets, of every name it gives (§ 42.14a) — the exporter MUST
+every target. Past the limit of tracked combinations (§ 22.1) such a read
+offers again every static target whose request is not tracked, and making
+room for one by dropping the combinations no probe or scrape asked for in
+the hour MUST NOT go through the tracked combinations for each target
+offered. It MUST go through them only when one that can expire may have
+gone that long unasked, which it MUST tell without going through them, so
+that a read goes through them at most once however many targets are left
+over, and again only to drop one that has gone the hour unasked since; and
+it MUST track, drop and count exactly what going through them for each
+target did. The debug scrape of a static target MUST find its target, the
+first of that name in the file in force, without copying the targets it
+passes on the way, so that finding it allocates nothing however many targets
+the file has, and MUST NOT write to the target it found. To tell whether a
+static target of a name is one of the static target file followed — the
+scrape of a static target that ends, before it publishes (§ 42.14), and a
+read of the static targets endpoint that names targets, of every name it
+gives (§ 42.14a) — the exporter MUST
 NOT go through the targets of that file: the names its targets have MUST be
 noted once for the file, by the following of the reload that put it in
 force, before the lock of the per-collector statistics is taken, or, for
@@ -5894,11 +5907,22 @@ for as many targets as collectors costs the square of their number: where
 the collectors are MUST be noted once for a check, by their names, and each
 target's collector found there, the one going through them finds, the first
 of that name, so that the check accepts what it accepted and refuses a file
-for the same target and with the same message. The collectors whose
-descriptor files the check opens (§ 24.1) MUST be found the same way, once
+for the same target and with the same message. Nor may the check find the
+placeholders of a collector's request (§ 42.10a, § 42.10b) again for each
+target that names the collector, or read which keys a target's `request`
+block can set from their declaration again for each target: the
+placeholders MUST be found once for each collector in a check, and the keys
+once, with the same verdict and the same message as before. The collectors
+whose descriptor files the check opens (§ 24.1) MUST be found the same way, once
 for each configuration the file is checked against, and only once a target
 sets a `request.message`: a target file in which none does MUST NOT have
-the collectors gone through for it at all. A reload
+the collectors gone through for it at all. A reload MUST check each pair of
+a static target file and a configuration it asks about at most once — the
+pair it read, a file it read with the other in force, the pair a file is
+refused for — and asked about the same pair again MUST give the verdict the
+check gave, the same error; a target file read alone MUST have the
+configuration in force gone through once to find those collectors, not
+once as the configuration read and again as the one in force. A reload
 that changes a collector's definition MUST make that collector's static
 targets due again (§ 42.14).
 
@@ -20549,6 +20573,119 @@ The tests of the chart's rolling update and ratio floor are in the chart's speci
 - Of a traceback, only lines of nothing but spaces, `^` and `~` directly
   under a frame's source line are taken for markers: carets in a message,
   a blank line under a source line and carets beside other text are kept.
+
+## 34.122 A reload checks each pair of files once
+
+- A reload checks each pair of a static target file and a configuration it
+  asks about once, counted through a hook only tests set: once when the
+  files it read agree, once for a target file or a configuration read alone
+  and refused for the other in force, twice when both were read and the
+  configuration goes alone, and three times when both were read and the
+  target file goes alone or neither goes. It checked them one, three, three,
+  four, four and five times. What goes in force is what it was in each case.
+- A grpc target file read alone, whose check opens descriptor files, has the
+  collectors of the configuration in force gone through once to learn which,
+  where it was twice; read with a configuration, both configurations are
+  gone through once each.
+- Over generated sequences of reloads — of http collectors and their
+  targets, and of a grpc collector whose descriptor set is replaced, removed
+  and put back with targets whose message it accepts or refuses; each file
+  accepted, refused for itself or refused for the other; one file read or
+  both, on demand or by a watch tick, with the watch on and off — a manager
+  reloading as now and one reloading as before (the former reload kept
+  beside the test) leave the same files in force, return the same errors,
+  log the same lines in the same order, count the same reloads, and watch
+  the same files for a refused file, stamped alike, after every step; and
+  the sequences reach each of those outcomes, a file going alone while the
+  other is refused for it and both refused for each other among them.
+
+## 34.123 The debug scrape of a static target finds its target and collector without going through them
+
+- The debug scrape of a static target finds the target and the collector the
+  lookup as it was found, over 200 generated pairs of configuration and
+  target file (50 under the race detector), with targets that share a name,
+  collectors that share one and targets of a collector the configuration
+  lacks, for every name of the file, one it lacks and the empty one: the
+  target is the first of its name, the one in the file in force and not a
+  copy, equal to the copy found before, and none where there was none; the
+  collector is the very one found before, or none — with the configuration
+  followed, with one followed that keeps no places and with no target file.
+- With the configuration followed, the debug scrapes of its static targets
+  go through its collectors once in all, to note their places; with one
+  followed that keeps no places, once for each target found.
+- Finding the last of 2,000 and of 10,000 static targets for a debug scrape
+  allocates nothing, where the lookup as it was allocates once for each
+  target it passes.
+- `BenchmarkStaticTargetLookup` also times, for 100, 2,000 and 10,000 static
+  targets, what the debug scrape of the last target does to find it and its
+  collector (`debug`).
+
+## 34.124 A verbose self-metrics read past the tracker's limit, and the per-target cost of the target file's check
+
+A verbose self-metrics read goes through the tracked requests at most once (§ 24.1a):
+
+- A read of the verbose self-metrics with more static targets than the
+  tracker of per-request series holds goes through the tracked requests at
+  most once, however many targets are left over (§ 24.1a): counted through
+  `requestsScannedHook`, with the tracker full of requests of probes asked
+  for within the hour, again with them idle an hour later, and full of the
+  static targets' requests, for twice as many static targets as the tracker
+  holds; each target left over went through every tracked request, 2,001
+  times at a read (`requeststats_oracle_test.go`).
+- The tracker of per-request series keeps, drops and counts exactly what
+  the former tracker, which went through every tracked request whenever it
+  looked for an idle one, did (§ 22.1, § 24.1a): over generated runs of
+  probes of new and tracked requests, scrapes of static targets, reads with
+  the static targets as they were or changed by a reload to a few, nearly
+  as many as the tracker holds or a few more, collectors removed, verbose
+  switched off, and time passing by seconds, minutes, about the hour and
+  backwards, the requests tracked, their values, creation and last-use
+  times, the static requests, the latest creation time dropped and the
+  capped indicator are the former tracker's after every step, and the
+  series a read is made of are the same in the same order; past the limit,
+  where the former tracker took the static targets in the map's order, the
+  new one is held to an order it could have had.
+- `BenchmarkVerboseSelfMetricsRead` times what the tracked requests make a
+  read of the verbose self-metrics do, for 1,000, 2,000 and 10,000 static
+  targets, with the tracker full of the static targets' requests and full
+  of requests of probes that leave no room for them.
+
+The target file's check finds a collector's placeholders and a request block's keys once (§ 24.1a):
+
+- A check of parameters against a collector through a
+  `fetch.RequestParamsCheck` finds the collector's placeholders once,
+  however many checks it makes against it and whatever parts of the
+  request each replaces: 1,000 checks against three collectors find them
+  three times; `fetch.CheckRequestParams` finds them once for each check.
+  The test counts through a hook only tests set.
+- The yaml keys of a static target's `request` block are read from its type
+  at most once for 1,000 targets checked (`CheckTargetRequest`), counted
+  through a hook only tests set.
+- `test/repository` holds `placeholdersParsedHook` and `yamlKeysReadHook` of
+  `internal/fetch` to what it holds the other counting hooks to: declared
+  once, read in one place, and set only by tests.
+- Checking 1,100 static targets of one collector, whose path has a
+  placeholder each target's params fill, allocates no more than five times
+  for each target past 100, where it allocated nine times; under the race
+  detector the test does not count.
+- Over 4,000 generated sets of three collectors with placeholders, well
+  formed or not, in the path, body, headers, query values, message,
+  metadata, targets and label values, each checked eight times with
+  generated params and replaced parts, `CheckRequestParams` and a
+  `RequestParamsCheck` shared by the eight checks give what the check gave
+  while it found the placeholders anew each time: the same params unused,
+  or the same error, of the same type and text, with the same parameter
+  missing. Under the race detector it is 800 sets.
+- Over 4,000 generated request blocks of a collector and of a static
+  target, every field set and left unset, a pointer nil and not, a map nil,
+  empty and not, the keys a block sets are those found while the struct
+  tags were read for each block, in the same order, skipping keys or not;
+  every key of each block is set in some case. Under the race detector it
+  is 800.
+- The generated pairs of the check of a static target file against a
+  configuration include collectors with placeholders, well formed or not,
+  in their body, message and targets, which some of their targets replace
+  and others do not, and the check still says what it said for each.
 
 # 35. Documentation requirements
 

@@ -335,7 +335,7 @@ func TestAParameterThatFillsALabelIsUsed(t *testing.T) {
 // checkRequestParamsBeforeLabels is CheckRequestParams as it was before a
 // label value took placeholders.
 func checkRequestParamsBeforeLabels(c *model.Collector, overrides RequestOverrides) (unused []string, err error) {
-	used, err := requestParamNames(c, overrides)
+	used, err := requestParamNamesBefore(c, overrides)
 	if err != nil {
 		return nil, err
 	}
@@ -356,6 +356,32 @@ func checkRequestParamsBeforeLabels(c *model.Collector, overrides RequestOverrid
 	}
 	sort.Strings(unused)
 	return unused, nil
+}
+
+// requestParamNamesBefore is requestParamNames, which listed the parameters
+// a collector's request uses, as it was before the check of a static target
+// file found each collector's placeholders once (RequestParamsCheck).
+func requestParamNamesBefore(c *model.Collector, overrides RequestOverrides) (map[string]bool, error) {
+	used := map[string]bool{}
+	if !overrides.PathSet && HasPathParams(c.Request.Path) {
+		placeholders, err := parsePathParams(c.Request.Path)
+		if err != nil {
+			return nil, err
+		}
+		for _, p := range placeholders {
+			used[p.Name] = true
+		}
+	}
+	for _, f := range requestTemplates(c, overrides) {
+		placeholders, err := f.parse()
+		if err != nil {
+			return nil, err
+		}
+		for _, p := range placeholders {
+			used[p.Name] = true
+		}
+	}
+	return used, nil
 }
 
 // A collector whose label values hold no placeholder is checked and read as

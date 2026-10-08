@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/eenchev/prometheus-universal-exporter/internal/model"
+	"github.com/eenchev/prometheus-universal-exporter/internal/testutil/alloctest"
 )
 
 // The check of a static target file against a configuration goes through
@@ -108,5 +109,32 @@ func TestTheCheckOfTheShippedTargetFilesIsAsItWas(t *testing.T) {
 	}
 	if accepted < 2 || refused < 20 {
 		t.Errorf("%d pairs agree and %d do not, want at least 2 and 20", accepted, refused)
+	}
+}
+
+// Checking the targets of one collector costs a few allocations for each
+// target, and what the collector's placeholders cost once for the check:
+// the targets of the last of three collectors, whose path has a placeholder
+// that each target's params fill, allocate no more than five times for each
+// target past a hundred. While the collector's placeholders were found
+// anew for each target they allocated nine times. The race detector changes
+// what is allocated, so under it the test does not count.
+func TestCheckingTheTargetsOfACollectorAllocatesAFewTimesForEachTarget(t *testing.T) {
+	if alloctest.RaceDetector {
+		t.Skip("the race detector changes what is allocated")
+	}
+	const few, many, each = 100, 1100, 5
+	check := func(targets int) func() {
+		file, cfg := targetCheckPair(t, 3, targets, true)
+		return func() {
+			if err := ValidateStaticTargetsAgainst(file, cfg); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	base, _ := alloctest.Allocations(5, check(few))
+	most := base + each*(many-few)
+	if got := alloctest.AllocsAtMost(5, most, check(many)); got > most {
+		t.Errorf("checking %d targets of a collector allocates %.0f times and %d of them %.0f times: %.1f for each target past %d, want %d at most", many, got, few, base, (got-base)/(many-few), few, each)
 	}
 }

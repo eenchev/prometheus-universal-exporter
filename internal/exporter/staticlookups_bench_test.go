@@ -6,18 +6,21 @@ package exporter
 // for 100, 2,000 and 10,000 static targets of as many collectors
 // (docs/DEVELOPMENT.md):
 //
-//	go test -run '^$' -bench 'StaticTargetLookup|SelfMetricsSeedStatic' ./internal/exporter/
+//	go test -run '^$' -bench 'StaticTargetLookup|SelfMetricsSeedStatic|VerboseSelfMetricsRead' ./internal/exporter/
 //
 // BenchmarkStaticTargetLookup is what a scrape of the last static target
 // asks when it ends, whether a target of its name is in force (in-force),
-// that scrape whole, answered from the cache (scrape), and what a read of
-// the static targets endpoint that names that one target asks (named).
+// that scrape whole, answered from the cache (scrape), what its debug
+// scrape does to find it and its collector (debug), and what a read of the
+// static targets endpoint that names that one target asks (named).
 // BenchmarkSelfMetricsSeedStatic is what a read of the verbose self-metrics
 // does for the static targets: finding the request of each (keys), and that
-// with the tracker told of them (seed). A configuration of 10,000 collectors
-// takes seconds to load, which are not timed and are waited for all the
-// same when that size is among those asked for: -bench
-// 'StaticTargetLookup/n=2000$' asks for one size.
+// with the tracker told of them (seed). BenchmarkVerboseSelfMetricsRead is
+// all that the tracked requests make a read of the verbose self-metrics do,
+// for 1,000, 2,000 and 10,000 static targets with the tracker full. A
+// configuration of 10,000 collectors takes seconds to load, which are not
+// timed and are waited for all the same when that size is among those asked
+// for: -bench 'StaticTargetLookup/n=2000$' asks for one size.
 
 import (
 	"context"
@@ -95,6 +98,14 @@ func BenchmarkStaticTargetLookup(b *testing.B) {
 					server.scrapeTargetSince(context.Background(), followed.config, followed.generation, last)
 				}
 			})
+			b.Run("debug", func(b *testing.B) {
+				b.ReportAllocs()
+				for range b.N {
+					if target, c := staticDebugTarget(followed, last.Name); target == nil || c == nil {
+						b.Fatal("the debug scrape of the last static target finds no target or no collector")
+					}
+				}
+			})
 			b.Run("named", func(b *testing.B) {
 				query := url.Values{staticTargetsParam: {last.Name}}
 				b.ReportAllocs()
@@ -110,8 +121,8 @@ func BenchmarkStaticTargetLookup(b *testing.B) {
 
 // BenchmarkSelfMetricsSeedStatic is what a read of the verbose self-metrics
 // does for the static targets: see the top of the file. More than
-// VerboseRequestSeriesLimit of them, 1,000, are not all tracked, and telling
-// the tracker of those left over takes far longer than finding them
+// VerboseRequestSeriesLimit of them, 1,000, are not all tracked, and those
+// left over are offered to the tracker again at each read
 // (requestTracker.setStatic): keys is the part that finds each target's
 // collector by its name.
 func BenchmarkSelfMetricsSeedStatic(b *testing.B) {
@@ -131,6 +142,47 @@ func BenchmarkSelfMetricsSeedStatic(b *testing.B) {
 				for range b.N {
 					server.seedStaticRequests()
 				}
+			})
+		})
+	}
+}
+
+// verboseReadSizes are how many static targets BenchmarkVerboseSelfMetricsRead
+// has: as many as the tracker holds, twice as many, and ten times.
+var verboseReadSizes = []int{VerboseRequestSeriesLimit, 2 * VerboseRequestSeriesLimit, 10 * VerboseRequestSeriesLimit}
+
+// BenchmarkVerboseSelfMetricsRead is the part of a read of the verbose
+// self-metrics that the tracked requests make (Server.verboseRequests): the
+// static targets' requests told to the tracker, the idle ones expired, and
+// the series of every one tracked. With static, the tracker is full of the
+// static targets' requests, as it is after the first read; with probed, it
+// is full of requests of probes, asked for within the hour, before the
+// first read, and no static target's request finds a place. Every static
+// target left over is offered to the tracker at each read.
+func BenchmarkVerboseSelfMetricsRead(b *testing.B) {
+	read := func(b *testing.B, server *Server) {
+		b.Helper()
+		b.ReportAllocs()
+		b.ResetTimer()
+		for range b.N {
+			if samples, _ := server.verboseRequests(); len(samples) != VerboseRequestSeriesLimit {
+				b.Fatalf("a read tracks %d requests, want the tracker full", len(samples))
+			}
+		}
+	}
+	for _, n := range verboseReadSizes {
+		b.Run(fmt.Sprintf("n=%d", n), func(b *testing.B) {
+			b.Run("static", func(b *testing.B) {
+				server, _ := staticLookupServer(b, n, "http://127.0.0.1:9/status")
+				server.verboseRequests()
+				read(b, server)
+			})
+			b.Run("probed", func(b *testing.B) {
+				server, _ := staticLookupServer(b, n, "http://127.0.0.1:9/status")
+				for i := range VerboseRequestSeriesLimit {
+					server.requests.statsFor(requestKey{Collector: "probed", URL: fmt.Sprintf("http://probed/%d", i), Method: http.MethodGet})
+				}
+				read(b, server)
 			})
 		})
 	}

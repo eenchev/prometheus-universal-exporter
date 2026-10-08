@@ -22,7 +22,10 @@ import (
 // (model.CollectorByName), four times for a target, and targetsChecked once
 // more for each configuration. Both now find it where collectorsByName noted
 // it. The two as they were are kept here, and the tests below hold the
-// present ones to them.
+// present ones to them. The old check also found a collector's placeholders
+// for every target (fetch.CheckRequestParams), where the present one finds
+// them once for each collector (fetch.RequestParamsCheck); fetch's tests
+// hold CheckRequestParams to what it was before that.
 
 // oldValidateStaticTargetsAgainst is ValidateStaticTargetsAgainst as it was
 // while it went through the collectors for every target.
@@ -121,8 +124,8 @@ func oneOf[T any](r *rand.Rand, values ...T) T { return values[r.IntN(len(values
 // checkCorpusConfig is a generated configuration as the check may be given
 // one, not a loaded one: up to six collectors, two of which may share a
 // name, each of a request type the build carries or of one it does not, with
-// or without placeholders in its path and a header, with and without
-// defaults, and retries; and OTLP export on or off, with an endpoint, a
+// or without placeholders in its path, a header, its body, message and
+// targets, with and without defaults, well formed or not, and retries; and OTLP export on or off, with an endpoint, a
 // blank one or none. mark tells its collectors from another configuration's
 // and from each other, in a file each names.
 func checkCorpusConfig(r *rand.Rand, types []string, mark int) *model.Config {
@@ -141,6 +144,19 @@ func checkCorpusConfig(r *rand.Rand, types []string, mark int) *model.Config {
 		c.Request.Path = oneOf(r, "", "", "/status", "/tenants/{{param_tenant}}", "/tenants/{{param_tenant:acme}}", "/tenants/{{param_tenant}}/{{param_zone:eu}}")
 		if r.IntN(5) == 0 {
 			c.Request.Headers = map[string]string{"X-Token": "{{param_token}}"}
+		}
+		// Placeholders in the parts a target replaces, its body, message and
+		// targets, well formed or not, so that one target of a collector
+		// replaces a part and another of it does not, in either order
+		// (fetch.RequestParamsCheck).
+		if r.IntN(5) == 0 {
+			c.Request.Body = oneOf(r, `{"t": {{param_tenant|json}}}`, "{{param_zone:eu}}", "{{param_tenant")
+		}
+		if r.IntN(6) == 0 {
+			c.Request.Message = oneOf(r, `{"t": {{param_tenant:acme|json}}}`, `{"t": {{param_tenant|form}}}`)
+		}
+		if r.IntN(6) == 0 {
+			c.Request.Targets = oneOf(r, []string{"servers.{{param_zone:eu}}.load"}, []string{"servers.{{param_tenant"})
 		}
 		if r.IntN(3) == 0 {
 			c.Request.Retry = model.RetryConfig{Attempts: r.IntN(4), Backoff: model.Duration(oneOf(r, 0, time.Second, 20*time.Second, 40*time.Second))}

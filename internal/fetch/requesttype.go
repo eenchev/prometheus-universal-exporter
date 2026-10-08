@@ -10,6 +10,8 @@ import (
 	"slices"
 	"sort"
 	"strings"
+	"sync"
+	"sync/atomic"
 
 	"github.com/eenchev/prometheus-universal-exporter/internal/model"
 )
@@ -294,7 +296,7 @@ func CheckTargetRequest(t *model.StaticTarget, c *model.Collector) error {
 	if rt == nil {
 		return fmt.Errorf("target %q uses collector %q, which has no registered request type", t.Name, c.Name)
 	}
-	keys := setKeys(reflect.ValueOf(t.Request))
+	keys := setKeys(reflect.ValueOf(&t.Request).Elem())
 	if t.Request.PathSet && !slices.Contains(keys, "path") {
 		keys = append(keys, "path")
 	}
@@ -413,17 +415,59 @@ func FetchStage(c *model.Collector) string {
 // YAML at all.
 func setKeys(v reflect.Value, skip ...string) []string {
 	var keys []string
-	t := v.Type()
-	for i := 0; i < t.NumField(); i++ {
-		key, _, _ := strings.Cut(t.Field(i).Tag.Get("yaml"), ",")
-		if key == "" || key == "-" || slices.Contains(skip, key) {
+	for _, field := range yamlKeysOf(v.Type()) {
+		if slices.Contains(skip, field.key) {
 			continue
 		}
-		if !v.Field(i).IsZero() {
-			keys = append(keys, key)
+		if !v.Field(field.index).IsZero() {
+			keys = append(keys, field.key)
 		}
 	}
 	return keys
+}
+
+// Which field of a struct has which yaml key depends on the struct's type
+// alone, while reading it out of the fields' tags cost more than half the
+// check of a static target file against the configuration, which asks for
+// every target (CheckTargetRequest). So the keys of a type are read once,
+// the first time it is asked about, and kept by the type; what is set is
+// still looked at in each value.
+
+// yamlField is a struct field read from YAML: its index and its yaml key.
+type yamlField struct {
+	index int
+	key   string
+}
+
+// yamlKeysByType holds the yamlFields of each struct type setKeys was asked
+// about, by its reflect.Type: in field order, without the fields that have
+// no yaml key or the key "-".
+var yamlKeysByType sync.Map
+
+// yamlKeysReadHook, set by tests, is called whenever the yaml keys of a
+// struct type are read from its tags (yamlKeysOf), so a test can see that
+// it is once for a type, not once for each value.
+var yamlKeysReadHook atomic.Pointer[func()]
+
+// yamlKeysOf is the fields of the struct type t that are read from YAML,
+// with their keys.
+func yamlKeysOf(t reflect.Type) []yamlField {
+	if known, ok := yamlKeysByType.Load(t); ok {
+		return known.([]yamlField)
+	}
+	if hook := yamlKeysReadHook.Load(); hook != nil {
+		(*hook)()
+	}
+	var fields []yamlField
+	for i := 0; i < t.NumField(); i++ {
+		key, _, _ := strings.Cut(t.Field(i).Tag.Get("yaml"), ",")
+		if key == "" || key == "-" {
+			continue
+		}
+		fields = append(fields, yamlField{index: i, key: key})
+	}
+	known, _ := yamlKeysByType.LoadOrStore(t, fields)
+	return known.([]yamlField)
 }
 
 func matchesOverride(overrides []string, key string) bool {

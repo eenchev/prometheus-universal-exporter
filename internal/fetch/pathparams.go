@@ -105,6 +105,12 @@ func bindPathParams(path string, params map[string]string) (string, []string, er
 	if err != nil {
 		return "", nil, err
 	}
+	return bindParsedPathParams(path, placeholders, params)
+}
+
+// bindParsedPathParams is bindPathParams for a path whose placeholders were
+// found already (parsePathParams).
+func bindParsedPathParams(path string, placeholders []pathPlaceholder, params map[string]string) (string, []string, error) {
 	var b strings.Builder
 	values := make([]string, 0, len(placeholders))
 	previous := 0

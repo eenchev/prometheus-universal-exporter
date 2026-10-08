@@ -1542,34 +1542,72 @@ func (m *Manager) apply(trigger string, doConfig, doTargets bool) error {
 		// which they are (stampDescriptors): one that changes after the
 		// checks read it, and before the file is refused, is then a change
 		// too.
-		m.targetsRetryChecked = targetsChecked(targets, pairConfig, m.Get())
+		// The configuration in force is the one read with it when no other
+		// was read, and is then looked through once.
+		inForce := m.Get()
+		if inForce == pairConfig {
+			inForce = nil
+		}
+		m.targetsRetryChecked = targetsChecked(targets, pairConfig, inForce)
 		m.targetsRetryFiles = namedFiles(m.targetsRetryChecked)
 		m.targetsRetryStamp = filesStamp(m.targetsRetryFiles)
 		if m.WatchEnabled() {
 			m.targetsRetryFiles, m.targetsRetryStamp, _ = retryImported(m.targetsRetryFiles, m.targetsRetryStamp, m.targetsRetryChecked)
 		}
 	}
-	if agree(pairTargets, pairConfig) == nil {
+	// A pair asked about again below is not checked again: its verdict is
+	// the one it got (pairVerdicts).
+	var verdicts pairVerdicts
+	if verdicts.agree(pairTargets, pairConfig) == nil {
 		m.install(trigger, cfg, targets)
 		return errors.Join(errs...)
 	}
 	// They disagree. When both were read, one may still go alone, with the
 	// other in force; what is left is refused, and waits for the other file.
-	if cfg != nil && agree(m.StaticTargetFile(), cfg) == nil {
+	if cfg != nil && verdicts.agree(m.StaticTargetFile(), cfg) == nil {
 		m.install(trigger, cfg, nil)
 		cfg = nil
 	}
-	if targets != nil && agree(targets, m.Get()) == nil {
+	if targets != nil && verdicts.agree(targets, m.Get()) == nil {
 		m.install(trigger, nil, targets)
 		targets = nil
 	}
 	if cfg != nil {
-		errs = append(errs, m.rejectConfig(trigger, agree(m.StaticTargetFile(), cfg), true))
+		errs = append(errs, m.rejectConfig(trigger, verdicts.agree(m.StaticTargetFile(), cfg), true))
 	}
 	if targets != nil {
-		errs = append(errs, m.rejectTargets(trigger, agree(targets, m.Get()), true))
+		errs = append(errs, m.rejectTargets(trigger, verdicts.agree(targets, m.Get()), true))
 	}
 	return errors.Join(errs...)
+}
+
+// pairVerdicts are the verdicts of the checks one reload made, each of a
+// static target file against a configuration, told by the two themselves.
+// A reload asks about up to three pairs, some of them up to three times —
+// the pair it read, then a file it read with the other in force, which is
+// the pair it read again once the other went in force alone, and then the
+// pair a refused file is refused for, to say why — and each check costs
+// microseconds a target, under the reload lock. A pair asked about again
+// gets the error it got, the very one. They are kept for one reload only:
+// the next reads new files, and checks what is in force again.
+type pairVerdicts []pairVerdict
+
+type pairVerdict struct {
+	targets *model.StaticTargetFile
+	config  *model.Config
+	err     error
+}
+
+// agree is agree(f, c), checked the first time the pair is asked about.
+func (v *pairVerdicts) agree(f *model.StaticTargetFile, c *model.Config) error {
+	for _, seen := range *v {
+		if seen.targets == f && seen.config == c {
+			return seen.err
+		}
+	}
+	err := agree(f, c)
+	*v = append(*v, pairVerdict{targets: f, config: c, err: err})
+	return err
 }
 
 // agree checks a static target file against a configuration; no file agrees

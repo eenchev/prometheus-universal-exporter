@@ -1280,13 +1280,14 @@ is what they allocated:
 
 What is left of `keys` is a target's own, about 3 µs and six allocations
 each: the overrides of its request and the label of its URL, made again at
-every read. `seed` with more than 1,000 static targets is the tracker's and
-is not changed by this: it tracks `VerboseRequestSeriesLimit` requests, the
+every read. `seed` with more than 1,000 static targets was the tracker's and
+was not changed by this: it tracks `VerboseRequestSeriesLimit` requests, the
 static targets over that are offered to it again at every read, and each
-offer goes through everything tracked for an idle request to make room for
+offer went through everything tracked for an idle request to make room for
 it (`setStatic`, `adoptLocked`, `expireLocked`), so 1,000 times through
 1,000 for 2,000 targets and 9,000 times for 10,000, which is most of the
-time above and hides what `keys` gained. The read that names a target goes
+time above and hid what `keys` gained. The tracker no longer does that:
+see below. The read that names a target goes
 on to filter every series of the endpoint by the names, which is as long as
 the endpoint is large, as it was.
 
@@ -1324,10 +1325,94 @@ read while a reload notes the next. Only a test sets one of the hooks: the
 exporter declares each and reads it in one place
 (`test/repository/scanhooks_test.go`).
 
+Past the limit, a static target the tracker has no room for is offered to
+it at every read of the verbose self-metrics, and every offer looked for an
+idle request to make room by going through all the requests tracked
+(`expireLocked`): with 2,000 static targets, 1,000 times through 1,000 at
+each read, once for every scrape of the self-metrics. The tracker now keeps
+a time no request that can expire was last used before (`idleFloor`), set
+when it goes through them and moved earlier when a request is used at an
+earlier time, and goes through them only when that time is an hour old, so
+when one of them may be idle; what it drops, keeps and counts is what it
+did. `BenchmarkVerboseSelfMetricsRead` in `staticlookups_bench_test.go` is
+what the tracked requests make a read do — the static targets' requests
+told to the tracker, the idle ones expired and the series of every one —
+with the tracker full of the static targets' requests (`static`) or of
+requests of probes that leave no room for any of them (`probed`);
+`BenchmarkSelfMetricsSeedStatic/seed` is the first part. Old and new back to
+back on two shared cores; neither allocates more or less than it did:
+
+```sh
+go test -run '^$' -bench 'SelfMetricsSeedStatic/.*/seed|VerboseSelfMetricsRead' ./internal/exporter/
+```
+
+| Benchmark | Before | After |
+| --- | --- | --- |
+| `n=1000/static` | 3.0–3.5 ms, 1.57 MB, 8,042 allocations | 3.8–4.0 ms, the same |
+| `n=1000/probed` | 54–55 ms, 1.89 MB, 9,042 allocations | 4.0–4.5 ms, the same |
+| `n=2000/static` | 68–69 ms, 2.40 MB, 15,051 allocations | 5.5–7.7 ms, the same |
+| `n=2000/probed` | 103–105 ms, 2.73 MB, 16,051 allocations | 5.4–7.1 ms, the same |
+| `n=10000/static` | 0.65 s, 8.51 MB, 71,101 allocations | 26–28 ms, the same |
+| `n=10000/probed` | 0.53–0.60 s, 9.05 MB, 72,118 allocations | 26–36 ms, the same |
+| `n=2000/seed` | 71 ms | 3.4 ms |
+| `n=10000/seed` | 0.60 s | 25 ms |
+
+What is left is as long as the static targets are many: about two thirds
+is finding each target's request (`staticRequestKeys`, mostly
+`fetch.RequestLabelFor` making its URL's label again), and most of the rest
+is `setStatic` itself, which makes new statistics for each target left over
+that the tracker then turns away. It is held by counting, not by time:
+`requestsScannedHook` is called whenever `expireLocked` goes through the
+requests, and a read with twice as many static targets as the tracker holds
+goes through them at most once, with the tracker full of requests of
+probes, with them idle an hour later and with it full of static targets'
+(`requeststats_oracle_test.go`), where it went through them 2,001 times.
+The former tracker is kept beside the tests as an oracle: over generated
+runs of probes of new and tracked requests, scrapes of static targets,
+reads with the static targets as they were or changed by a reload to a few,
+nearly as many as the tracker holds or a few more, collectors removed,
+verbose switched off and time passing by seconds, minutes, about the hour
+and backwards, the tracker keeps the same requests with the same values,
+times and counts as the former one after every step, and gives the same
+series at every read; past the limit the former tracker took the static
+targets in the map's order, and the new one is held to an order it could
+have had. It costs about a second, plain or under the race detector.
+
+The debug scrape of a static target, `/static-targets?debug=<name>`, finds
+its target and the target's collector before it scrapes (`staticDebugTarget`
+in `probedebug.go`). It went through the targets by value, keeping a pointer
+to the loop's copy, which put a copy of each target it passed, 416 bytes, on
+the heap, and then through the collectors (`model.CollectorByName`). It now
+goes through the targets by index and points into the file in force, which
+nothing the debug scrape does writes to, and finds the collector where the
+configuration followed keeps its place (`followedConfig.collectorOf`), as a
+scrape does, falling back to going through the collectors where a scrape
+does. `BenchmarkStaticTargetLookup` times it with the last target asked for
+(`debug`), old and new taken back to back:
+
+| Benchmark | Before | After |
+| --- | --- | --- |
+| `n=100/debug` | 38 µs, 41,600 bytes, 100 allocations | 0.4 µs, none |
+| `n=2000/debug` | 0.61 ms, 832,000 bytes, 2,000 allocations | 4.8 µs, none |
+| `n=10000/debug` | 2.3 ms, 4,160,000 bytes, 10,000 allocations | 54 µs, none |
+
+What is left is comparing the names of the targets passed, which costs much
+less than the scrape that follows; the targets are not noted by their names
+for it. `staticdebugtarget_test.go` holds it: finding the last of 2,000 and
+of 10,000 targets allocates nothing, where the lookup as it was, measured
+beside it, allocates once for each target; and over 200 generated pairs of
+configuration and target file, with targets that share a name, collectors
+that share one and targets of a collector the configuration lacks, the
+target and collector found are those the lookup as it was found — the
+target the first of its name, in the file itself — with the configuration
+followed, which goes through its collectors once in all
+(`collectorsScannedHook`), and with one followed that keeps no places,
+which goes through them once for each target found.
+
 The check of a static target file against a configuration, which the start
-and `--dry-run` make once and a reload once when the two agree, three times
-when one file was read and is refused, and up to five when both were, has a
-benchmark in `internal/config/targetcheck_bench_http_test.go`:
+and `--dry-run` make once and a reload once for each pair of the two it asks
+about (see below), has a benchmark in
+`internal/config/targetcheck_bench_http_test.go`:
 
 ```sh
 go test -run '^$' -bench 'StaticTargetsAgainst|TargetsChecked' ./internal/config/
@@ -1368,13 +1453,36 @@ runs):
 | `every_message/n=10000` | 0.67–0.85 s, 58,424,448 bytes, 20 allocations | 67–78 ms, 58,861,712 bytes, 55 allocations |
 | `one_message/n=10000` | 0.53–0.54 s, 1,280 bytes, 1 allocation | 1.3–1.6 ms, 438,544 bytes, 36 allocations |
 
-What is left of the check is a target's own, 5 to 6 µs each whatever the
-configuration holds: about half of it is reading which keys the target's
+What was left of the check was a target's own, 4 to 6 µs each whatever the
+configuration holds: about half of it reading which keys the target's
 `request` block sets, by reflection over the block's fields and their tags
 (`setKeys` in `internal/fetch`), and a quarter binding the target's params,
-which parses the placeholders of the collector's request anew for every
-target of it (`fetch.CheckRequestParams`); noting where 10,000 collectors
-are is 1 to 2 ms of the 57. The search with every target setting a message is
+which parsed the placeholders of the collector's request anew for every
+target of it, the path's twice (`fetch.CheckRequestParams`). Which field of
+a block has which yaml key depends on its type alone, and is now read from
+the tags once for a type and kept by it (`yamlKeysOf`); only whether each
+field is set is looked at for each target. A collector's placeholders are
+found once for a check, for its first target, and kept for its others
+(`fetch.RequestParamsCheck`, which lives for one check, so that what it keeps
+cannot go stale), and `CheckRequestParams` itself, which a probe calls,
+finds them once where it found them twice. The same benchmark, old and new
+in turn, twice:
+
+| Benchmark | Before | After |
+| --- | --- | --- |
+| `own/n=100` | 0.38–0.47 ms, 38,236 bytes, 508 allocations | 0.16 ms, 36,293 bytes, 451 allocations |
+| `last/n=100` | 0.57–0.66 ms, 66,752 bytes, 904 allocations | 0.13 ms, 25,499 bytes, 508 allocations |
+| `own/n=2000` | 7.4–7.9 ms, 797,452 bytes, 10,012 allocations | 3.4–3.5 ms, 817,717 bytes, 8,709 allocations |
+| `last/n=2000` | 9.7–11.7 ms, 1,373,334 bytes, 18,010 allocations | 2.6–3.3 ms, 541,644 bytes, 10,014 allocations |
+| `own/n=10000` | 39–40 ms, 3,877,267 bytes, 50,038 allocations | 18–22 ms, 3,828,729 bytes, 43,451 allocations |
+| `last/n=10000` | 49–50 ms, 6,757,022 bytes, 90,034 allocations | 15 ms, 2,597,295 bytes, 50,038 allocations |
+
+What is left for a target is 1.5 to 2 µs: whether each field of its
+`request` block is set, still by reflection, a fifth of the check;
+`url.Parse` of its address, which checking the address is, as much; and
+binding its params against the placeholders found. `own` also finds the
+placeholders of each collector, each its first. Noting where 10,000
+collectors are is 1 to 2 ms. The search with every target setting a message is
 the copies it returns, a collector's definition for each such target. One
 case costs more than it did: a target file of fewer than ten or so targets,
 one of which sets a message, checked against thousands of collectors, for
@@ -1395,7 +1503,68 @@ a name, a request type the build lacks, targets refused for each thing the
 check refuses and for several at once — and over every static target file
 the repository ships against every configuration it ships, the check says
 what it said, message for message, and the search finds the same collectors
-in the same order.
+in the same order. That a collector's placeholders are found once for a
+check and a block's yaml keys once for its type is held by counting
+(`placeholdersParsedHook` and `yamlKeysReadHook` in `internal/fetch`,
+`targetcheckcost_test.go`): 1,000 checks of the params of three collectors,
+whatever parts of the request each replaces, find the placeholders three
+times, and the request blocks of 1,000 targets are read for their keys once
+at most; and by allocations (`targetcheck_http_test.go`): checking 1,100
+targets of a collector with a placeholder in its path allocates no more than
+five times for each target past 100, where it allocated nine times. Beside
+them, `setKeys` and `CheckRequestParams` as they were hold the present ones:
+over 4,000 generated collectors with placeholders well formed or not in each
+part of the request and in label values, checked with generated params and
+overrides through `CheckRequestParams` and a `RequestParamsCheck` shared by
+eight checks, the same params unused or the same error, and over generated
+request blocks of a collector and of a target, every field set and left
+unset, the same keys in the same order.
+
+A reload asks whether a target file and a configuration agree up to five
+times (`Manager.apply` in `internal/config/config.go`): for the pair it read,
+for each file it read with the other in force, and again for the error of
+each file it refuses. It checked a pair each time it asked, the same pair up
+to three times, so a refused reload of a target file of 10,000 targets
+repeated a check of 30 ms or so under the reload lock. Now a reload checks
+each pair once and gives the verdict it got, the very error, when it asks
+again (`pairVerdicts`); and a target file read alone, whose check opens the
+descriptor files of the configuration read and of the one in force, which
+are then one, looks through that one once (`targetsChecked`).
+`BenchmarkRefusedPairReload` in `internal/config/refusedpair_http_test.go`
+makes each kind of reload at 10,000 targets, the files read from disk, each
+refused at its last target where it is refused; `checks/op` is how many
+checks it made:
+
+```sh
+go test -run '^$' -bench 'RefusedPairReload' ./internal/config/
+```
+
+As measured on two shared cores, old and new in turn (the times are the
+range of two runs):
+
+| Benchmark | Before | After |
+| --- | --- | --- |
+| `both_agree`, the files agree | 189–192 ms, 52.2 MB, 791,177 allocations, 1 check | 189–192 ms, 52.2 MB, 791,177 allocations, 1 check |
+| `targets_refused`, the target file read and refused | 250–253 ms, 56.1 MB, 850,287 allocations, 3 checks | 186–195 ms, 52.1 MB, 790,278 allocations, 1 check |
+| `config_refused`, the configuration read and refused | 88–92 ms, 6.1 MB, 90,563 allocations, 3 checks | 30–34 ms, 2.1 MB, 30,550 allocations, 1 check |
+| `config_alone`, both read, the configuration goes alone | 259–276 ms, 58.1 MB, 881,197 allocations, 4 checks | 217–221 ms, 54.2 MB, 821,194 allocations, 2 checks |
+| `targets_alone`, both read, the target file goes alone | 279–282 ms, 58.1 MB, 880,830 allocations, 4 checks | 249–262 ms, 56.1 MB, 850,829 allocations, 3 checks |
+| `neither_alone`, both read and refused | 295–305 ms, 60.1 MB, 910,839 allocations, 5 checks | 251–253 ms, 56.1 MB, 850,831 allocations, 3 checks |
+
+The rest is reading the files. It is held without a duration:
+`TestAReloadChecksEachPairOfFilesOnce` counts the checks of each of these
+reloads (`targetsValidatedHook`, which only a test sets,
+`test/repository/scanhooks_test.go`), one for each pair asked about, and
+`TestATargetFileReadAloneLooksThroughTheConfigurationInForceOnce` the times
+the collectors are gone through for a target file read alone. The reload as
+it was is kept beside the tests (`oldApply`), and over generated sequences
+of reloads — of http collectors and of a grpc collector whose descriptor set
+is replaced, removed and put back; each file accepted, refused for itself
+or refused for the other; one read or both, on demand or by a tick, with the
+watch on and off — two managers of the same files, one reloading as before
+and one as now, leave the same files in force, return the same errors, log
+the same lines in the same order, count the same reloads, and watch the same
+files for a refused one, stamped alike.
 
 The read of every collector's statistics, which each scrape of the
 self-metrics makes under that same lock, has a benchmark beside that one,

@@ -214,6 +214,9 @@ var staticTargetSeriesLabels = []struct{ name, on string }{
 // the file it read against the configuration in force, while scrapes read
 // both.
 func ValidateStaticTargetsAgainst(f *model.StaticTargetFile, c *model.Config) error {
+	if hook := targetsValidatedHook.Load(); hook != nil {
+		(*hook)()
+	}
 	for i := range f.Targets {
 		t := &f.Targets[i]
 		if !t.ExportViaOTLP {
@@ -227,6 +230,9 @@ func ValidateStaticTargetsAgainst(f *model.StaticTargetFile, c *model.Config) er
 		}
 	}
 	collectors := collectorsByName(c)
+	// The placeholders of a collector are found once for the check, for its
+	// first target, and not again for each of its others.
+	var params fetch.RequestParamsCheck
 	for i := range f.Targets {
 		t := &f.Targets[i]
 		collector := collectors[t.Collector]
@@ -269,7 +275,7 @@ func ValidateStaticTargetsAgainst(f *model.StaticTargetFile, c *model.Config) er
 		// params or a default, since nothing else can fill it; and every
 		// param must fill one, since an unused one is a misspelling.
 		// Catching both here makes them startup errors naming both sides.
-		unused, err := fetch.CheckRequestParams(collector, fetch.TargetOverrides(t))
+		unused, err := params.CheckRequestParams(collector, fetch.TargetOverrides(t))
 		var missing *fetch.MissingParamError
 		if errors.As(err, &missing) {
 			// Only a path the target sets itself replaces the
@@ -297,12 +303,18 @@ func ValidateStaticTargetsAgainst(f *model.StaticTargetFile, c *model.Config) er
 // the configuration is large, and the check went through them four times
 // for every target, and once more for each configuration to learn which
 // descriptor files it opens (targetsChecked): for 10,000 targets of as many
-// collectors that was seconds of a reload, which checks the pair up to five
-// times. So where the collectors are is noted once for a check, by their
+// collectors that was seconds of a reload, which checked the pair up to
+// five times. So where the collectors are is noted once for a check, by their
 // names, and each target's is found there. The exporter keeps the same for
 // the configuration it follows (internal/exporter, fingerprintGeneration);
 // that one lives with what the exporter keeps for a configuration in force,
 // and the check is also of a configuration that is not in force yet.
+
+// targetsValidatedHook, set by tests, is called at each check of a static
+// target file against a configuration (ValidateStaticTargetsAgainst), so a
+// test can count the checks a reload makes: one for each pair of the two it
+// asks about, however often it asks (Manager.apply).
+var targetsValidatedHook atomic.Pointer[func()]
 
 // collectorsIndexedHook, set by tests, is called whenever the collectors of
 // a configuration are gone through to note where each is (collectorsByName):

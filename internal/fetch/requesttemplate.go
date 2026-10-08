@@ -9,6 +9,7 @@ import (
 	"slices"
 	"sort"
 	"strings"
+	"sync/atomic"
 
 	"github.com/eenchev/prometheus-universal-exporter/internal/model"
 )
@@ -221,8 +222,17 @@ func (f templateField) parse() ([]pathPlaceholder, error) {
 // requires.
 func (f templateField) render(params map[string]string) (string, error) {
 	placeholders, err := f.parse()
-	if err != nil || len(placeholders) == 0 {
+	if err != nil {
 		return f.text, err
+	}
+	return f.renderParsed(placeholders, params)
+}
+
+// renderParsed is render for a field whose placeholders were found already
+// (parse).
+func (f templateField) renderParsed(placeholders []pathPlaceholder, params map[string]string) (string, error) {
+	if len(placeholders) == 0 {
+		return f.text, nil
 	}
 	var b strings.Builder
 	previous := 0
@@ -286,30 +296,66 @@ func (f templateField) write(p pathPlaceholder, value string) (string, error) {
 	return value, nil
 }
 
-// requestParamNames lists the parameters a collector's request uses: in its
-// path, unless the probe replaced it, and in its templated body, headers and
-// query values.
-func requestParamNames(c *model.Collector, overrides RequestOverrides) (map[string]bool, error) {
-	used := map[string]bool{}
+// requestPlaceholders is the placeholders of a collector's request, found
+// (parsePathParams, parse) once for every check of parameters against it
+// that uses them: its path's, when it has any and is checked, and those of
+// each templated field (requestTemplates), each with the error finding them
+// gave, which a check reports only where it looks.
+type requestPlaceholders struct {
+	hasPath bool
+	path    []pathPlaceholder
+	pathErr error
+	fields  []parsedTemplate
+}
+
+// parsedTemplate is a templated field of a request with its placeholders,
+// or the error finding them gave.
+type parsedTemplate struct {
+	field        templateField
+	placeholders []pathPlaceholder
+	err          error
+}
+
+// placeholdersParsedHook, set by tests, is called whenever the placeholders
+// of a collector's request are found (parseRequestPlaceholders), so a test
+// can count the times: once for each collector in a check of a static target
+// file, not once for each target (RequestParamsCheck).
+var placeholdersParsedHook atomic.Pointer[func()]
+
+// parseRequestPlaceholders finds the placeholders of the parts of a
+// collector's request that the overrides leave to it: its path unless they
+// set one, its body unless they set one, and so on (requestTemplates).
+func parseRequestPlaceholders(c *model.Collector, overrides RequestOverrides) requestPlaceholders {
+	if hook := placeholdersParsedHook.Load(); hook != nil {
+		(*hook)()
+	}
+	var parsed requestPlaceholders
 	if !overrides.PathSet && HasPathParams(c.Request.Path) {
-		placeholders, err := parsePathParams(c.Request.Path)
-		if err != nil {
-			return nil, err
-		}
-		for _, p := range placeholders {
-			used[p.Name] = true
-		}
+		parsed.hasPath = true
+		parsed.path, parsed.pathErr = parsePathParams(c.Request.Path)
 	}
-	for _, f := range requestTemplates(c, overrides) {
+	templates := requestTemplates(c, overrides)
+	parsed.fields = make([]parsedTemplate, 0, len(templates))
+	for _, f := range templates {
 		placeholders, err := f.parse()
-		if err != nil {
-			return nil, err
-		}
-		for _, p := range placeholders {
-			used[p.Name] = true
-		}
+		parsed.fields = append(parsed.fields, parsedTemplate{field: f, placeholders: placeholders, err: err})
 	}
-	return used, nil
+	return parsed
+}
+
+// replacedBy tells whether the overrides replace the field, which
+// requestTemplates then leaves out: the body, the message, and a graphite
+// collector's targets.
+func (f templateField) replacedBy(overrides RequestOverrides) bool {
+	switch {
+	case f.where == "request.body":
+		return overrides.Body != nil
+	case f.where == "request.message":
+		return overrides.Message != nil
+	case strings.HasPrefix(f.where, "request.targets["):
+		return overrides.Targets != nil
+	}
+	return false
 }
 
 // RequestParam is a parameter a collector takes from the probe, as
@@ -374,17 +420,78 @@ func RequestParams(c *model.Collector) []RequestParam {
 // (labelparams.go): a parameter one of those names is used, whatever the
 // request names and whatever of it the probe replaced.
 func CheckRequestParams(c *model.Collector, overrides RequestOverrides) (unused []string, err error) {
-	used, err := requestParamNames(c, overrides)
-	if err != nil {
-		return nil, err
+	parsed := parseRequestPlaceholders(c, overrides)
+	return checkParsedRequestParams(c, &parsed, overrides)
+}
+
+// RequestParamsCheck is CheckRequestParams for many checks against the same
+// collectors, as the check of a static target file against the
+// configuration makes, one for each target: each collector's placeholders
+// are found the first time it is checked, and kept for the checks after.
+// Finding them again for every target cost a quarter of that check. A loaded
+// collector does not change, and a RequestParamsCheck lives for one check of
+// a file against one configuration, so what it keeps cannot go stale. Its
+// zero value is ready to use; it is not safe for concurrent use.
+type RequestParamsCheck struct {
+	parsed map[*model.Collector]*requestPlaceholders
+}
+
+// CheckRequestParams is the package's CheckRequestParams, with the same
+// results and errors, for a collector whose placeholders may have been found
+// already by this check.
+func (check *RequestParamsCheck) CheckRequestParams(c *model.Collector, overrides RequestOverrides) (unused []string, err error) {
+	parsed := check.parsed[c]
+	if parsed == nil {
+		if check.parsed == nil {
+			check.parsed = map[*model.Collector]*requestPlaceholders{}
+		}
+		// Every part of the request, whatever this check's overrides
+		// replace: another target of the collector may replace less.
+		all := parseRequestPlaceholders(c, RequestOverrides{})
+		parsed = &all
+		check.parsed[c] = parsed
 	}
-	if !overrides.PathSet && HasPathParams(c.Request.Path) {
-		if _, _, err := bindPathParams(c.Request.Path, overrides.Params); err != nil {
+	return checkParsedRequestParams(c, parsed, overrides)
+}
+
+// checkParsedRequestParams is CheckRequestParams for placeholders found
+// already, of at least the parts the overrides leave to the collector. Its
+// errors come in the order they always did: those finding the placeholders,
+// of the path and then of each field, and then those binding them.
+func checkParsedRequestParams(c *model.Collector, parsed *requestPlaceholders, overrides RequestOverrides) (unused []string, err error) {
+	used := map[string]bool{}
+	path := parsed.hasPath && !overrides.PathSet
+	if path {
+		if parsed.pathErr != nil {
+			return nil, parsed.pathErr
+		}
+		for _, p := range parsed.path {
+			used[p.Name] = true
+		}
+	}
+	for i := range parsed.fields {
+		f := &parsed.fields[i]
+		if f.field.replacedBy(overrides) {
+			continue
+		}
+		if f.err != nil {
+			return nil, f.err
+		}
+		for _, p := range f.placeholders {
+			used[p.Name] = true
+		}
+	}
+	if path {
+		if _, _, err := bindParsedPathParams(c.Request.Path, parsed.path, overrides.Params); err != nil {
 			return nil, err
 		}
 	}
-	for _, f := range requestTemplates(c, overrides) {
-		if _, err := f.render(overrides.Params); err != nil {
+	for i := range parsed.fields {
+		f := &parsed.fields[i]
+		if f.field.replacedBy(overrides) {
+			continue
+		}
+		if _, err := f.field.renderParsed(f.placeholders, overrides.Params); err != nil {
 			return nil, err
 		}
 	}

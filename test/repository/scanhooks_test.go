@@ -10,17 +10,29 @@ import (
 // That a collector or a static target is found by its name without going
 // through the collectors or the targets is held by counting the times they
 // are gone through, which the code tells through a hook: collectorsScannedHook
-// and targetsScannedHook in internal/exporter, collectorsIndexedHook in
-// internal/config. Only a test sets one. The package declares it, as a
-// pointer nothing is stored in, and reads it in one place, where a test's
-// function is called when there is one; so the exporter itself calls
-// nothing there, and pays one load of the pointer for each time it goes
-// through them, never one for each collector or target.
+// and targetsScannedHook in internal/exporter, collectorsIndexedHook and
+// targetsValidatedHook (the checks of a static target file a reload makes)
+// in internal/config. That a read of the verbose self-metrics goes through
+// the tracked requests at most once, however many static targets are left
+// over past the tracker's limit, is held the same way, by
+// requestsScannedHook in internal/exporter; and that the check of a static
+// target file finds a collector's placeholders once for the check and reads
+// the yaml keys of a request block once for its type, not once for each
+// target, by placeholdersParsedHook and yamlKeysReadHook in internal/fetch.
+// Only a test sets one. The package declares it, as a pointer nothing is
+// stored in, and reads it in one place, where a test's function is called
+// when there is one; so the exporter itself calls nothing there, and pays
+// one load of the pointer for each time it goes through them, never one for
+// each collector, target or request.
 func TestOnlyTestsCountTheTimesTheCollectorsAndTheTargetsAreGoneThrough(t *testing.T) {
 	for _, hook := range []struct{ name, dir string }{
 		{"collectorsScannedHook", "internal/exporter"},
 		{"targetsScannedHook", "internal/exporter"},
+		{"requestsScannedHook", "internal/exporter"},
 		{"collectorsIndexedHook", "internal/config"},
+		{"targetsValidatedHook", "internal/config"},
+		{"placeholdersParsedHook", "internal/fetch"},
+		{"yamlKeysReadHook", "internal/fetch"},
 	} {
 		files, err := filepath.Glob(filepath.Join(hook.dir, "*.go"))
 		if err != nil {

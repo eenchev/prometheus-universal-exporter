@@ -471,8 +471,10 @@ parameter that no place uses is still answered `400`, as is one given twice.
 **The same as the text written.** Everything that reads a label's value
 treats a filled value exactly as it would treat the same text written in the
 configuration: `limits.max_label_value_length` — a longer value fails the
-scrape in the validation, unless the rule's label has
-[`truncate: true`](CONFIGURATION.md#long-label-values), which cuts it —
+scrape in the validation, unless the label is cut:
+[`truncate: true`](CONFIGURATION.md#long-label-values) on it, or on the
+label of that name in another rule of the metric's name, cuts it, after any
+`value_map` —
 `remove_labels` and `rename_labels` and their order, a `value_map` of the
 rule's name, `name_escaping`, `limits.max_labels_per_metric`, and the check
 for a series made twice.
@@ -491,6 +493,22 @@ own text and defaults fails every probe that leaves the parameters out:
 ```text
 collector "tenant_status" transform.labels "tenant" is 612 bytes once its placeholders take their defaults, longer than limits.max_label_value_length 500, so every series of a probe that gives them no other value would fail validation; shorten the text or the defaults, or raise the limit
 ```
+
+Where a `value_map` of the rule's name maps a rule's label, the value is
+measured as the map makes it. A `"*"` entry longer than the limit is what
+every value the probe gives that the map does not list becomes, so it is
+refused whatever the defaults are, unless the label is cut at the scrape —
+`truncate: true` on it, or on the label of that name in any rule of the
+metric's name:
+
+```text
+collector "tenant_status" metric "status_up" label "tenant" value holds {{param_...}} placeholders, and the value_map of the metric's name maps every value it does not list, by its "*" entry, to 612 bytes, longer than limits.max_label_value_length 500, so every series of a probe that gives a value not listed would fail validation; shorten the "*" entry or take it out, set truncate: true on the label, or raise the limit
+```
+
+A longer entry the map lists is refused only where the defaults give its
+key, since every probe that leaves the parameters out then gives it;
+otherwise the configuration loads, and a probe that gives that key fails its
+scrape in the validation, as a probe that gives any long value does.
 
 **Static targets.** A [static target](STATIC-TARGETS.md)'s `params` fill a
 label's placeholders exactly as they fill the request's, and the file is
@@ -991,7 +1009,13 @@ metrics:
 ```
 
 Listing statuses replaces the default, so write `2xx` to keep the successful
-ones. An accepted status is not [retried](#retries). jq and yq rules read the
+ones. A status written as a number is the status YAML reads it as, however it
+is written: `503.0`, `5.03e2`, `0x1F7`, `+503` and `0503` are all 503, as they
+are to the [schema](CONFIGURATION.md#editor-support). In quotes it is text,
+the digits of a status or a class: `"503"`, and `"0503"` and `"+503"`, which
+are 503 too though the schema flags them, while `"503.0"` is refused, and so are a number
+with a fraction, such as `503.5`, and one outside 100 to 599, such as `6e2`,
+naming the collector, or the static target, and the entry. An accepted status is not [retried](#retries). jq and yq rules read the
 status as `$status` and the headers as `$headers`, an object of lower-case
 header names, each with its values joined by `, `:
 `$headers["retry-after"]`. A Python script has them as `response.status_code`

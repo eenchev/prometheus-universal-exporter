@@ -258,6 +258,23 @@ helm-test: helm-version
 		echo "the default values rendered GOGC" >&2; \
 		exit 1; \
 	fi
+	@# A whole number is rendered as the whole number it is, however it is
+	@# written: --set-json hands the templates a floating-point number, as a
+	@# values file does, which a template prints as 2e+06 by itself. One past
+	@# what a count may be is rejected.
+	@set -eu; \
+	out="$$(helm template test charts/prometheus-universal-exporter --set-json replicaCount=2000000 --set-json server.probeMaxConcurrent=2e6 --set-json server.pythonMaxWorkers=2000000.0)"; \
+	echo "$$out" | grep -q 'replicas: 2000000$$'; \
+	echo "$$out" | grep -q -- '--probe.max-concurrent=2000000"'; \
+	echo "$$out" | grep -q -- '--python.max-workers=2000000"'; \
+	if echo "$$out" | grep -q 'e+0'; then \
+		echo "a whole number was rendered with an exponent" >&2; \
+		exit 1; \
+	fi; \
+	if helm template test charts/prometheus-universal-exporter --set-json replicaCount=2147483648 >/dev/null 2>&1; then \
+		echo "helm template accepted a replicaCount past 2147483647" >&2; \
+		exit 1; \
+	fi
 	@# A monitor's port and namespaces.
 	@set -eu; \
 	out="$$(helm template test charts/prometheus-universal-exporter --set-json 'monitors=[{"name":"t","enabled":true,"type":"service","collector":"example","interval":"30s","scrapeTimeout":"10s","port":"grpc","namespaceSelector":{"matchNames":["a"]}}]')"; \

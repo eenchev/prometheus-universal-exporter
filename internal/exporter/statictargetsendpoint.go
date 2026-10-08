@@ -119,14 +119,49 @@ func (s *Server) publishStaticResult(read configRead, target model.StaticTarget,
 	}
 }
 
-// staticTargetInForce reports whether a target of that name is in force.
+// staticTargetInForce reports whether a target of that name is in force: one
+// of the static target file the manager holds when it is asked, whether or
+// not that file is followed yet. The name is looked up where the names of
+// the file followed were noted (followedConfig.targetNames) when the file in
+// force is that file, as it is but from a reload putting another in force to
+// the following of that reload, which the reload makes at once: every scrape
+// asks this when it ends, and going through the targets for it took a scrape
+// as long as the file is large. For a file not followed they are gone
+// through as they were.
 func (s *Server) staticTargetInForce(name string) bool {
-	for _, target := range s.manager.StaticTargets() {
-		if target.Name == name {
+	file := s.manager.StaticTargetFile()
+	if names, noted := s.followed.Load().targetNames(file); noted {
+		_, named := names[name]
+		return named
+	}
+	return staticTargetNamedByScan(file, name)
+}
+
+// staticTargetNamedByScan reports whether file has a target named name, by
+// going through its targets: what the names noted for a file followed say
+// without going through them.
+func staticTargetNamedByScan(file *model.StaticTargetFile, name string) bool {
+	targetsScanned()
+	targets := staticTargetsOf(file)
+	for i := range targets {
+		if targets[i].Name == name {
 			return true
 		}
 	}
 	return false
+}
+
+// staticTargetNamesByScan is the names the targets of file have, noted by
+// going through them, for a read that asks about several names of a file
+// that is not followed.
+func staticTargetNamesByScan(file *model.StaticTargetFile) map[string]bool {
+	targetsScanned()
+	known := map[string]bool{}
+	targets := staticTargetsOf(file)
+	for i := range targets {
+		known[targets[i].Name] = true
+	}
+	return known
 }
 
 // withStaticTargetLabel is set with every series labelled static_target, the
@@ -388,13 +423,24 @@ func (s *Server) requestedStaticTargets(query url.Values) (map[string]bool, erro
 	if len(names) == 0 {
 		return nil, fmt.Errorf("the %s parameter names no static target; give one or more names, separated by commas, or leave it out to read every target", staticTargetsParam)
 	}
-	known := map[string]bool{}
-	for _, target := range s.manager.StaticTargets() {
-		known[target.Name] = true
+	// Every name is asked of one file, the one in force now, where the
+	// names of the file followed were noted (followedConfig.targetNames): a
+	// read that names a few targets then costs as much as it names, not as
+	// much as the file is large. Only for a file not followed yet are its
+	// targets gone through, once for the read, as they were for every read.
+	file := s.manager.StaticTargetFile()
+	noted, kept := s.followed.Load().targetNames(file)
+	var known map[string]bool
+	if !kept {
+		known = staticTargetNamesByScan(file)
 	}
 	var unknown []string
 	for name := range names {
-		if !known[name] {
+		named := known[name]
+		if kept {
+			_, named = noted[name]
+		}
+		if !named {
 			unknown = append(unknown, strconv.Quote(name))
 		}
 	}
@@ -423,12 +469,16 @@ func (s *Server) mergeStaticTargets(results []namedSet) model.MetricSet {
 	// derived is, for the name of every series of a histogram or summary
 	// on the endpoint, the family it is a series of.
 	derived := map[string]string{}
+	// A name is as long as its collector's limits.max_metric_name_length
+	// lets it be, which the operator may raise: the lines show it as an
+	// error shows a name (model.ShownName). The clash is remembered under
+	// the whole name, so two names that start alike are two clashes.
 	leftOut := func(target string, m model.Metric, clash error, attrs ...any) {
 		key := staticClashKey(target, m.Name)
 		clashes[key] = staticClash{target: target, metric: m.Name}
 		s.failures.failed(s.logger, slog.LevelWarn, key,
 			"static target metric left out of the static targets endpoint", "exposition", clash,
-			append([]any{"target", target, "metric", m.Name, "type", string(m.Type)}, attrs...)...)
+			append([]any{"target", target, "metric", model.ShownName(m.Name), "type", string(m.Type)}, attrs...)...)
 	}
 	var order []string
 	for _, result := range results {
@@ -442,7 +492,7 @@ func (s *Server) mergeStaticTargets(results []namedSet) model.MetricSet {
 				// A family new to the endpoint: its name, and the names
 				// of its series, must be nobody else's.
 				if owner, taken := derived[m.Name]; taken {
-					leftOut(result.name, m, errFamilyNameClash, "clashes_with", owner, "type_in_use", string(families[owner].typ))
+					leftOut(result.name, m, errFamilyNameClash, "clashes_with", model.ShownName(owner), "type_in_use", string(families[owner].typ))
 					continue
 				}
 				clash := ""
@@ -453,7 +503,7 @@ func (s *Server) mergeStaticTargets(results []namedSet) model.MetricSet {
 					}
 				}
 				if clash != "" {
-					leftOut(result.name, m, errFamilyNameClash, "clashes_with", clash, "type_in_use", string(families[clash].typ))
+					leftOut(result.name, m, errFamilyNameClash, "clashes_with", model.ShownName(clash), "type_in_use", string(families[clash].typ))
 					continue
 				}
 				f = &family{typ: m.Type}
@@ -504,7 +554,7 @@ func (s *Server) settleStaticClashes(clashes map[subjectKey]staticClash, results
 			s.failures.forget(key)
 			continue
 		}
-		s.failures.recovered(s.logger, key, "static target metric back on the static targets endpoint", "target", clash.target, "metric", clash.metric)
+		s.failures.recovered(s.logger, key, "static target metric back on the static targets endpoint", "target", clash.target, "metric", model.ShownName(clash.metric))
 	}
 }
 

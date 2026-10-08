@@ -221,6 +221,26 @@ earlier in the import paths than the one that was compiled, which is then
 the one read, as `protoc` would. A file of the same name later in the import
 paths is never read.
 
+A call sees a file as changed when the watch of the configuration would (see
+[Watching the configuration](CONFIGURATION.md#descriptor-files)): its
+modification time, size or permissions changed, it appeared or disappeared,
+or its path leads to another file, by a symbolic link or by another file
+renamed over it, which its device and inode tell. So a `.proto` file or a
+descriptor set mounted from a Kubernetes ConfigMap is compiled again at the
+first call after Kubernetes swaps its `..data` link to a new version, even
+when the new file has the very time and size of the old, and so is one
+renamed over by a file of the same time, size and permissions; the watch
+reloads for it too. A file made unreadable by a `chmod` fails that call
+with `permission denied`, an unreadable file in an earlier import path as
+well, rather than the next import path's file of that name being read, as
+it is when the file is missing there; run as root, which reads a file
+whatever its permissions, the call compiles the files once more and
+succeeds. A filesystem that gives an unchanged file another inode number —
+FUSE without `use_ino`, once the kernel has dropped the file from its
+cache, or the files mounted again — makes the next call compile the files
+again and the watch reload, once each time the number changes (see
+[Watching the configuration](CONFIGURATION.md#descriptor-files)).
+
 A call only finds out that a changed file no longer fits when it fails: the
 method is gone, the request type no longer takes the `message`, or the files
 do not compile. With

@@ -254,7 +254,9 @@ What still is not valid UTF-8 after that — a target that says UTF-8 and is
 not — no longer fails the scrape: the invalid bytes in label values and help
 text are replaced with `�` (U+FFFD), counted in
 `http_exporter_invalid_utf8_total`, and logged as a warning naming the first
-metric. Setting `response.charset` fixes it at the source. Each run of
+metric (`first_metric`; a name longer than 200 bytes by its first 200 and its
+length, as an [error](LOGGING.md#repeated-failures) shows one). Setting
+`response.charset` fixes it at the source. Each run of
 invalid bytes becomes one `�`, however long it is, so names that differ only
 in such bytes are repaired into the same text: a page of Cyrillic names in
 windows-1251 that declares nothing gives every one-word name the label `�`,
@@ -949,7 +951,13 @@ A name the collector writes itself is held to the same, when the
 configuration loads: a rule's `name` and the `name` of each of its labels,
 under every transform, the keys of `transform.labels`, and what
 `transform.rename` and `transform.rename_labels` rename to. Each leaves the
-transform beside the names the response gave and is escaped with them.
+transform beside the names the response gave and is escaped with them. A
+rule's label or a key of `transform.labels` that `transform.rename_labels`
+renames or `transform.remove_labels` removes is the exception: the renames
+and removals come before the names are escaped and the series validated, so
+such a name is never exported, and it loads whatever its characters, `a.b`
+under `fail` or `__tmp` alike, unless it is nothing but blanks; the name it
+is renamed to is held to everything here.
 
 ```yaml
 collectors:
@@ -1022,9 +1030,11 @@ then letters and digits, in parts joined by single underscores.
 
 An invalid prefix stops the exporter at startup, and `--dry-run` reports it,
 naming the collector. So does a declared metric whose prefixed name would be
-longer than `limits.max_metric_name_length` (200 by default); a name produced at
-scrape time, by a Python script or a `prometheus` transform, is checked against
-the same limit when the scrape happens.
+longer than `limits.max_metric_name_length` (200 by default), as does a rule's
+name over it without a prefix
+([Checked when the configuration loads](#checked-when-the-configuration-loads));
+a name produced at scrape time, by a Python script or a `prometheus`
+transform, is checked against the same limit when the scrape happens.
 
 Log lines and probe errors name a metric rule as it is written in the
 configuration, without the prefix, so it can be found in the file. The prefix is
@@ -1196,7 +1206,13 @@ and the label is left off the series, as every label with an empty value is,
 where it used to be exported as `message=""`. Truncation applies to declared metrics from
 every transform, a `prometheus` rule without a `name` included, before any
 `metrics_prefix` is added and before `transform.rename_labels`, so a label
-keeps its `truncate: true` under the name a rename gives it. Text that is not
+keeps its `truncate: true` under the name a rename gives it, and after a
+label's [`value_map`](#mapping-text-to-values-and-scaling-them), for every kind of rule, so the
+value exported is the one cut, never a cut value mapped long again. Like a
+`value_map`, `truncate: true` goes by the metric's name: set on a label in
+one rule, it cuts that label of every series of the rule's name, those of
+the other rules of that name included, and those a `prometheus` rule
+without a `name` keeps under that name. Text that is not
 the UTF-8 it claims is [repaired](#character-encodings) first, so a value cut
 to the cap stays within it. A `python` script's labels are cut the same way
 when a rule of the collector names the script's metric and the label:
@@ -1226,7 +1242,40 @@ need or raise limits.max_labels_per_metric`, a help text over
 `limits.max_help_length` as `metric "M" help is 2100 bytes, longer than
 limits.max_help_length 2000; shorten it or raise limits.max_help_length`, and
 a name over `limits.max_metric_name_length` as `invalid metric name "M":
-longer than limits.max_metric_name_length 200`.
+longer than limits.max_metric_name_length 200` — a name the target or a
+script gives, since a rule's own name over it is refused at startup.
+
+### Long label names
+
+A label's name is capped by `limits.max_label_name_length`, 200 bytes by
+default, as a metric's name is by `limits.max_metric_name_length`. A name over
+the cap fails the whole scrape at validation, whatever gave the series the
+label — a series a `prometheus` transform passes through, a script's
+`labels={...}`, a rule — and whatever `error_handling` says, as a metric name
+over its cap does, and counts in `http_exporter_series_limit_exceeded_total`:
+`metric "M" label name "L" is longer than limits.max_label_name_length 200;
+rename the label with transform.rename_labels, or raise
+limits.max_label_name_length`. A name past 200 bytes is shown by its first 200
+and its length, `"lll..."... (10485760 bytes)`, so a target that writes a
+label name of megabytes is neither served nor quoted whole. The name is
+measured as the scrape exposes it, after `name_escaping`. A series whose
+metric name is over its cap as well fails on the metric name, and a label
+whose name and value are both over their caps fails on the name. `le` and
+`quantile`, which a histogram's buckets and a summary's quantiles carry, are
+label names too: a cap under 2 bytes fails every histogram, and one under 8
+every summary. A label name written in the configuration — a rule's label, a
+key of `transform.labels`, a `transform.rename_labels` target — that is over
+the cap as it would be exported is refused at startup; a rule's label or a key
+of `transform.labels` that `transform.rename_labels` renames or
+`transform.remove_labels` removes is not exported under that name, and is
+held neither to the cap, which its new name is, nor to its characters or the
+`__` Prometheus reserves ([UTF-8 names](#utf-8-names)). A static target's label over its
+collector's cap is refused when the target file is loaded, and so is every
+target of a collector whose cap is under 13 bytes: the static targets
+endpoint adds `static_target` to each of its series, and `collector` and
+`target` to its health series, after the cap is checked. The `file` label a
+collector reading a directory adds is checked with the rest, and fails the
+scrape under a cap of 4 bytes.
 
 ### Turning a status into metrics
 
@@ -1587,7 +1636,11 @@ takes neither. `scale` must be a finite number other than 0.
 Rules of one `name` make one metric, so a label they share must map alike:
 two such rules giving one label different `value_map`s are refused at load,
 since the same value would read as two names in one series. Give them one
-`value_map`, or different names.
+`value_map`, or different names. The map goes by the series' name: a
+`prometheus` rule without a `name` keeps each series' own, and its series of
+a name another rule has take that rule's `value_map`, its static labels
+included. A label with `truncate: true` is cut after it is mapped, so the
+value exported is within the limit (see [Long label values](#long-label-values)).
 
 #### Adding up nodes with `sum()`
 
@@ -1904,7 +1957,7 @@ Each type accepts its own keys. For `http`, `type` is the only required one —
 | `follow_redirects`, `enable_http2` | off | See [Target requests](REQUESTS.md#redirects-and-http2). |
 | `redirect_trusted_hosts` | none | Hosts, globs and addresses, besides the request's own origin, that a followed redirect may carry the collector's headers, credentials and body to, and present its TLS client certificate to; see [What a followed redirect carries](REQUESTS.md#what-a-followed-redirect-carries). |
 | `allowed_schemes` | `http`, `https` | Schemes a target may use: `http`, `https` or both. Any other entry stops the exporter at startup. |
-| `accept_status` | every 2xx | Statuses whose answers are decoded, such as `["2xx", 503]`; see [Accepting other statuses](REQUESTS.md#accepting-other-statuses). |
+| `accept_status` | every 2xx | Statuses whose answers are decoded, such as `["2xx", 503]`; a status written as a number is the one YAML reads, so `503.0` and `0x1F7` are 503. See [Accepting other statuses](REQUESTS.md#accepting-other-statuses). |
 | `allowed_targets`, `denied_targets` | none | Hosts, globs, addresses and networks its requests may and may not reach; see [Restricting targets](REQUESTS.md#restricting-targets). |
 
 For `localfile`, `root` is required, and `path`, `max_age` and
@@ -2190,7 +2243,18 @@ metrics rule 2 has invalid type "timer"`, where a rule with a name reads
   [a pattern belongs in `expression`](#collectors). Under
   [`name_escaping`](#utf-8-names) `underscores` or `values` a rule's name,
   and every other name the collector writes, may be any name that is not
-  blanks alone, and is exported escaped;
+  blanks alone, and is exported escaped. A rule's name may be no longer than
+  `limits.max_metric_name_length` as it is exported — after `metrics_prefix`,
+  escaped by `name_escaping` — since every series of it would fail the
+  scrape: `collector "c" metric "M" is 201 bytes, longer than
+  limits.max_metric_name_length 200, so every series of that name would fail
+  validation; shorten the name or raise limits.max_metric_name_length`, or,
+  with a prefix, `collector "c" metric "M" is exported as "p_M", which is
+  longer than limits.max_metric_name_length 200`. This holds for a
+  `prometheus` rule's and a `python` rule's name too; the scrape measures a
+  histogram's or a summary's family name, not its `_bucket`, `_sum` or
+  `_count`, and so does the load, and a `prometheus` rule without a `name`
+  has nothing to measure;
 - every expression must compile in its transform's language — jq and yq
   (including `items`, and undefined functions and variables), regular
   expressions, CSS selectors, XPath with the collector's namespaces, and a
@@ -2220,9 +2284,12 @@ metrics rule 2 has invalid type "timer"`, where a rule with a name reads
   on;
 - `transform.labels` and `rename_labels` must give label names, classic ones
   unless `name_escaping` escapes the others, and two renames may not target
-  the same label;
+  the same label. A key of `transform.labels` or a rule's label that
+  `rename_labels` renames or `remove_labels` removes may be any name that is
+  not blanks alone, since it is never exported;
 - no label name, of a rule, `transform.labels`, `rename_labels` or a static
-  target, may start with `__`, which Prometheus keeps for its own labels: it
+  target, may start with `__` — unless `rename_labels` renames it or
+  `remove_labels` removes it — which Prometheus keeps for its own labels: it
   refuses `__name__` in what it scrapes and drops the others. A series whose
   labels still get such a name, from a Python script or a passthrough, fails
   validation. So does a histogram given a label `le` of its own, or a summary
@@ -2246,14 +2313,31 @@ metrics rule 2 has invalid type "timer"`, where a rule with a name reads
 - no rule may be named as a series of another rule's histogram or summary —
   `foo_bucket`, `foo_sum` or `foo_count` beside a histogram `foo`, `foo_sum` or
   `foo_count` beside a summary `foo`;
+- a label name of a rule, of `transform.labels` or that
+  `transform.rename_labels` renames to may be no longer than
+  `limits.max_label_name_length` as `name_escaping` exports it, unless
+  `transform.rename_labels` renames it or `transform.remove_labels` removes
+  it;
 - a `description` may be no longer than `limits.max_help_length`, and a
   static label value, of a rule or of `transform.labels`, no longer than
-  `limits.max_label_value_length` — unless the label has `truncate: true`, a
-  `value_map` maps it to something shorter, or `remove_labels` drops it. A
+  `limits.max_label_value_length` — unless the label is cut at the scrape,
+  which it is where it has `truncate: true` or any rule of the same metric
+  name sets `truncate: true` on a label of that name, a `value_map` maps it
+  to something shorter, or `remove_labels` drops it. A
   value that holds `{{param_...}}` placeholders is measured with each
-  replaced by its default, and by nothing where it has none; such a value of
-  a rule's label is not measured where a `value_map` of the rule's name maps
-  the label;
+  replaced by its default, and by nothing where it has none. Where a
+  `value_map` of the rule's name maps such a value of a rule's label, it is
+  measured as mapped: a `"*"` entry longer than the limit is refused whatever
+  the defaults, since every value the probe gives that the map does not list
+  becomes it; a longer entry the map lists is refused only where the
+  defaults give its key, and otherwise loads, failing the scrape of a probe
+  that gives that key. A `prometheus` rule without a `name` keeps each
+  series' own name, and a `value_map` or `truncate: true` of a rule named as
+  one of those series applies to it: its static label is measured as it is,
+  for the names no rule has, and besides as each other rule's name its
+  `expression` matches maps and cuts it — matched as at the scrape,
+  unanchored unless the pattern says otherwise, against the name the target
+  wrote, before `metrics_prefix` and `name_escaping`;
 - an explicit `decoder.type` must be one the transform
   [reads](#collectors);
 - a setting must belong to the decoder or transform the collector has:
@@ -2284,7 +2368,18 @@ metrics rule 2 has invalid type "timer"`, where a rule with a name reads
   `limits.max_metrics: -1`, and one with a fraction, as in
   `max_concurrent_probes: 1.9`, are refused naming the key and the value
   rather than quietly becoming the default or losing the fraction. 0, like a
-  limit left out, is the default. [Sizes](#sizes) are held to the same;
+  limit left out, is the default. Written with a point or an exponent, as
+  `1e3` or `4.0`, a limit is the whole number it equals, read by its digits,
+  and one too large for an int64, as `1e19`, or even for a floating-point
+  number, as `1e400`, is refused naming the key, the number and the range. [Sizes](#sizes) are held to the same;
+- `limits.max_output_bytes`, when it is set, is at least 38 bytes, which a
+  [Python script](PYTHON.md#how-scripts-run) that emits no metric answers
+  in: a smaller one is refused, in a collector with a script and in one
+  without, as `collector "c" limits.max_output_bytes is 26, and a Python
+  script that emits no metric answers in 38 bytes, so no transform's script
+  could answer within it; set at least 38, or leave it out, or 0, for the
+  default, 1MiB`. It once loaded and failed every scrape of a collector
+  whose transform is a script;
 - a mapping key YAML reads as no key at all — `null`, `~`, or nothing before
   the colon, as in `value_map: {null: 0}` — is refused, since the entry would
   be dropped; quote it, `"null"`, when that text is the key;
@@ -2340,7 +2435,9 @@ itself replaces the one merged in, and of a list of merges (`<<: [*a, *b]`)
 the first that sets a key is the one read, so
 `limits: {<<: *defaults, max_metrics: 500}` loads even if the anchor's own
 `max_metrics` is `0.5`: that value is never read there. A value that is read
-is refused, at the line it is written on.
+is refused, at the line it is written on. A key written as an alias,
+`*k : 7.0` with `&k max_metrics` elsewhere, is the key its anchor holds, as
+YAML reads it, and its value is read and refused as that key's, named so.
 
 Each of these would otherwise load and then fail every scrape's validation,
 or be ignored, whatever the target answered.
@@ -2620,7 +2717,11 @@ was built with. The schema describes the canonical spelling and is not the last
 word: startup validation also checks what a schema cannot, such as that an
 expression compiles, that `otlp.interval` is at least `1s` — a duration is
 text to a schema — that a duration is not too long to be held, that a
-[size](#sizes) is under 2^63 bytes, and that no two rules of a collector are
+[size](#sizes) is under 2^63 bytes, that any other whole number, such as
+`limits.max_metrics`, is one an int64 holds, from -2^63 to 2^63 - 1, that a
+`limits.max_output_bytes` written
+in quotes or with a unit is not under [its least](#sizes), and that no two
+rules of a collector are
 [the same rule](#two-rules-that-are-the-same-rule), nor a `prometheus`
 [name and a pattern that matches it](#a-name-and-a-pattern-that-matches-it),
 a schema having no way to compare the items of a list by some of their
@@ -2664,6 +2765,25 @@ the exporter, which reads what is written, refuses it as no duration. These
 two, a duration too long to be held and a zero that is a number but is not
 written `0`, are all the schemas and the exporter differ on in how a
 duration is written.
+
+A whole number, such as `limits.max_metrics: 1e3` or `retry.attempts: 2.0`,
+may be written with a point or an exponent: a schema is handed the number,
+and the exporter reads it by its digits, so `9007199254740993.0` is that
+number and not the one a floating-point number rounds it to. One past what an
+int64 holds, such as `1e19`, which a schema takes, the exporter refuses,
+naming the key, the number and the range, and so is one past what a
+floating-point number holds, such as `1e400`, which the YAML reader the
+exporter uses takes for text, and an editor, reading YAML 1.2, for a number; and a fraction the exporter
+refuses however small, though a schema, handed the floating-point number,
+takes `1.00000000000000000001` for 1. An entry of `request.accept_status` is
+a status written as a number or as text: a number is the status it is
+however it is written — `503.0`, `5.03e2`, `0x1F7`, `0o767`, `+503` and
+`0503` are 503 — to both; text is text, the digits of a status or a class,
+so `"503.0"` is refused by both. In quotes, digits with a sign or leading
+zeros, `"0503"` or `"+503"`, are the status they read as to the exporter, and
+text that is no status to an editor, which flags them. The few more spellings the exporter's
+reader takes for a number, `5_03` and `0b111110111` among them, are 503 to
+the exporter, and text that is no status to an editor, which reads YAML 1.2.
 
 An optional key written as the empty string is the key left out, to the
 exporter and to the schemas alike. Where the key takes one of a set of
@@ -2827,7 +2947,11 @@ Aliases and merge keys work in every mapping of the three files, a
 collector's `cache` and a static target's `request` included, and what a
 merge brings in is read as if it were written out: a key the block does not
 take is refused, and a `path` or `body` merged into a target's `request`
-replaces the collector's.
+replaces the collector's. A key may itself be an alias of an anchored name:
+with `x-names: [&ttl ttl]`, `cache: {*ttl : 1m}` sets `ttl`, as YAML reads
+it, in those blocks as anywhere, and an unknown key so written is refused by
+the name its anchor holds. An alias of `<<` is the text `<<`, not a merge,
+and so an unknown key.
 
 An `x-` key is only ignored at the top level; anywhere else it is an unknown
 key like any other, and so is a bare `x-`. With
@@ -3412,7 +3536,10 @@ limit, instead of growing past it into an OOM kill, and the rest is left to
 the Python workers and the runtime's own overhead. The startup log says what
 was set. Without a container limit the Go default stays, and `GOMEMLIMIT` in
 the environment wins over the ratio. `0`, the default, leaves it off; the Helm
-chart sets `0.8`.
+chart sets `0.8`. Any other ratio is at least `0.1`, and one below it is
+refused at startup and by `--dry-run`: it would leave the Go heap almost
+nothing, so the runtime would spend its time collecting garbage. Leaving
+room for the Python workers takes `0.5` to `0.95`.
 
 `GOGC` in the environment is honoured as by any Go program: it is the
 garbage collector's target, how far the heap may grow over the live data
@@ -3598,15 +3725,31 @@ from then on; a file of the same name in a later import path is never read
 and not looked at, and neither are the places of the well-known files
 (`google/protobuf/*.proto`), which are built in. A file has changed when its
 modification time, its size or its permissions have, when it appeared or
-disappeared, or when its path leads to another file through a symbolic
-link, which is how Kubernetes swaps in a new version of a mounted ConfigMap.
-The reload checks the configuration against the descriptors as the
-collectors read them, and a collector reads a file again when its time or
-its size changed: a link pointed at a file with the very time and size of
-the old one reloads, and finds the descriptors the collectors go on using.
-So does a file whose permissions alone changed: one made unreadable by a
-`chmod` reloads, and the reload is accepted with the descriptors read
-before, which the collectors use until the file's time or size changes.
+disappeared, or when its path leads to another file: through a symbolic
+link, which is how Kubernetes swaps in a new version of a mounted ConfigMap,
+or because another file was renamed over it, which the file's device and
+inode tell even when the new file has the time, size and permissions of the
+old. The reload checks the configuration against the descriptors as the
+collectors read them, and a collector's call looks at its files as the watch
+does: a link pointed at a file with the very time and size of the old one,
+or a file renamed over by one of the same time, size and permissions,
+reloads, and the next call compiles the new file; a file whose permissions
+alone changed reloads too, and the next call reads it again. One made
+unreadable by a `chmod` then fails the reload and that call with
+`permission denied` — an unreadable file in an earlier import path too,
+rather than the next import path's file of that name being read, as it is
+when the file is missing there. The exporter run as root reads a file
+whatever its permissions, so there a `chmod` only makes the next call
+compile the files once more, and it succeeds.
+
+The device and inode are what the filesystem reports. On one that gives an
+unchanged file another inode number — a FUSE filesystem mounted without
+`use_ino`, once the kernel has dropped the file from its cache, or the
+files mounted again — the file counts as changed: the next tick reloads,
+and the next call compiles the files again, once each time the number
+changes. Nothing reads the files to tell otherwise, since that would cost
+every call a read; on a filesystem that changed the number at every look,
+every tick would reload and every call compile.
 
 The cost is one look at each of these files per tick: a tick that finds them
 as they were reads no file, compiles nothing and logs nothing. However many
@@ -3646,8 +3789,9 @@ and the load opens, and those of the configuration in force:
   are the well-known files (`google/protobuf/*.proto`), which are built in.
 
 When one of them appears, disappears or changes — its modification time, its
-size, its permissions, or, through a symbolic link, the file the path leads
-to, which is how Kubernetes swaps in a new version of a Secret — the next
+size, its permissions, or the file the path leads to, through a symbolic
+link, which is how Kubernetes swaps in a new version of a Secret, or by
+another file renamed over it, which its device and inode tell — the next
 tick reloads, once however many of them changed, and a reload that then
 succeeds is logged like any other. A tick that finds them as they were does
 nothing and logs nothing: it reads no file and compiles none. The descriptor
@@ -3741,6 +3885,7 @@ from different triggers never interleave: one runs at a time.
 
 Whatever the trigger, the exporter's state follows the new configuration: a
 removed collector's [self-metrics](SELF-METRICS.md#collector-metrics) stop,
+those of its [Python workers](SELF-METRICS.md#python-workers) with them,
 and what was kept about it is dropped, and a changed collector's cached results
 are dropped, and its [static targets](STATIC-TARGETS.md#reloading) are scraped
 again within ten seconds. The configuration and the static target file take
@@ -3844,8 +3989,10 @@ The report lists:
   origin the request was made to and is not in
   request.redirect_trusted_hosts`. A `grpc` call is listed with its method,
   metadata and status code. A `localfile` read, which sends nothing, is
-  listed as the file it reads.
-- **Response:** the status, the headers and the body, up to 64 KiB, as the
+  listed as the file it reads. A URL longer than 512 bytes is listed by its
+  first 512.
+- **Response:** the status, the headers — the first 100 of them, each value
+  by its first 1,024 bytes — and the body, up to 64 KiB, as the
   target sent them: the `Content-Type` is the target's own, not the
   `charset=utf-8` the rules see after the body is
   [converted](#character-encodings). A body in another encoding is listed with
@@ -3860,12 +4007,57 @@ The report lists:
   rules that carried on without some of their series, each by itself with
   how many and its first error, and with its expression where several rules
   export its metric name. A `prometheus` rule without a name is listed as
-  `rule without a name`.
+  `rule without a name`, and a metric's name longer than 200 bytes by its
+  first 200.
 - **Logs:** everything the trip logged at any level, whatever `--log.level`
   is, including what a Python script printed.
 - **Metrics:** the exposition a probe would have served, and before the
   report, the status a probe would have answered. Where `cache.stale_if_error`
   would have answered with the last good result, the report says so.
+
+A target can make most of that as long as it likes — the URL a redirect led
+to, a header's value, the message of a gRPC status, a metric's name — and a
+report is read by a person and made in memory whole. So everything in it but
+the body has a bound, and what is cut says so with its whole length, as a
+long [error](LOGGING.md#repeated-failures) does:
+
+```text
+  2. GET http://10.0.0.7/LLLLLLLL... (921645 bytes) (redirect) -> 200 OK in 3ms
+    X-Trace: hhhhhhhh... (1046528 bytes)
+    ... (5003 headers)
+    queue_depth_aaaaaaaa... (1048577 bytes): 1
+```
+
+- **A line** longer than 8,192 bytes is shown by its first 8,192 bytes, cut
+  between two characters, and `... (N bytes)`, the length of the whole line.
+  That holds for every line of the report but the body's, whatever it is: the
+  first line with a long target, a log line, a line of the exposition. The
+  bound is past what is bounded already, so an error at its 2,000 bytes keeps
+  its own length in the line that quotes it, and the 4,096 characters the log
+  keeps of what a script printed are shown whole.
+- **The body** keeps its own bound, 64 KiB, and its lines are shown as they
+  are, however long.
+- **A request's URL** is shown by its first 512 bytes and **a metric's name**
+  in the Transform section by its first 200, as an error shows them, each
+  with its length, so that how the request ended and how many series the
+  metric got are still on the line.
+- **A header's value** is shown by its first 1,024 bytes and its length, and
+  **the headers** of a request or a response are listed up to the first 100,
+  in the order of their names, and then how many there are.
+- **A line of the exposition** that is cut is no valid exposition any more,
+  so the section then starts with `Lines longer than 8192 bytes are cut below
+  (3 of them), so this is not valid exposition as it stands; a probe serves
+  them whole.` Only the report is cut: the answer of the probe itself, the
+  line that says what a probe would have answered, the response cache, the
+  self-metrics and what is exported over OTLP are what they are without a
+  debug probe.
+
+What the report redacts, listed below, is withheld before anything is cut,
+and no cut ends inside a `<redacted>`. The number of lines is
+bounded by the collector's own limits: the Transform section has a line for
+each metric name and the exposition one for each series, up to
+`limits.max_metrics`, and a directory one for each file read, up to
+`request.max_files`, and for each file skipped.
 
 The [collectors page](AUTHENTICATION.md#probing-from-the-browser) at
 `/collectors` offers the same report with a *Debug report* switch on each
@@ -3880,7 +4072,11 @@ any other value is answered `400`.
 
 A debug probe always goes to the target, and leaves nothing behind. It does
 not read or fill the response cache, it does not share an identical probe in
-flight, and it is not counted in the self-metrics or exported over OTLP. Its
+flight, and it is not counted in the self-metrics or exported over OTLP,
+which is what the report's line "records no self-metric" says. One thing is
+counted all the same: a Python script it runs is run by the collector's
+workers, and the [Python worker series](SELF-METRICS.md#python-workers)
+count what the workers did, a debug probe's runs among them. Its
 failures go to its report, not to the exporter's log, which records only one
 `probe debug report served` line at `info`. The target's
 [`allowed_targets` and `denied_targets`](REQUESTS.md#restricting-targets),
@@ -3983,6 +4179,7 @@ or a number with a unit:
 | Written | Bytes |
 | --- | --- |
 | `1048576` | 1048576 |
+| `1e6`, `1000000.0` | 1000000 |
 | `512KiB`, `512 KiB` | 524288 |
 | `10MB` | 10000000 |
 | `64MiB` | 67108864 |
@@ -3997,6 +4194,34 @@ there is no half byte; space around the size in quotes, such as `" 10MiB"`;
 and a size of 2^63 bytes (`8388608TiB`) or more, which is past what a size
 can hold. The [schema](#editor-support) flags the same spellings, all but the
 last: the range is checked when the configuration loads.
+
+One size has a least. `limits.max_output_bytes`, which bounds an answer of a
+[Python worker](PYTHON.md#how-scripts-run) and is 1 MiB when it is left out
+or `0`, is at least 38 bytes when it is set, the answer of a script that
+emits no metric: a smaller one — `26`, `2.6e1`, `"26"`, `26B`, `0.02KiB` —
+fails to load. The schema flags it where it is written as a number, from 1
+to 37 however YAML writes the number. Written as text, in quotes or with a
+unit, a size is to the schema text that reads as a size, and how many bytes
+`20B` or `0.01KiB` comes to it cannot tell: that one is checked when the
+configuration loads.
+
+A number of bytes written without quotes is the whole number it equals
+however YAML writes the number: `1e6`, `1E6`, `+1e6` and `1000000.0` are a
+million bytes and `2.5e8` is 250000000, as they are whole numbers at every
+other key that takes one, such as `limits.max_metrics`, and to the schema,
+which is handed the number and not how it was written. The number is read by
+its digits, not as the floating-point number nearest to it, so
+`9007199254740993.0` is that many bytes. What is not a whole number of bytes
+is refused as before, by the schema too: one with a fraction (`1.5`, `1e-1`)
+and `.inf`. A whole number that no size holds is refused for what it is,
+however it is written: `-1e3` and `-1.0` as negative, like `-1000`, and
+`1e19` and `9223372036854775808.0` as too large, like `9223372036854775808`.
+In quotes a number is text, and text is a
+whole number of bytes or a number with a unit: `"1e6"` and `"1.0"` are
+refused, by the schema too. The schema cannot tell a number's range, nor
+digits past the seventeen or so a floating-point number holds: a fraction
+written that far out (`1.00000000000000000001`) reaches it as the whole
+number, and is refused when the configuration loads.
 
 A response over `max_response_bytes` fails the scrape with `response size
 5000 exceeds limit 1024` when the target said its size in `Content-Length`,

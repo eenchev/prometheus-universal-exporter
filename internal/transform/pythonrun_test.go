@@ -158,7 +158,7 @@ func TestPythonScriptDurationDoesNotCountHandingOverTheResponse(t *testing.T) {
 	}
 	body := strings.Repeat("requests 12345 worker=a\n", alloctest.UnlessRaced(32<<20, 8<<20)/24)
 	for run := 1; ; run++ {
-		ctx, timer := WithScriptTimer(context.Background())
+		ctx, timer := WithScriptTimer(context.Background(), nil)
 		start := time.Now()
 		set, err := runWorkerText(ctx, c, body)
 		took := time.Since(start)

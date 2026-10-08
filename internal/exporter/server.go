@@ -353,7 +353,7 @@ func (s *Server) probeHandler(w http.ResponseWriter, r *http.Request) {
 				collector: c, target: target, logTarget: logTarget, overrides: overrides,
 				forwarded: forwarded, budget: budget, budgetSource: budgetSource,
 			},
-			requestURL: requestURL, method: method,
+			requestURL: requestURL, method: method, generation: followed.generation,
 		}
 		if model.UsesCache(c) {
 			// The key the same probe without debug has: debug is no
@@ -752,6 +752,12 @@ type utf8Repairs struct {
 // still seen. file is the directory's file the transform was of, or empty;
 // target is what the lines name, keyTarget the address as the failure log
 // tells addresses apart.
+//
+// The first metric is named before the set is validated, so its name is as
+// long as the target or a script made it: the line shows it as an error
+// shows a name (model.ShownName), and one within that bound as it is. The
+// name is no part of what the warning is remembered by, which is the
+// collector, the address and the file.
 func (s *Server) noteUTF8Repairs(ctx context.Context, repaired utf8Repairs, rec statsRecorder, c *model.Collector, target, keyTarget, file string) {
 	key := aspectKey(c.Name, keyTarget, file, utf8Aspect)
 	changed, first := repaired.count, repaired.first
@@ -760,5 +766,5 @@ func (s *Server) noteUTF8Repairs(ctx context.Context, repaired utf8Repairs, rec 
 		return
 	}
 	rec.update(func(x *serverStats) { x.invalidUTF8 += changed })
-	s.tripFailed(ctx, rec.read, slog.LevelWarn, key, "label values or help text were not valid UTF-8; the invalid bytes were replaced with U+FFFD. If the target uses another encoding without declaring it, set response.charset", "utf8", nil, "collector", c.Name, "target", target, "values", changed, "first_metric", first)
+	s.tripFailed(ctx, rec.read, slog.LevelWarn, key, "label values or help text were not valid UTF-8; the invalid bytes were replaced with U+FFFD. If the target uses another encoding without declaring it, set response.charset", "utf8", nil, "collector", c.Name, "target", target, "values", changed, "first_metric", model.ShownName(first))
 }

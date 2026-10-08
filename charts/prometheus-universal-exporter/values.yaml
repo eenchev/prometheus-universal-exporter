@@ -110,15 +110,15 @@ server:
   # on top of each collector's max_concurrent_probes. Each holds a response
   # and its series in memory, so this bounds what a burst can cost the pod.
   # A probe over it is answered 503; a static target scrape waits. A whole
-  # number; 0 or empty leaves them bounded only per collector, and empty
-  # leaves the flag out.
+  # number up to 2147483647; 0 or empty leaves them bounded only per
+  # collector, and empty leaves the flag out.
   probeMaxConcurrent: ""
   # How many Python workers, of every collector together, may be alive at
   # once (--python.max-workers): each is a Python process with its own
   # memory. A run that finds none free takes the place of the idle worker
   # unused for longest, or waits within its probe's deadline. A whole
-  # number; 0 or empty leaves them bounded only per script, and empty leaves
-  # the flag out.
+  # number up to 2147483647; 0 or empty leaves them bounded only per script,
+  # and empty leaves the flag out.
   pythonMaxWorkers: ""
   # How long a pod that is stopping waits for the probes in progress before
   # closing their connections: hours, minutes and seconds such as "30s" or
@@ -406,9 +406,10 @@ resources:
 # past the container's limit into an OOM kill. The rest is left to what the
 # Go heap does not count: the Python workers, which are processes of their
 # own — bound them with server.pythonMaxWorkers and limits.max_script_memory
-# — and the runtime's overhead. More than 0 and at most 1. Without a memory
-# limit in resources, the exporter keeps the Go default. GOMEMLIMIT set in
-# env wins.
+# — and the runtime's overhead. From 0.1 to 1: below 0.1 the heap would
+# have almost nothing and the Go runtime would spend its time collecting
+# garbage. Without a memory limit in resources, the exporter keeps the Go
+# default. GOMEMLIMIT set in env wins.
 goMemLimit:
   enabled: true
   ratio: 0.8
@@ -484,7 +485,9 @@ podDisruptionBudget:
 terminationGracePeriodSeconds: null
 # The Deployment's strategy. rollingUpdate is rendered with RollingUpdate
 # only: with type Recreate it is left out, as Kubernetes refuses it there, so
-# `strategy.type: Recreate` alone is enough.
+# `strategy.type: Recreate` alone is enough. maxSurge and maxUnavailable both
+# 0, as 0 or 0%, fail rendering, as Kubernetes refuses them; one left out is
+# Kubernetes' default, 25%.
 strategy:
   type: RollingUpdate
   rollingUpdate:

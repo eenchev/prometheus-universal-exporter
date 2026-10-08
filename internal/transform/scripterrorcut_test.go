@@ -462,8 +462,85 @@ else:
 // failingRun runs the collector's transform on a response of body.
 func failingRun(t *testing.T, c *model.Collector, body string) (*model.MetricSet, error) {
 	t.Helper()
+	return failingRunWith(t, "python3", c, body)
+}
+
+// failingRunWith runs the collector's transform on a response of body in a
+// worker of the given interpreter.
+func failingRunWith(t *testing.T, python string, c *model.Collector, body string) (*model.MetricSet, error) {
+	t.Helper()
 	r := &fetch.HTTPResponse{StatusCode: 200, Body: []byte(body), Headers: http.Header{}}
-	return Transform(t.Context(), &decode.Decoded{Kind: "text", Data: body, Raw: r.Body}, r, c, "python3")
+	return Transform(t.Context(), &decode.Decoded{Kind: "text", Data: body, Raw: r.Body}, r, c, python)
+}
+
+// formerFailure is the error the exporter shows of script run as c's
+// transform ("metrics" and "transform") or pre-script ("data" and
+// "pre-script") on a response of body by a worker as it was, of the given
+// interpreter, under a limit nothing reaches: what that interpreter's
+// traceback module wrote, whole, as shownScriptError shows it. It is what a
+// test expects of an error the worker writes where a literal would hold one
+// Python release's traceback: 3.13 draws markers under a frame's source line
+// (withoutMarkers) that 3.12 does not.
+func formerFailure(t *testing.T, former *PythonPool, python string, c *model.Collector, mode, what, script, body string) string {
+	t.Helper()
+	r := &fetch.HTTPResponse{StatusCode: 200, Body: []byte(body), Headers: http.Header{}}
+	request, err := pythonRequest(mode, script, &decode.Decoded{Kind: "text", Data: body, Raw: r.Body}, r, c)
+	if err != nil {
+		t.Fatal(err)
+	}
+	spec := pythonWorkerSpec(python, c)
+	spec.MaxOutput = math.MaxInt32
+	line, _, err := former.run(t.Context(), spec, request, time.Minute)
+	var whole pythonOutput
+	if err != nil || json.Unmarshal(line, &whole) != nil || whole.OK || whole.Error == "" {
+		t.Fatalf("%.100s: the worker as it was answers %.200q, %v", script, line, err)
+	}
+	return model.Errorf("python %s failed: %s", what, shownScriptError(strings.TrimSpace(whole.Error))).Error()
+}
+
+// withoutMarkers is a traceback without the lines of position markers that
+// Python 3.13 draws under a frame's source line and 3.12 does not, such as
+// "    ~~~~^^^^^^^": a line of nothing but spaces, '^' and '~', with one of
+// those two in it, directly under a source line, which is indented four
+// spaces under a line that begins `  File "`. Every other byte is kept. A
+// test compares an error with a literal example of it by this, on both
+// sides, beside comparing it exactly with formerFailure: the example says
+// what the error is, and the release's own traceback is held to the byte.
+func withoutMarkers(text string) string {
+	lines := strings.Split(text, "\n")
+	kept := lines[:0:0]
+	for i, line := range lines {
+		marker := i >= 2 && strings.ContainsAny(line, "^~") && strings.Trim(line, " ^~") == "" &&
+			strings.HasPrefix(lines[i-1], "    ") && strings.HasPrefix(lines[i-2], `  File "`)
+		if !marker {
+			kept = append(kept, line)
+		}
+	}
+	return strings.Join(kept, "\n")
+}
+
+// A line of markers is left out only directly under a frame's source line,
+// and nothing else is: not carets in an exception's message, a blank line
+// under a source line, or a line of carets with anything else in it.
+func TestWithoutMarkersLeavesOutOnlyTheMarkersUnderASourceLine(t *testing.T) {
+	const frame = "Traceback (most recent call last):\n  File \"<collector-python>\", line 1, in <module>\n"
+	for _, test := range []struct{ text, want string }{
+		{frame + "    exec(response.text)\n    ~~~~^^^^^^^^^^^^^^^\nValueError: ordinary", frame + "    exec(response.text)\nValueError: ordinary"},
+		{frame + "    fail('x')\n    ^^^^^^^^^\nRuntimeError: x", frame + "    fail('x')\nRuntimeError: x"},
+		{frame + "    exec(response.text)\nValueError: x\n    ^^^^", ""},
+		{"  File \"a\", line 1\n    x\n    \nValueError", ""},
+		{"ValueError: ^^^\n    ~~~\n", ""},
+		{"  File \"a\", line 1\n    x\n  ^^ x", ""},
+		{"x\n    x\n    ^^^", ""},
+	} {
+		want := test.want
+		if want == "" {
+			want = test.text
+		}
+		if got := withoutMarkers(test.text); got != want {
+			t.Errorf("withoutMarkers(%q) is\n%q\nwant\n%q", test.text, got, want)
+		}
+	}
 }
 
 // A script that raises an exception with two megabytes in it, under the
@@ -480,56 +557,76 @@ func failingRun(t *testing.T, c *model.Collector, body string) (*model.MetricSet
 //
 // The script makes the text of as many characters as its response says:
 // what is long here is the exception, not what the exporter sends.
+//
+// The error is held to the byte against what the worker as it was writes of
+// the same script in the same interpreter, as shownScriptError shows it
+// (formerFailure) — of 20,000 characters, with the length the line ends with
+// made that of the run's, since only that length differs between them and
+// the oracle's megabytes would cost seconds under the race detector — and,
+// without the markers Python 3.13 draws under the frame's source line
+// (withoutMarkers), against the literal example below.
+// It is run with python3 from PATH and with each release the worker is known
+// to run on that is installed (eachInterpreterOfTheSandbox).
 func TestAScriptThatRaisesMoreThanTheOutputLimitFailsWithItsException(t *testing.T) {
-	requirePython(t)
 	const megabyte = 1 << 20
 	shown := func(script string, line string, characters int) string {
 		return fmt.Sprintf("Traceback (most recent call last):\n  File \"<collector-python>\", line 1, in <module>\n    %s\n%s%s... (%d bytes)", script, line, strings.Repeat("x", 200-len(line)), len(line)+characters)
 	}
 	const raises, fails = "raise ValueError('x' * int(response.text))", "fail('x' * int(response.text))"
-	raising := workerCollector("raising", raises)
-	failing := workerCollector("failing", fails)
-	first := workerCollector("raising-first", "")
-	first.Transform = model.TransformConfig{Type: "regex", PreScript: raises}
-	first.Metrics = []model.MetricRule{{Name: "m", Expression: `value=(\d+)`}}
-	for _, run := range []struct {
-		c                  *model.Collector
-		what, script, line string
-	}{
-		{raising, "transform", raises, "ValueError: "},
-		{failing, "transform", fails, "RuntimeError: "},
-		{first, "pre-script", raises, "ValueError: "},
-	} {
-		var recognised string
-		for i, characters := range []int{2 * megabyte, 3 * megabyte, 20000, 2000} {
-			_, err := failingRun(t, run.c, strconv.Itoa(characters))
-			want := "python " + run.what + " failed: " + shown(run.script, run.line, characters)
-			if err == nil || err.Error() != want {
-				t.Fatalf("%s, %d characters raised: the %s fails with\n%.700v\nwant\n%s", run.c.Name, characters, run.what, err, want)
+	eachInterpreterOfTheSandbox(t, func(t *testing.T, python string) {
+		former := formerErrorPool(t)
+		raising := workerCollector("raising-"+python, raises)
+		failing := workerCollector("failing-"+python, fails)
+		first := workerCollector("raising-first-"+python, "")
+		first.Transform = model.TransformConfig{Type: "regex", PreScript: raises}
+		first.Metrics = []model.MetricRule{{Name: "m", Expression: `value=(\d+)`}}
+		for _, run := range []struct {
+			c                        *model.Collector
+			mode, what, script, line string
+		}{
+			{raising, "metrics", "transform", raises, "ValueError: "},
+			{failing, "metrics", "transform", fails, "RuntimeError: "},
+			{first, "data", "pre-script", raises, "ValueError: "},
+		} {
+			var recognised string
+			const oracle = 20000
+			length := func(characters int) string { return fmt.Sprintf("... (%d bytes)", len(run.line)+characters) }
+			base := formerFailure(t, former, python, run.c, run.mode, run.what, run.script, strconv.Itoa(oracle))
+			if !strings.HasSuffix(base, length(oracle)) {
+				t.Fatalf("%s: the worker as it was shows %d characters raised as\n%.700s", run.c.Name, oracle, base)
 			}
-			if !errors.Is(err, model.ErrScriptFailed) || errors.Is(err, model.ErrLimitExceeded) {
-				t.Errorf("%s, %d characters raised: the failure is not a script's alone: %.200v", run.c.Name, characters, err)
+			for i, characters := range []int{2 * megabyte, 3 * megabyte, 20000, 2000} {
+				_, err := failingRunWith(t, python, run.c, strconv.Itoa(characters))
+				want := strings.TrimSuffix(base, length(oracle)) + length(characters)
+				example := "python " + run.what + " failed: " + shown(run.script, run.line, characters)
+				if err == nil || err.Error() != want || withoutMarkers(err.Error()) != withoutMarkers(example) {
+					t.Fatalf("%s, %d characters raised: the %s fails with\n%.700v\nwant\n%.700s\nwhich is, without markers under a source line,\n%s", run.c.Name, characters, run.what, err, want, example)
+				}
+				if !errors.Is(err, model.ErrScriptFailed) || errors.Is(err, model.ErrLimitExceeded) {
+					t.Errorf("%s, %d characters raised: the failure is not a script's alone: %.200v", run.c.Name, characters, err)
+				}
+				if same := model.SameFailureText(err); i == 0 {
+					recognised = same
+				} else if same != recognised || !strings.HasSuffix(same, "... ("+model.MovingMark+" bytes)") {
+					t.Errorf("%s, %d characters raised: the failure is recognised by\n%s\nand that of the first by\n%s", run.c.Name, characters, same, recognised)
+				}
 			}
-			if same := model.SameFailureText(err); i == 0 {
-				recognised = same
-			} else if same != recognised || !strings.HasSuffix(same, "... ("+model.MovingMark+" bytes)") {
-				t.Errorf("%s, %d characters raised: the failure is recognised by\n%s\nand that of the first by\n%s", run.c.Name, characters, same, recognised)
+			// One worker ran them all, and was stopped for none.
+			if now := PythonWorkers().Snapshot(run.c.Name); now.Starts != 1 || len(now.Stops) != 0 || now.Runs[pythonRunScriptError] != 4 || len(now.Runs) != 1 || now.Idle != 1 {
+				t.Errorf("%s: %d workers started, stopped %v, idle %d, runs %v; want one worker, four script errors and nothing else", run.c.Name, now.Starts, now.Stops, now.Idle, now.Runs)
 			}
 		}
-		// One worker ran them all, and was stopped for none.
-		if now := PythonWorkers().Snapshot(run.c.Name); now.Starts != 1 || len(now.Stops) != 0 || now.Runs[pythonRunScriptError] != 4 || len(now.Runs) != 1 || now.Idle != 1 {
-			t.Errorf("%s: %d workers started, stopped %v, idle %d, runs %v; want one worker, four script errors and nothing else", run.c.Name, now.Starts, now.Stops, now.Idle, now.Runs)
-		}
-	}
+	})
 }
 
 // An answer longer than limits.max_output_bytes is still what it was,
 // since only a script's error is cut. Metrics the worker writes that come
-// to more than the limit fail the run as output over the limit and cost
-// the worker; metrics whose strings alone are longer are refused by the
-// worker with the OverflowError that says so, which under a limit that
-// holds it is the line the worker as it was writes; and a worker that has
-// cut a script's error before serves both.
+// to more than the limit, sixty of them whose keys and strings are within
+// it, fail the run as output over the limit and cost the worker; metrics
+// whose strings alone are longer are refused by the worker with the
+// OverflowError that says so, which under a limit that holds it is the
+// line the worker as it was writes; and a worker that has cut a script's
+// error before serves both.
 func TestAnAnswerOverTheOutputLimitFailsAsItDidBesideAnErrorThatIsCut(t *testing.T) {
 	requirePython(t)
 	const limit = 4096
@@ -537,7 +634,7 @@ func TestAnAnswerOverTheOutputLimitFailsAsItDidBesideAnErrorThatIsCut(t *testing
 kind = response.text
 if kind == "raise": raise ValueError("x" * 100000)
 if kind == "numbers":
-    for i in range(300): metric("m", value=i, labels={"i": i})
+    for i in range(60): metric("m", value=i, labels={"i": i})
 if kind == "strings": metric("m", value=1, labels={"l": "x" * 5000})
 if kind == "few": metric("m", value=1)
 `)
@@ -741,6 +838,26 @@ func unwritten(named, fault string) string {
 	return "python transform failed: " + named + ": (the text of this error could not be written: " + fault + ")"
 }
 
+// ordinaryTraceback is the error of an ordinary length a script ends with: the
+// traceback the worker as it was writes of the script run by c, a
+// runningCollector, in the same interpreter, the frame that is shown being
+// that of exec(response.text) (formerFailure).
+const ordinaryTraceback = "python transform failed: Traceback (most recent call last):\n  File \"<collector-python>\", line 1, in <module>\n    exec(response.text)\n"
+
+// sameFailure reports whether err is want, or, where want is an
+// ordinaryTraceback, whether err is to the byte what the worker as it was
+// shows of script (as formerFailure has it) and is want without the markers
+// Python 3.13 draws under the frame's source line (withoutMarkers), which
+// the literal does not have; and what err is compared with, for a message.
+func sameFailure(t *testing.T, former *PythonPool, python string, c *model.Collector, script, want string, err error) (bool, string) {
+	t.Helper()
+	if !strings.HasPrefix(want, ordinaryTraceback) {
+		return err != nil && err.Error() == want, want
+	}
+	exact := formerFailure(t, former, python, c, "metrics", "transform", c.Transform.Script, script)
+	return err != nil && err.Error() == exact && withoutMarkers(err.Error()) == withoutMarkers(want), exact
+}
+
 // A worker in which cutting an error raises still answers that the script
 // failed: with the type of the script's exception, that the text of the
 // error could not be written and the type of what was raised over it, in
@@ -754,40 +871,43 @@ func unwritten(named, fault string) string {
 // whose module is no string is of "<unknown>"; and under a limit too small
 // for the sentence the error is as many of its first characters as fit:
 // one, under the 27 bytes a worker needs at least. An error of ordinary
-// length is not cut, and is the traceback it was.
+// length is not cut, and is the traceback it was (sameFailure), on every
+// interpreter the worker is known to run on that is installed.
 func TestAnErrorAWorkerCannotCutIsStillTheScriptsFailure(t *testing.T) {
-	requirePython(t)
-	launchWorkersWith(t, alteredLauncher(t, "        lines=0; own=0; skipping=False;", "        raise ZeroDivisionError('the test stops the cut here')\n        lines=0; own=0; skipping=False;"))
-	c := runningCollector("uncut", 1<<20)
-	for _, run := range []struct{ script, want string }{
-		{"raise ValueError('x' * 20000)", unwritten("ValueError", "ZeroDivisionError")},
-		{"fail('x' * 20000)", unwritten("RuntimeError", "ZeroDivisionError")},
-		{"raise ValueError('ordinary')", "python transform failed: Traceback (most recent call last):\n  File \"<collector-python>\", line 1, in <module>\n    exec(response.text)\nValueError: ordinary"},
-		{"class Odd(Exception): pass\nraise Odd('x' * 20000)", unwritten("__collector__.Odd", "ZeroDivisionError")},
-		{"raise type('N' * 100000, (Exception,), {})('x' * 20000)", unwritten("__collector__."+strings.Repeat("N", 66), "ZeroDivisionError")},
-		{"class Odd(Exception): pass\nOdd.__module__ = 5\nraise Odd('x' * 20000)", unwritten("<unknown>.Odd", "ZeroDivisionError")},
-		{"raise type('\\u20ac' * 100, (Exception,), {'__module__': 'builtins'})('x' * 20000)", unwritten(strings.Repeat("\u20ac", 80), "ZeroDivisionError")},
-	} {
-		_, err := failingRun(t, c, run.script)
-		if err == nil || err.Error() != run.want || !errors.Is(err, model.ErrScriptFailed) {
-			t.Errorf("%s\nfails with\n%.700v\nwant\n%s", run.script, err, run.want)
+	eachInterpreterOfTheSandbox(t, func(t *testing.T, python string) {
+		launchWorkersWith(t, alteredLauncher(t, "        lines=0; own=0; skipping=False;", "        raise ZeroDivisionError('the test stops the cut here')\n        lines=0; own=0; skipping=False;"))
+		former := formerErrorPool(t)
+		c := runningCollector("uncut-"+python, 1<<20)
+		for _, run := range []struct{ script, want string }{
+			{"raise ValueError('x' * 20000)", unwritten("ValueError", "ZeroDivisionError")},
+			{"fail('x' * 20000)", unwritten("RuntimeError", "ZeroDivisionError")},
+			{"raise ValueError('ordinary')", ordinaryTraceback + "ValueError: ordinary"},
+			{"class Odd(Exception): pass\nraise Odd('x' * 20000)", unwritten("__collector__.Odd", "ZeroDivisionError")},
+			{"raise type('N' * 100000, (Exception,), {})('x' * 20000)", unwritten("__collector__."+strings.Repeat("N", 66), "ZeroDivisionError")},
+			{"class Odd(Exception): pass\nOdd.__module__ = 5\nraise Odd('x' * 20000)", unwritten("<unknown>.Odd", "ZeroDivisionError")},
+			{"raise type('\\u20ac' * 100, (Exception,), {'__module__': 'builtins'})('x' * 20000)", unwritten(strings.Repeat("\u20ac", 80), "ZeroDivisionError")},
+		} {
+			_, err := failingRunWith(t, python, c, run.script)
+			if same, want := sameFailure(t, former, python, c, run.script, run.want, err); !same || !errors.Is(err, model.ErrScriptFailed) {
+				t.Errorf("%s\nfails with\n%.700v\nwant\n%s", run.script, err, want)
+			}
 		}
-	}
-	if set, err := failingRun(t, c, "metric('m', value=1)"); err != nil || len(set.Metrics) != 1 {
-		t.Errorf("a metric after them: %v, %v", set, err)
-	}
-	if now := PythonWorkers().Snapshot(c.Name); now.Starts != 1 || len(now.Stops) != 0 || now.Runs[pythonRunScriptError] != 7 || now.Runs[pythonRunOK] != 1 || len(now.Runs) != 2 {
-		t.Errorf("after seven errors and a metric: %d workers started, stopped %v, runs %v", now.Starts, now.Stops, now.Runs)
-	}
-	least := runningCollector("uncut-least", 27)
-	for range 2 {
-		if _, err := failingRun(t, least, "raise ValueError('x' * 20000)"); err == nil || err.Error() != "python transform failed: V" {
-			t.Errorf("under 27 bytes for an answer the error is\n%v\nwant its first character", err)
+		if set, err := failingRunWith(t, python, c, "metric('m', value=1)"); err != nil || len(set.Metrics) != 1 {
+			t.Errorf("a metric after them: %v, %v", set, err)
 		}
-	}
-	if now := PythonWorkers().Snapshot(least.Name); now.Starts != 1 || len(now.Stops) != 0 || now.Runs[pythonRunScriptError] != 2 {
-		t.Errorf("under 27 bytes for an answer: %d workers started, stopped %v, runs %v", now.Starts, now.Stops, now.Runs)
-	}
+		if now := PythonWorkers().Snapshot(c.Name); now.Starts != 1 || len(now.Stops) != 0 || now.Runs[pythonRunScriptError] != 7 || now.Runs[pythonRunOK] != 1 || len(now.Runs) != 2 {
+			t.Errorf("after seven errors and a metric: %d workers started, stopped %v, runs %v", now.Starts, now.Stops, now.Runs)
+		}
+		least := runningCollector("uncut-least-"+python, 27)
+		for range 2 {
+			if _, err := failingRunWith(t, python, least, "raise ValueError('x' * 20000)"); err == nil || err.Error() != "python transform failed: V" {
+				t.Errorf("under 27 bytes for an answer the error is\n%v\nwant its first character", err)
+			}
+		}
+		if now := PythonWorkers().Snapshot(least.Name); now.Starts != 1 || len(now.Stops) != 0 || now.Runs[pythonRunScriptError] != 2 {
+			t.Errorf("under 27 bytes for an answer: %d workers started, stopped %v, runs %v", now.Starts, now.Stops, now.Runs)
+		}
+	})
 }
 
 // What cuts an error is compiled when an error first needs it, not when the
@@ -797,26 +917,31 @@ func TestAnErrorAWorkerCannotCutIsStillTheScriptsFailure(t *testing.T) {
 // type of its exception and the SyntaxError the source is — each time, the
 // source being compiled anew until it compiles, with nothing of a failed
 // attempt kept — and carries on. Compiled at every start, it was a tenth of
-// what starting a worker takes.
+// what starting a worker takes. The error of ordinary length is the
+// traceback it was (sameFailure), on every interpreter the worker is known to
+// run on that is installed.
 func TestWhatCutsAnErrorIsCompiledWhenAnErrorNeedsIt(t *testing.T) {
-	requirePython(t)
-	launchWorkersWith(t, alteredLauncher(t, "    import re,collections\n", "    import re,collections\n    this is no Python\n"))
-	c := runningCollector("uncompiled", 1<<20)
-	for _, run := range []struct{ script, want string }{
-		{"raise ValueError('ordinary')", "python transform failed: Traceback (most recent call last):\n  File \"<collector-python>\", line 1, in <module>\n    exec(response.text)\nValueError: ordinary"},
-		{"raise ValueError('x' * 20000)", unwritten("ValueError", "SyntaxError")},
-		{"raise KeyError('x' * 20000)", unwritten("KeyError", "SyntaxError")},
-	} {
-		if _, err := failingRun(t, c, run.script); err == nil || err.Error() != run.want {
-			t.Errorf("%s\nfails with\n%.700v\nwant\n%s", run.script, err, run.want)
+	eachInterpreterOfTheSandbox(t, func(t *testing.T, python string) {
+		launchWorkersWith(t, alteredLauncher(t, "    import re,collections\n", "    import re,collections\n    this is no Python\n"))
+		former := formerErrorPool(t)
+		c := runningCollector("uncompiled-"+python, 1<<20)
+		for _, run := range []struct{ script, want string }{
+			{"raise ValueError('ordinary')", ordinaryTraceback + "ValueError: ordinary"},
+			{"raise ValueError('x' * 20000)", unwritten("ValueError", "SyntaxError")},
+			{"raise KeyError('x' * 20000)", unwritten("KeyError", "SyntaxError")},
+		} {
+			_, err := failingRunWith(t, python, c, run.script)
+			if same, want := sameFailure(t, former, python, c, run.script, run.want, err); !same {
+				t.Errorf("%s\nfails with\n%.700v\nwant\n%s", run.script, err, want)
+			}
 		}
-	}
-	if set, err := failingRun(t, c, "metric('m', value=1)"); err != nil || len(set.Metrics) != 1 {
-		t.Errorf("a metric after them: %v, %v", set, err)
-	}
-	if now := PythonWorkers().Snapshot(c.Name); now.Starts != 1 || len(now.Stops) != 0 || now.Runs[pythonRunScriptError] != 3 || now.Runs[pythonRunOK] != 1 {
-		t.Errorf("after three errors and a metric: %d workers started, stopped %v, runs %v", now.Starts, now.Stops, now.Runs)
-	}
+		if set, err := failingRunWith(t, python, c, "metric('m', value=1)"); err != nil || len(set.Metrics) != 1 {
+			t.Errorf("a metric after them: %v, %v", set, err)
+		}
+		if now := PythonWorkers().Snapshot(c.Name); now.Starts != 1 || len(now.Stops) != 0 || now.Runs[pythonRunScriptError] != 3 || now.Runs[pythonRunOK] != 1 {
+			t.Errorf("after three errors and a metric: %d workers started, stopped %v, runs %v", now.Starts, now.Stops, now.Runs)
+		}
+	})
 }
 
 // An error the traceback module cannot make is still the script's failure,
@@ -827,21 +952,26 @@ func TestWhatCutsAnErrorIsCompiledWhenAnErrorNeedsIt(t *testing.T) {
 // and the AttributeError. Either ended the interpreter, and the run failed
 // as "the interpreter exited". The worker runs the next script.
 func TestAnErrorTheTracebackModuleCannotMakeIsStillTheScriptsFailure(t *testing.T) {
-	requirePython(t)
-	c := runningCollector("unmade", 1<<20)
-	for _, run := range []struct{ script, want string }{
-		{"class Unnamed(type):\n    def __getattribute__(cls, name):\n        if name == '__qualname__': raise LookupError('no name')\n        return super().__getattribute__(name)\nclass Odd(Exception, metaclass=Unnamed): pass\nraise Odd('short')", unwritten("an exception", "LookupError")},
-		{"import traceback\nformer = traceback.TracebackException\ntraceback.TracebackException = None\ndef restore(): traceback.TracebackException = former\nbuiltins.restore = restore\nraise ValueError('short')", unwritten("ValueError", "AttributeError")},
-		{"restore()\nraise ValueError('short')", "python transform failed: Traceback (most recent call last):\n  File \"<collector-python>\", line 1, in <module>\n    exec(response.text)\nValueError: short"},
-	} {
-		_, err := failingRun(t, c, run.script)
-		if err == nil || err.Error() != run.want || !errors.Is(err, model.ErrScriptFailed) {
-			t.Errorf("%s\nfails with\n%.700v\nwant\n%s", run.script, err, run.want)
+	eachInterpreterOfTheSandbox(t, func(t *testing.T, python string) {
+		former := formerErrorPool(t)
+		c := runningCollector("unmade-"+python, 1<<20)
+		for _, run := range []struct{ script, want string }{
+			{"class Unnamed(type):\n    def __getattribute__(cls, name):\n        if name == '__qualname__': raise LookupError('no name')\n        return super().__getattribute__(name)\nclass Odd(Exception, metaclass=Unnamed): pass\nraise Odd('short')", unwritten("an exception", "LookupError")},
+			{"import traceback\nformer = traceback.TracebackException\ntraceback.TracebackException = None\ndef restore(): traceback.TracebackException = former\nbuiltins.restore = restore\nraise ValueError('short')", unwritten("ValueError", "AttributeError")},
+			// The worker as it was, which has no restore(), is given one
+			// that does nothing for sameFailure: the frames of what
+			// exec(response.text) runs are not shown.
+			{"builtins.restore = getattr(builtins, 'restore', lambda: None)\nrestore()\nraise ValueError('short')", ordinaryTraceback + "ValueError: short"},
+		} {
+			_, err := failingRunWith(t, python, c, run.script)
+			if same, want := sameFailure(t, former, python, c, run.script, run.want, err); !same || !errors.Is(err, model.ErrScriptFailed) {
+				t.Errorf("%s\nfails with\n%.700v\nwant\n%s", run.script, err, want)
+			}
 		}
-	}
-	if now := PythonWorkers().Snapshot(c.Name); now.Starts != 1 || len(now.Stops) != 0 || now.Runs[pythonRunScriptError] != 3 || len(now.Runs) != 1 {
-		t.Errorf("after three errors: %d workers started, stopped %v, runs %v", now.Starts, now.Stops, now.Runs)
-	}
+		if now := PythonWorkers().Snapshot(c.Name); now.Starts != 1 || len(now.Stops) != 0 || now.Runs[pythonRunScriptError] != 3 || len(now.Runs) != 1 {
+			t.Errorf("after three errors: %d workers started, stopped %v, runs %v", now.Starts, now.Stops, now.Runs)
+		}
+	})
 }
 
 // What is shown of a script's error fits a limit of 16 KiB for an answer

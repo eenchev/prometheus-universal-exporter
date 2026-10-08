@@ -23,7 +23,7 @@ spec:
     app.kubernetes.io/instance: {{ .Release.Name }}
   ports:
     - name: http
-      port: {{ .Values.service.port }}
+      port: {{ include "prometheus-universal-exporter.servicePort" . }}
       targetPort: http
       protocol: TCP
 {{- end }}

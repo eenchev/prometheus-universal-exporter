@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"math"
 	"os"
 	"regexp"
 	"sort"
@@ -142,6 +143,7 @@ func TestConfigSchemaRejectsInvalidConfigurations(t *testing.T) {
 		"label without either":    base + "        labels:\n          - name: l\n",
 		"label without a name":    base + "        labels:\n          - value: x\n",
 		"negative limit":          strings.Replace(base, "  - name: demo\n", "  - name: demo\n    limits:\n      max_metrics: -1\n", 1),
+		"negative label name max": strings.Replace(base, "  - name: demo\n", "  - name: demo\n    limits:\n      max_label_name_length: -1\n", 1),
 		"unsupported library":     strings.Replace(base, "      type: jq\n", "      type: jq\n      libraries: [requests]\n", 1),
 		"string for a list":       strings.Replace(base, "  - name: demo\n", "  - name: demo\n    request_list: x\n", 1),
 		"boolean for a structure": strings.Replace(base, "    request:\n      type: http\n", "    request: true\n", 1),
@@ -389,6 +391,9 @@ func validateAgainstSchema(schema map[string]any, value any) []string {
 		switch x := value.(type) {
 		case map[string]any:
 			properties, _ := schema["properties"].(map[string]any)
+			if minProperties, ok := schema["minProperties"].(float64); ok && float64(len(x)) < minProperties {
+				errs = append(errs, fmt.Sprintf("%s: %d keys, want at least %v", path, len(x), minProperties))
+			}
 			for _, key := range toStrings(schema["required"]) {
 				if _, ok := x[key]; !ok {
 					errs = append(errs, fmt.Sprintf("%s: %s is required", path, key))
@@ -473,7 +478,9 @@ func schemaTypeMatches(types, value any) bool {
 				return true
 			}
 		case "integer":
-			if n, ok := value.(float64); ok && n == float64(int64(n)) {
+			// A number without a fraction, however large: 1e19 is one,
+			// which converting it to an int64 and back would not say.
+			if n, ok := value.(float64); ok && n == math.Trunc(n) && !math.IsInf(n, 0) {
 				return true
 			}
 		case "boolean":

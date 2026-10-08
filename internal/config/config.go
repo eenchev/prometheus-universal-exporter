@@ -9,7 +9,6 @@ import (
 	"maps"
 	"net/url"
 	"os"
-	"reflect"
 	"regexp"
 	"slices"
 	"strconv"
@@ -217,6 +216,9 @@ func applyLimitDefaults(l *model.Limits) {
 	}
 	if l.MaxMetricNameLength <= 0 {
 		l.MaxMetricNameLength = 200
+	}
+	if l.MaxLabelNameLength <= 0 {
+		l.MaxLabelNameLength = 200
 	}
 	if l.MaxHelpLength <= 0 {
 		l.MaxHelpLength = 2000
@@ -712,11 +714,13 @@ func validateMetricRule(x *model.Collector, index int) error {
 			return fmt.Errorf("%s has a label without a name", where)
 		}
 		// A label's name is held to what a scrape holds it to under the
-		// collector's name_escaping (transform.TakesLabelName).
-		if !transform.TakesLabelName(x, label.Name) {
+		// collector's name_escaping, unless transform.remove_labels or
+		// rename_labels takes it off before the scrape looks at it
+		// (transform.TakesLabelNameBeforeRenames).
+		if !transform.TakesLabelNameBeforeRenames(x, label.Name) {
 			return fmt.Errorf("%s has invalid label name %q%s", where, label.Name, transform.EscapingAdvice(label.Name))
 		}
-		if err := transform.CheckExportedLabelName(x, label.Name); err != nil {
+		if err := transform.CheckLabelNameBeforeRenames(x, label.Name); err != nil {
 			return fmt.Errorf("%s: %w", where, err)
 		}
 		// An expression written as nothing but blanks is neither the key left
@@ -988,7 +992,7 @@ func load(path string, opts []LoadOption, decoded func(*model.Config)) (*model.C
 	var c model.Config
 	dec := yaml.NewDecoder(strings.NewReader(string(b)))
 	dec.KnownFields(true)
-	if err = withValueProblems(withoutExtensionKeys(dec.Decode(&c)), b, reflect.TypeOf(c)); err != nil {
+	if err = withValueProblems(withoutExtensionKeys(dec.Decode(&c)), b, &c); err != nil {
 		if errors.Is(err, io.EOF) {
 			return nil, fmt.Errorf("configuration file %s is empty; it must define collectors", path)
 		}

@@ -43,6 +43,7 @@ func Transform(ctx context.Context, d *decode.Decoded, r *fetch.HTTPResponse, c 
 	ctx = withSeriesBudget(ctx, c.Limits.MaxMetrics)
 	ctx, failures := withRuleFailures(ctx)
 	defer failures.finish(c, report)
+	ctx, cuts := withLabelCuts(ctx, c)
 	set, borrowed, err := transformMetrics(ctx, d, r, c, pythonPath)
 	// A rule that failed once the context was done did not fail for anything
 	// the response holds, and handleMetricError let none carry on, so what
@@ -76,9 +77,12 @@ func Transform(ctx context.Context, d *decode.Decoded, r *fetch.HTTPResponse, c 
 	}
 	// Label value maps and truncation first, while the labels still have
 	// the names the rules gave them: rename_labels would otherwise move a
-	// label out from under its value_map or truncate: true.
+	// label out from under its value_map or truncate: true. Truncation
+	// after the maps, for every kind of rule, so a value cut is not mapped
+	// long again (labelCuts).
 	mapLabelValues(set, c)
 	truncateLabels(set, c)
+	cuts.apply(set, c.Limits.MaxLabelValueLength)
 	applyCollectorLabels(set, c.Transform)
 	applyMetricsPrefix(set, c.MetricsPrefix)
 	// After the prefix, so a values-escaped name still starts with U__
@@ -2791,6 +2795,7 @@ func applyPrometheusTransform(ctx context.Context, in model.MetricSet, c *model.
 			patterns[i] = re
 		}
 		matched := make([]bool, len(rules))
+		cuts := labelCutsOf(ctx)
 		// The decoder kept only the series a rule's name or pattern can
 		// match (decode.Decode), so nearly every one of them becomes a
 		// series here.
@@ -2854,8 +2859,9 @@ func applyPrometheusTransform(ctx context.Context, in model.MetricSet, c *model.
 					}
 					// A rule without a name keeps each series' own, which
 					// truncateLabels cannot look it up by, so its labels are
-					// cut here.
-					if label.Truncate && c.Limits.MaxLabelValueLength > 0 {
+					// cut here; but one a value map maps is cut once mapped,
+					// whatever the rule (labelCuts).
+					if label.Truncate && c.Limits.MaxLabelValueLength > 0 && !cuts.later(metric.Name, label.Name) {
 						if value, ok := metric.Labels[label.Name]; ok {
 							setTruncated(metric.Labels, label.Name, value, c.Limits.MaxLabelValueLength)
 						}
@@ -2871,6 +2877,9 @@ func applyPrometheusTransform(ctx context.Context, in model.MetricSet, c *model.
 				}
 				if err := takeSeries(ctx); err != nil {
 					return nil, false, err
+				}
+				if cuts != nil && rule.Name == "" {
+					cuts.note(len(out.Metrics), rule, metric.Name)
 				}
 				out.Metrics = append(out.Metrics, metric)
 			}

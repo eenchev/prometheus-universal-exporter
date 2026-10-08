@@ -154,7 +154,16 @@ not restarted as dead. The check itself is the chart's: a value setting
 
 With `goMemLimit.enabled`, the default, the chart MUST render
 `--runtime.memory-limit-ratio` with `goMemLimit.ratio`, `0.8` by default,
-more than 0 and at most 1, or fail rendering.
+from 0.1 to 1, or fail rendering, refused by the values schema and, with it
+skipped, by the templates. A ratio above 0 and below 0.1 MUST fail with a
+message saying the floor and why: the Go memory limit would leave the heap
+almost nothing and the Go runtime would spend its time collecting garbage,
+and the exporter refuses such a flag (SPECIFICATION-EXPORTER.md § 30). A
+number MUST be written out, without an exponent, however small, so the
+message refusing `1e-5` says `0.00001`, never `1e-05`. Its digits MUST be
+those Helm's `toJson` gives it, so every number a template printed without
+an exponent before renders as it did. A string MUST be checked as written,
+and the values schema's pattern for it takes no exponent.
 
 `goGC.percent` is the Go garbage collector's target. Empty, the default, or
 null, the chart MUST render nothing for it, so Go's default, 100, stays, and
@@ -493,8 +502,8 @@ values schema:
 | `server.logLevel` | `--log.level`, one of `debug`, `info`, `warn`, `error`; default `info` |
 | `server.probeTimeoutOffset` | `--probe.timeout-offset`, a Go duration of zero or more |
 | `server.probeDefaultTimeout` | `--probe.default-timeout`, a Go duration of zero or more |
-| `server.probeMaxConcurrent` | `--probe.max-concurrent`, a whole number of zero or more; empty renders no flag |
-| `server.pythonMaxWorkers` | `--python.max-workers`, a whole number of zero or more; empty renders no flag |
+| `server.probeMaxConcurrent` | `--probe.max-concurrent`, a whole number from 0 to 2147483647, as a number or as a string of digits with no zero before another digit; empty renders no flag |
+| `server.pythonMaxWorkers` | `--python.max-workers`, a whole number from 0 to 2147483647, as a number or as a string of digits with no zero before another digit; empty renders no flag |
 | `server.shutdownTimeout` | `--web.shutdown-timeout`, whole hours, minutes and seconds such as `30s` or `1m30s`, positive |
 | `server.shutdownDelay` | `--web.shutdown-delay`, whole hours, minutes and seconds such as `5s`, `0s` allowed; default `5s`, and empty renders no flag |
 | `server.enableLifecycle` | `--web.enable-lifecycle`, rendered only when `true`; default `false` |
@@ -508,6 +517,74 @@ values schema:
 | `config` | `--config.file`, always the chart's mount path of `config.yaml` (§ 33.2) |
 
 An invalid value MUST fail rendering and be refused by the values schema.
+
+A whole number of the values MUST be rendered as the whole number it is,
+written out in digits, however it was written and however Helm hands it to
+the templates. Helm reads a number of a values file, and of `--set-json`, as
+floating point, and a template prints a floating-point number of a million or
+more with an exponent, so `2000000`, `2e6` and `2000000.0` MUST all render
+`2000000`, and never `2e+06`, wherever the chart renders the value: in a
+flag, a count, a number of seconds and a port alike. The templates MUST
+decide what a whole number is by its value, not by how a template prints it.
+
+The whole numbers the templates print themselves each have a range:
+`replicaCount`, `terminationGracePeriodSeconds`, `server.probeMaxConcurrent`,
+`server.pythonMaxWorkers`, and a `podDisruptionBudget.minAvailable` or
+`maxUnavailable` given as a number, from 0 to 2147483647;
+`autoscaling.minReplicas`, `maxReplicas`,
+`targetCPUUtilizationPercentage` and `targetMemoryUtilizationPercentage`
+from 1 to 2147483647; and `service.port` from 1 to 65535. 2147483647 is what
+a Kubernetes count holds, and the most the exporter's count flags take on
+every platform; the exporter takes a larger count on a 64-bit platform
+(SPECIFICATION-EXPORTER.md § 30), and Kubernetes a longer grace period, and
+the chart MUST NOT. A fraction, and a
+number outside its range — one too large for a template to hold as a whole
+number among them, which MUST NOT be rendered as another number — MUST be
+refused by the values schema, which MUST carry each maximum, and, with the
+schema skipped, MUST fail rendering with a message that names the value,
+gives the range and writes the number out, in digits when it is below
+10^21 and as Helm's `toJson` prints it from there. A count flag given as a
+string MUST be a string of digits within the same range with no zero before
+another digit, since the exporter's flag reads `010` as eight and refuses
+`08`, and MUST be rendered as it is written; the schema's pattern for it
+MUST be the templates'. A `podDisruptionBudget.minAvailable` or
+`maxUnavailable` given as a string is rendered bare, so a string of digits
+becomes the number, and MUST be a whole number in the same range with no
+zero before another digit, since YAML reads `010` as the octal number eight,
+or a percentage from `0%` to `100%` written the same way, since Kubernetes
+refuses a budget's percentage past 100%; anything else MUST be refused by
+the values schema, whose pattern MUST be the templates', and, with the
+schema skipped, MUST fail rendering with a message naming the value and
+saying what it may be. A value left out or null MUST render nothing for the
+number, which is then Kubernetes' to default.
+
+A message that names a number of the values — a grace period too short for
+the shutdown, a monitor's `port` given as its number, a `goGC.percent` out of
+range — MUST write it out too, and the notes MUST compare a budget's
+`minAvailable` with the replica count as the numbers they are. The whole
+numbers inside the Kubernetes shapes the chart passes through (§ 33.10b) — a
+security context's `runAsUser`, `runAsGroup` and `fsGroup`, the probes'
+timings, `resources`, `strategy.rollingUpdate`, tolerations, relabelings —
+MUST stay written out in digits, as `toYaml` writes every whole number of
+up to eighteen digits, a user ID such as `1000680000` included, and the
+chart MUST hand each such shape to `toYaml` rather than print a number of
+it itself. The templates do not bound them. The values schema MUST bound
+the probes' timings and the rolling update's counts as Kubernetes does, so
+a value Kubernetes would refuse when the Deployment is applied fails at
+rendering instead: each timing a whole number up to 2147483647, from 0 for
+`initialDelaySeconds` and from 1 for the others, `successThreshold` 1 on
+the liveness probe, the one value Kubernetes takes there; `maxSurge` and
+`maxUnavailable` a whole number from 0 to 2147483647, or a percentage with
+no zero before another digit, of at most 2147483647 for `maxSurge` and at
+most `100%` for `maxUnavailable`, as Kubernetes bounds it; and neither a
+string of digits alone, which `toYaml` renders as a string and Kubernetes
+refuses. Both rendered as 0, as `0` or `0%` in either, MUST fail rendering,
+refused by the schema and, with it skipped, by the templates with a message
+naming both keys, since Kubernetes refuses a rolling update that could
+neither add a pod nor take one away; a count left out is not rendered and
+is Kubernetes' default, 25%, and with `Recreate` neither is rendered. The
+other shapes are Kubernetes' to bound.
+
 `server.probeTimeoutOffset`, `server.probeDefaultTimeout`, `server.probeMaxConcurrent`, `server.pythonMaxWorkers` and `server.shutdownTimeout` MUST default to empty
 and, while empty, MUST NOT render their flags at all, so the exporter's own default applies and an image
 older than the flag still starts. A test MUST fail when the exporter has a flag
@@ -603,7 +680,10 @@ The schema MUST:
   takes as whole numbers of `y`, `w`, `d`, `h`, `m`, `s` and `ms`, with no
   fraction, `us` or `ns` — monitor names as DNS-1123 labels, the probes'
   timings (`terminationGracePeriodSeconds` on `livenessProbe` only, since
-  Kubernetes refuses it on a readiness probe), TCP port ranges,
+  Kubernetes refuses it on a readiness probe) and the rolling update's
+  counts within what Kubernetes takes (§ 33.10), TCP port ranges, the
+  maximum of every whole number the templates print themselves and the
+  count flags' and the disruption budget's strings within it (§ 33.10),
   `server.listenAddress` in the same `host:port` shape the render-time check
   enforces, `goGC.percent` as the whole number from 1 to 10000 or the `off`
   the render-time check accepts (§ 33.1), and the `--` prefix on an
@@ -653,6 +733,12 @@ The repository MUST include automated Helm validation covering at least:
   value, and with the default values, which MUST render no `GOGC`; and with
   `goGC.percent` `off` and `goMemLimit` disabled, `0`, and a number beside a
   `GOGC` entry in `env`, each of which MUST fail.
+- `helm template` with `replicaCount`, `server.probeMaxConcurrent` and
+  `server.pythonMaxWorkers` of two million given with `--set-json`, which
+  hands the templates floating-point numbers as a values file does, one
+  written out, one with an exponent and one with a decimal point, which MUST
+  render each written out and no number with an exponent; and with a
+  `replicaCount` of 2147483648, which MUST fail.
 - every rendered manifest starting its own YAML document, with monitors enabled
   and the self-metrics monitor rendering alongside them
 - every rendered ServiceMonitor and PodMonitor parsed as YAML, with a
@@ -1082,7 +1168,10 @@ are skipped and the text checks of the templates still run:
    `port: grpc` and `namespaceSelector.matchNames`, and find the port, the
    selector and the namespace; render `goGC.percent=400` and find
    `name: GOGC` and `value: "400"`, and render the default values and find
-   no `GOGC`; render a further `config.data` file whose
+   no `GOGC`; render `replicaCount`, `server.probeMaxConcurrent` and
+   `server.pythonMaxWorkers` of two million given with `--set-json` as
+   `2000000`, `2e6` and `2000000.0`, and find `replicas: 2000000`, both
+   flags written out and no `e+0`; render a further `config.data` file whose
    first line is indented, `testdata/chart/indented-first-line.yaml`, find
    that line indented in the ConfigMap and pass the render to the manifest
    check; and build the parent chart `testdata/chart/parent` with
@@ -1098,8 +1187,9 @@ are skipped and the text checks of the templates still run:
    `ingress.enabled` with `service.enabled=false`, a `webAuth.mountPath` at
    the configuration directory written with a trailing slash, an
    `extraVolumeMounts` entry there written with one, `goGC.percent` `off` as
-   a string with `goMemLimit.enabled=false`, `goGC.percent=0`, or
-   `goGC.percent=200` beside a `GOGC` entry in `env`. A check of what a render
+   a string with `goMemLimit.enabled=false`, `goGC.percent=0`,
+   `goGC.percent=200` beside a `GOGC` entry in `env`, or a `replicaCount` of
+   2147483648. A check of what a render
    holds MUST keep the render before reading it, so that helm failing fails
    the check rather than handing the reader nothing. A test MUST fail when
    either list lacks one of these checks. A test MUST also find no check in
@@ -1201,6 +1291,76 @@ are skipped and the text checks of the templates still run:
    take `GOGC` from the helper that checks it, and the schema to take an
    integer from 1 to 10000, a string or null, refuse another key, and hold
    the pattern the helper checks with an alternative for the empty string.
+36. Whole numbers (§ 33.10): written `2000000`, `2e6` and `2000000.0` in a
+   values file, and as `1000000`, `1000680000` and `2147483647`, a number
+   MUST render written out in `replicas`, both count flags,
+   `terminationGracePeriodSeconds` and the budget's `minAvailable`, and in
+   the HorizontalPodAutoscaler's `minReplicas`, `maxReplicas` and both
+   `averageUtilization` targets and the budget's `maxUnavailable`; the same
+   renders MUST hold a pod and a container `runAsUser`, an `fsGroup`, a
+   probe's `periodSeconds`, a CPU limit and a relabeling's `modulus` of that
+   number written out, and no number with an exponent. `service.port`
+   written `9.115e3` MUST render `9115` in the Service, the Ingress and the
+   monitors' address. The values schema MUST refuse, for its maximum and
+   naming the value, a `replicaCount` and a grace period of 2147483648, an
+   `autoscaling.maxReplicas` of `3e9` and a count flag of `1e30`, and MUST
+   refuse a `replicaCount` of `2000000.5` and a count flag given as the
+   strings `"2147483648"`, `"99999999999999999999"` and `"010"`; count flags
+   of `"2147483647"` and `"0"` MUST render as written. With the schema
+   skipped the templates MUST refuse, naming the value, the number and the
+   range: a `replicaCount` of `1.5`, `2000000.5`, `2147483648`, `3e9`,
+   `1e30`, `100000000000000000000`, `-1` and a word; a grace period of
+   `2000000.5` and `1e30`; a `service.port` of `2000000` and `65536`;
+   `autoscaling.minReplicas: 0` and a utilization target of `3000000000`; a
+   budget's `minAvailable: 1.5`; and count flags of `3000000000`, `1e30`,
+   `1.5`, `"2147483648"` and `"010"`; a monitor's `port` of `2000000` and a
+   `goGC.percent` of `2000000` MUST be named written out; and every number
+   at 2147483647 MUST render as with the schema. A grace period of 1000000
+   seconds too short for the shutdown MUST be refused naming it written out,
+   and the notes MUST warn for a `minAvailable` of `2000000` and of `2e6`
+   that is every replica. A chart of the helpers alone MUST print every
+   whole number of a table below a million — each within a thousand of
+   zero, the powers of ten and their neighbours, and generated ones, as a
+   values file and as `--set` give them — as a template prints it by itself,
+   so that no render of such a number changed. Without helm, each whole
+   number's template MUST still be checked to render it through the helper
+   with the range the schema holds, the schema's pattern for the count flags
+   to be the templates' with an alternative for the empty string and to take
+   exactly the strings of digits of 2147483647 or less with no zero before
+   another digit, and no integer of the schema to be without a maximum.
+37. Bounds of what Kubernetes takes (§ 33.1, § 33.10): the values schema
+   MUST refuse, naming the value, each probe timing of `1e30` and of
+   2147483648, a liveness `successThreshold` of 2, a fraction, and a rolling
+   update's `maxSurge` and `maxUnavailable` of 2147483648, `-1`, `2.5`, the
+   strings `"3"` and `"010%"`, and a `maxUnavailable` of `"101%"`; it MUST
+   take each timing at 2147483647, a readiness `successThreshold` of 3, a
+   `maxSurge` of `"200%"` and a `maxUnavailable` of `"100%"`, rendered as
+   written. A budget's `minAvailable` or `maxUnavailable` given as the
+   string `"3000000000"`, `"2147483648"`, `"010"`, `"00"`, `"200%"`,
+   `"101%"`, `"050%"`, `"-1"`, `"1.5"`, `"1e3"`, `"1 "` or `""` MUST be
+   refused by the schema naming the value and, with it skipped, by the
+   templates' message naming the key; `"2147483647"`, `"0"`, `"0%"` and
+   `"100%"` MUST render bare. The schema's pattern for the budget's strings
+   MUST be the templates', and MUST take exactly the strings of digits of
+   2147483647 or less with no zero before another digit and the percentages
+   from `0%` to `100%` written the same way. `goMemLimit.ratio` written
+   `1`, `1.0` and `0.9999999` MUST render as written, and `0`, `1.5` and the
+   string `"1e-5"` MUST be refused by the schema and, with it skipped, by
+   the templates; a chart of the helpers alone MUST render every ratio from
+   0.1 to 1 of a table that a template printed without an exponent as it
+   printed it.
+38. Floors of what makes sense (§ 33.1, § 33.10): `goMemLimit.ratio` written
+   `0.1`, `0.10000001`, the string `".1"` and `1` MUST render as written, and
+   `0.1000` as `0.1`; `0.0999999`, `0.0001`, `1e-5`, `0.00001`, `1e-9`,
+   `1.5e-7`, `1e-300` and the string `"0.05"` MUST be refused by the schema
+   naming `goMemLimit.ratio` and, with it skipped, by the templates' message
+   saying the floor, the value written out with no exponent. A rolling update
+   whose rendered `maxSurge` and `maxUnavailable` are both 0, as `0` or `0%`
+   in either, MUST be refused by the schema at `strategy` and, with it
+   skipped, by the templates' message naming both keys; one of them left out,
+   which Kubernetes defaults to 25%, one of them 1 or `1%`, and both 0 with
+   `strategy.type: Recreate`, which renders no `rollingUpdate`, MUST render.
+   The repository's own schema validator MUST give helm's verdict on each.
 
 12. `extraArgs`, `extraVolumes` and `extraVolumeMounts` set together, which MUST
    append the argument, the volume and the mount to the ones the chart renders

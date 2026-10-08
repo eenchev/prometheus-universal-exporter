@@ -5,11 +5,13 @@ import (
 	"sync/atomic"
 
 	"github.com/eenchev/prometheus-universal-exporter/internal/model"
+	"github.com/eenchev/prometheus-universal-exporter/internal/transform"
 )
 
 // The exporter keeps state per collector: its self-metric counters, the
 // verbose per-request series and scrape-time histogram, cached results and
-// what the failure log remembers. A reload can remove a collector, or change
+// what the failure log remembers, and the worker pool the statistics of its
+// Python workers (pythonstats.go). A reload can remove a collector, or change
 // its definition, and that state has to follow:
 //
 //   - A removed collector's self-metric series stop being exposed and exported,
@@ -169,6 +171,50 @@ func (f *followedConfig) collectorOf(cfg *model.Config, name string) *model.Coll
 		return &cfg.Collectors[index]
 	}
 	return nil
+}
+
+// A static target's scrape asks, when it ends, whether a target of its name
+// is in force (staticTargetInForce), and a read of the static targets
+// endpoint that names targets asks it of every name it gives
+// (requestedStaticTargets). Going through the targets of the file for it
+// costs as much as the file is large, at every scrape and every such read:
+// for 10,000 targets more than all the rest of a scrape answered from the
+// cache. The following of a file already notes the name of every target it
+// has, once for the file, with the generation the target has been there
+// from (targetsDefinedFrom), and keeps the names for as long as the file is
+// followed: a name is looked up there, and nothing more is kept or worked
+// out for it.
+
+// targetsScannedHook, set by tests, is called whenever the targets of a
+// static target file are gone through, to tell whether one of them has a
+// name (staticTargetNamedByScan, staticTargetNamesByScan) or to note the
+// names they have (targetsDefinedFrom): once for each time, not for each
+// target, so a test can count the times and see that it is once for a file,
+// not once for each scrape or each read.
+var targetsScannedHook atomic.Pointer[func()]
+
+// targetsScanned tells a test that the targets of a static target file are
+// about to be gone through.
+func targetsScanned() {
+	if hook := targetsScannedHook.Load(); hook != nil {
+		(*hook)()
+	}
+}
+
+// targetNames is the names of the static targets of file, as f noted them
+// when it was followed, and whether f noted them: it did those of the very
+// file it follows and of no other, each name a target of that file has,
+// whatever it is noted with (targetsDefined), so a name is there exactly
+// when going through the targets of file finds a target so named. For any
+// other file, as one a reload has put in force and nothing has followed
+// yet, and for a caller that follows none, f nil, nothing is noted, and the
+// caller goes through the targets as it did. f never changes once followed,
+// so the names are read without a lock.
+func (f *followedConfig) targetNames(file *model.StaticTargetFile) (names map[string]uint64, noted bool) {
+	if f == nil || f.targets != file {
+		return nil, false
+	}
+	return f.targetsDefined, true
 }
 
 // configRead is the configuration a probe or a static target scrape read its
@@ -545,6 +591,11 @@ func (s *Server) followLocked(plan *following, report *func()) *followedConfig {
 		delete(s.stats, name)
 		delete(s.since, name)
 	}
+	if len(removed) > 0 {
+		// The statistics of the collector's Python workers go with its
+		// own, under the lock a trip takes both under (pythonstats.go).
+		transform.PythonWorkers().Retire(removed)
+	}
 	// A collector that is new, or back, has been there from this generation.
 	for i := range collectors {
 		if _, known := s.since[collectors[i].Name]; !known {
@@ -634,7 +685,9 @@ func targetsMoved(previous *followedConfig, defined map[string]uint64) map[strin
 // and generation for one that is new, changed or back. What makes a target
 // another is what starts it again in the schedule (targetSchedule.plan),
 // but for its collector's definition, which a scrape asks about apart
-// (targetStands).
+// (targetStands). The names it notes are also how a target of the file is
+// told to be one of it (targetNames): every target of file is noted, and
+// nothing else.
 func targetsDefinedFrom(previous *followedConfig, file *model.StaticTargetFile, generation uint64) map[string]uint64 {
 	if previous != nil && previous.targets == file {
 		return previous.targetsDefined
@@ -643,6 +696,7 @@ func targetsDefinedFrom(previous *followedConfig, file *model.StaticTargetFile, 
 	if len(targets) == 0 {
 		return nil
 	}
+	targetsScanned()
 	var former map[string]*model.StaticTarget
 	if previous != nil {
 		was := staticTargetsOf(previous.targets)

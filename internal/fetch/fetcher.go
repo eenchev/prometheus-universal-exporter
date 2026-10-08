@@ -946,11 +946,12 @@ func validateAcceptStatus(c *model.Collector) error {
 	return nil
 }
 
-// normalizeAcceptStatus writes each entry in lower case, in place, and
-// refuses one that is not a status from 100 to 599 or a class such as 2xx.
+// normalizeAcceptStatus writes each entry as AcceptedStatus compares it
+// (canonicalStatus), in place, and refuses one that is not a status from 100
+// to 599 or a class such as 2xx.
 func normalizeAcceptStatus(entries []string) error {
 	for i, raw := range entries {
-		entry := strings.ToLower(strings.TrimSpace(raw))
+		entry := canonicalStatus(raw)
 		entries[i] = entry
 		if len(entry) == 3 && entry[1:] == "xx" && entry[0] >= '1' && entry[0] <= '5' {
 			continue
@@ -961,6 +962,20 @@ func normalizeAcceptStatus(entries []string) error {
 		return fmt.Errorf("entry %q is not an HTTP status from 100 to 599 or a class such as 2xx", raw)
 	}
 	return nil
+}
+
+// canonicalStatus is an entry of request.accept_status as AcceptedStatus
+// compares it with a status: in lower case without the blanks around it,
+// and, where it is a status written with a sign or leading zeros, "+503" or
+// "0503", which the load takes as the status it reads, as the status is
+// written, 503, so that it matches the status it was taken for. Any other
+// entry is left as it is, for the load to refuse in its own words.
+func canonicalStatus(raw string) string {
+	entry := strings.ToLower(strings.TrimSpace(raw))
+	if code, err := strconv.Atoi(entry); err == nil && code >= 100 && code <= 599 {
+		return strconv.Itoa(code)
+	}
+	return entry
 }
 
 // AcceptedStatus says whether a response with status is decoded: one of

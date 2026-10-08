@@ -25,9 +25,9 @@ import (
 // by encoding/json as it was and checked by the code that always checked
 // it, so its error is the error it was. And a line that is not an answer as
 // the worker writes it, or is no JSON at all, is not read here: the reader
-// says so and the line is read as it was (pythonResult), with the error it
-// then had. pythonanswer_test.go compares the two over every kind of
-// answer.
+// says so and the line is read as it was (countedPythonResult), with the
+// error it then had. pythonanswer_test.go compares the two over every kind
+// of answer.
 
 // pythonAnswerDepth is how deep encoding/json reads arrays and objects,
 // which is how deep a metric of an answer that encoding/json reads may

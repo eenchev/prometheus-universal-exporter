@@ -71,8 +71,6 @@ elif shape == "texts as long together, far down":
     for _ in range(3000): data = [data]
 elif shape == "numbers":
     data = list(range(size))
-elif shape == "a text as the key of every row":
-    data = [{text: i} for i in range(size)]
 else:
     fail("no shape " + shape)
 `
@@ -167,8 +165,11 @@ func TestDataWhoseStringsAreLongerThanTheLimitIsRefusedUnwritten(t *testing.T) {
 // exporter refuses it, with the output limit's error and its worker, as it
 // did; one character more and the worker refuses it itself, and stays. So
 // it is in a plain list, beside a value that is no JSON, and three thousand
-// levels down. And an answer is still taken when its line is exactly the
-// limit, and refused by the exporter one byte past it.
+// levels down, where the limit is met nine characters sooner: what writes
+// an answer nested that deep counts every key it writes with the strings,
+// the answer's own ok, log and data among them (pythonkeys_test.go). And
+// an answer is still taken when its line is exactly the limit, and refused
+// by the exporter one byte past it.
 func TestTheWorkerRefusesForItsStringsOnlyPastTheLimit(t *testing.T) {
 	requirePython(t)
 	c := longStringsCollector()
@@ -187,10 +188,14 @@ func TestTheWorkerRefusesForItsStringsOnlyPastTheLimit(t *testing.T) {
 		}
 	}
 	for _, shape := range []string{"texts as long together", "texts as long together, beside a NaN", "texts as long together, far down"} {
-		lost(shape, longStringsLimit)
+		atLimit := longStringsLimit
+		if shape == "texts as long together, far down" {
+			atLimit -= longKeysEnvelope
+		}
+		lost(shape, atLimit)
 		starts := PythonWorkers().PoolSnapshot().Starts
-		if _, err := leaveStrings(t, c, shape, longStringsLimit+1); err == nil || err.Error() != refused || !errors.Is(err, model.ErrScriptFailed) {
-			t.Fatalf("%s %d: %.300v, want the script's failure %q", shape, longStringsLimit+1, err, refused)
+		if _, err := leaveStrings(t, c, shape, atLimit+1); err == nil || err.Error() != refused || !errors.Is(err, model.ErrScriptFailed) {
+			t.Fatalf("%s %d: %.300v, want the script's failure %q", shape, atLimit+1, err, refused)
 		}
 		// The worker that refused it answers the next request.
 		if data, err := leaveStrings(t, c, shape, 2500); err != nil || !strings.Contains(fmt.Sprint(data), strings.Repeat("y", 500)) {
@@ -210,9 +215,6 @@ func TestTheWorkerRefusesForItsStringsOnlyPastTheLimit(t *testing.T) {
 	// Numbers have no strings: 30,000 of them are 200,000 bytes written,
 	// which the exporter refuses.
 	lost("numbers", 30000)
-	// A text that is the key of every row is not counted: no walk of the
-	// worker goes through the keys of a dict that is there once.
-	lost("a text as the key of every row", 200)
 }
 
 // longStringMetrics is a transform that emits what the response's first
@@ -305,13 +307,19 @@ func TestMetricsWhoseStringsAreLongerThanTheLimitAreRefusedUnwritten(t *testing.
 // now, byte for byte, unless the strings it is written with — read back
 // from the line itself, each as long as it is, the markers of NaN and the
 // infinities and the keys not among them — are longer together than the
-// limit: then, and only then, the worker refuses it, with the error of a
-// list held too often. That line was longer than the limit, so the
-// exporter refused it and stopped its worker. An answer that failed fails
-// with the same error, the worker's own refusals among them; but where its
-// strings, as the script left them, are over the limit, it may fail with
-// the refusal for them instead of what failed it before, which is counted
-// apart (otherwise).
+// limit: then the worker refuses it, with the error of a list held too
+// often. That line was longer than the limit, so the exporter refused it
+// and stopped its worker. The worker may refuse it too where its strings
+// are longer than the limit only with its keys, which it counts where its
+// look at them says they may be long (pythonkeys_test.go, where that is
+// compared): such a line was longer than the limit as well, and is counted
+// with those that were. An answer that failed fails with the same error,
+// the worker's own refusals among them; but where its strings, as the
+// script left them, are over the limit, alone or with its keys, it may
+// fail with the refusal for them instead of what failed it before, which
+// is counted apart (otherwise): by this script's own count of them, the
+// strings of what the script left and the keys that are strings, each as
+// often as it is there, and the three keys of the answer around it.
 const stringsOracle = `
 import __main__, collections, json, sys
 most, deepest, weigh, flat, too_deep, too_long = __main__.most, __main__.deepest, __main__.weigh, __main__.flat, __main__.too_deep, __main__.too_long
@@ -430,23 +438,27 @@ def written(answer, document):
     try: return answer(document)
     except BaseException as e: return "%s: %s" % (type(e).__name__, e)
 
-def strings_left(v):
+def strings_left(v, keys=False):
     # How long the strings of what a script left are together, each as
-    # often as it is there, or None for more than a script of this test
-    # leaves.
+    # often as it is there, with the keys that are strings where keys is
+    # set, or None for more than a script of this test leaves: with the
+    # keys or without them, the same number of steps.
     n, left, steps = 0, [v], 0
     while left:
         x = left.pop()
         steps += 1
         if steps > 300000: return None
         if type(x) is str: n += len(x)
-        elif isinstance(x, dict): left.extend(x.values())
+        elif isinstance(x, dict):
+            left.extend(x.values())
+            if keys: n += sum(str.__len__(k) for k in x if isinstance(k, str))
         elif isinstance(x, (list, tuple)): left.extend(x)
     return n
-def strings_written(line):
+def strings_written(line, keys=False):
     # The same of an answer's line, read back: of its values, the markers
-    # of the floats that are no JSON left out. A line nested deeper than
-    # json reads one is read as the worker reads such a request.
+    # of the floats that are no JSON left out, with its keys where keys is
+    # set. A line nested deeper than json reads one is read as the worker
+    # reads such a request.
     try: read = json.loads(line)
     except RecursionError: read = __main__.deep_loads(line)
     n, left = 0, [read]
@@ -454,7 +466,9 @@ def strings_written(line):
         x = left.pop()
         if type(x) is str:
             if not x.startswith('\x00pue-nonfinite:'): n += len(x)
-        elif type(x) is dict: left.extend(x.values())
+        elif type(x) is dict:
+            left.extend(x.values())
+            if keys: n += sum(map(len, x))
         elif type(x) is list: left.extend(x)
     return n
 
@@ -535,12 +549,13 @@ for what, left in documents:
     if was.endswith("\n"):
         over = strings_written(was) > most
         if over and len(was) - 1 <= most: differ.append("%s %.200r: its strings are longer than the limit and its line is not" % (what, left))
+        elif not over and now == refusal and len(was) - 1 > most and strings_written(was, True) > most: long += 1
         elif now != (refusal if over else was): differ.append("%s %.200r is answered %.300r, and was %.300r" % (what, left, now, was))
         elif over: refused += 1
         elif len(was) - 1 > most: long += 1
         else: same += 1
     elif now == was: failed += 1
-    elif now == refusal and held > most: otherwise += 1
+    elif now == refusal and (held > most or strings_left(left, True) + len("ok" + "log" + what) > most): otherwise += 1
     else: differ.append("%s %.200r fails with %.300r, and failed with %.300r" % (what, left, now, was))
 metric("compared", value=compared)
 metric("same", value=same)

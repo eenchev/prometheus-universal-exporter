@@ -140,6 +140,30 @@ last frames and the exception's own line ([Python](PYTHON.md#how-scripts-run)),
 and the metrics of a directory's file that clash with another file's by the
 first of them, the rest counted (`...; and 4983 more: a metric has one type
 across the directory's files`).
+A metric's name is shown by that rule in a line's attributes too, without
+the quotes an error puts around it: one of 200 bytes or fewer as it is, and
+a longer one by its first 200 bytes, cut between two characters, and its
+length — `"first_metric":"queue_depth_aaaa... (1048576 bytes)"`. That is the
+`first_metric` of the warning of output repaired for invalid UTF-8 (`label
+values or help text were not valid UTF-8; ...`, with the `collector`, the
+`target`, which for a file of a directory is the file's name, and the count
+of `values` repaired), which is logged before the names are validated, when
+a name is as long as the target or a script made it; and the `metric` and
+`clashes_with` of `static target metric left out of the static targets
+endpoint`, the `metric` of `static target metric back on the static targets
+endpoint` and the `metric` of `OTLP metric name written as two kinds under
+one resource`, whose names are as long as a raised
+`limits.max_metric_name_length` lets them be. The cut changes nothing of what
+is one failure: the warning of repaired UTF-8 is one failing thing per
+collector, target and file whatever its first metric, and the other two are
+remembered under the whole name, so two long names that start alike are
+logged apart. The other attributes that come from outside the exporter are
+bounded where they come in: a probe's `target` by the 8 KiB a probe
+parameter may be, and its `url` by that and the 8 KiB of a `path` parameter,
+each three times as long where every byte is percent-encoded;
+`response_body` by its 256 bytes; a directory's `file` by what the file
+system lets a name be; and what a Python script printed, at debug level, by
+its first 4,096 characters.
 Of a [runtime error of the XPath engine](CONFIGURATION.md#when-the-xpath-engine-fails-on-an-expression)
 what follows `runtime error:` is left out as well, since the numbers there
 come from the response; so it is of a runtime error while a YAML document is

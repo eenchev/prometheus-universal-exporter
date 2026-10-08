@@ -504,8 +504,9 @@ An invalid prefix MUST be rejected at startup, on reload and by `--dry-run`,
 with a message naming the collector, the rule, an example, and that the
 separator is added. A prefix that leaves no room for a name within
 `limits.max_metric_name_length`, and a declared metric whose prefixed name
-exceeds that limit, MUST be rejected the same way; a name only known at scrape
-time MUST be checked against the limit with every other exported name (§ 21).
+exceeds that limit, MUST be rejected the same way, as a rule's name without a
+prefix that exceeds it is (§ 21.1); a name only known at scrape time MUST be
+checked against the limit with every other exported name (§ 21).
 
 The prefix MUST be applied in one place, to the output of whichever transform
 ran — declared metrics, names emitted by a Python script, and names passed
@@ -520,23 +521,54 @@ and probe errors MUST name a metric rule as configured, without the prefix.
 ### 5.0a Sizes
 
 Every setting that is a number of bytes — `request.max_response_bytes`,
-`limits.max_response_bytes`, `limits.max_output_bytes` and
-`request.max_total_bytes` — MUST accept a YAML integer of bytes, or a string of
+`limits.max_response_bytes`, `limits.max_output_bytes`,
+`limits.max_script_memory` and
+`request.max_total_bytes` — MUST accept a YAML number that is a whole number
+of bytes, or a string of
 a number, optionally with a fraction, followed by an optional space and unit:
 `B`; `kB`, `MB`, `GB`, `TB` as powers of 1000; `KiB`, `MiB`, `GiB`, `TiB` as
 powers of 1024. The unit MUST be case insensitive, the `B` MAY be left out, and
 a fraction of a unit MUST be rounded down to whole bytes. Anything else MUST
 fail to load naming the value and its line, and MUST NOT be read as some
-other size or as the default: a negative number, as a YAML integer or in a
-string; an exponent or an unknown unit; a number with a fraction and no unit,
+other size or as the default: a negative number, as a YAML number or in a
+string; an exponent in a string, or an unknown unit; a number with a fraction
+and no unit,
 such as `1.5`; and a size of 2^63 bytes or more, with a unit (`8388608TiB`)
 or without, which is past what a size holds; and a string with space before
 or after the size. A whole number of bytes MUST be read exactly, up to
-2^63 - 1. The configuration schema MUST accept both forms for these
+2^63 - 1. A number YAML reads as one — written without quotes — MUST be the
+whole number of bytes it equals however it is written: with an exponent
+(`1e6`, `2.5e8`), with a fraction of zero (`1048576.0`) and with a sign
+(`+1e6`), as a key of a whole number reads it (§ 24.2) and as a schema takes
+it, which is handed the number and not its spelling. It MUST be read by its
+digits and not as the floating-point number nearest to it:
+`9007199254740993.0` is that many bytes, `9.223372036854775807e18` is the
+largest size, and a fraction too small for a floating-point number to hold
+is one. A number with a fraction (`1.5`, `1e-1`), a negative one (`-1e3`),
+one of 2^63 or more (`1e19`), infinity and not-a-number MUST be refused,
+and so MUST the same spellings in quotes:
+text is held to the pattern, so `"1e3"` and `"1.0"` are no size. A whole
+number written with a point or an exponent that no size holds MUST be
+refused for what it is, with the message of the same number written as an
+integer and shown as it is written: one under 0 (`-1e3`, `-1.0`) as
+negative, and one of 2^63 or more (`1e19`, `9223372036854775808.0`) as too
+large, neither as a spelling that is no size or as a number with a
+fraction. Zero is not negative whatever its sign (`-0.0`), and a negative
+number with a fraction (`-1.5`) is refused as the spelling it is. Reading a
+number this way MUST NOT change what any other spelling is read as or
+refused with, which a
+test MUST show against the reading as it was over generated spellings.
+The configuration schema MUST accept both forms for these
 settings, and its pattern for the string MUST accept exactly the strings
 the exporter does but for the range, which the exporter alone checks; a
 test MUST hold the pattern and the exporter to the same verdict over a
-table of spellings.
+table of spellings. The schemas and the exporter MUST give one verdict on a
+number too, in every way YAML writes one, at every size key of the
+configuration and of a collector file, which a test MUST find by the
+pattern, but for what a schema cannot tell of the number it is handed: its
+range, and a fraction written past the digits a floating-point number
+holds, such as `1.00000000000000000001`, which reaches a schema as a whole
+number and which the exporter MUST refuse.
 
 ### 5.1 Request types
 
@@ -670,7 +702,7 @@ type.
 | `redirect_trusted_hosts` | none | Hosts a followed redirect may carry the request's headers, credentials and body to, and present its TLS client certificate to, besides its own origin (§ 42.15c). |
 | `enable_http2` | `false` | § 42.15. |
 | `allowed_schemes` | `http`, `https` | Schemes a target may use. Each entry MUST be `http` or `https`, in any case; any other, including an empty one and one with a space or `://` around it, MUST be refused at load naming the collector and the entry. |
-| `accept_status` | every 2xx | A static target MAY set its own, replacing the collector's for it, checked at load and part of its cache key; so MAY a `grpc` target for `accept_codes`. Statuses whose answers are decoded: numbers from 100 to 599 and classes such as `2xx`, written as YAML numbers or strings; any other entry MUST be refused at load. A response with another status MUST fail in the `http_status` stage, and an accepted status MUST NOT be retried. |
+| `accept_status` | every 2xx | A static target MAY set its own, replacing the collector's for it, checked at load and part of its cache key; so MAY a `grpc` target for `accept_codes`. Statuses whose answers are decoded: numbers from 100 to 599 and classes such as `2xx`, written as YAML numbers or strings; any other entry MUST be refused at load. An entry YAML reads as a number MUST be the status it equals however it is written — with a point, an exponent, in hex or octal, with a sign or leading zeros: `503.0`, `5.03e2`, `0x1F7`, `0o767`, `+503` and `0503` are 503 — read by its digits, as a schema reads it, in the configuration, a collector file and the static target file; an entry in quotes MUST be read as the text it is, so `"503.0"` is refused, and text that is a status's digits with a sign or leading zeros (`"0503"`, `"+503"`) MUST accept the status they read as. A response with another status MUST fail in the `http_status` stage, and an accepted status MUST NOT be retried. |
 | `allowed_targets`, `denied_targets` | none | Hosts, globs, addresses and networks its requests may and may not reach (§ 26.1). |
 
 It MUST accept these `/probe` parameters: `method`, `path`, `timeout`, `body`,
@@ -948,6 +980,24 @@ keys:
   has appeared in an import path before the one a file was found in, which
   MUST be the one compiled from then on. A file MUST be stamped before it is
   read, so that one replaced while the files were being read is read again.
+  The check at a call MUST tell every change the configuration watch tells
+  (§ 24.1), and the watch every change it tells: a file whose modification
+  time, size or permissions changed, that appeared or disappeared, or whose
+  path leads to another file — a swapped `..data` link, even to a file with
+  the time and size of the old, or another file renamed over it with the
+  same time, size and permissions, which only its identity tells — MUST be
+  read again at the next call. One no longer readable MUST fail that call
+  with the system's error (`permission denied`), an unreadable file in an
+  earlier import path included, which MUST NOT be passed over for the next
+  import path's file of that name as a missing one is; where the exporter
+  can read it whatever its permissions, as root, the call MUST read the files
+  again and MAY succeed. Telling which file a path leads to MUST NOT cost
+  that check a look at each component of the path at every call: one look at
+  the file, as the time and size take, MUST tell it where the system says
+  which file it is, its device and inode, which the watch MUST stamp too.
+  Neither MUST read a file to tell whether it changed: a filesystem that
+  gives an unchanged file another inode number makes it a changed file, read
+  again at the next call and reloaded for at the next tick.
   With the configuration watch on, a change to one of these files MUST also
   reload the configuration at the next tick, which checks it against them
   (§ 24.1).
@@ -1263,8 +1313,9 @@ MUST have their invalid bytes replaced with U+FFFD rather than failing the
 scrape, since Prometheus refuses a whole scrape over one of them. Each value
 repaired MUST be counted in `http_exporter_invalid_utf8_total` for the
 collector, and a probe that repaired any MUST log a warning with the count and
-the first metric, suggesting `response.charset`. A label map a transform shares
-among metrics MUST NOT be changed in place.
+the first metric (`first_metric`, a name past 200 bytes by its first 200 and
+its length, as below), suggesting `response.charset`. A label map a transform
+shares among metrics MUST NOT be changed in place.
 
 A decoder names what it could not read with that part of the body — a token
 that is no number, a name written twice, an element that was not closed, a
@@ -1381,8 +1432,8 @@ length, as a decoder shows a value, and the error MUST go on as it did:
   512 bytes, the cut between two characters, with its credentials withheld
   as they were;
 - the name of a metric or of a label the validation quotes, by its first 200
-  bytes, the default `limits.max_metric_name_length`, quoted, with its
-  length after the quotes;
+  bytes, the default `limits.max_metric_name_length` and
+  `limits.max_label_name_length`, quoted, with its length after the quotes;
 - a script's error and what its interpreter wrote to stderr, as § 16.7 says
   of them;
 - the metrics of a directory's file that clash in type with another file's,
@@ -1393,6 +1444,25 @@ length, as a decoder shows a value, and the error MUST go on as it did:
 Each such length and count MUST be the mark in what the failure is
 recognised by, and an error none of whose parts is over its bound MUST be
 the error it was, to the letter, at the cost it had.
+
+The name of a metric has one rule wherever it is shown. A log line that names
+a metric in an attribute whose name the target or a script chose — the
+`first_metric` of the warning of repaired UTF-8, which is logged before the
+set is validated, when the name is as long as the response; the `metric` and
+the `clashes_with` of a static target's metric left out of the static targets
+endpoint and the `metric` of its return (§ 42.14a); the `metric` of a name an
+OTLP export had as two kinds (§ 42.1), whose names are as long as a raised
+`limits.max_metric_name_length` lets them be — MUST show a name longer than
+200 bytes by its first 200 bytes, the cut between two characters, followed by
+`... (N bytes)` with the length of the whole name, as the error shows it
+without the error's quotes, and MUST NOT hold the name it was cut from; a name
+of 200 bytes or fewer MUST be the attribute's value as it was, the line the
+same to the byte. What such a failure is remembered by (§ 25.1) MUST NOT
+change with the cut: the warning of repaired UTF-8 is its collector's, its
+address's and its file's whatever its first metric, so another first metric is
+the same failure again, and a metric left out of the endpoint or exported as
+one kind of two is remembered under its whole name, so two names that are the
+same for 200 bytes are two failures.
 
 ---
 
@@ -2945,6 +3015,17 @@ The worker's sandbox:
   import `zoneinfo` before installing the sandbox and MUST then drop
   `sysconfig`'s reference to `threading`, so the blocked module is not left
   reachable through it.
+- MUST import `tokenize` before installing the sandbox and MUST make the
+  `open` it reads files with (`tokenize._builtin_open`) open only what
+  `_io.open` does: `.py` and `.pyc` files and time zone data, for reading.
+  A traceback reads a library frame's source line through `linecache` and
+  `tokenize.open`, and that line MUST be shown on every supported Python;
+  Python 3.13 imports `tokenize` only when `linecache` first reads a file,
+  after the sandbox, where the read is refused. `tokenize.open` and
+  `linecache` MUST NOT read any other file for a script.
+- MUST run on the image's Python, 3.12, the supported one; the test suite
+  MUST also run the sandbox, a library's traceback and how a script's error
+  is cut on Python 3.13 where it is installed, and say where it is not.
 
 A sandbox inside the interpreter guards against a script doing by mistake what
 it should not; it is not a boundary against a script written to escape it,
@@ -3087,19 +3168,80 @@ typical script.
   strings, or is nested deeper than the worker's own walk follows. The sum
   MUST be of what would be written: where a transform's `metrics` are
   written without what no metric has, what is left out MUST NOT count. It
-  is of the strings that are values, of exactly the type `str`; the keys of
-  dicts, numbers and punctuation MUST NOT count, so that the sum is never
-  more than the answer is long and no answer the exporter would take is
-  refused. An answer whose strings are within the limit and which is longer
-  than it written out — the sum exactly at the limit, or numbers alone —
-  MUST end as it did, written, with the output limit's error and its
-  worker; an answer of exactly `limits.max_output_bytes` MUST be taken; and
-  an answer within the limit MUST be the line it was, byte for byte. An
-  answer that is no script's `data` or `metrics` is not measured so: the
-  worker's own word MUST be written as it is, and a script's error as the
-  rule on it below says, never longer than the limit. Counting the strings
-  MUST add no second walk of an answer: the cost is one addition for each
-  string the walk meets.
+  is of the strings that are values, of exactly the type `str`, and of the
+  keys the next rule counts; numbers and punctuation MUST NOT count, so
+  that the sum is never more than the answer is long and no answer the
+  exporter would take is refused. An answer whose strings and counted keys
+  are within the limit and which is longer than it written out — the sum
+  exactly at the limit, or numbers alone — MUST end as it did, written,
+  with the output limit's error and its worker; an answer of exactly
+  `limits.max_output_bytes` MUST be taken; and an answer within the limit
+  MUST be the line it was, byte for byte. An answer that is no script's
+  `data` or `metrics` is not measured so: the worker's own word MUST be
+  written as it is, and a script's error as the rule on it below says,
+  never longer than the limit. Counting the strings MUST add no second walk
+  of an answer: the cost is one addition for each string the walk meets.
+- A key is written each time its dict is: a text of 100,000 characters
+  that is the one key of each of 5,000 rows, or the name of a label of
+  5,000 metrics, is 500 MB written from 100 kB the script made, and a
+  worker MUST NOT make or write that either. But the walk MUST NOT add up
+  the keys of every dict of every answer, which costs an answer half again
+  of the look through it: the look at keys MUST cost an answer within the
+  limit — metrics as `metric()` makes them, rows of short keys, and either
+  where one dict the look passes has keys unlike the rest, many of them or
+  one long one — no more than a twentieth of the calls the worker made for
+  it before, and one the worker copies before it writes it no more than a
+  tenth. The walk MUST look at the keys of a few dicts, chosen by where
+  they stand in the answer. In an answer it writes as it is: of each level
+  that has four values or more, and another level below it, the fourth
+  value and every 61st after it, where that is a dict, a level being the
+  values of the lists and dicts of the level above and the answer the
+  first. In an answer it copies: of the dicts its copy is made of, in the
+  order the copy finished them, a dict after the dicts inside it and the
+  answer itself last, the fourth and every 61st after it. The lengths of
+  the keys looked at MUST be taken as often as the level has values, or the
+  copy dicts, for each one looked at: 4 times in a level of four values, 64
+  times in one of 64, about 61 times in a long one, and never 61 times for
+  a dict that stands among fewer values. Where the look found keys that are
+  strings, and the keys taken so and the sum of the strings are together
+  more than `limits.max_output_bytes`, or within 64 characters of it —
+  which stand for the keys of the levels of fewer than four values, the
+  answer's own among them — the worker MUST add up the keys of all the
+  answer's dicts, each as often as it is written, and the answer MUST fail
+  as one whose strings are too long does, with the same `OverflowError`,
+  exactly when its keys and its strings are together more than the limit.
+  That sum MUST be made once for an answer, MUST NOT go through the answer
+  again a value at a time, MUST NOT add up again the keys of the dicts
+  already looked at, and MUST stop where it is past the limit; an answer
+  whose keys, taken so, are not that near the limit MUST NOT cost it. What
+  writes an answer nested deeper than the worker's copy follows MUST add
+  each key as it writes it. A key counts when it is a string, of the type
+  `str` or of a class made of it, as long as it is in characters, whatever
+  a class of the script's own says of its length, in all three; a key that
+  is a number, a boolean or `None` MUST NOT count. The look MUST run
+  nothing of the script's, and MUST NOT fail an answer the worker would
+  have written: it MUST take a value for a dict and a key for a string by
+  its type, not by what it answers when asked for its class. A mapping the
+  copy has always gone through by its `items()` — a `weakref.proxy` of a
+  dict, an object that gives the class of what it stands for as its own —
+  and a dict with a key that is a number whose class says it is `str`, or
+  raises when it is asked, MUST be written wherever they stand in the
+  answer. The answer's own keys are among those counted: `ok`, `log`,
+  `data` or `metrics`, and those the worker writes for each metric. So an
+  answer whose keys and strings are exactly the limit MUST end as it did,
+  with the output limit's error and its worker, and one character more MUST
+  be the script's failure where the look passes its keys; and an answer in
+  which the dicts looked at do not say its keys are long MAY be written and
+  refused by the exporter, as before. That is one whose long keys are only
+  where the look does not pass — the first three values of a level, a level
+  of fewer than four values, the values between one looked at and the 61st
+  after it (of rows of exactly 61 values, every value but the fourth of
+  each row), the first three dicts of a copy — and one whose long keys are
+  in so few of the dicts it does pass that, taken for the values around
+  them, they stay within the limit. The same answer MUST end the same way
+  each time: the look MUST NOT go by chance or by where a value lies in
+  memory, and MUST NOT tell the dicts of a copy apart by their addresses,
+  which one made for the copy and let go of gives to the next.
 - A worker MUST say, with a line of its own before it runs the script, that
   it has read and parsed the request. `limits.script_timeout` MUST bound the
   run of a script from that line on: not the start of the interpreter, which
@@ -3168,7 +3310,11 @@ typical script.
   by their lengths with the mark in place of every length measured, and
   the failure MUST be recognised (§ 25.1) by the text with those marks, so
   that the same failure of a longer message, or of a longer chain that ends
-  alike, is shown by the same lines and is one failure.
+  alike, is shown by the same lines and is one failure. The traceback is
+  the text the interpreter's `traceback` module writes, and the lines of
+  position markers it draws under a source line (`~~~~^^^^`), which Python
+  3.13 draws under more lines than 3.12, MUST count as lines like any other:
+  a release that draws more MAY show fewer frames of the same failure.
 - A script's error MUST NOT be output over the limit, whatever its length:
   an exception whose text is longer than `limits.max_output_bytes` — a
   message as long as the response, a `KeyError` of a large key, a
@@ -3224,6 +3370,43 @@ typical script.
   answer that is no error MUST end as it did:
   `metrics` or `data` longer than the limit with the output limit's error
   and their worker, or with the worker's own refusal.
+- `limits.max_output_bytes`, a size (§ 5.0a), bounds the one line a worker
+  answers a request with, without its line break; left out or `0` it MUST be
+  1 MiB. Set, it MUST be at least 38 bytes, and a configuration that sets
+  less MUST be refused when it loads — at startup, by `--dry-run` and on a
+  reload, in a collector file as in the configuration — whatever the
+  collector is, with a script, with a pre-script or with neither, since the
+  key bounds nothing else: `collector "c" limits.max_output_bytes is 26, and
+  a Python script that emits no metric answers in 38 bytes, so no
+  transform's script could answer within it; set at least 38, or leave it
+  out, or 0, for the default, 1MiB`, naming the collector, the key, the
+  bytes the value comes to however it is written, the least and the
+  default. 38 bytes is the least limit under
+  which a worker starts and a script of either kind that has nothing to say
+  answers, taken of a script that prints nothing, what a script prints being
+  in its answer: the line a worker is ready with is 27 bytes, so under 27
+  none starts and every scrape fails as a start that failed; the line it
+  takes a request with is 17; a pre-script's answer is 34 bytes at its
+  shortest, with a number of one digit left in `data`, 35 with `{}`, `[]` or
+  `""` and 37 with `None`; and a transform's script that emits no metric
+  answers in 38, `{"ok": true, "log": "", "metrics": []}`. The least is
+  one, of the key: a limit of 34 to 37 bytes, under which a pre-script that
+  leaves no more than that in `data` could have answered and no transform's
+  script could, MUST be refused with the rest. A smaller limit once loaded,
+  passed `--dry-run` and failed every scrape of a collector whose transform
+  is a script, as output over the limit or as a start that failed. The
+  least MUST be a constant beside the worker, worked out from those lines
+  as the launcher writes them, and a test MUST hold it to the launcher: a
+  real worker MUST answer with exactly those lines and MUST start and
+  answer both kinds of script under the least, and a transform's script
+  MUST fail as output over the limit under a byte less; and a stand-in that
+  writes the same
+  lines MUST be read under the least and refused under a byte less, the
+  exporter measuring a line as the constant counts it. The loader holds the
+  least and the worker and the pool MUST NOT: a worker MUST run under
+  whatever limit it is given, cutting a script's error to it (above). The
+  schemas MUST refuse a number from 1 to 37 at the key and take 0, and what
+  they cannot tell of a size written as text stays the loader's (§ 24.3).
 - `limits.max_script_memory`, a size, MUST bound each of the collector's
   workers' address space (`RLIMIT_AS`), set after the declared libraries are
   imported. A script that needs more MUST fail the run with a `MemoryError`
@@ -3256,7 +3439,9 @@ typical script.
 - A reload that removes or changes a collector's script MUST stop that script's
   idle workers at once and each busy one when its run finishes, counting them
   with the stop reason `reload`; workers of scripts the reload keeps MUST be
-  left alone.
+  left alone. The workers of a collector a reload removed MUST be stopped so
+  though a later reload has brought the collector back with the script it
+  had by the time their runs finish (§ 22.1a).
 - The time each script runs in its worker, as `limits.script_timeout`
   measures it — not starting a worker, nor handing it the request — MUST be
   kept per probe, the pre-script's and the python transform's together, and
@@ -3913,8 +4098,15 @@ metrics from every transform, a `prometheus` rule without a name included and
 the series of a `python` script that a rule names (the rule makes no series;
 it declares the script's metric and the label to cut), and
 MUST happen before `transform.rename_labels` and before `metrics_prefix`
-(§ 5.0a) is added, so a renamed label is still cut, and after invalid UTF-8
-is repaired, so the repair cannot grow a cut value past the limit.
+(§ 5.0a) is added, so a renamed label is still cut, after invalid UTF-8
+is repaired, so the repair cannot grow a cut value past the limit, and after
+the label's `value_map` has mapped the value, for every kind of rule, a
+`prometheus` rule without a name included, so the value exported is the one
+cut and a cut value is never looked up in, nor mapped long again by, a map.
+`truncate: true` on a label of a rule with a name MUST cut that label of
+every series of that name, as a label's `value_map` maps it: those of the
+other rules of the name, and those a `prometheus` rule without a name keeps
+under it.
 
 A jq or yq expression label's value MUST be written as text the way JSON
 writes it: a number without an exponent when its magnitude is at least 1e-6
@@ -4286,6 +4478,7 @@ limits:
   max_labels_per_metric: 20
   max_label_value_length: 500
   max_metric_name_length: 200
+  max_label_name_length: 200
   script_timeout: 100ms
   max_cache_entries: 1000
 ```
@@ -4395,6 +4588,39 @@ labels like any other. Series that differ
 only in a label with an empty value MUST be duplicates, since Prometheus reads
 such a label as absent, and the error MUST say so.
 
+A label name longer than `limits.max_label_name_length` (200 bytes by default,
+the default of `limits.max_metric_name_length`; 0 or left out is the default,
+a negative value MUST be refused at load) MUST fail validation as a metric
+name longer than `limits.max_metric_name_length` does: the scrape's
+`validation` stage failure, counted in
+`http_exporter_series_limit_exceeded_total`, whatever `error_handling` and a
+rule's `error_mode` say, whatever gave the series the label — a rule,
+`transform.labels`, `transform.rename_labels`, a script's `labels`, a series a
+`prometheus` transform passes through — and measured as the scrape exposes it,
+after `name_escaping`. A label name MUST be checked after its metric's name,
+so a series with both names too long fails on the metric's, and after the
+label name is found to be a label name, before anything else about the label:
+of a label whose name is too long and whose value is too long, the name MUST
+be named. `le` and `quantile`, which a histogram's buckets and a summary's
+quantiles carry, are label names too and MUST fail validation under a limit
+shorter than they are. A label name the configuration writes longer than the
+limit, as the scrape would expose it — a rule's label, a key of `transform.labels`, what `transform.rename_labels` renames to — MUST
+be refused at load, naming the collector, the label, its length and the
+limit; a rule's label or a key of `transform.labels` that
+`transform.rename_labels` renames or `transform.remove_labels` removes is not
+exposed under that name and MUST NOT be held to the limit by it, nor to
+anything else the scrape holds an exposed name to (§ 21.1). A static
+target's label, which goes on its collector's series past
+the validation, MUST be refused when the target file is checked against the
+configuration, naming the target, the label, the limit and the collector;
+so MUST a target whose collector's limit is shorter than a label the
+exporter itself adds to the target's series past the validation —
+`static_target` on every series, 13 bytes, and `collector` and `target` on
+its health series — naming the target, the label, its length, the limit and
+the collector. A label the exporter adds before the validation, the `file`
+of a collector that reads a directory, MUST fail the scrape when it is
+longer than the limit, as any label does.
+
 A family named like a series of a histogram or a summary — `foo_bucket`,
 `foo_sum` or `foo_count` next to a histogram `foo`, `foo_sum` or `foo_count`
 next to a summary `foo` — MUST fail validation naming both, since the
@@ -4408,13 +4634,26 @@ accepted; a `prometheus` rule without a `type` is not compared); a rule named
 as a series of another rule's histogram or summary; a `description` longer
 than `limits.max_help_length`; and a static label value, of a rule or of
 `transform.labels`, longer than `limits.max_label_value_length`, unless the
-label has `truncate: true`, a `value_map` maps the value to a shorter one, or
-`remove_labels` drops it. A `python` transform's rules make no series, so only
+label is cut at the scrape — it has `truncate: true`, or a rule of the name
+its series have sets `truncate: true` on a label of that name — a
+`value_map` maps the value to a shorter one, or `remove_labels` drops it. A `python` transform's rules make no series, so only
 its `transform.labels` are checked. A value that holds placeholders
 (§ 42.10c) MUST be measured with each replaced by its default, and by
-nothing where it has none, and its refusal MUST say so; such a value of a
-rule's label MUST NOT be measured where a `value_map` of the rule's name maps
-the label.
+nothing where it has none, and its refusal MUST say so. Where a `value_map`
+of the rule's name maps such a value of a rule's label, it MUST be measured
+as mapped: a `"*"` entry longer than the limit, which every value the probe
+gives that the map does not list becomes, MUST be refused whatever the
+defaults, naming the entry; a longer entry the map lists MUST be refused only
+where the value with its defaults is that entry's key, and otherwise MUST be
+accepted, the scrape of a probe that gives the key failing validation. A
+`prometheus` rule without a name keeps each series' own name, which the
+value maps and the cuts go by: its static label, a constant or one with
+placeholders, MUST be measured as it is, for the names no rule has, and
+besides, by the rules above, as the `value_map` and the `truncate: true` of
+each other rule's name that its `expression` matches make it, the name matched
+as the scrape matches it — the pattern unanchored unless it anchors itself,
+against the name the target wrote, before `metrics_prefix` and
+`name_escaping` — and its refusal MUST name the metric whose map it is.
 
 A scrape that fails validation for a limit of its series MUST say which and
 what to change: the metric, what is over the limit and by how much, the limit
@@ -4427,9 +4666,13 @@ check knows no collector, the names are those the scrape exposes (after
 rule gives, as a directory's `file`, so the message MUST NOT tell the operator
 to set a key that may not exist; more labels than the limit, `metric "M" has
 N labels, more than limits.max_labels_per_metric MAX; drop labels it does not
-need or raise limits.max_labels_per_metric`; and a help text over it, `metric
+need or raise limits.max_labels_per_metric`; a help text over it, `metric
 "M" help is N bytes, longer than limits.max_help_length MAX; shorten it or
-raise limits.max_help_length`. Lengths MUST be in bytes, as the limits are.
+raise limits.max_help_length`; and a label name over it, `metric "M" label
+name "L" is longer than limits.max_label_name_length MAX; rename the label
+with transform.rename_labels, or raise limits.max_label_name_length`, the
+name shown as a metric name over its limit is. Lengths MUST be in bytes, as
+the limits are.
 
 Metric names SHOULD be normalized only when explicitly configured; silent surprising renaming is undesirable. A collector's `metrics_prefix` (§ 5.0a) is such explicit configuration, and validation applies to the prefixed names.
 
@@ -4603,9 +4846,24 @@ written so MUST be refused as it was, and one that `underscores` would
 export so, such as `1_x`, MUST be refused under `underscores`, the error
 naming what it is exported as, and taken under `values`; and a static
 target's `labels` (§ 42.14) MUST be classic names, being added to what the
-collector exported after its names were escaped. The length a rule's name
-is held to with a `metrics_prefix` (§ 6) MUST be that of the name as it is
-exported, and the error MUST quote that name. Two rules whose names differ
+collector exported after its names were escaped. A rule's label or a key of
+`transform.labels` that `transform.rename_labels` renames or
+`transform.remove_labels` removes is an exception to all of this but the
+blanks: the scrape renames and removes before it escapes the names and
+validates the series, so such a name is never exported, and it MUST load
+whatever its characters, `__tmp`, and `a.b` under `fail`, alike, while the
+name a rename gives MUST be held to everything above; one that neither takes
+off MUST be refused in the words it was. A rule's name, of every transform,
+`prometheus` and `python` rules among them, exported longer than
+`limits.max_metric_name_length` MUST be refused at load, since every series
+of it would fail validation: the name as it is exported, after
+`metrics_prefix` and escaped by `name_escaping`, measured as the scrape
+measures it, a histogram's or a summary's family name and not the names of
+its samples. The error MUST name the collector, the rule, the length and
+the limit, and say to shorten the name or raise the limit; with a
+`metrics_prefix` (§ 6) it MUST quote the name as it is exported, in the
+words it always had. A `prometheus` rule without a `name` has no name to
+measure. Two rules whose names differ
 as written and are one name once escaped are not the same rule to the load
 (§ 18.1), which compares what is written: they MUST load, and a scrape that
 has both fails as it does of two such names of a target.
@@ -4994,12 +5252,52 @@ and `outcome` MUST be published, zero included, so a rate can be taken before
 the first event. The pool MUST keep these counts regardless of verbose mode,
 since it maintains them anyway; only their publication depends on it.
 
+The counts of a collector's Python workers are part of the state kept for
+the collector, and MUST follow a reload as § 24.1a says of it: dropped when
+a reload removes the collector, from zero for a collector added again under
+the name, and kept by a collector that stays, whether or not its definition
+changed. A run takes the statistics it counts in once, for the collector its
+probe or scrape read, and a worker counts in those of the run that started
+it, for as long as it lives: a run of a removed collector's script that is
+waiting for a worker, running or ending when the statistics are dropped, one
+that begins afterwards, and a worker of the removed collector that stops
+afterwards, for whatever reason, MUST be counted under no collector, MUST
+NOT be counted for a collector added again under the name, and MUST NOT
+leave statistics under the name. The stop, for the reload, of the workers of
+a collector that reload removed MUST be counted under no collector either.
+
+A worker MUST serve only runs that count in the statistics it was started
+for, though workers are kept by the collector's name and its script, and a
+collector added again has both as the removed one had them. A worker of a
+removed collector MUST NOT be given to a run of the collector added again
+under the name, and a worker of the collector added again MUST NOT be given
+to a run of the removed collector that is still under way: such a run MUST
+start a worker of its own, within `--python.max-workers` as any other, whose
+place under that limit it holds until it is stopped. A worker of a removed
+collector MUST NOT be left idle: it MUST be stopped, with the reason
+`reload`, when the collector's statistics are dropped if it is idle then,
+and otherwise when its run ends, whether or not the script is in use again
+by then, and whether the run began before the reload or after it, when the
+script was no longer in use. So for every collector, after every event, the
+workers started less the workers stopped, for every `reason` together, MUST
+be the workers its `idle` and `busy` series count, and none of the three
+`state` series is ever below zero.
+
+One answer reads a collector's statistics before it reads what the
+collector's Python workers counted. Where reloads between the two removed
+the collector and added it again, the answer MUST NOT show what the workers
+of the collector added again counted with the creation time (§ 22.1b) of the
+collector it read: it MUST show that collector with its worker series at
+zero.
+
 The `http_exporter_python_pool_` families MUST report the Python execution pool
 as a whole, with the same `state`, `reason` and `outcome` values. They MUST be
 published whenever verbose mode is on, whether or not any collector uses Python,
 so the pool's status can be monitored without knowing which collectors run
 scripts. They MUST sum every collector the pool has served, including one a
-reload has removed, so a counter never decreases. They MUST have names of their
+reload has removed and what its runs and workers count once it is removed,
+so a counter never decreases and dropping a collector's statistics changes
+none of them. They MUST have names of their
 own rather than being unlabelled series of the per-collector families, so that
 summing a per-collector family never counts a run twice.
 
@@ -5016,18 +5314,19 @@ summaries began to count, its creation time:
 
 - the exporter's start, for a series that has counted since then: the
   counters of a collector of the configuration the exporter started with, its
-  `http_exporter_rule_failures_total` series and its
-  `http_exporter_collector_scrape_duration_seconds` histogram; the reload
-  counters (§ 22.0b) and the OTLP ones (§ 22.0c); the Python worker counters
-  of § 22.1a, per collector and of the pool, which the pool keeps whatever a
-  reload does; and the `go_` and `process_` counters and summary (§ 22.0a).
+  `http_exporter_rule_failures_total` series, its
+  `http_exporter_collector_scrape_duration_seconds` histogram and the
+  counters of its Python workers (§ 22.1a); the reload counters (§ 22.0b) and
+  the OTLP ones (§ 22.0c); the `http_exporter_python_pool_` counters of
+  § 22.1a, which the pool keeps whatever a reload does; and the `go_` and
+  `process_` counters and summary (§ 22.0a).
   The exporter's start MUST be the start of its process, the very time
   `process_start_time_seconds` gives where the platform has it and the moment
   the exporter was loaded where it has not, and one value for the life of the
   process;
 - the moment a collector's counters were made, for a collector a reload added,
-  or removed and brought back (§ 24.1): its counters, rule failures and
-  histogram start from zero then;
+  or removed and brought back (§ 24.1): its counters, rule failures,
+  histogram and Python worker counters start from zero then;
 - the start of the probe that got a request tracked, which of several probes
   of a request not yet tracked is the first to end, or the moment a static
   target's request was registered, for the per-request series of verbose mode
@@ -5236,7 +5535,8 @@ only a `grpc` collector may set (§ 5.1), and the files those `.proto` files
 import, through however many files, which are every path the compile of the
 `proto_files` looked at on disk, as set out below for a refused reload. The
 configuration is checked against these files when it loads, and a collector
-reads them again at a call when they change (§ 5.1), so one of them changing,
+reads them again at a call when they change, as this watch tells a change
+(§ 5.1), so one of them changing,
 appearing or disappearing MUST reload at the next tick, as a change to the
 configuration file does, although no configuration file changed: the
 configuration MUST be read and checked again, against the descriptors as a
@@ -5300,9 +5600,10 @@ refused because one of them was missing or half replaced — a Secret being
 rotated — MUST thus be tried again at the tick after the file is in place,
 without the configuration being touched. Such a file MUST be stamped before
 the load reads it, as what its path leads to: its modification time, size
-and permissions, the file a symbolic link resolves to, or that there is
-none, so a swapped `..data` link is a change even when the new file has the
-time and size of the old.
+and permissions, the file a symbolic link resolves to, its identity (device
+and inode) where the system gives it, or that there is none, so a swapped
+`..data` link, and a file renamed over by another, are a change even when
+the new file has the time and size of the old.
 
 The files that a collector's `.proto` files import, which the configuration
 does not name, MUST count among them too, through however many files: every
@@ -5383,19 +5684,22 @@ After any reload, whatever its trigger, the per-collector state MUST follow the
 new configuration when the reload is made: on the path that reloads, before
 the reload returns or `/-/reload` answers, and without a probe having to ask
 for it. Where it has not been, it MUST follow before it is next used. A removed collector's
-self-metric series, per-request series, scrape-time histogram, cached results
+self-metric series, per-request series, scrape-time histogram, the
+statistics of its Python workers (§ 22.1a), cached results
 and remembered failures MUST be dropped, so its series stop being exposed and
 exported and Prometheus marks them stale, and a collector added again under
 the name MUST start from zero. A probe or static target scrape that read the
 removed collector in a configuration from before the reload, however far it
 had come when the collector's state was dropped — waiting for a scrape slot,
-about to count, at its target, or ending — MUST NOT be counted in the
-counters, the scrape-time histogram or a per-request series of a collector
+about to count, at its target, running its script, or ending — MUST NOT be
+counted in the counters, the scrape-time histogram, the Python worker series
+or a per-request series of a collector
 added again under the name, MUST NOT start a per-request series of the
 removed collector, and MUST NOT leave statistics under the removed
 collector's name for a collector added again to take over. A probe or scrape
 of a collector the reload kept MUST be counted for it wherever it was at the
-reload. A collector whose definition changed MUST keep its counters, MUST
+reload. A collector whose definition changed MUST keep its counters, those
+of its Python workers among them, MUST
 have its cached results dropped, since their keys carry the old definition,
 and MUST have its remembered failures forgotten (§ 25.1), as a removed
 collector's are, so that the first failure of the new definition is logged as
@@ -5440,7 +5744,24 @@ that configuration: where each is MUST be noted once for the configuration,
 by the reload that works out its fingerprints, before it is in force, or,
 for the configuration the exporter started with, by the first to ask, and
 the collector found MUST be the one going through them finds, the first of
-that name. The
+that name. A read of the verbose self-metrics, which finds the collector of
+every static target in force to name the target's request (§ 22.1), MUST
+find each so too, while the configuration it read is the one followed, and
+MUST track the requests it tracked while it went through the collectors for
+every target. To tell whether a static target of a name is one of the
+static target file followed — the scrape of a static target that ends,
+before it publishes (§ 42.14), and a read of the static targets endpoint
+that names targets, of every name it gives (§ 42.14a) — the exporter MUST
+NOT go through the targets of that file: the names its targets have MUST be
+noted once for the file, by the following of the reload that put it in
+force, before the lock of the per-collector statistics is taken, or, for
+the file the exporter started with, when it starts; they MUST be kept only
+for the file followed, so that they do not grow with the reloads; and what
+is told MUST be what going through the targets tells, of the file in force
+when it is asked: a name is told of a file exactly when a target of it has
+that name, as it is written. For a file a reload has put in force and has
+not followed yet, as for a configuration that is not the one followed, the
+exporter MAY go through them as it did. The
 fingerprints kept MUST NOT grow with the reloads: the exporter MUST keep
 those of the configuration in force, and MAY keep those of one
 configuration before it while probes still read that one. What was worked
@@ -5662,8 +5983,30 @@ checked:
   MUST be refused naming the key, the value and the line, in the
   configuration, a collector file and the static target file alike, rather
   than becoming the default or losing its fraction. A whole number written
-  as `4.0` or `1e3` is one. A negative `limits.script_timeout` MUST be
-  refused. 0, like a limit left out, keeps its meaning: the default.
+  as `4.0` or `1e3` is one, and MUST be read by its digits and not as the
+  floating-point number nearest to it: `9007199254740993.0` is that number,
+  and `9.223372036854775807e18` is 2^63 - 1. A whole number so written that
+  the key's integer does not hold, under -2^63 or from 2^63 (`1e19`, `-1e19`,
+  `9.223372036854775808e18`), MUST be refused once, naming the key, the
+  number as written and the range, never wrapped around or read otherwise on
+  one platform than on another; one it holds MUST then be checked as the
+  key checks the same number written with digits alone, in the same words.
+  A number with a fraction MUST be refused however small the fraction
+  (`1.00000000000000000001`). A number so written past the range of a
+  floating-point number (`1e400`), which YAML 1.2 reads as a number and the
+  YAML decoder as text, MUST be refused as past the key's integer, in the
+  same message; in quotes or tagged `!!str` it is text. Such a number MUST be
+  written into the key the YAML decoder decodes it into: a key written as an
+  alias is the key its anchor holds, not the anchor's name, and a message
+  MUST name it so. A whole number written with digits alone MUST
+  be read as the YAML decoder reads it. A negative `limits.script_timeout` MUST be
+  refused. 0, like a limit left out, keeps its meaning: the default. A
+  `limits.max_output_bytes` that is set MUST be at least the 38 bytes a
+  Python script that emits no metric answers in, and a smaller one MUST be
+  refused naming
+  the collector, the key, the value in bytes, the least and the default
+  (§ 16.7). The check of the limits MUST say of every other set of limits
+  what it said, which a test MUST show against the check as it was.
 - A mapping key YAML reads as null — `null`, `~`, or an empty key — in any
   mapping of names to values, such as `value_map`, `headers` or `labels`,
   MUST be refused naming the mapping and the line, since the decoder would
@@ -5798,7 +6141,16 @@ at a mapping's keys itself, a key a merge supplies MUST count as a key of
 the mapping: an unknown one MUST be refused as if written there, at any
 depth and through an alias, and a `path` or `body` merged into a static
 target's `request` MUST replace the collector's as one written out does. A
-quoted `"<<"` is an ordinary key.
+quoted `"<<"` is an ordinary key. Wherever the exporter looks at a mapping's
+keys itself, a key written as an alias of an anchored scalar (`*k : value`
+with `&k ttl` elsewhere) MUST be the key its anchor holds, as the YAML
+decoder reads it, not the anchor's name: it MUST be accepted where that key
+is, a `path` or `body` so written MUST set that key of a static target's
+`request`, and a message about it MUST name that key, an unknown one
+included. A top-level alias key whose anchor holds an `x-` key MUST be
+ignored as one written out is, by environment expansion too. An alias of
+`<<` is the text `<<` to the decoder and MUST NOT merge: it is an unknown
+key.
 
 Each of these files MUST hold one YAML document. A second document after a
 `---` MUST be refused naming the line it starts on, since it would otherwise
@@ -5906,9 +6258,39 @@ differences in how a duration is written. What else a schema cannot
 tell MUST be said in the
 key's description and stay the exporter's to refuse: the least
 `otlp.interval`, 1s, since a duration is a string to a schema and a disabled
-block may hold any; the range of a size; and a size written as an unquoted
-number with an exponent or a fraction of zero (`1e3`, `1.0`), which a schema
-sees as the whole number it equals.
+block may hold any; and the range of a size. A key of any other whole number
+takes a number written with a point or an exponent as the whole number it
+equals, to the exporter as to a schema (§ 24.2): the range of the key's
+integer, from -2^63 to 2^63 - 1, which no schema of the exporter bounds, and
+a fraction past the digits of the floating-point number a schema is handed,
+such as `1.00000000000000000001`, stay the exporter's to refuse, the
+documentation of the schemas MUST say so, and a test MUST put such numbers
+through both. An entry of `request.accept_status` written as a number is the
+status it equals to both (§ 5.0), which the tables of keys MUST show of a
+number with a point, an exponent, in hex, in octal, with an underscore, and
+with a sign and leading zeros; the spellings of a number the exporter's
+reader takes beyond YAML 1.2, such as `5_03`, are text that is no status to
+an editor, which the documentation MUST say. Text the exporter takes as an
+entry and the pattern of an entry refuses — blanks around the digits, and in
+quotes a `+` or leading zeros before them — stays a difference of the two,
+an editor flagging what the exporter takes as the status the digits read as
+(`"0503"` and `"+503"` are 503). A number past the range of a floating-point
+number, such as `1e400`, is a number to both, which the exporter refuses at a
+key of a whole number (§ 24.2).
+A size written as an unquoted
+number with an exponent or a fraction of zero (`1e3`, `1.0`) is the whole
+number it equals, to the exporter as to a schema (§ 5.0a). The least of
+`limits.max_output_bytes` (§ 16.7) MUST be in the schemas of the
+configuration and of a collector file as far as a schema can tell it: a
+number at the key MUST be 0 or at least 38, with the least taken from the
+constant the loader checks against, so that `1`, `37`, `1e1` and `26.0` are
+refused by both and `0` and `38` taken by both, which the test of the two
+verdicts MUST show; the other four sizes MUST stay described as every size
+is. A size written as text — in quotes, or with a unit, such as `"26"`,
+`20B` or `0.01KiB` — is text of the pattern of a size to a schema, which
+cannot tell how many bytes it comes to: that such a size is under the least
+MUST stay the exporter's to refuse, MUST be said in the key's description
+and in the documentation of the schemas, and the test MUST hold both to it.
 
 A key written as the empty string MUST be the key left out, to the exporter
 and to the schemas alike, and CONFIGURATION.md MUST say so once, where it
@@ -6728,7 +7110,7 @@ Provide clear CLI flags, for example:
 --version
 ```
 
-`--runtime.memory-limit-ratio`, from 0 to 1 and 0 by default, MUST set the Go
+`--runtime.memory-limit-ratio`, 0 by default or from 0.1 to 1, MUST set the Go
 memory limit at startup to that share of the container's memory limit, and
 log both. The limit MUST be read along the process's own cgroup, as
 `/proc/self/cgroup` names it — v2 `memory.max`, and v1
@@ -6738,7 +7120,9 @@ cgroup namespace, where the path is `/`, and without one, where the root holds
 the host's `max`. Without a container limit, at 0, or with `GOMEMLIMIT` set in the
 environment, it MUST leave the limit alone, logging why for the first and
 last. A value outside 0 to 1 MUST be a command-line error, also with
-`--dry-run`.
+`--dry-run`, and so MUST one above 0 and below 0.1, with a message saying
+the floor and that below it the Go runtime spends its time collecting
+garbage: such a limit leaves the Go heap almost nothing.
 
 `--web.shutdown-timeout` bounds how long a `SIGTERM` or `SIGINT` waits for the
 probes in progress, 15 seconds by default, longer than a typical scrape timeout; a value that is not positive MUST be
@@ -8520,8 +8904,8 @@ status captured:
   leave the worker in service.
 - A worker that exits is replaced on the next run.
 - An answer over `max_output_bytes` that the worker does not refuse itself,
-  its strings together being within the limit, fails with the output limit
-  error, and the next run succeeds.
+  its strings and keys together being within the limit, fails with the
+  output limit error, and the next run succeeds.
 - `socket`, `subprocess` and `threading` imports, `open`, `os.system`, and
   reading or writing the protocol descriptors are refused on every run.
 - The ways around those are refused too: importing `_socket`,
@@ -8721,7 +9105,8 @@ See § 5.0a, § 5.1a, § 22.0d, § 23 and § 42.1a.
   carries the same as a gauge of 1.
 - Sizes with every unit, a space, a fraction and none are read; an empty,
   unit-only, negative, exponent, unknown-unit, trailing-garbage and overflowing
-  size is refused; YAML integers and quoted numbers are read; a list is not.
+  size is refused as text; YAML integers and quoted numbers are read; a list
+  is not.
   Each byte setting takes a unit in a loaded configuration, a malformed one
   fails naming it, and the schema carries the size pattern.
 - A second `SIGINT` during a shutdown held up by a probe in progress, once
@@ -11004,9 +11389,8 @@ Tests MUST show:
   and both refuse `tab`, `'\t'`, two characters, a double quote, a line
   feed, a carriage return, both together, NUL and U+FFFD.
 - The committed schema and the loader agree on some 60 spellings of
-  `limits.max_output_bytes`, as YAML numbers and as text; a size past the
-  range, `1.0` and `1e3` unquoted pass the schema and are refused by the
-  loader with their message.
+  `limits.max_response_bytes`, as YAML numbers and as text; a size past the
+  range passes the schema and is refused by the loader with its message.
 - `otlp.interval` of `1s`, `30s`, `1m`, `1h30m` and `1.5s` is accepted by
   both and `soon`, `5`, `1d` and a list refused by both; `500ms`, `999ms`
   and `1ns` pass the schema and are refused by the loader, and are
@@ -11485,11 +11869,12 @@ Tests MUST show:
 - The strict reference parser, `prometheus_client`'s, reads the self-metrics
   with their `_created` samples and reads every one of them, in counter,
   histogram and summary families only.
-- A collector the exporter started with, its rule failures and its scrape-time
-  histogram, the reload, OTLP and Python worker counters, per collector and of
-  the pool, are created at the exporter's start; a per-request series is
-  created when the first probe of the request began, and a static target's
-  when it was registered; the time is written in seconds.
+- A collector the exporter started with, its rule failures, its scrape-time
+  histogram and the counters of its Python workers, the reload and OTLP
+  counters and those of the Python pool, are created at the exporter's
+  start; a per-request series is created when the first probe of the request
+  began, and a static target's when it was registered; the time is written
+  in seconds.
 - A static target's request first registered by its scrape is created at the
   time of that scrape.
 - The `go_` and `process_` counters and `go_gc_duration_seconds` are created
@@ -18198,13 +18583,14 @@ Tests MUST show:
   refuses all seven, counted as `script_error`, and answers the next
   request. Each ended with `python pre-script output exceeds limit` before.
 - The worker refuses for its strings only past the limit: texts exactly as
-  long together as the limit, in a plain list, beside a NaN and 3,000 levels
-  down, are written and refused by the exporter, `python pre-script output
-  exceeds limit`, with the worker stopped as `output_limit`; one character
-  more and the worker refuses the answer itself and serves the next request.
-  One text whose answer is exactly the limit is taken, and one character
-  more ends with the output limit's error; 30,000 numbers and a text of
-  1,000 characters that is the key of each of 200 rows end with it too.
+  long together as the limit, in a plain list and beside a NaN, and nine
+  characters short of it 3,000 levels down, where the answer's keys `ok`,
+  `log` and `data` are counted with them, are written and refused by the
+  exporter, `python pre-script output exceeds limit`, with the worker
+  stopped as `output_limit`; one character more and the worker refuses the
+  answer itself and serves the next request. One text whose answer is
+  exactly the limit is taken, and one character more ends with the output
+  limit's error; 30,000 numbers end with it too.
 - A label or a help text of 1,000 characters on 5,000 metrics, also with a
   NaN among their values, and a text 5,000 times under a key of the script's
   own, fail the scrape with `python transform failed: OverflowError: what the
@@ -18219,15 +18605,18 @@ Tests MUST show:
   under an output limit of 16 KiB, compared with the worker's answer as it
   was, every answer that was written within the limit is the same line byte
   for byte; one written longer than the limit is refused by the worker
-  exactly when the strings read back from that line are longer together than
-  the limit, and is the same line when they are not; and one that failed
-  fails with the same error, but that a few whose strings are over the limit
-  and which json refuses for a value fail for their strings instead. About
+  when the strings read back from that line are longer together than the
+  limit, and is the same line when they are not, unless they are longer
+  than the limit with its keys and the worker refuses it for those; and one
+  that failed fails with the same error, but that a few whose strings are
+  over the limit, alone or with their keys, and which json refuses for a
+  value fail for their strings instead. About
   960 the lines they were, 90 written past the limit as they were, 130
   refused for their strings, 30 failed as they did, per seed.
-- An answer of 100 metrics with a name of one letter, 2048 bytes allowed, is
+- An answer of 30 metrics with a name of one letter, 2048 bytes allowed, is
   refused by the exporter and the next run succeeds in another worker: its
-  strings are within the limit, so the worker does not refuse it itself.
+  strings and keys are within the limit, so the worker does not refuse it
+  itself.
 - The largest failure each stage of a probe can be made to end with is
   answered, logged and remembered in at most 2,000 bytes, end to end through
   `/probe`: a scraper's target of eight kilobytes that refuses the connection,
@@ -18494,9 +18883,9 @@ A probe parameter fills a label value (§ 42.10c):
 - A value with placeholders is measured at load with its defaults: under a
   limit of 8, `{{param_tenant}}`, `api-{{param_a:1234}}` and a default of 4
   bytes load, and a text or defaults of 9 to 11 bytes are refused saying so,
-  for `transform.labels` and for a rule's label; `truncate: true`,
-  `remove_labels` and a `value_map` of the rule's name spare them, and a
-  constant is measured and refused as it was.
+  for `transform.labels` and for a rule's label; `truncate: true` and
+  `remove_labels` spare them, a `value_map` of the rule's name that maps none
+  of them does not, and a constant is measured and refused as it was.
 - A placeholder in a key of `transform.labels`, a `rename_labels` target, a
   label's name and the `value` of a label beside an `expression` is refused,
   and the refusal names the label values among the places that are filled.
@@ -18873,9 +19262,9 @@ A script's error is cut by its worker to what the exporter shows of it (§ 16.7)
   characters with `python transform failed: OverflowError: what the script
   left in metrics is longer than limits.max_output_bytes (4096 bytes)
   written out, ...`, the line the worker as it was writes, serves a metric
-  after it, and is stopped as `output_limit` over 300 metrics that are
-  longer than the limit written out, `python transform output exceeds
-  limit`.
+  after it, and is stopped as `output_limit` over 60 metrics that are
+  longer than the limit written out, their keys and strings within it,
+  `python transform output exceeds limit`.
 - A script that raises a message of 48 MiB under a memory limit of 256 MiB
   fails with its exception, twice in one worker; written whole, the message
   was held five times and the interpreter ended of a `MemoryError`.
@@ -19007,6 +19396,1159 @@ The check of a static target file finds each collector by its name (§ 24.1a):
   setting a message; both report how many times the collectors of a
   configuration were gone through: once for the check, and for the search
   once, or not at all when no target sets a message.
+
+## 34.115 A collector's Python worker statistics after a reload, a size written with an exponent, the lines of a debug report, and the keys of a script's answer
+
+A collector's Python worker statistics follow a reload (§ 22.1a, § 24.1a):
+
+- A reload that removes a collector with Python drops the statistics of its
+  Python workers: the collector has no series left, served or exported over
+  OTLP, and the stop of its worker for the reload is counted for the pool as
+  a whole alone, which has lost nothing of what the collector counted.
+- The collector added again under the name has every series of its Python
+  workers from zero — the three states, the starts, the start failures, each
+  stop reason and each run outcome — created no earlier than its return, and
+  counts its first probe as a first, with a worker of its own.
+- A collector whose script a reload changed keeps its worker counters and
+  their creation times, the `reload` stop of its worker among them; one whose
+  definition changed otherwise keeps them and its idle worker; an unchanged
+  collector's worker series are line for line what they were.
+- Before any reload the families of the Python workers, per collector and of
+  the pool, are metric for metric what the exporter built before the
+  statistics followed a reload.
+- A probe that read its collector before a reload removed it, held when it
+  had read the configuration or while it waited for its target, runs its
+  script under no collector's name: nothing is kept under the name while the
+  collector is gone, the collector added again is at zero in every series
+  whether the probe went on before or after its return, and the run is
+  counted for the pool. A debug probe is held to the same.
+- A static target's scrape counts its script's run for its collector; a
+  reload that removes the collector and its target drops the worker series,
+  the collector added again starts from zero, a scrape that had read the
+  removed collector and runs when the collector is back is counted for the
+  pool alone, and the first scrape of the collector that is back counts as a
+  first.
+- While no statistics are dropped the pool counts, for every collector and
+  as a whole, what the pool counted before, after every event of generated
+  sequences: runs that take or start a worker, starts that fail, runs that
+  end well or badly for every stop reason, a worker's thousandth run, bursts
+  that leave surplus workers, idle workers that die, the idle timeout,
+  reloads that keep some scripts, and a changing `--python.max-workers`.
+- Probes and reloads together, and runs and dropped statistics together at
+  the pool, under the race detector: every script that ran is counted once
+  for the pool, the collector that stays has counted all of its own, the one
+  added again no more than those of its name, no worker is left counted as
+  starting or busy, and after one more removal and return the collector is
+  at zero in every series.
+- A worker of a collector a reload removed while its script ran is stopped
+  when the run ends, with the reason `reload`, for the pool alone, though the
+  next reload has brought the collector back with its script by then; the
+  collector added again is not given it and starts a worker of its own, and
+  that worker's stop — for the idle timeout, a script's timeout, a reload
+  that changes the script, its thousandth run, an eviction under
+  `--python.max-workers` or its own death — is counted for the collector
+  that started it, which has then stopped every worker it started.
+- A run of a removed collector that is still to begin when the collector is
+  back, counting in the collector's dropped statistics or in none, is not
+  given the idle worker the collector added again started: it starts one,
+  which is stopped when its script ends, well or by its timeout; the
+  collector added again shows its own worker idle throughout, and is given
+  it at its next run.
+- Under `--python.max-workers` the busy worker of a removed collector holds
+  its place: the first run of the collector added again waits in line, is
+  let through when the removed collector's run ends and its worker is
+  stopped, and starts and counts the collector's own worker; a run of the
+  removed collector that waits is let through by that worker going idle,
+  evicts it, and runs in a worker of its own that is stopped when it ends.
+- A run that is waiting for a worker under `--python.max-workers`, starting
+  its worker or running its script when its collector's statistics are
+  dropped — the pool called as the exporter calls it, the scripts in use
+  kept before the statistics are dropped, and the collector's script kept
+  again when it is back — counts under no name, the collector added again by
+  then or not: the worker's start, the worker busy, its stop for the reload
+  when the run ends and the outcome are counted for the pool as a whole,
+  which dropping the statistics did not change; no worker is left idle,
+  nothing is kept under the name, and the first run of the collector added
+  again starts a worker and counts from zero. A run that had given its
+  worker back and not yet said how it ended says it for the pool alone, and
+  the worker it gave back is stopped with the statistics.
+- A run that begins after its statistics were dropped, the second script of
+  a trip or a trip that read a collector removed before it took any, counts
+  its worker's start, the worker's stop for the reload when the run ends
+  well, a start that fails, a stop for a timeout and its outcome for the
+  pool alone: it leaves no worker idle for a script nothing uses any more,
+  where one was kept until the idle timeout.
+- A script's run counts in the statistics its trip carries with its script
+  timer, twice for a trip with two scripts, each of a trip that carries none
+  of a collector's in a worker it starts and leaves stopped, and under its
+  collector's name when the trip carries none, or statistics of another
+  pool; a run that counts under its collector's name is not given the idle
+  worker of the script that counts in the statistics another trip carried.
+- A worker idle when its collector's statistics are dropped is stopped for
+  the reload under no collector's name: by the reload itself, before the
+  statistics are dropped, its stop then shown under no collector, or with
+  the statistics where the reload had left it; the idle worker of a
+  collector that stays is left as it is, and the collector added again is
+  given no worker of the removed one and starts its own.
+- Over 60 generated sequences of 120 events — trips that take their
+  collector's statistics and run a script, the one in use or the one a
+  reload replaced; trips that run a next script, their collector removed
+  since or not; trips of a collector removed before they took statistics;
+  scripts ending well, badly for every stop reason or at a worker's
+  thousandth run; starts that fail; a configuration put in force without a
+  collector, with it again or with another script; the statistics of the
+  collectors that are gone dropped at once or some events later; the idle
+  timeout; idle workers dying; a changing `--python.max-workers`; bursts
+  that leave surplus workers — after every event the workers each collector
+  has started less those stopped under its name are its idle and busy ones
+  and no state is below zero, the same holds for the pool as a whole, no
+  counter of which goes back, no worker is idle whose statistics are
+  dropped, the pool holds a place for exactly its idle and busy workers and
+  keeps statistics for no more collectors than there are; and when every
+  run has ended and a reload has removed every script, every collector has
+  stopped every worker it started.
+- Where no worker outlives its collector — a collector added again only when
+  no script of the removed one still runs, and a removed collector beginning
+  no script — the pool counts as a whole, after every event of 40 generated
+  sequences of 250, what the pool counted before a worker belonged to its
+  statistics, and for every collector no reload removed what that pool
+  counted for it: runs taking an idle worker or starting one, starts that
+  fail, runs ending well, at a worker's thousandth run or badly for every
+  stop reason, the idle timeout, a changing `--python.max-workers` with its
+  evictions, and reloads that change a script, remove a collector and add
+  one again.
+- A reader finds a collector's worker statistics without making any, and
+  reads from them what they had counted once a reload has dropped them, not
+  what the collector added again has counted since; no statistics, and
+  those of another pool, have counted nothing.
+- With `python3` itself: a probe waiting for its target while a reload
+  removes its collector, going on when the next reload has brought the
+  collector back or while it is still gone, runs its script in a worker
+  counted for the pool alone and stopped for the reload when the script
+  ends, none left idle; the collector added again is at zero in every
+  series, its first probe starts a worker of its own, shown idle, and a
+  reload that changes its script stops that worker under its name.
+- A debug scrape of a static target that a reload comes into while it reads
+  the target's credential file, the reload leaving its collector as it is,
+  counts its script's run for the collector, as one no reload came into
+  does; one whose collector was removed and added again meanwhile counts it
+  for the pool alone, the collector added again at zero.
+- A debug probe and the debug scrape of a static target count their scripts'
+  runs in the Python worker series of the collector that is there, and are
+  counted as no scrape of it.
+- One answer of the self-metrics whose reading of the collectors' statistics
+  is followed by a reload that removes a collector, one that adds it again
+  and two probes of it, shows the collector it read with its scrapes, its
+  creation time and no worker counts, not the two runs of the collector
+  added again with the creation time of the one removed; the next answer
+  shows those two, created later.
+- The scripts of a directory probe count in the statistics of their trip:
+  three files read by a probe that read its collector before a reload
+  removed it, the collector back by then, are three runs counted for the
+  pool alone, nothing kept under the name, and the first probe of the
+  collector added again counts its own three.
+- The pool keeps statistics for the collectors there are: over 200 renames
+  of a collector at the pool, and over 10 reloads that rename a probed
+  collector, it keeps those of one collector and of none of the former
+  names, asking about a former name keeps nothing for it, and every run
+  stays counted for the pool, whose counters never decrease.
+
+A size written as a whole number in any way a number is written (§ 5.0a):
+
+- A size written as a YAML number is the whole number of bytes it equals
+  however the number is written: `1e3`, `1E3`, `1e+3` and `+1e3` are 1000,
+  `1.0`, `1.` and `1.000` are 1, `2.5e2` and `2.50e2` are 250, `0.5e1` and
+  `.5e1` are 5, `10e-1` is 1, `0.0`, `0e9` and `-0.0` are 0, a number with
+  an underscore is the number without it, and a `!!float` tag says the same
+  as the spelling; `1000`, `+1000`, `1_000`, `0x10`, `0o17` and a size with
+  a unit are what they were.
+- A whole number of bytes is read by its digits and not as the float64
+  nearest to it: `9007199254740993.0` and `9.007199254740993e15` are
+  2^53 + 1, `9223372036854775807.0`, `9.223372036854775807e18` and
+  `92233720368547758.07e2` are 2^63 - 1; `9223372036854775808.0`, `1e19`
+  and `1e300` are refused, as are `9223372036854775807.5`,
+  `1.00000000000000000001` and `1e-400`, whose fraction a float64 does not
+  hold; an exponent of twenty digits under a `!!float` tag is refused
+  without the number being written out, and `0e99999999999999999999` is 0.
+- Each of the five size keys — `request.max_response_bytes`,
+  `limits.max_response_bytes`, `limits.max_output_bytes`,
+  `limits.max_script_memory` and `request.max_total_bytes` — loads `1e8`,
+  `1E8`, `1e+8`, `+1e8`, `100000000.0`, `100000000.`, `2.5e8`, `.5e9`,
+  `1000000000e-1` and `1_0e7` as the number of bytes it equals, in the
+  configuration and in a collector file, and `limits.max_metrics` beside
+  them loads the same numbers as it did; `0.0`, `0e0` and `-0.0` are the
+  default, as `0` is.
+- At each of the five size keys a fraction, a negative number, a number of
+  2^63 or more, infinity and not-a-number, and `'1e8'`, `"1e8"`,
+  `'100000000.0'` and `"1.0"` in quotes, are refused once each, at the
+  key's line, with the size's message and with no second message of the
+  check of whole numbers.
+- Under `--config.expand-env` an unquoted `${NAME}` whose value is `1e6`,
+  `1000000.0` or `2.5e6` at `max_response_bytes` is that number of bytes,
+  one whose value is `1.5` is refused as no whole number of bytes, and the
+  quoted `"${NAME}"` of `1e6` or `1000000.0` is refused as text.
+- `--dry-run` passes a configuration whose `max_response_bytes` and
+  `limits.max_output_bytes` are `1e6`, `1000000.0` or `2.5e6`, and fails
+  one where they are `1e-1`, naming both lines.
+- Each size key's row of the agreement tables puts the committed schema
+  and the loader, for the configuration and for a collector file, through
+  37 ways a number of bytes is written: both take the whole numbers
+  with an exponent, a fraction of zero or a sign, `9007199254740993.0` and
+  `9.223372036854775807e18`; both refuse a fraction, a negative number,
+  `.inf`, `.nan` and the same numbers in quotes; and `1e19`,
+  `9223372036854775808`, `9223372036854775808.0`, `8388608TiB` and
+  `100000000.00000000000000000001` pass the schema and are refused by the
+  loader with their message. A test finds the size keys of the three
+  schemas by their pattern — five in the configuration and in a collector
+  file, none in the target file — and fails for one whose row is not marked.
+- The committed schema and the loader agree on `limits.max_response_bytes`
+  written `1e3`, `1.0`, `1.`, `2.5e2`, `0.5e1`, `10e-1`, `-0.0`, `1_000.0`
+  and `9.223372036854775807e18`, which both take, and `1e-1`, `1.5e0`,
+  `-1e3`, `.inf`, `.nan`, `1e400` and `"1e3"`, `'1.'`, `!!str 1e3`, which
+  both refuse; a number of 2^63 or more (`9223372036854775808`, `1e19`,
+  `1e300`) and a fraction past the digits a float64 holds
+  (`1.00000000000000000001`, `9007199254740992.5`, `1e-400`) pass the
+  schema and are refused by the loader with their message.
+- The schema validator of the repository tests takes a number without a
+  fraction as an integer however large, `1e19` among them, and no infinity.
+- A whole number that no size holds, written as a YAML number with a point
+  or an exponent, is refused for what it is, with the message of the same
+  number written as an integer and shown as it is written:
+  `9223372036854775808.0`, `9.223372036854775808e18`, `9.3e18`, `1e19`,
+  `+1e19`, `.1e20`, `1e300`, `1_0e18` and `+99999999999999999999` as too
+  large (`size 1e19 is too large; a size is under 8EiB, which is 2^63
+  bytes`), and `-1e3`, `-1.0`, `-1.`, `-.5e1`, `-10e-1`, `-1e19`,
+  `-9223372036854775808.0` and `-99999999999999999999` as negative (`size
+  -1e3 is negative; a size is a number of bytes from 0, or a number with a
+  unit such as 10MiB`); each was refused as "not a number of bytes or a
+  number with a unit", and `9223372036854775808.0` as "not a whole number
+  of bytes". The message of
+  `-1e3`, `-1.0`, `1e19` and `9223372036854775808.0` is that of `-1000`,
+  `-1`, `10000000000000000000` and `9223372036854775808` but for the number
+  shown.
+- Under a `!!float` tag an exponent no number of bytes has says which way
+  the number is out of the range without the number being written out:
+  `1e9223372036854775807`, `10e9223372036854775807`, `1e400` and
+  `1e99999999999999999999` are too large, `-1e99999999999999999999` is
+  negative, and `1e-99999999999999999999` and `-10e-9223372036854775808`
+  are refused as no number of bytes, as they were.
+- What is no whole number keeps the message it had: `1.5`, `1000.001`,
+  `1.00000000000000000001`, `9223372036854775808.5` and
+  `99999999999999999999.5` as no whole number of bytes; `1e-1`, `1.5e0`,
+  `1e-400`, `92233720368547758085e-1`, the negative fractions `-1.5`,
+  `-1e-1` and `-1e-400`, `.inf`, `-.inf`, `.nan`, `0x1p3`, and `1e400` and
+  `-1e400`, which are text to YAML, as no number of bytes or number with a
+  unit. So do the integers and the text: `-1` is negative and
+  `9223372036854775808` too large, without quotes; `99999999999999999999`
+  and `!!float 9223372036854775808`, digits alone, are too large in quotes
+  as before; `'-1e3'`, `'1e19'` and `!!str 1e19` are no number of bytes and
+  `'9223372036854775808.0'` no whole number of bytes; `!!int 1e19` and
+  `!!int -1e3` are refused with the integer's error. `-0.0`, `-0e3`, `-0.`,
+  `-.0`, `-0e-3` and `-0` are 0.
+- Over some 29,000 generated spellings — three signs, fourteen whole
+  parts, seven fractions, eleven exponents and three units, each plain,
+  quoted, under `!!float` and under `!!str` — every one the reading as it
+  was took as a size is the same size, and every one it refused is refused
+  in the same words unless it is tagged `!!float` and is, by the arithmetic
+  of numbers of any length, a whole number: from 0 up to 2^63 it is that
+  size; under 0 it is refused as negative; and of 2^63 or more it is
+  refused as too large, unless it is digits alone, which was refused as
+  too large already and is in the same words. No number whose message
+  changed was refused as negative or as too large before, and each of the
+  five kinds is held to a floor.
+- At each of the five size keys `-1e8`, `-1.0`, `-100000000.0` and `-1e19`
+  are refused as negative and `1e19`, `9.223372036854775808e18`,
+  `9223372036854775808.0` and `1e300` as too large, once each at the key's
+  line; `1.5`, `1e-1`, `-1.5`, `-1e-1`, `.inf` and `.nan` are refused as
+  they were, and `'-1e8'`, `"1e19"` and `'9223372036854775808.0'` in quotes
+  as the text they are.
+- The agreement tables hold each size key to `1e19` and
+  `9223372036854775808.0` passing the schema and being refused by the
+  loader as too large, and the committed schema and the loader both refuse
+  `limits.max_response_bytes` written `-1`, `-1e3`, `-1.0` and `-1e19`, the
+  loader as negative; `9.223372036854775808e18`, `1e19` and `1e300` pass
+  the schema and are refused by the loader as too large.
+
+A debug report bounds every line but the body's (§ 42.17):
+
+- What a debug report shows of a text longer than its bound ends where a
+  failure's text does: of 4,000 generated texts of characters of one to four
+  bytes and of bytes that are no UTF-8 (800 under the race detector), each one
+  longer than its bound is cut, as a string and as bytes, at the bound or up
+  to three bytes before it, exactly as `model.HeadOf` cuts it. A bound that
+  falls after any of the first nine bytes of a `<redacted>` shows it whole and
+  then the length, one just before or just after it is left where it is, and
+  `<redirect>` is cut at the bound.
+- A report's lines are cut as § 42.17 states the rule, by a second reading of
+  it written in the test: a line of exactly 8,192 bytes stays, one of 8,193
+  is its first 8,192 and `... (8193 bytes)`, with or without its new-line,
+  empty lines stay, and a character of two, three or four bytes across the
+  bound, with one, two or three of its bytes before it, is left out whole;
+  lines written before the ones looked at are not looked at again.
+- The report of a trip within the report's bounds is what it was, byte for
+  byte, against the writer as it was before any bound, copied into the test:
+  300 generated responses (30 under the race detector) of up to a hundred
+  headers with values of up to 1,024 bytes, some under credential names and
+  some given twice, metric names of up to 200 bytes, bodies around and past
+  64 KiB with lines longer than 8,192 bytes, a failing status, a gRPC
+  status, an answer without a status and a directory with files read,
+  failed and skipped; and a report with a first line of exactly 8,192
+  bytes, a hundred headers, a value of 1,024 bytes and a name of 200.
+- The debug reports of the nine examples, fourteen probes of their collectors
+  at their stand-ins, are what they were, byte for byte.
+- A line of a report longer than 8,192 bytes is cut whatever wrote it: the
+  first line with a target of 8 kB, a header with a name of 12 kB, a
+  directory's line with its path, a file's with its name or its error, a
+  skipped file's, the stage that names the directory, the three log lines,
+  which name the target, and the line of 120 rules that gave no series; the
+  report is the old writer's with exactly those lines cut and nothing else
+  changed, and a file name whose `я` is across the bound is shown up to the
+  character before it.
+- Of 5,001 header values the report lists the first hundred by name, both
+  values of a name counted, and `... (5001 headers)`, in under 8 kB where it
+  had 5,001 lines; a hundred are listed as they were and a hundred and one
+  as a hundred and `... (101 headers)`. A value of a megabyte (64 kB under
+  the race detector) is shown by its first 1,024 bytes and its length, one
+  of two-byte characters with the character across the bound left out, one
+  of 1,024 bytes whole, and one under `X-Api-Key` as `<redacted>` with
+  nothing of it shown.
+- A target that sends a header value of 1,046,528 bytes, as long as a
+  response's headers may be, is reported with its first 1,024 bytes and
+  `... (1046528 bytes)`, and one that sends 5,000 headers (1,000 under the
+  race detector) with a hundred of them and the number a client counts.
+- A metric name of a megabyte is listed in the Transform section by its
+  first 200 bytes, its length and its count, `...: 1`, the same 200 bytes
+  the validation's failure quotes in the line of what a probe would have
+  answered; a name of 200 bytes is listed whole with its count of 2.
+- A redirect whose `Location` is 900 kB (64 kB under the race detector) is
+  listed as `2. GET <first 512 bytes>... (N bytes) (redirect) -> 200 OK`,
+  and, when it leads to an address that refuses, with `-> error:` after the
+  same 512 bytes the failure quotes; the token of its query is masked before
+  the cut, and the report is under 8 kB where it was over the `Location`.
+- A collector whose limits allow a metric name and a label value of a
+  megabyte answers a probe with them whole; its debug report shows the three
+  long lines of the exposition by their first 8,192 bytes and their lengths
+  under `Lines longer than 8192 bytes are cut below (3 of them), so this is
+  not valid exposition as it stands; a probe serves them whole.`, the lines
+  within the bound and the heading as they were, and the section no longer
+  reads as exposition. The section was the probe's answer to the byte
+  before, and above it only the name's line of the Transform section
+  differs. The probe answers the same bytes after the debug probe, from the
+  cache, which the debug probe neither read nor filled: the target is asked
+  twice in all.
+- No cut shows what a report withholds: with the token of a request's query
+  before the 512 bytes of its URL, across them at every byte and after
+  them, the URL listed ends before the name, with `<redacted>` whole or
+  after it, and the report never has the token nor a part of `<redacted>`
+  before a cut; a first line whose target's token is across byte 8,192, at
+  each of nine bytes, ends `token=<redacted>... (N bytes)`; `Authorization`
+  and a `Set-Cookie` of 4 kB are `<redacted>`.
+- A body of 64 KiB and a byte in one line is shown by its first 64 KiB in
+  one line and `... cut at 65536 bytes`, and a body with lines of 24 kB and
+  of 8,195 bytes with every line whole, each as the report showed it before.
+- A fetch that fails with an error of a megabyte is reported in the line of
+  what a probe would have answered, the stage's line and the log's line by
+  the failure's own 2,000 bytes ending with the error's length, none cut
+  again by the line's bound, as the report was before.
+- What a script printed, 5,000 characters, is in the report in one log line
+  with the first 4,096 and `... (905 more characters)`, as it was.
+- Writing the report of a metric name of 10 MiB (1 MiB under the race
+  detector), and of a header value of 1 MiB, allocates at most 512 kB, where
+  it allocated more than twice the name or the value.
+- A static target's debug report shows a header value of a megabyte by its
+  first 1,024 bytes and its length and a header line of 12 kB by its first
+  8,192, with the series the scrape would have published as they were.
+- The collectors page's form, with its `debug` switch on, is answered with a
+  report whose second line is `Took ... A probe would have answered 200 with
+  1 series.` and whose megabyte of a header value is shown by its first
+  1,024 bytes.
+- The report of a directory at the end of a path of 4 kB, with two files
+  read and three skipped, lists the directory, the files and the skipped
+  files as it did, and differs from what it was in one line alone: the log's
+  line of the skipped files, which names the path twice, is shown by its
+  first 8,192 bytes and its length.
+- A gRPC status the collector accepts whose message is a megabyte (64 kB
+  under the race detector) is reported with `gRPC status 9`, `Grpc-Status:
+  9` and `Grpc-Message:` by its first 1,024 bytes and its length, where the
+  report had the message in one line.
+
+The keys of a script's answer are among what is measured before it is written (§ 16.7):
+
+- `data` whose 2,000 rows are each keyed by one text of 10,000 characters,
+  20 MB written (300 rows and 3 MB under the race detector), fails under an
+  output limit of 128 KiB as the script's failure, `python pre-script
+  failed: OverflowError: what the script left in data is longer than
+  limits.max_output_bytes (131072 bytes) written out, ...`: the rows of a
+  list and of a dict, the cells of every row, beside a NaN, at the end of
+  3,000 levels, rows that are dicts of the script's own type or
+  OrderedDicts, a key beside a number and `None`, and a key that is no
+  ASCII; the worker holds 0.8 to 1.3 MiB for each (2 or 3 MiB allowed),
+  what its script built and its copy of that, where it made the 20 MB,
+  twice; one worker refuses all nine, counted as `script_error`, and answers
+  the next request. Each ended with `python pre-script output exceeds
+  limit`, or with a `MemoryError` under `limits.max_script_memory`, before
+  the worker looked at keys.
+- The worker refuses for its keys only past the limit: rows keyed by texts
+  of 1,000 characters whose keys are, with the answer's own `ok`, `log` and
+  `data`, exactly the limit of 128 KiB, in a plain list, beside a NaN and
+  3,000 levels down, are written and refused by the exporter, `python
+  pre-script output exceeds limit`, with the worker stopped as
+  `output_limit`; one character more and the worker refuses the answer
+  itself and serves the next request. Three rows keyed by 100,000 characters
+  each before 500 rows of short keys, which the look that begins at the
+  fourth value of a level does not pass, and 1,000 rows keyed by a number,
+  each with a number of 151 digits, neither of which counts, end with the
+  output limit's error as before; 2,000 rows of short keys (200 under the
+  race detector) are the rows they were.
+- A label whose name is 1,000 characters on 5,000 metrics, 5 MB written (500
+  metrics under the race detector), fails the scrape with `python transform
+  failed: OverflowError: what the script left in metrics is longer than
+  limits.max_output_bytes (131072 bytes) written out, ...`, from one worker
+  that stays: as `metric()` makes them, with a NaN among their values,
+  beside a list nested 3,000 deep under a key of the script's own, with the
+  text as a key of the script's own in every metric, and with one dict of
+  labels held by every metric; 50 such metrics are their 50 series of two
+  labels.
+- What is a dict, or a string, only by what it says its class is, is written
+  wherever it stands: a `weakref.proxy` of a dict of the script's own class,
+  an object whose `__class__` is the class of the dict it stands for, and a
+  dict keyed by a number of a class whose `__class__` is `str`, or raises
+  when it is asked, left after 0 to 4 and 61 to 65 lists, dicts or numbers,
+  after one list and numbers, and after dicts with a NaN behind it (after
+  1, 3, 62 and 64 of each under the race detector), 200 answers from one
+  worker, are each the items they were with the mapping as its one key `a`
+  and the number as the key `"5"`. The worker that asked `isinstance` and
+  then `dict.keys` failed 38 of them with a `TypeError`: the mapping that
+  was the fourth or the sixty-fifth list or dict of an answer, and the dict
+  keyed by such a number where it stood fourth.
+- The same answer ends the same way whatever the interpreter's allocator
+  holds: seventeen dicts of the script's own class whose `items()` makes
+  their rows when asked, a seventh of the rows keyed by 4,000 characters,
+  560 kB written under a limit of 128 KiB, left after 0 to 400 small dicts
+  were made and half of them dropped, by eights (by forties under the race
+  detector), are refused by one worker each of the 51 times with the
+  `OverflowError` of an answer that is too long. The worker that counted
+  the lists and dicts it had not met by a set of their addresses refused
+  some of the 51 and wrote the others, which the exporter refused, stopping
+  a worker for each: 4 and 47 in one run.
+- A key that is a string of another class counts wherever the worker counts
+  keys: 2,000 rows (200 under the race detector) keyed by 10,000
+  characters, the key a `str`, a `str` of the script's own class, one of a
+  class whose `__len__` says 1, or a member of an enum of strings, in a
+  plain list, beside a NaN and 3,000 levels down, are refused by one worker
+  with the `OverflowError` of an answer that is too long, all twelve, and
+  twelve such rows are the rows they were in each. What writes an answer
+  nested too deep for the worker's copy counted a key only of the class
+  `str` itself, and wrote the 20 MB of the other three.
+- Answers within the limit by their keys are the lines they were: of 1,200
+  generated answers for each of two seeds (200 for one under the race
+  detector) and a table of 154 whose end is known, under an output limit of
+  16 KiB, with keys that are empty, short, no ASCII, full of what JSON
+  escapes, numbers, `None`, strings of a class of the script's own, one of
+  them a class that says its length is 2^40, and texts of up to 2,500
+  characters, in one dict and in many, compared with the worker's answer as
+  it was before it looked at keys, every answer that was written within the
+  limit is the same line byte for byte; one written longer than the limit
+  is refused by the worker only when the keys and strings read back from
+  that line are longer together than the limit and, for `data`, only when
+  the keys that are strings and the strings the script left are, counted as
+  often as they are written, and is otherwise the same line; and one that
+  failed fails with the same error, but that a few whose keys and strings
+  are over the limit fail for those instead. Of the table, rows whose keys
+  are one character under the limit and at it are the lines they were and
+  one character over it are refused, in a plain list, in a tuple, beside a
+  NaN and 3,000 levels down, and so are 89 rows keyed alike whose keys are
+  one character over the limit only with the answer's own `ok`, `log` and
+  `data`, where 131 such rows exactly at it are the line they were; 200
+  rows and 100 metrics of one key of 700 characters, one dict held 200
+  times, and one dict of labels held by 100 metrics are refused; rows of
+  numbers, of the empty key and of short keys are the lines they were; rows
+  three times the limit are refused, and short answers are as they were,
+  nested 300, 700 and 1,500 deep and at each of the 32 depths around half
+  the recursion limit and the recursion limit (8 of them under the race
+  detector), where the worker's look, its copy and what writes without them
+  take over from one another; and 200 rows keyed by 700 characters of a
+  class of the script's own, 3,000 levels down, are refused, where 200
+  keyed by four characters of a class that says its length is 2^40 are the
+  line they were. About 950 the lines they were, 100 written past the limit
+  as they were, 20 of those over it by keys the look did not pass, 190
+  refused for their keys and 110 failed as they did, for the first seed.
+- The same table holds where the look at keys passes and where it does not,
+  under the limit of 16 KiB. Refused by the worker: one key of 32,768
+  characters in the fourth of 104 rows, in a plain list and beside a NaN;
+  a key of 700 characters in the fourth of the 61 values of each of 40
+  rows; and one dict of 762 keys, 32,766 characters together, that is the
+  fourth value of its level, or the fourth dict the worker's copy finishes.
+  Written as they were, longer than the limit: keys of 32,768 characters in
+  the first three of 103 rows, plain and beside a NaN, and in three rows
+  that are all there are; the key of 700 characters in the first of the 61
+  values of each of 40 rows, of which the look passes the fourth value of
+  each row and no other; and the dict of 762 keys as the third value of
+  its level, or as the second dict a copy finishes. And one dict of 76
+  keys, 3,268 characters, as the fourth value of four is taken four times,
+  13,072, and is the line it was without its keys being added up with the
+  rest, as it is where it is the fourth of six dicts of a copy and the keys
+  of all six are.
+- The look at keys costs an answer within the limit no more than a
+  twentieth, under a limit of 1 MiB: for 2,000 metrics as `metric()` makes
+  them and 2,000 rows of seven short keys (500 of each under the race
+  detector) the worker makes 0.8 % and 0.7 % more calls, of its own
+  functions and of the interpreter's, than it did before it looked at keys,
+  adds up the keys of 66 and 33 dicts it looks at, and adds up the keys of
+  all dicts never; for the same metrics with a NaN among their values,
+  which it copies, 5.8 % more, one for each dict of the copy, a tenth being
+  allowed, the keys of 99 dicts, and never those of all. Each must add up
+  the keys of one dict for every hundred metrics or rows at least, and for
+  every twenty at most (ten where it looked through the metrics before it
+  copied them). And where what the look passes is unlike the rest: one dict
+  of 10,000 keys, 90,000 characters, as the fourth value of four costs 6
+  calls more, the keys of that one dict added up and those of all dicts
+  never; one key of 20,000 characters in the fourth of 2,000 rows, and a
+  label named by 20,000 characters on the first of 2,000 metrics, cost 0.8
+  % and 0.9 % more calls, and the same rows beside a NaN 3.9 %, with the
+  keys of all dicts added up exactly once for each. The worker that took
+  each dict it looked at for sixty-one added up the keys of all dicts for
+  the one wide dict too, and made 43 % and 46 % more calls for the rows and
+  the metrics with one long key, four for every dict of the answer.
+- The oracle of the answers within the limit by their strings takes a
+  refusal for keys by its own count alone: where an answer that failed
+  before fails with the `OverflowError` of an answer that is too long, its
+  strings are longer than the limit, or its strings and the keys that are
+  strings are, as the script left them and with the answer's own `ok`, `log`
+  and `data` or `metrics`, each counted by the test's script as often as it
+  is there; an answer for which that count was not made is no longer taken
+  as refused rightly.
+
+## 34.116 A metric's name in a log line, the least output limit, and a static target and its collector found by name
+
+A metric's name in a log line's attribute is shown by its start (§ 6.1a, § 25.1):
+
+- The warning of repaired UTF-8 names its first metric as it did, the line
+  the same bytes as JSON and as text, for a response and for a directory's
+  file, while the name is 200 bytes or fewer: ordinary names, an empty one,
+  names with spaces, quotes and bytes that are no UTF-8, names of exactly 200
+  bytes and 400 generated ones, each against the line that named every name
+  whole. A name of 201 bytes is logged as its first 200 and `... (201
+  bytes)`; one with a character of two, three or four bytes across byte 200
+  by the 199, 198 or 197 bytes before the character; and one of a megabyte as
+  `nnn...n... (1048576 bytes)`, in a line under 700 bytes that was over a
+  megabyte.
+- The warning of a first metric of a megabyte is logged in at most 16 KiB
+  allocated, where it took over a megabyte. The failure log remembers it
+  under the collector, the address and the file, in under 200 bytes and with
+  no text, so warnings of other first metrics — longer by a byte, of another
+  letter, short — are the same failure again, logged at debug level as
+  repeats with each its own `first_metric`, and the output that is valid
+  again recovers it once with all four scrapes counted.
+- A target whose exposition names a metric in a megabyte with a label value
+  that is no UTF-8 is warned of with `first_metric` as the name's first 200
+  bytes and `... (1048576 bytes)` by a probe, by a static target's scrape and
+  in the logs of a debug probe's report, whose line ends
+  `first_metric="nnn...n... (1048576 bytes)"` in under 700 bytes and is not
+  one cut at the report's 8,192; the probe and the scrape each log under
+  2,000 bytes, and the failure log keeps the probe's two failures, the
+  warning and the name's refusal, in under 2,000.
+- `model.ShownName` gives a name of 200 bytes or fewer as the very string
+  and a longer one as its first 200 bytes, or the one to three fewer that
+  end between two characters, and its length, cut at byte 200 where the
+  bytes there are no UTF-8: for 4,000 generated names of some 150 to 270
+  bytes (800 under the race detector) of characters of one to four bytes and of
+  invalid bytes, what it shows is what the error of the name's refusal
+  quotes, to the letter, and a name that is UTF-8 stays UTF-8. Of a name of
+  a megabyte it allocates no more than 512 bytes.
+- A static target's metric left out of the static targets endpoint is named
+  whole in `metric` while its name is 200 bytes or fewer, and one over 100
+  KiB by its first 200 bytes and its length, as is the family in `clashes_with`
+  and the `metric` of the line that says it is back; two such names that
+  differ in their last byte are two clashes, logged once each with the same
+  `metric`, remembered each under its whole name, not logged again on the
+  next read, and each said to be back once.
+- A metric name an OTLP export had as two kinds is named whole in `metric`
+  while it is 200 bytes or fewer, and one over 100 KiB by its first 200
+  bytes and its length; two such names that differ in their last byte are two
+  clashes, logged once each, remembered each under its whole name, and
+  logged only as repeats at debug level on the next export.
+
+An output limit under the answer of a Python script that emits no metric is refused at the load (§ 16.7, § 24.2, § 24.3):
+
+- `limits.max_output_bytes: 37` fails to load with exactly `collector "a"
+  limits.max_output_bytes is 37, and a Python script that emits no metric
+  answers in 38 bytes, so no transform's script could answer within it; set
+  at least 38, or leave it out, or 0, for the default, 1MiB`, where it once
+  loaded; so does every way a smaller size is written, each named by the
+  bytes it comes to: `1`, `26`, `2.6e1`, `26.0`, `+26`, `0x1a`, `'26'`,
+  `26B`, `26 b`, `0.02KiB` (20), `0.000026MB`, `27`, `3.7e1`, `37.0`,
+  `"37"`, `37B` and `37.9B`.
+- `38`, `3.8e1`, `38.0`, `'38'`, `38B`, `38.9B`, `0.04KiB`, `39`, `1KiB` and
+  `64MiB` load as the bytes they are, and `0`, `0.0`, `0e0`, `'0'`, `0B`,
+  `0.0001KiB` and the key left out as the default, 1 MiB.
+- Three collectors with `max_output_bytes: 30` — a `python` transform, a
+  `jq` transform with a `pre_script`, and a `regex` transform with no
+  script — are refused in one load, each by its name, and load with 38; a
+  collector built without a file is refused by the validation at 37 and
+  kept at 38.
+- In a collector file the refusal names the file (`collector file …:
+  collector "pay" limits.max_output_bytes is 20, …`, of `20B`), and a limit
+  a collector takes from a YAML anchor is refused of that collector; 38 from
+  the anchor loads beside the anchor's other limit.
+- A reload that sets `max_output_bytes: 37` is rejected with the message,
+  its one log line names the file, and the configuration in force stays the
+  one that was, with its limit of 1 MiB; a reload that sets 38 goes through.
+- `--dry-run` exits 1 for `max_output_bytes` of `26`, `37` and `20B` in a
+  `python` collector, its `config` check failed with the one message, and
+  exits 0 with 38.
+- The check of a collector's limits says what the check as it was says of
+  every output limit from -3 to 45, 1 KiB, 1 MiB, 64 MiB, 2^31 - 1, 2^63 - 1
+  and -2^63, beside ten sets of the other limits — left out, set, and each
+  negative — but for the 74 that passed with an output limit from 1 to 37,
+  which are now refused with the message; a negative limit and a negative
+  timeout are still refused first, in their own words.
+- The schemas of the configuration and of a collector file describe
+  `limits.max_output_bytes` as a size that is `0` or at least the constant
+  of the loader (`anyOf` of `const: 0` and `minimum: 38`), its description
+  saying 38 bytes and the default, and the other four sizes with what every
+  size is held to and no more.
+- The committed schema and the loader agree on `limits.max_output_bytes`:
+  both take `0`, `0.0`, `0e0`, `-0`, `-0.0`, `0x0`, `38`, `39`, `3.8e1`,
+  `38.0`, `38.`, `+38`, `0x26`, `380e-1`, `1e2`, `1024`, `1048576`,
+  `4611686018427387904`, `'38'`, `38B`, `38 B`, `38.9B`, `0.04KiB`, `1k`,
+  `64MiB`, and `'0'`, `0B`, `0.9B` and `0.0001KiB`, which come to no byte
+  and are the default; both refuse, the loader with its message, `1`, `+1`,
+  `1.0`, `1e0`, `10`, `1e1`, `26`, `26.0`, `2.6e1`, `0x1a`, `27`, `37`,
+  `37.0`, `3.7e1`, `370e-1`, `0x25`, `+37` and `3_7`; `'1'`, `"26"`, `'37'`,
+  `1B`, `20B`, `26B`, `26 b`, `37B`, `37.9B`, `1.5B`, `0.01KiB`, `0.02KiB`
+  and `0.000026MB` pass the schema, to which they are text, and are refused
+  by the loader with its message; and `-1`, `-38`, `37.5`, `38.5`,
+  `3.75e1`, `lots`, `'3.8e1'`, `'38.0'`, `38 bytes`, `[38]` and `true` are
+  refused by both as no size.
+- The spellings of a size that the committed schema and the loader were
+  compared on at `limits.max_output_bytes`, the small ones among them, are
+  compared at `limits.max_response_bytes`, a size with no least, with the
+  verdicts they had.
+- A real worker answers a transform's script of `pass` with `{"ok": true,
+  "log": "", "metrics": []}`, and pre-scripts that leave `None`, `{}`,
+  `[]`, `''` and `0` in `data` with `{"ok": true, "log": "", "data":
+  null}` and its shorter likes, byte for byte the lines the constant is
+  worked out from; the longest of them, of the line a worker is ready with
+  and of the line it takes a request with is 38 bytes, which is the
+  constant; and a worker starts under the 27 bytes of the line it is ready
+  with and not under 26 (`the interpreter did not start: python output
+  exceeds limit`).
+- Under 38 bytes for an answer a real worker runs a transform's script that
+  emits nothing and pre-scripts that leave `None`, `{}` and `0`; under 37 the
+  transform's script fails with `python transform output exceeds limit`
+  while the pre-script that leaves `None` still answers, under 36 that one
+  fails with `python pre-script output exceeds limit`, and under 26 the
+  script fails with `python transform failed: the interpreter did not
+  start: python output exceeds limit`: the worker and the pool hold no
+  least.
+- A stand-in for the interpreter that writes the same three lines is read
+  under limits of 38, 39 and 9,728 bytes, its answer of no metric taken;
+  under 37 and under 27 its answer is `python transform output exceeds
+  limit`, and under 26 and 17 it did not start: the exporter measures a
+  line without its line break, as the constant counts it.
+
+A static target and its collector are found by name (§ 24.1a):
+
+- A static target told to be in force by its name is the one going through
+  the targets in force found (§ 24.1a): over 200 generated static target
+  files of no target to 12, given to the server as they are, some of them
+  no file at all, with targets that share a name, names that differ only by
+  case or by blanks and the empty name, and for every name of theirs and two
+  no file has, a scrape that ends is told what the former lookup, kept
+  beside the test, tells, and a read of the static targets endpoint that
+  names targets is given the same names or refused with the same words,
+  over 12 generated queries each time — with the file in force followed,
+  with another file in force that nothing has followed yet, which is then
+  the one asked about, with that one followed, and for a server that
+  follows nothing. While the file in force is the one followed its targets
+  are gone through for neither, where they were gone through once for each
+  ask; for a file not followed they are gone through once for each, as they
+  were; and the following of a file with targets goes through them once, to
+  note their names. Under the race detector it is 60 files.
+- A static target is told to be in force through reloads as it was: over a
+  run of reloads of both files, of the static target file alone, of the
+  configuration alone, of the same files read again and of files that are
+  refused, every name a file of the run has, one none has and the empty one
+  are told in force exactly when going through the targets in force finds
+  them — when the reload has read and checked its files and they are not
+  yet in force, when they are in force and the reload has not followed them
+  yet, where the targets of another file are gone through as they were, and
+  when the reload is done, where they are not gone through. Every scrape
+  that read its target before one of the reloads, however many reloads ago,
+  and ends when the files are in force and not yet followed, or once they
+  are, publishes exactly when the former lookup and the target's stay say
+  it does: the run has scrapes that publish, scrapes of a target no longer
+  in force, and scrapes of a target still in force under its name that a
+  reload changed, and the test fails when it has none of one of them.
+- The requests of the static targets a read of the verbose self-metrics
+  tracks are the ones going through the collectors found (§ 24.1a, § 22.1):
+  over 60 generated configurations of one collector to six, half of them
+  named so that collectors share a name, each collector with a path and a
+  method of its own, and no static target to ten, of those collectors, of
+  one never configured and of none, at addresses two targets share and
+  addresses no request can be named for, the requests found are the ones
+  the former search, kept beside the test, finds, each of the first
+  collector of its name — with the configuration in force followed, with
+  another configuration and file in force that nothing has followed yet,
+  where the collectors are gone through once for every target as they
+  were, with those followed, and with another file in force with that
+  configuration. With the configuration followed its collectors are gone
+  through once at most, by the first search, and not at all by the next.
+  The exposition of a verbose read is what it was: a server that tracks
+  the requests the former search finds before it reads, and one that only
+  reads, track the same requests with the same values, the read leaves the
+  former's as they were, and both answer the read with the same bytes but
+  for the families of the Go runtime and of the process, at the start and
+  after each change of what is in force. Under the race detector it is 20
+  configurations.
+- A scrape of a static target and a read of the verbose self-metrics look
+  nothing up by going through the targets or the collectors: of 60 caching
+  collectors with a static target each and verbose self-metrics, of 240,
+  and of 60 with five targets each, the first read of the self-metrics goes
+  through the collectors of the configuration the exporter started with
+  once, to note where each is, and the next not at all, where each read
+  went through them once for every static target; the scrape of the last
+  static target goes through the targets not at all, where it went through
+  them once when it ended, and neither does a read of the static targets
+  endpoint that names that target, which did so once too; a reload that
+  removes half the collectors and adds as many, their targets with them,
+  goes through the collectors of its configuration once and through the
+  targets of its file once, and the read, the scrape and the named read
+  after it go through neither. The requests the read finds are the former
+  search's at these sizes too. Under the race detector it is 12, 48 and 12
+  collectors.
+- A lookup by name made while reloads come is of what was in force (§ 24.1a):
+  two readers ask, over and over, whether targets of five names are in force,
+  for the targets three reads of the static targets endpoint name, one of a
+  target only one of the files has and one of a target none has, both refused
+  then, and for the requests of the static targets, while nine reloads
+  replace both files, the static target file alone and the configuration alone
+  in turn, each waiting for both readers to have checked two rounds more;
+  whenever no reload came during a round of asking, every answer is the one
+  the former lookups, kept beside the tests, give. Run with the race detector
+  it also shows that what was noted for the files followed is read while a
+  reload notes the next.
+- Only a test sets a hook that counts the times the collectors or the targets
+  are gone through: `collectorsScannedHook` and `targetsScannedHook` of the
+  exporter and `collectorsIndexedHook` of the configuration are each declared
+  once, read in one place, where the function a test stored is called, and
+  stored in by test files only; any other use in a file that is not a test
+  fails the repository test.
+- `BenchmarkStaticTargetLookup` times, for 100, 2,000 and 10,000 static
+  targets of as many collectors, what a scrape of the last static target
+  asks when it ends, that scrape whole, answered from the cache, and what a
+  read of the static targets endpoint that names one target asks;
+  `BenchmarkSelfMetricsSeedStatic` times, for the same sizes, the search
+  for the requests of the static targets a verbose read makes, alone and
+  with the tracker told of them.
+
+The tests of the chart's whole numbers, added with these, are in the chart's specification (SPECIFICATION-CHART.md § 34.29, item 36).
+
+## 34.117 A value map beside a placeholder, descriptor files that change identity, whole numbers at every key and at accept_status, and the length of a label name
+
+A label is measured at load as the value map of its series' name maps it, and cut after it is mapped (§ 42.10c, § 21):
+
+- A rule's label value with placeholders that a `value_map` of the rule's
+  name maps is measured at load as mapped: under a limit of 8, a `"*"` entry
+  of 13 bytes is refused whatever the defaults, a listed one among them,
+  naming the collector, the metric, the label, the `"*"` entry and the limit;
+  a 13-byte entry the map lists loads, unless the defaults give its key, which
+  is refused naming that entry; defaults of 9 bytes the map lists short, or
+  `"*"` maps to `""`, load, and ones it maps by no entry are refused as an
+  unmapped value is. `truncate: true` and `remove_labels` spare each, and the
+  constants beside the same maps load or are refused as they were.
+- A probe that gives a value such a map lists long fails its scrape in the
+  validation, naming the metric, the label and the limit; probes that give a
+  value mapped short or not listed pass.
+- Against a copy of the check as it was, over a generated table of values,
+  maps, limits, `truncate` and `remove_labels` settings, constants included,
+  only a templated label a `value_map` of its rule's name maps is measured
+  otherwise, and refused only where a probe of a kind fails; every other
+  collector gets the verdict and the error it got.
+- `--dry-run` refuses a templated label whose `"*"` entry is too long, with
+  the load's message, and passes it with `truncate: true`.
+
+A grpc collector's call and the watch tell the same changes of its descriptor files (§ 5.1, § 24.1):
+
+- Over generated sequences of events on descriptor files reached as a plain
+  file, a link to a file, a file under a directory link and a Kubernetes
+  `x.proto` link through `..data` (an edit with a new time, an edit keeping
+  time and size, a rename over, a swap to a file of the same time and size,
+  a chmod, a delete, a recreate), the check at each call tells a change
+  whenever the old time-and-size stamp did, and besides exactly when the path
+  came to lead to another file or the permissions changed; it tells every
+  change the configuration watch tells, and what it says of time and size is
+  what the old stamp said.
+- `.proto` files mounted as a ConfigMap, `..data` swapped to files of the
+  same time and size where the service's method `Get` became `Put`: the next
+  call compiles once and finds `Put`, the call after compiles nothing and no
+  longer finds `Get`.
+- A descriptor set behind a `..data` link swapped to one of the same time
+  and size is read once by the two calls after the swap.
+- A chmod of a named or an imported `.proto` file, or of a descriptor set,
+  is seen at the next call, which compiles or reads the files once; run as a
+  user other than root, that call fails with `permission denied` (for the set
+  `reading protoset_file: ...`), and the call after the file is readable
+  again compiles once and succeeds.
+- The check at a call of 1, 10 and 50 unchanged files linked through
+  `..data` reads nothing and allocates no more than the old stamp did.
+
+A whole number written with a point or an exponent at an integer key or at `request.accept_status` (§ 5.0, § 24.2, § 24.3):
+
+- A probe of a collector and a scrape of a static target, each read from its
+  file, decode a 503 answer when `accept_status` lists 503 written `503.0`,
+  `5.03e2`, `0x1F7`, `0o767`, `5_03`, `+503` or `0503`, and fail it in the
+  `http_status` stage when it lists `5.04e2`, `0x1F8`, `200.0` or `5_04`.
+- `503.5`, `5.035e2`, `6e2`, `600.0`, `0x258`, `9.9e1`, `-5.03e2`, `1e19`,
+  `-200`, `0700`, `true`, `.inf`, `'503.0'`, `"5e2"` and `'0xc8'` at
+  `accept_status` are refused, naming the collector or the target and the
+  entry as written, as no HTTP status from 100 to 599 or a class.
+- `--dry-run` lists `accept_status: [503.0, 4.04e2, 0x1F4, 2xx]` as
+  `["503", "404", "500", "2xx"]` and fails `[503.5]` naming the collector and
+  the entry.
+- The committed schemas and the loader agree on `accept_status` of a
+  collector and of a static target written with a point (`503.0` / `503.5`),
+  an exponent (`5.03e2` / `6e2`), in hex (`0x1F7` / `0x258`), in octal
+  (`0o767` / `0o1130`), with an underscore (`5_03` / `6_00`) and with a sign
+  and leading zeros (`+0503` / `-503`), in the tables of keys.
+- At `limits.max_metrics`, `max_concurrent_probes`, `request.retry.attempts`
+  and `otlp.max_pending_points` of the configuration, `limits.max_cache_entries`
+  and `max_concurrent_probes` of a collector file, and `concurrency` and a
+  target's `request.retry.attempts` of the static target file, a whole number
+  written with a point or an exponent (`9.223372036854775807e18`,
+  `9007199254740993.0`, `9.007199254740993e15`, `1e3`, `1.0`, `+3e0`, `0.0`,
+  `-1.0`, `-9.223372036854775808e18`) loads exactly as the same number
+  written with digits alone, value, verdict and message alike;
+  `9.223372036854775808e18`, `1e19`, `-1e19`, `9223372036854775808.0` and
+  `1e300` are refused in one message naming the key, the number as written
+  and the range -9223372036854775808 to 9223372036854775807; `1.5`,
+  `1.00000000000000000001`, `9007199254740992.5` and `-0.5` are refused as no
+  whole number, in the words a fraction had.
+- Over some 860 numbers written every way YAML writes one, at an int and at a
+  pointer to one, the load as it was (the YAML decoder and its check of a
+  fraction) is the oracle: every `!!int` number, every `!!float` whole number
+  a float64 holds, infinity and not-a-number load as they did; a whole number
+  the float64 rounded (`9007199254740993.0`, `9223372036854775807.0`, which
+  had wrapped to -2^63) is now the number written; one past the range of an
+  int is refused in the load's one message; and a fraction the float64 rounds
+  away (`1.000000000000000000001`, `9007199254740993.5`) is refused as a
+  fraction.
+- The committed schema and the loader agree on `max_metrics` and the target
+  file's `concurrency` written `1e3`, `1.0`, `1000.000`, `+2e0`,
+  `9007199254740993.0`, `9.223372036854775807e18`, `0.0`, `-0.0` (taken) and
+  `1.5`, `1e-1`, `-1.0`, `-1e3`, `-1e19`, `-9.223372036854775808e18`, `.inf`,
+  `.nan` (refused), and on `retry.attempts` written `2.0`, `2e0`, `+2.0`,
+  `1e1` (taken) and `11.0`, `1.1e1`, `9.223372036854775807e18`, `1e19`
+  (refused); `1e19`, `9.223372036854775808e18`, `9223372036854775808.0` and
+  `1e300` at `max_metrics` and `concurrency`, and `1.00000000000000000001` and
+  `9007199254740992.5` at `max_metrics`, pass the schema and are refused by
+  the loader alone.
+- `ReadWholeNumber` gives the whole number written, by its digits, with its
+  sign, up to 2^64 - 1 from 0 either way, against the arithmetic of numbers
+  of any length, and holds it to the range of an integer of 8, 32 and 64
+  bits; a size reads every number of the same table as it did before the
+  reading was shared, by the old code kept as the oracle.
+
+Every label name is held to `limits.max_label_name_length` (§ 21):
+
+- A label name one byte over `limits.max_label_name_length` fails validation
+  with `metric "M" label name "L" is longer than
+  limits.max_label_name_length MAX; rename the label with
+  transform.rename_labels, or raise limits.max_label_name_length`; one at the
+  limit passes, an empty value changes nothing, of two names over the limit
+  the first by name is named, and a limit of 0 holds nothing back.
+- A label name of 10 MiB is shown in that error by its first 200 bytes and
+  `... (N bytes)`, and a longer name that starts alike is recognised as the
+  same failure.
+- A series with a metric name and a label name both too long fails on the
+  metric name; a label name that is no label name is named as such however
+  long; a label name too long is named before its value too long and before
+  its reserved `__`; a value too long of a label before it by name is named
+  first.
+- A histogram passes `limits.max_label_name_length` 2 and fails 1 naming its
+  buckets' `le`; a summary passes 8 and fails 7 naming `quantile`; both pass
+  0 and 200.
+- Over 3,000 generated sets (600 under the race detector) of names, label
+  names, values, help, histograms, summaries and duplicates whose label names
+  are within the limit, at the limit, one over, 200 and 0, validation gives
+  the verdict and the words of validation before the limit, recognised alike.
+- `limits.max_label_name_length` is 200 when left out or 0, a set limit is
+  kept, and a negative one is refused naming the key; the configuration
+  schema refuses a negative one too.
+- A `/probe` of a `prometheus` pass-through whose target writes a label name
+  of 1 MiB answers 502 with the error, logs it at the `validation` stage and
+  counts it in `http_exporter_series_limit_exceeded_total`; so does it with
+  `error_handling.on_transform_error: log`, as an over-long metric name does;
+  so does a Python script's label name of 300 bytes, and a histogram under a
+  limit of 1. A name at the limit, a name under a raised limit and a
+  histogram under 2 are answered 200.
+- Probes of answers whose label names are within the limit answer the same
+  bytes at the default limit, at 200 and at 1,000,000.
+- A label name the configuration writes — classic, reserved, non-classic,
+  escaped, long — under every `name_escaping` is refused or accepted at load
+  in the words it was while its exported name is within
+  `limits.max_label_name_length` (0, at its length, above it); one byte under
+  its length it is refused naming its length and the limit, and the exported
+  name where escaping changed it.
+
+Found by the review of these, and fixed:
+
+- A whole number written with a point or an exponent goes into the key the
+  YAML decoder decodes it into: a configuration with such numbers (each one a
+  float64 does not hold, `9007199254740993.0`) loads exactly as the same
+  document with the numbers written with digits alone, for a key written as
+  an alias whose anchor is named for another key (`&max_labels_per_metric
+  max_metrics`, `*max_labels_per_metric : 7.0` sets `max_metrics`) or for
+  none, an alias key beside a merge key and in a merged mapping, overridden
+  or not, a merge of a list of aliases and of mappings written there, a
+  merged mapping that merges another, a mapping that is an alias used by two
+  collectors or merged into each, an `accept_status` list that is an alias
+  and entries that are aliases, and a collector that is an alias.
+- A key written as an alias is named in a message by the key its anchor
+  holds, at the alias's line: `*k : 1.5` and `*k :` with `&k max_metrics`
+  are refused as `max_metrics`'s, and in `transform.labels` `*z :` (`&z zone`)
+  is the key `zone` with no value and `*n : up` (`&n ~`) a key YAML reads as
+  none; each loaded without a word.
+- `model.DecodedEntries` gives each key the value the decoder gives it when a
+  key is an alias: it keeps out the merged key it names, in the mapping and
+  in a merged mapping, an alias of a quoted key keeps out the key of digits,
+  and an alias of a key of digits keeps out nothing; over 2,000 generated
+  mappings without an alias key (own, non-text and null keys, alias values,
+  merges of one, a list and nested), the entries are those of the code
+  before, kept as the oracle.
+- Over the example configurations and generated documents of the
+  configuration, a collector file and the static target file (whole numbers
+  every way, fractions, text, booleans, nulls, mapping keys, merges and alias
+  values) without an alias key or a number past a float64's range, the walk
+  gives the problems, the decoder messages it replaces and the values it
+  writes of the code before, kept as the oracle.
+- At every key of a whole number of the three files, `1e400`, `-1e400`,
+  `1_0e400` and `1.5e400`, which the YAML decoder tags `!!str`, are refused
+  in one message naming the key, the number as written and the range
+  -9223372036854775808 to 9223372036854775807, where they were "expected a
+  whole number, not a string"; `"1e400"`, `'1e3'` and `!!str 1e400` still
+  are; and over the generated spellings at an int and a pointer to one, the
+  numbers past a float64 written with `e300` are now the range message.
+- A quoted entry of `request.accept_status` with a sign or leading zeros
+  (`'+503'`, `"0503"`, `" +0503 "`) loads as `503`, in the configuration, a
+  collector file and the static target file, and a probe of a collector and
+  a scrape of a static target decode a 503 answer with it; `'-503'` and
+  `'0700'` are refused naming the entry as written; a static target's
+  statuses merged in with `<<` are read as written out.
+- `normalizeAcceptStatus` and `NormalizeTargetRequest` write a status with a
+  sign or leading zeros by its digits alone, which `AcceptedStatus` then
+  accepts; over 20,000 generated lists (4,000 under the race detector) of
+  digits, signs, blanks, points, letters and classes they take, refuse and
+  write every other entry as the code before, kept as the oracle, and stop
+  at the entry refused.
+- A rule's label and a `transform.labels` key of 201 bytes load when
+  `transform.rename_labels` renames them or `transform.remove_labels`
+  removes them, and the probe serves the renamed label (`n{short="v"} 1`) or
+  none; a pass-through's label renamed is served; the rename's target of 202
+  bytes, a renamed name another rename gives and another long key beside a
+  renamed one are refused. Over names under every `name_escaping` and limits
+  from 0 to past the exported length, a name renamed or removed is taken
+  whatever it is, unless it is blanks alone (§ 34.118), and any other is
+  checked as `CheckExportedLabelName` checks it.
+- A static target of a collector whose `limits.max_label_name_length` is 12,
+  9, 8 or 1 is refused when the target file is checked against the
+  configuration, `target "t" gets the label static_target, 13 bytes, on
+  every series of it, longer than limits.max_label_name_length N of
+  collector "a"; raise the collector's limit to 13 or more`; at 13 it loads,
+  and its series with `static_target` and its health series pass the
+  collector's validation. A target's label of 15 bytes is refused under 14,
+  the first by name, and one of 14 passes.
+- A reload that lowers a collector's `limits.max_label_name_length` from 20
+  to 14 under a static target's 15-byte label is refused naming the target,
+  the label and the limit, and the limit in force stays 20.
+- The short-failure test's Python "bad label" kind passes the metric's value
+  by name, so every generated failure of it is the validation's `which is
+  not a classic Prometheus label name`, not the script's type error.
+- A `prometheus` rule without a name, whose expression (`^foo$`, `fo` or
+  `^f.o$`) matches the name of a rule `foo` that maps the label `tenant` by a
+  `value_map` whose `"*"` entry is 13 bytes, under a limit of 8, is refused
+  at load for its static `tenant`, a constant and one with placeholders
+  alike, naming the rule by its place, the label, the metric `foo` whose map
+  it is and the limit, also with a `metrics_prefix`; scraped without the
+  check, that collector fails every probe of a kind. An expression that does
+  not match `foo` loads.
+- With `truncate: true` on the label of the rule `foo`, the label of the
+  rule without a name loads, and every probe passes with the series `foo`
+  exported as `tenant="overl…"`, the mapped value cut.
+- `truncate: true` on a label in another rule of the same name spares the
+  label of each rule of that name at load, a constant and a value with
+  placeholders alike, and every probe passes; the same truncating rule under
+  another name spares nothing it does not map.
+- `truncate: true` on the label of a rule without a name cuts the value the
+  `value_map` of the series' name maps it to, after the map: every probe
+  passes and the label is exported as `overl…`.
+- Against a copy of the load check as it was, over a generated table (the
+  `prometheus` and `jq` transforms; a rule without a name, named as the
+  mapping rule or named otherwise; expressions matching its name, not
+  matching, and matching unanchored; constants and placeholders, short and
+  long; value maps or none; `truncate` on either rule; a limit or none), only
+  a rule without a name whose expression matches a name that maps the label
+  is refused where it loaded, never the reverse, and only a label whose
+  rule's name another rule shares with `truncate: true` on that label loads
+  where it was refused, never the reverse; every other collector gets the
+  error it got, byte for byte.
+- Against the `prometheus` transform as it was, over a generated table of
+  2,160 collectors and source values (a rule without a name, named as the
+  mapping rule or otherwise; its label a short or long constant or read from
+  the series, with `truncate` or not; a mapping rule with five value maps or
+  none, with `truncate` or not; limits 0, 8 and 30), every series is
+  exported with its label mapped and then cut where it is truncated, its
+  other labels and fields as before, and every collector where no truncated
+  label of a series is mapped, every one without a value map or without
+  `truncate` among them, gives exactly what it gave. The check that leaves
+  cuts to after the maps is made only for a `prometheus` collector with a
+  limit, a `truncate` and a `value_map`, and costs the others no allocation.
+- A descriptor set renamed over by a file of the same modification time,
+  size and permissions, whose method `GetStats` became `GetStatz`, which a
+  collector's call then reads, makes the next tick of the watch reload: the
+  reload is refused naming `GetStats`, counted as refused, and
+  `last_reload_successful` is 0; the tick after logs nothing.
+- Over generated sequences of events on a plain file and on one behind a
+  swapped `..data` link (edits with a new time and keeping time and size, a
+  rename over keeping time, size and permissions, a rename over with a new
+  time, a link swap keeping time and size, a chmod, a delete, a recreate),
+  the watch's stamp tells a change exactly when its stamp as it was did, or
+  the path came to lead to another file (`os.SameFile`), where the system
+  gives a file identity.
+- With a file identity that changes at every look, as a filesystem that
+  hands out inode numbers per lookup would give, every call of unchanged
+  `.proto` files compiles them again (10 calls, 10 compiles), the limit the
+  documentation states; with a stable identity, 10 calls compile nothing.
+- `base.proto` only in the second import path compiles; an unreadable copy
+  appearing in the first makes the next call compile once and, run without
+  `CAP_DAC_OVERRIDE`/`CAP_DAC_READ_SEARCH`, fail with `permission denied`
+  naming that file rather than reading the second path's; as root the call
+  succeeds.
+
+The tests of the chart's bounds on probes, the rolling update, the budget's strings and the memory ratio, added with these, are in the chart's specification (SPECIFICATION-CHART.md § 34.29, item 37).
+
+## 34.118 Names a rename or a removal takes off, an over-long metric name at load, and the memory limit ratio's floor
+
+Load-time name checks (§ 21, § 21.1, § 5.0a):
+
+- A rule's label or a `transform.labels` key that `transform.rename_labels`
+  renames or `transform.remove_labels` removes loads whatever it is: `__tmp`,
+  `a.b` under `fail`, `é`, `..site` under `underscores`, a `transform.labels`
+  key removed, under a prometheus and a jq transform. The same names that
+  nothing takes off, beside a rename of another label or a rename to them,
+  are refused in the words they were; a name of blanks alone is refused
+  renamed or removed; a rename's target is still held to its characters and
+  to `__`.
+- Over the names of the label-name tests and 300 generated ones, under every
+  `name_escaping`, at limits from 0 to past the exported length, renamed,
+  removed, renamed to, added and removed, or none of these, the load's
+  verdict on a label name written before the renames (the former checks
+  kept as an oracle) differs only for a name a rename or a removal takes
+  off, and only from refused to taken, and blanks alone stay refused.
+- A probe of a collector whose rule label `__tmp` is renamed to `tenant`
+  serves `n{tenant="v"} 1`; a dotted rule label removed under `fail`, a
+  UTF-8 rule label renamed and a reserved `transform.labels` key renamed are
+  served as renamed or without the label.
+- The schema and the exporter both take a dotted rule label under `fail`
+  where the collector's `rename_labels` renames it or `remove_labels`
+  removes it; beside a rename or a removal of another label the exporter
+  alone refuses it, and with neither setting, or either written empty, both
+  refuse it.
+- A rule's name longer than `limits.max_metric_name_length` is refused at
+  load, `collector "c" metric "M" is 201 bytes, longer than
+  limits.max_metric_name_length 200, so every series of that name would fail
+  validation; shorten the name or raise limits.max_metric_name_length`, with
+  the limit left 0 or set low, under a jq, a prometheus and a python
+  transform; under `name_escaping: values` the escaped length counts and the
+  error quotes the escaped name; with `metrics_prefix` the old message
+  stands. A name at 200 loads, 201 loads under a raised limit, a dotted name
+  under `underscores` within the limit loads, a prometheus rule without a
+  name of a 201-byte pattern loads, and so does a histogram rule named at
+  200, whose probe serves its `_bucket` samples past the limit.
+- `--dry-run` exits 1 with the one config error naming a 201-byte rule name,
+  its length and the limit, and exits 0 at 200.
+- Over classic, dotted, reserved, blank and long rule names, with a sound
+  and a broken expression, under jq, prometheus and python, every
+  `name_escaping`, with and without `metrics_prefix` and at limits around
+  the exported length, the load's check of a rule says what it said with the
+  limit left 0 (the former check as the oracle), except of a name it
+  otherwise takes, without a prefix, exported past the limit: that is
+  refused first for its length, naming the escaped name where escaping
+  changed it, and every other problem follows as before.
+
+The memory limit ratio (§ 30):
+
+- `--runtime.memory-limit-ratio` above 0 and below 0.1 (`0.00001`, `1e-300`,
+  `0.0999999`) is a command-line error at startup and with `--dry-run`, its
+  message saying the floor and that the Go runtime would spend its time
+  collecting garbage; `0`, `0.1`, `.1`, `0.10000001`, `0.5` and `1` are not,
+  and every ratio outside 0 to 0.1 is judged as before the floor.
+
+The tests of the chart's rolling update and ratio floor are in the chart's specification (SPECIFICATION-CHART.md § 34.29, item 38 and the corrected item 37).
+
+## 34.119 A YAML alias key read as the key it stands for
+
+- A key written as an alias of an anchored scalar is the key its anchor
+  holds in every block that checks its own keys — `otlp`, `web.basic_auth`,
+  a static target's `request` (and its nested `retry`) and a collector's
+  `cache` — alone, in a mapping merged in and in a list of them: accepted
+  with the values yaml.v3 alone decodes into the same structs without their
+  own code, and an unknown key behind an alias refused naming the key it
+  stands for, at the alias's line, as yaml.v3 alone refuses it; a block's
+  missing `enabled` message names the keys the aliases stand for. An alias
+  of `<<` is the unknown key `<<`, as yaml.v3 reads it, and merges nothing.
+- A static target's `request` with an anchor named `path` holding `body`,
+  or one named `body` holding `path`, sets the key the document means, as
+  yaml.v3 reads it; scraped against a stand-in, a target so written sends
+  its own body to the collector's path, and another the collector's body to
+  its own path.
+- A collector file's top level takes `collectors` written as an alias,
+  alone or merged in, and refuses another key behind an alias naming it.
+- With environment expansion on, a top-level alias key whose anchor holds
+  an `x-` key is ignored as an `x-` block: its unset variable is not
+  required; an alias key of `web` is expanded as before.
+- The schema and the exporter agree on a key written as an alias: `otlp`,
+  `cache` and a top-level `x-` key so written are accepted by both, an
+  unknown key behind an alias refused by both.
+- Every mapping of the repository's YAML files (examples, configs, test
+  data, chart values) and of 800 generated documents without an alias key
+  (200 under the race detector) — block keys, unknown, quoted, non-text and
+  null keys, merges of one mapping and of a list, a quoted `"<<"` — gives
+  the key checks, the `otlp` and `basic_auth` switch, a request's path and
+  body set and a cache exactly what they gave before, against copies of the
+  old functions, and every key that is no alias is its own text.
+
+## 34.120 A library frame's traceback on Python 3.13, and what tokenize and linecache may read
+
+- A script failing inside a library call, `json.loads('x')` or
+  `response.json()` on a body that is not JSON, fails with the whole
+  traceback: the script's own line, the `json/decoder.py` frame with its
+  source line and `json.decoder.JSONDecodeError: Expecting value: line 1
+  column 1 (char 0)`, with `python3`, `python3.12` and `python3.13`, each
+  where it is installed; a subtest says which is skipped. On 3.13, before
+  the worker imported `tokenize` ahead of the sandbox, the error was the
+  stand-in naming only its type.
+- `tokenize.open`, `linecache.getline` and `traceback.linecache.getlines`
+  refuse a script a file that is neither module source nor time zone data
+  (`RuntimeError: operation disabled by exporter`) on each of those
+  interpreters, where on 3.12 they read any file the worker could; a
+  module's source (`json.__file__`) is still read through `linecache`.
+
+## 34.121 Tests of a script's error that hold on every interpreter
+
+- A script that raises past the output limit, a worker that cannot cut an
+  error, one whose cutting code is no Python and an error the traceback
+  module cannot make give the same errors with `python3`, `python3.12` and
+  `python3.13`, each where it is installed (a subtest says which is
+  skipped): each traceback is, to the byte, what the worker as it was
+  writes of the same script in the same interpreter as `shownScriptError`
+  shows it, and the literal example without the marker lines 3.13 draws
+  under a source line (`~~~~^^^^`), which 3.12 does not. Before, on 3.13,
+  the four tests failed on those marker lines.
+- Of a traceback, only lines of nothing but spaces, `^` and `~` directly
+  under a frame's source line are taken for markers: carets in a message,
+  a blank line under a source line and carets beside other text are kept.
 
 # 35. Documentation requirements
 
@@ -20035,7 +21577,9 @@ written. Two rules that differ only in the placeholders of a label's value
 are two rules; a probe that fills them alike makes one series twice, and
 that scrape MUST fail as a duplicate series does. The check of a static
 value's length MUST measure a value that holds placeholders with each
-replaced by its default (§ 24.2).
+replaced by its default, and, where a `value_map` of the rule's name maps the
+label, as that map makes it, a `"*"` entry being what any value not listed
+becomes (§ 24.2).
 
 A label whose value holds a placeholder is a static label in what may stand
 beside its value: `required` and a `value_map` of its own MUST be refused at
@@ -20486,7 +22030,11 @@ health series included.
 `static_target` MUST be refused as a target label, since the
 endpoint sets it, and so MUST `job` and `instance`, which Prometheus sets when
 it scrapes the endpoint and which, kept with `honor_labels`, a target's would
-replace.
+replace. A target's label longer than its collector's
+`limits.max_label_name_length`, and a target whose collector's limit is
+shorter than `static_target`, 13 bytes, which the endpoint adds past the
+collector's validation, MUST be refused when the file is checked against the
+configuration (§ 21).
 
 Each target MUST be scraped on its own `interval`, independent of when
 Prometheus scrapes the static targets endpoint and of the OTLP export
@@ -21160,14 +22708,65 @@ and MUST answer `200` with a `text/plain` report of it:
   including rule failures and what a Python script printed;
 - the exposition a probe would have served.
 
+What a report shows is the target's, the scraper's or a script's to make as
+long as a response, or longer: the URL a redirect led to, a header's value,
+the message of a gRPC status the collector accepts, a metric's name. The
+report is read by a person and made in memory whole, so everything in it but
+the body, which has its bound, MUST be bounded, and what is cut MUST say so
+with its whole length, as an error does (§ 6.1a):
+
+- a line of the report longer than 8,192 bytes MUST be shown by its first
+  8,192 bytes, the cut between two characters, followed by `... (N bytes)`
+  with the length of the whole line, whichever section the line is of and
+  whatever it is made of, a line of the logs and of the exposition
+  included. The lines of the body MUST NOT be cut so. The bound is past
+  every line whose parts are bounded already, which MUST NOT be cut again:
+  a failure at its 2,000 bytes MUST keep its own length in the line that
+  quotes it, and the line of what a script printed (§ 16.2) MUST be shown
+  whole;
+- the URL of a request MUST be listed by its first 512 bytes and its
+  length, and a metric's name in the list of series by its first 200 bytes
+  and its length, as an error shows them (§ 6.1a), with how the request
+  ended and the number of the metric's series after them as before;
+- a header's value MUST be shown by its first 1,024 bytes and its length,
+  and of the headers of a request or of a response the first 100 MUST be
+  listed, in the order of their names, every value of a name counted,
+  followed by `... (N headers)` with their number when there are more;
+- where a line of the exposition is cut, the section MUST say before the
+  exposition that lines longer than the bound are cut, how many, and that
+  it is not valid exposition as shown. An exposition without such a line
+  MUST be shown as a probe serves it, to the byte.
+
+What the report withholds (below) MUST be withheld before anything is cut:
+a cut MUST NOT show what redaction hides, and one that would end inside a
+`<redacted>` MUST show it whole instead. A report whose every part is within
+these bounds MUST be the report it would be without them, byte for byte, and
+the bounds MUST NOT change what a probe answers, what is cached, counted or
+exported, or the line that says what a probe would have answered. The number
+of the report's lines is bounded by the collector's limits alone: one for
+each metric name and for each series, up to `limits.max_metrics`, and one
+for each file of a directory read or skipped (§ 5.1a).
+
 The report's copy of the response MUST be made before the decode and MUST
 share the fetched body rather than copy it; a trip that is not reported MUST
 NOT keep the body the target sent beside the converted one.
 
 A debug probe MUST NOT read or fill the response cache, share a trip with a
-probe in flight (§ 42.13a), be counted in any self-metric, or be queued for
+probe in flight (§ 42.13a), be counted in any self-metric but the Python
+worker series (below), or be queued for
 OTLP. Its failures and recoveries MUST NOT reach the exporter's log or the
 failure log's state (§ 25): the next probe's failure is logged as the first.
+
+The Python worker series (§ 22.1a), per collector and of the pool, are the
+exception, for a debug probe and a debug scrape alike: they count what the
+pool's workers did, and MUST count the scripts a debug probe runs as they
+count a probe's, the workers it starts and stops and how its runs end. A
+debug probe's scripts run in the collector's own workers, and the worker one
+starts is the collector's idle worker afterwards: its start counted nowhere
+would leave the collector's series showing a worker the collector never
+started. They MUST be counted for the collector the debug probe or scrape
+read while a reload has not removed it since, wherever a reload that kept it
+came, and under no collector once one has (§ 24.1a).
 The exporter MUST log one `info` line per debug probe served, naming the
 collector and the target.
 A debug probe or debug scrape MUST give back its trip slot however its trip
@@ -21187,7 +22786,8 @@ a slot of the collector's `max_concurrent_probes` — and answer the same
 report, saying what the scrape would have published: `http_exporter_target_up`
 `1` or `0`, why, whether a stale result would stand in, and the series with the
 target's labels and `static_target`. It MUST NOT publish anything on the
-endpoint, count in a self-metric or be exported over OTLP, and MUST skip the
+endpoint, count in a self-metric but the Python worker series (above) or be
+exported over OTLP, and MUST skip the
 response cache. Without the flag it MUST be answered `403`; a name no target
 in force has `404`; more than one `debug` value, an empty one, or `debug`
 together with `targets`, `400`.

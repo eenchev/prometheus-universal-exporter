@@ -554,8 +554,9 @@ func runPython(ctx context.Context, pythonPath, mode, what, script string, d *de
 	if timeout <= 0 {
 		timeout = 100 * time.Millisecond
 	}
+	pool := PythonWorkers()
 	// A test's pool may leave every script longer (SetLeastScriptTimeout).
-	timeout = max(timeout, time.Duration(PythonWorkers().leastScriptTimeout.Load()))
+	timeout = max(timeout, time.Duration(pool.leastScriptTimeout.Load()))
 	// The request is written into a buffer kept for the next one, which is
 	// free again once the worker has been handed it.
 	encoder := pythonEncoders.Get().(*pythonEncoder)
@@ -563,14 +564,21 @@ func runPython(ctx context.Context, pythonPath, mode, what, script string, d *de
 	if err != nil {
 		return nil, model.MarkError(err, model.ErrScriptFailed)
 	}
-	line, ran, err := PythonWorkers().run(ctx, pythonWorkerSpec(pythonPath, c), payload, timeout)
+	// The run counts in the statistics it takes here, once, however it ends
+	// and whatever a reload does to its collector meanwhile: the ones its
+	// trip carries, and for a run that carries none those kept under the
+	// collector's name (PythonPool.statsOf).
+	timer := scriptTimerFrom(ctx)
+	spec := pythonWorkerSpec(pythonPath, c)
+	spec.stats = pool.statsOf(timer.carried(), c.Name)
+	line, ran, err := pool.run(ctx, spec, payload, timeout)
 	if cap(encoder.buf) <= pythonEncoderKept {
 		pythonEncoders.Put(encoder)
 	}
-	if timer := scriptTimerFrom(ctx); timer != nil && ran > 0 {
+	if timer != nil && ran > 0 {
 		timer.add(ran)
 	}
-	out, err := pythonResult(c, what, timeout, line, err)
+	out, err := countedPythonResult(spec.stats, c, what, timeout, line, err)
 	if err == nil && out.Log != "" {
 		// What the script printed, its first 4 KiB, for whoever debugs it;
 		// it counts against max_output_bytes only as far as that. A debug
@@ -605,27 +613,29 @@ func showScriptValue(v any) string {
 	return model.ShowValue(v)
 }
 
-// pythonResult reads a worker's answer, counting how the run ended.
-func pythonResult(c *model.Collector, what string, timeout time.Duration, line []byte, err error) (*pythonOutput, error) {
+// countedPythonResult reads a worker's answer, counting how the run ended in
+// st, the statistics the run took when it began.
+func countedPythonResult(st *PythonStats, c *model.Collector, what string, timeout time.Duration, line []byte, err error) (*pythonOutput, error) {
+	pool := st.pool
 	var deadline pythonDeadlineError
 	switch {
 	case errors.Is(err, errPythonTimeout):
-		PythonWorkers().recordRun(c.Name, pythonRunTimeout)
+		pool.recordRun(st, pythonRunTimeout)
 		return nil, fmt.Errorf("python %s timed out after %s: %w", what, timeout, context.DeadlineExceeded)
 	case errors.As(err, &deadline):
 		// The probe's deadline, not limits.script_timeout, ended the run:
 		// said and counted as that, so nobody raises a script_timeout the
 		// script never reached.
-		PythonWorkers().recordRun(c.Name, pythonRunDeadline)
+		pool.recordRun(st, pythonRunDeadline)
 		if !deadline.started {
 			return nil, fmt.Errorf("python %s did not run: its probe or scrape ran out of time while the response was handed to the worker: %w", what, context.DeadlineExceeded)
 		}
 		return nil, model.Errorf("python %s was stopped after %s because its probe or scrape ran out of time, not because of limits.script_timeout (%s): %w", what, model.Elapsed(deadline.ran.Round(time.Millisecond)), timeout, context.DeadlineExceeded)
 	case errors.Is(err, errPythonOutputTooLarge):
-		PythonWorkers().recordRun(c.Name, pythonRunOutputLimit)
+		pool.recordRun(st, pythonRunOutputLimit)
 		return nil, fmt.Errorf("python %s output exceeds limit", what)
 	case err != nil:
-		PythonWorkers().recordRun(c.Name, pythonRunFailed)
+		pool.recordRun(st, pythonRunFailed)
 		return nil, fmt.Errorf("python %s failed: %w", what, err)
 	}
 	// An answer as a worker writes it is read without encoding/json
@@ -641,12 +651,12 @@ func pythonResult(c *model.Collector, what string, timeout time.Duration, line [
 		decoder := json.NewDecoder(bytes.NewReader(line))
 		decoder.UseNumber()
 		if err := decoder.Decode(out); err != nil {
-			PythonWorkers().recordRun(c.Name, pythonRunFailed)
+			pool.recordRun(st, pythonRunFailed)
 			return nil, fmt.Errorf("python %s output: %w", what, err)
 		}
 	}
 	if !out.OK {
-		PythonWorkers().recordRun(c.Name, pythonRunScriptError)
+		pool.recordRun(st, pythonRunScriptError)
 		// A traceback past what an error holds is shown by its end, the
 		// exception's own line and the frames before it (scripterror.go):
 		// by the worker already where it might not have fitted the output
@@ -656,7 +666,7 @@ func pythonResult(c *model.Collector, what string, timeout time.Duration, line [
 		}
 		return nil, model.Errorf("python %s failed: %s", what, shownScriptError(strings.TrimSpace(out.Error)))
 	}
-	PythonWorkers().recordRun(c.Name, pythonRunOK)
+	pool.recordRun(st, pythonRunOK)
 	return out, nil
 }
 
@@ -668,18 +678,36 @@ func pythonResult(c *model.Collector, what string, timeout time.Duration, line [
 // the time each script ran, as limits.script_timeout measures it: the
 // pre-script and the python transform together, without starting an
 // interpreter or handing it the response.
+//
+// The timer also carries, the same way and for the same scripts, the worker
+// statistics the probe's runs count in (PythonStats), which the probe took
+// for the collector it read: a run finds them with the timer, and asks for
+// none by its collector's name, which a reload may have given to another
+// collector since.
 type ScriptTimer struct {
 	mu    sync.Mutex
 	total time.Duration
 	ran   bool
+	stats *PythonStats
 }
 
 type scriptTimerKey struct{}
 
-// WithScriptTimer returns a context carrying a fresh timer.
-func WithScriptTimer(ctx context.Context) (context.Context, *ScriptTimer) {
-	timer := &ScriptTimer{}
+// WithScriptTimer returns a context carrying a fresh timer, and with it
+// stats, the worker statistics the runs under the context count in; nil for
+// runs that count in those kept under their collector's name.
+func WithScriptTimer(ctx context.Context, stats *PythonStats) (context.Context, *ScriptTimer) {
+	timer := &ScriptTimer{stats: stats}
 	return context.WithValue(ctx, scriptTimerKey{}, timer), timer
+}
+
+// carried is the worker statistics the timer carries, nil for no timer and
+// for one that carries none. They do not change once the timer is made.
+func (t *ScriptTimer) carried() *PythonStats {
+	if t == nil {
+		return nil
+	}
+	return t.stats
 }
 
 func scriptTimerFrom(ctx context.Context) *ScriptTimer {

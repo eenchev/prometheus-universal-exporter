@@ -52,7 +52,8 @@ script error, not a missing key.
 A collector that a reload removes stops being reported, here and over OTLP, so
 Prometheus marks its series stale; one added again later under the same name
 starts from zero, and a probe or scrape of the removed collector that began
-before the reload, however far it had come by then, is not counted for it. A
+before the reload, however far it had come by then, is not counted for it.
+The series of its [Python workers](#python-workers) are held to the same. A
 collector a reload changes keeps its counters, but its cached results are
 dropped, since they belong to the old definition. A probe or scrape that
 began before the reload caches nothing under the name of a collector the
@@ -409,7 +410,8 @@ killed), a `crash` (the interpreter died, during a run or while it sat idle),
 an `output_limit` (it answered with more than `limits.max_output_bytes`),
 `cancelled` (the scrape was abandoned mid-run), `retired` (it reached 1,000
 runs), `surplus` (more than four were idle after a burst), `idle` (unused for
-five minutes), `reload` (a reload changed or removed its script) or `evicted`
+five minutes), `reload` (a reload changed or removed its script, or removed
+its collector) or `evicted`
 (it was idle when another script needed a worker under
 `--python.max-workers`). `retired`, `surplus`, `idle` and `reload` are routine;
 the first five each cost the next scrape a fresh interpreter, and many
@@ -418,8 +420,8 @@ the first five each cost the next scrape a fresh interpreter, and many
 A run ends `ok`, `script_error` (the script raised or called `fail(...)`,
 with a message of any length, or
 left `data` or `metrics` the worker does not write, such as a list that holds
-itself or strings that are longer together than `limits.max_output_bytes`; the
-worker carries on), `timeout` (it overran `limits.script_timeout`), `deadline`
+itself or strings and keys that are longer together than
+`limits.max_output_bytes`; the worker carries on), `timeout` (it overran `limits.script_timeout`), `deadline`
 (the probe's or scrape's deadline ended it first, or ran out while the
 response was handed to the worker: the time to raise is the probe's, not
 `script_timeout`), `output_limit` (it wrote an answer longer than
@@ -436,7 +438,31 @@ increase(http_exporter_python_worker_start_failures_total[5m]) > 0
 
 Every label is from a fixed set, and a collector without Python has none of
 these series. The counters are kept whether or not verbose mode is on, so
-turning it on through a reload shows the counts since the exporter started.
+turning it on through a reload shows what was counted before it was on.
+They count what the workers did, whoever asked: the scripts of a
+[debug probe](CONFIGURATION.md#debugging-a-probe), which is counted in no
+other self-metric, run in the collector's workers and are counted here.
+
+They are the collector's, and follow a reload as its
+[other counters](#collector-metrics) do. A reload that removes the collector
+drops them: the series are gone, here and over OTLP, and a collector added
+again under the name starts every one of them from zero, with workers of its
+own. A script of the removed collector that is still under way then —
+waiting for a worker, running, or ending — and the stop of its worker, for
+the `reload` or for anything else, are counted under no collector's name,
+whether or not the collector is back by then: they are counted for
+[the pool](#the-python-execution-pool) alone. A worker is the collector's
+that started it for as long as it lives. One of the removed collector is
+stopped for the `reload`, at once when it is idle and when its script ends
+when it is busy, also where the probe began before the reload and its script
+after it, and is never handed to the collector added again, though the
+script is the same; a script of the removed collector that is still to run
+starts a worker of its own rather than take one of the collector that is
+back. So the workers a collector has started, less those stopped under its
+name, are always the ones its `idle` and `busy` series show. A collector
+whose definition a reload changed keeps its counters, the `reload` stop of
+the worker of a script that changed among them, and an unchanged collector
+keeps everything, its idle workers too.
 
 #### The Python execution pool
 
@@ -459,7 +485,8 @@ These are always there in verbose mode, even when no collector uses Python, so
 a dashboard or alert on the pool works on every exporter without knowing which
 collectors run scripts; on an exporter without Python collectors they read zero.
 They sum every collector the pool has served, including collectors a reload has
-since removed, so the counters never go backwards. They have their own names,
+since removed and what the scripts and workers of such a collector did after
+the reload, so the counters never go backwards. They have their own names,
 rather than being an unlabelled series of the per-collector families, so
 `sum(http_exporter_python_runs_total)` never counts a run twice.
 
@@ -529,10 +556,10 @@ The time is when the series began to count:
 
 | Series | Created |
 | --- | --- |
-| The [collector metrics](#collector-metrics), `http_exporter_rule_failures_total` and the [scrape-time histogram](#scrape-time-histograms) of a collector the exporter started with | The exporter's start. |
+| The [collector metrics](#collector-metrics), `http_exporter_rule_failures_total`, the [scrape-time histogram](#scrape-time-histograms) and the [Python worker](#python-workers) counters of a collector the exporter started with | The exporter's start. |
 | The same, of a collector a reload added, or removed and brought back | When the collector's counters were made, from zero: at the first probe or the first read of the self-metrics after the reload. |
 | The [per-request](#verbose-per-request-self-metrics) counters | When the first probe of the request began — of several first probes at once, the one that ended first — or when a static target's request was registered. A request dropped — not asked for within the hour, removed with its collector or static target, or with verbose mode switched off — and asked for again counts from zero, since a later time than it showed before. |
-| `http_exporter_config_reloads_total`, the [OTLP](#otlp-export-status) counters, the [Python worker](#python-workers) counters, per collector and of the pool, and the `go_` and `process_` counters and `go_gc_duration_seconds` | The exporter's start. The worker pool keeps a collector's counts when a reload removes it, so they do not start again. |
+| `http_exporter_config_reloads_total`, the [OTLP](#otlp-export-status) counters, the counters of the [Python execution pool](#the-python-execution-pool), and the `go_` and `process_` counters and `go_gc_duration_seconds` | The exporter's start. The pool's counters keep what a collector counted when a reload removes it, so they do not start again. |
 
 The exporter's start is the start of its process, the same time
 `process_start_time_seconds` reports — where the platform does not say, the

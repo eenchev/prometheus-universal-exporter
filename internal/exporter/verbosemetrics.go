@@ -29,7 +29,9 @@ import (
 // Both are bounded: fixed buckets per collector, and fixed sets of states,
 // stop reasons and run outcomes. The histogram is only recorded while verbose
 // self-metrics are on; the worker counters are kept regardless, since the pool
-// counts them anyway, and only published when verbose.
+// counts them anyway, and only published when verbose. A collector's are kept
+// for as long as the collector's statistics are, and dropped with them when a
+// reload removes the collector (pythonstats.go).
 
 // scrapeDurationBuckets are the histogram's upper bounds in seconds, from a
 // fast local endpoint to the slowest scrape a Prometheus timeout allows.
@@ -138,8 +140,9 @@ func pythonPoolMetrics() []model.Metric {
 
 // verboseCollectorMetrics builds the verbose-only families above for the
 // configured collectors, whose statistics are stats: a collector's histogram
-// is part of those, and counts since they do (selfcreated.go). It returns
-// nothing unless verbose self-metrics are on.
+// is part of those, and counts since they do (selfcreated.go), as the
+// counters of its Python workers do, which are dropped when those are. It
+// returns nothing unless verbose self-metrics are on.
 func (s *Server) verboseCollectorMetrics(stats map[string]*serverStats) []model.Metric {
 	if !s.verboseSelfMetrics() {
 		return nil
@@ -156,7 +159,8 @@ func (s *Server) verboseCollectorMetrics(stats map[string]*serverStats) []model.
 	}
 	sort.Strings(names)
 	var out []model.Metric
-	for _, name := range names {
+	since, read := make([]int64, len(names)), make([]*serverStats, len(names))
+	for i, name := range names {
 		// The configuration is read again here, and a reload may have added a
 		// collector since stats were taken: its statistics are made now, as
 		// its first probe would make them, so its histogram has at once the
@@ -165,17 +169,22 @@ func (s *Server) verboseCollectorMetrics(stats map[string]*serverStats) []model.
 		if collector == nil {
 			collector = s.statsFor(name)
 		}
+		since[i], read[i] = createdMillis(collector.snapshot().created), collector
 		out = append(out, model.Metric{
 			Name: "http_exporter_collector_scrape_duration_seconds", Help: targetScrapeDurationHelp, Type: model.HistogramMetricType,
-			Labels: map[string]string{"collector": name}, Histogram: collector.tripHistogram(), Created: createdMillis(collector.snapshot().created),
+			Labels: map[string]string{"collector": name}, Histogram: collector.tripHistogram(), Created: since[i],
 		})
 	}
 	var workers, starts, failures, stops, runs []model.Metric
-	for _, name := range names {
+	for i, name := range names {
 		if !python[name] {
 			continue
 		}
-		snap := transform.PythonWorkers().Snapshot(name)
+		// What the workers counted is read from the statistics kept for the
+		// collector whose own were read above, and from no others
+		// (pythonStatsShown): the counts and their creation time are one
+		// collector's, whatever reloads came between the two readings.
+		snap := transform.PythonWorkers().SnapshotOf(s.pythonStatsShown(read[i], name))
 		labels := func(extra ...string) map[string]string {
 			l := map[string]string{"collector": name}
 			for i := 0; i+1 < len(extra); i += 2 {
@@ -189,22 +198,25 @@ func (s *Server) verboseCollectorMetrics(stats map[string]*serverStats) []model.
 		}{{"starting", snap.Starting}, {"idle", snap.Idle}, {"busy", snap.Busy}} {
 			workers = append(workers, model.Metric{Name: "http_exporter_python_workers", Help: pythonWorkersHelp, Type: model.GaugeMetricType, Labels: labels("state", state.name), Value: float64(state.value)})
 		}
-		starts = append(starts, model.Metric{Name: "http_exporter_python_worker_starts_total", Help: pythonWorkerStartsHelp, Type: model.CounterMetricType, Labels: labels(), Value: float64(snap.Starts)})
-		failures = append(failures, model.Metric{Name: "http_exporter_python_worker_start_failures_total", Help: pythonStartFailuresHelp, Type: model.CounterMetricType, Labels: labels(), Value: float64(snap.StartFailures)})
+		// The worker pool keeps a collector's counts for as long as the
+		// collector's statistics are kept, and they are retired together
+		// (pythonstats.go): the counters count since those were made.
+		starts = append(starts, model.Metric{Name: "http_exporter_python_worker_starts_total", Help: pythonWorkerStartsHelp, Type: model.CounterMetricType, Labels: labels(), Value: float64(snap.Starts), Created: since[i]})
+		failures = append(failures, model.Metric{Name: "http_exporter_python_worker_start_failures_total", Help: pythonStartFailuresHelp, Type: model.CounterMetricType, Labels: labels(), Value: float64(snap.StartFailures), Created: since[i]})
 		for _, reason := range transform.PythonStopReasons {
-			stops = append(stops, model.Metric{Name: "http_exporter_python_worker_stops_total", Help: pythonWorkerStopsHelp, Type: model.CounterMetricType, Labels: labels("reason", reason), Value: float64(snap.Stops[reason])})
+			stops = append(stops, model.Metric{Name: "http_exporter_python_worker_stops_total", Help: pythonWorkerStopsHelp, Type: model.CounterMetricType, Labels: labels("reason", reason), Value: float64(snap.Stops[reason]), Created: since[i]})
 		}
 		for _, outcome := range transform.PythonRunOutcomes {
-			runs = append(runs, model.Metric{Name: "http_exporter_python_runs_total", Help: pythonRunsHelp, Type: model.CounterMetricType, Labels: labels("outcome", outcome), Value: float64(snap.Runs[outcome])})
+			runs = append(runs, model.Metric{Name: "http_exporter_python_runs_total", Help: pythonRunsHelp, Type: model.CounterMetricType, Labels: labels("outcome", outcome), Value: float64(snap.Runs[outcome]), Created: since[i]})
 		}
 	}
 	// Grouped by family, so each family's HELP and TYPE come once, before its
 	// series.
-	// The worker pool keeps a collector's counts, and its own, for the life
-	// of the process, also across a reload that removes the collector, so
-	// these count since the exporter started.
-	for _, family := range [][]model.Metric{workers, starts, failures, stops, runs, pythonPoolMetrics()} {
-		out = append(out, countingSince(family, exporterStart())...)
+	for _, family := range [][]model.Metric{workers, starts, failures, stops, runs} {
+		out = append(out, family...)
 	}
+	// The pool's own counts are kept for the life of the process, whatever a
+	// reload does: they count since the exporter started.
+	out = append(out, countingSince(pythonPoolMetrics(), exporterStart())...)
 	return append(out, model.Metric{Name: "http_exporter_trips_waiting", Help: tripsWaitingHelp, Type: model.GaugeMetricType, Labels: map[string]string{}, Value: float64(s.trips.waitingCount())})
 }

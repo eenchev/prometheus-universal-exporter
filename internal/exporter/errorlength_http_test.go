@@ -410,6 +410,9 @@ func TestAShortFailureOfAnyStageIsAnsweredLoggedAndRememberedAsItWas(t *testing.
 		body      func(value string) string
 		refused   bool
 		status    int
+		// says is what every failure of the kind says, where the kind is
+		// of one failure that must not be another's.
+		says string
 	}{
 		{collector: `{name: c, ` + jq + `, metrics: [{name: m, expression: .n}]}`, refused: true},
 		{collector: `{name: c, ` + jq + `, metrics: [{name: m, expression: .n}]}`, body: func(value string) string { return value }, status: http.StatusServiceUnavailable},
@@ -422,7 +425,8 @@ func TestAShortFailureOfAnyStageIsAnsweredLoggedAndRememberedAsItWas(t *testing.
 		{collector: `{name: c, request: {type: http}, decoder: {type: json}, transform: {type: python, script: "raise ValueError(data['message'])"}}`, body: func(value string) string { return fmt.Sprintf(`{"message": %q}`, value) }},
 		{collector: `{name: c, request: {type: http}, decoder: {type: json}, transform: {type: jq, pre_script: "data = data['message'] + 1"}, metrics: [{name: m, expression: .n}]}`, body: func(value string) string { return fmt.Sprintf(`{"message": %q}`, value) }},
 		{collector: `{name: c, request: {type: http}, decoder: {type: json}, transform: {type: python, script: "metric(data['message'], 1.5)"}}`, body: func(value string) string { return fmt.Sprintf(`{"message": %q}`, "bad name "+value) }},
-		{collector: `{name: c, request: {type: http}, decoder: {type: json}, transform: {type: python, script: "metric('m', 1, labels={data['message']: 'v'})"}}`, body: func(value string) string { return fmt.Sprintf(`{"message": %q}`, "bad label "+value) }},
+		// The value is named: metric's second argument is its type.
+		{collector: `{name: c, request: {type: http}, decoder: {type: json}, transform: {type: python, script: "metric('m', value=1, labels={data['message']: 'v'})"}}`, body: func(value string) string { return fmt.Sprintf(`{"message": %q}`, "bad label "+value) }, says: "which is not a classic Prometheus label name"},
 		{collector: `{name: c, request: {type: http}, decoder: {type: prometheus}, transform: {type: prometheus}, limits: {max_metric_name_length: 5}}`, body: func(value string) string { return "metric_" + strings.Repeat("n", len(value)) + " 1\n" }},
 		{collector: `{name: c, ` + jq + `, metrics: [{name: m, expression: .n, labels: [{name: l, expression: .message}]}], limits: {max_label_value_length: 3}}`, body: func(value string) string { return fmt.Sprintf(`{"n": 1, "message": %q}`, "long"+value) }},
 		{collector: `{name: c, ` + jq + `, metrics: [{name: m, expression: .n}, {name: m, expression: '.n + 0'}]}`, body: func(value string) string { return fmt.Sprintf(`{"n": 1, "message": %q}`, value) }},
@@ -454,6 +458,9 @@ func TestAShortFailureOfAnyStageIsAnsweredLoggedAndRememberedAsItWas(t *testing.
 				body.Store(&answer)
 			}
 			stage, answer, logged, remembered := shortFailure(t.Context(), t, &collector, address)
+			if !strings.Contains(logged, kind.says) {
+				t.Fatalf("kind %d, %q: the probe fails at the %s stage with %q, not with %q", i, value.String(), stage, logged, kind.says)
+			}
 			if len(logged) > model.MaxFailureBytes {
 				t.Fatalf("kind %d: a value of %d bytes makes an error of %d", i, value.Len(), len(logged))
 			}

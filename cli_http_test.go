@@ -64,6 +64,29 @@ func TestCheckListsEveryConfigurationMistake(t *testing.T) {
 	}
 }
 
+// --dry-run refuses a rule whose literal name is longer than
+// limits.max_metric_name_length, as startup does, where it passed and every
+// scrape failed; the same rule at the limit passes.
+func TestCheckRefusesARuleNameOverTheMetricNameLimit(t *testing.T) {
+	for length, code := range map[int]int{201: 1, 200: 0} {
+		name := strings.Repeat("m", length)
+		conf := strings.Replace(testutil.MinimalConfig, "name: demo_value", "name: "+name, 1)
+		if conf == testutil.MinimalConfig {
+			t.Fatal("the minimal configuration has no rule named demo_value")
+		}
+		out := runCheckCLI(t, "--config.file="+testutil.WriteFile(t, "config.yaml", conf))
+		if out.code != code {
+			t.Fatalf("a %d-byte name: exit=%d, want %d\n%s", length, out.code, code, out.stdout)
+		}
+		if code == 0 {
+			continue
+		}
+		if errs := out.result(t, "config").Errors; len(errs) != 1 || !strings.Contains(errs[0], fmt.Sprintf("metric %q is 201 bytes, longer than limits.max_metric_name_length 200", name)) {
+			t.Fatalf("a %d-byte name: errors %q", length, errs)
+		}
+	}
+}
+
 // The Python check reports each faulty script on its own line, not one blob.
 func TestCheckListsEveryPythonFault(t *testing.T) {
 	conf := testutil.MinimalConfig + `  - name: first
@@ -274,6 +297,70 @@ func TestDryRunReportsAnInvalidMetricsPrefix(t *testing.T) {
 	}
 }
 
+// --dry-run takes a size written as a whole number with an exponent, as
+// startup does and as the schema an editor checks the file against does:
+// max_response_bytes: 1e6 is a megabyte, where the check once failed a file
+// the editor showed as valid. A number that is no whole number of bytes
+// still fails it, at its line.
+func TestDryRunTakesASizeWrittenWithAnExponent(t *testing.T) {
+	sized := func(size string) string {
+		return testutil.WriteFile(t, "config.yaml", "collectors:\n  - name: sized\n    request:\n      type: http\n      max_response_bytes: "+size+"\n    transform: {type: regex}\n    limits: {max_output_bytes: "+size+"}\n    metrics:\n      - name: v\n        expression: 'v=(\\d+)'\n")
+	}
+	for _, size := range []string{"1e6", "1000000.0", "2.5e6"} {
+		out := runCheckCLI(t, "--config.file="+sized(size))
+		if result := out.result(t, "config"); out.code != 0 || out.report.Status != checkOK || result.Status != checkOK || len(result.Errors) != 0 {
+			t.Errorf("sizes written %s: exit=%d config=%+v", size, out.code, result)
+		}
+	}
+	out := runCheckCLI(t, "--config.file="+sized("1e-1"))
+	result := out.result(t, "config")
+	if out.code != 1 || result.Status != checkFailed || len(result.Errors) != 1 || !strings.Contains(result.Errors[0], `line 5: size "1e-1" is not a number of bytes or a number with a unit such as 512KiB, 10MB or 1.5GiB; line 7: size "1e-1" is not`) {
+		t.Fatalf("sizes written 1e-1: exit=%d config=%+v", out.code, result)
+	}
+}
+
+// --dry-run refuses an output limit under the least, which no answer of a
+// transform's script fits, as startup does, with the collector, the key, the
+// least and the default in its report, where the check once passed a
+// configuration whose every scrape then failed; the least itself, 38 bytes,
+// passes.
+func TestDryRunReportsAnOutputLimitUnderTheLeast(t *testing.T) {
+	limited := func(size string) string {
+		return testutil.WriteFile(t, "config.yaml", "collectors:\n  - name: scripted\n    request: {type: http}\n    transform: {type: python, script: \"metric('m', 1)\"}\n    limits: {max_output_bytes: "+size+"}\n")
+	}
+	for _, size := range []string{"26", "37", "20B"} {
+		out := runCheckCLI(t, "--config.file="+limited(size))
+		result := out.result(t, "config")
+		if want := `collector "scripted" limits.max_output_bytes is ` + strings.TrimSuffix(size, "B") + `, and a Python script that emits no metric answers in 38 bytes, so no transform's script could answer within it; set at least 38, or leave it out, or 0, for the default, 1MiB`; out.code != 1 || out.report.Status != checkFailed || result.Status != checkFailed || len(result.Errors) != 1 || result.Errors[0] != want {
+			t.Errorf("max_output_bytes: %s: exit=%d config=%+v, want %s", size, out.code, result, want)
+		}
+	}
+	out := runCheckCLI(t, "--config.file="+limited("38"))
+	if result := out.result(t, "config"); out.code != 0 || out.report.Status != checkOK || result.Status != checkOK || len(result.Errors) != 0 {
+		t.Errorf("max_output_bytes: 38: exit=%d config=%+v", out.code, result)
+	}
+}
+
+// --dry-run refuses a label value with a {{param_...}} placeholder that the
+// "*" entry of a value_map of its rule's name maps to a text longer than
+// limits.max_label_value_length, as startup does, where the check once
+// passed a configuration whose every probe giving a value the map does not
+// list then failed its scrape; with truncate: true on the label it passes.
+func TestDryRunRefusesATemplatedLabelMappedTooLongByAnyValue(t *testing.T) {
+	mapped := func(label string) string {
+		return testutil.WriteFile(t, "config.yaml", "collectors:\n  - name: tenants\n    request: {type: http}\n    limits: {max_label_value_length: 8}\n    transform: {type: jq}\n    metrics:\n      - name: m\n        expression: .x\n        labels:\n          - {name: tenant, value: \"{{param_tenant}}\""+label+"}\n      - name: m\n        expression: .y\n        labels:\n          - {name: tenant, expression: .t, value_map: {\"*\": overlongvalue}}\n")
+	}
+	out := runCheckCLI(t, "--config.file="+mapped(""))
+	result := out.result(t, "config")
+	if want := `collector "tenants" metric "m" label "tenant" value holds {{param_...}} placeholders, and the value_map of the metric's name maps every value it does not list, by its "*" entry, to 13 bytes, longer than limits.max_label_value_length 8, so every series of a probe that gives a value not listed would fail validation; shorten the "*" entry or take it out, set truncate: true on the label, or raise the limit`; out.code != 1 || result.Status != checkFailed || len(result.Errors) != 1 || !strings.HasSuffix(result.Errors[0], want) {
+		t.Errorf("exit=%d config=%+v, want the error %q", out.code, result, want)
+	}
+	out = runCheckCLI(t, "--config.file="+mapped(", truncate: true"))
+	if result := out.result(t, "config"); out.code != 0 || out.report.Status != checkOK || result.Status != checkOK || len(result.Errors) != 0 {
+		t.Errorf("with truncate: true: exit=%d config=%+v", out.code, result)
+	}
+}
+
 // --dry-run reports an expression that does not compile, because it loads the
 // configuration the way startup does.
 func TestDryRunReportsAnExpressionThatDoesNotCompile(t *testing.T) {
@@ -393,6 +480,26 @@ func TestDryRunReportsRequestPolicies(t *testing.T) {
 	guarded, _ := policies["guarded"].(map[string]any)
 	if check.code != 0 || len(policies) != 1 || !reflect.DeepEqual(guarded["accept_status"], []any{"2xx", "503"}) || !reflect.DeepEqual(guarded["denied_targets"], []any{"169.254.169.254"}) {
 		t.Fatalf("exit=%d\n%s", check.code, check.stdout)
+	}
+}
+
+// --dry-run takes a status of request.accept_status written as a number with
+// a point, an exponent or in hex, as startup does and as the schema an editor
+// checks the file against does, and lists it as the status it is; a number
+// that is no status still fails it, naming the collector and the entry.
+func TestDryRunTakesAStatusWrittenAsANumberOfAnySpelling(t *testing.T) {
+	accepting := func(list string) string {
+		return testutil.WriteFile(t, "config.yaml", "collectors:\n  - name: tolerant\n    request:\n      type: http\n      accept_status: ["+list+"]\n    transform: {type: regex}\n    metrics: [{name: v, expression: 'v=(\\d+)'}]\n")
+	}
+	check := runCheckCLI(t, "--config.file="+accepting("503.0, 4.04e2, 0x1F4, 2xx"))
+	policies, _ := check.result(t, "config").Details["request_policies"].(map[string]any)
+	tolerant, _ := policies["tolerant"].(map[string]any)
+	if check.code != 0 || !reflect.DeepEqual(tolerant["accept_status"], []any{"503", "404", "500", "2xx"}) {
+		t.Fatalf("exit=%d\n%s", check.code, check.stdout)
+	}
+	out := runCheckCLI(t, "--config.file="+accepting("503.5"))
+	if result := out.result(t, "config"); out.code != 1 || result.Status != checkFailed || len(result.Errors) != 1 || !strings.Contains(result.Errors[0], `collector "tolerant" request.accept_status entry "503.5" is not an HTTP status from 100 to 599 or a class such as 2xx`) {
+		t.Fatalf("accept_status: [503.5]: exit=%d config=%+v", out.code, result)
 	}
 }
 

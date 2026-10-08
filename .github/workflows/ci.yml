@@ -273,6 +273,26 @@ jobs:
             echo "the default values rendered GOGC" >&2
             exit 1
           fi
+      - name: Render whole numbers as the whole numbers they are
+        if: steps.changes.outputs.chart == 'true'
+        run: |
+          set -eu
+          # --set-json hands the templates a floating-point number, as a
+          # values file does, which a template prints as 2e+06 by itself.
+          # However it is written, it is rendered written out; one past what
+          # a count may be is rejected.
+          out="$(helm template test charts/prometheus-universal-exporter --set-json replicaCount=2000000 --set-json server.probeMaxConcurrent=2e6 --set-json server.pythonMaxWorkers=2000000.0)"
+          echo "$out" | grep -q 'replicas: 2000000$'
+          echo "$out" | grep -q -- '--probe.max-concurrent=2000000"'
+          echo "$out" | grep -q -- '--python.max-workers=2000000"'
+          if echo "$out" | grep -q 'e+0'; then
+            echo "a whole number was rendered with an exponent" >&2
+            exit 1
+          fi
+          if helm template test charts/prometheus-universal-exporter --set-json replicaCount=2147483648 >/dev/null 2>&1; then
+            echo "helm template accepted a replicaCount past 2147483647" >&2
+            exit 1
+          fi
       - name: Render a monitor's port and namespaces
         if: steps.changes.outputs.chart == 'true'
         run: |

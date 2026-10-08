@@ -81,7 +81,7 @@ func decodeSwitchedBlock(n *yaml.Node, out any, name, block string) error {
 	switched := false
 	for _, entry := range DecodedEntries(n) {
 		switch {
-		case entry.Key.Value != "enabled":
+		case KeyName(entry.Key) != "enabled":
 			others = append(others, entry.Key)
 		case entry.Value != nil && entry.Value.ShortTag() != nullTag:
 			switched = true
@@ -90,7 +90,7 @@ func decodeSwitchedBlock(n *yaml.Node, out any, name, block string) error {
 	if !switched && len(others) > 0 {
 		keys := make([]string, 0, len(others))
 		for _, key := range others {
-			keys = append(keys, key.Value)
+			keys = append(keys, KeyName(key))
 		}
 		problems = append(problems, fmt.Sprintf("line %d: %s sets %s but not enabled; say enabled: true to turn it on, or enabled: false to keep the settings without using them", others[0].Line, block, joinWithAnd(keys)))
 	}
@@ -128,6 +128,21 @@ func resolveAlias(n *yaml.Node) *yaml.Node {
 		n = n.Alias
 	}
 	return n
+}
+
+// KeyName is the key of a mapping as the decoder reads it: the text it is
+// written as, or, of a key that is an alias (*name: value), the text of the
+// node the anchor holds, which is the key the value is decoded into, and not
+// the anchor's name, which the alias node holds as its value. Every check of
+// a mapping's keys written by hand reads a key's text through it, so an
+// alias key is the key it stands for wherever the decoder takes it for one.
+// An alias of <<, which the decoder reads as the text "<<" rather than as a
+// merge, is that text here too: only a << written out merges (mergeTag).
+func KeyName(key *yaml.Node) string {
+	if named := resolveAlias(key); named != nil {
+		return named.Value
+	}
+	return key.Value
 }
 
 // MappingEntry is a key of a mapping and its value.
@@ -181,11 +196,14 @@ func MappingEntries(n *yaml.Node) []MappingEntry {
 // anchor holds and the mapping overrides, which the decoder never reads there,
 // is not held against it.
 //
-// Two things follow the decoder rather than the eye. A key YAML reads as no
+// Three things follow the decoder rather than the eye. A key YAML reads as no
 // key at all (null, ~) sets nothing, so none stands for another and each is
-// returned. And the decoder knows a mapping's own keys by what YAML reads
+// returned. The decoder knows a mapping's own keys by what YAML reads
 // them as, so one that is not text — 1, true — does not keep out a merged key
-// of the same spelling, whose value replaces its own: both are returned.
+// of the same spelling, whose value replaces its own: both are returned. And
+// a key that is an alias (*name: value) is the key the anchor holds, not the
+// anchor's name, and keeps out what that key does; it is returned as it is
+// written, at its own line, for a check to resolve (resolveAlias).
 func DecodedEntries(n *yaml.Node) []MappingEntry {
 	var entries []MappingEntry
 	taken := map[string]bool{}
@@ -209,12 +227,12 @@ func DecodedEntries(n *yaml.Node) []MappingEntry {
 				merge = value
 				continue
 			}
-			if tag := key.ShortTag(); key.Kind == yaml.ScalarNode && tag != nullTag {
-				if merged && taken[key.Value] {
+			if named := resolveAlias(key); named != nil && named.Kind == yaml.ScalarNode && named.ShortTag() != nullTag {
+				if merged && taken[named.Value] {
 					continue
 				}
-				if merged || tag == stringTag {
-					taken[key.Value] = true
+				if merged || named.ShortTag() == stringTag {
+					taken[named.Value] = true
 				}
 			}
 			entries = append(entries, MappingEntry{key, value})
@@ -235,8 +253,9 @@ func DecodedEntries(n *yaml.Node) []MappingEntry {
 // is decoded into has no field for, with the decoder's own message. Types
 // that decode themselves check their own keys. name is what the message calls
 // t, which is a local type when checked from t's own UnmarshalYAML. The keys
-// are those the decoder reads: an alias is what it names, and a merge key
-// supplies the keys of the mappings it merges in (MappingEntries).
+// are those the decoder reads: an alias is what it names, a key that is an
+// alias the key it names (KeyName), and a merge key supplies the keys of the
+// mappings it merges in (MappingEntries).
 func checkKnownKeys(n *yaml.Node, t reflect.Type, name string) error {
 	var problems []string
 	visiting := map[*yaml.Node]bool{}
@@ -269,13 +288,13 @@ func checkKnownKeys(n *yaml.Node, t reflect.Type, name string) error {
 			}
 			for _, entry := range MappingEntries(n) {
 				key := entry.Key
-				field, ok := fields[key.Value]
+				field, ok := fields[KeyName(key)]
 				if !ok {
 					typeName := t.String()
 					if top {
 						typeName = name
 					}
-					problems = append(problems, fmt.Sprintf("line %d: field %s not found in type %s", key.Line, key.Value, typeName))
+					problems = append(problems, fmt.Sprintf("line %d: field %s not found in type %s", key.Line, KeyName(key), typeName))
 					continue
 				}
 				walk(entry.Value, field, false)

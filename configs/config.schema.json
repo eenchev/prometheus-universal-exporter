@@ -231,6 +231,72 @@
                 "metrics": {
                   "items": {
                     "properties": {
+                      "name": {
+                        "pattern": "^$|^[a-zA-Z_:][a-zA-Z0-9_:]*$",
+                        "type": "string"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "not": {
+                "anyOf": [
+                  {
+                    "properties": {
+                      "name_escaping": {
+                        "enum": [
+                          "underscores",
+                          "values"
+                        ]
+                      }
+                    },
+                    "required": [
+                      "name_escaping"
+                    ]
+                  },
+                  {
+                    "properties": {
+                      "transform": {
+                        "anyOf": [
+                          {
+                            "properties": {
+                              "rename_labels": {
+                                "minProperties": 1
+                              }
+                            },
+                            "required": [
+                              "rename_labels"
+                            ]
+                          },
+                          {
+                            "properties": {
+                              "remove_labels": {
+                                "minItems": 1
+                              }
+                            },
+                            "required": [
+                              "remove_labels"
+                            ]
+                          }
+                        ]
+                      }
+                    },
+                    "required": [
+                      "transform"
+                    ]
+                  }
+                ]
+              }
+            },
+            "then": {
+              "properties": {
+                "metrics": {
+                  "items": {
+                    "properties": {
                       "labels": {
                         "items": {
                           "properties": {
@@ -240,10 +306,6 @@
                             }
                           }
                         }
-                      },
-                      "name": {
-                        "pattern": "^$|^[a-zA-Z_:][a-zA-Z0-9_:]*$",
-                        "type": "string"
                       }
                     }
                   }
@@ -370,6 +432,10 @@
                 "minimum": 0,
                 "type": "integer"
               },
+              "max_label_name_length": {
+                "minimum": 0,
+                "type": "integer"
+              },
               "max_label_value_length": {
                 "minimum": 0,
                 "type": "integer"
@@ -387,7 +453,15 @@
                 "type": "integer"
               },
               "max_output_bytes": {
-                "description": "A size: a whole number of bytes, or a number with a unit such as 512KiB, 10MB or 1.5GiB. Under 2^63 bytes, which the exporter checks when the configuration loads.",
+                "anyOf": [
+                  {
+                    "const": 0
+                  },
+                  {
+                    "minimum": 38
+                  }
+                ],
+                "description": "The most bytes one answer of the collector's Python worker may be, a script's metrics or a pre-script's data. A size: a whole number of bytes, or a number with a unit such as 512KiB, 10MB or 1.5GiB, under 2^63 bytes. At least 38 bytes, the answer of a script that emits no metric; 0, like the key left out, is the default, 1MiB. The range, and the least of a size written as text, in quotes or with a unit, are checked by the exporter when the configuration loads.",
                 "minimum": 0,
                 "pattern": "^([0-9]+|[0-9]+(\\.[0-9]+)? ?([kKmMgGtT][iI]?[bB]?|[bB]))$",
                 "type": [
@@ -548,7 +622,7 @@
                         ]
                       },
                       "name": {
-                        "description": "The label's name: letters, digits and _, not starting with a digit. Under the collector's name_escaping underscores or values it may be any name, such as service.name, and is exported escaped. Text: a name YAML reads as a number or a boolean is written in quotes.",
+                        "description": "The label's name: letters, digits and _, not starting with a digit. Under the collector's name_escaping underscores or values it may be any name, such as service.name, and is exported escaped. A name transform.rename_labels renames or transform.remove_labels removes is not exported, and may be any name. Text: a name YAML reads as a number or a boolean is written in quotes.",
                         "minLength": 1,
                         "not": {
                           "pattern": "^[\\t\\n\\v\\f\\r \\x85\\xA0  - \u2028\u2029  　]+$",

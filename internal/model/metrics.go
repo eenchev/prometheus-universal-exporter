@@ -420,11 +420,20 @@ func (s *MetricSet) validate(l Limits, seen *seriesSet) error {
 		if len(m.Labels) > l.MaxLabelsPerMetric && l.MaxLabelsPerMetric > 0 {
 			return Errorf("metric %q has %d labels, more than limits.max_labels_per_metric %d; drop labels it does not need or raise limits.max_labels_per_metric", shownName(m.Name), Size(len(m.Labels)), l.MaxLabelsPerMetric)
 		}
+		// le and quantile, which a histogram's buckets and a summary's
+		// quantiles carry, are label names as well: a limit under the
+		// longer, 8 bytes, is asked of them, and any other costs one
+		// comparison.
+		if l.MaxLabelNameLength > 0 && l.MaxLabelNameLength < len("quantile") {
+			if own := seriesOwnLabel(m); len(own) > l.MaxLabelNameLength {
+				return nameErrorf("metric %q is a %s, whose %s carry the label %s, which is longer than limits.max_label_name_length %d; raise limits.max_label_name_length", shownName(m.Name), m.Type, map[string]string{"le": "buckets", "quantile": "quantiles"}[own], own, l.MaxLabelNameLength)
+			}
+		}
 		var labels uint64
 		for k, v := range m.Labels {
 			// What labelFailure refuses, asked here without a call: a
 			// series that passes pays for the questions alone.
-			if !ValidLabelName(k) || ReservedLabelName(k) || k == seriesOwnLabel(m) || l.MaxLabelValueLength > 0 && len(v) > l.MaxLabelValueLength {
+			if !ValidLabelName(k) || ReservedLabelName(k) || k == seriesOwnLabel(m) || len(k) > l.MaxLabelNameLength && l.MaxLabelNameLength > 0 || l.MaxLabelValueLength > 0 && len(v) > l.MaxLabelValueLength {
 				return firstLabelFailure(m, &l)
 			}
 			// The labels are gone through once, for these checks and for
@@ -588,6 +597,26 @@ func shownName(name string) any {
 	}
 	head := HeadOf(name, maxShownName)
 	return shownStart(strconv.Quote(name[:head]), head, len(name))
+}
+
+// ShownName is a metric's or a label's name as a log line shows it in an
+// attribute: by the rule the error of a set that cannot be exposed quotes a
+// name by (shownName), so that one rule holds for a name wherever it is
+// shown, and without the quotes, which are the error's and which the value
+// of an attribute never had. It is the name itself, the very string, when
+// it is no longer than maxShownName, and otherwise its first maxShownName
+// bytes, at a character boundary, and its length (CutMark).
+//
+// A line may name a metric before the set is validated, as the warning of
+// repaired UTF-8 names the first metric repaired: the name is then as long
+// as the target or a script made it, and not yet held to
+// limits.max_metric_name_length, which is a limit the operator may raise
+// besides. The cut name is made anew, and holds nothing of the name.
+func ShownName(name string) string {
+	if len(name) <= maxShownName {
+		return name
+	}
+	return name[:HeadOf(name, maxShownName)] + CutMark(len(name), false)
 }
 
 // nameErrorf is fmt.Errorf for the error of a set that cannot be exposed
@@ -842,13 +871,18 @@ func SanitizeUTF8(set *MetricSet) (uint64, string) {
 }
 
 // labelFailure is why a label of a series cannot be exposed, nil when it can:
-// its name, or a value over limits.max_label_value_length.
+// its name, one over limits.max_label_name_length, or a value over
+// limits.max_label_value_length. A name is held to its length after it is
+// found to be a name, as a metric's is.
 func labelFailure(m *Metric, k, v string, l *Limits) error {
 	if !ValidLabelName(k) {
 		if k != "" && utf8.ValidString(k) {
 			return nameErrorf("metric %q has label %q, which is not a classic Prometheus label name; set the collector's name_escaping to underscores or values to export it escaped", shownName(m.Name), shownName(k))
 		}
 		return nameErrorf("metric %q has invalid label name %q", shownName(m.Name), shownName(k))
+	}
+	if l.MaxLabelNameLength > 0 && len(k) > l.MaxLabelNameLength {
+		return labelNameLengthError(m, k, l.MaxLabelNameLength)
 	}
 	if ReservedLabelName(k) {
 		return nameErrorf("metric %q has %s", shownName(m.Name), reservedLabelError(k))
@@ -865,6 +899,15 @@ func labelFailure(m *Metric, k, v string, l *Limits) error {
 		return Errorf("metric %q label %q value is %d bytes, longer than limits.max_label_value_length %d; a label one of the collector's rules gives can be cut to fit with truncate: true on that label, or raise limits.max_label_value_length", shownName(m.Name), shownName(k), Size(len(v)), l.MaxLabelValueLength)
 	}
 	return nil
+}
+
+// labelNameLengthError is the failure of a series with a label named k,
+// longer than limits.max_label_name_length, limit. The name is the target's
+// or a script's to make as long as the response, so it is shown as a
+// metric's name over its limit is: whole within 200 bytes, and past them by
+// its start and its length (shownName).
+func labelNameLengthError(m *Metric, k string, limit int) error {
+	return nameErrorf("metric %q label name %q is longer than limits.max_label_name_length %d; rename the label with transform.rename_labels, or raise limits.max_label_name_length", shownName(m.Name), shownName(k), limit)
 }
 
 // firstLabelFailure is the failure of the first label of a series that has

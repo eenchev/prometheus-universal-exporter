@@ -12,6 +12,7 @@ import (
 	"github.com/eenchev/prometheus-universal-exporter/internal/config"
 	"github.com/eenchev/prometheus-universal-exporter/internal/model"
 	"github.com/eenchev/prometheus-universal-exporter/internal/testutil"
+	"github.com/eenchev/prometheus-universal-exporter/internal/transform"
 )
 
 // The schema an editor checks a configuration against and the exporter that
@@ -82,16 +83,27 @@ func TestSchemaAndExporterAgreeOnTheCSVDelimiter(t *testing.T) {
 }
 
 // sizedCollector is a configuration of one collector whose
-// limits.max_output_bytes is as written.
+// limits.max_response_bytes is as written: a size that is held to nothing
+// but being one. limits.max_output_bytes, which the sizes below were first
+// written at, has a least of its own (limitedCollector).
 func sizedCollector(size string) string {
-	return "collectors:\n  - name: sized\n    request: {type: http}\n    transform: {type: regex}\n    limits:\n      max_output_bytes: " + size + "\n    metrics:\n      - name: v\n        expression: 'v=(\\d+)'\n"
+	return limitedCollector("max_response_bytes", size)
+}
+
+// limitedCollector is a configuration of one collector whose limit of the
+// key is as written.
+func limitedCollector(key, written string) string {
+	return "collectors:\n  - name: sized\n    request: {type: http}\n    transform: {type: regex}\n    limits:\n      " + key + ": " + written + "\n    metrics:\n      - name: v\n        expression: 'v=(\\d+)'\n"
 }
 
 // A size is a whole number of bytes or a number with a unit, as a YAML number
 // or as text; a fraction needs a unit, and a sign, an exponent, an unknown
-// unit and space around it are refused. The range, and a number YAML reads
-// as a whole one where the exporter sees how it was written, are the
-// exporter's alone to refuse.
+// unit and space around the text are refused. A number YAML reads as one is
+// the whole number it equals however it is written, with an exponent or a
+// fraction of zero too, to the exporter as to the schema, which is handed
+// the number and not its spelling: the exporter once refused 1e3 and 1.0,
+// which the schema took. The range, and a fraction past the digits the
+// number a schema is handed holds, are the exporter's alone to refuse.
 func TestSchemaAndExporterAgreeOnSizes(t *testing.T) {
 	schema := loadSchema(t)
 	for written, accepted := range map[string]bool{
@@ -99,22 +111,148 @@ func TestSchemaAndExporterAgreeOnSizes(t *testing.T) {
 		"10B": true, "10 B": true, "1.5B": true, "1k": true, "1K": true, "1kB": true, "1KB": true, "1.5 kb": true,
 		"2Ki": true, "2KiB": true, "2kib": true, "0.5KiB": true, "0.0001KiB": true, "10MB": true, "64MiB": true, "64 MiB": true,
 		"1.5MiB": true, "1G": true, "1.5GiB": true, "0.5GiB": true, "1T": true, "1TiB": true, "8388607TiB": true,
+		"1e3": true, "1E3": true, "1e+3": true, "+1e3": true, "1.0": true, "1.": true, "1000.000": true, "2.5e2": true, "2.50e2": true,
+		"0.5e1": true, ".5e1": true, "10e-1": true, "0.0": true, "0e0": true, "-0.0": true, "-0": true, "+1000": true,
+		"1_000.0": true, "1_0e2": true, "9007199254740993.0": true, "9.223372036854775807e18": true, "9223372036854775807": true,
 
 		"lots": false, "''": false, "MiB": false, "-1": false, "'-1'": false, "-1MiB": false, "-1.5MiB": false, "+5MiB": false,
 		"1.5": false, "0.5": false, "'1.5'": false, "'1.0'": false, "'0.0'": false, ".5MiB": false, "5.MiB": false, "1.5.5MiB": false, "'1,5MiB'": false,
 		"'1e3'": false, "1e3KiB": false, "'0x100'": false, "'1_000'": false, "8EiB": false, "1PiB": false, "10 XB": false, "10MiBs": false,
 		"10  MiB": false, "' 10MiB'": false, "'10MiB '": false, "[1]": false, "{bytes: 1}": false, "true": false,
+		"1e-1": false, "1.5e0": false, "2.55e1": false, "15e-1": false, ".5": false, "-1e3": false, "-1.0": false, "-.5e1": false,
+		".inf": false, "+.inf": false, "-.inf": false, ".nan": false, "1e400": false, "0x1p3": false,
+		`"1e3"`: false, "'1E3'": false, "'1e+3'": false, `"1.0"`: false, "'1.'": false, "'2.5e2'": false, "'+1000'": false, "'0e0'": false, "!!str 1e3": false,
 	} {
-		agree(t, schema, "max_output_bytes: "+written, sizedCollector(written), accepted)
+		agree(t, schema, "max_response_bytes: "+written, sizedCollector(written), accepted)
 	}
 	for written, message := range map[string]string{
-		"8388608TiB":            `size "8388608TiB" is too large; a size is under 8EiB, which is 2^63 bytes`,
-		"99999999999TiB":        `size "99999999999TiB" is too large`,
-		"'9223372036854775808'": `size "9223372036854775808" is too large`,
-		"1.0":                   `size "1.0" is not a whole number of bytes`,
-		"1e3":                   `size "1e3" is not a number of bytes or a number with a unit`,
+		"8388608TiB":              `size "8388608TiB" is too large; a size is under 8EiB, which is 2^63 bytes`,
+		"99999999999TiB":          `size "99999999999TiB" is too large`,
+		"'9223372036854775808'":   `size "9223372036854775808" is too large`,
+		"9223372036854775808":     `size 9223372036854775808 is too large; a size is under 8EiB, which is 2^63 bytes`,
+		"99999999999999999999":    `size "99999999999999999999" is too large`,
+		"9223372036854775808.0":   `size 9223372036854775808.0 is too large; a size is under 8EiB, which is 2^63 bytes`,
+		"9.223372036854775808e18": `size 9.223372036854775808e18 is too large; a size is under 8EiB, which is 2^63 bytes`,
+		"1e19":                    `size 1e19 is too large; a size is under 8EiB, which is 2^63 bytes`,
+		"1e300":                   `size 1e300 is too large; a size is under 8EiB, which is 2^63 bytes`,
+		// A float64 holds some 17 digits: past them a fraction is none to
+		// what a schema is handed, and the exporter reads what is written.
+		"1.00000000000000000001": `size "1.00000000000000000001" is not a whole number of bytes`,
+		"9007199254740992.5":     `size "9007199254740992.5" is not a whole number of bytes`,
+		"1e-400":                 `size "1e-400" is not a number of bytes or a number with a unit`,
 	} {
-		loadersAlone(t, schema, "max_output_bytes: "+written, sizedCollector(written), message)
+		loadersAlone(t, schema, "max_response_bytes: "+written, sizedCollector(written), message)
+	}
+	// A whole number under 0 is refused by both, and by the exporter as
+	// negative however it is written.
+	for _, written := range []string{"-1", "-1e3", "-1.0", "-1e19"} {
+		refusedByBoth(t, schema, "max_response_bytes: "+written, sizedCollector(written), "size "+written+" is negative; a size is a number of bytes from 0, or a number with a unit such as 10MiB")
+	}
+}
+
+// A key of a whole number takes a number YAML writes with a point or an
+// exponent as the whole number it is, to the exporter as to the schema, which
+// is handed the number and not its spelling: in the configuration, at a
+// collector's limit and its retries, which the schema holds to at most 10,
+// and in the static target file. The
+// exporter reads the number by its digits, where it converted the float64
+// nearest to it, so that 9.223372036854775807e18 was refused as negative on
+// amd64 and 1e19 as no whole number. A whole number past what the key's int
+// holds, under -2^63 or from 2^63, is refused by the exporter in one message,
+// and the schemas, which have no maximum for a whole number, take it from
+// 2^63: the range is the exporter's alone to refuse, as a size's is, and so
+// is a fraction past the digits the float64 a schema is handed holds.
+func TestSchemaAndExporterAgreeOnWholeNumbersWrittenWithAPointOrAnExponent(t *testing.T) {
+	schema, targetSchema := loadSchema(t), loadSchemaFile(t, staticTargetsSchemaFile)
+	retried := func(written string) string {
+		return strings.Replace(limitedCollector("max_metrics", "0"), "    request: {type: http}\n", "    request: {type: http, retry: {attempts: "+written+"}}\n", 1)
+	}
+	targets := func(written string) string {
+		return "interval: 1m\nconcurrency: " + written + "\ntargets:\n  - {name: t, collector: sized, target: 'http://x'}\n"
+	}
+	targetVerdicts := func(written string) ([]string, error) {
+		problems := schemaProblems(t, targetSchema, targets(written))
+		file, err := config.LoadStaticTargets(testutil.WriteFile(t, "targets.yaml", targets(written)))
+		if err == nil {
+			err = config.ValidateStaticTargets(file)
+		}
+		return problems, err
+	}
+	pastTheRange := func(key, written string) string {
+		return key + " is " + written + ", which is past the whole numbers it holds, -9223372036854775808 to 9223372036854775807; write a whole number in that range"
+	}
+	for written, accepted := range map[string]bool{
+		"1e3": true, "1.0": true, "1000.000": true, "+2e0": true, "9007199254740993.0": true, "9.223372036854775807e18": true, "0.0": true, "-0.0": true,
+		"1.5": false, "1e-1": false, "-1.0": false, "-1e3": false, "-1e19": false, "-9.223372036854775808e18": false, ".inf": false, ".nan": false,
+	} {
+		agree(t, schema, "max_metrics: "+written, limitedCollector("max_metrics", written), accepted)
+		if problems, err := targetVerdicts(written); (len(problems) == 0) != accepted || (err == nil) != accepted {
+			t.Errorf("concurrency: %s: want accepted %v by both; the schema says %v, the exporter %v", written, accepted, problems, err)
+		}
+	}
+	// A retry's attempts are at most 10, to both, however the number is
+	// written.
+	for _, written := range []string{"2.0", "2e0", "+2.0", "1e1"} {
+		agree(t, schema, "attempts: "+written, retried(written), true)
+	}
+	for _, written := range []string{"11.0", "1.1e1", "9.223372036854775807e18"} {
+		refusedByBoth(t, schema, "attempts: "+written, retried(written), `collector "sized" request.retry.attempts must be from 0 to 10`)
+	}
+	for _, written := range []string{"1e19", "9.223372036854775808e18", "9223372036854775808.0", "1e300"} {
+		loadersAlone(t, schema, "max_metrics: "+written, limitedCollector("max_metrics", written), pastTheRange("max_metrics", written))
+		refusedByBoth(t, schema, "attempts: "+written, retried(written), pastTheRange("attempts", written))
+		if problems, err := targetVerdicts(written); len(problems) != 0 || err == nil || !strings.Contains(err.Error(), pastTheRange("concurrency", written)) {
+			t.Errorf("concurrency: %s: want it past the schema and refused by the exporter as past the range; the schema says %v, the exporter %v", written, problems, err)
+		}
+	}
+	// A float64 holds some 17 digits: past them a fraction is none to
+	// what a schema is handed, and the exporter reads what is written.
+	for _, written := range []string{"1.00000000000000000001", "9007199254740992.5"} {
+		loadersAlone(t, schema, "max_metrics: "+written, limitedCollector("max_metrics", written), "max_metrics is "+written+", which is not a whole number")
+	}
+}
+
+// limits.max_output_bytes is a size that, when it is set, is at least the 38
+// bytes a Python script that emits no metric answers in
+// (transform.MinPythonOutputBytes), to the exporter and, where the size is written as a number, to the schema,
+// which is handed the number however it is written: 37 and 1 are refused by
+// both, with an exponent and with a fraction of zero too, and 38, and 0,
+// which is the default, are taken by both. A size written as text, in
+// quotes or with a unit, is text of the pattern of a size to a schema,
+// which cannot tell how many bytes it comes to: one that is too small is the
+// exporter's alone to refuse, and one that comes to no byte at all is the
+// default to both.
+func TestSchemaAndExporterAgreeOnTheLeastOutputLimit(t *testing.T) {
+	schema := loadSchema(t)
+	const least = transform.MinPythonOutputBytes
+	limited := func(written string) string { return limitedCollector("max_output_bytes", written) }
+	tooSmall := func(size int) string {
+		return fmt.Sprintf(`collector "sized" limits.max_output_bytes is %d, and a Python script that emits no metric answers in %d bytes, so no transform's script could answer within it; set at least %d, or leave it out, or 0, for the default, 1MiB`, size, least, least)
+	}
+	for written, accepted := range map[string]bool{
+		"0": true, "0.0": true, "0e0": true, "-0": true, "-0.0": true, "0x0": true,
+		"38": true, "39": true, "3.8e1": true, "38.0": true, "38.": true, "+38": true, "0x26": true, "380e-1": true,
+		"1e2": true, "1024": true, "1048576": true, "4611686018427387904": true,
+		"'38'": true, "38B": true, "38 B": true, "38.9B": true, "0.04KiB": true, "1k": true, "64MiB": true,
+		// No byte at all is the default, with a unit too.
+		"'0'": true, "0B": true, "0.9B": true, "0.0001KiB": true,
+	} {
+		agree(t, schema, "max_output_bytes: "+written, limited(written), accepted)
+	}
+	for written, size := range map[string]int{
+		"1": 1, "+1": 1, "1.0": 1, "1e0": 1, "10": 10, "1e1": 10, "26": 26, "26.0": 26, "2.6e1": 26, "0x1a": 26, "27": 27,
+		"37": 37, "37.0": 37, "3.7e1": 37, "370e-1": 37, "0x25": 37, "+37": 37, "3_7": 37,
+	} {
+		refusedByBoth(t, schema, "max_output_bytes: "+written, limited(written), tooSmall(size))
+	}
+	for written, size := range map[string]int{
+		"'1'": 1, `"26"`: 26, "'37'": 37, "1B": 1, "20B": 20, "26B": 26, "26 b": 26, "37B": 37, "37.9B": 37, "1.5B": 1, "0.01KiB": 10, "0.02KiB": 20, "0.000026MB": 26,
+	} {
+		loadersAlone(t, schema, "max_output_bytes: "+written, limited(written), tooSmall(size))
+	}
+	// What is no size is no output limit either, to both, as it was.
+	for _, written := range []string{"-1", "-38", "37.5", "38.5", "3.75e1", "lots", "'3.8e1'", "'38.0'", "38 bytes", "[38]", "true"} {
+		agree(t, schema, "max_output_bytes: "+written, limited(written), false)
 	}
 }
 

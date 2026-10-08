@@ -217,7 +217,14 @@ func targetsChecked(f *model.StaticTargetFile, configs ...*model.Config) *model.
 // there is none. The path is followed as reading it would be, so a file
 // replaced by pointing a symbolic link elsewhere — how Kubernetes publishes
 // a new version of a mounted Secret or ConfigMap, swapping ..data — is
-// another file even when its time and size are those of the old one.
+// another file even when its time and size are those of the old one. The
+// file is also told by its identity, the device and inode its stat holds
+// where the system gives them (fetch.FileIdentity), as the check of a grpc
+// collector's descriptor files at each call tells it: a file renamed over
+// by another of the same time, size and permissions at the same path leads
+// to the same resolved path, and only its identity tells the call's new
+// files from the ones the configuration was checked against. The identity
+// costs nothing beyond the stat.
 func filesStamp(paths []string) string {
 	var b strings.Builder
 	for _, path := range paths {
@@ -230,6 +237,12 @@ func filesStamp(paths []string) string {
 		}
 		if resolved, err := filepath.EvalSymlinks(path); err == nil {
 			b.WriteString(resolved)
+		}
+		b.WriteByte(0)
+		if dev, ino, ok := fetch.FileIdentity(st); ok {
+			b.WriteString(strconv.FormatUint(dev, 10))
+			b.WriteByte('.')
+			b.WriteString(strconv.FormatUint(ino, 10))
 		}
 		b.WriteByte(0)
 		b.WriteString(strconv.FormatInt(st.ModTime().UnixNano(), 10))

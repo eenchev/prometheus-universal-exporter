@@ -853,6 +853,7 @@ func chartCasesMissing(local, ci map[string]bool) []string {
 		parent   = "helm template test $tree/testdata/chart/parent --set prometheus-universal-exporter.enabled=true"
 		shadow   = `--set-json extraVolumes=[{"name":"shadow","configMap":{"name":"shadow"}}] --set-json extraVolumeMounts=[{"name":"shadow","mountPath":"/etc/prometheus-universal-exporter/"}]`
 		target   = template + "--set goGC.percent=400"
+		numbers  = template + "--set-json replicaCount=2000000 --set-json server.probeMaxConcurrent=2e6 --set-json server.pythonMaxWorkers=2000000.0"
 	)
 	want := []string{
 		"succeeds: " + recreate,
@@ -884,6 +885,16 @@ func chartCasesMissing(local, ci map[string]bool) []string {
 		"fails: " + template + "--set-string goGC.percent=off --set goMemLimit.enabled=false",
 		"fails: " + template + "--set goGC.percent=0",
 		"fails: " + template + `--set goGC.percent=200 --set-json env=[{"name":"GOGC","value":"50"}]`,
+
+		// A whole number is rendered as the whole number it is, however
+		// it is written, where a template printed 2e+06 by itself; one
+		// past what a count may be is refused.
+		"succeeds: " + numbers,
+		`renders a line matching "replicas: 2000000$": ` + numbers,
+		`renders a line matching "--probe.max-concurrent=2000000\"": ` + numbers,
+		`renders a line matching "--python.max-workers=2000000\"": ` + numbers,
+		`renders no line matching "e+0": ` + numbers,
+		"fails: " + template + "--set-json replicaCount=2147483648",
 
 		// A monitor's port is a port's name, never its number.
 		"fails: " + template + `--set-json monitors=[{"name":"t","enabled":true,"type":"service","collector":"example","port":"9115"}]`,
@@ -936,8 +947,9 @@ func chartCaseAdvice(check string, made map[string]bool) string {
 // The chart refuses and renders things that only the Go tests looked at: the
 // Recreate strategy without a rollingUpdate, a monitor's port and namespaces,
 // a configuration file whose first line is indented, the chart as a dependency
-// of a parent chart, the garbage collector's target, and the refusals of a
-// monitor's auth without a type, of a monitor's port given as a number, of a
+// of a parent chart, the garbage collector's target, whole numbers written
+// out however they were given, and the refusals of a count past 2147483647,
+// of a monitor's auth without a type, of a monitor's port given as a number, of a
 // scrape timeout longer than its interval, of an Ingress without the Service,
 // of a mount at the configuration directory written with a trailing slash and
 // of a garbage collector target that is off with no memory limit, 0 or beside

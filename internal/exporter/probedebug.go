@@ -38,6 +38,8 @@ import (
 // records no self-metric, queues nothing for OTLP, and logs its failures to
 // its report rather than the exporter's log, where they would take part in
 // the failure log's reckoning of what is failing (failurelog.go). Its
+// scripts, though, run in the collector's Python workers, whose series count
+// what the workers did, a debug probe's runs among them (pythonstats.go). Its
 // report always answers 200, whatever the probe would have answered, which it
 // says.
 //
@@ -54,6 +56,64 @@ const probeDebugParam = "debug"
 
 // debugBodyLimit is how much of the response body a report shows.
 const debugBodyLimit = 64 << 10
+
+// What a report shows is the target's to make long, and a script's: the
+// request a redirect led to is for the URL its Location named, most of a
+// megabyte of it; a response header's value, and the message of a gRPC
+// status the collector accepts, are as long as the target sends them, and
+// the headers as many; a metric's name is as long as the response. The
+// report wrote each whole, in one line. It is read by a person, in a browser
+// or a terminal, and is made in memory whole, so beside the body, which has
+// its bound (debugBodyLimit), no line of it is longer than debugLineLimit:
+// a longer one is shown by its start and its length, as a failure's text is
+// (model.CutMark). That is done to the lines once they are written,
+// whatever section wrote them and whatever they are made of (cutLongLines),
+// and costs a report without such a line the reading of it. Four things are
+// bounded before it, where the line says more after them, where the length
+// that tells the reader something is theirs and not the line's, or where
+// there is no end of them:
+//
+//   - the URL of a request is shown as a failure shows one, by its first
+//     debugURLLimit bytes and its length, and how the request ended is said
+//     after it;
+//   - a metric's name in the Transform section is shown as a failure shows
+//     one, by its first debugNameLimit bytes and its length, and its count
+//     is said after it, so the section is no longer than limits.max_metrics
+//     such lines;
+//   - a header's value is shown by its first debugHeaderValueLimit bytes
+//     and its length, and is not copied whole to be cut;
+//   - of the headers of a request or a response the first debugHeaderLimit
+//     are listed, and then how many there are.
+//
+// What is withheld is withheld before anything is cut, so a cut shows
+// nothing redaction hides, and none ends inside the <redacted> that stands
+// for a credential, where the part shown would read as the start of one
+// (shownHead).
+
+// debugLineLimit is how long a line of a report may be, the body's aside.
+// It is past every line whose parts the exporter bounds already, which are
+// not to be cut twice: a failure's text, 2,000 bytes with its own length at
+// its end (model.MaxFailureBytes), in the sentence or the log line that
+// quotes it, and the log line of what a script printed, the first 4,096
+// characters of it.
+const debugLineLimit = 8 << 10
+
+// debugURLLimit and debugNameLimit are how much of a request's URL and of a
+// metric's name a report shows: what a failure's text shows of one
+// (fetch/urlcut.go, model.Validate).
+const (
+	debugURLLimit  = 512
+	debugNameLimit = 200
+)
+
+// debugHeaderValueLimit is how much of a header's value a report shows, and
+// debugHeaderLimit how many headers of a request or a response it lists:
+// several times what an API sends, and a small part of what fits in the
+// megabyte a response's headers may take.
+const (
+	debugHeaderValueLimit = 1 << 10
+	debugHeaderLimit      = 100
+)
 
 // SetProbeDebug enables debug probes, --web.enable-probe-debug.
 func (s *Server) SetProbeDebug(enabled bool) { s.probeDebug = enabled }
@@ -266,6 +326,10 @@ type debugProbe struct {
 	// static is the static target a debug scrape is of, nil for a probe
 	// (serveStaticTargetDebug).
 	static *model.StaticTarget
+	// generation is that of the configuration the collector was read in,
+	// which says whose the worker statistics are that the probe's scripts
+	// count in (pythonStatsSince).
+	generation uint64
 }
 
 // whose is what a report is of, in its first line.
@@ -350,6 +414,7 @@ func (s *Server) debugTrip(ctx context.Context, trace *probeTrace, p debugProbe,
 		collector: p.collector, target: p.target, overrides: p.overrides, headers: p.forwarded,
 		display: p.logTarget, budget: p.budget, budgetSource: p.budgetSource,
 		scrape: p.static != nil, log: log,
+		python: s.pythonStatsSince(p.generation, p.collector),
 	})
 	return s.debugVerdict(result, p)
 }
@@ -444,8 +509,14 @@ func (s *Server) staticDebugVerdict(result collected, p debugProbe) (string, *mo
 // target's last scheduled result.
 func (s *Server) serveStaticTargetDebug(w http.ResponseWriter, r *http.Request, name string) {
 	// The target and its collector are read together, as its scrape reads
-	// them.
-	cfg, file := s.manager.InForce()
+	// them, and with them the generation of the configuration they are in
+	// (followedInForce), which says below whose worker statistics the
+	// scrape's scripts count in. Asked for once the target's credential
+	// files are read, it would be that of another configuration when a
+	// reload came meanwhile, or of none: the scripts of a collector the
+	// reload kept would be counted under no collector, in its own worker.
+	followed := s.followedInForce()
+	cfg, file := followed.config, followed.targets
 	var target *model.StaticTarget
 	for _, t := range staticTargetsOf(file) {
 		if t.Name == name {
@@ -475,7 +546,7 @@ func (s *Server) serveStaticTargetDebug(w http.ResponseWriter, r *http.Request, 
 			budget: time.Duration(target.Interval), budgetSource: budgetFromInterval,
 		},
 		method: fetch.RequestMethodFor(c, overrides),
-		static: target,
+		static: target, generation: followed.generation,
 	}
 	if label, err := fetch.RequestLabelFor(target.Target, c, overrides); err == nil {
 		p.requestURL = label
@@ -486,11 +557,15 @@ func (s *Server) serveStaticTargetDebug(w http.ResponseWriter, r *http.Request, 
 	s.serveDebugProbe(w, r, p)
 }
 
-// report renders the trace.
+// report renders the trace. Its lines are cut where they are longer than a
+// line may be (cutLongLines), but for the body's: those before the body
+// when the body is to be written, and those after it at the end.
 func (t *probeTrace) report(p debugProbe, verdict string, answer *model.MetricSet, took time.Duration) []byte {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	var b bytes.Buffer
+	// uncut is where the lines not yet looked at for their length start.
+	uncut := 0
 	c := p.collector
 	b.WriteString(p.whose())
 	b.WriteString("\n")
@@ -522,7 +597,7 @@ func (t *probeTrace) report(p debugProbe, verdict string, answer *model.MetricSe
 		} else {
 			outcome += " in " + req.Duration.Round(time.Millisecond).String()
 		}
-		fmt.Fprintf(&b, "  %d. %s %s%s -> %s\n", i+1, req.Method, fetch.RedactURLString(req.URL, fetch.MaskQueryValues), via, outcome)
+		fmt.Fprintf(&b, "  %d. %s %s%s -> %s\n", i+1, req.Method, shownStart(fetch.RedactURLString(req.URL, fetch.MaskQueryValues), debugURLLimit), via, outcome)
 		writeHeaders(&b, req.Header, "     ")
 		if len(req.Withheld) > 0 {
 			// The names only: the values were not sent, and are not shown.
@@ -533,8 +608,11 @@ func (t *probeTrace) report(p debugProbe, verdict string, answer *model.MetricSe
 	b.WriteString("\nResponse\n")
 	if t.response == nil {
 		b.WriteString("  none\n")
-	} else {
-		writeResponse(&b, t.response, t.convertedFrom)
+	} else if writeResponse(&b, t.response) {
+		// The body is shown as it is, up to its own bound.
+		cutLongLines(&b, uncut)
+		writeBody(&b, t.response.Body, t.convertedFrom)
+		uncut = b.Len()
 	}
 
 	b.WriteString("\nStages\n")
@@ -571,18 +649,112 @@ func (t *probeTrace) report(p debugProbe, verdict string, answer *model.MetricSe
 	}
 	if answer == nil || len(answer.Metrics) == 0 {
 		b.WriteString("  none\n")
+		cutLongLines(&b, uncut)
+		return b.Bytes()
+	}
+	// The exposition is what a probe serves, to the byte, unless a line of
+	// it is cut, which makes it no exposition: the section then says so
+	// before it. It is not written to the report to be cut there, which
+	// would hold every long line of it twice.
+	exposition := appendMetricSet(nil, answer)
+	long := longLines(exposition)
+	if long > 0 {
+		served := "a probe serves them whole"
+		if p.static != nil {
+			served = "the endpoint serves them whole"
+		}
+		fmt.Fprintf(&b, "  Lines longer than %d bytes are cut below (%d of them), so this is not valid exposition as it stands; %s.\n", debugLineLimit, long, served)
+	}
+	cutLongLines(&b, uncut)
+	if long == 0 {
+		b.Write(exposition)
 	} else {
-		b.Write(appendMetricSet(nil, answer))
+		appendCutLines(&b, exposition)
 	}
 	return b.Bytes()
 }
 
-// writeResponse renders the response as the target sent it: its status,
-// headers and body, or a directory's files. convertedFrom, when not empty,
-// is the encoding the body was converted from before it was decoded, which
-// the report says, since the rules read the converted text and not the bytes
-// shown.
-func writeResponse(b *bytes.Buffer, r *fetch.HTTPResponse, convertedFrom string) {
+// cutLongLines cuts the lines of the report from the byte uncut on that are
+// longer than debugLineLimit (appendCutLines). A report without one, as
+// nearly every report is, is read for its new-lines and left as it was
+// written.
+func cutLongLines(b *bytes.Buffer, uncut int) {
+	written := b.Bytes()[uncut:]
+	if longLines(written) == 0 {
+		return
+	}
+	written = bytes.Clone(written)
+	b.Truncate(uncut)
+	appendCutLines(b, written)
+}
+
+// appendCutLines appends text to the report line by line: a line of
+// debugLineLimit bytes or fewer as it is, and a longer one as its first
+// debugLineLimit bytes (shownHead) and its length, as a failure's text says
+// where it was cut (model.CutMark).
+func appendCutLines(b *bytes.Buffer, text []byte) {
+	for len(text) > 0 {
+		line, rest, ended := bytes.Cut(text, []byte("\n"))
+		if len(line) > debugLineLimit {
+			b.Write(line[:shownHead(line, debugLineLimit)])
+			b.WriteString(model.CutMark(len(line), false))
+		} else {
+			b.Write(line)
+		}
+		if ended {
+			b.WriteByte('\n')
+		}
+		text = rest
+	}
+}
+
+// longLines counts the lines of text that are longer than debugLineLimit.
+func longLines(text []byte) (long int) {
+	for len(text) > 0 {
+		line, rest, _ := bytes.Cut(text, []byte("\n"))
+		if len(line) > debugLineLimit {
+			long++
+		}
+		text = rest
+	}
+	return long
+}
+
+// shownStart is text when it is no longer than limit bytes, and otherwise
+// its first limit bytes (shownHead) and its length. The cut text is made
+// anew, and holds nothing of the text it was cut from.
+func shownStart(text string, limit int) string {
+	if len(text) <= limit {
+		return text
+	}
+	return text[:shownHead(text, limit)] + model.CutMark(len(text), false)
+}
+
+// shownHead is how many bytes of a text longer than limit a report shows:
+// limit, or up to three fewer where the text would be cut inside a
+// character, as a failure's text is cut (model.HeadOf); and where that ends
+// inside a <redacted>, the few bytes more that show it whole, since
+// `token=<red` reads as the start of a token.
+func shownHead[T ~string | ~[]byte](text T, limit int) int {
+	head := limit
+	for start := limit; start > 0 && start > limit-utf8.UTFMax; start-- {
+		if utf8.RuneStart(text[start]) {
+			head = start
+			break
+		}
+	}
+	for had := 1; had < len(fetch.Redacted) && had <= head; had++ {
+		if rest := len(fetch.Redacted) - had; len(text)-head >= rest && string(text[head-had:head+rest]) == fetch.Redacted {
+			return head + rest
+		}
+	}
+	return head
+}
+
+// writeResponse renders the response as the target sent it: its status and
+// headers, and a directory's files. It reports whether the response has a
+// body for writeBody to render after them, which a directory has not.
+func writeResponse(b *bytes.Buffer, r *fetch.HTTPResponse) (body bool) {
 	switch {
 	case r.GRPCCode != nil:
 		fmt.Fprintf(b, "  gRPC status %d\n", *r.GRPCCode)
@@ -610,15 +782,18 @@ func writeResponse(b *bytes.Buffer, r *fetch.HTTPResponse, convertedFrom string)
 		for _, name := range d.Skipped {
 			fmt.Fprintf(b, "    %s: skipped, over request.max_files\n", name)
 		}
-		return
+		return false
 	}
-	writeBody(b, r.Body, convertedFrom)
+	return true
 }
 
 // writeBody renders a body, up to debugBodyLimit, text only. The report is
 // UTF-8, so a body in another encoding, whose bytes it cannot show as they
 // are, is shown as the same text in UTF-8, under a line that gives its size
-// as sent and says what it was converted from.
+// as sent and says what it was converted from: convertedFrom, when not
+// empty, is the encoding the body was converted from before it was decoded,
+// which the report says, since the rules read the converted text and not the
+// bytes shown.
 func writeBody(b *bytes.Buffer, body []byte, convertedFrom string) {
 	shown, note := body, ""
 	if convertedFrom != "" {
@@ -673,7 +848,7 @@ func writeTransform(b *bytes.Buffer, c *model.Collector, set *model.MetricSet, f
 	} else {
 		b.WriteString("  Series by metric\n")
 		for _, name := range order {
-			fmt.Fprintf(b, "    %s: %d\n", name, counts[name])
+			fmt.Fprintf(b, "    %s: %d\n", shownStart(name, debugNameLimit), counts[name])
 		}
 	}
 	var empty []string
@@ -723,17 +898,25 @@ func writeTransform(b *bytes.Buffer, c *model.Collector, set *model.MetricSet, f
 	}
 }
 
-// writeHeaders renders headers, sorted, their credentials redacted.
+// writeHeaders renders headers, sorted, their credentials redacted: the
+// first debugHeaderLimit of them, each value by no more than its first
+// debugHeaderValueLimit bytes, and how many there are when there are more.
 func writeHeaders(b *bytes.Buffer, h http.Header, indent string) {
 	names := make([]string, 0, len(h))
 	for name := range h {
 		names = append(names, name)
 	}
 	sort.Strings(names)
+	headers := 0
 	for _, name := range names {
 		for _, value := range h[name] {
-			fmt.Fprintf(b, "%s%s: %s\n", indent, name, fetch.RedactHeaderValue(name, value))
+			if headers++; headers <= debugHeaderLimit {
+				fmt.Fprintf(b, "%s%s: %s\n", indent, name, shownStart(fetch.RedactHeaderValue(name, value), debugHeaderValueLimit))
+			}
 		}
+	}
+	if headers > debugHeaderLimit {
+		fmt.Fprintf(b, "%s... (%d headers)\n", indent, headers)
 	}
 }
 

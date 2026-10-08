@@ -2,8 +2,12 @@ package exporter
 
 import (
 	"errors"
+	"fmt"
+	"math"
+	"math/rand/v2"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/eenchev/prometheus-universal-exporter/internal/testutil"
@@ -88,5 +92,41 @@ func TestTheMemoryLimitRatio(t *testing.T) {
 	}
 	if ValidateMemoryLimitRatio(0) != nil || ValidateMemoryLimitRatio(1) != nil {
 		t.Error("0 and 1 refused")
+	}
+}
+
+// oldValidateMemoryLimitRatio is ValidateMemoryLimitRatio as it was before
+// the floor, the oracle of the test below.
+func oldValidateMemoryLimitRatio(ratio float64) error {
+	if math.IsNaN(ratio) || ratio < 0 || ratio > 1 {
+		return fmt.Errorf("--runtime.memory-limit-ratio must be from 0, for off, to 1, got %v", ratio)
+	}
+	return nil
+}
+
+// A ratio above 0 and below 0.1 sets a Go memory limit of next to nothing,
+// so the runtime would collect garbage all the time: it is refused, with a
+// message saying the floor and why. Every other ratio gives what it gave
+// before, the same error or none, over a table of boundaries and generated
+// ratios.
+func TestAMemoryLimitRatioBelowATenthIsRefused(t *testing.T) {
+	for _, small := range []float64{1e-300, 1e-5, 0.0001, 0.05, 0.0999999, math.Nextafter(0.1, 0), math.SmallestNonzeroFloat64} {
+		err := ValidateMemoryLimitRatio(small)
+		if err == nil || !strings.Contains(err.Error(), "or at least 0.1") || !strings.Contains(err.Error(), "spends its time collecting garbage") {
+			t.Errorf("%v: %v, want it refused under the floor", small, err)
+		}
+	}
+	ratios := []float64{0, 0.1, 0.10000001, math.Nextafter(0.1, 1), 0.5, 0.8, 0.95, 1, math.Nextafter(1, 2), 1.5, -0.1, -1e-300, math.Copysign(0, -1), math.NaN(), math.Inf(1), math.Inf(-1)}
+	random := rand.New(rand.NewPCG(48, 49))
+	for range 2000 {
+		ratios = append(ratios, 0.1+random.Float64()*0.9, random.Float64()*4-2)
+	}
+	for _, ratio := range ratios {
+		if !(ratio > 0 && ratio < 0.1) {
+			now, before := ValidateMemoryLimitRatio(ratio), oldValidateMemoryLimitRatio(ratio)
+			if fmt.Sprint(now) != fmt.Sprint(before) {
+				t.Errorf("%v: %v, before %v", ratio, now, before)
+			}
+		}
 	}
 }

@@ -15,7 +15,7 @@ spec:
   {{- if not .Values.autoscaling.enabled }}
   {{- /* With the HorizontalPodAutoscaler the replica count is its to set: a
          count here would be put back on every upgrade. */}}
-  replicas: {{ .Values.replicaCount }}
+  replicas: {{ include "prometheus-universal-exporter.wholeNumber" (list "replicaCount" .Values.replicaCount 0 2147483647) }}
   {{- end }}
   {{- /* rollingUpdate belongs to the RollingUpdate strategy alone: Kubernetes
          refuses a Deployment that carries it with Recreate, and the default
@@ -25,6 +25,7 @@ spec:
   strategy:
     type: {{ $strategyType }}
     {{- if and (eq $strategyType "RollingUpdate") $strategy.rollingUpdate }}
+    {{- include "prometheus-universal-exporter.rollingUpdateCheck" $strategy.rollingUpdate }}
     rollingUpdate: {{- toYaml $strategy.rollingUpdate | nindent 6 }}
     {{- end }}
   selector:

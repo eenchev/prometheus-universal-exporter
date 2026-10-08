@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"reflect"
 	"slices"
+	"strconv"
 	"strings"
 
 	"github.com/eenchev/prometheus-universal-exporter/internal/fetch"
@@ -278,6 +279,21 @@ func schemaFor(t reflect.Type, path string, rules map[string]map[string]any) map
 	return schema
 }
 
+// leastOutputRule is the rule of limits.max_output_bytes: beside what every
+// size is held to, one written as a number is 0, the default, or at least the
+// answer of a Python script that emits no metric
+// (transform.MinPythonOutputBytes), as the exporter has it. minimum is of numbers alone, so text passes the
+// second alternative and stays held by the pattern of a size: how many bytes
+// a size written in quotes or with a unit comes to, 20B or 0.01KiB, no
+// pattern short of a wall of one can tell, and that such a size is too small
+// is the exporter's alone to say.
+func leastOutputRule() map[string]any {
+	return map[string]any{
+		"anyOf":       []any{map[string]any{"const": 0}, map[string]any{"minimum": transform.MinPythonOutputBytes}},
+		"description": "The most bytes one answer of the collector's Python worker may be, a script's metrics or a pre-script's data. A size: a whole number of bytes, or a number with a unit such as 512KiB, 10MB or 1.5GiB, under 2^63 bytes. At least " + strconv.Itoa(transform.MinPythonOutputBytes) + " bytes, the answer of a script that emits no metric; 0, like the key left out, is the default, 1MiB. The range, and the least of a size written as text, in quotes or with a unit, are checked by the exporter when the configuration loads.",
+	}
+}
+
 // enabledSwitchRule is the rule of a block that does nothing until its
 // enabled key turns it on: every other key it takes requires enabled beside
 // it, as the exporter does when it reads the block
@@ -392,7 +408,7 @@ func configSchemaRules() map[string]map[string]any {
 			"description": "What happens when this metric cannot be extracted. Defaults to log. Not for the python transform, whose script fails the scrape itself, with fail(...).",
 		},
 		"collectors[].metrics[].required":      {"description": "When false, a missing value is skipped without an error. Defaults to true. Not for the python transform, whose rules read no value."},
-		"collectors[].metrics[].labels[].name": {"type": "string", "minLength": 1, "not": onlyBlanks(), "description": "The label's name: letters, digits and _, not starting with a digit. Under the collector's name_escaping underscores or values it may be any name, such as service.name, and is exported escaped. Text: a name YAML reads as a number or a boolean is written in quotes."},
+		"collectors[].metrics[].labels[].name": {"type": "string", "minLength": 1, "not": onlyBlanks(), "description": "The label's name: letters, digits and _, not starting with a digit. Under the collector's name_escaping underscores or values it may be any name, such as service.name, and is exported escaped. A name transform.rename_labels renames or transform.remove_labels removes is not exported, and may be any name. Text: a name YAML reads as a number or a boolean is written in quotes."},
 		// A name, and one of value and expression.
 		"collectors[].metrics[].labels[]":            labelSchemaRule(),
 		"collectors[].metrics[].labels[].value":      {"description": "A static label value, exported as written. May contain {{param_name}} placeholders, filled from the probe's parameters; see docs/REQUESTS.md#in-label-values."},
@@ -410,6 +426,7 @@ func configSchemaRules() map[string]map[string]any {
 		"collectors[].metrics[].time_zone":           {"type": "string", "description": "With time_format: the zone a text that names none of its own is read in, as an IANA name such as Europe/Sofia. Defaults to UTC."},
 		"collectors[].metrics[]":                     metricRuleSchemaRule(),
 		"collectors[].limits.max_script_memory":      {"description": "The most memory, as address space, each of the collector's Python workers may use, the interpreter and its libraries included, such as 256MiB. A script that needs more fails with a MemoryError. At least 32MiB; 0, the default, leaves it unbounded. Enforced on Linux."},
+		"collectors[].limits.max_output_bytes":       leastOutputRule(),
 		"collectors[].limits.script_timeout":         {"description": "How long a Python script may run. Starting the interpreter is not counted. Defaults to 100ms."},
 		"otlp":                                       otlpSchemaRule(),
 		"otlp.enabled":                               {"description": "Turn the export on. false keeps the block's settings without using them."},
@@ -529,7 +546,14 @@ func metricRuleSchemaRule() map[string]any {
 // unless the collector's name_escaping is underscores or values, under which
 // a scrape exports any name escaped and the exporter takes any written one
 // (transform.TakesLabelName): the patterns of the two keys hold where the
-// collector does not say one of those two. The two keys are text under every
+// collector does not say one of those two. A label's name that the
+// collector's transform.rename_labels renames or remove_labels removes is
+// taken whatever its characters (transform.TakesLabelNameBeforeRenames),
+// which a schema cannot tell, since it would have to read the name among
+// the keys of one setting or the entries of the other: the pattern of a
+// label's name holds where the collector writes neither of the two, and
+// where it writes one, a name that neither takes off is the exporter's alone
+// to refuse. The two keys are text under every
 // name_escaping, as a key with a pattern is throughout, by the type they
 // have themselves (configSchemaRules): a name YAML reads as a number or a
 // boolean is refused by the schemas and, read from them, by the load, and is
@@ -558,9 +582,15 @@ func collectorSchemaRule() map[string]any {
 	}
 	escapesNames := map[string]any{"properties": map[string]any{"name_escaping": map[string]any{"enum": []string{transform.NameEscapingUnderscores, transform.NameEscapingValues}}}, "required": []string{"name_escaping"}}
 	classicNames := map[string]any{"properties": map[string]any{
-		"name":   map[string]any{"type": "string", "pattern": optionalPattern(`^[a-zA-Z_:][a-zA-Z0-9_:]*$`)},
+		"name": map[string]any{"type": "string", "pattern": optionalPattern(`^[a-zA-Z_:][a-zA-Z0-9_:]*$`)},
+	}}
+	classicLabelNames := map[string]any{"properties": map[string]any{
 		"labels": map[string]any{"items": map[string]any{"properties": map[string]any{"name": map[string]any{"type": "string", "pattern": `^[a-zA-Z_][a-zA-Z0-9_]*$`}}}},
 	}}
+	takesOffLabels := map[string]any{"properties": map[string]any{"transform": map[string]any{"anyOf": []any{
+		map[string]any{"properties": map[string]any{"rename_labels": map[string]any{"minProperties": 1}}, "required": []string{"rename_labels"}},
+		map[string]any{"properties": map[string]any{"remove_labels": map[string]any{"minItems": 1}}, "required": []string{"remove_labels"}},
+	}}}, "required": []string{"transform"}}
 	return map[string]any{
 		"required":    []string{"name", "request", "transform"},
 		"description": "How to reach a kind of target and turn its response into metrics.",
@@ -570,6 +600,7 @@ func collectorSchemaRule() map[string]any {
 			map[string]any{"if": transformIs("python"), "then": rules(pythonRule)},
 			map[string]any{"if": transformIs("prometheus"), "then": rules(prometheusRule)},
 			map[string]any{"if": map[string]any{"not": escapesNames}, "then": rules(classicNames)},
+			map[string]any{"if": map[string]any{"not": map[string]any{"anyOf": []any{escapesNames, takesOffLabels}}}, "then": rules(classicLabelNames)},
 		},
 	}
 }

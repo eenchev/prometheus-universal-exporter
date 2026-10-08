@@ -50,8 +50,9 @@ type fileFailure struct {
 // collectDirectory turns a directory read into one metric set.
 //
 // logTarget is the target as logs show it, keyTarget as the failure log
-// tells targets apart (failureKey).
-func (s *Server) collectDirectory(ctx context.Context, read *fetch.DirectoryRead, c *model.Collector, rec statsRecorder, logTarget, keyTarget string) *model.MetricSet {
+// tells targets apart (failureKey). python is the worker statistics the
+// scripts of the trip count in (pythonstats.go).
+func (s *Server) collectDirectory(ctx context.Context, read *fetch.DirectoryRead, c *model.Collector, rec statsRecorder, python *transform.PythonStats, logTarget, keyTarget string) *model.MetricSet {
 	rec.update(func(x *serverStats) { x.lastBytes = read.Bytes })
 	// These hold for as long as the directory stays as it is, so they are
 	// logged like repeated failures (failurelog.go).
@@ -68,7 +69,7 @@ func (s *Server) collectDirectory(ctx context.Context, read *fetch.DirectoryRead
 	}
 	// One script timer covers every file: the gauge is the Python this probe
 	// ran, whichever files ran it.
-	scriptCtx, timer := transform.WithScriptTimer(ctx)
+	scriptCtx, timer := transform.WithScriptTimer(ctx, python)
 	defer recordScriptDuration(rec, timer)
 
 	var order []string

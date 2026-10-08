@@ -7,6 +7,8 @@ import (
 	"sort"
 	"strings"
 	"testing"
+
+	"github.com/eenchev/prometheus-universal-exporter/internal/model"
 )
 
 // constrainedKeys are the keys of a schema that take text and are held to
@@ -82,4 +84,57 @@ func TestEveryConstrainedKeyOfTheSchemasIsInATable(t *testing.T) {
 		t.Errorf("only %d keys are held to a rule by the schemas", held)
 	}
 	t.Logf("%d keys are held to values, a pattern or a length", held)
+}
+
+// sizeKeys are the keys of a schema that take a size, found by what a size
+// is to a schema: a whole number, or text of the pattern of a size.
+func sizeKeys(schema map[string]any) []string {
+	var keys []string
+	var walk func(node map[string]any, path string)
+	walk = func(node map[string]any, path string) {
+		if node["pattern"] == model.ByteSizePattern {
+			keys = append(keys, path)
+		}
+		properties, _ := node["properties"].(map[string]any)
+		for key, sub := range properties {
+			walk(sub.(map[string]any), strings.TrimPrefix(path+"."+key, "."))
+		}
+		if items, ok := node["items"].(map[string]any); ok {
+			walk(items, path+"[]")
+		}
+	}
+	walk(schema, "")
+	sort.Strings(keys)
+	return keys
+}
+
+// Every key of the schemas that takes a size is put through the ways a
+// number of bytes is written (sizeForms): its row says so, and a size key
+// that is added fails here until its row does. The configuration and a
+// collector file have five, and the target file none.
+func TestEverySizeKeyOfTheSchemasIsPutThroughTheWaysASizeIsWritten(t *testing.T) {
+	marked := map[string]bool{}
+	for _, key := range slices.Concat(httpSchemaKeys(), grpcSchemaKeys(), graphiteSchemaKeys(), localfileSchemaKeys()) {
+		if key.size {
+			if key.file != inConfiguration {
+				t.Errorf("%s is marked as a size in a file that has none", key.name())
+			}
+			marked[key.key] = true
+		}
+	}
+	sizes := sizeKeys(loadSchema(t))
+	for _, key := range sizes {
+		if !marked[key] {
+			t.Errorf("%s takes a size and no row of schemakeys_*_test.go says size: true of it", key)
+		}
+	}
+	if len(sizes) != 5 || len(marked) != len(sizes) {
+		t.Errorf("the configuration's schema has the size keys %v, and the rows mark %d: want the five sizes, each marked", sizes, len(marked))
+	}
+	if inFile := sizeKeys(loadSchemaFile(t, collectorFileSchemaFile)); !slices.Equal(inFile, sizes) {
+		t.Errorf("a collector file's schema has the size keys %v, and the configuration's %v", inFile, sizes)
+	}
+	if inTargets := sizeKeys(loadSchemaFile(t, staticTargetsSchemaFile)); len(inTargets) != 0 {
+		t.Errorf("the target file's schema has the size keys %v, and no row puts them through the ways a size is written", inTargets)
+	}
 }

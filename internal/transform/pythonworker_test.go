@@ -261,7 +261,7 @@ func TestPythonWorkerStartupIsNotCountedAgainstTheScript(t *testing.T) {
 				}
 				c := workerCollector("cold_start", `metric(name="v", value=1)`)
 				c.Limits.ScriptTimeout = model.Duration(budget)
-				ctx, timer := WithScriptTimer(context.Background())
+				ctx, timer := WithScriptTimer(context.Background(), nil)
 				began := time.Now()
 				r := &fetch.HTTPResponse{StatusCode: 200, Body: []byte("value=7"), Headers: http.Header{}}
 				set, err := executePython(ctx, "python3", c.Transform.Script, &decode.Decoded{Kind: "text", Data: "value=7", Raw: r.Body}, r, c)
@@ -356,14 +356,14 @@ func TestPythonWorkerCrashIsReplaced(t *testing.T) {
 
 // An answer longer than limits.max_output_bytes is refused by the exporter,
 // which reads no more of it, and the next scrape is served by another
-// worker. The answer is of a hundred metrics with a name of one letter:
-// far longer than the limit with all that is written around its strings,
-// which together are well within it, so the worker does not refuse it
-// itself (pythonstrings_test.go).
+// worker. The answer is of thirty metrics with a name of one letter:
+// longer than the limit with all that is written around its strings and
+// its keys, which together are well within it, so the worker does not
+// refuse it itself (pythonstrings_test.go, pythonkeys_test.go).
 func TestPythonWorkerOutputLimit(t *testing.T) {
 	requirePython(t)
 	c := workerCollector("output_limit", `
-for i in range(100):
+for i in range(30):
     metric(name="v", value=i, labels={"i": str(i)})
 `)
 	c.Limits.MaxOutputBytes = 2048

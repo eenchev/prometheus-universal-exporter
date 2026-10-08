@@ -472,12 +472,31 @@ func (v *statsValues) absorb(o statsValues) {
 // appears the first time it is asked for, and expires when it is no longer
 // asked for (VerboseRequestIdleExpiry).
 func (s *Server) seedStaticRequests() {
+	s.requests.setStatic(s.staticRequestKeys())
+}
+
+// staticRequestKeys is the request of every static target in force, as the
+// verbose self-metrics name it: those of the targets whose collector the
+// configuration has and whose request can be named. Each target's collector
+// is found by its name where the configuration followed keeps its place
+// (followedConfig.collectorOf), and the collectors are not gone through for
+// it: that was once for every static target at every read of the verbose
+// self-metrics, which for 2,000 targets of 2,000 collectors took as long
+// as all the rest of finding the requests, and for 10,000 of 10,000 more
+// than ten times as long. The place is read only while the configuration
+// read here is the very one followed, as it is for a read of the
+// self-metrics, which follows what is in force before it comes here
+// (collectorStats); for a configuration a reload put in force since, until
+// that reload has followed it, the collectors are gone through as they
+// were.
+func (s *Server) staticRequestKeys() map[requestKey]bool {
 	// Read together, so every target finds the collector it was checked
 	// against.
 	cfg, file := s.manager.InForce()
+	followed := s.followed.Load()
 	keys := map[requestKey]bool{}
 	for _, target := range staticTargetsOf(file) {
-		c := model.CollectorByName(cfg, target.Collector)
+		c := followed.collectorOf(cfg, target.Collector)
 		if c == nil {
 			continue
 		}
@@ -488,7 +507,7 @@ func (s *Server) seedStaticRequests() {
 		}
 		keys[requestKey{Collector: c.Name, URL: label, Method: fetch.RequestMethodFor(c, overrides)}] = true
 	}
-	s.requests.setStatic(keys)
+	return keys
 }
 
 // requestLabels builds the label set of one tracked request. The method label

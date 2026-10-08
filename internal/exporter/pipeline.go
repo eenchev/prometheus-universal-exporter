@@ -42,6 +42,10 @@ type collectJob struct {
 	// interval, so an error it runs out of says so as a scrape's.
 	scrape bool
 	log    collectLog
+	// python is the worker statistics the trip's scripts count in when the
+	// trip counts in no statistics itself, rec's, as a debug probe does not
+	// (pythonstats.go).
+	python *transform.PythonStats
 }
 
 // boundedTripFailure is a stage's error as a trip reports it: the error
@@ -270,7 +274,7 @@ func (s *Server) collect(ctx context.Context, j collectJob) collected {
 			return collected{stage: fetch.FetchStage(c), err: context.Cause(ctx), aborted: true}
 		}
 		mark = time.Now()
-		set = s.collectDirectory(ctx, response.Directory, c, rec, j.display, j.target)
+		set = s.collectDirectory(ctx, response.Directory, c, rec, s.pythonStats(&j), j.display, j.target)
 		trace.step("files", "ok", time.Since(mark), fmt.Sprintf("%d files, %d series", len(response.Directory.Files), len(set.Metrics)))
 		trace.record(func(t *probeTrace) { t.transform = set })
 	} else {
@@ -296,7 +300,7 @@ func (s *Server) collect(ctx context.Context, j collectJob) collected {
 		s.noteGraphite(ctx, decoded, c, rec, j.display, j.target, "")
 		s.notePrometheus(ctx, decoded, c, rec, j.display, j.target, "")
 		mark = time.Now()
-		scriptCtx, timer := transform.WithScriptTimer(ctx)
+		scriptCtx, timer := transform.WithScriptTimer(ctx, s.pythonStats(&j))
 		var repaired utf8Repairs
 		set, repaired, err = s.transformRecorded(scriptCtx, decoded, response, c, rec, j.log)
 		recordScriptDuration(rec, timer)

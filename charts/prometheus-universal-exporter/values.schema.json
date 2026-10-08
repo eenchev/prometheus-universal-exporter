@@ -8,7 +8,7 @@
     "global": {"type": "object", "description": "Helm's own: the parent chart's global values, which Helm passes to every dependency, an empty map when there are none. The chart reads none of it."},
     "enabled": {"type": "boolean", "description": "Not read by the chart: the key a parent chart's dependency condition, such as prometheus-universal-exporter.enabled, switches this chart on and off with, which Helm passes on with the rest of the values."},
 
-    "replicaCount": {"type": "integer", "minimum": 0},
+    "replicaCount": {"type": "integer", "minimum": 0, "maximum": 2147483647},
     "namespaceOverride": {"type": "string"},
     "nameOverride": {"type": "string"},
     "fullnameOverride": {"type": "string"},
@@ -134,15 +134,17 @@
         },
         "probeMaxConcurrent": {
           "type": ["string", "integer", "null"],
-          "description": "Rendered as --probe.max-concurrent when set: how many trips to targets, of every collector together, may be in progress at once. 0 or empty leaves them bounded only per collector.",
-          "pattern": "^$|^[0-9]+$",
-          "minimum": 0
+          "description": "Rendered as --probe.max-concurrent when set: how many trips to targets, of every collector together, may be in progress at once: a whole number from 0 to 2147483647, as a number or as a string of digits with no zero before another digit. 0 or empty leaves them bounded only per collector.",
+          "pattern": "^$|^(0|[1-9][0-9]{0,8}|1[0-9]{9}|20[0-9]{8}|21[0-3][0-9]{7}|214[0-6][0-9]{6}|2147[0-3][0-9]{5}|21474[0-7][0-9]{4}|214748[0-2][0-9]{3}|2147483[0-5][0-9]{2}|21474836[0-3][0-9]|214748364[0-7])$",
+          "minimum": 0,
+          "maximum": 2147483647
         },
         "pythonMaxWorkers": {
           "type": ["string", "integer", "null"],
-          "description": "Rendered as --python.max-workers when set: how many Python workers, of every collector together, may be alive at once. 0 or empty leaves them bounded only per script.",
-          "pattern": "^$|^[0-9]+$",
-          "minimum": 0
+          "description": "Rendered as --python.max-workers when set: how many Python workers, of every collector together, may be alive at once: a whole number from 0 to 2147483647, as a number or as a string of digits with no zero before another digit. 0 or empty leaves them bounded only per script.",
+          "pattern": "^$|^(0|[1-9][0-9]{0,8}|1[0-9]{9}|20[0-9]{8}|21[0-3][0-9]{7}|214[0-6][0-9]{6}|2147[0-3][0-9]{5}|21474[0-7][0-9]{4}|214748[0-2][0-9]{3}|2147483[0-5][0-9]{2}|21474836[0-3][0-9]|214748364[0-7])$",
+          "minimum": 0,
+          "maximum": 2147483647
         },
         "shutdownTimeout": {
           "type": "string",
@@ -160,6 +162,7 @@
     "terminationGracePeriodSeconds": {
       "type": ["integer", "null"],
       "minimum": 0,
+      "maximum": 2147483647,
       "description": "The pod's terminationGracePeriodSeconds. Null keeps Kubernetes' 30 unless the shutdown needs more; set, it must be at least server.shutdownDelay plus server.shutdownTimeout plus 10 seconds."
     },
 
@@ -333,7 +336,7 @@
       "type": "object",
       "additionalProperties": false,
       "description": "Rendered as --runtime.memory-limit-ratio when enabled: the Go memory limit as a share of the container's memory limit, which the exporter reads from its cgroup. GOMEMLIMIT set in env wins.",
-      "properties": {"enabled": {"type": "boolean"}, "ratio": {"type": ["number", "string"], "exclusiveMinimum": 0, "maximum": 1, "pattern": "^(0?\\.[0-9]*[1-9][0-9]*|1(\\.0*)?)$"}}
+      "properties": {"enabled": {"type": "boolean"}, "ratio": {"type": ["number", "string"], "minimum": 0.1, "maximum": 1, "pattern": "^(0?\\.[1-9][0-9]*|1(\\.0*)?)$", "description": "From 0.1 to 1: below 0.1 the Go memory limit leaves the heap almost nothing and the Go runtime spends its time collecting garbage. 0.5 to 0.95 leaves room for the Python workers; set enabled to false for no limit."}}
     },
     "goGC": {
       "type": "object",
@@ -349,10 +352,10 @@
       "description": "An optional HorizontalPodAutoscaler for the Deployment, which then leaves replicaCount out. Every replica scrapes every static target, and exports those with export_via_otlp once per replica: keep static targets in a release without it.",
       "properties": {
         "enabled": {"type": "boolean"},
-        "minReplicas": {"type": "integer", "minimum": 1},
-        "maxReplicas": {"type": "integer", "minimum": 1},
-        "targetCPUUtilizationPercentage": {"type": ["integer", "null"], "minimum": 1},
-        "targetMemoryUtilizationPercentage": {"type": ["integer", "null"], "minimum": 1},
+        "minReplicas": {"type": "integer", "minimum": 1, "maximum": 2147483647},
+        "maxReplicas": {"type": "integer", "minimum": 1, "maximum": 2147483647},
+        "targetCPUUtilizationPercentage": {"type": ["integer", "null"], "minimum": 1, "maximum": 2147483647},
+        "targetMemoryUtilizationPercentage": {"type": ["integer", "null"], "minimum": 1, "maximum": 2147483647},
         "metrics": {"type": "array", "items": {"type": "object"}},
         "behavior": {"type": "object"}
       }
@@ -363,8 +366,8 @@
       "description": "An optional PodDisruptionBudget for the exporter's pods; set minAvailable or maxUnavailable, not both.",
       "properties": {
         "enabled": {"type": "boolean"},
-        "minAvailable": {"type": ["integer", "string", "null"], "pattern": "^[0-9]+%?$", "minimum": 0},
-        "maxUnavailable": {"type": ["integer", "string", "null"], "pattern": "^[0-9]+%?$", "minimum": 0},
+        "minAvailable": {"type": ["integer", "string", "null"], "pattern": "^(0|[1-9][0-9]{0,8}|1[0-9]{9}|20[0-9]{8}|21[0-3][0-9]{7}|214[0-6][0-9]{6}|2147[0-3][0-9]{5}|21474[0-7][0-9]{4}|214748[0-2][0-9]{3}|2147483[0-5][0-9]{2}|21474836[0-3][0-9]|214748364[0-7]|(0|[1-9][0-9]?|100)%)$", "minimum": 0, "maximum": 2147483647, "description": "A disruption budget's count: a whole number from 0 to 2147483647, as a number or as a string of digits with no zero before another digit, which is rendered as the number, or a percentage from 0% to 100% with no zero before another digit, as Kubernetes takes it. A string of digits with a zero first would render as YAML's octal number, 010 as eight."},
+        "maxUnavailable": {"type": ["integer", "string", "null"], "pattern": "^(0|[1-9][0-9]{0,8}|1[0-9]{9}|20[0-9]{8}|21[0-3][0-9]{7}|214[0-6][0-9]{6}|2147[0-3][0-9]{5}|21474[0-7][0-9]{4}|214748[0-2][0-9]{3}|2147483[0-5][0-9]{2}|21474836[0-3][0-9]|214748364[0-7]|(0|[1-9][0-9]?|100)%)$", "minimum": 0, "maximum": 2147483647, "description": "A disruption budget's count: a whole number from 0 to 2147483647, as a number or as a string of digits with no zero before another digit, which is rendered as the number, or a percentage from 0% to 100% with no zero before another digit, as Kubernetes takes it. A string of digits with a zero first would render as YAML's octal number, 010 as eight."},
         "unhealthyPodEvictionPolicy": {"type": "string", "enum": ["", "IfHealthyBudget", "AlwaysAllow"]}
       }
     },
@@ -372,14 +375,22 @@
     "strategy": {
       "type": "object",
       "additionalProperties": false,
+      "not": {
+        "description": "Kubernetes refuses a rolling update whose maxSurge and maxUnavailable are both 0, as a number or as 0%: set one of them above 0, or type Recreate, which renders no rollingUpdate. A count left out is Kubernetes' default, 25%.",
+        "required": ["rollingUpdate"],
+        "properties": {
+          "type": {"const": "RollingUpdate"},
+          "rollingUpdate": {"required": ["maxSurge", "maxUnavailable"], "properties": {"maxSurge": {"enum": [0, "0%"]}, "maxUnavailable": {"enum": [0, "0%"]}}}
+        }
+      },
       "properties": {
         "type": {"enum": ["RollingUpdate", "Recreate"]},
         "rollingUpdate": {
           "type": "object",
           "additionalProperties": false,
           "properties": {
-            "maxUnavailable": {"$ref": "#/$defs/countOrPercent"},
-            "maxSurge": {"$ref": "#/$defs/countOrPercent"}
+            "maxUnavailable": {"type": ["integer", "string"], "minimum": 0, "maximum": 2147483647, "pattern": "^(0|[1-9][0-9]?|100)%$", "description": "Pods that may be missing during a rolling update: a whole number from 0 to 2147483647, or a percentage from 0% to 100% with no zero before another digit, as Kubernetes takes it. A string of digits alone would reach Kubernetes as a string, which it refuses."},
+            "maxSurge": {"type": ["integer", "string"], "minimum": 0, "maximum": 2147483647, "pattern": "^(0|[1-9][0-9]{0,8}|1[0-9]{9}|20[0-9]{8}|21[0-3][0-9]{7}|214[0-6][0-9]{6}|2147[0-3][0-9]{5}|21474[0-7][0-9]{4}|214748[0-2][0-9]{3}|2147483[0-5][0-9]{2}|21474836[0-3][0-9]|214748364[0-7])%$", "description": "Pods that may be added during a rolling update: a whole number from 0 to 2147483647, or a percentage of one written with no zero before another digit, as Kubernetes takes it. A string of digits alone would reach Kubernetes as a string, which it refuses."}
           }
         }
       }
@@ -443,12 +454,12 @@
       "type": "object",
       "additionalProperties": false,
       "properties": {
-        "initialDelaySeconds": {"type": "integer", "minimum": 0},
-        "periodSeconds": {"type": "integer", "minimum": 1},
-        "timeoutSeconds": {"type": "integer", "minimum": 1},
-        "successThreshold": {"type": "integer", "minimum": 1},
-        "failureThreshold": {"type": "integer", "minimum": 1},
-        "terminationGracePeriodSeconds": {"type": ["integer", "null"], "minimum": 1}
+        "initialDelaySeconds": {"type": "integer", "minimum": 0, "maximum": 2147483647},
+        "periodSeconds": {"type": "integer", "minimum": 1, "maximum": 2147483647},
+        "timeoutSeconds": {"type": "integer", "minimum": 1, "maximum": 2147483647},
+        "successThreshold": {"type": "integer", "minimum": 1, "maximum": 1, "description": "Kubernetes refuses a liveness probe whose successThreshold is not 1."},
+        "failureThreshold": {"type": "integer", "minimum": 1, "maximum": 2147483647},
+        "terminationGracePeriodSeconds": {"type": ["integer", "null"], "minimum": 1, "maximum": 2147483647}
       }
     },
     "readinessProbeTimings": {
@@ -456,16 +467,15 @@
       "additionalProperties": false,
       "description": "As probeTimings, without terminationGracePeriodSeconds, which Kubernetes refuses on a readiness probe.",
       "properties": {
-        "initialDelaySeconds": {"type": "integer", "minimum": 0},
-        "periodSeconds": {"type": "integer", "minimum": 1},
-        "timeoutSeconds": {"type": "integer", "minimum": 1},
-        "successThreshold": {"type": "integer", "minimum": 1},
-        "failureThreshold": {"type": "integer", "minimum": 1}
+        "initialDelaySeconds": {"type": "integer", "minimum": 0, "maximum": 2147483647},
+        "periodSeconds": {"type": "integer", "minimum": 1, "maximum": 2147483647},
+        "timeoutSeconds": {"type": "integer", "minimum": 1, "maximum": 2147483647},
+        "successThreshold": {"type": "integer", "minimum": 1, "maximum": 2147483647},
+        "failureThreshold": {"type": "integer", "minimum": 1, "maximum": 2147483647}
       }
     },
     "quantityMap": {"type": "object", "additionalProperties": {"type": ["string", "number"]}},
     "port": {"type": "integer", "minimum": 1, "maximum": 65535},
-    "countOrPercent": {"type": ["integer", "string"], "pattern": "^[0-9]+%?$"},
     "duration": {
       "type": "string",
       "description": "A Go duration such as 30s, 1m30s or 2h.",

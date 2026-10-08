@@ -445,7 +445,7 @@ func TestCompilingProtoFilesGivesWhatItGave(t *testing.T) {
 					t.Errorf("a well-known file was looked for at %s", path)
 				}
 			}
-			if stamp != filesStamp(looked) || filesStamp(looked) != oldFilesStamp(looked) {
+			if stamp != filesStamp(looked) || oldPartOf(filesStamp(looked)) != oldFilesStamp(looked) {
 				t.Errorf("the stamp of the paths looked at is\n%s\nthe one of the files now\n%s\nand as it was written before\n%s", stamp, filesStamp(looked), oldFilesStamp(looked))
 			}
 		})

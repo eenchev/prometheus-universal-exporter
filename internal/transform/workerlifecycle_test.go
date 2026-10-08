@@ -13,7 +13,7 @@ import (
 
 // The timer adds up the scripts a probe runs and says whether any ran.
 func TestScriptTimerSumsTheRuns(t *testing.T) {
-	ctx, timer := WithScriptTimer(context.Background())
+	ctx, timer := WithScriptTimer(context.Background(), nil)
 	if _, ran := timer.Seconds(); ran {
 		t.Fatal("a fresh timer says a script ran")
 	}

@@ -161,6 +161,12 @@ func httpSchemaKeys() []schemaKey {
 		// reach.
 		{key: "collector_files[]", document: "# files\n" + jqCollector, at: "# files\n", setting: "collector_files: [%s]\n", absent: true},
 		{key: "collectors[].request.accept_status[]", document: jqCollector, at: request, setting: "      accept_status: [%s]\n", valid: "503", invalid: "600", absent: true},
+		{key: "collectors[].request.accept_status[]", of: "written with a point", document: jqCollector, at: request, setting: "      accept_status: [%s]\n", valid: "503.0", invalid: "503.5", absent: true},
+		{key: "collectors[].request.accept_status[]", of: "with an exponent", document: jqCollector, at: request, setting: "      accept_status: [%s]\n", valid: "5.03e2", invalid: "6e2", absent: true},
+		{key: "collectors[].request.accept_status[]", of: "in hex", document: jqCollector, at: request, setting: "      accept_status: [%s]\n", valid: "0x1F7", invalid: "0x258", absent: true},
+		{key: "collectors[].request.accept_status[]", of: "in octal", document: jqCollector, at: request, setting: "      accept_status: [%s]\n", valid: "0o767", invalid: "0o1130", absent: true},
+		{key: "collectors[].request.accept_status[]", of: "with an underscore", document: jqCollector, at: request, setting: "      accept_status: [%s]\n", valid: "5_03", invalid: "6_00", absent: true},
+		{key: "collectors[].request.accept_status[]", of: "with a sign and leading zeros", document: jqCollector, at: request, setting: "      accept_status: [%s]\n", valid: "+0503", invalid: "-503", absent: true},
 		{key: "collectors[].request.allowed_targets[]", document: jqCollector, at: request, setting: "      allowed_targets: [%s]\n", valid: "api.example.com", invalid: "bücher.example", absent: true, emptyWas: taken},
 		{key: "collectors[].request.denied_targets[]", document: jqCollector, at: request, setting: "      denied_targets: [%s]\n", valid: "api.example.com", invalid: "bücher.example", absent: true, emptyWas: taken},
 		{key: "collectors[].request.redirect_trusted_hosts[]", document: jqCollector, at: request, setting: "      follow_redirects: true\n      redirect_trusted_hosts: [%s]\n", valid: "cdn.example.com", invalid: "bücher.example", absent: true},
@@ -173,11 +179,14 @@ func httpSchemaKeys() []schemaKey {
 		{key: "collectors[].transform.required_libs[]", document: pythonCollector, at: "      # transform\n", setting: "      required_libs: [%s]\n", valid: "PyYAML", invalid: "requests", absent: true},
 		{key: "collectors[].metrics[].value_map{}", document: jqCollector, at: metric, setting: "        value_map: {%s: 1}\n", valid: "up", invalid: `" up"`, absent: true, emptyWas: taken, invalidWas: taken},
 		{key: "collectors[].metrics[].labels[].value_map{}", document: jqCollector, at: label, setting: "            value_map: {%s: other}\n", valid: `"1"`, invalid: `"1 "`, absent: true, emptyWas: taken, invalidWas: taken},
-		// Sizes: "" is no size, to both.
-		{key: "collectors[].limits.max_output_bytes", document: jqCollector, at: collector, setting: "    limits:\n      max_output_bytes: %s\n", valid: "1MiB", invalid: "lots", absent: true},
-		{key: "collectors[].limits.max_response_bytes", document: jqCollector, at: collector, setting: "    limits:\n      max_response_bytes: %s\n", valid: "1MiB", invalid: "lots", absent: true},
-		{key: "collectors[].limits.max_script_memory", document: jqCollector, at: collector, setting: "    limits:\n      max_script_memory: %s\n", valid: "64MiB", invalid: "lots", absent: true, numberAlone: "limits.max_script_memory must be 0, for no limit, or at least 32MiB"},
-		{key: "collectors[].request.max_response_bytes", document: jqCollector, at: request, setting: "      max_response_bytes: %s\n", valid: "1MiB", invalid: "lots", absent: true},
+		// Sizes: "" is no size, to both, and a number of bytes is one
+		// however YAML writes the whole number. An output limit has a least
+		// besides, which both hold a number to, so its 1 is refused by both
+		// (TestSchemaAndExporterAgreeOnTheLeastOutputLimit).
+		{key: "collectors[].limits.max_output_bytes", document: jqCollector, at: collector, setting: "    limits:\n      max_output_bytes: %s\n", valid: "1MiB", invalid: "lots", absent: true, size: true},
+		{key: "collectors[].limits.max_response_bytes", document: jqCollector, at: collector, setting: "    limits:\n      max_response_bytes: %s\n", valid: "1MiB", invalid: "lots", absent: true, size: true},
+		{key: "collectors[].limits.max_script_memory", document: jqCollector, at: collector, setting: "    limits:\n      max_script_memory: %s\n", valid: "64MiB", invalid: "lots", absent: true, numberAlone: "limits.max_script_memory must be 0, for no limit, or at least 32MiB", size: true},
+		{key: "collectors[].request.max_response_bytes", document: jqCollector, at: request, setting: "      max_response_bytes: %s\n", valid: "1MiB", invalid: "lots", absent: true, size: true},
 		// Durations: "" is no duration, to both, and the number 0 is one.
 		{key: "collectors[].cache.ttl", document: jqCollector, at: collector, setting: "    cache:\n      ttl: %s\n", valid: "30s", invalid: "soon", absent: true, duration: true},
 		{key: "collectors[].cache.stale_if_error", document: jqCollector, at: collector, setting: "    cache:\n      stale_if_error: %s\n", valid: "30s", invalid: "soon", absent: true, duration: true},
@@ -194,6 +203,12 @@ func httpSchemaKeys() []schemaKey {
 		{key: "targets[].collector", file: inTargetFile, document: oneTarget, at: "    collector: demo\n", setting: "    collector: %s\n", valid: "demo", emptyWas: taken, booleanAlone: `references unknown collector "true"`, numberAlone: `references unknown collector "1"`},
 		{key: "targets[].request.method", file: inTargetFile, document: oneTarget, at: target, setting: "    request:\n      method: %s\n", valid: "POST", invalid: "FETCH", absent: true, empty: true, emptyWas: refused},
 		{key: "targets[].request.accept_status[]", file: inTargetFile, document: oneTarget, at: target, setting: "    request:\n      accept_status: [%s]\n", valid: "503", invalid: "600", absent: true},
+		{key: "targets[].request.accept_status[]", of: "written with a point", file: inTargetFile, document: oneTarget, at: target, setting: "    request:\n      accept_status: [%s]\n", valid: "503.0", invalid: "503.5", absent: true},
+		{key: "targets[].request.accept_status[]", of: "with an exponent", file: inTargetFile, document: oneTarget, at: target, setting: "    request:\n      accept_status: [%s]\n", valid: "5.03e2", invalid: "6e2", absent: true},
+		{key: "targets[].request.accept_status[]", of: "in hex", file: inTargetFile, document: oneTarget, at: target, setting: "    request:\n      accept_status: [%s]\n", valid: "0x1F7", invalid: "0x258", absent: true},
+		{key: "targets[].request.accept_status[]", of: "in octal", file: inTargetFile, document: oneTarget, at: target, setting: "    request:\n      accept_status: [%s]\n", valid: "0o767", invalid: "0o1130", absent: true},
+		{key: "targets[].request.accept_status[]", of: "with an underscore", file: inTargetFile, document: oneTarget, at: target, setting: "    request:\n      accept_status: [%s]\n", valid: "5_03", invalid: "6_00", absent: true},
+		{key: "targets[].request.accept_status[]", of: "with a sign and leading zeros", file: inTargetFile, document: oneTarget, at: target, setting: "    request:\n      accept_status: [%s]\n", valid: "+0503", invalid: "-503", absent: true},
 		{key: "targets[].params{}", file: inTargetFile, document: oneTarget, at: target, setting: "    params: {%s: one}\n", valid: "param_id", invalid: "tenant", absent: true},
 		{key: "targets[].labels{}", file: inTargetFile, document: oneTarget, at: target, setting: "    labels: {%s: one}\n", valid: "team", invalid: "job", absent: true, emptyWas: taken, numberAlone: `has invalid label name "1"`},
 		{key: "interval", file: inTargetFile, document: oneTarget, at: "interval: 1m\n", setting: "interval: %s\n", valid: "30s", invalid: "soon", duration: true, zero: "interval is required"},
@@ -218,8 +233,9 @@ func httpSchemaKeys() []schemaKey {
 // the otlp block and of the target file that a schema holds to values, a
 // pattern or a length is put through both, left out, written "", written
 // well and written badly; a key the exporter requires is refused by both
-// written "", as it is left out; and each duration key takes the number 0,
-// which the exporter reads as the duration, and no other number.
+// written "", as it is left out; each duration key takes the number 0,
+// which the exporter reads as the duration, and no other number; and each
+// size key takes a whole number of bytes however YAML writes the number.
 func TestSchemaAndExporterAgreeOnKeysWrittenEmpty(t *testing.T) {
 	checkSchemaKeys(t, httpSchemaKeys())
 }

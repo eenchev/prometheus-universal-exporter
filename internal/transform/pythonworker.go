@@ -69,7 +69,9 @@ var PythonLibraries = map[string]bool{"lxml": true, "PyYAML": true, "yaml": true
 // PythonWorkerReapInterval whether or not anything runs Python, so a collector
 // nobody scrapes any more does not keep its interpreters. A reload stops at
 // once the idle workers of scripts it removed or changed, and those still busy
-// when they finish.
+// when they finish, as it does the workers of a collector it removed, whose
+// statistics are retired (PythonStats), though a later reload has brought the
+// collector back as it was by then: that one starts workers of its own.
 //
 // An idle worker can die: the kernel may kill it for memory, and a script
 // can arm a signal that outlives its run. One found dead when it is taken
@@ -137,6 +139,38 @@ func (e pythonWorkerGone) Error() string { return e.why }
 // a request, before it runs the script.
 const pythonRequestTaken = `{"started": true}`
 
+// The other lines a worker cannot do without, as the launcher writes them,
+// with the ", " and ": " json.dumps separates by: that it is ready, the
+// answer of a transform's script that emitted no metric and printed nothing,
+// and the answer of a pre-script that printed nothing and left None in data.
+const (
+	pythonReadyLine          = `{"ok": true, "ready": true}`
+	pythonEmptyMetricsAnswer = `{"ok": true, "log": "", "metrics": []}`
+	pythonNoDataAnswer       = `{"ok": true, "log": "", "data": null}`
+)
+
+// MinPythonOutputBytes is the least a limits.max_output_bytes that is set
+// may be, 38 bytes: the longest of the lines every worker has to get through
+// it, without the line break, which is not counted (readAnswers). Under 27
+// bytes the worker's line that it is ready does not fit, so no worker
+// starts and every scrape fails as a start that failed; from 27 a worker
+// starts and says of each request that it has it (17 bytes), and its errors
+// are cut to fit (failed), but an answer is not: the shortest a pre-script
+// gets is 34 bytes, with a number of one digit left in data, 35 with {}, []
+// or "" and 37 with None, and the shortest a transform's script gets is the
+// 38 of no metric at all. Those are of a script that prints nothing: what it
+// prints is in the answer's log. So a smaller limit is one under which a
+// transform's script could do nothing but fail and a pre-script could leave
+// in data nothing that is written longer than None is, and the
+// configuration is refused with it when it loads (config.Validate), by the
+// schema too where the size is written as a number.
+//
+// The loader holds this floor, not the worker and not the pool: a worker
+// runs under whatever limit it is given, cutting an error to it, which the
+// tests of that rely on. A test holds the constant to what the launcher
+// writes, so it cannot stay behind when an answer gains or loses a key.
+const MinPythonOutputBytes = max(len(pythonReadyLine), len(pythonRequestTaken), len(pythonEmptyMetricsAnswer), len(pythonNoDataAnswer))
+
 // pythonLibraryModules are the modules a declared library preloads. Importing
 // them at start-up keeps their import time out of script_timeout, and lets a
 // library that imports a module the sandbox blocks, such as threading, load
@@ -159,6 +193,11 @@ type pythonSpec struct {
 	// unbounded.
 	MaxMemory int64
 	Scripts   string // a digest of the collector's scripts
+	// stats are the statistics the run counts in, when it took them as it
+	// began (PythonPool.statsOf); a run that names none counts in those kept
+	// under Collector. They are no part of which workers the script may run
+	// in (key).
+	stats *PythonStats
 }
 
 func pythonWorkerSpec(pythonPath string, c *model.Collector) pythonSpec {
@@ -194,7 +233,17 @@ type PythonPool struct {
 	started atomic.Int64
 	// stats are kept per collector, under mu. They cost a map lookup per
 	// run, and are published only with verbose self-metrics (exporter/verbosemetrics.go).
-	stats map[string]*pythonCollectorStats
+	// They are a collector's for as long as the collector stays: a reload
+	// that removes it retires them (Retire), and a collector added again
+	// under the name has others, from zero.
+	stats map[string]*PythonStats
+	// departed is what was counted for the collectors whose statistics were
+	// retired, and what their runs and workers have counted since: it is
+	// shown under no collector, and is part of what the pool counts as a
+	// whole (PoolSnapshot), which therefore never goes backwards. It is also
+	// the statistics of a run whose collector was removed before the run
+	// took any (Departed).
+	departed PythonStats
 	// busy counts the workers of each key that are running a script, and
 	// obsolete holds the keys a reload dropped while some of their workers
 	// were busy; those are stopped when they finish.
@@ -256,7 +305,22 @@ var (
 	PythonRunOutcomes = []string{pythonRunOK, pythonRunScriptError, pythonRunTimeout, pythonRunDeadline, pythonRunOutputLimit, pythonRunFailed}
 )
 
-type pythonCollectorStats struct {
+// PythonStats is one collector's worker statistics, as a run counts in them:
+// a run takes them once, when its trip begins, and counts in those and no
+// others however the run ends, and a worker counts in those of the run that
+// started it, for as long as it lives: it serves the runs that count in
+// them and no others (acquire). So a run or a worker that outlives its
+// collector, which a reload removed, is counted nowhere a collector shows,
+// and not for a collector added again under the name, which has statistics
+// of its own, and workers of its own: every worker a collector's series show
+// is one they counted the start of, and will count the stop of.
+type PythonStats struct {
+	// pool is the pool that keeps them, which never changes, and retired
+	// says that the collector they were of is gone (Retire): what counts in
+	// them is then counted in the pool's departed. retired is read and set
+	// under the pool's mu, as the counts are.
+	pool           *PythonPool
+	retired        bool
 	starting, busy int
 	starts         uint64
 	startFailures  uint64
@@ -289,7 +353,8 @@ func IsolatePythonWorkers() (restore func()) {
 }
 
 func newPythonPool() *PythonPool {
-	pool := &PythonPool{idle: map[string][]*pythonWorker{}, stats: map[string]*pythonCollectorStats{}, busy: map[string]int{}, obsolete: map[string]bool{}, start: startPythonWorker}
+	pool := &PythonPool{idle: map[string][]*pythonWorker{}, stats: map[string]*PythonStats{}, busy: map[string]int{}, obsolete: map[string]bool{}, start: startPythonWorker}
+	pool.departed = PythonStats{pool: pool, retired: true, stops: map[string]uint64{}, runs: map[string]uint64{}}
 	pool.startTimeout.Store(int64(pythonStartupTimeout))
 	return pool
 }
@@ -356,25 +421,134 @@ func (p *PythonPool) stopLocked(worker *pythonWorker) {
 }
 
 // statsLocked returns a collector's statistics, creating them; mu is held.
-func (p *PythonPool) statsLocked(collector string) *pythonCollectorStats {
+func (p *PythonPool) statsLocked(collector string) *PythonStats {
 	st := p.stats[collector]
 	if st == nil {
-		st = &pythonCollectorStats{stops: map[string]uint64{}, runs: map[string]uint64{}}
+		st = &PythonStats{pool: p, stops: map[string]uint64{}, runs: map[string]uint64{}}
 		p.stats[collector] = st
 	}
 	return st
 }
 
-func (p *PythonPool) count(collector string, update func(*pythonCollectorStats)) {
+// Stats returns the statistics kept under a collector's name, making them
+// when there are none. It is for whoever knows that the collector of that
+// name is the one a run is of, which a name alone does not say once a reload
+// may have removed the collector and another brought one back: the exporter
+// asks while it holds what a reload retires a collector's statistics under,
+// for a trip whose collector has been there since the trip read it
+// (exporter/pythonstats.go), and hands them to the trip's runs
+// (WithScriptTimer). A run that is handed none asks by its collector's name
+// when it begins, as every run did.
+func (p *PythonPool) Stats(collector string) *PythonStats {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	update(p.statsLocked(collector))
+	return p.statsLocked(collector)
 }
 
-// recordRun counts how a run ended. The pool cannot tell a script's own error
-// from a successful answer, so the caller, which reads the answer, records it.
-func (p *PythonPool) recordRun(collector, outcome string) {
-	p.count(collector, func(st *pythonCollectorStats) { st.runs[outcome]++ })
+// Departed returns the statistics of a run whose collector a reload removed
+// before the run took any: retired from the start, so what the run counts is
+// shown under no collector, leaves nothing under the collector's name, and
+// is counted for the pool as a whole.
+func (p *PythonPool) Departed() *PythonStats { return &p.departed }
+
+// Retire drops the statistics kept under the names of collectors a reload
+// removed: they are shown no more, a collector added again under one of the
+// names starts from zero, and nothing is kept for a name that does not come
+// back. What they had counted stays counted for the pool as a whole, and so
+// is what the runs and workers that still hold them count from now on, a run
+// that waits for a worker, runs its script or ends, and a worker that is
+// stopped when its run ends: under no collector's name.
+//
+// No worker outlives its statistics idle. The ones that are idle now are
+// stopped here, for the reload that removed their collector
+// (pythonStopReload), where the reload has not stopped them already (Retain,
+// which the configuration manager calls before the exporter retires
+// anything): a run of the removed collector may have left one since. A busy
+// one is stopped when its run ends (release).
+func (p *PythonPool) Retire(collectors map[string]bool) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	retired := false
+	for name := range collectors {
+		st := p.stats[name]
+		if st == nil {
+			continue
+		}
+		delete(p.stats, name)
+		st.retired, retired = true, true
+		p.departed.starting += st.starting
+		p.departed.busy += st.busy
+		p.departed.starts += st.starts
+		p.departed.startFailures += st.startFailures
+		for reason, n := range st.stops {
+			p.departed.stops[reason] += n
+		}
+		for outcome, n := range st.runs {
+			p.departed.runs[outcome] += n
+		}
+	}
+	if retired {
+		p.stopRetiredLocked()
+	}
+}
+
+// stopRetiredLocked stops the idle workers whose statistics are retired; mu
+// is held.
+func (p *PythonPool) stopRetiredLocked() {
+	for key, workers := range p.idle {
+		kept := workers[:0]
+		for _, worker := range workers {
+			if worker.stats.retired {
+				p.stopLocked(worker)
+				p.departed.stops[pythonStopReload]++
+				continue
+			}
+			kept = append(kept, worker)
+		}
+		if len(kept) == 0 {
+			delete(p.idle, key)
+		} else {
+			p.idle[key] = kept
+		}
+	}
+}
+
+// StatsKept is how many collectors the pool keeps statistics for. It is for
+// tests, which hold it to the collectors there are: the names a reload
+// removed must not add up.
+func (p *PythonPool) StatsKept() int {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return len(p.stats)
+}
+
+// countedLocked is where what a run or a worker of st counts is counted: in
+// st, and in the pool's departed once st is retired; mu is held.
+func (p *PythonPool) countedLocked(st *PythonStats) *PythonStats {
+	if st.retired {
+		return &p.departed
+	}
+	return st
+}
+
+// statsOf is the statistics a run of collector counts in: carried, the ones
+// its trip was handed, when they are this pool's, and otherwise the ones
+// kept under the collector's name. A test may have put another pool in place
+// since a trip was handed its own (IsolatePythonWorkers).
+func (p *PythonPool) statsOf(carried *PythonStats, collector string) *PythonStats {
+	if carried != nil && carried.pool == p {
+		return carried
+	}
+	return p.Stats(collector)
+}
+
+// recordRun counts how a run ended, in the statistics the run took when it
+// began. The pool cannot tell a script's own error from a successful answer,
+// so the caller, which reads the answer, records it.
+func (p *PythonPool) recordRun(st *PythonStats, outcome string) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.countedLocked(st).runs[outcome]++
 }
 
 // run sends one request to a worker for spec and returns its answer line and
@@ -420,7 +594,7 @@ func (p *PythonPool) discard(worker *pythonWorker, reason string) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	p.stopLocked(worker)
-	st := p.statsLocked(worker.collector)
+	st := p.countedLocked(worker.stats)
 	st.busy--
 	st.stops[reason]++
 	p.unbusyLocked(worker.key)
@@ -436,27 +610,51 @@ func (p *PythonPool) unbusyLocked(key string) {
 }
 
 // acquire gives a worker for spec: an idle one of the pool, which reused
-// then says, or one it starts.
+// then says, or one it starts. The run counts in spec's statistics, which
+// are the collector's by name for a run that names none, and so does the
+// worker it is given: an idle worker is one of the script, and of those
+// statistics, the ones the run that started it counted its start in. Workers
+// are kept by a key that carries the collector's name, and a name does not
+// say whose a worker is once a reload has removed a collector and another
+// has brought one back under it: a run of the collector added again is not
+// given a worker the removed collector started, whose stop its series would
+// then count with no start, and a run of the removed collector that is
+// still under way, whose statistics are retired, is not given one the
+// collector added again started, which would leave that one's series with
+// its stop never counted. Such a run finds no idle worker, since none
+// outlives its statistics idle (Retire, release), and starts one, under the
+// pool's limit as any other.
 func (p *PythonPool) acquire(ctx context.Context, spec pythonSpec) (*pythonWorker, bool, error) {
 	key := spec.key()
 	p.mu.Lock()
+	st := spec.stats
+	if st == nil {
+		st = p.statsLocked(spec.Collector)
+	}
 	p.reapLocked(time.Now())
 	woken := false
 	for {
 		var worker *pythonWorker
-		if idle := p.idle[key]; len(idle) > 0 {
-			worker = idle[len(idle)-1]
-			p.idle[key] = idle[:len(idle)-1]
+		idle := p.idle[key]
+		for i := len(idle) - 1; i >= 0; i-- {
+			// The one that went idle last, which is the last of them
+			// wherever the script's workers are all of one collector's
+			// statistics, as they are while the name has had one collector.
+			if idle[i].stats == st {
+				worker = idle[i]
+				p.idle[key] = append(idle[:i], idle[i+1:]...)
+				break
+			}
 		}
 		if worker != nil && worker.gone() {
 			// It died while it was idle: stopped and counted as the crash
 			// it was, and the next one, or a new one, serves the run.
 			p.stopLocked(worker)
-			p.statsLocked(worker.collector).stops[pythonStopCrash]++
+			p.countedLocked(worker.stats).stops[pythonStopCrash]++
 			continue
 		}
 		if worker != nil {
-			p.statsLocked(spec.Collector).busy++
+			p.countedLocked(st).busy++
 			p.busy[key]++
 			p.mu.Unlock()
 			return worker, true, nil
@@ -494,24 +692,25 @@ func (p *PythonPool) acquire(ctx context.Context, spec pythonSpec) (*pythonWorke
 		p.mu.Lock()
 	}
 	p.live++
-	st := p.statsLocked(spec.Collector)
-	st.starting++
+	p.countedLocked(st).starting++
 	p.mu.Unlock()
 
 	p.started.Add(1)
 	worker, err := p.start(ctx, spec)
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	st = p.statsLocked(spec.Collector)
-	st.starting--
+	// A reload may have retired the statistics while the worker started.
+	counted := p.countedLocked(st)
+	counted.starting--
 	if err != nil {
 		p.live--
 		p.notifyLocked()
-		st.startFailures++
+		counted.startFailures++
 		return nil, false, err
 	}
-	st.starts++
-	st.busy++
+	worker.stats = st
+	counted.starts++
+	counted.busy++
 	p.busy[key]++
 	return worker, false, nil
 }
@@ -541,7 +740,7 @@ func (p *PythonPool) evictIdleLocked() bool {
 		p.idle[oldestKey] = workers
 	}
 	p.stopLocked(worker)
-	p.statsLocked(worker.collector).stops[pythonStopEvicted]++
+	p.countedLocked(worker.stats).stops[pythonStopEvicted]++
 	return true
 }
 
@@ -554,7 +753,7 @@ func (p *PythonPool) release(spec pythonSpec, worker *pythonWorker) {
 	key := spec.key()
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	st := p.statsLocked(spec.Collector)
+	st := p.countedLocked(worker.stats)
 	st.busy--
 	obsolete := p.obsolete[key]
 	p.unbusyLocked(key)
@@ -562,8 +761,14 @@ func (p *PythonPool) release(spec pythonSpec, worker *pythonWorker) {
 		p.stopLocked(worker)
 		return
 	}
-	if obsolete {
-		// A reload removed or changed this script while it ran.
+	if obsolete || worker.stats.retired {
+		// A reload removed or changed this script while it ran, or removed
+		// the collector the worker was started for, whose statistics are
+		// retired: the script may be in use again, of a collector added
+		// again under the name, and the worker is none of that one's. So a
+		// run of a removed collector that began late, when its script was
+		// no longer in use, leaves no worker idle either. The stop is the
+		// reload's, counted for the pool alone.
 		p.stopLocked(worker)
 		st.stops[pythonStopReload]++
 		return
@@ -586,7 +791,7 @@ func (p *PythonPool) reapLocked(now time.Time) {
 		for _, worker := range workers {
 			if now.Sub(worker.idleSince) > pythonWorkerIdleTimeout {
 				p.stopLocked(worker)
-				p.statsLocked(worker.collector).stops[pythonStopIdle]++
+				p.countedLocked(worker.stats).stops[pythonStopIdle]++
 				continue
 			}
 			kept = append(kept, worker)
@@ -654,7 +859,7 @@ func (p *PythonPool) Retain(keys map[string]bool) {
 		}
 		for _, worker := range workers {
 			p.stopLocked(worker)
-			p.statsLocked(worker.collector).stops[pythonStopReload]++
+			p.countedLocked(worker.stats).stops[pythonStopReload]++
 		}
 		delete(p.idle, key)
 	}
@@ -685,12 +890,48 @@ type pythonWorkerSnapshot struct {
 	Stops, Runs           map[string]uint64
 }
 
-// Snapshot copies a collector's statistics and counts its idle workers.
+// Snapshot copies the statistics kept under a collector's name and counts
+// the idle workers that count in them. A name nothing is kept under has
+// counted nothing, and asking makes nothing kept under it: a reader may name
+// a collector a reload has just removed.
 func (p *PythonPool) Snapshot(collector string) pythonWorkerSnapshot {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	st := p.statsLocked(collector)
-	out := pythonWorkerSnapshot{Starting: st.starting, Busy: st.busy, Starts: st.starts, StartFailures: st.startFailures, Stops: map[string]uint64{}, Runs: map[string]uint64{}}
+	return p.snapshotLocked(p.stats[collector])
+}
+
+// Kept returns the statistics kept under a collector's name, and nil when
+// there are none: for a reader, which makes none by asking. Like Stats, it is
+// for whoever knows that the collector of that name is the one it means
+// (exporter/pythonstats.go).
+func (p *PythonPool) Kept(collector string) *PythonStats {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.stats[collector]
+}
+
+// SnapshotOf is Snapshot for the statistics a reader holds (Kept): what they
+// count is read from them, whatever is kept under the collector's name by
+// now, so a reader shows the counts of the collector it means. Retired since
+// the reader took them, they are what they were then; nil, or of another
+// pool, they have counted nothing.
+func (p *PythonPool) SnapshotOf(st *PythonStats) pythonWorkerSnapshot {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if st != nil && st.pool != p {
+		st = nil
+	}
+	return p.snapshotLocked(st)
+}
+
+// snapshotLocked copies st and counts the idle workers that count in them;
+// nil have counted nothing. mu is held.
+func (p *PythonPool) snapshotLocked(st *PythonStats) pythonWorkerSnapshot {
+	out := pythonWorkerSnapshot{Stops: map[string]uint64{}, Runs: map[string]uint64{}}
+	if st == nil {
+		return out
+	}
+	out.Starting, out.Busy, out.Starts, out.StartFailures = st.starting, st.busy, st.starts, st.startFailures
 	for reason, n := range st.stops {
 		out.Stops[reason] = n
 	}
@@ -699,7 +940,7 @@ func (p *PythonPool) Snapshot(collector string) pythonWorkerSnapshot {
 	}
 	for _, workers := range p.idle {
 		for _, worker := range workers {
-			if worker.collector == collector {
+			if worker.stats == st {
 				out.Idle++
 			}
 		}
@@ -708,14 +949,14 @@ func (p *PythonPool) Snapshot(collector string) pythonWorkerSnapshot {
 }
 
 // PoolSnapshot sums the statistics of every collector the pool has served,
-// including collectors a reload has since removed, so its counters never go
-// backwards.
+// including collectors a reload has since removed, whose counts the pool
+// keeps together (departed), so its counters never go backwards.
 func (p *PythonPool) PoolSnapshot() pythonWorkerSnapshot {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	out := pythonWorkerSnapshot{Stops: map[string]uint64{}, Runs: map[string]uint64{}}
 	out.Waiting = len(p.waiting)
-	for _, st := range p.stats {
+	sum := func(st *PythonStats) {
 		out.Starting += st.starting
 		out.Busy += st.busy
 		out.Starts += st.starts
@@ -727,6 +968,10 @@ func (p *PythonPool) PoolSnapshot() pythonWorkerSnapshot {
 			out.Runs[outcome] += n
 		}
 	}
+	for _, st := range p.stats {
+		sum(st)
+	}
+	sum(&p.departed)
 	for _, workers := range p.idle {
 		out.Idle += len(workers)
 	}
@@ -752,6 +997,9 @@ type pythonWorker struct {
 	stopOnce  sync.Once
 	// maxMemory is the worker's limits.max_script_memory, 0 for none.
 	maxMemory int64
+	// stats are the statistics the worker counts in: those of the run that
+	// started it, which do not change while it lives. The pool sets them.
+	stats *PythonStats
 }
 
 func startPythonWorker(ctx context.Context, spec pythonSpec) (*pythonWorker, error) {
@@ -784,9 +1032,10 @@ func startPythonWorkerRunning(ctx context.Context, spec pythonSpec, launcher str
 	// the depth is stated once, with the decoders. And it is told how long
 	// an answer may be, limits.max_output_bytes: it does not write one
 	// that a list or a dict is in so many times over that it is longer
-	// (weigh), nor one whose strings alone are, each as often as it is
-	// written, nor a script's error, which it cuts to what is shown of one
-	// (failed). The exporter measures the line it reads, as it did.
+	// (weigh), nor one whose strings are, with the keys of its dicts that
+	// are strings where it looks at those, each as often as it is written,
+	// nor a script's error, which it cuts to what is shown of one (failed).
+	// The exporter measures the line it reads, as it did.
 	cmd := exec.CommandContext(context.WithoutCancel(ctx), spec.Path, "-I", "-B", "-c", launcher, string(modules), strconv.FormatInt(spec.MaxMemory, 10), strconv.Itoa(decode.MaxDepth), strconv.Itoa(spec.MaxOutput)) // #nosec G204 -- the interpreter is the operator's --python.path
 	cmd.ExtraFiles = []*os.File{requestRead, answerWrite}                                                                                                                                                              // descriptors 3 and 4
 	cmd.Env = pythonWorkerEnvironment(os.Environ())
@@ -1088,7 +1337,7 @@ func (b *tailBuffer) String() string {
 // only then answers that it is ready. Each request runs the script in fresh
 // globals holding the same names scripts have always had, with stdout and
 // stderr captured, and answers with the metrics, the data or the error.
-const pythonWorkerLauncher = `import sys,json,builtins,contextlib,io,os,traceback,decimal,linecache
+const pythonWorkerLauncher = `import sys,json,builtins,contextlib,io,os,traceback,decimal,linecache,tokenize
 requests=os.fdopen(3,'r',encoding='utf-8')
 answers=os.fdopen(4,'w',encoding='utf-8')
 def watch_parent():
@@ -1199,6 +1448,14 @@ def code_only(open_code):
         if tz_readable(file,mode): return open_code(file,mode,*a,**kw)
         raise RuntimeError('operation disabled by exporter')
     return opened
+# A traceback shows a library frame's source line, which linecache reads
+# through tokenize.open, and tokenize opens it with its _builtin_open: the
+# real open where tokenize was imported before the sandbox, as it is above
+# (Python 3.13 imports it only when linecache first reads a file, which is
+# after the sandbox, and that read was refused). So a script reached any
+# file through tokenize.open or linecache.getline; they read a module's
+# source, as the importer does, and time zone data, and nothing else.
+tokenize._builtin_open=code_only(io.open)
 builtins.open=tz_only(io.open); io.FileIO=tz_only(_io.FileIO); _io.open=code_only(_io.open); io.open=builtins.open; _io.FileIO=io.FileIO
 del _io, _name, code_only, tz_only, tz_roots
 class Response:
@@ -1260,13 +1517,17 @@ def wire(v):
         # before any more of it is copied. Nothing is called for one met
         # the first time, and what is called for one met again may not
         # have a frame left where this walk still has: it is then asked
-        # of the next.
+        # of the next. The copy of a dict is kept (made), in the order the
+        # copies are finished, for the look at their keys once the answer
+        # is copied (answer): they are dicts and nothing else whatever
+        # they are copies of, and say what is written, where a look at
+        # what the script left would have to ask it.
         i=id(v)
         if i not in met: met.add(i)
         elif whole[1] is None:
             try: again()
             except RecursionError: pass
-        if isinstance(v,dict): return {k:wire(x) for k,x in v.items()}
+        if isinstance(v,dict): v={k:wire(x) for k,x in v.items()}; made.append(v); return v
         return [wire(x) for x in v]
     return v
 def metric_number(name,what,v):
@@ -1323,13 +1584,102 @@ def too_long(what): return OverflowError('what the script left in %s is longer t
 # at least, whatever its characters are escaped as, so an answer whose
 # strings come to more than limits.max_output_bytes is longer than the
 # exporter takes, and is refused unwritten (answer), as one that holds a
-# list too often is. The sum is of the values, not of the keys of dicts,
-# which no walk goes through, and of strings of exactly that type; an
-# answer that is longer than the limit only with its keys, its numbers and
-# its punctuation is written, and refused by the exporter, as before.
+# list too often is. The sum is of strings of exactly that type.
+#
+# A key is written as often as its dict is, as long as it is at least, and
+# one string can be the key of every dict of an answer: a hundred thousand
+# characters as the one key of five thousand rows, or as the name of a
+# label of five thousand metrics, are five hundred million written too.
+# But no walk goes through the keys, and to add them up for every dict, as
+# the strings are, cost half again of what looking through an answer costs
+# (sixty percent of the look through five thousand metrics, a fifth of
+# writing them), for keys that are a few characters each in nearly every
+# answer there is. So the keys of a few dicts are added up, and those
+# dicts stand for the ones around them. Of each level of a plain answer
+# that has four values or more, and a level below it, the fourth value and
+# every sixty-first after it are looked at, and the keys of those that are
+# dicts are taken as often as the level has values for each one looked at
+# (plain): four times in a level of four, sixty-four times in one of
+# sixty-four, and near sixty-one times in a long one. Of the dicts the
+# copy of any other answer is made of, in the order the copy finished
+# them, a dict after the dicts inside it, the fourth and every sixty-first
+# after it are looked at, and their keys taken as often as the copy has
+# dicts for each one looked at (answer). Only where the look found keys,
+# and the keys taken so and the strings together are more than
+# limits.max_output_bytes, or within sixty-four characters of it, which
+# stand for the keys of the levels of fewer than four values, the answer's
+# own among them, are the keys of the answer added up, those of every
+# dict, each as often as it is written (keyed), and the answer is refused
+# when the keys and the strings together are longer than the limit, as for
+# the strings alone. What writes an answer nested too deep for wire passes
+# every key, and adds each. A key counts when it is a string, of that type
+# or of a class made of it, as long as it is; a number, a boolean or None
+# is written in a few characters, and counts nothing. So an answer is
+# refused only when it is longer than the limit for certain, and the same
+# answer ends the same way each time: which dicts are looked at goes by
+# where they stand in the answer and by nothing else. One whose long keys
+# are in dicts the look does not pass, or in so few of a level's dicts
+# that those looked at do not come to the limit when they stand for the
+# rest, may be written, and refused by the exporter, as before: the look
+# does not pass the first three values of a level, a level of fewer than
+# four values, or the first three dicts of a copy. And so is one that is
+# longer than the limit only with its numbers and its punctuation.
+#
+# The look costs an ordinary answer two to five hundredths of its
+# look-through, a level kept and the keys of a few dicts joined, and of the
+# copy of one that is no JSON as it is, whose dicts are kept for it, no
+# more. It cost more where the dict looked at was unlike the rest, while
+# each one looked at was taken for sixty-one wherever it stood and the keys
+# were added up in a walk of their own: one dict of fifty thousand keys as
+# the fourth value of four, or one key of twenty thousand characters in
+# the fourth of five thousand rows, had all the keys of the answer added
+# up, at twice the look again, every scrape, for an answer well within the
+# limit. Taken for the four values of its level the one dict costs the
+# joining of its own keys, a sixth of the look, and nothing else. And
+# where all the keys are added up for an answer that is then within the
+# limit, they are added up from the levels the look kept, which costs what
+# adding them up for every answer would: half again of the look through
+# rows, three quarters of the look through metrics, a quarter of writing
+# either.
 class Unwritable(Exception): pass
 whole=[None,None,0]
 met=set()
+made=[]
+joined=''.join
+def key_size(d):
+    # How long the keys of d that are strings are together, d being a dict
+    # and of no class of the script's. The interpreter joins them, which
+    # asks nothing of a key: it takes a string of any class for the
+    # characters it holds, whatever the class says of its length, and
+    # refuses what is no string by its type, whatever that says its class
+    # is. Then the keys whose type is str, or made of it, are joined. So
+    # nothing of the script's runs here, and nothing is raised. What is
+    # joined is as long as the keys of the one dict, which the script
+    # holds, and is let go of at once; one key alone is not copied.
+    try: return len(joined(d))
+    except TypeError: return len(joined([k for k in d if issubclass(type(k),str)]))
+def keyed(levels,k,room):
+    # How long the keys of the dicts in levels are together, those that
+    # are strings, each as often as it is there, added to k: what the
+    # dicts the look passed came to already, which are left out here, the
+    # fourth of each level and every sixty-first after it. A level is a
+    # list of this launcher's own, of values a look has been through:
+    # every level of a plain answer but its last, where a dict has no
+    # keys (plain), or the dicts the copy of an answer is made of
+    # (answer). The dicts of a level are added up 1,024 values at a time,
+    # by the interpreter's own loops and with no call of this launcher's
+    # for a dict whose keys are all strings: a walk through the answer
+    # again, a step for each value, cost twice the look itself. And no
+    # further than room, past which the answer is refused whatever is
+    # left.
+    for level in levels:
+        if len(level)>3: del level[3::61]
+        for i in range(0,len(level),1024):
+            if k>room: return k
+            dicts=[v for v in level[i:i+1024] if type(v) is dict]
+            try: k+=sum(map(len,map(joined,dicts)))
+            except TypeError: k+=sum(map(key_size,dicts))
+    return k
 def weigh(document,steps=1<<62):
     # The least length document is written in, a list or a dict that is in
     # it twice counted twice: a string as long as it is and its quotes, any
@@ -1410,11 +1760,25 @@ def plain_check():
     # the exporter takes. None says the answer is unwritable, and not to
     # be walked at all. The strings the look passes are added up, one
     # addition for each, and an answer that is plain is left with how
-    # long its strings are together (whole[2]).
+    # long its strings are together (whole[2]). Of each level of four
+    # values or more that has another below it, the fourth value and
+    # every sixty-first after it are looked at again, for the keys of
+    # those that are dicts (key_size), in a loop of their own: one step
+    # more for every dict in the loop over the level cost more than all
+    # of this look. The fourth of the values of a metric that metric()
+    # made is its labels. What those keys come to is added up as it is
+    # (k), and as often as the level has values for each one looked at
+    # (e), wide being how many values the level has; a level of no more
+    # than sixty-four has the one value to look at, and no list is made
+    # of it. Every level that has one below it is kept: where there are
+    # such keys and, taken so, they and the strings are more than the
+    # limit or within sixty-four characters of it, the keys of all their
+    # dicts are added up (keyed), and the answer is left with how long
+    # its strings and its keys are together.
     recursion_limit=sys.getrecursionlimit
     scalars=frozenset((int,bool,type(None)))
     def plain(document,levels=1<<30):
-        level=[document]; room=half=most//2; look=4096; s=0
+        level=[document]; room=half=most//2; look=4096; s=k=e=0; wide=1; kept=[]; keep=kept.append
         for _ in range(min(levels,recursion_limit()//2-10)):
             below=[]
             extend=below.extend
@@ -1435,8 +1799,14 @@ def plain_check():
                         if unwritable(): return None
                         room=look=1<<62
                 elif t not in scalars: return False
-            if not below: whole[2]=s; return True
-            room-=len(below)
+            if not below:
+                if e and e+s+64>most>=s: s+=keyed(kept,k,most-s)
+                whole[2]=s; return True
+            keep(level)
+            if wide>3:
+                for v in level[3::61] if wide>64 else (level[3],):
+                    if type(v) is dict: x=key_size(v); k+=x; e+=x*wide/((wide+57)//61)
+            wide=len(below); room-=wide
             if half-room>look:
                 look=(half-room)*4
                 n=whole[1]=weigh(document,look>>8)
@@ -1494,7 +1864,10 @@ def deep_check(deepest):
         return whole[0]
     def key_text(k):
         # A key as json writes it: one that is no string as json makes it
-        # one, or refuses it.
+        # one, or refuses it. A string is counted with the answer's
+        # strings (whole[2]), as long as it is: one of any class made of
+        # str, by its type and by str's own length, as key_size counts.
+        if issubclass(type(k),str): whole[2]+=str.__len__(k)
         if k.__class__ is str: return quote(k)
         return json.dumps({k:None},allow_nan=False)[1:-7]
     def dumps(document):
@@ -1506,13 +1879,13 @@ def deep_check(deepest):
         while True:
             if isinstance(v,dict): put('{'); inside.append([iter(v.items()),'}',''])
             elif isinstance(v,(list,tuple)): put('['); inside.append([iter(v),']',''])
-            else:
-                put(json.dumps(wire(v),allow_nan=False))
-                # Its strings are counted as wire meets them, and it is
-                # not written on once they are longer than an answer may be.
-                if whole[2]>most: raise too_long('metrics' if 'metrics' in document else 'data')
+            else: put(json.dumps(wire(v),allow_nan=False))
             # The answer is one dict deeper than what a script left in data.
             if len(inside)>deepest+1: raise too_deep()
+            # Its strings are counted as wire meets them and its keys as
+            # they are written (key_text), and it is not written on once
+            # they are longer than an answer may be.
+            if whole[2]>most: raise too_long('metrics' if 'metrics' in document else 'data')
             # The next value: of the innermost list or dict that has one
             # left, those that have none being closed.
             while inside:
@@ -1573,10 +1946,13 @@ def answer(document):
     # count of the walk that went through all of it (whole[2]): plain,
     # where the answer is plain, wire, where it went through wire to its
     # end, and otherwise what writes one nested too deep for wire, as it
-    # writes. A count that wire did not finish is dropped: what is written
-    # then may be without what it counted. An answer that is not a
-    # script's data or metrics, an error or a word to the exporter, is
-    # written however long.
+    # writes. The keys of its dicts are counted with the strings where
+    # the dicts looked at say they may be long (plain, and here for the
+    # dicts of the copy, as plain does for a level; keyed), and by what
+    # writes an answer nested too deep, key by key. A count that wire did
+    # not finish is dropped: what is written then may be without what it
+    # counted. An answer that is not a script's data or metrics, an error
+    # or a word to the exporter, is written however long.
     left='metrics' if 'metrics' in document else 'data' if 'data' in document else None
     text=None; follow=False; whole[0]=document; whole[1]=None; whole[2]=0
     try:
@@ -1584,15 +1960,19 @@ def answer(document):
         if follow and (whole[2]<=most or not left): text=json.dumps(document,allow_nan=False)
     except Exception: text=None; follow=False
     if text is None and follow is False:
-        whole[2]=0
+        whole[2]=0; del made[:]
         try:
             copy=wire(document)
+            n=len(made)
+            if n>3 and whole[2]<=most:
+                k=sum(map(key_size,made[3::61]))
+                if k and k*n//((n+57)//61)+whole[2]+64>most: whole[2]+=keyed((made,),k,most-whole[2])
             if whole[2]<=most or not left: text=json.dumps(copy,allow_nan=False)
         except Unwritable: whole[2]=0
         except RecursionError:
             if not left: raise
             whole[2]=0
-        finally: met.clear()
+        finally: met.clear(); del made[:]
     # Outside the handler, so that what is raised here is raised alone.
     if text is None:
         if whole[2]>most: raise too_long(left)

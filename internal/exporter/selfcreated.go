@@ -22,7 +22,10 @@ import (
 //     part of the statistics, dropped with them (reconcile.go), and a trip
 //     is observed in the statistics it began with (verbosemetrics.go): one
 //     that ends after its collector was removed is not observed in the
-//     histogram of a collector brought back under the name.
+//     histogram of a collector brought back under the name. The counters of
+//     a collector's Python workers count since then too: the worker pool
+//     keeps them for as long as those statistics are kept, and a run counts
+//     in the ones its trip took by them (pythonstats.go).
 //   - The per-request counters of verbose mode count since the request began
 //     to be tracked: since the probe that got it tracked started, which of
 //     several first probes at once is the one to end first. A request
@@ -30,10 +33,10 @@ import (
 //     from zero, at a later time, when it comes back. The time is settled
 //     when the request starts being tracked and does not change while it is
 //     (requestTracker.adoptLocked).
-//   - The reload and OTLP counters, the Python worker counters, which the
-//     worker pool keeps for the life of the process whatever a reload does,
-//     and the go_ and process_ counters and summary count since the exporter
-//     started.
+//   - The reload and OTLP counters, the counters of the Python execution
+//     pool as a whole, which the worker pool keeps for the life of the
+//     process whatever a reload does, and the go_ and process_ counters and
+//     summary count since the exporter started.
 //
 // The _created samples are written only in an OpenMetrics answer of the
 // self-metrics endpoint, and only with web.self_metrics.created_timestamps

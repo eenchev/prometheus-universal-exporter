@@ -22,7 +22,9 @@ import (
 // transform the collector does not have.
 
 // checkLimits refuses a negative limit, which once became the default without
-// a word. 0, like a limit left out, is the default.
+// a word, and a limits.max_output_bytes under the least a Python worker
+// answers within (transform.MinPythonOutputBytes). 0, like a limit left out,
+// is the default.
 func checkLimits(x *model.Collector) error {
 	l := x.Limits
 	for _, limit := range []struct {
@@ -33,6 +35,7 @@ func checkLimits(x *model.Collector) error {
 		{"max_labels_per_metric", int64(l.MaxLabelsPerMetric)},
 		{"max_label_value_length", int64(l.MaxLabelValueLength)},
 		{"max_metric_name_length", int64(l.MaxMetricNameLength)},
+		{"max_label_name_length", int64(l.MaxLabelNameLength)},
 		{"max_help_length", int64(l.MaxHelpLength)},
 		{"max_output_bytes", int64(l.MaxOutputBytes)},
 		{"max_cache_entries", int64(l.MaxCacheEntries)},
@@ -43,6 +46,14 @@ func checkLimits(x *model.Collector) error {
 	}
 	if l.ScriptTimeout < 0 {
 		return fmt.Errorf("collector %q limits.script_timeout is %s, and a timeout must not be negative; leave it out for the default, 100ms", x.Name, time.Duration(l.ScriptTimeout))
+	}
+	// An output limit no answer of a transform's script fits loaded, and
+	// failed every scrape of a collector with such a script as output over
+	// the limit, or as an interpreter that did not start. The key bounds
+	// nothing else, so it is held to its least with a script, with a
+	// pre-script and with neither, which is a rule the schema can say too.
+	if least := model.ByteSize(transform.MinPythonOutputBytes); l.MaxOutputBytes > 0 && l.MaxOutputBytes < least {
+		return fmt.Errorf("collector %q limits.max_output_bytes is %d, and a Python script that emits no metric answers in %d bytes, so no transform's script could answer within it; set at least %d, or leave it out, or 0, for the default, 1MiB", x.Name, l.MaxOutputBytes, least, least)
 	}
 	return nil
 }

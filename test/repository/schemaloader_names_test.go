@@ -110,3 +110,28 @@ func TestSchemaAndExporterAgreeOnANameUnderEachNameEscaping(t *testing.T) {
 		}
 	}
 }
+
+// A rule's label that the collector's transform.rename_labels renames or
+// remove_labels removes is taken by the exporter whatever its characters,
+// since the scrape never exports it, and the schema, which cannot read a
+// name among the keys of one setting or the entries of the other, holds no
+// label's name to the classic pattern where the collector writes either: a
+// dotted label under name_escaping fail, renamed or removed, is taken by
+// both, where the schema refused it. One that neither takes off, beside a
+// rename or a removal of another label, is then the exporter's alone to
+// refuse, and with neither setting written, or written empty, both refuse
+// it as before.
+func TestSchemaAndExporterAgreeOnALabelNameARenameOrRemovalTakesOff(t *testing.T) {
+	schema := loadSchema(t)
+	const collector = "collectors:\n  - name: demo\n    request:\n      type: http\n    transform:\n      type: jq\n%s    metrics:\n      - expression: .v\n        name: up\n        labels:\n          - expression: .l\n            name: a.b\n"
+	written := func(settings string) string { return fmt.Sprintf(collector, settings) }
+	for _, settings := range []string{"      rename_labels: {a.b: ab}\n", "      remove_labels: [a.b]\n", "      remove_labels: [x, a.b]\n      rename_labels: {y: z}\n"} {
+		agree(t, schema, "a dotted label with "+strings.TrimSpace(settings), written(settings), true)
+	}
+	for _, settings := range []string{"      rename_labels: {x: y}\n", "      remove_labels: [x]\n"} {
+		loadersAlone(t, schema, "a dotted label beside "+strings.TrimSpace(settings), written(settings), `has invalid label name "a.b"`)
+	}
+	for _, settings := range []string{"", "      rename_labels: {}\n", "      remove_labels: []\n"} {
+		agree(t, schema, "a dotted label with "+strings.TrimSpace(settings), written(settings), false)
+	}
+}

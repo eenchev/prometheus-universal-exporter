@@ -84,7 +84,9 @@ therefore one series twice, and the scrape fails for the duplicate. A list
 or a dict is not one value and fails the script, saying so; join it into one
 first, with `",".join(tags)`.
 
-The launcher blocks `socket`, `ssl`, `subprocess`, `ctypes`, `multiprocessing`, `threading`, `mmap`, `pty`, `pathlib`, `shutil`, `tempfile` and `urllib.request`, and the C modules beneath them, such as `_socket` and `_posixsubprocess`; shell execution; opening files, through `open`, `io.FileIO` or `os`, but for reading time zone data; and package installation. A script may not import `posix`, `_io`, `_thread`, `select`, `selectors`, `fcntl`, `termios` or `importlib` itself, though the standard library it imports may, so `dataclasses` and the like still work. Time zone data is the one thing a script may read: the system's zone files (`zoneinfo.TZPATH`, `/usr/share/zoneinfo` and the like, and `/etc/localtime`), `python-dateutil`'s bundled copy and the `tzdata` package's, so `zoneinfo.ZoneInfo("Europe/Berlin")` and `dateutil.tz.gettz("Europe/Berlin")` work; the image ships the system's. (From Python 3.12, `zoneinfo` loads `sysconfig`, which imports `threading`; the worker loads `zoneinfo` before the sandbox is in place, so scripts can import it while `threading` stays blocked.) Any other file, or one reached from those directories by `..` or a symlink out of them, is still refused. The worker never writes bytecode caches either (it runs Python with `-B`), so importing a module whose `.pyc` is missing or out of date works in a writable directory as in a read-only one. The sandbox keeps a script from doing by mistake what it should not; it is not a wall against a script written to get out, which Python cannot offer from inside the interpreter. Treat collector configuration as you treat the exporter's code, and rely on the container — the chart runs it as a non-root user with a read-only root file system — for isolation. Python has no supported network API; `requests` and `httpx` are unnecessary. `script_timeout` and metric/output limits apply. Declared `libraries` are validated against the supported names (`lxml`, `PyYAML`, and `python-dateutil`, or their import names `yaml` and `dateutil`); they are never installed during a scrape, and the image has no pip to install them with.
+The launcher blocks `socket`, `ssl`, `subprocess`, `ctypes`, `multiprocessing`, `threading`, `mmap`, `pty`, `pathlib`, `shutil`, `tempfile` and `urllib.request`, and the C modules beneath them, such as `_socket` and `_posixsubprocess`; shell execution; opening files, through `open`, `io.FileIO` or `os`, but for reading time zone data; and package installation. A script may not import `posix`, `_io`, `_thread`, `select`, `selectors`, `fcntl`, `termios` or `importlib` itself, though the standard library it imports may, so `dataclasses` and the like still work. Time zone data is the one thing a script may read: the system's zone files (`zoneinfo.TZPATH`, `/usr/share/zoneinfo` and the like, and `/etc/localtime`), `python-dateutil`'s bundled copy and the `tzdata` package's, so `zoneinfo.ZoneInfo("Europe/Berlin")` and `dateutil.tz.gettz("Europe/Berlin")` work; the image ships the system's. (From Python 3.12, `zoneinfo` loads `sysconfig`, which imports `threading`; the worker loads `zoneinfo` before the sandbox is in place, so scripts can import it while `threading` stays blocked.) Any other file, or one reached from those directories by `..` or a symlink out of them, is still refused. A script that fails inside a library is shown the library's frames with their source lines, which the traceback reads through `linecache` and `tokenize.open`; those read a module's `.py` source, as the importer does, and time zone data, and refuse any other file. The worker never writes bytecode caches either (it runs Python with `-B`), so importing a module whose `.pyc` is missing or out of date works in a writable directory as in a read-only one. The sandbox keeps a script from doing by mistake what it should not; it is not a wall against a script written to get out, which Python cannot offer from inside the interpreter. Treat collector configuration as you treat the exporter's code, and rely on the container — the chart runs it as a non-root user with a read-only root file system — for isolation. Python has no supported network API; `requests` and `httpx` are unnecessary. `script_timeout` and metric/output limits apply. Declared `libraries` are validated against the supported names (`lxml`, `PyYAML`, and `python-dateutil`, or their import names `yaml` and `dateutil`); they are never installed during a scrape, and the image has no pip to install them with.
+
+The worker runs the interpreter `--python.path` names, `python3` by default, which in the image is Python 3.12 (the Dockerfile's `PYTHON_VERSION`). The sandbox depends on what the standard library imports, and when, which changes between releases, so 3.12 is the release it is built and tested on; the test suite also runs the sandbox, a library's traceback and how a script's error is cut on Python 3.13 where 3.13 is installed. Other releases may work, untested.
 
 ## What `data` is
 
@@ -156,16 +158,77 @@ scrape with the same `OverflowError`, naming `data` or `metrics`, before
 anything is written: in a few milliseconds, in the memory the script took,
 and the worker carries on. That goes for one long text alone as well, and
 for an answer of many different texts that are too long together: `leave
-less there, or raise limits.max_output_bytes` is what to do about each. Only
-the strings that are values count, as long as they are in characters; the
-keys of dicts, numbers and the punctuation between them do not.
+less there, or raise limits.max_output_bytes` is what to do about each. The
+strings that are values count so, each as long as it is in characters.
 
-An answer the worker does not refuse this way is not measured by it: it is
-written, and one longer than `limits.max_output_bytes` — its strings within
-the limit, and the whole over it with its keys, its numbers and what stands
-between them — fails the scrape with `python pre-script output exceeds
-limit` (`python transform output exceeds limit`) and costs its worker, as
-below.
+A key is written each time its dict is, so one long string that is the key
+of every row, or the name of a label on every metric, is written as often:
+`data = [{text: 1} for _ in range(5000)]`, or `metric("m", labels={text:
+"v"})` five thousand times. Keys count with the strings, but the worker does
+not add them up for every answer: that would cost every answer half again of
+the look through it, for keys that are a few characters each in nearly every
+answer there is. It adds up the keys of a few dicts, and lets each stand for
+the values around it:
+
+- In an answer it writes as it is, it goes by levels: the answer is the
+  first, and a level is all that the lists and dicts of the level above
+  hold. Of each level that has four values or more it looks at the fourth
+  value and at every sixty-first after it, and adds up the keys of those
+  that are dicts. What they come to is taken as often as the level has
+  values for each one looked at: four times in a level of four values,
+  sixty-four times in one of sixty-four, and about sixty-one times in a long
+  one.
+- In an answer it copies before writing, for a `NaN` or a value of another
+  type in it, it goes by the dicts its copy is made of, in the order it
+  finished them: a dict after the dicts inside it, and the answer itself
+  last. It adds up the keys of the fourth and of every sixty-first after
+  it, and takes them as often as the copy has dicts for each one looked at.
+
+Only where it found keys so, and those, taken so, would with the strings be
+longer than the limit or within 64 characters of it, does it add up the keys
+of every dict, each as often as it is written, and the answer fails with the same `OverflowError` when its keys and its
+strings together come to more than `limits.max_output_bytes`. An answer
+nested deeper than the copy follows is written key by key, and each key is
+counted as it is written. A key counts when it is a string — a `str`, or a
+value of a class made of it, such as a member of an enum of strings — as
+long as it is in characters; a key that is a number, a boolean or `None`
+counts nothing, and neither do numbers and the punctuation between values.
+The answer's own keys are among those counted: `ok`, `log` and `data`, and
+for each metric `name`, `type`, `value`, `labels`, `help` and `timestamp`.
+So metrics as `metric()` makes them fail this way too, and not with the
+exporter's error below, once their names, label names, label values and
+help texts come to more than the limit with those keys. Under a limit of
+1 MiB that is from 2.4 times the limit written out for metrics of a
+one-letter name and one label, from 1.7 times for metrics of four labels
+and a help text, and from 1.4 times for metrics of eight labels and a long
+help text; between the limit and that they are written, and the exporter
+refuses them.
+
+The look asks nothing of what the script left. It takes a value for a dict,
+and a key for a string, by its type, not by what the value says its class
+or its length is, and it runs none of a class's own methods: a mapping or a
+key of a class of your own, or one that stands in for another object, is
+written as it always was, wherever it stands in the answer.
+
+So an answer is refused only when it is longer than the limit for certain,
+and the same answer always ends the same way; but not every answer that
+long keys make too long is refused. The look does not pass the first three
+values of a level, any value of a level of fewer than four, the values
+between one it looks at and the sixty-first after it, or, in an answer the
+worker copies, the first three dicts it finishes. Long keys that are only
+there are not counted: in the first three rows, say, or in the first column
+of rows of exactly sixty-one columns, where the sixty-first value after the
+fourth of one row is the fourth of the next, so that the look passes the
+fourth column of every row and no other. Nor are long keys counted that are
+in so few of the dicts the look does pass that, taken for the values around
+them, they do not come to the limit. Such an answer may be written and
+refused by the exporter, as any answer is that the worker does not refuse:
+it is not measured by the worker but written, and one longer than
+`limits.max_output_bytes` — its strings and the keys the worker counted
+within the limit, and the whole over it with its numbers, what stands
+between them, or keys the look did not pass — fails the scrape with `python
+pre-script output exceeds limit` (`python transform output exceeds limit`)
+and costs its worker, as below.
 
 What the script itself does with data that deep is bounded by its
 interpreter. A function that calls itself for each level stops with a
@@ -274,8 +337,8 @@ start once and then serves scrape after scrape.
   scrape with the Python error; the worker carries on. A worker that crashes, or
   answers with more than `limits.max_output_bytes`, is replaced; an answer it
   does not write because a list or a dict is in it too often, or in itself,
-  or because its strings alone are longer than the limit, is the script's
-  error, and the worker carries on. An exception is never such an answer,
+  or because its strings, alone or with its keys, are longer than the limit,
+  is the script's error, and the worker carries on. An exception is never such an answer,
   however long its text is (below). A worker that
   died while it sat idle — killed by the kernel for memory, or by a signal a
   script armed and left behind, such as `signal.alarm` — fails no scrape: it
@@ -318,7 +381,11 @@ start once and then serves scrape after scrape.
   transform failed: ... (3613 lines)` and then the end of the traceback: the
   last exception with its frames, and as many of those before it as fit.
   The same failure with a longer message, or a longer chain that ends alike,
-  is one failure to the log.
+  is one failure to the log. The lines of markers under a source line
+  (`^^^^`, `~~~~`) are the `traceback` module's, and Python 3.13 draws them
+  under more lines than 3.12, under a call such as `fail(...)` too; they
+  count as lines like any other, so on 3.13 a long traceback may show a frame
+  fewer, and a failure's text differs between the two.
 
   An exception's text does not count as output, and
   `limits.max_output_bytes` never makes of it `python transform output
@@ -358,6 +425,20 @@ start once and then serves scrape after scrape.
   transform printed` or `python pre-script printed` with the collector, so
   `--log.level=debug` shows it while a script is being written; the rest is
   dropped, and counts against `limits.max_output_bytes` no further.
+- **The size of an answer.** `limits.max_output_bytes`, a
+  [size](CONFIGURATION.md#sizes), bounds what a worker writes back for one
+  run — the metrics a script emitted or the data a pre-script left, with
+  what it printed — and is 1 MiB when it is left out or `0`. Set, it is at
+  least 38 bytes: the answer of a transform's script that emits no metric
+  and prints nothing. Under less such a script could do nothing but fail,
+  and a pre-script could leave nothing in `data` that is written longer
+  than `None` — under 27 bytes no worker even starts — so a smaller limit
+  is refused when the configuration loads, by `--dry-run` and on a reload,
+  in a collector with a script, with a pre-script and with neither:
+  `collector "c" limits.max_output_bytes is 26, and a Python script that
+  emits no metric answers in 38 bytes, so no transform's script could
+  answer within it; set at least 38, or leave it out, or 0, for the
+  default, 1MiB`.
 - **Memory.** `limits.max_script_memory`, such as `256MiB`, bounds the address
   space of each of the collector's workers through `RLIMIT_AS`, set after the
   libraries are loaded. Everything the worker's process has mapped counts
@@ -390,7 +471,9 @@ start once and then serves scrape after scrape.
   collector after a burst of scrapes, and an idle one stops after five minutes
   — checked every minute, so a collector nobody scrapes any more does not keep
   its interpreters. A reload that changes or removes a script stops its idle
-  workers at once, and a busy one when its run ends.
+  workers at once, and a busy one when its run ends; the workers of a
+  collector a reload removed are not kept for a collector added again under
+  its name, which starts its own.
   Workers exit with the exporter. An idle worker exits when the exporter's end
   of its request pipe closes, however the exporter ended. A worker busy in a
   script is not reading that pipe, and an exporter that was killed stops

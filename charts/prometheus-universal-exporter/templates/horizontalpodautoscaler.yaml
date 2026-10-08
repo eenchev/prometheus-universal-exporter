@@ -1,7 +1,9 @@
 {{- if .Values.autoscaling.enabled }}
 {{- $scaling := .Values.autoscaling }}
-{{- if lt (int $scaling.maxReplicas) (int $scaling.minReplicas) }}
-{{- fail (printf "autoscaling.maxReplicas %v is below autoscaling.minReplicas %v" $scaling.maxReplicas $scaling.minReplicas) }}
+{{- $minReplicas := include "prometheus-universal-exporter.wholeNumber" (list "autoscaling.minReplicas" $scaling.minReplicas 1 2147483647) }}
+{{- $maxReplicas := include "prometheus-universal-exporter.wholeNumber" (list "autoscaling.maxReplicas" $scaling.maxReplicas 1 2147483647) }}
+{{- if lt (int64 $maxReplicas) (int64 $minReplicas) }}
+{{- fail (printf "autoscaling.maxReplicas %s is below autoscaling.minReplicas %s" ($maxReplicas | default "<nil>") ($minReplicas | default "<nil>")) }}
 {{- end }}
 {{- if and (not $scaling.targetCPUUtilizationPercentage) (not $scaling.targetMemoryUtilizationPercentage) (not $scaling.metrics) }}
 {{- fail "autoscaling.enabled needs something to scale on: targetCPUUtilizationPercentage, targetMemoryUtilizationPercentage or metrics" }}
@@ -20,8 +22,8 @@ spec:
     apiVersion: apps/v1
     kind: Deployment
     name: {{ include "prometheus-universal-exporter.fullname" . }}
-  minReplicas: {{ $scaling.minReplicas }}
-  maxReplicas: {{ $scaling.maxReplicas }}
+  minReplicas: {{ $minReplicas }}
+  maxReplicas: {{ $maxReplicas }}
   metrics:
     {{- with $scaling.targetCPUUtilizationPercentage }}
     - type: Resource
@@ -29,7 +31,7 @@ spec:
         name: cpu
         target:
           type: Utilization
-          averageUtilization: {{ . }}
+          averageUtilization: {{ include "prometheus-universal-exporter.wholeNumber" (list "autoscaling.targetCPUUtilizationPercentage" . 1 2147483647) }}
     {{- end }}
     {{- with $scaling.targetMemoryUtilizationPercentage }}
     - type: Resource
@@ -37,7 +39,7 @@ spec:
         name: memory
         target:
           type: Utilization
-          averageUtilization: {{ . }}
+          averageUtilization: {{ include "prometheus-universal-exporter.wholeNumber" (list "autoscaling.targetMemoryUtilizationPercentage" . 1 2147483647) }}
     {{- end }}
     {{- with $scaling.metrics }}
     {{- toYaml . | nindent 4 }}

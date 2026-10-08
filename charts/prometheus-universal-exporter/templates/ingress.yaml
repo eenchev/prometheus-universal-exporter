@@ -30,7 +30,7 @@ spec:
               service:
                 name: {{ include "prometheus-universal-exporter.fullname" $ }}
                 port:
-                  number: {{ $.Values.service.port }}
+                  number: {{ include "prometheus-universal-exporter.servicePort" $ }}
           {{- end }}
     {{- end }}
   {{- with .Values.ingress.tls }}

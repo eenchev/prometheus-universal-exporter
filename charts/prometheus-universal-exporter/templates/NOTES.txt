@@ -45,7 +45,7 @@ Use maxUnavailable: 1, or minAvailable below the replica count.
        not render; a percentage is rounded up, as Kubernetes rounds it, and
        100% blocks at any replica count. */}}
 {{- if and $pdb.enabled (not (kindIs "invalid" $pdb.minAvailable)) }}
-{{- $min := toString $pdb.minAvailable }}
+{{- $min := include "prometheus-universal-exporter.text" $pdb.minAvailable }}
 {{- $replicas := int .Values.replicaCount }}
 {{- $fixed := and (not .Values.autoscaling.enabled) (gt $replicas 0) }}
 {{- $blocked := false }}

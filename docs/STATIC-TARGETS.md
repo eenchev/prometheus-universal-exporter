@@ -144,7 +144,12 @@ of the job that scrapes it. Name such a label something else, such as `task`.
 A label's name is a classic Prometheus name, letters, digits and `_`,
 whatever the collector's [`name_escaping`](CONFIGURATION.md#utf-8-names):
 the labels are added to what the collector exported, after its names were
-escaped.
+escaped. Since they are added after the collector's series are checked, a
+label name longer than the collector's
+[`limits.max_label_name_length`](CONFIGURATION.md#long-label-names) is
+refused when the file is loaded, and so is a target of a collector whose
+limit is under 13 bytes, the length of the `static_target` label the
+endpoint adds, beside `collector` and `target` on the health series.
 
 A key, an entry of a list or a label written with no value at all — nothing
 after the colon or the dash, `null` or `~` — is refused, as it is in the
@@ -452,7 +457,10 @@ interval — and answers with the same plain-text report as a
 [debug probe](CONFIGURATION.md#debugging-a-probe): the requests, the response,
 each stage, the logs, and the series the scrape would have published, with
 the target's labels and `static_target`, and whether `http_exporter_target_up`
-would have been `1` or `0`.
+would have been `1` or `0`. The report is bounded as a debug probe's is: a
+long line, URL, header value or metric name is shown by its start and its
+length, and where a line of the series is cut the report says that the
+endpoint serves it whole.
 
 ```sh
 curl 'http://exporter:8080/static-targets?debug=legacy_eu'

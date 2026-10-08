@@ -95,7 +95,7 @@ func oraclePythonPool() *PythonPool {
 const oracleTimeout = time.Minute
 
 // oraclePythonLauncher is pythonWorkerLauncher as it was.
-const oraclePythonLauncher = `import sys,json,builtins,contextlib,io,os,traceback,decimal,linecache
+const oraclePythonLauncher = `import sys,json,builtins,contextlib,io,os,traceback,decimal,linecache,tokenize
 requests=os.fdopen(3,'r',encoding='utf-8')
 answers=os.fdopen(4,'w',encoding='utf-8')
 def watch_parent():
@@ -206,6 +206,9 @@ def code_only(open_code):
         if tz_readable(file,mode): return open_code(file,mode,*a,**kw)
         raise RuntimeError('operation disabled by exporter')
     return opened
+# As the worker does (pythonworker.go), so that a traceback reads a
+# library's source on Python 3.13 too, and a script reads nothing else.
+tokenize._builtin_open=code_only(io.open)
 builtins.open=tz_only(io.open); io.FileIO=tz_only(_io.FileIO); _io.open=code_only(_io.open); io.open=builtins.open; _io.FileIO=io.FileIO
 del _io, _name, code_only, tz_only, tz_roots
 class Response:

@@ -2,6 +2,7 @@ package transform
 
 import (
 	"fmt"
+	"slices"
 	"strings"
 	"unicode/utf8"
 
@@ -67,6 +68,8 @@ func checkMetricRule(x *model.Collector, r *model.MetricRule, where string) erro
 	if r.Name != "" {
 		if err := checkMetricName(x, r.Name); err != nil {
 			fail(fmt.Errorf("%s: %w%s", where, err, patternForAName(x, r.Name)))
+		} else {
+			fail(checkMetricNameLength(x, r.Name, where))
 		}
 	}
 	if r.Items != "" && !jqFamily(x.Transform.Type) && x.Transform.Type != "css" {
@@ -235,9 +238,9 @@ func CheckTransformSettings(x *model.Collector) error {
 		}
 	}
 	for _, name := range model.SortedKeys(t.Labels) {
-		if !TakesLabelName(x, name) {
+		if !TakesLabelNameBeforeRenames(x, name) {
 			errs = append(errs, fmt.Errorf("collector %q transform.labels has invalid label name %q%s", x.Name, name, EscapingAdvice(name)))
-		} else if err := CheckExportedLabelName(x, name); err != nil {
+		} else if err := CheckLabelNameBeforeRenames(x, name); err != nil {
 			errs = append(errs, fmt.Errorf("collector %q transform.labels: %w", x.Name, err))
 		}
 	}
@@ -356,16 +359,71 @@ func TakesLabelName(x *model.Collector, name string) bool {
 // (TakesLabelName) that is exported as one Prometheus reserves, beginning
 // with "__": a classic name written so, in the words it always was, and a
 // name underscores escapes to one, which the scrape would refuse of every
-// series that has the label.
+// series that has the label. It refuses as well a name exported longer than
+// the collector's limits.max_label_name_length, which the scrape would
+// refuse of every such series too: the name as escaped, which is what the
+// scrape measures.
 func CheckExportedLabelName(x *model.Collector, name string) error {
 	exported := escapeName(name, x.NameEscaping, false)
 	if exported == name {
-		return model.CheckLabelName(name)
-	}
-	if model.ReservedLabelName(exported) {
+		if err := model.CheckLabelName(name); err != nil {
+			return err
+		}
+	} else if model.ReservedLabelName(exported) {
 		return fmt.Errorf("label name %q is exported as %q under name_escaping %s, which starts with __, which Prometheus reserves for its own labels", name, exported, x.NameEscaping)
 	}
-	return nil
+	return checkLabelNameLength(x, name, exported)
+}
+
+// A label name a series has before the collector's transform.remove_labels
+// and rename_labels apply (applyCollectorLabels) — a rule's label, a key of
+// transform.labels — is exported under that name only if neither takes it
+// off. The scrape escapes the names and validates the series after both
+// (Transform), so a name one of them takes off is neither escaped nor
+// validated: its characters, the "__" Prometheus reserves and its length are
+// nothing to the scrape, which holds the rename's target to all three, as the
+// load does (CheckTransformSettings). The renames do not chain, and a
+// transform.labels key is added before the removals, so a key remove_labels
+// names is gone as a rule's label is. A name of nothing but blanks is
+// refused all the same, as the load refuses one everywhere: it is no name
+// anyone meant.
+
+// TakesLabelNameBeforeRenames is TakesLabelName of a label name a series has
+// before remove_labels and rename_labels: one either takes off is taken
+// whatever its characters, unless it is blanks alone.
+func TakesLabelNameBeforeRenames(x *model.Collector, name string) bool {
+	return TakesLabelName(x, name) || takenOffByRenames(x, name) && strings.TrimSpace(name) != ""
+}
+
+// CheckLabelNameBeforeRenames is CheckExportedLabelName of a label name a
+// series has before remove_labels and rename_labels, which refuses nothing
+// of a name either takes off.
+func CheckLabelNameBeforeRenames(x *model.Collector, name string) error {
+	if takenOffByRenames(x, name) {
+		return nil
+	}
+	return CheckExportedLabelName(x, name)
+}
+
+// takenOffByRenames reports whether the collector's transform.rename_labels
+// renames the label name or its remove_labels removes it.
+func takenOffByRenames(x *model.Collector, name string) bool {
+	_, renamed := x.Transform.RenameLabels[name]
+	return renamed || slices.Contains(x.Transform.RemoveLabels, name)
+}
+
+// checkLabelNameLength refuses a label name written in the collector's
+// configuration that is exported, as exported, longer than
+// limits.max_label_name_length.
+func checkLabelNameLength(x *model.Collector, name, exported string) error {
+	limit := x.Limits.MaxLabelNameLength
+	if limit <= 0 || len(exported) <= limit {
+		return nil
+	}
+	if exported == name {
+		return fmt.Errorf("label name %q is %d bytes, longer than limits.max_label_name_length %d; shorten it or raise limits.max_label_name_length", name, len(name), limit)
+	}
+	return fmt.Errorf("label name %q is exported as %q under name_escaping %s, %d bytes, longer than limits.max_label_name_length %d; shorten it or raise limits.max_label_name_length", name, exported, x.NameEscaping, len(exported), limit)
 }
 
 // checkMetricName applies the rule exposition applies at scrape time under
@@ -386,6 +444,34 @@ func checkMetricName(x *model.Collector, name string) error {
 		return fmt.Errorf("%q is exported as %q under name_escaping %s, which starts with \"__\", which Prometheus reserves", name, exported, x.NameEscaping)
 	}
 	return nil
+}
+
+// checkMetricNameLength refuses a rule's name, the rule being named by
+// where, that the collector exports longer than limits.max_metric_name_length:
+// every series of that name would fail the scrape's validation, which
+// measures the name as exported, escaped under the collector's name_escaping,
+// and only that name, a histogram's or a summary's family name and not the
+// _bucket, _sum and _count its samples are written under. A rule's name is
+// what its series are exported under by every transform: transform.rename
+// applies only to a pass-through without rules, and a python rule's name is
+// the name of the script's series it is about, exported so. A collector with
+// a metrics_prefix has the prefixed name checked by ValidateMetricsPrefix, in
+// its own words, before the rules.
+func checkMetricNameLength(x *model.Collector, name, where string) error {
+	limit := x.Limits.MaxMetricNameLength
+	if x.MetricsPrefix != "" || limit <= 0 {
+		return nil
+	}
+	const advice = "so every series of that name would fail validation; shorten the name or raise limits.max_metric_name_length"
+	exported := ExportedMetricName(x, name)
+	switch {
+	case len(exported) <= limit:
+		return nil
+	case exported == name:
+		return fmt.Errorf("%s is %d bytes, longer than limits.max_metric_name_length %d, %s", where, len(name), limit, advice)
+	default:
+		return fmt.Errorf("%s is exported as %q under name_escaping %s, %d bytes, longer than limits.max_metric_name_length %d, %s", where, exported, x.NameEscaping, len(exported), limit, advice)
+	}
 }
 
 // patternForAName is what the load adds to its refusal of a prometheus

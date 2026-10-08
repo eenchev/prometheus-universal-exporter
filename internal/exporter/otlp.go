@@ -725,7 +725,9 @@ var errOTLPNameClash = errors.New("two writers of one OTLP resource - probes, st
 
 // logOTLPNameClashes logs each name of a resource that an export had as
 // two kinds, once and then as a repeat (failureLog), whichever of the kinds
-// was written last at each export.
+// was written last at each export. The line shows the name as an error
+// shows one (model.ShownName), and the clash is remembered under the whole
+// name.
 func (s *Server) logOTLPNameClashes(identity otlpResourceIdentity, resource string, clashes []otlpNameClash) {
 	for _, clash := range clashes {
 		kinds := make([]string, 0, len(clash.leftOut))
@@ -734,7 +736,7 @@ func (s *Server) logOTLPNameClashes(identity otlpResourceIdentity, resource stri
 		}
 		s.failures.failed(s.logger, slog.LevelWarn, otlpNameClashKey(resource, clash.name),
 			"OTLP metric name written as two kinds under one resource; the data points of the kind written earlier are left out of the export", "otlp", errOTLPNameClash,
-			"metric", clash.name, "kind", otlpKindNames[clash.kept], "left_out_kind", strings.Join(kinds, ", "), "left_out_points", clash.points, "service_name", identity.ServiceName)
+			"metric", model.ShownName(clash.name), "kind", otlpKindNames[clash.kept], "left_out_kind", strings.Join(kinds, ", "), "left_out_points", clash.points, "service_name", identity.ServiceName)
 	}
 }
 

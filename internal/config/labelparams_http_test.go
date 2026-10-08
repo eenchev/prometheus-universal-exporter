@@ -3,14 +3,18 @@
 package config
 
 import (
+	"context"
 	"fmt"
+	"net/http"
 	"slices"
 	"strings"
 	"testing"
 
+	"github.com/eenchev/prometheus-universal-exporter/internal/decode"
 	"github.com/eenchev/prometheus-universal-exporter/internal/fetch"
 	"github.com/eenchev/prometheus-universal-exporter/internal/model"
 	"github.com/eenchev/prometheus-universal-exporter/internal/testutil"
+	"github.com/eenchev/prometheus-universal-exporter/internal/transform"
 )
 
 // Placeholders in a collector's fixed label values (fetch/labelparams.go),
@@ -123,9 +127,10 @@ func TestAPythonRulesLabelTakesNoValueWithAPlaceholder(t *testing.T) {
 // that gives no parameter fills it: its own text and its defaults, a
 // placeholder without a default counting for nothing. One that is too long
 // so fails every probe that leaves the parameters out, and is refused as a
-// constant too long is, with what a constant is spared by: truncate: true,
-// remove_labels, and, for a rule's label, a value_map of the rule's name,
-// since what the value is mapped to depends on what the probe gives.
+// constant too long is, with what a constant is spared by: truncate: true
+// and remove_labels. A value_map of the rule's name that lists neither the
+// value its defaults give nor "*" leaves that value as it is, measured and
+// refused alike (TestATemplatedLabelIsMeasuredAsItsValueMapMapsIt).
 func TestALabelValueWithPlaceholdersIsMeasuredByItsDefaults(t *testing.T) {
 	const small = "    limits:\n      max_label_value_length: 8\n"
 	wide := func(value, settings string) []string {
@@ -172,8 +177,8 @@ func TestALabelValueWithPlaceholdersIsMeasuredByItsDefaults(t *testing.T) {
 		if got := rule(value, "", "      remove_labels: [tenant]\n", ""); got != nil {
 			t.Errorf("a rule's label %q under remove_labels: %q", value, got)
 		}
-		if got := rule(value, "", "", "      - name: m\n        expression: .y\n        labels:\n          - name: tenant\n            expression: .t\n            value_map: {a: b}\n"); got != nil {
-			t.Errorf("a rule's label %q beside a value_map of the rule's name: %q", value, got)
+		if got := rule(value, "", "", "      - name: m\n        expression: .y\n        labels:\n          - name: tenant\n            expression: .t\n            value_map: {a: b}\n"); !slices.Equal(got, wantRule) {
+			t.Errorf("a rule's label %q beside a value_map of the rule's name that maps none of it: %q\nwant %q", value, got, wantRule)
 		}
 	}
 	// A constant is measured as it was.
@@ -182,6 +187,110 @@ func TestALabelValueWithPlaceholdersIsMeasuredByItsDefaults(t *testing.T) {
 	}
 	if got := rule("acme-corp", "", "", ""); !slices.Equal(got, []string{`collector "a" metric "m" label "tenant" value is 9 bytes, longer than limits.max_label_value_length 8, so every series would fail validation; shorten it, set truncate: true on the label, or raise the limit`}) {
 		t.Errorf("a constant in a rule's label: %q", got)
+	}
+}
+
+// A rule's label value that holds placeholders, where a value_map of the
+// rule's name maps the label, is measured as the map makes it. A "*" entry
+// longer than the limit is what every value the probe gives that the map
+// does not list becomes, so the label is refused whatever its defaults are,
+// naming the entry, where it once loaded and failed every scrape that gave
+// such a value; truncate: true and remove_labels spare it, as they spare a
+// constant. A long entry the map lists is the probe's to reach: the label
+// loads, unless its defaults give that entry's value, which every probe that
+// leaves the parameters out then gives. A constant beside the same maps is
+// refused, or loads, as it was.
+func TestATemplatedLabelIsMeasuredAsItsValueMapMapsIt(t *testing.T) {
+	rules := func(value, label, settings, valueMap string) []string {
+		return problemsOf(t, "collectors:\n  - name: a\n    request: {type: http}\n    limits:\n      max_label_value_length: 8\n    transform:\n      type: jq\n"+settings+"    metrics:\n      - name: m\n        expression: .x\n        labels:\n          - name: tenant\n            value: \""+value+"\"\n"+label+
+			"      - name: m\n        expression: .y\n        labels:\n          - name: tenant\n            expression: .t\n            value_map: "+valueMap+"\n")
+	}
+	const (
+		star   = `collector "a" metric "m" label "tenant" value holds {{param_...}} placeholders, and the value_map of the metric's name maps every value it does not list, by its "*" entry, to 13 bytes, longer than limits.max_label_value_length 8, so every series of a probe that gives a value not listed would fail validation; shorten the "*" entry or take it out, set truncate: true on the label, or raise the limit`
+		listed = `collector "a" metric "m" label "tenant" value is mapped once its placeholders take their defaults, by the "acme" entry of the value_map of the metric's name, to 13 bytes, longer than limits.max_label_value_length 8, so every series of a probe that gives them no other value would fail validation; shorten that entry or change the defaults, set truncate: true on the label, or raise the limit`
+		long   = `collector "a" metric "m" label "tenant" value is 13 bytes, longer than limits.max_label_value_length 8, so every series would fail validation; shorten it, set truncate: true on the label, or raise the limit`
+	)
+	for _, tc := range []struct{ value, valueMap, want string }{
+		// "*" too long: refused whatever the defaults, a listed one too.
+		{"{{param_tenant}}", `{"*": overlongvalue}`, star},
+		{"{{param_tenant:x}}", `{"*": overlongvalue}`, star},
+		{"api-{{param_tenant}}", `{acme: short, "*": overlongvalue}`, star},
+		{"{{param_tenant:acme}}", `{acme: short, "*": overlongvalue}`, star},
+		// A long listed entry: the probe's, unless the defaults give it.
+		{"{{param_tenant}}", `{acme: overlongvalue}`, ""},
+		{"{{param_tenant:x}}", `{acme: overlongvalue, "*": short}`, ""},
+		{"api-{{param_tenant:acme}}", `{acme: overlongvalue}`, ""},
+		{"{{param_tenant:acme}}", `{acme: overlongvalue}`, listed},
+		{"{{param_tenant:ac}}{{param_rest:me}}", `{acme: overlongvalue, "*": short}`, listed},
+		// Defaults too long by themselves, mapped short or left alone.
+		{"{{param_tenant:acme-corp}}", `{acme-corp: short}`, ""},
+		{"{{param_tenant:acme-corp}}", `{"*": ""}`, ""},
+		{"{{param_tenant:acme-corp}}", `{acme: short}`, `collector "a" metric "m" label "tenant" value is 9 bytes once its placeholders take their defaults, longer than limits.max_label_value_length 8, so every series of a probe that gives them no other value would fail validation; shorten the text or the defaults, set truncate: true on the label, or raise the limit`},
+		// The constants beside the same maps, as they were.
+		{"x", `{"*": overlongvalue}`, long},
+		{"acme", `{acme: short, "*": overlongvalue}`, ""},
+		{"acme", `{acme: overlongvalue}`, long},
+		{"x", `{acme: overlongvalue}`, ""},
+	} {
+		var want []string
+		if tc.want != "" {
+			want = []string{tc.want}
+		}
+		if got := rules(tc.value, "", "", tc.valueMap); !slices.Equal(got, want) {
+			t.Errorf("%q under value_map %s:\n got %q\nwant %q", tc.value, tc.valueMap, got, want)
+		}
+		if got := rules(tc.value, "            truncate: true\n", "", tc.valueMap); got != nil {
+			t.Errorf("%q under value_map %s with truncate: %q", tc.value, tc.valueMap, got)
+		}
+		if got := rules(tc.value, "", "      remove_labels: [tenant]\n", tc.valueMap); got != nil {
+			t.Errorf("%q under value_map %s under remove_labels: %q", tc.value, tc.valueMap, got)
+		}
+	}
+}
+
+// A label that loads beside a value_map whose long entries the map lists
+// fails the scrape of a probe that gives one of those values, in the
+// validation, as a long value the label is given does; a probe that gives
+// another value is mapped short, or left as it is, and passes.
+func TestAProbeThatFillsALongMappedValueFailsItsScrape(t *testing.T) {
+	cfg, err := Load(testutil.WriteFile(t, "config.yaml", `collectors:
+  - name: a
+    request: {type: http}
+    limits: {max_label_value_length: 8}
+    transform: {type: jq}
+    metrics:
+      - name: m
+        expression: .x
+        labels:
+          - {name: tenant, value: "{{param_tenant}}"}
+      - name: m
+        expression: .y
+        labels:
+          - {name: tenant, expression: .t, value_map: {acme: overlongvalue, globex: short}}
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	c := &cfg.Collectors[0]
+	r := &fetch.HTTPResponse{Body: []byte(`{"x": 1, "y": 2, "t": "umbrella"}`), Headers: http.Header{}}
+	d, err := decode.Decode(r, c)
+	if err != nil {
+		t.Fatal(err)
+	}
+	scrape := func(tenant string) error {
+		set, err := transform.Transform(transform.WithLabelParams(context.Background(), map[string]string{"param_tenant": tenant}), d, r, c, "")
+		if err != nil {
+			return err
+		}
+		return set.Validate(c.Limits)
+	}
+	if err := scrape("acme"); err == nil || !strings.Contains(err.Error(), `metric "m" label "tenant" value is 13 bytes, longer than limits.max_label_value_length 8`) {
+		t.Errorf("a probe that gives a value mapped long: %v", err)
+	}
+	for _, tenant := range []string{"globex", "initech"} {
+		if err := scrape(tenant); err != nil {
+			t.Errorf("a probe that gives %q: %v", tenant, err)
+		}
 	}
 }
 

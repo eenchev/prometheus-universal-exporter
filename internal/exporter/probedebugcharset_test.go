@@ -54,7 +54,10 @@ func TestTheDecodeLeavesTheReportsCopyOfTheResponseAlone(t *testing.T) {
 		t.Fatalf("converted from %q", from)
 	}
 	var b bytes.Buffer
-	writeResponse(&b, sent, "windows-1251")
+	if !writeResponse(&b, sent) {
+		t.Fatal("the copy has no body to show")
+	}
+	writeBody(&b, sent.Body, "windows-1251")
 	assertContains(t, b.String(),
 		"Content-Type: application/xml\n",
 		"Body: 58 bytes in windows-1251, converted to UTF-8 before decoding and shown here as UTF-8",

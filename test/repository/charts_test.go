@@ -362,7 +362,7 @@ func TestThePodDisruptionBudget(t *testing.T) {
 		"{{- if .Values.podDisruptionBudget.enabled }}",
 		"apiVersion: policy/v1\nkind: PodDisruptionBudget",
 		"sets both minAvailable and maxUnavailable",
-		`maxUnavailable: {{ if kindIs "invalid" $pdb.maxUnavailable }}1{{ else }}{{ $pdb.maxUnavailable }}{{ end }}`,
+		`maxUnavailable: {{ if kindIs "invalid" $pdb.maxUnavailable }}1{{ else }}{{ include "prometheus-universal-exporter.budgetCount" (list "podDisruptionBudget.maxUnavailable" $pdb.maxUnavailable) }}{{ end }}`,
 		"app.kubernetes.io/name: {{ include \"prometheus-universal-exporter.name\" . }}\n      app.kubernetes.io/instance: {{ .Release.Name }}",
 	} {
 		if !strings.Contains(pdb, want) {

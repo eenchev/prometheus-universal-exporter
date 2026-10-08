@@ -3,8 +3,8 @@ package config
 import (
 	"errors"
 	"fmt"
-	"math"
 	"reflect"
+	"regexp"
 	"slices"
 	"strconv"
 	"strings"
@@ -50,6 +50,24 @@ import (
 // or, where the key takes one of a few words, which they are; and a word
 // that is no boolean where one is taken is refused, saying which of true
 // and false it would have been read as.
+//
+// And a number YAML reads with a point or an exponent is read by its digits
+// where a whole number is taken. The decoder makes a float64 of it and
+// converts that, so 9007199254740993.0 became the whole number below it, and
+// one past the range of the key's integer wrapped around or was refused as
+// no whole number, as the platform's conversion had it: 9.3e18 was a
+// negative number on amd64. Such a number is the whole number it is
+// written as (model.ReadWholeNumber), as it is to a schema, which is handed
+// the number and not how it was written; one the key's integer does not
+// hold is refused, naming the key, the number and the range, and so is one
+// past the range of a float64, 1e400, which the decoder takes for text
+// (pastFloat64); and one with a fraction is refused as it was, however small
+// the fraction. A number
+// written with digits alone is the decoder's to read, as it was. An entry
+// of request.accept_status, which the schemas take as a status written as a
+// number or as text, is read as the number it is too (wholeNumberText): the
+// decoder handed the exporter the number as it is written, 200.0 or 0xC8,
+// which is no status to it, while it is the status 200 to a schema.
 
 // valueKinds is what a schema says of a place of its file where a value is
 // written, and of the places under it: whether the place takes text alone,
@@ -57,8 +75,12 @@ import (
 // keys of a block there, the entries of a list and the values of a mapping
 // take in their turn.
 type valueKinds struct {
-	textOnly        bool
-	allowed         []string
+	textOnly bool
+	allowed  []string
+	// number is set of a place of text that takes a whole number too, from
+	// least to most: an entry of request.accept_status.
+	number          bool
+	least, most     int64
 	keys            map[string]*valueKinds
 	entries, values *valueKinds
 }
@@ -90,6 +112,11 @@ func (k *valueKinds) value() *valueKinds {
 // with allowed values or a pattern and a rule gives a key by saying so.
 func kindsOf(schema map[string]any) *valueKinds {
 	kinds := &valueKinds{textOnly: schema["type"] == "string"}
+	if types, _ := schema["type"].([]string); slices.Contains(types, "integer") {
+		least, hasLeast := schema["minimum"].(int)
+		most, hasMost := schema["maximum"].(int)
+		kinds.number, kinds.least, kinds.most = hasLeast && hasMost, int64(least), int64(most)
+	}
 	// "" is the key left out (optionalEnum), not a value to write.
 	if allowed, _ := schema["enum"].([]string); kinds.textOnly {
 		for _, value := range allowed {
@@ -158,14 +185,26 @@ var yamlBooleanWords = map[string]bool{
 }
 
 // withValueProblems adds to a decoding error, or to none, the values of the
-// document the decoder would change in silence. t is the type the document
-// is decoded into.
-func withValueProblems(err error, document []byte, t reflect.Type) error {
-	problems := valueProblems(document, t)
+// document the decoder would change in silence. decoded points to what the
+// document was decoded into, whose whole numbers written with a point or an
+// exponent it writes as the numbers they are, and the entries of
+// request.accept_status written as a number as the statuses they are.
+func withValueProblems(err error, document []byte, decoded any) error {
+	problems, readAgain := checkValues(document, reflect.ValueOf(decoded).Elem())
+	var typeErr *yaml.TypeError
+	// What the decoder said of a number that is read again here is said
+	// here, once, or is no mistake.
+	if errors.As(err, &typeErr) && len(readAgain) > 0 {
+		kept := slices.DeleteFunc(slices.Clone(typeErr.Errors), func(message string) bool { return readAgain[message] })
+		err = nil
+		if len(kept) > 0 {
+			typeErr = &yaml.TypeError{Errors: kept}
+			err = typeErr
+		}
+	}
 	if len(problems) == 0 {
 		return err
 	}
-	var typeErr *yaml.TypeError
 	switch {
 	case err == nil:
 		return &yaml.TypeError{Errors: problems}
@@ -177,23 +216,34 @@ func withValueProblems(err error, document []byte, t reflect.Type) error {
 }
 
 // valueProblems walks the document beside the type it is decoded into, as
-// the decoder does: an alias is what it names, and a merge key supplies the
-// keys of what it merges in that the mapping does not set itself
-// (model.DecodedEntries). Only a value the decoder uses is looked at, where
+// the decoder does: an alias is what it names, a key that is an alias the
+// key it names (model.KeyName), and a merge key supplies the keys of what it
+// merges in that the mapping does not set itself (model.DecodedEntries). Only a value the decoder uses is looked at, where
 // it is written: one in an anchor that the mapping merging it in overrides is
 // no mistake of that mapping's, and one that is used is reported at its own
 // line.
 func valueProblems(document []byte, t reflect.Type) []string {
+	problems, _ := checkValues(document, reflect.New(t).Elem())
+	return problems
+}
+
+// checkValues is valueProblems of the document decoded into decoded, which
+// it walks beside the document, writing into it what is read again here: a
+// whole number written with a point or an exponent, and a number at a place
+// of text that takes one. readAgain are the decoder's messages of such
+// values, which are said here instead.
+func checkValues(document []byte, decoded reflect.Value) (problems []string, readAgain map[string]bool) {
 	var doc yaml.Node
 	if yaml.Unmarshal(document, &doc) != nil || len(doc.Content) == 0 {
-		return nil
+		return nil, nil
 	}
-	var problems []string
+	readAgain = map[string]bool{}
 	visiting := map[*yaml.Node]bool{}
-	// at is the place for a message, and kinds what its schema says the
-	// place takes.
-	var walk func(n *yaml.Node, t reflect.Type, at writtenAt, kinds *valueKinds)
-	walk = func(n *yaml.Node, t reflect.Type, at writtenAt, kinds *valueKinds) {
+	// at is the place for a message, kinds what its schema says the place
+	// takes, and out the value decoded there, which is not valid where
+	// nothing was.
+	var walk func(n *yaml.Node, t reflect.Type, out reflect.Value, at writtenAt, kinds *valueKinds)
+	walk = func(n *yaml.Node, t reflect.Type, out reflect.Value, at writtenAt, kinds *valueKinds) {
 		key := at.key
 		for n != nil && n.Kind == yaml.AliasNode {
 			n = n.Alias
@@ -206,27 +256,35 @@ func valueProblems(document []byte, t reflect.Type) []string {
 		defer delete(visiting, n)
 		for t.Kind() == reflect.Pointer {
 			t = t.Elem()
+			if out.IsValid() {
+				out = out.Elem()
+			}
 		}
 		switch t.Kind() {
 		case reflect.Struct:
 			if n.Kind != yaml.MappingNode {
 				return
 			}
-			fields := map[string]reflect.Type{}
+			fields := map[string]int{}
 			for i := 0; i < t.NumField(); i++ {
 				name, _, _ := strings.Cut(t.Field(i).Tag.Get("yaml"), ",")
 				if name != "" && name != "-" {
-					fields[name] = t.Field(i).Type
+					fields[name] = i
 				}
 			}
 			for _, entry := range model.DecodedEntries(n) {
-				field, ok := fields[entry.Key.Value]
+				name := model.KeyName(entry.Key)
+				field, ok := fields[name]
 				switch {
 				case !ok:
 				case noValue(entry.Value):
-					problems = append(problems, fmt.Sprintf("line %d: %s %s, which YAML reads as no value at all; write its value, or take the key out", entry.Key.Line, entry.Key.Value, noValueAfterColon(entry.Value)))
+					problems = append(problems, fmt.Sprintf("line %d: %s %s, which YAML reads as no value at all; write its value, or take the key out", entry.Key.Line, name, noValueAfterColon(entry.Value)))
 				default:
-					walk(entry.Value, field, writtenAt{key: entry.Key.Value}, kinds.key(entry.Key.Value))
+					var value reflect.Value
+					if out.IsValid() {
+						value = out.Field(field)
+					}
+					walk(entry.Value, t.Field(field).Type, value, writtenAt{key: name}, kinds.key(name))
 				}
 			}
 		case reflect.Slice:
@@ -240,7 +298,14 @@ func valueProblems(document []byte, t reflect.Type) []string {
 						problems = append(problems, fmt.Sprintf("line %d: %s entry %d %s, which YAML reads as no value at all, so the entry would be left out without a word; write %s there, or take the entry out", item.Line, key, i+1, how, yamlEntry(t.Elem())))
 						continue
 					}
-					walk(item, t.Elem(), writtenAt{key: key, entry: i + 1}, kinds.entry())
+					var value reflect.Value
+					// The decoder leaves out of the list what it takes for
+					// no value, which is refused above: past one, the
+					// entries are not where the document has them.
+					if out.IsValid() && out.Len() == len(n.Content) {
+						value = out.Index(i)
+					}
+					walk(item, t.Elem(), value, writtenAt{key: key, entry: i + 1}, kinds.entry())
 				}
 			}
 		case reflect.Map:
@@ -248,20 +313,28 @@ func valueProblems(document []byte, t reflect.Type) []string {
 				return
 			}
 			for _, entry := range model.DecodedEntries(n) {
-				if entry.Key.Kind == yaml.ScalarNode && entry.Key.ShortTag() == "!!null" {
-					written := entry.Key.Value
+				if named := resolveAlias(entry.Key); named != nil && named.Kind == yaml.ScalarNode && named.ShortTag() == "!!null" {
+					written := named.Value
 					if written == "" {
 						written = "nothing"
 					}
 					problems = append(problems, fmt.Sprintf("line %d: %s has the key %s, which YAML reads as no key at all, so the entry would be dropped; to use that text as the key, quote it", entry.Key.Line, key, written))
 				}
 				if noValue(entry.Value) {
-					problems = append(problems, fmt.Sprintf("line %d: %s key %q %s, which YAML reads as no value at all; write its value, or take the key out", entry.Key.Line, key, entry.Key.Value, noValueAfterColon(entry.Value)))
+					problems = append(problems, fmt.Sprintf("line %d: %s key %q %s, which YAML reads as no value at all; write its value, or take the key out", entry.Key.Line, key, model.KeyName(entry.Key), noValueAfterColon(entry.Value)))
 					continue
 				}
-				walk(entry.Value, t.Elem(), writtenAt{key: key, mapKey: entry.Key.Value, inMap: true}, kinds.value())
+				// A value of a mapping is not one to write into: no
+				// mapping of the files has whole numbers or statuses.
+				walk(entry.Value, t.Elem(), reflect.Value{}, writtenAt{key: key, mapKey: model.KeyName(entry.Key), inMap: true}, kinds.value())
 			}
 		case reflect.String:
+			if n.Kind == yaml.ScalarNode && kinds != nil && kinds.number && out.CanSet() {
+				if text, ok := wholeNumberText(n, kinds.least, kinds.most); ok {
+					out.SetString(text)
+				}
+				return
+			}
 			if n.Kind != yaml.ScalarNode || kinds == nil || !kinds.textOnly {
 				return
 			}
@@ -290,16 +363,97 @@ func valueProblems(document []byte, t reflect.Type) []string {
 			}
 		case reflect.Int, reflect.Int64:
 			// A duration and a size read themselves, and say what they take.
-			if t == durationType || t == byteSizeType || n.Kind != yaml.ScalarNode || n.ShortTag() != "!!float" {
+			if t == durationType || t == byteSizeType || n.Kind != yaml.ScalarNode || (n.ShortTag() != "!!float" && !pastFloat64(n)) {
 				return
 			}
-			if value, err := strconv.ParseFloat(strings.ReplaceAll(n.Value, "_", ""), 64); err == nil && value != math.Trunc(value) {
-				problems = append(problems, fmt.Sprintf("line %d: %s is %s, which is not a whole number", n.Line, key, n.Value))
+			whole, isWhole := model.ReadWholeNumber(n.Value)
+			if !isWhole && n.ShortTag() != "!!float" {
+				return
+			}
+			if !isWhole {
+				// A fraction, however small, is refused as it was; what is
+				// no number at all, infinity and not-a-number, is the
+				// decoder's to refuse.
+				if _, err := strconv.ParseFloat(strings.ReplaceAll(n.Value, "_", ""), 64); err == nil {
+					readAgain[decoderRefusal(n, t)] = true
+					problems = append(problems, fmt.Sprintf("line %d: %s is %s, which is not a whole number", n.Line, key, n.Value))
+				}
+				return
+			}
+			readAgain[decoderRefusal(n, t)] = true
+			value, held := whole.Int(t.Bits())
+			if !held {
+				least := int64(-1) << (t.Bits() - 1)
+				problems = append(problems, fmt.Sprintf("line %d: %s is %s, which is past the whole numbers it holds, %d to %d; write a whole number in that range", n.Line, key, n.Value, least, -(least+1)))
+				return
+			}
+			if out.CanSet() {
+				out.SetInt(value)
 			}
 		}
 	}
-	walk(doc.Content[0], t, writtenAt{key: "the document"}, schemaKinds(t))
-	return problems
+	walk(doc.Content[0], decoded.Type(), decoded, writtenAt{key: "the document"}, schemaKinds(decoded.Type()))
+	return problems, readAgain
+}
+
+// yamlFloat is a number as YAML 1.2 writes one with a point or an exponent,
+// as the YAML decoder matches it, its underscores left out.
+var yamlFloat = regexp.MustCompile(`^[-+]?(\.[0-9]+|[0-9]+(\.[0-9]*)?)([eE][-+]?[0-9]+)?$`)
+
+// pastFloat64 reports whether a scalar is a number written with a point or
+// an exponent past the range of a float64, such as 1e400, which the YAML
+// decoder, failing to make a float64 of it, reads as text. It is plain and
+// untagged, for quoted or tagged !!str it is text to YAML too; to YAML 1.2,
+// and to a schema in an editor, it is a number.
+func pastFloat64(n *yaml.Node) bool {
+	return n.Tag == "!!str" && n.Style == 0 && yamlFloat.MatchString(strings.ReplaceAll(n.Value, "_", ""))
+}
+
+// decoderRefusal is what the YAML decoder says of a scalar it cannot decode
+// into a value of type t, as its decode.go words it, the value cut short.
+func decoderRefusal(n *yaml.Node, t reflect.Type) string {
+	value := n.Value
+	if len(value) > 10 {
+		value = value[:7] + "..."
+	}
+	return fmt.Sprintf("line %d: cannot unmarshal %s `%s` into %s", n.Line, n.ShortTag(), value, t)
+}
+
+// wholeNumberText is the text of the whole number a scalar YAML reads as a
+// number is, at a place of text that takes a whole number from least to
+// most beside text, when it is one in that range: 200.0, 2e2, 0xC8, 0o310
+// and 2_00 are 200, which an entry of request.accept_status takes as a
+// number, while the text it was handed, as written, is no status. Digits
+// alone, with a sign or leading zeros, are the number they are in decimal,
+// +200 and 0200 the 200 YAML 1.2 reads them as, where the text as written
+// passed the load and matched no status. A number out of the range, or that
+// is no whole number, is left as it is written, for what reads the text to
+// refuse.
+func wholeNumberText(n *yaml.Node, least, most int64) (string, bool) {
+	// Text, quoted, is what reads it to take or refuse as it is.
+	tag := n.ShortTag()
+	if tag != "!!int" && tag != "!!float" {
+		return "", false
+	}
+	var v int64
+	switch decimal, err := strconv.ParseInt(n.Value, 10, 64); {
+	case err == nil:
+		v = decimal
+	case tag == "!!int":
+		if n.Decode(&v) != nil {
+			return "", false
+		}
+	default:
+		whole, isWhole := model.ReadWholeNumber(n.Value)
+		var held bool
+		if v, held = whole.Int(64); !isWhole || !held {
+			return "", false
+		}
+	}
+	if v < least || v > most {
+		return "", false
+	}
+	return strconv.FormatInt(v, 10), true
 }
 
 // resolveAlias is the node an alias stands for, and any other node itself.

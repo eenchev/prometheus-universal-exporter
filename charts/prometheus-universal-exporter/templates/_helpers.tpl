@@ -104,9 +104,60 @@
 {{- define "prometheus-universal-exporter.namespace" -}}
 {{- .Values.namespaceOverride | default .Release.Namespace -}}
 {{- end }}
-{{- /* The exporter's Service as Prometheus reaches it from any namespace. */ -}}
+{{- /* A value as text: a number written out in full, anything else as it
+       prints. Helm reads the numbers of a values file, and of --set-json, as
+       floating point, and a template prints one of a million or more with an
+       exponent: 2000000 as 2e+06, which is not what was written, and is no
+       whole number to a flag or to a check that looks for digits. toJson
+       writes the number out, 2000000, whether it was written 2000000, 2e6 or
+       2000000.0, and a fraction as the fraction it is. */ -}}
+{{- define "prometheus-universal-exporter.text" -}}
+{{- if kindIs "float64" . }}{{ toJson . }}{{ else }}{{ toString . }}{{ end -}}
+{{- end }}
+{{- /* A whole number of the values, from (list name value least most),
+       written out in full: the value is one by what it is, however it was
+       written, and anything else — a fraction, a number outside least to
+       most, a text that is no number — fails rendering. The digits are
+       counted before they are read, since a number of 1e19 or more is
+       beyond what a template can hold as a whole number. A value left out
+       or null renders nothing, and is Kubernetes' to default. */ -}}
+{{- define "prometheus-universal-exporter.wholeNumber" -}}
+{{- if not (kindIs "invalid" (index . 1)) -}}
+{{- $text := include "prometheus-universal-exporter.text" (index . 1) -}}
+{{- $least := index . 2 | int64 -}}
+{{- $most := index . 3 | int64 -}}
+{{- if or (not (regexMatch "^-?(0|[1-9][0-9]{0,17})$" $text)) (lt (int64 $text) $least) (gt (int64 $text) $most) -}}
+{{- fail (printf "%s %s must be a whole number from %d to %d" (index . 0) $text $least $most) -}}
+{{- end -}}
+{{- int64 $text -}}
+{{- end -}}
+{{- end }}
+{{- /* A disruption budget's count, from (list name value): a string, which
+       is how a percentage is written, as it is, and a number as the whole
+       number it is. The string is rendered bare, so a string of digits
+       becomes the number, and one with a zero first YAML's octal number,
+       010 as eight; one past 2147483647, and a percentage past 100%, which
+       Kubernetes refuses on a budget, would fail only when applied. So the
+       string is held to the values schema's pattern, which spells the range
+       out digit by digit. */ -}}
+{{- define "prometheus-universal-exporter.budgetCount" -}}
+{{- if kindIs "string" (index . 1) -}}
+{{- if not (regexMatch "^(0|[1-9][0-9]{0,8}|1[0-9]{9}|20[0-9]{8}|21[0-3][0-9]{7}|214[0-6][0-9]{6}|2147[0-3][0-9]{5}|21474[0-7][0-9]{4}|214748[0-2][0-9]{3}|2147483[0-5][0-9]{2}|21474836[0-3][0-9]|214748364[0-7]|(0|[1-9][0-9]?|100)%)$" (index . 1)) -}}
+{{- fail (printf "%s %q must be a whole number from 0 to 2147483647, or a percentage from 0%% to 100%%, written with no zero before another digit" (index . 0) (index . 1)) -}}
+{{- end -}}
+{{- index . 1 -}}
+{{- else -}}
+{{- include "prometheus-universal-exporter.wholeNumber" (list (index . 0) (index . 1) 0 2147483647) -}}
+{{- end -}}
+{{- end }}
+{{- define "prometheus-universal-exporter.servicePort" -}}
+{{- include "prometheus-universal-exporter.wholeNumber" (list "service.port" .Values.service.port 1 65535) -}}
+{{- end }}
+{{- /* The exporter's Service as Prometheus reaches it from any namespace. A
+       port set to null prints as it did, <nil>; the Service is then
+       Kubernetes' to refuse. */ -}}
 {{- define "prometheus-universal-exporter.serviceAddress" -}}
-{{- printf "%s.%s.svc:%v" (include "prometheus-universal-exporter.fullname" .) (include "prometheus-universal-exporter.namespace" .) .Values.service.port -}}
+{{- printf "%s.%s.svc:%s" (include "prometheus-universal-exporter.fullname" .) (include "prometheus-universal-exporter.namespace" .) (include "prometheus-universal-exporter.servicePort" . | default "<nil>") -}}
 {{- end }}
 {{- /* Probe monitors send Prometheus to the exporter's Service, whatever
        their type, so they need it. */ -}}
@@ -218,13 +269,17 @@ app.kubernetes.io/managed-by: {{ .Release.Service }}
 {{- end }}
 {{- define "prometheus-universal-exporter.countFlag" -}}
 {{- /* A count flag's value, from (list name value): empty or null leaves the
-       flag out; otherwise a whole number of zero or more. */ -}}
+       flag out; otherwise a whole number from 0 to 2147483647, as a number
+       or as a string of digits with no zero before another digit: the
+       exporter's flag reads 010 as eight and refuses 08, so the chart takes
+       neither. The pattern is the values schema's, and spells the range out
+       digit by digit, since it has to hold for a string of any length. */ -}}
 {{- $name := index . 0 -}}
 {{- $value := index . 1 -}}
 {{- if not (or (kindIs "invalid" $value) (eq (toString $value) "")) -}}
-{{- $text := toString $value -}}
-{{- if not (regexMatch "^[0-9]+$" $text) -}}
-{{- fail (printf "%s %q must be a whole number of zero or more, 0 for no limit, or empty to keep the exporter's default" $name $text) -}}
+{{- $text := include "prometheus-universal-exporter.text" $value -}}
+{{- if not (regexMatch "^(0|[1-9][0-9]{0,8}|1[0-9]{9}|20[0-9]{8}|21[0-3][0-9]{7}|214[0-6][0-9]{6}|2147[0-3][0-9]{5}|21474[0-7][0-9]{4}|214748[0-2][0-9]{3}|2147483[0-5][0-9]{2}|21474836[0-3][0-9]|214748364[0-7])$" $text) -}}
+{{- fail (printf "%s %q must be a whole number from 0 to 2147483647, 0 for no limit, or empty to keep the exporter's default" $name $text) -}}
 {{- end -}}
 {{- $text -}}
 {{- end -}}
@@ -296,10 +351,11 @@ app.kubernetes.io/managed-by: {{ .Release.Service }}
 {{- $needed := add (include "prometheus-universal-exporter.durationSeconds" $delay | atoi) (include "prometheus-universal-exporter.durationSeconds" $shutdown | atoi) 10 -}}
 {{- $explicit := .Values.terminationGracePeriodSeconds -}}
 {{- if not (kindIs "invalid" $explicit) -}}
-{{- if lt (int $explicit) (int $needed) -}}
-{{- fail (printf "terminationGracePeriodSeconds %v is shorter than the %d seconds a stopping pod needs: server.shutdownDelay (%s), server.shutdownTimeout (%s) and 10 seconds for the last OTLP export and exit; raise it or lower server.shutdownDelay or server.shutdownTimeout" $explicit $needed $delay $shutdown) -}}
+{{- $seconds := include "prometheus-universal-exporter.wholeNumber" (list "terminationGracePeriodSeconds" $explicit 0 2147483647) | int64 -}}
+{{- if lt $seconds (int64 $needed) -}}
+{{- fail (printf "terminationGracePeriodSeconds %d is shorter than the %d seconds a stopping pod needs: server.shutdownDelay (%s), server.shutdownTimeout (%s) and 10 seconds for the last OTLP export and exit; raise it or lower server.shutdownDelay or server.shutdownTimeout" $seconds $needed $delay $shutdown) -}}
 {{- end -}}
-{{- int $explicit -}}
+{{- $seconds -}}
 {{- else if gt (int $needed) 30 -}}
 {{- $needed -}}
 {{- end -}}
@@ -517,7 +573,7 @@ basicAuth:
 {{- if or (not (hasKey . "port")) (kindIs "invalid" .port) -}}
 http
 {{- else -}}
-{{- $text := toString .port -}}
+{{- $text := include "prometheus-universal-exporter.text" .port -}}
 {{- $name := toString .name -}}
 {{- $pod := eq (toString .type) "pod" -}}
 {{- if regexMatch "^[0-9]+$" $text -}}
@@ -554,15 +610,52 @@ true
 {{- if .Values.serviceAccount.create }}{{ default (include "prometheus-universal-exporter.fullname" .) .Values.serviceAccount.name }}{{ else }}{{ default "default" .Values.serviceAccount.name }}{{ end }}
 {{- end }}
 
+{{- define "prometheus-universal-exporter.rollingUpdateCheck" -}}
+{{- /* Kubernetes refuses a rolling update whose maxSurge and maxUnavailable
+       are both 0, as a number or as 0%, since it could then neither add a
+       pod nor take one away. Only what is rendered counts: a count left out
+       is Kubernetes' default, 25%, which is not 0. */ -}}
+{{- if and (kindIs "map" .) (include "prometheus-universal-exporter.zeroCount" .maxSurge) (include "prometheus-universal-exporter.zeroCount" .maxUnavailable) -}}
+{{- fail (printf "strategy.rollingUpdate.maxSurge %v and strategy.rollingUpdate.maxUnavailable %v are both 0, which Kubernetes refuses, since the rolling update could then neither add a pod nor take one away; set one of them above 0, such as maxSurge: 1, or set strategy.type: Recreate" .maxSurge .maxUnavailable) -}}
+{{- end -}}
+{{- end }}
+{{- define "prometheus-universal-exporter.zeroCount" -}}
+{{- /* Whether a rolling update's count is 0: a number of 0, or a percentage
+       of 0, which Kubernetes reads with any zeros before it. */ -}}
+{{- if kindIs "string" . -}}
+{{- if regexMatch "^0+%$" . }}true{{ end -}}
+{{- else if and (not (kindIs "invalid" .)) (not (kindIs "bool" .)) (regexMatch "^-?0+(\\.0*)?$" (toString .)) -}}
+true
+{{- end -}}
+{{- end }}
 {{- define "prometheus-universal-exporter.memoryLimitRatio" -}}
 {{- /* --runtime.memory-limit-ratio from goMemLimit: empty, leaving the flag
        out, when it is off. The exporter reads the container's memory limit
        from its cgroup, so no limit is needed here; without one it keeps the
-       Go default. */ -}}
+       Go default. A number of a values file is floating point, which a
+       template prints with an exponent below 0.0001, and toJson below
+       0.000001. So the number is written out with the digits toJson gives
+       it, 1.5e-7 as 0.00000015, and the message refusing it below 0.1 says
+       the value as it reads; a string is checked as written. */ -}}
 {{- if .Values.goMemLimit.enabled -}}
 {{- $ratio := .Values.goMemLimit.ratio | toString -}}
+{{- if kindIs "float64" .Values.goMemLimit.ratio -}}
+{{- $ratio = toJson .Values.goMemLimit.ratio -}}
+{{- $exponent := "^([1-9])\\.?([0-9]*)e-0*([1-9][0-9]*)$" -}}
+{{- if regexMatch $exponent $ratio -}}
+{{- $zeros := regexReplaceAll $exponent $ratio "${3}" | atoi | add -1 | int -}}
+{{- $ratio = printf "0.%s%s" (repeat $zeros "0") (regexReplaceAll $exponent $ratio "${1}${2}") -}}
+{{- end -}}
+{{- end -}}
 {{- if not (regexMatch "^(0?\\.[0-9]*[1-9][0-9]*|1(\\.0*)?)$" $ratio) -}}
 {{- fail (printf "goMemLimit.ratio %s must be more than 0 and at most 1, such as 0.8" $ratio) -}}
+{{- end -}}
+{{- /* Below 0.1 the Go memory limit leaves the heap almost nothing, and the
+       runtime would spend its time collecting garbage; the exporter refuses
+       it too. The ratio is written out by now, so a first decimal of 0 is
+       exactly a ratio below 0.1. */ -}}
+{{- if regexMatch "^0?\\.0" $ratio -}}
+{{- fail (printf "goMemLimit.ratio %s must be at least 0.1, since below it the Go memory limit leaves the heap almost nothing and the Go runtime spends its time collecting garbage; use 0.5 to 0.95, or set goMemLimit.enabled to false" $ratio) -}}
 {{- end -}}
 {{- $ratio -}}
 {{- end -}}
@@ -574,7 +667,7 @@ true
        flag for it. A whole number from 1 to 10000, or off. */ -}}
 {{- $percent := (.Values.goGC | default dict).percent -}}
 {{- if not (or (kindIs "invalid" $percent) (eq (toString $percent) "")) -}}
-{{- $text := toString $percent -}}
+{{- $text := include "prometheus-universal-exporter.text" $percent -}}
 {{- if not (regexMatch "^([1-9][0-9]{0,3}|10000|off)$" $text) -}}
 {{- fail (printf "goGC.percent %q must be a whole number from 1 to 10000, or \"off\" — in quotes in a values file, since YAML reads a bare off as false — or empty to keep Go's default of 100" $text) -}}
 {{- end -}}

@@ -2,6 +2,7 @@ package repository
 
 import (
 	"fmt"
+	"math"
 	"reflect"
 	"slices"
 	"strings"
@@ -75,10 +76,16 @@ func documentValue(n *yaml.Node) any {
 	case yaml.MappingNode:
 		object := map[string]any{}
 		for _, entry := range model.DecodedEntries(n) {
-			if entry.Key.Kind == yaml.ScalarNode && entry.Key.ShortTag() == "!!null" {
+			// A key that is an alias is the key its anchor holds, as YAML,
+			// and so an editor, reads it.
+			key := entry.Key
+			for key.Kind == yaml.AliasNode {
+				key = key.Alias
+			}
+			if key.Kind == yaml.ScalarNode && key.ShortTag() == "!!null" {
 				continue
 			}
-			object[entry.Key.Value] = documentValue(entry.Value)
+			object[model.KeyName(entry.Key)] = documentValue(entry.Value)
 		}
 		return object
 	case yaml.SequenceNode:
@@ -125,6 +132,26 @@ func TestTheSchemaValidatorChecksMaximum(t *testing.T) {
 	}
 	if errs := validateAgainstSchema(map[string]any{"maximum": float64(10)}, float64(10)); len(errs) != 0 {
 		t.Errorf("10 under a maximum of 10: %v", errs)
+	}
+}
+
+// The validator takes for an integer what a validator of JSON Schema does: a
+// number without a fraction, however large, since a schema is handed a
+// number and not its spelling. It once asked whether the number came back
+// from an int64, which 2^63 and 1e19 do not, so that a size past the range
+// was said to be refused by a schema that takes it. Infinity and
+// not-a-number, which YAML can write and JSON cannot, are no integers.
+func TestTheSchemaValidatorTakesAWholeNumberForAnIntegerHoweverLarge(t *testing.T) {
+	schema := map[string]any{"type": "integer"}
+	for _, taken := range []float64{0, -3, 1e3, 1 << 53, 1 << 63, 1e19, 1e300} {
+		if errs := validateAgainstSchema(schema, taken); len(errs) != 0 {
+			t.Errorf("%v is refused: %v", taken, errs)
+		}
+	}
+	for _, refused := range []any{1.5, 0.1, 1e-300, math.Inf(1), math.Inf(-1), math.NaN(), "1", true} {
+		if errs := validateAgainstSchema(schema, refused); len(errs) == 0 {
+			t.Errorf("%v is taken", refused)
+		}
 	}
 }
 
@@ -196,6 +223,9 @@ type schemaKey struct {
 	// with in a key that needs more, and empty where zero is taken.
 	duration bool
 	zero     string
+	// size marks a key that takes a size, which is put through the ways a
+	// number of bytes is written too (sizeForms).
+	size bool
 	// booleanAlone and numberAlone are what the exporter alone refuses the
 	// key with, written as the boolean true and as the number 1, where the
 	// key takes more than text and what is wrong with that text is not a
@@ -452,6 +482,36 @@ var durationForms = []struct {
 // schemas (docs/CONFIGURATION.md, Editor support).
 var zerosOfAnotherSpelling = []string{`0.0`, `00`, `0x0`, `0e0`, `-0.0`, `0_0`}
 
+// sizeForms are the ways a number of bytes is written at a key that takes a
+// size, each large enough for the key that has a least size: whether the
+// schemas and the exporter take it, or what the exporter alone refuses it
+// with. A number YAML reads as one is a size when it is a whole number of
+// bytes, however it is written — with an exponent, with a fraction of zero,
+// with a sign — since a schema is handed the number and not its spelling;
+// with a fraction, negative, or no number at all, it is refused by both; and
+// in quotes it is text, which the pattern of a size holds to a whole number
+// or a number with a unit. What is left to the exporter alone is what a
+// schema cannot tell: the range, and a fraction that the number a schema is
+// handed, a float64, does not hold.
+var sizeForms = []struct {
+	written string
+	taken   bool
+	alone   string
+}{
+	{written: `100000000`, taken: true}, {written: `+100000000`, taken: true}, {written: `"100000000"`, taken: true}, {written: `128MiB`, taken: true},
+	{written: `1e8`, taken: true}, {written: `1E8`, taken: true}, {written: `1e+8`, taken: true}, {written: `+1e8`, taken: true},
+	{written: `100000000.0`, taken: true}, {written: `100000000.`, taken: true}, {written: `2.5e8`, taken: true}, {written: `2.50e8`, taken: true},
+	{written: `.5e9`, taken: true}, {written: `1000000000e-1`, taken: true}, {written: `9007199254740993.0`, taken: true}, {written: `9.223372036854775807e18`, taken: true},
+	{written: `1.5`}, {written: `100000000.5`}, {written: `1e-1`}, {written: `2.55e1`}, {written: `-1e8`}, {written: `-100000000.0`}, {written: `-1`},
+	{written: `.inf`}, {written: `-.inf`}, {written: `.nan`},
+	{written: `"1e8"`}, {written: `'1E8'`}, {written: `"100000000.0"`}, {written: `'2.5e8'`}, {written: `"1.5"`}, {written: `"+100000000"`},
+	{written: `1e19`, alone: `size 1e19 is too large; a size is under 8EiB, which is 2^63 bytes`},
+	{written: `9223372036854775808`, alone: `size 9223372036854775808 is too large; a size is under 8EiB, which is 2^63 bytes`},
+	{written: `9223372036854775808.0`, alone: `size 9223372036854775808.0 is too large; a size is under 8EiB, which is 2^63 bytes`},
+	{written: `8388608TiB`, alone: `size "8388608TiB" is too large; a size is under 8EiB, which is 2^63 bytes`},
+	{written: `100000000.00000000000000000001`, alone: `size "100000000.00000000000000000001" is not a whole number of bytes`},
+}
+
 // checkSchemaKeys puts each row's file through the committed schema and the
 // exporter four ways — without the key, with the key written "", with a
 // value both take and with one both refuse — and fails unless both give the
@@ -462,7 +522,8 @@ var zerosOfAnotherSpelling = []string{`0.0`, `00`, `0x0`, `0e0`, `-0.0`, `0_0`}
 // and 1, a key whose schema takes text alone is refused by both, and any
 // other key gets one verdict of both. The schema as it was (schemaAsItWas) must
 // say what the row says it said: the same, but for the cases a change is
-// about. A duration key goes through the ways a duration is written too.
+// about. A duration key goes through the ways a duration is written too,
+// and a size key through the ways a number of bytes is.
 // Each row is logged as a line of the table the documentation of the
 // change gives: the key, what the exporter does with "", and what the
 // schema did and does.
@@ -548,6 +609,25 @@ func checkSchemaKeys(t *testing.T, keys []schemaKey) {
 					exporter = "refuses it: " + text[strings.LastIndex(text, ".yaml: ")+1:]
 				}
 				t.Logf("| %s | %s | %s | %s |", key.name(), exporter, verdict(key.emptyWas.said(key.empty)), verdict(key.empty))
+			}
+			for _, form := range sizeForms {
+				if !key.size {
+					break
+				}
+				document := key.written(t, form.written)
+				now, old, _, err := file.check(t, document)
+				switch {
+				case form.alone != "":
+					if len(now) != 0 || err == nil || !strings.Contains(err.Error(), form.alone) {
+						t.Errorf("%s: %s: want it past the schema and refused by the exporter with %q; the schema says %v, the exporter %v", name, form.written, form.alone, now, err)
+					}
+				case (len(now) == 0) != form.taken || (err == nil) != form.taken:
+					t.Errorf("%s: %s: want accepted %v by both; the schema says %v, the exporter %v", name, form.written, form.taken, now, err)
+				}
+				// A size is to the schemas what it was.
+				if (len(old) == 0) != (len(now) == 0) {
+					t.Errorf("%s: %s: the schema as it was says %v, and the schema %v", name, form.written, old, now)
+				}
 			}
 			if !key.duration {
 				continue

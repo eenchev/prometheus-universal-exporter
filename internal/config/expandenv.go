@@ -9,6 +9,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/eenchev/prometheus-universal-exporter/internal/model"
 	"gopkg.in/yaml.v3"
 )
 
@@ -215,7 +216,8 @@ func collectReferences(n *yaml.Node, where scalarContext, out *[]scalarRef) {
 // documentReferences gathers the references the document uses: those of
 // every scalar, keys included, except within a top-level x- entry, which the
 // exporter ignores (yamlerrors.go), unless an alias elsewhere uses what an
-// anchor there defines. A reference in an x- block nothing uses is left as it
+// anchor there defines. A top-level key that is an alias of x-something is
+// such an entry too, as the decoder reads it (model.KeyName). A reference in an x- block nothing uses is left as it
 // is, so a variable only such a block names need not be set.
 func documentReferences(doc *yaml.Node) []scalarRef {
 	var all []scalarRef
@@ -245,7 +247,7 @@ func documentReferences(doc *yaml.Node) []scalarRef {
 			visit(n.Alias)
 		default:
 			for i := 0; i < len(n.Content); i++ {
-				if n == root && i%2 == 0 && isExtensionKey(n.Content[i].Value) {
+				if n == root && i%2 == 0 && isExtensionKey(model.KeyName(n.Content[i])) {
 					i++
 					continue
 				}

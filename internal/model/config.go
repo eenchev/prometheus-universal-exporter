@@ -361,6 +361,7 @@ type Limits struct {
 	MaxLabelsPerMetric  int      `yaml:"max_labels_per_metric"`
 	MaxLabelValueLength int      `yaml:"max_label_value_length"`
 	MaxMetricNameLength int      `yaml:"max_metric_name_length"`
+	MaxLabelNameLength  int      `yaml:"max_label_name_length"`
 	MaxHelpLength       int      `yaml:"max_help_length"`
 	ScriptTimeout       Duration `yaml:"script_timeout"`
 	MaxOutputBytes      ByteSize `yaml:"max_output_bytes"`
@@ -504,7 +505,8 @@ var cacheConfigKeys = []string{"ttl", "stale_if_error"}
 
 // UnmarshalYAML refuses the keys it does not know, which a custom decoder
 // would otherwise let through, and explains the one-value form. The keys of
-// a mapping merged in with << are the cache's own keys, and checked as such.
+// a mapping merged in with << are the cache's own keys, and checked as such,
+// and a key that is an alias is the key it names (KeyName).
 func (c *CacheConfig) UnmarshalYAML(n *yaml.Node) error {
 	if n.Kind == yaml.ScalarNode {
 		return fmt.Errorf("line %d: cache is a mapping: write cache: {ttl: %s} to answer repeats of a probe for %s, and add stale_if_error to answer with the last good result when the target fails", n.Line, n.Value, n.Value)
@@ -513,7 +515,7 @@ func (c *CacheConfig) UnmarshalYAML(n *yaml.Node) error {
 		return fmt.Errorf("line %d: cache must be a mapping with ttl and stale_if_error", n.Line)
 	}
 	for _, entry := range MappingEntries(n) {
-		if key := entry.Key.Value; !slices.Contains(cacheConfigKeys, key) {
+		if key := KeyName(entry.Key); !slices.Contains(cacheConfigKeys, key) {
 			return fmt.Errorf("line %d: cache has the unknown key %q; it takes %s", entry.Key.Line, key, strings.Join(cacheConfigKeys, " and "))
 		}
 	}

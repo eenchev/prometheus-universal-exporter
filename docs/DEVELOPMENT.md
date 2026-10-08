@@ -107,7 +107,11 @@ long shows that part by its start, as the decoders do, with
 `shownStderr` for what a script and its interpreter said, `shownName` in
 `MetricSet.Validate`), and is recognised with the mark in place of the
 length; the test `TestTheLargestFailureOfEveryStageIsAnsweredLoggedAndRememberedWithinTheBound`
-has a case for each stage, and a new stage gets one. An error that names a
+has a case for each stage, and a new stage gets one. A log line that names,
+in an attribute, a metric whose name the target or a script chose gives it
+as `model.ShownName(name)`, the rule of `shownName` without the error's
+quotes, and leaves the key its failure is remembered under as it is, the
+whole name where the name is part of it. An error that names a
 value of the body is made with `model.Errorf` and gives the value as
 `model.Quoted(value)`, or as `model.Bare(name)` where the message writes a
 name without quotes, never with `%q`, `%s` or `%v`: the argument formats as
@@ -223,6 +227,28 @@ from test to test. A test that runs Python calls `requirePython(t)`, which also
 gives it a pool of its own and stops that pool's workers when it ends; a test
 that uses the pool without an interpreter calls `usePythonPool(t)`. Tests
 therefore must not use `t.Parallel`, which the swap assumes.
+
+What the pool counts for a collector is the collector's only while the
+collector stays ([self-metrics](SELF-METRICS.md#python-workers)): a run
+counts in the statistics its trip took for the collector it read
+(`transform.PythonStats`, handed on with the script timer), a worker in those
+of the run that started it, and a reload that removes the collector retires
+them (`PythonPool.Retire`, called where the exporter drops the collector's
+own statistics). A worker is of its statistics for as long as it lives,
+though the pool keeps workers by the collector's name and script, which a
+collector added again has too: `acquire` gives a run only an idle worker of
+the statistics the run counts in, and `Retire` and `release` stop the
+workers whose statistics are retired, so none is idle for a collector added
+again to be given. So nothing in the pool counts by a collector's name: a new
+place that counts takes the run's or the worker's statistics and counts
+through `countedLocked`, which sends what is retired to the pool's own
+count. A test of what is counted, and under which name, needs no
+interpreter: `scriptWorkers` and `fakeWorker`
+(`internal/transform/pythonstats_test.go`) stand in for workers whose start
+and whose script the test holds and releases, and `noInterpreter`
+(`internal/exporter/pythonstats_http_test.go`) is a `python3` that passes the
+load-time check and fails every worker's start, which is counted like any
+other.
 
 What the process allocates is shared the same way. `testing.AllocsPerRun` and
 `runtime.MemStats` count the allocations of every goroutine, not those of the
@@ -521,6 +547,20 @@ and a test keeps each of them reading them. Run them with that version locally t
 standard library imports, and that changes between releases — from 3.12,
 `zoneinfo` loads `sysconfig`, which imports the blocked `threading`, so a
 sandbox change can pass on 3.11 and fail in the image.
+The tests in `internal/transform/pythonversions_test.go`, and those of how a
+script's error is cut in `scripterrorcut_test.go`, also run the worker with
+`python3.12` and `python3.13` from `PATH`, each where it is installed, and
+skip the other saying it is not, which `go test -v` shows. To run the whole
+suite with another interpreter, put a `python3` that is it first on `PATH`
+(`mkdir -p /tmp/py && ln -s /usr/bin/python3.13 /tmp/py/python3 &&
+PATH=/tmp/py:$PATH go test . ./internal/transform/ ./internal/exporter/`);
+those three packages pass so with 3.11, 3.12 and 3.13, a test of a library
+the interpreter lacks being skipped with what is missing. A test that expects
+the text of a traceback takes it from the interpreter it runs: from what the
+worker as it was writes of the same script there (`formerFailure`), or, for a
+literal example, without the markers 3.13 draws under a source line
+(`withoutMarkers`, on both sides); a new one should do the same rather than
+hold one release's text.
 
 Some tests use a Python module the image does not ship. The tests named
 `TestTheStrictOpenMetricsParser…`, and the self-metrics tests that end in a
@@ -694,8 +734,10 @@ a schema can tell, and add the value to
 `test/repository/schemaloader_test.go`, which puts each document of its
 tables through both the committed schema and `config.Load` and fails when
 they disagree. What a schema cannot tell — a least duration, the range of a
-size — goes in the key's description and in that file's table of what the
-exporter alone refuses.
+size, how many bytes a size written with a unit comes to, which is what
+leaves a `limits.max_output_bytes` of `20B` to the exporter where one of
+`20` is refused by both — goes in the key's description and in that file's
+table of what the exporter alone refuses.
 
 A key the schema holds to allowed values, a pattern or a length also gets a
 row in the table of its request type, `test/repository/schemakeys_http_test.go`
@@ -706,6 +748,17 @@ takes `""` as the key left out — `optionalEnum` and `optionalPattern` say so
 in the schema — and a rule about a key is made of `writtenKey`, which goes by
 the key being written, not by its being there. A test of the build with every
 request type fails until a constrained key has its row.
+
+A key that takes a size (`model.ByteSize`) says `size: true` in its row, which
+puts it through the ways a number of bytes is written (`sizeForms`): a
+number YAML reads as one is the whole number it equals to the exporter as to
+a schema, which is handed the number and not its spelling, so `1e3` and `1.0`
+are sizes, and a fraction, a negative number and the same spellings in quotes
+are refused by both. A test finds the size keys of the schemas by their
+pattern and fails until a new one has its row so marked. The validator those
+tests use takes for an integer what a JSON Schema validator does, a number
+without a fraction however large: the range of a size is the exporter's to
+refuse, and the tables say so.
 
 No key takes a value YAML reads as none — nothing after its colon, `null`,
 `~` — and no list such an entry: to a schema null is none of a key's types,
@@ -833,6 +886,97 @@ its values, a check for each list and dict that adds half a millisecond at
 a sixty-fourth of the count goes: that is what keeps an answer that holds
 one list many times over, or in itself, from being gone through as it is
 written (`weigh` in `pythonworker.go`, and `pythonshared_test.go`).
+
+The look adds up how long the answer's strings are as well, one addition for
+each, and refuses an answer they alone make longer than
+`limits.max_output_bytes`. It does not add up the keys of every dict, though
+a long key held by every row is written as often as a long value. The
+cheapest way there is, `sum(map(len, d))` for each dict, took the look
+through 5,000 metrics from 5.8 ms to 9.1, through 5,000 rows of seven keys
+from 4.0 ms to 5.9, and the copy of 5,000 metrics that hold a NaN from 18.7
+ms to 22.6: half again of the look, a sixth of the whole answer, for keys
+that are a few characters each in nearly every answer there is. So the look
+adds up the keys of a few dicts — of each level of four values or more the
+fourth value and every sixty-first after it, of the dicts a copy is made of
+the fourth and every sixty-first after it — takes each for the values around
+it, as often as the level has values for each one looked at, and adds up all
+the keys only where those then say the answer is longer than the limit
+(`keyed`). Measured against the worker before it looked at keys, as the
+least of fifteen runs under a limit of 1 MiB (Python 3.12; 3.10 is within a
+few points of it), the look through an answer costs:
+
+| answer | before | now | |
+|---|---|---|---|
+| 1 metric | 4.6 µs | 5.8 µs | +26 % |
+| 100 metrics | 130 µs | 133 µs | +2 % |
+| 5,000 metrics | 7.1 ms | 7.3 ms | +2 % |
+| 5,000 rows of seven keys | 4.6 ms | 4.7 ms | +2 % |
+| a nested document of 1 MiB | 17.2 ms | 18.1 ms | +5 % |
+| a chain of lists 450 deep | 197 µs | 210 µs | +7 % |
+| the same, four items a level | 334 µs | 414 µs | +24 % |
+| 5,000 metrics, one a NaN (copied) | 21.8 ms | 22.6 ms | +4 % |
+| 5,000 rows, one a NaN (copied) | 17.6 ms | 17.6 ms | +1 % |
+| one dict of 50,000 keys as the fourth value of four | 6.1 ms | 7.0 ms | +15 % |
+| 5,000 rows, a key of 20 kB in the fourth | 4.5 ms | 6.9 ms | +53 % |
+| 5,000 metrics, a label of 20 kB on the first | 6.5 ms | 11.5 ms | +78 % |
+| the last rows, one a NaN (copied) | 17.0 ms | 19.8 ms | +16 % |
+
+and all of writing the answer 1 to 5 % more for the ordinary ones, 4 % for
+the one dict of many keys, and 21 to 31 % for the last three. An answer of
+a few values pays for its levels, a microsecond in all: each is kept, and one
+of four values or more has its fourth looked at. The last three rows are the
+worst there is for an answer within the limit: one key that is unlike the
+rest stands where the look passes, the dicts looked at say sixty-one times
+too much, and the keys of every dict are added up to find the answer within
+the limit after all. That costs what adding them up for every answer would
+(`sum(map(len, d))` in the look, measured beside it: +54 % for the rows, +65
+% for the metrics), and a tenth of the look more where the dicts are a few
+among many values, since they are picked out of the levels afterwards. It is
+done from the levels the look kept, the dicts of each picked out in one pass
+and the keys of each joined by the interpreter, 1,024 values at a time:
+`sum(map(len, map("".join, dicts)))`. A key is not asked for its length,
+which would run the `__len__` of a class of the script's own, and the dicts
+looked at before are left out. The first form of this took each dict looked
+at for sixty-one wherever it stood, and added up the keys in a second walk
+through the answer, four calls for a dict: the one dict of 50,000 keys then
+cost 18.6 ms where it cost 6.1, the rows 12.5 ms and the metrics 19.7,
+three times the look, whenever such a dict stood fourth and never when it
+stood third. What the look keeps for this is the lists it made anyway,
+eight bytes for each value of the answer until it ends (472 kB where it
+held 429 for 5,000 metrics), and for a copy a list of its dicts; the keys
+of a dict looked at are joined into one string, as long as they are, which
+is let go of at once.
+
+A row keyed by a hundred thousand characters 5,000 times, 500 MB written,
+is refused in 10 to 40 ms and 15 MiB, where the worker took 3.5 s and 1.4 GB
+to write it for the exporter to refuse. A clock does not hold two percent
+on a shared machine, so
+`TestTheLookAtKeysCostsAnAnswerWithinTheLimitNoMoreThanATwentieth` holds
+the cost by a count: the calls the worker makes for an answer, of its own
+functions and of the interpreter's (`sys.setprofile`), as it was and as it
+is, in the worker itself, for the ordinary answers and for the three kinds
+above; how many dicts it looks at; and that the keys of all dicts are added
+up once for the answers with one long key and not at all for the others,
+the one dict of many keys among them. A count of calls does not see what
+the interpreter does inside one, so it holds that no walk is made a call
+at a time, not how long a join takes: the table above is to be measured
+again when `keyed` or `key_size` changes. Counting bytecodes with
+`sys.settrace` would say more, but from Python 3.12 that count stops short
+the first time a function is traced. What the look leaves is in
+`docs/PYTHON.md`: an answer whose long keys are where the look does not
+pass, or in too few of the dicts it does.
+
+The shortest of the lines a worker writes set the least a
+`limits.max_output_bytes` may be: `MinPythonOutputBytes` in
+`pythonworker.go` is the longest of the line a worker is ready with, the
+line it takes a request with, and the answers of a transform's script that
+emits nothing and of a pre-script that leaves `None`, 38 bytes. The loader
+refuses a smaller limit and the schemas a smaller number
+(`leastOutputRule`); the worker and the pool hold no floor, and run under
+any limit a test gives them. `pythonleastoutput_test.go` runs a worker and
+compares its lines with those constants, so an answer that gains or loses a
+key fails there: change the lines, and the 38 that `docs/PYTHON.md`,
+`docs/CONFIGURATION.md` and the specification say.
 
 The lines the exporter and a worker exchange are the lines they were, byte
 for byte, so `limits.max_output_bytes` bounds what it bounded and a script
@@ -1073,6 +1217,113 @@ static target file reloaded alone has the look encode only a collector that
 nothing had asked about; and over generated runs of reloads every look
 leaves the schedule as the former one, kept beside the test, leaves it.
 
+Two more lookups by a name grew with the configuration, both for the static
+targets. A scrape of a static target asked when it ended, before it
+published, whether a target of its name was in force, by going through the
+targets of the file (`staticTargetInForce` in `statictargetsendpoint.go`),
+and a read of the static targets endpoint that names targets noted every
+name of the file anew to look its few up (`requestedStaticTargets`). And a
+read of the verbose self-metrics, which finds the request of every static
+target to keep it tracked (`seedStaticRequests` in `requeststats.go`), went
+through the collectors of the configuration once for every target
+(`model.CollectorByName`): 2,000 times through 2,000 at every read. Now the
+first two read the names the following of a file notes anyway, once for the
+file, with the generation each target has been there from
+(`followedConfig.targetNames`, `targetsDefinedFrom` in `reconcile.go`).
+Nothing more is kept, and a reload does nothing more than it did:
+`BenchmarkFollowReload` allocates what it allocated, 390.8 MB in 1,178,256
+allocations for 2,000 collectors with a static target each. The names are
+those of the file followed and are read only when the file in force is that
+very file. From a reload putting another file in force to that reload's
+following of it, which it makes at once and works out before the statistics
+lock is taken, the targets are gone through as they were, so what is told
+is of the file in force either way. The read of the verbose self-metrics
+finds each target's collector where the configuration followed keeps its
+place (`followedConfig.collectorOf`), as a probe and a scrape do, and under
+the same condition: the read follows what is in force before it looks for
+the requests, so only a reload that comes between the two has the
+collectors gone through as they were. `staticlookups_bench_test.go` has
+both, for 100, 2,000 and 10,000 static targets of as many collectors:
+
+```sh
+go test -run '^$' -bench 'StaticTargetLookup|SelfMetricsSeedStatic' ./internal/exporter/
+```
+
+`BenchmarkStaticTargetLookup` is what the scrape of the last static target
+asks when it ends (`in-force`), that scrape whole, answered from the cache
+(`scrape`), and what a read of the endpoint that names that one target asks
+(`named`). `BenchmarkSelfMetricsSeedStatic` is what a verbose read does for
+the static targets: finding the request of each (`keys`), and that with the
+tracker told of them (`seed`). A configuration of 10,000 collectors takes
+seconds to load, which are not timed: `-bench 'StaticTargetLookup/n=2000$'`
+asks for one size. As measured on two shared cores that other work kept
+busy all the while, old and new in turn, seven to ten times, which is why
+the ranges are wide; what `in-force`, `scrape`, `keys` and `seed` allocate
+is what they allocated:
+
+| Benchmark | Before | After |
+| --- | --- | --- |
+| `n=100/in-force` | 0.6–1.5 µs | 14–106 ns |
+| `n=2000/in-force` | 6–19 µs | 16–76 ns |
+| `n=10000/in-force` | 60–188 µs | 15–46 ns |
+| `n=100/scrape` | 20–61 µs | 20–76 µs |
+| `n=2000/scrape` | 29–75 µs | 18–63 µs |
+| `n=10000/scrape` | 120–239 µs | 16–36 µs |
+| `n=100/named` | 16–56 µs, 6,968 bytes, 12 allocations | 0.7–1.7 µs, 272 bytes, 3 allocations |
+| `n=2000/named` | 0.5–1.5 ms, 218,248 bytes, 32 allocations | 0.5–1.4 µs, 272 bytes, 3 allocations |
+| `n=10000/named` | 2.0–6.2 ms, 873,544 bytes, 82 allocations | 0.6–1.5 µs, 272 bytes, 3 allocations |
+| `n=100/keys` | 0.21–0.60 ms | 0.20–0.43 ms |
+| `n=2000/keys` | 11–36 ms | 5–16 ms |
+| `n=10000/keys` | 0.61–1.74 s | 27–70 ms |
+| `n=2000/seed` | 92–330 ms | 113–338 ms |
+| `n=10000/seed` | 1.4–3.6 s | 0.8–1.9 s |
+
+What is left of `keys` is a target's own, about 3 µs and six allocations
+each: the overrides of its request and the label of its URL, made again at
+every read. `seed` with more than 1,000 static targets is the tracker's and
+is not changed by this: it tracks `VerboseRequestSeriesLimit` requests, the
+static targets over that are offered to it again at every read, and each
+offer goes through everything tracked for an idle request to make room for
+it (`setStatic`, `adoptLocked`, `expireLocked`), so 1,000 times through
+1,000 for 2,000 targets and 9,000 times for 10,000, which is most of the
+time above and hides what `keys` gained. The read that names a target goes
+on to filter every series of the endpoint by the names, which is as long as
+the endpoint is large, as it was.
+
+It is held by counting, never by time. `targetsScannedHook`, beside
+`collectorsScannedHook`, is called whenever the targets of a file are gone
+through to tell whether one has a name or to note the names they have, and
+`staticlookups_http_test.go` counts both: a read of the verbose
+self-metrics goes through the collectors once, the first time, for the
+configuration the exporter started with, and not at all after, where it
+went through them once for every static target; the scrape of the last
+static target and a read that names it go through the targets not at all,
+where each did once; and a reload goes through the collectors of its
+configuration once and the targets of its file once — for 60 collectors
+with a target each, for 240, and with five targets to a collector. The
+former lookups are kept beside the tests. Over 200 generated target files
+given to the server as they are, with targets that share a name, names that
+differ by case or by blanks and the empty name, a name is told in force,
+and a read that names targets is given its names or refused, exactly as the
+former lookups do (`statictargetnames_test.go`), with the file followed,
+with one in force that is not followed yet and with nothing followed. Over
+a run of reloads of both files, of either alone and of files that are
+refused, the same holds when the files are read and not yet in force, when
+they are in force and not yet followed, and when the reload is done, and
+every scrape that read its target before a reload publishes exactly when
+the former lookup and the target's stay say it does. And over 60 generated
+configurations, collectors that share a name among them and targets of a
+collector the configuration does not have, the requests found are the
+former search's, and a verbose read is answered with the same bytes as by a
+server that tracked the former search's requests, but for the families of
+the Go runtime and of the process. Two readers that ask all three while
+reloads replace both files and either alone are answered as the former
+lookups answer whenever no reload came during the asking, which, run with
+the race detector, also shows that what was noted for the files followed is
+read while a reload notes the next. Only a test sets one of the hooks: the
+exporter declares each and reads it in one place
+(`test/repository/scanhooks_test.go`).
+
 The check of a static target file against a configuration, which the start
 and `--dry-run` make once and a reload once when the two agree, three times
 when one file was read and is refused, and up to five when both were, has a
@@ -1250,6 +1501,33 @@ times are the range of four runs, old and new in turn):
 | `start/n=100` | 130–205 µs, 86.0 kB, 912 allocations | 122–209 µs, 67.6 kB, 515 allocations |
 | `start/n=5000` | 6.0–10.8 ms, 4.53 MB, 45,069 allocations | 5.8–8.2 ms, 3.61 MB, 25,071 allocations |
 
+`BenchmarkDescriptorFilesCheck` (`internal/fetch/grpcdescriptors_bench_test.go`)
+is what a call of a grpc collector with descriptor files costs before it
+uses them when they did not change: the look at each file the set was read
+from (`fileSets.getStamped`), for 1, 10 and 50 files, each at a realistic
+depth (`deep`) or a link through `..data` as Kubernetes mounts a ConfigMap
+(`kubernetes`). `BenchmarkProbeGRPC` (`internal/exporter/probe_bench_grpc_test.go`)
+is a whole probe of a collector with `.proto` files and of one with a
+descriptor set, against a server on the same machine:
+
+```sh
+go test -run '^$' -bench 'DescriptorFilesCheck' -benchtime 1s ./internal/fetch/
+go test -run '^$' -bench 'ProbeGRPC' -benchtime 1s ./internal/exporter/
+```
+
+The look tells, as the configuration's watch does, which file a path leads
+to and its permissions besides its time and size. The watch resolves the
+path's links (`filepath.EvalSymlinks`), a look at each component; done at
+every call that cost 18–19 µs for one file and 0.8–1.0 ms for 50, against
+2–5 µs and 85–120 µs for the time and size alone, and 46 allocations for one
+file against 5. The look takes the file's device and inode from the stat it
+makes anyway (`fetch.FileIdentity`, `fileidentity_unix.go`, which the
+watch's stamp also writes; elsewhere it resolves the links), and writes its numbers without allocating: one file
+costs 4 allocations and 50 cost 110, against 5 and 160 before, in the same
+time within the noise of two shared cores, and a probe of `BenchmarkProbeGRPC`
+(0.3–0.7 ms here) allocates no more than it did (560 and 549 allocations against 563 and 551). `TestTheQuietCheckOfDescriptorFilesAllocatesNoMoreThanBefore`
+holds the look at no more allocations than the old one, kept beside the tests.
+
 What was made fast stays fast by tests, not by the benchmarks: the decoders,
 the transforms, the duplicate check and the body read each have a test that
 bounds their allocations per series or per body, and a test that compares
@@ -1386,7 +1664,9 @@ and fails when one has a case the other lacks, so add a chart case to both.
 Both go beyond the plain renders: the Recreate strategy without a
 `rollingUpdate`, a monitor's `port` and `namespaceSelector` on both monitor
 types, the garbage collector's target (`goGC.percent` rendered as `GOGC`, and
-no `GOGC` by default), a configuration file whose first line is indented, the
+no `GOGC` by default), whole numbers given as `--set-json` gives them, as
+floating point, and rendered written out with no exponent (a count past
+2147483647 is refused), a configuration file whose first line is indented, the
 chart as a dependency of a parent chart, and the values that must be refused,
 among them a monitor's `auth` without a `type`, a monitor's `port` given as a
 number, a `scrapeTimeout` longer than its `interval`, an Ingress without the
@@ -1547,6 +1827,24 @@ into a single document and the chart only fails when someone applies it.
 `helm-test` and CI render the chart with monitors enabled and additionally fail
 when the number of manifests exceeds the number of documents the output parses
 into.
+
+A template never prints a number of the values by itself. Helm reads the
+numbers of a values file, and of `--set-json`, as floating point, and
+`{{ .Values.replicaCount }}`, `toString` and `printf "%v"` print one of a
+million or more with an exponent, `2e+06`; `--set` hands over an integer, so a
+test that sets the value with `--set` does not show it. A whole number goes
+through the `wholeNumber` helper of `_helpers.tpl`, with its name and its
+range, which writes it out and fails rendering for a fraction or a number
+outside the range, and the values schema carries the same maximum; a value
+that may also be text goes through the `text` helper before it is looked at.
+A sub-tree handed to `toYaml` needs neither: `toYaml` writes a whole number
+of up to eighteen digits out, since it goes through JSON, which does
+(`runAsUser: 1000680000`, and `2e9` as `2000000000`); only a fraction of a
+million or more, and a number past what 64 bits hold, come out with an
+exponent. `test/repository/chartwholenumbers_test.go` renders each such
+value from a values file, and a test there fails for an integer of the
+values schema that has no maximum and is not listed as one a sub-tree hands
+to `toYaml`.
 
 A few `gosec` findings are deliberate and are suppressed narrowly, with the
 reason stated at the suppression: `request.tls.insecure_skip_verify` is a

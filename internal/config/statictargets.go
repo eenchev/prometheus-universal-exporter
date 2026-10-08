@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"reflect"
 	"regexp"
 	"sort"
 	"strings"
@@ -33,7 +32,7 @@ func LoadStaticTargets(path string, opts ...LoadOption) (*model.StaticTargetFile
 	var f model.StaticTargetFile
 	dec := yaml.NewDecoder(strings.NewReader(string(b)))
 	dec.KnownFields(true)
-	if err = withValueProblems(withoutExtensionKeys(dec.Decode(&f)), b, reflect.TypeOf(f)); err != nil {
+	if err = withValueProblems(withoutExtensionKeys(dec.Decode(&f)), b, &f); err != nil {
 		if errors.Is(err, io.EOF) {
 			return nil, fmt.Errorf("static target file %s is empty; it must define targets", path)
 		}
@@ -194,6 +193,20 @@ func ValidateStaticTargets(f *model.StaticTargetFile) error {
 // their series apart.
 const StaticTargetLabel = "static_target"
 
+// staticTargetSeriesLabels are the labels the exporter adds to the series of
+// a static target after the scrape's validation, which holds every other
+// label name to limits.max_label_name_length, longest first: static_target
+// on every series the endpoint serves and OTLP exports of it (the exporter's
+// withStaticTargetLabel), and collector and target on its health series
+// (staticTargetHealthMetrics). A label added before the validation, such as
+// the file label of a collector that reads a directory, fails the scrape
+// when it is too long, as any label does.
+var staticTargetSeriesLabels = []struct{ name, on string }{
+	{StaticTargetLabel, "every series of it"},
+	{"collector", "its health series"},
+	{"target", "its health series"},
+}
+
 // ValidateStaticTargetsAgainst enforces the preconditions that depend on the
 // exporter configuration: every target must name a configured collector, and a
 // target exported over OTLP needs OTLP export enabled. It writes into neither:
@@ -234,6 +247,22 @@ func ValidateStaticTargetsAgainst(f *model.StaticTargetFile, c *model.Config) er
 		}
 		if err := checkRetriesFitTheInterval(t, collector); err != nil {
 			return err
+		}
+		// A target's labels go on every series of its collector, past the
+		// scrape's validation, so they are held here to the collector's
+		// limits.max_label_name_length, which every other label name of
+		// those series is held to.
+		for _, name := range model.SortedKeys(t.Labels) {
+			if limit := collector.Limits.MaxLabelNameLength; limit > 0 && len(name) > limit {
+				return fmt.Errorf("target %q label name %q is %d bytes, longer than limits.max_label_name_length %d of collector %q; shorten it or raise the collector's limit", t.Name, name, len(name), limit, t.Collector)
+			}
+		}
+		// So are the labels the exporter itself adds to the target's
+		// series past the validation.
+		for _, added := range staticTargetSeriesLabels {
+			if limit := collector.Limits.MaxLabelNameLength; limit > 0 && len(added.name) > limit {
+				return fmt.Errorf("target %q gets the label %s, %d bytes, on %s, longer than limits.max_label_name_length %d of collector %q; raise the collector's limit to %d or more", t.Name, added.name, len(added.name), added.on, limit, t.Collector, len(added.name))
+			}
 		}
 		// Every placeholder of the collector, in its request or in a label
 		// value (fetch/labelparams.go), must be filled, by the target's

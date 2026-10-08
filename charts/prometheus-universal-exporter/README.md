@@ -407,7 +407,7 @@ The exporter's own flags are chart values rather than something to assemble by h
 
 `server.probeDefaultTimeout` bounds a probe without a scrape timeout header, as from curl, a script or the exporter's collectors page with JavaScript off; a `timeout` parameter bounds the request within it and cannot lift it. Prometheus always sends a scrape timeout, so its scrapes are unaffected. It takes a Go duration of zero or more, `0` leaving such a probe unbounded, and like `probeTimeoutOffset` it is rendered only when set.
 
-`server.probeMaxConcurrent` bounds the trips to targets, probes and static target scrapes of every collector together, on top of each collector's `max_concurrent_probes`; each holds a response and its series in memory, so this bounds what a burst of probes can cost the pod. `server.pythonMaxWorkers` bounds the Python workers of every collector together, each a process with memory of its own; pair it with a collector's `limits.max_script_memory` (see [Python](../../docs/PYTHON.md)). Both take a whole number, `0` for no limit, and are rendered only when set. Size them to `resources.limits.memory`.
+`server.probeMaxConcurrent` bounds the trips to targets, probes and static target scrapes of every collector together, on top of each collector's `max_concurrent_probes`; each holds a response and its series in memory, so this bounds what a burst of probes can cost the pod. `server.pythonMaxWorkers` bounds the Python workers of every collector together, each a process with memory of its own; pair it with a collector's `limits.max_script_memory` (see [Python](../../docs/PYTHON.md)). Both take a whole number from 0 to 2147483647, as a number or as a string of digits with no zero before another digit (the exporter's flag reads `010` as eight and refuses `08`), `0` for no limit, and are rendered only when set; the exporter itself takes a larger number on a 64-bit platform, and the chart does not. Size them to `resources.limits.memory`.
 
 ```sh
 helm install exporter charts/prometheus-universal-exporter \
@@ -506,7 +506,7 @@ resources:
     memory: 512Mi
 ```
 
-`goMemLimit`, on by default, renders `--runtime.memory-limit-ratio` with `goMemLimit.ratio`, `0.8`: the exporter reads the container's memory limit from its cgroup and sets the Go memory limit to that share of it, so the Go runtime collects harder as its heap nears it instead of growing past the container's limit into an OOM kill. The rest is left to what the Go heap does not count — the Python workers, which are processes of their own, and the runtime's overhead; lower the ratio for a configuration with many Python workers, and bound those with `server.pythonMaxWorkers` and `limits.max_script_memory`. Without a memory limit in `resources`, the exporter keeps the Go default, and `GOMEMLIMIT` set in `env` wins over the ratio.
+`goMemLimit`, on by default, renders `--runtime.memory-limit-ratio` with `goMemLimit.ratio`, `0.8`: the exporter reads the container's memory limit from its cgroup and sets the Go memory limit to that share of it, so the Go runtime collects harder as its heap nears it instead of growing past the container's limit into an OOM kill. The rest is left to what the Go heap does not count — the Python workers, which are processes of their own, and the runtime's overhead; lower the ratio for a configuration with many Python workers, and bound those with `server.pythonMaxWorkers` and `limits.max_script_memory`. Without a memory limit in `resources`, the exporter keeps the Go default, and `GOMEMLIMIT` set in `env` wins over the ratio. The ratio is from 0.1 to 1, as the exporter takes it: below 0.1 the Go memory limit leaves the heap almost nothing and the Go runtime spends its time collecting garbage, so `ratio: 0.05` fails rendering, and `0.5` to `0.95` is the range that leaves room for the Python workers; set `goMemLimit.enabled: false` for no Go memory limit. A number is written out, however small, so the message refusing `ratio: 1e-5` says `0.00001` rather than `1e-05`, while a string is checked as written and so takes no exponent.
 
 ### Garbage collector
 
@@ -556,6 +556,8 @@ A change rolls the pods with `strategy`, `RollingUpdate` by default with `maxUna
 strategy:
   type: Recreate
 ```
+
+With `RollingUpdate`, `maxSurge` and `maxUnavailable` both 0, as `0` or `0%`, fail rendering, since Kubernetes refuses a rolling update that could neither add a pod nor take one away; set one of them above 0. A count left out of `strategy.rollingUpdate` is not rendered, and Kubernetes takes its default, 25%, for it.
 
 To keep replicas apart, spread them over zones or nodes. A constraint without a `labelSelector` gets one selecting this release's pods:
 
@@ -873,6 +875,8 @@ Helm passes a dependency the parent's `global` values, and the `enabled` its con
 ## Values
 
 Every value has a default, and `values.yaml` documents each one in place. `values.schema.json` is checked by Helm on install, upgrade and `helm template`, so a misspelled key or a wrong type fails there rather than on a pod that starts and behaves unexpectedly.
+
+A whole number is rendered as the whole number it is, however it is written: `replicaCount: 2000000`, `2e6` and `2000000.0` in a values file all render `replicas: 2000000`, never `2e+06`. The whole numbers the chart renders itself take a range, and a fraction or a number outside it fails rendering, refused by the schema and, with the schema skipped, by the templates: 0 to 2147483647 for `replicaCount`, `terminationGracePeriodSeconds`, `server.probeMaxConcurrent`, `server.pythonMaxWorkers` and a `podDisruptionBudget` count, 1 to 2147483647 for the replicas and utilization targets of `autoscaling`, and 1 to 65535 for `service.port`. A `podDisruptionBudget` count given as a string is rendered bare, so it is held to what Kubernetes takes on a budget and fails rendering otherwise, naming the key: a whole number from 0 to 2147483647 or a percentage from `0%` to `100%`, written with no zero before another digit, since `"010"` would render as YAML's octal number, eight. The probes' timings and the `strategy.rollingUpdate` counts are passed through as written, and the values schema bounds them as Kubernetes does, so `periodSeconds: 1e30` fails at `helm template` rather than when Kubernetes refuses the Deployment: each timing is a whole number up to 2147483647, from 0 for `initialDelaySeconds` and from 1 for the others, and a liveness probe's `successThreshold` is 1, the one value Kubernetes takes there; `maxSurge` and `maxUnavailable` are a whole number from 0 to 2147483647 or a percentage written with no zero before another digit, up to `100%` for `maxUnavailable`, and never a string of digits alone, which would reach Kubernetes as a string it refuses. Whole numbers inside the other Kubernetes shapes the chart passes through — a security context's `runAsUser` or `fsGroup`, such as OpenShift's `1000680000`, `resources`, tolerations, relabelings — are written out in digits too, and are Kubernetes' to bound.
 
 | Value | Type | Default | What it sets |
 | --- | --- | --- | --- |

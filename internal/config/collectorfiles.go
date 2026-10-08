@@ -7,7 +7,6 @@ import (
 	"io"
 	"os"
 	"path/filepath"
-	"reflect"
 	"slices"
 	"sort"
 	"strconv"
@@ -187,16 +186,16 @@ func loadCollectorFile(path string, opts []LoadOption) ([]model.Collector, error
 		return nil, fmt.Errorf("collector file %s must be a mapping with a collectors list", path)
 	}
 	// The keys are the file's own and those a merge key (<<) brings in, as
-	// the decoder reads them.
+	// the decoder reads them, a key that is an alias the key it names.
 	for _, entry := range model.MappingEntries(root) {
-		if key := entry.Key.Value; key != collectorFileKey && !isExtensionKey(key) {
+		if key := model.KeyName(entry.Key); key != collectorFileKey && !isExtensionKey(key) {
 			return nil, fmt.Errorf("collector file %s: line %d: %q is not allowed; a collector file may only contain %s, and x- keys of its own for YAML anchors", path, entry.Key.Line, key, collectorFileKey)
 		}
 	}
 	var file collectorFile
 	dec := yaml.NewDecoder(bytes.NewReader(b))
 	dec.KnownFields(true)
-	if err := withValueProblems(withoutExtensionKeys(dec.Decode(&file)), b, reflect.TypeOf(file)); err != nil && !errors.Is(err, io.EOF) {
+	if err := withValueProblems(withoutExtensionKeys(dec.Decode(&file)), b, &file); err != nil && !errors.Is(err, io.EOF) {
 		return nil, fmt.Errorf("collector file %s: %w", path, yamlError(err))
 	}
 	if err := oneDocument(dec); err != nil {

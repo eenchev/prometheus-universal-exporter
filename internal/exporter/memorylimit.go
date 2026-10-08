@@ -26,12 +26,22 @@ import (
 // to the largest int64, rounded down to a page.
 const cgroupUnlimited = 1 << 60
 
+// minMemoryLimitRatio is the least --runtime.memory-limit-ratio other than
+// 0: below it the Go memory limit leaves the heap almost nothing, so the
+// runtime would collect garbage all the time, and 1e-5 of any container
+// limit is a few kilobytes. Leaving room for the Python workers takes 0.5
+// to 0.95.
+const minMemoryLimitRatio = 0.1
+
 // ValidateMemoryLimitRatio refuses a --runtime.memory-limit-ratio outside
-// 0 to 1: 0 turns it off, and more than the whole limit would let the heap
-// grow past it.
+// 0 to 1, where 0 turns it off and more than the whole limit would let the
+// heap grow past it, and one between 0 and 0.1.
 func ValidateMemoryLimitRatio(ratio float64) error {
 	if math.IsNaN(ratio) || ratio < 0 || ratio > 1 {
 		return fmt.Errorf("--runtime.memory-limit-ratio must be from 0, for off, to 1, got %v", ratio)
+	}
+	if ratio != 0 && ratio < minMemoryLimitRatio {
+		return fmt.Errorf("--runtime.memory-limit-ratio must be 0, for off, or at least %v, got %v: below it the Go memory limit leaves the heap almost nothing and the Go runtime spends its time collecting garbage; 0.5 to 0.95 leaves room for the Python workers", minMemoryLimitRatio, ratio)
 	}
 	return nil
 }

@@ -257,6 +257,11 @@ func TestOutOfRangeLimitsAreCommandLineErrors(t *testing.T) {
 		"--probe.max-concurrent=-1":        "--probe.max-concurrent must not be negative",
 		"--python.max-workers=-1":          "--python.max-workers must not be negative",
 		"--runtime.memory-limit-ratio=1.5": "--runtime.memory-limit-ratio must be from 0",
+		// A soft limit of a few kilobytes would have the Go runtime collect
+		// garbage all the time.
+		"--runtime.memory-limit-ratio=0.00001":   "or at least 0.1, got 1e-05: below it the Go memory limit leaves the heap almost nothing",
+		"--runtime.memory-limit-ratio=1e-300":    "or at least 0.1, got 1e-300",
+		"--runtime.memory-limit-ratio=0.0999999": "or at least 0.1, got 0.0999999",
 		// A bare port would stop the start with "missing port in address";
 		// --dry-run says so, rather than ok.
 		"--web.listen-address=9115":    "must be host:port, such as :8080",
@@ -267,6 +272,18 @@ func TestOutOfRangeLimitsAreCommandLineErrors(t *testing.T) {
 			if out.code != 2 || !strings.Contains(out.stderr, message) || out.stdout != "" {
 				t.Fatalf("%v: exit=%d stderr=%s stdout=%s", args, out.code, out.stderr, out.stdout)
 			}
+		}
+	}
+}
+
+// The floor of --runtime.memory-limit-ratio leaves 0, for off, and 0.1 to 1
+// as they were: neither startup nor --dry-run takes them for a command-line
+// error.
+func TestAMemoryLimitRatioOfZeroOrFromATenthIsNoCommandLineError(t *testing.T) {
+	for _, ratio := range []string{"0", "0.1", ".1", "0.10000001", "0.5", "1"} {
+		out := runCLI(t, "--dry-run", "--config.file=configs/config.example.yaml", "--runtime.memory-limit-ratio="+ratio)
+		if out.code == 2 || strings.Contains(out.stderr, "memory-limit-ratio") {
+			t.Errorf("ratio %s: exit=%d stderr=%s", ratio, out.code, out.stderr)
 		}
 	}
 }

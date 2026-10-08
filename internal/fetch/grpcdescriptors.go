@@ -189,22 +189,59 @@ var descriptorFileRead func(path string)
 // protoCompiles counts the compiles of .proto files, for tests.
 var protoCompiles atomic.Int64
 
-// filesStamp describes files as they are on disk now.
+// filesStamp describes files as they are on disk now: for each, its
+// modification time and size, which file its path leads to and its
+// permissions, or that there is none. So the check at each call sees what
+// the configuration's watch sees (config's filesStamp): a file replaced by
+// pointing a symbolic link elsewhere — how Kubernetes publishes a new
+// version of a mounted Secret or ConfigMap, swapping ..data — is another
+// file even when its time and size are those of the old one, and a file
+// whose permissions changed may no longer be readable. Which file the path
+// leads to is told by the file's identity (fileIdentity), which the one
+// stat that follows the path already gives on the systems the exporter is
+// built for and which the watch stamps too, so a file renamed over by one of
+// the same time, size and permissions is another to both; it is not told by
+// resolving the path's links, as the watch also does, which costs a stat of
+// each of its components at every call. The numbers are written through
+// num, which allocates none.
 func filesStamp(paths []string) string {
 	var b strings.Builder
+	var num [20]byte
 	for _, path := range paths {
 		b.WriteString(path)
 		if st, err := os.Stat(path); err == nil {
 			b.WriteString(":")
-			b.WriteString(strconv.FormatInt(st.ModTime().UnixNano(), 10))
+			b.Write(strconv.AppendInt(num[:0], st.ModTime().UnixNano(), 10))
 			b.WriteString(":")
-			b.WriteString(strconv.FormatInt(st.Size(), 10))
+			b.Write(strconv.AppendInt(num[:0], st.Size(), 10))
+			b.WriteString(":")
+			if dev, ino, resolved := fileIdentity(path, st); resolved != "" {
+				b.WriteString(resolved)
+			} else {
+				b.Write(strconv.AppendUint(num[:0], dev, 10))
+				b.WriteString(".")
+				b.Write(strconv.AppendUint(num[:0], ino, 10))
+			}
+			b.WriteString(":")
+			b.Write(strconv.AppendUint(num[:0], uint64(st.Mode()), 8))
 		} else {
 			b.WriteString(":missing")
 		}
 		b.WriteByte('|')
 	}
 	return b.String()
+}
+
+// fileIdentity tells which file st, the stat of path following its links,
+// is: by the device and inode the stat already holds (FileIdentity), which
+// the configuration's watch stamps too, and where the system does not say,
+// by resolving the path's links, as the watch also does.
+func fileIdentity(path string, st os.FileInfo) (dev, ino uint64, resolved string) {
+	if dev, ino, ok := FileIdentity(st); ok {
+		return dev, ino, ""
+	}
+	resolved, _ = filepath.EvalSymlinks(path)
+	return 0, 0, resolved
 }
 
 // pathStamp is the stamp of one path: the stamp of several is theirs, one
